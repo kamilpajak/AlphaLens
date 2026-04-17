@@ -117,5 +117,19 @@ def process_queue():
     typer.echo(f"processed={processed}")
 
 
+@watchdog_app.command("status")
+def status():
+    """Report current state: queue, digest buffer, dedup count."""
+    from tradingagents.watchdog.status import collect_status, format_status
+
+    home = Path.home() / ".tradingagents" / "watchdog"
+    result = collect_status(
+        queue_path=home / "auto_trigger_queue.db",
+        digest_path=home / "digest.db",
+        seen_path=home / "seen_events.db",
+    )
+    typer.echo(format_status(result))
+
+
 if __name__ == "__main__":
     watchdog_app()
