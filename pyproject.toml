@@ -8,9 +8,9 @@ version = "0.1.0"
 description = "Stock analysis pipeline: event detection + screening + multi-agent LLM analysis"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = [
-    "tradingagents @ file:./TradingAgents",
-]
+dependencies = []
+# Note: tradingagents is installed separately as editable from ./TradingAgents
+# Setup: `uv pip install -e ./TradingAgents && uv pip install -e .`
 
 [project.scripts]
 alphalens = "cli.main:app"
