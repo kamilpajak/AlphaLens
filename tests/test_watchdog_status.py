@@ -8,9 +8,9 @@ from typer.testing import CliRunner
 
 
 def _classified_digest_event(ticker: str, accession: str):
-    from tradingagents.watchdog.classifier import Action, ClassifiedEvent, Severity
-    from tradingagents.watchdog.portfolio import Relevance
-    from tradingagents.watchdog.types import Event, FormType
+    from alphalens.watchdog.classifier import Action, ClassifiedEvent, Severity
+    from alphalens.watchdog.portfolio import Relevance
+    from alphalens.watchdog.types import Event, FormType
 
     return ClassifiedEvent(
         event=Event(
@@ -39,7 +39,7 @@ class TestCollectStatus(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_empty_dbs_return_zero_counts(self):
-        from tradingagents.watchdog.status import collect_status
+        from alphalens.watchdog.status import collect_status
 
         s = collect_status(self.queue_path, self.digest_path, self.seen_path)
 
@@ -49,8 +49,8 @@ class TestCollectStatus(unittest.TestCase):
         self.assertEqual(s["seen_events"]["total"], 0)
 
     def test_queue_breakdown_includes_pending_done_failed_and_latest(self):
-        from tradingagents.watchdog.queue import AutoTriggerQueue
-        from tradingagents.watchdog.status import collect_status
+        from alphalens.watchdog.queue import AutoTriggerQueue
+        from alphalens.watchdog.status import collect_status
 
         q = AutoTriggerQueue(self.queue_path)
         q.enqueue("AAPL", "A1", "u")
@@ -73,8 +73,8 @@ class TestCollectStatus(unittest.TestCase):
         self.assertEqual(s["queue"]["latest_done"]["decision"], "BUY")
 
     def test_digest_breakdown_counts_per_ticker(self):
-        from tradingagents.watchdog.dispatch.handlers.digest import DigestHandler
-        from tradingagents.watchdog.status import collect_status
+        from alphalens.watchdog.dispatch.handlers.digest import DigestHandler
+        from alphalens.watchdog.status import collect_status
 
         h = DigestHandler(db_path=self.digest_path, sender=MagicMock())
         h.handle(_classified_digest_event("AAPL", "D1"))
@@ -89,8 +89,8 @@ class TestCollectStatus(unittest.TestCase):
         self.assertEqual(s["digest"]["per_ticker"]["MSFT"], 1)
 
     def test_seen_events_total_is_counted(self):
-        from tradingagents.watchdog.status import collect_status
-        from tradingagents.watchdog.storage import SeenEventStore
+        from alphalens.watchdog.status import collect_status
+        from alphalens.watchdog.storage import SeenEventStore
 
         store = SeenEventStore(self.seen_path)
         store.mark_seen("ACC-1")
@@ -104,7 +104,7 @@ class TestCollectStatus(unittest.TestCase):
 
 class TestFormatStatus(unittest.TestCase):
     def test_format_surfaces_key_counts_and_budget(self):
-        from tradingagents.watchdog.status import format_status
+        from alphalens.watchdog.status import format_status
 
         status = {
             "queue": {

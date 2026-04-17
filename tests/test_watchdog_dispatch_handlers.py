@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 
 def _classified(ticker="AAPL", severity=None, relevance=None, action=None, form=None, items=None):
-    from tradingagents.watchdog.classifier import Action, ClassifiedEvent, Severity
-    from tradingagents.watchdog.portfolio import Relevance
-    from tradingagents.watchdog.types import Event, FormType
+    from alphalens.watchdog.classifier import Action, ClassifiedEvent, Severity
+    from alphalens.watchdog.portfolio import Relevance
+    from alphalens.watchdog.types import Event, FormType
 
     return ClassifiedEvent(
         event=Event(
@@ -27,7 +27,7 @@ def _classified(ticker="AAPL", severity=None, relevance=None, action=None, form=
 
 class TestAlertHandlerABC(unittest.TestCase):
     def test_abstract_handle_method_required(self):
-        from tradingagents.watchdog.dispatch.handlers.base import AlertHandler
+        from alphalens.watchdog.dispatch.handlers.base import AlertHandler
 
         class BadHandler(AlertHandler):
             pass
@@ -37,9 +37,9 @@ class TestAlertHandlerABC(unittest.TestCase):
 
 
 class TestTelegramHandler(unittest.TestCase):
-    @patch("tradingagents.watchdog.dispatch.handlers.telegram.requests.post")
+    @patch("alphalens.watchdog.dispatch.handlers.telegram.requests.post")
     def test_send_uses_bot_api_endpoint(self, mock_post):
-        from tradingagents.watchdog.dispatch.handlers.telegram import TelegramHandler
+        from alphalens.watchdog.dispatch.handlers.telegram import TelegramHandler
 
         mock_post.return_value = MagicMock(status_code=200, raise_for_status=MagicMock())
         handler = TelegramHandler(bot_token="BOTTOKEN", chat_id="CHATID")
@@ -49,10 +49,10 @@ class TestTelegramHandler(unittest.TestCase):
         url = mock_post.call_args.args[0]
         self.assertIn("api.telegram.org/botBOTTOKEN/sendMessage", url)
 
-    @patch("tradingagents.watchdog.dispatch.handlers.telegram.requests.post")
+    @patch("alphalens.watchdog.dispatch.handlers.telegram.requests.post")
     def test_message_includes_severity_and_url(self, mock_post):
-        from tradingagents.watchdog.classifier import Severity
-        from tradingagents.watchdog.dispatch.handlers.telegram import TelegramHandler
+        from alphalens.watchdog.classifier import Severity
+        from alphalens.watchdog.dispatch.handlers.telegram import TelegramHandler
 
         mock_post.return_value = MagicMock(status_code=200, raise_for_status=MagicMock())
         handler = TelegramHandler(bot_token="T", chat_id="C")
@@ -65,18 +65,18 @@ class TestTelegramHandler(unittest.TestCase):
         self.assertIn("AAPL", text)
         self.assertIn("https://sec.gov/filing", text)
 
-    @patch("tradingagents.watchdog.dispatch.handlers.telegram.requests.post")
+    @patch("alphalens.watchdog.dispatch.handlers.telegram.requests.post")
     def test_handles_api_error_without_raising(self, mock_post):
         import requests as req_module
 
-        from tradingagents.watchdog.dispatch.handlers.telegram import TelegramHandler
+        from alphalens.watchdog.dispatch.handlers.telegram import TelegramHandler
 
         mock_post.side_effect = req_module.ConnectionError("down")
         handler = TelegramHandler(bot_token="T", chat_id="C")
         handler.handle(_classified())  # should not raise
 
     def test_requires_bot_token_and_chat_id(self):
-        from tradingagents.watchdog.dispatch.handlers.telegram import TelegramHandler
+        from alphalens.watchdog.dispatch.handlers.telegram import TelegramHandler
 
         with self.assertRaises(ValueError):
             TelegramHandler(bot_token="", chat_id="C")
@@ -93,7 +93,7 @@ class TestDigestHandler(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_handle_adds_event_to_buffer(self):
-        from tradingagents.watchdog.dispatch.handlers.digest import DigestHandler
+        from alphalens.watchdog.dispatch.handlers.digest import DigestHandler
 
         handler = DigestHandler(db_path=self.db_path, sender=MagicMock())
         handler.handle(_classified(ticker="AAPL"))
@@ -102,7 +102,7 @@ class TestDigestHandler(unittest.TestCase):
         self.assertEqual(len(handler.buffered()), 2)
 
     def test_flush_sends_combined_message(self):
-        from tradingagents.watchdog.dispatch.handlers.digest import DigestHandler
+        from alphalens.watchdog.dispatch.handlers.digest import DigestHandler
 
         sender = MagicMock()
         handler = DigestHandler(db_path=self.db_path, sender=sender)
@@ -116,7 +116,7 @@ class TestDigestHandler(unittest.TestCase):
         self.assertIn("MSFT", msg)
 
     def test_buffer_persists_across_instances(self):
-        from tradingagents.watchdog.dispatch.handlers.digest import DigestHandler
+        from alphalens.watchdog.dispatch.handlers.digest import DigestHandler
 
         h1 = DigestHandler(db_path=self.db_path, sender=MagicMock())
         h1.handle(_classified(ticker="NVDA"))
@@ -128,7 +128,7 @@ class TestDigestHandler(unittest.TestCase):
         self.assertIn("NVDA", tickers)
 
     def test_flush_clears_buffer(self):
-        from tradingagents.watchdog.dispatch.handlers.digest import DigestHandler
+        from alphalens.watchdog.dispatch.handlers.digest import DigestHandler
 
         handler = DigestHandler(db_path=self.db_path, sender=MagicMock())
         handler.handle(_classified(ticker="AAPL"))
@@ -145,10 +145,10 @@ class TestAutoTriggerEnqueueHandler(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_handle_enqueues_classified_event(self):
-        from tradingagents.watchdog.dispatch.handlers.auto_trigger import (
+        from alphalens.watchdog.dispatch.handlers.auto_trigger import (
             AutoTriggerEnqueueHandler,
         )
-        from tradingagents.watchdog.queue import AutoTriggerQueue
+        from alphalens.watchdog.queue import AutoTriggerQueue
 
         handler = AutoTriggerEnqueueHandler(queue_path=self.queue_path)
         handler.handle(_classified(ticker="AAPL"))
@@ -160,7 +160,7 @@ class TestAutoTriggerEnqueueHandler(unittest.TestCase):
             self.assertEqual(pending[0]["ticker"], "AAPL")
 
     def test_handle_does_not_raise_on_queue_write_error(self):
-        from tradingagents.watchdog.dispatch.handlers.auto_trigger import (
+        from alphalens.watchdog.dispatch.handlers.auto_trigger import (
             AutoTriggerEnqueueHandler,
         )
 
@@ -174,7 +174,7 @@ class TestAutoTriggerEnqueueHandler(unittest.TestCase):
 
 class TestObsoleteSyncHandlerRemoved(unittest.TestCase):
     def test_legacy_class_no_longer_exported(self):
-        from tradingagents.watchdog.dispatch.handlers import auto_trigger
+        from alphalens.watchdog.dispatch.handlers import auto_trigger
 
         self.assertFalse(
             hasattr(auto_trigger, "AutoTriggerHandler"),

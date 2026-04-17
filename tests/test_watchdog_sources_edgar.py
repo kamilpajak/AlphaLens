@@ -43,8 +43,8 @@ def _make_response(text: str, status_code: int = 200):
 
 
 def _make_source(tickers=None, config_overrides=None, store=None, ticker_to_cik=None):
-    from tradingagents.watchdog.config import WATCHDOG_DEFAULTS
-    from tradingagents.watchdog.sources.edgar import SECEdgarSource
+    from alphalens.watchdog.config import WATCHDOG_DEFAULTS
+    from alphalens.watchdog.sources.edgar import SECEdgarSource
 
     cfg = dict(WATCHDOG_DEFAULTS)
     cfg["user_agent"] = "AlphaLens Test test@example.com"
@@ -68,11 +68,11 @@ class TestSECEdgarSource(unittest.TestCase):
         self.tmp.cleanup()
 
     def _store(self):
-        from tradingagents.watchdog.storage import SeenEventStore
+        from alphalens.watchdog.storage import SeenEventStore
 
         return SeenEventStore(self.db_path)
 
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_user_agent_header_is_sent(self, mock_get):
         mock_get.return_value = _make_response(SAMPLE_ATOM)
         source = _make_source(store=self._store())
@@ -84,8 +84,8 @@ class TestSECEdgarSource(unittest.TestCase):
         self.assertEqual(kwargs["headers"]["User-Agent"], "AlphaLens Test test@example.com")
 
     def test_missing_user_agent_in_config_raises(self):
-        from tradingagents.watchdog.config import WATCHDOG_DEFAULTS
-        from tradingagents.watchdog.sources.edgar import SECEdgarSource
+        from alphalens.watchdog.config import WATCHDOG_DEFAULTS
+        from alphalens.watchdog.sources.edgar import SECEdgarSource
 
         cfg = dict(WATCHDOG_DEFAULTS)  # user_agent=None
         with self.assertRaises(ValueError):
@@ -96,9 +96,9 @@ class TestSECEdgarSource(unittest.TestCase):
                 ticker_to_cik={"AAPL": "0000320193"},
             )
 
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_detect_parses_atom_entries_into_events(self, mock_get):
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.types import FormType
 
         mock_get.return_value = _make_response(SAMPLE_ATOM)
         # filter=None → accept all forms for this test
@@ -117,9 +117,9 @@ class TestSECEdgarSource(unittest.TestCase):
         self.assertIn("sec.gov", evt_8k.url)
         self.assertIsNotNone(evt_8k.filed_at.tzinfo)
 
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_detect_filters_by_form_type(self, mock_get):
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.types import FormType
 
         mock_get.return_value = _make_response(SAMPLE_ATOM)
         source = _make_source(
@@ -131,9 +131,9 @@ class TestSECEdgarSource(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].form_type, FormType.FORM_8K)
 
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_detect_deduplicates_via_store(self, mock_get):
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.types import FormType
 
         mock_get.return_value = _make_response(SAMPLE_ATOM)
         store = self._store()
@@ -148,8 +148,8 @@ class TestSECEdgarSource(unittest.TestCase):
         second = source.detect()
         self.assertEqual(second, [])
 
-    @patch("tradingagents.watchdog.sources.edgar.time.sleep")
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.time.sleep")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_rate_limit_sleeps_between_ticker_requests(self, mock_get, mock_sleep):
         mock_get.return_value = _make_response(SAMPLE_ATOM)
         source = _make_source(
@@ -164,7 +164,7 @@ class TestSECEdgarSource(unittest.TestCase):
         slept = [args[0] for args, _ in mock_sleep.call_args_list]
         self.assertTrue(all(s >= 0.15 for s in slept))
 
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_detect_returns_empty_on_network_error(self, mock_get):
         import requests
 
@@ -174,7 +174,7 @@ class TestSECEdgarSource(unittest.TestCase):
 
         self.assertEqual(events, [])
 
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_detect_returns_empty_on_malformed_xml(self, mock_get):
         mock_get.return_value = _make_response("<not-xml<>>")
         source = _make_source(store=self._store())
@@ -182,7 +182,7 @@ class TestSECEdgarSource(unittest.TestCase):
 
         self.assertEqual(events, [])
 
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_skips_ticker_without_cik_mapping(self, mock_get):
         mock_get.return_value = _make_response(SAMPLE_ATOM)
         source = _make_source(

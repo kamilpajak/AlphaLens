@@ -92,9 +92,9 @@ class TestEdgarEnhanced(unittest.TestCase):
         self.tmp.cleanup()
 
     def _source(self, config_overrides=None, tickers=None, ticker_to_cik=None, cik_loader=None):
-        from tradingagents.watchdog.config import WATCHDOG_DEFAULTS
-        from tradingagents.watchdog.sources.edgar import SECEdgarSource
-        from tradingagents.watchdog.storage import SeenEventStore
+        from alphalens.watchdog.config import WATCHDOG_DEFAULTS
+        from alphalens.watchdog.sources.edgar import SECEdgarSource
+        from alphalens.watchdog.storage import SeenEventStore
 
         cfg = dict(WATCHDOG_DEFAULTS)
         cfg["user_agent"] = "AlphaLens Test test@example.com"
@@ -109,7 +109,7 @@ class TestEdgarEnhanced(unittest.TestCase):
             cik_loader=cik_loader,
         )
 
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_8k_items_extracted_from_title(self, mock_get):
         mock_get.return_value = _mock_resp(SAMPLE_ATOM_8K_WITH_ITEMS)
         source = self._source()
@@ -121,7 +121,7 @@ class TestEdgarEnhanced(unittest.TestCase):
         self.assertIn("4.02", items)
         self.assertIn("2.02", items)
 
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_form4_details_fetched_when_enabled(self, mock_get):
         mock_get.side_effect = _url_dispatch(SAMPLE_ATOM_FORM4, SAMPLE_FORM4_PRIMARY_DOC)
         source = self._source(config_overrides={"fetch_form4_details": True})
@@ -132,7 +132,7 @@ class TestEdgarEnhanced(unittest.TestCase):
         self.assertEqual(evt.raw_data.get("insider_action"), "BUY")
         self.assertAlmostEqual(evt.raw_data.get("transaction_value_usd", 0), 2000 * 175.0)
 
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_form4_details_not_fetched_when_disabled(self, mock_get):
         mock_get.return_value = _mock_resp(SAMPLE_ATOM_FORM4)
         source = self._source(config_overrides={"fetch_form4_details": False})
@@ -142,7 +142,7 @@ class TestEdgarEnhanced(unittest.TestCase):
         urls = [call.args[0] for call in mock_get.call_args_list]
         self.assertFalse(any("index.json" in u or "Archives" in u and u.endswith(".xml") for u in urls))
 
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_form4_fetch_failure_does_not_break_detect(self, mock_get):
         import requests as req_module
 
@@ -159,9 +159,9 @@ class TestEdgarEnhanced(unittest.TestCase):
         # insider_action absent is fine — base event still emitted
         self.assertNotIn("insider_action", events[0].raw_data)
 
-    @patch("tradingagents.watchdog.sources.edgar.requests.get")
+    @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_cik_loader_takes_precedence_over_dict(self, mock_get):
-        from tradingagents.watchdog.sources.cik_loader import CIKLoader
+        from alphalens.watchdog.sources.cik_loader import CIKLoader
 
         mock_get.return_value = _mock_resp(SAMPLE_ATOM_FORM4)
 

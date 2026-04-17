@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 class TestEventDataclass(unittest.TestCase):
     def test_event_holds_required_fields(self):
-        from tradingagents.watchdog.types import Event, FormType
+        from alphalens.watchdog.types import Event, FormType
 
         filed_at = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
         event = Event(
@@ -24,7 +24,7 @@ class TestEventDataclass(unittest.TestCase):
         self.assertEqual(event.raw_data["items"], ["2.02"])
 
     def test_event_equality_by_accession_number(self):
-        from tradingagents.watchdog.types import Event, FormType
+        from alphalens.watchdog.types import Event, FormType
 
         filed_at = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
         event_a = Event(
@@ -57,7 +57,7 @@ class TestEventDataclass(unittest.TestCase):
         self.assertEqual(hash(event_a), hash(event_b))
 
     def test_form_type_enum_covers_mvp_forms(self):
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.types import FormType
 
         required = {"FORM_8K", "FORM_4", "FORM_13D", "FORM_13G", "FORM_13D_A", "FORM_13G_A"}
         actual = {member.name for member in FormType}
@@ -65,7 +65,7 @@ class TestEventDataclass(unittest.TestCase):
         self.assertFalse(missing, f"Missing FormType members: {missing}")
 
     def test_form_type_values_map_to_sec_form_strings(self):
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.types import FormType
 
         self.assertEqual(FormType.FORM_8K.value, "8-K")
         self.assertEqual(FormType.FORM_4.value, "4")
@@ -73,7 +73,7 @@ class TestEventDataclass(unittest.TestCase):
         self.assertEqual(FormType.FORM_13G.value, "SC 13G")
 
     def test_form_type_from_sec_string(self):
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.types import FormType
 
         self.assertEqual(FormType.from_sec_string("8-K"), FormType.FORM_8K)
         self.assertEqual(FormType.from_sec_string("4"), FormType.FORM_4)

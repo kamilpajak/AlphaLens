@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 
 def _event(form_type, ticker="AAPL", raw_data=None, accession="ACC-1"):
-    from tradingagents.watchdog.types import Event
+    from alphalens.watchdog.types import Event
 
     return Event(
         ticker=ticker,
@@ -16,20 +16,20 @@ def _event(form_type, ticker="AAPL", raw_data=None, accession="ACC-1"):
 
 
 def _portfolio(held=None, watchlist=None):
-    from tradingagents.watchdog.portfolio import PortfolioState
+    from alphalens.watchdog.portfolio import PortfolioState
 
     return PortfolioState(held=held or [], watchlist=watchlist or [])
 
 
 class TestSeverityAndActionEnums(unittest.TestCase):
     def test_severity_has_low_medium_high(self):
-        from tradingagents.watchdog.classifier import Severity
+        from alphalens.watchdog.classifier import Severity
 
         names = {s.name for s in Severity}
         self.assertEqual(names, {"LOW", "MEDIUM", "HIGH"})
 
     def test_action_has_required_members(self):
-        from tradingagents.watchdog.classifier import Action
+        from alphalens.watchdog.classifier import Action
 
         names = {a.name for a in Action}
         self.assertEqual(names, {"AUTO_TRIGGER", "APPROVAL", "DIGEST", "IGNORE"})
@@ -40,8 +40,8 @@ class TestForm4Severity(unittest.TestCase):
     sales flat/noise (diversification, 10b5-1)."""
 
     def test_form4_default_low_when_action_unknown(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         # No insider_action in raw_data (fetch_form4_details=False or parse failed)
@@ -49,8 +49,8 @@ class TestForm4Severity(unittest.TestCase):
         self.assertEqual(result.severity, Severity.LOW)
 
     def test_form4_buy_default_medium(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(
@@ -61,8 +61,8 @@ class TestForm4Severity(unittest.TestCase):
         self.assertEqual(result.severity, Severity.MEDIUM)
 
     def test_form4_large_insider_buy_is_high(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(
@@ -73,8 +73,8 @@ class TestForm4Severity(unittest.TestCase):
         self.assertEqual(result.severity, Severity.HIGH)
 
     def test_form4_sell_is_low_regardless_of_size(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(
@@ -86,8 +86,8 @@ class TestForm4Severity(unittest.TestCase):
 
     def test_form4_small_sell_is_suppressed_to_ignore(self):
         """Evidence: sub-$100k SELLs are pure noise. Action.IGNORE regardless of portfolio."""
-        from tradingagents.watchdog.classifier import Action, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Action, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(
@@ -98,8 +98,8 @@ class TestForm4Severity(unittest.TestCase):
         self.assertEqual(result.action, Action.IGNORE)
 
     def test_form4_small_buy_is_low(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(
@@ -114,32 +114,32 @@ class TestBeneficialOwnership(unittest.TestCase):
     """Evidence: 13D activist +3-6% CAR; 13G ~65% passive rebalancing."""
 
     def test_13d_is_high(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         result = classifier.classify(_event(FormType.FORM_13D), _portfolio())
         self.assertEqual(result.severity, Severity.HIGH)
 
     def test_13g_is_medium_not_high(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         result = classifier.classify(_event(FormType.FORM_13G), _portfolio())
         self.assertEqual(result.severity, Severity.MEDIUM)
 
     def test_13d_amendment_is_medium(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         result = classifier.classify(_event(FormType.FORM_13D_A), _portfolio())
         self.assertEqual(result.severity, Severity.MEDIUM)
 
     def test_13g_amendment_is_low(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         result = classifier.classify(_event(FormType.FORM_13G_A), _portfolio())
@@ -151,8 +151,8 @@ class TestEightKItems(unittest.TestCase):
     Aharony (2.04 -1.5-3%); earnings 8-K (2.02) priced in via press release."""
 
     def test_8k_402_non_reliance_is_high(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(FormType.FORM_8K, raw_data={"items": ["4.02"]})
@@ -160,8 +160,8 @@ class TestEightKItems(unittest.TestCase):
         self.assertEqual(result.severity, Severity.HIGH)
 
     def test_8k_204_default_is_high(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(FormType.FORM_8K, raw_data={"items": ["2.04"]})
@@ -169,8 +169,8 @@ class TestEightKItems(unittest.TestCase):
         self.assertEqual(result.severity, Severity.HIGH)
 
     def test_8k_502_is_high_when_title_mentions_CEO(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(
@@ -181,8 +181,8 @@ class TestEightKItems(unittest.TestCase):
         self.assertEqual(result.severity, Severity.HIGH)
 
     def test_8k_502_is_medium_for_ordinary_director(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(
@@ -194,8 +194,8 @@ class TestEightKItems(unittest.TestCase):
 
     def test_8k_202_earnings_is_low(self):
         """Earnings 8-K is priced in via press release (Dellavigna & Pollet 2009)."""
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(FormType.FORM_8K, raw_data={"items": ["2.02"]})
@@ -203,8 +203,8 @@ class TestEightKItems(unittest.TestCase):
         self.assertEqual(result.severity, Severity.LOW)
 
     def test_8k_701_regfd_is_low(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(FormType.FORM_8K, raw_data={"items": ["7.01"]})
@@ -212,8 +212,8 @@ class TestEightKItems(unittest.TestCase):
         self.assertEqual(result.severity, Severity.LOW)
 
     def test_8k_101_material_agreement_is_medium(self):
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(FormType.FORM_8K, raw_data={"items": ["1.01"]})
@@ -222,8 +222,8 @@ class TestEightKItems(unittest.TestCase):
 
     def test_8k_without_items_is_low(self):
         """Title-only 8-Ks without parseable items are usually routine (8.01 Other)."""
-        from tradingagents.watchdog.classifier import Severity, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(FormType.FORM_8K, raw_data={"title": "8-K - Other Events"})
@@ -233,16 +233,16 @@ class TestEightKItems(unittest.TestCase):
 
 class TestActionMatrix(unittest.TestCase):
     def test_classify_returns_severity_relevance_action(self):
-        from tradingagents.watchdog.classifier import ClassifiedEvent, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import ClassifiedEvent, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         result = classifier.classify(_event(FormType.FORM_4), _portfolio(held=["AAPL"]))
         self.assertIsInstance(result, ClassifiedEvent)
 
     def test_action_matrix_high_held_is_auto_trigger(self):
-        from tradingagents.watchdog.classifier import Action, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Action, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(FormType.FORM_8K, raw_data={"items": ["4.02"]})
@@ -251,8 +251,8 @@ class TestActionMatrix(unittest.TestCase):
 
     def test_action_matrix_covers_all_cells(self):
         """Base 3x3 matrix — before form-type-specific overrides."""
-        from tradingagents.watchdog.classifier import Action, Severity, SignalClassifier
-        from tradingagents.watchdog.portfolio import Relevance
+        from alphalens.watchdog.classifier import Action, Severity, SignalClassifier
+        from alphalens.watchdog.portfolio import Relevance
 
         classifier = SignalClassifier()
         expected = {
@@ -273,8 +273,8 @@ class TestActionMatrix(unittest.TestCase):
 
     def test_form4_medium_on_watchlist_is_digested_not_approved(self):
         """Spam-reduction override: Form 4 MEDIUM on watchlist is too noisy for approval."""
-        from tradingagents.watchdog.classifier import Action, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Action, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(
@@ -286,8 +286,8 @@ class TestActionMatrix(unittest.TestCase):
 
     def test_form4_medium_on_held_stays_approval(self):
         """HELD is capital at risk — keep approval for MEDIUM buys."""
-        from tradingagents.watchdog.classifier import Action, SignalClassifier
-        from tradingagents.watchdog.types import FormType
+        from alphalens.watchdog.classifier import Action, SignalClassifier
+        from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
         event = _event(

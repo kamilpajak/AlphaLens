@@ -4,9 +4,9 @@ from unittest.mock import MagicMock
 
 
 def _classified(action):
-    from tradingagents.watchdog.classifier import ClassifiedEvent, Severity
-    from tradingagents.watchdog.portfolio import Relevance
-    from tradingagents.watchdog.types import Event, FormType
+    from alphalens.watchdog.classifier import ClassifiedEvent, Severity
+    from alphalens.watchdog.portfolio import Relevance
+    from alphalens.watchdog.types import Event, FormType
 
     return ClassifiedEvent(
         event=Event(
@@ -25,8 +25,8 @@ def _classified(action):
 
 class TestDispatchRouter(unittest.TestCase):
     def test_routes_per_action_to_registered_handler(self):
-        from tradingagents.watchdog.classifier import Action
-        from tradingagents.watchdog.dispatch.router import DispatchRouter
+        from alphalens.watchdog.classifier import Action
+        from alphalens.watchdog.dispatch.router import DispatchRouter
 
         auto = MagicMock()
         approval = MagicMock()
@@ -48,8 +48,8 @@ class TestDispatchRouter(unittest.TestCase):
         digest.handle.assert_called_once()
 
     def test_fanout_to_multiple_handlers(self):
-        from tradingagents.watchdog.classifier import Action
-        from tradingagents.watchdog.dispatch.router import DispatchRouter
+        from alphalens.watchdog.classifier import Action
+        from alphalens.watchdog.dispatch.router import DispatchRouter
 
         h1 = MagicMock()
         h2 = MagicMock()
@@ -61,8 +61,8 @@ class TestDispatchRouter(unittest.TestCase):
         h2.handle.assert_called_once()
 
     def test_ignore_action_does_not_dispatch(self):
-        from tradingagents.watchdog.classifier import Action
-        from tradingagents.watchdog.dispatch.router import DispatchRouter
+        from alphalens.watchdog.classifier import Action
+        from alphalens.watchdog.dispatch.router import DispatchRouter
 
         h = MagicMock()
         router = DispatchRouter({Action.IGNORE: [h]})
@@ -71,8 +71,8 @@ class TestDispatchRouter(unittest.TestCase):
         h.handle.assert_not_called()
 
     def test_handler_error_does_not_stop_other_handlers(self):
-        from tradingagents.watchdog.classifier import Action
-        from tradingagents.watchdog.dispatch.router import DispatchRouter
+        from alphalens.watchdog.classifier import Action
+        from alphalens.watchdog.dispatch.router import DispatchRouter
 
         failing = MagicMock()
         failing.handle.side_effect = RuntimeError("boom")

@@ -13,7 +13,7 @@ class TestAutoTriggerWorker(unittest.TestCase):
         self.tmp.cleanup()
 
     def _queue_with(self, *jobs):
-        from tradingagents.watchdog.queue import AutoTriggerQueue
+        from alphalens.watchdog.queue import AutoTriggerQueue
 
         q = AutoTriggerQueue(self.queue_path)
         for ticker, acc in jobs:
@@ -21,7 +21,7 @@ class TestAutoTriggerWorker(unittest.TestCase):
         q.close()
 
     def test_process_one_returns_false_when_queue_empty(self):
-        from tradingagents.watchdog.worker import AutoTriggerWorker
+        from alphalens.watchdog.worker import AutoTriggerWorker
 
         worker = AutoTriggerWorker(
             ta_graph=MagicMock(),
@@ -31,8 +31,8 @@ class TestAutoTriggerWorker(unittest.TestCase):
         self.assertFalse(worker.process_one())
 
     def test_process_one_calls_ta_propagate_and_notifies(self):
-        from tradingagents.watchdog.queue import AutoTriggerQueue
-        from tradingagents.watchdog.worker import AutoTriggerWorker
+        from alphalens.watchdog.queue import AutoTriggerQueue
+        from alphalens.watchdog.worker import AutoTriggerWorker
 
         self._queue_with(("AAPL", "ACC-1"))
         ta_graph = MagicMock()
@@ -59,8 +59,8 @@ class TestAutoTriggerWorker(unittest.TestCase):
             self.assertEqual(done[0]["decision"], "OVERWEIGHT")
 
     def test_process_one_marks_failed_on_exception(self):
-        from tradingagents.watchdog.queue import AutoTriggerQueue
-        from tradingagents.watchdog.worker import AutoTriggerWorker
+        from alphalens.watchdog.queue import AutoTriggerQueue
+        from alphalens.watchdog.worker import AutoTriggerWorker
 
         self._queue_with(("MSFT", "ACC-X"))
         ta_graph = MagicMock()
@@ -79,8 +79,8 @@ class TestAutoTriggerWorker(unittest.TestCase):
             self.assertIn("rate limit", failed[0]["error"])
 
     def test_process_one_skips_when_daily_budget_exhausted(self):
-        from tradingagents.watchdog.queue import AutoTriggerQueue
-        from tradingagents.watchdog.worker import AutoTriggerWorker
+        from alphalens.watchdog.queue import AutoTriggerQueue
+        from alphalens.watchdog.worker import AutoTriggerWorker
 
         # Pre-populate 2 done-today
         q = AutoTriggerQueue(self.queue_path)
@@ -111,7 +111,7 @@ class TestAutoTriggerWorker(unittest.TestCase):
             self.assertEqual(pending[0]["ticker"], "NVDA")
 
     def test_process_all_drains_queue(self):
-        from tradingagents.watchdog.worker import AutoTriggerWorker
+        from alphalens.watchdog.worker import AutoTriggerWorker
 
         self._queue_with(("AAPL", "A1"), ("MSFT", "A2"))
         ta_graph = MagicMock()

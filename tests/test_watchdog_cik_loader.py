@@ -30,9 +30,9 @@ class TestCIKLoader(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    @patch("tradingagents.watchdog.sources.cik_loader.requests.get")
+    @patch("alphalens.watchdog.sources.cik_loader.requests.get")
     def test_download_when_cache_missing(self, mock_get):
-        from tradingagents.watchdog.sources.cik_loader import CIKLoader
+        from alphalens.watchdog.sources.cik_loader import CIKLoader
 
         mock_get.return_value = _make_response(FAKE_TICKERS_JSON)
         loader = CIKLoader(user_agent=self.user_agent, cache_path=self.cache_path)
@@ -43,9 +43,9 @@ class TestCIKLoader(unittest.TestCase):
         _, kwargs = mock_get.call_args
         self.assertEqual(kwargs["headers"]["User-Agent"], self.user_agent)
 
-    @patch("tradingagents.watchdog.sources.cik_loader.requests.get")
+    @patch("alphalens.watchdog.sources.cik_loader.requests.get")
     def test_use_cache_when_fresh(self, mock_get):
-        from tradingagents.watchdog.sources.cik_loader import CIKLoader
+        from alphalens.watchdog.sources.cik_loader import CIKLoader
 
         self.cache_path.write_text(json.dumps(FAKE_TICKERS_JSON))
 
@@ -53,9 +53,9 @@ class TestCIKLoader(unittest.TestCase):
         loader.load()
         self.assertEqual(mock_get.call_count, 0)
 
-    @patch("tradingagents.watchdog.sources.cik_loader.requests.get")
+    @patch("alphalens.watchdog.sources.cik_loader.requests.get")
     def test_refresh_after_cache_expiry(self, mock_get):
-        from tradingagents.watchdog.sources.cik_loader import CIKLoader
+        from alphalens.watchdog.sources.cik_loader import CIKLoader
 
         mock_get.return_value = _make_response(FAKE_TICKERS_JSON)
         self.cache_path.write_text(json.dumps(FAKE_TICKERS_JSON))
@@ -71,9 +71,9 @@ class TestCIKLoader(unittest.TestCase):
         loader.load()
         self.assertEqual(mock_get.call_count, 1)
 
-    @patch("tradingagents.watchdog.sources.cik_loader.requests.get")
+    @patch("alphalens.watchdog.sources.cik_loader.requests.get")
     def test_get_cik_returns_10_digit_padded(self, mock_get):
-        from tradingagents.watchdog.sources.cik_loader import CIKLoader
+        from alphalens.watchdog.sources.cik_loader import CIKLoader
 
         mock_get.return_value = _make_response(FAKE_TICKERS_JSON)
         loader = CIKLoader(user_agent=self.user_agent, cache_path=self.cache_path)
@@ -83,9 +83,9 @@ class TestCIKLoader(unittest.TestCase):
         self.assertEqual(loader.get_cik("MSFT"), "0000789019")
         self.assertEqual(loader.get_cik("GOOGL"), "0001652044")
 
-    @patch("tradingagents.watchdog.sources.cik_loader.requests.get")
+    @patch("alphalens.watchdog.sources.cik_loader.requests.get")
     def test_get_cik_returns_none_for_unknown_ticker(self, mock_get):
-        from tradingagents.watchdog.sources.cik_loader import CIKLoader
+        from alphalens.watchdog.sources.cik_loader import CIKLoader
 
         mock_get.return_value = _make_response(FAKE_TICKERS_JSON)
         loader = CIKLoader(user_agent=self.user_agent, cache_path=self.cache_path)
@@ -94,14 +94,14 @@ class TestCIKLoader(unittest.TestCase):
         self.assertIsNone(loader.get_cik("FAKE"))
 
     def test_default_cache_path_is_in_tradingagents_home(self):
-        from tradingagents.watchdog.sources.cik_loader import default_cik_cache_path
+        from alphalens.watchdog.sources.cik_loader import default_cik_cache_path
 
         expected = Path.home() / ".tradingagents" / "watchdog" / "company_tickers.json"
         self.assertEqual(default_cik_cache_path(), expected)
 
-    @patch("tradingagents.watchdog.sources.cik_loader.requests.get")
+    @patch("alphalens.watchdog.sources.cik_loader.requests.get")
     def test_case_insensitive_ticker_lookup(self, mock_get):
-        from tradingagents.watchdog.sources.cik_loader import CIKLoader
+        from alphalens.watchdog.sources.cik_loader import CIKLoader
 
         mock_get.return_value = _make_response(FAKE_TICKERS_JSON)
         loader = CIKLoader(user_agent=self.user_agent, cache_path=self.cache_path)

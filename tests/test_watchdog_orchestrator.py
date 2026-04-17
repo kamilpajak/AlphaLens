@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 
 def _mk_event(ticker="AAPL", accession="ACC-1"):
-    from tradingagents.watchdog.types import Event, FormType
+    from alphalens.watchdog.types import Event, FormType
 
     return Event(
         ticker=ticker,
@@ -26,9 +26,9 @@ class TestWatchdogOrchestrator(unittest.TestCase):
         self.tmp.cleanup()
 
     def _build_watchdog(self, sources, router=None, portfolio=None, classifier=None):
-        from tradingagents.watchdog.classifier import SignalClassifier
-        from tradingagents.watchdog.portfolio import PortfolioState
-        from tradingagents.watchdog.watchdog import Watchdog
+        from alphalens.watchdog.classifier import SignalClassifier
+        from alphalens.watchdog.portfolio import PortfolioState
+        from alphalens.watchdog.watchdog import Watchdog
 
         return Watchdog(
             sources=sources,
