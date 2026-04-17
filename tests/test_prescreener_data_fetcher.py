@@ -33,7 +33,8 @@ class TestBatchDataFetcher(unittest.TestCase):
 
         dates = pd.bdate_range("2023-12-01", "2024-02-15")
         cols = pd.MultiIndex.from_product(
-            [["Close", "High", "Low", "Open", "Volume"], ["AAPL"]]
+            [["Close", "High", "Low", "Open", "Volume"], ["AAPL"]],
+            names=["Price", "Ticker"],
         )
         mock_data = pd.DataFrame(100.0, index=dates, columns=cols)
         mock_download.return_value = mock_data
