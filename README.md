@@ -2,7 +2,7 @@
 
 Stock analysis pipeline for active investing — combines real-time event detection, quantitative screening, and multi-agent LLM analysis to surface investment opportunities.
 
-> **Status**: private, solo developer, macOS-only (runs under `launchd`). Built on top of a fork of [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents).
+> **Status**: private, solo developer, macOS-only (runs under `launchd`). Built around [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents), vendored as a `git subtree --squash` at `TradingAgents/`.
 
 ---
 
@@ -62,24 +62,28 @@ watchlist:
 
 ### Running things
 
+Two console scripts are installed:
+- `alphalens` — my CLI (watchdog subcommands)
+- `tradingagents` — upstream's interactive analysis menu
+
 ```bash
-# Deep analysis of a single ticker (Gemini)
+# Deep analysis of a single ticker (ad-hoc Gemini run)
 .venv/bin/python run_gemini.py
 
-# Interactive CLI (upstream TradingAgents menu)
+# Upstream TradingAgents interactive menu (their flow for deep analysis)
 .venv/bin/tradingagents
 
 # Layer 1 — EDGAR poll once, classify, dispatch
-.venv/bin/tradingagents watchdog run-once
+.venv/bin/alphalens watchdog run-once
 
 # Layer 1 — drain auto-trigger queue (feeds Layer 3)
-.venv/bin/tradingagents watchdog process-queue
+.venv/bin/alphalens watchdog process-queue
 
 # Layer 2b — daily momentum scan, send Telegram report
-.venv/bin/tradingagents watchdog momentum-screen --dry-run
+.venv/bin/alphalens watchdog momentum-screen --dry-run
 
 # Status: queue, digest buffer, dedup
-.venv/bin/tradingagents watchdog status
+.venv/bin/alphalens watchdog status
 
 # Tests (unittest, not pytest)
 .venv/bin/python -m unittest discover tests -v
@@ -169,7 +173,7 @@ Lives outside the repo in `~/.tradingagents/` — survives git operations:
 - **Package manager**: `uv` (not pip / poetry)
 - **Testing**: unittest (not pytest) — `python -m unittest discover tests`
 - **Commits**: Conventional Commits enforced (`feat(scope):`, `fix(scope):`, `refactor(scope):`, etc.)
-- **New components always go in `alphalens/<name>/`** — never in `tradingagents/` (upstream territory) or top-level
+- **New components always go in `alphalens/<name>/`** — never in `TradingAgents/` (upstream territory) or at top level
 
 See `docs/architecture.mmd.txt` for a mermaid diagram of the layer interactions.
 
@@ -177,18 +181,15 @@ See `docs/architecture.mmd.txt` for a mermaid diagram of the layer interactions.
 
 ## Upstream relationship
 
-AlphaLens is built on a fork of [`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents) (v0.2.3). The upstream framework powers Layer 3 deep analysis.
+AlphaLens vendors [`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents) (v0.2.3) at `TradingAgents/` via `git subtree --squash`. The upstream framework powers Layer 3 deep analysis and is editable-installed so `import tradingagents.*` works transparently.
 
-- `origin` — `kamilpajak/AlphaLens` (this repo)
-- `upstream` — `TauricResearch/TradingAgents`
-
-To pull upstream updates (embedded subtree model):
+To pull upstream updates:
 ```
 git subtree pull --prefix=TradingAgents https://github.com/TauricResearch/TradingAgents.git main --squash
 ```
-After sync, reapply any vendored patches (currently: Gemini 429 retry in `TradingAgents/tradingagents/llm_clients/google_client.py`).
+After each sync, reapply the single vendored patch: Gemini 429 retry logic in `TradingAgents/tradingagents/llm_clients/google_client.py` (~33 lines, stable region). Goal is to upstream this as a PR so future syncs replay cleanly.
 
-Upstream's original README is preserved at [`docs/UPSTREAM_README.md`](docs/UPSTREAM_README.md).
+Upstream's own README lives at [`TradingAgents/README.md`](TradingAgents/README.md).
 
 ---
 
