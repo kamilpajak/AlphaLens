@@ -1,240 +1,190 @@
-<p align="center">
-  <img src="assets/TauricResearch.png" style="width: 60%; height: auto;">
-</p>
+# AlphaLens
 
-<div align="center" style="line-height: 1;">
-  <a href="https://arxiv.org/abs/2412.20138" target="_blank"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-2412.20138-B31B1B?logo=arxiv"/></a>
-  <a href="https://discord.com/invite/hk9PGKShPK" target="_blank"><img alt="Discord" src="https://img.shields.io/badge/Discord-TradingResearch-7289da?logo=discord&logoColor=white&color=7289da"/></a>
-  <a href="./assets/wechat.png" target="_blank"><img alt="WeChat" src="https://img.shields.io/badge/WeChat-TauricResearch-brightgreen?logo=wechat&logoColor=white"/></a>
-  <a href="https://x.com/TauricResearch" target="_blank"><img alt="X Follow" src="https://img.shields.io/badge/X-TauricResearch-white?logo=x&logoColor=white"/></a>
-  <br>
-  <a href="https://github.com/TauricResearch/" target="_blank"><img alt="Community" src="https://img.shields.io/badge/Join_GitHub_Community-TauricResearch-14C290?logo=discourse"/></a>
-</div>
+Stock analysis pipeline for active investing — combines real-time event detection, quantitative screening, and multi-agent LLM analysis to surface investment opportunities.
 
-<div align="center">
-  <!-- Keep these links. Translations will automatically update with the README. -->
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=de">Deutsch</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=es">Español</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=fr">français</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=ja">日本語</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=ko">한국어</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=pt">Português</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=ru">Русский</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=zh">中文</a>
-</div>
+> **Status**: private, solo developer, macOS-only (runs under `launchd`). Built on top of a fork of [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents).
 
 ---
 
-# TradingAgents: Multi-Agents LLM Financial Trading Framework
+## Architecture
 
-## News
-- [2026-03] **TradingAgents v0.2.3** released with multi-language support, GPT-5.4 family models, unified model catalog, backtesting date fidelity, and proxy support.
-- [2026-03] **TradingAgents v0.2.2** released with GPT-5.4/Gemini 3.1/Claude 4.6 model coverage, five-tier rating scale, OpenAI Responses API, Anthropic effort control, and cross-platform stability.
-- [2026-02] **TradingAgents v0.2.0** released with multi-provider LLM support (GPT-5.x, Gemini 3.x, Claude 4.x, Grok 4.x) and improved system architecture.
-- [2026-01] **Trading-R1** [Technical Report](https://arxiv.org/abs/2509.11420) released, with [Terminal](https://github.com/TauricResearch/Trading-R1) expected to land soon.
+Four layers, each narrowing the candidate funnel before the expensive final stage.
 
-<div align="center">
-<a href="https://www.star-history.com/#TauricResearch/TradingAgents&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=TauricResearch/TradingAgents&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=TauricResearch/TradingAgents&type=Date" />
-   <img alt="TradingAgents Star History" src="https://api.star-history.com/svg?repos=TauricResearch/TradingAgents&type=Date" style="width: 80%; height: auto;" />
- </picture>
-</a>
-</div>
-
-> 🎉 **TradingAgents** officially released! We have received numerous inquiries about the work, and we would like to express our thanks for the enthusiasm in our community.
->
-> So we decided to fully open-source the framework. Looking forward to building impactful projects with you!
-
-<div align="center">
-
-🚀 [TradingAgents](#tradingagents-framework) | ⚡ [Installation & CLI](#installation-and-cli) | 🎬 [Demo](https://www.youtube.com/watch?v=90gr5lwjIho) | 📦 [Package Usage](#tradingagents-package) | 🤝 [Contributing](#contributing) | 📄 [Citation](#citation)
-
-</div>
-
-## TradingAgents Framework
-
-TradingAgents is a multi-agent trading framework that mirrors the dynamics of real-world trading firms. By deploying specialized LLM-powered agents: from fundamental analysts, sentiment experts, and technical analysts, to trader, risk management team, the platform collaboratively evaluates market conditions and informs trading decisions. Moreover, these agents engage in dynamic discussions to pinpoint the optimal strategy.
-
-<p align="center">
-  <img src="assets/schema.png" style="width: 100%; height: auto;">
-</p>
-
-> TradingAgents framework is designed for research purposes. Trading performance may vary based on many factors, including the chosen backbone language models, model temperature, trading periods, the quality of data, and other non-deterministic factors. [It is not intended as financial, investment, or trading advice.](https://tauric.ai/disclaimer/)
-
-Our framework decomposes complex trading tasks into specialized roles. This ensures the system achieves a robust, scalable approach to market analysis and decision-making.
-
-### Analyst Team
-- Fundamentals Analyst: Evaluates company financials and performance metrics, identifying intrinsic values and potential red flags.
-- Sentiment Analyst: Analyzes social media and public sentiment using sentiment scoring algorithms to gauge short-term market mood.
-- News Analyst: Monitors global news and macroeconomic indicators, interpreting the impact of events on market conditions.
-- Technical Analyst: Utilizes technical indicators (like MACD and RSI) to detect trading patterns and forecast price movements.
-
-<p align="center">
-  <img src="assets/analyst.png" width="100%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-### Researcher Team
-- Comprises both bullish and bearish researchers who critically assess the insights provided by the Analyst Team. Through structured debates, they balance potential gains against inherent risks.
-
-<p align="center">
-  <img src="assets/researcher.png" width="70%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-### Trader Agent
-- Composes reports from the analysts and researchers to make informed trading decisions. It determines the timing and magnitude of trades based on comprehensive market insights.
-
-<p align="center">
-  <img src="assets/trader.png" width="70%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-### Risk Management and Portfolio Manager
-- Continuously evaluates portfolio risk by assessing market volatility, liquidity, and other risk factors. The risk management team evaluates and adjusts trading strategies, providing assessment reports to the Portfolio Manager for final decision.
-- The Portfolio Manager approves/rejects the transaction proposal. If approved, the order will be sent to the simulated exchange and executed.
-
-<p align="center">
-  <img src="assets/risk.png" width="70%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-## Installation and CLI
-
-### Installation
-
-Clone TradingAgents:
-```bash
-git clone https://github.com/TauricResearch/TradingAgents.git
-cd TradingAgents
+```
+Layer 1 — watchdog             → SEC EDGAR event detection           (real-time,  <1 min lag)
+Layer 2a — prescreener         → S&P 500 fundamentals + technicals   (~30 min, ad-hoc)
+Layer 2b — momentum screener   → curated YAML universe, theme-based  (daily 22:00)
+Layer 3 — TradingAgents        → multi-agent LLM deep analysis       (~15 min / ticker)
+          → final rating: BUY / OVERWEIGHT / HOLD / UNDERWEIGHT / SELL
 ```
 
-Create a virtual environment in any of your favorite environment managers:
-```bash
-conda create -n tradingagents python=3.13
-conda activate tradingagents
-```
+**Design rationale**: Layer 3 is slow and expensive. Layers 1–2b filter the universe to high-conviction candidates so the LLM stage sees only what's worth analyzing. Layer 1 also auto-triggers Layer 3 when a material SEC filing lands on a held or watchlisted ticker.
 
-Install the package and its dependencies:
-```bash
-pip install .
-```
+---
 
-### Docker
+## Quickstart
 
-Alternatively, run with Docker:
-```bash
-cp .env.example .env  # add your API keys
-docker compose run --rm tradingagents
-```
+### Prerequisites
 
-For local models with Ollama:
-```bash
-docker compose --profile ollama run --rm tradingagents-ollama
-```
+- macOS (launchd scheduling assumed; other platforms can still run the CLI manually)
+- Python 3.13+ — managed via [`uv`](https://github.com/astral-sh/uv)
+- API keys: Google AI (Gemini), Alpha Vantage, Telegram bot token + chat ID
 
-### Required APIs
-
-TradingAgents supports multiple LLM providers. Set the API key for your chosen provider:
+### Setup
 
 ```bash
-export OPENAI_API_KEY=...          # OpenAI (GPT)
-export GOOGLE_API_KEY=...          # Google (Gemini)
-export ANTHROPIC_API_KEY=...       # Anthropic (Claude)
-export XAI_API_KEY=...             # xAI (Grok)
-export DEEPSEEK_API_KEY=...        # DeepSeek
-export DASHSCOPE_API_KEY=...       # Qwen (Alibaba DashScope)
-export ZHIPU_API_KEY=...           # GLM (Zhipu)
-export OPENROUTER_API_KEY=...      # OpenRouter
-export ALPHA_VANTAGE_API_KEY=...   # Alpha Vantage
+git clone git@github.com:kamilpajak/AlphaLens.git
+cd AlphaLens
+
+uv venv
+uv pip install -e .
 ```
 
-For enterprise providers (e.g. Azure OpenAI, AWS Bedrock), copy `.env.enterprise.example` to `.env.enterprise` and fill in your credentials.
+Create `.env` at repo root (see `.env.example`):
 
-For local models, configure Ollama with `llm_provider: "ollama"` in your config.
+```
+GOOGLE_API_KEY=...
+ALPHA_VANTAGE_API_KEY=...
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+```
 
-Alternatively, copy `.env.example` to `.env` and fill in your keys:
+Populate portfolio at `~/.tradingagents/watchdog/portfolio.yaml`:
+
+```yaml
+held:
+  - AAPL
+  - MSFT
+watchlist:
+  - NVDA
+  - GOOGL
+```
+
+### Running things
+
 ```bash
-cp .env.example .env
+# Deep analysis of a single ticker (Gemini)
+.venv/bin/python run_gemini.py
+
+# Interactive CLI (upstream TradingAgents menu)
+.venv/bin/tradingagents
+
+# Layer 1 — EDGAR poll once, classify, dispatch
+.venv/bin/tradingagents watchdog run-once
+
+# Layer 1 — drain auto-trigger queue (feeds Layer 3)
+.venv/bin/tradingagents watchdog process-queue
+
+# Layer 2b — daily momentum scan, send Telegram report
+.venv/bin/tradingagents watchdog momentum-screen --dry-run
+
+# Status: queue, digest buffer, dedup
+.venv/bin/tradingagents watchdog status
+
+# Tests (unittest, not pytest)
+.venv/bin/python -m unittest discover tests -v
 ```
 
-### CLI Usage
+### Scheduled jobs (launchd)
 
-Launch the interactive CLI:
+Three jobs in `launchd/`:
+
+| Job | Interval | Purpose |
+|---|---|---|
+| `com.alphalens.watchdog.detect` | every 15 min | Layer 1 EDGAR poll |
+| `com.alphalens.watchdog.worker` | every 5 min  | Drain auto-trigger queue |
+| `com.alphalens.watchdog.momentum` | daily 22:00 | Layer 2b momentum scan |
+
+Install:
+
 ```bash
-tradingagents          # installed command
-python -m cli.main     # alternative: run directly from source
-```
-You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
-
-<p align="center">
-  <img src="assets/cli/cli_init.png" width="100%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-An interface will appear showing results as they load, letting you track the agent's progress as it runs.
-
-<p align="center">
-  <img src="assets/cli/cli_news.png" width="100%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-<p align="center">
-  <img src="assets/cli/cli_transaction.png" width="100%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-## TradingAgents Package
-
-### Implementation Details
-
-We built TradingAgents with LangGraph to ensure flexibility and modularity. The framework supports multiple LLM providers: OpenAI, Google, Anthropic, xAI, OpenRouter, and Ollama.
-
-### Python Usage
-
-To use TradingAgents inside your code, you can import the `tradingagents` module and initialize a `TradingAgentsGraph()` object. The `.propagate()` function will return a decision. You can run `main.py`, here's also a quick example:
-
-```python
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
-
-ta = TradingAgentsGraph(debug=True, config=DEFAULT_CONFIG.copy())
-
-# forward propagate
-_, decision = ta.propagate("NVDA", "2026-01-15")
-print(decision)
+cp launchd/com.alphalens.watchdog.*.plist ~/Library/LaunchAgents/
+for job in detect worker momentum; do
+  launchctl load ~/Library/LaunchAgents/com.alphalens.watchdog.${job}.plist
+done
 ```
 
-You can also adjust the default configuration to set your own choice of LLMs, debate rounds, etc.
+---
 
-```python
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
-
-config = DEFAULT_CONFIG.copy()
-config["llm_provider"] = "openai"        # openai, google, anthropic, xai, openrouter, ollama
-config["deep_think_llm"] = "gpt-5.4"     # Model for complex reasoning
-config["quick_think_llm"] = "gpt-5.4-mini" # Model for quick tasks
-config["max_debate_rounds"] = 2
-
-ta = TradingAgentsGraph(debug=True, config=config)
-_, decision = ta.propagate("NVDA", "2026-01-15")
-print(decision)
-```
-
-See `tradingagents/default_config.py` for all configuration options.
-
-## Contributing
-
-We welcome contributions from the community! Whether it's fixing a bug, improving documentation, or suggesting a new feature, your input helps make this project better. If you are interested in this line of research, please consider joining our open-source financial AI research community [Tauric Research](https://tauric.ai/).
-
-## Citation
-
-Please reference our work if you find *TradingAgents* provides you with some help :)
+## Components
 
 ```
-@misc{xiao2025tradingagentsmultiagentsllmfinancial,
-      title={TradingAgents: Multi-Agents LLM Financial Trading Framework}, 
-      author={Yijia Xiao and Edward Sun and Di Luo and Wei Wang},
-      year={2025},
-      eprint={2412.20138},
-      archivePrefix={arXiv},
-      primaryClass={q-fin.TR},
-      url={https://arxiv.org/abs/2412.20138}, 
-}
+alphalens/                             ← my code
+├── watchdog/                          Layer 1: EDGAR detection + classifier + dispatch + queue/worker
+├── prescreener/                       Layer 2a: S&P 500 scoring (technical, fundamental, volume, composite ranker)
+├── momentum_screener/                 Layer 2b: theme-based momentum on curated YAML universe
+└── config_gemini.py                   shared Gemini TradingAgentsGraph config
+
+tradingagents/                         ← upstream fork (TauricResearch/TradingAgents)
+├── agents/                            analysts, researchers, traders, risk managers, portfolio manager
+├── graph/                             LangGraph state graph + debate flow control
+├── llm_clients/                       provider adapters (OpenAI-compat, Anthropic, Google + 429 retry patch)
+└── dataflows/                         yfinance + Alpha Vantage adapters
+
+cli/                                   Typer CLI — upstream menu + my watchdog subcommands
+launchd/                               macOS scheduled jobs (plists + bash wrappers)
+tests/                                 unittest suite (258 tests)
 ```
+
+See `CLAUDE.md` for detailed agent flow and configuration reference.
+
+---
+
+## Configuration
+
+**LLM config**: `alphalens/config_gemini.py` (single source of truth — both `run_gemini.py` and the watchdog worker route through `build_gemini_config()`).
+
+**Data vendors**: `core_stock_apis` and `technical_indicators` use yfinance (free). `fundamental_data` and `news_data` use Alpha Vantage (requires key).
+
+**Momentum universe**: `alphalens/momentum_screener/universe.yaml` — curated tickers grouped by theme (ai, quantum, etc.).
+
+**Portfolio**: `~/.tradingagents/watchdog/portfolio.yaml` — your held + watchlist tickers for Layer 1 dispatch routing.
+
+---
+
+## Runtime data
+
+Lives outside the repo in `~/.tradingagents/` — survives git operations:
+
+```
+~/.tradingagents/
+├── watchdog/
+│   ├── seen_events.db              SQLite — EDGAR event dedup
+│   ├── auto_trigger_queue.db       SQLite — Layer 1 → Layer 3 queue
+│   ├── digest.db                   SQLite — quiet-hour digest buffer
+│   ├── portfolio.yaml              your held + watchlist
+│   ├── company_tickers.json        SEC CIK mapping (cached)
+│   └── {detect,worker,momentum}.{log,err}
+├── cache/                          yfinance OHLCV cache
+└── logs/                           TradingAgents full-state JSON logs
+```
+
+---
+
+## Development
+
+- **Package manager**: `uv` (not pip / poetry)
+- **Testing**: unittest (not pytest) — `python -m unittest discover tests`
+- **Commits**: Conventional Commits enforced (`feat(scope):`, `fix(scope):`, `refactor(scope):`, etc.)
+- **New components always go in `alphalens/<name>/`** — never in `tradingagents/` (upstream territory) or top-level
+
+See `docs/architecture.mmd.txt` for a mermaid diagram of the layer interactions.
+
+---
+
+## Upstream relationship
+
+AlphaLens is built on a fork of [`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents) (v0.2.3). The upstream framework powers Layer 3 deep analysis.
+
+- `origin` — `kamilpajak/AlphaLens` (this repo)
+- `upstream` — `TauricResearch/TradingAgents`
+
+To pull upstream updates: `git fetch upstream && git merge upstream/main` (expect conflicts in `cli/main.py`, `pyproject.toml`, `tradingagents/llm_clients/google_client.py`).
+
+Upstream's original README is preserved at [`docs/UPSTREAM_README.md`](docs/UPSTREAM_README.md).
+
+---
+
+## License
+
+Apache License 2.0 — inherited from upstream TradingAgents. AlphaLens additions are released under the same license.
