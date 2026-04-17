@@ -8,13 +8,11 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jacoren/Developer/Personal/AlphaLens/TradingAgents/.venv/bin/tradingagents</string>
-        <string>watchdog</string>
-        <string>run-once</string>
+        <string>/Users/jacoren/Developer/Personal/AlphaLens/launchd/bin/alphalens-detect</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jacoren/Developer/Personal/AlphaLens/TradingAgents</string>
+    <string>/Users/jacoren/Developer/Personal/AlphaLens</string>
 
     <key>EnvironmentVariables</key>
     <dict>
