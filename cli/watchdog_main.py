@@ -14,7 +14,7 @@ from pathlib import Path
 import typer
 from dotenv import load_dotenv
 
-from tradingagents.default_config import DEFAULT_CONFIG
+from alphalens.config_gemini import build_gemini_config
 from alphalens.watchdog.classifier import Action, SignalClassifier
 from alphalens.watchdog.config import WATCHDOG_DEFAULTS
 from alphalens.watchdog.dispatch.handlers.auto_trigger import (
@@ -89,7 +89,7 @@ def _build_worker():
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
 
     home = Path.home() / ".tradingagents" / "watchdog"
-    ta_graph = TradingAgentsGraph(debug=False, config=DEFAULT_CONFIG)
+    ta_graph = TradingAgentsGraph(debug=False, config=build_gemini_config())
     telegram = TelegramHandler(bot_token=bot_token, chat_id=chat_id)
 
     return AutoTriggerWorker(
