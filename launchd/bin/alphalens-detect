@@ -1,0 +1,3 @@
+#!/bin/bash
+# Layer 1 EDGAR watchdog — detects new SEC filings, dispatches Telegram alerts.
+exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/tradingagents watchdog run-once "$@"

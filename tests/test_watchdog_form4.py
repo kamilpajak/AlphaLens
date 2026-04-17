@@ -76,19 +76,19 @@ SAMPLE_FORM4_MULTIPLE = """<?xml version="1.0"?>
 
 class TestForm4Parser(unittest.TestCase):
     def test_parse_transaction_code_P_is_buy(self):
-        from tradingagents.watchdog.sources.form4 import parse_form4_xml
+        from alphalens.watchdog.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml(SAMPLE_FORM4_BUY)
         self.assertEqual(result["insider_action"], "BUY")
 
     def test_parse_transaction_code_S_is_sale(self):
-        from tradingagents.watchdog.sources.form4 import parse_form4_xml
+        from alphalens.watchdog.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml(SAMPLE_FORM4_SALE)
         self.assertEqual(result["insider_action"], "SELL")
 
     def test_parse_extracts_shares_and_price_and_value(self):
-        from tradingagents.watchdog.sources.form4 import parse_form4_xml
+        from alphalens.watchdog.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml(SAMPLE_FORM4_BUY)
         self.assertEqual(result["total_shares"], 1000.0)
@@ -96,7 +96,7 @@ class TestForm4Parser(unittest.TestCase):
 
     def test_parse_handles_multiple_transactions(self):
         """Net buy: 1000+500 buys vs 100 sell → BUY dominates."""
-        from tradingagents.watchdog.sources.form4 import parse_form4_xml
+        from alphalens.watchdog.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml(SAMPLE_FORM4_MULTIPLE)
         self.assertEqual(result["insider_action"], "BUY")
@@ -104,13 +104,13 @@ class TestForm4Parser(unittest.TestCase):
         self.assertAlmostEqual(result["transaction_value_usd"], buy_value)
 
     def test_parse_handles_missing_fields_returns_empty_dict(self):
-        from tradingagents.watchdog.sources.form4 import parse_form4_xml
+        from alphalens.watchdog.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml("<?xml version='1.0'?><ownershipDocument/>")
         self.assertEqual(result, {})
 
     def test_parse_returns_empty_on_malformed_xml(self):
-        from tradingagents.watchdog.sources.form4 import parse_form4_xml
+        from alphalens.watchdog.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml("<bad<<xml")
         self.assertEqual(result, {})

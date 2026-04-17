@@ -14,20 +14,20 @@ from pathlib import Path
 import typer
 from dotenv import load_dotenv
 
-from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.watchdog.classifier import Action, SignalClassifier
-from tradingagents.watchdog.config import WATCHDOG_DEFAULTS
-from tradingagents.watchdog.dispatch.handlers.auto_trigger import (
+from alphalens.config_gemini import build_gemini_config
+from alphalens.watchdog.classifier import Action, SignalClassifier
+from alphalens.watchdog.config import WATCHDOG_DEFAULTS
+from alphalens.watchdog.dispatch.handlers.auto_trigger import (
     AutoTriggerEnqueueHandler,
 )
-from tradingagents.watchdog.dispatch.handlers.digest import DigestHandler
-from tradingagents.watchdog.dispatch.handlers.telegram import TelegramHandler
-from tradingagents.watchdog.dispatch.router import DispatchRouter
-from tradingagents.watchdog.portfolio import PortfolioState, default_portfolio_path
-from tradingagents.watchdog.sources.cik_loader import CIKLoader
-from tradingagents.watchdog.sources.edgar import SECEdgarSource
-from tradingagents.watchdog.storage import SeenEventStore
-from tradingagents.watchdog.watchdog import Watchdog
+from alphalens.watchdog.dispatch.handlers.digest import DigestHandler
+from alphalens.watchdog.dispatch.handlers.telegram import TelegramHandler
+from alphalens.watchdog.dispatch.router import DispatchRouter
+from alphalens.watchdog.portfolio import PortfolioState, default_portfolio_path
+from alphalens.watchdog.sources.cik_loader import CIKLoader
+from alphalens.watchdog.sources.edgar import SECEdgarSource
+from alphalens.watchdog.storage import SeenEventStore
+from alphalens.watchdog.watchdog import Watchdog
 
 load_dotenv()
 
@@ -83,13 +83,13 @@ def _build_watchdog() -> Watchdog:
 def _build_worker():
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
-    from tradingagents.watchdog.worker import AutoTriggerWorker
+    from alphalens.watchdog.worker import AutoTriggerWorker
 
     bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
 
     home = Path.home() / ".tradingagents" / "watchdog"
-    ta_graph = TradingAgentsGraph(debug=False, config=DEFAULT_CONFIG)
+    ta_graph = TradingAgentsGraph(debug=False, config=build_gemini_config())
     telegram = TelegramHandler(bot_token=bot_token, chat_id=chat_id)
 
     return AutoTriggerWorker(
@@ -117,10 +117,39 @@ def process_queue():
     typer.echo(f"processed={processed}")
 
 
+@watchdog_app.command("momentum-screen")
+def momentum_screen(
+    top_n: int = typer.Option(5, help="Number of top momentum names to report"),
+    dry_run: bool = typer.Option(False, help="Print report to stdout, skip Telegram send"),
+):
+    """Run the Layer 2b momentum screener and Telegram the top-N results."""
+    import pandas as pd
+
+    from alphalens.momentum_screener.pipeline import MomentumPipeline
+    from alphalens.momentum_screener.reporter import format_telegram_report
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    curr_date = pd.Timestamp.today().strftime("%Y-%m-%d")
+    pipeline = MomentumPipeline()
+    result = pipeline.run(curr_date=curr_date, top_n=top_n)
+    text = format_telegram_report(result, curr_date)
+
+    if dry_run:
+        typer.echo(text)
+        return
+
+    bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
+    chat_id = os.environ["TELEGRAM_CHAT_ID"]
+    telegram = TelegramHandler(bot_token=bot_token, chat_id=chat_id)
+    telegram.send_message(text)
+    typer.echo(f"sent {len(result)} candidates to Telegram")
+
+
 @watchdog_app.command("status")
 def status():
     """Report current state: queue, digest buffer, dedup count."""
-    from tradingagents.watchdog.status import collect_status, format_status
+    from alphalens.watchdog.status import collect_status, format_status
 
     home = Path.home() / ".tradingagents" / "watchdog"
     result = collect_status(

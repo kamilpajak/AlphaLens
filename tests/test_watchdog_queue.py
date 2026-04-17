@@ -12,7 +12,7 @@ class TestAutoTriggerQueue(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_enqueue_inserts_pending_row(self):
-        from tradingagents.watchdog.queue import AutoTriggerQueue
+        from alphalens.watchdog.queue import AutoTriggerQueue
 
         queue = AutoTriggerQueue(self.db_path)
         queue.enqueue(ticker="AAPL", accession="ACC-001", trigger_url="https://sec.gov/x")
@@ -23,7 +23,7 @@ class TestAutoTriggerQueue(unittest.TestCase):
         self.assertEqual(rows[0]["accession_number"], "ACC-001")
 
     def test_claim_next_returns_oldest_pending_and_marks_in_progress(self):
-        from tradingagents.watchdog.queue import AutoTriggerQueue
+        from alphalens.watchdog.queue import AutoTriggerQueue
 
         queue = AutoTriggerQueue(self.db_path)
         queue.enqueue(ticker="AAPL", accession="ACC-1", trigger_url="x")
@@ -38,13 +38,13 @@ class TestAutoTriggerQueue(unittest.TestCase):
         self.assertEqual(in_progress[0]["id"], claimed["id"])
 
     def test_claim_next_returns_none_when_no_pending(self):
-        from tradingagents.watchdog.queue import AutoTriggerQueue
+        from alphalens.watchdog.queue import AutoTriggerQueue
 
         queue = AutoTriggerQueue(self.db_path)
         self.assertIsNone(queue.claim_next())
 
     def test_mark_done_stores_decision(self):
-        from tradingagents.watchdog.queue import AutoTriggerQueue
+        from alphalens.watchdog.queue import AutoTriggerQueue
 
         queue = AutoTriggerQueue(self.db_path)
         queue.enqueue(ticker="AAPL", accession="ACC-1", trigger_url="x")
@@ -58,7 +58,7 @@ class TestAutoTriggerQueue(unittest.TestCase):
         self.assertIsNotNone(done[0]["finished_at"])
 
     def test_mark_failed_stores_error(self):
-        from tradingagents.watchdog.queue import AutoTriggerQueue
+        from alphalens.watchdog.queue import AutoTriggerQueue
 
         queue = AutoTriggerQueue(self.db_path)
         queue.enqueue(ticker="AAPL", accession="ACC-1", trigger_url="x")
@@ -71,7 +71,7 @@ class TestAutoTriggerQueue(unittest.TestCase):
         self.assertIn("rate limit", failed[0]["error"])
 
     def test_count_done_today(self):
-        from tradingagents.watchdog.queue import AutoTriggerQueue
+        from alphalens.watchdog.queue import AutoTriggerQueue
 
         queue = AutoTriggerQueue(self.db_path)
         for acc in ["A1", "A2"]:

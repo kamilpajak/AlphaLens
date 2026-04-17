@@ -4,11 +4,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.alphalens.watchdog.worker</string>
+    <string>com.alphalens.watchdog.momentum</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jacoren/Developer/Personal/AlphaLens/launchd/bin/alphalens-worker</string>
+        <string>/Users/jacoren/Developer/Personal/AlphaLens/launchd/bin/alphalens-momentum</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -20,14 +20,19 @@
         <string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin</string>
     </dict>
 
-    <key>StartInterval</key>
-    <integer>300</integer>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>22</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/jacoren/.tradingagents/watchdog/worker.log</string>
+    <string>/Users/jacoren/.tradingagents/watchdog/momentum.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/jacoren/.tradingagents/watchdog/worker.err</string>
+    <string>/Users/jacoren/.tradingagents/watchdog/momentum.err</string>
 
     <key>RunAtLoad</key>
     <false/>

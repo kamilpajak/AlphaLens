@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _mk_event(accession: str, ticker: str = "AAPL"):
-    from tradingagents.watchdog.types import Event, FormType
+    from alphalens.watchdog.types import Event, FormType
 
     return Event(
         ticker=ticker,
@@ -26,7 +26,7 @@ class TestSeenEventStore(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_mark_seen_then_has_seen_returns_true(self):
-        from tradingagents.watchdog.storage import SeenEventStore
+        from alphalens.watchdog.storage import SeenEventStore
 
         store = SeenEventStore(self.db_path)
         self.assertFalse(store.has_seen("ACC-123"))
@@ -34,7 +34,7 @@ class TestSeenEventStore(unittest.TestCase):
         self.assertTrue(store.has_seen("ACC-123"))
 
     def test_store_persists_across_instances(self):
-        from tradingagents.watchdog.storage import SeenEventStore
+        from alphalens.watchdog.storage import SeenEventStore
 
         store1 = SeenEventStore(self.db_path)
         store1.mark_seen("ACC-PERSIST")
@@ -44,7 +44,7 @@ class TestSeenEventStore(unittest.TestCase):
         self.assertTrue(store2.has_seen("ACC-PERSIST"))
 
     def test_filter_unseen_returns_only_new_events(self):
-        from tradingagents.watchdog.storage import SeenEventStore
+        from alphalens.watchdog.storage import SeenEventStore
 
         store = SeenEventStore(self.db_path)
         store.mark_seen("ACC-1")
@@ -56,13 +56,13 @@ class TestSeenEventStore(unittest.TestCase):
         self.assertEqual([e.accession_number for e in unseen], ["ACC-2", "ACC-4"])
 
     def test_default_path_is_in_tradingagents_home(self):
-        from tradingagents.watchdog.storage import SeenEventStore, default_db_path
+        from alphalens.watchdog.storage import SeenEventStore, default_db_path
 
         expected = Path.home() / ".tradingagents" / "watchdog" / "seen_events.db"
         self.assertEqual(default_db_path(), expected)
 
     def test_mark_seen_is_idempotent(self):
-        from tradingagents.watchdog.storage import SeenEventStore
+        from alphalens.watchdog.storage import SeenEventStore
 
         store = SeenEventStore(self.db_path)
         store.mark_seen("ACC-X")
