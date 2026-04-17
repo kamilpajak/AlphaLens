@@ -130,7 +130,7 @@ class TestFormatStatus(unittest.TestCase):
 
 class TestStatusCLICommand(unittest.TestCase):
     def test_status_subcommand_is_registered(self):
-        from cli.watchdog_main import watchdog_app
+        from alphalens_cli.watchdog_main import watchdog_app
 
         result = CliRunner().invoke(watchdog_app, ["--help"])
         self.assertEqual(result.exit_code, 0)

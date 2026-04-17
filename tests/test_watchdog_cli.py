@@ -9,16 +9,16 @@ class TestWatchdogCLI(unittest.TestCase):
         self.runner = CliRunner()
 
     def test_cli_has_run_once_and_process_queue_subcommands(self):
-        from cli.watchdog_main import watchdog_app
+        from alphalens_cli.watchdog_main import watchdog_app
 
         result = self.runner.invoke(watchdog_app, ["--help"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("run-once", result.stdout)
         self.assertIn("process-queue", result.stdout)
 
-    @patch("cli.watchdog_main._build_watchdog")
+    @patch("alphalens_cli.watchdog_main._build_watchdog")
     def test_run_once_invokes_watchdog(self, mock_build):
-        from cli.watchdog_main import watchdog_app
+        from alphalens_cli.watchdog_main import watchdog_app
 
         fake_wd = MagicMock()
         fake_wd.run_once.return_value = {"events_detected": 3, "events_dispatched": 3}
@@ -28,9 +28,9 @@ class TestWatchdogCLI(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
         fake_wd.run_once.assert_called_once()
 
-    @patch("cli.watchdog_main._build_worker")
+    @patch("alphalens_cli.watchdog_main._build_worker")
     def test_process_queue_invokes_worker(self, mock_build):
-        from cli.watchdog_main import watchdog_app
+        from alphalens_cli.watchdog_main import watchdog_app
 
         fake_worker = MagicMock()
         fake_worker.process_all.return_value = 2

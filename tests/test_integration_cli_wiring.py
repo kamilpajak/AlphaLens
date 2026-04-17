@@ -21,12 +21,12 @@ OUR_PACKAGE_PREFIX = "alphalens"
 
 class TestTyperAppRegistration(unittest.TestCase):
     def test_watchdog_app_is_typer(self):
-        from cli.watchdog_main import watchdog_app
+        from alphalens_cli.watchdog_main import watchdog_app
 
         self.assertIsInstance(watchdog_app, typer.Typer)
 
     def test_all_subcommands_registered(self):
-        from cli.watchdog_main import watchdog_app
+        from alphalens_cli.watchdog_main import watchdog_app
 
         names = {cmd.name for cmd in watchdog_app.registered_commands}
         self.assertEqual(
@@ -58,7 +58,7 @@ class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):
             mock_portfolio.load.return_value = MagicMock(
                 held=["AAPL"], watchlist=["MSFT"]
             )
-            from cli.watchdog_main import _build_watchdog
+            from alphalens_cli.watchdog_main import _build_watchdog
 
             try:
                 _build_watchdog()
@@ -80,7 +80,7 @@ class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):
         with patch(graph_cls) as mock_graph, patch(worker_cls) as mock_worker:
             mock_graph.return_value = MagicMock()
             mock_worker.return_value = MagicMock()
-            from cli.watchdog_main import _build_worker
+            from alphalens_cli.watchdog_main import _build_worker
 
             try:
                 _build_worker()
@@ -99,7 +99,7 @@ class TestRootTyperSubprocessSmoke(unittest.TestCase):
 
     def test_root_app_imports_cleanly(self):
         result = subprocess.run(
-            [sys.executable, "-c", "from cli.main import app; assert app is not None"],
+            [sys.executable, "-c", "from alphalens_cli.main import app; assert app is not None"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -107,7 +107,7 @@ class TestRootTyperSubprocessSmoke(unittest.TestCase):
         self.assertEqual(
             result.returncode,
             0,
-            f"cli.main import failed:\nstdout: {result.stdout}\nstderr: {result.stderr}",
+            f"alphalens_cli.main import failed:\nstdout: {result.stdout}\nstderr: {result.stderr}",
         )
 
 

@@ -27,7 +27,7 @@ Layer 3 — TradingAgents        → multi-agent LLM deep analysis       (~15 mi
 ### Prerequisites
 
 - macOS (launchd scheduling assumed; other platforms can still run the CLI manually)
-- Python 3.13+ — managed via [`uv`](https://github.com/astral-sh/uv)
+- Python 3.13 (not 3.14 yet — transitive dep `tiktoken 0.9.0` has no 3.14 prebuilt wheel, and we don't want a Rust toolchain on the critical path) — managed via [`uv`](https://github.com/astral-sh/uv)
 - API keys: Google AI (Gemini), Alpha Vantage, Telegram bot token + chat ID
 
 ### Setup
@@ -36,8 +36,8 @@ Layer 3 — TradingAgents        → multi-agent LLM deep analysis       (~15 mi
 git clone git@github.com:kamilpajak/AlphaLens.git
 cd AlphaLens
 
-uv venv
-uv pip install -e .
+uv venv --python 3.13       # tiktoken has no 3.14 prebuilt wheel
+uv sync                      # installs both alphalens and tradingagents editable via tool.uv.sources
 ```
 
 Create `.env` at repo root (see `.env.example`):
@@ -109,19 +109,22 @@ done
 ## Components
 
 ```
-alphalens/                             ← my code
+alphalens/                             ← my code (Python package)
 ├── watchdog/                          Layer 1: EDGAR detection + classifier + dispatch + queue/worker
 ├── prescreener/                       Layer 2a: S&P 500 scoring (technical, fundamental, volume, composite ranker)
 ├── momentum_screener/                 Layer 2b: theme-based momentum on curated YAML universe
 └── config_gemini.py                   shared Gemini TradingAgentsGraph config
 
-tradingagents/                         ← upstream fork (TauricResearch/TradingAgents)
-├── agents/                            analysts, researchers, traders, risk managers, portfolio manager
-├── graph/                             LangGraph state graph + debate flow control
-├── llm_clients/                       provider adapters (OpenAI-compat, Anthropic, Google + 429 retry patch)
-└── dataflows/                         yfinance + Alpha Vantage adapters
+alphalens_cli/                         ← my CLI (separate package to avoid collision with TradingAgents/cli/)
+├── main.py                            entry point — `alphalens` console script
+└── watchdog_main.py                   Typer sub-app for watchdog subcommands
 
-cli/                                   Typer CLI — upstream menu + my watchdog subcommands
+TradingAgents/                         ← upstream vendored via git subtree --squash
+├── tradingagents/                     their Python package (agents, graph, llm_clients, dataflows)
+├── cli/                               their interactive menu (reachable via `tradingagents` console script)
+├── main.py, Dockerfile, ...           their project-root files, isolated here
+└── pyproject.toml                     their config (active via uv editable install)
+
 launchd/                               macOS scheduled jobs (plists + bash wrappers)
 tests/                                 unittest suite (258 tests)
 ```
@@ -179,7 +182,11 @@ AlphaLens is built on a fork of [`TauricResearch/TradingAgents`](https://github.
 - `origin` — `kamilpajak/AlphaLens` (this repo)
 - `upstream` — `TauricResearch/TradingAgents`
 
-To pull upstream updates: `git fetch upstream && git merge upstream/main` (expect conflicts in `cli/main.py`, `pyproject.toml`, `tradingagents/llm_clients/google_client.py`).
+To pull upstream updates (embedded subtree model):
+```
+git subtree pull --prefix=TradingAgents https://github.com/TauricResearch/TradingAgents.git main --squash
+```
+After sync, reapply any vendored patches (currently: Gemini 429 retry in `TradingAgents/tradingagents/llm_clients/google_client.py`).
 
 Upstream's original README is preserved at [`docs/UPSTREAM_README.md`](docs/UPSTREAM_README.md).
 

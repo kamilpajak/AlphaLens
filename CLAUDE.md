@@ -6,15 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **AlphaLens** is a stock analysis pipeline. Own code lives in `alphalens/`. Upstream **TradingAgents** (multi-agent LLM trading framework, v0.2.3) is vendored at `TradingAgents/` as a `git subtree --squash` from `TauricResearch/TradingAgents` and powers Layer 3 deep analysis. AlphaLens additions: Layer 1 SEC EDGAR watchdog, Layer 2a S&P 500 prescreener, Layer 2b momentum screener.
 
-Project root belongs to AlphaLens. Upstream sits in its own subfolder — edit patches there, sync with `git subtree pull`.
+Project root belongs to AlphaLens. Upstream sits in its own subfolder — edit patches there, sync with `git subtree pull`. The top-level CLI package is named `alphalens_cli/` (not `cli/`) to avoid namespace collision with TradingAgents' own `cli/` package.
 
 ## Commands
 
 ```bash
-# Setup (fresh clone)
-uv venv
-uv pip install -e ./TradingAgents    # register tradingagents package as editable
-uv pip install -e .                  # register alphalens + cli
+# Setup (fresh clone) — requires Python 3.13 (tiktoken has no 3.14 prebuilt wheel)
+uv venv --python 3.13
+uv sync                               # installs both alphalens and tradingagents editable (via tool.uv.sources)
 
 # Run tests (unittest, not pytest)
 .venv/bin/python -m unittest discover tests -v
@@ -106,7 +105,7 @@ TradingAgents state logs: `~/.tradingagents/logs/{TICKER}/TradingAgentsStrategy_
 
 Generate human-readable reports:
 ```python
-from cli.main import save_report_to_disk   # upstream util, now at TradingAgents/cli/main.py
+from cli.main import save_report_to_disk   # upstream util, resolves to TradingAgents/cli/main.py via editable install
 ```
 (Path changed — this helper lives in the subtree's CLI, not mine.)
 
