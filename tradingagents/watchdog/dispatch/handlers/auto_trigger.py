@@ -1,96 +1,36 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
 
 from ...classifier import ClassifiedEvent
+from ...queue import AutoTriggerQueue
 from .base import AlertHandler
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BUDGET_PER_DAY = 5
 
+class AutoTriggerEnqueueHandler(AlertHandler):
+    """Detection-side handler: inserts a job into the auto-trigger queue.
 
-class Sender(Protocol):
-    def send_message(self, text: str) -> None: ...
+    Does NOT run TradingAgents. A separate worker (see `watchdog.worker`)
+    drains the queue and executes deep analysis with its own budget guard.
+    """
 
-
-class TradingAgentsProtocol(Protocol):
-    def propagate(self, ticker: str, date: str): ...
-
-
-class AutoTriggerHandler(AlertHandler):
-    """Runs TradingAgents deep analysis on the event's ticker, subject to daily budget."""
-
-    def __init__(
-        self,
-        ta_graph: TradingAgentsProtocol,
-        notifier: Sender,
-        budget_path: Path | str,
-        budget_per_day: int = DEFAULT_BUDGET_PER_DAY,
-    ):
-        self.ta_graph = ta_graph
-        self.notifier = notifier
-        self.budget_path = Path(budget_path)
-        self.budget_path.parent.mkdir(parents=True, exist_ok=True)
-        self.budget_per_day = budget_per_day
-        self._conn = sqlite3.connect(str(self.budget_path))
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS trigger_counter (date TEXT PRIMARY KEY, count INTEGER NOT NULL)"
-        )
-        self._conn.commit()
+    def __init__(self, queue_path: Path | str | None = None):
+        self.queue = AutoTriggerQueue(queue_path)
 
     def handle(self, classified: ClassifiedEvent) -> None:
-        today = datetime.now(timezone.utc).date().isoformat()
-        used = self._count_for(today)
-        ticker = classified.event.ticker
-
-        if used >= self.budget_per_day:
-            msg = (
-                f"🛑 Auto-trigger budget exhausted ({used}/{self.budget_per_day} for {today}). "
-                f"Skipping {ticker}. Manual trigger still available."
-            )
-            logger.warning(msg)
-            self._notify(msg)
-            return
-
-        self._increment(today)
-        date_str = classified.event.filed_at.date().isoformat()
-
+        event = classified.event
         try:
-            _, decision = self.ta_graph.propagate(ticker, date_str)
-            msg = (
-                f"🤖 Auto-analysis done — {ticker}\n"
-                f"Decision: *{decision}*\n"
-                f"Trigger: {classified.event.form_type.value} "
-                f"({classified.severity.name}/{classified.relevance.value})\n"
-                f"{classified.event.url}"
+            self.queue.enqueue(
+                ticker=event.ticker,
+                accession=event.accession_number,
+                trigger_url=event.url,
             )
-            self._notify(msg)
-        except Exception as exc:  # noqa: BLE001 — defensive, loop must continue
-            logger.error("Auto-trigger propagate failed for %s: %s", ticker, exc, exc_info=True)
-            self._notify(f"❌ Auto-analysis failed for {ticker}: {exc}")
-
-    def _count_for(self, date: str) -> int:
-        cur = self._conn.execute(
-            "SELECT count FROM trigger_counter WHERE date = ?", (date,)
-        )
-        row = cur.fetchone()
-        return row[0] if row else 0
-
-    def _increment(self, date: str) -> None:
-        self._conn.execute(
-            "INSERT INTO trigger_counter (date, count) VALUES (?, 1) "
-            "ON CONFLICT(date) DO UPDATE SET count = count + 1",
-            (date,),
-        )
-        self._conn.commit()
-
-    def _notify(self, msg: str) -> None:
-        try:
-            self.notifier.send_message(msg)
+            logger.info("Enqueued auto-trigger for %s (%s)", event.ticker, event.accession_number)
         except Exception as exc:  # noqa: BLE001
-            logger.error("Notifier send failed: %s", exc)
+            logger.error("Enqueue failed for %s: %s", event.ticker, exc, exc_info=True)
+
+    def close(self) -> None:
+        self.queue.close()

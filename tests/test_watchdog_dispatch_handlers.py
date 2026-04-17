@@ -136,90 +136,50 @@ class TestDigestHandler(unittest.TestCase):
         self.assertEqual(handler.buffered(), [])
 
 
-class TestAutoTriggerHandler(unittest.TestCase):
+class TestAutoTriggerEnqueueHandler(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.budget_path = Path(self.tmp.name) / "budget.db"
+        self.queue_path = Path(self.tmp.name) / "queue.db"
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_calls_tradingagents_propagate_with_ticker_and_date(self):
-        from tradingagents.watchdog.dispatch.handlers.auto_trigger import AutoTriggerHandler
-
-        ta_graph = MagicMock()
-        ta_graph.propagate.return_value = ({}, "BUY")
-
-        handler = AutoTriggerHandler(
-            ta_graph=ta_graph,
-            notifier=MagicMock(),
-            budget_path=self.budget_path,
-            budget_per_day=5,
+    def test_handle_enqueues_classified_event(self):
+        from tradingagents.watchdog.dispatch.handlers.auto_trigger import (
+            AutoTriggerEnqueueHandler,
         )
+        from tradingagents.watchdog.queue import AutoTriggerQueue
+
+        handler = AutoTriggerEnqueueHandler(queue_path=self.queue_path)
+        handler.handle(_classified(ticker="AAPL"))
+        handler.close()
+
+        with AutoTriggerQueue(self.queue_path) as q:
+            pending = q.list_by_status("pending")
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]["ticker"], "AAPL")
+
+    def test_handle_does_not_raise_on_queue_write_error(self):
+        from tradingagents.watchdog.dispatch.handlers.auto_trigger import (
+            AutoTriggerEnqueueHandler,
+        )
+
+        handler = AutoTriggerEnqueueHandler(queue_path=self.queue_path)
+        # Simulate queue failure by closing the underlying connection
+        handler.queue.close()
+
+        # Should not raise despite broken queue
         handler.handle(_classified(ticker="AAPL"))
 
-        self.assertTrue(ta_graph.propagate.called)
-        args = ta_graph.propagate.call_args.args
-        self.assertEqual(args[0], "AAPL")
-        # Second arg is date string
-        self.assertIsNotNone(args[1])
 
-    def test_sends_decision_via_notifier(self):
-        from tradingagents.watchdog.dispatch.handlers.auto_trigger import AutoTriggerHandler
+class TestObsoleteSyncHandlerRemoved(unittest.TestCase):
+    def test_legacy_class_no_longer_exported(self):
+        from tradingagents.watchdog.dispatch.handlers import auto_trigger
 
-        ta_graph = MagicMock()
-        ta_graph.propagate.return_value = ({}, "OVERWEIGHT")
-        notifier = MagicMock()
-
-        handler = AutoTriggerHandler(
-            ta_graph=ta_graph,
-            notifier=notifier,
-            budget_path=self.budget_path,
+        self.assertFalse(
+            hasattr(auto_trigger, "AutoTriggerHandler"),
+            "Sync AutoTriggerHandler replaced by AutoTriggerEnqueueHandler + worker",
         )
-        handler.handle(_classified(ticker="AAPL"))
-
-        notifier.send_message.assert_called_once()
-        msg = notifier.send_message.call_args.args[0]
-        self.assertIn("AAPL", msg)
-        self.assertIn("OVERWEIGHT", msg)
-
-    def test_budget_guard_blocks_after_limit(self):
-        from tradingagents.watchdog.dispatch.handlers.auto_trigger import AutoTriggerHandler
-
-        ta_graph = MagicMock()
-        ta_graph.propagate.return_value = ({}, "BUY")
-        notifier = MagicMock()
-
-        handler = AutoTriggerHandler(
-            ta_graph=ta_graph,
-            notifier=notifier,
-            budget_path=self.budget_path,
-            budget_per_day=2,
-        )
-        handler.handle(_classified(ticker="AAPL"))
-        handler.handle(_classified(ticker="MSFT"))
-        handler.handle(_classified(ticker="NVDA"))  # blocked
-
-        self.assertEqual(ta_graph.propagate.call_count, 2)
-        # Notifier should be called for blocked one too (informing user)
-        blocked_msgs = [
-            c.args[0] for c in notifier.send_message.call_args_list
-            if "budget" in c.args[0].lower() or "limit" in c.args[0].lower()
-        ]
-        self.assertTrue(blocked_msgs)
-
-    def test_propagate_failure_does_not_crash(self):
-        from tradingagents.watchdog.dispatch.handlers.auto_trigger import AutoTriggerHandler
-
-        ta_graph = MagicMock()
-        ta_graph.propagate.side_effect = RuntimeError("LLM down")
-
-        handler = AutoTriggerHandler(
-            ta_graph=ta_graph,
-            notifier=MagicMock(),
-            budget_path=self.budget_path,
-        )
-        handler.handle(_classified(ticker="AAPL"))  # should not raise
 
 
 if __name__ == "__main__":
