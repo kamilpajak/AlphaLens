@@ -1,3 +1,6 @@
+import logging
+import re
+import time
 from typing import Any, Optional
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -5,16 +8,45 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from .base_client import BaseLLMClient, normalize_content
 from .validators import validate_model
 
+logger = logging.getLogger(__name__)
+
+_QUOTA_MAX_RETRIES = 10
+_QUOTA_BASE_DELAY = 40.0  # seconds — Google recommends ~37s
+
 
 class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
     """ChatGoogleGenerativeAI with normalized content output.
 
     Gemini 3 models return content as list of typed blocks.
     This normalizes to string for consistent downstream handling.
+
+    Adds retry logic for 429 RESOURCE_EXHAUSTED quota errors that
+    require longer waits than the default SDK retry (which maxes at ~8s).
     """
 
     def invoke(self, input, config=None, **kwargs):
-        return normalize_content(super().invoke(input, config, **kwargs))
+        for attempt in range(_QUOTA_MAX_RETRIES + 1):
+            try:
+                return normalize_content(super().invoke(input, config, **kwargs))
+            except Exception as e:
+                if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
+                    if attempt < _QUOTA_MAX_RETRIES:
+                        delay = _parse_retry_delay(str(e)) or _QUOTA_BASE_DELAY
+                        logger.warning(
+                            "Gemini quota exceeded, waiting %.0fs before retry %d/%d",
+                            delay, attempt + 1, _QUOTA_MAX_RETRIES,
+                        )
+                        time.sleep(delay)
+                        continue
+                raise
+
+
+def _parse_retry_delay(error_msg: str) -> float | None:
+    """Extract retry delay from Google API error message."""
+    match = re.search(r"retryDelay.*?(\d+(?:\.\d+)?)\s*s", error_msg)
+    if match:
+        return float(match.group(1)) + 2.0  # add buffer
+    return None
 
 
 class GoogleClient(BaseLLMClient):
