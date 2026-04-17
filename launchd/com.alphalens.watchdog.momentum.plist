@@ -29,10 +29,10 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/jacoren/.tradingagents/watchdog/momentum.log</string>
+    <string>/Users/jacoren/.alphalens/watchdog/momentum.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/jacoren/.tradingagents/watchdog/momentum.err</string>
+    <string>/Users/jacoren/.alphalens/watchdog/momentum.err</string>
 
     <key>RunAtLoad</key>
     <false/>

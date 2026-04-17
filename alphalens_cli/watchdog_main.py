@@ -1,9 +1,10 @@
 """CLI entry points for the Layer 1 watchdog.
 
-Two subcommands invoked by launchd:
+Subcommands invoked by launchd:
 
-    tradingagents watchdog run-once        # detection (every 15 min)
-    tradingagents watchdog process-queue   # worker (every 5 min)
+    alphalens watchdog run-once        # detection (every 15 min)
+    alphalens watchdog process-queue   # worker (every 5 min)
+    alphalens watchdog momentum-screen # Layer 2b daily scan (22:00)
 """
 from __future__ import annotations
 
@@ -49,7 +50,7 @@ def _build_watchdog() -> Watchdog:
 
     portfolio = PortfolioState.load(default_portfolio_path())
 
-    home = Path.home() / ".tradingagents" / "watchdog"
+    home = Path.home() / ".alphalens" / "watchdog"
     cik_loader = CIKLoader(user_agent=user_agent, cache_path=home / "company_tickers.json")
     cik_loader.load()
 
@@ -88,7 +89,7 @@ def _build_worker():
     bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
 
-    home = Path.home() / ".tradingagents" / "watchdog"
+    home = Path.home() / ".alphalens" / "watchdog"
     ta_graph = TradingAgentsGraph(debug=False, config=build_gemini_config())
     telegram = TelegramHandler(bot_token=bot_token, chat_id=chat_id)
 
@@ -151,7 +152,7 @@ def status():
     """Report current state: queue, digest buffer, dedup count."""
     from alphalens.watchdog.status import collect_status, format_status
 
-    home = Path.home() / ".tradingagents" / "watchdog"
+    home = Path.home() / ".alphalens" / "watchdog"
     result = collect_status(
         queue_path=home / "auto_trigger_queue.db",
         digest_path=home / "digest.db",

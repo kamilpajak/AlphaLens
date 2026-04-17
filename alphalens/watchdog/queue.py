@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def default_queue_path() -> Path:
-    return Path.home() / ".tradingagents" / "watchdog" / "auto_trigger_queue.db"
+    return Path.home() / ".alphalens" / "watchdog" / "auto_trigger_queue.db"
 
 
 class AutoTriggerQueue:

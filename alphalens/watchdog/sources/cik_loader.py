@@ -14,7 +14,7 @@ DEFAULT_TTL_SECONDS = 7 * 86400  # 7 days
 
 
 def default_cik_cache_path() -> Path:
-    return Path.home() / ".tradingagents" / "watchdog" / "company_tickers.json"
+    return Path.home() / ".alphalens" / "watchdog" / "company_tickers.json"
 
 
 class CIKLoader:

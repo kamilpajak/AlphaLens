@@ -24,10 +24,10 @@
     <integer>300</integer>
 
     <key>StandardOutPath</key>
-    <string>/Users/jacoren/.tradingagents/watchdog/worker.log</string>
+    <string>/Users/jacoren/.alphalens/watchdog/worker.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/jacoren/.tradingagents/watchdog/worker.err</string>
+    <string>/Users/jacoren/.alphalens/watchdog/worker.err</string>
 
     <key>RunAtLoad</key>
     <false/>

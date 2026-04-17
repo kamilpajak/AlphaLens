@@ -59,7 +59,7 @@ class TestPortfolioState(unittest.TestCase):
     def test_default_path_is_in_tradingagents_home(self):
         from alphalens.watchdog.portfolio import default_portfolio_path
 
-        expected = Path.home() / ".tradingagents" / "watchdog" / "portfolio.yaml"
+        expected = Path.home() / ".alphalens" / "watchdog" / "portfolio.yaml"
         self.assertEqual(default_portfolio_path(), expected)
 
 

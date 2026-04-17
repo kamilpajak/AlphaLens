@@ -17,10 +17,10 @@ Two launchd jobs run Layer 1 on macOS:
 cp launchd/com.alphalens.watchdog.*.plist ~/Library/LaunchAgents/
 
 # Create state dir (for logs + SQLite)
-mkdir -p ~/.tradingagents/watchdog
+mkdir -p ~/.alphalens/watchdog
 
 # Create a portfolio file (held/watchlist tickers to monitor)
-cat > ~/.tradingagents/watchdog/portfolio.yaml <<'EOF'
+cat > ~/.alphalens/watchdog/portfolio.yaml <<'EOF'
 held:
   - AAPL
   - MSFT
@@ -38,7 +38,7 @@ launchctl load ~/Library/LaunchAgents/com.alphalens.watchdog.worker.plist
 
 # Optional: trigger once to smoke test
 launchctl start com.alphalens.watchdog.detect
-tail -f ~/.tradingagents/watchdog/detect.log
+tail -f ~/.alphalens/watchdog/detect.log
 ```
 
 ## Stop / remove
@@ -53,16 +53,16 @@ rm ~/Library/LaunchAgents/com.alphalens.watchdog.*.plist
 
 ```bash
 # Queue status
-sqlite3 ~/.tradingagents/watchdog/auto_trigger_queue.db \
+sqlite3 ~/.alphalens/watchdog/auto_trigger_queue.db \
   "SELECT id, ticker, status, decision, enqueued_at FROM auto_trigger_queue ORDER BY id DESC LIMIT 20;"
 
 # Dedup (filings already seen)
-sqlite3 ~/.tradingagents/watchdog/seen_events.db \
+sqlite3 ~/.alphalens/watchdog/seen_events.db \
   "SELECT COUNT(*) FROM seen_events;"
 
 # Tail logs
-tail -f ~/.tradingagents/watchdog/detect.log
-tail -f ~/.tradingagents/watchdog/worker.log
+tail -f ~/.alphalens/watchdog/detect.log
+tail -f ~/.alphalens/watchdog/worker.log
 ```
 
 ## Why two jobs
@@ -74,4 +74,4 @@ analysis takes ~15 min and costs API $. Keeping them separate means:
 - Queue is durable — reboots / crashes leave jobs in place for retry.
 - Budget guard in the worker caps real cost regardless of how many alerts fire.
 
-See `tradingagents/watchdog/queue.py` and `worker.py`.
+See `alphalens/watchdog/queue.py` and `worker.py`.

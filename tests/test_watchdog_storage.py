@@ -58,7 +58,7 @@ class TestSeenEventStore(unittest.TestCase):
     def test_default_path_is_in_tradingagents_home(self):
         from alphalens.watchdog.storage import SeenEventStore, default_db_path
 
-        expected = Path.home() / ".tradingagents" / "watchdog" / "seen_events.db"
+        expected = Path.home() / ".alphalens" / "watchdog" / "seen_events.db"
         self.assertEqual(default_db_path(), expected)
 
     def test_mark_seen_is_idempotent(self):

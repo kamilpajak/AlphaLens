@@ -120,4 +120,4 @@ from cli.main import save_report_to_disk   # upstream util, resolves to TradingA
 - API keys in `.env` at repo root (GOOGLE_API_KEY, ALPHA_VANTAGE_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
 - Google API key also in macOS Keychain under `google-api-key`
 - Current LLM config: Gemini 3.1 Pro (deep) + Gemini 2.5 Flash (quick)
-- Runtime data: `~/.tradingagents/` (portfolio.yaml, SQLite dbs, logs) — outside repo, survives git operations
+- Runtime data: `~/.alphalens/watchdog/` (my watchdog state — portfolio.yaml, SQLite dbs, launchd logs) and `~/.tradingagents/{cache,logs}/` (upstream — hardcoded in their code) — outside repo, survives git operations

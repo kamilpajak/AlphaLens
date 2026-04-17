@@ -8,7 +8,7 @@ from .types import Event
 
 
 def default_db_path() -> Path:
-    return Path.home() / ".tradingagents" / "watchdog" / "seen_events.db"
+    return Path.home() / ".alphalens" / "watchdog" / "seen_events.db"
 
 
 class SeenEventStore:

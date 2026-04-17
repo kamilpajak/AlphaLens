@@ -49,7 +49,7 @@ TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
 ```
 
-Populate portfolio at `~/.tradingagents/watchdog/portfolio.yaml`:
+Populate portfolio at `~/.alphalens/watchdog/portfolio.yaml`:
 
 ```yaml
 held:
@@ -145,23 +145,25 @@ See `CLAUDE.md` for detailed agent flow and configuration reference.
 
 **Momentum universe**: `alphalens/momentum_screener/universe.yaml` — curated tickers grouped by theme (ai, quantum, etc.).
 
-**Portfolio**: `~/.tradingagents/watchdog/portfolio.yaml` — your held + watchlist tickers for Layer 1 dispatch routing.
+**Portfolio**: `~/.alphalens/watchdog/portfolio.yaml` — your held + watchlist tickers for Layer 1 dispatch routing.
 
 ---
 
 ## Runtime data
 
-Lives outside the repo in `~/.tradingagents/` — survives git operations:
+Lives outside the repo, split between two directories that survive git operations:
 
 ```
-~/.tradingagents/
-├── watchdog/
-│   ├── seen_events.db              SQLite — EDGAR event dedup
-│   ├── auto_trigger_queue.db       SQLite — Layer 1 → Layer 3 queue
-│   ├── digest.db                   SQLite — quiet-hour digest buffer
-│   ├── portfolio.yaml              your held + watchlist
-│   ├── company_tickers.json        SEC CIK mapping (cached)
-│   └── {detect,worker,momentum}.{log,err}
+~/.alphalens/                       ← AlphaLens runtime (mine)
+└── watchdog/
+    ├── seen_events.db              SQLite — EDGAR event dedup
+    ├── auto_trigger_queue.db       SQLite — Layer 1 → Layer 3 queue
+    ├── digest.db                   SQLite — quiet-hour digest buffer
+    ├── portfolio.yaml              your held + watchlist
+    ├── company_tickers.json        SEC CIK mapping (cached)
+    └── {detect,worker,momentum}.{log,err}
+
+~/.tradingagents/                   ← upstream TradingAgents runtime (hardcoded in their code)
 ├── cache/                          yfinance OHLCV cache
 └── logs/                           TradingAgents full-state JSON logs
 ```

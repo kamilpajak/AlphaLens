@@ -14,7 +14,7 @@ class Relevance(Enum):
 
 
 def default_portfolio_path() -> Path:
-    return Path.home() / ".tradingagents" / "watchdog" / "portfolio.yaml"
+    return Path.home() / ".alphalens" / "watchdog" / "portfolio.yaml"
 
 
 @dataclass
