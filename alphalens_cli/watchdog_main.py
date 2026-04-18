@@ -47,6 +47,7 @@ def _build_watchdog() -> Watchdog:
     cfg = dict(WATCHDOG_DEFAULTS)
     cfg["user_agent"] = user_agent
     cfg["fetch_form4_details"] = True
+    cfg["fetch_8k_details"] = True
 
     portfolio = PortfolioState.load(default_portfolio_path())
 

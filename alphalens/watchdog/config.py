@@ -7,6 +7,7 @@ WATCHDOG_DEFAULTS = {
     "edgar_recent_count": 40,
     "rate_limit_seconds": 0.15,
     "fetch_form4_details": False,
+    "fetch_8k_details": False,
     "form_filter": [
         FormType.FORM_8K,
         FormType.FORM_4,

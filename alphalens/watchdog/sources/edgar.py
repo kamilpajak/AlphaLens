@@ -14,6 +14,7 @@ from ..storage import SeenEventStore
 from ..types import Event, FormType
 from .base import EventSource
 from .cik_loader import CIKLoader
+from .eightk import extract_8k_items
 from .form4 import parse_form4_xml
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class SECEdgarSource(EventSource):
         self.form_filter: set[FormType] = set(self.config["form_filter"])
         self.rate_limit_seconds = float(self.config["rate_limit_seconds"])
         self.fetch_form4_details = bool(self.config.get("fetch_form4_details", False))
+        self.fetch_8k_details = bool(self.config.get("fetch_8k_details", False))
 
     def detect(self) -> list[Event]:
         all_events: list[Event] = []
@@ -75,6 +77,11 @@ class SECEdgarSource(EventSource):
             for event in unseen:
                 if event.form_type == FormType.FORM_4:
                     self._enrich_form4(event)
+
+        if self.fetch_8k_details:
+            for event in unseen:
+                if event.form_type == FormType.FORM_8K:
+                    self._enrich_8k(event)
 
         for event in unseen:
             self.store.mark_seen(event.accession_number)
@@ -124,6 +131,33 @@ class SECEdgarSource(EventSource):
         parsed = parse_form4_xml(xml_text)
         if parsed:
             event.raw_data.update(parsed)
+
+    def _enrich_8k(self, event: Event) -> None:
+        """Fetch primary 8-K HTML via FilingSummary.xml doctype metadata and extract items."""
+        base_dir = event.url.rsplit("/", 1)[0] if "/" in event.url else ""
+        if not base_dir:
+            return
+
+        summary_text = self._get(
+            f"{base_dir}/FilingSummary.xml",
+            context=f"8-k summary {event.accession_number}",
+        )
+        if summary_text is None:
+            return
+
+        primary = _pick_8k_primary_name(summary_text)
+        if not primary:
+            return
+
+        html_text = self._get(
+            f"{base_dir}/{primary}", context=f"8-k html {event.accession_number}"
+        )
+        if html_text is None:
+            return
+
+        items = extract_8k_items(html_text)
+        if items:
+            event.raw_data["items"] = items
 
     def _get(self, url: str, params: dict | None = None, context: str = "") -> str | None:
         headers = {"User-Agent": self.config["user_agent"]}
@@ -201,6 +235,30 @@ def _parse_iso_datetime(text: str) -> datetime | None:
         return datetime.fromisoformat(text)
     except ValueError:
         return None
+
+
+def _pick_8k_primary_name(filing_summary_xml: str) -> str | None:
+    """From SEC FilingSummary.xml, pick the primary 8-K document filename.
+
+    FilingSummary.xml is authoritative — its <File doctype="..."> attribute
+    declares the form type explicitly, whereas index.json's `type` field is
+    only a MIME icon hint ("text.gif") that can't distinguish primary 8-K
+    from EX-99 exhibits or XBRL wrappers.
+    """
+    try:
+        root = ET.fromstring(filing_summary_xml)
+    except ET.ParseError:
+        return None
+
+    for file_el in root.iter("File"):
+        doctype = (file_el.get("doctype") or "").upper()
+        if doctype in {"8-K", "8-K/A"}:
+            original = file_el.get("original")
+            if original:
+                return original
+            text = (file_el.text or "").strip()
+            return text or None
+    return None
 
 
 def _pick_form4_xml_name(index_json_text: str) -> str | None:
