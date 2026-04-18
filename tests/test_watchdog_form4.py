@@ -74,6 +74,51 @@ SAMPLE_FORM4_MULTIPLE = """<?xml version="1.0"?>
 """
 
 
+SAMPLE_FORM4_EXERCISE_ONLY = """<?xml version="1.0"?>
+<ownershipDocument>
+  <issuer><issuerTradingSymbol>AAPL</issuerTradingSymbol></issuer>
+  <nonDerivativeTable>
+    <nonDerivativeTransaction>
+      <transactionCoding><transactionCode>M</transactionCode></transactionCoding>
+      <transactionAmounts>
+        <transactionShares><value>2000</value></transactionShares>
+        <transactionPricePerShare><value>50</value></transactionPricePerShare>
+      </transactionAmounts>
+    </nonDerivativeTransaction>
+    <nonDerivativeTransaction>
+      <transactionCoding><transactionCode>F</transactionCode></transactionCoding>
+      <transactionAmounts>
+        <transactionShares><value>500</value></transactionShares>
+        <transactionPricePerShare><value>180</value></transactionPricePerShare>
+      </transactionAmounts>
+    </nonDerivativeTransaction>
+  </nonDerivativeTable>
+</ownershipDocument>
+"""
+
+SAMPLE_FORM4_SALE_WITH_EXERCISE = """<?xml version="1.0"?>
+<ownershipDocument>
+  <issuer><issuerTradingSymbol>AAPL</issuerTradingSymbol></issuer>
+  <nonDerivativeTable>
+    <nonDerivativeTransaction>
+      <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+      <transactionAmounts>
+        <transactionShares><value>300</value></transactionShares>
+        <transactionPricePerShare><value>180</value></transactionPricePerShare>
+      </transactionAmounts>
+    </nonDerivativeTransaction>
+    <nonDerivativeTransaction>
+      <transactionCoding><transactionCode>M</transactionCode></transactionCoding>
+      <transactionAmounts>
+        <transactionShares><value>1000</value></transactionShares>
+        <transactionPricePerShare><value>50</value></transactionPricePerShare>
+      </transactionAmounts>
+    </nonDerivativeTransaction>
+  </nonDerivativeTable>
+</ownershipDocument>
+"""
+
+
 class TestForm4Parser(unittest.TestCase):
     def test_parse_transaction_code_P_is_buy(self):
         from alphalens.watchdog.sources.form4 import parse_form4_xml
@@ -114,6 +159,29 @@ class TestForm4Parser(unittest.TestCase):
 
         result = parse_form4_xml("<bad<<xml")
         self.assertEqual(result, {})
+
+    def test_parse_exercise_only_returns_exercise_action(self):
+        """Form 4 with only M (option exercise) + F (tax withholding) — no open-market
+        buy/sell. Parser should return EXERCISE so the digest entry shows what happened
+        instead of being mute."""
+        from alphalens.watchdog.sources.form4 import parse_form4_xml
+
+        result = parse_form4_xml(SAMPLE_FORM4_EXERCISE_ONLY)
+        self.assertEqual(result["insider_action"], "EXERCISE")
+        self.assertEqual(result["total_shares"], 2500.0)  # 2000 (M) + 500 (F)
+        self.assertAlmostEqual(
+            result["transaction_value_usd"], 2000 * 50 + 500 * 180
+        )
+
+    def test_parse_real_sell_overrides_exercise(self):
+        """Mixed filing: real S sale + M exercise. Real market action is the signal —
+        EXERCISE must not shadow it."""
+        from alphalens.watchdog.sources.form4 import parse_form4_xml
+
+        result = parse_form4_xml(SAMPLE_FORM4_SALE_WITH_EXERCISE)
+        self.assertEqual(result["insider_action"], "SELL")
+        self.assertEqual(result["total_shares"], 300.0)
+        self.assertAlmostEqual(result["transaction_value_usd"], 300 * 180)
 
 
 if __name__ == "__main__":
