@@ -109,6 +109,12 @@ from cli.main import save_report_to_disk   # upstream util, resolves to TradingA
 ```
 (Path changed — this helper lives in the subtree's CLI, not mine.)
 
+## Project stage conventions
+
+- **Solo, early-stage, zero external users.** No backward-compatibility shims, no dual-path logic, no deprecated-but-still-works branches. Rename, refactor, drop old behavior in a single commit without aliases or fallbacks. If a runtime schema (SQLite, yaml) changes, drop/migrate the data — don't keep version markers.
+- **Exception:** vendored patches in `TradingAgents/` must stay mergeable with upstream sync (that interface has an external stakeholder).
+- **New components always go in `alphalens/<name>/`** — never into `TradingAgents/` (upstream territory), never at top level.
+
 ## Known issues
 
 - **Gemini 429 RESOURCE_EXHAUSTED**: Google free tier has 1M input tokens/min on gemini-2.5-flash. Alpha Vantage fundamentals ~1.8MB trigger it. Custom retry in `TradingAgents/tradingagents/llm_clients/google_client.py` (10 retries, ~40s base delay). Planned upstream PR.
