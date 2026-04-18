@@ -57,6 +57,47 @@ class TestExtract8KItems(unittest.TestCase):
         html = "<bad<<<html>Item 2.02 results</p><broken"
         self.assertEqual(extract_8k_items(html), ["2.02"])
 
+    def test_captures_subsection_suffix_for_item_5_02(self):
+        """Real 8-K filings spell out subsections: '5.02(b)' (principal officer
+        termination) vs '5.02(a)' (director). Classifier needs this granularity."""
+        from alphalens.watchdog.sources.eightk import extract_8k_items
+
+        html = "<p>Item 5.02(b) Departure of Principal Executive Officer</p>"
+        self.assertEqual(extract_8k_items(html), ["5.02(b)"])
+
+    def test_captures_multiple_subsections_separately(self):
+        """A single filing may disclose several subsections (e.g. departure plus
+        appointment)."""
+        from alphalens.watchdog.sources.eightk import extract_8k_items
+
+        html = """
+        <p>Item 5.02(b) Departure of CFO</p>
+        <p>Item 5.02(c) Appointment of Interim CFO</p>
+        """
+        self.assertEqual(extract_8k_items(html), ["5.02(b)", "5.02(c)"])
+
+    def test_mixes_subsectioned_and_plain_items(self):
+        from alphalens.watchdog.sources.eightk import extract_8k_items
+
+        html = "<p>Item 2.02 Results</p><p>Item 5.02(b) Officer exit</p>"
+        self.assertEqual(extract_8k_items(html), ["2.02", "5.02(b)"])
+
+    def test_subsection_letter_normalized_to_lowercase(self):
+        """Filings use both 'Item 5.02(B)' and 'Item 5.02(b)'. Normalize for
+        classifier consistency."""
+        from alphalens.watchdog.sources.eightk import extract_8k_items
+
+        html = "<p>ITEM 5.02(B) Departure</p>"
+        self.assertEqual(extract_8k_items(html), ["5.02(b)"])
+
+    def test_plain_item_without_subsection_still_matches(self):
+        """Fallback if SEC filing doesn't spell out subsection inline (rare but
+        possible): bare '5.02' still extracted so classifier has a signal."""
+        from alphalens.watchdog.sources.eightk import extract_8k_items
+
+        html = "<p>Item 5.02 Departure of Directors</p>"
+        self.assertEqual(extract_8k_items(html), ["5.02"])
+
 
 class TestPick8KPrimaryName(unittest.TestCase):
     def test_picks_file_with_8k_doctype(self):

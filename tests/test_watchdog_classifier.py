@@ -168,27 +168,71 @@ class TestEightKItems(unittest.TestCase):
         result = classifier.classify(event, _portfolio())
         self.assertEqual(result.severity, Severity.HIGH)
 
-    def test_8k_502_is_high_when_title_mentions_CEO(self):
+    def test_8k_502b_principal_officer_termination_is_high(self):
+        """SEC Form 8-K Item 5.02(b): termination of principal executive officer
+        (CEO), CFO, COO, or principal accounting officer. Salzman: ~-1.5 to -2%
+        CAR, deserves HIGH severity → AUTO_TRIGGER on held tickers."""
         from alphalens.watchdog.classifier import Severity, SignalClassifier
         from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
-        event = _event(
-            FormType.FORM_8K,
-            raw_data={"items": ["5.02"], "title": "8-K - CEO resignation announced"},
-        )
+        event = _event(FormType.FORM_8K, raw_data={"items": ["5.02(b)"]})
         result = classifier.classify(event, _portfolio())
         self.assertEqual(result.severity, Severity.HIGH)
 
-    def test_8k_502_is_medium_for_ordinary_director(self):
+    def test_8k_502c_principal_officer_appointment_is_high(self):
+        """Item 5.02(c): appointment of new principal officer. Materially informative
+        (succession signal) — classify as HIGH."""
         from alphalens.watchdog.classifier import Severity, SignalClassifier
         from alphalens.watchdog.types import FormType
 
         classifier = SignalClassifier()
-        event = _event(
-            FormType.FORM_8K,
-            raw_data={"items": ["5.02"], "title": "8-K - Director departure"},
-        )
+        event = _event(FormType.FORM_8K, raw_data={"items": ["5.02(c)"]})
+        result = classifier.classify(event, _portfolio())
+        self.assertEqual(result.severity, Severity.HIGH)
+
+    def test_8k_502a_director_resignation_is_medium(self):
+        """Item 5.02(a): director resignation/removal (not in dispute). Salzman
+        director ~-0.3% CAR — MEDIUM, approval gate rather than auto-trigger."""
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
+
+        classifier = SignalClassifier()
+        event = _event(FormType.FORM_8K, raw_data={"items": ["5.02(a)"]})
+        result = classifier.classify(event, _portfolio())
+        self.assertEqual(result.severity, Severity.MEDIUM)
+
+    def test_8k_502d_director_election_is_medium(self):
+        """Item 5.02(d): election of director (non-annual). Routine governance,
+        MEDIUM."""
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
+
+        classifier = SignalClassifier()
+        event = _event(FormType.FORM_8K, raw_data={"items": ["5.02(d)"]})
+        result = classifier.classify(event, _portfolio())
+        self.assertEqual(result.severity, Severity.MEDIUM)
+
+    def test_8k_502e_compensation_change_is_low(self):
+        """Item 5.02(e)-(f): compensatory arrangements / salary changes. Procedural,
+        rarely market-moving — LOW."""
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
+
+        classifier = SignalClassifier()
+        event = _event(FormType.FORM_8K, raw_data={"items": ["5.02(e)"]})
+        result = classifier.classify(event, _portfolio())
+        self.assertEqual(result.severity, Severity.LOW)
+
+    def test_8k_502_without_subsection_defaults_to_medium(self):
+        """Defensive fallback: if the primary HTML parser fails to capture the
+        subsection and we only see plain '5.02', we still know it's about
+        directors/officers — default to MEDIUM (not auto-trigger, but not noise)."""
+        from alphalens.watchdog.classifier import Severity, SignalClassifier
+        from alphalens.watchdog.types import FormType
+
+        classifier = SignalClassifier()
+        event = _event(FormType.FORM_8K, raw_data={"items": ["5.02"]})
         result = classifier.classify(event, _portfolio())
         self.assertEqual(result.severity, Severity.MEDIUM)
 

@@ -27,8 +27,14 @@ _VALID_ITEMS = (
     "9.01",
 )
 
+# Item N.NN optionally followed by a subsection letter in parens, e.g. "5.02(b)".
+# Subsection granularity matters for Item 5.02 (Perplexity 2026-04-18): 5.02(b)/(c)
+# = principal-officer events → HIGH; 5.02(a)/(d) = director events → MEDIUM;
+# 5.02(e)/(f) = compensation → LOW. Captures both pieces so callers can reassemble.
 _ITEM_RE = re.compile(
-    r"\bItem\s+(" + "|".join(re.escape(item) for item in _VALID_ITEMS) + r")\b",
+    r"\bItem\s+("
+    + "|".join(re.escape(item) for item in _VALID_ITEMS)
+    + r")(?!\d)(\s*\(([a-f])\))?",
     re.IGNORECASE,
 )
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -36,10 +42,19 @@ _WS_RE = re.compile(r"\s+")
 
 
 def extract_8k_items(html: str) -> list[str]:
-    """Return sorted, de-duplicated list of valid 8-K item numbers in the HTML."""
+    """Return sorted, de-duplicated list of valid 8-K item codes in the HTML.
+
+    Codes are either bare ('2.02') or subsectioned ('5.02(b)'). Letters are
+    normalized to lowercase so '(B)' and '(b)' collapse to the same code.
+    """
     if not html:
         return []
     stripped = _TAG_RE.sub(" ", html)
     decoded = _html.unescape(stripped).replace("\xa0", " ")
     normalized = _WS_RE.sub(" ", decoded)
-    return sorted(set(_ITEM_RE.findall(normalized)))
+    codes: set[str] = set()
+    for match in _ITEM_RE.finditer(normalized):
+        item = match.group(1)
+        letter = match.group(3)
+        codes.add(f"{item}({letter.lower()})" if letter else item)
+    return sorted(codes)
