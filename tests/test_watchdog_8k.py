@@ -99,6 +99,105 @@ class TestExtract8KItems(unittest.TestCase):
         self.assertEqual(extract_8k_items(html), ["5.02"])
 
 
+class TestExtract502Section(unittest.TestCase):
+    """Carve out just the narrative under the Item 5.02 heading so keyword
+    inference doesn't get fooled by officer mentions in signatures or other
+    sections (Perplexity 2026-04-18)."""
+
+    def test_returns_text_between_5_02_and_next_item_heading(self):
+        from alphalens.watchdog.sources.eightk import extract_5_02_section
+
+        html = """
+        <p>Item 2.02 Results</p><p>Details of Q3 earnings ...</p>
+        <p>Item 5.02 Departure</p><p>CEO resigned on March 1, 2026.</p>
+        <p>Item 9.01 Financial Statements</p><p>Exhibit index ...</p>
+        """
+        section = extract_5_02_section(html)
+        self.assertIn("CEO resigned", section)
+        self.assertNotIn("Q3 earnings", section)
+        self.assertNotIn("Exhibit index", section)
+
+    def test_stops_at_signatures_marker(self):
+        """SEC filings put 'SIGNATURES' / 'Pursuant to the requirements' at the
+        document tail. Officers named in the signature block (e.g. the filer's
+        CFO) must not leak into 5.02 inference."""
+        from alphalens.watchdog.sources.eightk import extract_5_02_section
+
+        html = """
+        <p>Item 5.02 Director not standing for re-election.</p>
+        <p>SIGNATURES</p>
+        <p>Pursuant to the requirements of the Securities Exchange Act of 1934,
+           the registrant ... By: /s/ John Smith, Chief Financial Officer</p>
+        """
+        section = extract_5_02_section(html)
+        self.assertIn("Director not standing", section)
+        self.assertNotIn("Chief Financial Officer", section)
+
+    def test_returns_empty_when_no_5_02_heading(self):
+        from alphalens.watchdog.sources.eightk import extract_5_02_section
+
+        html = "<p>Item 2.02 Earnings release. No officer changes today.</p>"
+        self.assertEqual(extract_5_02_section(html), "")
+
+    def test_runs_to_end_if_no_next_heading_or_signatures(self):
+        from alphalens.watchdog.sources.eightk import extract_5_02_section
+
+        html = "<p>Item 5.02 Officer resigned.</p>"
+        section = extract_5_02_section(html)
+        self.assertIn("Officer resigned", section)
+
+
+class TestInfer502Subsection(unittest.TestCase):
+    def test_infers_502b_from_officer_departure(self):
+        """CEO/CFO/COO + departure/resignation/termination → 5.02(b)."""
+        from alphalens.watchdog.sources.eightk import infer_5_02_subsection
+
+        text = "John Smith, the Company's Chief Executive Officer, resigned effective April 1, 2026."
+        self.assertEqual(infer_5_02_subsection(text), "5.02(b)")
+
+    def test_infers_502b_from_cfo_termination(self):
+        from alphalens.watchdog.sources.eightk import infer_5_02_subsection
+
+        text = "The Board terminated the employment of the CFO on March 15, 2026."
+        self.assertEqual(infer_5_02_subsection(text), "5.02(b)")
+
+    def test_infers_502c_from_officer_appointment(self):
+        from alphalens.watchdog.sources.eightk import infer_5_02_subsection
+
+        text = "The Board appointed Jane Doe as Chief Executive Officer, effective immediately."
+        self.assertEqual(infer_5_02_subsection(text), "5.02(c)")
+
+    def test_infers_502a_from_director_departure_without_officer(self):
+        """Director keyword present, no officer keyword → 5.02(a)."""
+        from alphalens.watchdog.sources.eightk import infer_5_02_subsection
+
+        text = "Ms. Sandford notified the Company that she will not stand for re-election to the Board of Directors."
+        self.assertEqual(infer_5_02_subsection(text), "5.02(a)")
+
+    def test_prefers_502b_when_officer_departure_dominates(self):
+        """If both departure and appointment of same officer (successor scenario),
+        prefer 5.02(b) — departure is the materiality signal."""
+        from alphalens.watchdog.sources.eightk import infer_5_02_subsection
+
+        text = (
+            "The Chief Executive Officer resigned effective May 1. "
+            "The Board has appointed an interim successor."
+        )
+        self.assertEqual(infer_5_02_subsection(text), "5.02(b)")
+
+    def test_returns_none_when_signal_is_unclear(self):
+        """Compensation-only change, or text without actionable keywords."""
+        from alphalens.watchdog.sources.eightk import infer_5_02_subsection
+
+        text = "The Board approved a revised compensation package consisting of stock options."
+        self.assertIsNone(infer_5_02_subsection(text))
+
+    def test_returns_none_for_empty_text(self):
+        from alphalens.watchdog.sources.eightk import infer_5_02_subsection
+
+        self.assertIsNone(infer_5_02_subsection(""))
+
+
 class TestPick8KPrimaryName(unittest.TestCase):
     def test_picks_file_with_8k_doctype(self):
         from alphalens.watchdog.sources.edgar import _pick_8k_primary_name

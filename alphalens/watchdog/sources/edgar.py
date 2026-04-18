@@ -14,7 +14,7 @@ from ..storage import SeenEventStore
 from ..types import Event, FormType
 from .base import EventSource
 from .cik_loader import CIKLoader
-from .eightk import extract_8k_items
+from .eightk import extract_5_02_section, extract_8k_items, infer_5_02_subsection
 from .form4 import parse_form4_xml
 
 logger = logging.getLogger(__name__)
@@ -157,6 +157,15 @@ class SECEdgarSource(EventSource):
 
         items = extract_8k_items(html_text)
         if items:
+            # Upgrade bare "5.02" to explicit subsection when the section
+            # narrative gives a clear signal (Perplexity 2026-04-18: ~60-70%
+            # of real principal-officer events use bare "Item 5.02" headings).
+            if "5.02" in items and not any(
+                i.startswith("5.02(") for i in items
+            ):
+                inferred = infer_5_02_subsection(extract_5_02_section(html_text))
+                if inferred:
+                    items = [inferred if i == "5.02" else i for i in items]
             event.raw_data["items"] = items
 
     def _get(self, url: str, params: dict | None = None, context: str = "") -> str | None:

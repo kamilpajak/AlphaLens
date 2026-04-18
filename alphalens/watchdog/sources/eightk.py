@@ -41,6 +41,13 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
 
+def _normalize_html_text(html: str) -> str:
+    """Strip tags, decode entities, collapse whitespace to a single scannable line."""
+    stripped = _TAG_RE.sub(" ", html)
+    decoded = _html.unescape(stripped).replace("\xa0", " ")
+    return _WS_RE.sub(" ", decoded)
+
+
 def extract_8k_items(html: str) -> list[str]:
     """Return sorted, de-duplicated list of valid 8-K item codes in the HTML.
 
@@ -49,12 +56,99 @@ def extract_8k_items(html: str) -> list[str]:
     """
     if not html:
         return []
-    stripped = _TAG_RE.sub(" ", html)
-    decoded = _html.unescape(stripped).replace("\xa0", " ")
-    normalized = _WS_RE.sub(" ", decoded)
+    normalized = _normalize_html_text(html)
     codes: set[str] = set()
     for match in _ITEM_RE.finditer(normalized):
         item = match.group(1)
         letter = match.group(3)
         codes.add(f"{item}({letter.lower()})" if letter else item)
     return sorted(codes)
+
+
+# --- Item 5.02 subsection inference ---------------------------------------
+# When a filing uses a bare "Item 5.02" heading (no subsection letter in the
+# HTML), Perplexity 2026-04-18 flagged that this covers ~60-70% of real
+# principal-officer events — if we stop at bare "5.02" the classifier only
+# reaches MEDIUM and the auto-trigger goal is defeated. Carve out the text
+# under the Item 5.02 heading and keyword-infer the subsection.
+
+_SIGNATURES_RE = re.compile(
+    r"\bSIGNATURES?\b|\bPursuant\s+to\s+the\s+requirements\b",
+    re.IGNORECASE,
+)
+_NEXT_ITEM_RE = re.compile(r"\bItem\s+\d+\.\d+\b", re.IGNORECASE)
+_ITEM_5_02_HEADING_RE = re.compile(r"\bItem\s+5\.02\b", re.IGNORECASE)
+
+_OFFICER_RE = re.compile(
+    r"\b(chief\s+executive\s+officer|chief\s+financial\s+officer|"
+    r"chief\s+operating\s+officer|chief\s+accounting\s+officer|"
+    r"principal\s+executive\s+officer|principal\s+financial\s+officer|"
+    r"principal\s+operating\s+officer|principal\s+accounting\s+officer|"
+    r"CEO|CFO|COO|CAO|president)\b",
+    re.IGNORECASE,
+)
+_DEPARTURE_RE = re.compile(
+    r"\b(depart|resign|retir|step(ped|s)?\s+down|termin|remov|dismis|"
+    r"not\s+(stand|seek|seeking|standing)\s+for\s+re-?election)",
+    re.IGNORECASE,
+)
+_APPOINTMENT_RE = re.compile(
+    r"\b(appoint|elect|named\s+as|nominat|hir|promot)",
+    re.IGNORECASE,
+)
+_DIRECTOR_RE = re.compile(r"\bdirector(s)?\b", re.IGNORECASE)
+
+
+def extract_5_02_section(html: str) -> str:
+    """Return the narrative text under the Item 5.02 heading.
+
+    Cuts at the next Item X.YY heading or at a signatures block (whichever
+    comes first). Returns empty string when no Item 5.02 heading is present.
+    """
+    if not html:
+        return ""
+    text = _normalize_html_text(html)
+    heading = _ITEM_5_02_HEADING_RE.search(text)
+    if not heading:
+        return ""
+    start = heading.start()
+    tail = text[heading.end():]
+    end_candidates: list[int] = []
+    next_item = _NEXT_ITEM_RE.search(tail)
+    if next_item:
+        end_candidates.append(heading.end() + next_item.start())
+    sig = _SIGNATURES_RE.search(tail)
+    if sig:
+        end_candidates.append(heading.end() + sig.start())
+    end = min(end_candidates) if end_candidates else len(text)
+    return text[start:end].strip()
+
+
+def infer_5_02_subsection(section_text: str) -> str | None:
+    """Infer the 5.02 subsection code from the section narrative.
+
+    Priority order (most material first): 5.02(b) officer departure,
+    5.02(c) officer appointment, 5.02(a) director departure,
+    5.02(d) director election. Returns None when the text has no clear
+    directional signal — caller keeps the bare '5.02' code (MEDIUM fallback).
+    """
+    if not section_text:
+        return None
+
+    has_officer = bool(_OFFICER_RE.search(section_text))
+    has_departure = bool(_DEPARTURE_RE.search(section_text))
+    has_appointment = bool(_APPOINTMENT_RE.search(section_text))
+    # A director event is only one where the officer keyword is absent — any
+    # officer reference outranks plain "director" because the event is then
+    # about the officer, even if they also happened to be on the board.
+    director_only = bool(_DIRECTOR_RE.search(section_text)) and not has_officer
+
+    if has_officer and has_departure:
+        return "5.02(b)"
+    if has_officer and has_appointment:
+        return "5.02(c)"
+    if director_only and has_departure:
+        return "5.02(a)"
+    if director_only and has_appointment:
+        return "5.02(d)"
+    return None
