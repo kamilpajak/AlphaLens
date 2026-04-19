@@ -1,0 +1,4 @@
+#!/bin/bash
+# Layer 2c Lean batch screener — daily Polygon sync + Docker Lean run.
+# Invoked by com.alphalens.watchdog.lean.plist (daily ~23:30 CET, post-US-close + Polygon settle).
+exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens watchdog lean-screen --top-n 30 --analyze "$@"
