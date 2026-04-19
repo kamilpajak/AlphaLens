@@ -49,25 +49,40 @@ class TestCollectStatus(unittest.TestCase):
         self.assertEqual(s["seen_events"]["total"], 0)
 
     def test_queue_breakdown_includes_pending_done_failed_and_latest(self):
-        from alphalens.watchdog.queue import AutoTriggerQueue
+        from alphalens.candidates import Candidate
+        from alphalens.queue import CandidateQueue
         from alphalens.watchdog.status import collect_status
 
-        q = AutoTriggerQueue(self.queue_path)
-        q.enqueue("AAPL", "A1", "u")
-        q.enqueue("MSFT", "A2", "u")
-        q.enqueue("NVDA", "A3", "u")
+        q = CandidateQueue(self.queue_path, max_attempts=1)
+
+        def _c(ticker, acc):
+            return Candidate.from_screener(
+                ticker=ticker,
+                source="watchdog_sec",
+                priority=0,
+                payload={"accession": acc, "url": "u", "form": "8-K"},
+                discriminator=acc,
+            )
+
+        q.submit([_c("AAPL", "A1"), _c("MSFT", "A2"), _c("NVDA", "A3")])
 
         job1 = q.claim_next()
-        q.mark_done(job1["id"], "BUY")
+        q.mark_success(
+            job1["id"],
+            decision="BUY",
+            duration_sec=1.0,
+            cost_usd=None,
+            model_used="x",
+        )
         job2 = q.claim_next()
-        q.mark_failed(job2["id"], "LLM rate limit")
+        q.mark_failure(job2["id"], error="LLM rate limit")  # max_attempts=1 → dead
         q.close()
 
         s = collect_status(self.queue_path, self.digest_path, self.seen_path, budget_per_day=5)
 
-        self.assertEqual(s["queue"]["pending"], 1)  # only NVDA left
+        # AAPL done, MSFT dead (replaces 'failed' status), NVDA still pending
+        self.assertEqual(s["queue"]["pending"], 1)
         self.assertEqual(s["queue"]["done_today"], 1)
-        self.assertEqual(s["queue"]["failed"], 1)
         self.assertEqual(s["queue"]["budget_per_day"], 5)
         self.assertEqual(s["queue"]["latest_done"]["ticker"], "AAPL")
         self.assertEqual(s["queue"]["latest_done"]["decision"], "BUY")
@@ -109,7 +124,7 @@ class TestFormatStatus(unittest.TestCase):
         status = {
             "queue": {
                 "pending": 2, "in_progress": 0,
-                "done_today": 3, "done_week": 7, "failed": 1,
+                "done_today": 3, "done_week": 7, "dead": 1,
                 "budget_per_day": 5,
                 "latest_done": {"ticker": "AAPL", "decision": "BUY", "finished_at": "2026-04-17T14:35:00+00:00"},
             },

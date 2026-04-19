@@ -1,13 +1,13 @@
-"""Pipeline orchestrator: pre-screen → optional TradingAgents deep analysis."""
+"""Pipeline orchestrator: pre-screen S&P 500. Hands off to Layer 3 through the shared queue."""
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import pandas as pd
 
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-
+from ..candidates import Candidate
 from .composite_ranker import CompositeRanker
 from .config import PRESCREENER_DEFAULTS
 from .data_fetcher import BatchDataFetcher
@@ -25,12 +25,10 @@ class PrescreenerPipeline:
         curr_date: str,
         tickers: list[str] | None = None,
         config: dict | None = None,
-        ta_config: dict | None = None,
     ):
         self.curr_date = curr_date
         self.tickers = tickers or get_sp500_tickers()
         self.config = config or PRESCREENER_DEFAULTS
-        self.ta_config = ta_config
 
     def screen(self) -> pd.DataFrame:
         """Run the full screening pipeline. Returns ranked DataFrame."""
@@ -57,28 +55,24 @@ class PrescreenerPipeline:
         logger.info("Top 5: %s", ranked.head(5)[["ticker", "composite_score"]].to_string(index=False))
         return ranked
 
-    def screen_and_analyze(self, top_n: int = 5) -> list[tuple[str, str]]:
-        """Screen, then run TradingAgents on top N candidates.
-
-        Returns [(ticker, decision), ...].
-        """
-        ranked = self.screen()
-        candidates = CompositeRanker(self.config).top_n(ranked, n=top_n)
-
-        if self.ta_config is None:
-            raise ValueError("ta_config required for screen_and_analyze()")
-
-        ta = TradingAgentsGraph(debug=False, config=self.ta_config)
-        results = []
-
-        for _, row in candidates.iterrows():
-            ticker = row["ticker"]
-            logger.info("Deep analysis: %s (rank #%d, score %.3f)", ticker, int(row["rank"]), row["composite_score"])
-            try:
-                _, decision = ta.propagate(ticker, self.curr_date)
-                results.append((ticker, decision))
-            except Exception:
-                logger.error("TradingAgents failed for %s", ticker, exc_info=True)
-                results.append((ticker, "ERROR"))
-
-        return results
+    def to_candidates(self, df: pd.DataFrame) -> list[Candidate]:
+        if df.empty:
+            return []
+        now = datetime.now(timezone.utc)
+        return [
+            Candidate.from_screener(
+                ticker=row["ticker"],
+                source="prescreener",
+                priority=20,
+                payload={
+                    "rank": int(row["rank"]),
+                    "composite_score": float(row["composite_score"]),
+                    "technical_score": float(row.get("technical_score", 0.0)),
+                    "fundamental_score": float(row.get("fundamental_score", 0.0)),
+                    "volume_score": float(row.get("volume_score", 0.0)),
+                },
+                discriminator=self.curr_date,
+                detected_at=now,
+            )
+            for _, row in df.iterrows()
+        ]

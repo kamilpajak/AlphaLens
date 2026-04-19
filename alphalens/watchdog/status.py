@@ -22,7 +22,7 @@ def collect_status(
 
 def _queue_stats(path: Path, budget_per_day: int) -> dict[str, Any]:
     empty = {
-        "pending": 0, "in_progress": 0, "done_today": 0, "done_week": 0, "failed": 0,
+        "pending": 0, "in_progress": 0, "done_today": 0, "done_week": 0, "dead": 0,
         "budget_per_day": budget_per_day, "latest_done": None,
     }
     if not path.exists():
@@ -37,21 +37,21 @@ def _queue_stats(path: Path, budget_per_day: int) -> dict[str, Any]:
         counts = {
             row[0]: row[1]
             for row in conn.execute(
-                "SELECT status, COUNT(*) FROM auto_trigger_queue GROUP BY status"
+                "SELECT status, COUNT(*) FROM candidates GROUP BY status"
             )
         }
         done_today = conn.execute(
-            "SELECT COUNT(*) FROM auto_trigger_queue "
+            "SELECT COUNT(*) FROM candidates "
             "WHERE status = 'done' AND DATE(finished_at) = ?",
             (today,),
         ).fetchone()[0]
         done_week = conn.execute(
-            "SELECT COUNT(*) FROM auto_trigger_queue "
+            "SELECT COUNT(*) FROM candidates "
             "WHERE status = 'done' AND DATE(finished_at) >= ?",
             (week_ago,),
         ).fetchone()[0]
         latest = conn.execute(
-            "SELECT ticker, decision, finished_at FROM auto_trigger_queue "
+            "SELECT ticker, decision, finished_at FROM candidates "
             "WHERE status = 'done' ORDER BY finished_at DESC LIMIT 1"
         ).fetchone()
     finally:
@@ -62,7 +62,7 @@ def _queue_stats(path: Path, budget_per_day: int) -> dict[str, Any]:
         "in_progress": counts.get("in_progress", 0),
         "done_today": done_today,
         "done_week": done_week,
-        "failed": counts.get("failed", 0),
+        "dead": counts.get("dead", 0),
         "budget_per_day": budget_per_day,
         "latest_done": dict(latest) if latest else None,
     }
@@ -117,7 +117,7 @@ def format_status(status: dict[str, Any]) -> str:
         f"  in_progress:  {q['in_progress']}",
         f"  done today:   {q['done_today']} / {q['budget_per_day']} budget",
         f"  done week:    {q['done_week']}",
-        f"  failed:       {q['failed']}",
+        f"  dead:         {q['dead']}",
     ]
     if q["latest_done"]:
         ld = q["latest_done"]
