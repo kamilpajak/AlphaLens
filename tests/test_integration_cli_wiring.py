@@ -1,11 +1,5 @@
 """Integration test: CLI wiring — verify typer subcommands register and
-factory functions resolve lazy imports without ImportError.
-
-The refactor risk this guards against: `_build_worker()` contains lazy imports
-(`from tradingagents.graph.trading_graph import TradingAgentsGraph`,
-`from alphalens.watchdog.worker import AutoTriggerWorker`) that fail only
-at runtime, not at module load. A missed rename there would only surface when
-launchd fires the job — 5 minutes after ship.
+factory functions resolve their dependencies without ImportError.
 """
 
 import os
@@ -31,7 +25,8 @@ class TestTyperAppRegistration(unittest.TestCase):
         names = {cmd.name for cmd in watchdog_app.registered_commands}
         self.assertEqual(
             names,
-            {"run-once", "process-queue", "momentum-screen", "status"},
+            {"run-once", "process-queue", "momentum-screen", "momentum-status",
+             "lean-screen", "backtest", "status"},
             f"missing or extra subcommands: {names}",
         )
 
@@ -70,16 +65,15 @@ class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):
                 pass
 
     @patch.dict(os.environ, {}, clear=False)
-    def test_build_worker_lazy_imports_resolve(self):
-        """The lazy import of TradingAgentsGraph is the primary target."""
+    def test_build_worker_resolves_without_import_error(self):
         os.environ.update(self.env_patches)
 
-        graph_cls = "tradingagents.graph.trading_graph.TradingAgentsGraph"
-        worker_cls = f"{OUR_PACKAGE_PREFIX}.watchdog.worker.AutoTriggerWorker"
+        runner_cls = f"{OUR_PACKAGE_PREFIX}.runner.TradingAgentsRunner"
+        queue_cls = f"{OUR_PACKAGE_PREFIX}.queue.CandidateQueue"
 
-        with patch(graph_cls) as mock_graph, patch(worker_cls) as mock_worker:
-            mock_graph.return_value = MagicMock()
-            mock_worker.return_value = MagicMock()
+        with patch(runner_cls) as mock_runner, patch(queue_cls) as mock_queue:
+            mock_runner.return_value = MagicMock()
+            mock_queue.return_value = MagicMock()
             from alphalens_cli.watchdog_main import _build_worker
 
             try:
