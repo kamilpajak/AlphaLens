@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 import pandas as pd
 
 _METRIC_SHORT = {
@@ -14,6 +16,31 @@ _METRIC_SHORT = {
     "macd_score": "MACD",
 }
 
+CONCENTRATION_WARNING_THRESHOLD = 0.70
+
+
+def _theme_concentration(df: pd.DataFrame) -> tuple[dict[str, float], str | None, bool]:
+    """Zlicz wagi per theme dla top-N picks (split na tickery z wieloma themes).
+
+    Zwraca: (theme_weights dict, dominujący theme lub None, czy flag > threshold).
+    """
+    counts: dict[str, float] = {}
+    total = 0.0
+    for _, row in df.iterrows():
+        themes = row.get("themes") or []
+        if not isinstance(themes, list) or not themes:
+            continue
+        share = 1.0 / len(themes)
+        for t in themes:
+            counts[t] = counts.get(t, 0.0) + share
+        total += 1.0
+    if total == 0:
+        return {}, None, False
+    weights = {k: v / total for k, v in counts.items()}
+    dominant = max(weights, key=weights.get) if weights else None
+    flag = bool(dominant and weights[dominant] > CONCENTRATION_WARNING_THRESHOLD)
+    return weights, dominant, flag
+
 
 def format_telegram_report(df: pd.DataFrame, curr_date: str) -> str:
     """Render a compact Markdown report for Telegram. Safe on empty frames."""
@@ -22,7 +49,26 @@ def format_telegram_report(df: pd.DataFrame, curr_date: str) -> str:
     if df.empty:
         return f"{header}\n\n_No momentum candidates passed guardrails + scoring._"
 
-    lines = [header, ""]
+    # Factor-aware header: theme breakdown + alert if one theme dominates
+    weights, dominant, concentration_flag = _theme_concentration(df)
+    theme_line = None
+    if weights:
+        parts = [
+            f"{theme}: {weight * 100:.0f}%"
+            for theme, weight in sorted(weights.items(), key=lambda kv: -kv[1])
+        ]
+        theme_line = "_Themes: " + " · ".join(parts) + "_"
+
+    lines = [header]
+    if theme_line:
+        lines.append(theme_line)
+    if concentration_flag:
+        lines.append(
+            f"⚠️ _Koncentracja {dominant} > {int(CONCENTRATION_WARNING_THRESHOLD * 100)}% "
+            f"— single-theme bet, nie diversified basket._"
+        )
+    lines.append("")
+
     for _, row in df.iterrows():
         ticker = row["ticker"]
         score = float(row["momentum_score"])

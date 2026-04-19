@@ -8,17 +8,23 @@ Stock analysis pipeline for active investing — combines real-time event detect
 
 ## Architecture
 
-Four layers, each narrowing the candidate funnel before the expensive final stage.
+Pipeline filtruje szeroki zbiór spółek do ~kilku kandydatów dla drogiej finalnej analizy LLM. **Dwa deployowane screenery + Layer 1 event-driven** po rigorous walidacji:
 
 ```
-Layer 1 — watchdog             → SEC EDGAR event detection           (real-time,  <1 min lag)
-Layer 2a — prescreener         → S&P 500 fundamentals + technicals   (~30 min, ad-hoc)
-Layer 2b — momentum screener   → curated YAML universe, theme-based  (daily 22:00)
-Layer 3 — TradingAgents        → multi-agent LLM deep analysis       (~15 min / ticker)
-          → final rating: BUY / OVERWEIGHT / HOLD / UNDERWEIGHT / SELL
+Layer 1 — watchdog           → SEC EDGAR event detection            (real-time, <1 min)  ─┐
+Layer 2a — prescreener       → S&P 500 fundamentals (unvalidated)   (~30 min, ad-hoc)    ─┤
+Layer 2b — momentum screener → curated 4-theme universe (validated) (daily 22:00 CET)    ─┼─► CandidateQueue ─► AnalysisWorker ─► Layer 3
+Layer 2c — Lean screener     → ARCHIVED (failed 5-year backtest)                         ─┘     (SQLite)         (budget + retry)    TradingAgents
+                                                                                                                                   → BUY / OVERWEIGHT /
+                                                                                                                                     HOLD / UNDERWEIGHT / SELL
 ```
 
-**Design rationale**: Layer 3 is slow and expensive. Layers 1–2b filter the universe to high-conviction candidates so the LLM stage sees only what's worth analyzing. Layer 1 also auto-triggers Layer 3 when a material SEC filing lands on a held or watchlisted ticker.
+**Status walidacji** (5-letni backtest 2021-04 do 2026-04):
+- **Layer 2b** ✅ validated: Sharpe 1.53 net, FF3 alpha +96% annualized t-stat +2.60, IC t-stat +1.83 (wszystkie ponad progami deploy)
+- **Layer 2c** ❌ archived: Sharpe 0.25 net, FF3 alpha t-stat 0.14 — brak statystycznej alfy, plist w `launchd/archived/`
+- **Layer 2a** ⚠️ unvalidated: fundamentals-heavy scorer wymaga point-in-time Compustat/Polygon Advanced, używaj jako ad-hoc manual tool
+
+**Unified handoff**: każdy screener emituje `Candidate(ticker, source, priority, payload, dedup_key)` do `~/.alphalens/candidates.db`. Worker drainuje FIFO per priority (watchdog_sec=0 > momentum=10 > lean=15 > prescreener=20), aplikuje daily budget cap, retry exponential backoff + DLQ (`status='dead'` po 5 attempts). Infrastruktura Layer 2c (`backtest/` submodule) jest aktywnie reużywana przez walidację Layer 2b.
 
 ---
 
@@ -47,7 +53,10 @@ GOOGLE_API_KEY=...
 ALPHA_VANTAGE_API_KEY=...
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
+POLYGON_API_KEY=...            # free "Stocks Basic" tier — https://polygon.io
 ```
+
+Layer 2c (Lean screener — archived) wymaga **Docker Desktop** tylko gdy wskrzesić strategię. Obecnie plist w `launchd/archived/` + `POLYGON_API_KEY` już ustawione dla backtest harness.
 
 Populate portfolio at `~/.alphalens/watchdog/portfolio.yaml`:
 
@@ -73,17 +82,31 @@ Two console scripts are installed:
 # Upstream TradingAgents interactive menu (their flow for deep analysis)
 .venv/bin/tradingagents
 
-# Layer 1 — EDGAR poll once, classify, dispatch
+# Layer 1 — EDGAR poll once, classify, dispatch (SEC events → queue)
 .venv/bin/alphalens watchdog run-once
 
-# Layer 1 — drain auto-trigger queue (feeds Layer 3)
+# Drain the candidate queue — runs Layer 3 on whichever candidates are waiting
 .venv/bin/alphalens watchdog process-queue
 
-# Layer 2b — daily momentum scan, send Telegram report
+# Layer 2b — momentum scan; --analyze also submits top-N to queue
 .venv/bin/alphalens watchdog momentum-screen --dry-run
+.venv/bin/alphalens watchdog momentum-screen --analyze --dry-run
 
-# Status: queue, digest buffer, dedup
+# Monitoring Layer 2b (ostatnie 90 dni runów — theme HHI, staleness, turnover)
+.venv/bin/alphalens watchdog momentum-status --days 90
+
+# Backtest (5-letni, z diagnostykami + factor decomposition)
+.venv/bin/alphalens watchdog backtest --start 2021-04-19 --end 2026-04-17 --diagnose
+
+# Layer 2c (archived — failed validation, plist w launchd/archived/)
+# .venv/bin/alphalens watchdog lean-screen --sync-only   # gdy wskrzesić strategię
+
+# Status: queue breakdown (pending/in_progress/done/dead), digest buffer, dedup
 .venv/bin/alphalens watchdog status
+
+# Inspect the queue directly
+sqlite3 ~/.alphalens/candidates.db \
+  "SELECT id, ticker, source, priority, status, decision FROM candidates ORDER BY id DESC LIMIT 20;"
 
 # Tests (unittest, not pytest)
 .venv/bin/python -m unittest discover tests -v
@@ -91,19 +114,20 @@ Two console scripts are installed:
 
 ### Scheduled jobs (launchd)
 
-Three jobs in `launchd/`:
+Four jobs in `launchd/`:
 
 | Job | Interval | Purpose |
 |---|---|---|
-| `com.alphalens.watchdog.detect` | every 15 min | Layer 1 EDGAR poll |
-| `com.alphalens.watchdog.worker` | every 5 min  | Drain auto-trigger queue |
-| `com.alphalens.watchdog.momentum` | daily 22:00 | Layer 2b momentum scan |
+| `com.alphalens.watchdog.detect` | every 15 min  | Layer 1 EDGAR poll → submit Candidates |
+| `com.alphalens.watchdog.worker` | every 5 min   | Drain `candidates.db` → Layer 3 |
+| `com.alphalens.watchdog.momentum` | daily 22:00 CET | Layer 2b momentum scan (Telegram + optional `--analyze`) |
+| ~~`com.alphalens.watchdog.lean`~~ | ~~daily 23:30 CET~~ | **Archived** — failed 5-year validation (plist w `launchd/archived/`) |
 
 Install:
 
 ```bash
 cp launchd/com.alphalens.watchdog.*.plist ~/Library/LaunchAgents/
-for job in detect worker momentum; do
+for job in detect worker momentum lean; do
   launchctl load ~/Library/LaunchAgents/com.alphalens.watchdog.${job}.plist
 done
 ```
@@ -114,10 +138,27 @@ done
 
 ```
 alphalens/                             ← my code (Python package)
-├── watchdog/                          Layer 1: EDGAR detection + classifier + dispatch + queue/worker
+├── candidates.py                      shared domain model — Candidate, AnalysisResult, CandidateSink Protocol
+├── queue.py                           SQLite priority queue (CandidateQueue) with dedup + retry + DLQ
+├── worker.py                          AnalysisWorker — drains queue, budget guard, notifier
+├── runner.py                          TradingAgentsRunner — only place constructing TradingAgentsGraph
+├── registry.py                        SCREENERS dict — register a new screener with one line
+├── config_gemini.py                   shared Gemini TradingAgentsGraph config
+├── watchdog/                          Layer 1: EDGAR detection + classifier + dispatch
 ├── prescreener/                       Layer 2a: S&P 500 scoring (technical, fundamental, volume, composite ranker)
 ├── momentum_screener/                 Layer 2b: theme-based momentum on curated YAML universe
-└── config_gemini.py                   shared Gemini TradingAgentsGraph config
+└── lean_screener/                     Layer 2c: Polygon sync + QuantConnect Lean in Docker
+    ├── polygon_client.py              grouped-daily REST client (Stocks Basic tier)
+    ├── lean_csv_writer.py             Polygon bars → Lean equity-daily zip/csv format
+    ├── data_sync.py                   incremental + bootstrap sync, state file tracks last-synced
+    ├── runner.py                      LeanDockerRunner — builds docker run args, reads JSON result
+    ├── pipeline.py                    LeanScreenerPipeline — sync + run + to_candidates()
+    └── lean_project/                  mounted into Lean Docker container
+        ├── main.py                    QCAlgorithm subclass (uses AlgorithmImports)
+        ├── features.py                pure pandas — ROC, SMA, volume surprise, breakout
+        ├── scorer.py                  pure pandas — guardrails, metrics, cross-sectional ranking
+        ├── universe.yaml              curated ~780 Russell-like small/mid caps, quarterly refresh
+        └── config.json                Lean project config
 
 alphalens_cli/                         ← my CLI (separate package to avoid collision with TradingAgents/cli/)
 ├── main.py                            entry point — `alphalens` console script
@@ -130,7 +171,7 @@ TradingAgents/                         ← upstream vendored via git subtree --s
 └── pyproject.toml                     their config (active via uv editable install)
 
 launchd/                               macOS scheduled jobs (plists + bash wrappers)
-tests/                                 unittest suite (258 tests)
+tests/                                 unittest suite (443 tests)
 ```
 
 See `CLAUDE.md` for detailed agent flow and configuration reference.
@@ -145,23 +186,33 @@ See `CLAUDE.md` for detailed agent flow and configuration reference.
 
 **Momentum universe**: `alphalens/momentum_screener/universe.yaml` — curated tickers grouped by theme (ai, quantum, etc.).
 
+**Lean universe**: `alphalens/lean_screener/lean_project/universe.yaml` — ~780 Russell-like US small/mid caps grouped by GICS sector (technology, healthcare, financials, …). Refresh quarterly.
+
+**Lean scoring config**: `alphalens/lean_screener/config.py::LEAN_DEFAULTS` (host) + `lean_project/main.py::SCORER_CONFIG` (algo). Weights cover ROC(20/60), volume surprise, trend stack, breakout flag, near-high. Keep the two dicts in sync.
+
 **Portfolio**: `~/.alphalens/watchdog/portfolio.yaml` — your held + watchlist tickers for Layer 1 dispatch routing.
 
 ---
 
 ## Runtime data
 
-Lives outside the repo, split between two directories that survive git operations:
+Lives outside the repo, split between directories that survive git operations:
 
 ```
 ~/.alphalens/                       ← AlphaLens runtime (mine)
-└── watchdog/
-    ├── seen_events.db              SQLite — EDGAR event dedup
-    ├── auto_trigger_queue.db       SQLite — Layer 1 → Layer 3 queue
-    ├── digest.db                   SQLite — quiet-hour digest buffer
-    ├── portfolio.yaml              your held + watchlist
-    ├── company_tickers.json        SEC CIK mapping (cached)
-    └── {detect,worker,momentum}.{log,err}
+├── candidates.db                   SQLite — unified screener→Layer 3 queue (all screeners)
+├── watchdog/
+│   ├── seen_events.db              SQLite — EDGAR event dedup
+│   ├── digest.db                   SQLite — quiet-hour digest buffer
+│   ├── portfolio.yaml              your held + watchlist
+│   ├── company_tickers.json        SEC CIK mapping (cached)
+│   └── {detect,worker,momentum}.{log,err}
+└── lean/
+    ├── data/equity/usa/daily/      Lean-format OHLCV zips (populated by Polygon sync)
+    ├── results/candidates.json     last Lean algo output (ranked tickers + metrics)
+    ├── logs/                       Lean stdout/stderr per run
+    ├── sync_state.json             last-synced trading date
+    └── launchd.{log,err}
 
 ~/.tradingagents/                   ← upstream TradingAgents runtime (hardcoded in their code)
 ├── cache/                          yfinance OHLCV cache
