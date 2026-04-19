@@ -145,19 +145,20 @@ class TestAutoTriggerEnqueueHandler(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_handle_enqueues_classified_event(self):
+        from alphalens.queue import CandidateQueue
         from alphalens.watchdog.dispatch.handlers.auto_trigger import (
             AutoTriggerEnqueueHandler,
         )
-        from alphalens.watchdog.queue import AutoTriggerQueue
 
         handler = AutoTriggerEnqueueHandler(queue_path=self.queue_path)
         handler.handle(_classified(ticker="AAPL"))
         handler.close()
 
-        with AutoTriggerQueue(self.queue_path) as q:
+        with CandidateQueue(self.queue_path) as q:
             pending = q.list_by_status("pending")
             self.assertEqual(len(pending), 1)
             self.assertEqual(pending[0]["ticker"], "AAPL")
+            self.assertEqual(pending[0]["source"], "watchdog_sec")
 
     def test_handle_does_not_raise_on_queue_write_error(self):
         from alphalens.watchdog.dispatch.handlers.auto_trigger import (

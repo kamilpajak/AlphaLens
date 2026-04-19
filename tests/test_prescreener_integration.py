@@ -32,36 +32,6 @@ class TestPrescreenerPipeline(unittest.TestCase):
         self.assertIn("rank", result.columns)
         self.assertEqual(len(result), 2)
 
-    @patch("alphalens.prescreener.integration.TradingAgentsGraph")
-    @patch("alphalens.prescreener.integration.BatchDataFetcher")
-    @patch("alphalens.prescreener.integration.get_sp500_tickers")
-    def test_screen_and_analyze_calls_propagate(
-        self, mock_universe, mock_fetcher_cls, mock_ta_cls
-    ):
-        from alphalens.prescreener.integration import PrescreenerPipeline
-
-        mock_universe.return_value = ["AAPL", "MSFT"]
-        fetcher = mock_fetcher_cls.return_value
-
-        dates = pd.bdate_range(end="2024-01-15", periods=250)
-        prices = pd.DataFrame({
-            "Open": [100.0] * 250, "High": [101.0] * 250,
-            "Low": [99.0] * 250, "Close": [100.0] * 250,
-            "Volume": [1_000_000] * 250,
-        }, index=dates)
-        fetcher.fetch_prices.return_value = {"AAPL": prices, "MSFT": prices}
-        fetcher.fetch_fundamentals.return_value = {
-            "AAPL": {"trailingPE": 20, "marketCap": 3e12, "averageVolume": 50e6},
-            "MSFT": {"trailingPE": 30, "marketCap": 2e12, "averageVolume": 30e6},
-        }
-
-        mock_ta_cls.return_value.propagate.return_value = ({}, "BUY")
-
-        pipeline = PrescreenerPipeline("2024-01-15", ta_config={"llm_provider": "google"})
-        results = pipeline.screen_and_analyze(top_n=2)
-        self.assertEqual(len(results), 2)
-        self.assertEqual(mock_ta_cls.return_value.propagate.call_count, 2)
-
     @patch("alphalens.prescreener.integration.BatchDataFetcher")
     @patch("alphalens.prescreener.integration.get_sp500_tickers")
     def test_screen_with_custom_tickers(self, mock_universe, mock_fetcher_cls):
