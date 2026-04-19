@@ -113,3 +113,36 @@ biotech:
   - TSHA   # Taysha Gene Therapies
   - DNLI   # Denali Therapeutics
   - VOR    # Vor Biopharma
+
+semis:
+  # Pure small/mid cap semiconductor pure plays. Added 2026-04-19 after
+  # 5-year validation (Sharpe +1.00, IC t-stat +3.67, FF3 alpha +33% annualized).
+  - MPWR    # Monolithic Power Systems
+  - POWI    # Power Integrations
+  - SYNA    # Synaptics
+  - AMKR    # Amkor Technology
+  - MTSI    # MACOM Technology Solutions
+  - PLAB    # Photon Dynamics (Photronics)
+  - SWKS    # Skyworks Solutions
+  - QRVO    # Qorvo
+  - ALGM    # Allegro MicroSystems
+  - KLIC    # Kulicke & Soffa
+  - ASYS    # Amtech Systems
+  - AEIS    # Advanced Energy Industries
+  - MKSI    # MKS Instruments
+  - KN      # Knowles (acoustic semi)
+  - NSIT    # Insight Enterprises
+  - CEVA    # Ceva (DSP cores)
+  - COHU    # Cohu (test equipment)
+  - ONTO    # Onto Innovation
+  - VSH     # Vishay Intertechnology
+  - DIOD    # Diodes
+  - CAMT    # Camtek
+  - BELFB   # Bel Fuse
+  - COHR    # Coherent
+  - LITE    # Lumentum
+  - VECO    # Veeco Instruments
+  - FORM    # FormFactor (already in quantum — dedup handles overlap)
+  - LSCC    # Lattice Semiconductor (already in quantum)
+  - SMTC    # Semtech (already in quantum)
+  - CRUS    # Cirrus Logic (already in quantum)

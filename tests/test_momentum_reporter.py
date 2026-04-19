@@ -54,6 +54,46 @@ class TestMomentumReporter(unittest.TestCase):
         self.assertIn("2026-04-17", text)
         self.assertIn("Momentum", text)
 
+    def test_theme_breakdown_included_when_multiple_themes(self):
+        from alphalens.momentum_screener.reporter import format_telegram_report
+
+        df = pd.DataFrame([
+            {"ticker": "A", "momentum_score": 0.9, "themes": ["quantum"]},
+            {"ticker": "B", "momentum_score": 0.8, "themes": ["ai"]},
+            {"ticker": "C", "momentum_score": 0.7, "themes": ["biotech"]},
+        ])
+        text = format_telegram_report(df, curr_date="2026-04-17")
+        self.assertIn("Themes:", text)
+        # Każdy theme powinien mieć ~33% weight
+        self.assertIn("33%", text)
+
+    def test_concentration_warning_when_one_theme_dominates(self):
+        """Gdy >70% picks w jednym temacie, raport emituje ⚠️ ostrzeżenie."""
+        from alphalens.momentum_screener.reporter import format_telegram_report
+
+        df = pd.DataFrame([
+            {"ticker": "Q1", "momentum_score": 0.9, "themes": ["quantum"]},
+            {"ticker": "Q2", "momentum_score": 0.85, "themes": ["quantum"]},
+            {"ticker": "Q3", "momentum_score": 0.8, "themes": ["quantum"]},
+            {"ticker": "Q4", "momentum_score": 0.75, "themes": ["quantum"]},
+            {"ticker": "A1", "momentum_score": 0.7, "themes": ["ai"]},
+        ])
+        text = format_telegram_report(df, curr_date="2026-04-17")
+        self.assertIn("⚠️", text)
+        self.assertIn("quantum", text)
+        self.assertIn("single-theme bet", text)
+
+    def test_no_warning_when_balanced(self):
+        from alphalens.momentum_screener.reporter import format_telegram_report
+
+        df = pd.DataFrame([
+            {"ticker": "Q", "momentum_score": 0.9, "themes": ["quantum"]},
+            {"ticker": "A", "momentum_score": 0.85, "themes": ["ai"]},
+            {"ticker": "B", "momentum_score": 0.80, "themes": ["biotech"]},
+        ])
+        text = format_telegram_report(df, curr_date="2026-04-17")
+        self.assertNotIn("⚠️", text)
+
 
 if __name__ == "__main__":
     unittest.main()

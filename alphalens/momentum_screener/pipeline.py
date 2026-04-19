@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import pandas as pd
 
+from ..candidates import Candidate
 from ..prescreener.data_fetcher import BatchDataFetcher
 from .config import MOMENTUM_DEFAULTS
 from .guardrails import Guardrails
@@ -53,3 +55,44 @@ class MomentumPipeline:
 
         ranked = scores.sort_values("momentum_score", ascending=False).reset_index(drop=True)
         return ranked.head(n)
+
+    def to_candidates(
+        self, df: pd.DataFrame, weighting: str = "linear"
+    ) -> list[Candidate]:
+        """Emit `Candidate` rows with per-position `weight` in payload.
+
+        `weighting` controls suggested position sizing (nie TradingAgents decision —
+        to jest sygnał dla ewentualnego downstream rebalansu albo eksternalnego
+        sizingu). Domyślnie `"linear"` bo weighting-sweep pokazał że linear top-5
+        daje +7% Sharpe i +27% Calmar vs equal weights. Schematy: `equal`, `linear`,
+        `conviction` (zobacz `alphalens/lean_screener/backtest/weighting.py`).
+        """
+        if df.empty:
+            return []
+        # Lokalny import — backtest'owy moduł nie jest dependency produkcji;
+        # pipeline działa niezmiennie gdy plik zniknie (fallback do equal).
+        try:
+            from alphalens.lean_screener.backtest.weighting import compute_position_weights
+            weights = compute_position_weights(len(df), weighting).tolist()
+        except (ImportError, ValueError):
+            weights = [1.0 / len(df)] * len(df)
+
+        now = datetime.now(timezone.utc)
+        discriminator = now.date().isoformat()
+        # df jest już posortowane descending by momentum_score w run().
+        return [
+            Candidate.from_screener(
+                ticker=row["ticker"],
+                source="momentum",
+                priority=10,
+                payload={
+                    "momentum_score": float(row["momentum_score"]),
+                    "themes": list(row.get("themes") or []),
+                    "weight": float(weights[idx]),
+                    "weighting_scheme": weighting,
+                },
+                discriminator=discriminator,
+                detected_at=now,
+            )
+            for idx, (_, row) in enumerate(df.iterrows())
+        ]
