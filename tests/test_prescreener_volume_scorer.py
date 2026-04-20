@@ -5,48 +5,48 @@ import pandas as pd
 
 class TestVolumeScorerStatic(unittest.TestCase):
     def test_volume_score_high(self):
-        from alphalens.prescreener.volume_scorer import VolumeScorer
+        from alphalens.screeners.prescreener.volume_scorer import VolumeScorer
 
         score = VolumeScorer._avg_volume_score(2_000_000)
         self.assertGreater(score, 0.5)
 
     def test_volume_score_low(self):
-        from alphalens.prescreener.volume_scorer import VolumeScorer
+        from alphalens.screeners.prescreener.volume_scorer import VolumeScorer
 
         score = VolumeScorer._avg_volume_score(100_000)
         self.assertLess(score, 0.5)
 
     def test_volume_score_none(self):
-        from alphalens.prescreener.volume_scorer import VolumeScorer
+        from alphalens.screeners.prescreener.volume_scorer import VolumeScorer
 
         self.assertAlmostEqual(VolumeScorer._avg_volume_score(None), 0.5)
 
     def test_market_cap_score_large(self):
-        from alphalens.prescreener.volume_scorer import VolumeScorer
+        from alphalens.screeners.prescreener.volume_scorer import VolumeScorer
 
         score = VolumeScorer._market_cap_score(100e9)
         self.assertGreater(score, 0.5)
 
     def test_market_cap_score_below_floor(self):
-        from alphalens.prescreener.volume_scorer import VolumeScorer
+        from alphalens.screeners.prescreener.volume_scorer import VolumeScorer
 
         score = VolumeScorer._market_cap_score(500e6)
         self.assertLess(score, 0.5)
 
     def test_volume_trend_rising(self):
-        from alphalens.prescreener.volume_scorer import VolumeScorer
+        from alphalens.screeners.prescreener.volume_scorer import VolumeScorer
 
         score = VolumeScorer._volume_trend_score(avg_20d=1_500_000, avg_50d=1_000_000)
         self.assertGreater(score, 0.5)
 
     def test_volume_trend_falling(self):
-        from alphalens.prescreener.volume_scorer import VolumeScorer
+        from alphalens.screeners.prescreener.volume_scorer import VolumeScorer
 
         score = VolumeScorer._volume_trend_score(avg_20d=500_000, avg_50d=1_000_000)
         self.assertLess(score, 0.5)
 
     def test_all_scores_bounded(self):
-        from alphalens.prescreener.volume_scorer import VolumeScorer
+        from alphalens.screeners.prescreener.volume_scorer import VolumeScorer
 
         for val in [None, 0, 100_000, 500_000, 1_000_000, 10_000_000]:
             self.assertGreaterEqual(VolumeScorer._avg_volume_score(val), 0.0)
@@ -64,7 +64,7 @@ class TestVolumeScorerAll(unittest.TestCase):
         }, index=dates)
 
     def test_score_all_returns_expected_columns(self):
-        from alphalens.prescreener.volume_scorer import VolumeScorer
+        from alphalens.screeners.prescreener.volume_scorer import VolumeScorer
 
         scorer = VolumeScorer()
         prices = self._make_price_df([1_000_000] * 60)
@@ -76,7 +76,7 @@ class TestVolumeScorerAll(unittest.TestCase):
             self.assertIn(col, result.columns)
 
     def test_liquid_stock_beats_illiquid(self):
-        from alphalens.prescreener.volume_scorer import VolumeScorer
+        from alphalens.screeners.prescreener.volume_scorer import VolumeScorer
 
         scorer = VolumeScorer()
         liquid = self._make_price_df([5_000_000] * 60)

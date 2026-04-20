@@ -8,7 +8,7 @@ import pandas as pd
 
 
 def _mk_bar(d, price, vol=100_000):
-    from alphalens.lean_screener.lean_csv_writer import DailyBar
+    from alphalens.screeners.lean.lean_csv_writer import DailyBar
 
     return DailyBar(date=d, open=price, high=price * 1.01, low=price * 0.99, close=price, volume=vol)
 
@@ -16,8 +16,8 @@ def _mk_bar(d, price, vol=100_000):
 def _prime_store(tmpdir: Path, per_ticker_bars: dict[str, list]):
     """Load data into a HistoryStore from the given bar lists."""
     from alphalens.backtest.history_store import HistoryStore
-    from alphalens.lean_screener.lean_csv_loader import load_lean_histories
-    from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
+    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+    from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
 
     writer = LeanCsvWriter(tmpdir)
     for t, bars in per_ticker_bars.items():
@@ -70,7 +70,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
 
     def test_runs_and_produces_daily_results(self):
         from alphalens.backtest.engine import BacktestEngine
-        from alphalens.lean_screener.lean_project.scorer import rank_universe
+        from alphalens.screeners.lean.lean_project.scorer import rank_universe
 
         store = _prime_store(
             self.dir,
@@ -262,8 +262,8 @@ class TestIntegrationWithRealScorer(unittest.TestCase):
 
     def test_real_scorer_integrates(self):
         from alphalens.backtest.engine import BacktestEngine
-        from alphalens.lean_screener.config import LEAN_DEFAULTS
-        from alphalens.lean_screener.lean_project.scorer import rank_universe
+        from alphalens.screeners.lean.config import LEAN_DEFAULTS
+        from alphalens.screeners.lean.lean_project.scorer import rank_universe
 
         with tempfile.TemporaryDirectory() as tmp:
             store = _prime_store(

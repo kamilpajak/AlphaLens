@@ -15,7 +15,7 @@ from typing import Mapping
 
 import pandas as pd
 
-from .config import MOMENTUM_DEFAULTS
+from .config import THEMED_DEFAULTS
 from .early_stage_scorer import EARLY_STAGE_DEFAULTS, EarlyStageScorer
 from .momentum_scorer import MomentumScorer
 
@@ -44,8 +44,8 @@ def momentum_scorer_adapter(
     that the BacktestEngine consumes.
     """
     config = dict(config or {})
-    merged_config = dict(MOMENTUM_DEFAULTS)
-    merged_config.update({k: v for k, v in config.items() if k in MOMENTUM_DEFAULTS})
+    merged_config = dict(THEMED_DEFAULTS)
+    merged_config.update({k: v for k, v in config.items() if k in THEMED_DEFAULTS})
 
     benchmark_ticker = config.get("benchmark", merged_config.get("benchmark", "SPY"))
     prices: dict[str, pd.DataFrame] = {

@@ -2,16 +2,23 @@
 
 Every pipeline listed here is expected to expose `to_candidates(df)` so the CLI
 can funnel results through the shared `CandidateQueue`.
+
+Naming:
+    `SCREENERS` key = pipeline identity (universe invariant).
+    `SOURCE_PRIORITY` key = `Candidate.source` value = scorer identity.
+These are decoupled: one pipeline (e.g. `themed`) can emit candidates tagged
+with different source names depending on the scorer injected (e.g. `momentum`
+vs `early-stage`).
 """
 
 from __future__ import annotations
 
-from alphalens.lean_screener.pipeline import LeanScreenerPipeline
-from alphalens.momentum_screener.pipeline import MomentumPipeline
-from alphalens.prescreener.integration import PrescreenerPipeline
+from alphalens.screeners.lean.pipeline import LeanScreenerPipeline
+from alphalens.screeners.prescreener.integration import PrescreenerPipeline
+from alphalens.screeners.themed.pipeline import ThemedPipeline
 
 SCREENERS = {
-    "momentum": MomentumPipeline,
+    "themed": ThemedPipeline,
     "prescreener": PrescreenerPipeline,
     "lean": LeanScreenerPipeline,
 }

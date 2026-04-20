@@ -5,7 +5,7 @@ Phase 0 audit per Perplexity recommendation (2026-04-19):
 insights? What % were 'can't find edge'?"
 
 Ten moduł iteruje over historical top-N picks (z `BacktestReport` lub
-`MomentumHistoryStore`), puszcza pluggable LLM scorer na każdy, porównuje:
+`ThemedHistoryStore`), puszcza pluggable LLM scorer na każdy, porównuje:
 - accept_rate: % picks gdzie LLM daje approve
 - accept_hit_rate: mean forward return w accepted
 - reject_hit_rate: mean forward return w rejected
@@ -288,16 +288,16 @@ def picks_from_backtest_report(report) -> list[PickRecord]:
 def picks_from_history_store(
     store, days: int = 60, top_n: int = 5
 ) -> list[PickRecord]:
-    """Ekstraktuj z MomentumHistoryStore (z produkcji Layer 2b).
+    """Ekstraktuj z ThemedHistoryStore (z produkcji Layer 2b).
 
     Musi byc `momentum_history.db` wypełniony przez daily runs. Forward return
     liczymy z późniejszych picks — jeśli ticker pojawił się w historii później
     też, używamy późniejszej ceny jako proxy. Fallback: None (skip).
     """
-    from alphalens.momentum_screener.history_store import MomentumHistoryStore  # late
+    from alphalens.screeners.themed.history_store import ThemedHistoryStore  # late
 
-    if not isinstance(store, MomentumHistoryStore):
-        raise TypeError(f"expected MomentumHistoryStore, got {type(store)}")
+    if not isinstance(store, ThemedHistoryStore):
+        raise TypeError(f"expected ThemedHistoryStore, got {type(store)}")
 
     timeline = store.picks_timeline(days=days)
     timeline = timeline[timeline["rank"] <= top_n]
@@ -306,8 +306,8 @@ def picks_from_history_store(
 
     # Forward return z HistoryStore (OHLCV) — loader lives Lean-side, store is generic.
     from alphalens.backtest.history_store import HistoryStore
-    from alphalens.lean_screener.config import DATA_DIR
-    from alphalens.lean_screener.lean_csv_loader import load_lean_histories
+    from alphalens.screeners.lean.config import DATA_DIR
+    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
 
     tickers = sorted(timeline["ticker"].unique())
     histories = load_lean_histories(DATA_DIR, tickers)

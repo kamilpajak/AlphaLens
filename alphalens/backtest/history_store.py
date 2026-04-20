@@ -6,7 +6,7 @@ hitting disk. The backtest loop calls `.truncate_to(ticker, asof)` thousands
 of times, so avoiding I/O per call is critical for calibration speed.
 
 Loading is the caller's responsibility (see
-`alphalens.lean_screener.lean_csv_loader.load_lean_histories` for the Lean
+`alphalens.screeners.lean.lean_csv_loader.load_lean_histories` for the Lean
 zip-CSV implementation). Keeping I/O out of this class means the generic
 harness has no knowledge of the Lean data layout.
 

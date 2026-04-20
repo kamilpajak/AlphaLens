@@ -31,10 +31,10 @@ from alphalens.backtest.metrics import (  # noqa: E402
     sharpe,
     summarise_portfolio,
 )
-from alphalens.lean_screener.lean_csv_loader import load_lean_histories  # noqa: E402
-from alphalens.momentum_screener.backtest_adapter import momentum_scorer_adapter  # noqa: E402
-from alphalens.momentum_screener.config import MOMENTUM_DEFAULTS, UNIVERSE_PATH  # noqa: E402
-from alphalens.momentum_screener.universe import flatten_universe  # noqa: E402
+from alphalens.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
+from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter  # noqa: E402
+from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH  # noqa: E402
+from alphalens.screeners.themed.universe import flatten_universe  # noqa: E402
 
 MAIN_DATA = Path.home() / ".alphalens" / "lean" / "data"
 SURV_DATA = Path.home() / ".alphalens" / "survivorship" / "lean_data"
@@ -67,7 +67,7 @@ def build_augmented_store() -> tuple[HistoryStore, list[str], list[str]]:
 
 def run(store: HistoryStore, screener_tickers: list[str], label: str) -> tuple:
     """Run BacktestEngine with momentum scorer on given universe."""
-    cfg = dict(MOMENTUM_DEFAULTS)
+    cfg = dict(THEMED_DEFAULTS)
     cfg["benchmark"] = "SPY"
     engine = BacktestEngine(
         store,

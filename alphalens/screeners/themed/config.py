@@ -1,6 +1,6 @@
 from pathlib import Path
 
-MOMENTUM_DEFAULTS = {
+THEMED_DEFAULTS = {
     # Metric weights (7 metrics, equal weight on start; sum to 1.0)
     "weight_near_high": 1 / 7,
     "weight_pct_20d": 1 / 7,

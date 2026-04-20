@@ -7,13 +7,13 @@ import pandas as pd
 
 
 def _mk_bar(d, price, vol=1000):
-    from alphalens.lean_screener.lean_csv_writer import DailyBar
+    from alphalens.screeners.lean.lean_csv_writer import DailyBar
 
     return DailyBar(date=d, open=price, high=price * 1.01, low=price * 0.99, close=price, volume=vol)
 
 
 def _prime_dir(tmpdir: Path, tickers_to_bars: dict[str, list]) -> Path:
-    from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
+    from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
 
     writer = LeanCsvWriter(tmpdir)
     for t, bars in tickers_to_bars.items():
@@ -24,7 +24,7 @@ def _prime_dir(tmpdir: Path, tickers_to_bars: dict[str, list]) -> Path:
 def _store_with(tmpdir: Path, bars: dict[str, list]):
     """Build HistoryStore by priming a dir with zips and loading via lean CSV loader."""
     from alphalens.backtest.history_store import HistoryStore
-    from alphalens.lean_screener.lean_csv_loader import load_lean_histories
+    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
 
     _prime_dir(tmpdir, bars)
     histories = load_lean_histories(tmpdir, list(bars.keys()))

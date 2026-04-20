@@ -68,7 +68,7 @@ class RunRecord:
     error: str | None
 
 
-class MomentumHistoryStore:
+class ThemedHistoryStore:
     def __init__(self, path: Path | None = None):
         self.path = Path(path) if path else default_history_path()
         self._ensure_schema()

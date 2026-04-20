@@ -9,7 +9,7 @@ import pandas as pd
 class TestPrescreenerToCandidates(unittest.TestCase):
     def test_to_candidates_emits_prescreener_candidates(self):
         from alphalens.candidates import Candidate
-        from alphalens.prescreener.integration import PrescreenerPipeline
+        from alphalens.screeners.prescreener.integration import PrescreenerPipeline
 
         df = pd.DataFrame(
             [
@@ -48,7 +48,7 @@ class TestPrescreenerToCandidates(unittest.TestCase):
 
     def test_prescreener_no_longer_imports_tradingagents_graph(self):
         """The integration module must not construct TradingAgentsGraph directly anymore."""
-        import alphalens.prescreener.integration as integ
+        import alphalens.screeners.prescreener.integration as integ
 
         self.assertFalse(
             hasattr(integ, "TradingAgentsGraph"),
@@ -56,7 +56,7 @@ class TestPrescreenerToCandidates(unittest.TestCase):
         )
 
     def test_screen_and_analyze_removed(self):
-        from alphalens.prescreener.integration import PrescreenerPipeline
+        from alphalens.screeners.prescreener.integration import PrescreenerPipeline
 
         pipeline = PrescreenerPipeline("2026-04-17")
         self.assertFalse(
@@ -64,11 +64,11 @@ class TestPrescreenerToCandidates(unittest.TestCase):
             "screen_and_analyze() replaced by screen() + to_candidates() + sink",
         )
 
-    @patch("alphalens.prescreener.integration.BatchDataFetcher")
-    @patch("alphalens.prescreener.integration.get_sp500_tickers")
+    @patch("alphalens.screeners.prescreener.integration.BatchDataFetcher")
+    @patch("alphalens.screeners.prescreener.integration.get_sp500_tickers")
     def test_screen_still_returns_dataframe_only(self, mock_universe, mock_fetcher_cls):
         """screen() must remain a pure ranking step — no TA calls, no network side effects."""
-        from alphalens.prescreener.integration import PrescreenerPipeline
+        from alphalens.screeners.prescreener.integration import PrescreenerPipeline
 
         mock_universe.return_value = ["AAPL"]
         fetcher = mock_fetcher_cls.return_value
