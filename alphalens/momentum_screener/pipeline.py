@@ -18,8 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 class MomentumPipeline:
-    def __init__(self, config: dict | None = None):
+    def __init__(
+        self,
+        config: dict | None = None,
+        scorer=None,
+        source_name: str = "momentum",
+    ):
         self.config = config or MOMENTUM_DEFAULTS
+        self.scorer = scorer or MomentumScorer(self.config)
+        self.source_name = source_name
 
     def run(self, curr_date: str, top_n: int | None = None) -> pd.DataFrame:
         n = top_n if top_n is not None else self.config["top_n"]
@@ -49,8 +56,13 @@ class MomentumPipeline:
         if not kept:
             return pd.DataFrame(columns=["ticker", "momentum_score", "themes"])
 
-        scorer = MomentumScorer(self.config)
-        scores = scorer.score_all(kept, prices, benchmark_ticker=benchmark)
+        scores = self.scorer.score_all(kept, prices, benchmark_ticker=benchmark)
+        # Normalise scorer-specific column to canonical "momentum_score" so all
+        # downstream code (history_store, to_candidates, reporter) keeps working
+        # regardless of which scorer was injected.
+        for alt in ("early_stage_score",):
+            if alt in scores.columns and "momentum_score" not in scores.columns:
+                scores = scores.rename(columns={alt: "momentum_score"})
         scores["themes"] = scores["ticker"].map(membership)
 
         ranked = scores.sort_values("momentum_score", ascending=False).reset_index(drop=True)
@@ -83,13 +95,14 @@ class MomentumPipeline:
         return [
             Candidate.from_screener(
                 ticker=row["ticker"],
-                source="momentum",
+                source=self.source_name,
                 priority=10,
                 payload={
                     "momentum_score": float(row["momentum_score"]),
                     "themes": list(row.get("themes") or []),
                     "weight": float(weights[idx]),
                     "weighting_scheme": weighting,
+                    "scorer": self.source_name,
                 },
                 discriminator=discriminator,
                 detected_at=now,

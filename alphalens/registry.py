@@ -19,6 +19,7 @@ SCREENERS = {
 SOURCE_PRIORITY = {
     "watchdog_sec": 0,
     "momentum": 10,
+    "early-stage": 10,  # Layer 2b variant — base-breakout scorer, same priority as classic momentum
     "lean": 15,
     "prescreener": 20,
 }
