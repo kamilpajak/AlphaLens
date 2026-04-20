@@ -16,7 +16,9 @@ Strategy (per zen review):
   never flow into real indicators — zero stockstats / guardrails
   brittleness.
 - `--no-attrib` skips Fama-French factor loading (no FF files in test env).
-- Each end-to-end test writes the report to a tempdir.
+- Each end-to-end test writes the report to a tempdir and asserts on
+  structural markers of the rendered markdown (section headers, table
+  rows) rather than on ephemeral stdout formatting.
 """
 
 from __future__ import annotations
@@ -65,6 +67,20 @@ def _fake_scorer(histories, config):
     return pd.DataFrame({"ticker": tickers, "score": scores})
 
 
+def _assert_report_has_structural_markers(test_case: unittest.TestCase, report_path: Path) -> None:
+    """Assert the rendered markdown report contains the stable section/table
+    anchors produced by `alphalens.backtest.report.write_markdown_report`.
+
+    Structural asserts (not string-match on stdout) guard against silent
+    truncation of the report while tolerating cosmetic wording changes in
+    the HEADLINE echo.
+    """
+    test_case.assertTrue(report_path.exists(), msg=f"report not written: {report_path}")
+    body = report_path.read_text()
+    for marker in ("Sharpe (gross)", "## Decision criteria"):
+        test_case.assertIn(marker, body, msg=f"missing {marker!r} in report body")
+
+
 class TestBacktestCLIHelp(unittest.TestCase):
     """Catches import errors and Typer registration regressions."""
 
@@ -81,6 +97,7 @@ class TestBacktestCLIHelp(unittest.TestCase):
         self.assertIn("--start", result.output)
         self.assertIn("--end", result.output)
         self.assertIn("--no-attrib", result.output)
+        self.assertIn("--diagnose", result.output)
 
 
 class TestBacktestCLIEndToEnd(unittest.TestCase):
@@ -101,17 +118,12 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
     def _histories_for(self, tickers):
         return {t: _minimal_ohlcv() for t in tickers}
 
-    def test_momentum_scorer_end_to_end(self):
-        """`--scorer momentum` executes engine + report without touching
-        real OHLCV data or factor files.
-        """
+    def _run_momentum(self, extra_args: list[str] | None = None):
         from alphalens_cli.main import app
-
-        universe_patch = {"ai": ["NVDA", "AMD"]}
 
         with patch(
             "alphalens.screeners.themed.universe.load_universe",
-            return_value=universe_patch,
+            return_value={"ai": ["NVDA", "AMD"]},
         ), patch(
             "alphalens.screeners.themed.universe.flatten_universe",
             return_value={"NVDA": ["ai"], "AMD": ["ai"]},
@@ -122,7 +134,7 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
             "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
             return_value=self._histories_for(["NVDA", "AMD", "SPY"]),
         ):
-            result = self.runner.invoke(
+            return self.runner.invoke(
                 app,
                 [
                     "backtest",
@@ -131,13 +143,27 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
                     "--no-attrib",
                     "--top-n", "1",
                     "--report", str(self.report_path),
+                    *(extra_args or []),
                 ],
             )
 
+    def test_momentum_scorer_end_to_end(self):
+        """`--scorer momentum` executes engine + report without touching
+        real OHLCV data or factor files.
+        """
+        result = self._run_momentum()
         self.assertEqual(result.exit_code, 0, msg=result.output)
-        self.assertIn("HEADLINE", result.output)
-        self.assertIn("sharpe_gross", result.output)
-        self.assertTrue(self.report_path.exists(), msg=result.output)
+        _assert_report_has_structural_markers(self, self.report_path)
+
+    def test_momentum_scorer_end_to_end_with_diagnose(self):
+        """`--diagnose` pulls in a separate lazy-import chain
+        (`diagnostics.format_vol_decomposition`, `ic_by_decile_from_scored_frames`,
+        `tail_concentration_score`, `vol_decomposition_by_regime`). Exercise it
+        with the same fake scorer so API drift in that chain is caught too.
+        """
+        result = self._run_momentum(extra_args=["--diagnose"])
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        _assert_report_has_structural_markers(self, self.report_path)
 
     def test_lean_scorer_end_to_end(self):
         """`--scorer lean` executes the archived Layer 2c path the same way."""
@@ -167,8 +193,62 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
             )
 
         self.assertEqual(result.exit_code, 0, msg=result.output)
-        self.assertIn("HEADLINE", result.output)
-        self.assertTrue(self.report_path.exists(), msg=result.output)
+        _assert_report_has_structural_markers(self, self.report_path)
+
+    def test_theme_mapping_fallback_when_universe_load_fails(self):
+        """When `flatten_universe(load_universe())` raises, the command logs
+        `theme mapping skipped` and continues (theme analysis is advisory,
+        not required). Verify the fallback path exits 0 and emits the
+        skip notice.
+        """
+        from alphalens_cli.main import app
+
+        # For the momentum path, backtest_adapter pulls its own universe
+        # config (THEMED_DEFAULTS + UNIVERSE_PATH), so we need the scorer
+        # pass to succeed — patch the scorer and break the *second*
+        # themed-universe import (the one used by theme_analysis).
+        def _raise(*_args, **_kwargs):
+            raise RuntimeError("simulated universe load failure")
+
+        with patch(
+            "alphalens.screeners.themed.universe.load_universe",
+            side_effect=_raise,
+        ), patch(
+            "alphalens.screeners.themed.universe.flatten_universe",
+            side_effect=_raise,
+        ), patch(
+            "alphalens.screeners.themed.backtest_adapter.momentum_scorer_adapter",
+            new=_fake_scorer,
+        ), patch(
+            "alphalens.screeners.lean.universe.all_tickers",
+            return_value=["NVDA", "AMD"],
+        ), patch(
+            "alphalens.screeners.lean.lean_project.scorer.rank_universe",
+            new=_fake_scorer,
+        ), patch(
+            "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
+            return_value=self._histories_for(["NVDA", "AMD", "SPY", "QQQ", "IWM"]),
+        ):
+            # Use `--scorer lean` so momentum's universe loader is NOT called
+            # for scorer configuration (only the theme_analysis post-hoc
+            # block attempts the themed universe load — which is exactly
+            # the branch we're testing).
+            result = self.runner.invoke(
+                app,
+                [
+                    "backtest",
+                    "--scorer", "lean",
+                    "--start", "2023-07-03",
+                    "--end", "2023-07-10",
+                    "--no-attrib",
+                    "--top-n", "1",
+                    "--report", str(self.report_path),
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertIn("theme mapping skipped", result.output)
+        _assert_report_has_structural_markers(self, self.report_path)
 
 
 class TestBacktestCLIArgValidation(unittest.TestCase):
