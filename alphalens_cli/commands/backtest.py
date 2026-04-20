@@ -20,17 +20,6 @@ def backtest(
     weighting: str = typer.Option(
         "linear", "--weighting", help="Position weighting: linear | equal"
     ),
-    cost_model: str = typer.Option(
-        "flat",
-        "--cost-model",
-        help="Cost model: 'flat' (global bps by profile) or 'per_ticker' "
-        "(EDGE-based per-ticker spread + market impact)",
-    ),
-    portfolio_value: float = typer.Option(
-        100_000.0,
-        "--portfolio-value",
-        help="Portfolio value used for per-ticker cost notional. Default $100k.",
-    ),
     benchmark: str = typer.Option("SPY", help="Benchmark ticker for calendar + regime"),
     report: str = typer.Option(
         "docs/backtest/mvp1_report.md",
@@ -123,7 +112,6 @@ def backtest(
         screener_tickers=screener_tickers,
         weighting=weighting,
         retain_scored_frames=diagnose,
-        portfolio_value=portfolio_value,
     )
 
     typer.echo("Running backtest replay…")
@@ -193,28 +181,6 @@ def backtest(
                 f"alert days={theme_stats.concentration_alert_days}"
             )
 
-    per_ticker_result = None
-    if cost_model == "per_ticker":
-        from alphalens.backtest.cost_applier import CostApplier
-        from alphalens.backtest.cost_model import PerTickerCostModel
-        from alphalens.backtest.market_chars_store import MarketCharacteristicsStore
-
-        typer.echo("  building MarketCharacteristicsStore (EDGE spread + vol + ADV)…")
-        chars = MarketCharacteristicsStore(store)
-        chars.prime(screener_tickers, start=start_date, end=end_date)
-
-        ticker_to_theme = {t: themes[0] for t, themes in themes_map.items() if themes}
-        applier = CostApplier(
-            market_chars=chars,
-            cost_model=PerTickerCostModel(),
-            theme_map=ticker_to_theme,
-        )
-        per_ticker_result = applier.apply(result)
-        typer.echo(
-            f"  per-ticker drag: {per_ticker_result.total_cost_bps_annualized:.1f} bps/yr "
-            f"(portfolio value ${portfolio_value:,.0f})"
-        )
-
     report_path = Path(report)
     if not report_path.is_absolute():
         report_path = Path.cwd() / report_path
@@ -222,7 +188,6 @@ def backtest(
         result, report_path, summary, attribution, regimes, cost_df,
         decile_ic=decile_ic, vol_decomp=vol_decomp, tail_score=tail_score,
         theme_stats=theme_stats,
-        per_ticker_cost=per_ticker_result,
     )
     typer.echo(f"Report written to {report_path}")
 
@@ -238,11 +203,6 @@ def backtest(
     typer.echo("=== HEADLINE ===")
     typer.echo(f"  sharpe_gross      = {summary.sharpe_gross:+.3f}")
     typer.echo(f"  sharpe_moderate   = {summary.sharpe_moderate:+.3f}")
-    if per_ticker_result is not None:
-        from alphalens.backtest.metrics import sharpe as _sharpe
-
-        net_sharpe = _sharpe(per_ticker_result.net_returns.tolist())
-        typer.echo(f"  sharpe_per_ticker = {net_sharpe:+.3f}  (drag={per_ticker_result.total_cost_bps_annualized:.0f} bps/yr)")
     typer.echo(f"  mean_ic           = {summary.mean_ic:+.4f}  (t={summary.ic_tstat:+.2f})")
     typer.echo(f"  ic_positive_pct   = {summary.ic_positive_pct * 100:.1f}%")
     typer.echo(f"  turnover          = {summary.turnover * 100:.1f}%")
