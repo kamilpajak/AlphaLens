@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from typing import Any, Iterator
 
 import requests
@@ -28,6 +29,24 @@ class GroupedBar:
     close: float
     volume: int
     timestamp_ms: int
+
+
+@dataclass(frozen=True)
+class Trade:
+    """One row from Polygon v3/trades — a single printed trade.
+
+    `trf_id` is populated (non-None) only for off-exchange / dark-pool prints
+    reported through FINRA TRF. `exchange=4` also maps to FINRA ADF; use
+    either signal to flag dark-pool activity.
+    """
+
+    ticker: str
+    sip_timestamp_ns: int
+    price: float
+    size: int
+    conditions: list[int] = field(default_factory=list)
+    exchange: int = 0
+    trf_id: int | None = None
 
 
 class PolygonError(RuntimeError):
@@ -104,6 +123,28 @@ class PolygonClient:
             )
             for row in results
         ]
+
+    def trades(
+        self,
+        ticker: str,
+        trade_date: date,
+        limit: int = 50_000,
+    ) -> list[Trade]:
+        """All printed trades for `ticker` on `trade_date` (UTC-midnight window).
+
+        Follows `next_url` pagination until the full day is fetched. Returns
+        an empty list when the market was closed or the ticker had no prints.
+        """
+        start_ns = _ns_at_utc_midnight(trade_date)
+        end_ns = _ns_at_utc_midnight(_add_day(trade_date))
+        params: dict[str, Any] = {
+            "timestamp.gte": start_ns,
+            "timestamp.lt": end_ns,
+            "limit": int(limit),
+            "order": "asc",
+        }
+        rows = list(self._paginate(f"/v3/trades/{ticker.upper()}", params))
+        return [_trade_from_row(r, ticker.upper()) for r in rows]
 
     def delisted_tickers(
         self,
@@ -202,3 +243,27 @@ class PolygonClient:
                     continue
                 break
         raise PolygonError(f"exhausted network retries: {last_exc}") from last_exc
+
+
+def _ns_at_utc_midnight(d: date) -> int:
+    dt = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1_000_000_000)
+
+
+def _add_day(d: date) -> date:
+    from datetime import timedelta
+
+    return d + timedelta(days=1)
+
+
+def _trade_from_row(row: dict[str, Any], ticker: str) -> Trade:
+    raw_trf = row.get("trf_id")
+    return Trade(
+        ticker=ticker,
+        sip_timestamp_ns=int(row.get("sip_timestamp", 0)),
+        price=float(row.get("price", 0.0)),
+        size=int(row.get("size", 0)),
+        conditions=list(row.get("conditions") or []),
+        exchange=int(row.get("exchange", 0)),
+        trf_id=int(raw_trf) if raw_trf is not None else None,
+    )

@@ -23,7 +23,7 @@ import logging
 import math
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Callable, Mapping
+from typing import Callable, Literal, Mapping
 
 import pandas as pd
 
@@ -39,6 +39,26 @@ logger = logging.getLogger(__name__)
 
 
 Scorer = Callable[[Mapping[str, pd.DataFrame], Mapping], pd.DataFrame]
+
+
+TradeDirection = Literal["enter", "exit"]
+
+
+@dataclass(frozen=True)
+class Trade:
+    """A rebalance-day trade: enter a new name or exit a dropped name.
+
+    `notional` equals `|weight_delta| × portfolio_value`, always positive.
+    `price` is the close on the scoring day — trades are assumed filled at
+    the next open/close but the price here is just the most recent observable
+    mark used for share counting in commission calculations.
+    """
+
+    date: pd.Timestamp
+    ticker: str
+    notional: float
+    direction: TradeDirection
+    price: float
 
 
 @dataclass(frozen=True)
@@ -63,6 +83,8 @@ class DailyResult:
     portfolio_return_holding: float            # holding_period forward return of top-N (signal diagnostic)
     universe_median_return: float              # 1-day median across scored set
     ic: float                                  # Rank IC over holding_period horizon
+    top_n_weights: list[float] = field(default_factory=list)   # aligned with top_n_tickers
+    trades: list[Trade] | None = None          # rebalance trades vs. previous day
 
 
 @dataclass
@@ -76,6 +98,7 @@ class BacktestReport:
     universe_ticker_count: int
     daily_results: list[DailyResult] = field(default_factory=list)
     scored_frames: dict[pd.Timestamp, pd.DataFrame] = field(default_factory=dict)
+    portfolio_value: float = 100_000.0
 
     @property
     def portfolio_returns(self) -> pd.Series:
@@ -137,6 +160,7 @@ class BacktestEngine:
         screener_tickers: list[str] | None = None,
         retain_scored_frames: bool = False,
         weighting: WeightingScheme = "equal",
+        portfolio_value: float = 100_000.0,
     ):
         self.store = history_store
         self._scorer = scorer
@@ -147,6 +171,8 @@ class BacktestEngine:
         self._screener_tickers = list(screener_tickers) if screener_tickers else []
         self.retain_scored_frames = bool(retain_scored_frames)
         self.weighting: WeightingScheme = weighting
+        self.portfolio_value = float(portfolio_value)
+        self._prev_weights: dict[str, float] = {}
 
     def run(self, start: date, end: date) -> BacktestReport:
         calendar = HistoryStore.benchmark_calendar(self.store, self.benchmark, start, end)
@@ -167,7 +193,12 @@ class BacktestEngine:
             end=end,
             benchmark=self.benchmark,
             universe_ticker_count=len(tickers),
+            portfolio_value=self.portfolio_value,
         )
+
+        # Reset state so multiple .run() calls on the same engine don't bleed
+        # prior positions into a new simulation.
+        self._prev_weights = {}
 
         logger.info(
             "backtest run: %s..%s benchmark=%s tickers=%d days=%d top_n=%d hold=%d",
@@ -192,6 +223,36 @@ class BacktestEngine:
         return report
 
     # ------------------------------------------------------------------ internal
+
+    def _build_trades(
+        self,
+        day: pd.Timestamp,
+        current_weights: dict[str, float],
+        prev_weights: dict[str, float],
+        prices: dict[str, float],
+        history_closes: dict[str, float],
+    ) -> list[Trade]:
+        trades: list[Trade] = []
+        all_tickers = set(current_weights) | set(prev_weights)
+        for ticker in sorted(all_tickers):
+            cw = current_weights.get(ticker, 0.0)
+            pw = prev_weights.get(ticker, 0.0)
+            delta = cw - pw
+            if abs(delta) < 1e-12:
+                continue
+            direction: TradeDirection = "enter" if delta > 0 else "exit"
+            notional = abs(delta) * self.portfolio_value
+            price = prices.get(ticker) or history_closes.get(ticker, 0.0)
+            trades.append(
+                Trade(
+                    date=day,
+                    ticker=ticker,
+                    notional=notional,
+                    direction=direction,
+                    price=price,
+                )
+            )
+        return trades
 
     def _simulate_day(
         self, day: date, tickers: list[str]
@@ -238,10 +299,22 @@ class BacktestEngine:
             valid_holding["score"].tolist(), valid_holding["fwd_holding"].tolist()
         )
 
+        top_n_tickers = top_n["ticker"].tolist()
+        weights_list = [float(w) for w in weights]
+        current_weights = dict(zip(top_n_tickers, weights_list))
+        trades = self._build_trades(
+            day=pd.Timestamp(day),
+            current_weights=current_weights,
+            prices={t: float(p) for t, p in zip(top_n_tickers, top_n["fwd_1d"].tolist())},
+            history_closes={t: _last_close(self.store, t, day) for t in top_n_tickers},
+            prev_weights=self._prev_weights,
+        )
+        self._prev_weights = current_weights
+
         snap = DailyResult(
             date=pd.Timestamp(day),
             scored_count=int(len(valid_holding)),
-            top_n_tickers=top_n["ticker"].tolist(),
+            top_n_tickers=top_n_tickers,
             top_n_scores=[float(x) for x in top_n["score"].tolist()],
             top_n_forward_returns=[
                 float(x) if not _is_nan(x) else float("nan")
@@ -253,6 +326,8 @@ class BacktestEngine:
             ),
             universe_median_return=universe_median_ret_1d,
             ic=ic_value,
+            top_n_weights=weights_list,
+            trades=trades,
         )
 
         scored_frame = (
@@ -268,3 +343,10 @@ def _is_nan(x) -> bool:
         return math.isnan(float(x))
     except (TypeError, ValueError):
         return False
+
+
+def _last_close(store: HistoryStore, ticker: str, asof: date) -> float:
+    df = store.truncate_to(ticker, asof)
+    if df.empty:
+        return 0.0
+    return float(df["close"].iloc[-1])

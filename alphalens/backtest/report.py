@@ -24,6 +24,7 @@ from alphalens.backtest.metrics import (
 from alphalens.backtest.regime import RegimeStats
 from alphalens.backtest.theme_analysis import ThemeSeriesStats, format_theme_summary
 
+from .cost_applier import CostApplicationResult
 from .diagnostics import DecileICResult, VolDecomposition, format_vol_decomposition
 from .engine import BacktestReport
 
@@ -119,6 +120,7 @@ def write_markdown_report(
     vol_decomp: Mapping[str, VolDecomposition] | None = None,
     tail_score: float = 0.0,
     theme_stats: ThemeSeriesStats | None = None,
+    per_ticker_cost: CostApplicationResult | None = None,
 ) -> None:
     """Write the full markdown decision-matrix report to `path`."""
     lines: list[str] = []
@@ -161,6 +163,61 @@ def write_markdown_report(
                 f"{row['sharpe']:+.3f} | {row['annual_return'] * 100:+.2f}% |"
             )
         lines.append("")
+
+    if per_ticker_cost is not None:
+        from alphalens.backtest.metrics import sharpe as _sharpe
+
+        net_series = per_ticker_cost.net_returns.tolist()
+        net_sharpe = _sharpe(net_series)
+        lines.append("## Per-ticker cost breakdown")
+        lines.append("")
+        lines.append(f"- **Sharpe (per-ticker net)**: {net_sharpe:+.3f}")
+        lines.append(
+            f"- Annualised drag: **{per_ticker_cost.total_cost_bps_annualized:.1f} bps/yr** "
+            f"(portfolio value ${report.portfolio_value:,.0f})"
+        )
+        lines.append(
+            "- Interpretation: if annualised drag >> flat 100 bps baseline, the "
+            "strategy is effectively unrunnable at this portfolio size on this "
+            "universe — flat profiles are underestimating real-world costs."
+        )
+        lines.append("")
+
+        top = per_ticker_cost.per_ticker_breakdown.head(10)
+        if not top.empty:
+            lines.append("### Top-10 najdroższe tickery")
+            lines.append("")
+            lines.append("| Ticker | Enters | Exits | Total cost (USD) | Bps of NAV |")
+            lines.append("| --- | ---: | ---: | ---: | ---: |")
+            for _, row in top.iterrows():
+                lines.append(
+                    f"| {row['ticker']} | {int(row['enter_count'])} | "
+                    f"{int(row['exit_count'])} | ${row['total_cost_usd']:,.2f} | "
+                    f"{row['total_cost_bps_of_nav']:.2f} |"
+                )
+            lines.append("")
+            top5_cost = top.head(5)["total_cost_usd"].sum()
+            total_cost = per_ticker_cost.per_ticker_breakdown["total_cost_usd"].sum()
+            if total_cost > 0:
+                pct = top5_cost / total_cost * 100.0
+                lines.append(
+                    f"**Koncentracja kosztów**: top-5 tickerów generuje {pct:.1f}% "
+                    f"całkowitego kosztu."
+                )
+                lines.append("")
+
+        theme_df = per_ticker_cost.per_theme_breakdown
+        if not theme_df.empty:
+            lines.append("### Decompozycja per-theme")
+            lines.append("")
+            lines.append("| Temat | Total cost (USD) | % całości |")
+            lines.append("| --- | ---: | ---: |")
+            for _, row in theme_df.iterrows():
+                lines.append(
+                    f"| {row['theme']} | ${row['total_cost_usd']:,.2f} | "
+                    f"{row['pct_of_total'] * 100:.1f}% |"
+                )
+            lines.append("")
 
     if regime_stats:
         lines.append("## Regime breakdown")

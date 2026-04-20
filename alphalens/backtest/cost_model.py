@@ -12,6 +12,7 @@ high-churn ones. Net returns = gross returns − (turnover × per-trade cost).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Literal, Sequence
 
@@ -88,6 +89,52 @@ class CostModel:
         drag = self.per_period_drag(periods_per_year=periods_per_year)
         annualised_drag_sharpe = drag / volatility_daily * np.sqrt(periods_per_year)
         return float(gross_sharpe - annualised_drag_sharpe)
+
+
+@dataclass(frozen=True)
+class PerTickerCostModel:
+    """Per-trade cost model composed of half-spread, market impact, and commission.
+
+    ```
+    cost = max(spread_bps, min_spread_bps) / 10_000 × trade_notional / 2
+         + impact_kappa × volatility × sqrt(trade_notional / adv_dollar) × trade_notional
+         + commission_per_share × (trade_notional / share_price)
+    ```
+
+    Defaults target a retail profile: free commissions (IBKR Pro / Alpaca),
+    Almgren-Chriss κ=0.10 which is typical for US equities, and a 5 bps floor
+    to avoid implausibly tight spreads on synthetic sample days.
+    """
+
+    commission_per_share: float = 0.0
+    impact_kappa: float = 0.10
+    min_spread_bps: float = 5.0
+
+    def cost_for_trade(
+        self,
+        trade_notional: float,
+        spread_bps: float,
+        volatility: float,
+        adv_dollar: float,
+        share_price: float,
+    ) -> float:
+        """Return the estimated cost in the same currency units as `trade_notional`."""
+        effective_spread_bps = max(spread_bps, self.min_spread_bps)
+        spread_cost = (effective_spread_bps / 10_000.0) * trade_notional / 2.0
+
+        safe_adv = adv_dollar if adv_dollar > 0.0 else 1.0
+        impact_cost = (
+            self.impact_kappa
+            * volatility
+            * math.sqrt(trade_notional / safe_adv)
+            * trade_notional
+        )
+
+        safe_price = share_price if share_price > 0.0 else 0.01
+        shares = trade_notional / safe_price
+        commission_cost = self.commission_per_share * shares
+
+        return float(spread_cost + impact_cost + commission_cost)
 
 
 def cost_sensitivity_table(
