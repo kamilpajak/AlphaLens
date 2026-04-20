@@ -45,7 +45,7 @@ class TestTyperAppRegistration(unittest.TestCase):
         from alphalens_cli.commands.research import research_app
 
         names = {cmd.name for cmd in research_app.registered_commands}
-        self.assertEqual(names, {"validate-llm-filter"})
+        self.assertEqual(names, {"validate-llm-filter", "survivorship-pit"})
 
     def test_root_app_top_level_commands(self):
         from alphalens_cli.main import app
