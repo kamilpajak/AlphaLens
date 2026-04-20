@@ -26,10 +26,10 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from alphalens.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens.backtest.factor_analysis import fama_french_alpha  # noqa: E402
+from alphalens.backtest.factor_analysis import run_carhart_attribution  # noqa: E402
+from alphalens.backtest.factors import load_carhart_daily  # noqa: E402
 from alphalens.backtest.history_store import HistoryStore  # noqa: E402
 from alphalens.backtest.metrics import rank_ic_tstat, sharpe  # noqa: E402
-from alphalens.lean_screener.factors import load_ff3_daily  # noqa: E402
 from alphalens.lean_screener.lean_csv_loader import load_lean_histories  # noqa: E402
 from alphalens.momentum_screener.backtest_adapter import (  # noqa: E402
     early_stage_scorer_adapter,
@@ -169,13 +169,17 @@ def _run_scorer(
         "turnover_pct": float(report.turnover * 100),
     }
     try:
-        ff3 = load_ff3_daily(start=date(2021, 6, 1), end=date(2026, 4, 17))
-        alpha = fama_french_alpha(returns, ff3)
-        metrics["ff3_alpha_ann_pct"] = float(alpha.alpha_daily * 252 * 100)
-        metrics["ff3_alpha_tstat"] = float(alpha.alpha_tstat)
-        metrics["ff3_r2"] = float(alpha.r_squared)
+        carhart_factors = load_carhart_daily(start=date(2021, 6, 1), end=date(2026, 4, 17))
+        attrib = run_carhart_attribution(returns, carhart_factors)
+        by_spec = {r.spec_name: r for r in attrib}
+        for spec in ("CAPM", "FF3", "Carhart-4F"):
+            r = by_spec[spec]
+            key = spec.lower().replace("-", "_")
+            metrics[f"{key}_alpha_ann_pct"] = float(r.alpha_annualized * 100)
+            metrics[f"{key}_alpha_tstat"] = float(r.alpha_tstat)
+            metrics[f"{key}_r2"] = float(r.r_squared)
     except (FileNotFoundError, ValueError) as e:
-        print(f"  FF3 skipped: {e}")
+        print(f"  Factor attribution skipped: {e}")
 
     # Per-pick feature dataframe
     print(f"[{label}] computing per-pick features …")

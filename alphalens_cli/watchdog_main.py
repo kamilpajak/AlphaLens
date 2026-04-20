@@ -550,10 +550,18 @@ def momentum_status(
 
 @watchdog_app.command("backtest")
 def backtest(
-    start: str = typer.Option("2024-07-01", help="Backtest window start (YYYY-MM-DD)"),
+    start: str = typer.Option("2021-04-19", help="Backtest window start (YYYY-MM-DD)"),
     end: str = typer.Option("2026-04-17", help="Backtest window end (YYYY-MM-DD)"),
-    top_n: int = typer.Option(30, help="Top-N names to hold at each rebalance"),
+    scorer: str = typer.Option(
+        "momentum",
+        "--scorer",
+        help="Scorer: 'momentum' (Layer 2b, live/validated) or 'lean' (Layer 2c, archived)",
+    ),
+    top_n: int = typer.Option(5, help="Top-N names to hold at each rebalance"),
     holding: int = typer.Option(5, help="Holding period in trading days"),
+    weighting: str = typer.Option(
+        "linear", "--weighting", help="Position weighting: linear | equal"
+    ),
     cost_profile: str = typer.Option(
         "moderate", help="Cost profile: gross, aggressive, moderate, conservative"
     ),
@@ -565,8 +573,8 @@ def backtest(
     csv: str = typer.Option(
         "", help="Optional daily results CSV output path (empty = skip)"
     ),
-    no_ff3: bool = typer.Option(
-        False, "--no-ff3", help="Skip Fama-French 3-factor alpha regression"
+    no_attrib: bool = typer.Option(
+        False, "--no-attrib", help="Skip factor attribution (CAPM/FF3/Carhart-4F) regressions"
     ),
     diagnose: bool = typer.Option(
         False,
@@ -574,12 +582,20 @@ def backtest(
         help="Retain per-day scored frames and append IC-by-decile + vol decomposition to report",
     ),
 ):
-    """Run the MVP1 backtest over Lean CSV data and emit a decision-matrix report."""
+    """Run backtest over Lean CSV data and emit a decision-matrix report.
+
+    Default wiring matches the live/validated strategy: Layer 2b momentum
+    screener, top-5, linear weighting. Pass `--scorer lean` to re-examine the
+    archived Layer 2c strategy.
+    """
     from datetime import date
+
+    import yaml
 
     from alphalens.backtest.cost_model import cost_sensitivity_table
     from alphalens.backtest.engine import BacktestEngine
-    from alphalens.backtest.factor_analysis import fama_french_alpha
+    from alphalens.backtest.factor_analysis import run_carhart_attribution
+    from alphalens.backtest.factors import load_carhart_daily
     from alphalens.backtest.history_store import HistoryStore
     from alphalens.backtest.regime import (
         classify_regime,
@@ -590,31 +606,57 @@ def backtest(
         daily_results_to_dataframe,
         write_markdown_report,
     )
-    from alphalens.lean_screener.config import BENCHMARKS, DATA_DIR, LEAN_DEFAULTS
-    from alphalens.lean_screener.factors import load_ff3_daily
+    from alphalens.lean_screener.config import DATA_DIR
     from alphalens.lean_screener.lean_csv_loader import load_lean_histories
-    from alphalens.lean_screener.lean_project.scorer import rank_universe as lean_rank
-    from alphalens.lean_screener.universe import all_tickers
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
 
+    if scorer == "momentum":
+        from alphalens.momentum_screener.backtest_adapter import momentum_scorer_adapter
+        from alphalens.momentum_screener.config import MOMENTUM_DEFAULTS, UNIVERSE_PATH
+        from alphalens.momentum_screener.universe import flatten_universe
+
+        universe = yaml.safe_load(UNIVERSE_PATH.read_text())
+        screener_tickers = sorted(flatten_universe(universe).keys())
+        scorer_fn = momentum_scorer_adapter
+        scorer_config = dict(MOMENTUM_DEFAULTS, benchmark=benchmark)
+        typer.echo(f"Scorer: Layer 2b momentum ({len(screener_tickers)} curated tickers)")
+    elif scorer == "lean":
+        from alphalens.lean_screener.config import BENCHMARKS, LEAN_DEFAULTS
+        from alphalens.lean_screener.lean_project.scorer import rank_universe as lean_rank
+        from alphalens.lean_screener.universe import all_tickers
+
+        screener_tickers = all_tickers()
+        scorer_fn = lean_rank
+        scorer_config = LEAN_DEFAULTS
+        typer.echo(
+            f"Scorer: Layer 2c Lean (archived, {len(screener_tickers)} tickers) — "
+            "this strategy failed 5-year validation per CLAUDE.md"
+        )
+    else:
+        raise typer.BadParameter(f"Unknown --scorer: {scorer!r} (expected: momentum | lean)")
+
     typer.echo(f"Loading OHLCV into HistoryStore ({start_date} → {end_date})…")
-    tickers = all_tickers() + list(BENCHMARKS)
+    if scorer == "lean":
+        tickers = screener_tickers + list(BENCHMARKS)  # type: ignore[possibly-undefined]
+    else:
+        tickers = screener_tickers + [benchmark]
     histories = load_lean_histories(DATA_DIR, tickers)
     store = HistoryStore(histories)
     typer.echo(f"  loaded {len(store.tickers())} tickers")
 
     engine = BacktestEngine(
         store,
-        scorer=lean_rank,
-        scorer_config=LEAN_DEFAULTS,
+        scorer=scorer_fn,
+        scorer_config=scorer_config,
         holding_period=holding,
         top_n=top_n,
         benchmark=benchmark,
-        screener_tickers=all_tickers(),
+        screener_tickers=screener_tickers,
+        weighting=weighting,
         retain_scored_frames=diagnose,
     )
 
@@ -637,13 +679,13 @@ def backtest(
         result.portfolio_returns, result.ic_series, result.universe_median_returns, regime_labels
     )
 
-    alpha_result = None
-    if not no_ff3:
+    attribution = None
+    if not no_attrib:
         try:
-            ff3 = load_ff3_daily(start=start_date, end=end_date)
-            alpha_result = fama_french_alpha(result.portfolio_returns, ff3)
+            carhart = load_carhart_daily(start=start_date, end=end_date)
+            attribution = run_carhart_attribution(result.portfolio_returns, carhart)
         except (FileNotFoundError, ValueError) as exc:
-            typer.echo(f"  FF3 regression skipped: {exc}")
+            typer.echo(f"  Factor attribution skipped: {exc}")
 
     # Optional diagnostics when --diagnose is set
     decile_ic = []
@@ -693,7 +735,7 @@ def backtest(
     if not report_path.is_absolute():
         report_path = Path.cwd() / report_path
     write_markdown_report(
-        result, report_path, summary, alpha_result, regimes, cost_df,
+        result, report_path, summary, attribution, regimes, cost_df,
         decile_ic=decile_ic, vol_decomp=vol_decomp, tail_score=tail_score,
         theme_stats=theme_stats,
     )
@@ -714,11 +756,12 @@ def backtest(
     typer.echo(f"  mean_ic           = {summary.mean_ic:+.4f}  (t={summary.ic_tstat:+.2f})")
     typer.echo(f"  ic_positive_pct   = {summary.ic_positive_pct * 100:.1f}%")
     typer.echo(f"  turnover          = {summary.turnover * 100:.1f}%")
-    if alpha_result is not None:
-        typer.echo(
-            f"  ff3_alpha_ann     = {alpha_result.alpha_annualized * 100:+.2f}% "
-            f"(t={alpha_result.alpha_tstat:+.2f})"
-        )
+    if attribution:
+        for r in attribution:
+            typer.echo(
+                f"  {r.spec_name:<12} alpha_ann = {r.alpha_annualized * 100:+.2f}% "
+                f"(t={r.alpha_tstat:+.2f} HAC, R²={r.r_squared:.3f})"
+            )
 
 
 @watchdog_app.command("status")

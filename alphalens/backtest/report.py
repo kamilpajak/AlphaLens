@@ -14,7 +14,7 @@ from typing import Any, Mapping
 import pandas as pd
 
 from alphalens.backtest.cost_model import cost_sensitivity_table
-from alphalens.backtest.factor_analysis import AlphaResult, format_alpha_summary
+from alphalens.backtest.factor_analysis import AlphaResult, format_attribution_table
 from alphalens.backtest.metrics import (
     concentration_top_k,
     rank_ic_positive_pct,
@@ -112,7 +112,7 @@ def write_markdown_report(
     report: BacktestReport,
     path: Path,
     summary: BacktestSummary,
-    alpha_result: AlphaResult | None = None,
+    attribution: list[AlphaResult] | None = None,
     regime_stats: Mapping[str, RegimeStats] | None = None,
     cost_sensitivity: pd.DataFrame | None = None,
     decile_ic: list[DecileICResult] | None = None,
@@ -218,12 +218,20 @@ def write_markdown_report(
             )
             lines.append("")
 
-    if alpha_result is not None:
-        lines.append("## Fama-French 3-factor alpha")
+    carhart = None
+    if attribution:
+        carhart = next((r for r in attribution if r.spec_name == "Carhart-4F"), None)
+        lines.append("## Factor attribution (CAPM / FF3 / Carhart-4F, HAC t-stats)")
         lines.append("")
         lines.append("```")
-        lines.append(format_alpha_summary(alpha_result))
+        lines.append(format_attribution_table(attribution))
         lines.append("```")
+        lines.append("")
+        lines.append(
+            "Alpha that survives the Carhart row (with momentum factor Mom) is "
+            "independent of generic momentum beta. If alpha collapses between FF3 "
+            "and Carhart-4F, the strategy is re-packaged UMD exposure."
+        )
         lines.append("")
 
     lines.append("## Decision criteria (MVP1 → paper trade gate)")
@@ -232,8 +240,8 @@ def write_markdown_report(
         ("Sharpe (net moderate) > 0.3", summary.sharpe_moderate > 0.3),
         ("IC positive windows > 60%", summary.ic_positive_pct > 0.60),
         (
-            "FF3 alpha t-stat > 1.5",
-            alpha_result is not None and alpha_result.alpha_tstat > 1.5,
+            "Carhart-4F alpha t-stat > 1.5 (HAC)",
+            carhart is not None and carhart.alpha_tstat > 1.5,
         ),
     ]
     pass_count = sum(1 for _, ok in deploy_criteria if ok)
@@ -253,12 +261,22 @@ def write_markdown_report(
     Path(path).write_text("\n".join(lines))
 
 
-def make_decision(summary: BacktestSummary, alpha: AlphaResult | None) -> str:
-    """Pure helper — returns 'deploy' / 'iterate' / 'abandon' based on criteria."""
+def make_decision(
+    summary: BacktestSummary, attribution: list[AlphaResult] | None
+) -> str:
+    """Pure helper — returns 'deploy' / 'iterate' / 'abandon' based on criteria.
+
+    Uses the Carhart-4F spec (with Mom factor) as the alpha gate: it's the
+    strictest of the three, so surviving it means the edge is independent of
+    generic momentum beta.
+    """
+    carhart = None
+    if attribution:
+        carhart = next((r for r in attribution if r.spec_name == "Carhart-4F"), None)
     checks = [
         summary.sharpe_moderate > 0.3,
         summary.ic_positive_pct > 0.60,
-        alpha is not None and alpha.alpha_tstat > 1.5,
+        carhart is not None and carhart.alpha_tstat > 1.5,
     ]
     n = sum(1 for c in checks if c)
     if n == 3:

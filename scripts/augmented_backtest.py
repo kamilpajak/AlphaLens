@@ -23,14 +23,14 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from alphalens.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens.backtest.factor_analysis import fama_french_alpha  # noqa: E402
+from alphalens.backtest.factor_analysis import run_carhart_attribution  # noqa: E402
+from alphalens.backtest.factors import load_carhart_daily  # noqa: E402
 from alphalens.backtest.history_store import HistoryStore  # noqa: E402
 from alphalens.backtest.metrics import (  # noqa: E402
     rank_ic_tstat,
     sharpe,
     summarise_portfolio,
 )
-from alphalens.lean_screener.factors import load_ff3_daily  # noqa: E402
 from alphalens.lean_screener.lean_csv_loader import load_lean_histories  # noqa: E402
 from alphalens.momentum_screener.backtest_adapter import momentum_scorer_adapter  # noqa: E402
 from alphalens.momentum_screener.config import MOMENTUM_DEFAULTS, UNIVERSE_PATH  # noqa: E402
@@ -101,17 +101,21 @@ def run(store: HistoryStore, screener_tickers: list[str], label: str) -> tuple:
         "max_drawdown_pct": _max_dd(returns) * 100,
     }
 
-    # FF3
+    # Factor attribution — Carhart-4F row is the one to trust (controls for UMD).
     try:
-        ff3 = load_ff3_daily(start=start, end=end)
-        alpha_result = fama_french_alpha(returns, ff3)
-        metrics["ff3_alpha_bps_day"] = float(alpha_result.alpha_daily * 10000)
-        metrics["ff3_alpha_ann_pct"] = float(alpha_result.alpha_daily * 252 * 100)
-        metrics["ff3_alpha_tstat"] = float(alpha_result.alpha_tstat)
-        metrics["ff3_r2"] = float(alpha_result.r_squared)
+        carhart_factors = load_carhart_daily(start=start, end=end)
+        attrib = run_carhart_attribution(returns, carhart_factors)
+        by_spec = {r.spec_name: r for r in attrib}
+        for spec in ("CAPM", "FF3", "Carhart-4F"):
+            r = by_spec[spec]
+            key = spec.lower().replace("-", "_")
+            metrics[f"{key}_alpha_bps_day"] = float(r.alpha_daily * 10000)
+            metrics[f"{key}_alpha_ann_pct"] = float(r.alpha_annualized * 100)
+            metrics[f"{key}_alpha_tstat"] = float(r.alpha_tstat)
+            metrics[f"{key}_r2"] = float(r.r_squared)
     except (FileNotFoundError, ValueError) as e:
-        print(f"  FF3 skipped: {e}")
-        metrics["ff3_alpha_tstat"] = None
+        print(f"  Factor attribution skipped: {e}")
+        metrics["carhart_4f_alpha_tstat"] = None
 
     # Count appearances of delisted names in top-5 picks
     counter: dict[str, int] = {}
@@ -142,7 +146,9 @@ def main() -> None:
     print(f"{'metric':<25} {'baseline':>15} {'augmented':>15} {'delta':>15}")
     for k in ["universe_size", "daily_snapshots", "sharpe_gross",
               "ic_mean", "ic_tstat", "annual_return_gross_pct",
-              "max_drawdown_pct", "ff3_alpha_ann_pct", "ff3_alpha_tstat", "ff3_r2"]:
+              "max_drawdown_pct",
+              "ff3_alpha_ann_pct", "ff3_alpha_tstat", "ff3_r2",
+              "carhart_4f_alpha_ann_pct", "carhart_4f_alpha_tstat", "carhart_4f_r2"]:
         b = baseline_metrics.get(k)
         a = augmented_metrics.get(k)
         if b is None or a is None:
@@ -180,7 +186,9 @@ def main() -> None:
     ]
     for k in ["universe_size", "daily_snapshots", "sharpe_gross",
               "ic_mean", "ic_tstat", "annual_return_gross_pct",
-              "max_drawdown_pct", "ff3_alpha_ann_pct", "ff3_alpha_tstat", "ff3_r2"]:
+              "max_drawdown_pct",
+              "ff3_alpha_ann_pct", "ff3_alpha_tstat", "ff3_r2",
+              "carhart_4f_alpha_ann_pct", "carhart_4f_alpha_tstat", "carhart_4f_r2"]:
         b = baseline_metrics.get(k)
         a = augmented_metrics.get(k)
         if b is None or a is None:
