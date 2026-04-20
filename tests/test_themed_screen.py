@@ -1,15 +1,15 @@
-"""Phase B: momentum screener must expose `to_candidates()` and CLI --analyze submits to queue."""
+"""Layer 2b themed screener must expose `to_candidates()` and CLI --analyze submits to queue."""
 
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pandas as pd
 from typer.testing import CliRunner
 
 
-class TestMomentumToCandidates(unittest.TestCase):
+class TestThemedPipelineToCandidates(unittest.TestCase):
     def test_to_candidates_maps_dataframe_rows_to_candidate_objects(self):
         from alphalens.candidates import Candidate
         from alphalens.screeners.themed.pipeline import ThemedPipeline
@@ -72,7 +72,7 @@ class TestMomentumToCandidates(unittest.TestCase):
             self.assertAlmostEqual(w, 0.2)
 
 
-class TestMomentumScreenCLIAnalyzeFlag(unittest.TestCase):
+class TestThemedScreenCLIAnalyzeFlag(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Path(self.tmp.name) / "candidates.db"
@@ -89,8 +89,8 @@ class TestMomentumScreenCLIAnalyzeFlag(unittest.TestCase):
             ]
         )
 
-    @patch("alphalens_cli.watchdog_main.default_queue_path")
-    @patch("alphalens_cli.watchdog_main.TelegramHandler")
+    @patch("alphalens_cli.commands.themed.default_queue_path")
+    @patch("alphalens_cli.commands.themed.TelegramHandler")
     @patch.dict(
         "os.environ",
         {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c"},
@@ -99,7 +99,7 @@ class TestMomentumScreenCLIAnalyzeFlag(unittest.TestCase):
     def test_analyze_flag_submits_candidates_to_queue(
         self, _mock_telegram, mock_queue_path
     ):
-        from alphalens_cli.watchdog_main import watchdog_app
+        from alphalens_cli.commands.themed import themed_app
 
         mock_queue_path.return_value = self.db
 
@@ -108,7 +108,7 @@ class TestMomentumScreenCLIAnalyzeFlag(unittest.TestCase):
             return_value=self._fake_df(),
         ):
             result = self.runner.invoke(
-                watchdog_app, ["momentum-screen", "--top-n", "2", "--analyze", "--dry-run"]
+                themed_app, ["screen", "--top-n", "2", "--analyze", "--dry-run"]
             )
 
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
@@ -122,8 +122,8 @@ class TestMomentumScreenCLIAnalyzeFlag(unittest.TestCase):
             self.assertTrue(all(r["source"] == "momentum" for r in pending))
             self.assertTrue(all(r["priority"] == 10 for r in pending))
 
-    @patch("alphalens_cli.watchdog_main.default_queue_path")
-    @patch("alphalens_cli.watchdog_main.TelegramHandler")
+    @patch("alphalens_cli.commands.themed.default_queue_path")
+    @patch("alphalens_cli.commands.themed.TelegramHandler")
     @patch.dict(
         "os.environ",
         {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c"},
@@ -132,7 +132,7 @@ class TestMomentumScreenCLIAnalyzeFlag(unittest.TestCase):
     def test_without_analyze_flag_queue_stays_empty(
         self, _mock_telegram, mock_queue_path
     ):
-        from alphalens_cli.watchdog_main import watchdog_app
+        from alphalens_cli.commands.themed import themed_app
 
         mock_queue_path.return_value = self.db
 
@@ -141,12 +141,11 @@ class TestMomentumScreenCLIAnalyzeFlag(unittest.TestCase):
             return_value=self._fake_df(),
         ):
             result = self.runner.invoke(
-                watchdog_app, ["momentum-screen", "--top-n", "2", "--dry-run"]
+                themed_app, ["screen", "--top-n", "2", "--dry-run"]
             )
 
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
 
-        # No DB expected — queue path not touched when --analyze absent
         if self.db.exists():
             from alphalens.queue import CandidateQueue
 

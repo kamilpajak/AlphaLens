@@ -1,12 +1,12 @@
 # Layer 2b Theme Refresh Runbook
 
-Procedura kwartalnego przeglądu uniwersum Layer 2b (`alphalens/momentum_screener/universe.yaml`).
+Procedura kwartalnego przeglądu uniwersum Layer 2b (`alphalens/screeners/themed/universe.yaml`).
 
 **Cadence**: Co kwartał (styczeń, kwiecień, lipiec, październik), najlepiej po earnings season żeby widzieć aktualne fundamentals.
 
 **Narzędzia**:
-- `alphalens watchdog momentum-status --days 90` — ostatnie 3 miesiące produkcji
-- Backtest engine (`alphalens watchdog backtest`) — walidacja na 5-letnim oknie
+- `alphalens themed status --days 90` — ostatnie 3 miesiące produkcji
+- Backtest engine (`alphalens backtest`) — walidacja na 5-letnim oknie
 - Theme validation script `/tmp/theme_validation.py` (wzorcowy — kopiuj do daty refresh'u)
 
 ---
@@ -16,7 +16,7 @@ Procedura kwartalnego przeglądu uniwersum Layer 2b (`alphalens/momentum_screene
 ### 1. Pre-refresh audit (30 min)
 
 ```bash
-alphalens watchdog momentum-status --days 90
+alphalens themed status --days 90
 ```
 
 Zapisz metryki do journala:
@@ -31,7 +31,7 @@ Dla każdego theme w current YAML, backtestuj osobno na 5-letnim oknie:
 
 ```python
 # /tmp/check_existing_themes.py
-from alphalens.momentum_screener.universe import load_universe, flatten_universe
+from alphalens.screeners.themed.universe import load_universe, flatten_universe
 from alphalens.backtest.engine import BacktestEngine
 # ... (wzorzec z /tmp/theme_validation.py)
 ```
@@ -74,7 +74,7 @@ Uruchom `/tmp/theme_validation.py` ze swoimi 3 kryteriami. Accept tylko jeśli w
 Po zmianach w YAML:
 
 ```bash
-alphalens watchdog backtest \
+alphalens backtest \
   --start 2021-04-19 --end 2026-04-17 \
   --cost-profile moderate \
   --report docs/backtest/post_refresh_$(date +%Y%m).md \
@@ -91,8 +91,8 @@ alphalens watchdog backtest \
 ### 6. Commit + deployment (15 min)
 
 ```bash
-git add alphalens/momentum_screener/universe.yaml
-git commit -m "refactor(momentum): Q1 2026 universe refresh — add X, remove Y"
+git add alphalens/screeners/themed/universe.yaml
+git commit -m "refactor(themed): Q1 2026 universe refresh — add X, remove Y"
 ```
 
 Launchd job odczyta nowy YAML przy kolejnym runie (22:00 CET) automatycznie — nie trzeba restartować.

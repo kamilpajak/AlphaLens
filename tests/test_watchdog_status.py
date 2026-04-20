@@ -144,10 +144,10 @@ class TestFormatStatus(unittest.TestCase):
 
 
 class TestStatusCLICommand(unittest.TestCase):
-    def test_status_subcommand_is_registered(self):
-        from alphalens_cli.watchdog_main import watchdog_app
+    def test_status_is_top_level_command(self):
+        from alphalens_cli.main import app
 
-        result = CliRunner().invoke(watchdog_app, ["--help"])
+        result = CliRunner().invoke(app, ["--help"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("status", result.stdout)
 

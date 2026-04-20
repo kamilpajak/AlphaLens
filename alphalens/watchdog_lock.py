@@ -1,8 +1,8 @@
 """Kernel-level file lock for the Layer 3 worker.
 
 Prevents the race condition where `launchctl com.alphalens.watchdog.worker`
-fires at its `StartInterval` while a manual `alphalens watchdog process-queue`
-is already running. Both workers would `claim_next()` from the same SQLite
+fires at its `StartInterval` while a manual `alphalens queue process` is
+already running. Both workers would `claim_next()` from the same SQLite
 queue and hammer the Gemini 1M-tokens/min quota in parallel, triggering
 cumulative 429 `RESOURCE_EXHAUSTED` and stalling both indefinitely.
 
