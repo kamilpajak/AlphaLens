@@ -5,10 +5,10 @@ import pandas as pd
 
 
 class TestPrescreenerPipeline(unittest.TestCase):
-    @patch("alphalens.prescreener.integration.BatchDataFetcher")
-    @patch("alphalens.prescreener.integration.get_sp500_tickers")
+    @patch("alphalens.screeners.prescreener.integration.BatchDataFetcher")
+    @patch("alphalens.screeners.prescreener.integration.get_sp500_tickers")
     def test_screen_returns_ranked_dataframe(self, mock_universe, mock_fetcher_cls):
-        from alphalens.prescreener.integration import PrescreenerPipeline
+        from alphalens.screeners.prescreener.integration import PrescreenerPipeline
 
         mock_universe.return_value = ["AAPL", "MSFT"]
         fetcher = mock_fetcher_cls.return_value
@@ -32,10 +32,10 @@ class TestPrescreenerPipeline(unittest.TestCase):
         self.assertIn("rank", result.columns)
         self.assertEqual(len(result), 2)
 
-    @patch("alphalens.prescreener.integration.BatchDataFetcher")
-    @patch("alphalens.prescreener.integration.get_sp500_tickers")
+    @patch("alphalens.screeners.prescreener.integration.BatchDataFetcher")
+    @patch("alphalens.screeners.prescreener.integration.get_sp500_tickers")
     def test_screen_with_custom_tickers(self, mock_universe, mock_fetcher_cls):
-        from alphalens.prescreener.integration import PrescreenerPipeline
+        from alphalens.screeners.prescreener.integration import PrescreenerPipeline
 
         fetcher = mock_fetcher_cls.return_value
         dates = pd.bdate_range(end="2024-01-15", periods=250)

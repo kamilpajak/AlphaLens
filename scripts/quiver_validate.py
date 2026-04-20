@@ -37,10 +37,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from alphalens.backtest.factor_analysis import format_attribution_table, run_regression  # noqa: E402
 from alphalens.backtest.factors import load_carhart_daily  # noqa: E402
 from alphalens.backtest.history_store import HistoryStore  # noqa: E402
-from alphalens.lean_screener.config import DATA_DIR  # noqa: E402
-from alphalens.lean_screener.lean_csv_loader import load_lean_histories  # noqa: E402
-from alphalens.momentum_screener.config import UNIVERSE_PATH  # noqa: E402
-from alphalens.momentum_screener.universe import flatten_universe  # noqa: E402
+from alphalens.screeners.lean.config import DATA_DIR  # noqa: E402
+from alphalens.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
+from alphalens.screeners.themed.config import UNIVERSE_PATH  # noqa: E402
+from alphalens.screeners.themed.universe import flatten_universe  # noqa: E402
 from alphalens.quiver_screener.client import (  # noqa: E402
     fetch_congress_for_tickers,
     fetch_insiders_for_tickers,

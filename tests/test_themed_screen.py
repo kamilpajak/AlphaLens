@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 class TestMomentumToCandidates(unittest.TestCase):
     def test_to_candidates_maps_dataframe_rows_to_candidate_objects(self):
         from alphalens.candidates import Candidate
-        from alphalens.momentum_screener.pipeline import MomentumPipeline
+        from alphalens.screeners.themed.pipeline import ThemedPipeline
 
         df = pd.DataFrame(
             [
@@ -21,7 +21,7 @@ class TestMomentumToCandidates(unittest.TestCase):
             ]
         )
 
-        candidates = MomentumPipeline().to_candidates(df)
+        candidates = ThemedPipeline().to_candidates(df)
         self.assertEqual(len(candidates), 2)
         for c in candidates:
             self.assertIsInstance(c, Candidate)
@@ -34,14 +34,14 @@ class TestMomentumToCandidates(unittest.TestCase):
         self.assertEqual(first.payload["themes"], ["AI", "MegaCap"])
 
     def test_to_candidates_on_empty_dataframe_returns_empty_list(self):
-        from alphalens.momentum_screener.pipeline import MomentumPipeline
+        from alphalens.screeners.themed.pipeline import ThemedPipeline
 
         df = pd.DataFrame(columns=["ticker", "momentum_score", "themes"])
-        self.assertEqual(MomentumPipeline().to_candidates(df), [])
+        self.assertEqual(ThemedPipeline().to_candidates(df), [])
 
     def test_linear_weighting_emits_descending_weights(self):
         """Rank 1 (najwyższy score) dostaje największą wagę, wagi sumują do 1.0."""
-        from alphalens.momentum_screener.pipeline import MomentumPipeline
+        from alphalens.screeners.themed.pipeline import ThemedPipeline
 
         df = pd.DataFrame(
             [
@@ -50,7 +50,7 @@ class TestMomentumToCandidates(unittest.TestCase):
                 {"ticker": "C", "momentum_score": 0.7, "themes": ["X"]},
             ]
         )
-        candidates = MomentumPipeline().to_candidates(df, weighting="linear")
+        candidates = ThemedPipeline().to_candidates(df, weighting="linear")
         weights = [c.payload["weight"] for c in candidates]
         self.assertAlmostEqual(sum(weights), 1.0)
         self.assertGreater(weights[0], weights[1])
@@ -59,13 +59,13 @@ class TestMomentumToCandidates(unittest.TestCase):
             self.assertEqual(c.payload["weighting_scheme"], "linear")
 
     def test_equal_weighting_fallback(self):
-        from alphalens.momentum_screener.pipeline import MomentumPipeline
+        from alphalens.screeners.themed.pipeline import ThemedPipeline
 
         df = pd.DataFrame(
             [{"ticker": f"T{i}", "momentum_score": 1.0 - i * 0.1, "themes": ["X"]}
              for i in range(5)]
         )
-        candidates = MomentumPipeline().to_candidates(df, weighting="equal")
+        candidates = ThemedPipeline().to_candidates(df, weighting="equal")
         weights = [c.payload["weight"] for c in candidates]
         self.assertAlmostEqual(sum(weights), 1.0)
         for w in weights:
@@ -104,7 +104,7 @@ class TestMomentumScreenCLIAnalyzeFlag(unittest.TestCase):
         mock_queue_path.return_value = self.db
 
         with patch(
-            "alphalens.momentum_screener.pipeline.MomentumPipeline.run",
+            "alphalens.screeners.themed.pipeline.ThemedPipeline.run",
             return_value=self._fake_df(),
         ):
             result = self.runner.invoke(
@@ -137,7 +137,7 @@ class TestMomentumScreenCLIAnalyzeFlag(unittest.TestCase):
         mock_queue_path.return_value = self.db
 
         with patch(
-            "alphalens.momentum_screener.pipeline.MomentumPipeline.run",
+            "alphalens.screeners.themed.pipeline.ThemedPipeline.run",
             return_value=self._fake_df(),
         ):
             result = self.runner.invoke(

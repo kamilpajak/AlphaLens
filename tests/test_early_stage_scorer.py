@@ -121,28 +121,28 @@ class TestBaseBreakout(unittest.TestCase):
     """Score high for stocks 5-25% above SMA_50, where SMA_50 > SMA_200."""
 
     def test_stock_in_base_breakout_zone_scores_high(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         df = _base_building_df(breakout_pct=0.12)
         # Close ~12% above base; SMA_50 should be between base and close
         s = EarlyStageScorer._base_breakout_score(df)
         self.assertGreaterEqual(s, 0.9, f"got {s}")
 
     def test_extended_rally_scores_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         df = _extended_rally_df(total_gain=0.80)
         # Close way above SMA_50, ratio >> 0.25 → should score 0
         s = EarlyStageScorer._base_breakout_score(df)
         self.assertLess(s, 0.1, f"got {s}")
 
     def test_flat_stock_scores_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         df = _flat_df()
         # SMA_50 == SMA_200 → divide by zero; should gracefully return 0
         s = EarlyStageScorer._base_breakout_score(df)
         self.assertEqual(s, 0.0)
 
     def test_insufficient_bars_returns_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         df = _flat_df(days=150)  # <200 bars
         s = EarlyStageScorer._base_breakout_score(df)
         self.assertEqual(s, 0.0)
@@ -152,19 +152,19 @@ class TestAcceleration(unittest.TestCase):
     """Score high when 2nd derivative positive AND > recent median."""
 
     def test_accelerating_scores_high(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         df = _accelerating_df()
         s = EarlyStageScorer._acceleration_score(df)
         self.assertEqual(s, 1.0)
 
     def test_flat_scores_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         df = _flat_df()
         s = EarlyStageScorer._acceleration_score(df)
         self.assertEqual(s, 0.0)
 
     def test_insufficient_bars_returns_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         df = _accelerating_df(days=40)  # <60 bars
         s = EarlyStageScorer._acceleration_score(df)
         self.assertEqual(s, 0.0)
@@ -174,7 +174,7 @@ class TestVCP(unittest.TestCase):
     """Volatility contraction: tight BB width + above SMA_20."""
 
     def test_tight_range_above_sma20_scores_high(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         # Mostly flat (tight BB), tiny uptick at end to be above SMA_20
         days = 260
         idx = pd.date_range(end="2026-04-17", periods=days, freq="B")
@@ -192,14 +192,14 @@ class TestVCP(unittest.TestCase):
         self.assertEqual(s, 1.0)
 
     def test_choppy_rally_scores_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         # Heavy noise throughout → BB_width never contracts to p30
         df = _choppy_rally_df()
         s = EarlyStageScorer._vcp_score(df)
         self.assertEqual(s, 0.0)
 
     def test_insufficient_bars_returns_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         df = _flat_df(days=40)
         s = EarlyStageScorer._vcp_score(df)
         self.assertEqual(s, 0.0)
@@ -209,27 +209,27 @@ class TestRSIEmergence(unittest.TestCase):
     """RSI in [45, 65] → 1.0; >70 → 0 (penalty); <45 → 0."""
 
     def test_rsi_in_emergence_zone(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         s = EarlyStageScorer._rsi_emergence_score(rsi=55.0)
         self.assertEqual(s, 1.0)
 
     def test_rsi_overbought_penalty(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         s = EarlyStageScorer._rsi_emergence_score(rsi=78.0)
         self.assertEqual(s, 0.0)
 
     def test_rsi_oversold_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         s = EarlyStageScorer._rsi_emergence_score(rsi=30.0)
         self.assertEqual(s, 0.0)
 
     def test_rsi_none_neutral(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         s = EarlyStageScorer._rsi_emergence_score(rsi=None)
         self.assertEqual(s, 0.5)
 
     def test_rsi_boundary_inclusive(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         self.assertEqual(EarlyStageScorer._rsi_emergence_score(rsi=45.0), 1.0)
         self.assertEqual(EarlyStageScorer._rsi_emergence_score(rsi=65.0), 1.0)
 
@@ -238,27 +238,27 @@ class TestADXBuilding(unittest.TestCase):
     """ADX in [20, 35] AND rising (ΔADX_5d > +2) → 1.0."""
 
     def test_adx_building_scores_high(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         s = EarlyStageScorer._adx_building_score(adx_current=28.0, adx_5d_ago=24.0)
         self.assertEqual(s, 1.0)
 
     def test_adx_mature_scores_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         s = EarlyStageScorer._adx_building_score(adx_current=45.0, adx_5d_ago=40.0)
         self.assertEqual(s, 0.0)
 
     def test_adx_low_scores_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         s = EarlyStageScorer._adx_building_score(adx_current=15.0, adx_5d_ago=12.0)
         self.assertEqual(s, 0.0)
 
     def test_adx_in_range_but_flat_scores_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         s = EarlyStageScorer._adx_building_score(adx_current=28.0, adx_5d_ago=28.0)
         self.assertEqual(s, 0.0)  # delta < +2
 
     def test_adx_none_neutral(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         s = EarlyStageScorer._adx_building_score(adx_current=None, adx_5d_ago=None)
         self.assertEqual(s, 0.5)
 
@@ -267,7 +267,7 @@ class TestVolumeAccumulation(unittest.TestCase):
     """vol20/vol60 in [1.1, 1.5] → 1.0; >2.0 → 0 (climactic = distribution)."""
 
     def test_accumulation_range(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         # Build vol where last-20d avg = 1.3x last-60d avg
         days = 80
         vol = np.concatenate([np.full(40, 1_000_000), np.full(20, 1_000_000), np.full(20, 1_900_000)])
@@ -281,7 +281,7 @@ class TestVolumeAccumulation(unittest.TestCase):
         self.assertEqual(s, 1.0)
 
     def test_climactic_volume_penalty(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         days = 80
         vol = np.concatenate([np.full(60, 1_000_000), np.full(20, 3_000_000)])  # ratio ~2.33x
         df = pd.DataFrame({
@@ -292,13 +292,13 @@ class TestVolumeAccumulation(unittest.TestCase):
         self.assertEqual(s, 0.0)
 
     def test_flat_volume_below_range(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         df = _flat_df()
         s = EarlyStageScorer._volume_accumulation_score(df)
         self.assertEqual(s, 0.0)
 
     def test_insufficient_bars_returns_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         df = _flat_df(days=30)
         s = EarlyStageScorer._volume_accumulation_score(df)
         self.assertEqual(s, 0.0)
@@ -308,7 +308,7 @@ class TestJegadeesh11_1(unittest.TestCase):
     """11-month skip-last-month momentum > 0 AND trend live → 1.0."""
 
     def test_positive_11_1_with_live_trend(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         # 260-day series: start=10, 11m ago (t-252) price=10, 1m ago (t-21) price=14, now=14.5
         days = 260
         close = np.full(days, 10.0)
@@ -322,7 +322,7 @@ class TestJegadeesh11_1(unittest.TestCase):
         self.assertEqual(s, 1.0)
 
     def test_negative_11_1_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         days = 260
         close = np.linspace(20.0, 10.0, days)  # steady decline
         df = pd.DataFrame({
@@ -333,7 +333,7 @@ class TestJegadeesh11_1(unittest.TestCase):
         self.assertEqual(s, 0.0)
 
     def test_positive_11_1_but_trend_broken(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         # Up 40% in months 2-11, then down 10% in last month → 11-1 still positive but trend dead
         days = 260
         close = np.full(days, 10.0)
@@ -347,7 +347,7 @@ class TestJegadeesh11_1(unittest.TestCase):
         self.assertEqual(s, 0.0)
 
     def test_insufficient_bars_returns_zero(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         df = _flat_df(days=100)  # need 252+
         s = EarlyStageScorer._jegadeesh_11_1_score(df)
         self.assertEqual(s, 0.0)
@@ -357,7 +357,7 @@ class TestCompositeScore(unittest.TestCase):
     """End-to-end: base_building_df should beat extended_rally_df."""
 
     def test_base_building_beats_extended_rally(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         scorer = EarlyStageScorer()
         df_base = _base_building_df(breakout_pct=0.12)
         df_ext = _extended_rally_df(total_gain=0.80)
@@ -372,13 +372,13 @@ class TestCompositeScore(unittest.TestCase):
                            f"base={base_row['early_stage_score']} ext={ext_row['early_stage_score']}")
 
     def test_all_zero_on_empty_df(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         scorer = EarlyStageScorer()
         result = scorer.score_all(["X"], {"X": pd.DataFrame()}, benchmark_ticker=None)
         self.assertEqual(result.iloc[0]["early_stage_score"], 0.0)
 
     def test_output_schema(self):
-        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
         scorer = EarlyStageScorer()
         df = _base_building_df()
         result = scorer.score_all(["BASE"], {"BASE": df}, benchmark_ticker=None)

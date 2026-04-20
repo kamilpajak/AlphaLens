@@ -8,7 +8,7 @@ import logging
 import pandas as pd
 from stockstats import wrap
 
-from .config import MOMENTUM_DEFAULTS
+from .config import THEMED_DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ METRIC_COLS = (
 
 class MomentumScorer:
     def __init__(self, config: dict | None = None):
-        self.config = config or MOMENTUM_DEFAULTS
+        self.config = config or THEMED_DEFAULTS
 
     def score_all(
         self,

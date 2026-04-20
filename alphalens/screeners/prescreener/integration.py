@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from ..candidates import Candidate
+from ...candidates import Candidate
 from .composite_ranker import CompositeRanker
 from .config import PRESCREENER_DEFAULTS
 from .data_fetcher import BatchDataFetcher

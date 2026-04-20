@@ -12,7 +12,7 @@ from typing import Any
 
 import pandas as pd
 
-from ..candidates import Candidate
+from ...candidates import Candidate
 from .config import LEAN_DEFAULTS
 from .runner import LeanDockerRunner
 from .schema import LeanOutput

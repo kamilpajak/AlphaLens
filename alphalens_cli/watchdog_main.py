@@ -168,8 +168,8 @@ def momentum_screen(
     """
     import pandas as pd
 
-    from alphalens.momentum_screener.pipeline import MomentumPipeline
-    from alphalens.momentum_screener.reporter import format_telegram_report
+    from alphalens.screeners.themed.pipeline import ThemedPipeline
+    from alphalens.screeners.themed.reporter import format_telegram_report
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -177,18 +177,18 @@ def momentum_screen(
 
     # Select scorer
     if scorer == "momentum":
-        pipeline = MomentumPipeline()
+        pipeline = ThemedPipeline()
     elif scorer == "early-stage":
-        from alphalens.momentum_screener.early_stage_scorer import (
+        from alphalens.screeners.themed.early_stage_scorer import (
             EARLY_STAGE_DEFAULTS,
             EarlyStageScorer,
         )
-        from alphalens.momentum_screener.config import MOMENTUM_DEFAULTS
+        from alphalens.screeners.themed.config import THEMED_DEFAULTS
 
         # Merge: momentum guardrails (min_cap/price/vol, benchmark) + early-stage weights/thresholds
-        cfg = dict(MOMENTUM_DEFAULTS)
+        cfg = dict(THEMED_DEFAULTS)
         cfg.update(EARLY_STAGE_DEFAULTS)
-        pipeline = MomentumPipeline(
+        pipeline = ThemedPipeline(
             config=cfg,
             scorer=EarlyStageScorer(cfg),
             source_name="early-stage",
@@ -201,11 +201,11 @@ def momentum_screen(
 
     # Historyczny zapis do monitoring store (non-blocking — fail doesn't break run)
     try:
-        from alphalens.momentum_screener.history_store import MomentumHistoryStore
+        from alphalens.screeners.themed.history_store import ThemedHistoryStore
         from alphalens.backtest.weighting import compute_position_weights
 
         weights_list = compute_position_weights(len(result), "linear").tolist() if not result.empty else []
-        MomentumHistoryStore().record_run(
+        ThemedHistoryStore().record_run(
             picks_df=result,
             config=pipeline.config,
             universe_size=len(pipeline.config.get("_universe_size", [])) or 0,
@@ -245,17 +245,17 @@ def lean_screen(
     """Run the Layer 2c Lean batch screener (daily, Polygon + Docker)."""
     from datetime import date
 
-    from alphalens.lean_screener.config import LEAN_DEFAULTS, polygon_api_key
-    from alphalens.lean_screener.data_sync import PolygonLeanSync
-    from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
-    from alphalens.lean_screener.pipeline import LeanScreenerPipeline
-    from alphalens.lean_screener.polygon_client import PolygonClient
-    from alphalens.lean_screener.runner import (
+    from alphalens.screeners.lean.config import LEAN_DEFAULTS, polygon_api_key
+    from alphalens.screeners.lean.data_sync import PolygonLeanSync
+    from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
+    from alphalens.screeners.lean.pipeline import LeanScreenerPipeline
+    from alphalens.screeners.lean.polygon_client import PolygonClient
+    from alphalens.screeners.lean.runner import (
         LeanDockerRunner,
         default_run_config,
         docker_available,
     )
-    from alphalens.lean_screener.universe import all_tickers
+    from alphalens.screeners.lean.universe import all_tickers
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -263,7 +263,7 @@ def lean_screen(
     if not api_key:
         raise typer.BadParameter("POLYGON_API_KEY not set in environment")
 
-    from alphalens.lean_screener.config import DATA_DIR
+    from alphalens.screeners.lean.config import DATA_DIR
 
     state_path = DATA_DIR.parent / "sync_state.json"
     client = PolygonClient(
@@ -346,10 +346,10 @@ def validate_llm_filter(
         picks_from_backtest_report,
         rule_based_tractability_scorer,
     )
-    from alphalens.lean_screener.config import BENCHMARKS, DATA_DIR, LEAN_DEFAULTS
-    from alphalens.lean_screener.lean_csv_loader import load_lean_histories
-    from alphalens.lean_screener.lean_project.scorer import rank_universe as lean_rank
-    from alphalens.momentum_screener.universe import (
+    from alphalens.screeners.lean.config import BENCHMARKS, DATA_DIR, LEAN_DEFAULTS
+    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+    from alphalens.screeners.lean.lean_project.scorer import rank_universe as lean_rank
+    from alphalens.screeners.themed.universe import (
         flatten_universe,
         load_universe as load_2b,
     )
@@ -471,14 +471,14 @@ def momentum_status(
     """Dashboard monitoringu Layer 2b — rolling metrics z historic runs."""
     import pandas as pd
 
-    from alphalens.momentum_screener.history_store import (
-        MomentumHistoryStore,
+    from alphalens.screeners.themed.history_store import (
+        ThemedHistoryStore,
         compute_staleness,
         compute_theme_hhi_by_day,
         compute_turnover_by_day,
     )
 
-    store = MomentumHistoryStore()
+    store = ThemedHistoryStore()
     runs = store.recent_runs(days=days)
     if not runs:
         typer.echo(f"Brak runów w historii. Uruchom `alphalens watchdog momentum-screen` żeby zacząć zbierać dane.")
@@ -606,8 +606,8 @@ def backtest(
         daily_results_to_dataframe,
         write_markdown_report,
     )
-    from alphalens.lean_screener.config import DATA_DIR
-    from alphalens.lean_screener.lean_csv_loader import load_lean_histories
+    from alphalens.screeners.lean.config import DATA_DIR
+    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -615,19 +615,19 @@ def backtest(
     end_date = date.fromisoformat(end)
 
     if scorer == "momentum":
-        from alphalens.momentum_screener.backtest_adapter import momentum_scorer_adapter
-        from alphalens.momentum_screener.config import MOMENTUM_DEFAULTS, UNIVERSE_PATH
-        from alphalens.momentum_screener.universe import flatten_universe
+        from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter
+        from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+        from alphalens.screeners.themed.universe import flatten_universe
 
         universe = yaml.safe_load(UNIVERSE_PATH.read_text())
         screener_tickers = sorted(flatten_universe(universe).keys())
         scorer_fn = momentum_scorer_adapter
-        scorer_config = dict(MOMENTUM_DEFAULTS, benchmark=benchmark)
+        scorer_config = dict(THEMED_DEFAULTS, benchmark=benchmark)
         typer.echo(f"Scorer: Layer 2b momentum ({len(screener_tickers)} curated tickers)")
     elif scorer == "lean":
-        from alphalens.lean_screener.config import BENCHMARKS, LEAN_DEFAULTS
-        from alphalens.lean_screener.lean_project.scorer import rank_universe as lean_rank
-        from alphalens.lean_screener.universe import all_tickers
+        from alphalens.screeners.lean.config import BENCHMARKS, LEAN_DEFAULTS
+        from alphalens.screeners.lean.lean_project.scorer import rank_universe as lean_rank
+        from alphalens.screeners.lean.universe import all_tickers
 
         screener_tickers = all_tickers()
         scorer_fn = lean_rank
@@ -713,7 +713,7 @@ def backtest(
     # Buduj mapę tickers → themes z curated YAML (jeśli istnieje, fallback to empty).
     themes_map: dict[str, list[str]] = {}
     try:
-        from alphalens.momentum_screener.universe import (
+        from alphalens.screeners.themed.universe import (
             flatten_universe as flatten_2b,
             load_universe as load_2b,
         )

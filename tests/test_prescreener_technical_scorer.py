@@ -8,82 +8,82 @@ class TestTechnicalScorerStatic(unittest.TestCase):
     """Test individual scoring functions."""
 
     def test_rsi_score_in_range(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         self.assertAlmostEqual(TechnicalScorer._rsi_score(50), 1.0)
         self.assertAlmostEqual(TechnicalScorer._rsi_score(30), 1.0)
         self.assertAlmostEqual(TechnicalScorer._rsi_score(70), 1.0)
 
     def test_rsi_score_extreme_low(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         score = TechnicalScorer._rsi_score(10)
         self.assertLess(score, 0.5)
         self.assertGreater(score, 0.0)
 
     def test_rsi_score_extreme_high(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         score = TechnicalScorer._rsi_score(90)
         self.assertLess(score, 0.5)
 
     def test_rsi_score_at_zero(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         self.assertAlmostEqual(TechnicalScorer._rsi_score(0), 0.0)
 
     def test_rsi_score_at_hundred(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         self.assertAlmostEqual(TechnicalScorer._rsi_score(100), 0.0)
 
     def test_rsi_score_none_returns_neutral(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         self.assertAlmostEqual(TechnicalScorer._rsi_score(None), 0.5)
 
     def test_trend_score_above_ma(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         score = TechnicalScorer._trend_score(150.0, 140.0)
         self.assertGreater(score, 0.5)
 
     def test_trend_score_below_ma(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         score = TechnicalScorer._trend_score(130.0, 140.0)
         self.assertLess(score, 0.5)
 
     def test_trend_score_at_ma(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         score = TechnicalScorer._trend_score(100.0, 100.0)
         self.assertAlmostEqual(score, 0.5)
 
     def test_trend_score_none_ma_returns_neutral(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         self.assertAlmostEqual(TechnicalScorer._trend_score(100.0, None), 0.5)
 
     def test_adx_score_strong_trend(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         self.assertAlmostEqual(TechnicalScorer._adx_score(35), 1.0)
 
     def test_adx_score_weak_trend(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         score = TechnicalScorer._adx_score(15)
         self.assertLess(score, 1.0)
         self.assertGreater(score, 0.0)
 
     def test_adx_score_none_returns_neutral(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         self.assertAlmostEqual(TechnicalScorer._adx_score(None), 0.5)
 
     def test_all_scores_bounded_zero_one(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         for val in [None, 0, 10, 30, 50, 70, 90, 100]:
             score = TechnicalScorer._rsi_score(val)
@@ -112,7 +112,7 @@ class TestTechnicalScorerAll(unittest.TestCase):
         }, index=dates)
 
     def test_score_all_returns_expected_columns(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         scorer = TechnicalScorer()
         # 250 days of steadily rising prices
@@ -123,7 +123,7 @@ class TestTechnicalScorerAll(unittest.TestCase):
             self.assertIn(col, result.columns)
 
     def test_uptrend_scores_higher_than_downtrend(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         scorer = TechnicalScorer()
         up_prices = self._make_price_df([50 + i * 0.5 for i in range(250)])
@@ -136,7 +136,7 @@ class TestTechnicalScorerAll(unittest.TestCase):
         self.assertGreater(up_score, down_score)
 
     def test_insufficient_data_returns_neutral(self):
-        from alphalens.prescreener.technical_scorer import TechnicalScorer
+        from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
 
         scorer = TechnicalScorer()
         # Only 10 data points — not enough for SMA(200)

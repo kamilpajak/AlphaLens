@@ -5,14 +5,14 @@ from pathlib import Path
 
 
 def _mk_bar(date, o, h, l, c, v):
-    from alphalens.lean_screener.lean_csv_writer import DailyBar
+    from alphalens.screeners.lean.lean_csv_writer import DailyBar
 
     return DailyBar(date=date, open=o, high=h, low=l, close=c, volume=v)
 
 
 class TestFormatAndParse(unittest.TestCase):
     def test_round_trip_preserves_bar(self):
-        from alphalens.lean_screener.lean_csv_writer import format_bar, parse_bar
+        from alphalens.screeners.lean.lean_csv_writer import format_bar, parse_bar
 
         original = _mk_bar("20260417", 100.5, 102.25, 99.75, 101.1, 12345)
         line = format_bar(original)
@@ -26,7 +26,7 @@ class TestFormatAndParse(unittest.TestCase):
         self.assertEqual(round_tripped.volume, 12345)
 
     def test_format_uses_lean_scaled_prices(self):
-        from alphalens.lean_screener.lean_csv_writer import format_bar
+        from alphalens.screeners.lean.lean_csv_writer import format_bar
 
         line = format_bar(_mk_bar("20260417", 100.5, 102.0, 99.0, 101.0, 500))
 
@@ -34,13 +34,13 @@ class TestFormatAndParse(unittest.TestCase):
         self.assertEqual(line, "20260417 00:00,1005000,1020000,990000,1010000,500")
 
     def test_format_includes_hour_marker(self):
-        from alphalens.lean_screener.lean_csv_writer import format_bar
+        from alphalens.screeners.lean.lean_csv_writer import format_bar
 
         line = format_bar(_mk_bar("20260417", 1.0, 1.0, 1.0, 1.0, 1))
         self.assertTrue(line.startswith("20260417 00:00,"))
 
     def test_parse_rejects_malformed(self):
-        from alphalens.lean_screener.lean_csv_writer import parse_bar
+        from alphalens.screeners.lean.lean_csv_writer import parse_bar
 
         with self.assertRaises(ValueError):
             parse_bar("not,enough,fields")
@@ -48,7 +48,7 @@ class TestFormatAndParse(unittest.TestCase):
 
 class TestLeanCsvWriterPaths(unittest.TestCase):
     def test_path_for_lowercases_ticker_and_uses_daily_subtree(self):
-        from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
+        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(Path("/tmp/fake"))
         self.assertEqual(
@@ -66,7 +66,7 @@ class TestWriteRead(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_write_then_read_round_trip(self):
-        from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
+        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(self.dir)
         bars = [
@@ -81,7 +81,7 @@ class TestWriteRead(unittest.TestCase):
         self.assertEqual(round_tripped[1].date, "20260416")
 
     def test_write_sorts_bars_by_date(self):
-        from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
+        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(self.dir)
         writer.write_bars(
@@ -97,14 +97,14 @@ class TestWriteRead(unittest.TestCase):
         self.assertEqual([b.date for b in bars], ["20260414", "20260415", "20260416"])
 
     def test_write_refuses_empty(self):
-        from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
+        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(self.dir)
         with self.assertRaises(ValueError):
             writer.write_bars("AAPL", [])
 
     def test_zip_contains_correctly_named_csv(self):
-        from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
+        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(self.dir)
         writer.write_bars("MSFT", [_mk_bar("20260415", 1, 1, 1, 1, 1)])
@@ -115,13 +115,13 @@ class TestWriteRead(unittest.TestCase):
         self.assertEqual(names, ["msft.csv"])
 
     def test_read_missing_returns_empty(self):
-        from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
+        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(self.dir)
         self.assertEqual(writer.read_bars("NOPE"), [])
 
     def test_atomic_write_leaves_no_tmp_file(self):
-        from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
+        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(self.dir)
         writer.write_bars("AAPL", [_mk_bar("20260415", 1, 1, 1, 1, 1)])
@@ -141,7 +141,7 @@ class TestUpsert(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_upsert_into_empty_writes_all(self):
-        from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
+        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(self.dir)
         count = writer.upsert_bars(
@@ -155,7 +155,7 @@ class TestUpsert(unittest.TestCase):
         self.assertEqual(len(writer.read_bars("AAPL")), 2)
 
     def test_upsert_dedups_by_date_new_wins(self):
-        from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
+        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(self.dir)
         writer.write_bars(
@@ -173,7 +173,7 @@ class TestUpsert(unittest.TestCase):
         self.assertEqual(bars[0].volume, 999)
 
     def test_upsert_merges_with_existing(self):
-        from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
+        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(self.dir)
         writer.write_bars(

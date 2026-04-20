@@ -5,12 +5,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from .config import MOMENTUM_DEFAULTS
+from .config import THEMED_DEFAULTS
 
 
 class Guardrails:
     def __init__(self, config: dict | None = None, asof: pd.Timestamp | None = None):
-        self.config = config or MOMENTUM_DEFAULTS
+        self.config = config or THEMED_DEFAULTS
         self.asof = asof or pd.Timestamp.today().normalize()
 
     def check(

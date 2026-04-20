@@ -27,7 +27,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from alphalens.lean_screener.polygon_client import PolygonClient  # noqa: E402
+from alphalens.screeners.lean.polygon_client import PolygonClient  # noqa: E402
 
 CACHE_DIR = Path.home() / ".alphalens" / "survivorship"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)

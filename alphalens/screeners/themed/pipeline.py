@@ -1,4 +1,8 @@
-"""Momentum screener pipeline: universe -> fetch -> guardrails -> score -> top N."""
+"""Themed screener pipeline: curated YAML universe → fetch → guardrails → score → top N.
+
+Scorer is pluggable (MomentumScorer default, EarlyStageScorer alternative) — the
+pipeline's invariant is the themed universe loader, not the scoring math.
+"""
 
 from __future__ import annotations
 
@@ -7,9 +11,9 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from ..candidates import Candidate
+from ...candidates import Candidate
 from ..prescreener.data_fetcher import BatchDataFetcher
-from .config import MOMENTUM_DEFAULTS
+from .config import THEMED_DEFAULTS
 from .guardrails import Guardrails
 from .momentum_scorer import MomentumScorer
 from .universe import flatten_universe, load_universe
@@ -17,14 +21,14 @@ from .universe import flatten_universe, load_universe
 logger = logging.getLogger(__name__)
 
 
-class MomentumPipeline:
+class ThemedPipeline:
     def __init__(
         self,
         config: dict | None = None,
         scorer=None,
         source_name: str = "momentum",
     ):
-        self.config = config or MOMENTUM_DEFAULTS
+        self.config = config or THEMED_DEFAULTS
         self.scorer = scorer or MomentumScorer(self.config)
         self.source_name = source_name
 

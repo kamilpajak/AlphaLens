@@ -3,12 +3,12 @@ import unittest
 
 class TestScreenerRegistry(unittest.TestCase):
     def test_registry_exposes_all_screeners(self):
-        from alphalens.lean_screener.pipeline import LeanScreenerPipeline
-        from alphalens.momentum_screener.pipeline import MomentumPipeline
-        from alphalens.prescreener.integration import PrescreenerPipeline
+        from alphalens.screeners.lean.pipeline import LeanScreenerPipeline
+        from alphalens.screeners.prescreener.integration import PrescreenerPipeline
+        from alphalens.screeners.themed.pipeline import ThemedPipeline
         from alphalens.registry import SCREENERS
 
-        self.assertIs(SCREENERS["momentum"], MomentumPipeline)
+        self.assertIs(SCREENERS["themed"], ThemedPipeline)
         self.assertIs(SCREENERS["prescreener"], PrescreenerPipeline)
         self.assertIs(SCREENERS["lean"], LeanScreenerPipeline)
 
@@ -17,14 +17,28 @@ class TestScreenerRegistry(unittest.TestCase):
 
         self.assertEqual(SOURCE_PRIORITY["watchdog_sec"], 0)
         self.assertEqual(SOURCE_PRIORITY["momentum"], 10)
+        self.assertEqual(SOURCE_PRIORITY["early-stage"], 10)
         self.assertEqual(SOURCE_PRIORITY["lean"], 15)
         self.assertEqual(SOURCE_PRIORITY["prescreener"], 20)
 
-    def test_all_registered_sources_have_priority(self):
+    def test_themed_pipeline_source_names_are_registered(self):
+        """Themed pipeline can emit candidates tagged `momentum` or `early-stage`
+        depending on injected scorer. Both source names must exist in
+        SOURCE_PRIORITY so the queue can resolve priority on claim."""
+        from alphalens.registry import SOURCE_PRIORITY
+
+        self.assertIn("momentum", SOURCE_PRIORITY)
+        self.assertIn("early-stage", SOURCE_PRIORITY)
+
+    def test_non_themed_screener_keys_match_source_names(self):
+        """For single-scorer screeners (lean, prescreener) the pipeline key
+        equals the source_name. Themed is the exception — it's decoupled."""
         from alphalens.registry import SCREENERS, SOURCE_PRIORITY
 
-        for source in SCREENERS:
-            self.assertIn(source, SOURCE_PRIORITY, f"{source} missing priority mapping")
+        for key in SCREENERS:
+            if key == "themed":
+                continue  # decoupled — tested separately
+            self.assertIn(key, SOURCE_PRIORITY, f"{key} missing priority mapping")
 
     def test_lean_priority_between_momentum_and_prescreener(self):
         """Lean is daily+quant, so it deserves to beat prescreener but not

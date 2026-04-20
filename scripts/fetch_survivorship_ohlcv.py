@@ -25,8 +25,8 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from alphalens.lean_screener.lean_csv_writer import DailyBar, LeanCsvWriter  # noqa: E402
-from alphalens.lean_screener.polygon_client import PolygonClient  # noqa: E402
+from alphalens.screeners.lean.lean_csv_writer import DailyBar, LeanCsvWriter  # noqa: E402
+from alphalens.screeners.lean.polygon_client import PolygonClient  # noqa: E402
 
 SURV_DIR = Path.home() / ".alphalens" / "survivorship"
 LEAN_DATA = SURV_DIR / "lean_data"

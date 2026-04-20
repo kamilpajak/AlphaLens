@@ -5,12 +5,12 @@ import pandas as pd
 
 class TestCompositeRanker(unittest.TestCase):
     def setUp(self):
-        from alphalens.prescreener.composite_ranker import CompositeRanker
+        from alphalens.screeners.prescreener.composite_ranker import CompositeRanker
 
         self.ranker = CompositeRanker()
 
     def test_weights_sum_to_one(self):
-        from alphalens.prescreener.config import PRESCREENER_DEFAULTS
+        from alphalens.screeners.prescreener.config import PRESCREENER_DEFAULTS
 
         total = (
             PRESCREENER_DEFAULTS["weight_fundamental"]
@@ -48,7 +48,7 @@ class TestCompositeRanker(unittest.TestCase):
         self.assertEqual(len(result), 5)
 
     def test_top_n_defaults_to_config(self):
-        from alphalens.prescreener.config import PRESCREENER_DEFAULTS
+        from alphalens.screeners.prescreener.config import PRESCREENER_DEFAULTS
 
         tickers = [f"T{i}" for i in range(30)]
         tech = pd.DataFrame({"ticker": tickers, "technical_score": [0.5] * 30})

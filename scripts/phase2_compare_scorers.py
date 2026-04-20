@@ -30,14 +30,14 @@ from alphalens.backtest.factor_analysis import run_carhart_attribution  # noqa: 
 from alphalens.backtest.factors import load_carhart_daily  # noqa: E402
 from alphalens.backtest.history_store import HistoryStore  # noqa: E402
 from alphalens.backtest.metrics import rank_ic_tstat, sharpe  # noqa: E402
-from alphalens.lean_screener.lean_csv_loader import load_lean_histories  # noqa: E402
-from alphalens.momentum_screener.backtest_adapter import (  # noqa: E402
+from alphalens.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
+from alphalens.screeners.themed.backtest_adapter import (  # noqa: E402
     early_stage_scorer_adapter,
     momentum_scorer_adapter,
 )
-from alphalens.momentum_screener.config import MOMENTUM_DEFAULTS, UNIVERSE_PATH  # noqa: E402
-from alphalens.momentum_screener.early_stage_scorer import EARLY_STAGE_DEFAULTS  # noqa: E402
-from alphalens.momentum_screener.universe import flatten_universe  # noqa: E402
+from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH  # noqa: E402
+from alphalens.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS  # noqa: E402
+from alphalens.screeners.themed.universe import flatten_universe  # noqa: E402
 
 LEAN_DATA = Path.home() / ".alphalens" / "lean" / "data"
 OUT_DIR = Path(__file__).resolve().parent.parent / "docs" / "backtest"
@@ -261,7 +261,7 @@ def main() -> None:
     store, curated, themes_map = _load_store_and_tickers()
     print(f"universe: {len(curated)} names")
 
-    momentum_cfg = dict(MOMENTUM_DEFAULTS)
+    momentum_cfg = dict(THEMED_DEFAULTS)
     momentum_cfg["benchmark"] = "SPY"
     early_cfg = dict(EARLY_STAGE_DEFAULTS)
     early_cfg["benchmark"] = "SPY"
