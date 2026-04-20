@@ -1,4 +1,4 @@
-"""Re-validate Layer 2b momentum screener under the new Carhart-4F + HAC factor pipeline.
+"""Re-validate Layer 2b themed screener (momentum scorer) under the new Carhart-4F + HAC factor pipeline.
 
 Reference: project_mvp1_backtest_findings memo records Sharpe 1.61 net + FF3 alpha
 t-stat 2.78 on top-5 × linear weighting over 2021-04 → 2026-04.
