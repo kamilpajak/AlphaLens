@@ -1,4 +1,10 @@
 #!/bin/bash
 # Layer 2c Lean batch screener — daily Polygon sync + Docker Lean run.
 # Invoked by com.alphalens.watchdog.lean.plist (daily ~23:30 CET, post-US-close + Polygon settle).
-exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens watchdog lean-screen --top-n 30 --analyze "$@"
+#
+# ARCHIVED 2026-04-20: Lean strategy failed 5-year rigorous validation
+# (Sharpe 0.25 net, FF3 α t-stat 0.14). The CLI command `alphalens watchdog
+# lean-screen` has been removed. To revive: restore a `lean screen` command
+# in `alphalens_cli/commands/` (e.g. wiring through `alphalens.screeners.lean.pipeline`)
+# and update this wrapper to invoke it.
+exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens lean screen --top-n 30 --analyze "$@"

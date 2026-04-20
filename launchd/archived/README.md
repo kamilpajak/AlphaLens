@@ -17,7 +17,7 @@ Pliki w tym katalogu reprezentują strategie/joby które były rozważane ale NI
 Szczegóły w `~/.claude/projects/-Users-jacoren-Developer-Personal-AlphaLens/memory/project_mvp1_backtest_findings.md` oraz `docs/backtest/mvp1_5year.md`.
 
 **Wartość pozostała**:
-- Kod `alphalens/lean_screener/` jest reużywany przez BacktestEngine, diagnostics, weighting, theme analysis (wszystko w `backtest/` subfolder). Nie usuwać.
+- Kod `alphalens/screeners/lean/` jest reużywany przez `backtest --scorer lean` + BacktestEngine, diagnostics, weighting, theme analysis (wszystko w `alphalens/backtest/` submodule). Nie usuwać.
 - `SCREENERS["lean"]` zostaje w `alphalens/registry.py` — nie powoduje harm.
 - Dane historyczne (`~/.alphalens/lean/data/`) są źródłem dla Layer 2b backtestów — nie usuwać.
 
