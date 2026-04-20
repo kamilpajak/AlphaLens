@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import typer
@@ -58,7 +57,6 @@ def validate_llm_filter(
         load_universe as load_2b,
     )
 
-    logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)

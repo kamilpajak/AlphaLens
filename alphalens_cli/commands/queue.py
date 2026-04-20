@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 
 import typer
@@ -44,7 +43,6 @@ def process() -> None:
         worker_lock,
     )
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     try:
         with worker_lock(default_worker_lock_path()):
             worker = _build_worker()

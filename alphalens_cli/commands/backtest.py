@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import typer
@@ -20,9 +19,6 @@ def backtest(
     holding: int = typer.Option(5, help="Holding period in trading days"),
     weighting: str = typer.Option(
         "linear", "--weighting", help="Position weighting: linear | equal"
-    ),
-    cost_profile: str = typer.Option(
-        "moderate", help="Cost profile: gross, aggressive, moderate, conservative"
     ),
     cost_model: str = typer.Option(
         "flat",
@@ -79,7 +75,6 @@ def backtest(
     from alphalens.screeners.lean.config import DATA_DIR
     from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)

@@ -48,6 +48,13 @@ def _format_prescreener(p: dict[str, Any]) -> str:
     )
 
 
+def _format_lean(p: dict[str, Any]) -> str:
+    return (
+        f"Triggered by Lean screener (archived): rank {p.get('rank', '?')}, "
+        f"score={p.get('score', '?')}"
+    )
+
+
 # Keys are Candidate.source values. Themed pipeline emits both "momentum" and
 # "early-stage" depending on the injected scorer — same formatter for both.
 _FORMATTERS: dict[str, Callable[[dict[str, Any]], str]] = {
@@ -55,6 +62,7 @@ _FORMATTERS: dict[str, Callable[[dict[str, Any]], str]] = {
     "early-stage": _format_themed,
     "watchdog_sec": _format_watchdog_sec,
     "prescreener": _format_prescreener,
+    "lean": _format_lean,
 }
 
 
