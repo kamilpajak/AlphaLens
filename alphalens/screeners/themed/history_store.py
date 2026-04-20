@@ -1,7 +1,7 @@
 """Historia dziennych runów Layer 2b — SQLite store dla monitoring dashboardu.
 
-Każdy `momentum-screen` run zapisuje się tu (run metadata + picks). Dashboard
-odczytuje i liczy rolling metrics:
+Każdy `themed screen` run zapisuje się tu (run metadata + picks). Dashboard
+(`alphalens themed status`) odczytuje i liczy rolling metrics:
 - Theme HHI trend (detect single-theme drift)
 - Persistence top-N (które nazwy stoją w top-5 > X dni)
 - Turnover (dzień-dzień przepływ nazw)
@@ -9,6 +9,11 @@ odczytuje i liczy rolling metrics:
 
 Intencjonalnie osobny store od `~/.alphalens/candidates.db` (który jest kolejką
 do Layer 3) — monitoring to inny concern niż pipeline execution.
+
+Kolumna `momentum_score` w `themed_picks` trzyma canonical score — `MomentumScorer`
+emituje ją bezpośrednio, a `EarlyStageScorer` emituje `early_stage_score` które
+pipeline przemianowuje na `momentum_score` (zobacz `themed/pipeline.py`) żeby
+downstream (reporter, history, to_candidates) było scorer-agnostyczne.
 """
 
 from __future__ import annotations
@@ -27,11 +32,11 @@ import pandas as pd
 def default_history_path() -> Path:
     root = Path.home() / ".alphalens"
     root.mkdir(parents=True, exist_ok=True)
-    return root / "momentum_history.db"
+    return root / "themed_history.db"
 
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS momentum_runs (
+CREATE TABLE IF NOT EXISTS themed_runs (
     run_id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_date TEXT NOT NULL,
     run_timestamp_utc TEXT NOT NULL,
@@ -41,9 +46,9 @@ CREATE TABLE IF NOT EXISTS momentum_runs (
     error TEXT
 );
 
-CREATE TABLE IF NOT EXISTS momentum_picks (
+CREATE TABLE IF NOT EXISTS themed_picks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER NOT NULL REFERENCES momentum_runs(run_id),
+    run_id INTEGER NOT NULL REFERENCES themed_runs(run_id),
     rank INTEGER NOT NULL,
     ticker TEXT NOT NULL,
     momentum_score REAL NOT NULL,
@@ -53,8 +58,8 @@ CREATE TABLE IF NOT EXISTS momentum_picks (
     metric_breakdown_json TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_picks_run ON momentum_picks(run_id);
-CREATE INDEX IF NOT EXISTS idx_runs_date ON momentum_runs(run_date);
+CREATE INDEX IF NOT EXISTS idx_picks_run ON themed_picks(run_id);
+CREATE INDEX IF NOT EXISTS idx_runs_date ON themed_runs(run_date);
 """
 
 
@@ -97,12 +102,12 @@ class ThemedHistoryStore:
         weighting_scheme: str = "equal",
         weights: list[float] | None = None,
     ) -> int:
-        """Zapisz dzienny run momentum-screen. Zwraca run_id."""
+        """Zapisz dzienny run `themed screen`. Zwraca run_id."""
         run_date = run_date or datetime.now(timezone.utc).date()
         now = datetime.now(timezone.utc)
         with self._conn() as c:
             cur = c.execute(
-                """INSERT INTO momentum_runs
+                """INSERT INTO themed_runs
                    (run_date, run_timestamp_utc, config_json, universe_size, scored_count, error)
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (
@@ -117,14 +122,12 @@ class ThemedHistoryStore:
             run_id = cur.lastrowid
             if picks_df.empty:
                 return run_id
-            # Zapisz picks
             for rank_idx, (_, row) in enumerate(picks_df.iterrows(), start=1):
                 themes = row.get("themes") or []
                 if isinstance(themes, (list, tuple)):
                     themes_str = ",".join(themes)
                 else:
                     themes_str = str(themes) if themes else ""
-                # Metric breakdown = wszystkie score columns oprócz overall + meta
                 breakdown = {
                     k: float(row[k]) for k in row.index
                     if k not in {"ticker", "momentum_score", "themes"}
@@ -132,7 +135,7 @@ class ThemedHistoryStore:
                 }
                 weight = weights[rank_idx - 1] if weights else None
                 c.execute(
-                    """INSERT INTO momentum_picks
+                    """INSERT INTO themed_picks
                        (run_id, rank, ticker, momentum_score, themes, weight,
                         weighting_scheme, metric_breakdown_json)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -155,7 +158,7 @@ class ThemedHistoryStore:
             rows = c.execute(
                 """SELECT run_id, run_date, run_timestamp_utc, universe_size,
                           scored_count, error
-                   FROM momentum_runs
+                   FROM themed_runs
                    ORDER BY run_date DESC, run_id DESC
                    LIMIT ?""",
                 (days,),
@@ -176,7 +179,7 @@ class ThemedHistoryStore:
         with self._conn() as c:
             rows = c.execute(
                 """SELECT rank, ticker, momentum_score, themes, weight, weighting_scheme
-                   FROM momentum_picks WHERE run_id = ? ORDER BY rank""",
+                   FROM themed_picks WHERE run_id = ? ORDER BY rank""",
                 (run_id,),
             ).fetchall()
         if not rows:
@@ -189,8 +192,8 @@ class ThemedHistoryStore:
             rows = c.execute(
                 """SELECT r.run_date, r.run_id, p.rank, p.ticker, p.momentum_score,
                           p.themes, p.weight, p.weighting_scheme
-                   FROM momentum_runs r
-                   JOIN momentum_picks p ON p.run_id = r.run_id
+                   FROM themed_runs r
+                   JOIN themed_picks p ON p.run_id = r.run_id
                    WHERE r.run_date >= date('now', ? )
                    ORDER BY r.run_date DESC, p.rank ASC""",
                 (f"-{days} days",),
@@ -204,7 +207,7 @@ class ThemedHistoryStore:
 
     def count_runs(self) -> int:
         with self._conn() as c:
-            row = c.execute("SELECT COUNT(*) AS c FROM momentum_runs").fetchone()
+            row = c.execute("SELECT COUNT(*) AS c FROM themed_runs").fetchone()
         return int(row["c"])
 
 
@@ -215,11 +218,8 @@ def compute_staleness(timeline: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
     """
     if timeline.empty:
         return pd.DataFrame(columns=["ticker", "consecutive_days", "last_rank"])
-    # Filtruj do top-N
     tn = timeline[timeline["rank"] <= top_n]
-    # Posortuj malejąco po dacie żeby last pozycja była pierwsza
     tn = tn.sort_values(["run_date", "rank"], ascending=[False, True])
-    # Policz consecutive per ticker od najświeższego runu
     stale = tn.groupby("ticker").agg(
         consecutive_days=("run_date", "nunique"),
         last_rank=("rank", "first"),
