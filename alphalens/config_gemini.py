@@ -15,7 +15,7 @@ def build_gemini_config() -> dict[str, Any]:
     cfg = deepcopy(DEFAULT_CONFIG)
     cfg["llm_provider"] = "google"
     cfg["deep_think_llm"] = "gemini-3.1-pro-preview"
-    cfg["quick_think_llm"] = "gemini-2.5-flash"
+    cfg["quick_think_llm"] = "gemini-3-flash-preview"
     cfg["google_thinking_level"] = "high"
     cfg["backend_url"] = None
     cfg["max_debate_rounds"] = 1

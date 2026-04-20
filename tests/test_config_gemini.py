@@ -15,7 +15,7 @@ class TestBuildGeminiConfig(unittest.TestCase):
 
         cfg = build_gemini_config()
         self.assertEqual(cfg["deep_think_llm"], "gemini-3.1-pro-preview")
-        self.assertEqual(cfg["quick_think_llm"], "gemini-2.5-flash")
+        self.assertEqual(cfg["quick_think_llm"], "gemini-3-flash-preview")
 
     def test_backend_url_none_for_google(self):
         from alphalens.config_gemini import build_gemini_config
