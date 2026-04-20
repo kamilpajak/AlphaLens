@@ -27,10 +27,11 @@ def _default_graph_factory(config: dict[str, Any]):
     return TradingAgentsGraph(debug=False, config=config)
 
 
-def _format_momentum(p: dict[str, Any]) -> str:
+def _format_themed(p: dict[str, Any]) -> str:
     score = p.get("momentum_score", "?")
     themes = ",".join(p.get("themes") or [])
-    return f"Triggered by momentum screener: score={score}, themes={themes}"
+    scorer = p.get("scorer", "momentum")
+    return f"Triggered by themed screener (scorer={scorer}): score={score}, themes={themes}"
 
 
 def _format_watchdog_sec(p: dict[str, Any]) -> str:
@@ -47,8 +48,11 @@ def _format_prescreener(p: dict[str, Any]) -> str:
     )
 
 
+# Keys are Candidate.source values. Themed pipeline emits both "momentum" and
+# "early-stage" depending on the injected scorer — same formatter for both.
 _FORMATTERS: dict[str, Callable[[dict[str, Any]], str]] = {
-    "momentum": _format_momentum,
+    "momentum": _format_themed,
+    "early-stage": _format_themed,
     "watchdog_sec": _format_watchdog_sec,
     "prescreener": _format_prescreener,
 }

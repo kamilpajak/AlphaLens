@@ -1,4 +1,4 @@
-"""Format momentum pipeline output for Telegram delivery."""
+"""Format themed pipeline output for Telegram delivery."""
 
 from __future__ import annotations
 
