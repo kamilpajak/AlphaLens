@@ -1,16 +1,16 @@
 # alphalens/backtest — backtest harness
 
-**Serce AlphaLens.** Każda decyzja deploy/reject dla Layer 2 strategii przechodzi przez tę infrastrukturę przed dotknięciem launchd'a. Odpowiedziała "tak" dla Layer 2b (themed, Sharpe 1.53 net / FF3 α_t 2.60 HAC) i "nie" dla Layer 2c (lean, Sharpe 0.25 / α_t 0.14) — tu się materializuje różnica między pomysłem a empiryczną walidacją.
+**The heart of AlphaLens.** Every Layer 2 deploy/archive decision passes through this infrastructure before any launchd job is touched. It said "yes" to Layer 2b (themed: Sharpe 1.53 net, FF3 α_t 2.60 HAC) and "no" to Layer 2c (lean: Sharpe 0.25, α_t 0.14). The harness is where an idea becomes an empirically validated strategy — or gets shelved.
 
-Harness jest **screener-agnostic**: dowolna strategia implementująca `Scorer` protocol podpina się do tego samego silnika, raportów, factor attribution i cost model. Ta sama infrastruktura walidowała momentum, early-stage, Lean, Carhart revalidation, survivorship probes oraz evaluation LLM filtrów.
+The harness is **screener-agnostic**: any strategy that implements the `Scorer` protocol plugs into the same engine, reports, factor attribution, and cost model. The same infrastructure has validated the momentum scorer, the early-stage scorer, the Lean ranker, the Carhart revalidation, several survivorship probes, and the LLM-filter evaluation runs.
 
-## Przepływ
+## Flow
 
 ```
 OHLCV (Lean CSV zip)
        │
        ▼
-HistoryStore  ← punkt wejścia, point-in-time truncation
+HistoryStore  ← entry point, point-in-time truncation
        │
        │  + scorer: (histories, config) -> DataFrame[ticker, score]
        │  + scorer_config, top_n, holding_period, weighting, benchmark
@@ -27,36 +27,36 @@ BacktestReport       ── portfolio_returns (Sharpe-ready, non-overlapping)
        │             ├─ universe_median_returns
        │             └─ scored_frames (optional, for diagnostics)
        │
-       ├── metrics.py            → Sharpe, IC+t-stat, Calmar, max DD
-       ├── cost_model.py         → flat bps drag (75/100/150)
+       ├── metrics.py            → Sharpe, IC + t-stat, Calmar, max DD
+       ├── cost_model.py         → flat bps drag (75 / 100 / 150)
        ├── factor_analysis.py    → CAPM → FF3 → Carhart-4F + HAC + industry controls
-       ├── regime.py             → bull/bear/flat breakdown
+       ├── regime.py             → bull / bear / flat breakdown
        ├── diagnostics.py        → IC by decile, bear-regime vol decomposition
        ├── theme_analysis.py     → HHI + dominant-theme concentration alerts
        ├── historical_validation → LLM filter evaluation harness
        └── report.py             → markdown + CSV + decision matrix
 ```
 
-## Kontrakty (co musisz dać, co dostajesz)
+## Contracts
 
-### `Scorer` (wejście)
+### `Scorer` (input)
 
 ```python
 Scorer = Callable[[Mapping[str, pd.DataFrame], Mapping], pd.DataFrame]
 ```
 
-- **Dostaje**: `histories` (truncated point-in-time do `t`, column `close/open/high/low/volume`) + `config` dict.
-- **Zwraca**: DataFrame z co najmniej `ticker` i `score`. Engine sam robi `sort_values("score", ascending=False).head(top_n)`.
-- **Invariant**: engine ufnie przekazuje truncated histories — scorer nie może zaglądać w przyszłość. Wszystkie window'y (rolling SMA, ROC) muszą być obliczone na `histories[ticker]` bez rozszerzania.
+- **Takes**: `histories` (each DataFrame truncated point-in-time to `t`) + a `config` dict.
+- **Returns**: a DataFrame with at minimum `ticker` and `score` columns. The engine does `sort_values("score", ascending=False).head(top_n)` internally.
+- **Invariant**: the engine hands the scorer truncated histories — the scorer must not look into the future. Every rolling window (SMA, ROC, RSI) must be computed on `histories[ticker]` without extending it.
 
-Przykładowe adaptery:
-- `alphalens.screeners.themed.backtest_adapter.momentum_scorer_adapter` — Layer 2b `MomentumScorer` (7-metric)
-- `alphalens.screeners.themed.backtest_adapter.early_stage_scorer_adapter` — Layer 2b `EarlyStageScorer` (base-breakout)
-- `alphalens.screeners.lean.lean_project.scorer.rank_universe` — archived Layer 2c (już zgodny z `Scorer`, bez adaptera)
+Example adapters:
+- `alphalens.screeners.themed.backtest_adapter.momentum_scorer_adapter` — Layer 2b `MomentumScorer` (7-metric classic momentum)
+- `alphalens.screeners.themed.backtest_adapter.early_stage_scorer_adapter` — Layer 2b `EarlyStageScorer` (base-breakout / VCP)
+- `alphalens.screeners.lean.lean_project.scorer.rank_universe` — archived Layer 2c (already matches `Scorer` signature, no adapter needed)
 
-### `HistoryStore` (dane)
+### `HistoryStore` (data)
 
-In-memory, pure-pandas, zero I/O w hot loopie. Loading jest odpowiedzialnością callera:
+In-memory, pure pandas, zero I/O in the hot loop. Loading is the caller's responsibility:
 
 ```python
 from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
@@ -66,23 +66,45 @@ histories = load_lean_histories(DATA_DIR, tickers)  # zip-CSV → dict[ticker, D
 store = HistoryStore(histories)
 ```
 
-Dlaczego Lean zip-CSV a nie yfinance? Lean data ma stały format, adjusted prices z factor files, trading calendar, i jest offline-stable. yfinance podczas 5-letniego backtestu gubi nazwy (delisting, rate limits) co łamie reproducibility.
+**DataFrame conventions**: each value must be a `DatetimeIndex`-indexed DataFrame sorted ascending, with lowercase columns `["open", "high", "low", "close", "volume"]`. The Lean CSV loader produces this shape out of the box. If you write a custom loader, match it.
 
-### `BacktestReport` (wyjście)
+**Why Lean zip-CSV and not yfinance?** Lean data has a stable format, uses adjusted prices via factor files, ships a deterministic trading calendar, and works offline. yfinance loses names mid-backtest (delistings, rate limits) which breaks reproducibility over 5-year windows.
 
-- `portfolio_returns` — 1-day forward return top-N **(Sharpe-ready, nie nakłada się)**
-- `portfolio_returns_holding` — holding-period return top-N (overlapping, dla signal diagnostics, nie Sharpe)
-- `ic_series` — Rank IC liczony po `holding_period`-day fwd return cross-sectionally
-- `universe_median_returns` — 1-day median całego scorowanego uniwersum
-- `daily_results` — lista per-day snapshot'ów (`DailyResult`: tickery, scores, fwd returns, IC)
-- `scored_frames` — opcjonalnie (`retain_scored_frames=True`) — full DataFrame scored per day, dla IC-by-decile + tail concentration
+### `BacktestReport` (output)
 
-## Uruchomienie
+- `portfolio_returns` — 1-day forward return of top-N **(Sharpe-ready, non-overlapping)**
+- `portfolio_returns_holding` — holding-period forward return of top-N (overlapping, for signal diagnostics, **not** Sharpe)
+- `ic_series` — cross-sectional Rank IC on `holding_period`-day forward returns
+- `universe_median_returns` — 1-day median across the whole scored universe
+- `daily_results` — per-day snapshots (`DailyResult`: tickers, scores, forward returns, IC)
+- `scored_frames` — optional (pass `retain_scored_frames=True`) — full scored DataFrame per day, needed for IC-by-decile and tail concentration diagnostics
 
-### CLI (produkcja)
+## Data prerequisites
+
+The harness itself is pure pandas, but running a backtest end-to-end needs two external data caches to be populated first.
+
+### OHLCV via Lean CSV
+
+The default scorers read OHLCV from `~/.alphalens/lean/data/equity/usa/daily/`. The top-level `CLAUDE.md` has the full setup: install Docker Desktop, set `POLYGON_API_KEY`, then run the Polygon → Lean CSV sync (a one-time ~100-minute bootstrap at 5 req/min on Polygon's free Basic tier, then daily incremental updates of a single grouped-daily call).
+
+If the cache is empty, `load_lean_histories()` returns empty DataFrames and `BacktestEngine` raises `"No trading days found for benchmark ..."`. Fix: populate the cache first.
+
+### Fama-French factor files
+
+`factor_analysis.run_carhart_attribution` calls `factors.load_carhart_daily`, which reads Ken French's CSV files from `~/.alphalens/factors/`. These are **not** auto-downloaded. Grab them manually (a quarterly refresh is enough):
+
+- `F-F_Research_Data_5_Factors_2x3_daily_CSV.zip` — Mkt-RF, SMB, HML, RMW, CMA, RF
+- `F-F_Momentum_Factor_daily_CSV.zip` — UMD / Mom (the momentum factor)
+- `12_Industry_Portfolios_daily_CSV.zip` — optional, for industry-adjusted Carhart
+
+All three are free at [Ken French's data library](https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html). Unzip into `~/.alphalens/factors/` and you are done. If the files are missing, `factors.py` raises `FileNotFoundError` with the exact path it was looking for.
+
+## Usage
+
+### CLI (production)
 
 ```bash
-# Layer 2b themed + momentum scorer (domyślne wiring)
+# Layer 2b themed + momentum scorer (the default wiring)
 .venv/bin/alphalens backtest \
   --start 2021-04-19 --end 2026-04-17 \
   --top-n 5 --holding 5 --weighting linear \
@@ -93,9 +115,9 @@ Dlaczego Lean zip-CSV a nie yfinance? Lean data ma stały format, adjusted price
 .venv/bin/alphalens backtest --scorer lean ...
 ```
 
-Wyjście domyślne:
-- `docs/backtest/mvp1_report.md` — markdown z summary, regime breakdown, factor attribution, cost table, diagnostics
-- `--csv path.csv` — opcjonalny daily CSV z portfolio returns, IC, top-N
+Default outputs:
+- `docs/backtest/mvp1_report.md` — markdown with summary, regime breakdown, factor attribution, cost table, diagnostics
+- `--csv path.csv` — optional daily CSV with portfolio returns, IC, top-N
 
 ### Programmatic
 
@@ -108,7 +130,7 @@ from alphalens.screeners.themed.config import THEMED_DEFAULTS
 from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
 from alphalens.screeners.lean.config import DATA_DIR
 
-universe = ["NVDA", "AMD", "AVGO", ...]  # plus benchmark
+universe = ["NVDA", "AMD", "AVGO", ...]  # add the benchmark separately
 store = HistoryStore(load_lean_histories(DATA_DIR, universe + ["SPY"]))
 
 engine = BacktestEngine(
@@ -117,90 +139,96 @@ engine = BacktestEngine(
     scorer_config=dict(THEMED_DEFAULTS, benchmark="SPY"),
     top_n=5, holding_period=5, benchmark="SPY",
     screener_tickers=universe, weighting="linear",
-    retain_scored_frames=True,  # potrzebne dla IC-by-decile
+    retain_scored_frames=True,  # required for IC-by-decile
 )
 report = engine.run(start=date(2021, 4, 19), end=date(2026, 4, 17))
 ```
 
-Dalej można:
-- `alphalens.backtest.report.build_summary(report)` → `Summary` (sharpe, IC t-stat, turnover)
-- `alphalens.backtest.factor_analysis.run_carhart_attribution(report.portfolio_returns, factors)` → `[CAPM, FF3, Carhart-4F]` × HAC t-stats
-- `alphalens.backtest.regime.regime_breakdown(returns, ic, median, labels)` → per-regime Sharpe/IC
+From there:
+- `alphalens.backtest.report.build_summary(report)` → `BacktestSummary` (Sharpe gross/moderate, IC, IC t-stat, turnover)
+- `alphalens.backtest.factor_analysis.run_carhart_attribution(report.portfolio_returns, factors)` → `[CAPM, FF3, Carhart-4F]` with HAC t-stats
+- `alphalens.backtest.regime.regime_breakdown(returns, ic, median, labels)` → per-regime Sharpe / IC
 
-## Dodawanie nowego scorera
+## Adding a new scorer
 
-1. Napisz `scorer(histories, config) -> DataFrame[ticker, score]`. Pure pandas, no I/O.
-2. Opcjonalnie napisz adapter jeśli potrzebujesz column renaming lub benchmark wiring — patrz `screeners/themed/backtest_adapter.py` jako referencja.
-3. Zarejestruj pipeline w `alphalens/registry.py` (jeśli scorer ma własny pipeline + CLI).
-4. Odpal backtest przez CLI (`--scorer <nazwa>`) albo programmatic.
+1. Write `scorer(histories, config) -> DataFrame[ticker, score]`. Pure pandas, no I/O.
+2. Optionally write an adapter if you need column renaming or benchmark wiring — see `screeners/themed/backtest_adapter.py` for a reference.
+3. Register the pipeline in `alphalens/registry.py` if the scorer has its own pipeline and CLI.
+4. Run it through the CLI (`--scorer <name>`) or programmatically.
 
-**Gate do deploy** (z mojego validation workflow, nie formal reguła):
+### Deploy gates (heuristics, not enforced code)
+
+> These are the thresholds I apply manually when deciding whether a validated strategy is ready for launchd. **Nothing in the codebase enforces them at runtime.** The decision matrix in `report.py` uses a permissive `sharpe_moderate > 0.3` as the MVP1 "paper-trade gate" — a much weaker bar than the production-deploy target below.
+
+Thresholds I use for production deploy (stricter than the MVP1 paper-trade gate):
+
 - Net Sharpe > 1.0 (moderate cost profile)
 - FF3 α t-stat > 2.0 HAC
 - Rank IC t-stat > 1.5
-- Carhart-4F α t-stat > 1.5 HAC (alpha przeżywa kontrolę na UMD factor)
-- Industry-adjusted Carhart α t-stat > 1.5 (edge to stock selection, nie sector tilt)
+- Carhart-4F α t-stat > 1.5 HAC (alpha survives control for the UMD momentum factor)
+- Industry-adjusted Carhart α t-stat > 1.5 (the edge is stock selection, not sector timing)
 
-Layer 2c oblało wszystkie. Layer 2b przeszło wszystkie (plus augmented test z delisted names wzmocnił wyniki).
+Layer 2c failed all of them. Layer 2b passed all of them, and an augmented survivorship test strengthened rather than weakened the result.
 
 ## Factor attribution methodology
 
-Trzy specyfikacje budowane incrementally (CAPM → FF3 → Carhart-4F):
-- **CAPM**: `y = α + β_Mkt·(Mkt-RF)`
-- **FF3**: `+ β_SMB·SMB + β_HML·HML`
-- **Carhart-4F**: `+ β_UMD·UMD` (momentum factor — jeśli α collapsuje tu, strategia to repackaged momentum beta, nie niezależny edge)
+Three specifications built incrementally (CAPM → FF3 → Carhart-4F):
 
-Wszystkie z **Newey-West HAC** (maxlag = `int(4·(n/100)^(2/9))` ≈ 10 dla 1260 dni). Brak HAC → fałszywa istotność bo daily errors są autocorrelated.
+- **CAPM**: `y = α + β_Mkt · (Mkt - RF)`
+- **FF3**: `+ β_SMB · SMB + β_HML · HML`
+- **Carhart-4F**: `+ β_UMD · UMD` (the momentum factor — if α collapses here, the strategy was repackaged momentum-factor beta, not independent edge)
 
-**Industry controls** (`factors.load_industry12_daily`): 12 FF industry portfolios jako dodatkowe regresory. Jeśli Carhart α zniknie po dodaniu sector controls → edge to timing, nie selection. Patrz `scripts/revalidate_carhart.py`.
+All three use **Newey-West HAC** covariance (`maxlag = int(4·(n/100)^(2/9))`, about 10 for 1260 trading days). Skipping HAC inflates significance because daily OLS residuals are autocorrelated.
+
+**Industry controls** (`factors.load_industry12_daily`): the 12 FF industry portfolios as additional regressors. If Carhart α disappears once sector controls are in, the edge is sector timing, not stock selection. See `scripts/revalidate_carhart.py` for the full sequence on Layer 2b.
 
 ## Cost model
 
-**Flat** (default, production-ready):
-- 75 / 100 / 150 bps annualized drag (aggressive / moderate / conservative)
-- Skalowany turnover'em: drogie strategie high-churn widzą więcej drag niż stabilne top-N
-- `cost_sensitivity_table()` zwraca frame 4×(sharpe, ann_return) dla wszystkich profili
+**Flat** (default, production):
+- 75 / 100 / 150 bps annualised drag (aggressive / moderate / conservative)
+- Scaled by turnover: stable top-N portfolios see less drag than high-churn ones
+- `cost_sensitivity_table()` returns a 4-row frame (gross / aggressive / moderate / conservative) with Sharpe and annualised return per profile
 
-**Per-ticker** (na branchu `feature/per-ticker-cost-model`, nie w production):
+**Per-ticker** (on the `feature/per-ticker-cost-model` branch, **not on main**):
 - EDGE spread estimator (Ardia-Guidotti-Kroencke 2024) + Almgren-Chriss market impact
-- Empirycznie **nie działa** na naszym universum: 68× overestimate na AAPL. Per memory `project_per_ticker_cost_findings.md`: ~95% artifact bez ticks z Polygon Advanced ($199/mo).
+- Empirically **does not work** on our universe: a 68× overestimate on AAPL. See `project_per_ticker_cost_findings.md` in memory — the per-ticker drag is ~95% artifact without real tick data from Polygon Advanced ($199/mo).
 
-## Moduły (crisp)
+## Module guide
 
-| Plik | Odpowiedzialność |
+| File | Purpose |
 |---|---|
-| `engine.py` | `BacktestEngine`, `DailyResult`, `BacktestReport` — core replay loop |
-| `history_store.py` | `HistoryStore` — point-in-time OHLCV cache, forward-return lookup |
-| `weighting.py` | `compute_position_weights(n, scheme)` — equal / linear / conviction. Linear best-performing (+7% Sharpe, +27% Calmar vs equal per 2026-04-19 sweep) |
+| `engine.py` | `BacktestEngine`, `DailyResult`, `BacktestReport` — the core replay loop |
+| `history_store.py` | `HistoryStore` — point-in-time OHLCV cache + forward-return lookup |
+| `weighting.py` | `compute_position_weights(n, scheme)` — `equal` / `linear` / `conviction`. Linear is the best performer (+7% Sharpe, +27% Calmar vs equal per the 2026-04-19 sweep) |
 | `metrics.py` | Sharpe, IC + t-stat + rolling, decile spread, max DD, Calmar, Herfindahl concentration |
-| `cost_model.py` | Flat-bps drag + sensitivity table across gross/aggressive/moderate/conservative |
-| `factor_analysis.py` | OLS wrappers + `run_carhart_attribution` + rolling regression + HAC maxlag rule |
-| `factors.py` | Loader dla Fama-French factors (`FF3`, `Carhart-4F`, `12_Industries`) z Ken French website, cached locally |
-| `regime.py` | Bull/bear/flat classifier oparty na trailing benchmark return + breakdown metryk |
+| `cost_model.py` | Flat-bps drag + sensitivity table across gross / aggressive / moderate / conservative |
+| `factor_analysis.py` | OLS wrappers + `run_carhart_attribution` + rolling regression + HAC lag rule |
+| `factors.py` | Loaders for Fama-French factors (`FF3`, `Carhart-4F`, `12_Industries`) from local Ken French CSVs |
+| `regime.py` | Bull / bear / flat classifier on trailing benchmark return + per-regime metric breakdown |
 | `diagnostics.py` | IC-by-decile, tail-concentration score, vol decomposition by regime |
 | `theme_analysis.py` | Theme HHI + dominant theme per day + concentration alerts (Layer 2b specific) |
-| `historical_validation.py` | `evaluate_historical_picks(picks, scorer_fn)` — pluggable LLM/rule scorer eval, decision matrix |
-| `llm_scorers.py` | Reference LLM scorers: Gemini Flash tractability, hybrid rule→Gemini, TradingAgents reduced |
+| `historical_validation.py` | `evaluate_historical_picks(picks, scorer_fn)` — pluggable LLM / rule scorer evaluation + decision matrix |
+| `llm_scorers.py` | Reference LLM scorers: Gemini Flash tractability, hybrid rule → Gemini, TradingAgents reduced |
 | `report.py` | `build_summary`, `write_markdown_report`, `daily_results_to_dataframe` |
 
-## Znane ograniczenia
+## Known limitations
 
-- **Universe survivorship**: production-universe pre-selected po fakcie. Survivorship probe Test B (augmented backtest 113→163 delisted+active) pokazał bias odwrotny — α okrzepła (t=2.62 → 2.99 HAC). Test A (point-in-time reconstruction) wciąż todo.
-- **Adjusted prices**: Lean CSV używa adjusted closes (factor files). Per-ticker cost validation pokazała że adjusted underestimuje EDGE spread o 10–20% vs raw. Dla flat cost model nieistotne; dla per-ticker blokujące.
-- **Turnover approximation**: fixed 100% assumption w `cost_model.apply()` gdy brak per-day turnover series. Daje overestimate drag. `cost_sensitivity_table` używa tego; realny deploy policzył z `report.turnover`.
-- **One-day hold Sharpe vs N-day hold IC**: `portfolio_returns` to 1-day fwd (dla Sharpe), `ic_series` to N-day fwd (dla signal quality). Nie mieszać — overlapping daily Sharpe z N-day returns zaniża σ i inflate'uje Sharpe.
+- **Universe survivorship**: the production universe is pre-selected after the fact. Survivorship probe "Test B" (augmented backtest, 113 → 163 names including delisted) showed the bias is *opposite* — α strengthened (Carhart t 2.62 → 2.99 HAC). A point-in-time reconstruction ("Test A") is still pending.
+- **Adjusted prices**: Lean CSV uses adjusted closes (factor files). Per-ticker cost validation showed adjusted prices underestimate EDGE spread by 10–20% vs raw. Irrelevant for the flat cost model; a blocker for per-ticker.
+- **Turnover approximation**: `cost_model.apply()` falls back to 100% turnover when no per-day turnover series is passed. That overestimates drag. `cost_sensitivity_table` uses this fallback; real deploy runs pass `report.turnover`.
+- **1-day-Sharpe vs N-day-IC horizons**: `portfolio_returns` is 1-day forward (for Sharpe); `ic_series` is N-day forward (for signal quality). Don't mix them — using N-day overlapping returns in Sharpe understates σ and inflates Sharpe.
 
-## Kluczowe walidacje (archive)
+## Key validations (archive)
 
-Reports w `docs/backtest/`:
-- `mvp1_5year.md` — pełna Layer 2c walidacja (oblała, archived)
-- `mvp1_5year_daily.csv` — daily portfolio returns dla Layer 2c
+Reports in `docs/backtest/`:
+- `mvp1_5year.md` — full Layer 2c validation (failed, archived)
+- `mvp1_5year_daily.csv` — daily portfolio returns for Layer 2c
 - `mvp1_baseline.md`, `mvp1_5year_iwm.md` — benchmark variants
-- `early_stage_comparison.md` — early-stage vs momentum scorer
-- `layer2b_survivorship.md` — augmented backtest z delisted names
+- `early_stage_comparison.md` — early-stage scorer vs momentum scorer
+- `layer2b_survivorship.md` — augmented backtest with delisted names
 - `llm_filter_{baseline_rule,gemini}.{md,csv}` — Phase 0 LLM filter validation
 
-Memory notes z wnioskami:
+Memory notes with the decisions behind those numbers:
 - `project_mvp1_backtest_findings.md`
 - `project_weighting_sweep_findings.md`
 - `project_carhart_revalidation.md`
