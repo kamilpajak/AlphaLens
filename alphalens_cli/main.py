@@ -18,6 +18,8 @@ package to avoid namespace collision).
 """
 from __future__ import annotations
 
+import logging
+
 import typer
 from dotenv import load_dotenv
 
@@ -37,6 +39,20 @@ app = typer.Typer(
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
+
+
+@app.callback()
+def _root_callback() -> None:
+    """Configure logging once before routing to any subcommand.
+
+    basicConfig is a no-op if the root logger is already configured (e.g. by a
+    parent Python process); in that case we inherit the parent's setup.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
 
 app.add_typer(watchdog_app, name="watchdog")
 app.add_typer(queue_app, name="queue")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 
 import typer
@@ -41,7 +40,6 @@ def screen(
     from alphalens.screeners.themed.pipeline import ThemedPipeline
     from alphalens.screeners.themed.reporter import format_telegram_report
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     curr_date = pd.Timestamp.today().strftime("%Y-%m-%d")
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
 
@@ -81,7 +80,6 @@ def _build_watchdog() -> Watchdog:
 @watchdog_app.command(name="run-once")
 def run_once() -> None:
     """Poll EDGAR once, classify new events, dispatch alerts."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     watchdog = _build_watchdog()
     result = watchdog.run_once()
     typer.echo(f"detected={result['events_detected']} dispatched={result['events_dispatched']}")
