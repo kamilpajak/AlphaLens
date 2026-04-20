@@ -124,11 +124,27 @@ def run_once():
 
 @watchdog_app.command("process-queue")
 def process_queue():
-    """Drain the auto-trigger queue (one job per call of TradingAgents)."""
+    """Drain the auto-trigger queue (one job per call of TradingAgents).
+
+    Uses a kernel-level flock on ~/.alphalens/watchdog/worker.lock so that
+    launchd-spawned workers and manual runs never execute in parallel —
+    parallel workers hammer the Gemini 1M-tokens/min quota and deadlock.
+    """
+    from alphalens.watchdog_lock import (
+        WorkerLockBusy,
+        default_worker_lock_path,
+        worker_lock,
+    )
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    worker = _build_worker()
-    processed = worker.process_all()
-    typer.echo(f"processed={processed}")
+    try:
+        with worker_lock(default_worker_lock_path()):
+            worker = _build_worker()
+            processed = worker.process_all()
+            typer.echo(f"processed={processed}")
+    except WorkerLockBusy:
+        typer.echo("another worker instance is running — skipping (see worker.lock for pid)")
+        raise typer.Exit(code=0)
 
 
 @watchdog_app.command("momentum-screen")
