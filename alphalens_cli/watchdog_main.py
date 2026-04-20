@@ -96,6 +96,23 @@ def _build_worker():
     return AnalysisWorker(queue=queue, runner=runner, notifier=telegram)
 
 
+@watchdog_app.command("scorer-stats")
+def scorer_stats(
+    since_days: int = typer.Option(30, help="Only count Layer 3 runs finished within the last N days"),
+):
+    """Layer 3 acceptance rate per scorer — used for paper-trade validation.
+
+    Queries the candidate queue for completed TradingAgents runs, groups by
+    `source` (e.g. 'momentum' vs 'early-stage'), and reports decision
+    distribution + accept rate (BUY+OVERWEIGHT / total).
+    """
+    from alphalens.scorer_stats import compute_scorer_stats, format_stats_table
+
+    stats = compute_scorer_stats(default_queue_path(), since_days=since_days)
+    typer.echo(f"=== Scorer stats — last {since_days} days ===")
+    typer.echo(format_stats_table(stats))
+
+
 @watchdog_app.command("run-once")
 def run_once():
     """Poll EDGAR once, classify new events, dispatch alerts."""
@@ -121,8 +138,18 @@ def momentum_screen(
     analyze: bool = typer.Option(
         False, help="Submit top-N to the candidate queue for Layer 3 deep analysis"
     ),
+    scorer: str = typer.Option(
+        "momentum",
+        help="Which scorer to run: 'momentum' (default, late-stage trend continuation) or "
+             "'early-stage' (CAN SLIM / VCP / Jegadeesh 11-1 base-breakout detection)",
+    ),
 ):
-    """Run the Layer 2b momentum screener; optionally queue top-N for Layer 3."""
+    """Run the Layer 2b screener; optionally queue top-N for Layer 3.
+
+    Two scorers:
+      - momentum: 7-metric classic momentum (near_high/pct_20d/vol_surge/rel_strength/RSI/ADX/MACD)
+      - early-stage: 7-metric base-breakout (base_breakout/accel/VCP/RSI_emergence/ADX_building/vol_accum/Jegadeesh_11_1)
+    """
     import pandas as pd
 
     from alphalens.momentum_screener.pipeline import MomentumPipeline
@@ -131,7 +158,28 @@ def momentum_screen(
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     curr_date = pd.Timestamp.today().strftime("%Y-%m-%d")
-    pipeline = MomentumPipeline()
+
+    # Select scorer
+    if scorer == "momentum":
+        pipeline = MomentumPipeline()
+    elif scorer == "early-stage":
+        from alphalens.momentum_screener.early_stage_scorer import (
+            EARLY_STAGE_DEFAULTS,
+            EarlyStageScorer,
+        )
+        from alphalens.momentum_screener.config import MOMENTUM_DEFAULTS
+
+        # Merge: momentum guardrails (min_cap/price/vol, benchmark) + early-stage weights/thresholds
+        cfg = dict(MOMENTUM_DEFAULTS)
+        cfg.update(EARLY_STAGE_DEFAULTS)
+        pipeline = MomentumPipeline(
+            config=cfg,
+            scorer=EarlyStageScorer(cfg),
+            source_name="early-stage",
+        )
+    else:
+        raise typer.BadParameter(f"Unknown scorer: {scorer!r}. Use 'momentum' or 'early-stage'.")
+
     result = pipeline.run(curr_date=curr_date, top_n=top_n)
     text = format_telegram_report(result, curr_date)
 
@@ -154,7 +202,7 @@ def momentum_screen(
     if analyze:
         with CandidateQueue(default_queue_path()) as queue:
             submitted = queue.submit(pipeline.to_candidates(result))
-        typer.echo(f"queued {submitted} momentum candidate(s) for Layer 3")
+        typer.echo(f"queued {submitted} {scorer} candidate(s) for Layer 3")
 
     if dry_run:
         typer.echo(text)
@@ -164,7 +212,7 @@ def momentum_screen(
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
     telegram = TelegramHandler(bot_token=bot_token, chat_id=chat_id)
     telegram.send_message(text)
-    typer.echo(f"sent {len(result)} candidates to Telegram")
+    typer.echo(f"sent {len(result)} {scorer} candidates to Telegram")
 
 
 @watchdog_app.command("lean-screen")
@@ -586,7 +634,7 @@ def backtest(
     vol_decomp = {}
     tail_score = 0.0
     if diagnose and result.scored_frames:
-        from alphalens.lean_screener.backtest.diagnostics import (
+        from alphalens.backtest.diagnostics import (
             format_vol_decomposition,
             ic_by_decile_from_scored_frames,
             tail_concentration_score,
@@ -600,7 +648,7 @@ def backtest(
         typer.echo(format_vol_decomposition(vol_decomp))
 
     # Factor-aware monitoring — theme concentration per day
-    from alphalens.lean_screener.backtest.theme_analysis import (
+    from alphalens.backtest.theme_analysis import (
         snapshots_from_backtest,
         theme_series,
     )

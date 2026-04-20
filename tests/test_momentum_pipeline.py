@@ -126,5 +126,87 @@ class TestPipelineRun(unittest.TestCase):
         self.assertEqual(len(result), 0)
 
 
+class TestPipelineScorerInjection(unittest.TestCase):
+    """Pipeline can be constructed with either MomentumScorer or EarlyStageScorer."""
+
+    def setUp(self):
+        self.themes = {"quantum": ["QUBT", "RGTI"], "ai": ["BBAI"]}
+        self.prices = {
+            "QUBT": _trending_df(slope=0.10),
+            "RGTI": _trending_df(slope=0.06),
+            "BBAI": _flat_df(),
+            "SPY": _flat_df(),
+        }
+        self.fundamentals = {
+            "QUBT": {"marketCap": 1_500_000_000, "averageVolume": 5_000_000},
+            "RGTI": {"marketCap": 1_000_000_000, "averageVolume": 3_000_000},
+            "BBAI": {"marketCap": 500_000_000, "averageVolume": 2_000_000},
+        }
+
+    @patch("alphalens.momentum_screener.pipeline.BatchDataFetcher")
+    @patch("alphalens.momentum_screener.pipeline.load_universe")
+    def test_default_uses_momentum_scorer(self, mock_load, mock_fetcher_cls):
+        from alphalens.momentum_screener.momentum_scorer import MomentumScorer
+        from alphalens.momentum_screener.pipeline import MomentumPipeline
+
+        mock_load.return_value = self.themes
+        fetcher = mock_fetcher_cls.return_value
+        fetcher.fetch_prices.return_value = self.prices
+        fetcher.fetch_fundamentals.return_value = self.fundamentals
+
+        pipeline = MomentumPipeline()
+        self.assertIsInstance(pipeline.scorer, MomentumScorer)
+        self.assertEqual(pipeline.source_name, "momentum")
+
+    @patch("alphalens.momentum_screener.pipeline.BatchDataFetcher")
+    @patch("alphalens.momentum_screener.pipeline.load_universe")
+    def test_early_stage_scorer_injection(self, mock_load, mock_fetcher_cls):
+        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.momentum_screener.pipeline import MomentumPipeline
+
+        mock_load.return_value = self.themes
+        fetcher = mock_fetcher_cls.return_value
+        fetcher.fetch_prices.return_value = self.prices
+        fetcher.fetch_fundamentals.return_value = self.fundamentals
+
+        pipeline = MomentumPipeline(scorer=EarlyStageScorer(), source_name="early-stage")
+        self.assertIsInstance(pipeline.scorer, EarlyStageScorer)
+        self.assertEqual(pipeline.source_name, "early-stage")
+
+    @patch("alphalens.momentum_screener.pipeline.BatchDataFetcher")
+    @patch("alphalens.momentum_screener.pipeline.load_universe")
+    def test_early_stage_run_returns_score_column(self, mock_load, mock_fetcher_cls):
+        """Regardless of scorer, output has canonical `momentum_score` column (backward compat)."""
+        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.momentum_screener.pipeline import MomentumPipeline
+
+        mock_load.return_value = self.themes
+        fetcher = mock_fetcher_cls.return_value
+        fetcher.fetch_prices.return_value = self.prices
+        fetcher.fetch_fundamentals.return_value = self.fundamentals
+
+        pipeline = MomentumPipeline(scorer=EarlyStageScorer(), source_name="early-stage")
+        result = pipeline.run(curr_date="2026-04-17", top_n=2)
+        self.assertIn("momentum_score", result.columns)
+
+    @patch("alphalens.momentum_screener.pipeline.BatchDataFetcher")
+    @patch("alphalens.momentum_screener.pipeline.load_universe")
+    def test_candidates_carry_source_name(self, mock_load, mock_fetcher_cls):
+        from alphalens.momentum_screener.early_stage_scorer import EarlyStageScorer
+        from alphalens.momentum_screener.pipeline import MomentumPipeline
+
+        mock_load.return_value = self.themes
+        fetcher = mock_fetcher_cls.return_value
+        fetcher.fetch_prices.return_value = self.prices
+        fetcher.fetch_fundamentals.return_value = self.fundamentals
+
+        pipeline = MomentumPipeline(scorer=EarlyStageScorer(), source_name="early-stage")
+        picks = pipeline.run(curr_date="2026-04-17", top_n=2)
+        candidates = pipeline.to_candidates(picks)
+        self.assertTrue(candidates, "expected non-empty candidates")
+        for cand in candidates:
+            self.assertEqual(cand.source, "early-stage")
+
+
 if __name__ == "__main__":
     unittest.main()

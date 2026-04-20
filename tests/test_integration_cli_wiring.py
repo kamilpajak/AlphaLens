@@ -26,7 +26,8 @@ class TestTyperAppRegistration(unittest.TestCase):
         self.assertEqual(
             names,
             {"run-once", "process-queue", "momentum-screen", "momentum-status",
-             "lean-screen", "backtest", "validate-llm-filter", "status"},
+             "lean-screen", "backtest", "validate-llm-filter", "scorer-stats",
+             "status"},
             f"missing or extra subcommands: {names}",
         )
 
