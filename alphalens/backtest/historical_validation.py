@@ -290,7 +290,7 @@ def picks_from_history_store(
 ) -> list[PickRecord]:
     """Ekstraktuj z ThemedHistoryStore (z produkcji Layer 2b).
 
-    Musi byc `momentum_history.db` wypełniony przez daily runs. Forward return
+    Musi byc `themed_history.db` wypełniony przez daily runs. Forward return
     liczymy z późniejszych picks — jeśli ticker pojawił się w historii później
     też, używamy późniejszej ceny jako proxy. Fallback: None (skip).
     """
