@@ -38,7 +38,7 @@ _HISTORY_BARS = 260
 
 # Scoring config duplicated here because this file runs inside Lean where the
 # host-side alphalens package isn't importable. Keep in sync with
-# `alphalens/lean_screener/config.py::LEAN_DEFAULTS`.
+# `alphalens/screeners/lean/config.py::LEAN_DEFAULTS`.
 SCORER_CONFIG = {
     "weight_roc20": 0.20,
     "weight_roc60": 0.20,

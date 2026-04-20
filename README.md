@@ -8,7 +8,7 @@ Stock analysis pipeline for active investing — combines real-time event detect
 
 ## Architecture
 
-Pipeline filtruje szeroki zbiór spółek do ~kilku kandydatów dla drogiej finalnej analizy LLM. **Dwa deployowane screenery + Layer 1 event-driven** po rigorous walidacji:
+Pipeline filtruje szeroki zbiór spółek do ~kilku kandydatów dla drogiej finalnej analizy LLM. **Jeden deployowany screener (Layer 2b themed) + Layer 1 event-driven** po rigorous walidacji; Layer 2a trzymane jako manual ad-hoc, Layer 2c archived:
 
 ```
 Layer 1 — watchdog          → SEC EDGAR event detection            (real-time, <1 min)  ─┐
@@ -72,12 +72,13 @@ watchlist:
 ### Running things
 
 Two console scripts are installed:
-- `alphalens` — my CLI (watchdog subcommands)
+- `alphalens` — my CLI (groups: `watchdog`, `queue`, `themed`, `research`; top-level: `analyze`, `status`, `backtest`)
 - `tradingagents` — upstream's interactive analysis menu
 
 ```bash
-# Deep analysis of a single ticker (ad-hoc Gemini run)
-.venv/bin/python run_gemini.py
+# Deep analysis of a single ticker (Layer 3 ad-hoc, Gemini config)
+.venv/bin/alphalens analyze TSHA
+.venv/bin/python run_gemini.py                 # alternative no-CLI entry point
 
 # Upstream TradingAgents interactive menu (their flow for deep analysis)
 .venv/bin/tradingagents
@@ -167,7 +168,7 @@ TradingAgents/                         ← upstream vendored via git subtree --s
 └── pyproject.toml                     their config (active via uv editable install)
 
 launchd/                               macOS scheduled jobs (plists + bash wrappers)
-tests/                                 unittest suite (443 tests)
+tests/                                 unittest suite (773 tests)
 ```
 
 See `CLAUDE.md` for detailed agent flow and configuration reference.
@@ -222,7 +223,7 @@ Lives outside the repo, split between directories that survive git operations:
 - **Package manager**: `uv` (not pip / poetry)
 - **Testing**: unittest (not pytest) — `python -m unittest discover tests`
 - **Commits**: Conventional Commits enforced (`feat(scope):`, `fix(scope):`, `refactor(scope):`, etc.)
-- **New components always go in `alphalens/<name>/`** — never in `TradingAgents/` (upstream territory) or at top level
+- **New screener pipelines go in `alphalens/screeners/<name>/`**, other components in `alphalens/<name>/` — never in `TradingAgents/` (upstream territory) or at top level
 
 See `docs/architecture.mmd.txt` for a mermaid diagram of the layer interactions.
 

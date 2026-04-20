@@ -9,8 +9,8 @@ Three launchd jobs run the pipeline on macOS:
   - Drains the auto-trigger queue one job at a time.
   - Each job runs `TradingAgents.propagate` (~15 min, costs API $).
   - Daily budget cap (default 5 analyses/day, configurable in code).
-- **momentum** (`com.alphalens.watchdog.momentum.plist`) — daily 22:00 CET
-  - Layer 2b theme-based momentum scan over the curated YAML universe.
+- **themed** (`com.alphalens.watchdog.themed.plist`) — daily 22:00 CET
+  - Layer 2b themed scan over the curated YAML universe (pluggable scorer: momentum | early-stage).
   - Telegram report (and `--analyze` auto-queue if the wrapper passes it).
   - Validated edge (Sharpe 1.53, FF3 α_t 2.60 on 5-year backtest).
 
@@ -40,7 +40,7 @@ EOF
 # (the CLI uses python-dotenv to load them)
 
 # Load the jobs
-for job in detect worker momentum; do
+for job in detect worker themed; do
   launchctl load ~/Library/LaunchAgents/com.alphalens.watchdog.${job}.plist
 done
 
@@ -54,7 +54,7 @@ Dla Layer 2c (archived) — plist w `archived/` można skopiować gdy zdecydujes
 ## Stop / remove
 
 ```bash
-for job in detect worker momentum; do
+for job in detect worker themed; do
   launchctl unload ~/Library/LaunchAgents/com.alphalens.watchdog.${job}.plist
 done
 rm ~/Library/LaunchAgents/com.alphalens.watchdog.*.plist
