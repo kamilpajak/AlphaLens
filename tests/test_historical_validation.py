@@ -6,7 +6,7 @@ import pandas as pd
 
 
 def _mk_pick(date_str, ticker, rank=1, score=0.8, themes=None, fwd=0.01):
-    from alphalens.lean_screener.backtest.historical_validation import PickRecord
+    from alphalens.backtest.historical_validation import PickRecord
 
     return PickRecord(
         asof_date=date.fromisoformat(date_str),
@@ -19,19 +19,19 @@ def _mk_pick(date_str, ticker, rank=1, score=0.8, themes=None, fwd=0.01):
 
 
 def _always_accept(ticker, asof, context):
-    from alphalens.lean_screener.backtest.historical_validation import LLMVerdict
+    from alphalens.backtest.historical_validation import LLMVerdict
     return LLMVerdict(verdict="accept", confidence=0.9, cost_usd=0.01, latency_sec=0.5)
 
 
 def _always_reject(ticker, asof, context):
-    from alphalens.lean_screener.backtest.historical_validation import LLMVerdict
+    from alphalens.backtest.historical_validation import LLMVerdict
     return LLMVerdict(verdict="reject", confidence=0.8, cost_usd=0.01, latency_sec=0.5)
 
 
 def _smart_scorer(ticker, asof, context):
     """Perfect signal: accept tickers starting with 'A' (which we'll arrange to
     have positive forward returns in the test)."""
-    from alphalens.lean_screener.backtest.historical_validation import LLMVerdict
+    from alphalens.backtest.historical_validation import LLMVerdict
     if ticker.startswith("A"):
         return LLMVerdict(verdict="accept", confidence=0.9, cost_usd=0.01)
     return LLMVerdict(verdict="reject", confidence=0.9, cost_usd=0.01)
@@ -39,7 +39,7 @@ def _smart_scorer(ticker, asof, context):
 
 class TestEvaluateHistoricalPicks(unittest.TestCase):
     def test_empty_picks_returns_zero_result(self):
-        from alphalens.lean_screener.backtest.historical_validation import (
+        from alphalens.backtest.historical_validation import (
             evaluate_historical_picks,
         )
 
@@ -48,7 +48,7 @@ class TestEvaluateHistoricalPicks(unittest.TestCase):
         self.assertEqual(result.n_accept, 0)
 
     def test_always_accept_gives_100_pct_accept_rate(self):
-        from alphalens.lean_screener.backtest.historical_validation import (
+        from alphalens.backtest.historical_validation import (
             evaluate_historical_picks,
         )
 
@@ -61,7 +61,7 @@ class TestEvaluateHistoricalPicks(unittest.TestCase):
 
     def test_smart_scorer_detects_edge(self):
         """Scorer rozrozniajacy dobrze od złego picka powinien dawać positive delta."""
-        from alphalens.lean_screener.backtest.historical_validation import (
+        from alphalens.backtest.historical_validation import (
             evaluate_historical_picks,
         )
 
@@ -80,7 +80,7 @@ class TestEvaluateHistoricalPicks(unittest.TestCase):
     def test_noisy_scorer_gives_near_zero_delta(self):
         """Random scorer powinien dać delta ~0 (baseline dla 'no value add')."""
         import random
-        from alphalens.lean_screener.backtest.historical_validation import (
+        from alphalens.backtest.historical_validation import (
             LLMVerdict, evaluate_historical_picks,
         )
 
@@ -98,7 +98,7 @@ class TestEvaluateHistoricalPicks(unittest.TestCase):
         self.assertLess(abs(result.delta_accept_minus_reject), 0.03)
 
     def test_scorer_exception_treated_as_uncertain(self):
-        from alphalens.lean_screener.backtest.historical_validation import (
+        from alphalens.backtest.historical_validation import (
             evaluate_historical_picks,
         )
 
@@ -113,7 +113,7 @@ class TestEvaluateHistoricalPicks(unittest.TestCase):
 
 class TestDecisionMatrix(unittest.TestCase):
     def test_deploy_verdict_when_clear_edge(self):
-        from alphalens.lean_screener.backtest.historical_validation import (
+        from alphalens.backtest.historical_validation import (
             ValidationResult, format_decision_matrix,
         )
 
@@ -129,7 +129,7 @@ class TestDecisionMatrix(unittest.TestCase):
         self.assertIn("DEPLOY", text)
 
     def test_skip_verdict_when_no_edge(self):
-        from alphalens.lean_screener.backtest.historical_validation import (
+        from alphalens.backtest.historical_validation import (
             ValidationResult, format_decision_matrix,
         )
 
@@ -145,7 +145,7 @@ class TestDecisionMatrix(unittest.TestCase):
         self.assertIn("SKIP", text)
 
     def test_iterate_verdict_marginal(self):
-        from alphalens.lean_screener.backtest.historical_validation import (
+        from alphalens.backtest.historical_validation import (
             ValidationResult, format_decision_matrix,
         )
 
@@ -163,7 +163,7 @@ class TestDecisionMatrix(unittest.TestCase):
 
 class TestRuleBasedTractabilityScorer(unittest.TestCase):
     def test_accepts_top_rank(self):
-        from alphalens.lean_screener.backtest.historical_validation import (
+        from alphalens.backtest.historical_validation import (
             rule_based_tractability_scorer,
         )
 
@@ -174,7 +174,7 @@ class TestRuleBasedTractabilityScorer(unittest.TestCase):
         self.assertEqual(verdict.verdict, "accept")
 
     def test_accepts_high_score(self):
-        from alphalens.lean_screener.backtest.historical_validation import (
+        from alphalens.backtest.historical_validation import (
             rule_based_tractability_scorer,
         )
 
@@ -185,7 +185,7 @@ class TestRuleBasedTractabilityScorer(unittest.TestCase):
         self.assertEqual(verdict.verdict, "accept")
 
     def test_rejects_low_rank_low_score(self):
-        from alphalens.lean_screener.backtest.historical_validation import (
+        from alphalens.backtest.historical_validation import (
             rule_based_tractability_scorer,
         )
 
@@ -198,8 +198,8 @@ class TestRuleBasedTractabilityScorer(unittest.TestCase):
 
 class TestPicksFromBacktestReport(unittest.TestCase):
     def test_extracts_picks_with_forward_returns(self):
-        from alphalens.lean_screener.backtest.engine import BacktestReport, DailyResult
-        from alphalens.lean_screener.backtest.historical_validation import (
+        from alphalens.backtest.engine import BacktestReport, DailyResult
+        from alphalens.backtest.historical_validation import (
             picks_from_backtest_report,
         )
 

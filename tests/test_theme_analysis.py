@@ -5,7 +5,7 @@ import pandas as pd
 
 class TestSnapshotThemes(unittest.TestCase):
     def test_single_theme_per_ticker(self):
-        from alphalens.lean_screener.backtest.theme_analysis import snapshot_themes
+        from alphalens.backtest.theme_analysis import snapshot_themes
 
         themes_map = {"A": ["quantum"], "B": ["quantum"], "C": ["ai"]}
         snap = snapshot_themes(["A", "B", "C"], themes_map)
@@ -16,7 +16,7 @@ class TestSnapshotThemes(unittest.TestCase):
         self.assertEqual(snap.unclassified_fraction, 0.0)
 
     def test_multi_theme_ticker_splits_weight(self):
-        from alphalens.lean_screener.backtest.theme_analysis import snapshot_themes
+        from alphalens.backtest.theme_analysis import snapshot_themes
 
         themes_map = {"X": ["quantum", "ai"]}  # ticker w 2 tematach
         snap = snapshot_themes(["X"], themes_map)
@@ -26,7 +26,7 @@ class TestSnapshotThemes(unittest.TestCase):
         self.assertAlmostEqual(snap.theme_weights["ai"], 0.5)
 
     def test_unclassified_ticker(self):
-        from alphalens.lean_screener.backtest.theme_analysis import snapshot_themes
+        from alphalens.backtest.theme_analysis import snapshot_themes
 
         themes_map = {"A": ["quantum"]}  # B nie jest w mapie
         snap = snapshot_themes(["A", "B"], themes_map)
@@ -35,7 +35,7 @@ class TestSnapshotThemes(unittest.TestCase):
         self.assertAlmostEqual(snap.unclassified_fraction, 0.5)
 
     def test_empty_input(self):
-        from alphalens.lean_screener.backtest.theme_analysis import snapshot_themes
+        from alphalens.backtest.theme_analysis import snapshot_themes
 
         snap = snapshot_themes([], {})
         self.assertEqual(snap.theme_weights, {})
@@ -43,7 +43,7 @@ class TestSnapshotThemes(unittest.TestCase):
         self.assertEqual(snap.hhi, 0.0)
 
     def test_position_weights_honor(self):
-        from alphalens.lean_screener.backtest.theme_analysis import snapshot_themes
+        from alphalens.backtest.theme_analysis import snapshot_themes
 
         themes_map = {"A": ["quantum"], "B": ["ai"], "C": ["biotech"]}
         # Top-heavy: pierwszy ticker dominuje.
@@ -56,7 +56,7 @@ class TestSnapshotThemes(unittest.TestCase):
         self.assertEqual(snap.dominant_theme, "quantum")
 
     def test_hhi_diversification(self):
-        from alphalens.lean_screener.backtest.theme_analysis import snapshot_themes
+        from alphalens.backtest.theme_analysis import snapshot_themes
 
         # Idealna dywersyfikacja 3 równe tematy → HHI = 3 × (1/3)² = 1/3
         themes_map = {"A": ["quantum"], "B": ["ai"], "C": ["biotech"]}
@@ -69,7 +69,7 @@ class TestSnapshotThemes(unittest.TestCase):
         self.assertAlmostEqual(snap.hhi, 1.0)
 
     def test_position_weights_length_mismatch_raises(self):
-        from alphalens.lean_screener.backtest.theme_analysis import snapshot_themes
+        from alphalens.backtest.theme_analysis import snapshot_themes
 
         with self.assertRaises(ValueError):
             snapshot_themes(["A", "B"], {"A": ["q"]}, position_weights=[1.0])
@@ -78,7 +78,7 @@ class TestSnapshotThemes(unittest.TestCase):
 class TestThemeSeries(unittest.TestCase):
     def _make_snaps(self, rows):
         """rows: list of (date_str, themes_map, top_n_tickers)."""
-        from alphalens.lean_screener.backtest.theme_analysis import snapshot_themes
+        from alphalens.backtest.theme_analysis import snapshot_themes
 
         return [
             snapshot_themes(tickers, themes_map, date=pd.Timestamp(d))
@@ -86,7 +86,7 @@ class TestThemeSeries(unittest.TestCase):
         ]
 
     def test_series_aggregates(self):
-        from alphalens.lean_screener.backtest.theme_analysis import theme_series
+        from alphalens.backtest.theme_analysis import theme_series
 
         themes_map = {"A": ["quantum"], "B": ["ai"]}
         snaps = self._make_snaps([
@@ -104,14 +104,14 @@ class TestThemeSeries(unittest.TestCase):
         self.assertEqual(stats.concentration_alert_days, 2)
 
     def test_empty_snapshots(self):
-        from alphalens.lean_screener.backtest.theme_analysis import theme_series
+        from alphalens.backtest.theme_analysis import theme_series
 
         df, stats = theme_series([])
         self.assertTrue(df.empty)
         self.assertEqual(stats.concentration_alert_days, 0)
 
     def test_days_dominant_count(self):
-        from alphalens.lean_screener.backtest.theme_analysis import theme_series
+        from alphalens.backtest.theme_analysis import theme_series
 
         themes_map = {"A": ["quantum"], "B": ["ai"]}
         snaps = self._make_snaps([
@@ -126,7 +126,7 @@ class TestThemeSeries(unittest.TestCase):
 
 class TestFormatThemeSummary(unittest.TestCase):
     def test_output_contains_key_sections(self):
-        from alphalens.lean_screener.backtest.theme_analysis import (
+        from alphalens.backtest.theme_analysis import (
             ThemeSeriesStats,
             format_theme_summary,
         )
@@ -148,8 +148,8 @@ class TestFormatThemeSummary(unittest.TestCase):
 
 class TestSnapshotsFromBacktest(unittest.TestCase):
     def test_from_daily_results(self):
-        from alphalens.lean_screener.backtest.engine import DailyResult
-        from alphalens.lean_screener.backtest.theme_analysis import snapshots_from_backtest
+        from alphalens.backtest.engine import DailyResult
+        from alphalens.backtest.theme_analysis import snapshots_from_backtest
 
         daily = [
             DailyResult(

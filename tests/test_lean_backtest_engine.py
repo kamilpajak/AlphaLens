@@ -2,7 +2,6 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
@@ -16,15 +15,15 @@ def _mk_bar(d, price, vol=100_000):
 
 def _prime_store(tmpdir: Path, per_ticker_bars: dict[str, list]):
     """Load data into a HistoryStore from the given bar lists."""
-    from alphalens.lean_screener.backtest.history_store import HistoryStore
+    from alphalens.backtest.history_store import HistoryStore
+    from alphalens.lean_screener.lean_csv_loader import load_lean_histories
     from alphalens.lean_screener.lean_csv_writer import LeanCsvWriter
 
     writer = LeanCsvWriter(tmpdir)
     for t, bars in per_ticker_bars.items():
         writer.write_bars(t, bars)
-    store = HistoryStore(tmpdir)
-    store.load(per_ticker_bars.keys())
-    return store
+    histories = load_lean_histories(tmpdir, list(per_ticker_bars.keys()))
+    return HistoryStore(histories)
 
 
 def _long_history(n: int, start_price: float, drift: float = 0.0):
@@ -70,7 +69,8 @@ class TestBacktestEngineBasic(unittest.TestCase):
         }
 
     def test_runs_and_produces_daily_results(self):
-        from alphalens.lean_screener.backtest.engine import BacktestEngine
+        from alphalens.backtest.engine import BacktestEngine
+        from alphalens.lean_screener.lean_project.scorer import rank_universe
 
         store = _prime_store(
             self.dir,
@@ -84,12 +84,12 @@ class TestBacktestEngineBasic(unittest.TestCase):
         )
         engine = BacktestEngine(
             store,
+            scorer=rank_universe,
             scorer_config=self._tiny_config(),
             holding_period=3,
             top_n=2,
             benchmark="SPY",
         )
-        # Override MIN_BARS_REQUIRED for this synthetic test.
         engine.MIN_BARS_REQUIRED = 25
         report = engine.run(start=date(2024, 4, 1), end=date(2024, 4, 30))
 
@@ -99,7 +99,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
 
     def test_uses_injected_scorer(self):
         """Engine should call whatever scorer callable is injected."""
-        from alphalens.lean_screener.backtest.engine import BacktestEngine
+        from alphalens.backtest.engine import BacktestEngine
 
         store = _prime_store(
             self.dir,
@@ -110,7 +110,6 @@ class TestBacktestEngineBasic(unittest.TestCase):
             },
         )
 
-        # Fake scorer that always ranks AAA above BBB.
         def fake_scorer(histories, config):
             return pd.DataFrame(
                 [
@@ -122,6 +121,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
         engine = BacktestEngine(
             store,
             scorer=fake_scorer,
+            scorer_config={},
             holding_period=2,
             top_n=1,
             benchmark="SPY",
@@ -132,12 +132,11 @@ class TestBacktestEngineBasic(unittest.TestCase):
         report = engine.run(start=date(2024, 3, 1), end=date(2024, 3, 15))
 
         self.assertGreater(len(report.daily_results), 0)
-        # AAA should always be top-1.
         for r in report.daily_results:
             self.assertEqual(r.top_n_tickers[0], "AAA")
 
     def test_top_n_picks_highest_scores(self):
-        from alphalens.lean_screener.backtest.engine import BacktestEngine
+        from alphalens.backtest.engine import BacktestEngine
 
         store = _prime_store(
             self.dir,
@@ -152,7 +151,6 @@ class TestBacktestEngineBasic(unittest.TestCase):
         )
 
         def fake_scorer(histories, config):
-            # Arbitrary but deterministic rank.
             return pd.DataFrame(
                 [
                     {"ticker": "A", "score": 5.0},
@@ -166,6 +164,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
         engine = BacktestEngine(
             store,
             scorer=fake_scorer,
+            scorer_config={},
             holding_period=2,
             top_n=3,
             benchmark="SPY",
@@ -178,7 +177,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
             self.assertEqual(r.top_n_tickers[:3], ["A", "B", "C"])
 
     def test_skips_days_without_enough_history(self):
-        from alphalens.lean_screener.backtest.engine import BacktestEngine
+        from alphalens.backtest.engine import BacktestEngine
 
         store = _prime_store(
             self.dir,
@@ -190,6 +189,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
         engine = BacktestEngine(
             store,
             scorer=lambda h, c: pd.DataFrame([{"ticker": "A", "score": 1.0}]),
+            scorer_config={},
             holding_period=2,
             top_n=1,
             benchmark="SPY",
@@ -203,7 +203,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
 
 class TestBacktestReport(unittest.TestCase):
     def _make_report(self, daily_results):
-        from alphalens.lean_screener.backtest.engine import BacktestReport
+        from alphalens.backtest.engine import BacktestReport
 
         return BacktestReport(
             scorer_config={},
@@ -217,7 +217,7 @@ class TestBacktestReport(unittest.TestCase):
         )
 
     def _mock_daily(self, date_str, port_ret=0.01, tickers=None, ic=0.05):
-        from alphalens.lean_screener.backtest.engine import DailyResult
+        from alphalens.backtest.engine import DailyResult
 
         tickers = tickers or ["A", "B", "C"]
         return DailyResult(
@@ -254,7 +254,6 @@ class TestBacktestReport(unittest.TestCase):
                 self._mock_daily("2024-01-03", tickers=["A", "X", "Y"]),
             ]
         )
-        # 2 out of 3 turned over → 66.7%
         self.assertAlmostEqual(r.turnover, 2 / 3, places=6)
 
 
@@ -262,7 +261,9 @@ class TestIntegrationWithRealScorer(unittest.TestCase):
     """Use the production `rank_universe` — skip if we can't synthesise enough data."""
 
     def test_real_scorer_integrates(self):
-        from alphalens.lean_screener.backtest.engine import BacktestEngine
+        from alphalens.backtest.engine import BacktestEngine
+        from alphalens.lean_screener.config import LEAN_DEFAULTS
+        from alphalens.lean_screener.lean_project.scorer import rank_universe
 
         with tempfile.TemporaryDirectory() as tmp:
             store = _prime_store(
@@ -277,6 +278,8 @@ class TestIntegrationWithRealScorer(unittest.TestCase):
             )
             engine = BacktestEngine(
                 store,
+                scorer=rank_universe,
+                scorer_config=LEAN_DEFAULTS,
                 holding_period=3,
                 top_n=2,
                 benchmark="SPY",
@@ -285,7 +288,6 @@ class TestIntegrationWithRealScorer(unittest.TestCase):
             report = engine.run(start=date(2024, 12, 1), end=date(2024, 12, 31))
 
         self.assertGreater(len(report.daily_results), 0)
-        # In a synthetic uptrend-vs-downtrend universe, UP1 + UP2 should dominate top-N.
         top_tickers = [t for r in report.daily_results for t in r.top_n_tickers]
         self.assertGreater(top_tickers.count("UP1") + top_tickers.count("UP2"),
                            top_tickers.count("DOWN"))

@@ -91,21 +91,27 @@ Portfolio Manager → final 5-tier rating
 
 **Lean screener** (`alphalens/lean_screener/`, Layer 2c — **ARCHIVED**):
 - Strategia failed 5-year rigorous validation (Sharpe 0.25 net, FF3 α t-stat 0.14 = zero alpha).
-- Infrastruktura pozostaje i jest aktywnie reużywana przez backtest harness (`backtest/engine.py`, `backtest/diagnostics.py`, `backtest/weighting.py`, `backtest/theme_analysis.py`), FF3 factors, Polygon sync.
+- Pozostały Lean-specific kod: pipeline, universe, polygon_client, factors, lean_csv_writer, lean_csv_loader (zip-CSV → dict historii).
 - launchd plist przeniesiony do `launchd/archived/com.alphalens.watchdog.lean.plist` — nie ładuje się w produkcji.
 - `registry.SCREENERS["lean"]` zostaje zarejestrowane (harm neutralny, można re-enable jednym ruchem gdy strategia zostałaby przeprojektowana).
 
-**Backtest harness** (`alphalens/lean_screener/backtest/`) — reusable niezależnie od Layer 2c:
-- **`history_store.py`** — in-memory OHLCV cache z point-in-time truncation, forward returns computation.
-- **`engine.py`** — `BacktestEngine` replay loop z `DailyResult` + `BacktestReport`, weighting schemes (equal/linear/conviction).
-- **`weighting.py`** — `compute_position_weights(n, scheme)` dla position-sizing (linear najlepiej performs per 2026-04-19 sweep).
+**Generic backtest harness** (`alphalens/backtest/`) — screener-agnostic, reusable dla dowolnej Layer 2 strategii:
+- **`engine.py`** — `BacktestEngine(scorer, scorer_config, ...)` — replay loop z pluggable scorerem (typ `Scorer = Callable[[Mapping[str, pd.DataFrame], Mapping], pd.DataFrame]`). Dowolna Layer 2 strategia podłącza się przez adapter (np. `alphalens.momentum_screener.backtest_adapter.momentum_scorer_adapter`, albo `lean_project.scorer.rank_universe` dla archived Lean'a).
+- **`history_store.py`** — `HistoryStore(histories: dict[str, pd.DataFrame])` — point-in-time cache z `truncate_to` i `forward_return`. Zero I/O; ładowanie jest odpowiedzialnością callera (Lean zip-CSV: `alphalens.lean_screener.lean_csv_loader.load_lean_histories`).
+- **`report.py`** — markdown + CSV + decision matrix generation z `BacktestReport`.
+- **`diagnostics.py`** — IC by decile, bear-regime vol decomposition; operuje na `BacktestReport` z engine'u.
+- **`weighting.py`** — `compute_position_weights(n, scheme)` dla position-sizing (linear najlepiej performs per 2026-04-19 sweep). Używane przez produkcyjny Layer 2b `momentum_screener/pipeline.py`.
 - **`metrics.py`** — Sharpe, IC + t-stat + rolling, decile spread, max DD, Calmar, concentration.
 - **`cost_model.py`** — 75/100/150 bps annual drag scenarios.
 - **`regime.py`** — bull/bear/flat classifier na trailing benchmark return.
 - **`factor_analysis.py`** — Fama-French 3-factor regression przez `statsmodels` OLS.
 - **`theme_analysis.py`** — HHI + dominant theme per day + concentration alerts.
-- **`diagnostics.py`** — IC decomposition by decile, bear-regime vol decomposition.
-- **`report.py`** — markdown + CSV + decision matrix generation.
+- **`historical_validation.py`** — pluggable scorer evaluation harness (PickRecord, LLMVerdict, decision matrix).
+- **`llm_scorers.py`** — reference LLM scorers (Gemini Flash, hybrid, TradingAgents reduced).
+
+**Screener adapters** — każda Layer 2 strategia trzyma swój adapter przy sobie:
+- `alphalens/momentum_screener/backtest_adapter.py` — `momentum_scorer_adapter`, `early_stage_scorer_adapter` (column rename + benchmark wiring dla Layer 2b `MomentumScorer` / `EarlyStageScorer`).
+- Lean scorer (archived) nie wymaga adaptera — `lean_project.scorer.rank_universe` ma już sygnaturę zgodną z `Scorer`.
 
 **Upstream** (`TradingAgents/`):
 - **LLM Factory** (`TradingAgents/tradingagents/llm_clients/factory.py`): provider-agnostic client creation

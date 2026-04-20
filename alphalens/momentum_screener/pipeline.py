@@ -65,14 +65,14 @@ class MomentumPipeline:
         to jest sygnał dla ewentualnego downstream rebalansu albo eksternalnego
         sizingu). Domyślnie `"linear"` bo weighting-sweep pokazał że linear top-5
         daje +7% Sharpe i +27% Calmar vs equal weights. Schematy: `equal`, `linear`,
-        `conviction` (zobacz `alphalens/lean_screener/backtest/weighting.py`).
+        `conviction` (zobacz `alphalens/backtest/weighting.py`).
         """
         if df.empty:
             return []
         # Lokalny import — backtest'owy moduł nie jest dependency produkcji;
         # pipeline działa niezmiennie gdy plik zniknie (fallback do equal).
         try:
-            from alphalens.lean_screener.backtest.weighting import compute_position_weights
+            from alphalens.backtest.weighting import compute_position_weights
             weights = compute_position_weights(len(df), weighting).tolist()
         except (ImportError, ValueError):
             weights = [1.0 / len(df)] * len(df)

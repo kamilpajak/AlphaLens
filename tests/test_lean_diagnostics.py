@@ -34,7 +34,7 @@ def _synthetic_scored_frames(n_days=50, n_tickers=100, tail_alpha=True, seed=0):
 
 class TestICByDecile(unittest.TestCase):
     def test_tail_alpha_shows_u_shape(self):
-        from alphalens.lean_screener.backtest.diagnostics import (
+        from alphalens.backtest.diagnostics import (
             ic_by_decile_from_scored_frames,
             tail_concentration_score,
         )
@@ -51,7 +51,7 @@ class TestICByDecile(unittest.TestCase):
         self.assertGreater(tail_concentration_score(results), 1.2)
 
     def test_noise_shows_flat_deciles(self):
-        from alphalens.lean_screener.backtest.diagnostics import (
+        from alphalens.backtest.diagnostics import (
             ic_by_decile_from_scored_frames,
             tail_concentration_score,
         )
@@ -65,7 +65,7 @@ class TestICByDecile(unittest.TestCase):
         self.assertLess(score, 2.0)  # not meaningfully concentrated
 
     def test_empty_input_returns_empty(self):
-        from alphalens.lean_screener.backtest.diagnostics import (
+        from alphalens.backtest.diagnostics import (
             ic_by_decile_from_scored_frames,
         )
 
@@ -75,10 +75,10 @@ class TestICByDecile(unittest.TestCase):
 class TestVolDecomposition(unittest.TestCase):
     def test_detects_defensive_positioning(self):
         """Synthetic: top-N has lower vol in bear but similar mean as median."""
-        from alphalens.lean_screener.backtest.diagnostics import (
+        from alphalens.backtest.diagnostics import (
             vol_decomposition_by_regime,
         )
-        from alphalens.lean_screener.backtest.engine import BacktestReport, DailyResult
+        from alphalens.backtest.engine import BacktestReport, DailyResult
 
         rng = np.random.default_rng(0)
         # Bear days: port vol 10% ann, median vol 20% ann, same mean returns.
@@ -111,10 +111,10 @@ class TestVolDecomposition(unittest.TestCase):
         self.assertLess(bear.vol_ratio, 0.8)
 
     def test_missing_regime_omitted(self):
-        from alphalens.lean_screener.backtest.diagnostics import (
+        from alphalens.backtest.diagnostics import (
             vol_decomposition_by_regime,
         )
-        from alphalens.lean_screener.backtest.engine import BacktestReport
+        from alphalens.backtest.engine import BacktestReport
 
         report = BacktestReport(
             scorer_config={}, holding_period=5, top_n=30,
@@ -129,7 +129,7 @@ class TestVolDecomposition(unittest.TestCase):
 
 class TestFormatVolDecomposition(unittest.TestCase):
     def test_format_contains_header_and_regimes(self):
-        from alphalens.lean_screener.backtest.diagnostics import (
+        from alphalens.backtest.diagnostics import (
             VolDecomposition,
             format_vol_decomposition,
         )

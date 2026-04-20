@@ -2,11 +2,15 @@
 
 For each trading day `t` in the benchmark calendar:
   1. Truncate every ticker's history to `t` (point-in-time).
-  2. Call the existing `scorer.rank_universe` with those truncated histories.
+  2. Call the injected `scorer(histories, config)` with those truncated histories.
   3. For every scored ticker, compute the realized `holding_period`-day forward
      return (enter next trading day's close, exit N bars later).
-  4. Snapshot top-N names, the portfolio return (equal-weight mean of top-N),
+  4. Snapshot top-N names, the portfolio return (weighted mean of top-N),
      the universe median return, and cross-sectional Rank IC.
+
+The engine is scorer-agnostic. Callers supply both the scorer callable and
+its config. Adapters for specific scorers (Layer 2b MomentumScorer, the
+archived Lean `rank_universe`) live next to those scorers.
 
 The returned `BacktestReport` carries the full per-date series so downstream
 analysis (cost model, regime breakdown, FF3 regression) can operate on it
@@ -21,14 +25,15 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Callable, Mapping
 
-import numpy as np
 import pandas as pd
 
-from ..config import LEAN_DEFAULTS
-from ..lean_project.scorer import rank_universe
 from .history_store import HistoryStore
 from .metrics import rank_ic, turnover_pct
-from .weighting import WeightingScheme, compute_position_weights, weighted_return
+from .weighting import (
+    WeightingScheme,
+    compute_position_weights,
+    weighted_return,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +75,6 @@ class BacktestReport:
     benchmark: str
     universe_ticker_count: int
     daily_results: list[DailyResult] = field(default_factory=list)
-    # When engine is run with retain_scored_frames=True, each day's full scored
-    # frame (ticker, score, fwd_1d, fwd_holding) is retained here for diagnostics.
     scored_frames: dict[pd.Timestamp, pd.DataFrame] = field(default_factory=dict)
 
     @property
@@ -116,18 +119,18 @@ class BacktestReport:
 class BacktestEngine:
     """Daily-rebalance backtest over a universe, using a pluggable scorer.
 
-    The scorer must match the signature `rank_universe(histories, config) -> DataFrame`
+    The scorer must match the signature `scorer(histories, config) -> DataFrame`
     and return a frame with at minimum columns `ticker` and `score`. Any tickers
     it returns are treated as scored; top-N is selected by descending `score`.
     """
 
-    MIN_BARS_REQUIRED = 220       # scorer's longest lookback (SMA200) + safety buffer
+    MIN_BARS_REQUIRED = 220       # covers the longest lookback our scorers use (SMA200 + buffer)
 
     def __init__(
         self,
         history_store: HistoryStore,
-        scorer_config: Mapping | None = None,
-        scorer: Scorer = rank_universe,
+        scorer: Scorer,
+        scorer_config: Mapping,
         holding_period: int = 5,
         top_n: int = 30,
         benchmark: str = "SPY",
@@ -136,12 +139,11 @@ class BacktestEngine:
         weighting: WeightingScheme = "equal",
     ):
         self.store = history_store
-        self.scorer_config = dict(scorer_config or LEAN_DEFAULTS)
         self._scorer = scorer
+        self.scorer_config = dict(scorer_config)
         self.holding_period = int(holding_period)
         self.top_n = int(top_n)
         self.benchmark = benchmark
-        # Tickers we actually pass to the scorer — excludes benchmarks.
         self._screener_tickers = list(screener_tickers) if screener_tickers else []
         self.retain_scored_frames = bool(retain_scored_frames)
         self.weighting: WeightingScheme = weighting
@@ -208,9 +210,6 @@ class BacktestEngine:
         if scored.empty:
             return None
 
-        # Two forward-return series per scored ticker:
-        #   fwd_1d       — 1-day forward, used for Sharpe-interpretable portfolio P&L
-        #   fwd_holding  — holding_period forward, used for Rank IC and signal diagnostics
         fwd_1d = []
         fwd_holding = []
         for ticker in scored["ticker"]:
@@ -226,7 +225,6 @@ class BacktestEngine:
 
         top_n = scored.sort_values("score", ascending=False).head(self.top_n)
 
-        # Wagi pozycji wg schematu (top-1 dostaje największą wagę).
         weights = compute_position_weights(len(top_n), self.weighting)
         fwd_1d_arr = top_n["fwd_1d"].to_numpy(dtype=float)
         fwd_h_arr = top_n["fwd_holding"].to_numpy(dtype=float)
