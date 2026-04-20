@@ -14,22 +14,44 @@ OUR_PACKAGE_PREFIX = "alphalens"
 
 
 class TestTyperAppRegistration(unittest.TestCase):
-    def test_watchdog_app_is_typer(self):
-        from alphalens_cli.watchdog_main import watchdog_app
+    def test_each_group_is_typer(self):
+        from alphalens_cli.commands.queue import queue_app
+        from alphalens_cli.commands.research import research_app
+        from alphalens_cli.commands.themed import themed_app
+        from alphalens_cli.commands.watchdog import watchdog_app
 
-        self.assertIsInstance(watchdog_app, typer.Typer)
+        for app in (watchdog_app, queue_app, themed_app, research_app):
+            self.assertIsInstance(app, typer.Typer)
 
-    def test_all_subcommands_registered(self):
-        from alphalens_cli.watchdog_main import watchdog_app
+    def test_watchdog_commands(self):
+        from alphalens_cli.commands.watchdog import watchdog_app
 
         names = {cmd.name for cmd in watchdog_app.registered_commands}
-        self.assertEqual(
-            names,
-            {"run-once", "process-queue", "momentum-screen", "momentum-status",
-             "lean-screen", "backtest", "validate-llm-filter", "scorer-stats",
-             "status"},
-            f"missing or extra subcommands: {names}",
-        )
+        self.assertEqual(names, {"run-once"})
+
+    def test_queue_commands(self):
+        from alphalens_cli.commands.queue import queue_app
+
+        names = {cmd.name for cmd in queue_app.registered_commands}
+        self.assertEqual(names, {"process", "scorer-stats"})
+
+    def test_themed_commands(self):
+        from alphalens_cli.commands.themed import themed_app
+
+        names = {cmd.name for cmd in themed_app.registered_commands}
+        self.assertEqual(names, {"screen", "status"})
+
+    def test_research_commands(self):
+        from alphalens_cli.commands.research import research_app
+
+        names = {cmd.name for cmd in research_app.registered_commands}
+        self.assertEqual(names, {"validate-llm-filter"})
+
+    def test_root_app_top_level_commands(self):
+        from alphalens_cli.main import app
+
+        names = {cmd.name for cmd in app.registered_commands}
+        self.assertEqual(names, {"analyze", "status", "backtest"})
 
 
 class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):
@@ -54,15 +76,13 @@ class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):
             mock_portfolio.load.return_value = MagicMock(
                 held=["AAPL"], watchlist=["MSFT"]
             )
-            from alphalens_cli.watchdog_main import _build_watchdog
+            from alphalens_cli.commands.watchdog import _build_watchdog
 
             try:
                 _build_watchdog()
             except ImportError:
                 raise
             except Exception:
-                # Other failures (DB, filesystem) are acceptable — this test only
-                # asserts that imports resolved. The module got loaded successfully.
                 pass
 
     @patch.dict(os.environ, {}, clear=False)
@@ -75,7 +95,7 @@ class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):
         with patch(runner_cls) as mock_runner, patch(queue_cls) as mock_queue:
             mock_runner.return_value = MagicMock()
             mock_queue.return_value = MagicMock()
-            from alphalens_cli.watchdog_main import _build_worker
+            from alphalens_cli.commands.queue import _build_worker
 
             try:
                 _build_worker()

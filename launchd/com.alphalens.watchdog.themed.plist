@@ -4,11 +4,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.alphalens.watchdog.momentum</string>
+    <string>com.alphalens.watchdog.themed</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jacoren/Developer/Personal/AlphaLens/launchd/bin/alphalens-momentum</string>
+        <string>/Users/jacoren/Developer/Personal/AlphaLens/launchd/bin/alphalens-themed</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -29,10 +29,10 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/jacoren/.alphalens/watchdog/momentum.log</string>
+    <string>/Users/jacoren/.alphalens/watchdog/themed.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/jacoren/.alphalens/watchdog/momentum.err</string>
+    <string>/Users/jacoren/.alphalens/watchdog/themed.err</string>
 
     <key>RunAtLoad</key>
     <false/>

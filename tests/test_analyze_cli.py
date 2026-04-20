@@ -17,8 +17,8 @@ class TestAnalyzeCommand(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertIn("analyze", result.stdout)
 
-    @patch("alphalens_cli.main.TradingAgentsGraph")
-    @patch("alphalens_cli.main.build_gemini_config")
+    @patch("alphalens_cli.commands.analyze.TradingAgentsGraph")
+    @patch("alphalens_cli.commands.analyze.build_gemini_config")
     def test_analyze_invokes_graph_with_ticker_and_today_by_default(
         self, mock_config, mock_graph_cls
     ):
@@ -37,8 +37,8 @@ class TestAnalyzeCommand(unittest.TestCase):
         self.assertEqual(date_arg, dt.date.today().isoformat())
         self.assertIn("BUY rating", result.stdout)
 
-    @patch("alphalens_cli.main.TradingAgentsGraph")
-    @patch("alphalens_cli.main.build_gemini_config")
+    @patch("alphalens_cli.commands.analyze.TradingAgentsGraph")
+    @patch("alphalens_cli.commands.analyze.build_gemini_config")
     def test_analyze_honors_explicit_date(self, mock_config, mock_graph_cls):
         from alphalens_cli.main import app
 
@@ -53,8 +53,8 @@ class TestAnalyzeCommand(unittest.TestCase):
         _, date_arg = fake_graph.propagate.call_args[0]
         self.assertEqual(date_arg, "2026-01-15")
 
-    @patch("alphalens_cli.main.TradingAgentsGraph")
-    @patch("alphalens_cli.main.build_gemini_config")
+    @patch("alphalens_cli.commands.analyze.TradingAgentsGraph")
+    @patch("alphalens_cli.commands.analyze.build_gemini_config")
     def test_analyze_passes_gemini_config_to_graph(
         self, mock_config, mock_graph_cls
     ):

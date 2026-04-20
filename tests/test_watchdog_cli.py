@@ -8,17 +8,24 @@ class TestWatchdogCLI(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
 
-    def test_cli_has_run_once_and_process_queue_subcommands(self):
-        from alphalens_cli.watchdog_main import watchdog_app
+    def test_watchdog_group_exposes_run_once(self):
+        from alphalens_cli.commands.watchdog import watchdog_app
 
         result = self.runner.invoke(watchdog_app, ["--help"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("run-once", result.stdout)
-        self.assertIn("process-queue", result.stdout)
 
-    @patch("alphalens_cli.watchdog_main._build_watchdog")
+    def test_queue_group_exposes_process_and_scorer_stats(self):
+        from alphalens_cli.commands.queue import queue_app
+
+        result = self.runner.invoke(queue_app, ["--help"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("process", result.stdout)
+        self.assertIn("scorer-stats", result.stdout)
+
+    @patch("alphalens_cli.commands.watchdog._build_watchdog")
     def test_run_once_invokes_watchdog(self, mock_build):
-        from alphalens_cli.watchdog_main import watchdog_app
+        from alphalens_cli.commands.watchdog import watchdog_app
 
         fake_wd = MagicMock()
         fake_wd.run_once.return_value = {"events_detected": 3, "events_dispatched": 3}
@@ -28,15 +35,15 @@ class TestWatchdogCLI(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
         fake_wd.run_once.assert_called_once()
 
-    @patch("alphalens_cli.watchdog_main._build_worker")
-    def test_process_queue_invokes_worker(self, mock_build):
-        from alphalens_cli.watchdog_main import watchdog_app
+    @patch("alphalens_cli.commands.queue._build_worker")
+    def test_queue_process_invokes_worker(self, mock_build):
+        from alphalens_cli.commands.queue import queue_app
 
         fake_worker = MagicMock()
         fake_worker.process_all.return_value = 2
         mock_build.return_value = fake_worker
 
-        result = self.runner.invoke(watchdog_app, ["process-queue"])
+        result = self.runner.invoke(queue_app, ["process"])
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
         fake_worker.process_all.assert_called_once()
 

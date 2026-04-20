@@ -11,10 +11,10 @@ Stock analysis pipeline for active investing — combines real-time event detect
 Pipeline filtruje szeroki zbiór spółek do ~kilku kandydatów dla drogiej finalnej analizy LLM. **Dwa deployowane screenery + Layer 1 event-driven** po rigorous walidacji:
 
 ```
-Layer 1 — watchdog           → SEC EDGAR event detection            (real-time, <1 min)  ─┐
-Layer 2a — prescreener       → S&P 500 fundamentals (unvalidated)   (~30 min, ad-hoc)    ─┤
-Layer 2b — momentum screener → curated 4-theme universe (validated) (daily 22:00 CET)    ─┼─► CandidateQueue ─► AnalysisWorker ─► Layer 3
-Layer 2c — Lean screener     → ARCHIVED (failed 5-year backtest)                         ─┘     (SQLite)         (budget + retry)    TradingAgents
+Layer 1 — watchdog          → SEC EDGAR event detection            (real-time, <1 min)  ─┐
+Layer 2a — prescreener      → S&P 500 fundamentals (unvalidated)   (~30 min, ad-hoc)    ─┤
+Layer 2b — themed screener  → curated YAML universe (validated)    (daily 22:00 CET)    ─┼─► CandidateQueue ─► AnalysisWorker ─► Layer 3
+Layer 2c — Lean screener    → ARCHIVED (failed 5-year backtest)                         ─┘     (SQLite)         (budget + retry)    TradingAgents
                                                                                                                                    → BUY / OVERWEIGHT /
                                                                                                                                      HOLD / UNDERWEIGHT / SELL
 ```
@@ -86,23 +86,22 @@ Two console scripts are installed:
 .venv/bin/alphalens watchdog run-once
 
 # Drain the candidate queue — runs Layer 3 on whichever candidates are waiting
-.venv/bin/alphalens watchdog process-queue
+.venv/bin/alphalens queue process
 
-# Layer 2b — momentum scan; --analyze also submits top-N to queue
-.venv/bin/alphalens watchdog momentum-screen --dry-run
-.venv/bin/alphalens watchdog momentum-screen --analyze --dry-run
+# Layer 2b — themed universe scan; --analyze also submits top-N to queue
+.venv/bin/alphalens themed screen --dry-run
+.venv/bin/alphalens themed screen --analyze --dry-run
+.venv/bin/alphalens themed screen --scorer early-stage       # base-breakout scorer
 
 # Monitoring Layer 2b (ostatnie 90 dni runów — theme HHI, staleness, turnover)
-.venv/bin/alphalens watchdog momentum-status --days 90
+.venv/bin/alphalens themed status --days 90
 
 # Backtest (5-letni, z diagnostykami + factor decomposition)
-.venv/bin/alphalens watchdog backtest --start 2021-04-19 --end 2026-04-17 --diagnose
-
-# Layer 2c (archived — failed validation, plist w launchd/archived/)
-# .venv/bin/alphalens watchdog lean-screen --sync-only   # gdy wskrzesić strategię
+.venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose
+.venv/bin/alphalens backtest --scorer lean                   # re-examine archived Layer 2c
 
 # Status: queue breakdown (pending/in_progress/done/dead), digest buffer, dedup
-.venv/bin/alphalens watchdog status
+.venv/bin/alphalens status
 
 # Inspect the queue directly
 sqlite3 ~/.alphalens/candidates.db \
@@ -120,14 +119,14 @@ Four jobs in `launchd/`:
 |---|---|---|
 | `com.alphalens.watchdog.detect` | every 15 min  | Layer 1 EDGAR poll → submit Candidates |
 | `com.alphalens.watchdog.worker` | every 5 min   | Drain `candidates.db` → Layer 3 |
-| `com.alphalens.watchdog.momentum` | daily 22:00 CET | Layer 2b momentum scan (Telegram + optional `--analyze`) |
+| `com.alphalens.watchdog.themed` | daily 22:00 CET | Layer 2b themed scan (Telegram + optional `--analyze`) |
 | ~~`com.alphalens.watchdog.lean`~~ | ~~daily 23:30 CET~~ | **Archived** — failed 5-year validation (plist w `launchd/archived/`) |
 
 Install:
 
 ```bash
 cp launchd/com.alphalens.watchdog.*.plist ~/Library/LaunchAgents/
-for job in detect worker momentum lean; do
+for job in detect worker themed; do
   launchctl load ~/Library/LaunchAgents/com.alphalens.watchdog.${job}.plist
 done
 ```
@@ -145,24 +144,21 @@ alphalens/                             ← my code (Python package)
 ├── registry.py                        SCREENERS dict — register a new screener with one line
 ├── config_gemini.py                   shared Gemini TradingAgentsGraph config
 ├── watchdog/                          Layer 1: EDGAR detection + classifier + dispatch
-├── prescreener/                       Layer 2a: S&P 500 scoring (technical, fundamental, volume, composite ranker)
-├── momentum_screener/                 Layer 2b: theme-based momentum on curated YAML universe
-└── lean_screener/                     Layer 2c: Polygon sync + QuantConnect Lean in Docker
-    ├── polygon_client.py              grouped-daily REST client (Stocks Basic tier)
-    ├── lean_csv_writer.py             Polygon bars → Lean equity-daily zip/csv format
-    ├── data_sync.py                   incremental + bootstrap sync, state file tracks last-synced
-    ├── runner.py                      LeanDockerRunner — builds docker run args, reads JSON result
-    ├── pipeline.py                    LeanScreenerPipeline — sync + run + to_candidates()
-    └── lean_project/                  mounted into Lean Docker container
-        ├── main.py                    QCAlgorithm subclass (uses AlgorithmImports)
-        ├── features.py                pure pandas — ROC, SMA, volume surprise, breakout
-        ├── scorer.py                  pure pandas — guardrails, metrics, cross-sectional ranking
-        ├── universe.yaml              curated ~780 Russell-like small/mid caps, quarterly refresh
-        └── config.json                Lean project config
+├── backtest/                          screener-agnostic backtest harness
+├── tick_data/                         tick-level trade data loader (Polygon)
+└── screeners/                         pipeline strategies
+    ├── themed/                        Layer 2b: curated YAML universe + pluggable scorer (momentum|early-stage)
+    ├── prescreener/                   Layer 2a: S&P 500 scoring (technical, fundamental, volume, composite)
+    └── lean/                          Layer 2c — ARCHIVED: Polygon sync + QuantConnect Lean in Docker
 
 alphalens_cli/                         ← my CLI (separate package to avoid collision with TradingAgents/cli/)
-├── main.py                            entry point — `alphalens` console script
-└── watchdog_main.py                   Typer sub-app for watchdog subcommands
+├── main.py                            entry point — `alphalens` console script (root Typer)
+└── commands/                          one file per group/command
+    ├── analyze.py, status.py, backtest.py   top-level commands
+    ├── watchdog.py                          Layer 1 group (run-once)
+    ├── queue.py                             Layer 3 ops group (process, scorer-stats)
+    ├── themed.py                            Layer 2b group (screen, status)
+    └── research.py                          research group (validate-llm-filter)
 
 TradingAgents/                         ← upstream vendored via git subtree --squash
 ├── tradingagents/                     their Python package (agents, graph, llm_clients, dataflows)
@@ -184,11 +180,11 @@ See `CLAUDE.md` for detailed agent flow and configuration reference.
 
 **Data vendors**: `core_stock_apis` and `technical_indicators` use yfinance (free). `fundamental_data` and `news_data` use Alpha Vantage (requires key).
 
-**Momentum universe**: `alphalens/momentum_screener/universe.yaml` — curated tickers grouped by theme (ai, quantum, etc.).
+**Themed universe**: `alphalens/screeners/themed/universe.yaml` — curated tickers grouped by theme (quantum, AI, semis, nuclear, crypto, …).
 
-**Lean universe**: `alphalens/lean_screener/lean_project/universe.yaml` — ~780 Russell-like US small/mid caps grouped by GICS sector (technology, healthcare, financials, …). Refresh quarterly.
+**Lean universe** (archived): `alphalens/screeners/lean/lean_project/universe.yaml` — ~780 Russell-like US small/mid caps grouped by GICS sector (technology, healthcare, financials, …). Refresh quarterly.
 
-**Lean scoring config**: `alphalens/lean_screener/config.py::LEAN_DEFAULTS` (host) + `lean_project/main.py::SCORER_CONFIG` (algo). Weights cover ROC(20/60), volume surprise, trend stack, breakout flag, near-high. Keep the two dicts in sync.
+**Lean scoring config** (archived): `alphalens/screeners/lean/config.py::LEAN_DEFAULTS` (host) + `lean_project/main.py::SCORER_CONFIG` (algo). Weights cover ROC(20/60), volume surprise, trend stack, breakout flag, near-high. Keep the two dicts in sync.
 
 **Portfolio**: `~/.alphalens/watchdog/portfolio.yaml` — your held + watchlist tickers for Layer 1 dispatch routing.
 
@@ -206,7 +202,7 @@ Lives outside the repo, split between directories that survive git operations:
 │   ├── digest.db                   SQLite — quiet-hour digest buffer
 │   ├── portfolio.yaml              your held + watchlist
 │   ├── company_tickers.json        SEC CIK mapping (cached)
-│   └── {detect,worker,momentum}.{log,err}
+│   └── {detect,worker,themed}.{log,err}
 └── lean/
     ├── data/equity/usa/daily/      Lean-format OHLCV zips (populated by Polygon sync)
     ├── results/candidates.json     last Lean algo output (ranked tickers + metrics)
