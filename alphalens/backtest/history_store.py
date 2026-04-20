@@ -1,65 +1,31 @@
 """In-memory OHLCV store for backtesting.
 
-Loads every zip under `<data_dir>/equity/usa/daily/` once into a
-`dict[ticker, pd.DataFrame]`, then serves point-in-time truncated slices and
-forward-return lookups without hitting disk again. The backtest loop calls
-`.truncate_to(ticker, asof)` thousands of times, so avoiding I/O per call is
-critical for calibration speed.
+Takes a pre-loaded mapping of ticker → `DatetimeIndex` OHLCV DataFrame and
+serves point-in-time truncated slices and forward-return lookups without
+hitting disk. The backtest loop calls `.truncate_to(ticker, asof)` thousands
+of times, so avoiding I/O per call is critical for calibration speed.
 
-All DataFrames are sorted ascending by date and use a `DatetimeIndex`.
+Loading is the caller's responsibility (see
+`alphalens.lean_screener.lean_csv_loader.load_lean_histories` for the Lean
+zip-CSV implementation). Keeping I/O out of this class means the generic
+harness has no knowledge of the Lean data layout.
+
+All DataFrames must be sorted ascending by date and use a `DatetimeIndex`.
 """
 
 from __future__ import annotations
 
-import logging
-from datetime import date, timedelta
-from pathlib import Path
-from typing import Iterable
+from datetime import date
+from typing import Mapping
 
 import pandas as pd
 
-from ..lean_csv_writer import LeanCsvWriter
-
-logger = logging.getLogger(__name__)
-
-
-def _bars_to_dataframe(bars: list) -> pd.DataFrame:
-    """Convert list of `DailyBar` to a `DatetimeIndex` OHLCV DataFrame."""
-    if not bars:
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-    df = pd.DataFrame(
-        {
-            "open": [b.open for b in bars],
-            "high": [b.high for b in bars],
-            "low": [b.low for b in bars],
-            "close": [b.close for b in bars],
-            "volume": [b.volume for b in bars],
-        },
-        index=pd.to_datetime([b.date for b in bars], format="%Y%m%d"),
-    )
-    df = df.sort_index()
-    return df
-
 
 class HistoryStore:
-    def __init__(self, data_dir: Path):
-        self._writer = LeanCsvWriter(data_dir)
-        self._cache: dict[str, pd.DataFrame] = {}
-
-    def load(self, tickers: Iterable[str]) -> None:
-        """Eagerly populate the in-memory cache for the given tickers.
-
-        Missing zips are skipped silently (delisted tickers with no bars, etc.).
-        """
-        for ticker in tickers:
-            up = ticker.upper()
-            if up in self._cache:
-                continue
-            bars = self._writer.read_bars(up)
-            if bars:
-                self._cache[up] = _bars_to_dataframe(bars)
-            else:
-                logger.debug("history_store: no bars for %s", up)
+    def __init__(self, histories: Mapping[str, pd.DataFrame]):
+        self._cache: dict[str, pd.DataFrame] = {
+            ticker.upper(): df for ticker, df in histories.items()
+        }
 
     def tickers(self) -> list[str]:
         return sorted(self._cache.keys())
@@ -68,7 +34,7 @@ class HistoryStore:
         """Full OHLCV history for `ticker`. Raises KeyError if unknown."""
         up = ticker.upper()
         if up not in self._cache:
-            raise KeyError(f"no history cached for {ticker!r} — did you call load()?")
+            raise KeyError(f"no history cached for {ticker!r}")
         return self._cache[up]
 
     def truncate_to(self, ticker: str, asof: date) -> pd.DataFrame:
@@ -99,7 +65,6 @@ class HistoryStore:
         if df is None or df.empty:
             return None
         ts_asof = pd.Timestamp(entry_date)
-        # Find the first trading day strictly after asof.
         future = df.loc[df.index > ts_asof]
         if len(future) < holding_period + 1:
             return None

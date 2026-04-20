@@ -262,7 +262,7 @@ def picks_from_backtest_report(report) -> list[PickRecord]:
 
     Używa `top_n_forward_returns` jako holding-period fwd return (5-day).
     """
-    from alphalens.lean_screener.backtest.engine import BacktestReport  # late import
+    from alphalens.backtest.engine import BacktestReport  # late import
 
     if not isinstance(report, BacktestReport):
         raise TypeError(f"expected BacktestReport, got {type(report)}")
@@ -304,18 +304,19 @@ def picks_from_history_store(
     if timeline.empty:
         return []
 
-    # Forward return z HistoryStore (OHLCV)
-    from alphalens.lean_screener.backtest.history_store import HistoryStore
+    # Forward return z HistoryStore (OHLCV) — loader lives Lean-side, store is generic.
+    from alphalens.backtest.history_store import HistoryStore
     from alphalens.lean_screener.config import DATA_DIR
+    from alphalens.lean_screener.lean_csv_loader import load_lean_histories
 
-    hs = HistoryStore(DATA_DIR)
     tickers = sorted(timeline["ticker"].unique())
-    hs.load(tickers)
+    histories = load_lean_histories(DATA_DIR, tickers)
+    hs = HistoryStore(histories)
 
     out: list[PickRecord] = []
     for _, row in timeline.iterrows():
         asof = date.fromisoformat(str(row["run_date"]))
-        fwd = hs.forward_return(row["ticker"], asof, horizon=5)
+        fwd = hs.forward_return(row["ticker"], asof, holding_period=5)
         if fwd is None:
             continue
         themes = [t for t in str(row["themes"]).split(",") if t]

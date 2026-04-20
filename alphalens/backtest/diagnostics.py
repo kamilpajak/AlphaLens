@@ -23,9 +23,10 @@ from typing import Mapping
 import numpy as np
 import pandas as pd
 
+from alphalens.backtest.metrics import rank_ic
+from alphalens.backtest.regime import RegimeStats
+
 from .engine import BacktestReport
-from .metrics import rank_ic
-from .regime import RegimeStats
 
 
 @dataclass(frozen=True)

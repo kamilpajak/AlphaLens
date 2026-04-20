@@ -32,7 +32,7 @@ Dla każdego theme w current YAML, backtestuj osobno na 5-letnim oknie:
 ```python
 # /tmp/check_existing_themes.py
 from alphalens.momentum_screener.universe import load_universe, flatten_universe
-from alphalens.lean_screener.backtest.engine import BacktestEngine
+from alphalens.backtest.engine import BacktestEngine
 # ... (wzorzec z /tmp/theme_validation.py)
 ```
 

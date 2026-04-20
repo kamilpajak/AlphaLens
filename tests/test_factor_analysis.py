@@ -20,7 +20,7 @@ def _synthetic_ff3(n=252, seed=0):
 
 class TestFamaFrenchAlpha(unittest.TestCase):
     def test_market_mimicking_portfolio_has_near_zero_alpha(self):
-        from alphalens.lean_screener.backtest.factor_analysis import fama_french_alpha
+        from alphalens.backtest.factor_analysis import fama_french_alpha
 
         ff3 = _synthetic_ff3(252, seed=1)
         # Portfolio = Mkt-RF + RF + small noise → alpha should be near zero, beta_mkt near 1.
@@ -33,7 +33,7 @@ class TestFamaFrenchAlpha(unittest.TestCase):
         self.assertAlmostEqual(res.beta_mkt, 1.0, delta=0.2)
 
     def test_synthetic_alpha_is_detected(self):
-        from alphalens.lean_screener.backtest.factor_analysis import fama_french_alpha
+        from alphalens.backtest.factor_analysis import fama_french_alpha
 
         ff3 = _synthetic_ff3(500, seed=3)
         rng = np.random.default_rng(4)
@@ -46,7 +46,7 @@ class TestFamaFrenchAlpha(unittest.TestCase):
         self.assertGreater(res.alpha_tstat, 2.0)  # should be statistically significant
 
     def test_missing_columns_raises(self):
-        from alphalens.lean_screener.backtest.factor_analysis import fama_french_alpha
+        from alphalens.backtest.factor_analysis import fama_french_alpha
 
         bad = pd.DataFrame({"Mkt-RF": [0.001], "SMB": [0.001]})  # missing HML, RF
         port = pd.Series([0.001])
@@ -54,7 +54,7 @@ class TestFamaFrenchAlpha(unittest.TestCase):
             fama_french_alpha(port, bad)
 
     def test_insufficient_history_raises(self):
-        from alphalens.lean_screener.backtest.factor_analysis import fama_french_alpha
+        from alphalens.backtest.factor_analysis import fama_french_alpha
 
         ff3 = _synthetic_ff3(10, seed=5)
         port = pd.Series(np.random.default_rng(0).normal(0, 0.01, 10), index=ff3.index)
@@ -64,7 +64,7 @@ class TestFamaFrenchAlpha(unittest.TestCase):
 
 class TestFormatAlphaSummary(unittest.TestCase):
     def test_output_contains_key_lines(self):
-        from alphalens.lean_screener.backtest.factor_analysis import (
+        from alphalens.backtest.factor_analysis import (
             AlphaResult,
             format_alpha_summary,
         )

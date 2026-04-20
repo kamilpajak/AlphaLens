@@ -13,18 +13,19 @@ from typing import Any, Mapping
 
 import pandas as pd
 
-from .cost_model import cost_sensitivity_table
-from .diagnostics import DecileICResult, VolDecomposition, format_vol_decomposition
-from .engine import BacktestReport
-from .factor_analysis import AlphaResult, format_alpha_summary
-from .theme_analysis import ThemeSeriesStats, format_theme_summary
-from .metrics import (
+from alphalens.backtest.cost_model import cost_sensitivity_table
+from alphalens.backtest.factor_analysis import AlphaResult, format_alpha_summary
+from alphalens.backtest.metrics import (
     concentration_top_k,
     rank_ic_positive_pct,
     rank_ic_tstat,
     summarise_portfolio,
 )
-from .regime import RegimeStats
+from alphalens.backtest.regime import RegimeStats
+from alphalens.backtest.theme_analysis import ThemeSeriesStats, format_theme_summary
+
+from .diagnostics import DecileICResult, VolDecomposition, format_vol_decomposition
+from .engine import BacktestReport
 
 
 @dataclass(frozen=True)

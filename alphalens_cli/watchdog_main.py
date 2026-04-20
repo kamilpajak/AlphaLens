@@ -138,7 +138,7 @@ def momentum_screen(
     # Historyczny zapis do monitoring store (non-blocking — fail doesn't break run)
     try:
         from alphalens.momentum_screener.history_store import MomentumHistoryStore
-        from alphalens.lean_screener.backtest.weighting import compute_position_weights
+        from alphalens.backtest.weighting import compute_position_weights
 
         weights_list = compute_position_weights(len(result), "linear").tolist() if not result.empty else []
         MomentumHistoryStore().record_run(
@@ -274,15 +274,16 @@ def validate_llm_filter(
     agreguje delta(accept_mean - reject_mean) + hit rate deltas + decision."""
     from datetime import date
 
-    from alphalens.lean_screener.backtest.engine import BacktestEngine
-    from alphalens.lean_screener.backtest.historical_validation import (
+    from alphalens.backtest.engine import BacktestEngine
+    from alphalens.backtest.history_store import HistoryStore
+    from alphalens.backtest.historical_validation import (
         evaluate_historical_picks,
         format_decision_matrix,
         picks_from_backtest_report,
         rule_based_tractability_scorer,
     )
-    from alphalens.lean_screener.backtest.history_store import HistoryStore
     from alphalens.lean_screener.config import BENCHMARKS, DATA_DIR, LEAN_DEFAULTS
+    from alphalens.lean_screener.lean_csv_loader import load_lean_histories
     from alphalens.lean_screener.lean_project.scorer import rank_universe as lean_rank
     from alphalens.momentum_screener.universe import (
         flatten_universe,
@@ -296,12 +297,11 @@ def validate_llm_filter(
     typer.echo(f"Okno picks: {start_date} → {end_date}")
 
     # Krok 1: wygeneruj picks przez BacktestEngine na Layer 2b universe
-    store = HistoryStore(DATA_DIR)
     themes_map = flatten_universe(load_2b())
     screener_tickers = sorted(themes_map.keys())
-    store.load(screener_tickers + list(BENCHMARKS))
-
     typer.echo(f"Ładuję {len(screener_tickers)} tickerów Layer 2b universe...")
+    histories = load_lean_histories(DATA_DIR, screener_tickers + list(BENCHMARKS))
+    store = HistoryStore(histories)
 
     engine = BacktestEngine(
         store, scorer=lean_rank, scorer_config=LEAN_DEFAULTS,
@@ -316,7 +316,7 @@ def validate_llm_filter(
     # Dodaj themes (backtest report tego nie ma — uzupełniamy z themes_map)
     picks_with_themes = []
     for p in all_picks:
-        from alphalens.lean_screener.backtest.historical_validation import PickRecord
+        from alphalens.backtest.historical_validation import PickRecord
         picks_with_themes.append(PickRecord(
             asof_date=p.asof_date, ticker=p.ticker, rank=p.rank,
             momentum_score=p.momentum_score,
@@ -337,7 +337,7 @@ def validate_llm_filter(
         scorer_fn = rule_based_tractability_scorer
         typer.echo("Scorer: rule-based deterministic (no LLM cost)")
     elif scorer == "gemini":
-        from alphalens.lean_screener.backtest.llm_scorers import (
+        from alphalens.backtest.llm_scorers import (
             gemini_flash_tractability_scorer,
         )
         scorer_fn = gemini_flash_tractability_scorer
@@ -346,13 +346,13 @@ def validate_llm_filter(
             f"${len(picks_with_themes) * 0.02:.2f}"
         )
     elif scorer == "hybrid":
-        from alphalens.lean_screener.backtest.llm_scorers import (
+        from alphalens.backtest.llm_scorers import (
             rule_and_gemini_hybrid_scorer,
         )
         scorer_fn = rule_and_gemini_hybrid_scorer
         typer.echo("Scorer: hybrid (rule first, Gemini on uncertain)")
     elif scorer == "tradingagents":
-        from alphalens.lean_screener.backtest.llm_scorers import (
+        from alphalens.backtest.llm_scorers import (
             tradingagents_reduced_scorer,
         )
         scorer_fn = tradingagents_reduced_scorer
@@ -513,21 +513,23 @@ def backtest(
     """Run the MVP1 backtest over Lean CSV data and emit a decision-matrix report."""
     from datetime import date
 
-    from alphalens.lean_screener.backtest.cost_model import cost_sensitivity_table
-    from alphalens.lean_screener.backtest.engine import BacktestEngine
-    from alphalens.lean_screener.backtest.factor_analysis import fama_french_alpha
-    from alphalens.lean_screener.backtest.history_store import HistoryStore
-    from alphalens.lean_screener.backtest.regime import (
+    from alphalens.backtest.cost_model import cost_sensitivity_table
+    from alphalens.backtest.engine import BacktestEngine
+    from alphalens.backtest.factor_analysis import fama_french_alpha
+    from alphalens.backtest.history_store import HistoryStore
+    from alphalens.backtest.regime import (
         classify_regime,
         regime_breakdown,
     )
-    from alphalens.lean_screener.backtest.report import (
+    from alphalens.backtest.report import (
         build_summary,
         daily_results_to_dataframe,
         write_markdown_report,
     )
     from alphalens.lean_screener.config import BENCHMARKS, DATA_DIR, LEAN_DEFAULTS
     from alphalens.lean_screener.factors import load_ff3_daily
+    from alphalens.lean_screener.lean_csv_loader import load_lean_histories
+    from alphalens.lean_screener.lean_project.scorer import rank_universe as lean_rank
     from alphalens.lean_screener.universe import all_tickers
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -536,13 +538,14 @@ def backtest(
     end_date = date.fromisoformat(end)
 
     typer.echo(f"Loading OHLCV into HistoryStore ({start_date} → {end_date})…")
-    store = HistoryStore(DATA_DIR)
     tickers = all_tickers() + list(BENCHMARKS)
-    store.load(tickers)
+    histories = load_lean_histories(DATA_DIR, tickers)
+    store = HistoryStore(histories)
     typer.echo(f"  loaded {len(store.tickers())} tickers")
 
     engine = BacktestEngine(
         store,
+        scorer=lean_rank,
         scorer_config=LEAN_DEFAULTS,
         holding_period=holding,
         top_n=top_n,
