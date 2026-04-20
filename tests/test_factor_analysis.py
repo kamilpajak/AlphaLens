@@ -112,6 +112,25 @@ class TestRunRegression(unittest.TestCase):
             run_regression(port, ff, factor_columns=["Mkt-RF"])
         self.assertIn("RF", str(cm.exception))
 
+    def test_subtract_rf_false_allows_missing_rf_column(self):
+        """Long-short factor returns are already excess. Caller passes subtract_rf=False."""
+        from alphalens.backtest.factor_analysis import run_regression
+
+        ff = _synthetic_carhart(500, seed=30).drop(columns=["RF"])
+        rng = np.random.default_rng(31)
+        # Already-excess synthetic L/S return with +5 bps/day pure alpha
+        ls_factor = pd.Series(0.0005 + rng.normal(0, 0.002, len(ff)), index=ff.index)
+
+        res = run_regression(
+            ls_factor, ff,
+            factor_columns=["Mkt-RF", "SMB", "HML"],
+            spec_name="L/S factor", subtract_rf=False,
+        )
+        self.assertGreater(res.alpha_daily, 0.0002)
+        # Sanity: requesting subtract_rf=True without RF still raises
+        with self.assertRaises(ValueError):
+            run_regression(ls_factor, ff, factor_columns=["Mkt-RF"], subtract_rf=True)
+
     def test_insufficient_overlap_raises(self):
         from alphalens.backtest.factor_analysis import run_regression
 

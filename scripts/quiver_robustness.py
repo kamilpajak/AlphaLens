@@ -55,12 +55,11 @@ def regress(trades: pd.DataFrame, tickers, dates, ret_panel, carhart, label: str
     )
     density = (panel != 0).mean().mean()
     factor = build_long_short_factor(panel, ret_panel, n_quintiles=N_QUINTILES)
-    carhart_for_ls = carhart.copy()
-    carhart_for_ls["RF"] = carhart_for_ls["RF"] * 0.0
     res = run_regression(
-        factor, carhart_for_ls,
+        factor, carhart,
         factor_columns=["Mkt-RF", "SMB", "HML", "Mom"],
         spec_name=label,
+        subtract_rf=False,
     )
     return res, density, len(factor)
 

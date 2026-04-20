@@ -52,17 +52,21 @@ def run_regression(
     cov_type: str = "HAC",
     spec_name: str | None = None,
     periods_per_year: int = 252,
+    subtract_rf: bool = True,
 ) -> AlphaResult:
-    """Run OLS of (portfolio − RF) on [intercept, *factor_columns].
+    """Run OLS of portfolio excess return on [intercept, *factor_columns].
 
     factors: DataFrame containing at least the requested columns + "RF" (decimals).
     cov_type: "HAC" (Newey-West, default) or "nonrobust" (plain OLS).
+    subtract_rf: when True (default), y = port - RF. Set False when the input is
+        already an excess return (e.g. a long-short factor) — then y = port
+        directly and factors["RF"] is ignored for the LHS.
     """
-    if "RF" not in factors.columns:
-        raise ValueError("factors DataFrame must contain an 'RF' column")
     missing = [c for c in factor_columns if c not in factors.columns]
     if missing:
         raise ValueError(f"factor_columns not present in factors: {missing}")
+    if subtract_rf and "RF" not in factors.columns:
+        raise ValueError("factors DataFrame must contain an 'RF' column when subtract_rf=True")
 
     aligned = pd.concat(
         [portfolio_returns.rename("port"), factors], axis=1, join="inner"
@@ -72,7 +76,7 @@ def run_regression(
             f"Need at least 20 overlapping observations, got {len(aligned)}"
         )
 
-    y = aligned["port"] - aligned["RF"]
+    y = aligned["port"] - aligned["RF"] if subtract_rf else aligned["port"]
     X = sm.add_constant(aligned[factor_columns])
 
     if cov_type == "HAC":
@@ -122,41 +126,36 @@ def run_rolling_regression(
     factors: pd.DataFrame,
     factor_columns: list[str],
     window: int = 60,
+    subtract_rf: bool = True,
 ) -> pd.DataFrame:
-    """Rolling-window OLS. Returns DataFrame indexed by date with columns
-    ``alpha`` and ``beta_<factor>`` for each factor.
+    """Rolling-window OLS via statsmodels.regression.rolling.RollingOLS.
 
-    Rows before the first full window are NaN. Uses plain OLS inside each window
+    Returns DataFrame indexed by date with columns ``alpha`` and ``beta_<factor>``.
+    Rows before the first full window are NaN. Plain OLS within each window
     (HAC is for full-sample inference, not window-by-window beta tracking).
     """
-    if "RF" not in factors.columns:
-        raise ValueError("factors DataFrame must contain an 'RF' column")
+    from statsmodels.regression.rolling import RollingOLS
+
     missing = [c for c in factor_columns if c not in factors.columns]
     if missing:
         raise ValueError(f"factor_columns not present in factors: {missing}")
+    if subtract_rf and "RF" not in factors.columns:
+        raise ValueError("factors DataFrame must contain an 'RF' column when subtract_rf=True")
 
     aligned = pd.concat(
         [portfolio_returns.rename("port"), factors], axis=1, join="inner"
     ).dropna()
 
-    idx = aligned.index
-    out = pd.DataFrame(
-        index=idx,
-        columns=["alpha"] + [f"beta_{c}" for c in factor_columns],
-        dtype=float,
-    )
-
-    y_full = aligned["port"] - aligned["RF"]
+    y_full = aligned["port"] - aligned["RF"] if subtract_rf else aligned["port"]
     X_full = sm.add_constant(aligned[factor_columns])
 
-    for end in range(window, len(aligned) + 1):
-        sl = slice(end - window, end)
-        res = sm.OLS(y_full.iloc[sl], X_full.iloc[sl]).fit()
-        row_idx = idx[end - 1]
-        out.at[row_idx, "alpha"] = float(res.params["const"])
-        for col in factor_columns:
-            out.at[row_idx, f"beta_{col}"] = float(res.params[col])
+    res = RollingOLS(y_full, X_full, window=window).fit()
+    params = res.params
 
+    out = pd.DataFrame(index=aligned.index)
+    out["alpha"] = params["const"]
+    for col in factor_columns:
+        out[f"beta_{col}"] = params[col]
     return out
 
 

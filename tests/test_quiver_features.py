@@ -275,6 +275,92 @@ class TestInsiderFeaturePanel(unittest.TestCase):
         self.assertAlmostEqual(panel.loc["2024-01-15", "INTC"], 0.0)
 
 
+class TestVectorizedPanelMatchesSlow(unittest.TestCase):
+    """Parity: vectorized rolling-sum panel must reproduce per-cell scalar feature."""
+
+    def test_congress_net_flow_panel_matches_per_cell(self):
+        from alphalens.quiver_screener.features import (
+            build_congress_feature_panel,
+            congress_net_flow,
+        )
+
+        # Non-trivial synthetic trade log across 3 tickers, 1 year of dates.
+        rng = pd.Series([100_000, -50_000, 75_000, -25_000, 200_000, -10_000, 50_000])
+        trades = _congress_trades([
+            ("NVDA", "2023-06-10", "A", "PURCHASE", 100_000),
+            ("NVDA", "2023-07-15", "B", "SALE",      50_000),
+            ("NVDA", "2023-09-20", "C", "PURCHASE",  75_000),
+            ("AMD",  "2023-07-05", "A", "PURCHASE",  25_000),
+            ("AMD",  "2023-08-12", "C", "SALE",     200_000),
+            ("INTC", "2023-11-01", "B", "PURCHASE",  10_000),
+        ])
+        tickers = ["NVDA", "AMD", "INTC"]
+        dates = pd.date_range("2023-08-01", "2023-12-31", freq="B")
+
+        panel = build_congress_feature_panel(
+            trades, tickers=tickers, dates=dates, lookback_days=45, feature="net_flow",
+        )
+
+        # Reference values from per-cell function
+        for t in tickers:
+            for d in dates:
+                expected = congress_net_flow(trades, t, d, lookback_days=45)
+                actual = panel.loc[d, t]
+                self.assertAlmostEqual(
+                    actual, expected, places=2,
+                    msg=f"Mismatch for ({t}, {d.date()}): vec={actual}, ref={expected}",
+                )
+
+    def test_insider_net_flow_panel_matches_per_cell(self):
+        from alphalens.quiver_screener.features import (
+            build_insider_feature_panel,
+            insider_net_flow,
+        )
+
+        trades = _insider_trades([
+            ("NVDA", "2023-06-10", "CEO", "A", 1000, 500.0, 500_000.0),
+            ("NVDA", "2023-07-15", "CFO", "D",  500, 500.0, 250_000.0),
+            ("NVDA", "2023-09-20", "COO", "A",  300, 500.0, 150_000.0),
+            ("AMD",  "2023-08-12", "CEO", "A",  200, 200.0,  40_000.0),
+        ])
+        tickers = ["NVDA", "AMD", "INTC"]
+        dates = pd.date_range("2023-09-01", "2023-12-31", freq="B")
+
+        panel = build_insider_feature_panel(
+            trades, tickers=tickers, dates=dates, lookback_days=60, feature="net_flow",
+        )
+
+        for t in tickers:
+            for d in dates:
+                expected = insider_net_flow(trades, t, d, lookback_days=60)
+                actual = panel.loc[d, t]
+                self.assertAlmostEqual(
+                    actual, expected, places=2,
+                    msg=f"Mismatch for ({t}, {d.date()}): vec={actual}, ref={expected}",
+                )
+
+    def test_empty_trades_returns_zero_panel(self):
+        from alphalens.quiver_screener.features import (
+            build_congress_feature_panel,
+            build_insider_feature_panel,
+        )
+
+        dates = pd.date_range("2024-01-15", "2024-01-20", freq="B")
+        tickers = ["NVDA", "AMD"]
+
+        congress_panel = build_congress_feature_panel(
+            _congress_trades([]), tickers=tickers, dates=dates, feature="net_flow",
+        )
+        insider_panel = build_insider_feature_panel(
+            _insider_trades([]), tickers=tickers, dates=dates, feature="net_flow",
+        )
+
+        self.assertEqual(congress_panel.shape, (len(dates), len(tickers)))
+        self.assertEqual(insider_panel.shape, (len(dates), len(tickers)))
+        self.assertTrue((congress_panel == 0).all().all())
+        self.assertTrue((insider_panel == 0).all().all())
+
+
 class TestFeaturePanelBuilder(unittest.TestCase):
     """Cross-sectional panel: (date × ticker) → feature value.
 

@@ -10,11 +10,10 @@ the mapping once rather than silently miscomputing features.
 """
 from __future__ import annotations
 
-import json
 import re
-from datetime import date
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "quiver"
@@ -97,16 +96,20 @@ def normalize_insiders(raw: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["ticker", "date", "name", "transaction", "shares", "price", "value"])
 
     cols = {k: _resolve_column(raw, v) for k, v in _INSIDER_COL_ALIASES.items()}
+    raw_trans = raw[cols["transaction"]].astype(str).str.upper()
+    # Match any known buy indicator explicitly. Unknown codes default to 'D' (sell)
+    # to stay conservative — misclassifying a buy as sell biases signal to zero,
+    # which is safer than misclassifying a sell as buy.
+    is_buy = raw_trans.str.contains(r"^(?:P|A|PURCHASE|ACQUIRED|BUY)", regex=True, na=False)
     out = pd.DataFrame({
         "ticker":      raw[cols["ticker"]].astype(str).str.upper(),
         "date":        pd.to_datetime(raw[cols["date"]]),
         "name":        raw[cols["name"]].astype(str),
-        "transaction": raw[cols["transaction"]].astype(str).str.upper().str[0],  # 'A' or 'D' from first char
+        "transaction": np.where(is_buy, "A", "D"),
         "shares":      pd.to_numeric(raw[cols["shares"]], errors="coerce").fillna(0).astype(int),
         "price":       pd.to_numeric(raw[cols["price"]], errors="coerce").fillna(0.0),
     })
     out["value"] = out["shares"] * out["price"]
-    out["transaction"] = out["transaction"].where(out["transaction"].isin(["A", "D"]), "D")
     return out
 
 
@@ -128,8 +131,8 @@ def fetch_congress_for_tickers(
         try:
             raw = quiver_client.congress_trading(t, recent=False)
         except Exception as exc:
-            print(f"  {t}: congress_trading failed ({exc}); skipping")
-            raw = pd.DataFrame()
+            print(f"  {t}: congress_trading failed ({exc}); skipping (no cache write)")
+            continue
         if not isinstance(raw, pd.DataFrame):
             raw = pd.DataFrame()
         norm = normalize_congress(raw)
@@ -157,8 +160,8 @@ def fetch_insiders_for_tickers(
         try:
             raw = quiver_client.insiders(t)
         except Exception as exc:
-            print(f"  {t}: insiders failed ({exc}); skipping")
-            raw = pd.DataFrame()
+            print(f"  {t}: insiders failed ({exc}); skipping (no cache write)")
+            continue
         if not isinstance(raw, pd.DataFrame):
             raw = pd.DataFrame()
         norm = normalize_insiders(raw)

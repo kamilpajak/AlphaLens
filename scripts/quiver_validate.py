@@ -147,20 +147,15 @@ def main() -> None:
     if len(factor_ret) < 100:
         print("WARNING: very few valid days — signal likely too sparse for meaningful regression.")
 
-    # Regress factor return on Carhart-4F (HAC)
     carhart = load_carhart_daily(start=START, end=END)
-    # Need an 'RF' column even though factor_ret is already a long-short return.
-    # run_regression requires 'RF' in factors; use 0 for long-short (already excess).
-    carhart_for_ls = carhart.copy()
-    # We'll feed factor_ret + RF=0 so "excess" = factor return itself.
-    zeroed_rf = carhart_for_ls["RF"] * 0.0
-    carhart_for_ls["RF"] = zeroed_rf
 
     print("\nRegressing Quiver factor return on Carhart-4F (HAC)…")
+    # factor_ret is already a long-short (excess) return; don't subtract RF.
     res = run_regression(
-        factor_ret, carhart_for_ls,
+        factor_ret, carhart,
         factor_columns=["Mkt-RF", "SMB", "HML", "Mom"],
         spec_name="Quiver L/S ~ Carhart-4F",
+        subtract_rf=False,
     )
     print(format_attribution_table([res]))
     print(f"\n  beta[Mom] = {res.betas['Mom']:+.3f}  (|β|>0.3 → signal loads heavily on momentum → redundant)")
@@ -192,14 +187,23 @@ def main() -> None:
     ins_factor = build_long_short_factor(ins_panel, ret_panel, n_quintiles=N_QUINTILES)
     print(f"  {len(ins_factor)} days with valid factor return")
 
-    print("\nRegressing insider factor on Carhart-4F (HAC)…")
-    ins_res = run_regression(
-        ins_factor, carhart_for_ls,
-        factor_columns=["Mkt-RF", "SMB", "HML", "Mom"],
-        spec_name="Insider L/S ~ Carhart-4F",
-    )
-    print(format_attribution_table([ins_res]))
-    print(f"\n  beta[Mom] = {ins_res.betas['Mom']:+.3f}")
+    ins_res = None
+    if len(ins_factor) < 20:
+        print(
+            "\n  SKIPPED: insider regression needs >=20 days with valid factor return.\n"
+            "  Most likely cause: /beta/live/insiders is gated behind Quiver Trader tier\n"
+            "  ($75/mo) — free trial / Hobbyist returns 403 for every ticker."
+        )
+    else:
+        print("\nRegressing insider factor on Carhart-4F (HAC)…")
+        ins_res = run_regression(
+            ins_factor, carhart,
+            factor_columns=["Mkt-RF", "SMB", "HML", "Mom"],
+            spec_name="Insider L/S ~ Carhart-4F",
+            subtract_rf=False,
+        )
+        print(format_attribution_table([ins_res]))
+        print(f"\n  beta[Mom] = {ins_res.betas['Mom']:+.3f}")
 
     # ------------------------------------------------------------------
     # Final decision across both signals
@@ -208,9 +212,10 @@ def main() -> None:
     print("FINAL DECISION")
     print("=" * 70)
     print(f"  Congress L/S:  α ann = {congress_ann:+.2f}%, t = {congress_t:+.2f} HAC, density {(signal_panel != 0).mean().mean() * 100:.1f}%")
-    ins_ann = ins_res.alpha_annualized * 100
-    ins_t = ins_res.alpha_tstat
-    print(f"  Insider  L/S:  α ann = {ins_ann:+.2f}%, t = {ins_t:+.2f} HAC, density {ins_density * 100:.1f}%")
+    if ins_res is None:
+        print("  Insider  L/S:  INSUFFICIENT_DATA (endpoint likely paywalled)")
+    else:
+        print(f"  Insider  L/S:  α ann = {ins_res.alpha_annualized * 100:+.2f}%, t = {ins_res.alpha_tstat:+.2f} HAC, density {ins_density * 100:.1f}%")
 
     def verdict(t: float) -> str:
         if t > 1.5:
@@ -222,9 +227,10 @@ def main() -> None:
         return "REVERSE-SIGNAL-OR-NOISE"
 
     print(f"\n  Congress verdict: {verdict(congress_t)}")
-    print(f"  Insider  verdict: {verdict(ins_t)}")
+    print(f"  Insider  verdict: {'INSUFFICIENT_DATA' if ins_res is None else verdict(ins_res.alpha_tstat)}")
 
-    if max(congress_t, ins_t) > 1.5:
+    best_t = max([congress_t] + ([ins_res.alpha_tstat] if ins_res else []))
+    if best_t > 1.5:
         print("\n  → GO on whichever passed. Subscribe Hobbyist $10/mo, proceed to Phase 2 with that feature.")
     else:
         print("\n  → KILL on both. No Quiver subscription. Document in project_quiver_validation.md.")
