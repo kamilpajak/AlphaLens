@@ -19,6 +19,164 @@ def _research_callback() -> None:
     """Force multi-command behaviour even when only one command is registered."""
 
 
+@research_app.command(name="walk-forward")
+def walk_forward(
+    start: str = typer.Option(
+        "2021-06-01",
+        help="Backtest start (YYYY-MM-DD). Polygon Basic entitlement floor is 2021-06-01.",
+    ),
+    end: str = typer.Option("2026-04-17", help="Backtest end (YYYY-MM-DD)"),
+    window_days: int = typer.Option(252, help="Test window size in trading days (~1 year)"),
+    step_days: int = typer.Option(21, help="Stride between windows in trading days (~1 month)"),
+    top_n: int = typer.Option(5, help="Top-N picks per day"),
+    holding: int = typer.Option(5, help="Holding period in trading days"),
+    weighting: str = typer.Option("linear", help="Position weighting: linear | equal | conviction"),
+    benchmark: str = typer.Option("SPY", help="Benchmark for calendar + regime classification"),
+    no_attrib: bool = typer.Option(
+        False, "--no-attrib",
+        help="Skip Carhart per-window attribution (useful when FF factor files are unavailable).",
+    ),
+    report: str = typer.Option(
+        "docs/backtest/walk_forward.md",
+        help="Markdown report output path (relative to repo root)",
+    ),
+    csv: str = typer.Option(
+        "", help="Optional per-window CSV output path (empty = skip)"
+    ),
+) -> None:
+    """Walk-forward OOS validation — rolling 252-day test windows.
+
+    Runs one baseline `BacktestEngine.run` over the full span, slices the
+    daily_results per window, computes per-window Sharpe / Carhart α_t / IC_t
+    / MaxDD / turnover, and reports distribution + decision gate (5 rules).
+
+    Detects regime-specific performance and data-snooping bias. Gate C3
+    uses non-overlapping 21-day block-return autocorr (~59 observations,
+    statistically defensible) rather than windowed-Sharpe autocorr
+    (mechanically near 1 due to 92% overlap). Gate C4 uses a 12-month
+    dark-half threshold because momentum strategies have documented
+    12-18 month "winters" during reversals.
+    """
+    from datetime import date as _date
+
+    import yaml
+
+    from alphalens.backtest.engine import BacktestEngine
+    from alphalens.backtest.factors import load_carhart_daily
+    from alphalens.backtest.history_store import HistoryStore
+    from alphalens.backtest.walk_forward import compile_report, run_walk_forward
+    from alphalens.screeners.lean.config import DATA_DIR
+    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+    from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter
+    from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+    from alphalens.screeners.themed.universe import flatten_universe
+
+    start_date = _date.fromisoformat(start)
+    end_date = _date.fromisoformat(end)
+    typer.echo(
+        f"Walk-forward OOS — {start_date} → {end_date}, "
+        f"window={window_days}d, step={step_days}d"
+    )
+
+    # Load universe + histories
+    universe_yaml = yaml.safe_load(UNIVERSE_PATH.read_text())
+    screener_tickers = sorted(flatten_universe(universe_yaml).keys())
+    typer.echo(f"Loading OHLCV for {len(screener_tickers)} themed tickers + {benchmark}…")
+    histories = load_lean_histories(DATA_DIR, screener_tickers + [benchmark])
+    store = HistoryStore(histories)
+    typer.echo(f"  loaded {len(store.tickers())} tickers")
+
+    scorer_config = dict(THEMED_DEFAULTS, benchmark=benchmark)
+
+    # Carhart factors
+    carhart = None
+    if not no_attrib:
+        try:
+            carhart = load_carhart_daily(start=start_date, end=end_date)
+        except (FileNotFoundError, ValueError) as exc:
+            typer.echo(f"  Carhart factors unavailable: {exc} (gate C2 will be N/A)")
+            carhart = None
+
+    # Single baseline backtest
+    typer.echo("\n[baseline] running full-span backtest…")
+    engine = BacktestEngine(
+        store,
+        scorer=momentum_scorer_adapter,
+        scorer_config=scorer_config,
+        holding_period=holding,
+        top_n=top_n,
+        benchmark=benchmark,
+        screener_tickers=screener_tickers,
+        weighting=weighting,
+    )
+    baseline = engine.run(start=start_date, end=end_date)
+    typer.echo(f"  {len(baseline.daily_results)} daily snapshots")
+
+    benchmark_close = store.full(benchmark)["close"]
+
+    typer.echo("\n[walk-forward] slicing + computing per-window metrics…")
+    wf_report = run_walk_forward(
+        baseline,
+        benchmark_close=benchmark_close,
+        carhart=carhart,
+        window_days=window_days,
+        step_days=step_days,
+    )
+    typer.echo(f"  {len(wf_report.window_results)} windows")
+    typer.echo(
+        f"  baseline Sharpe: {wf_report.baseline_sharpe:+.3f}"
+        + (
+            f"  baseline Carhart α_t: {wf_report.baseline_alpha_tstat:+.2f}"
+            if wf_report.baseline_alpha_tstat is not None
+            else ""
+        )
+    )
+    typer.echo(f"  verdict: {wf_report.verdict.overall}")
+    for key in ("c1", "c2", "c3", "c4", "c5"):
+        reason = wf_report.verdict.reasons.get(key, "")
+        flag = getattr(wf_report.verdict, f"{key}_pass")
+        mark = "PASS" if flag else ("N/A" if flag is None else "FAIL")
+        typer.echo(f"    {key.upper()} {mark} — {reason}")
+
+    report_path = Path(report)
+    if not report_path.is_absolute():
+        report_path = Path.cwd() / report_path
+    compile_report(
+        report_path,
+        wf_report,
+        benchmark=benchmark,
+        top_n=top_n,
+        holding=holding,
+    )
+    typer.echo(f"\nReport written to {report_path}")
+
+    if csv:
+        import csv as _csv
+
+        csv_path = Path(csv)
+        if not csv_path.is_absolute():
+            csv_path = Path.cwd() / csv_path
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        with csv_path.open("w", newline="") as fh:
+            writer = _csv.writer(fh)
+            writer.writerow([
+                "test_start", "test_end", "n_days", "regime", "regime_reversed_within",
+                "sharpe_gross", "sharpe_moderate",
+                "carhart_alpha_daily", "carhart_alpha_tstat",
+                "ic_mean", "ic_tstat", "max_drawdown", "turnover", "cumulative_return",
+            ])
+            for r in wf_report.window_results:
+                writer.writerow([
+                    r.test_start, r.test_end, r.n_days, r.regime, r.regime_reversed_within,
+                    f"{r.sharpe_gross:.4f}", f"{r.sharpe_moderate:.4f}",
+                    f"{r.carhart_alpha_daily:.6f}" if r.carhart_alpha_daily is not None else "",
+                    f"{r.carhart_alpha_tstat:.4f}" if r.carhart_alpha_tstat is not None else "",
+                    f"{r.ic_mean:.6f}", f"{r.ic_tstat:.4f}",
+                    f"{r.max_drawdown:.4f}", f"{r.turnover:.4f}", f"{r.cumulative_return:.4f}",
+                ])
+        typer.echo(f"Per-window CSV: {csv_path}")
+
+
 @research_app.command(name="survivorship-pit")
 def survivorship_pit(
     start: str = typer.Option(
