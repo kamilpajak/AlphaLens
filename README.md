@@ -24,6 +24,11 @@ Layer 2c — Lean screener    → ARCHIVED (failed 5-year backtest)             
 - **Layer 2c** ❌ archived: Sharpe 0.25 net, FF3 alpha t-stat 0.14 — brak statystycznej alfy, plist w `launchd/archived/`
 - **Layer 2a** ⚠️ unvalidated: fundamentals-heavy scorer wymaga point-in-time Compustat/Polygon Advanced, używaj jako ad-hoc manual tool
 
+**Post-hoc audit** (Perplexity's 3 flagged gaps, raporty w `docs/backtest/`):
+- **PIT survivorship** ✅ PASS (`survivorship_pit_a.md`): 0 / 5155 picks delisted within 30/90/180d vs 0.88% universe base rate — scorer aktywnie unika umierających spółek
+- **Walk-forward OOS** ✅ PASS (`walk_forward.md`): 38 rolling 252-day windows, 86.84% z Sharpe > 0.5, 63.16% z Carhart α_t > 1.5 HAC, zero consecutive-negative-Sharpe stretches
+- **Cost validation / scale-path** ❌ FAIL at $10M AUM (`cost_validation.md`): 8.87% pick-days wymagałoby > 15% dziennego volumenu. Strategia ma AUM ceiling < $10M przy top-5 daily-rebalance. Flat 100bps zostaje produkcyjnym cost modelem.
+
 **Unified handoff**: każdy screener emituje `Candidate(ticker, source, priority, payload, dedup_key)` do `~/.alphalens/candidates.db`. Worker drainuje FIFO per priority (watchdog_sec=0 > momentum=10 > lean=15 > prescreener=20), aplikuje daily budget cap, retry exponential backoff + DLQ (`status='dead'` po 5 attempts). Infrastruktura Layer 2c (`backtest/` submodule) jest aktywnie reużywana przez walidację Layer 2b.
 
 ---
@@ -101,6 +106,12 @@ Two console scripts are installed:
 .venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose
 .venv/bin/alphalens backtest --scorer lean                   # re-examine archived Layer 2c
 
+# Research / audit (diagnostic tools, write raport do docs/backtest/)
+.venv/bin/alphalens research survivorship-pit                # PIT universe reconstruction (Test A-lite)
+.venv/bin/alphalens research walk-forward                    # rolling OOS stability test
+.venv/bin/alphalens research cost-validation                 # tiered flat-bps + scale-path gate
+.venv/bin/alphalens research validate-llm-filter --scorer rule   # LLM filter validation
+
 # Status: queue breakdown (pending/in_progress/done/dead), digest buffer, dedup
 .venv/bin/alphalens status
 
@@ -168,7 +179,7 @@ TradingAgents/                         ← upstream vendored via git subtree --s
 └── pyproject.toml                     their config (active via uv editable install)
 
 launchd/                               macOS scheduled jobs (plists + bash wrappers)
-tests/                                 unittest suite (773 tests)
+tests/                                 unittest suite (758 tests)
 ```
 
 See `CLAUDE.md` for detailed agent flow and configuration reference.
