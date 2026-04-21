@@ -91,8 +91,44 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
         store.preload(["AAPL"])
         self.assertIsNone(store.features_as_of("NVDA", date(2024, 6, 1)))
 
-    def test_preload_skips_tickers_that_raise(self):
-        """One bad ticker shouldn't poison the whole preload run."""
+    def test_backtest_strips_forward_looking_overview_fields(self):
+        """OVERVIEW.PriceToSalesRatioTTM + NetIncomeTTM are CURRENT values;
+        using them in a historical replay would leak today's valuation into
+        2022 scoring. Both must be stripped so extract_features returns
+        None / falls back to PIT income-statement."""
+        from alphalens.fundamentals.backtest_store import HistoricalFundamentalsStore
+
+        bundle = {
+            "overview": {
+                "Symbol": "X",
+                "PriceToSalesRatioTTM": "150.0",
+                "NetIncomeTTM": "99999999999",  # present-day blowout
+            },
+            "balance_sheet": {"quarterlyReports": [
+                {"fiscalDateEnding": "2022-03-31", "cashAndShortTermInvestments": "10000000"},
+            ]},
+            "cash_flow": {"quarterlyReports": [
+                {"fiscalDateEnding": "2022-03-31", "operatingCashflow": "-5000000"},
+            ]},
+            "income_statement": {"quarterlyReports": [
+                {"fiscalDateEnding": "2022-03-31", "netIncome": "-1000000"},
+                {"fiscalDateEnding": "2021-12-31", "netIncome": "-2000000"},
+                {"fiscalDateEnding": "2021-09-30", "netIncome": "-3000000"},
+                {"fiscalDateEnding": "2021-06-30", "netIncome": "-4000000"},
+            ]},
+        }
+        store = HistoricalFundamentalsStore(fetcher=lambda t, curr_date=None: bundle)
+        store.preload(["X"])
+
+        features = store.features_as_of("X", date(2022, 6, 1))
+        # ps_ratio must NOT come back as 150.0 (that's today's value).
+        self.assertIsNone(features["ps_ratio"])
+        # net_income_ttm should fall back to sum of 4 historical quarters
+        # (= -10M), not the "99999999999" from OVERVIEW.
+        self.assertEqual(features["net_income_ttm"], -10_000_000.0)
+
+    def test_preload_skips_tickers_that_raise_below_threshold(self):
+        """One bad ticker out of 10 (10%) shouldn't poison the whole preload."""
         from alphalens.fundamentals.backtest_store import HistoricalFundamentalsStore
 
         def fetcher(ticker, curr_date=None):
@@ -100,11 +136,24 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
                 raise RuntimeError("av failure")
             return BUNDLE_APPL
 
+        tickers = ["AAPL", "BAD"] + [f"T{i}" for i in range(8)]
         store = HistoricalFundamentalsStore(fetcher=fetcher)
-        store.preload(["AAPL", "BAD", "MSFT"])
+        store.preload(tickers)
         self.assertIsNotNone(store.features_as_of("AAPL", date(2024, 8, 1)))
         self.assertIsNone(store.features_as_of("BAD", date(2024, 8, 1)))
-        self.assertIsNotNone(store.features_as_of("MSFT", date(2024, 8, 1)))
+
+    def test_preload_aborts_when_too_many_fail(self):
+        """Silent zero-gate runs in Phase 2 would look like 'gate has no
+        effect' — false negative. Abort at 15% failure threshold."""
+        from alphalens.fundamentals.backtest_store import HistoricalFundamentalsStore
+
+        def always_fail(ticker, curr_date=None):
+            raise RuntimeError("AV outage")
+
+        store = HistoricalFundamentalsStore(fetcher=always_fail)
+        with self.assertRaises(RuntimeError) as ctx:
+            store.preload(["AAPL", "MSFT", "NVDA"])
+        self.assertIn("threshold", str(ctx.exception).lower())
 
 
 if __name__ == "__main__":

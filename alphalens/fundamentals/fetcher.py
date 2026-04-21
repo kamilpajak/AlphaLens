@@ -101,11 +101,12 @@ def _consecutive_neg_ocf(cash_flow: Mapping) -> int:
 
 
 def _cash_runway_months(balance_sheet: Mapping, cash_flow: Mapping) -> float | None:
-    """Monthly runway = cash_and_short_term_investments / |avg quarterly OCF| × 3.
+    """Monthly runway = cash_and_short_term_investments / |TTM avg quarterly OCF| × 3.
 
-    Uses most recent balance sheet cash + last 4 quarters OCF to smooth lumpy
-    cash-burn. Returns None if data is insufficient or the company is
-    cash-flow positive (runway is effectively infinite).
+    Uses trailing-4-quarter average OCF to smooth one-time items (legal
+    settlements, inventory builds, tax windfalls) that otherwise risk
+    false-positive hard rejects. Returns None if data is insufficient or
+    the company is cash-flow positive over the trailing window.
     """
     bs_reports = balance_sheet.get("quarterlyReports") or []
     cf_reports = cash_flow.get("quarterlyReports") or []
@@ -116,13 +117,16 @@ def _cash_runway_months(balance_sheet: Mapping, cash_flow: Mapping) -> float | N
     if cash is None or cash <= 0:
         return None
 
-    # Use the most recent quarter's OCF — conservative proxy for current burn
-    # rate (captures acceleration if burn is trending worse; avg would hide that).
-    recent_ocf = _to_float(cf_reports[0].get("operatingCashflow"))
-    if recent_ocf is None or recent_ocf >= 0:
-        return None  # Missing data or cash-flow positive — no runway concern
+    ocf_values = [_to_float(r.get("operatingCashflow")) for r in cf_reports[:4]]
+    ocf_values = [v for v in ocf_values if v is not None]
+    if not ocf_values:
+        return None
 
-    burn_per_quarter = -recent_ocf
+    avg_ocf = sum(ocf_values) / len(ocf_values)
+    if avg_ocf >= 0:
+        return None  # Cash-flow positive over TTM — no runway concern
+
+    burn_per_quarter = -avg_ocf
     quarters = cash / burn_per_quarter
     return quarters * 3.0
 

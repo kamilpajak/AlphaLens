@@ -109,9 +109,11 @@ class TestExtractFeatures(unittest.TestCase):
         self.assertLess(f["net_income_ttm"], 0)
         # 5 consecutive negative OCF quarters in fixture
         self.assertEqual(f["consecutive_neg_ocf_quarters"], 5)
-        # $50M cash / $20M burn per quarter → 2.5 quarters ≈ 7.5 months
+        # $50M cash / TTM avg burn of (20+18+15+12)/4 = 16.25M per quarter
+        #  → 50/16.25 ≈ 3.077 quarters × 3 ≈ 9.23 months.
+        # TTM avg (not latest quarter) defends against one-time items per CR M3.
         self.assertIsNotNone(f["cash_runway_months"])
-        self.assertAlmostEqual(f["cash_runway_months"], 7.5, places=1)
+        self.assertAlmostEqual(f["cash_runway_months"], 9.23, places=1)
 
     def test_extract_handles_missing_overview_fields(self):
         """If AV returns the ticker but is missing PriceToSalesRatioTTM, don't crash."""

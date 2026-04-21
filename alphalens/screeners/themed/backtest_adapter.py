@@ -38,17 +38,19 @@ def _latest_asof(histories: Mapping[str, pd.DataFrame]) -> date | None:
     """Infer the backtest engine's current date from the truncated histories.
 
     BacktestEngine calls `store.truncate_to(ticker, asof)` before passing
-    prices in — so max(index) across any non-empty frame equals asof. Cheapest
-    PIT hook without modifying the Scorer protocol signature.
+    prices in — so max(index) across every non-empty frame equals asof.
+    Takes max across all frames (not first-encountered) to defend against
+    any caller that passes mismatched truncations.
     """
+    dates: list[date] = []
     for df in histories.values():
         if df is None or df.empty:
             continue
         try:
-            return df.index.max().date()
+            dates.append(df.index.max().date())
         except Exception:  # noqa: BLE001
             continue
-    return None
+    return max(dates) if dates else None
 
 
 def _fundamentals_for_backtest(
@@ -87,8 +89,13 @@ def momentum_scorer_adapter(
     that the BacktestEngine consumes.
     """
     config = dict(config or {})
+    # Preserve underscore-prefixed internal keys (e.g. `_fundamentals_store`)
+    # through the merge so adapter helpers can read them off merged_config.
     merged_config = dict(THEMED_DEFAULTS)
-    merged_config.update({k: v for k, v in config.items() if k in THEMED_DEFAULTS})
+    merged_config.update({
+        k: v for k, v in config.items()
+        if k in THEMED_DEFAULTS or k.startswith("_")
+    })
 
     benchmark_ticker = config.get("benchmark", merged_config.get("benchmark", "SPY"))
     prices: dict[str, pd.DataFrame] = {
@@ -101,7 +108,7 @@ def momentum_scorer_adapter(
         bench_series = benchmark_ticker
 
     tickers = [t for t in prices.keys() if t != benchmark_ticker]
-    fundamentals = _fundamentals_for_backtest(tickers, histories, config)
+    fundamentals = _fundamentals_for_backtest(tickers, histories, merged_config)
 
     scorer = MomentumScorer(merged_config)
     scored = scorer.score_all(
@@ -126,7 +133,10 @@ def early_stage_scorer_adapter(
     """
     config = dict(config or {})
     merged_config = dict(EARLY_STAGE_DEFAULTS)
-    merged_config.update({k: v for k, v in config.items() if k in EARLY_STAGE_DEFAULTS})
+    merged_config.update({
+        k: v for k, v in config.items()
+        if k in EARLY_STAGE_DEFAULTS or k.startswith("_")
+    })
 
     prices: dict[str, pd.DataFrame] = {
         ticker: _to_capitalised(df) for ticker, df in histories.items()
@@ -135,7 +145,7 @@ def early_stage_scorer_adapter(
     benchmark_ticker = config.get("benchmark", merged_config.get("benchmark", "SPY"))
     tickers = [t for t in prices.keys() if t != benchmark_ticker]
 
-    fundamentals = _fundamentals_for_backtest(tickers, histories, config)
+    fundamentals = _fundamentals_for_backtest(tickers, histories, merged_config)
 
     scorer = EarlyStageScorer(merged_config)
     scored = scorer.score_all(
