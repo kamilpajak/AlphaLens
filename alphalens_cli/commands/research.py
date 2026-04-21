@@ -690,9 +690,31 @@ def validate_llm_filter(
 
 
 _ACCEPT_RATINGS = {"BUY", "OVERWEIGHT"}
-_REJECT_RATINGS = {"HOLD", "UNDERWEIGHT", "SELL"}
 _PIT_SAFE_ANALYSTS = ["market", "news", "fundamentals"]  # social drops look-ahead risk
 _FWD_HORIZONS = (5, 20, 60, 120)
+
+
+def _classify_rating(raw: str | None) -> str:
+    """Normalize an upstream decision string (strip whitespace, uppercase)."""
+    if not raw:
+        return ""
+    return str(raw).strip().upper()
+
+
+def _mean_alpha(rows, horizon: int):
+    """NaN-aware mean + accurate sample count for the forward-return table.
+
+    For 120d horizon, recent picks typically have alpha_120d = NaN (the 120-day
+    forward window hasn't occurred yet). Returning len(rows) as n would overstate
+    the mean's support.
+    """
+    import pandas as pd
+
+    vals = [r.get(f"alpha_{horizon}d") for r in rows]
+    vals = [v for v in vals if pd.notna(v)]
+    if not vals:
+        return None, 0
+    return sum(vals) / len(vals), len(vals)
 
 
 def _at_pick_trailing_return(store, ticker: str, pick_date, lookback: int) -> float | None:
@@ -724,24 +746,32 @@ def _compute_forward_features(store, ticker: str, benchmark: str, pick_date) -> 
     ts = pd.Timestamp(pick_date)
     out: dict = {}
 
+    # PIT-safe entry: signal is generated at EOD of pick_date; earliest realistic
+    # fill is the NEXT trading day's close. Using pick_date's close would be
+    # look-ahead (we can't execute at a price we learned after the bar closed).
+    # Matches HistoryStore.forward_return convention used by the backtest engine.
     try:
-        tkr_close = store.full(ticker)["close"].loc[ts:]
+        df_t = store.full(ticker)
+        tkr_close = df_t["close"].loc[df_t.index > ts]
     except Exception:  # noqa: BLE001
         tkr_close = None
     try:
-        bench_close = store.full(benchmark)["close"].loc[ts:]
+        df_b = store.full(benchmark)
+        bench_close = df_b["close"].loc[df_b.index > ts]
     except Exception:  # noqa: BLE001
         bench_close = None
 
     def _window_metrics(closes, horizon):
-        if closes is None or len(closes) <= horizon:
+        # Need horizon+1 bars post-entry: entry@iloc[0], exit@iloc[horizon].
+        if closes is None or len(closes) < horizon + 1:
             return None, None, None
         window = closes.iloc[: horizon + 1]
-        entry, exit_ = float(window.iloc[0]), float(window.iloc[horizon])
+        entry = float(window.iloc[0])
+        exit_ = float(window.iloc[horizon])
         if entry <= 0:
             return None, None, None
         ret = (exit_ - entry) / entry
-        # Intra-period max drawdown on cumulative return path.
+        # Intra-period max drawdown on cumulative return path vs entry.
         path = window / entry
         max_dd = float((path / path.cummax() - 1.0).min())
         # Realized daily vol, annualized.
@@ -861,8 +891,9 @@ def historical_acceptance(
     picks = pd.DataFrame(rows)
     typer.echo(f"  {len(picks)} (date, ticker) pairs over {picks['date'].nunique()} days")
 
-    # Load full themed universe + benchmark — we need all sampled tickers' OHLCV
-    # later for forward-return computation, so pay the load cost once.
+    # Dry-run only needs the benchmark (for regime classification). A full run
+    # additionally loads the themed universe (for forward-return computation
+    # on sampled tickers). Skipping the 113-ticker load on --dry-run saves ~30s.
     import yaml
 
     from alphalens.screeners.themed.config import UNIVERSE_PATH
@@ -870,11 +901,16 @@ def historical_acceptance(
 
     universe_yaml = yaml.safe_load(UNIVERSE_PATH.read_text())
     universe_tickers = sorted(flatten_universe(universe_yaml).keys())
-    typer.echo(
-        f"Loading OHLCV for {len(universe_tickers)} universe tickers + {benchmark} "
-        f"(regime + forward returns)…"
-    )
-    histories = load_lean_histories(DATA_DIR, universe_tickers + [benchmark])
+
+    if dry_run:
+        typer.echo(f"Loading OHLCV for {benchmark} only (dry-run — no forward returns)…")
+        histories = load_lean_histories(DATA_DIR, [benchmark])
+    else:
+        typer.echo(
+            f"Loading OHLCV for {len(universe_tickers)} universe tickers + {benchmark} "
+            f"(regime + forward returns)…"
+        )
+        histories = load_lean_histories(DATA_DIR, universe_tickers + [benchmark])
     store = HistoryStore(histories)
     bench_close = store.full(benchmark)["close"]
     regime_labels = classify_regime(bench_close)
@@ -913,6 +949,10 @@ def historical_acceptance(
 
     # Real runs.
     analysts = None if include_social else list(_PIT_SAFE_ANALYSTS)
+    if analysts is not None and not analysts:
+        raise typer.BadParameter(
+            "selected_analysts resolved to empty list — upstream requires ≥1 analyst"
+        )
     typer.echo(
         f"Running Layer 3 with selected_analysts="
         f"{'default (all 4)' if analysts is None else analysts}"
@@ -926,6 +966,16 @@ def historical_acceptance(
         reports_root = Path.cwd() / reports_root
     reports_root.mkdir(parents=True, exist_ok=True)
     typer.echo(f"Per-sample reports → {reports_root}")
+
+    # Resolve CSV path once up front so we can flush after every sample. A 3h
+    # run with no intermediate persistence would lose everything on OOM/crash
+    # /Ctrl-C. Per-sample flush protects ~6M tokens of API spend.
+    csv_path: Path | None = None
+    if results_csv:
+        csv_path = Path(results_csv)
+        if not csv_path.is_absolute():
+            csv_path = Path.cwd() / csv_path
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
     results: list[dict] = []
     accept_by_regime: dict[str, list[int]] = defaultdict(list)
 
@@ -945,7 +995,7 @@ def historical_acceptance(
                 curr_date=s["date"],
                 selected_analysts=analysts,
             )
-            rating = (result.rating or "").upper()
+            rating = _classify_rating(result.rating)
             accepted = 1 if rating in _ACCEPT_RATINGS else 0
             accept_by_regime[s["regime"]].append(accepted)
 
@@ -1022,6 +1072,10 @@ def historical_acceptance(
             results.append(err_row)
             typer.echo(f"    → ERROR: {exc}")
 
+        # Flush CSV after every sample — survives crashes / interruptions.
+        if csv_path is not None:
+            pd.DataFrame(results).to_csv(csv_path, index=False)
+
     # Aggregate.
     def _accept_rate(lst):
         return sum(lst) / len(lst) if lst else float("nan")
@@ -1077,11 +1131,6 @@ def historical_acceptance(
         lines.append(f"- {rating}: {rating_counts.get(rating, 0)}")
 
     # Forward-return post-hoc: did Layer 3's decisions actually predict future returns?
-    def _mean_alpha(rows, horizon):
-        vals = [r.get(f"alpha_{horizon}d") for r in rows]
-        vals = [v for v in vals if v is not None]
-        return (sum(vals) / len(vals)) if vals else None
-
     accepted_rows = [r for r in results if r["accepted"] == 1]
     rejected_rows = [r for r in results if r["accepted"] == 0 and r["rating"]]
 
@@ -1090,27 +1139,28 @@ def historical_acceptance(
         "## Forward returns by Layer 3 decision (vs SPY benchmark)",
         "",
         "Higher α on accepted rows = Layer 3 correctly picked winners. "
-        "If rejected rows have similar/higher α, Layer 3 is destroying value.",
+        "If rejected rows have similar/higher α, Layer 3 is destroying value. "
+        "`n` reflects rows with a valid alpha at that horizon — recent picks "
+        "may be missing at longer horizons.",
         "",
         "| Horizon | Accepted α (n) | Rejected α (n) | Δ (accepted − rejected) |",
         "| --- | ---: | ---: | ---: |",
     ]
-    for horizon in (5, 20, 60, 120):
-        a_alpha = _mean_alpha(accepted_rows, horizon)
-        r_alpha = _mean_alpha(rejected_rows, horizon)
+    for horizon in _FWD_HORIZONS:
+        a_alpha, a_n = _mean_alpha(accepted_rows, horizon)
+        r_alpha, r_n = _mean_alpha(rejected_rows, horizon)
         delta = (a_alpha - r_alpha) if (a_alpha is not None and r_alpha is not None) else None
-        a_str = f"{a_alpha * 100:+.2f}% ({len(accepted_rows)})" if a_alpha is not None else "n/a"
-        r_str = f"{r_alpha * 100:+.2f}% ({len(rejected_rows)})" if r_alpha is not None else "n/a"
+        a_str = f"{a_alpha * 100:+.2f}% ({a_n})" if a_alpha is not None else f"n/a ({a_n})"
+        r_str = f"{r_alpha * 100:+.2f}% ({r_n})" if r_alpha is not None else f"n/a ({r_n})"
         d_str = f"{delta * 100:+.2f}%" if delta is not None else "n/a"
         lines.append(f"| {horizon}d | {a_str} | {r_str} | {d_str} |")
 
     report_path.write_text("\n".join(lines))
     typer.echo(f"Report: {report_path}")
 
-    if results_csv:
-        csv_path = Path(results_csv)
-        if not csv_path.is_absolute():
-            csv_path = Path.cwd() / csv_path
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
+    if csv_path is not None:
+        # One final flush to catch the case where the loop exited on a skipped
+        # regime (no samples executed in it) — during-loop writes still covered
+        # the common path.
         pd.DataFrame(results).to_csv(csv_path, index=False)
         typer.echo(f"Per-sample CSV: {csv_path}")
