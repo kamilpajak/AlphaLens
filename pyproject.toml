@@ -13,6 +13,7 @@ dependencies = [
     "statsmodels>=0.14.6",
     "tradingagents",
     "quiverquant",
+    "simfin>=1.0.1",
 ]
 
 [project.scripts]

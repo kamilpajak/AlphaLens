@@ -40,9 +40,25 @@ def backtest(
     fundamental_gate: bool = typer.Option(
         False,
         "--fundamental-gate/--no-fundamental-gate",
-        help="Apply Layer 2b fundamental soft-guardrail (issue #14). Pre-loads Alpha Vantage "
+        help="Apply Layer 2b fundamental soft-guardrail (issue #14). Pre-loads "
              "fundamentals once for the universe and multiplies the technical composite by "
              "the gate score. Only meaningful for --scorer momentum | early-stage.",
+    ),
+    fundamentals_source: str = typer.Option(
+        "simfin",
+        "--fundamentals-source",
+        help="Data source when --fundamental-gate is on: 'simfin' (free 5y bulk CSV, "
+             "requires SIMFIN_API_KEY in .env; recommended) or 'av' (Alpha Vantage, "
+             "25 req/day free tier so 113 tickers × 4 endpoints will throttle).",
+    ),
+    with_prices: bool = typer.Option(
+        False,
+        "--with-prices/--no-prices",
+        help="SimFin-only: load daily share-prices CSV for PIT P/S gate. Requires "
+             "~/.alphalens/simfin_cache/us-shareprices-daily.csv (~435MB). If "
+             "missing, simfin will download it (download speed varies — can be "
+             "slow on throttled broadband). When off, P/S penalty is skipped "
+             "and gate uses only runway/OCF/net_income.",
     ),
 ) -> None:
     """Run backtest over Lean CSV data and emit a decision-matrix report.
@@ -117,16 +133,30 @@ def backtest(
         )
 
     if fundamental_gate and scorer in ("momentum", "early-stage"):
-        from alphalens.fundamentals.backtest_store import HistoricalFundamentalsStore
+        if fundamentals_source == "simfin":
+            from alphalens.fundamentals.simfin_store import SimFinFundamentalsStore
 
-        typer.echo(
-            f"Preloading fundamentals for {len(screener_tickers)} tickers (one-shot)…"
-        )
-        fundamentals_store = HistoricalFundamentalsStore()
+            typer.echo(
+                f"Preloading SimFin fundamentals (bulk CSV, 5y US quarterly, "
+                f"with_prices={with_prices})…"
+            )
+            fundamentals_store = SimFinFundamentalsStore(with_prices=with_prices)
+        elif fundamentals_source == "av":
+            from alphalens.fundamentals.backtest_store import HistoricalFundamentalsStore
+
+            typer.echo(
+                f"Preloading Alpha Vantage fundamentals for {len(screener_tickers)} tickers…"
+            )
+            fundamentals_store = HistoricalFundamentalsStore()
+        else:
+            raise typer.BadParameter(
+                f"Unknown --fundamentals-source: {fundamentals_source!r} "
+                "(expected: simfin | av)"
+            )
         fundamentals_store.preload(screener_tickers)
         scorer_config["fundamental_gate_enabled"] = True
         scorer_config["_fundamentals_store"] = fundamentals_store
-        typer.echo("  fundamental gate: ON")
+        typer.echo(f"  fundamental gate: ON (source={fundamentals_source})")
 
     typer.echo(f"Loading OHLCV into HistoryStore ({start_date} → {end_date})…")
     if scorer == "lean":
