@@ -85,5 +85,67 @@ class TestTradingAgentsRunner(unittest.TestCase):
             runner.run(_cand(ticker="AAPL"), candidate_id=1)
 
 
+class TestTradingAgentsRunnerPITReplay(unittest.TestCase):
+    """curr_date override + selected_analysts for point-in-time historical replay."""
+
+    def test_runner_forwards_curr_date_to_propagate(self):
+        from datetime import date
+
+        from alphalens.runner import TradingAgentsRunner
+
+        graph = MagicMock()
+        graph.propagate.return_value = ({}, "BUY")
+        runner = TradingAgentsRunner(
+            config_builder=lambda: {"deep_think_llm": "x"},
+            graph_factory=lambda _cfg: graph,
+        )
+
+        runner.run(_cand(ticker="NVDA"), candidate_id=1, curr_date=date(2023, 6, 15))
+
+        args, _ = graph.propagate.call_args
+        self.assertEqual(args[0], "NVDA")
+        self.assertEqual(args[1], "2023-06-15")
+
+    def test_runner_forwards_selected_analysts_to_graph_factory(self):
+        from alphalens.runner import TradingAgentsRunner
+
+        graph = MagicMock()
+        graph.propagate.return_value = ({}, "HOLD")
+        factory = MagicMock(return_value=graph)
+        runner = TradingAgentsRunner(
+            config_builder=lambda: {"deep_think_llm": "x"},
+            graph_factory=factory,
+        )
+
+        runner.run(
+            _cand(ticker="AAPL"),
+            candidate_id=1,
+            selected_analysts=["market", "news", "fundamentals"],
+        )
+
+        factory.assert_called_once()
+        _args, kwargs = factory.call_args
+        self.assertEqual(
+            kwargs.get("selected_analysts"),
+            ["market", "news", "fundamentals"],
+        )
+
+    def test_runner_skips_selected_analysts_kwarg_when_none(self):
+        """Backward compat: existing 1-arg graph_factory callables must still work."""
+        from alphalens.runner import TradingAgentsRunner
+
+        graph = MagicMock()
+        graph.propagate.return_value = ({}, "HOLD")
+        factory = MagicMock(return_value=graph)
+        runner = TradingAgentsRunner(
+            config_builder=lambda: {"deep_think_llm": "x"},
+            graph_factory=factory,
+        )
+        runner.run(_cand(ticker="MSFT"), candidate_id=1)
+
+        _args, kwargs = factory.call_args
+        self.assertNotIn("selected_analysts", kwargs)
+
+
 if __name__ == "__main__":
     unittest.main()

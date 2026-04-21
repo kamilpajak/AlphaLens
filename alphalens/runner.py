@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Callable
 
 from .candidates import AnalysisResult, Candidate
@@ -17,14 +17,17 @@ from .config_gemini import build_gemini_config
 logger = logging.getLogger(__name__)
 
 
-GraphFactory = Callable[[dict[str, Any]], Any]
+GraphFactory = Callable[..., Any]
 ConfigBuilder = Callable[[], dict[str, Any]]
 
 
-def _default_graph_factory(config: dict[str, Any]):
+def _default_graph_factory(config: dict[str, Any], selected_analysts: list[str] | None = None):
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
-    return TradingAgentsGraph(debug=False, config=config)
+    kwargs: dict[str, Any] = {"debug": False, "config": config}
+    if selected_analysts is not None:
+        kwargs["selected_analysts"] = list(selected_analysts)
+    return TradingAgentsGraph(**kwargs)
 
 
 def _format_themed(p: dict[str, Any]) -> str:
@@ -88,10 +91,36 @@ class TradingAgentsRunner:
         self._config_builder = config_builder
         self._graph_factory = graph_factory
 
-    def run(self, candidate: Candidate, *, candidate_id: int) -> AnalysisResult:
+    def run(
+        self,
+        candidate: Candidate,
+        *,
+        candidate_id: int,
+        curr_date: date | None = None,
+        selected_analysts: list[str] | None = None,
+    ) -> AnalysisResult:
+        """Run Layer 3 on a candidate.
+
+        Args:
+            candidate: the ticker and source metadata.
+            candidate_id: row id in the queue (for tracing).
+            curr_date: point-in-time replay date; default today. Drops news/social
+                look-ahead risk for historical replays (though social agent's date
+                handling is not fully PIT-safe — exclude it via selected_analysts
+                for clean replay).
+            selected_analysts: subset of ["market", "social", "news", "fundamentals"].
+                None → upstream default (all four). Pass without "social" for
+                PIT-clean replays on historical dates.
+        """
         config = self._config_builder()
-        graph = self._graph_factory(config)
-        date_str = datetime.now(timezone.utc).date().isoformat()
+        # Only forward selected_analysts when explicitly provided — preserves
+        # backward-compat with graph_factory callables that take just (config).
+        if selected_analysts is not None:
+            graph = self._graph_factory(config, selected_analysts=selected_analysts)
+        else:
+            graph = self._graph_factory(config)
+        replay_date = curr_date or datetime.now(timezone.utc).date()
+        date_str = replay_date.isoformat()
 
         logger.info(
             "ta_run start ticker=%s source=%s candidate_id=%s",

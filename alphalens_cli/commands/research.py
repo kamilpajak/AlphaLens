@@ -608,12 +608,13 @@ def validate_llm_filter(
     histories = load_lean_histories(DATA_DIR, screener_tickers + list(BENCHMARKS))
     store = HistoryStore(histories)
 
+    # Scorer declares its own warmup requirement — engine reads on __init__.
+    lean_rank.MIN_BARS_REQUIRED = 252
     engine = BacktestEngine(
         store, scorer=lean_rank, scorer_config=LEAN_DEFAULTS,
         holding_period=5, top_n=top_n, benchmark="SPY",
         screener_tickers=screener_tickers, weighting="linear",
     )
-    engine.MIN_BARS_REQUIRED = 252
 
     typer.echo("Generuję historical picks via BacktestEngine...")
     report_obj = engine.run(start=start_date, end=end_date)
@@ -686,3 +687,244 @@ def validate_llm_filter(
         import pandas as pd
         pd.DataFrame(result.per_pick_evaluations).to_csv(csv_path, index=False)
         typer.echo(f"CSV: {csv_path}")
+
+
+_ACCEPT_RATINGS = {"BUY", "OVERWEIGHT"}
+_REJECT_RATINGS = {"HOLD", "UNDERWEIGHT", "SELL"}
+_PIT_SAFE_ANALYSTS = ["market", "news", "fundamentals"]  # social drops look-ahead risk
+
+
+@research_app.command(name="historical-acceptance")
+def historical_acceptance(
+    scorer: str = typer.Option(
+        ...,
+        help="Which scorer's picks to replay: 'momentum' or 'early-stage'",
+    ),
+    samples_per_regime: int = typer.Option(
+        10, help="How many (date, ticker) samples per regime bucket to run through Layer 3"
+    ),
+    seed: int = typer.Option(42, help="Random seed for reproducibility"),
+    picks_csv: str = typer.Option(
+        "",
+        help="Path to picks CSV (default: docs/backtest/compare_{scorer}_2026-04-21.csv)",
+    ),
+    benchmark: str = typer.Option("SPY", help="Benchmark ticker for regime classification"),
+    include_social: bool = typer.Option(
+        False,
+        "--include-social/--exclude-social",
+        help="Include social analyst. Default: exclude (social has look-ahead risk on "
+             "historical replay). Off for clean PIT rigor.",
+    ),
+    report: str = typer.Option("", help="Markdown report output path"),
+    results_csv: str = typer.Option("", help="Per-sample results CSV"),
+    dry_run: bool = typer.Option(
+        False, help="Print sampling plan + cost estimate, skip Layer 3 invocation"
+    ),
+) -> None:
+    """Stratified random sample of historical top-5 picks → Layer 3 PIT replay.
+
+    Sampling design (per user feedback 2026-04-21):
+      - Population: every (date, ticker) in the scorer's 5y top-5 timeline.
+      - Stratified by regime (bull/bear/flat) to reduce variance + isolate
+        regime-specific acceptance behavior.
+      - No decision-change filter — Layer 3 verdict is (date, ticker, state)-
+        dependent, not purely scorer-composition-dependent. Same ticker on
+        different days → genuinely independent decisions.
+
+    PIT hygiene:
+      - curr_date passed through to TradingAgents graph.propagate.
+      - Social analyst excluded by default (see CLAUDE.md — its toolset doesn't
+        filter by historical date). News + fundamentals + market are PIT-safe.
+
+    Acceptance metric: fraction of samples where Layer 3 returns BUY or OVERWEIGHT.
+    """
+    import random
+    from collections import defaultdict
+    from datetime import date as _date
+
+    import pandas as pd
+
+    from alphalens.backtest.history_store import HistoryStore
+    from alphalens.backtest.regime import classify_regime
+    from alphalens.candidates import Candidate
+    from alphalens.runner import TradingAgentsRunner
+    from alphalens.screeners.lean.config import DATA_DIR
+    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+
+    if scorer not in {"momentum", "early-stage"}:
+        raise typer.BadParameter(f"Unknown scorer: {scorer!r} (expected: momentum | early-stage)")
+
+    picks_path = Path(picks_csv) if picks_csv else Path(
+        f"docs/backtest/compare_{scorer.replace('-', '_')}_2026-04-21.csv"
+    )
+    if not picks_path.exists():
+        raise typer.BadParameter(f"Picks CSV not found: {picks_path}")
+
+    typer.echo(f"Loading picks from {picks_path}")
+    picks_raw = pd.read_csv(picks_path)
+    # Explode top_n_tickers (comma-separated) into (date, ticker) rows.
+    rows = []
+    for _, r in picks_raw.iterrows():
+        d = pd.to_datetime(r["date"]).date()
+        for rank, t in enumerate(str(r["top_n_tickers"]).split(","), 1):
+            rows.append({"date": d, "ticker": t.strip().upper(), "rank": rank})
+    picks = pd.DataFrame(rows)
+    typer.echo(f"  {len(picks)} (date, ticker) pairs over {picks['date'].nunique()} days")
+
+    # Regime classification — load benchmark close.
+    typer.echo(f"Loading {benchmark} OHLCV for regime classification…")
+    histories = load_lean_histories(DATA_DIR, [benchmark])
+    store = HistoryStore(histories)
+    bench_close = store.full(benchmark)["close"]
+    regime_labels = classify_regime(bench_close)
+    regime_labels.index = regime_labels.index.date
+    picks["regime"] = picks["date"].map(regime_labels.to_dict())
+    picks = picks.dropna(subset=["regime"])
+
+    regime_counts = picks["regime"].value_counts().to_dict()
+    typer.echo(f"  population by regime: {regime_counts}")
+
+    # Stratified sample.
+    rng = random.Random(seed)
+    sampled = []
+    for regime in ("bull", "bear", "flat"):
+        pool = picks[picks["regime"] == regime]
+        if pool.empty:
+            typer.echo(f"  [{regime}] empty pool, skipping")
+            continue
+        k = min(samples_per_regime, len(pool))
+        idx = rng.sample(range(len(pool)), k)
+        sampled.extend(pool.iloc[idx].to_dict(orient="records"))
+
+    typer.echo(f"Sampled {len(sampled)} (date, ticker) pairs across regimes")
+    if dry_run:
+        typer.echo("--- sampling plan ---")
+        for s in sampled[:10]:
+            typer.echo(f"  {s['date']}  {s['ticker']:<6}  rank={s['rank']}  regime={s['regime']}")
+        if len(sampled) > 10:
+            typer.echo(f"  … ({len(sampled) - 10} more)")
+        typer.echo(
+            f"\nEstimated cost: ~{len(sampled)} Layer 3 runs × ~15 min each "
+            f"= ~{len(sampled) * 15 / 60:.1f}h sequential"
+        )
+        typer.echo("Dry-run complete — no Layer 3 calls made.")
+        raise typer.Exit(0)
+
+    # Real runs.
+    analysts = None if include_social else list(_PIT_SAFE_ANALYSTS)
+    typer.echo(
+        f"Running Layer 3 with selected_analysts="
+        f"{'default (all 4)' if analysts is None else analysts}"
+    )
+    runner = TradingAgentsRunner()
+    results: list[dict] = []
+    accept_by_regime: dict[str, list[int]] = defaultdict(list)
+
+    for i, s in enumerate(sampled, 1):
+        typer.echo(f"[{i}/{len(sampled)}] {s['date']} {s['ticker']} (regime={s['regime']})")
+        candidate = Candidate.from_screener(
+            ticker=s["ticker"],
+            source=scorer,
+            priority=10,
+            payload={"rank": s["rank"], "replay_date": s["date"].isoformat()},
+            discriminator=f"replay-{s['date']}",
+        )
+        try:
+            result = runner.run(
+                candidate,
+                candidate_id=i,
+                curr_date=s["date"],
+                selected_analysts=analysts,
+            )
+            rating = (result.rating or "").upper()
+            accepted = 1 if rating in _ACCEPT_RATINGS else 0
+            accept_by_regime[s["regime"]].append(accepted)
+            results.append({
+                "date": s["date"].isoformat(),
+                "ticker": s["ticker"],
+                "rank": s["rank"],
+                "regime": s["regime"],
+                "rating": rating,
+                "accepted": accepted,
+                "duration_sec": round(result.duration_sec, 1),
+                "model": result.model_used,
+                "error": "",
+            })
+            typer.echo(f"    → {rating}  ({result.duration_sec:.0f}s)")
+        except Exception as exc:  # noqa: BLE001
+            results.append({
+                "date": s["date"].isoformat(),
+                "ticker": s["ticker"],
+                "rank": s["rank"],
+                "regime": s["regime"],
+                "rating": "",
+                "accepted": 0,
+                "duration_sec": 0,
+                "model": "",
+                "error": str(exc)[:200],
+            })
+            typer.echo(f"    → ERROR: {exc}")
+
+    # Aggregate.
+    def _accept_rate(lst):
+        return sum(lst) / len(lst) if lst else float("nan")
+
+    total_accept = [r["accepted"] for r in results if not r["error"]]
+    total_rate = _accept_rate(total_accept)
+
+    typer.echo("")
+    typer.echo(f"=== Acceptance rate — scorer={scorer} ===")
+    typer.echo(f"  Overall: {total_rate * 100:.1f}% ({sum(total_accept)}/{len(total_accept)})")
+    for regime in ("bull", "bear", "flat"):
+        lst = accept_by_regime.get(regime, [])
+        if lst:
+            typer.echo(f"  {regime}:   {_accept_rate(lst) * 100:.1f}% ({sum(lst)}/{len(lst)})")
+
+    # Reports.
+    report_path = Path(report) if report else Path(
+        f"docs/research/historical_acceptance_{scorer.replace('-', '_')}.md"
+    )
+    if not report_path.is_absolute():
+        report_path = Path.cwd() / report_path
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        f"# Historical Layer 3 Acceptance — {scorer}",
+        "",
+        f"- Picks source: `{picks_path}`",
+        f"- Samples per regime: {samples_per_regime}",
+        f"- Seed: {seed}",
+        f"- Analysts: {'all 4' if analysts is None else ', '.join(analysts)}"
+        + ("" if analysts is None else " (social excluded for PIT rigor)"),
+        f"- Total samples: {len(sampled)}  (attempted), {len(total_accept)} (completed)",
+        "",
+        "## Acceptance rate",
+        "",
+        "| Regime | n | Accepted | Rate |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    for regime in ("bull", "bear", "flat"):
+        lst = accept_by_regime.get(regime, [])
+        if lst:
+            lines.append(f"| {regime} | {len(lst)} | {sum(lst)} | {_accept_rate(lst) * 100:.1f}% |")
+    lines += [
+        f"| **overall** | **{len(total_accept)}** | **{sum(total_accept)}** | **{total_rate * 100:.1f}%** |",
+        "",
+        "## Rating distribution",
+        "",
+    ]
+    rating_counts: dict[str, int] = defaultdict(int)
+    for r in results:
+        if r["rating"]:
+            rating_counts[r["rating"]] += 1
+    for rating in ("BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL"):
+        lines.append(f"- {rating}: {rating_counts.get(rating, 0)}")
+    report_path.write_text("\n".join(lines))
+    typer.echo(f"Report: {report_path}")
+
+    if results_csv:
+        csv_path = Path(results_csv)
+        if not csv_path.is_absolute():
+            csv_path = Path.cwd() / csv_path
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(results).to_csv(csv_path, index=False)
+        typer.echo(f"Per-sample CSV: {csv_path}")
