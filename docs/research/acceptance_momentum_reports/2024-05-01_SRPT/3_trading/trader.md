@@ -1,0 +1,9 @@
+Analysis of SRPT (Sarepta Therapeutics) reveals a high-stakes scenario centered on the upcoming June 21 FDA PDUFA date. While the company has shown impressive strides toward commercial profitability—evidenced by two quarters of positive net income and a robust cash position of $1.3 billion—the fundamental investment thesis currently rests on a binary regulatory outcome that carries asymmetric risk.
+
+The bullish narrative focuses on the FDA’s willingness to grant a broad label expansion despite the EMBARK trial failing its primary endpoint. However, from a risk management perspective, relying on regulatory leniency after a failed primary endpoint is a precarious strategy. The market appears to have priced in a "best-case scenario" during the recent run-up, leaving the stock vulnerable to a significant "sell the news" event or a severe correction if the FDA issues a Complete Response Letter (CRL) or a restrictive label.
+
+Technically, SRPT is showing signs of exhaustion, trading near the upper Bollinger Band with an RSI approaching overbought territory. This suggests that the "buy the rumor" phase is reaching its peak. Furthermore, the $370 million in inventory identified by analysts represents a looming balance sheet threat; a negative FDA decision would likely necessitate a massive write-down, compounding the downward pressure on the stock.
+
+Following the principles of capital preservation, the prudent move is to exit the position ahead of the high-volatility event on June 21. The potential for a catastrophic drawdown in the event of a regulatory setback far outweighs the marginal gains of a successful approval that is already largely baked into the current price.
+
+FINAL TRANSACTION PROPOSAL: **SELL**
