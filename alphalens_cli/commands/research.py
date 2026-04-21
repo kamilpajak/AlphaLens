@@ -692,6 +692,75 @@ def validate_llm_filter(
 _ACCEPT_RATINGS = {"BUY", "OVERWEIGHT"}
 _REJECT_RATINGS = {"HOLD", "UNDERWEIGHT", "SELL"}
 _PIT_SAFE_ANALYSTS = ["market", "news", "fundamentals"]  # social drops look-ahead risk
+_FWD_HORIZONS = (5, 20, 60, 120)
+
+
+def _at_pick_trailing_return(store, ticker: str, pick_date, lookback: int) -> float | None:
+    """Trailing `lookback`-day return for `ticker` ending at `pick_date` (inclusive)."""
+    try:
+        df = store.full(ticker)
+    except Exception:  # noqa: BLE001
+        return None
+    import pandas as pd
+    ts = pd.Timestamp(pick_date)
+    try:
+        closes = df["close"].loc[:ts]
+        if len(closes) <= lookback:
+            return None
+        now = float(closes.iloc[-1])
+        then = float(closes.iloc[-lookback - 1])
+        if then <= 0:
+            return None
+        return (now - then) / then
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _compute_forward_features(store, ticker: str, benchmark: str, pick_date) -> dict:
+    """Return fwd/bench/alpha + max drawdown + realized vol for horizons {5,20,60,120}."""
+    import numpy as np
+    import pandas as pd
+
+    ts = pd.Timestamp(pick_date)
+    out: dict = {}
+
+    try:
+        tkr_close = store.full(ticker)["close"].loc[ts:]
+    except Exception:  # noqa: BLE001
+        tkr_close = None
+    try:
+        bench_close = store.full(benchmark)["close"].loc[ts:]
+    except Exception:  # noqa: BLE001
+        bench_close = None
+
+    def _window_metrics(closes, horizon):
+        if closes is None or len(closes) <= horizon:
+            return None, None, None
+        window = closes.iloc[: horizon + 1]
+        entry, exit_ = float(window.iloc[0]), float(window.iloc[horizon])
+        if entry <= 0:
+            return None, None, None
+        ret = (exit_ - entry) / entry
+        # Intra-period max drawdown on cumulative return path.
+        path = window / entry
+        max_dd = float((path / path.cummax() - 1.0).min())
+        # Realized daily vol, annualized.
+        daily_rets = window.pct_change().dropna()
+        vol_ann = float(daily_rets.std() * np.sqrt(252)) if len(daily_rets) > 1 else None
+        return ret, max_dd, vol_ann
+
+    for horizon in _FWD_HORIZONS:
+        t_ret, t_dd, t_vol = _window_metrics(tkr_close, horizon)
+        b_ret, b_dd, b_vol = _window_metrics(bench_close, horizon)
+        alpha = (t_ret - b_ret) if (t_ret is not None and b_ret is not None) else None
+        out[f"fwd_{horizon}d"] = t_ret
+        out[f"bench_{horizon}d"] = b_ret
+        out[f"alpha_{horizon}d"] = alpha
+        out[f"fwd_max_dd_{horizon}d"] = t_dd
+        out[f"bench_max_dd_{horizon}d"] = b_dd
+        out[f"fwd_vol_{horizon}d"] = t_vol
+        out[f"bench_vol_{horizon}d"] = b_vol
+    return out
 
 
 @research_app.command(name="historical-acceptance")
@@ -774,18 +843,38 @@ def historical_acceptance(
 
     typer.echo(f"Loading picks from {picks_path}")
     picks_raw = pd.read_csv(picks_path)
-    # Explode top_n_tickers (comma-separated) into (date, ticker) rows.
+    # Explode top_n_tickers (comma-separated) into (date, ticker, score) rows.
     rows = []
     for _, r in picks_raw.iterrows():
         d = pd.to_datetime(r["date"]).date()
-        for rank, t in enumerate(str(r["top_n_tickers"]).split(","), 1):
-            rows.append({"date": d, "ticker": t.strip().upper(), "rank": rank})
+        tickers_list = [t.strip().upper() for t in str(r["top_n_tickers"]).split(",")]
+        scores_list = [float(s.strip()) for s in str(r["top_n_scores"]).split(",")]
+        for rank, (t, s) in enumerate(zip(tickers_list, scores_list), 1):
+            rows.append({
+                "date": d,
+                "ticker": t,
+                "rank": rank,
+                "scorer_score": s,
+                "daily_ic": float(r.get("ic", float("nan"))) if "ic" in r else float("nan"),
+                "scored_count": int(r.get("scored_count", 0)) if "scored_count" in r else 0,
+            })
     picks = pd.DataFrame(rows)
     typer.echo(f"  {len(picks)} (date, ticker) pairs over {picks['date'].nunique()} days")
 
-    # Regime classification — load benchmark close.
-    typer.echo(f"Loading {benchmark} OHLCV for regime classification…")
-    histories = load_lean_histories(DATA_DIR, [benchmark])
+    # Load full themed universe + benchmark — we need all sampled tickers' OHLCV
+    # later for forward-return computation, so pay the load cost once.
+    import yaml
+
+    from alphalens.screeners.themed.config import UNIVERSE_PATH
+    from alphalens.screeners.themed.universe import flatten_universe
+
+    universe_yaml = yaml.safe_load(UNIVERSE_PATH.read_text())
+    universe_tickers = sorted(flatten_universe(universe_yaml).keys())
+    typer.echo(
+        f"Loading OHLCV for {len(universe_tickers)} universe tickers + {benchmark} "
+        f"(regime + forward returns)…"
+    )
+    histories = load_lean_histories(DATA_DIR, universe_tickers + [benchmark])
     store = HistoryStore(histories)
     bench_close = store.full(benchmark)["close"]
     regime_labels = classify_regime(bench_close)
@@ -860,6 +949,15 @@ def historical_acceptance(
             accepted = 1 if rating in _ACCEPT_RATINGS else 0
             accept_by_regime[s["regime"]].append(accepted)
 
+            # Forward returns + realized vol + max drawdown — full post-hoc
+            # feature vector so the CSV is self-sufficient for any later
+            # regression / quantile analysis without re-running Layer 3.
+            fwd = _compute_forward_features(store, s["ticker"], benchmark, s["date"])
+            # At-pick-time market context.
+            fwd["spy_trailing_60d"] = _at_pick_trailing_return(
+                store, benchmark, s["date"], 60
+            )
+
             # Persist the full state + upstream's markdown render for post-hoc
             # analysis of why Layer 3 accepted/rejected this pick.
             sample_dir = reports_root / f"{s['date'].isoformat()}_{s['ticker']}"
@@ -876,10 +974,13 @@ def historical_acceptance(
                 except Exception as exc:  # noqa: BLE001
                     typer.echo(f"    warn: save_report_to_disk failed: {exc}", err=True)
 
-            results.append({
+            row = {
                 "date": s["date"].isoformat(),
                 "ticker": s["ticker"],
                 "rank": s["rank"],
+                "scorer_score": s.get("scorer_score"),
+                "daily_ic": s.get("daily_ic"),
+                "scored_count": s.get("scored_count"),
                 "regime": s["regime"],
                 "rating": rating,
                 "accepted": accepted,
@@ -887,13 +988,25 @@ def historical_acceptance(
                 "model": result.model_used,
                 "report_dir": str(sample_dir.relative_to(Path.cwd())) if sample_dir.is_relative_to(Path.cwd()) else str(sample_dir),
                 "error": "",
-            })
-            typer.echo(f"    → {rating}  ({result.duration_sec:.0f}s)  → {sample_dir.name}/")
+                **fwd,
+            }
+            results.append(row)
+            fwd_20 = fwd.get("fwd_20d")
+            alpha_20 = fwd.get("alpha_20d")
+            fwd_str = (
+                f"  fwd20d={fwd_20 * 100:+.1f}% α={alpha_20 * 100:+.1f}%"
+                if (fwd_20 is not None and alpha_20 is not None)
+                else "  fwd20d=n/a"
+            )
+            typer.echo(f"    → {rating}  ({result.duration_sec:.0f}s){fwd_str}  → {sample_dir.name}/")
         except Exception as exc:  # noqa: BLE001
-            results.append({
+            err_row: dict = {
                 "date": s["date"].isoformat(),
                 "ticker": s["ticker"],
                 "rank": s["rank"],
+                "scorer_score": s.get("scorer_score"),
+                "daily_ic": s.get("daily_ic"),
+                "scored_count": s.get("scored_count"),
                 "regime": s["regime"],
                 "rating": "",
                 "accepted": 0,
@@ -901,7 +1014,12 @@ def historical_acceptance(
                 "model": "",
                 "report_dir": "",
                 "error": str(exc)[:200],
-            })
+            }
+            err_row.update(_compute_forward_features(store, s["ticker"], benchmark, s["date"]))
+            err_row["spy_trailing_60d"] = _at_pick_trailing_return(
+                store, benchmark, s["date"], 60
+            )
+            results.append(err_row)
             typer.echo(f"    → ERROR: {exc}")
 
     # Aggregate.
@@ -957,6 +1075,35 @@ def historical_acceptance(
             rating_counts[r["rating"]] += 1
     for rating in ("BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL"):
         lines.append(f"- {rating}: {rating_counts.get(rating, 0)}")
+
+    # Forward-return post-hoc: did Layer 3's decisions actually predict future returns?
+    def _mean_alpha(rows, horizon):
+        vals = [r.get(f"alpha_{horizon}d") for r in rows]
+        vals = [v for v in vals if v is not None]
+        return (sum(vals) / len(vals)) if vals else None
+
+    accepted_rows = [r for r in results if r["accepted"] == 1]
+    rejected_rows = [r for r in results if r["accepted"] == 0 and r["rating"]]
+
+    lines += [
+        "",
+        "## Forward returns by Layer 3 decision (vs SPY benchmark)",
+        "",
+        "Higher α on accepted rows = Layer 3 correctly picked winners. "
+        "If rejected rows have similar/higher α, Layer 3 is destroying value.",
+        "",
+        "| Horizon | Accepted α (n) | Rejected α (n) | Δ (accepted − rejected) |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    for horizon in (5, 20, 60, 120):
+        a_alpha = _mean_alpha(accepted_rows, horizon)
+        r_alpha = _mean_alpha(rejected_rows, horizon)
+        delta = (a_alpha - r_alpha) if (a_alpha is not None and r_alpha is not None) else None
+        a_str = f"{a_alpha * 100:+.2f}% ({len(accepted_rows)})" if a_alpha is not None else "n/a"
+        r_str = f"{r_alpha * 100:+.2f}% ({len(rejected_rows)})" if r_alpha is not None else "n/a"
+        d_str = f"{delta * 100:+.2f}%" if delta is not None else "n/a"
+        lines.append(f"| {horizon}d | {a_str} | {r_str} | {d_str} |")
+
     report_path.write_text("\n".join(lines))
     typer.echo(f"Report: {report_path}")
 
