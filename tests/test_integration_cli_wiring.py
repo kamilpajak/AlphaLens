@@ -47,7 +47,13 @@ class TestTyperAppRegistration(unittest.TestCase):
         names = {cmd.name for cmd in research_app.registered_commands}
         self.assertEqual(
             names,
-            {"validate-llm-filter", "survivorship-pit", "walk-forward", "cost-validation"},
+            {
+                "validate-llm-filter",
+                "survivorship-pit",
+                "walk-forward",
+                "cost-validation",
+                "historical-acceptance",
+            },
         )
 
     def test_root_app_top_level_commands(self):
