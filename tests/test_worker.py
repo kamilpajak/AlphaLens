@@ -149,6 +149,41 @@ class TestAnalysisWorker(unittest.TestCase):
         with CandidateQueue(self.db) as q:
             self.assertEqual(len(q.list_by_status("pending")), 1)
 
+    def test_process_one_does_not_notify_on_budget_exhaustion(self):
+        """Budget-exhausted path must NOT spam Telegram — logs locally only.
+
+        Worker plist fires every 5 min. Notifying on every exhausted tick spams
+        12 messages/hour until midnight. Success messages already intrinsically
+        signal the budget state. Fix: log, don't notify.
+        """
+        from alphalens.queue import CandidateQueue
+
+        runner = MagicMock()
+        notifier = MagicMock()
+        worker = self._make_worker(runner, notifier, budget_per_day=1)
+
+        with CandidateQueue(self.db) as q:
+            q.submit([_cand(ticker="DONE", discriminator="d1")])
+            job = q.claim_next()
+            q.mark_success(
+                job["id"],
+                decision="HOLD",
+                duration_sec=1.0,
+                cost_usd=None,
+                model_used="x",
+            )
+
+        notifier.send_message.reset_mock()
+
+        with self.assertLogs("alphalens.worker", level="INFO") as captured:
+            worker.process_one()
+
+        notifier.send_message.assert_not_called()
+        self.assertTrue(
+            any("Budget exhausted" in line for line in captured.output),
+            msg=f"Expected budget-exhausted log line, got: {captured.output}",
+        )
+
     def test_process_one_takes_higher_priority_first(self):
         from alphalens.queue import CandidateQueue
 

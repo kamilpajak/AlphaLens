@@ -40,9 +40,13 @@ class AnalysisWorker:
     def process_one(self) -> bool:
         done_today = self.queue.count_done_today()
         if done_today >= self.budget_per_day:
-            self._notify(
-                f"🛑 Auto-trigger budget exhausted ({done_today}/{self.budget_per_day}). "
-                f"Skipping pending jobs until tomorrow. Manual trigger remains available."
+            # Log locally — don't notify. Worker fires every 5 min; Telegraming on
+            # every exhausted tick spams 12/h until midnight. Success messages
+            # already intrinsically signal the budget state.
+            logger.info(
+                "Budget exhausted (%d/%d). Skipping pending jobs until tomorrow.",
+                done_today,
+                self.budget_per_day,
             )
             return False
 
