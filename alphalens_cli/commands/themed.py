@@ -24,8 +24,8 @@ def screen(
         False, help="Submit top-N to the candidate queue for Layer 3 deep analysis"
     ),
     scorer: str = typer.Option(
-        "momentum",
-        help="Which scorer to run: 'momentum' (default, late-stage trend continuation) or "
+        ...,
+        help="Required. Which scorer to run: 'momentum' (late-stage trend continuation) or "
              "'early-stage' (CAN SLIM / VCP / Jegadeesh 11-1 base-breakout detection)",
     ),
 ) -> None:
@@ -81,9 +81,13 @@ def screen(
         typer.echo(f"history store skipped: {exc}")
 
     if analyze:
-        with CandidateQueue(default_queue_path()) as queue:
-            submitted = queue.submit(pipeline.to_candidates(result))
-        typer.echo(f"queued {submitted} {scorer} candidate(s) for Layer 3")
+        try:
+            with CandidateQueue(default_queue_path()) as queue:
+                submitted = queue.submit(pipeline.to_candidates(result))
+            typer.echo(f"queued {submitted} {scorer} candidate(s) for Layer 3")
+        except Exception as exc:  # noqa: BLE001
+            typer.echo(f"queue submit failed: {exc}", err=True)
+            text += f"\n\n[ALERT] queue submit failed: {exc}"
 
     if dry_run:
         typer.echo(text)

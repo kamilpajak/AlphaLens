@@ -108,7 +108,8 @@ class TestThemedScreenCLIAnalyzeFlag(unittest.TestCase):
             return_value=self._fake_df(),
         ):
             result = self.runner.invoke(
-                themed_app, ["screen", "--top-n", "2", "--analyze", "--dry-run"]
+                themed_app,
+                ["screen", "--scorer", "momentum", "--top-n", "2", "--analyze", "--dry-run"],
             )
 
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
@@ -141,7 +142,8 @@ class TestThemedScreenCLIAnalyzeFlag(unittest.TestCase):
             return_value=self._fake_df(),
         ):
             result = self.runner.invoke(
-                themed_app, ["screen", "--top-n", "2", "--dry-run"]
+                themed_app,
+                ["screen", "--scorer", "momentum", "--top-n", "2", "--dry-run"],
             )
 
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
@@ -151,6 +153,62 @@ class TestThemedScreenCLIAnalyzeFlag(unittest.TestCase):
 
             with CandidateQueue(self.db) as q:
                 self.assertEqual(q.list_by_status("pending"), [])
+
+
+class TestThemedScreenCLIScorerRequired(unittest.TestCase):
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def test_missing_scorer_exits_nonzero(self):
+        from alphalens_cli.commands.themed import themed_app
+
+        result = self.runner.invoke(themed_app, ["screen", "--top-n", "2", "--dry-run"])
+        self.assertNotEqual(result.exit_code, 0)
+
+
+class TestThemedScreenQueueFailureTelegramFallback(unittest.TestCase):
+    """When --analyze is set and queue submit raises, Telegram must still fire with an error note."""
+
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def _fake_df(self):
+        return pd.DataFrame(
+            [
+                {"ticker": "AAPL", "momentum_score": 0.91, "themes": ["AI"]},
+                {"ticker": "NVDA", "momentum_score": 0.88, "themes": ["AI"]},
+            ]
+        )
+
+    @patch("alphalens_cli.commands.themed.TelegramHandler")
+    @patch("alphalens_cli.commands.themed.CandidateQueue")
+    @patch.dict(
+        "os.environ",
+        {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c"},
+        clear=False,
+    )
+    def test_queue_failure_still_sends_telegram_with_alert(
+        self, mock_queue_cls, mock_telegram_cls
+    ):
+        from alphalens_cli.commands.themed import themed_app
+
+        mock_queue_cls.side_effect = RuntimeError("database is locked")
+
+        with patch(
+            "alphalens.screeners.themed.pipeline.ThemedPipeline.run",
+            return_value=self._fake_df(),
+        ):
+            result = self.runner.invoke(
+                themed_app,
+                ["screen", "--scorer", "momentum", "--top-n", "2", "--analyze"],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.stdout)
+        telegram_instance = mock_telegram_cls.return_value
+        telegram_instance.send_message.assert_called_once()
+        (sent_text,), _ = telegram_instance.send_message.call_args
+        self.assertIn("queue submit failed", sent_text)
+        self.assertIn("database is locked", sent_text)
 
 
 if __name__ == "__main__":

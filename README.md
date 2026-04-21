@@ -94,10 +94,10 @@ Two console scripts are installed:
 # Drain the candidate queue — runs Layer 3 on whichever candidates are waiting
 .venv/bin/alphalens queue process
 
-# Layer 2b — themed universe scan; --analyze also submits top-N to queue
-.venv/bin/alphalens themed screen --dry-run
-.venv/bin/alphalens themed screen --analyze --dry-run
-.venv/bin/alphalens themed screen --scorer early-stage       # base-breakout scorer
+# Layer 2b — themed universe scan (--scorer REQUIRED: momentum | early-stage)
+.venv/bin/alphalens themed screen --scorer momentum --dry-run
+.venv/bin/alphalens themed screen --scorer momentum --analyze --dry-run
+.venv/bin/alphalens themed screen --scorer early-stage --analyze   # base-breakout scorer (daily plist default)
 
 # Monitoring Layer 2b (last 90 days of runs — theme HHI, staleness, turnover)
 .venv/bin/alphalens themed status --days 90

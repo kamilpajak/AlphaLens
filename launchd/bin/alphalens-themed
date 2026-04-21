@@ -1,3 +1,4 @@
 #!/bin/bash
-# Layer 2b themed screener — daily curated YAML universe scan, Telegram report.
-exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens themed screen --top-n 5 "$@"
+# Layer 2b themed screener — daily early-stage scan + auto-queue to Layer 3.
+# Momentum scorer is ad-hoc only (already validated); early-stage is in paper-trade observation.
+exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens themed screen --scorer early-stage --analyze --top-n 5 "$@"

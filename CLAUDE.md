@@ -32,11 +32,12 @@ uv sync                               # installs both alphalens and tradingagent
 .venv/bin/alphalens queue process                                # drain unified candidate queue → Layer 3
 .venv/bin/alphalens queue scorer-stats --since-days 30           # per-scorer acceptance rate
 
-# Layer 2b themed screener
-.venv/bin/alphalens themed screen --dry-run                      # report only, Telegram
-.venv/bin/alphalens themed screen --analyze --dry-run            # screen + submit top-N to queue
-.venv/bin/alphalens themed screen --scorer early-stage           # base-breakout scorer
-.venv/bin/alphalens themed status --days 90                      # monitoring dashboard (theme HHI, staleness, turnover)
+# Layer 2b themed screener (--scorer REQUIRED: momentum | early-stage)
+.venv/bin/alphalens themed screen --scorer momentum --dry-run               # report only, Telegram
+.venv/bin/alphalens themed screen --scorer momentum --analyze --dry-run     # screen + submit top-N to queue
+.venv/bin/alphalens themed screen --scorer early-stage --analyze            # base-breakout scorer
+.venv/bin/alphalens themed status --days 90                                 # monitoring dashboard (theme HHI, staleness, turnover)
+# Daily plist (22:00 CET) odpala `--scorer early-stage --analyze` — momentum już zwalidowane, available only ad-hoc.
 
 # Backtest (screener-agnostic)
 .venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose   # pełny 5-letni backtest + diagnostyki

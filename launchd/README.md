@@ -10,9 +10,10 @@ Three launchd jobs run the pipeline on macOS:
   - Each job runs `TradingAgents.propagate` (~15 min, costs API $).
   - Daily budget cap (default 5 analyses/day, configurable in code).
 - **themed** (`com.alphalens.watchdog.themed.plist`) — daily 22:00 CET
-  - Layer 2b themed scan over the curated YAML universe (pluggable scorer: momentum | early-stage).
-  - Telegram report (and `--analyze` auto-queue if the wrapper passes it).
-  - Validated edge (Sharpe 1.53, FF3 α_t 2.60 on 5-year backtest).
+  - Layer 2b themed scan over the curated YAML universe.
+  - Wrapper runs `--scorer early-stage --analyze` → top-5 auto-queued to Layer 3 + Telegram report.
+  - Early-stage scorer is in paper-trade observation; momentum (validated Sharpe 1.53, FF3 α_t 2.60) is ad-hoc only.
+  - If queue submit raises, Telegram still fires with an `[ALERT]` note so you aren't blinded.
 
 **Archived strategies** (nie deployowane) — zobacz `archived/README.md`:
 - Layer 2c Lean-based broad Russell screener — failed 5-year validation (Sharpe 0.25).
