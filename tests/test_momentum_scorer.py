@@ -193,6 +193,7 @@ class TestScoreAll(unittest.TestCase):
             "rsi_score",
             "adx_score",
             "macd_score",
+            "fundamental_gate",
             "momentum_score",
         }
         self.assertEqual(expected, set(result.columns))

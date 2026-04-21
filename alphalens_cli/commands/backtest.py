@@ -37,6 +37,13 @@ def backtest(
         "--diagnose",
         help="Retain per-day scored frames and append IC-by-decile + vol decomposition to report",
     ),
+    fundamental_gate: bool = typer.Option(
+        False,
+        "--fundamental-gate/--no-fundamental-gate",
+        help="Apply Layer 2b fundamental soft-guardrail (issue #14). Pre-loads Alpha Vantage "
+             "fundamentals once for the universe and multiplies the technical composite by "
+             "the gate score. Only meaningful for --scorer momentum | early-stage.",
+    ),
 ) -> None:
     """Run backtest over Lean CSV data and emit a decision-matrix report.
 
@@ -108,6 +115,18 @@ def backtest(
         raise typer.BadParameter(
             f"Unknown --scorer: {scorer!r} (expected: momentum | early-stage | lean)"
         )
+
+    if fundamental_gate and scorer in ("momentum", "early-stage"):
+        from alphalens.fundamentals.backtest_store import HistoricalFundamentalsStore
+
+        typer.echo(
+            f"Preloading fundamentals for {len(screener_tickers)} tickers (one-shot)…"
+        )
+        fundamentals_store = HistoricalFundamentalsStore()
+        fundamentals_store.preload(screener_tickers)
+        scorer_config["fundamental_gate_enabled"] = True
+        scorer_config["_fundamentals_store"] = fundamentals_store
+        typer.echo("  fundamental gate: ON")
 
     typer.echo(f"Loading OHLCV into HistoryStore ({start_date} → {end_date})…")
     if scorer == "lean":

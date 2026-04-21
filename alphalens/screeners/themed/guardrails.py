@@ -1,10 +1,12 @@
 """Anti-pump guardrails — filter out penny stocks, micro-caps, illiquid names,
-and recently reverse-split tickers before momentum scoring."""
+recently reverse-split tickers, and (when enabled) near-bankruptcy companies
+before momentum scoring."""
 
 from __future__ import annotations
 
 import pandas as pd
 
+from ...fundamentals.gate import should_hard_reject
 from .config import THEMED_DEFAULTS
 
 
@@ -39,6 +41,13 @@ class Guardrails:
 
         if self._has_recent_reverse_split(info):
             return False, "reverse_split"
+
+        # Fundamental hard reject (opt-in via config). `info` carries the
+        # extracted features alongside yfinance basics — when absent (e.g.
+        # fundamental_gate_enabled=False) this is a no-op.
+        hard_rejected, reason = should_hard_reject(info, self.config)
+        if hard_rejected:
+            return False, reason
 
         return True, ""
 

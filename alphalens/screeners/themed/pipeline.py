@@ -48,6 +48,25 @@ class ThemedPipeline:
         prices = fetcher.fetch_prices()
         fundamentals = fetcher.fetch_fundamentals()
 
+        # Merge Alpha Vantage fundamentals into the per-ticker info dict when
+        # the soft gate is enabled. Cache handles the 90-day TTL so we do at
+        # most ~113 API calls per quarter, not per daily run.
+        if self.config.get("fundamental_gate_enabled", False):
+            from ...fundamentals.cache import FundamentalsCache
+            from ...fundamentals.fetcher import extract_features, fetch_ticker_bundle
+
+            cache = FundamentalsCache()
+            for ticker in tickers:
+                try:
+                    av_features = cache.get_or_fetch(
+                        ticker,
+                        lambda tk: extract_features(fetch_ticker_bundle(tk)),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Fundamental fetch failed for %s: %s", ticker, exc)
+                    continue
+                fundamentals.setdefault(ticker, {}).update(av_features)
+
         guardrails = Guardrails(self.config, asof=pd.Timestamp(curr_date))
         kept, rejected = guardrails.filter(tickers, prices, fundamentals)
         logger.info(
@@ -60,7 +79,9 @@ class ThemedPipeline:
         if not kept:
             return pd.DataFrame(columns=["ticker", "momentum_score", "themes"])
 
-        scores = self.scorer.score_all(kept, prices, benchmark_ticker=benchmark)
+        scores = self.scorer.score_all(
+            kept, prices, benchmark_ticker=benchmark, fundamentals=fundamentals,
+        )
         # Normalise scorer-specific column to canonical "momentum_score" so all
         # downstream code (history_store, to_candidates, reporter) keeps working
         # regardless of which scorer was injected.

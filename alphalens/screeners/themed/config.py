@@ -28,6 +28,14 @@ THEMED_DEFAULTS = {
     # Data
     "price_lookback_days": 260,
     "batch_size": 50,
+    # Fundamental soft-guardrail (issue #14). Defaults disabled — opt-in via
+    # the pipeline / CLI flag until Phase 2 backtest validation passes.
+    "fundamental_gate_enabled": False,
+    "cash_runway_months_hard_reject": 3,       # <3mo → Guardrails binary reject
+    "cash_runway_months_penalty_full": 12,     # <12mo → max soft penalty
+    "ps_ceiling_preprofit_penalty_full": 100,  # P/S >100 on pre-profit → max soft penalty
+    "consecutive_neg_ocf_penalty": 4,          # ≥4 consecutive negative OCF quarters ramps penalty
+    "fundamental_gate_floor": 0.3,             # min multiplier — keeps bubble-regime optionality
 }
 
 UNIVERSE_PATH = Path(__file__).parent / "universe.yaml"

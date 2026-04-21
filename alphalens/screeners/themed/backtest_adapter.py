@@ -11,6 +11,7 @@ DataFrame — both handled here.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Mapping
 
 import pandas as pd
@@ -31,6 +32,47 @@ _COLUMN_RENAME = {
 def _to_capitalised(df: pd.DataFrame) -> pd.DataFrame:
     """Lean/pandas lowercase → capitalised (Layer 2b convention)."""
     return df.rename(columns=_COLUMN_RENAME)
+
+
+def _latest_asof(histories: Mapping[str, pd.DataFrame]) -> date | None:
+    """Infer the backtest engine's current date from the truncated histories.
+
+    BacktestEngine calls `store.truncate_to(ticker, asof)` before passing
+    prices in — so max(index) across any non-empty frame equals asof. Cheapest
+    PIT hook without modifying the Scorer protocol signature.
+    """
+    for df in histories.values():
+        if df is None or df.empty:
+            continue
+        try:
+            return df.index.max().date()
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def _fundamentals_for_backtest(
+    tickers: list[str],
+    histories: Mapping[str, pd.DataFrame],
+    config: Mapping,
+) -> dict[str, dict]:
+    """Pull PIT feature dicts from the HistoricalFundamentalsStore attached to
+    config (CLI wiring adds it under `_fundamentals_store`). Returns {} when
+    the store isn't wired or gate is disabled."""
+    if not config.get("fundamental_gate_enabled", False):
+        return {}
+    store = config.get("_fundamentals_store")
+    if store is None:
+        return {}
+    asof = _latest_asof(histories)
+    if asof is None:
+        return {}
+    out: dict[str, dict] = {}
+    for t in tickers:
+        features = store.features_as_of(t, asof)
+        if features:
+            out[t] = features
+    return out
 
 
 def momentum_scorer_adapter(
@@ -59,9 +101,12 @@ def momentum_scorer_adapter(
         bench_series = benchmark_ticker
 
     tickers = [t for t in prices.keys() if t != benchmark_ticker]
+    fundamentals = _fundamentals_for_backtest(tickers, histories, config)
 
     scorer = MomentumScorer(merged_config)
-    scored = scorer.score_all(tickers, prices, benchmark_ticker=bench_series)
+    scored = scorer.score_all(
+        tickers, prices, benchmark_ticker=bench_series, fundamentals=fundamentals,
+    )
     if scored.empty:
         return pd.DataFrame(columns=["ticker", "score"])
     scored = scored.rename(columns={"momentum_score": "score"})
@@ -90,8 +135,12 @@ def early_stage_scorer_adapter(
     benchmark_ticker = config.get("benchmark", merged_config.get("benchmark", "SPY"))
     tickers = [t for t in prices.keys() if t != benchmark_ticker]
 
+    fundamentals = _fundamentals_for_backtest(tickers, histories, config)
+
     scorer = EarlyStageScorer(merged_config)
-    scored = scorer.score_all(tickers, prices, benchmark_ticker=None)
+    scored = scorer.score_all(
+        tickers, prices, benchmark_ticker=None, fundamentals=fundamentals,
+    )
     if scored.empty:
         return pd.DataFrame(columns=["ticker", "score"])
     scored = scored.rename(columns={"early_stage_score": "score"})

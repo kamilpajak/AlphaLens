@@ -4,10 +4,12 @@ relative strength vs benchmark, RSI, ADX, MACD histogram."""
 from __future__ import annotations
 
 import logging
+from typing import Mapping
 
 import pandas as pd
 from stockstats import wrap
 
+from ...fundamentals.gate import fundamental_gate_score
 from .config import THEMED_DEFAULTS
 
 logger = logging.getLogger(__name__)
@@ -36,9 +38,20 @@ class MomentumScorer:
         tickers: list[str],
         prices: dict[str, pd.DataFrame],
         benchmark_ticker: str | None = None,
+        fundamentals: Mapping[str, Mapping] | None = None,
     ) -> pd.DataFrame:
+        """Score a list of tickers. `fundamentals` is optional: when provided,
+        its per-ticker feature dict is multiplied into the composite via the
+        fundamental gate (see issue #14). When None, gate is 1.0 (no-op).
+        """
         benchmark = prices.get(benchmark_ticker) if benchmark_ticker else None
-        rows = [self._score_one(t, prices.get(t), benchmark) for t in tickers]
+        rows = [
+            self._score_one(
+                t, prices.get(t), benchmark,
+                (fundamentals or {}).get(t, {}),
+            )
+            for t in tickers
+        ]
         return pd.DataFrame(rows)
 
     def _score_one(
@@ -46,6 +59,7 @@ class MomentumScorer:
         ticker: str,
         df: pd.DataFrame | None,
         benchmark: pd.DataFrame | None,
+        ticker_fundamentals: Mapping,
     ) -> dict:
         if df is None or df.empty:
             return self._zero_row(ticker)
@@ -60,7 +74,7 @@ class MomentumScorer:
             adx_s = self._adx_score(adx, self.config["adx_min"])
             macd_s = self._macd_score(macd_hist)
 
-            composite = (
+            technical_composite = (
                 near_high * self.config["weight_near_high"]
                 + pct_20d * self.config["weight_pct_20d"]
                 + vol_surge * self.config["weight_volume_surge"]
@@ -69,6 +83,9 @@ class MomentumScorer:
                 + adx_s * self.config["weight_adx"]
                 + macd_s * self.config["weight_macd"]
             )
+
+            gate = fundamental_gate_score(ticker_fundamentals or {}, self.config)
+            composite = technical_composite * gate
 
             return {
                 "ticker": ticker,
@@ -79,6 +96,7 @@ class MomentumScorer:
                 "rsi_score": rsi_s,
                 "adx_score": adx_s,
                 "macd_score": macd_s,
+                "fundamental_gate": gate,
                 "momentum_score": composite,
             }
         except Exception:
@@ -87,7 +105,7 @@ class MomentumScorer:
 
     @staticmethod
     def _zero_row(ticker: str) -> dict:
-        row = {"ticker": ticker, "momentum_score": 0.0}
+        row = {"ticker": ticker, "momentum_score": 0.0, "fundamental_gate": 1.0}
         for col in METRIC_COLS:
             row[col] = 0.0
         return row

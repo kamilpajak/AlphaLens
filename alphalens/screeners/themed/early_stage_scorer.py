@@ -17,10 +17,13 @@ it's pluggable via the BacktestEngine scorer_adapter pattern.
 from __future__ import annotations
 
 import logging
+from typing import Mapping
 
 import numpy as np
 import pandas as pd
 from stockstats import wrap
+
+from ...fundamentals.gate import fundamental_gate_score
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,13 @@ EARLY_STAGE_DEFAULTS = {
     "min_price":              2.0,
     "benchmark":              "SPY",
     "top_n":                  5,
+    # Fundamental soft-guardrail (issue #14). Defaults disabled — opt-in.
+    "fundamental_gate_enabled":          False,
+    "cash_runway_months_hard_reject":    3,
+    "cash_runway_months_penalty_full":   12,
+    "ps_ceiling_preprofit_penalty_full": 100,
+    "consecutive_neg_ocf_penalty":       4,
+    "fundamental_gate_floor":            0.3,
 }
 
 METRIC_COLS = (
@@ -80,11 +90,20 @@ class EarlyStageScorer:
         tickers: list[str],
         prices: dict[str, pd.DataFrame],
         benchmark_ticker: str | None = None,
+        fundamentals: Mapping[str, Mapping] | None = None,
     ) -> pd.DataFrame:
-        rows = [self._score_one(t, prices.get(t)) for t in tickers]
+        rows = [
+            self._score_one(t, prices.get(t), (fundamentals or {}).get(t, {}))
+            for t in tickers
+        ]
         return pd.DataFrame(rows)
 
-    def _score_one(self, ticker: str, df: pd.DataFrame | None) -> dict:
+    def _score_one(
+        self,
+        ticker: str,
+        df: pd.DataFrame | None,
+        ticker_fundamentals: Mapping,
+    ) -> dict:
         if df is None or df.empty:
             return self._zero_row(ticker)
         try:
@@ -116,7 +135,7 @@ class EarlyStageScorer:
             )
             jeg = self._jegadeesh_11_1_score(df)
 
-            composite = (
+            technical_composite = (
                 base  * self.config["weight_base_breakout"]
                 + accel * self.config["weight_acceleration"]
                 + vcp   * self.config["weight_vcp"]
@@ -125,6 +144,9 @@ class EarlyStageScorer:
                 + vol_a * self.config["weight_volume_accumulation"]
                 + jeg   * self.config["weight_jegadeesh_11_1"]
             )
+
+            gate = fundamental_gate_score(ticker_fundamentals or {}, self.config)
+            composite = technical_composite * gate
 
             return {
                 "ticker": ticker,
@@ -135,6 +157,7 @@ class EarlyStageScorer:
                 "adx_building_score":        adx_b,
                 "volume_accumulation_score": vol_a,
                 "jegadeesh_11_1_score":      jeg,
+                "fundamental_gate":          gate,
                 "early_stage_score":         composite,
             }
         except Exception:
@@ -143,7 +166,7 @@ class EarlyStageScorer:
 
     @staticmethod
     def _zero_row(ticker: str) -> dict:
-        row = {"ticker": ticker, "early_stage_score": 0.0}
+        row = {"ticker": ticker, "early_stage_score": 0.0, "fundamental_gate": 1.0}
         for col in METRIC_COLS:
             row[col] = 0.0
         return row
