@@ -715,8 +715,14 @@ def historical_acceptance(
         help="Include social analyst. Default: exclude (social has look-ahead risk on "
              "historical replay). Off for clean PIT rigor.",
     ),
-    report: str = typer.Option("", help="Markdown report output path"),
+    report: str = typer.Option("", help="Markdown summary report output path"),
     results_csv: str = typer.Option("", help="Per-sample results CSV"),
+    reports_dir: str = typer.Option(
+        "",
+        help="Directory for per-sample full reports (analyst + research + trader + "
+             "risk markdowns + final_state.json). Default: "
+             "docs/research/acceptance_{scorer}_reports/",
+    ),
     dry_run: bool = typer.Option(
         False, help="Print sampling plan + cost estimate, skip Layer 3 invocation"
     ),
@@ -738,6 +744,7 @@ def historical_acceptance(
 
     Acceptance metric: fraction of samples where Layer 3 returns BUY or OVERWEIGHT.
     """
+    import json
     import random
     from collections import defaultdict
     from datetime import date as _date
@@ -750,6 +757,11 @@ def historical_acceptance(
     from alphalens.runner import TradingAgentsRunner
     from alphalens.screeners.lean.config import DATA_DIR
     from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+
+    try:
+        from cli.main import save_report_to_disk as _save_ta_report
+    except Exception:  # noqa: BLE001
+        _save_ta_report = None
 
     if scorer not in {"momentum", "early-stage"}:
         raise typer.BadParameter(f"Unknown scorer: {scorer!r} (expected: momentum | early-stage)")
@@ -817,6 +829,14 @@ def historical_acceptance(
         f"{'default (all 4)' if analysts is None else analysts}"
     )
     runner = TradingAgentsRunner()
+
+    reports_root = Path(reports_dir) if reports_dir else Path(
+        f"docs/research/acceptance_{scorer.replace('-', '_')}_reports"
+    )
+    if not reports_root.is_absolute():
+        reports_root = Path.cwd() / reports_root
+    reports_root.mkdir(parents=True, exist_ok=True)
+    typer.echo(f"Per-sample reports → {reports_root}")
     results: list[dict] = []
     accept_by_regime: dict[str, list[int]] = defaultdict(list)
 
@@ -839,6 +859,23 @@ def historical_acceptance(
             rating = (result.rating or "").upper()
             accepted = 1 if rating in _ACCEPT_RATINGS else 0
             accept_by_regime[s["regime"]].append(accepted)
+
+            # Persist the full state + upstream's markdown render for post-hoc
+            # analysis of why Layer 3 accepted/rejected this pick.
+            sample_dir = reports_root / f"{s['date'].isoformat()}_{s['ticker']}"
+            sample_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                (sample_dir / "final_state.json").write_text(
+                    json.dumps(result.final_state, default=str, indent=2)
+                )
+            except Exception as exc:  # noqa: BLE001
+                typer.echo(f"    warn: final_state.json failed: {exc}", err=True)
+            if _save_ta_report is not None:
+                try:
+                    _save_ta_report(result.final_state, s["ticker"], sample_dir)
+                except Exception as exc:  # noqa: BLE001
+                    typer.echo(f"    warn: save_report_to_disk failed: {exc}", err=True)
+
             results.append({
                 "date": s["date"].isoformat(),
                 "ticker": s["ticker"],
@@ -848,9 +885,10 @@ def historical_acceptance(
                 "accepted": accepted,
                 "duration_sec": round(result.duration_sec, 1),
                 "model": result.model_used,
+                "report_dir": str(sample_dir.relative_to(Path.cwd())) if sample_dir.is_relative_to(Path.cwd()) else str(sample_dir),
                 "error": "",
             })
-            typer.echo(f"    → {rating}  ({result.duration_sec:.0f}s)")
+            typer.echo(f"    → {rating}  ({result.duration_sec:.0f}s)  → {sample_dir.name}/")
         except Exception as exc:  # noqa: BLE001
             results.append({
                 "date": s["date"].isoformat(),
@@ -861,6 +899,7 @@ def historical_acceptance(
                 "accepted": 0,
                 "duration_sec": 0,
                 "model": "",
+                "report_dir": "",
                 "error": str(exc)[:200],
             })
             typer.echo(f"    → ERROR: {exc}")
