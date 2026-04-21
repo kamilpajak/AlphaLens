@@ -19,6 +19,198 @@ def _research_callback() -> None:
     """Force multi-command behaviour even when only one command is registered."""
 
 
+@research_app.command(name="cost-validation")
+def cost_validation(
+    start: str = typer.Option(
+        "2021-06-01",
+        help="Backtest start (YYYY-MM-DD). Polygon Basic entitlement floor is 2021-06-01.",
+    ),
+    end: str = typer.Option("2026-04-17", help="Backtest end (YYYY-MM-DD)"),
+    portfolio_value: float = typer.Option(
+        10_000_000.0,
+        "--portfolio-value",
+        help="Portfolio size used for participation calculation. Default $10M.",
+    ),
+    threshold_pct: float = typer.Option(
+        15.0,
+        "--threshold-pct",
+        help="Per-pick ADV participation flag threshold (institutional VWAP working range).",
+    ),
+    max_threshold_pct: float = typer.Option(
+        20.0,
+        "--max-threshold-pct",
+        help="Absolute ceiling for max single-pick participation.",
+    ),
+    window_days: int = typer.Option(
+        21, help="Trailing window for dollar-ADV computation (trading days)"
+    ),
+    top_n: int = typer.Option(5, help="Top-N picks per day"),
+    holding: int = typer.Option(5, help="Holding period in trading days"),
+    weighting: str = typer.Option(
+        "linear", help="Position weighting: linear | equal | conviction"
+    ),
+    benchmark: str = typer.Option("SPY", help="Benchmark for calendar"),
+    report: str = typer.Option(
+        "docs/backtest/cost_validation.md",
+        help="Markdown report output path (relative to repo root)",
+    ),
+    csv: str = typer.Option(
+        "", help="Optional per-pick-day participation CSV output path"
+    ),
+) -> None:
+    """Tiered flat-bps cost model + scale-path validation.
+
+    Single baseline `BacktestEngine.run`; per-pick participation computed
+    vs rolling 21-day trailing dollar-ADV (lookahead-safe). Gate: PASS iff
+    <5% of pick-days exceed 15% ADV AND max <20%. On PASS, ship tiered
+    cost model (AQR-anchored bps: mega=3, large=10, mid=25, small=50,
+    micro=100). On FAIL, document AUM ceiling and keep flat 100bps.
+
+    Addresses the third Perplexity-flagged gap after PIT survivorship
+    (PR #9 PASS) and walk-forward (PR #11 PASS).
+    """
+    from datetime import date as _date
+
+    import yaml
+
+    from alphalens.backtest.cost_validation import (
+        DEFAULT_TIERS,
+        build_per_date_tiers,
+        compare_cost_scenarios,
+        compile_report as cv_compile_report,
+        CostValidationReport,
+        evaluate_cost_gate,
+        rolling_dollar_adv,
+        run_scale_path,
+    )
+    from alphalens.backtest.engine import BacktestEngine
+    from alphalens.backtest.history_store import HistoryStore
+    from alphalens.backtest.metrics import sharpe
+    from alphalens.screeners.lean.config import DATA_DIR
+    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+    from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter
+    from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+    from alphalens.screeners.themed.universe import flatten_universe
+
+    start_date = _date.fromisoformat(start)
+    end_date = _date.fromisoformat(end)
+    typer.echo(
+        f"Cost-validation — {start_date} → {end_date}, "
+        f"portfolio ${portfolio_value:,.0f}, window={window_days}d"
+    )
+
+    # Load universe + histories
+    universe_yaml = yaml.safe_load(UNIVERSE_PATH.read_text())
+    screener_tickers = sorted(flatten_universe(universe_yaml).keys())
+    typer.echo(f"Loading OHLCV for {len(screener_tickers)} themed tickers + {benchmark}…")
+    histories = load_lean_histories(DATA_DIR, screener_tickers + [benchmark])
+    store = HistoryStore(histories)
+    typer.echo(f"  loaded {len(store.tickers())} tickers")
+
+    scorer_config = dict(THEMED_DEFAULTS, benchmark=benchmark)
+
+    # Single baseline backtest
+    typer.echo("\n[baseline] running full-span backtest for picks extraction…")
+    engine = BacktestEngine(
+        store,
+        scorer=momentum_scorer_adapter,
+        scorer_config=scorer_config,
+        holding_period=holding,
+        top_n=top_n,
+        benchmark=benchmark,
+        screener_tickers=screener_tickers,
+        weighting=weighting,
+    )
+    baseline = engine.run(start=start_date, end=end_date)
+    typer.echo(f"  {len(baseline.daily_results)} daily snapshots")
+
+    # Rolling ADV + per-date tier assignments
+    typer.echo("\n[adv] computing rolling 21-day dollar-ADV + per-date tiers…")
+    rolling_adv = rolling_dollar_adv(store, screener_tickers, window_days=window_days)
+    calendar = [snap.date for snap in baseline.daily_results]
+    per_date_tiers = build_per_date_tiers(rolling_adv, calendar, DEFAULT_TIERS)
+    if calendar:
+        last_tiers = per_date_tiers.get(calendar[-1], {})
+        tier_counts: dict[str, int] = {}
+        for tier in last_tiers.values():
+            tier_counts[tier] = tier_counts.get(tier, 0) + 1
+        typer.echo(f"  tier counts on {calendar[-1].date()}: {tier_counts}")
+
+    # Scale-path analysis
+    typer.echo("\n[scale-path] computing participation distribution…")
+    scale_path = run_scale_path(
+        baseline, rolling_adv, per_date_tiers,
+        portfolio_value=portfolio_value,
+        threshold_pct=threshold_pct,
+        max_threshold_pct=max_threshold_pct,
+        weighting=weighting,
+    )
+    typer.echo(
+        f"  pick-days: {scale_path.n_pick_days}  "
+        f"median participation: {scale_path.median_participation:.2%}  "
+        f"max: {scale_path.max_participation:.2%}  "
+        f"fraction>{threshold_pct:.0f}%: {scale_path.fraction_exceeding_threshold:.2%}"
+    )
+
+    # Tiered cost model comparison
+    typer.echo("\n[tiered-cost] comparing gross / flat 100 / tiered Sharpe…")
+    bps_per_tier = {t.name: t.bps_annual for t in DEFAULT_TIERS}
+    tiered = compare_cost_scenarios(
+        baseline, per_date_tiers, bps_per_tier, weighting=weighting
+    )
+    typer.echo(
+        f"  gross={tiered.sharpe_gross:+.3f}  "
+        f"flat 100bps={tiered.sharpe_flat_100bps:+.3f}  "
+        f"tiered={tiered.sharpe_tiered:+.3f}  "
+        f"(tiered drag ≈ {tiered.annual_drag_tiered_bps:.0f} bps/yr)"
+    )
+
+    # Gate
+    verdict = evaluate_cost_gate(scale_path)
+    typer.echo(f"\nverdict: {verdict.overall}")
+    typer.echo(f"  fraction: {'PASS' if verdict.fraction_pass else 'FAIL'} — {verdict.reasons['fraction']}")
+    typer.echo(f"  max:      {'PASS' if verdict.max_pass else 'FAIL'} — {verdict.reasons['max']}")
+
+    # Report
+    cv_report = CostValidationReport(
+        portfolio_value=portfolio_value,
+        window_days=window_days,
+        baseline_sharpe_gross=sharpe(baseline.portfolio_returns.tolist()),
+        tiers=DEFAULT_TIERS,
+        scale_path=scale_path,
+        tiered=tiered,
+        verdict=verdict,
+    )
+    report_path = Path(report)
+    if not report_path.is_absolute():
+        report_path = Path.cwd() / report_path
+    cv_compile_report(
+        report_path, cv_report,
+        start=start_date, end=end_date,
+    )
+    typer.echo(f"\nReport written to {report_path}")
+
+    if csv:
+        import csv as _csv
+        csv_path = Path(csv)
+        if not csv_path.is_absolute():
+            csv_path = Path.cwd() / csv_path
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        with csv_path.open("w", newline="") as fh:
+            writer = _csv.writer(fh)
+            writer.writerow(
+                ["date", "ticker", "rank", "tier", "participation", "dollar_position", "dollar_adv"]
+            )
+            for p in scale_path.worst_offenders:
+                writer.writerow([
+                    p.date, p.ticker, p.rank, p.tier,
+                    f"{p.participation:.6f}",
+                    f"{p.dollar_position:.2f}",
+                    f"{p.dollar_adv:.2f}",
+                ])
+        typer.echo(f"Worst-offenders CSV: {csv_path}")
+
+
 @research_app.command(name="walk-forward")
 def walk_forward(
     start: str = typer.Option(
