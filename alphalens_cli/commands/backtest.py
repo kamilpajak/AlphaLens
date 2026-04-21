@@ -13,7 +13,8 @@ def backtest(
     scorer: str = typer.Option(
         "momentum",
         "--scorer",
-        help="Scorer: 'momentum' (Layer 2b, live/validated) or 'lean' (Layer 2c, archived)",
+        help="Scorer: 'momentum' (Layer 2b, validated), 'early-stage' (Layer 2b, "
+             "production scheduled from 2026-04-21), or 'lean' (Layer 2c, archived)",
     ),
     top_n: int = typer.Option(5, help="Top-N names to hold at each rebalance"),
     holding: int = typer.Option(5, help="Holding period in trading days"),
@@ -78,6 +79,19 @@ def backtest(
         scorer_fn = momentum_scorer_adapter
         scorer_config = dict(THEMED_DEFAULTS, benchmark=benchmark)
         typer.echo(f"Scorer: Layer 2b momentum ({len(screener_tickers)} curated tickers)")
+    elif scorer == "early-stage":
+        from alphalens.screeners.themed.backtest_adapter import early_stage_scorer_adapter
+        from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+        from alphalens.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS
+        from alphalens.screeners.themed.universe import flatten_universe
+
+        universe = yaml.safe_load(UNIVERSE_PATH.read_text())
+        screener_tickers = sorted(flatten_universe(universe).keys())
+        scorer_fn = early_stage_scorer_adapter
+        scorer_config = {**THEMED_DEFAULTS, **EARLY_STAGE_DEFAULTS, "benchmark": benchmark}
+        typer.echo(
+            f"Scorer: Layer 2b early-stage ({len(screener_tickers)} curated tickers)"
+        )
     elif scorer == "lean":
         from alphalens.screeners.lean.config import BENCHMARKS, LEAN_DEFAULTS
         from alphalens.screeners.lean.lean_project.scorer import rank_universe as lean_rank
@@ -91,13 +105,15 @@ def backtest(
             "this strategy failed 5-year validation per CLAUDE.md"
         )
     else:
-        raise typer.BadParameter(f"Unknown --scorer: {scorer!r} (expected: momentum | lean)")
+        raise typer.BadParameter(
+            f"Unknown --scorer: {scorer!r} (expected: momentum | early-stage | lean)"
+        )
 
     typer.echo(f"Loading OHLCV into HistoryStore ({start_date} → {end_date})…")
     if scorer == "lean":
         tickers = screener_tickers + list(BENCHMARKS)  # type: ignore[possibly-undefined]
     else:
-        tickers = screener_tickers + [benchmark]
+        tickers = screener_tickers + [benchmark]  # themed pipeline scorers (momentum, early-stage)
     histories = load_lean_histories(DATA_DIR, tickers)
     store = HistoryStore(histories)
     typer.echo(f"  loaded {len(store.tickers())} tickers")

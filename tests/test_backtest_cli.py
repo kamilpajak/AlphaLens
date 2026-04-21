@@ -165,6 +165,41 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, msg=result.output)
         _assert_report_has_structural_markers(self, self.report_path)
 
+    def test_early_stage_scorer_end_to_end(self):
+        """`--scorer early-stage` executes the Layer 2b themed pipeline with
+        EarlyStageScorer (same universe as momentum, different scoring logic).
+        """
+        from alphalens_cli.main import app
+
+        with patch(
+            "alphalens.screeners.themed.universe.load_universe",
+            return_value={"ai": ["NVDA", "AMD"]},
+        ), patch(
+            "alphalens.screeners.themed.universe.flatten_universe",
+            return_value={"NVDA": ["ai"], "AMD": ["ai"]},
+        ), patch(
+            "alphalens.screeners.themed.backtest_adapter.early_stage_scorer_adapter",
+            new=_fake_scorer,
+        ), patch(
+            "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
+            return_value=self._histories_for(["NVDA", "AMD", "SPY"]),
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "backtest",
+                    "--scorer", "early-stage",
+                    "--start", "2023-07-03",
+                    "--end", "2023-07-10",
+                    "--no-attrib",
+                    "--top-n", "1",
+                    "--report", str(self.report_path),
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        _assert_report_has_structural_markers(self, self.report_path)
+
     def test_lean_scorer_end_to_end(self):
         """`--scorer lean` executes the archived Layer 2c path the same way."""
         from alphalens_cli.main import app
