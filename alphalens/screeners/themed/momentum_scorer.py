@@ -24,6 +24,10 @@ METRIC_COLS = (
 
 
 class MomentumScorer:
+    # near_high is 52-week (252 bars) + relative-strength benchmark window.
+    # BacktestEngine honours this via getattr to enforce warmup before scoring.
+    MIN_BARS_REQUIRED = 252
+
     def __init__(self, config: dict | None = None):
         self.config = config or THEMED_DEFAULTS
 

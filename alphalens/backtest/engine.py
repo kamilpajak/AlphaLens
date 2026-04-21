@@ -124,7 +124,11 @@ class BacktestEngine:
     it returns are treated as scored; top-N is selected by descending `score`.
     """
 
-    MIN_BARS_REQUIRED = 220       # covers the longest lookback our scorers use (SMA200 + buffer)
+    # Fallback warmup bars when a scorer doesn't declare its own MIN_BARS_REQUIRED
+    # attribute. The scorer's declaration is authoritative — e.g. EarlyStageScorer
+    # declares 252 for Jegadeesh 11-1. Never mutate this at runtime — override via
+    # scorer attr.
+    MIN_BARS_REQUIRED = 220
 
     def __init__(
         self,
@@ -147,6 +151,12 @@ class BacktestEngine:
         self._screener_tickers = list(screener_tickers) if screener_tickers else []
         self.retain_scored_frames = bool(retain_scored_frames)
         self.weighting: WeightingScheme = weighting
+        # Scorer's declared requirement is authoritative (it knows its own
+        # indicator lookbacks). Class attr is only a fallback when the scorer
+        # doesn't declare one.
+        self._min_bars = int(
+            getattr(scorer, "MIN_BARS_REQUIRED", type(self).MIN_BARS_REQUIRED)
+        )
 
     def run(self, start: date, end: date) -> BacktestReport:
         calendar = HistoryStore.benchmark_calendar(self.store, self.benchmark, start, end)
@@ -199,7 +209,7 @@ class BacktestEngine:
         histories: dict[str, pd.DataFrame] = {}
         for ticker in tickers:
             df = self.store.truncate_to(ticker, day)
-            if len(df) < self.MIN_BARS_REQUIRED:
+            if len(df) < self._min_bars:
                 continue
             histories[ticker] = df
 

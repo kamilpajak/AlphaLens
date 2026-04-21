@@ -68,6 +68,10 @@ METRIC_COLS = (
 
 
 class EarlyStageScorer:
+    # Jegadeesh 11-1 requires exactly 252 bars (t-252 price lookback).
+    # BacktestEngine honours this via getattr to enforce warmup before scoring.
+    MIN_BARS_REQUIRED = 252
+
     def __init__(self, config: dict | None = None):
         self.config = config or dict(EARLY_STAGE_DEFAULTS)
 

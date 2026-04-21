@@ -72,6 +72,8 @@ class TestBacktestEngineBasic(unittest.TestCase):
         from alphalens.backtest.engine import BacktestEngine
         from alphalens.screeners.lean.lean_project.scorer import rank_universe
 
+        rank_universe.MIN_BARS_REQUIRED = 25  # tiny tests — declare via scorer
+
         store = _prime_store(
             self.dir,
             {
@@ -90,7 +92,6 @@ class TestBacktestEngineBasic(unittest.TestCase):
             top_n=2,
             benchmark="SPY",
         )
-        engine.MIN_BARS_REQUIRED = 25
         report = engine.run(start=date(2024, 4, 1), end=date(2024, 4, 30))
 
         self.assertGreater(len(report.daily_results), 0)
@@ -117,6 +118,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
                     {"ticker": "BBB", "score": 0.0},
                 ]
             )
+        fake_scorer.MIN_BARS_REQUIRED = 25
 
         engine = BacktestEngine(
             store,
@@ -127,7 +129,6 @@ class TestBacktestEngineBasic(unittest.TestCase):
             benchmark="SPY",
             screener_tickers=["AAA", "BBB"],
         )
-        engine.MIN_BARS_REQUIRED = 25
 
         report = engine.run(start=date(2024, 3, 1), end=date(2024, 3, 15))
 
@@ -160,6 +161,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
                     {"ticker": "E", "score": 1.0},
                 ]
             )
+        fake_scorer.MIN_BARS_REQUIRED = 25
 
         engine = BacktestEngine(
             store,
@@ -170,7 +172,6 @@ class TestBacktestEngineBasic(unittest.TestCase):
             benchmark="SPY",
             screener_tickers=["A", "B", "C", "D", "E"],
         )
-        engine.MIN_BARS_REQUIRED = 25
         report = engine.run(start=date(2024, 3, 1), end=date(2024, 3, 15))
 
         for r in report.daily_results:
@@ -186,16 +187,17 @@ class TestBacktestEngineBasic(unittest.TestCase):
                 "A": _long_history(50, 100.0),
             },
         )
+        impossible_scorer = lambda h, c: pd.DataFrame([{"ticker": "A", "score": 1.0}])
+        impossible_scorer.MIN_BARS_REQUIRED = 1000  # impossible minimum
         engine = BacktestEngine(
             store,
-            scorer=lambda h, c: pd.DataFrame([{"ticker": "A", "score": 1.0}]),
+            scorer=impossible_scorer,
             scorer_config={},
             holding_period=2,
             top_n=1,
             benchmark="SPY",
             screener_tickers=["A"],
         )
-        engine.MIN_BARS_REQUIRED = 1000  # impossible minimum
         report = engine.run(start=date(2024, 1, 2), end=date(2024, 3, 1))
 
         self.assertEqual(len(report.daily_results), 0)
@@ -291,6 +293,93 @@ class TestIntegrationWithRealScorer(unittest.TestCase):
         top_tickers = [t for r in report.daily_results for t in r.top_n_tickers]
         self.assertGreater(top_tickers.count("UP1") + top_tickers.count("UP2"),
                            top_tickers.count("DOWN"))
+
+
+class TestBacktestEngineScorerMinBars(unittest.TestCase):
+    """Engine must respect a scorer's declared MIN_BARS_REQUIRED (max against default).
+
+    Rationale: without this, scorers whose indicators need >220 bars (Jegadeesh 11-1,
+    52w high, long SMA) silently run on insufficient warmup, producing noisy scores
+    that inflate or deflate Sharpe/alpha in hard-to-diagnose ways. This invalidated
+    the Apr 21 CLI re-run of the early-stage scorer.
+    """
+
+    def test_engine_uses_scorer_declared_min_bars_when_higher_than_default(self):
+        from alphalens.backtest.engine import BacktestEngine
+
+        tickers_seen_at_scorer: list[int] = []
+
+        def scorer(histories, config):  # noqa: ARG001
+            tickers_seen_at_scorer.append(len(histories))
+            tickers = list(histories.keys())
+            return pd.DataFrame({"ticker": tickers, "score": np.linspace(1.0, 0.1, len(tickers))})
+
+        scorer.MIN_BARS_REQUIRED = 300  # way above engine default 220
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = _prime_store(
+                Path(tmp),
+                {
+                    "SPY": _long_history(260, 400.0, drift=0.0005),
+                    "A":   _long_history(260, 50.0, drift=0.001),
+                    "B":   _long_history(260, 80.0, drift=0.0008),
+                },
+            )
+            engine = BacktestEngine(
+                store,
+                scorer=scorer,
+                scorer_config={},
+                holding_period=2,
+                top_n=1,
+                benchmark="SPY",
+                screener_tickers=["A", "B"],
+            )
+            engine.run(start=date(2024, 12, 1), end=date(2024, 12, 31))
+
+        # 260 bars < 300 declared → no ticker ever qualifies → scorer never called.
+        self.assertEqual(
+            tickers_seen_at_scorer, [],
+            "scorer.MIN_BARS_REQUIRED=300 was not respected by engine "
+            "(tickers only had 260 bars but were passed to scorer anyway)",
+        )
+
+    def test_engine_falls_back_to_class_default_when_scorer_has_no_attribute(self):
+        from alphalens.backtest.engine import BacktestEngine
+
+        called_count: list[int] = []
+
+        def scorer(histories, config):  # noqa: ARG001
+            called_count.append(len(histories))
+            tickers = list(histories.keys())
+            return pd.DataFrame({"ticker": tickers, "score": np.linspace(1.0, 0.1, len(tickers))})
+        # Note: no MIN_BARS_REQUIRED attribute on this scorer
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = _prime_store(
+                Path(tmp),
+                {
+                    "SPY": _long_history(260, 400.0, drift=0.0005),
+                    "A":   _long_history(260, 50.0, drift=0.001),
+                    "B":   _long_history(260, 80.0, drift=0.0008),
+                },
+            )
+            engine = BacktestEngine(
+                store,
+                scorer=scorer,
+                scorer_config={},
+                holding_period=2,
+                top_n=1,
+                benchmark="SPY",
+                screener_tickers=["A", "B"],
+            )
+            engine.run(start=date(2024, 12, 1), end=date(2024, 12, 31))
+
+        # 260 > default 220 → scorer should have been called on most days.
+        self.assertGreater(
+            len(called_count), 0,
+            "without scorer.MIN_BARS_REQUIRED engine should use class default (220), "
+            "and 260 bars > 220 means scorer should have been called",
+        )
 
 
 if __name__ == "__main__":

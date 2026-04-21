@@ -36,7 +36,8 @@ def _to_capitalised(df: pd.DataFrame) -> pd.DataFrame:
 def momentum_scorer_adapter(
     histories: Mapping[str, pd.DataFrame],
     config: Mapping | None = None,
-) -> pd.DataFrame:
+) -> pd.DataFrame:  # MIN_BARS_REQUIRED attached below at module scope
+
     """Call Layer 2b's MomentumScorer with the column rename + benchmark wiring.
 
     Config may override `benchmark` (default "SPY") and the seven metric weights.
@@ -70,7 +71,8 @@ def momentum_scorer_adapter(
 def early_stage_scorer_adapter(
     histories: Mapping[str, pd.DataFrame],
     config: Mapping | None = None,
-) -> pd.DataFrame:
+) -> pd.DataFrame:  # MIN_BARS_REQUIRED attached below at module scope
+
     """Call EarlyStageScorer with the column rename (lowercase → capitalised).
 
     Unlike MomentumScorer, the early-stage scorer ignores the benchmark (no
@@ -94,3 +96,9 @@ def early_stage_scorer_adapter(
         return pd.DataFrame(columns=["ticker", "score"])
     scored = scored.rename(columns={"early_stage_score": "score"})
     return scored
+
+
+# Propagate scorer warmup requirements to the adapter functions so BacktestEngine
+# (which receives the adapter, not the underlying scorer class) can getattr them.
+momentum_scorer_adapter.MIN_BARS_REQUIRED = MomentumScorer.MIN_BARS_REQUIRED
+early_stage_scorer_adapter.MIN_BARS_REQUIRED = EarlyStageScorer.MIN_BARS_REQUIRED
