@@ -8,7 +8,7 @@ Stock analysis pipeline for active investing — combines real-time event detect
 
 ## Architecture
 
-Pipeline filtruje szeroki zbiór spółek do ~kilku kandydatów dla drogiej finalnej analizy LLM. **Jeden deployowany screener (Layer 2b themed) + Layer 1 event-driven** po rigorous walidacji; Layer 2a trzymane jako manual ad-hoc, Layer 2c archived:
+The pipeline filters a broad universe of stocks down to a handful of candidates for expensive final LLM analysis. **One deployed screener (Layer 2b themed) + Layer 1 event-driven** after rigorous validation; Layer 2a kept as manual ad-hoc, Layer 2c archived:
 
 ```
 Layer 1 — watchdog          → SEC EDGAR event detection            (real-time, <1 min)  ─┐
@@ -19,17 +19,17 @@ Layer 2c — Lean screener    → ARCHIVED (failed 5-year backtest)             
                                                                                                                                      HOLD / UNDERWEIGHT / SELL
 ```
 
-**Status walidacji** (5-letni backtest 2021-04 do 2026-04):
-- **Layer 2b** ✅ validated: Sharpe 1.53 net, FF3 alpha +96% annualized t-stat +2.60, IC t-stat +1.83 (wszystkie ponad progami deploy)
-- **Layer 2c** ❌ archived: Sharpe 0.25 net, FF3 alpha t-stat 0.14 — brak statystycznej alfy, plist w `launchd/archived/`
-- **Layer 2a** ⚠️ unvalidated: fundamentals-heavy scorer wymaga point-in-time Compustat/Polygon Advanced, używaj jako ad-hoc manual tool
+**Validation status** (5-year backtest 2021-04 to 2026-04):
+- **Layer 2b** ✅ validated: Sharpe 1.53 net, FF3 alpha +96% annualized t-stat +2.60, IC t-stat +1.83 (all above deploy gates)
+- **Layer 2c** ❌ archived: Sharpe 0.25 net, FF3 alpha t-stat 0.14 — no statistical alpha, plist in `launchd/archived/`
+- **Layer 2a** ⚠️ unvalidated: fundamentals-heavy scorer requires point-in-time Compustat / Polygon Advanced data; use as ad-hoc manual tool
 
-**Post-hoc audit** (Perplexity's 3 flagged gaps, raporty w `docs/backtest/`):
-- **PIT survivorship** ✅ PASS (`survivorship_pit_a.md`): 0 / 5155 picks delisted within 30/90/180d vs 0.88% universe base rate — scorer aktywnie unika umierających spółek
-- **Walk-forward OOS** ✅ PASS (`walk_forward.md`): 38 rolling 252-day windows, 86.84% z Sharpe > 0.5, 63.16% z Carhart α_t > 1.5 HAC, zero consecutive-negative-Sharpe stretches
-- **Cost validation / scale-path** ❌ FAIL at $10M AUM (`cost_validation.md`): 8.87% pick-days wymagałoby > 15% dziennego volumenu. Strategia ma AUM ceiling < $10M przy top-5 daily-rebalance. Flat 100bps zostaje produkcyjnym cost modelem.
+**Post-hoc audit** (Perplexity's 3 flagged gaps, reports in `docs/backtest/`):
+- **PIT survivorship** ✅ PASS (`survivorship_pit_a.md`): 0 / 5155 picks delisted within 30/90/180d vs 0.88% universe base rate — the scorer actively avoids names about to die.
+- **Walk-forward OOS** ✅ PASS (`walk_forward.md`): 38 rolling 252-day windows, 86.84% with Sharpe > 0.5, 63.16% with Carhart α_t > 1.5 HAC, zero consecutive-negative-Sharpe stretches.
+- **Cost validation / scale-path** ❌ FAIL at $10M AUM (`cost_validation.md`): 8.87% of pick-days would require > 15% of daily volume. Strategy has a hard AUM ceiling < $10M at the top-5 daily-rebalance configuration. Flat 100 bps remains the production cost model.
 
-**Unified handoff**: każdy screener emituje `Candidate(ticker, source, priority, payload, dedup_key)` do `~/.alphalens/candidates.db`. Worker drainuje FIFO per priority (watchdog_sec=0 > momentum=10 > lean=15 > prescreener=20), aplikuje daily budget cap, retry exponential backoff + DLQ (`status='dead'` po 5 attempts). Infrastruktura Layer 2c (`backtest/` submodule) jest aktywnie reużywana przez walidację Layer 2b.
+**Unified handoff**: every screener emits `Candidate(ticker, source, priority, payload, dedup_key)` into `~/.alphalens/candidates.db`. The worker drains FIFO within priority (watchdog_sec=0 > momentum=10 > lean=15 > prescreener=20), applies a daily budget cap, retries with exponential backoff, and moves persistent failures to DLQ (`status='dead'` after 5 attempts). The Layer 2c `backtest/` submodule is actively reused for Layer 2b validation.
 
 ---
 
@@ -61,7 +61,7 @@ TELEGRAM_CHAT_ID=...
 POLYGON_API_KEY=...            # free "Stocks Basic" tier — https://polygon.io
 ```
 
-Layer 2c (Lean screener — archived) wymaga **Docker Desktop** tylko gdy wskrzesić strategię. Obecnie plist w `launchd/archived/` + `POLYGON_API_KEY` już ustawione dla backtest harness.
+Layer 2c (Lean screener — archived) requires **Docker Desktop** only if the strategy is ever revived. The plist currently lives in `launchd/archived/`, and `POLYGON_API_KEY` is already wired up for the backtest harness.
 
 Populate portfolio at `~/.alphalens/watchdog/portfolio.yaml`:
 
@@ -99,14 +99,14 @@ Two console scripts are installed:
 .venv/bin/alphalens themed screen --analyze --dry-run
 .venv/bin/alphalens themed screen --scorer early-stage       # base-breakout scorer
 
-# Monitoring Layer 2b (ostatnie 90 dni runów — theme HHI, staleness, turnover)
+# Monitoring Layer 2b (last 90 days of runs — theme HHI, staleness, turnover)
 .venv/bin/alphalens themed status --days 90
 
-# Backtest (5-letni, z diagnostykami + factor decomposition)
+# Backtest (5-year, with diagnostics + factor decomposition)
 .venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose
 .venv/bin/alphalens backtest --scorer lean                   # re-examine archived Layer 2c
 
-# Research / audit (diagnostic tools, write raport do docs/backtest/)
+# Research / audit (diagnostic tools, write reports to docs/backtest/)
 .venv/bin/alphalens research survivorship-pit                # PIT universe reconstruction (Test A-lite)
 .venv/bin/alphalens research walk-forward                    # rolling OOS stability test
 .venv/bin/alphalens research cost-validation                 # tiered flat-bps + scale-path gate
