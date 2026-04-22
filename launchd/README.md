@@ -1,6 +1,6 @@
 # Watchdog launchd setup
 
-Three launchd jobs run the pipeline on macOS:
+Four launchd jobs run the pipeline on macOS:
 
 - **detect** (`com.alphalens.watchdog.detect.plist`) — every 15 min
   - Polls SEC EDGAR, classifies, dispatches alerts.
@@ -14,6 +14,13 @@ Three launchd jobs run the pipeline on macOS:
   - Wrapper runs `--scorer early-stage --analyze` → top-5 auto-queued to Layer 3 + Telegram report.
   - Early-stage scorer is in paper-trade observation; momentum (validated Sharpe 1.53, FF3 α_t 2.60) is ad-hoc only.
   - If queue submit raises, Telegram still fires with an `[ALERT]` note so you aren't blinded.
+- **insider** (`com.alphalens.insider.screen.plist`) — daily 22:00 CET
+  - Layer 2d Form 4 cluster-buy scan over IWM current constituents.
+  - Wrapper runs `--dry-run --top-n 20 --report ~/.alphalens/insider/daily_{date}.md`.
+  - Feeds GATE 1 firing-rate check: aggregate ≥5 trading days of reports
+    to decide whether to invest Phase 2.5 PIT reconstruction (Perplexity R8 Q5).
+  - Requires seeded `alphalens/alt_data/data/{ticker_cik_map,iwm_current}.yaml`
+    and `SEC_EDGAR_USER_AGENT` env var.
 
 **Archived strategies** (nie deployowane) — zobacz `archived/README.md`:
 - Layer 2c Lean-based broad Russell screener — failed 5-year validation (Sharpe 0.25).
