@@ -67,6 +67,51 @@ class TestParseIsharesCsv(unittest.TestCase):
 
         self.assertEqual(parse_ishares_csv(csv), [])
 
+    def test_footer_disclaimer_row_dropped(self):
+        """iShares CSV has a multi-line legal disclaimer that smashes into
+        the first column. Reject anything that doesn't match a ticker pattern."""
+        from alphalens.alt_data.iwm_refresher import parse_ishares_csv
+
+        csv_text = (
+            '"Ticker","Name","Asset Class"\n'
+            '"AAPL","Apple","Equity"\n'
+            '"THE CONTENT CONTAINED HEREIN IS OWNED BY BLACKROCK","copyright","Equity"\n'
+            '"MSFT","Microsoft","Equity"\n'
+        )
+
+        tickers = parse_ishares_csv(csv_text)
+
+        self.assertEqual(tickers, ["AAPL", "MSFT"])
+
+    def test_numeric_pseudo_ticker_dropped(self):
+        """iShares includes rows like 'P5N994' (internal codes) that aren't real tickers."""
+        from alphalens.alt_data.iwm_refresher import parse_ishares_csv
+
+        csv_text = (
+            '"Ticker","Name","Asset Class"\n'
+            '"AAPL","Apple","Equity"\n'
+            '"P5N994","","Equity"\n'
+            '"MPTI RT","Rights","Equity"\n'
+        )
+
+        tickers = parse_ishares_csv(csv_text)
+
+        self.assertEqual(tickers, ["AAPL"])
+
+    def test_class_share_suffix_allowed(self):
+        """BRK.B / GOOG-L style class shares must be kept."""
+        from alphalens.alt_data.iwm_refresher import parse_ishares_csv
+
+        csv_text = (
+            '"Ticker","Name","Asset Class"\n'
+            '"BRK.B","Berkshire B","Equity"\n'
+            '"GOOG-L","Alphabet L","Equity"\n'
+        )
+
+        tickers = parse_ishares_csv(csv_text)
+
+        self.assertEqual(set(tickers), {"BRK.B", "GOOG-L"})
+
     def test_dedups_preserving_first_occurrence(self):
         from alphalens.alt_data.iwm_refresher import parse_ishares_csv
 

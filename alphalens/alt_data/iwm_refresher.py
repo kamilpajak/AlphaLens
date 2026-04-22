@@ -26,12 +26,17 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
 import shutil
 from pathlib import Path
 from typing import Callable
 
 import requests
 import yaml
+
+# Strict ticker pattern: 1-6 uppercase letters, optional class suffix (e.g. BRK.B, GOOG-L).
+# Rejects iShares CSV footer disclaimers that otherwise slip into the Ticker column.
+_VALID_TICKER_RE = re.compile(r"^[A-Z]{1,6}([.\-][A-Z]{1,2})?$")
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +73,11 @@ def parse_ishares_csv(csv_text: str) -> list[str]:
             continue
         asset_class = (record.get("Asset Class") or "").strip()
         if asset_class and asset_class.lower() != "equity":
+            continue
+        # Reject non-ticker strings (iShares CSV has footer disclaimer rows
+        # that smash legal text into the first column; length-only check is
+        # insufficient because short non-tickers like "P5N994" also appear).
+        if not _VALID_TICKER_RE.match(ticker):
             continue
         if ticker in seen:
             continue
