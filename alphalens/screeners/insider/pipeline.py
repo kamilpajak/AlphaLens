@@ -47,16 +47,22 @@ class InsiderPipeline:
             return pd.DataFrame(columns=_OUTPUT_COLUMNS)
 
         rows: list[dict] = []
-        for ticker in tickers:
+        total = len(tickers)
+        log_every = max(1, total // 20)  # ~5% progress granularity
+        for idx, ticker in enumerate(tickers, start=1):
             feat = self._scorer.features_as_of(ticker, curr_date)
-            if not feat:
-                continue
-            rows.append({
-                "ticker": ticker,
-                "insider_count": feat["insider_count"],
-                "aggregate_dollar": feat["aggregate_dollar"],
-                "asof": feat.get("asof", curr_date.isoformat()),
-            })
+            if feat:
+                rows.append({
+                    "ticker": ticker,
+                    "insider_count": feat["insider_count"],
+                    "aggregate_dollar": feat["aggregate_dollar"],
+                    "asof": feat.get("asof", curr_date.isoformat()),
+                })
+            if idx % log_every == 0 or idx == total:
+                logger.info(
+                    "insider scan %d/%d (%.0f%%) — %d clusters so far",
+                    idx, total, idx / total * 100, len(rows),
+                )
 
         if not rows:
             return pd.DataFrame(columns=_OUTPUT_COLUMNS)
