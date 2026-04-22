@@ -57,6 +57,11 @@ class SecEdgarClient:
         """
         return self._get_json(_COMPANY_TICKERS_URL)
 
+    def fetch_company_facts(self, cik: str) -> dict[str, Any]:
+        """Fetch SEC XBRL companyfacts (all reported concepts ever filed)."""
+        url = f"{_DATA_BASE}/api/xbrl/companyfacts/CIK{cik}.json"
+        return self._get_json(url)
+
     def fetch_form4_xml(
         self,
         cik: str,
