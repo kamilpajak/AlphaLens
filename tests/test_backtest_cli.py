@@ -310,5 +310,65 @@ class TestBacktestCLIArgValidation(unittest.TestCase):
         self.assertIn("Unknown --scorer", result.output)
 
 
+class TestBacktestInsiderDispatch(unittest.TestCase):
+    """Phase 3a: verify `--scorer insider` wires correctly and guards preconditions.
+
+    Does not run a full insider backtest (requires Phase 2.5 PIT universe +
+    yfinance prices). Only exercises the dispatch branch up to the point
+    where missing inputs raise BadParameter with helpful guidance.
+    """
+
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def test_rejects_when_data_files_absent(self):
+        from alphalens_cli.main import app
+
+        with patch("pathlib.Path.exists", return_value=False):
+            result = self.runner.invoke(
+                app,
+                [
+                    "backtest",
+                    "--scorer", "insider",
+                    "--start", "2023-07-03",
+                    "--end", "2023-07-10",
+                    "--no-attrib",
+                ],
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn(
+            "Missing",
+            result.output + (str(result.exception) if result.exception else ""),
+        )
+
+    def test_rejects_when_user_agent_missing(self):
+        from alphalens_cli.main import app
+
+        # Make both data files appear to exist; lookups run before UA check.
+        with patch("pathlib.Path.exists", return_value=True), patch(
+            "alphalens.alt_data.russell_universe.load_iwm_current",
+            return_value=["UPST", "SMCI"],
+        ), patch(
+            "alphalens.alt_data.ticker_cik_map.TickerCikMap.load",
+        ), patch.dict("os.environ", {}, clear=True):
+            result = self.runner.invoke(
+                app,
+                [
+                    "backtest",
+                    "--scorer", "insider",
+                    "--start", "2023-07-03",
+                    "--end", "2023-07-10",
+                    "--no-attrib",
+                ],
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn(
+            "SEC_EDGAR_USER_AGENT",
+            result.output + (str(result.exception) if result.exception else ""),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
