@@ -44,11 +44,22 @@ class SecEdgarClient:
         self._session = session or requests.Session()
         self._sleep = sleep
         self._last_call_ts: float = 0.0
+        # Per-process in-memory cache: submissions JSON and Form 4 XML payloads
+        # are content-addressable and static — once fetched they never change
+        # during a backtest run, so caching them eliminates the "refetch every
+        # scorer call" trap that dominated Phase 3b.3 initial runtime.
+        self._submissions_cache: dict[str, dict[str, Any]] = {}
+        self._form4_xml_cache: dict[tuple[str, str], bytes] = {}
 
     def fetch_submissions(self, cik: str) -> dict[str, Any]:
         """Fetch a filer's submissions index. cik must be 10-digit zero-padded."""
+        cached = self._submissions_cache.get(cik)
+        if cached is not None:
+            return cached
         url = f"{_DATA_BASE}/submissions/CIK{cik}.json"
-        return self._get_json(url)
+        data = self._get_json(url)
+        self._submissions_cache[cik] = data
+        return data
 
     def fetch_company_tickers(self) -> dict[str, Any]:
         """Fetch SEC's master ticker→CIK mapping (refreshed daily).
@@ -74,13 +85,19 @@ class SecEdgarClient:
         EDGAR archive URLs use the CIK without leading zeros and the
         accession number without dashes.
         """
+        cache_key = (cik, accession_number)
+        cached = self._form4_xml_cache.get(cache_key)
+        if cached is not None:
+            return cached
         cik_no_zeros = str(int(cik))
         acc_no_dashes = accession_number.replace("-", "")
         url = (
             f"{_ARCHIVES_BASE}/Archives/edgar/data/"
             f"{cik_no_zeros}/{acc_no_dashes}/{primary_doc}"
         )
-        return self._get_bytes(url)
+        data = self._get_bytes(url)
+        self._form4_xml_cache[cache_key] = data
+        return data
 
     _TRANSIENT_NET_EXCEPTIONS = (
         requests.exceptions.ConnectionError,
