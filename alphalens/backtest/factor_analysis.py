@@ -121,6 +121,47 @@ def run_carhart_attribution(
     ]
 
 
+def run_ff5_umd_attribution(
+    portfolio_returns: pd.Series,
+    ff5_umd_factors: pd.DataFrame,
+) -> AlphaResult:
+    """FF5+UMD 6-factor robustness regression.
+
+    Phase 3b robustness check: if Carhart-4F α passes Bonferroni but this
+    α attenuates >30%, the alpha was loading on RMW (profitability) or
+    CMA (investment) rather than an independent edge (design doc §7 R5).
+
+    ff5_umd_factors must contain: Mkt-RF, SMB, HML, RMW, CMA, Mom, RF.
+    """
+    return run_regression(
+        portfolio_returns,
+        ff5_umd_factors,
+        ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom"],
+        spec_name="FF5+UMD",
+    )
+
+
+def run_q4_attribution(
+    portfolio_returns: pd.Series,
+    q4_factors: pd.DataFrame,
+) -> AlphaResult:
+    """Hou-Xue-Zhang q-factor (Q4) robustness regression.
+
+    Phase 3b robustness check alongside FF5+UMD. Q4 offers different
+    factor construction (investment + ROE instead of HML/RMW), so an
+    alpha that survives both Carhart-4F and Q4 has stronger claim to
+    independence than one that survives only one.
+
+    q4_factors must contain: Mkt-RF, ME, IA, ROE, RF.
+    """
+    return run_regression(
+        portfolio_returns,
+        q4_factors,
+        ["Mkt-RF", "ME", "IA", "ROE"],
+        spec_name="Q4",
+    )
+
+
 def run_rolling_regression(
     portfolio_returns: pd.Series,
     factors: pd.DataFrame,

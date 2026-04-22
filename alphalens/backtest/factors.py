@@ -160,3 +160,104 @@ def load_carhart_daily(
     umd = load_umd_daily(path=umd_path, start=start, end=end)
     merged = ff5[["Mkt-RF", "SMB", "HML", "RF"]].join(umd, how="inner")
     return merged
+
+
+DEFAULT_Q4_DIR = DEFAULT_FACTORS_DIR / "q4"
+_Q4_COLUMNS = ["R_F", "R_MKT", "R_ME", "R_IA", "R_ROE", "R_EG"]  # q5; Q4 drops R_EG
+_Q4_URL_BASE = "https://global-q.org/uploads/1/2/2/6/122679606"
+
+
+def _q4_cumulative_url() -> str:
+    return f"{_Q4_URL_BASE}/q5_factors_daily.csv"
+
+
+def _q4_yearly_url(year: int) -> str:
+    return f"{_Q4_URL_BASE}/q5_factors_daily_{year}.csv"
+
+
+def _parse_q4_csv(text: str) -> pd.DataFrame:
+    """Parse a global-q.org daily CSV (percent returns, YYYYMMDD date column).
+
+    Schema: ``DATE,R_F,R_MKT,R_ME,R_IA,R_ROE,R_EG``. We keep only the Q4
+    subset (Mkt, ME, I/A, ROE) and RF; R_EG is the q5 extension, not
+    part of Hou-Xue-Zhang 2015.
+    """
+    raw = pd.read_csv(StringIO(text))
+    raw["DATE"] = pd.to_datetime(raw["DATE"].astype(int).astype(str), format="%Y%m%d")
+    raw = raw.set_index("DATE").sort_index()
+    raw.index.name = "date"
+
+    for col in _Q4_COLUMNS:
+        if col not in raw.columns:
+            raise ValueError(f"Q4 CSV missing expected column {col!r}")
+        raw[col] = pd.to_numeric(raw[col], errors="coerce") / 100.0
+
+    return raw.rename(
+        columns={"R_F": "RF", "R_MKT": "Mkt-RF", "R_ME": "ME", "R_IA": "IA", "R_ROE": "ROE"}
+    )[["Mkt-RF", "ME", "IA", "ROE", "RF"]]
+
+
+def _fetch_q4_text(url: str) -> str:
+    import requests
+
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.text
+
+
+def load_q4_daily(
+    cache_dir: Path | None = None,
+    start: date | None = None,
+    end: date | None = None,
+    *,
+    fetch: "callable | None" = None,
+) -> pd.DataFrame:
+    """Load Hou-Xue-Zhang q-factor daily returns (Q4: Mkt-RF, ME, I/A, ROE).
+
+    Global-q.org publishes in two parts: a cumulative 1967-2018 file plus
+    per-year files 2019+. Latest available at time of writing: 2024 yearly
+    (2025-2026 coverage gap — downstream callers must handle by restricting
+    date range or accepting partial OOS attribution per Phase 3b plan §3b.2).
+
+    On first use downloads all parts to ``cache_dir`` and concatenates.
+    Subsequent calls read the cache. ``fetch`` injected for testing.
+    """
+    target_dir = cache_dir or DEFAULT_Q4_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    fetcher = fetch or _fetch_q4_text
+
+    files = [("cumulative.csv", _q4_cumulative_url())]
+    for year in range(2019, 2025):  # yearly files currently available 2019-2024
+        files.append((f"{year}.csv", _q4_yearly_url(year)))
+
+    frames: list[pd.DataFrame] = []
+    for filename, url in files:
+        path = target_dir / filename
+        if not path.exists():
+            path.write_text(fetcher(url))
+        frames.append(_parse_q4_csv(path.read_text()))
+
+    combined = (
+        pd.concat(frames)
+        .sort_index()
+        .loc[lambda df: ~df.index.duplicated(keep="last")]
+    )
+    return _apply_date_filter(combined, start, end)
+
+
+def load_ff5_umd_daily(
+    ff5_path: Path | None = None,
+    umd_path: Path | None = None,
+    start: date | None = None,
+    end: date | None = None,
+) -> pd.DataFrame:
+    """Return FF5+UMD (6-factor) merged DataFrame.
+
+    Columns: Mkt-RF, SMB, HML, RMW, CMA, Mom, RF. Used as the Carhart-4F
+    robustness check in Phase 3b validation — if Carhart α passes but FF5+UMD
+    α attenuates >30%, the alpha was loading on RMW/CMA (profitability /
+    investment) rather than an independent edge (design doc §7 R5).
+    """
+    ff5 = load_ff5_daily(path=ff5_path, start=start, end=end)
+    umd = load_umd_daily(path=umd_path, start=start, end=end)
+    return ff5.join(umd, how="inner")
