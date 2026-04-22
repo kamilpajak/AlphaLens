@@ -203,6 +203,21 @@ class TestDefaultFetcher(unittest.TestCase):
         with self.assertRaises(KeyError):
             _normalize_ohlcv(raw)
 
+    def test_normalize_strips_timezone_from_index(self):
+        """yfinance returns NY-localized DatetimeIndex; strip so downstream
+        naive-Timestamp comparisons (close_as_of) don't TypeError."""
+        from alphalens.alt_data.yfinance_cache import _normalize_ohlcv
+
+        raw = pd.DataFrame(
+            {"Open": [100.0], "High": [101.0], "Low": [99.0],
+             "Close": [100.5], "Volume": [1000]},
+            index=pd.DatetimeIndex(["2024-01-03"], tz="America/New_York"),
+        )
+
+        normalized = _normalize_ohlcv(raw)
+
+        self.assertIsNone(normalized.index.tz)
+
 
 if __name__ == "__main__":
     unittest.main()

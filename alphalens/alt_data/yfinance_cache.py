@@ -41,7 +41,14 @@ _YFINANCE_RENAME = {
 
 
 def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
-    """Lowercase OHLCV columns and drop extras (Dividends, Stock Splits).
+    """Lowercase OHLCV columns, drop extras, strip timezone from the index.
+
+    yfinance emits ``DatetimeIndex`` localized to ``America/New_York``;
+    comparing it against a naive ``pd.Timestamp(date)`` raises
+    ``TypeError: Invalid comparison between dtype=datetime64[ns, TZ] and
+    Timestamp``. We force the index timezone-naive so downstream code
+    (``HistoryStore``, ``close_as_of``) stays simple — date-level PIT
+    doesn't care about intraday tz.
 
     Raises ``KeyError`` if any required column is missing — a silent drop
     would mask upstream data corruption.
@@ -50,7 +57,10 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     missing = [c for c in _OHLCV_COLUMNS if c not in renamed.columns]
     if missing:
         raise KeyError(f"yfinance DataFrame missing OHLCV columns: {missing}")
-    return renamed[list(_OHLCV_COLUMNS)]
+    result = renamed[list(_OHLCV_COLUMNS)].copy()
+    if isinstance(result.index, pd.DatetimeIndex) and result.index.tz is not None:
+        result.index = result.index.tz_localize(None)
+    return result
 
 
 def _default_yfinance_fetcher(ticker: str, start: date, end: date) -> pd.DataFrame:
