@@ -141,6 +141,7 @@ class BacktestEngine:
         screener_tickers: list[str] | None = None,
         retain_scored_frames: bool = False,
         weighting: WeightingScheme = "equal",
+        rebalance_stride: int = 1,
     ):
         self.store = history_store
         self._scorer = scorer
@@ -151,6 +152,11 @@ class BacktestEngine:
         self._screener_tickers = list(screener_tickers) if screener_tickers else []
         self.retain_scored_frames = bool(retain_scored_frames)
         self.weighting: WeightingScheme = weighting
+        # Sample every Nth trading day — a stride of 5 gives weekly rebalance,
+        # 21 gives monthly. Needed for Layer 2d insider scorer backtests where
+        # per-day EDGAR fetches would push daily-rebalance runtime past 24h
+        # on 12y × 1400-ticker sweeps.
+        self.rebalance_stride = max(1, int(rebalance_stride))
         # Scorer's declared requirement is authoritative (it knows its own
         # indicator lookbacks). Class attr is only a fallback when the scorer
         # doesn't declare one.
@@ -164,6 +170,8 @@ class BacktestEngine:
             raise RuntimeError(
                 f"No trading days found for benchmark {self.benchmark!r} in [{start}, {end}]"
             )
+        if self.rebalance_stride > 1:
+            calendar = calendar[::self.rebalance_stride]
 
         tickers = self._screener_tickers or [
             t for t in self.store.tickers() if t != self.benchmark.upper()
@@ -185,7 +193,11 @@ class BacktestEngine:
             self.top_n, self.holding_period,
         )
 
-        for ts in calendar:
+        total_days = len(calendar)
+        # Log every 5% of days so large sweeps emit ~20 progress lines total.
+        progress_stride = max(1, total_days // 20)
+
+        for idx, ts in enumerate(calendar):
             day = ts.date()
             simulated = self._simulate_day(day, tickers)
             if simulated is None:
@@ -194,6 +206,12 @@ class BacktestEngine:
             report.daily_results.append(snap)
             if self.retain_scored_frames and scored_frame is not None:
                 report.scored_frames[pd.Timestamp(day)] = scored_frame
+            if (idx + 1) % progress_stride == 0 or idx == total_days - 1:
+                logger.info(
+                    "backtest progress: %d/%d days (%.0f%%) — latest snap %s scored=%d",
+                    idx + 1, total_days, 100 * (idx + 1) / total_days,
+                    day, snap.scored_count,
+                )
 
         logger.info(
             "backtest done: %d daily snapshots out of %d trading days",

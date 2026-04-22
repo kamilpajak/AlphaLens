@@ -57,6 +57,59 @@ def sharpe(
     return (excess.mean() / std) * math.sqrt(periods_per_year)
 
 
+def sharpe_autocorr_adjusted(
+    returns: Sequence[float],
+    periods_per_year: int = DEFAULT_PERIODS_PER_YEAR,
+    max_lag: int = 5,
+    risk_free: float = 0.0,
+) -> float:
+    """Autocorrelation-adjusted annualised Sharpe (Perplexity R11 recommendation).
+
+    Naive ``sharpe()`` uses sqrt(periods_per_year) which assumes i.i.d. returns.
+    Stock return series — especially weekly-sampled short-horizon returns —
+    exhibit negative lag-1 autocorrelation (mean reversion). Correcting for it
+    yields an *effective* scale factor smaller than sqrt(periods_per_year),
+    so annualised Sharpe shrinks (or expands for momentum-biased series).
+
+    Effective periods formula (Lo 2002, adapted):
+
+        k_eff = k + 2 * Σ_{j=1..min(k, max_lag)-1} (1 - j/k) * ρ(j)
+
+    With negative autocorrelation, ``k_eff < k`` and the annualised Sharpe is
+    ``(μ/σ) * sqrt(max(k_eff, 1))``.
+
+    ``max_lag=5`` covers one-week of lag structure for daily returns; larger
+    windows inflate noise on shorter series.
+    """
+    arr = np.asarray(list(returns), dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if len(arr) < max(3, max_lag + 2):
+        return 0.0
+
+    excess = arr - risk_free
+    std = excess.std(ddof=1)
+    if std < 1e-12:
+        return 0.0
+
+    k = periods_per_year
+    # pandas autocorr would spin up a DataFrame; use numpy for speed.
+    demean = excess - excess.mean()
+    denom = float((demean * demean).sum())
+    if denom <= 0:
+        return (excess.mean() / std) * math.sqrt(max(k, 1))
+
+    lags = min(max_lag, len(arr) - 1, k - 1)
+    corr_sum = 0.0
+    for j in range(1, lags + 1):
+        num = float((demean[:-j] * demean[j:]).sum())
+        rho = num / denom
+        corr_sum += (1.0 - j / k) * rho
+
+    k_eff = k + 2.0 * corr_sum
+    scale = math.sqrt(max(k_eff, 1.0))
+    return (excess.mean() / std) * scale
+
+
 def rank_ic(predicted_scores: Sequence[float], actual_returns: Sequence[float]) -> float:
     """Single-date Spearman rank correlation between predicted scores and realized returns.
 

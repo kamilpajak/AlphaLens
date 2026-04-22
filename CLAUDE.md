@@ -43,6 +43,20 @@ uv sync                               # installs both alphalens and tradingagent
 .venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose   # pełny 5-letni backtest + diagnostyki
 .venv/bin/alphalens backtest --scorer lean                       # re-examine archived Layer 2c
 
+# Layer 2d insider backtest (Phase 3b runbook)
+# --rebalance-stride 1 = daily (design default, wymaga warm EDGAR cache),
+# --rebalance-stride 5 = weekly (cold-cache fallback, ~6h/split)
+.venv/bin/python scripts/run_layer2d_backtest.py --split insample \
+    --start 2011-01-01 --end 2022-12-31 --top-n 15 --rebalance-stride 1
+.venv/bin/python scripts/run_layer2d_backtest.py --split oos \
+    --start 2023-01-01 --end 2026-04-22 --top-n 15 --rebalance-stride 1
+
+# Prewarm Layer 2d EDGAR Form 4 disk cache (out-of-band, e.g. on VPS 24/7)
+# Populates ~/.alphalens/insider_form4/*.json dla wszystkich (ticker, asof) par,
+# żeby kolejne daily backtest runs byly cache-only (zero EDGAR fetches)
+export SEC_EDGAR_USER_AGENT="AlphaLens-Prewarm pajakkamil@gmail.com"
+.venv/bin/python scripts/prewarm_form4_cache.py --start 2011-01-01 --end 2026-04-22 --stride 1
+
 # Research / walidacja
 .venv/bin/alphalens research validate-llm-filter --scorer rule   # Phase 0 LLM filter validation
 
