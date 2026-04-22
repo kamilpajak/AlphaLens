@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _DATA_BASE = "https://data.sec.gov"
 _ARCHIVES_BASE = "https://www.sec.gov"
+_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 
 
 class SecEdgarError(RuntimeError):
@@ -48,6 +49,13 @@ class SecEdgarClient:
         """Fetch a filer's submissions index. cik must be 10-digit zero-padded."""
         url = f"{_DATA_BASE}/submissions/CIK{cik}.json"
         return self._get_json(url)
+
+    def fetch_company_tickers(self) -> dict[str, Any]:
+        """Fetch SEC's master ticker→CIK mapping (refreshed daily).
+
+        Returns the raw JSON dict of ``{index: {cik_str, ticker, title}}``.
+        """
+        return self._get_json(_COMPANY_TICKERS_URL)
 
     def fetch_form4_xml(
         self,
