@@ -348,6 +348,39 @@ class TestTransactionCodePreserved(unittest.TestCase):
         self.assertEqual(records[0].transaction_code, "F")
 
 
+class TestTolerantDateParse(unittest.TestCase):
+    def test_iso_date_with_timezone_offset_parses_to_date(self):
+        """Real AEHR Form 4 filing had tx_date '2026-04-09-05:00'.
+        Strip after YYYY-MM-DD rather than raise uncaught ValueError."""
+        from alphalens.alt_data.form4_records import parse_form4_xml
+
+        xml = _build_xml(
+            non_derivative=[
+                {"date": "2026-04-09-05:00", "code": "S", "shares": "5000", "price": "68"},
+            ],
+        )
+
+        records = parse_form4_xml(
+            xml, accession_number="A", filing_date=date(2026, 4, 10),
+        )
+
+        self.assertEqual(records[0].transaction_date, date(2026, 4, 9))
+
+    def test_malformed_date_raises_form4_parse_error(self):
+        """Genuinely malformed dates must raise Form4ParseError so scorer
+        can skip the filing — NOT uncaught ValueError crashing the scan."""
+        from alphalens.alt_data.form4_records import Form4ParseError, parse_form4_xml
+
+        xml = _build_xml(
+            non_derivative=[
+                {"date": "not-a-date", "code": "P", "shares": "100"},
+            ],
+        )
+
+        with self.assertRaises(Form4ParseError):
+            parse_form4_xml(xml, accession_number="A", filing_date=date(2026, 4, 10))
+
+
 class TestMissingPriceNonePreserved(unittest.TestCase):
     def test_gift_tx_no_price_parses_as_none(self):
         from alphalens.alt_data.form4_records import parse_form4_xml

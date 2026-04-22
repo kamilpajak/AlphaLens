@@ -166,12 +166,30 @@ def _parse_transaction(tx: ET.Element) -> dict:
     acq_disp = _text_value(amounts, "transactionAcquiredDisposedCode") or "A"
 
     return {
-        "transaction_date": date.fromisoformat(tx_date_node.text.strip()),
+        "transaction_date": _parse_iso_date(tx_date_node.text),
         "transaction_code": code,
         "transaction_shares": shares,
         "transaction_price_per_share": price,
         "acquired_disposed": acq_disp,
     }
+
+
+def _parse_iso_date(raw: str) -> date:
+    """Parse an ISO date tolerantly.
+
+    SEC Form 4 usually emits plain ``YYYY-MM-DD`` but some filings append a
+    timezone offset (e.g. ``2026-04-09-05:00``) or a time component. Take
+    the first 10 chars and parse that — anything after is ignored. Raises
+    :class:`Form4ParseError` on malformed input so the scorer's except
+    clause treats it as a skippable filing rather than an uncaught crash.
+    """
+    text = (raw or "").strip()
+    if len(text) < 10:
+        raise Form4ParseError(f"transaction date too short: {text!r}")
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError as exc:
+        raise Form4ParseError(f"invalid transaction date: {text!r}") from exc
 
 
 def _text_value(elem: ET.Element, tag: str) -> str:
