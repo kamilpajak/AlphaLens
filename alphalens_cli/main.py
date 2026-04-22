@@ -9,6 +9,7 @@ Groups:
     watchdog/           — Layer 1 SEC EDGAR event detection
     queue/              — Layer 3 ops (process worker + scorer-stats)
     themed/             — Layer 2b curated YAML universe scan + monitoring
+    insider/            — Layer 2d Form 4 cluster-buy scan (live/ad-hoc)
     research/           — eksperymenty (LLM filter validation, ...)
 
 For the TradingAgents interactive menu use `.venv/bin/tradingagents`
@@ -25,6 +26,7 @@ from dotenv import load_dotenv
 
 from alphalens_cli.commands.analyze import analyze
 from alphalens_cli.commands.backtest import backtest
+from alphalens_cli.commands.insider import insider_app
 from alphalens_cli.commands.queue import queue_app
 from alphalens_cli.commands.research import research_app
 from alphalens_cli.commands.status import status
@@ -57,6 +59,7 @@ def _root_callback() -> None:
 app.add_typer(watchdog_app, name="watchdog")
 app.add_typer(queue_app, name="queue")
 app.add_typer(themed_app, name="themed")
+app.add_typer(insider_app, name="insider")
 app.add_typer(research_app, name="research")
 app.command(name="analyze")(analyze)
 app.command(name="status")(status)
