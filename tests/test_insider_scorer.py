@@ -250,5 +250,56 @@ class TestCacheContract(unittest.TestCase):
         self.assertEqual(edgar.fetch_submissions.call_count, 1)
 
 
+class TestXslPrefixStripping(unittest.TestCase):
+    def test_xsl_prefix_stripped_before_fetch(self):
+        """SEC submissions primaryDocument points at xslF345X../form4.xml (HTML render);
+        raw parseable XML sits at the basename one dir up. The scorer must fetch the raw."""
+        filings = [
+            {
+                "form": "4",
+                "accession": "acc-0",
+                "filing_date": "2025-03-10",
+                "primary": "xslF345X06/form4.xml",
+            }
+        ]
+        # Map the RAW expected primary to the XML so fetch succeeds only if xsl-stripped.
+        xmls = {"acc-0": _record_xml(owner_cik="0000000001", tx_date="2025-03-08")}
+
+        scorer, edgar = _build_scorer(
+            xml_by_accession=xmls,
+            submissions=_submissions_payload(filings),
+        )
+
+        scorer.features_as_of("AAPL", date(2025, 3, 20))
+
+        call = edgar.fetch_form4_xml.call_args
+        primary = call.kwargs.get("primary_doc") or call.args[2]
+        self.assertEqual(primary, "form4.xml")
+        self.assertNotIn("xslF345X", primary)
+
+    def test_non_xsl_primary_passthrough(self):
+        """Primary doc without the xsl prefix should be left alone."""
+        filings = [
+            {
+                "form": "4",
+                "accession": "acc-0",
+                "filing_date": "2025-03-10",
+                "primary": "wk-form4_1234567.xml",
+            }
+        ]
+        xmls = {"acc-0": _record_xml(owner_cik="0000000001", tx_date="2025-03-08")}
+
+        scorer, edgar = _build_scorer(
+            xml_by_accession=xmls,
+            submissions=_submissions_payload(filings),
+        )
+
+        scorer.features_as_of("AAPL", date(2025, 3, 20))
+
+        call = edgar.fetch_form4_xml.call_args
+        primary = call.kwargs.get("primary_doc") or call.args[2]
+        self.assertEqual(primary, "wk-form4_1234567.xml")
+
+
 if __name__ == "__main__":
     unittest.main()

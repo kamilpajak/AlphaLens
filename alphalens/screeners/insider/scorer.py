@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -147,6 +148,17 @@ class InsiderScorer:
         path.write_text(json.dumps(payload))
 
 
+_XSL_PREFIX_RE = re.compile(r"^xslF345X\d+/")
+
+
+def _strip_xsl_prefix(primary_doc: str) -> str:
+    """Submissions JSON's primaryDocument points at the XSL-rendered HTML view
+    (e.g. ``xslF345X06/form4.xml``). The raw XML we can parse lives at the same
+    basename one directory up.
+    """
+    return _XSL_PREFIX_RE.sub("", primary_doc)
+
+
 def _iter_form4_filings(
     submissions: dict, *, asof: date, min_filing_date: date
 ) -> list[dict]:
@@ -172,6 +184,6 @@ def _iter_form4_filings(
             "form": form,
             "accession": accession,
             "filing_date": fd,
-            "primary": primary,
+            "primary": _strip_xsl_prefix(primary),
         })
     return out
