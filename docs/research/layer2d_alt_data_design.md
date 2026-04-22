@@ -28,25 +28,34 @@
 
 **Universe refresh:** iShares IWM holdings or Russell official rebalance (June annually). **Pre-commit:** universe snapshot frozen per-quarter point-in-time. No retrospective sector additions — the Layer 2b 18-semis mid-audit mistake is explicit failure mode.
 
-## 3. Data source (LOCKED)
+## 3. Data source (LOCKED — amended 2026-04-22 per Perplexity R6)
 
-**Finnhub `/stock/insider-transactions` free tier** (60 calls/min).
+**SEC EDGAR Form 4 XML direct** (primary, free, ~10 req/s polite rate with User-Agent header).
 
-- **Backup/validation:** SEC EDGAR Form 4 direct (XBRL parse) jako audit trail — not production dependency.
-- **PIT integrity:** use Form 4 `filingDate`, NOT `transactionDate`. Form 4 filings have ~2 business day SEC deadline post-transaction. Using `transactionDate` introduces look-ahead bias identical to Layer 2b SimFin Report-Date vs Publish-Date bug.
+**Amendment rationale:** Initial design locked Finnhub as primary with SEC EDGAR as audit backup. R6 investigation revealed Finnhub `/stock/insider-transactions` does NOT expose:
+- `isDirector` / `isOfficer` / `isTenPercentOwner` flags (required by §6 role filter)
+- 10b5-1 plan adoption date (required by §6 >90d exclusion)
 
-**Short interest:** status OPEN (see §6). Data source TBD — Finnhub `/stock/short-interest` is biweekly NYSE/NASDAQ publication.
+Both fields are native in SEC EDGAR Form 4 XML (`<reportingOwnerRelationship>` element for role flags; `<footnote>` elements for 10b5-1 adoption date — structured post-April 2023, regex-extractable free-text pre-2023).
 
-## 4. Cadence (LOCKED)
+**Finnhub status:** deprecated as data source. Kept only as emergency fallback for specific tickers where EDGAR XML parsing fails (log and monitor — R6 threshold: eskalacja jeśli EDGAR parse fail rate >5%).
 
-| Task | Frequency | Finnhub calls |
+- **PIT integrity:** use EDGAR filing_date (from submissions index header), NOT `<transactionDate>` from XML. Form 4 has 2 business day filing deadline post-transaction. Using transaction_date introduces look-ahead bias identical to Layer 2b SimFin Report-Date vs Publish-Date bug.
+- **10b5-1 footnote parsing:** benchmark regex recall ≥95% + precision ≥98% on 150+150 stratified sample (pre-2023 free-text + post-2023 structured). Unparseable adoption date → conservative exclude (treat as <90d old).
+
+**Short interest:** status OPEN (see §6). Data source TBD; Finnhub biweekly publication likely usable only if H3 activated (short interest not part of H1).
+
+## 4. Cadence (LOCKED — amended per §3 source switch to EDGAR)
+
+| Task | Frequency | EDGAR calls |
 |---|---|---|
-| Full universe Form 4 scan | Quarterly | ~2000/quarter ≈ 166/month ≈ 5-6/day |
-| Delta scan (portfolio + watchlist) | Monthly | ~150-200/month ≈ 5-7/day |
-| Fundamentals / liquidity filter refresh | Quarterly | ~2000/quarter ≈ 5-6/day |
-| **Total sustained** | — | **~15-20/day** |
+| Full universe Form 4 scan | Quarterly | ~2000 submissions index + ~2000 Form 4 fetches = ~4000/quarter ≈ 133/day (1× scan day/quarter) |
+| Delta scan (portfolio + watchlist) | Monthly | ~150-200 submissions index + delta Form 4 fetches, ~10-20/day amortized |
+| Liquidity filter refresh | Quarterly | ~2000/quarter ≈ 5-6/day |
+| **Scan day burst rate** | — | **~4000 calls over ~7 min at 10 rps** |
+| **Sustained average** | — | **~20-30/day** |
 
-Headroom under 60/min cap: ~99%. Daily Form 4 polling explicitly rejected as premature optimization — holding period is 60-180d, rebalance is monthly.
+Headroom under 10 rps cap: scan day completes in ~7 minutes; easily within SEC EDGAR polite-use guidelines with proper User-Agent header. Monthly rebalance cadence unchanged. Daily Form 4 polling explicitly rejected (holding 60-180d, rebalance monthly).
 
 ## 5. Execution model (LOCKED per Perplexity R5)
 
@@ -191,3 +200,4 @@ R5: no empirical insider × SI interaction literature for small-cap. Disciplined
 | R3 | 2026-04-22 | CLOSE Layer 2b; ranked alt-data pivot +20% nad alternatives |
 | R4 | 2026-04-22 | Universe = Russell 2000 (rejected biotech-only i broad); monthly rebalance; cadence quarterly + delta |
 | R5 | 2026-04-22 | Signal spec (count-only, ≥3-in-30, officers+directors, code P, 10b5-1 >90d exclude); skip SI for H1; Carhart primary + FF5/Q4 robustness; dual cost model z empirical `k` |
+| R6 | 2026-04-22 | Phase 1 architecture: switch §3 primary from Finnhub → SEC EDGAR XML (Finnhub lacks role flags + 10b5-1 dates); accept ~100-150 bps/y survivorship bias z IWM-current + market-cap reconstruction; paper-trade 12-18mo parallel; 10b5-1 regex benchmark ≥95% recall threshold |
