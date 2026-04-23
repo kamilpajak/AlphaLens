@@ -125,10 +125,58 @@ class TestFetchForm4Xml(unittest.TestCase):
         url = self.session.get.call_args[0][0]
         self.assertIn("/Archives/edgar/data/320193/000032019325000001/wk-form4.xml", url)
 
-    def test_raises_on_5xx(self):
+    def test_retries_on_503_then_succeeds(self):
+        """503 is transient (SEC overload) — must retry, not skip the filing."""
+        xml = b"<ownershipDocument/>"
+        self.session.get.side_effect = [
+            _response(503, text="Service Unavailable"),
+            _response(200, content=xml),
+        ]
+
+        result = self.client.fetch_form4_xml(
+            cik="0000320193",
+            accession_number="0000320193-25-000001",
+            primary_doc="wk-form4.xml",
+        )
+
+        self.assertEqual(result, xml)
+        self.assertEqual(self.session.get.call_count, 2)
+
+    def test_retries_on_502_then_succeeds(self):
+        xml = b"<ownershipDocument/>"
+        self.session.get.side_effect = [
+            _response(502, text="Bad Gateway"),
+            _response(200, content=xml),
+        ]
+
+        result = self.client.fetch_form4_xml(
+            cik="0000320193",
+            accession_number="0000320193-25-000001",
+            primary_doc="wk-form4.xml",
+        )
+
+        self.assertEqual(result, xml)
+
+    def test_retries_on_500_then_succeeds(self):
+        xml = b"<ownershipDocument/>"
+        self.session.get.side_effect = [
+            _response(500, text="Internal Server Error"),
+            _response(200, content=xml),
+        ]
+
+        result = self.client.fetch_form4_xml(
+            cik="0000320193",
+            accession_number="0000320193-25-000001",
+            primary_doc="wk-form4.xml",
+        )
+
+        self.assertEqual(result, xml)
+
+    def test_exhausts_5xx_retries_raises(self):
+        """After all 5xx retries exhausted, must raise SecEdgarError."""
         from alphalens.alt_data.sec_edgar_client import SecEdgarError
 
-        self.session.get.return_value = _response(500, text="server error")
+        self.session.get.return_value = _response(503, text="Service Unavailable")
 
         with self.assertRaises(SecEdgarError):
             self.client.fetch_form4_xml(
@@ -136,6 +184,22 @@ class TestFetchForm4Xml(unittest.TestCase):
                 accession_number="0000320193-25-000001",
                 primary_doc="wk-form4.xml",
             )
+        # 3 attempts total
+        self.assertEqual(self.session.get.call_count, 3)
+
+    def test_does_not_retry_on_4xx_permanent(self):
+        """404 is permanent (file missing) — no retry."""
+        from alphalens.alt_data.sec_edgar_client import SecEdgarError
+
+        self.session.get.return_value = _response(404, text="Not Found")
+
+        with self.assertRaises(SecEdgarError):
+            self.client.fetch_form4_xml(
+                cik="0000320193",
+                accession_number="0000320193-25-000001",
+                primary_doc="wk-form4.xml",
+            )
+        self.assertEqual(self.session.get.call_count, 1)
 
 
 class TestRateLimit(unittest.TestCase):

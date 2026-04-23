@@ -119,6 +119,10 @@ class SecEdgarClient:
         resp = self._request(url)
         return resp.content
 
+    # 5xx = transient SEC server issue (overload, gateway hiccup); retry.
+    # 4xx (except 429) is permanent (missing file, bad URL, auth) — no retry.
+    _SERVER_ERROR_BACKOFFS = (10, 30)
+
     def _request(self, url: str):
         self._throttle()
         resp = self._request_with_retry(url)
@@ -126,6 +130,16 @@ class SecEdgarClient:
             logger.warning("sec edgar 429 rate-limited; backing off 60s")
             self._sleep(60)
             resp = self._request_with_retry(url)
+        for attempt, backoff in enumerate(self._SERVER_ERROR_BACKOFFS):
+            if 500 <= resp.status_code < 600:
+                logger.warning(
+                    "sec edgar %d server error (attempt %d/3); sleeping %ds",
+                    resp.status_code, attempt + 1, backoff,
+                )
+                self._sleep(backoff)
+                resp = self._request_with_retry(url)
+            else:
+                break
         if resp.status_code >= 400:
             raise SecEdgarError(f"{resp.status_code} {resp.text[:200]}")
         return resp
