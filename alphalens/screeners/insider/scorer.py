@@ -15,10 +15,11 @@ explicitly so an empty cluster doesn't look like a cache miss.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -127,15 +128,40 @@ class InsiderScorer:
             return None
         return self._cache_dir / f"{ticker.upper()}_{asof.isoformat()}.json"
 
+    def _config_hash(self) -> str:
+        """Stable short hash of the ScorerConfig for cache fingerprinting.
+
+        Per Zen CR (2026-04-24): tuning `window_days`,
+        `min_distinct_insiders`, or `plan_age_threshold_days` must invalidate
+        the cached results; otherwise a silent data-quality regression hides
+        under the cache hit. Hash written into each cache entry and verified
+        on load.
+        """
+        payload = json.dumps(asdict(self._cfg), sort_keys=True).encode()
+        return hashlib.md5(payload).hexdigest()[:8]
+
+    def _is_default_config(self) -> bool:
+        return asdict(self._cfg) == asdict(_ScorerConfig())
+
     def _cache_load(self, ticker: str, asof: date) -> dict | None:
         path = self._cache_path(ticker, asof)
         if path is None or not path.exists():
             return None
         try:
-            return json.loads(path.read_text())
+            data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning("insider cache corrupt for %s@%s: %s", ticker, asof, exc)
             return None
+        cached_hash = data.get("config_hash")
+        if cached_hash is None:
+            # Legacy entry (pre-hash era). Accept only against default config —
+            # otherwise we can't prove it matches the caller's parameters.
+            if not self._is_default_config():
+                return None
+            return data
+        if cached_hash != self._config_hash():
+            return None  # config changed → treat as miss
+        return data
 
     def _cache_store(self, ticker: str, asof: date, features: dict | None) -> None:
         path = self._cache_path(ticker, asof)
@@ -144,6 +170,7 @@ class InsiderScorer:
         payload = {
             "features": features,
             "cached_at": datetime.now(timezone.utc).isoformat(),
+            "config_hash": self._config_hash(),
         }
         path.write_text(json.dumps(payload))
 

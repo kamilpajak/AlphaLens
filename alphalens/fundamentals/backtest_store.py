@@ -74,14 +74,23 @@ class HistoricalFundamentalsStore:
 
 
 def _filter_bundle_by_date(bundle: Mapping, asof_iso: str) -> dict:
-    """Clone each quarterly section's reports trimmed to fiscalDateEnding ≤ asof.
+    """Clone each quarterly section's reports trimmed to publicly-available reports.
+
+    PIT filter uses ``reportedDate`` (the SEC filing date) rather than
+    ``fiscalDateEnding`` (the fiscal quarter end). SEC 10-Q filings are
+    typically 45-90 days after fiscal end — using fiscal end as the PIT
+    boundary leaks ~1 quarter of not-yet-public data. Falls back to
+    fiscalDateEnding when reportedDate is absent (legacy bundles); the
+    fallback still introduces the leak but keeps the code running rather
+    than hard-failing on schema drift.
 
     OVERVIEW is stripped of forward-looking TTM values (PriceToSalesRatioTTM,
     NetIncomeTTM) — those are always current, so using them in a backtest
     leaks future information. `extract_features` gracefully falls back to
     summing trimmed quarterly income reports for net_income_ttm; ps_ratio
     then returns None and the P/S penalty becomes a no-op for backtest.
-    Documented PIT compromise per issue #14 / CR (Phase 1.5).
+    Documented PIT compromise per issue #14 / CR (Phase 1.5) + Zen CR
+    (2026-04-24, reportedDate fix).
     """
     overview = dict(bundle.get("overview") or {})
     for forward_key in ("PriceToSalesRatioTTM", "NetIncomeTTM"):
@@ -93,7 +102,7 @@ def _filter_bundle_by_date(bundle: Mapping, asof_iso: str) -> dict:
         reports = cloned.get("quarterlyReports") or []
         cloned["quarterlyReports"] = [
             r for r in reports
-            if (r.get("fiscalDateEnding") or "") <= asof_iso
+            if (r.get("reportedDate") or r.get("fiscalDateEnding") or "") <= asof_iso
         ]
         out[key] = cloned
     return out

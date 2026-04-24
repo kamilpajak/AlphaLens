@@ -208,6 +208,95 @@ class TestFeaturesDict(unittest.TestCase):
         json.dumps(result)  # must be serializable
 
 
+class TestCacheConfigFingerprint(unittest.TestCase):
+    """Zen CR fix: scorer cache must be invalidated when scorer config
+    changes (window_days, min_distinct_insiders, plan_age_threshold_days).
+    Cache entries include a config_hash; load treats mismatched hashes as
+    cache miss. Missing hash = legacy default-config entry, accepted only
+    against default config.
+    """
+
+    def test_custom_config_does_not_reuse_default_cache(self):
+        from alphalens.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.screeners.insider.scorer import InsiderScorer, _ScorerConfig
+
+        edgar = MagicMock()
+        cik_map = TickerCikMap(_by_ticker={"AAPL": "0000320193"})
+
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            default_scorer = InsiderScorer(
+                edgar_client=edgar, ticker_cik_map=cik_map, cache_dir=cache
+            )
+            default_scorer._cache_store(
+                "AAPL", date(2024, 1, 15),
+                {"insider_count": 3, "aggregate_dollar": 1000.0,
+                 "cluster_window_days": 30, "asof": "2024-01-15"},
+            )
+
+            hit_default = default_scorer._cache_load("AAPL", date(2024, 1, 15))
+            self.assertIsNotNone(hit_default)
+
+            custom = InsiderScorer(
+                edgar_client=edgar,
+                ticker_cik_map=cik_map,
+                cache_dir=cache,
+                config=_ScorerConfig(window_days=45, min_distinct_insiders=3),
+            )
+            hit_custom = custom._cache_load("AAPL", date(2024, 1, 15))
+            self.assertIsNone(hit_custom)
+
+    def test_legacy_cache_without_hash_accepted_by_default_config(self):
+        """Backward compat: ~2M VPS-prewarmed entries lack config_hash.
+        Accept them when current scorer uses default config."""
+        import json
+        from alphalens.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.screeners.insider.scorer import InsiderScorer
+
+        edgar = MagicMock()
+        cik_map = TickerCikMap(_by_ticker={"AAPL": "0000320193"})
+
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            legacy_path = cache / "AAPL_2024-01-15.json"
+            legacy_path.write_text(json.dumps({
+                "features": {"insider_count": 3, "aggregate_dollar": 1000.0,
+                             "cluster_window_days": 30, "asof": "2024-01-15"},
+                "cached_at": "2024-01-15T00:00:00+00:00",
+            }))
+
+            scorer = InsiderScorer(edgar_client=edgar, ticker_cik_map=cik_map, cache_dir=cache)
+            hit = scorer._cache_load("AAPL", date(2024, 1, 15))
+            self.assertIsNotNone(hit)
+            self.assertEqual(hit["features"]["insider_count"], 3)
+
+    def test_legacy_cache_without_hash_rejected_by_custom_config(self):
+        import json
+        from alphalens.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.screeners.insider.scorer import InsiderScorer, _ScorerConfig
+
+        edgar = MagicMock()
+        cik_map = TickerCikMap(_by_ticker={"AAPL": "0000320193"})
+
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            legacy_path = cache / "AAPL_2024-01-15.json"
+            legacy_path.write_text(json.dumps({
+                "features": {"insider_count": 3, "aggregate_dollar": 1000.0,
+                             "cluster_window_days": 30, "asof": "2024-01-15"},
+                "cached_at": "2024-01-15T00:00:00+00:00",
+            }))
+
+            custom = InsiderScorer(
+                edgar_client=edgar,
+                ticker_cik_map=cik_map,
+                cache_dir=cache,
+                config=_ScorerConfig(window_days=45),
+            )
+            hit = custom._cache_load("AAPL", date(2024, 1, 15))
+            self.assertIsNone(hit)
+
+
 class TestCacheContract(unittest.TestCase):
     def test_second_call_same_inputs_does_not_refetch(self):
         filings = [

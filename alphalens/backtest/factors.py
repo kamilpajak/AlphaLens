@@ -17,12 +17,15 @@ All returns are published in **percent** and are converted to decimals on load.
 """
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date
 from io import StringIO
 from pathlib import Path
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 _DATE_ROW_RE = re.compile(r"^\s*\d{8}\s*,")
 
@@ -226,15 +229,23 @@ def load_q4_daily(
     target_dir.mkdir(parents=True, exist_ok=True)
     fetcher = fetch or _fetch_q4_text
 
-    files = [("cumulative.csv", _q4_cumulative_url())]
-    for year in range(2019, 2025):  # yearly files currently available 2019-2024
+    # Cumulative file (1967-2018) always required; yearly files 2019→current.
+    # Auto-extend to current year so newly-published files get picked up when
+    # global-q.org drops them. Unpublished years 404 — skip silently.
+    files: list[tuple[str, str]] = [("cumulative.csv", _q4_cumulative_url())]
+    current_year = date.today().year
+    for year in range(2019, current_year + 1):
         files.append((f"{year}.csv", _q4_yearly_url(year)))
 
     frames: list[pd.DataFrame] = []
     for filename, url in files:
         path = target_dir / filename
         if not path.exists():
-            path.write_text(fetcher(url))
+            try:
+                path.write_text(fetcher(url))
+            except Exception as exc:  # noqa: BLE001 — skip unpublished year files
+                logger.debug("q4 yearly file %s not available: %s", filename, exc)
+                continue
         frames.append(_parse_q4_csv(path.read_text()))
 
     combined = (

@@ -25,6 +25,19 @@ class SecEdgarError(RuntimeError):
     """Non-transient SEC EDGAR failure (auth, schema, permanent 4xx/5xx)."""
 
 
+def _evict_to_capacity(cache: dict, max_size: int) -> None:
+    """FIFO eviction: drop oldest entries until ``len(cache) <= max_size``.
+
+    Relies on dict insertion order (Python 3.7+). Cheap: O(1) per eviction
+    via ``pop(next(iter(cache)))``. Intended to be called right before a
+    new insertion to reserve space.
+    """
+    if max_size < 0:
+        max_size = 0
+    while len(cache) > max_size:
+        cache.pop(next(iter(cache)))
+
+
 class SecEdgarClient:
     def __init__(
         self,
@@ -48,8 +61,13 @@ class SecEdgarClient:
         # are content-addressable and static — once fetched they never change
         # during a backtest run, so caching them eliminates the "refetch every
         # scorer call" trap that dominated Phase 3b.3 initial runtime.
+        # FIFO-bounded per Zen CR (2026-04-24) so long-running prewarm
+        # (32h observed) cannot grow memory without bound. Capacities tuned
+        # for R2000-scale universes (~2000 tickers, ~500 Form 4/yr average).
         self._submissions_cache: dict[str, dict[str, Any]] = {}
         self._form4_xml_cache: dict[tuple[str, str], bytes] = {}
+        self._submissions_cache_capacity = 5_000
+        self._form4_xml_cache_capacity = 50_000
 
     def fetch_submissions(self, cik: str) -> dict[str, Any]:
         """Fetch a filer's submissions index. cik must be 10-digit zero-padded."""
@@ -58,6 +76,7 @@ class SecEdgarClient:
             return cached
         url = f"{_DATA_BASE}/submissions/CIK{cik}.json"
         data = self._get_json(url)
+        _evict_to_capacity(self._submissions_cache, self._submissions_cache_capacity - 1)
         self._submissions_cache[cik] = data
         return data
 
@@ -96,6 +115,7 @@ class SecEdgarClient:
             f"{cik_no_zeros}/{acc_no_dashes}/{primary_doc}"
         )
         data = self._get_bytes(url)
+        _evict_to_capacity(self._form4_xml_cache, self._form4_xml_cache_capacity - 1)
         self._form4_xml_cache[cache_key] = data
         return data
 

@@ -128,6 +128,38 @@ class TestLoadQ4Daily(unittest.TestCase):
         self.assertEqual(df.index.min().year, 2021)
         self.assertEqual(df.index.max().year, 2022)
 
+    def test_auto_detects_latest_published_year(self):
+        """Zen CR fix: Q4 yearly file range shouldn't be hardcoded.
+        Loader must attempt up to current_year and skip 404s gracefully
+        so it picks up new years as global-q.org publishes them.
+        """
+        from alphalens.backtest.factors import load_q4_daily
+
+        # Simulate global-q.org publishing up to 2026 (current). 2027+ not yet.
+        published = {2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026}
+
+        def fetch(url):
+            if "daily.csv" in url and "_" not in url.rsplit("/", 1)[-1].replace(
+                "q5_factors_daily", ""
+            ):
+                return self._synth_csv(2018)
+            for y in range(2019, 2030):
+                if f"_{y}.csv" in url:
+                    if y in published:
+                        return self._synth_csv(y)
+                    # Simulate 404 for unpublished years
+                    raise ValueError(f"404 for year {y}")
+            raise ValueError(f"unexpected url {url}")
+
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            df = load_q4_daily(cache_dir=cache, fetch=fetch)
+
+        # Must include 2025 + 2026 (was truncated to 2024 in old hardcoded code)
+        years_loaded = set(df.index.year.unique())
+        self.assertIn(2025, years_loaded)
+        self.assertIn(2026, years_loaded)
+
 
 class TestQ4Attribution(unittest.TestCase):
     def _synth_factors(self, n: int = 500) -> pd.DataFrame:

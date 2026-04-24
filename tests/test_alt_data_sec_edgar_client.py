@@ -242,6 +242,60 @@ class TestFetchForm4Xml(unittest.TestCase):
         self.assertEqual(self.session.get.call_count, 3)
 
 
+class TestCacheEviction(unittest.TestCase):
+    """In-process caches (submissions JSON + Form 4 XML) must be bounded
+    to prevent unbounded memory growth on long-running prewarm processes.
+    FIFO eviction, capacity set to a generous default that fits 32h VPS
+    prewarm in <1GB observed.
+    """
+
+    def _make_client(self):
+        from alphalens.alt_data.sec_edgar_client import SecEdgarClient
+
+        session = MagicMock()
+        sleep = MagicMock()
+        client = SecEdgarClient(
+            user_agent="AlphaLens test@example.com",
+            rate_limit_per_sec=10,
+            session=session,
+            sleep=sleep,
+        )
+        return client, session
+
+    def test_form4_xml_cache_respects_capacity(self):
+        from alphalens.alt_data.sec_edgar_client import SecEdgarClient
+
+        client, session = self._make_client()
+        client._form4_xml_cache_capacity = 3
+
+        # Generate 5 distinct filings; each returns unique XML.
+        session.get.side_effect = [
+            _response(200, content=f"<xml{i}/>".encode())
+            for i in range(5)
+        ]
+        for i in range(5):
+            client.fetch_form4_xml(
+                cik="0000320193",
+                accession_number=f"000-{i:02d}-000000",
+                primary_doc="f.xml",
+            )
+
+        # Cache should only have the 3 most recent entries.
+        self.assertEqual(len(client._form4_xml_cache), 3)
+
+    def test_submissions_cache_respects_capacity(self):
+        client, session = self._make_client()
+        client._submissions_cache_capacity = 2
+
+        session.get.side_effect = [
+            _response(200, {"cik": f"{i:010d}"}) for i in range(4)
+        ]
+        for i in range(4):
+            client.fetch_submissions(f"{i:010d}")
+
+        self.assertEqual(len(client._submissions_cache), 2)
+
+
 class TestRateLimit(unittest.TestCase):
     def test_throttles_between_calls(self):
         from alphalens.alt_data.sec_edgar_client import SecEdgarClient
