@@ -45,9 +45,7 @@ During 3b.3 execution the daily-rebalance × 12y × 1403 tickers × EDGAR-bound 
 
 ## Executive verdict
 
-_TBD — fill after both splits complete. Expected format:_
-
-> **Verdict: GO / PAPER_TRACK / KILL** — [one-sentence justification].
+> **Verdict: KILL.** Layer 2d insider-cluster screener exhibits classic overfit pattern — Carhart-4F α collapses from 103.48%/y (t=2.14 in-sample) to 21.56%/y (t=0.68 OOS). Bootstrap 95% CI OOS `[-45.34%, +84.84%]` includes zero. Signal does not generalize 2023-2026. Same failure mode as Layer 2b momentum scorer (#18 post-mortem, train t=2.60 → OOS t=0.82). Daily-stride rerun cannot save it — even with √5 ≈ 2.24× tighter SE, Carhart OOS t ≈ 1.52 stays below 2.24 Bonferroni threshold.
 
 ## Timeline — Phase 3b.3 execution
 
@@ -61,54 +59,148 @@ _TBD — fill after both splits complete. Expected format:_
 | In-sample backtest (2011-2022, weekly, top-15) | _TBD_ |
 | OOS backtest (2023-2026, weekly, top-15) | _TBD_ |
 
-## In-sample (2011-01-01 → 2022-12-31)
+## In-sample (2011-01-01 → 2022-12-31, weekly stride=5, N=603)
 
-_Numbers from `docs/backtest/layer2d_insider_insample.md`._
+_Backtest runtime 21h, completed 2026-04-23 16:25. Full report: `docs/backtest/layer2d_insider_insample.md`._
 
 ### Factor attribution
 
 | Spec | α (ann) | α t-stat (HAC) | R² | n |
 |---|---:|---:|---:|---:|
-| Carhart-4F | TBD | TBD | TBD | TBD |
-| FF5+UMD    | TBD | TBD | TBD | TBD |
-| Q4         | TBD | TBD | TBD | TBD |
+| Carhart-4F | **103.48%** | **2.14** | 0.005 | 603 |
+| FF5+UMD    | 100.09% | 2.19 | 0.012 | 603 |
+| Q4         | 100.15% | 2.16 | 0.009 | 603 |
 
 ### Cost sensitivity
 
-| Scenario | Half-spread | Annual drag | Net α |
-|---|---:|---:|---:|
-| Primary (design §5 R8) | 5 bps | TBD | TBD |
-| Stress (k=0.15 proxy)  | 15 bps | TBD | TBD |
+| Scenario | Half-spread | Turnover/rebal | Annual drag | Net α |
+|---|---:|---:|---:|---:|
+| Primary | 5 bps | 27.9% | 2.81% | **100.66%** |
+| Stress (k=0.15 proxy) | 15 bps | 27.9% | 5.63% | 97.85% |
 
 ### Bootstrap 95% CI (annualized α)
 
-- Carhart-4F moving-block bootstrap (10k iters, block n^(1/3)): `[TBD%, TBD%]`
-- Excludes zero: **TBD**
+- Carhart-4F moving-block bootstrap (10k iters, block n^(1/3)=8): **[26.30%, 214.87%]**
+- Excludes zero: **True**
 
 ### Regime breakdown (Carhart α t-stat HAC)
 
-| Regime | α t-stat | days |
-|---|---:|---:|
-| bull | TBD | TBD |
-| bear | TBD | TBD |
-| flat | TBD | TBD |
+| Regime | α t-stat | days | α ann |
+|---|---:|---:|---:|
+| bull | 2.51 | 221 | 63.24% |
+| bear | 1.47 | 72 | 441.37% |
+| flat | 1.67 | 310 | 63.34% |
 
 ### Bonferroni gates
 
 | Gate | Pass |
 |---|:---:|
-| carhart_alpha_bonferroni (n=2, t_crit 2.24) | TBD |
-| ff5_umd_alpha (t>2) | TBD |
-| ff5_umd_attenuation (<30%) | TBD |
-| net_alpha_primary (>0) | TBD |
-| net_alpha_stress_k15 (>0) | TBD |
-| bootstrap_ci (excludes 0) | TBD |
-| sharpe_net (>1.0) | TBD |
-| regime_collapse_{bull,bear,flat} (t>1.5) | TBD |
+| carhart_alpha_bonferroni (t>2.24) | ✗ (t=2.14) |
+| ff5_umd_alpha (t>2) | ✓ |
+| ff5_umd_attenuation (<30%) | ✓ |
+| net_alpha_primary (>0) | ✓ |
+| net_alpha_stress_k15 (>0) | ✓ |
+| bootstrap_ci (excludes 0) | ✓ |
+| sharpe_net (>1.0) | ✗ (0.95) |
+| regime_collapse_bull (t>1.5) | ✓ |
+| regime_collapse_bear (t>1.5) | ✗ (t=1.47) |
+| regime_collapse_flat (t>1.5) | ✓ |
 
-## OOS (2023-01-01 → 2026-04-22)
+### Verdict in-sample: **PAPER_TRACK**
 
-_Mirror of the in-sample tables above — fill after OOS run completes._
+3 marginalne misses, wszystkie w tolerancji weekly-sampling underpower (SE ×2.24 per R10 caveat):
+- Carhart t=2.14 vs 2.24 required (Δ=0.10)
+- Sharpe 0.95 vs 1.0 required (Δ=0.05)
+- Bear regime t=1.47 vs 1.5 required (Δ=0.03)
+
+Daily rebalance (stride=1, N=3020) może podnieść wszystkie 3 nad progi bez zmiany signal efektów size. Pending OOS + daily rerun po VPS prewarm.
+
+## OOS (2023-01-01 → 2026-04-22, weekly stride=5, N=154)
+
+_Backtest runtime 10h52m, completed 2026-04-24 03:35. Full report: `docs/backtest/layer2d_insider_oos.md`._
+
+### Factor attribution
+
+| Spec | α (ann) | α t-stat (HAC) | R² | n |
+|---|---:|---:|---:|---:|
+| Carhart-4F | 21.56% | **0.68** | 0.008 | 154 |
+| FF5+UMD    | 25.95% | 0.82 | 0.043 | 154 |
+| Q4         | 41.46% | 0.97 | 0.052 | 101 |
+
+### Cost sensitivity
+
+| Scenario | Half-spread | Turnover/rebal | Annual drag | Net α |
+|---|---:|---:|---:|---:|
+| Primary | 5 bps | 30.5% | 3.07% | 18.48% |
+| Stress (k=0.15 proxy) | 15 bps | 30.5% | 6.15% | 15.41% |
+
+### Bootstrap 95% CI (annualized α)
+
+- Carhart-4F moving-block bootstrap (10k iters, block n^(1/3)=5): **[-45.34%, +84.84%]**
+- Excludes zero: **False**
+
+### Regime breakdown (Carhart α t-stat HAC)
+
+| Regime | α t-stat |
+|---|---:|
+| bull | 1.24 |
+| bear | 0.00 |
+| flat | -0.44 |
+
+### Bonferroni gates
+
+| Gate | Pass |
+|---|:---:|
+| carhart_alpha_bonferroni (t>2.24) | ✗ (t=0.68) |
+| ff5_umd_alpha (t>2) | ✗ (t=0.82) |
+| ff5_umd_attenuation (<30%) | ✓ |
+| net_alpha_primary (>0) | ✓ |
+| net_alpha_stress_k15 (>0) | ✓ |
+| bootstrap_ci (excludes 0) | ✗ |
+| sharpe_net (>1.0) | ✗ (0.42) |
+| regime_collapse_bull (t>1.5) | ✗ (1.24) |
+| regime_collapse_bear (t>1.5) | ✗ (0.00) |
+| regime_collapse_flat (t>1.5) | ✗ (-0.44) |
+
+### Verdict OOS: **KILL** (7/10 gates fail)
+
+## Combined decision
+
+| Split | Carhart α t | Verdict |
+|---|---:|---|
+| In-sample | 2.14 | PAPER_TRACK (marginal) |
+| OOS | **0.68** | KILL |
+
+Per design doc §8 Bonferroni n=2: both splits must pass independently. OOS collapse is catastrophic — Carhart t dropped 3.14×, far beyond what weekly-underpower caveat explains. Signal classified as **overfit noise, not tradeable alpha**.
+
+## Findings + lessons
+
+1. **Classic overfit pattern, same as Layer 2b momentum scorer.** Train α t=2.14 / OOS α t=0.68 = 3.1× attenuation. Layer 2b saw 2.60 → 0.82 (3.2× attenuation). Similar signature: small-cap concentrated strategy on curated universe.
+
+2. **Factor attribution unanimous OOS rejection.** Carhart-4F, FF5+UMD, Q4 — all three t-stats are below 1.0 OOS. Not a factor-specification issue; signal genuinely absent in 2023-2026.
+
+3. **Regime collapse across all three regimes.** In-sample bull 2.51 / bear 1.47 / flat 1.67 → OOS bull 1.24 / bear 0.00 / flat -0.44. Bear regime actually negative. Signal did NOT generalize in any market condition.
+
+4. **Daily rebalance cannot save it.** Weekly N=154 OOS gives SE that is √5 ≈ 2.24× larger than daily N=800 would give. Even with ideal tightening, Carhart t OOS ≈ 0.68 × 2.24 = 1.52 — still below Bonferroni 2.24 threshold and even below regime 1.5 threshold. Running daily would confirm KILL but not change it.
+
+5. **Infra investment was not wasted.** `scripts/prewarm_form4_cache.py`, `SecEdgarClient` in-process cache, `BacktestEngine.rebalance_stride`, 5xx retry logic, autocorr-adjusted Sharpe, block-bootstrap CI — all are screener-agnostic and will reuse for any next Layer 2 candidate (Layer 3 classifier, short-interest, options flow).
+
+6. **Methodological discipline paid off.** Perplexity R10/R11 caveats (weekly underpower, autocorrelation adjustment) were correctly identified as non-determinative. The kill signal came from OOS factor attribution + bootstrap CI, not from any scaling subtlety.
+
+## Capital deploy decision
+
+**KILL.** Archive Layer 2d screener:
+
+- `alphalens/screeners/insider/` **retain for backtest-only reference** (no registry removal — same pattern as Layer 2c lean).
+- `launchd/com.alphalens.watchdog.insider.plist` — **never loaded** (we did not deploy; no systemd/launchctl action needed).
+- No Layer 3 queue integration. `SOURCE_PRIORITY["insider"]` was never registered; leave as-is.
+- Memory notes updated: `project_pivot_alt_data.md` marked CLOSED; Layer 2d appended to `project_archive_decisions.md`.
+
+Next candidate (open): **Layer 3 rejection-prediction classifier** per Layer 2b post-mortem §Pivot direction Option B — reuse 6 months of Layer 3 BUY/HOLD/SELL decisions as panel data, train classifier on pre-decision features. Alternative: short-interest or options-flow alt data.
+
+## Post-mortem sentence
+
+**Layer 2d zjadło 3 dni solo-dev + 31h wall-clock backtest (21h in-sample + 11h OOS na weekly stride) żeby potwierdzić że SEC Form 4 cluster buys nie dają OOS alfy — Carhart t=2.14 collapsed do 0.68, bootstrap CI otwiera na zero. Infra (prewarm script, EDGAR cache, rebalance_stride, 5xx retry, autocorr Sharpe) jest reusable dla kolejnej alt-data hipotezy; signal jest nie.**
 
 ## Decision matrix output
 
