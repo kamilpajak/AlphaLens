@@ -63,20 +63,27 @@ def sharpe_autocorr_adjusted(
     max_lag: int = 5,
     risk_free: float = 0.0,
 ) -> float:
-    """Autocorrelation-adjusted annualised Sharpe (Perplexity R11 recommendation).
+    """Autocorrelation-adjusted annualised Sharpe (Lo 2002 Theorem 2).
 
-    Naive ``sharpe()`` uses sqrt(periods_per_year) which assumes i.i.d. returns.
-    Stock return series — especially weekly-sampled short-horizon returns —
-    exhibit negative lag-1 autocorrelation (mean reversion). Correcting for it
-    yields an *effective* scale factor smaller than sqrt(periods_per_year),
-    so annualised Sharpe shrinks (or expands for momentum-biased series).
+    Naive ``sharpe()`` scales by ``sqrt(k)`` which assumes i.i.d. returns.
+    Lo (2002) corrects for serial correlation via the variance ratio:
 
-    Effective periods formula (Lo 2002, adapted):
+        VR(k) = 1 + 2 * Σ_{j=1..min(k-1, max_lag)} (1 - j/k) * ρ(j)
+        k_eff = k / VR(k)
+        SR_annualised = SR_per_period * sqrt(k_eff)
 
-        k_eff = k + 2 * Σ_{j=1..min(k, max_lag)-1} (1 - j/k) * ρ(j)
+    Sign convention (verified against Lo 2002 §4.2):
+    - ρ(j) < 0 (mean reversion): VR(k) < 1 → k_eff > k → scale > sqrt(k) →
+      annualised Sharpe is HIGHER than naive sqrt(k) scaling. Realised annual
+      vol grows slower than sqrt(k) × single-period vol, so the denominator
+      in the annualised ratio is smaller, not larger.
+    - ρ(j) > 0 (momentum/persistence): VR(k) > 1 → k_eff < k → scale < sqrt(k)
+      → annualised Sharpe is LOWER than naive.
+    - ρ(j) ≈ 0: VR(k) ≈ 1 → adjusted ≈ naive.
 
-    With negative autocorrelation, ``k_eff < k`` and the annualised Sharpe is
-    ``(μ/σ) * sqrt(max(k_eff, 1))``.
+    An earlier implementation used ``k_eff = k + 2*Σ(1-j/k)*ρ(j)`` which
+    inverted the direction for mean-reverting series. Zen code review
+    (2026-04-24) caught the regression; this version matches Lo 2002.
 
     ``max_lag=5`` covers one-week of lag structure for daily returns; larger
     windows inflate noise on shorter series.
@@ -92,7 +99,6 @@ def sharpe_autocorr_adjusted(
         return 0.0
 
     k = periods_per_year
-    # pandas autocorr would spin up a DataFrame; use numpy for speed.
     demean = excess - excess.mean()
     denom = float((demean * demean).sum())
     if denom <= 0:
@@ -105,7 +111,11 @@ def sharpe_autocorr_adjusted(
         rho = num / denom
         corr_sum += (1.0 - j / k) * rho
 
-    k_eff = k + 2.0 * corr_sum
+    # Lo 2002: annualised variance = k * σ² * VR(k) where VR = 1 + 2*Σ(1-j/k)ρ.
+    # Guard against degenerate VR near 0 (pathological rho sequence) or
+    # slightly-negative VR (numerical noise near zero-vol) — clamp to 0.01.
+    var_ratio = 1.0 + 2.0 * corr_sum
+    k_eff = k / max(var_ratio, 0.01)
     scale = math.sqrt(max(k_eff, 1.0))
     return (excess.mean() / std) * scale
 

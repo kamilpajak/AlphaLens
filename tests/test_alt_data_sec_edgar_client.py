@@ -201,6 +201,46 @@ class TestFetchForm4Xml(unittest.TestCase):
             )
         self.assertEqual(self.session.get.call_count, 1)
 
+    def test_5xx_then_429_then_success(self):
+        """Mixed transient errors: 500 → retry → 429 → retry → 200.
+        Must succeed, not raise. Regression test for the Zen CR finding
+        that an old version broke out of the 5xx loop when a 429 landed
+        on the retry and fell through to the >=400 raise.
+        """
+        xml = b"<ownershipDocument/>"
+        self.session.get.side_effect = [
+            _response(500, text="server error"),
+            _response(429, text="rate limited"),
+            _response(200, content=xml),
+        ]
+
+        result = self.client.fetch_form4_xml(
+            cik="0000320193",
+            accession_number="0000320193-25-000001",
+            primary_doc="wk-form4.xml",
+        )
+
+        self.assertEqual(result, xml)
+        self.assertEqual(self.session.get.call_count, 3)
+
+    def test_429_then_5xx_then_success(self):
+        """Reverse order: 429 → retry → 503 → retry → 200. Must succeed."""
+        xml = b"<ownershipDocument/>"
+        self.session.get.side_effect = [
+            _response(429, text="rate limited"),
+            _response(503, text="Service Unavailable"),
+            _response(200, content=xml),
+        ]
+
+        result = self.client.fetch_form4_xml(
+            cik="0000320193",
+            accession_number="0000320193-25-000001",
+            primary_doc="wk-form4.xml",
+        )
+
+        self.assertEqual(result, xml)
+        self.assertEqual(self.session.get.call_count, 3)
+
 
 class TestRateLimit(unittest.TestCase):
     def test_throttles_between_calls(self):

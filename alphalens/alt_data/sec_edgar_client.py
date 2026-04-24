@@ -119,27 +119,41 @@ class SecEdgarClient:
         resp = self._request(url)
         return resp.content
 
-    # 5xx = transient SEC server issue (overload, gateway hiccup); retry.
-    # 4xx (except 429) is permanent (missing file, bad URL, auth) — no retry.
+    # Unified retry: both 429 (rate-limited) and 5xx (transient server error)
+    # are retryable. 4xx-except-429 is permanent. Up to 3 total attempts.
+    # 429 uses 60s backoff (SEC polite guideline); 5xx uses 10s / 30s
+    # exponential backoff. Mixed sequences (e.g. 500 → 429 → 200) succeed.
     _SERVER_ERROR_BACKOFFS = (10, 30)
+    _RATE_LIMIT_BACKOFF = 60
+    _MAX_REQUEST_ATTEMPTS = 3
 
     def _request(self, url: str):
-        self._throttle()
-        resp = self._request_with_retry(url)
-        if resp.status_code == 429:
-            logger.warning("sec edgar 429 rate-limited; backing off 60s")
-            self._sleep(60)
+        resp = None
+        for attempt in range(self._MAX_REQUEST_ATTEMPTS):
+            self._throttle()
             resp = self._request_with_retry(url)
-        for attempt, backoff in enumerate(self._SERVER_ERROR_BACKOFFS):
-            if 500 <= resp.status_code < 600:
+            if attempt == self._MAX_REQUEST_ATTEMPTS - 1:
+                break
+            if resp.status_code == 429:
                 logger.warning(
-                    "sec edgar %d server error (attempt %d/3); sleeping %ds",
-                    resp.status_code, attempt + 1, backoff,
+                    "sec edgar 429 rate-limited (attempt %d/%d); sleeping %ds",
+                    attempt + 1, self._MAX_REQUEST_ATTEMPTS,
+                    self._RATE_LIMIT_BACKOFF,
+                )
+                self._sleep(self._RATE_LIMIT_BACKOFF)
+                continue
+            if 500 <= resp.status_code < 600:
+                backoff = self._SERVER_ERROR_BACKOFFS[
+                    min(attempt, len(self._SERVER_ERROR_BACKOFFS) - 1)
+                ]
+                logger.warning(
+                    "sec edgar %d server error (attempt %d/%d); sleeping %ds",
+                    resp.status_code, attempt + 1,
+                    self._MAX_REQUEST_ATTEMPTS, backoff,
                 )
                 self._sleep(backoff)
-                resp = self._request_with_retry(url)
-            else:
-                break
+                continue
+            break
         if resp.status_code >= 400:
             raise SecEdgarError(f"{resp.status_code} {resp.text[:200]}")
         return resp

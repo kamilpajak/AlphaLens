@@ -52,15 +52,49 @@ class TestDecisionMatrix(unittest.TestCase):
         self.assertIn("carhart_alpha_bonferroni", report.failing_gates)
 
     def test_ff5_umd_heavy_attenuation_flags_gate(self):
-        """R5 locked: >30% attenuation vs Carhart signals profitability loading."""
+        """R5 locked: >30% attenuation of alpha MAGNITUDE vs Carhart signals
+        profitability/investment loading. Zen CR fix: compare α_annualized,
+        not α_tstat — t-stat can drop just from SE inflation without the
+        actual alpha coefficient shrinking.
+        """
         from alphalens.backtest.decision_matrix import evaluate_exit_criteria
 
         inputs = self._base_inputs()
-        inputs["ff5_umd"] = _alpha_result("FF5+UMD", t=0.5)  # huge drop from 3.0
+        # Carhart baseline α_daily=0.0003. FF5+UMD at 40% of that → 60% attenuation.
+        inputs["ff5_umd"] = _alpha_result("FF5+UMD", t=2.5, daily=0.0003 * 0.4)
 
         report = evaluate_exit_criteria(**inputs)
 
         self.assertIn("ff5_umd_attenuation", report.failing_gates)
+
+    def test_ff5_tstat_drop_without_alpha_drop_passes_attenuation(self):
+        """Zen CR fix: if FF5+UMD α_tstat drops from 3.0 to 2.0 but
+        α_annualized is preserved (larger SE just because more factors
+        eat d.o.f.), the attenuation gate must PASS — it's measuring
+        economic magnitude decay, not statistical power decay.
+        """
+        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+
+        inputs = self._base_inputs()
+        # Carhart α_daily=0.0003, t=3.0. FF5+UMD same α but lower t (SE only).
+        inputs["ff5_umd"] = _alpha_result("FF5+UMD", t=2.0, daily=0.0003)
+
+        report = evaluate_exit_criteria(**inputs)
+
+        self.assertNotIn("ff5_umd_attenuation", report.failing_gates)
+
+    def test_ff5_alpha_grows_does_not_attenuate(self):
+        """If FF5+UMD α actually exceeds Carhart α, attenuation is
+        negative (the factor model *increased* measured alpha). Gate
+        should pass — there's no attenuation to worry about."""
+        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+
+        inputs = self._base_inputs()
+        inputs["ff5_umd"] = _alpha_result("FF5+UMD", t=2.5, daily=0.0003 * 1.2)
+
+        report = evaluate_exit_criteria(**inputs)
+
+        self.assertNotIn("ff5_umd_attenuation", report.failing_gates)
 
     def test_negative_net_alpha_kill(self):
         from alphalens.backtest.decision_matrix import evaluate_exit_criteria

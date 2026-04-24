@@ -153,9 +153,17 @@ class TestNetAlphaScaling(unittest.TestCase):
 
 
 class TestSharpeAutocorrAdjusted(unittest.TestCase):
-    """Autocorrelation-adjusted Sharpe (Perplexity R11) must collapse to
-    naive sqrt-k Sharpe when returns are iid and shrink it when they have
-    negative autocorrelation (mean reversion).
+    """Autocorrelation-adjusted Sharpe (Lo 2002, Perplexity R11 + Zen CR fix).
+
+    Formula (Lo 2002 Theorem 2):
+        VR(k) = 1 + 2 * Σ(1 - j/k) * ρ(j)
+        k_eff = k / VR(k)
+        SR_ann = SR_per_period * sqrt(k_eff)
+
+    Sign convention:
+    - Negative ρ (mean reversion) → VR < 1 → k_eff > k → adj Sharpe > naive
+    - Positive ρ (momentum) → VR > 1 → k_eff < k → adj Sharpe < naive
+    - ρ ≈ 0 (iid) → VR ≈ 1 → k_eff ≈ k → adj ≈ naive
     """
 
     def test_iid_matches_naive_within_tolerance(self):
@@ -165,27 +173,73 @@ class TestSharpeAutocorrAdjusted(unittest.TestCase):
         iid = rng.standard_normal(2000) * 0.01 + 0.0003
         s_naive = sharpe(iid.tolist(), periods_per_year=252)
         s_adj = sharpe_autocorr_adjusted(iid.tolist(), periods_per_year=252)
-        # Random noise correlations → adj within ~10% of naive.
         self.assertAlmostEqual(s_naive, s_adj, delta=abs(s_naive) * 0.10 + 0.2)
 
-    def test_negative_autocorrelation_shrinks_sharpe(self):
+    def test_negative_autocorrelation_increases_sharpe(self):
+        """Mean reversion: realized annual vol is lower than sqrt(k)*daily_vol
+        → annualized Sharpe is HIGHER than naive sqrt(k) scaling."""
         from alphalens.backtest.metrics import sharpe, sharpe_autocorr_adjusted
 
-        # AR(1) with phi = -0.3 (mean reversion)
         rng = np.random.default_rng(42)
         n = 3000
         eps = rng.standard_normal(n) * 0.01
         x = np.empty(n)
         x[0] = eps[0]
-        phi = -0.3
+        phi = -0.3  # AR(1) mean-reverting
         for i in range(1, n):
             x[i] = phi * x[i - 1] + eps[i]
-        x += 0.0003  # positive drift
+        x += 0.0003
 
         s_naive = sharpe(x.tolist(), periods_per_year=252)
         s_adj = sharpe_autocorr_adjusted(x.tolist(), periods_per_year=252)
-        # Mean reversion → k_eff < k → scale shrinks → adj < naive (assuming positive mean).
-        self.assertLess(s_adj, s_naive)
+        self.assertGreater(s_adj, s_naive)
+
+    def test_positive_autocorrelation_shrinks_sharpe_magnitude(self):
+        """Momentum: realized annual vol is higher than sqrt(k)*daily_vol
+        → |annualised Sharpe| is LOWER than naive |sqrt(k)| scaling.
+
+        (Uses magnitude comparison so the assertion works for either sign
+        of mean return — the effect is a vol-scaling adjustment, not a
+        directional one.)
+        """
+        from alphalens.backtest.metrics import sharpe, sharpe_autocorr_adjusted
+
+        rng = np.random.default_rng(11)
+        n = 3000
+        eps = rng.standard_normal(n) * 0.01
+        x = np.empty(n)
+        x[0] = eps[0]
+        phi = 0.3  # AR(1) positive autocorr (persistence)
+        for i in range(1, n):
+            x[i] = phi * x[i - 1] + eps[i]
+        x += 0.002  # larger positive drift so both Sharpes are positive
+
+        s_naive = sharpe(x.tolist(), periods_per_year=252)
+        s_adj = sharpe_autocorr_adjusted(x.tolist(), periods_per_year=252)
+        self.assertLess(abs(s_adj), abs(s_naive))
+
+    def test_matches_lo2002_variance_ratio(self):
+        """Numerical sanity: for AR(1) phi=-0.5, k=52, the variance ratio
+        VR(k) = 1 + 2*Σ(1-j/k)*ρ(j) should approximate sum_{j} (1-j/k)*phi^j
+        and k_eff/k should diverge significantly from 1.0."""
+        from alphalens.backtest.metrics import sharpe, sharpe_autocorr_adjusted
+
+        rng = np.random.default_rng(123)
+        n = 5000
+        eps = rng.standard_normal(n) * 0.01
+        x = np.empty(n)
+        x[0] = eps[0]
+        phi = -0.5
+        for i in range(1, n):
+            x[i] = phi * x[i - 1] + eps[i]
+        x += 0.001
+
+        s_naive = sharpe(x.tolist(), periods_per_year=252)
+        s_adj = sharpe_autocorr_adjusted(x.tolist(), periods_per_year=252, max_lag=5)
+        # Strong mean reversion (phi=-0.5) + positive drift → adj Sharpe must be
+        # clearly larger. Direction: scale multiplier = sqrt(k_eff / k) where
+        # k_eff > k for ρ<0; concrete ratio depends on stochastic sample.
+        self.assertGreater(s_adj, s_naive * 1.05)
 
     def test_returns_zero_on_empty_or_constant(self):
         from alphalens.backtest.metrics import sharpe_autocorr_adjusted

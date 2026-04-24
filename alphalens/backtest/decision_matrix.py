@@ -71,7 +71,19 @@ def evaluate_exit_criteria(
     if ff5_umd is not None:
         ff5_t = abs(ff5_umd.alpha_tstat)
         gates["ff5_umd_alpha"] = ff5_t > 2.0
-        attenuation = (carhart_t - ff5_t) / carhart_t if carhart_t > 0 else 0.0
+        # Attenuation gate measures ECONOMIC magnitude decay, not statistical
+        # significance decay. Per Zen code review (2026-04-24): comparing
+        # α_tstat conflates SE inflation from added factors with actual α
+        # shrinkage. Correct approach compares α_annualized (Harvey-Liu-Zhu).
+        # Negative attenuation (FF5+UMD α > Carhart α) is treated as "no
+        # attenuation" — gate passes.
+        carhart_alpha = abs(carhart.alpha_annualized)
+        if carhart_alpha > 1e-9:
+            attenuation = (
+                carhart_alpha - abs(ff5_umd.alpha_annualized)
+            ) / carhart_alpha
+        else:
+            attenuation = 0.0
         gates["ff5_umd_attenuation"] = attenuation < _FF5_ATTENUATION_THRESHOLD
     else:
         gates["ff5_umd_alpha"] = True  # absent, not a blocker
