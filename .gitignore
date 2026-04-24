@@ -220,3 +220,6 @@ __marimo__/
 
 # Runtime analysis output
 reports/
+
+# Claude Code local state
+.claude/

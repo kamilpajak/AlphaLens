@@ -57,6 +57,69 @@ def sharpe(
     return (excess.mean() / std) * math.sqrt(periods_per_year)
 
 
+def sharpe_autocorr_adjusted(
+    returns: Sequence[float],
+    periods_per_year: int = DEFAULT_PERIODS_PER_YEAR,
+    max_lag: int = 5,
+    risk_free: float = 0.0,
+) -> float:
+    """Autocorrelation-adjusted annualised Sharpe (Lo 2002 Theorem 2).
+
+    Naive ``sharpe()`` scales by ``sqrt(k)`` which assumes i.i.d. returns.
+    Lo (2002) corrects for serial correlation via the variance ratio:
+
+        VR(k) = 1 + 2 * Σ_{j=1..min(k-1, max_lag)} (1 - j/k) * ρ(j)
+        k_eff = k / VR(k)
+        SR_annualised = SR_per_period * sqrt(k_eff)
+
+    Sign convention (verified against Lo 2002 §4.2):
+    - ρ(j) < 0 (mean reversion): VR(k) < 1 → k_eff > k → scale > sqrt(k) →
+      annualised Sharpe is HIGHER than naive sqrt(k) scaling. Realised annual
+      vol grows slower than sqrt(k) × single-period vol, so the denominator
+      in the annualised ratio is smaller, not larger.
+    - ρ(j) > 0 (momentum/persistence): VR(k) > 1 → k_eff < k → scale < sqrt(k)
+      → annualised Sharpe is LOWER than naive.
+    - ρ(j) ≈ 0: VR(k) ≈ 1 → adjusted ≈ naive.
+
+    An earlier implementation used ``k_eff = k + 2*Σ(1-j/k)*ρ(j)`` which
+    inverted the direction for mean-reverting series. Zen code review
+    (2026-04-24) caught the regression; this version matches Lo 2002.
+
+    ``max_lag=5`` covers one-week of lag structure for daily returns; larger
+    windows inflate noise on shorter series.
+    """
+    arr = np.asarray(list(returns), dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if len(arr) < max(3, max_lag + 2):
+        return 0.0
+
+    excess = arr - risk_free
+    std = excess.std(ddof=1)
+    if std < 1e-12:
+        return 0.0
+
+    k = periods_per_year
+    demean = excess - excess.mean()
+    denom = float((demean * demean).sum())
+    if denom <= 0:
+        return (excess.mean() / std) * math.sqrt(max(k, 1))
+
+    lags = min(max_lag, len(arr) - 1, k - 1)
+    corr_sum = 0.0
+    for j in range(1, lags + 1):
+        num = float((demean[:-j] * demean[j:]).sum())
+        rho = num / denom
+        corr_sum += (1.0 - j / k) * rho
+
+    # Lo 2002: annualised variance = k * σ² * VR(k) where VR = 1 + 2*Σ(1-j/k)ρ.
+    # Guard against degenerate VR near 0 (pathological rho sequence) or
+    # slightly-negative VR (numerical noise near zero-vol) — clamp to 0.01.
+    var_ratio = 1.0 + 2.0 * corr_sum
+    k_eff = k / max(var_ratio, 0.01)
+    scale = math.sqrt(max(k_eff, 1.0))
+    return (excess.mean() / std) * scale
+
+
 def rank_ic(predicted_scores: Sequence[float], actual_returns: Sequence[float]) -> float:
     """Single-date Spearman rank correlation between predicted scores and realized returns.
 

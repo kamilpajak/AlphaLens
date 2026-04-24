@@ -16,11 +16,18 @@ import pandas as pd
 
 
 def _frame(ticker: str, reports: list[dict]) -> pd.DataFrame:
-    """Build a SimFin-style DataFrame indexed by (Ticker, Report Date)."""
+    """Build a SimFin-style DataFrame indexed by (Ticker, Report Date).
+
+    Auto-fills `Publish Date` = Report Date + 45 days to mirror the real
+    SimFin schema (`features_as_of` filters by Publish Date, not index date).
+    Pass an explicit `Publish Date` field in a report to override.
+    """
     rows = []
     idx = []
     for r in reports:
         rep_date = pd.Timestamp(r.pop("Report Date"))
+        if "Publish Date" not in r:
+            r["Publish Date"] = rep_date + pd.Timedelta(days=45)
         idx.append((ticker, rep_date))
         rows.append(r)
     frame = pd.DataFrame(rows)
@@ -168,7 +175,9 @@ class TestSimFinFundamentalsStoreEndToEnd(unittest.TestCase):
     def test_features_as_of_integrates_runway_ttm_streak(self):
         store = self._build_store_with_synthetic_data()
 
-        features = store.features_as_of("ACME", date(2024, 7, 15))
+        # asof 2024-08-20 > Q2 2024 publish date (06-30 + 45d = 08-14), so all
+        # four quarters are visible.
+        features = store.features_as_of("ACME", date(2024, 8, 20))
         # Balance: latest cash as of 2024-06-30 = 25M
         # OCF TTM avg = (8+7+6+5)/4 = 6.5M burn → runway = 25/6.5 × 3 ≈ 11.54 months
         self.assertAlmostEqual(features["cash_runway_months"], 11.54, places=1)
@@ -179,13 +188,15 @@ class TestSimFinFundamentalsStoreEndToEnd(unittest.TestCase):
         # Streak: last 4 quarters all negative → 4
         self.assertEqual(features["consecutive_neg_ocf_quarters"], 4)
 
-    def test_features_as_of_filters_reports_after_asof(self):
-        """On 2024-04-15 we should only see reports ≤ Q1 2024."""
+    def test_features_as_of_filters_reports_after_publish(self):
+        """On 2024-05-20 Q1 2024 (publish 05-15) is visible; Q2 2024 (publish 08-14) is not."""
         store = self._build_store_with_synthetic_data()
-        features = store.features_as_of("ACME", date(2024, 4, 15))
+        features = store.features_as_of("ACME", date(2024, 5, 20))
 
-        # Balance latest on or before 2024-04-15 is 2024-03-31 cash = 30M
-        # OCF TTM (3 reports): (8+7+6)/3 = 7.0M → runway = 30/7 × 3 ≈ 12.86 months
+        # Balance latest published by 2024-05-20 is 2024-03-31 cash = 30M
+        # OCF reports visible: 2023-09-30 (pub 2023-11-14), 2023-12-31 (pub 2024-02-14),
+        # 2024-03-31 (pub 2024-05-15). Q2 2024 not yet published.
+        # runway = 30M / avg(8+7+6)/3 × 3 = 30 / 7.0 × 3 ≈ 12.86 months
         self.assertAlmostEqual(features["cash_runway_months"], 12.86, places=1)
         # Only 3 income reports pre-asof → net_income_ttm requires 4 → None
         self.assertIsNone(features["net_income_ttm"])

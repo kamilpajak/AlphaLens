@@ -153,9 +153,12 @@ class SimFinFundamentalsStore:
                 sub = df.loc[up]
             except KeyError:
                 return None
-            # Reports indexed by publish date — filter to ≤ asof
-            mask = sub.index <= asof_ts
-            filtered = sub[mask]
+            # SimFin frames are indexed by Report Date (fiscal quarter end); the
+            # actual 10-Q/10-K filing lag is ~40-60 days. Filter by Publish Date
+            # so the backtest only sees reports that were publicly available.
+            publish = pd.to_datetime(sub["Publish Date"])
+            mask = publish <= asof_ts
+            filtered = sub[mask].sort_index()
             return filtered if not filtered.empty else None
 
         bs = _slice(self._balance)

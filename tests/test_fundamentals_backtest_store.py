@@ -84,6 +84,90 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
         self.assertIsNotNone(features)
         self.assertIsNone(features.get("cash_runway_months"))
 
+    def test_features_as_of_filters_by_reported_date_not_fiscal_end(self):
+        """Zen CR fix: SEC filings are public on reportedDate (fiscal_end + 45-90d),
+        not on fiscalDateEnding. Filtering by fiscal_end leaks ~1 quarter of
+        data that wasn't yet publicly filed. Correct PIT filter: reportedDate.
+        """
+        from alphalens.fundamentals.backtest_store import HistoricalFundamentalsStore
+
+        # Fiscal Q1 ending 2024-03-31 was actually reported on 2024-05-15.
+        # asof 2024-04-15 is BEFORE report date but AFTER fiscal end.
+        bundle = {
+            "overview": {},
+            "balance_sheet": {"quarterlyReports": [
+                {
+                    "fiscalDateEnding": "2024-03-31",
+                    "reportedDate": "2024-05-15",
+                    "cashAndShortTermInvestments": "50000000000",
+                },
+                {
+                    "fiscalDateEnding": "2023-12-31",
+                    "reportedDate": "2024-02-15",
+                    "cashAndShortTermInvestments": "40000000000",
+                },
+            ]},
+            "cash_flow": {"quarterlyReports": [
+                {
+                    "fiscalDateEnding": "2024-03-31",
+                    "reportedDate": "2024-05-15",
+                    "operatingCashflow": "30000000000",
+                },
+                {
+                    "fiscalDateEnding": "2023-12-31",
+                    "reportedDate": "2024-02-15",
+                    "operatingCashflow": "25000000000",
+                },
+            ]},
+            "income_statement": {"quarterlyReports": [
+                {
+                    "fiscalDateEnding": "2024-03-31",
+                    "reportedDate": "2024-05-15",
+                    "netIncome": "22000000000",
+                },
+                {
+                    "fiscalDateEnding": "2023-12-31",
+                    "reportedDate": "2024-02-15",
+                    "netIncome": "28000000000",
+                },
+            ]},
+        }
+
+        store = HistoricalFundamentalsStore(fetcher=lambda t, curr_date=None: bundle)
+        store.preload(["AAPL"])
+
+        # The store's internal filter must expose only the 2023-12-31 report
+        # when asof is 2024-04-15 — the 2024-03-31 report is not yet public.
+        from alphalens.fundamentals.backtest_store import _filter_bundle_by_date
+        filtered = _filter_bundle_by_date(bundle, "2024-04-15")
+        latest_fiscal_dates = [
+            r["fiscalDateEnding"]
+            for r in filtered["income_statement"]["quarterlyReports"]
+        ]
+        self.assertEqual(latest_fiscal_dates, ["2023-12-31"])
+        self.assertNotIn("2024-03-31", latest_fiscal_dates)
+
+    def test_features_as_of_falls_back_to_fiscal_end_if_reported_date_missing(self):
+        """Some legacy bundles lack reportedDate — fall back to
+        fiscalDateEnding to avoid crashing on incomplete data."""
+        from alphalens.fundamentals.backtest_store import _filter_bundle_by_date
+
+        bundle = {
+            "overview": {},
+            "income_statement": {"quarterlyReports": [
+                # No reportedDate field at all
+                {"fiscalDateEnding": "2023-12-31", "netIncome": "100"},
+                {"fiscalDateEnding": "2024-03-31", "netIncome": "200"},
+            ]},
+            "balance_sheet": {"quarterlyReports": []},
+            "cash_flow": {"quarterlyReports": []},
+        }
+
+        # Without reportedDate, fall back to fiscalDateEnding
+        filtered = _filter_bundle_by_date(bundle, "2024-02-01")
+        kept = [r["fiscalDateEnding"] for r in filtered["income_statement"]["quarterlyReports"]]
+        self.assertEqual(kept, ["2023-12-31"])
+
     def test_features_as_of_unknown_ticker_returns_none(self):
         from alphalens.fundamentals.backtest_store import HistoricalFundamentalsStore
 

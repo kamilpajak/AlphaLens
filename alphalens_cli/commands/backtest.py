@@ -127,9 +127,48 @@ def backtest(
             f"Scorer: Layer 2c Lean (archived, {len(screener_tickers)} tickers) — "
             "this strategy failed 5-year validation per CLAUDE.md"
         )
+    elif scorer == "insider":
+        import os
+        from pathlib import Path as _P
+
+        from alphalens.alt_data.russell_universe import load_iwm_current
+        from alphalens.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+        from alphalens.screeners.insider.scorer import InsiderScorer
+
+        iwm_path = _P("alphalens/alt_data/data/iwm_current.yaml")
+        cik_map_path = _P("alphalens/alt_data/data/ticker_cik_map.yaml")
+        for p in (iwm_path, cik_map_path):
+            if not p.exists():
+                raise typer.BadParameter(
+                    f"Missing {p}. Seed via P3/P4 refreshers before running insider backtest."
+                )
+        ua = os.environ.get("SEC_EDGAR_USER_AGENT")
+        if not ua:
+            raise typer.BadParameter("SEC_EDGAR_USER_AGENT env var required")
+
+        screener_tickers = sorted(load_iwm_current(iwm_path))
+        cache_root = _P.home() / ".alphalens" / "insider_form4"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        insider_store = InsiderScorer(
+            edgar_client=SecEdgarClient(user_agent=ua),
+            ticker_cik_map=TickerCikMap.load(cik_map_path),
+            cache_dir=cache_root,
+        )
+        scorer_fn = insider_scorer_adapter
+        scorer_config = {
+            "benchmark": benchmark,
+            "_insider_store": insider_store,
+        }
+        typer.echo(
+            f"Scorer: Layer 2d insider cluster ({len(screener_tickers)} IWM tickers) — "
+            "Phase 3a live universe; Phase 3b backtest uses PIT reconstruction"
+        )
     else:
         raise typer.BadParameter(
-            f"Unknown --scorer: {scorer!r} (expected: momentum | early-stage | lean)"
+            f"Unknown --scorer: {scorer!r} "
+            "(expected: momentum | early-stage | lean | insider)"
         )
 
     if fundamental_gate and scorer in ("momentum", "early-stage"):

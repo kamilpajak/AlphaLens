@@ -3,6 +3,7 @@ import unittest
 
 class TestScreenerRegistry(unittest.TestCase):
     def test_registry_exposes_all_screeners(self):
+        from alphalens.screeners.insider.pipeline import InsiderPipeline
         from alphalens.screeners.lean.pipeline import LeanScreenerPipeline
         from alphalens.screeners.prescreener.integration import PrescreenerPipeline
         from alphalens.screeners.themed.pipeline import ThemedPipeline
@@ -11,6 +12,7 @@ class TestScreenerRegistry(unittest.TestCase):
         self.assertIs(SCREENERS["themed"], ThemedPipeline)
         self.assertIs(SCREENERS["prescreener"], PrescreenerPipeline)
         self.assertIs(SCREENERS["lean"], LeanScreenerPipeline)
+        self.assertIs(SCREENERS["insider"], InsiderPipeline)
 
     def test_source_priority_mapping(self):
         from alphalens.registry import SOURCE_PRIORITY
@@ -18,6 +20,7 @@ class TestScreenerRegistry(unittest.TestCase):
         self.assertEqual(SOURCE_PRIORITY["watchdog_sec"], 0)
         self.assertEqual(SOURCE_PRIORITY["momentum"], 10)
         self.assertEqual(SOURCE_PRIORITY["early-stage"], 10)
+        self.assertEqual(SOURCE_PRIORITY["insider"], 12)
         self.assertEqual(SOURCE_PRIORITY["lean"], 15)
         self.assertEqual(SOURCE_PRIORITY["prescreener"], 20)
 

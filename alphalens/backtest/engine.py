@@ -43,15 +43,22 @@ Scorer = Callable[[Mapping[str, pd.DataFrame], Mapping], pd.DataFrame]
 
 @dataclass(frozen=True)
 class DailyResult:
-    """One-day snapshot of the backtest.
+    """One **per-rebalance** snapshot of the backtest.
 
-    `portfolio_return` is the **1-day forward return** of today's top-N picks —
-    i.e. simulated "daily rebalance, 1-day hold" P&L. This is what Sharpe should
-    be computed on (non-overlapping, independent daily observations).
+    Name is historical (pre-``rebalance_stride``). Actual semantic: one entry
+    per scorer invocation, i.e. per rebalance event. With stride=1 this is
+    literally daily; with stride=5 it is weekly; stride=21 monthly. The API
+    name is preserved for backward compatibility across ~25 callers.
 
-    `ic` uses the longer `holding_period` forward returns cross-sectionally as
-    the signal-quality metric. Overlapping is fine there because IC is a
-    cross-sectional measure per day, not a time-series statistic.
+    ``portfolio_return`` is the **1-period (=1 trading day) forward return** of
+    the top-N picks selected at that rebalance. For stride>1 the strategy is
+    effectively in-market only 1 day per rebalance period — use
+    ``periods_per_year = 252 / stride`` when annualising Sharpe to reflect
+    the rebalance cadence rather than the per-period observation horizon.
+
+    ``ic`` uses the longer ``holding_period`` forward returns cross-sectionally
+    as the signal-quality metric. Overlapping is fine there because IC is a
+    cross-sectional measure per rebalance, not a time-series statistic.
     """
 
     date: pd.Timestamp
@@ -79,7 +86,9 @@ class BacktestReport:
 
     @property
     def portfolio_returns(self) -> pd.Series:
-        """1-day forward returns of top-N (for Sharpe, non-overlapping)."""
+        """1-period (=1 trading day) forward returns of top-N, one entry per
+        rebalance date. Non-overlapping. For stride>1 the series is sampled
+        at the rebalance cadence; annualise Sharpe at ``252/stride``."""
         if not self.daily_results:
             return pd.Series(dtype=float)
         idx = [r.date for r in self.daily_results]
@@ -141,6 +150,7 @@ class BacktestEngine:
         screener_tickers: list[str] | None = None,
         retain_scored_frames: bool = False,
         weighting: WeightingScheme = "equal",
+        rebalance_stride: int = 1,
     ):
         self.store = history_store
         self._scorer = scorer
@@ -151,6 +161,11 @@ class BacktestEngine:
         self._screener_tickers = list(screener_tickers) if screener_tickers else []
         self.retain_scored_frames = bool(retain_scored_frames)
         self.weighting: WeightingScheme = weighting
+        # Sample every Nth trading day — a stride of 5 gives weekly rebalance,
+        # 21 gives monthly. Needed for Layer 2d insider scorer backtests where
+        # per-day EDGAR fetches would push daily-rebalance runtime past 24h
+        # on 12y × 1400-ticker sweeps.
+        self.rebalance_stride = max(1, int(rebalance_stride))
         # Scorer's declared requirement is authoritative (it knows its own
         # indicator lookbacks). Class attr is only a fallback when the scorer
         # doesn't declare one.
@@ -164,6 +179,8 @@ class BacktestEngine:
             raise RuntimeError(
                 f"No trading days found for benchmark {self.benchmark!r} in [{start}, {end}]"
             )
+        if self.rebalance_stride > 1:
+            calendar = calendar[::self.rebalance_stride]
 
         tickers = self._screener_tickers or [
             t for t in self.store.tickers() if t != self.benchmark.upper()
@@ -185,7 +202,11 @@ class BacktestEngine:
             self.top_n, self.holding_period,
         )
 
-        for ts in calendar:
+        total_days = len(calendar)
+        # Log every 5% of days so large sweeps emit ~20 progress lines total.
+        progress_stride = max(1, total_days // 20)
+
+        for idx, ts in enumerate(calendar):
             day = ts.date()
             simulated = self._simulate_day(day, tickers)
             if simulated is None:
@@ -194,6 +215,12 @@ class BacktestEngine:
             report.daily_results.append(snap)
             if self.retain_scored_frames and scored_frame is not None:
                 report.scored_frames[pd.Timestamp(day)] = scored_frame
+            if (idx + 1) % progress_stride == 0 or idx == total_days - 1:
+                logger.info(
+                    "backtest progress: %d/%d days (%.0f%%) — latest snap %s scored=%d",
+                    idx + 1, total_days, 100 * (idx + 1) / total_days,
+                    day, snap.scored_count,
+                )
 
         logger.info(
             "backtest done: %d daily snapshots out of %d trading days",
