@@ -44,6 +44,36 @@ def parse_items_string(raw: str | None) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
+def _parse_one_8k_row(
+    *,
+    i: int,
+    forms: list,
+    dates: list,
+    accessions: list,
+    items_col: list,
+    cik: str,
+    ticker: str,
+    start: pd.Timestamp | None,
+    end: pd.Timestamp | None,
+) -> EightKFiling | None:
+    if forms[i] != "8-K":
+        return None
+    try:
+        filing_date = pd.Timestamp(dates[i])
+    except Exception:
+        return None
+    if (start is not None and filing_date < start) or (end is not None and filing_date > end):
+        return None
+    items_raw = items_col[i] if i < len(items_col) else ""
+    return EightKFiling(
+        cik=cik,
+        ticker=ticker,
+        filing_date=filing_date,
+        accession=accessions[i],
+        items=tuple(parse_items_string(items_raw)),
+    )
+
+
 def extract_8k_filings(
     *,
     submissions: dict,
@@ -62,30 +92,21 @@ def extract_8k_filings(
     if not (len(dates) == len(accessions) == n):
         return []
 
-    out: list[EightKFiling] = []
-    for i in range(n):
-        if forms[i] != "8-K":
-            continue
-        try:
-            filing_date = pd.Timestamp(dates[i])
-        except Exception:
-            continue
-        if start is not None and filing_date < start:
-            continue
-        if end is not None and filing_date > end:
-            continue
-        items_raw = items_col[i] if i < len(items_col) else ""
-        parsed = tuple(parse_items_string(items_raw))
-        out.append(
-            EightKFiling(
-                cik=cik,
-                ticker=ticker,
-                filing_date=filing_date,
-                accession=accessions[i],
-                items=parsed,
-            )
+    parsed_filings = (
+        _parse_one_8k_row(
+            i=i,
+            forms=forms,
+            dates=dates,
+            accessions=accessions,
+            items_col=items_col,
+            cik=cik,
+            ticker=ticker,
+            start=start,
+            end=end,
         )
-    return out
+        for i in range(n)
+    )
+    return [f for f in parsed_filings if f is not None]
 
 
 def compute_abnormal_return(
@@ -227,6 +248,57 @@ def aggregate_car_by_item(records: pd.DataFrame) -> pd.DataFrame:
     ]
 
 
+def _load_ticker_data(
+    ticker: str,
+    cik: str,
+    sec_client,
+    price_loader: Callable[[str], pd.Series],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> tuple[pd.Series, list[EightKFiling]] | None:
+    """Fetch submissions + filings + price series for one ticker. None on any failure."""
+    try:
+        subs = sec_client.fetch_submissions(cik)
+    except Exception:
+        return None
+    filings = extract_8k_filings(submissions=subs, cik=cik, ticker=ticker, start=start, end=end)
+    if not filings:
+        return None
+    try:
+        ticker_close = price_loader(ticker)
+    except Exception:
+        return None
+    if ticker_close is None or ticker_close.empty:
+        return None
+    return ticker_close, filings
+
+
+def _car_records_for_ticker(
+    ticker: str,
+    cik: str,
+    ticker_close: pd.Series,
+    bench_close: pd.Series,
+    filings: list[EightKFiling],
+    windows: tuple[int, ...],
+) -> list[dict]:
+    return [
+        {
+            "ticker": ticker,
+            "cik": cik,
+            "filing_date": f.filing_date,
+            "accession": f.accession,
+            "item": item,
+            "window_days": w,
+            "car": compute_abnormal_return(
+                ticker_close, bench_close, event_date=f.filing_date, window_days=w
+            ),
+        }
+        for f in filings
+        for item in f.items
+        for w in windows
+    ]
+
+
 def run_screen(
     *,
     ticker_cik_pairs: Sequence[tuple[str, str]],
@@ -246,40 +318,13 @@ def run_screen(
     bench_close = price_loader(benchmark)
 
     for ticker, cik in ticker_cik_pairs:
-        try:
-            subs = sec_client.fetch_submissions(cik)
-        except Exception:
+        loaded = _load_ticker_data(ticker, cik, sec_client, price_loader, start, end)
+        if loaded is None:
             continue
-        filings = extract_8k_filings(submissions=subs, cik=cik, ticker=ticker, start=start, end=end)
-        if not filings:
-            continue
-        try:
-            ticker_close = price_loader(ticker)
-        except Exception:
-            continue
-        if ticker_close is None or ticker_close.empty:
-            continue
-
-        for f in filings:
-            for item in f.items:
-                for w in windows:
-                    car = compute_abnormal_return(
-                        ticker_close,
-                        bench_close,
-                        event_date=f.filing_date,
-                        window_days=w,
-                    )
-                    records.append(
-                        {
-                            "ticker": ticker,
-                            "cik": cik,
-                            "filing_date": f.filing_date,
-                            "accession": f.accession,
-                            "item": item,
-                            "window_days": w,
-                            "car": car,
-                        }
-                    )
+        ticker_close, filings = loaded
+        records.extend(
+            _car_records_for_ticker(ticker, cik, ticker_close, bench_close, filings, windows)
+        )
 
     records_df = pd.DataFrame(records)
     summary = aggregate_car_by_item(records_df)

@@ -66,6 +66,15 @@ class ClassifiedEvent:
     action: Action
 
 
+# Static dispatch for Schedule 13 forms — no item/value subsetting needed.
+_FORM_FIXED_SEVERITY: dict[FormType, Severity] = {
+    FormType.FORM_13D: Severity.HIGH,
+    FormType.FORM_13D_A: Severity.MEDIUM,
+    FormType.FORM_13G: Severity.MEDIUM,  # ~65% passive rebalancing — not HIGH
+    FormType.FORM_13G_A: Severity.LOW,
+}
+
+
 class SignalClassifier:
     def classify(self, event: Event, portfolio: PortfolioState) -> ClassifiedEvent:
         severity = self._severity_for(event)
@@ -81,44 +90,38 @@ class SignalClassifier:
 
     def _severity_for(self, event: Event) -> Severity:
         form = event.form_type
-        raw = event.raw_data
-
-        if form == FormType.FORM_13D:
-            return Severity.HIGH
-        if form == FormType.FORM_13D_A:
-            return Severity.MEDIUM
-        if form == FormType.FORM_13G:
-            return Severity.MEDIUM  # ~65% passive rebalancing — not HIGH
-        if form == FormType.FORM_13G_A:
-            return Severity.LOW
-
+        if form in _FORM_FIXED_SEVERITY:
+            return _FORM_FIXED_SEVERITY[form]
         if form == FormType.FORM_8K:
-            items = set(raw.get("items") or [])
-            if not items:
-                return Severity.LOW  # title-only 8-K, usually routine
-            if items & HIGH_IMPACT_8K_ITEMS:
-                return Severity.HIGH
-            if items & MEDIUM_IMPACT_8K_ITEMS:
-                return Severity.MEDIUM
-            if items & LOW_IMPACT_8K_ITEMS:
-                return Severity.LOW
-            return Severity.MEDIUM  # unknown item — be slightly conservative
-
+            return self._severity_for_8k(event.raw_data)
         if form == FormType.FORM_4:
-            action = raw.get("insider_action")
-            value = raw.get("transaction_value_usd", 0) or 0
-            if action == "BUY":
-                if value >= LARGE_INSIDER_BUY_USD:
-                    return Severity.HIGH
-                if value > 0 and value < SMALL_INSIDER_BUY_USD:
-                    return Severity.LOW
-                return Severity.MEDIUM
-            if action == "SELL":
-                # SELLs are noise per Cohen/Malloy/Pomorski
-                return Severity.LOW
-            # Unknown action (parse failed / details not fetched): conservative LOW
-            return Severity.LOW
+            return self._severity_for_form4(event.raw_data)
+        return Severity.LOW
 
+    @staticmethod
+    def _severity_for_8k(raw: dict) -> Severity:
+        items = set(raw.get("items") or [])
+        if not items:
+            return Severity.LOW  # title-only 8-K, usually routine
+        if items & HIGH_IMPACT_8K_ITEMS:
+            return Severity.HIGH
+        if items & MEDIUM_IMPACT_8K_ITEMS:
+            return Severity.MEDIUM
+        if items & LOW_IMPACT_8K_ITEMS:
+            return Severity.LOW
+        return Severity.MEDIUM  # unknown item — be slightly conservative
+
+    @staticmethod
+    def _severity_for_form4(raw: dict) -> Severity:
+        action = raw.get("insider_action")
+        value = raw.get("transaction_value_usd", 0) or 0
+        if action == "BUY":
+            if value >= LARGE_INSIDER_BUY_USD:
+                return Severity.HIGH
+            if 0 < value < SMALL_INSIDER_BUY_USD:
+                return Severity.LOW
+            return Severity.MEDIUM
+        # SELL is noise per Cohen/Malloy/Pomorski; unknown action → conservative LOW.
         return Severity.LOW
 
     def _should_suppress(self, event: Event) -> bool:

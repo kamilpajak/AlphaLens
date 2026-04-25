@@ -60,6 +60,57 @@ def _compute_1yr_return(
     return exit_ / entry - 1.0
 
 
+def _load_price_series(price_store, ticker: str) -> pd.Series | None:
+    """Return ``close`` series for ticker, or None if unavailable."""
+    try:
+        df = price_store.full(ticker)
+    except KeyError:
+        return None
+    if df is None or df.empty:
+        return None
+    return df["close"]
+
+
+def _score_one_ticker(
+    *,
+    ticker: str,
+    asof: pd.Timestamp,
+    price_store,
+    scorer,
+    context_builder: CONTEXT_BUILDER_TYPE,
+) -> ConvictionResult | None:
+    """Build context + invoke scorer for a single ticker. None on any data/scorer failure."""
+    price_series = _load_price_series(price_store, ticker)
+    if price_series is None:
+        return None
+    try:
+        ctx = context_builder(ticker=ticker, asof=asof, price_series=price_series)
+    except Exception as exc:
+        logger.warning("context_builder failed for %s: %s", ticker, exc)
+        return None
+    if ctx is None:
+        return None
+    context_text = ctx if isinstance(ctx, str) else str(ctx)
+    try:
+        return scorer.score(ticker=ticker, asof=asof, context_text=context_text)
+    except Exception as exc:
+        logger.warning("Scorer failed for %s: %s", ticker, exc)
+        return None
+
+
+def _portfolio_return(picks: list[ConvictionResult], price_store, asof: pd.Timestamp) -> float:
+    returns: list[float] = []
+    for p in picks:
+        try:
+            price_df = price_store.full(p.ticker)
+        except KeyError:
+            continue
+        ret = _compute_1yr_return(price_df["close"], asof)
+        if ret is not None:
+            returns.append(ret)
+    return sum(returns) / len(returns) if returns else 0.0
+
+
 def run_single_year(
     *,
     year: int,
@@ -80,31 +131,14 @@ def run_single_year(
     total_cost = 0.0
 
     for ticker in sampled:
-        try:
-            price_df = price_store.full(ticker)
-        except KeyError:
-            skipped.append(ticker)
-            continue
-        if price_df is None or price_df.empty:
-            skipped.append(ticker)
-            continue
-        price_series = price_df["close"]
-
-        try:
-            ctx = context_builder(ticker=ticker, asof=asof, price_series=price_series)
-        except Exception as exc:
-            logger.warning("context_builder failed for %s: %s", ticker, exc)
-            skipped.append(ticker)
-            continue
-        if ctx is None:
-            skipped.append(ticker)
-            continue
-
-        context_text = str(ctx) if not isinstance(ctx, str) else ctx
-        try:
-            result = scorer.score(ticker=ticker, asof=asof, context_text=context_text)
-        except Exception as exc:
-            logger.warning("Scorer failed for %s: %s", ticker, exc)
+        result = _score_one_ticker(
+            ticker=ticker,
+            asof=asof,
+            price_store=price_store,
+            scorer=scorer,
+            context_builder=context_builder,
+        )
+        if result is None:
             skipped.append(ticker)
             continue
         picks_all.append(result)
@@ -116,18 +150,7 @@ def run_single_year(
     picks_all.sort(key=lambda r: r.conviction, reverse=True)
     picks = picks_all[:top_n]
 
-    # Compute equal-weight 1-year forward return for the portfolio
-    returns = []
-    for p in picks:
-        try:
-            price_df = price_store.full(p.ticker)
-            ret = _compute_1yr_return(price_df["close"], asof)
-            if ret is not None:
-                returns.append(ret)
-        except KeyError:
-            continue
-    portfolio_return = sum(returns) / len(returns) if returns else 0.0
-
+    portfolio_return = _portfolio_return(picks, price_store, asof)
     bench_df = price_store.full(benchmark)
     benchmark_return = _compute_1yr_return(bench_df["close"], asof) or 0.0
 

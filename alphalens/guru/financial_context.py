@@ -119,34 +119,60 @@ def build_context(
     }
 
 
+def _fmt_num(v, fmt: str = "{:,.0f}") -> str:
+    return "n/a" if v is None else fmt.format(v)
+
+
+def _safe_ratio(num, denom, *, denom_positive: bool = False) -> float | None:
+    """Return num/denom when both are truthy; ``denom_positive=True`` also requires denom > 0."""
+    if not (num and denom):
+        return None
+    if denom_positive and denom <= 0:
+        return None
+    return num / denom
+
+
+def _compute_ratios(income: dict, balance: dict, cashflow: dict) -> dict[str, float | None]:
+    revenue = income.get("latest_fy_revenue")
+    net_income = income.get("latest_fy_net_income")
+    operating = income.get("latest_fy_operating_income")
+    equity = balance.get("total_equity")
+    debt = balance.get("long_term_debt")
+    op_cf = cashflow.get("operating_cashflow")
+    return {
+        "profit_margin": _safe_ratio(net_income, revenue),
+        "operating_margin": _safe_ratio(operating, revenue),
+        "roe": _safe_ratio(net_income, equity, denom_positive=True),
+        "debt_to_equity": _safe_ratio(debt, equity, denom_positive=True),
+        "cf_to_ni": _safe_ratio(op_cf, net_income, denom_positive=True),
+    }
+
+
+def _format_history_lines(history: list[dict]) -> list[str]:
+    if not history:
+        return []
+    lines = ["Revenue / net income trend (last 3 fiscal years):"]
+    for rec in history:
+        lines.append(
+            f"  {rec.get('period') or 'n/a'}: "
+            f"rev=${_fmt_num(rec.get('revenue'))}, "
+            f"ni=${_fmt_num(rec.get('net_income'))}"
+        )
+    lines.append("")
+    return lines
+
+
 def context_to_prompt(ctx: dict) -> str:
     """Render the context dict as compact key-value text for LLM consumption."""
     if ctx is None:
         return "NO DATA AVAILABLE"
-
-    def _fmt_num(v, fmt="{:,.0f}"):
-        return "n/a" if v is None else fmt.format(v)
 
     income = ctx.get("income", {})
     balance = ctx.get("balance", {})
     cashflow = ctx.get("cashflow", {})
     price = ctx.get("price_summary", {})
     history = ctx.get("history", []) or []
-
-    # Compute simple ratios where possible (LLM does the rest)
-    revenue = income.get("latest_fy_revenue")
-    net_income = income.get("latest_fy_net_income")
-    operating = income.get("latest_fy_operating_income")
-    equity = balance.get("total_equity")
-    assets = balance.get("total_assets")
-    debt = balance.get("long_term_debt")
-    op_cf = cashflow.get("operating_cashflow")
-
-    profit_margin = (net_income / revenue) if (revenue and net_income) else None
-    operating_margin = (operating / revenue) if (revenue and operating) else None
-    roe = (net_income / equity) if (equity and net_income and equity > 0) else None
-    debt_to_equity = (debt / equity) if (equity and debt and equity > 0) else None
-    cf_to_ni = (op_cf / net_income) if (net_income and op_cf and net_income > 0) else None
+    ratios = _compute_ratios(income, balance, cashflow)
 
     lines = [
         f"COMPANY: {ctx['ticker']} — {ctx.get('name') or 'Unknown'}",
@@ -155,35 +181,25 @@ def context_to_prompt(ctx: dict) -> str:
         "",
         f"Latest annual report (period {income.get('latest_fy_period') or 'n/a'}, "
         f"filed {income.get('latest_fy_filing_date') or 'n/a'}):",
-        f"  Revenue: ${_fmt_num(revenue)}",
-        f"  Net income: ${_fmt_num(net_income)}",
-        f"  Operating income: ${_fmt_num(operating)}",
-        f"  Operating cashflow: ${_fmt_num(op_cf)}",
+        f"  Revenue: ${_fmt_num(income.get('latest_fy_revenue'))}",
+        f"  Net income: ${_fmt_num(income.get('latest_fy_net_income'))}",
+        f"  Operating income: ${_fmt_num(income.get('latest_fy_operating_income'))}",
+        f"  Operating cashflow: ${_fmt_num(cashflow.get('operating_cashflow'))}",
         "",
         "Balance sheet:",
-        f"  Total assets: ${_fmt_num(assets)}",
-        f"  Total equity: ${_fmt_num(equity)}",
-        f"  Long-term debt: ${_fmt_num(debt)}",
+        f"  Total assets: ${_fmt_num(balance.get('total_assets'))}",
+        f"  Total equity: ${_fmt_num(balance.get('total_equity'))}",
+        f"  Long-term debt: ${_fmt_num(balance.get('long_term_debt'))}",
         "",
         "Computed ratios:",
-        f"  Profit margin: {_fmt_num(profit_margin, '{:.2%}')}",
-        f"  Operating margin: {_fmt_num(operating_margin, '{:.2%}')}",
-        f"  ROE (basic): {_fmt_num(roe, '{:.2%}')}",
-        f"  Long-term D/E: {_fmt_num(debt_to_equity, '{:.2f}')}",
-        f"  Operating CF / Net Income: {_fmt_num(cf_to_ni, '{:.2f}')}",
+        f"  Profit margin: {_fmt_num(ratios['profit_margin'], '{:.2%}')}",
+        f"  Operating margin: {_fmt_num(ratios['operating_margin'], '{:.2%}')}",
+        f"  ROE (basic): {_fmt_num(ratios['roe'], '{:.2%}')}",
+        f"  Long-term D/E: {_fmt_num(ratios['debt_to_equity'], '{:.2f}')}",
+        f"  Operating CF / Net Income: {_fmt_num(ratios['cf_to_ni'], '{:.2f}')}",
         "",
     ]
-
-    if history:
-        lines.append("Revenue / net income trend (last 3 fiscal years):")
-        for rec in history:
-            lines.append(
-                f"  {rec.get('period') or 'n/a'}: "
-                f"rev=${_fmt_num(rec.get('revenue'))}, "
-                f"ni=${_fmt_num(rec.get('net_income'))}"
-            )
-        lines.append("")
-
+    lines += _format_history_lines(history)
     lines += [
         f"Price summary (trailing 12m as of {ctx['asof']}):",
         f"  Latest close: ${_fmt_num(price.get('latest_close'), '{:.2f}')}",

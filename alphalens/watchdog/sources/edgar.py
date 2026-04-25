@@ -52,37 +52,37 @@ class SECEdgarSource(EventSource):
         self.fetch_form4_details = bool(self.config.get("fetch_form4_details", False))
         self.fetch_8k_details = bool(self.config.get("fetch_8k_details", False))
 
-    def detect(self) -> list[Event]:
-        all_events: list[Event] = []
-        for idx, ticker in enumerate(self.tickers):
-            cik = self._resolve_cik(ticker)
-            if not cik:
-                logger.warning("No CIK mapping for %s, skipping", ticker)
-                continue
+    def _collect_events_for_ticker(self, idx: int, ticker: str) -> list[Event]:
+        """Fetch + parse one ticker's Atom feed; logs and skips on missing CIK or fetch error."""
+        cik = self._resolve_cik(ticker)
+        if not cik:
+            logger.warning("No CIK mapping for %s, skipping", ticker)
+            return []
+        if idx > 0:
+            time.sleep(self.rate_limit_seconds)
+        xml_text = self._fetch_feed(cik)
+        if xml_text is None:
+            return []
+        return self._parse_atom(xml_text, ticker)
 
-            if idx > 0:
-                time.sleep(self.rate_limit_seconds)
-
-            xml_text = self._fetch_feed(cik)
-            if xml_text is None:
-                continue
-
-            parsed = self._parse_atom(xml_text, ticker)
-            all_events.extend(parsed)
-
-        filtered = [e for e in all_events if e.form_type in self.form_filter]
-        unseen = self.store.filter_unseen(filtered)
-
+    def _apply_enrichments(self, unseen: list[Event]) -> None:
         if self.fetch_form4_details:
             for event in unseen:
                 if event.form_type == FormType.FORM_4:
                     self._enrich_form4(event)
-
         if self.fetch_8k_details:
             for event in unseen:
                 if event.form_type == FormType.FORM_8K:
                     self._enrich_8k(event)
 
+    def detect(self) -> list[Event]:
+        all_events: list[Event] = []
+        for idx, ticker in enumerate(self.tickers):
+            all_events.extend(self._collect_events_for_ticker(idx, ticker))
+
+        filtered = [e for e in all_events if e.form_type in self.form_filter]
+        unseen = self.store.filter_unseen(filtered)
+        self._apply_enrichments(unseen)
         for event in unseen:
             self.store.mark_seen(event.accession_number)
         return unseen
@@ -155,14 +155,7 @@ class SECEdgarSource(EventSource):
 
         items = extract_8k_items(html_text)
         if items:
-            # Upgrade bare "5.02" to explicit subsection when the section
-            # narrative gives a clear signal (Perplexity 2026-04-18: ~60-70%
-            # of real principal-officer events use bare "Item 5.02" headings).
-            if "5.02" in items and not any(i.startswith("5.02(") for i in items):
-                inferred = infer_5_02_subsection(extract_5_02_section(html_text))
-                if inferred:
-                    items = [inferred if i == "5.02" else i for i in items]
-            event.raw_data["items"] = items
+            event.raw_data["items"] = _resolve_5_02_subsection(items, html_text)
 
     def _get(self, url: str, params: dict | None = None, context: str = "") -> str | None:
         headers = {"User-Agent": self.config["user_agent"]}
@@ -266,6 +259,19 @@ def _pick_8k_primary_name(filing_summary_xml: str) -> str | None:
             text = (file_el.text or "").strip()
             return text or None
     return None
+
+
+def _resolve_5_02_subsection(items: list[str], html_text: str) -> list[str]:
+    """Upgrade bare ``5.02`` to its subsection (5.02(a)/(b)/...) when the section
+    narrative gives a clear signal. Per Perplexity 2026-04-18 ~60-70% of real
+    principal-officer events use bare ``Item 5.02`` headings.
+    """
+    if "5.02" not in items or any(i.startswith("5.02(") for i in items):
+        return items
+    inferred = infer_5_02_subsection(extract_5_02_section(html_text))
+    if not inferred:
+        return items
+    return [inferred if i == "5.02" else i for i in items]
 
 
 def _pick_form4_xml_name(index_json_text: str) -> str | None:
