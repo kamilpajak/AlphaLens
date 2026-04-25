@@ -24,6 +24,22 @@ def _synthetic_ff5_umd(n: int = 500) -> pd.DataFrame:
 
 
 class TestLoadFf5Umd(unittest.TestCase):
+    """Integration tests against ~/.alphalens/factors/ Dartmouth CSVs.
+
+    Skipped automatically in CI (file absent on fresh runner). Run locally
+    after downloading FF5+UMD daily factors from Ken French's data library.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from alphalens.backtest.factors import DEFAULT_FF5_PATH
+
+        if not DEFAULT_FF5_PATH.exists():
+            raise unittest.SkipTest(
+                f"FF5+UMD CSV not found at {DEFAULT_FF5_PATH} — "
+                "skipping integration test (download Dartmouth CSVs to enable)"
+            )
+
     def test_joined_frame_has_all_six_factors_plus_rf(self):
         from alphalens.backtest.factors import load_ff5_umd_daily
 

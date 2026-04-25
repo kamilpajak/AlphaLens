@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,14 @@ from alphalens.guru.llm_scorer import ConvictionResult
 from alphalens.guru.pilot_runner import SingleYearResult
 
 _SAMPLE_PROMPT = "You are a value investor. Score the company 0-100.\n"
+
+# Pilot CLI checks GOOGLE_API_KEY before delegating to _build_pilot_years; tests
+# that mock the build step still need the key set so the env-precondition gate
+# doesn't intercept. In CI these are unset; locally they come from .env.
+_FAKE_API_ENV = {
+    "GOOGLE_API_KEY": "fake-google-key-for-test",
+    "POLYGON_API_KEY": "fake-polygon-key-for-test",
+}
 
 
 def _stub_year(year: int, outperf: float = 0.10) -> SingleYearResult:
@@ -99,6 +108,7 @@ class TestGuruPilot(unittest.TestCase):
             ]
 
             with (
+                patch.dict(os.environ, _FAKE_API_ENV, clear=False),
                 patch(
                     "alphalens_cli.commands.guru._build_pilot_years",
                     return_value=stub_years,
@@ -161,6 +171,7 @@ class TestGuruPilot(unittest.TestCase):
             ]
 
             with (
+                patch.dict(os.environ, _FAKE_API_ENV, clear=False),
                 patch(
                     "alphalens_cli.commands.guru._build_pilot_years",
                     return_value=stub_years,

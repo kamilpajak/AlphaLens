@@ -85,7 +85,10 @@ class TestBacktestCLIHelp(unittest.TestCase):
     """Catches import errors and Typer registration regressions."""
 
     def setUp(self):
-        self.runner = CliRunner()
+        # COLUMNS=200 prevents Typer from wrapping flag names mid-line on the
+        # narrow CI terminal — without this, `--scorer` becomes `-scorer`+wrap
+        # in the rendered output and substring asserts fail.
+        self.runner = CliRunner(env={"COLUMNS": "200", "NO_COLOR": "1"})
 
     def test_backtest_help_renders(self):
         from alphalens_cli.main import app
@@ -328,7 +331,9 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
 
 class TestBacktestCLIArgValidation(unittest.TestCase):
     def setUp(self):
-        self.runner = CliRunner()
+        # COLUMNS=200 / NO_COLOR=1 same as TestBacktestCLIHelp — keeps Typer
+        # error messages on a single line so substring assertions work in CI.
+        self.runner = CliRunner(env={"COLUMNS": "200", "NO_COLOR": "1"})
 
     def test_invalid_scorer_exits_cleanly(self):
         """Typer should intercept `BadParameter` and exit with a non-zero code
