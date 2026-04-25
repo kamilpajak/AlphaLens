@@ -1,21 +1,21 @@
-"""Reference LLM scorer implementations dla historical_validation.
+"""Reference LLM scorer implementations for historical_validation.
 
-Dwie dostępne implementacje:
+Two available implementations:
 
-1. `gemini_flash_tractability_scorer` — pojedynczy Gemini 2.5 Flash call,
-   ~$0.01-0.03 per ticker. Pyta model czy nazwa jest "analysis-tractable"
-   — czyli czy ma coherent business model, sensowny size, nie zombie/fraud.
+1. `gemini_flash_tractability_scorer` — a single Gemini 2.5 Flash call,
+   ~$0.01-0.03 per ticker. Asks the model whether a name is "analysis-tractable":
+   coherent business model, reasonable size, not a zombie/fraud.
 
-2. `tradingagents_reduced_scorer` — odpalenie pełnego TradingAgents
-   z `selected_analysts=["market", "news"]`. ~$0.50-1 per ticker. Realistic
-   production-parity; skip fundamentals (= Alpha Vantage bottleneck) + social.
+2. `tradingagents_reduced_scorer` — a full TradingAgents run with
+   `selected_analysts=["market", "news"]`. ~$0.50-1 per ticker. Production-parity;
+   skips fundamentals (Alpha Vantage bottleneck) and social.
 
-Oba zwracają `LLMVerdict` zgodny z interfejsem w `historical_validation.py`.
+Both return an `LLMVerdict` matching the interface in `historical_validation.py`.
 
-**Look-ahead bias**: LLM trenowany jest na danych do określonego cutoff.
-Jeśli testujesz na datach > cutoff (np. 2026 w Gemini 2.5 Pro cutoff early
-2025), model efektywnie "wie" post-event. Dla rigorous validation — użyj
-okna 2022-2023 (pre-cutoff dla wszystkich mainstream models).
+**Look-ahead bias**: LLMs are trained up to a fixed cutoff. If you test on
+dates beyond the cutoff (e.g. 2026 with a Gemini 2.5 Pro early-2025 cutoff),
+the model effectively "knows" the post-event outcome. For rigorous validation,
+use a 2022-2023 window (pre-cutoff for all mainstream models).
 """
 
 from __future__ import annotations
@@ -111,10 +111,10 @@ def gemini_flash_tractability_scorer(
 ) -> LLMVerdict:
     """Single Gemini Flash call ~$0.01-0.03 per ticker.
 
-    Używa Google Gen AI SDK (google-genai). Fallback: raise jeśli brak API key
-    lub SDK nie zainstalowane.
+    Uses the Google Gen AI SDK (google-genai). Raises if the API key is missing
+    or the SDK is not installed.
 
-    `context` powinien mieć: rank, momentum_score, themes.
+    `context` must include: rank, momentum_score, themes.
     """
     api_key = api_key or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -182,13 +182,15 @@ def tradingagents_reduced_scorer(
     context: Mapping,
     selected_analysts: tuple[str, ...] = ("market", "news"),
 ) -> LLMVerdict:
-    """Wywołuje TradingAgentsGraph z reduced analyst set.
+    """Run TradingAgentsGraph with a reduced analyst set.
 
-    Uwaga: debate, risk management, portfolio manager są HARDCODED w setup.py —
-    nie można ich wyłączyć przez `selected_analysts`. Realny koszt ~$0.50-1
-    per ticker na Gemini paid tier, znacznie więcej niż Flash tractability call.
+    Note: debate, risk management, and portfolio manager are HARDCODED in
+    setup.py — they cannot be disabled through `selected_analysts`. Real cost
+    is ~$0.50-1 per ticker on the Gemini paid tier, much more than a single
+    Flash tractability call.
 
-    Użyć gdy chcesz REALISTIC PRODUCTION EVAL (jakby odpalić Layer 3 na picku).
+    Use this when you want a REALISTIC PRODUCTION EVAL (as if running Layer 3
+    on the pick).
     """
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
@@ -241,9 +243,9 @@ def rule_and_gemini_hybrid_scorer(
     asof: date,
     context: Mapping,
 ) -> LLMVerdict:
-    """Hybrid: rules first, Gemini tylko gdy rule → 'uncertain'.
+    """Hybrid: rules first, Gemini only when the rule returns 'uncertain'.
 
-    Tanie (większość picks lands na deterministic rule), LLM fallback dla
+    Cheap (most picks land on the deterministic rule); LLM fallback only for
     borderline cases.
     """
     from .historical_validation import rule_based_tractability_scorer

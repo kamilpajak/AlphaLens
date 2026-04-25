@@ -58,12 +58,12 @@ class TestSnapshotThemes(unittest.TestCase):
     def test_hhi_diversification(self):
         from alphalens.backtest.theme_analysis import snapshot_themes
 
-        # Idealna dywersyfikacja 3 równe tematy → HHI = 3 × (1/3)² = 1/3
+        # Perfect diversification — 3 equal themes → HHI = 3 × (1/3)² = 1/3
         themes_map = {"A": ["quantum"], "B": ["ai"], "C": ["biotech"]}
         snap = snapshot_themes(["A", "B", "C"], themes_map)
         self.assertAlmostEqual(snap.hhi, 1 / 3, places=4)
 
-        # Pełna koncentracja: wszystkie w jednym temacie → HHI = 1.0
+        # Full concentration: all in one theme → HHI = 1.0
         themes_map = {"A": ["quantum"], "B": ["quantum"], "C": ["quantum"]}
         snap = snapshot_themes(["A", "B", "C"], themes_map)
         self.assertAlmostEqual(snap.hhi, 1.0)
@@ -144,7 +144,7 @@ class TestFormatThemeSummary(unittest.TestCase):
             concentration_threshold=0.70,
         )
         out = format_theme_summary(stats, n_total_days=250)
-        self.assertIn("250 dni", out)
+        self.assertIn("250 days", out)
         self.assertIn("HHI", out)
         self.assertIn("quantum", out)
         self.assertIn("ai", out)

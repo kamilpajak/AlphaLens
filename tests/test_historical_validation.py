@@ -62,7 +62,7 @@ class TestEvaluateHistoricalPicks(unittest.TestCase):
         self.assertAlmostEqual(result.total_llm_cost_usd, 0.05)
 
     def test_smart_scorer_detects_edge(self):
-        """Scorer rozrozniajacy dobrze od złego picka powinien dawać positive delta."""
+        """A scorer that distinguishes good from bad picks should yield positive delta."""
         from alphalens.backtest.historical_validation import (
             evaluate_historical_picks,
         )
@@ -80,7 +80,7 @@ class TestEvaluateHistoricalPicks(unittest.TestCase):
         self.assertGreater(result.delta_accept_minus_reject, 0.02)
 
     def test_noisy_scorer_gives_near_zero_delta(self):
-        """Random scorer powinien dać delta ~0 (baseline dla 'no value add')."""
+        """A random scorer should yield delta ~0 (baseline for 'no value add')."""
         import random
 
         from alphalens.backtest.historical_validation import (

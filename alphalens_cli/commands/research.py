@@ -1,4 +1,12 @@
-"""`alphalens research` — eksperymenty / walidacje poza produkcyjnym pipeline'em."""
+"""`alphalens research` — experiments and validations outside the production pipeline.
+
+Note on import style: heavy `alphalens.backtest.*` and `alphalens.screeners.*`
+modules are imported lazily inside each command function. They pull in pandas,
+scipy, statsmodels and Carhart factor loaders (~900ms cumulative). The Layer 1
+`watchdog` cron runs `alphalens` frequently and must not pay this cost.
+Within-function imports may overlap across commands — that duplication is
+deliberate; do not promote to module level without re-measuring CLI startup.
+"""
 
 from __future__ import annotations
 
@@ -72,8 +80,6 @@ def cost_validation(
     Addresses the third Perplexity-flagged gap after PIT survivorship
     (PR #9 PASS) and walk-forward (PR #11 PASS).
     """
-    from datetime import date as _date
-
     import yaml
 
     from alphalens.backtest.cost_validation import (
@@ -97,8 +103,8 @@ def cost_validation(
     from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
     from alphalens.screeners.themed.universe import flatten_universe
 
-    start_date = _date.fromisoformat(start)
-    end_date = _date.fromisoformat(end)
+    start_date = date.fromisoformat(start)
+    end_date = date.fromisoformat(end)
     typer.echo(
         f"Cost-validation — {start_date} → {end_date}, "
         f"portfolio ${portfolio_value:,.0f}, window={window_days}d"
@@ -329,8 +335,6 @@ def walk_forward(
     dark-half threshold because momentum strategies have documented
     12-18 month "winters" during reversals.
     """
-    from datetime import date as _date
-
     import yaml
 
     from alphalens.backtest.engine import BacktestEngine
@@ -343,8 +347,8 @@ def walk_forward(
     from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
     from alphalens.screeners.themed.universe import flatten_universe
 
-    start_date = _date.fromisoformat(start)
-    end_date = _date.fromisoformat(end)
+    start_date = date.fromisoformat(start)
+    end_date = date.fromisoformat(end)
     typer.echo(
         f"Walk-forward OOS — {start_date} → {end_date}, window={window_days}d, step={step_days}d"
     )
@@ -618,25 +622,26 @@ def survivorship_pit(
 
 @research_app.command(name="validate-llm-filter")
 def validate_llm_filter(
-    start: str = typer.Option("2023-07-01", help="Początek okna picks (YYYY-MM-DD)"),
-    end: str = typer.Option("2023-09-30", help="Koniec okna picks"),
-    top_n: int = typer.Option(5, help="Rozmiar top-N"),
+    start: str = typer.Option("2023-07-01", help="Picks-window start (YYYY-MM-DD)"),
+    end: str = typer.Option("2023-09-30", help="Picks-window end"),
+    top_n: int = typer.Option(5, help="Top-N size"),
     scorer: str = typer.Option(
         "rule",
         help="Scorer: 'rule' (baseline, $0), 'gemini' (Flash, ~$0.02/pick), "
         "'hybrid' (rule→Gemini fallback), 'tradingagents' (full pipeline, ~$0.50/pick)",
     ),
     report: str = typer.Option(
-        "docs/backtest/llm_filter_validation.md", help="Ścieżka do raportu MD"
+        "docs/backtest/llm_filter_validation.md", help="Markdown report path"
     ),
-    csv: str = typer.Option("", help="Opcjonalne: ścieżka do CSV z per-pick details"),
-    dry_run: bool = typer.Option(False, help="Tylko wygeneruj picks, nie uruchamiaj LLM"),
+    csv: str = typer.Option("", help="Optional: CSV path for per-pick details"),
+    dry_run: bool = typer.Option(False, help="Only generate picks; do not call LLMs"),
 ) -> None:
-    """Phase 0 validation per Perplexity — czy LLM rejections korelują z
-    subsequent underperformance na historical picks Layer 2b.
+    """Phase 0 validation per Perplexity — do LLM rejections correlate with
+    subsequent underperformance on Layer 2b historical picks?
 
-    Generuje 60 dni top-N picks z BacktestEngine, uruchamia pluggable scorer,
-    agreguje delta(accept_mean - reject_mean) + hit rate deltas + decision."""
+    Generates 60 days of top-N picks via BacktestEngine, runs a pluggable
+    scorer, aggregates delta(accept_mean − reject_mean) + hit-rate deltas
+    + decision."""
     from datetime import date
 
     from alphalens.backtest.engine import BacktestEngine
@@ -659,11 +664,11 @@ def validate_llm_filter(
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
-    typer.echo(f"Okno picks: {start_date} → {end_date}")
+    typer.echo(f"Picks window: {start_date} → {end_date}")
 
     themes_map = flatten_universe(load_2b())
     screener_tickers = sorted(themes_map.keys())
-    typer.echo(f"Ładuję {len(screener_tickers)} tickerów Layer 2b universe...")
+    typer.echo(f"Loading {len(screener_tickers)} Layer 2b universe tickers...")
     histories = load_lean_histories(DATA_DIR, screener_tickers + list(BENCHMARKS))
     store = HistoryStore(histories)
 
@@ -680,7 +685,7 @@ def validate_llm_filter(
         weighting="linear",
     )
 
-    typer.echo("Generuję historical picks via BacktestEngine...")
+    typer.echo("Generating historical picks via BacktestEngine...")
     report_obj = engine.run(start=start_date, end=end_date)
     all_picks = picks_from_backtest_report(report_obj)
     picks_with_themes = []
@@ -697,10 +702,10 @@ def validate_llm_filter(
                 forward_return=p.forward_return,
             )
         )
-    typer.echo(f"  {len(picks_with_themes)} picks (dni × top-{top_n}) z forward returns")
+    typer.echo(f"  {len(picks_with_themes)} picks (days × top-{top_n}) with forward returns")
 
     if not picks_with_themes:
-        raise typer.BadParameter("Brak picks w oknie — zwiększ range lub obniż MIN_BARS_REQUIRED")
+        raise typer.BadParameter("No picks in window — widen the range or lower MIN_BARS_REQUIRED")
 
     if dry_run:
         typer.echo("--dry-run: skip LLM scoring")

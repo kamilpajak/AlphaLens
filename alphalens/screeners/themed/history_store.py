@@ -1,19 +1,20 @@
-"""Historia dziennych runów Layer 2b — SQLite store dla monitoring dashboardu.
+"""History of Layer 2b daily runs — SQLite store for the monitoring dashboard.
 
-Każdy `themed screen` run zapisuje się tu (run metadata + picks). Dashboard
-(`alphalens themed status`) odczytuje i liczy rolling metrics:
+Every `themed screen` run is recorded here (run metadata + picks). The dashboard
+(`alphalens themed status`) reads from this store and computes rolling metrics:
 - Theme HHI trend (detect single-theme drift)
-- Persistence top-N (które nazwy stoją w top-5 > X dni)
-- Turnover (dzień-dzień przepływ nazw)
-- Error/skip rate (czy launchd ma problem)
+- Top-N persistence (which names sit in top-5 for > X days)
+- Turnover (day-over-day flow of names)
+- Error/skip rate (whether launchd has a problem)
 
-Intencjonalnie osobny store od `~/.alphalens/candidates.db` (który jest kolejką
-do Layer 3) — monitoring to inny concern niż pipeline execution.
+Intentionally separate from `~/.alphalens/candidates.db` (the queue to Layer 3) —
+monitoring is a different concern than pipeline execution.
 
-Kolumna `momentum_score` w `themed_picks` trzyma canonical score — `MomentumScorer`
-emituje ją bezpośrednio, a `EarlyStageScorer` emituje `early_stage_score` które
-pipeline przemianowuje na `momentum_score` (zobacz `themed/pipeline.py`) żeby
-downstream (reporter, history, to_candidates) było scorer-agnostyczne.
+The `momentum_score` column in `themed_picks` holds the canonical score —
+`MomentumScorer` emits it directly, while `EarlyStageScorer` emits
+`early_stage_score` which the pipeline renames to `momentum_score` (see
+`themed/pipeline.py`) so downstream code (reporter, history, to_candidates)
+stays scorer-agnostic.
 """
 
 from __future__ import annotations
@@ -101,7 +102,7 @@ class ThemedHistoryStore:
         weighting_scheme: str = "equal",
         weights: list[float] | None = None,
     ) -> int:
-        """Zapisz dzienny run `themed screen`. Zwraca run_id."""
+        """Persist a daily `themed screen` run. Returns the new run_id."""
         run_date = run_date or datetime.now(UTC).date()
         now = datetime.now(UTC)
         with self._conn() as c:
@@ -154,7 +155,7 @@ class ThemedHistoryStore:
             return run_id
 
     def recent_runs(self, days: int = 30) -> list[RunRecord]:
-        """Zwróć ostatnie N dni runów (chronologicznie malejąco)."""
+        """Return the most recent N days of runs (descending chronological)."""
         with self._conn() as c:
             rows = c.execute(
                 """SELECT run_id, run_date, run_timestamp_utc, universe_size,
@@ -188,7 +189,7 @@ class ThemedHistoryStore:
         return pd.DataFrame([dict(r) for r in rows])
 
     def picks_timeline(self, days: int = 30) -> pd.DataFrame:
-        """DataFrame z all picks z ostatnich N dni (joined z run_date)."""
+        """DataFrame of all picks from the last N days (joined with run_date)."""
         with self._conn() as c:
             rows = c.execute(
                 """SELECT r.run_date, r.run_id, p.rank, p.ticker, p.momentum_score,
@@ -221,9 +222,9 @@ class ThemedHistoryStore:
 
 
 def compute_staleness(timeline: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
-    """Per-ticker staleness = ile kolejnych dni nazwa była w top-N.
+    """Per-ticker staleness = consecutive days the name has been in top-N.
 
-    Zwraca DataFrame z kolumnami: ticker, consecutive_days, last_rank.
+    Returns a DataFrame with columns: ticker, consecutive_days, last_rank.
     """
     if timeline.empty:
         return pd.DataFrame(columns=["ticker", "consecutive_days", "last_rank"])
@@ -241,7 +242,7 @@ def compute_staleness(timeline: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
 
 
 def compute_turnover_by_day(timeline: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
-    """Per-day turnover = frakcja nazw która zmienia się vs poprzedni run."""
+    """Per-day turnover = fraction of names that change vs the previous run."""
     if timeline.empty:
         return pd.DataFrame(columns=["run_date", "turnover"])
     tn = timeline[timeline["rank"] <= top_n]
@@ -259,7 +260,7 @@ def compute_turnover_by_day(timeline: pd.DataFrame, top_n: int = 5) -> pd.DataFr
 
 
 def compute_theme_hhi_by_day(timeline: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
-    """Per-day HHI (sum of squared theme weights) w top-N pickach."""
+    """Per-day HHI (sum of squared theme weights) over the top-N picks."""
     if timeline.empty:
         return pd.DataFrame(columns=["run_date", "hhi", "dominant_theme", "dominant_weight"])
     tn = timeline[timeline["rank"] <= top_n]

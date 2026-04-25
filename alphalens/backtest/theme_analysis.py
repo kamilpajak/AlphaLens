@@ -1,20 +1,20 @@
-"""Analiza koncentracji tematów w czasie — factor-aware monitoring.
+"""Theme concentration analysis over time — factor-aware monitoring.
 
-Backtest'owe `daily_results` trzymają listy top-N tickerów każdego dnia. Ten
-moduł mapuje tickery do tematów (z `universe.yaml` curated basketa) i liczy:
+Backtest `daily_results` carry the top-N tickers each day. This module maps
+tickers to themes (from the curated `universe.yaml` basket) and computes:
 
-- daily theme weights (% portfolio w każdym temacie)
-- Herfindahl concentration index (HHI) na poziomie tematu
-- dominujący temat per dzień
-- agregaty: średnia wag per theme, % dni gdzie jeden theme > próg
+- daily theme weights (% of portfolio per theme)
+- Herfindahl concentration index (HHI) at the theme level
+- dominant theme per day
+- aggregates: mean weight per theme, fraction of days a single theme exceeds
+  a threshold
 
-Używany w dwóch miejscach:
+Used in two places:
 
-1. **Backtest raport** — wykrywa czy Sharpe zależał od jednej konkretnej
-   sytuacji tematycznej (np. 2024 AI bull) i czy koncentracja drift'owała
-   w czasie.
-2. **Produkcyjny Layer 2b** — emituje ostrzeżenie do Telegrama gdy dzisiejsza
-   top-N picks jest zbyt skoncentrowana w jednym temacie.
+1. **Backtest report** — detects whether Sharpe depended on a single thematic
+   regime (e.g. the 2024 AI bull) and whether concentration drifted over time.
+2. **Production Layer 2b** — emits a Telegram alert when today's top-N picks
+   are too concentrated in one theme.
 """
 
 from __future__ import annotations
@@ -27,14 +27,14 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class ThemeSnapshot:
-    """Jednodniowy widok alokacji tematycznej."""
+    """Single-day view of thematic allocation."""
 
     date: pd.Timestamp
     top_n_tickers: tuple[str, ...]
-    theme_weights: Mapping[str, float]  # normalized, sum ≤ 1.0 (może < 1.0 gdy niesklasyfikowane)
+    theme_weights: Mapping[str, float]  # normalized, sum ≤ 1.0 (less when names are unclassified)
     dominant_theme: str | None
-    hhi: float  # Herfindahl index w przestrzeni wag tematów, [0, 1]
-    unclassified_fraction: float  # nazwy bez żadnego theme mapping'u
+    hhi: float  # Herfindahl index over theme weights, [0, 1]
+    unclassified_fraction: float  # names with no theme mapping
 
 
 def _resolve_position_weights(
@@ -84,14 +84,14 @@ def snapshot_themes(
     date: pd.Timestamp | None = None,
     position_weights: Iterable[float] | None = None,
 ) -> ThemeSnapshot:
-    """Zmap tickery na tematy i oblicz wagi tematów.
+    """Map tickers to themes and compute theme weights.
 
-    `themes_map`: {ticker → [lista tematów]}, np. output `flatten_universe()`.
-    Jeśli ticker ma wiele tematów, dzielimy jego wagę równo (np. FORM może
-    być w quantum i semis → 50/50 na oba).
+    `themes_map`: {ticker → [list of themes]}, e.g. `flatten_universe()` output.
+    Multi-theme tickers split their weight equally (e.g. FORM may be in both
+    quantum and semis → 50/50 across both).
 
-    `position_weights` opcjonalne — jeśli podane, użyjemy ich zamiast equal-weight
-    dla każdego tickera. Musi mieć tę samą długość co `top_n_tickers`.
+    `position_weights` is optional — if provided, replaces equal-weight per
+    ticker. Must have the same length as `top_n_tickers`.
     """
     tickers = list(top_n_tickers)
     if not tickers:
@@ -125,13 +125,13 @@ def snapshot_themes(
 
 @dataclass(frozen=True)
 class ThemeSeriesStats:
-    """Agregaty koncentracji tematów przez całe okno backtestu."""
+    """Theme concentration aggregates across the full backtest window."""
 
     all_themes: tuple[str, ...]
-    mean_weights: Mapping[str, float]  # średnia waga per theme przez okno
-    days_dominant: Mapping[str, int]  # ile dni dany theme był dominujący
-    mean_hhi: float  # średnia HHI przez okno
-    concentration_alert_days: int  # dni gdzie max theme > threshold
+    mean_weights: Mapping[str, float]  # mean weight per theme over the window
+    days_dominant: Mapping[str, int]  # days the theme was dominant
+    mean_hhi: float  # mean HHI over the window
+    concentration_alert_days: int  # days where max theme > threshold
     concentration_threshold: float
 
 
@@ -139,11 +139,11 @@ def theme_series(
     snapshots: Iterable[ThemeSnapshot],
     concentration_threshold: float = 0.70,
 ) -> tuple[pd.DataFrame, ThemeSeriesStats]:
-    """Zbierz listę snapshotów dziennych w DataFrame (date × theme → weight).
+    """Collect a list of daily snapshots into a DataFrame (date × theme → weight).
 
-    Zwraca dwa obiekty:
-    - DataFrame z kolumnami per theme (plus 'unclassified', 'hhi')
-    - `ThemeSeriesStats` z agregatami
+    Returns two objects:
+    - DataFrame with one column per theme (plus `unclassified`, `hhi`)
+    - `ThemeSeriesStats` with aggregates
     """
     rows: list[dict] = []
     for snap in snapshots:
@@ -166,7 +166,7 @@ def theme_series(
 
     df = df.set_index("date") if "date" in df.columns else df
 
-    # Theme columns = wszystko poza metadata
+    # Theme columns = everything except metadata
     meta = {"unclassified", "hhi", "dominant_theme"}
     theme_cols = tuple(c for c in df.columns if c not in meta)
 
@@ -174,7 +174,7 @@ def theme_series(
     days_dominant = (
         df["dominant_theme"].value_counts().to_dict() if "dominant_theme" in df.columns else {}
     )
-    # Odrzuć pusty string (dni bez dominanty)
+    # Drop the empty string entry (days with no dominant theme)
     days_dominant = {k: int(v) for k, v in days_dominant.items() if k}
 
     mean_hhi = float(df["hhi"].mean()) if "hhi" in df.columns else 0.0
@@ -196,19 +196,20 @@ def theme_series(
 
 
 def format_theme_summary(stats: ThemeSeriesStats, n_total_days: int) -> str:
-    """Ludzko-czytelny raport dla markdown sekcji."""
+    """Human-readable report for the markdown summary section."""
     lines = []
     lines.append(
-        f"Okno backtestu: {n_total_days} dni, próg koncentracji = {stats.concentration_threshold * 100:.0f}%"
+        f"Backtest window: {n_total_days} days, "
+        f"concentration threshold = {stats.concentration_threshold * 100:.0f}%"
     )
-    lines.append(f"Średni HHI: {stats.mean_hhi:.3f} (0 = idealna dywersyfikacja, 1 = jeden theme)")
+    lines.append(f"Mean HHI: {stats.mean_hhi:.3f} (0 = perfect diversification, 1 = single theme)")
     lines.append(
-        f"Dni z max theme > {stats.concentration_threshold * 100:.0f}%: "
+        f"Days with max theme > {stats.concentration_threshold * 100:.0f}%: "
         f"{stats.concentration_alert_days} / {n_total_days} "
         f"({stats.concentration_alert_days / max(n_total_days, 1) * 100:.1f}%)"
     )
     lines.append("")
-    lines.append("| Theme | Średnia waga | Dni dominujący |")
+    lines.append("| Theme | Mean weight | Days dominant |")
     lines.append("|---|---:|---:|")
     for theme in sorted(
         stats.all_themes, key=lambda t: stats.mean_weights.get(t, 0.0), reverse=True
@@ -225,10 +226,10 @@ def snapshots_from_backtest(
     daily_results: Iterable,
     themes_map: Mapping[str, list[str]],
 ) -> list[ThemeSnapshot]:
-    """Convenience: zbuduj snapshots z `BacktestReport.daily_results`.
+    """Convenience: build snapshots from `BacktestReport.daily_results`.
 
-    Używa score-equal-weight (nie honoruje linear/conviction). Dla dokładnego
-    weighted theme breakdown dodaj `position_weights` per snap recznie.
+    Uses score-equal-weight (ignores linear/conviction). For an accurate
+    weighted theme breakdown, pass `position_weights` per snap explicitly.
     """
     out = []
     for r in daily_results:

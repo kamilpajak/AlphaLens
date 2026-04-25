@@ -18,9 +18,9 @@ CONCENTRATION_WARNING_THRESHOLD = 0.70
 
 
 def _theme_concentration(df: pd.DataFrame) -> tuple[dict[str, float], str | None, bool]:
-    """Zlicz wagi per theme dla top-N picks (split na tickery z wieloma themes).
+    """Sum weights per theme over the top-N picks (split for multi-theme tickers).
 
-    Zwraca: (theme_weights dict, dominujący theme lub None, czy flag > threshold).
+    Returns: (theme_weights dict, dominant theme or None, whether flagged > threshold).
     """
     counts: dict[str, float] = {}
     total = 0.0
