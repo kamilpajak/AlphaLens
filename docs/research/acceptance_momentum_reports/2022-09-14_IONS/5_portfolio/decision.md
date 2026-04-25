@@ -3,14 +3,14 @@
 **2. Executive Summary**:
 - **Action Strategy**: Immediately close out all existing long positions in `IONS` at the current market price to protect capital and lock in residual gains from the recent clinical data rally. Under no circumstances should this current dip be bought.
 - **Position Sizing**: Reduce `IONS` exposure to 0%. Redeploy freed capital into profitable, value-oriented equities equipped to withstand a high-rate macroeconomic regime.
-- **Key Risk Levels**: Resistance is firmly established following a technical rejection at the upper Bollinger Band near $48.66. Set a downward price alert near the 200-day simple moving average (SMA) at approximately $36.23. 
+- **Key Risk Levels**: Resistance is firmly established following a technical rejection at the upper Bollinger Band near $48.66. Set a downward price alert near the 200-day simple moving average (SMA) at approximately $36.23.
 - **Time Horizon**: Immediate execution for the exit. We will maintain a long-term monitoring stance to re-evaluate the fundamentals only if a total washout tests the $36 baseline support in the future.
 
 **3. Investment Thesis**:
-After a comprehensive review of the analysts' debate, it is clear that the prevailing bull case for `IONS` is severely compromised by clinical tunnel vision, ignoring the stark macroeconomic and commercial realities of the current environment. 
+After a comprehensive review of the analysts' debate, it is clear that the prevailing bull case for `IONS` is severely compromised by clinical tunnel vision, ignoring the stark macroeconomic and commercial realities of the current environment.
 
 **The "Priced-In" Clinical Catalyst**
-The aggressive analyst argues that the Phase 3 success of Eplontersen and the impending FDA submission represent a massive breakout opportunity toward a $96 target. However, as the conservative analyst correctly identifies, this clinical success is already fully baked into the valuation. `IONS` recently ran from the high $30s to the upper $40s on this data. The market is forward-looking, and the transition from a clinical-stage victory to a commercial-stage reality is notoriously expensive and slow. 
+The aggressive analyst argues that the Phase 3 success of Eplontersen and the impending FDA submission represent a massive breakout opportunity toward a $96 target. However, as the conservative analyst correctly identifies, this clinical success is already fully baked into the valuation. `IONS` recently ran from the high $30s to the upper $40s on this data. The market is forward-looking, and the transition from a clinical-stage victory to a commercial-stage reality is notoriously expensive and slow.
 
 **Severe Commercial and Valuation Headwinds**
 Fundamentally, `IONS` faces an uphill commercial battle. Being second-to-market requires competing against an entrenched market leader like Alnylam, a process that will inevitably compress margins and delay profitability, regardless of the AstraZeneca partnership. Furthermore, paying a steep premium—such as a 25x price-to-book multiple—for a company with shrinking revenues and accelerating net losses is a reckless proposition during a period of aggressive Federal Reserve rate hikes following the dismal September 13th CPI report. While the neutral and aggressive analysts point to the $2 billion cash cushion, an aggressive quarterly burn rate of $160 to $180 million makes that cushion a rapidly melting ice cube in a high-cost capital environment.

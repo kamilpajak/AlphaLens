@@ -17,6 +17,7 @@ Polygon Basic tier: 5 req/min. Expected ~6–10 pages at 1000 events each
 Usage:
     .venv/bin/python scripts/backfill_delisted_2021_2024.py
 """
+
 from __future__ import annotations
 
 import json
@@ -85,14 +86,9 @@ def fetch_backfill(client: PolygonClient) -> list[dict]:
         # Continue fetching remaining — we don't know how many pages remain
         # so just stream through and append anything the cache misses.
 
-    seen_ids: set[str] = {
-        f"{r.get('ticker')}|{r.get('delisted_utc')}" for r in all_rows
-    }
+    seen_ids: set[str] = {f"{r.get('ticker')}|{r.get('delisted_utc')}" for r in all_rows}
 
-    print(
-        f"streaming delisted_tickers "
-        f"({BACKFILL_START} → {BACKFILL_END}, CS/stocks) …"
-    )
+    print(f"streaming delisted_tickers ({BACKFILL_START} → {BACKFILL_END}, CS/stocks) …")
     for row in client.delisted_tickers(
         market="stocks",
         type_="CS",

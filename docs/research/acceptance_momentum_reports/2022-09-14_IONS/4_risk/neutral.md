@@ -7,7 +7,7 @@ But on the flip side, to the conservative analyst, your insistence on waiting fo
 
 The reality is that neither of you is acknowledging the "middle path" that the data actually supports. We have a company with two billion dollars in cash. That's a massive shield against the interest rate hikes that the conservative side is so afraid of. They don't need to go to the capital markets anytime soon. At the same time, we have a clear regulatory milestone by year-end. That's a reason to stay in the game, but not necessarily a reason to double down when the RSI was just screaming "overbought" a few days ago at 70.
 
-The aggressive strategy risks too much capital in an unstable macro environment, while the conservative strategy risks missing a fundamental recovery by being too tethered to outdated technical floors. If you sell now, you’re betting against the data. If you buy now, you’re betting against the Fed. Both are losing bets. 
+The aggressive strategy risks too much capital in an unstable macro environment, while the conservative strategy risks missing a fundamental recovery by being too tethered to outdated technical floors. If you sell now, you’re betting against the data. If you buy now, you’re betting against the Fed. Both are losing bets.
 
 The most sustainable move here is to hold. We let the current "froth" that the conservative analyst is worried about settle without abandoning the long-term thesis that the aggressive analyst is so excited about. We should be looking to maintain the position, using the high institutional support as a floor while accepting that the $50 ceiling probably won't be broken until the market digests the inflation shock. Let the volatility play out. Don't chase the rally, but don't flee the fortress either.
 

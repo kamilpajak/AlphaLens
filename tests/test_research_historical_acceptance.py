@@ -12,10 +12,8 @@ bad numbers (worse). Hence explicit tests before the full run.
 
 from __future__ import annotations
 
-import math
 import unittest
 
-import numpy as np
 import pandas as pd
 
 
@@ -24,7 +22,13 @@ def _ramp_df(start: str, n: int, start_price: float, step: float) -> pd.DataFram
     idx = pd.bdate_range(start=start, periods=n)
     closes = [start_price + i * step for i in range(n)]
     return pd.DataFrame(
-        {"open": closes, "high": closes, "low": closes, "close": closes, "volume": 1_000},
+        {
+            "open": closes,
+            "high": closes,
+            "low": closes,
+            "close": closes,
+            "volume": 1_000,
+        },
         index=idx,
     )
 
@@ -37,10 +41,12 @@ class TestComputeForwardFeatures(unittest.TestCase):
 
         # Ticker: 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111
         # Bench:  200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200 (flat)
-        return HistoryStore({
-            "A": _ramp_df("2024-01-02", 12, 100.0, 1.0),
-            "SPY": _ramp_df("2024-01-02", 12, 200.0, 0.0),
-        })
+        return HistoryStore(
+            {
+                "A": _ramp_df("2024-01-02", 12, 100.0, 1.0),
+                "SPY": _ramp_df("2024-01-02", 12, 200.0, 0.0),
+            }
+        )
 
     def test_forward_return_uses_next_day_close_as_entry(self):
         """Signal at pick_date EOD → earliest fill = next day's close.
@@ -98,7 +104,13 @@ class TestComputeForwardFeatures(unittest.TestCase):
         # V-shape: entry@101 → drops to 90 → recovers to 105.
         closes = [100, 101, 95, 90, 92, 98, 102, 103, 104, 105, 106, 107]
         df = pd.DataFrame(
-            {"open": closes, "high": closes, "low": closes, "close": closes, "volume": 1},
+            {
+                "open": closes,
+                "high": closes,
+                "low": closes,
+                "close": closes,
+                "volume": 1,
+            },
             index=idx,
         )
         bench = _ramp_df("2024-01-02", 12, 200.0, 0.0)
@@ -175,7 +187,7 @@ class TestMeanAlphaReporting(unittest.TestCase):
         rows = [
             {"alpha_120d": 0.10},
             {"alpha_120d": 0.20},
-            {"alpha_120d": None},   # picks with no 120d forward yet
+            {"alpha_120d": None},  # picks with no 120d forward yet
             {"alpha_120d": None},
         ]
         mean, n = _mean_alpha(rows, 120)

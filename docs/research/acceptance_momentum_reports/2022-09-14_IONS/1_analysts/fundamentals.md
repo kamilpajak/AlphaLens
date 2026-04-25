@@ -1,7 +1,7 @@
 ### **Fundamental Analysis Report: Ionis Pharmaceuticals (IONS)**
-**Date:** September 14, 2022  
-**Ticker:** IONS  
-**Exchange:** NASDAQ  
+**Date:** September 14, 2022
+**Ticker:** IONS
+**Exchange:** NASDAQ
 **Sector/Industry:** Healthcare / Biotechnology
 
 ---
@@ -19,7 +19,7 @@ Ionis Pharmaceuticals (IONS) is a leading biotechnology company focused on the d
 *   **Earnings Per Share (EPS):** The TTM EPS is **-$2.38**. Traders should note that while earnings are negative, they are often secondary to pipeline progression in the biotech industry.
 
 #### **2. Balance Sheet & Liquidity**
-*   **Cash Reserves:** As of Q2 2022, Ionis maintains a formidable war chest with **$521.9 million** in cash and **$1.5 billion** in short-term investments, totaling roughly **$2.02 billion**. 
+*   **Cash Reserves:** As of Q2 2022, Ionis maintains a formidable war chest with **$521.9 million** in cash and **$1.5 billion** in short-term investments, totaling roughly **$2.02 billion**.
 *   **Solvency:** Total assets of **$2.45 billion** significantly exceed total liabilities of **$1.83 billion**. The massive cash reserve provides several years of "runway," mitigating the risk of dilutive secondary offerings in the near term.
 *   **Book Value:** The book value per share is **$2.995**, while the stock trades at a high **Price-to-Book ratio of 25.29**, reflecting the premium placed on its proprietary RNA technology.
 
@@ -58,5 +58,5 @@ Ionis Pharmaceuticals (IONS) is a leading biotechnology company focused on the d
 | **Price to Sales (TTM)** | 13.11 | High valuation; typical for "platform" biotech. |
 | **Institutional Ownership**| 105.8% | Extremely high institutional confidence. |
 
-**FINAL TRANSACTION PROPOSAL: HOLD**  
+**FINAL TRANSACTION PROPOSAL: HOLD**
 *Reasoning: While the pipeline and cash position are stellar, the current negative earnings and slowing YOY revenue growth suggest waiting for a clear clinical catalyst or a pullback toward the 200-day moving average ($68) before initiating a heavy Buy.*

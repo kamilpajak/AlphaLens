@@ -121,28 +121,37 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
     def _run_momentum(self, extra_args: list[str] | None = None):
         from alphalens_cli.main import app
 
-        with patch(
-            "alphalens.screeners.themed.universe.load_universe",
-            return_value={"ai": ["NVDA", "AMD"]},
-        ), patch(
-            "alphalens.screeners.themed.universe.flatten_universe",
-            return_value={"NVDA": ["ai"], "AMD": ["ai"]},
-        ), patch(
-            "alphalens.screeners.themed.backtest_adapter.momentum_scorer_adapter",
-            new=_fake_scorer,
-        ), patch(
-            "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
-            return_value=self._histories_for(["NVDA", "AMD", "SPY"]),
+        with (
+            patch(
+                "alphalens.screeners.themed.universe.load_universe",
+                return_value={"ai": ["NVDA", "AMD"]},
+            ),
+            patch(
+                "alphalens.screeners.themed.universe.flatten_universe",
+                return_value={"NVDA": ["ai"], "AMD": ["ai"]},
+            ),
+            patch(
+                "alphalens.screeners.themed.backtest_adapter.momentum_scorer_adapter",
+                new=_fake_scorer,
+            ),
+            patch(
+                "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
+                return_value=self._histories_for(["NVDA", "AMD", "SPY"]),
+            ),
         ):
             return self.runner.invoke(
                 app,
                 [
                     "backtest",
-                    "--start", "2023-07-03",
-                    "--end", "2023-07-10",
+                    "--start",
+                    "2023-07-03",
+                    "--end",
+                    "2023-07-10",
                     "--no-attrib",
-                    "--top-n", "1",
-                    "--report", str(self.report_path),
+                    "--top-n",
+                    "1",
+                    "--report",
+                    str(self.report_path),
                     *(extra_args or []),
                 ],
             )
@@ -171,29 +180,39 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
         """
         from alphalens_cli.main import app
 
-        with patch(
-            "alphalens.screeners.themed.universe.load_universe",
-            return_value={"ai": ["NVDA", "AMD"]},
-        ), patch(
-            "alphalens.screeners.themed.universe.flatten_universe",
-            return_value={"NVDA": ["ai"], "AMD": ["ai"]},
-        ), patch(
-            "alphalens.screeners.themed.backtest_adapter.early_stage_scorer_adapter",
-            new=_fake_scorer,
-        ), patch(
-            "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
-            return_value=self._histories_for(["NVDA", "AMD", "SPY"]),
+        with (
+            patch(
+                "alphalens.screeners.themed.universe.load_universe",
+                return_value={"ai": ["NVDA", "AMD"]},
+            ),
+            patch(
+                "alphalens.screeners.themed.universe.flatten_universe",
+                return_value={"NVDA": ["ai"], "AMD": ["ai"]},
+            ),
+            patch(
+                "alphalens.screeners.themed.backtest_adapter.early_stage_scorer_adapter",
+                new=_fake_scorer,
+            ),
+            patch(
+                "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
+                return_value=self._histories_for(["NVDA", "AMD", "SPY"]),
+            ),
         ):
             result = self.runner.invoke(
                 app,
                 [
                     "backtest",
-                    "--scorer", "early-stage",
-                    "--start", "2023-07-03",
-                    "--end", "2023-07-10",
+                    "--scorer",
+                    "early-stage",
+                    "--start",
+                    "2023-07-03",
+                    "--end",
+                    "2023-07-10",
                     "--no-attrib",
-                    "--top-n", "1",
-                    "--report", str(self.report_path),
+                    "--top-n",
+                    "1",
+                    "--report",
+                    str(self.report_path),
                 ],
             )
 
@@ -204,26 +223,35 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
         """`--scorer lean` executes the archived Layer 2c path the same way."""
         from alphalens_cli.main import app
 
-        with patch(
-            "alphalens.screeners.lean.universe.all_tickers",
-            return_value=["NVDA", "AMD"],
-        ), patch(
-            "alphalens.screeners.lean.lean_project.scorer.rank_universe",
-            new=_fake_scorer,
-        ), patch(
-            "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
-            return_value=self._histories_for(["NVDA", "AMD", "SPY", "QQQ", "IWM"]),
+        with (
+            patch(
+                "alphalens.screeners.lean.universe.all_tickers",
+                return_value=["NVDA", "AMD"],
+            ),
+            patch(
+                "alphalens.screeners.lean.lean_project.scorer.rank_universe",
+                new=_fake_scorer,
+            ),
+            patch(
+                "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
+                return_value=self._histories_for(["NVDA", "AMD", "SPY", "QQQ", "IWM"]),
+            ),
         ):
             result = self.runner.invoke(
                 app,
                 [
                     "backtest",
-                    "--scorer", "lean",
-                    "--start", "2023-07-03",
-                    "--end", "2023-07-10",
+                    "--scorer",
+                    "lean",
+                    "--start",
+                    "2023-07-03",
+                    "--end",
+                    "2023-07-10",
                     "--no-attrib",
-                    "--top-n", "1",
-                    "--report", str(self.report_path),
+                    "--top-n",
+                    "1",
+                    "--report",
+                    str(self.report_path),
                 ],
             )
 
@@ -245,24 +273,31 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
         def _raise(*_args, **_kwargs):
             raise RuntimeError("simulated universe load failure")
 
-        with patch(
-            "alphalens.screeners.themed.universe.load_universe",
-            side_effect=_raise,
-        ), patch(
-            "alphalens.screeners.themed.universe.flatten_universe",
-            side_effect=_raise,
-        ), patch(
-            "alphalens.screeners.themed.backtest_adapter.momentum_scorer_adapter",
-            new=_fake_scorer,
-        ), patch(
-            "alphalens.screeners.lean.universe.all_tickers",
-            return_value=["NVDA", "AMD"],
-        ), patch(
-            "alphalens.screeners.lean.lean_project.scorer.rank_universe",
-            new=_fake_scorer,
-        ), patch(
-            "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
-            return_value=self._histories_for(["NVDA", "AMD", "SPY", "QQQ", "IWM"]),
+        with (
+            patch(
+                "alphalens.screeners.themed.universe.load_universe",
+                side_effect=_raise,
+            ),
+            patch(
+                "alphalens.screeners.themed.universe.flatten_universe",
+                side_effect=_raise,
+            ),
+            patch(
+                "alphalens.screeners.themed.backtest_adapter.momentum_scorer_adapter",
+                new=_fake_scorer,
+            ),
+            patch(
+                "alphalens.screeners.lean.universe.all_tickers",
+                return_value=["NVDA", "AMD"],
+            ),
+            patch(
+                "alphalens.screeners.lean.lean_project.scorer.rank_universe",
+                new=_fake_scorer,
+            ),
+            patch(
+                "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
+                return_value=self._histories_for(["NVDA", "AMD", "SPY", "QQQ", "IWM"]),
+            ),
         ):
             # Use `--scorer lean` so momentum's universe loader is NOT called
             # for scorer configuration (only the theme_analysis post-hoc
@@ -272,12 +307,17 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
                 app,
                 [
                     "backtest",
-                    "--scorer", "lean",
-                    "--start", "2023-07-03",
-                    "--end", "2023-07-10",
+                    "--scorer",
+                    "lean",
+                    "--start",
+                    "2023-07-03",
+                    "--end",
+                    "2023-07-10",
                     "--no-attrib",
-                    "--top-n", "1",
-                    "--report", str(self.report_path),
+                    "--top-n",
+                    "1",
+                    "--report",
+                    str(self.report_path),
                 ],
             )
 
@@ -300,9 +340,12 @@ class TestBacktestCLIArgValidation(unittest.TestCase):
             app,
             [
                 "backtest",
-                "--scorer", "bogus",
-                "--start", "2023-07-03",
-                "--end", "2023-07-10",
+                "--scorer",
+                "bogus",
+                "--start",
+                "2023-07-03",
+                "--end",
+                "2023-07-10",
                 "--no-attrib",
             ],
         )
@@ -329,9 +372,12 @@ class TestBacktestInsiderDispatch(unittest.TestCase):
                 app,
                 [
                     "backtest",
-                    "--scorer", "insider",
-                    "--start", "2023-07-03",
-                    "--end", "2023-07-10",
+                    "--scorer",
+                    "insider",
+                    "--start",
+                    "2023-07-03",
+                    "--end",
+                    "2023-07-10",
                     "--no-attrib",
                 ],
             )
@@ -346,19 +392,27 @@ class TestBacktestInsiderDispatch(unittest.TestCase):
         from alphalens_cli.main import app
 
         # Make both data files appear to exist; lookups run before UA check.
-        with patch("pathlib.Path.exists", return_value=True), patch(
-            "alphalens.alt_data.russell_universe.load_iwm_current",
-            return_value=["UPST", "SMCI"],
-        ), patch(
-            "alphalens.alt_data.ticker_cik_map.TickerCikMap.load",
-        ), patch.dict("os.environ", {}, clear=True):
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch(
+                "alphalens.alt_data.russell_universe.load_iwm_current",
+                return_value=["UPST", "SMCI"],
+            ),
+            patch(
+                "alphalens.alt_data.ticker_cik_map.TickerCikMap.load",
+            ),
+            patch.dict("os.environ", {}, clear=True),
+        ):
             result = self.runner.invoke(
                 app,
                 [
                     "backtest",
-                    "--scorer", "insider",
-                    "--start", "2023-07-03",
-                    "--end", "2023-07-10",
+                    "--scorer",
+                    "insider",
+                    "--start",
+                    "2023-07-03",
+                    "--end",
+                    "2023-07-10",
                     "--no-attrib",
                 ],
             )

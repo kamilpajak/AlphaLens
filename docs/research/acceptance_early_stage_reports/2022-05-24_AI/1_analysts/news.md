@@ -9,7 +9,7 @@ The past week has been defined by a significant shift in market sentiment, trans
 
 ### **Sector Trends: Technology and AI**
 The Nasdaq and broader tech sector have been the hardest hit during this "flight to safety."
-*   **Valuation Reset:** Growth stocks that trade on future earnings multiples (like `AI`) are being re-rated as the discount rate (interest rates) rises. 
+*   **Valuation Reset:** Growth stocks that trade on future earnings multiples (like `AI`) are being re-rated as the discount rate (interest rates) rises.
 *   **Software and Cloud Demand:** While there is evidence of continued digital transformation (e.g., Google Cloud’s recent focus on manufacturing data engines), the market is currently ignoring long-term growth stories in favor of immediate profitability and margin stability.
 *   **Crypto Contagion:** The collapse of the Terra/Luna ecosystem (wiping out $40 billion) has further soured the mood for "disruptive tech" and high-risk assets, adding to the general market volatility.
 

@@ -9,9 +9,10 @@ an `AnalysisResult`.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Iterable, Optional, Protocol
+from datetime import UTC, datetime
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -19,9 +20,9 @@ class Candidate:
     ticker: str
     source: str
     detected_at: datetime
-    priority: int                   # lower = higher priority (0 top)
-    payload: dict[str, Any]         # JSON-serialisable; interpretation is source-specific
-    dedup_key: str                  # stable hash; UNIQUE in the queue
+    priority: int  # lower = higher priority (0 top)
+    payload: dict[str, Any]  # JSON-serialisable; interpretation is source-specific
+    dedup_key: str  # stable hash; UNIQUE in the queue
 
     @classmethod
     def from_screener(
@@ -31,14 +32,14 @@ class Candidate:
         priority: int,
         payload: dict[str, Any],
         discriminator: str,
-        detected_at: Optional[datetime] = None,
-    ) -> "Candidate":
-        key_input = f"{ticker}|{source}|{discriminator}".encode("utf-8")
+        detected_at: datetime | None = None,
+    ) -> Candidate:
+        key_input = f"{ticker}|{source}|{discriminator}".encode()
         dedup = hashlib.sha256(key_input).hexdigest()
         return cls(
             ticker=ticker,
             source=source,
-            detected_at=detected_at or datetime.now(timezone.utc),
+            detected_at=detected_at or datetime.now(UTC),
             priority=priority,
             payload=dict(payload),
             dedup_key=dedup,
@@ -52,7 +53,7 @@ class AnalysisResult:
     source: str
     rating: str
     duration_sec: float
-    cost_usd: Optional[float]
+    cost_usd: float | None
     model_used: str
     completed_at: datetime
     final_state: dict[str, Any] = field(default_factory=dict)

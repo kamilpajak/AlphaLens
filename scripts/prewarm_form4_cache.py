@@ -44,12 +44,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pandas as pd  # noqa: E402
-import yaml  # noqa: E402
+import pandas as pd
+import yaml
 
-from alphalens.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError  # noqa: E402
-from alphalens.alt_data.ticker_cik_map import TickerCikMap  # noqa: E402
-from alphalens.screeners.insider.scorer import InsiderScorer  # noqa: E402
+from alphalens.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
+from alphalens.alt_data.ticker_cik_map import TickerCikMap
+from alphalens.screeners.insider.scorer import InsiderScorer
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ def load_pit_union(start: date, end: date) -> list[str]:
 def build_calendar(start: date, end: date, stride: int) -> list[date]:
     """Trading-day calendar (NYSE weekdays) sampled every ``stride`` days."""
     bdays = pd.bdate_range(start, end)
-    return [d.date() for d in bdays[::max(1, stride)]]
+    return [d.date() for d in bdays[:: max(1, stride)]]
 
 
 def count_existing(tickers: list[str], asof: date) -> int:
@@ -98,7 +98,10 @@ def prewarm(
     total_pairs = len(tickers) * len(calendar)
     logger.info(
         "prewarm start: %d tickers × %d dates = %d (ticker,asof) pairs; cache=%s",
-        len(tickers), len(calendar), total_pairs, _CACHE_DIR,
+        len(tickers),
+        len(calendar),
+        total_pairs,
+        _CACHE_DIR,
     )
 
     run_start = time.monotonic()
@@ -116,7 +119,7 @@ def prewarm(
             except SecEdgarError as exc:
                 edgar_errors += 1
                 logger.warning("edgar error %s@%s: %s", ticker, asof, exc)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 edgar_errors += 1
                 logger.exception("unexpected error %s@%s: %s", ticker, asof, exc)
             pairs_done += 1
@@ -127,9 +130,12 @@ def prewarm(
                 eta_s = (total_pairs - pairs_done) / rate if rate > 0 else 0
                 logger.info(
                     "checkpoint: pairs=%d/%d (%.1f%%) rate=%.1f/s eta=%.1fh errs=%d",
-                    pairs_done, total_pairs,
+                    pairs_done,
+                    total_pairs,
                     100 * pairs_done / total_pairs,
-                    rate, eta_s / 3600, edgar_errors,
+                    rate,
+                    eta_s / 3600,
+                    edgar_errors,
                 )
 
         post_existing = count_existing(tickers, asof)
@@ -138,14 +144,21 @@ def prewarm(
         if (day_idx + 1) % date_stride_log == 0 or day_idx == len(calendar) - 1:
             logger.info(
                 "day %d/%d (%s): cached=%d/%d fetched_this_run=%d errs_total=%d",
-                day_idx + 1, len(calendar), asof,
-                post_existing, len(tickers), fetched_this_day, edgar_errors,
+                day_idx + 1,
+                len(calendar),
+                asof,
+                post_existing,
+                len(tickers),
+                fetched_this_day,
+                edgar_errors,
             )
 
     total_elapsed = time.monotonic() - run_start
     logger.info(
         "prewarm done: pairs=%d elapsed=%.1fh errs=%d",
-        pairs_done, total_elapsed / 3600, edgar_errors,
+        pairs_done,
+        total_elapsed / 3600,
+        edgar_errors,
     )
 
 
@@ -154,11 +167,15 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--start", type=date.fromisoformat, default=date(2011, 1, 1))
     ap.add_argument("--end", type=date.fromisoformat, default=date.today())
     ap.add_argument(
-        "--stride", type=int, default=1,
+        "--stride",
+        type=int,
+        default=1,
         help="sample every Nth trading day (1=daily, 5=weekly)",
     )
     ap.add_argument(
-        "--checkpoint-every", type=int, default=5000,
+        "--checkpoint-every",
+        type=int,
+        default=5000,
         help="log a rate/ETA line every N (ticker,asof) pairs",
     )
     return ap.parse_args()

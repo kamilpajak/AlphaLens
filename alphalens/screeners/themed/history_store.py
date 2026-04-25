@@ -22,9 +22,8 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Iterable
 
 import pandas as pd
 
@@ -103,8 +102,8 @@ class ThemedHistoryStore:
         weights: list[float] | None = None,
     ) -> int:
         """Zapisz dzienny run `themed screen`. Zwraca run_id."""
-        run_date = run_date or datetime.now(timezone.utc).date()
-        now = datetime.now(timezone.utc)
+        run_date = run_date or datetime.now(UTC).date()
+        now = datetime.now(UTC)
         with self._conn() as c:
             cur = c.execute(
                 """INSERT INTO themed_runs
@@ -115,7 +114,7 @@ class ThemedHistoryStore:
                     now.isoformat(),
                     json.dumps(config, default=str),
                     int(universe_size),
-                    int(len(picks_df)),
+                    len(picks_df),
                     error,
                 ),
             )
@@ -129,9 +128,11 @@ class ThemedHistoryStore:
                 else:
                     themes_str = str(themes) if themes else ""
                 breakdown = {
-                    k: float(row[k]) for k in row.index
+                    k: float(row[k])
+                    for k in row.index
                     if k not in {"ticker", "momentum_score", "themes"}
-                    and pd.notna(row.get(k)) and isinstance(row[k], (int, float))
+                    and pd.notna(row.get(k))
+                    and isinstance(row[k], (int, float))
                 }
                 weight = weights[rank_idx - 1] if weights else None
                 c.execute(
@@ -200,8 +201,16 @@ class ThemedHistoryStore:
             ).fetchall()
         if not rows:
             return pd.DataFrame(
-                columns=["run_date", "run_id", "rank", "ticker", "momentum_score",
-                         "themes", "weight", "weighting_scheme"]
+                columns=[
+                    "run_date",
+                    "run_id",
+                    "rank",
+                    "ticker",
+                    "momentum_score",
+                    "themes",
+                    "weight",
+                    "weighting_scheme",
+                ]
             )
         return pd.DataFrame([dict(r) for r in rows])
 
@@ -220,10 +229,14 @@ def compute_staleness(timeline: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
         return pd.DataFrame(columns=["ticker", "consecutive_days", "last_rank"])
     tn = timeline[timeline["rank"] <= top_n]
     tn = tn.sort_values(["run_date", "rank"], ascending=[False, True])
-    stale = tn.groupby("ticker").agg(
-        consecutive_days=("run_date", "nunique"),
-        last_rank=("rank", "first"),
-    ).reset_index()
+    stale = (
+        tn.groupby("ticker")
+        .agg(
+            consecutive_days=("run_date", "nunique"),
+            last_rank=("rank", "first"),
+        )
+        .reset_index()
+    )
     return stale.sort_values("consecutive_days", ascending=False)
 
 
@@ -263,16 +276,24 @@ def compute_theme_hhi_by_day(timeline: pd.DataFrame, top_n: int = 5) -> pd.DataF
                 theme_counts[t] = theme_counts.get(t, 0.0) + share
             total += 1.0
         if total == 0:
-            records.append({"run_date": run_date, "hhi": 0.0,
-                            "dominant_theme": "", "dominant_weight": 0.0})
+            records.append(
+                {
+                    "run_date": run_date,
+                    "hhi": 0.0,
+                    "dominant_theme": "",
+                    "dominant_weight": 0.0,
+                }
+            )
             continue
         weights = {k: v / total for k, v in theme_counts.items()}
         hhi = sum(w * w for w in weights.values())
         dominant = max(weights, key=weights.get)
-        records.append({
-            "run_date": run_date,
-            "hhi": hhi,
-            "dominant_theme": dominant,
-            "dominant_weight": weights[dominant],
-        })
+        records.append(
+            {
+                "run_date": run_date,
+                "hhi": hhi,
+                "dominant_theme": dominant,
+                "dominant_weight": weights[dominant],
+            }
+        )
     return pd.DataFrame(records).sort_values("run_date")

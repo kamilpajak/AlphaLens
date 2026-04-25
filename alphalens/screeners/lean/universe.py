@@ -6,10 +6,10 @@ YAML maps GICS sector -> list of tickers. Overlaps across sectors are tolerated;
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Iterator
 
 import yaml
 
@@ -74,9 +74,7 @@ def load_delisted(path: Path | None = None) -> list[DelistedRecord]:
     return out
 
 
-def delisted_tickers_on_or_after(
-    start: date, path: Path | None = None
-) -> Iterator[str]:
+def delisted_tickers_on_or_after(start: date, path: Path | None = None) -> Iterator[str]:
     """Yield delisted tickers active at or after `start` (so they'd have been
     in the tradable universe for at least one bar in the backtest window).
     """

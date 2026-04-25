@@ -1,8 +1,15 @@
 # AlphaLens
 
-Stock analysis pipeline for active investing — combines real-time event detection, quantitative screening, and multi-agent LLM analysis to surface investment opportunities.
+[![CI](https://github.com/kamilpajak/AlphaLens/actions/workflows/ci.yml/badge.svg)](https://github.com/kamilpajak/AlphaLens/actions/workflows/ci.yml)
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=kamilpajak_AlphaLens&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=kamilpajak_AlphaLens)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=kamilpajak_AlphaLens&metric=coverage)](https://sonarcloud.io/summary/new_code?id=kamilpajak_AlphaLens)
+[![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **Status**: private, solo developer, macOS-only (runs under `launchd`). Built around [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents), vendored as a `git subtree --squash` at `TradingAgents/`.
+Research lab infrastructure for retail active alpha experimentation — combines real-time event detection, quantitative screening, and multi-agent LLM analysis. **Status 2026-04-25:** project pivoted from active alpha generation to research/learning infrastructure after [5 paradigm failures](docs/research/5_paradigm_failures_postmortem.md). Code remains as reusable framework: backtest engines, factor attribution, sanity checks, pre-commit discipline. Layer 1 SEC EDGAR watchdog runs live as read-only event detection.
+
+> **Setup**: private, solo developer, macOS-only (runs under `launchd`). Built around [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents), vendored as a `git subtree --squash` at `TradingAgents/`.
 
 ---
 

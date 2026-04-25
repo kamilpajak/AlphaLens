@@ -1,6 +1,6 @@
 ### Fundamental Analysis Report: Day One Biopharmaceuticals Inc. (DAWN)
-**Date:** September 14, 2022  
-**Ticker:** DAWN (NASDAQ)  
+**Date:** September 14, 2022
+**Ticker:** DAWN (NASDAQ)
 **Sector/Industry:** Healthcare / Biotechnology
 
 ---
@@ -13,7 +13,7 @@ As a clinical-stage biotech, DAWN does not currently generate product revenue. I
 
 *   **Revenue:** $0 (Consistent with clinical-stage status).
 *   **Net Loss:** For the quarter ended June 30, 2022, the company reported a net loss of **$36.53 million**, compared to **$27.75 million** in Q1 2022. This increasing loss reflects the ramp-up in clinical trial activities.
-*   **Operating Expenses:** 
+*   **Operating Expenses:**
     *   **Research & Development (R&D):** $22.56 million (Q2 2022). This is a significant portion of their spend, dedicated to advancing tovorafenib and other pipeline candidates.
     *   **Selling, General & Administrative (SG&A):** $14.16 million (Q2 2022).
 
@@ -51,5 +51,5 @@ DAWN maintains a very robust and "clean" balance sheet, which is a primary stren
 | **Institutional Ownership** | 85.49% | High professional conviction |
 | **Analyst Target Price** | $21.50 | ~20% upside from current levels |
 
-**FINAL TRANSACTION PROPOSAL: HOLD**  
+**FINAL TRANSACTION PROPOSAL: HOLD**
 DAWN is fundamentally sound with an exceptional cash runway and high institutional support. However, with the stock trading near its 52-week high and a "Hold" consensus from analysts, investors should maintain current positions and wait for pivotal clinical trial data before increasing exposure. For new traders, a pullback toward the 50-day moving average ($17.61) may offer a more attractive entry point.

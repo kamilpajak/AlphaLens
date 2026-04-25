@@ -9,8 +9,8 @@ The analysis of **INVZ** (Innoviz Technologies Ltd.) as of November 25, 2024, re
 *   **MACD & Histogram:** The MACD remains negative at **-0.039**, confirming the trend is still bearish. However, the **MACD Histogram has turned positive (+0.009)**. This is a critical "convergence" signal, suggesting that the downward momentum is fading and a potential trend shift or consolidation period is beginning.
 
 ### **3. Volatility and Range**
-*   **Bollinger Bands:** The stock recently bounced off the **Lower Band ($0.46)** and is currently navigating the lower half of the volatility channel. The **Upper Band at $0.72** aligns closely with the 50-day SMA, creating a formidable "Resistance Zone" between **$0.70 and $0.72**. 
-*   **Current Support/Resistance:** 
+*   **Bollinger Bands:** The stock recently bounced off the **Lower Band ($0.46)** and is currently navigating the lower half of the volatility channel. The **Upper Band at $0.72** aligns closely with the 50-day SMA, creating a formidable "Resistance Zone" between **$0.70 and $0.72**.
+*   **Current Support/Resistance:**
     *   **Immediate Support:** $0.45 - $0.49 (recent lows and Lower Bollinger Band).
     *   **Key Resistance:** $0.70 (50-day SMA and Upper Bollinger Band).
 

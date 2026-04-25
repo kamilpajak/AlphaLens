@@ -30,14 +30,18 @@ from alphalens.backtest.survivorship_pit import (
 def _synth_history(start: str, n_bars: int = 260) -> pd.DataFrame:
     idx = pd.date_range(start, periods=n_bars, freq="B")
     return pd.DataFrame(
-        {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 1_000_000},
+        {
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 1_000_000,
+        },
         index=idx,
     )
 
 
-def _daily_result(
-    d: str, tickers: list[str], fwd_returns: list[float]
-) -> DailyResult:
+def _daily_result(d: str, tickers: list[str], fwd_returns: list[float]) -> DailyResult:
     return DailyResult(
         date=pd.Timestamp(d),
         scored_count=len(tickers),
@@ -113,10 +117,7 @@ class TestSelectionBias(unittest.TestCase):
         near 1.0 and Fisher p well above 0.05.
         """
         picks = pd.DataFrame(
-            [
-                {"pick_date": date(2023, 1, 10), "ticker": f"T{i}", "rank": 1}
-                for i in range(20)
-            ]
+            [{"pick_date": date(2023, 1, 10), "ticker": f"T{i}", "rank": 1} for i in range(20)]
         )
         # 2 of 20 picks are delisted within 30d ⇒ 10%
         events = [
@@ -230,9 +231,7 @@ class TestLoadDelistingEvents(unittest.TestCase):
             )
 
             events = load_delisting_events(parquet_path=parquet, yaml_path=yaml_path)
-            self.assertEqual(
-                {e.ticker for e in events}, {"AAA", "BBB", "CCC"}, "3 unique"
-            )
+            self.assertEqual({e.ticker for e in events}, {"AAA", "BBB", "CCC"}, "3 unique")
             aaa = next(e for e in events if e.ticker == "AAA")
             # Parquet seeds first → reason preserved as "acquisition", YAML dup ignored
             self.assertEqual(aaa.reason, "acquisition")
@@ -256,9 +255,7 @@ class TestDecisionGate(unittest.TestCase):
             SelectionBiasResult(90, 6300, 15, 0.0024, 113, 3, 0.027, 0.09, 0.4),
             SelectionBiasResult(180, 6300, 20, 0.0032, 113, 4, 0.036, 0.09, 0.5),
         ]
-        audit = MidHoldingAuditResult(
-            6300, 5, 0.0008, 1.5, 1.45, -0.05, 2.6, 2.5, -0.1, ()
-        )
+        audit = MidHoldingAuditResult(6300, 5, 0.0008, 1.5, 1.45, -0.05, 2.6, 2.5, -0.1, ())
         gate = evaluate_decision_gate(cohorts, bias, audit)
         self.assertTrue(gate["c1_pass"])
         self.assertTrue(gate["c2_pass"])

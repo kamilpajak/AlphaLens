@@ -47,33 +47,33 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
-import statsmodels.api as sm  # noqa: E402
-import yaml  # noqa: E402
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+import yaml
 
-from alphalens.alt_data.sec_edgar_client import SecEdgarClient  # noqa: E402
-from alphalens.alt_data.ticker_cik_map import TickerCikMap  # noqa: E402
-from alphalens.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
-from alphalens.backtest.cost_model import RealisticCostModel  # noqa: E402
-from alphalens.backtest.decision_matrix import evaluate_exit_criteria  # noqa: E402
-from alphalens.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens.backtest.factor_analysis import (  # noqa: E402
+from alphalens.alt_data.sec_edgar_client import SecEdgarClient
+from alphalens.alt_data.ticker_cik_map import TickerCikMap
+from alphalens.alt_data.yfinance_cache import load_cached_histories
+from alphalens.backtest.cost_model import RealisticCostModel
+from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+from alphalens.backtest.engine import BacktestEngine
+from alphalens.backtest.factor_analysis import (
     run_carhart_attribution,
     run_ff5_umd_attribution,
     run_q4_attribution,
     run_regression,
 )
-from alphalens.backtest.factors import (  # noqa: E402
+from alphalens.backtest.factors import (
     load_carhart_daily,
     load_ff5_umd_daily,
     load_q4_daily,
 )
-from alphalens.backtest.history_store import HistoryStore  # noqa: E402
-from alphalens.backtest.metrics import sharpe, sharpe_autocorr_adjusted, turnover_pct  # noqa: E402
-from alphalens.backtest.regime import classify_regime  # noqa: E402
-from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter  # noqa: E402
-from alphalens.screeners.insider.scorer import InsiderScorer  # noqa: E402
+from alphalens.backtest.history_store import HistoryStore
+from alphalens.backtest.metrics import sharpe, sharpe_autocorr_adjusted, turnover_pct
+from alphalens.backtest.regime import classify_regime
+from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+from alphalens.screeners.insider.scorer import InsiderScorer
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +159,9 @@ def compute_regime_alpha_tstats(
         if len(port_slice) < _REGIME_MIN_OBS:
             logger.warning(
                 "regime %s: %d obs < %d min → t-stat set to 0.0",
-                regime, len(port_slice), _REGIME_MIN_OBS,
+                regime,
+                len(port_slice),
+                _REGIME_MIN_OBS,
             )
             out[regime] = 0.0
             continue
@@ -173,8 +175,10 @@ def compute_regime_alpha_tstats(
             out[regime] = result.alpha_tstat
             logger.info(
                 "regime %s: n=%d alpha_ann=%.2f%% t=%.2f",
-                regime, result.n_observations,
-                result.alpha_annualized * 100, result.alpha_tstat,
+                regime,
+                result.n_observations,
+                result.alpha_annualized * 100,
+                result.alpha_tstat,
             )
         except ValueError as exc:
             logger.warning("regime %s regression failed: %s", regime, exc)
@@ -276,8 +280,11 @@ def run_split(
     )
 
     report = engine.run(start, end)
-    logger.info("backtest done; %d daily snapshots, mean IC=%.4f",
-                len(report.daily_results), report.ic_series.mean() if len(report.ic_series) else 0.0)
+    logger.info(
+        "backtest done; %d daily snapshots, mean IC=%.4f",
+        len(report.daily_results),
+        report.ic_series.mean() if len(report.ic_series) else 0.0,
+    )
 
     portfolio_returns = report.portfolio_returns
     if portfolio_returns.empty:
@@ -287,12 +294,10 @@ def run_split(
     # Factor attributions
     carhart_factors = load_carhart_daily(start=start, end=end)
     carhart = run_carhart_attribution(portfolio_returns, carhart_factors)[-1]
-    ff5_umd = run_ff5_umd_attribution(
-        portfolio_returns, load_ff5_umd_daily(start=start, end=end)
-    )
+    ff5_umd = run_ff5_umd_attribution(portfolio_returns, load_ff5_umd_daily(start=start, end=end))
     try:
         q4 = run_q4_attribution(portfolio_returns, load_q4_daily(start=start, end=end))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("Q4 attribution skipped: %s", exc)
         q4 = None
 
@@ -302,13 +307,13 @@ def run_split(
     )
 
     logger.info("running bootstrap CI on Carhart alpha (iter=%d)…", _BOOTSTRAP_ITERATIONS)
-    ci_low_ann, ci_high_ann = bootstrap_carhart_alpha_ci(
-        portfolio_returns, carhart_factors
-    )
+    ci_low_ann, ci_high_ann = bootstrap_carhart_alpha_ci(portfolio_returns, carhart_factors)
     bootstrap_ci_excludes_zero = (ci_low_ann > 0) or (ci_high_ann < 0)
     logger.info(
         "bootstrap 95%% CI (annualized): [%.2f%%, %.2f%%] → excludes_zero=%s",
-        ci_low_ann * 100, ci_high_ann * 100, bootstrap_ci_excludes_zero,
+        ci_low_ann * 100,
+        ci_high_ann * 100,
+        bootstrap_ci_excludes_zero,
     )
 
     avg_rebal_turnover = turnover_pct(r.top_n_tickers for r in report.daily_results)
@@ -318,9 +323,12 @@ def run_split(
     )
     logger.info(
         "turnover/rebal=%.1f%% rebal/y=%.0f | primary drag=%.2f%%/y (net α=%.2f%%) | stress drag=%.2f%%/y (net α=%.2f%%)",
-        avg_rebal_turnover * 100, rebalances_per_year,
-        primary_drag * 100, net_alpha_primary * 100,
-        stress_drag * 100, net_alpha_stress * 100,
+        avg_rebal_turnover * 100,
+        rebalances_per_year,
+        primary_drag * 100,
+        net_alpha_primary * 100,
+        stress_drag * 100,
+        net_alpha_stress * 100,
     )
 
     sharpe_net = sharpe(portfolio_returns.tolist(), periods_per_year=int(rebalances_per_year))
@@ -329,7 +337,8 @@ def run_split(
     )
     logger.info(
         "Sharpe (naive sqrt-k)=%.2f | Sharpe (autocorr-adj, Perplexity R11)=%.2f",
-        sharpe_net, sharpe_net_adj,
+        sharpe_net,
+        sharpe_net_adj,
     )
     decision = evaluate_exit_criteria(
         carhart=carhart,
@@ -357,7 +366,7 @@ def run_split(
         f"- Top-N: {top_n}",
         f"- Benchmark: {benchmark}",
         f"- Rebalance stride: {engine.rebalance_stride} trading day(s) ({rebalances_per_year:.0f}/y)",
-        f"- Avg per-rebalance turnover: {avg_rebal_turnover*100:.1f}%",
+        f"- Avg per-rebalance turnover: {avg_rebal_turnover * 100:.1f}%",
         f"- Sharpe (naive sqrt-k, rebal cadence): {sharpe_net:.2f}",
         f"- Sharpe (autocorr-adjusted, Perplexity R11): {sharpe_net_adj:.2f}",
         "",
@@ -365,24 +374,24 @@ def run_split(
         "",
         "| Spec | α (ann) | α t-stat | R² | n |",
         "|---|---:|---:|---:|---:|",
-        f"| Carhart-4F | {carhart.alpha_annualized*100:.2f}% | {carhart.alpha_tstat:.2f} | {carhart.r_squared:.3f} | {carhart.n_observations} |",
-        f"| FF5+UMD    | {ff5_umd.alpha_annualized*100:.2f}% | {ff5_umd.alpha_tstat:.2f} | {ff5_umd.r_squared:.3f} | {ff5_umd.n_observations} |",
+        f"| Carhart-4F | {carhart.alpha_annualized * 100:.2f}% | {carhart.alpha_tstat:.2f} | {carhart.r_squared:.3f} | {carhart.n_observations} |",
+        f"| FF5+UMD    | {ff5_umd.alpha_annualized * 100:.2f}% | {ff5_umd.alpha_tstat:.2f} | {ff5_umd.r_squared:.3f} | {ff5_umd.n_observations} |",
     ]
     if q4 is not None:
         md_lines.append(
-            f"| Q4         | {q4.alpha_annualized*100:.2f}% | {q4.alpha_tstat:.2f} | {q4.r_squared:.3f} | {q4.n_observations} |"
+            f"| Q4         | {q4.alpha_annualized * 100:.2f}% | {q4.alpha_tstat:.2f} | {q4.r_squared:.3f} | {q4.n_observations} |"
         )
 
     md_lines += [
         "",
         "## Cost sensitivity",
         "",
-        f"- Primary (half-spread {_PRIMARY_HALF_SPREAD_BPS:.0f} bps): drag = {primary_drag*100:.2f}%/y → **net α = {net_alpha_primary*100:.2f}%**",
-        f"- Stress (half-spread {_STRESS_HALF_SPREAD_BPS:.0f} bps, ~k=0.15 proxy): drag = {stress_drag*100:.2f}%/y → **net α = {net_alpha_stress*100:.2f}%**",
+        f"- Primary (half-spread {_PRIMARY_HALF_SPREAD_BPS:.0f} bps): drag = {primary_drag * 100:.2f}%/y → **net α = {net_alpha_primary * 100:.2f}%**",
+        f"- Stress (half-spread {_STRESS_HALF_SPREAD_BPS:.0f} bps, ~k=0.15 proxy): drag = {stress_drag * 100:.2f}%/y → **net α = {net_alpha_stress * 100:.2f}%**",
         "",
         "## Bootstrap CI (Carhart α, annualized)",
         "",
-        f"- Block-bootstrap 95% CI: [{ci_low_ann*100:.2f}%, {ci_high_ann*100:.2f}%]",
+        f"- Block-bootstrap 95% CI: [{ci_low_ann * 100:.2f}%, {ci_high_ann * 100:.2f}%]",
         f"- Excludes zero: **{bootstrap_ci_excludes_zero}** ({_BOOTSTRAP_ITERATIONS} iters, block n^(1/3))",
         "",
         "## Regime breakdown (Carhart α t-stat, HAC)",

@@ -13,7 +13,7 @@ BigBear.ai Holdings, Inc. (BBAI) is a provider of artificial intelligence (AI), 
 As of the most recent quarterly filing (Q1 2023, ending March 31, 2023), BigBear.ai reported revenue of **$42.15 million**. While this reflects a stable core business, year-over-year growth has been modest. The company is currently struggling to scale its commercial segment as rapidly as the "AI hype" might suggest, with revenue largely anchored in legacy government contracts.
 
 ### Profitability
-BBAI is currently **not profitable**. 
+BBAI is currently **not profitable**.
 *   **Net Loss:** In Q1 2023, the company reported a net loss of **$26.21 million**.
 *   **Gross Margin:** Gross margins stand at approximately **24%** ($10.2M gross profit on $42.2M revenue). For a software/AI-driven company, this is relatively low, suggesting a high component of lower-margin professional services and labor-intensive government work rather than pure high-margin software licensing.
 *   **Operating Expenses:** The company is heavily burdened by Selling, General, and Administrative (SG&A) expenses ($20.9M in Q1 2023), which consume nearly double its gross profit.
@@ -21,7 +21,7 @@ BBAI is currently **not profitable**.
 ## 3. Balance Sheet & Solvency Risks
 The balance sheet presents significant red flags for long-term investors:
 *   **Negative Equity:** As of March 31, 2023, BBAI reported a **total shareholder deficit of -$54.04 million**. This indicates that total liabilities ($258.6M) far exceed total assets ($204.6M).
-*   **Liquidity Crisis:** Cash and cash equivalents stood at only **$21.83 million** at the end of Q1. 
+*   **Liquidity Crisis:** Cash and cash equivalents stood at only **$21.83 million** at the end of Q1.
 *   **Debt Burden:** The company carries approximately **$200 million in total debt** (primarily long-term debt of $192.3M). The interest expense of ~$3.5M per quarter is a significant drain on their limited cash reserves.
 
 ## 4. Cash Flow Analysis

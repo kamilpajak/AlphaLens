@@ -6,7 +6,7 @@ The past week has been characterized by extreme market volatility, driven primar
 
 1.  **Global Trade War & Tariffs:** The dominant market driver continues to be the aggressive tariff policies. Recent announcements include 125% tariffs on Chinese imports and retaliatory 84% tariffs from China. This has spiked volatility (VIX) and fueled deep fears of **stagflation**—a combination of persistent inflation driven by supply costs and slowing economic growth.
 2.  **Monetary Policy Uncertainty:** Friction between President Trump and Federal Reserve Chair Jerome Powell has reached a boiling point, with rumors of the Chair's potential removal. This has destabilized the dollar and led to a "flight to haven" assets.
-3.  **Commodities and Safe Havens:** 
+3.  **Commodities and Safe Havens:**
     *   **Gold:** Has surged past **$3,500/oz**, hitting record highs as investors flee from U.S. stocks and bonds.
     *   **Japanese Yen:** Currently experiencing its strongest rally in a decade, up 12% year-to-date, acting as a primary safe-haven currency.
     *   **Oil:** Prices have plunged toward $60/bbl due to projected demand destruction from global trade barriers.
@@ -26,8 +26,8 @@ Iovance continues to focus on the commercialization of **Amtagvi®**, its first-
 
 ### Actionable Insights for Traders
 
-*   **Risk Management:** `IOVA` is a high-beta asset. In the current environment of tariff-driven volatility, expect wide price swings. 
-*   **Contrarian Opportunity:** The hiring of 50 new staff members is a "fundamental-over-sentiment" indicator. While the market panics over macro issues, Iovance is building capacity. 
+*   **Risk Management:** `IOVA` is a high-beta asset. In the current environment of tariff-driven volatility, expect wide price swings.
+*   **Contrarian Opportunity:** The hiring of 50 new staff members is a "fundamental-over-sentiment" indicator. While the market panics over macro issues, Iovance is building capacity.
 *   **Sector Play:** If the Russell 2000 continues its nascent recovery (as seen earlier this week), `IOVA` is well-positioned to rebound from its current multi-year lows.
 
 ---

@@ -4,7 +4,6 @@ from pathlib import Path
 
 import yaml
 
-
 # Representative iShares IWM CSV shape (junk preamble + real header + rows).
 _SAMPLE_CSV = """\
 "iShares Russell 2000 ETF"
@@ -53,7 +52,10 @@ class TestParseIsharesCsv(unittest.TestCase):
         self.assertEqual(tickers, ["AAPL"])
 
     def test_missing_header_raises(self):
-        from alphalens.alt_data.iwm_refresher import IsharesCsvFormatError, parse_ishares_csv
+        from alphalens.alt_data.iwm_refresher import (
+            IsharesCsvFormatError,
+            parse_ishares_csv,
+        )
 
         csv = "no header here\njust junk\n"
 

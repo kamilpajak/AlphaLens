@@ -33,7 +33,7 @@ Onto Innovation Inc. (ONTO) is a key player in the semiconductor equipment and m
 *   **Price Target:** The average analyst target price is **$324.29**, representing significant potential upside from its current 50-day moving average of $218.62.
 
 ### 5. Actionable Insights for Traders
-*   **Safety in Liquidity:** The massive cash pile and high current ratio make ONTO a lower-risk play regarding bankruptcy or financial distress during a semiconductor cycle downturn. 
+*   **Safety in Liquidity:** The massive cash pile and high current ratio make ONTO a lower-risk play regarding bankruptcy or financial distress during a semiconductor cycle downturn.
 *   **Growth Premium:** Traders should be aware that at a P/E of 100+, the stock is priced for perfection. Any further misses in quarterly revenue growth (which was only 1.1% YOY recently) could lead to volatility.
 *   **Technical Context:** The stock is trading well above its 200-day moving average ($157.31) but slightly below its 52-week high ($296.17). A breakout above previous highs combined with stabilized quarterly earnings could signal a strong entry point.
 

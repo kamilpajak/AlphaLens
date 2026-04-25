@@ -56,8 +56,8 @@ RKLB experienced a parabolic move starting in June 2023, surging from approximat
 
 ### News Analyst
 ### Market Analysis Report: Rocket Lab USA, Inc. (RKLB)
-**Date:** August 8, 2023  
-**Instrument:** RKLB (Nasdaq)  
+**Date:** August 8, 2023
+**Instrument:** RKLB (Nasdaq)
 **Sentiment:** Cautiously Bullish (Short-term) / Bullish (Long-term)
 
 ---
@@ -71,10 +71,10 @@ The broader market has been characterized by increased volatility over the past 
 #### 2. Rocket Lab (RKLB) Specific Performance & Recent Developments
 Rocket Lab has entered August with significant operational momentum, having achieved several critical milestones in July and early August.
 
-*   **Launch Cadence & Reliability:** 
+*   **Launch Cadence & Reliability:**
     *   On July 18, 2023, Rocket Lab successfully completed its 39th Electron mission, **"Baby Come Back,"** which deployed seven satellites. Crucially, the mission featured a successful ocean splashdown and recovery of the Electron's first stage, a vital step toward their goal of rocket reusability.
     *   The 40th mission, **"We Love the Nightlife,"** for Capella Space, was successfully launched in early August. This mission marked the first of four dedicated launches for Capella's next-generation "Acadia" satellites, showcasing Rocket Lab's ability to retain and expand major commercial contracts.
-*   **Backlog & Business Growth:** 
+*   **Backlog & Business Growth:**
     *   Rocket Lab signed a multi-launch deal with Japanese Earth-imaging firm **Synspective** for two additional dedicated missions, bringing the total contracted launches for Synspective to six.
     *   The company is increasingly seen as the primary "small-launch" alternative to SpaceX, with a growing revenue stream from its "Space Systems" division (satellite components and software).
 
@@ -101,11 +101,11 @@ FINAL TRANSACTION PROPOSAL: **HOLD** (Pending Earnings Results)
 ### Fundamentals Analyst
 ### Rocket Lab USA Inc. (RKLB) Fundamental Analysis Report
 
-**Date of Analysis:** August 8, 2023  
-**Ticker:** RKLB  
-**Exchange:** NASDAQ  
-**Sector:** Industrials  
-**Industry:** Aerospace & Defense  
+**Date of Analysis:** August 8, 2023
+**Ticker:** RKLB
+**Exchange:** NASDAQ
+**Sector:** Industrials
+**Industry:** Aerospace & Defense
 
 ---
 
@@ -116,7 +116,7 @@ Rocket Lab USA Inc. is a premier aerospace and defense company that has establis
 Rocket Lab is in a high-growth phase, characterized by rapidly increasing revenue alongside significant investment-driven losses.
 
 *   **Revenue Growth:** Revenue has shown a strong upward trajectory. For the fiscal year ending 2022, the company reported **$211M** in total revenue, a massive jump from **$62.2M** in 2021. The trailing twelve months (TTM) revenue as of mid-2023 reached **$601.8M**, indicating a robust scaling of operations.
-*   **Profitability & Margins:** 
+*   **Profitability & Margins:**
     *   **Gross Profit:** The company turned gross-margin positive on an annual basis in 2022 ($19M) and has significantly improved this in the first half of 2023. Quarterly gross profit for Q2 2023 was **$14.6M**.
     *   **Net Losses:** RKLB continues to report net losses due to heavy reinvestment. Net income for 2022 was **-$135.9M**. The most recent quarter (Q2 2023) saw a net loss of **-$45.9M**.
     *   **Operating Expenses:** A major driver of expenses is Research and Development (R&D), which was **$31M** in Q2 2023 alone, reflecting the ongoing development of the **Neutron** rocket (a larger, reusable launch vehicle).
@@ -124,8 +124,8 @@ Rocket Lab is in a high-growth phase, characterized by rapidly increasing revenu
 #### **3. Financial Health & Solvency (Balance Sheet)**
 The company maintains a strong liquidity position to fund its ambitious growth plans.
 
-*   **Cash Position:** As of June 30, 2023, Rocket Lab held approximately **$341M** in cash and short-term investments (**$197.2M** in cash + **$144M** in short-term investments). 
-*   **Assets vs. Liabilities:** Total assets stand at **$981.5M**, comfortably exceeding total liabilities of **$370.4M**. 
+*   **Cash Position:** As of June 30, 2023, Rocket Lab held approximately **$341M** in cash and short-term investments (**$197.2M** in cash + **$144M** in short-term investments).
+*   **Assets vs. Liabilities:** Total assets stand at **$981.5M**, comfortably exceeding total liabilities of **$370.4M**.
 *   **Debt:** The company has a manageable debt-to-equity profile, with long-term debt and capital lease obligations totaling roughly **$163M**. This provides sufficient "runway" to continue R&D without immediate solvency concerns.
 *   **Inventory:** Inventory levels increased to **$102.2M** by mid-2023, up from **$92.3M** at the end of 2022, suggesting the company is scaling up production for future launches and space systems orders.
 
@@ -175,36 +175,36 @@ FINAL TRANSACTION PROPOSAL: **HOLD** (The stock has seen a massive run-up and is
 
 Bull Analyst: Look, I hear the bears loud and clear. They see a 18% retracement from the July highs, they see the Fitch downgrade causing a "risk-off" tremor in the macro environment, and they see a company that is still reporting net losses. But if you’re focusing on the rearview mirror, you’re going to miss the launch of the decade.
 
-Rocket Lab isn’t just "another space startup." It is the **only** proven, reliable alternative to SpaceX in the small-launch market. While others are stuck in PowerPoint phases, Rocket Lab just completed its 40th mission. 
+Rocket Lab isn’t just "another space startup." It is the **only** proven, reliable alternative to SpaceX in the small-launch market. While others are stuck in PowerPoint phases, Rocket Lab just completed its 40th mission.
 
 Let’s break down why this recent dip to $6.59 is actually a screaming entry point for anyone with a long-term vision.
 
 ### 1. The "Space Systems" Pivot: The Secret the Bears Ignore
-The most common bear argument is that "launching rockets is a low-margin, high-risk business." Here’s the reality: Rocket Lab has evolved. By vertically integrating into **Space Systems** (satellites, components, and software), they’ve created a high-margin, recurring revenue engine. 
-*   **The Proof:** Revenue jumped from $211M in 2022 to a TTM of $601.8M. That’s not just growth; that’s a company scaling at lightspeed. 
+The most common bear argument is that "launching rockets is a low-margin, high-risk business." Here’s the reality: Rocket Lab has evolved. By vertically integrating into **Space Systems** (satellites, components, and software), they’ve created a high-margin, recurring revenue engine.
+*   **The Proof:** Revenue jumped from $211M in 2022 to a TTM of $601.8M. That’s not just growth; that’s a company scaling at lightspeed.
 *   **The Competitive Moat:** They aren't just the "bus driver" to space; they’re building the bus, the engine, and the navigation system. This end-to-end capability (like the Synspective and Capella Space deals) creates a "sticky" ecosystem that competitors simply can't match.
 
 ### 2. Addressing the "Cash Burn" Myth
-Bears love to point at the -$45.9M net loss in Q2. But you have to look at *where* that money is going. It’s not being wasted; it’s being weaponized. 
+Bears love to point at the -$45.9M net loss in Q2. But you have to look at *where* that money is going. It’s not being wasted; it’s being weaponized.
 *   **Neutron is the Game Changer:** A significant chunk of R&D is going toward Neutron, their medium-lift rocket. Once Neutron is online, Rocket Lab moves from the "small-sat" niche into the massive "constellation" market, directly competing for multi-billion dollar contracts.
 *   **Solvency is a Non-Issue:** With **$341 million in cash** and short-term investments, and a current ratio of 1.83, Rocket Lab has a massive runway. They aren't desperate for a capital raise; they are strategically investing to dominate the 2025-2030 space economy.
 
 ### 3. Technicals: This is a "Healthy" Correction
-To my bear colleagues worried about the MACD "death cross"—let’s look at the bigger picture. 
-*   **The RSI Reset:** In July, RKLB was dangerously overbought at 77.4. Today, at **48.07**, the "froth" has been completely blown off. We have a neutral RSI while the stock is still well above its **200-day SMA ($4.78)** and testing support at the **50-day SMA ($6.08)**. 
+To my bear colleagues worried about the MACD "death cross"—let’s look at the bigger picture.
+*   **The RSI Reset:** In July, RKLB was dangerously overbought at 77.4. Today, at **48.07**, the "froth" has been completely blown off. We have a neutral RSI while the stock is still well above its **200-day SMA ($4.78)** and testing support at the **50-day SMA ($6.08)**.
 *   **The Springboard:** We are seeing a classic "mean reversion." The price is currently resting on a major floor. History shows that for high-growth stocks like RKLB, these corrections are where the real money is made before the next leg up.
 
 ### 4. Direct Response to the Bear's "Macro Fear"
-The bear says the Fitch downgrade makes growth stocks a "no-go." I argue the opposite. In a volatile macro environment, you want companies with **strategic government importance.** 
+The bear says the Fitch downgrade makes growth stocks a "no-go." I argue the opposite. In a volatile macro environment, you want companies with **strategic government importance.**
 Space is now the ultimate high ground for national security. Rocket Lab’s successful recovery of the Electron first stage ("Baby Come Back") isn't just a cool trick—it's a path to **reusability**, which slashes costs and insulates the company from inflationary pressures. While the rest of the market frets over credit ratings, the demand for tactical, rapid-response space launch is only going up.
 
 ### Lessons Learned & Final Verdict
-In the past, I’ve seen investors get spooked by short-term volatility in high-beta names (RKLB's Beta is 2.2). The mistake is treating Rocket Lab like a traditional industrial stock. It’s a tech-enabled infrastructure play. 
+In the past, I’ve seen investors get spooked by short-term volatility in high-beta names (RKLB's Beta is 2.2). The mistake is treating Rocket Lab like a traditional industrial stock. It’s a tech-enabled infrastructure play.
 
-**The Bull Case is simple:** 
-You have a company with **600%+ revenue growth potential**, a **$341M war chest**, **improving gross margins (23.5%)**, and a **proven track record** of 40 successful missions. 
+**The Bull Case is simple:**
+You have a company with **600%+ revenue growth potential**, a **$341M war chest**, **improving gross margins (23.5%)**, and a **proven track record** of 40 successful missions.
 
-If you’re waiting for the "perfect" macro environment to buy, you’ll be buying at $15. The smart money is looking at the $6.00-$6.50 support zone as a gift. The correction is nearly over, the RSI is reset, and the fundamentals have never been stronger. 
+If you’re waiting for the "perfect" macro environment to buy, you’ll be buying at $15. The smart money is looking at the $6.00-$6.50 support zone as a gift. The correction is nearly over, the RSI is reset, and the fundamentals have never been stronger.
 
 **I am firmly in the "Strong Buy/Hold" camp heading into earnings.** Don’t let short-term noise drown out the signal: Rocket Lab is building the orbital infrastructure of the future. Why would you bet against that?
 
@@ -215,36 +215,36 @@ Bear Analyst: I appreciate the Bull’s enthusiasm—it’s the kind of optimism
 Let’s get real about the risks the Bull is glossing over.
 
 ### 1. The "Space Systems" Pivot: Revenue vs. Reality
-The Bull talks about "Space Systems" as if it’s a high-margin software business. It’s not. It’s hardware. It’s complex, it’s capital-intensive, and it’s prone to the same supply-chain bottlenecks as the rest of the industrial sector. 
+The Bull talks about "Space Systems" as if it’s a high-margin software business. It’s not. It’s hardware. It’s complex, it’s capital-intensive, and it’s prone to the same supply-chain bottlenecks as the rest of the industrial sector.
 *   **The Margin Trap:** While gross margins improved to 23.5%, that is still incredibly thin for a company with this much technical risk. If a single satellite component fails or a supplier hikes prices, that margin evaporates.
 *   **Backlog isn't Cash:** A "multi-launch deal" is a promise, not a payment. In this macro environment, companies can and do cancel contracts. Relying on "long-term revenue visibility" in a sector as volatile as space is a dangerous game.
 
 ### 2. The Neutron Money Pit
-The Bull calls the -$45.9M net loss "weaponized" spending. I call it a **cash bonfire**. 
-*   **The Funding Gap:** Developing a medium-lift rocket like Neutron is an multi-billion dollar endeavor. The Bull points to a $341M "war chest." In the world of orbital rocket development, $341M is pocket change. 
+The Bull calls the -$45.9M net loss "weaponized" spending. I call it a **cash bonfire**.
+*   **The Funding Gap:** Developing a medium-lift rocket like Neutron is an multi-billion dollar endeavor. The Bull points to a $341M "war chest." In the world of orbital rocket development, $341M is pocket change.
 *   **The SpaceX Shadow:** The Bull claims Rocket Lab is the "only" alternative to SpaceX. But SpaceX is currently eating the world. Their Transporter missions are driving launch costs so low that even a "reusable" Electron might struggle to compete on price. If Neutron faces even a six-month delay (and when was the last time a rocket wasn't delayed?), Rocket Lab will be forced to return to the capital markets. With the Fitch downgrade and high interest rates, that capital will be significantly more expensive, diluting current shareholders into oblivion.
 
 ### 3. Technicals: This Isn't a "Correction," It's a Distribution
-I have to challenge the Bull’s interpretation of the charts. 
+I have to challenge the Bull’s interpretation of the charts.
 *   **The VWMA Warning:** The price is sitting at $6.59, well below the **Volume-Weighted Moving Average (VWMA) of $7.33**. This is a massive red flag. It means the "smart money" and the high-volume buyers entered at much higher prices. They are now "underwater." Every relief rally will be met with selling pressure from people just trying to break even.
 *   **Momentum has Vanished:** The MACD isn't just "weakening"—it’s diving. We are staring down a potential "death cross." The Bull says the RSI reset is "healthy," but an RSI of 48 in a downtrend often signals that the stock is just catching its breath before the next leg down to the **$5.98 Lower Bollinger Band**.
 
 ### 4. Direct Rebuttal: The "Macro Fear" is Rational
-The Bull argues that strategic government importance insulates RKLB. I’ve seen this movie before. In 2021, we were told the same thing about several space SPACs that are now trading for pennies or are bankrupt. 
+The Bull argues that strategic government importance insulates RKLB. I’ve seen this movie before. In 2021, we were told the same thing about several space SPACs that are now trading for pennies or are bankrupt.
 *   **Beta is a Double-Edged Sword:** A Beta of 2.2 means when the market sneezes, RKLB catches pneumonia. If the "risk-off" sentiment from the Fitch downgrade continues, high-growth, non-profitable names are the first to be liquidated. You don't want to be "holding the bag" on a 2.2 Beta stock when the Nasdaq is undergoing a regime shift.
 
 ### Lessons Learned & Reflections
-In the past, I’ve made the mistake of underestimate the "cool factor" of a stock. I watched Virgin Galactic (SPCE) fly to $50 on pure hype, only to see it crater when the reality of Capex and operational hurdles set in. 
+In the past, I’ve made the mistake of underestimate the "cool factor" of a stock. I watched Virgin Galactic (SPCE) fly to $50 on pure hype, only to see it crater when the reality of Capex and operational hurdles set in.
 
 Rocket Lab is a better company than SPCE, but the **market mechanics are the same.** Investors get enamored with the "orbital infrastructure of the future" and forget that, in the present, the company is losing nearly $50M a quarter while competing against a near-monopoly (SpaceX).
 
 ### The Bear Verdict
-The Bull says buy the dip at $6.50. I say **watch out below.** 
-*   We are trading below the 10-day EMA and the 20-day SMA. 
+The Bull says buy the dip at $6.50. I say **watch out below.**
+*   We are trading below the 10-day EMA and the 20-day SMA.
 *   The $6.00 support level is the only thing standing between RKLB and a return to the $4.00 range.
 *   **Earnings tonight is a "coin flip" at best.** If they show even a slight widening of losses or a delay in the Neutron timeline, this "healthy correction" will turn into a route.
 
-**Final Transaction Proposal: SELL/AVOID.** 
+**Final Transaction Proposal: SELL/AVOID.**
 The risk-to-reward ratio here is skewed heavily to the downside. Why bet on a company that has to execute perfectly for the next five years just to justify its *current* valuation? Let the Bull have the "vision"—I’ll keep my capital.
 
 ### Research Manager
@@ -256,10 +256,10 @@ The bull analyst paints a picture of a company transitioning from a small-launch
 On the flip side, the bear analyst cuts through the optimism with a sharp focus on the financials and the macro environment. They point out that space systems is a capital-intensive hardware business with thin margins. Crucially, the bear argues that the 341 million dollar cash pile is insufficient for developing the Neutron rocket, inevitably leading to expensive shareholder dilution. Technically, the bear notes the stock is trading well below the volume-weighted moving average of 7.33, signaling that buyers who entered higher are trapped underwater and will likely sell into any relief rallies.
 
 My Recommendation: SELL
-I am aligning with the bear analyst. My recommendation for RKLB is a Sell, or to strictly avoid initiating a new position if you are currently on the sidelines. 
+I am aligning with the bear analyst. My recommendation for RKLB is a Sell, or to strictly avoid initiating a new position if you are currently on the sidelines.
 
 Rationale
-While the bull makes an exciting case for the long-term future of orbital infrastructure, the bear's argument regarding the cost of capital and the Neutron development funding gap is the most grounded reality check. Developing a medium-lift rocket is notoriously expensive, and 341 million dollars does not provide a comfortable runway in an industry prone to delays and cost overruns. With a quarterly net loss of nearly 46 million dollars, the clock is ticking. When RKLB eventually needs to tap the capital markets, the current macroeconomic climate will make that capital highly dilutive and punishing to current shareholders. 
+While the bull makes an exciting case for the long-term future of orbital infrastructure, the bear's argument regarding the cost of capital and the Neutron development funding gap is the most grounded reality check. Developing a medium-lift rocket is notoriously expensive, and 341 million dollars does not provide a comfortable runway in an industry prone to delays and cost overruns. With a quarterly net loss of nearly 46 million dollars, the clock is ticking. When RKLB eventually needs to tap the capital markets, the current macroeconomic climate will make that capital highly dilutive and punishing to current shareholders.
 
 Furthermore, the technical setup confirms the bear's thesis. Trading below the VWMA of 7.33 means overhead supply is heavy. Any upward momentum will struggle against trapped buyers looking to break even. The risk-to-reward ratio heading into an earnings report with a high beta of 2.2 is heavily skewed to the downside, especially competing against a near-monopoly like SpaceX.
 
@@ -301,15 +301,15 @@ FINAL TRANSACTION PROPOSAL: **SELL**
 
 ### Aggressive Analyst
 
-Aggressive Analyst: Listen, the "Sell" recommendation we’re seeing here is a classic example of playing not to lose instead of playing to win. If you follow the conservative or neutral path right now, you aren’t "protecting capital"—you’re surrendering your seat on a rocket ship that’s just finished its mid-flight refueling. 
+Aggressive Analyst: Listen, the "Sell" recommendation we’re seeing here is a classic example of playing not to lose instead of playing to win. If you follow the conservative or neutral path right now, you aren’t "protecting capital"—you’re surrendering your seat on a rocket ship that’s just finished its mid-flight refueling.
 
-Let’s dismantle this "cash pile is too thin" argument first. You’re calling $341 million a thin cushion? That is an aggressive war chest for a company that just narrowed its operating cash flow loss to a mere $6.1 million in Q2. The bear thesis treats that loss like a leak in a boat, but look at the trajectory: they are sprinting toward cash-flow break-even while simultaneously scaling a massive backlog. In a high-growth sector like aerospace, you don't wait for a pristine balance sheet; by the time that happens, the stock is trading at triple digits and you’ve missed the 10x move. 
+Let’s dismantle this "cash pile is too thin" argument first. You’re calling $341 million a thin cushion? That is an aggressive war chest for a company that just narrowed its operating cash flow loss to a mere $6.1 million in Q2. The bear thesis treats that loss like a leak in a boat, but look at the trajectory: they are sprinting toward cash-flow break-even while simultaneously scaling a massive backlog. In a high-growth sector like aerospace, you don't wait for a pristine balance sheet; by the time that happens, the stock is trading at triple digits and you’ve missed the 10x move.
 
 And regarding the technicals—calling for a "Sell" because we are below the VWMA of $7.33 is incredibly shortsighted. You’re looking at overhead supply; I’m looking at a coiled spring. The RSI has completely reset from an overbought 77 down to a healthy 48. We’ve shaken out the "weak hands" and the momentum-chasers. The stock is currently hovering just above its 50-day SMA of $6.08. That’s not a "downward path of least resistance"; that’s a textbook "buy the dip" entry point before the next leg up. Waiting for the $4.00 range is a pipe dream that assumes the market will ignore the fact that Rocket Lab just pulled off two successful missions in one month and is about to drop Q2 earnings.
 
 The "SpaceX monopoly" fear is another ghost story. Rocket Lab isn’t just a launch company; it’s a space systems powerhouse. Their Space Systems revenue is the real story here—high margins, recurring contracts, and a vertical integration that SpaceX doesn't prioritize for small-sat customers. They are the only viable, proven alternative. To sell now, with a beta of 2.2, is to ignore the very volatility that creates wealth. You don’t buy a 2.2 beta stock to hide under the covers when the Fitch downgrade causes a minor market ripple. You use that volatility to outpace the S&P.
 
-If you sell at $6.59 today, you are betting against a company with a $51.7 billion market cap potential and analyst targets sitting at $86.56. That is an astronomical upside compared to the "prudent" downside protection you’re obsessing over. Today’s earnings are the catalyst. While the conservative analysts are waiting for "confirmation," the real money is made by taking the position before the gap up. 
+If you sell at $6.59 today, you are betting against a company with a $51.7 billion market cap potential and analyst targets sitting at $86.56. That is an astronomical upside compared to the "prudent" downside protection you’re obsessing over. Today’s earnings are the catalyst. While the conservative analysts are waiting for "confirmation," the real money is made by taking the position before the gap up.
 
 Stop looking at the $4.00 floor and start looking at the $10.00 ceiling. The trend is your friend, and the medium-term trend is still screaming "Bullish." I’m not just holding; I’m advocating for an aggressive entry right here. Fortune favors the bold, not those waiting for a 200-day moving average that might never be touched again. The recommendation shouldn't be "Sell"—it should be a conviction **BUY**.
 
@@ -333,9 +333,9 @@ Aggressive Analyst, you’re treating this like a foregone conclusion, but your 
 
 On the other hand, Conservative Analyst, you’re being a bit too quick to head for the exits. Recommending a sell at $6.59, when the 50-day moving average is sitting right there at $6.08, feels like you're selling into a potential floor. You’re obsessing over a drop to the $4.00 range, but that would require a total breakdown of the long-term bullish trend that has been in place all year. If you sell now, and Rocket Lab beats expectations tonight or provides a solid update on Neutron milestones, you’re going to be left standing on the sidelines while the stock gaps up. You’re focused so much on capital preservation that you’re ignoring the fundamental progress the company has made with its recent successful launches and growing backlog.
 
-The reality is that Rocket Lab is in a healthy, albeit painful, corrective phase. The RSI has reset from overbought levels to a neutral 48, which actually supports a more stable base for the next move. But we can't ignore the macro environment. The Fitch downgrade and high interest rates mean growth stocks aren't getting a free pass anymore. 
+The reality is that Rocket Lab is in a healthy, albeit painful, corrective phase. The RSI has reset from overbought levels to a neutral 48, which actually supports a more stable base for the next move. But we can't ignore the macro environment. The Fitch downgrade and high interest rates mean growth stocks aren't getting a free pass anymore.
 
-So, here is the moderate path. We shouldn't be selling at a support level, but we definitely shouldn't be adding fresh capital right before an earnings report that could go either way. The most sensible strategy is a hold. By holding, we respect the long-term uptrend that is still technically intact above the 50-day SMA, but we also acknowledge the short-term bearish momentum. 
+So, here is the moderate path. We shouldn't be selling at a support level, but we definitely shouldn't be adding fresh capital right before an earnings report that could go either way. The most sensible strategy is a hold. By holding, we respect the long-term uptrend that is still technically intact above the 50-day SMA, but we also acknowledge the short-term bearish momentum.
 
 Instead of an outright sell or a blind buy, let’s use the data we have. If the stock closes below $6.00 after earnings, the conservative analyst is right, and we exit to protect against that $4.00 drop. If it breaks back above $7.10, the aggressive analyst's recovery story gains teeth. Until then, stay the course. Selling now is emotional; buying now is speculative. Holding is the only move that respects both the risk of dilution and the potential of the space systems business. Let’s let the market absorb the earnings data tonight before we make a high-conviction move.
 
@@ -345,18 +345,18 @@ Instead of an outright sell or a blind buy, let’s use the data we have. If the
 **1. Rating**: Sell
 
 **2. Executive Summary**
-*   **Entry Strategy**: Liquidate any existing long positions in `RKLB` immediately at current levels (approximately $6.59) prior to the upcoming binary earnings event. For aggressive momentum traders, consider initiating a short position or purchasing put options targeting the $5.98 lower Bollinger band. 
-*   **Position Sizing**: Reduce long exposure to `RKLB` to 0% to prioritize capital preservation. 
+*   **Entry Strategy**: Liquidate any existing long positions in `RKLB` immediately at current levels (approximately $6.59) prior to the upcoming binary earnings event. For aggressive momentum traders, consider initiating a short position or purchasing put options targeting the $5.98 lower Bollinger band.
+*   **Position Sizing**: Reduce long exposure to `RKLB` to 0% to prioritize capital preservation.
 *   **Key Risk Levels**: For short trades, maintain a strict stop-loss just above the overhead resistance at the $7.33 Volume-Weighted Moving Average (VWMA). Our long-term downside target and potential reassessment zone sits at the 200-day SMA, ranging from $4.00 to $4.78.
 *   **Time Horizon**: Immediate action required for liquidations ahead of earnings; long-term horizon for any re-evaluation of the asset once the funding runway is proven.
 
 **3. Investment Thesis**
 After synthesizing the analysts' debate, the decision to issue a Sell rating for `RKLB` is anchored in the brutal realities of balance sheet mechanics and macroeconomic headwinds, which severely outweigh the company's compelling technological narrative.
 
-**Fundamental Reality Over Narrative:** 
+**Fundamental Reality Over Narrative:**
 The aggressive analyst paints an optimistic picture of a space systems powerhouse with a narrowed operating cash flow loss of $6.1 million and a $341 million "war chest." However, as the conservative analyst correctly diagnosed, in the capital-intensive aerospace industry, $341 million is merely a down payment. `RKLB` is shouldering the immense R&D burden of developing the medium-lift Neutron rocket while sustaining quarterly net losses of nearly $46 million. This severe funding gap makes future shareholder dilution nearly inevitable. With the recent Fitch downgrade signaling a risk-off macro environment, the cost of capital is rising, meaning any future capital raises will be deeply punishing to current shareholders.
 
-**Technical Breakdown and Overhead Supply:** 
+**Technical Breakdown and Overhead Supply:**
 Technically, the momentum has definitively broken. `RKLB` is trading at $6.59, sitting below both the 10-day EMA of $6.98 and the VWMA of $7.33. The aggressive analyst views the RSI reset to 48 as a "coiled spring," but the reality is that the $7.33 VWMA acts as a heavy ceiling of trapped buyers who will likely sell into any relief rallies just to break even. The neutral analyst suggested holding because the stock is near its 50-day SMA of $6.08, but holding a stock with a high beta of 2.2 through a binary earnings event is speculation, not risk management. If earnings reflect any Neutron delays or widened cash burn, that $6.08 floor will instantly collapse, opening an air pocket down to the 200-day SMA at $4.78.
 
 **Reflections and Strategic Positioning:**

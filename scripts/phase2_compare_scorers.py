@@ -25,19 +25,19 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from alphalens.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens.backtest.factor_analysis import run_carhart_attribution  # noqa: E402
-from alphalens.backtest.factors import load_carhart_daily  # noqa: E402
-from alphalens.backtest.history_store import HistoryStore  # noqa: E402
-from alphalens.backtest.metrics import rank_ic_tstat, sharpe  # noqa: E402
-from alphalens.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
-from alphalens.screeners.themed.backtest_adapter import (  # noqa: E402
+from alphalens.backtest.engine import BacktestEngine
+from alphalens.backtest.factor_analysis import run_carhart_attribution
+from alphalens.backtest.factors import load_carhart_daily
+from alphalens.backtest.history_store import HistoryStore
+from alphalens.backtest.metrics import rank_ic_tstat, sharpe
+from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+from alphalens.screeners.themed.backtest_adapter import (
     early_stage_scorer_adapter,
     momentum_scorer_adapter,
 )
-from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH  # noqa: E402
-from alphalens.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS  # noqa: E402
-from alphalens.screeners.themed.universe import flatten_universe  # noqa: E402
+from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+from alphalens.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS
+from alphalens.screeners.themed.universe import flatten_universe
 
 LEAN_DATA = Path.home() / ".alphalens" / "lean" / "data"
 OUT_DIR = Path(__file__).resolve().parent.parent / "docs" / "backtest"
@@ -52,7 +52,7 @@ class ScorerRun:
     report: object
     metrics: dict
     picks_df: pd.DataFrame  # columns: date, rank, ticker, trailing_60d, dist_from_52w_high, rsi,
-                            #          fwd_20d, fwd_60d, fwd_120d, theme
+    #          fwd_20d, fwd_60d, fwd_120d, theme
 
 
 def _load_store_and_tickers() -> tuple[HistoryStore, list[str], dict[str, list[str]]]:
@@ -82,16 +82,30 @@ def _compute_pick_features(
     try:
         df = store.full(ticker.upper())
     except KeyError:
-        return {"ticker": ticker, "trailing_60d": np.nan, "dist_from_52w_high": np.nan,
-                "rsi": np.nan, "fwd_20d": np.nan, "fwd_60d": np.nan, "fwd_120d": np.nan,
-                "theme": ""}
+        return {
+            "ticker": ticker,
+            "trailing_60d": np.nan,
+            "dist_from_52w_high": np.nan,
+            "rsi": np.nan,
+            "fwd_20d": np.nan,
+            "fwd_60d": np.nan,
+            "fwd_120d": np.nan,
+            "theme": "",
+        }
 
     # Slice up to pick_date (point-in-time)
     hist_up = df.loc[:pick_date]
     if len(hist_up) < 60:
-        return {"ticker": ticker, "trailing_60d": np.nan, "dist_from_52w_high": np.nan,
-                "rsi": np.nan, "fwd_20d": np.nan, "fwd_60d": np.nan, "fwd_120d": np.nan,
-                "theme": ",".join(themes_map.get(ticker, []))}
+        return {
+            "ticker": ticker,
+            "trailing_60d": np.nan,
+            "dist_from_52w_high": np.nan,
+            "rsi": np.nan,
+            "fwd_20d": np.nan,
+            "fwd_60d": np.nan,
+            "fwd_120d": np.nan,
+            "theme": ",".join(themes_map.get(ticker, [])),
+        }
 
     close_now = float(hist_up["close"].iloc[-1])
     close_60_ago = float(hist_up["close"].iloc[-60])
@@ -202,18 +216,18 @@ def _pick_overlap(run_a: ScorerRun, run_b: ScorerRun) -> pd.Series:
     by_date_b = run_b.picks_df.groupby("date")["ticker"].apply(set)
     common = by_date_a.index.intersection(by_date_b.index)
     overlap = [
-        len(by_date_a.loc[d] & by_date_b.loc[d]) / max(len(by_date_a.loc[d]), 1)
-        for d in common
+        len(by_date_a.loc[d] & by_date_b.loc[d]) / max(len(by_date_a.loc[d]), 1) for d in common
     ]
     return pd.Series(overlap, index=common)
 
 
 def _theme_hhi_per_day(picks_df: pd.DataFrame) -> pd.Series:
     """HHI of theme concentration in top-5, per day."""
+
     def _hhi_row(themes_lists: list[str]) -> float:
         counter: Counter = Counter()
         for themes_str in themes_lists:
-            for t in (themes_str.split(",") if themes_str else []):
+            for t in themes_str.split(",") if themes_str else []:
                 counter[t.strip()] += 1
         total = sum(counter.values())
         if total == 0:
@@ -225,11 +239,19 @@ def _theme_hhi_per_day(picks_df: pd.DataFrame) -> pd.Series:
 
 
 def _format_metric_table(runs: list[ScorerRun]) -> str:
-    keys = ["sharpe_gross", "annual_return_pct", "ic_mean", "ic_tstat",
-            "max_drawdown_pct", "turnover_pct",
-            "ff3_alpha_ann_pct", "ff3_alpha_tstat", "ff3_r2"]
+    keys = [
+        "sharpe_gross",
+        "annual_return_pct",
+        "ic_mean",
+        "ic_tstat",
+        "max_drawdown_pct",
+        "turnover_pct",
+        "ff3_alpha_ann_pct",
+        "ff3_alpha_tstat",
+        "ff3_r2",
+    ]
     header = "| Metric | " + " | ".join(r.label for r in runs) + " |"
-    sep    = "| --- | " + " | ".join(["---:"] * len(runs)) + " |"
+    sep = "| --- | " + " | ".join(["---:"] * len(runs)) + " |"
     rows = [header, sep]
     for k in keys:
         vals = []
@@ -266,10 +288,12 @@ def main() -> None:
     early_cfg = dict(EARLY_STAGE_DEFAULTS)
     early_cfg["benchmark"] = "SPY"
 
-    run_mom = _run_scorer(store, curated, themes_map,
-                          momentum_scorer_adapter, momentum_cfg, "momentum")
-    run_early = _run_scorer(store, curated, themes_map,
-                            early_stage_scorer_adapter, early_cfg, "early_stage")
+    run_mom = _run_scorer(
+        store, curated, themes_map, momentum_scorer_adapter, momentum_cfg, "momentum"
+    )
+    run_early = _run_scorer(
+        store, curated, themes_map, early_stage_scorer_adapter, early_cfg, "early_stage"
+    )
 
     # Experiment 1 — metric comparison
     print("\n=== Experiment 1: headline metrics ===")
@@ -277,26 +301,31 @@ def main() -> None:
 
     # Experiment 2 — pick overlap
     overlap = _pick_overlap(run_mom, run_early)
-    print(f"\n=== Experiment 2: pick overlap ===")
+    print("\n=== Experiment 2: pick overlap ===")
     print(f"  days compared: {len(overlap)}")
     print(f"  mean overlap:   {overlap.mean():.3f}")
     print(f"  median overlap: {overlap.median():.3f}")
-    print(f"  overlap distribution:")
+    print("  overlap distribution:")
     for q in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]:
         count = int((overlap >= q).sum())
-        print(f"    ≥{q:.1f}: {count} ({count/len(overlap)*100:.1f}%)")
+        print(f"    ≥{q:.1f}: {count} ({count / len(overlap) * 100:.1f}%)")
 
     # Experiment 3 — extension at pick time
-    print(f"\n=== Experiment 3: extension at pick time ===")
+    print("\n=== Experiment 3: extension at pick time ===")
     mom_feat = _feature_summary(run_mom.picks_df)
     early_feat = _feature_summary(run_early.picks_df)
     print(f"  {'metric':<25} {'momentum':>12} {'early_stage':>12}")
-    for k in ["trailing_60d_mean", "dist_from_52w_high_mean", "rsi_mean",
-              "pct_picks_near_high", "pct_picks_rsi_overbought"]:
+    for k in [
+        "trailing_60d_mean",
+        "dist_from_52w_high_mean",
+        "rsi_mean",
+        "pct_picks_near_high",
+        "pct_picks_rsi_overbought",
+    ]:
         print(f"  {k:<25} {mom_feat[k]:>12.4f} {early_feat[k]:>12.4f}")
 
     # Experiment 4 — forward returns
-    print(f"\n=== Experiment 4: forward return distribution ===")
+    print("\n=== Experiment 4: forward return distribution ===")
     print(f"  {'horizon':<12} {'momentum':>12} {'early_stage':>12}")
     for h in ["fwd_20d_mean", "fwd_60d_mean", "fwd_120d_mean"]:
         print(f"  {h:<12} {mom_feat[h]:>12.4f} {early_feat[h]:>12.4f}")
@@ -304,10 +333,14 @@ def main() -> None:
     # Experiment 5 — theme HHI
     hhi_mom = _theme_hhi_per_day(run_mom.picks_df)
     hhi_early = _theme_hhi_per_day(run_early.picks_df)
-    print(f"\n=== Experiment 5: theme HHI (lower = more diversified) ===")
+    print("\n=== Experiment 5: theme HHI (lower = more diversified) ===")
     print(f"  {'scorer':<15} {'mean':>8} {'median':>8} {'p90':>8}")
-    print(f"  {'momentum':<15} {hhi_mom.mean():>8.3f} {hhi_mom.median():>8.3f} {hhi_mom.quantile(0.9):>8.3f}")
-    print(f"  {'early_stage':<15} {hhi_early.mean():>8.3f} {hhi_early.median():>8.3f} {hhi_early.quantile(0.9):>8.3f}")
+    print(
+        f"  {'momentum':<15} {hhi_mom.mean():>8.3f} {hhi_mom.median():>8.3f} {hhi_mom.quantile(0.9):>8.3f}"
+    )
+    print(
+        f"  {'early_stage':<15} {hhi_early.mean():>8.3f} {hhi_early.median():>8.3f} {hhi_early.quantile(0.9):>8.3f}"
+    )
 
     # Experiment 6 — hybrid? (run if metrics are promising)
     hybrid_run = None
@@ -321,15 +354,17 @@ def main() -> None:
         and dist_diff < -0.03  # early_stage picks further from 52w high
     )
     if trigger_hybrid:
-        print(f"\n=== Experiment 6: hybrid (triggered) ===")
+        print("\n=== Experiment 6: hybrid (triggered) ===")
         # TODO: implement a hybrid adapter that combines scores
         # For now, signal-only: we note that hybrid would be worth trying
         print("  hybrid merits exploration — see report recommendation")
     else:
-        print(f"\n=== Experiment 6: hybrid SKIPPED ===")
-        print(f"  trigger conditions not met "
-              f"(early_sharpe={early_sharpe:.2f}>0.5? "
-              f"overlap={overlap_mean:.2f}<0.7? dist_diff={dist_diff:+.3f}<-0.03?)")
+        print("\n=== Experiment 6: hybrid SKIPPED ===")
+        print(
+            f"  trigger conditions not met "
+            f"(early_sharpe={early_sharpe:.2f}>0.5? "
+            f"overlap={overlap_mean:.2f}<0.7? dist_diff={dist_diff:+.3f}<-0.03?)"
+        )
 
     # --- Write report + CSVs ---
     report_md = OUT_DIR / "early_stage_comparison.md"
@@ -353,9 +388,9 @@ def main() -> None:
         f"- Mean overlap: **{overlap.mean():.3f}**",
         f"- Median overlap: {overlap.median():.3f}",
         f"- Days with zero overlap: {int((overlap == 0).sum())} "
-        f"({(overlap == 0).mean()*100:.1f}%)",
+        f"({(overlap == 0).mean() * 100:.1f}%)",
         f"- Days with full overlap (same 5 names): {int((overlap == 1).sum())} "
-        f"({(overlap == 1).mean()*100:.1f}%)",
+        f"({(overlap == 1).mean() * 100:.1f}%)",
         "",
         "## Experiment 3 — Extension at pick time (Layer 3 rejection proxy)",
         "",
@@ -364,8 +399,13 @@ def main() -> None:
         "| Metric | Momentum | EarlyStage | Δ (lower is better) |",
         "| --- | ---: | ---: | ---: |",
     ]
-    for k in ["trailing_60d_mean", "dist_from_52w_high_mean", "rsi_mean",
-              "pct_picks_near_high", "pct_picks_rsi_overbought"]:
+    for k in [
+        "trailing_60d_mean",
+        "dist_from_52w_high_mean",
+        "rsi_mean",
+        "pct_picks_near_high",
+        "pct_picks_rsi_overbought",
+    ]:
         delta = early_feat[k] - mom_feat[k]
         better = "✓" if delta < 0 else "✗"
         lines.append(f"| {k} | {mom_feat[k]:.4f} | {early_feat[k]:.4f} | {delta:+.4f} {better} |")
@@ -409,14 +449,25 @@ def main() -> None:
 
     # Go/No-go decision per plan
     if overlap.mean() > 0.7:
-        lines.append("**STOP**: Pick overlap > 70% — early-stage scorer nie zmienia istotnie selekcji.")
+        lines.append(
+            "**STOP**: Pick overlap > 70% — early-stage scorer nie zmienia istotnie selekcji."
+        )
     elif early_sharpe < 0.3 and overlap.mean() < 0.2:
-        lines.append(f"**STOP**: Early-stage Sharpe {early_sharpe:.2f} < 0.3 z overlap {overlap.mean():.2f} < 0.2 — scorer wybiera noise, nie early-stage signal.")
-    elif (overlap.mean() < 0.7 and early_sharpe > 0.5 and
-          early_feat["pct_picks_near_high"] < mom_feat["pct_picks_near_high"]):
-        lines.append("**GO do Fazy 3** (paper trade): picks różnią się od obecnego scorer'a, Sharpe jest sensowny, i extension features pokazują że picks są wcześniej w rally'u. Layer 3 powinien je częściej akceptować.")
+        lines.append(
+            f"**STOP**: Early-stage Sharpe {early_sharpe:.2f} < 0.3 z overlap {overlap.mean():.2f} < 0.2 — scorer wybiera noise, nie early-stage signal."
+        )
+    elif (
+        overlap.mean() < 0.7
+        and early_sharpe > 0.5
+        and early_feat["pct_picks_near_high"] < mom_feat["pct_picks_near_high"]
+    ):
+        lines.append(
+            "**GO do Fazy 3** (paper trade): picks różnią się od obecnego scorer'a, Sharpe jest sensowny, i extension features pokazują że picks są wcześniej w rally'u. Layer 3 powinien je częściej akceptować."
+        )
     else:
-        lines.append(f"**REVIEW**: wyniki nie mieszczą się w prostym decision tree. Przeanalizuj indywidualne metryki.")
+        lines.append(
+            "**REVIEW**: wyniki nie mieszczą się w prostym decision tree. Przeanalizuj indywidualne metryki."
+        )
 
     report_md.write_text("\n".join(lines))
     print(f"\nWrote {report_md}")

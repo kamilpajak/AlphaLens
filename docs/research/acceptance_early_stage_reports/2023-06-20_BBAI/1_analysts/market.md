@@ -36,5 +36,5 @@ BigBear.ai Holdings, Inc. (BBAI) is currently navigating a pivotal technical jun
 | **VWMA** | $2.28 | **Support:** Price is currently supported by volume-weighted averages. |
 | **ATR (14)** | $0.259 | **Volatility:** Moderate; use to calibrate stop-loss levels. |
 
-**Final Transaction Proposal: HOLD/WATCH.** 
+**Final Transaction Proposal: HOLD/WATCH.**
 BBAI is showing constructive signs of a bottom, but the immediate overhead resistance of the 50 SMA ($2.55) has not been decisively cleared. Traders should look for a breakout above $2.55 with volume to initiate new long positions. Existing holders should maintain positions with a stop-loss near the $2.00 (200 SMA) level.

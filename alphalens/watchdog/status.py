@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,32 +22,33 @@ def collect_status(
 
 def _queue_stats(path: Path, budget_per_day: int) -> dict[str, Any]:
     empty = {
-        "pending": 0, "in_progress": 0, "done_today": 0, "done_week": 0, "dead": 0,
-        "budget_per_day": budget_per_day, "latest_done": None,
+        "pending": 0,
+        "in_progress": 0,
+        "done_today": 0,
+        "done_week": 0,
+        "dead": 0,
+        "budget_per_day": budget_per_day,
+        "latest_done": None,
     }
     if not path.exists():
         return empty
 
-    today = datetime.now(timezone.utc).date().isoformat()
-    week_ago = (datetime.now(timezone.utc).date() - timedelta(days=7)).isoformat()
+    today = datetime.now(UTC).date().isoformat()
+    week_ago = (datetime.now(UTC).date() - timedelta(days=7)).isoformat()
 
     conn = sqlite3.connect(str(path))
     try:
         conn.row_factory = sqlite3.Row
         counts = {
             row[0]: row[1]
-            for row in conn.execute(
-                "SELECT status, COUNT(*) FROM candidates GROUP BY status"
-            )
+            for row in conn.execute("SELECT status, COUNT(*) FROM candidates GROUP BY status")
         }
         done_today = conn.execute(
-            "SELECT COUNT(*) FROM candidates "
-            "WHERE status = 'done' AND DATE(finished_at) = ?",
+            "SELECT COUNT(*) FROM candidates WHERE status = 'done' AND DATE(finished_at) = ?",
             (today,),
         ).fetchone()[0]
         done_week = conn.execute(
-            "SELECT COUNT(*) FROM candidates "
-            "WHERE status = 'done' AND DATE(finished_at) >= ?",
+            "SELECT COUNT(*) FROM candidates WHERE status = 'done' AND DATE(finished_at) >= ?",
             (week_ago,),
         ).fetchone()[0]
         latest = conn.execute(
@@ -121,9 +122,7 @@ def format_status(status: dict[str, Any]) -> str:
     ]
     if q["latest_done"]:
         ld = q["latest_done"]
-        lines.append(
-            f"  latest done:  {ld['ticker']} → {ld['decision']} at {ld['finished_at']}"
-        )
+        lines.append(f"  latest done:  {ld['ticker']} → {ld['decision']} at {ld['finished_at']}")
 
     lines += ["", "Digest buffer", f"  total:        {d['total']}"]
     if d["per_ticker"]:

@@ -1,7 +1,7 @@
 To provide a comprehensive recommendation for VKTX, I have analyzed the clinical landscape, the financial position of the company, and the technical indicators provided in the investment plan.
 
 ### Market and Clinical Analysis
-Viking Therapeutics (VKTX) is currently at the center of the high-growth obesity and NASH (MASH) markets. While the Phase 1 and Phase 2 data for VK2735 (dual GLP-1/GIP receptor agonist) has been exceptional—showing weight loss results that rival or exceed those of market leaders Eli Lilly and Novo Nordisk—the transition from clinical success to commercial viability is a monumental hurdle. 
+Viking Therapeutics (VKTX) is currently at the center of the high-growth obesity and NASH (MASH) markets. While the Phase 1 and Phase 2 data for VK2735 (dual GLP-1/GIP receptor agonist) has been exceptional—showing weight loss results that rival or exceed those of market leaders Eli Lilly and Novo Nordisk—the transition from clinical success to commercial viability is a monumental hurdle.
 
 The "manufacturing wall" mentioned in the plan is a critical factor. The giants in this space are spending tens of billions on CAPEX to secure supply chains. For a mid-cap biotech like VKTX, competing on this scale independently is nearly impossible.
 

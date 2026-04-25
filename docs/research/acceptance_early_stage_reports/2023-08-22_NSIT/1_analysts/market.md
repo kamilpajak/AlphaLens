@@ -15,13 +15,13 @@ The following report provides a comprehensive technical analysis of **NSIT (Insi
 *   **RSI (Relative Strength Index):** The RSI is currently **62.57**. This is firmly in bullish territory (above 50) but remains below the "overbought" threshold of 70. This suggests that while the stock is strong, it still has "room to run" before becoming technically overextended.
 
 ### **3. Volatility and Price Extreme Analysis**
-*   **Bollinger Bands:** 
+*   **Bollinger Bands:**
     *   Upper Band (UB): **152.11**
     *   Lower Band (LB): **140.63**
 *   The current price of **149.51** is positioned in the upper half of the Bollinger Bands. It is approaching the upper band but has not yet signaled a reversal or extreme overbought condition. The width of the bands suggests moderate volatility, typical for a trending stock.
 
 ### **4. Actionable Insights**
-The technical profile for **NSIT** is overwhelmingly positive. The recovery from the August 3rd low (approx. $139) has been swift, reclaimimg the 50 SMA and generating a new bullish MACD signal. 
+The technical profile for **NSIT** is overwhelmingly positive. The recovery from the August 3rd low (approx. $139) has been swift, reclaimimg the 50 SMA and generating a new bullish MACD signal.
 
 *   **For Buyers:** An entry at current levels is supported by momentum. However, tighter risk management is advised as the price nears the Bollinger Upper Band ($152.11).
 *   **Support Levels:** Immediate support is found at the 50 SMA (**146.22**) and the recent swing low near **142.50**.

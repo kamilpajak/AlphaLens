@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
-
 import pandas as pd
 
 _METRIC_SHORT = {

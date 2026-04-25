@@ -1,4 +1,5 @@
 """Tests for alphalens.backtest.factors — FF5 / UMD / Industry12 loaders."""
+
 from __future__ import annotations
 
 import unittest
@@ -140,8 +141,18 @@ class TestLoadIndustry12Daily(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             df = load_industry12_daily(path=_write_ind12(Path(tmp)))
             expected = [
-                "NoDur", "Durbl", "Manuf", "Enrgy", "Chems", "BusEq",
-                "Telcm", "Utils", "Shops", "Hlth", "Money", "Other",
+                "NoDur",
+                "Durbl",
+                "Manuf",
+                "Enrgy",
+                "Chems",
+                "BusEq",
+                "Telcm",
+                "Utils",
+                "Shops",
+                "Hlth",
+                "Money",
+                "Other",
             ]
             self.assertEqual(list(df.columns), expected)
 
@@ -189,10 +200,7 @@ class TestLoadCarhartDaily(unittest.TestCase):
             # UMD with only 2 dates overlapping with FF5's 3:
             umd_path = tmp_path / "umd_short.csv"
             umd_path.write_text(
-                "Preamble.\n\n,Mom\n"
-                "20240102,   0.40\n"
-                "20240104,   0.60\n"
-                "\nCopyright\n"
+                "Preamble.\n\n,Mom\n20240102,   0.40\n20240104,   0.60\n\nCopyright\n"
             )
             df = load_carhart_daily(ff5_path=ff5_path, umd_path=umd_path)
             self.assertEqual(len(df), 2)

@@ -1,10 +1,10 @@
-Let's break down what we just heard from both the bull and the bear regarding PLXS. 
+Let's break down what we just heard from both the bull and the bear regarding PLXS.
 
 The bull is painting a picture of a company on the verge of massive earnings expansion. They argue that the high trailing price-to-earnings ratio of 37 is a rearview mirror metric, pointing instead to a highly attractive forward P/E of around 15. They believe PLXS is insulated from typical manufacturing risks because of its high-moat specialization in Medical, Aerospace, and Defense, plus an AI tailwind. To the bull, the massive 1.2 billion dollar inventory is a strategic advantage in a brittle supply chain, and the recent pullback from the 140 dollar level is just a healthy consolidation before a run to 200 dollars.
 
 On the flip side, the bear brings a heavy dose of reality, arguing that pricing an Electronic Manufacturing Services company at a 37 trailing multiple is a recipe for disaster. They see the forward P/E as a hope-based metric that prices in absolute perfection. Instead of a competitive advantage, the bear views the massive inventory as a glaring obsolescence and liquidity risk, especially with rising copper prices and thin operating margins around 5 percent. Technically, the bear sees the recent price action not as a healthy pause, but as a hard rejection at the 200-day moving average.
 
-My recommendation is to Sell PLXS. 
+My recommendation is to Sell PLXS.
 
 Here is my rationale. The bear's argument heavily outweighs the bull's optimism primarily because of the fundamental realities of the EMS business model. We are talking about a company that builds hardware and operates on thin net margins of roughly 4 to 5 percent. Paying a trailing multiple of 37 for this type of business is incredibly rich. The bull's entire valuation argument rests on a forward P/E of 15.36, which means the market is already pricing in a flawless execution of earnings acceleration. In hardware manufacturing, OEM clients hold the pricing power, meaning rising commodity costs like copper will inevitably squeeze PLXS. Furthermore, holding over a billion dollars in inventory is a massive risk. If any of their slow-moving Medical or Aerospace clients delay an order, that inventory becomes a dead weight that eats into cash flow.
 

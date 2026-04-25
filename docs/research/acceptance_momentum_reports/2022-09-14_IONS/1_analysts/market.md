@@ -16,13 +16,13 @@ As of the latest trading data (September 13, 2022), **IONS** is trading at **$46
 *   **VWMA (Volume-Weighted Moving Average):** The VWMA is at **$44.63**. Price trading above the VWMA confirms that the recent uptrend is supported by significant trading volume, adding "conviction" to the move.
 
 #### 3. Volatility & Support/Resistance
-*   **Bollinger Bands:** The Upper Band is at **$47.88** and the Lower Band is at **$40.36**. 
+*   **Bollinger Bands:** The Upper Band is at **$47.88** and the Lower Band is at **$40.36**.
 *   **Observations:** On September 12, the price pierced the upper band ($48.66 vs. UB $47.14), which often leads to a temporary regression toward the mean. The current price ($46.25) represents exactly this—a healthy reversion toward the center of the bands after a period of high volatility.
 
 ### Actionable Insights
 *   **Trend Confirmation:** The primary trend is undeniably bullish across all timeframes.
 *   **Entry Strategy:** The recent pullback from $48.66 toward the 10 EMA ($45.44) offers a more favorable entry point than buying at the peak of the breakout.
-*   **Key Levels:** 
+*   **Key Levels:**
     *   **Resistance:** $48.66 (Recent High) and the psychological $50 level.
     *   **Support:** $45.44 (10 EMA) and $44.63 (VWMA). A deeper support lies at the 50 SMA ($41.67).
 

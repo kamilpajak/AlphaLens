@@ -1,5 +1,5 @@
 
-Neutral Analyst: Both of you are making the classic mistake of looking at the same set of numbers and seeing only what fits your narrative, and frankly, you're both leaning into extremes that could cost us dearly. 
+Neutral Analyst: Both of you are making the classic mistake of looking at the same set of numbers and seeing only what fits your narrative, and frankly, you're both leaning into extremes that could cost us dearly.
 
 To the Aggressive Analyst: You’re calling this a coiled spring, but you’re ignoring the fact that the spring is sitting in a pool of acid. You can’t just hand-wave away a 24% gross margin. This isn’t the high-margin, scalable software model that justifies a "land-grab" burn rate. It looks a lot more like a labor-intensive consulting firm that’s being valued like a tech unicorn because it has AI in the name. You’re betting on a gap-up from a government contract that hasn't materialized yet, while the company has less than six months of cash left. If you buy the breakout at 2.55 without acknowledging the dilution risk, you’re not trading; you’re hoping. Hope isn’t a strategy, especially when the company has a shareholder deficit of 54 million dollars.
 

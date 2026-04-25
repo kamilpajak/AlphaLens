@@ -62,7 +62,7 @@ FINAL TRANSACTION PROPOSAL: **HOLD**
 ### Global Macroeconomic & `QUBT` News Report: April 10, 2025
 
 #### 1. Macroeconomic Context: The "Liberation Day" Tariff Shock
-The current trading week has been defined by the fallout from President Trump's "Liberation Day" tariff announcements. Effective import rates are projected to rise to 17%-22%, marking the highest levels since the 1930s. 
+The current trading week has been defined by the fallout from President Trump's "Liberation Day" tariff announcements. Effective import rates are projected to rise to 17%-22%, marking the highest levels since the 1930s.
 
 *   **Market Volatility & Recession Fears:** Major financial institutions, including Morgan Stanley and T. Rowe Price, have significantly increased the odds of a U.S. recession (now estimated at 30%-40%) or a period of stagflation.
 *   **Sector Performance:** Technology and energy were the hardest-hit sectors initially. While the Nasdaq staged a historic intraday recovery on April 7th, the overall sentiment remains "risk-off."
@@ -97,7 +97,7 @@ FINAL TRANSACTION PROPOSAL: **HOLD** (Wait for the macro-volatility from the "Li
 ### Fundamentals Analyst
 # Fundamental Analysis Report: Quantum Computing Inc. (QUBT)
 
-**Date of Analysis:** April 10, 2025  
+**Date of Analysis:** April 10, 2025
 **Sector:** Technology | **Industry:** Computer Hardware
 
 ---
@@ -171,52 +171,52 @@ FINAL TRANSACTION PROPOSAL: **HOLD** (Wait for a break above the 200-day moving 
 
 ### Bull Researcher
 
-Bull Analyst: Listen, I hear the bears loud and clear—it’s easy to look at a pre-revenue company during a "tariff shock" and see a sinking ship. But if you’re only looking at the surface-level turbulence of April 2025, you’re missing the most sophisticated "liquidity fortress" and technology pivot in the quantum sector. 
+Bull Analyst: Listen, I hear the bears loud and clear—it’s easy to look at a pre-revenue company during a "tariff shock" and see a sinking ship. But if you’re only looking at the surface-level turbulence of April 2025, you’re missing the most sophisticated "liquidity fortress" and technology pivot in the quantum sector.
 
 Let’s talk about why the bull case for **QUBT** isn't just surviving; it’s actually strengthening under this pressure.
 
 ### 1. The "Smart Money" Floor ($12.25 vs. $6.85)
-The bears point to the current price of ~$6.85 as a sign of failure. I see it as a massive, temporary dislocation from reality. In January 2025, institutional investors committed **$100 million in a private placement at $12.25 per share**. These aren't retail traders; these are sophisticated players who did deep-dive due diligence and decided the company was worth double what it’s trading for today. 
+The bears point to the current price of ~$6.85 as a sign of failure. I see it as a massive, temporary dislocation from reality. In January 2025, institutional investors committed **$100 million in a private placement at $12.25 per share**. These aren't retail traders; these are sophisticated players who did deep-dive due diligence and decided the company was worth double what it’s trading for today.
 
 By buying now, you are getting the same technology and "war chest" as the institutions but at a **44% discount**. That is a rare window of opportunity.
 
 ### 2. A "Liquidity Fortress" in a Stormy Macro
-The bear argument relies on "recession fears" and "burn rates." Let’s look at the actual balance sheet: QUBT has effectively decoupled itself from the typical "startup death spiral." With cash reserves projected to hit **$737 million by year-end**, QUBT isn't just surviving the 2025 recession; they are positioned to **acquire** distressed competitors. 
+The bear argument relies on "recession fears" and "burn rates." Let’s look at the actual balance sheet: QUBT has effectively decoupled itself from the typical "startup death spiral." With cash reserves projected to hit **$737 million by year-end**, QUBT isn't just surviving the 2025 recession; they are positioned to **acquire** distressed competitors.
 
 While other pure-play quantum firms will be begging for high-interest loans, QUBT is sitting on a "war chest" that provides years of R&D runway. This isn't a "pre-revenue" gamble; it’s a well-funded technology incubator with a massive safety net.
 
 ### 3. The Nvidia Counter-Argument: Validation, Not Competition
-The bears panicked on March 21 when Nvidia announced its "Quantum Day." They think Nvidia will crush QUBT. This is a fundamental misunderstanding of the ecosystem. 
+The bears panicked on March 21 when Nvidia announced its "Quantum Day." They think Nvidia will crush QUBT. This is a fundamental misunderstanding of the ecosystem.
 
 Nvidia’s entry **validates the market.** When the king of AI moves into quantum, it signals that the commercialization "hockey stick" is starting. More importantly, QUBT isn't trying to build a general-purpose GPU; they are specialized in **thin-film lithium niobate (TFLN) technology**. This is high-performance hardware that AI giants often need to *integrate* into their systems. QUBT is a prime candidate for a partnership or acquisition by a company like Nvidia that needs the specialized photonics QUBT is currently manufacturing.
 
 ### 4. Reshoring & The "Tariff" Hedge
-The bear claims the "Liberation Day" tariffs will hurt QUBT. I argue the opposite. QUBT is headquartered in **Hoboken, NJ**, and is focusing on domestic manufacturing for its TFLN and photonics products. 
+The bear claims the "Liberation Day" tariffs will hurt QUBT. I argue the opposite. QUBT is headquartered in **Hoboken, NJ**, and is focusing on domestic manufacturing for its TFLN and photonics products.
 *   **The Bullish Twist:** High tariffs on foreign tech components make QUBT’s domestic production *more* attractive to U.S.-based defense and data center clients. QUBT is effectively a "Reshoring" play. As supply chains move away from China, a domestic quantum hardware manufacturer becomes a strategic national asset.
 
 ### 5. Technicals: The Long-Term Trend is Your Friend
-While the short-term 50-day SMA is bearish, the **200-day SMA at $4.89** remains the structural floor. The stock had a massive rally in late 2024, and this current consolidation is a healthy "reset" of the RSI (now at 46). We aren't in a death spiral; we are in a **base-building phase.** 
+While the short-term 50-day SMA is bearish, the **200-day SMA at $4.89** remains the structural floor. The stock had a massive rally in late 2024, and this current consolidation is a healthy "reset" of the RSI (now at 46). We aren't in a death spiral; we are in a **base-building phase.**
 
 Look at the **VWMA ($7.70)**. Yes, buyers are currently underwater, but that creates a "spring" effect. Once we clear the $7.45 resistance, the path to the analyst target of **$17.40** is wide open.
 
 ### Addressing the Bear Directly:
-To my bear colleagues: You focus on a P/S ratio of 3000x. If we were selling soap, you’d be right. But we are selling the **foundational hardware for the next era of computing.** In the early 2000s, Amazon’s metrics looked "insane." In the early 2010s, Nvidia’s metrics looked "speculative." 
+To my bear colleagues: You focus on a P/S ratio of 3000x. If we were selling soap, you’d be right. But we are selling the **foundational hardware for the next era of computing.** In the early 2000s, Amazon’s metrics looked "insane." In the early 2010s, Nvidia’s metrics looked "speculative."
 
 You call it a "valuation bubble." I call it the **price of admission for a generational shift.** With $166M+ in the bank and a proprietary hardware edge in TFLN, QUBT is the only small-cap in this space with the "survival capital" to see the other side of this macro volatility.
 
 **The Bottom Line:**
-The bear case is built on fear of the "now." The bull case is built on the reality of the "next." I’m holding for the $17.40 target because the fundamentals of their cash position and the strategic value of their hardware far outweigh the temporary noise of the April tariff shock. 
+The bear case is built on fear of the "now." The bull case is built on the reality of the "next." I’m holding for the $17.40 target because the fundamentals of their cash position and the strategic value of their hardware far outweigh the temporary noise of the April tariff shock.
 
 **Don't let short-term volatility blind you to a 2x-3x upside potential.** If it was good enough for the institutions at $12.25, it’s a steal at $6.85.
 
 ### Bear Researcher
 
-Bear Analyst: Look, I appreciate the optimism. It’s the same kind of "visionary" talk we heard during the 2021 SPAC boom and the dot-com bubble. But as a Bear Analyst, my job isn’t to trade on dreams—it’s to look at the cold, hard reality of the balance sheet and the tape. 
+Bear Analyst: Look, I appreciate the optimism. It’s the same kind of "visionary" talk we heard during the 2021 SPAC boom and the dot-com bubble. But as a Bear Analyst, my job isn’t to trade on dreams—it’s to look at the cold, hard reality of the balance sheet and the tape.
 
 You call QUBT a "liquidity fortress." I call it a **leaky bucket with a $3,200 entry fee.** Let’s break down why the bull case is built on sand.
 
 ### 1. The "Smart Money" Fallacy ($12.25 is an Anchor, Not a Floor)
-You mentioned the January private placement at $12.25 as a "sign of value." I’ve seen this movie before—most recently with the 2021-2022 EV and Green-Tech crash. Institutional entry prices are not "floors"; they are **traps**. 
+You mentioned the January private placement at $12.25 as a "sign of value." I’ve seen this movie before—most recently with the 2021-2022 EV and Green-Tech crash. Institutional entry prices are not "floors"; they are **traps**.
 
 If the "smart money" was so smart, why is the stock currently trading at **$6.85—a 44% loss for those institutions in just four months?** That’s not a dislocation; that’s a market-wide rejection of the valuation. Furthermore, these private placements often come with warrants or secondary terms that retail investors don't see. When the lock-up periods end or these funds need to rebalance, that $12.25 "floor" becomes a ceiling of overhead supply that will crush any attempt at a rally.
 
@@ -226,13 +226,13 @@ You’re excited about a projected $737 million in cash. Where do you think that
 For every dollar of "war chest" QUBT builds, they are slicing the pie thinner and thinner for existing shareholders. With an operating margin of **-112%**, they are spending $100 to make less than $1. That’s not a business; that’s a science project funded by shareholder dilution. My lesson from the 2000 fiber-optic crash: **Cash on hand is irrelevant if the burn rate is accelerating faster than the revenue scale.**
 
 ### 3. The Nvidia "Validation" is Actually an Execution Sentence
-You say Nvidia’s entry "validates" the market. History tells a different story. When a Goliath like Nvidia enters a niche space, they don't "partner" with small-caps; they **suffocate** them. 
-*   **The R&D Gap:** QUBT spent $20M on R&D last year. Nvidia spends billions. 
+You say Nvidia’s entry "validates" the market. History tells a different story. When a Goliath like Nvidia enters a niche space, they don't "partner" with small-caps; they **suffocate** them.
+*   **The R&D Gap:** QUBT spent $20M on R&D last year. Nvidia spends billions.
 *   **The Talent War:** In a recessionary "risk-off" environment, the top quantum physicists aren't going to stay at a pre-revenue firm in Hoboken when Nvidia offers stability and massive compute resources.
 QUBT’s TFLN technology might be great, but being "a prime candidate for acquisition" is a hope, not a strategy. Betting on an exit is a sign of a weak fundamental thesis.
 
 ### 4. The Tariff Myth: Costs Rise Faster Than Patriotism
-Your argument that the "Liberation Day" tariffs help QUBT because they are domestic ignores the reality of high-tech manufacturing. QUBT isn't mining its own raw materials in New Jersey. 
+Your argument that the "Liberation Day" tariffs help QUBT because they are domestic ignores the reality of high-tech manufacturing. QUBT isn't mining its own raw materials in New Jersey.
 The 17-22% tariffs will spike the cost of specialized sub-components and laboratory equipment that are only produced overseas. For a company already losing **$18M+ a year**, an increase in CapEx and supply chain costs is catastrophic. Domestic manufacturing doesn’t help you if your customers (who are facing 40% recession odds) are slashing their "experimental tech" budgets to survive the stagflation.
 
 ### 5. Technicals: The "Falling Knife" vs. The 200-Day SMA
@@ -241,11 +241,11 @@ You’re leaning on the **200-day SMA ($4.89)** as the "structural floor." If a 
 *   **MACD & RSI:** The MACD has crossed negative and the RSI is at 46 with *room to fall*. We haven't even hit "oversold" territory yet. There is no technical reason to buy this today.
 
 ### Reflection and Lessons Learned
-In the past, I’ve made the mistake of being "too early" on a bear call because I ignored high cash balances. I’ve learned that **liquidity only delays the inevitable if the P/S ratio is 3200x.** 
+In the past, I’ve made the mistake of being "too early" on a bear call because I ignored high cash balances. I’ve learned that **liquidity only delays the inevitable if the P/S ratio is 3200x.**
 
 Investing in QUBT at a $2.2B market cap with under $1M in revenue is the definition of "irrational exuberance." You’re paying for a future that has to go *perfectly* in a macro environment that is currently falling apart.
 
-**My Final Transaction Proposal: SELL/AVOID.** 
+**My Final Transaction Proposal: SELL/AVOID.**
 Wait for the dilution to settle and for revenue to actually cross the $10M mark before even considering this. Right now, you’re just paying for the institutions' exit liquidity.
 
 ### Research Manager
@@ -266,10 +266,10 @@ Here is the detailed investment plan and your strategic actions. First, immediat
 ## III. Trading Team Plan
 
 ### Trader
-Analysis of the investment plan for **QUBT** reveals a classic conflict between visionary potential and fundamental reality. 
+Analysis of the investment plan for **QUBT** reveals a classic conflict between visionary potential and fundamental reality.
 
 ### Fundamental Analysis
-The core issue with **QUBT** is the extreme disconnect between its market valuation and its commercial performance. With a market capitalization of approximately $2.2 billion against trailing revenue of just $682,000, the company is trading at a Price-to-Sales (P/S) ratio of over 3,000x. This is an unsustainable multiple, even in the high-growth quantum computing sector. 
+The core issue with **QUBT** is the extreme disconnect between its market valuation and its commercial performance. With a market capitalization of approximately $2.2 billion against trailing revenue of just $682,000, the company is trading at a Price-to-Sales (P/S) ratio of over 3,000x. This is an unsustainable multiple, even in the high-growth quantum computing sector.
 
 The "liquidity fortress" mentioned by bulls is indeed a double-edged sword. While the cash on hand provides a runway, it has been built through aggressive share dilution. For an investor, dilution at these levels means that even if the company eventually succeeds, the value per share is being systematically eroded.
 
@@ -288,29 +288,29 @@ FINAL TRANSACTION PROPOSAL: **SELL**
 
 ### Aggressive Analyst
 
-Aggressive Analyst: Look, I’ve listened to the Sell and Hold arguments, and frankly, it sounds like a recipe for mediocrity. While the conservative analysts are busy hyperventilating over a P/S ratio and the neutral crowd is waiting for a "perfect" technical signal that will only appear after the move has already happened, we are missing the most explosive growth opportunity in the quantum sector. 
+Aggressive Analyst: Look, I’ve listened to the Sell and Hold arguments, and frankly, it sounds like a recipe for mediocrity. While the conservative analysts are busy hyperventilating over a P/S ratio and the neutral crowd is waiting for a "perfect" technical signal that will only appear after the move has already happened, we are missing the most explosive growth opportunity in the quantum sector.
 
 Let’s start with this obsession over the P/S ratio. Evaluating a frontier technology play like QUBT based on current revenue is like trying to value the internet in 1992 by counting the number of modem sales. You don't buy QUBT for the $682,000 they made last year; you buy it for the $737 million in cash they’re projected to have by the end of 2025 and their leadership in thin-film lithium niobate technology. The fundamental report itself shows a Price-to-Book of 1.34. That is an absolute steal for a company holding this much intellectual property and hardware potential. You’re essentially buying the tech and the cash at cost, with the entire future of quantum computing thrown in as a free lottery ticket.
 
 To the trader calling this a "lottery ticket" and screaming about dilution: you’re missing the forest for the trees. That $100 million private placement at $12.25 wasn't "erosion"—it was a massive vote of confidence from institutional players who now own over 43% of the company. These aren't retail "bag holders"; these are sophisticated funds that understand the cost of building a domestic photonics powerhouse. That cash is a "war chest" that allows QUBT to play offense while everyone else is cowering from the "Liberation Day" tariffs. In fact, those tariffs are a competitive advantage. If the cost of importing specialized components spikes, QUBT’s domestic manufacturing focus becomes a massive moat against foreign competitors.
 
-And this fear of Nvidia? It’s completely backwards. Nvidia entering the space doesn't "suffocate" QUBT; it validates the entire industry and turns QUBT into one of the most attractive M&A targets on the board. Nvidia has the cash to buy QUBT with pocket change just to acquire their TFLN patents and photonics talent. By the time the "neutral" crowd waits for a break above the 200-day moving average, the buyout or the breakthrough will have already pushed this stock toward that $17.40 analyst target. 
+And this fear of Nvidia? It’s completely backwards. Nvidia entering the space doesn't "suffocate" QUBT; it validates the entire industry and turns QUBT into one of the most attractive M&A targets on the board. Nvidia has the cash to buy QUBT with pocket change just to acquire their TFLN patents and photonics talent. By the time the "neutral" crowd waits for a break above the 200-day moving average, the buyout or the breakthrough will have already pushed this stock toward that $17.40 analyst target.
 
-The technical report says we are above the 200-day SMA of $4.89. That is the only trend that matters. We are in a long-term structural bull market for this stock, and this "medium-term consolidation" is nothing more than a gift for those with the guts to buy the dip. Waiting for $6.16 to "save a few cents" is how you miss a 150% move to the upside. 
+The technical report says we are above the 200-day SMA of $4.89. That is the only trend that matters. We are in a long-term structural bull market for this stock, and this "medium-term consolidation" is nothing more than a gift for those with the guts to buy the dip. Waiting for $6.16 to "save a few cents" is how you miss a 150% move to the upside.
 
 Stop playing not to lose and start playing to win. The macro volatility and the Nvidia "shadow" have created a massive disconnect between the stock price and the company's $1.6 billion asset base. While you're "reallocating to resilient margins," the aggressive capital is going to snap up QUBT at these levels and ride it to the moon when the sector rotates back into risk-on mode. My call is a bold **BUY**. We don’t wait for the reversal; we anticipate it.
 
 ### Conservative Analyst
 
-Conservative Analyst: The aggressive stance we’re hearing is exactly how portfolios get decimated during a regime shift. Calling a $2.2 billion valuation for a company making less than a million dollars in revenue an "absolute steal" ignores the fundamental rule of risk management: you cannot value a business on cash you are burning through at a rate of $30 million a year. That "war chest" isn't a trophy; it's a countdown clock. While you're busy comparing this to the 1992 internet, I’m looking at the very real 2025 reality where recession odds have spiked to 40% and tariffs are about to gut the tech sector's margins. 
+Conservative Analyst: The aggressive stance we’re hearing is exactly how portfolios get decimated during a regime shift. Calling a $2.2 billion valuation for a company making less than a million dollars in revenue an "absolute steal" ignores the fundamental rule of risk management: you cannot value a business on cash you are burning through at a rate of $30 million a year. That "war chest" isn't a trophy; it's a countdown clock. While you're busy comparing this to the 1992 internet, I’m looking at the very real 2025 reality where recession odds have spiked to 40% and tariffs are about to gut the tech sector's margins.
 
 You mention the $12.25 private placement as a vote of confidence, but from where I sit as a risk analyst, that level is a disaster. Those institutional investors are currently sitting on a nearly 50% loss. They aren't "sophisticated support"; they are a massive wall of overhead supply. The second this stock sniffs $10 or $11, those funds will be tripping over each other to exit and salvage what’s left of their capital. That creates a ceiling that is almost impossible to break through in a "risk-off" environment.
 
 Furthermore, dismissing the Nvidia threat as "validation" is dangerously optimistic. When a titan with Nvidia’s R&D budget enters a niche market, they don't just validate it—they commoditize it. Relying on an M&A fairy tale to rescue a position is the antithesis of calculated investing. We don’t bet the firm’s assets on the hope that a competitor will bail us out, especially when that competitor can simply outspend us into irrelevance.
 
-And to the argument that we are in a "structural bull market" because we’re above the 200-day moving average: that average is down at $4.89. The stock is currently around $6.85. Are you seriously suggesting that a potential 28% drop to hit that "support" is a risk worth taking? In a conservative framework, a 28% loss isn't a "dip"—it’s a catastrophic failure of capital preservation. 
+And to the argument that we are in a "structural bull market" because we’re above the 200-day moving average: that average is down at $4.89. The stock is currently around $6.85. Are you seriously suggesting that a potential 28% drop to hit that "support" is a risk worth taking? In a conservative framework, a 28% loss isn't a "dip"—it’s a catastrophic failure of capital preservation.
 
-The data is screaming caution. We have a MACD that just turned negative, a price sliding below the 50-day average, and a global macro environment where tech is being sold first. The aggressive approach treats this like a lottery ticket, but my job is to ensure we aren't gambling with the firm's stability. If you want to "play to win," you first have to ensure you don't lose the ability to play at all. 
+The data is screaming caution. We have a MACD that just turned negative, a price sliding below the 50-day average, and a global macro environment where tech is being sold first. The aggressive approach treats this like a lottery ticket, but my job is to ensure we aren't gambling with the firm's stability. If you want to "play to win," you first have to ensure you don't lose the ability to play at all.
 
 Until this company can prove it can generate revenue that isn't a rounding error, and until the technicals stop flagging a medium-term breakdown, the only responsible move is to protect what we have. Selling now allows us to reallocate into assets that provide actual yields and resilient margins, rather than staying strapped to a speculative rocket that’s clearly losing altitude. My recommendation remains a firm **SELL**.
 
@@ -332,24 +332,24 @@ My recommendation is to hold the current position but tighten the leash. We shou
 **1. Rating:** Sell
 
 **2. Executive Summary:**
-*   **Entry Strategy/Action:** Immediately liquidate all existing long positions in QUBT at current market prices. Do not wait for a bounce to the VWAP of $7.70 or the lower Bollinger Band at $6.16. 
+*   **Entry Strategy/Action:** Immediately liquidate all existing long positions in QUBT at current market prices. Do not wait for a bounce to the VWAP of $7.70 or the lower Bollinger Band at $6.16.
 *   **Position Sizing:** Reduce portfolio exposure to 0%. Reallocate preserved capital toward companies with tangible earnings, positive free cash flow, and resilient pricing power.
-*   **Key Risk Levels:** Massive overhead supply and resistance exist from the $12.25 institutional private placement. Downside risk targets the 200-day moving average at $4.89; absolutely avoid the temptation to "catch the falling knife" at this level, as it signals fundamental repricing, not base-building. 
+*   **Key Risk Levels:** Massive overhead supply and resistance exist from the $12.25 institutional private placement. Downside risk targets the 200-day moving average at $4.89; absolutely avoid the temptation to "catch the falling knife" at this level, as it signals fundamental repricing, not base-building.
 *   **Time Horizon:** Immediate execution. QUBT is uninvestable for our portfolio until the company can prove commercial viability by crossing the $10 million threshold in actual, scaled revenues.
 
 **3. Investment Thesis:**
 After rigorously evaluating the aggressive, conservative, and neutral analysts' arguments alongside the transaction proposals, I am siding definitively with the bear camp. The fundamental reality of QUBT exposes it as a high-risk value trap masked by visionary narratives, requiring immediate liquidation.
 
 **The Illusion of the "Liquidity Fortress"**
-The aggressive analyst paints QUBT as a generational quantum opportunity, arguing that its projected cash balance and 1.34 Price-to-Book ratio offer a secure moat. However, as the conservative analyst and our trading team accurately highlighted, this "fortress" is built entirely on relentless, aggressive shareholder dilution. Valuing a company at $2.2 billion when it generates a microscopic $682,000 in trailing revenue—a Price-to-Sales multiple exceeding 3,000x—is sheer speculation. A massive cash balance means absolutely nothing if it requires systematic erosion of per-share value to maintain a $30 million annual cash burn. 
+The aggressive analyst paints QUBT as a generational quantum opportunity, arguing that its projected cash balance and 1.34 Price-to-Book ratio offer a secure moat. However, as the conservative analyst and our trading team accurately highlighted, this "fortress" is built entirely on relentless, aggressive shareholder dilution. Valuing a company at $2.2 billion when it generates a microscopic $682,000 in trailing revenue—a Price-to-Sales multiple exceeding 3,000x—is sheer speculation. A massive cash balance means absolutely nothing if it requires systematic erosion of per-share value to maintain a $30 million annual cash burn.
 
 **Overhead Supply vs. Institutional Support**
-The bull argument frames the recent $100 million institutional private placement at $12.25 as a vote of confidence and a solid floor. I fundamentally disagree. As the conservative analyst pointed out, those institutional buyers are currently sitting on near 50% losses. This dynamic creates a suffocating ceiling of overhead supply. Any upward momentum toward $10 or $11 will be met with intense selling pressure from underwater funds looking to break even, crushing the potential for a sustained rally. 
+The bull argument frames the recent $100 million institutional private placement at $12.25 as a vote of confidence and a solid floor. I fundamentally disagree. As the conservative analyst pointed out, those institutional buyers are currently sitting on near 50% losses. This dynamic creates a suffocating ceiling of overhead supply. Any upward momentum toward $10 or $11 will be met with intense selling pressure from underwater funds looking to break even, crushing the potential for a sustained rally.
 
 **Macro and Competitive Headwinds**
 While the aggressive analyst believes domestic manufacturing shields QUBT from "Liberation Day" tariffs, this ignores the reality of global photonics supply chains. QUBT remains highly exposed to spiking costs for imported specialized laboratory sub-components and raw materials. Furthermore, viewing Nvidia's entry into the quantum space as mere "validation" or a guaranteed M&A catalyst is dangerously naive. Nvidia is a suffocating competitor with infinite R&D capital; their entry is far more likely to commoditize the niche and outspend QUBT into irrelevance than to result in a charitable buyout.
 
 **Technical Breakdown and Past Reflections**
-The neutral analyst suggested holding out for a bounce at the $6.16 Bollinger Band or relying on the 200-day SMA at $4.89. Enduring a near 30% drawdown from current levels (~$6.85) to test support is a catastrophic failure of capital preservation. With the MACD turning negative and the price sliding below the 50-day average, the trend is decisively breaking down. 
+The neutral analyst suggested holding out for a bounce at the $6.16 Bollinger Band or relying on the 200-day SMA at $4.89. Enduring a near 30% drawdown from current levels (~$6.85) to test support is a catastrophic failure of capital preservation. With the MACD turning negative and the price sliding below the 50-day average, the trend is decisively breaking down.
 
 Reflecting on past decisions, I have learned the hard way that holding onto hyper-growth, pre-revenue tech stocks for too long based on massive Total Addressable Markets—while ignoring immediate financial decay—destroys portfolio alpha. We will not pay an astronomical premium for a science project in a macro environment that actively punishes high-cash-burn assets. Exit QUBT immediately.

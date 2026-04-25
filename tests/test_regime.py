@@ -55,7 +55,8 @@ class TestRegimeBreakdown(unittest.TestCase):
         port = pd.Series([mapping[r] for r in regimes], index=idx)
         ic = pd.Series([0.03 if r == "bull" else -0.01 for r in regimes], index=idx)
         median = pd.Series(
-            [mapping[r] * 0.5 for r in regimes], index=idx  # portfolio beats median
+            [mapping[r] * 0.5 for r in regimes],
+            index=idx,  # portfolio beats median
         )
         labels = pd.Series(regimes, index=idx)
         return port, ic, median, labels
@@ -83,16 +84,20 @@ class TestRegimeBreakdown(unittest.TestCase):
         port = pd.Series(
             np.concatenate(
                 [
-                    rng.normal(0.005, 0.01, n),   # bull
-                    rng.normal(-0.002, 0.015, n), # bear
-                    rng.normal(0.0002, 0.008, n), # flat
+                    rng.normal(0.005, 0.01, n),  # bull
+                    rng.normal(-0.002, 0.015, n),  # bear
+                    rng.normal(0.0002, 0.008, n),  # flat
                 ]
             ),
             index=idx,
         )
         ic = pd.Series(
             np.concatenate(
-                [rng.normal(0.05, 0.1, n), rng.normal(-0.02, 0.15, n), rng.normal(0.0, 0.1, n)]
+                [
+                    rng.normal(0.05, 0.1, n),
+                    rng.normal(-0.02, 0.15, n),
+                    rng.normal(0.0, 0.1, n),
+                ]
             ),
             index=idx,
         )

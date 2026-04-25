@@ -1,4 +1,5 @@
 """Tests for `alphalens analyze TICKER` subcommand."""
+
 import datetime as dt
 import unittest
 from unittest.mock import MagicMock, patch
@@ -55,12 +56,13 @@ class TestAnalyzeCommand(unittest.TestCase):
 
     @patch("alphalens_cli.commands.analyze.TradingAgentsGraph")
     @patch("alphalens_cli.commands.analyze.build_gemini_config")
-    def test_analyze_passes_gemini_config_to_graph(
-        self, mock_config, mock_graph_cls
-    ):
+    def test_analyze_passes_gemini_config_to_graph(self, mock_config, mock_graph_cls):
         from alphalens_cli.main import app
 
-        sentinel = {"llm_provider": "google", "deep_think_llm": "gemini-3.1-pro-preview"}
+        sentinel = {
+            "llm_provider": "google",
+            "deep_think_llm": "gemini-3.1-pro-preview",
+        }
         mock_config.return_value = sentinel
         mock_graph_cls.return_value.propagate.return_value = (None, "")
 

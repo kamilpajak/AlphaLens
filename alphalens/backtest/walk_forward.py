@@ -46,16 +46,17 @@ guards it.
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 
 from alphalens.backtest.cost_model import CostModel
-from alphalens.backtest.engine import BacktestReport, DailyResult
+from alphalens.backtest.engine import BacktestReport
 from alphalens.backtest.factor_analysis import run_carhart_attribution
 from alphalens.backtest.metrics import (
     max_drawdown,
@@ -64,7 +65,6 @@ from alphalens.backtest.metrics import (
     turnover_pct,
 )
 from alphalens.backtest.regime import classify_regime
-
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -81,16 +81,16 @@ class WindowResult:
     test_start: date
     test_end: date
     n_days: int
-    regime: str                            # majority bull/bear/flat within window
-    regime_reversed_within: bool           # bull↔bear transition inside the window
+    regime: str  # majority bull/bear/flat within window
+    regime_reversed_within: bool  # bull↔bear transition inside the window
     sharpe_gross: float
-    sharpe_moderate: float                 # after 100 bps annual flat drag
+    sharpe_moderate: float  # after 100 bps annual flat drag
     carhart_alpha_daily: float | None
     carhart_alpha_tstat: float | None
     ic_mean: float
     ic_tstat: float
-    max_drawdown: float                    # non-positive
-    turnover: float                        # top-N exit rate / N, averaged daily
+    max_drawdown: float  # non-positive
+    turnover: float  # top-N exit rate / N, averaged daily
     cumulative_return: float
 
 
@@ -123,13 +123,15 @@ class DistributionSummary:
     max_turnover: float
     q95_turnover: float
     # Momentum-crash indicator
-    momentum_crash_coincidence: float       # fraction of negative-Sharpe windows coinciding with regime reversal
+    momentum_crash_coincidence: (
+        float  # fraction of negative-Sharpe windows coinciding with regime reversal
+    )
 
 
 @dataclass(frozen=True)
 class GateVerdict:
     c1_pass: bool
-    c2_pass: bool | None                    # None = skipped (factors unavailable)
+    c2_pass: bool | None  # None = skipped (factors unavailable)
     c3_pass: bool
     c4_pass: bool
     c5_pass: bool
@@ -176,9 +178,7 @@ def generate_windows(
     return windows
 
 
-def slice_report_to_window(
-    baseline: BacktestReport, window: WindowSpec
-) -> BacktestReport:
+def slice_report_to_window(baseline: BacktestReport, window: WindowSpec) -> BacktestReport:
     """Return a shallow copy of `baseline` with `daily_results` filtered to
     the window's date range (inclusive).
 
@@ -188,11 +188,7 @@ def slice_report_to_window(
     """
     start_ts = pd.Timestamp(window.test_start)
     end_ts = pd.Timestamp(window.test_end)
-    filtered = [
-        snap
-        for snap in baseline.daily_results
-        if start_ts <= snap.date <= end_ts
-    ]
+    filtered = [snap for snap in baseline.daily_results if start_ts <= snap.date <= end_ts]
     sliced = copy.copy(baseline)
     sliced.daily_results = filtered
     return sliced
@@ -317,9 +313,7 @@ def compute_window_metrics(
 # Stability metrics
 
 
-def block_return_autocorr(
-    daily_returns: pd.Series, block_days: int = 21
-) -> float:
+def block_return_autocorr(daily_returns: pd.Series, block_days: int = 21) -> float:
     """Lag-1 autocorrelation of non-overlapping `block_days`-day block sums.
 
     Per zen review: this replaces "windowed Sharpe autocorr" as the gate C3
@@ -342,9 +336,7 @@ def block_return_autocorr(
     # Sum daily returns within each block (approximation; exact would be
     # (1+r).cumprod() - 1, but for small daily returns sum is a close proxy
     # and simpler to reason about for autocorr).
-    block_returns = truncated.groupby(
-        np.arange(len(truncated)) // block_days
-    ).sum()
+    block_returns = truncated.groupby(np.arange(len(truncated)) // block_days).sum()
     if len(block_returns) < 2:
         return float("nan")
     return float(block_returns.autocorr(lag=1))
@@ -396,9 +388,7 @@ def run_walk_forward(
     results: list[WindowResult] = []
     for window in windows:
         sliced = slice_report_to_window(baseline, window)
-        results.append(
-            compute_window_metrics(sliced, window, benchmark_close, carhart)
-        )
+        results.append(compute_window_metrics(sliced, window, benchmark_close, carhart))
 
     summary = summarize_distribution(results, baseline)
     verdict = evaluate_gate(summary)
@@ -454,7 +444,9 @@ def summarize_distribution(
     negative_windows = [r for r in results if r.sharpe_gross < 0]
     crash_coincidence = 0.0
     if negative_windows:
-        crash_coincidence = sum(1 for r in negative_windows if r.regime_reversed_within) / len(negative_windows)
+        crash_coincidence = sum(1 for r in negative_windows if r.regime_reversed_within) / len(
+            negative_windows
+        )
 
     def _q(arr, q):
         return float(np.quantile(arr, q)) if len(arr) else 0.0
@@ -524,8 +516,7 @@ def evaluate_gate(summary: DistributionSummary) -> GateVerdict:
 
     c5_pass = summary.max_turnover < _THR_C5
     reasons["c5"] = (
-        f"max per-window turnover = {summary.max_turnover:.2%}"
-        f" (threshold < {_THR_C5:.0%})"
+        f"max per-window turnover = {summary.max_turnover:.2%} (threshold < {_THR_C5:.0%})"
     )
 
     gate_passes = [c1_pass, c3_pass, c4_pass, c5_pass]
@@ -539,15 +530,17 @@ def evaluate_gate(summary: DistributionSummary) -> GateVerdict:
     elif failed == 1:
         # Check if the single failure is within 10% of the threshold
         borderline = False
-        if not c1_pass and summary.fraction_sharpe_gt_0_5 >= _THR_C1 * 0.9:
-            borderline = True
-        elif c2_pass is False and summary.fraction_alpha_t_gt_1_5 is not None and summary.fraction_alpha_t_gt_1_5 >= _THR_C2 * 0.9:
-            borderline = True
-        elif not c3_pass and not np.isnan(ac) and ac < _THR_C3 * 1.1:
-            borderline = True
-        elif not c4_pass and summary.longest_negative_sharpe_stretch <= int(_THR_C4 * 1.1):
-            borderline = True
-        elif not c5_pass and summary.max_turnover < _THR_C5 * 1.1:
+        if (
+            (not c1_pass and summary.fraction_sharpe_gt_0_5 >= _THR_C1 * 0.9)
+            or (
+                c2_pass is False
+                and summary.fraction_alpha_t_gt_1_5 is not None
+                and summary.fraction_alpha_t_gt_1_5 >= _THR_C2 * 0.9
+            )
+            or (not c3_pass and not np.isnan(ac) and ac < _THR_C3 * 1.1)
+            or (not c4_pass and summary.longest_negative_sharpe_stretch <= int(_THR_C4 * 1.1))
+            or (not c5_pass and summary.max_turnover < _THR_C5 * 1.1)
+        ):
             borderline = True
         overall = "BORDERLINE" if borderline else "FAIL"
     else:
@@ -586,7 +579,10 @@ def _format_window_table(results: Sequence[WindowResult]) -> str:
 
 
 def _format_distribution_block(s: DistributionSummary) -> str:
-    lines = ["| Metric | min | Q25 | median | Q75 | max |", "| --- | ---: | ---: | ---: | ---: | ---: |"]
+    lines = [
+        "| Metric | min | Q25 | median | Q75 | max |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
     lines.append(
         f"| Sharpe gross | {s.sharpe_min:+.2f} | {s.sharpe_q25:+.2f} | "
         f"{s.sharpe_median:+.2f} | {s.sharpe_q75:+.2f} | {s.sharpe_max:+.2f} |"
@@ -600,12 +596,8 @@ def _format_distribution_block(s: DistributionSummary) -> str:
     lines.append(f"- Windows with Sharpe > 0.5: **{s.fraction_sharpe_gt_0_5:.0%}**")
     lines.append(f"- Windows with Sharpe > 1.0: **{s.fraction_sharpe_gt_1_0:.0%}**")
     if s.fraction_alpha_t_gt_1_5 is not None:
-        lines.append(
-            f"- Windows with Carhart α_t > 1.5: **{s.fraction_alpha_t_gt_1_5:.0%}**"
-        )
-        lines.append(
-            f"- Windows with Carhart α_t > 2.0: **{s.fraction_alpha_t_gt_2_0:.0%}**"
-        )
+        lines.append(f"- Windows with Carhart α_t > 1.5: **{s.fraction_alpha_t_gt_1_5:.0%}**")
+        lines.append(f"- Windows with Carhart α_t > 2.0: **{s.fraction_alpha_t_gt_2_0:.0%}**")
     lines.append(f"- Windows with IC t-stat > 1.5: **{s.fraction_ic_t_gt_1_5:.0%}**")
     return "\n".join(lines)
 
@@ -619,24 +611,22 @@ def _format_stability_block(s: DistributionSummary) -> str:
         f"- **Longest contiguous negative-Sharpe stretch**: {s.longest_negative_sharpe_stretch} windows",
     ]
     if s.dark_half_span:
-        lines.append(
-            f"  - Span: {s.dark_half_span[0]} → {s.dark_half_span[1]}"
-        )
+        lines.append(f"  - Span: {s.dark_half_span[0]} → {s.dark_half_span[1]}")
     lines.append(
         f"- **Momentum-crash coincidence**: {s.momentum_crash_coincidence:.0%} "
         f"of negative-Sharpe windows overlap a benchmark regime reversal"
     )
-    lines.append(
-        f"- **Turnover**: max {s.max_turnover:.0%}, Q95 {s.q95_turnover:.0%}"
-    )
+    lines.append(f"- **Turnover**: max {s.max_turnover:.0%}, Q95 {s.q95_turnover:.0%}")
     return "\n".join(lines)
 
 
 def _format_gate_block(v: GateVerdict) -> str:
     lines = ["## Decision gate", ""]
+
     def line(key: str, pass_flag: bool | None) -> str:
         mark = "PASS" if pass_flag else ("N/A" if pass_flag is None else "FAIL")
         return f"- **{key.upper()}**: {mark} — {v.reasons[key]}"
+
     lines.append(line("c1", v.c1_pass))
     lines.append(line("c2", v.c2_pass))
     lines.append(line("c3", v.c3_pass))
@@ -647,9 +637,7 @@ def _format_gate_block(v: GateVerdict) -> str:
     return "\n".join(lines)
 
 
-def _interpret_walk_forward(
-    report: WalkForwardReport, verdict: GateVerdict
-) -> str:
+def _interpret_walk_forward(report: WalkForwardReport, verdict: GateVerdict) -> str:
     s = report.summary
     if verdict.overall == "PASS":
         return (

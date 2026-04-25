@@ -6,7 +6,9 @@ from pathlib import Path
 def _mk_bar(d, price, vol=1000):
     from alphalens.screeners.lean.lean_csv_writer import DailyBar
 
-    return DailyBar(date=d, open=price, high=price * 1.01, low=price * 0.99, close=price, volume=vol)
+    return DailyBar(
+        date=d, open=price, high=price * 1.01, low=price * 0.99, close=price, volume=vol
+    )
 
 
 def _prime_dir(tmpdir: Path, tickers_to_bars: dict[str, list]) -> Path:
@@ -39,7 +41,9 @@ class TestLoadLeanHistories(unittest.TestCase):
         histories = load_lean_histories(self.dir, ["AAPL", "MSFT"])
         self.assertEqual(sorted(histories.keys()), ["AAPL", "MSFT"])
         self.assertEqual(len(histories["AAPL"]), 2)
-        self.assertEqual(list(histories["AAPL"].columns), ["open", "high", "low", "close", "volume"])
+        self.assertEqual(
+            list(histories["AAPL"].columns), ["open", "high", "low", "close", "volume"]
+        )
 
     def test_unknown_ticker_skipped(self):
         from alphalens.screeners.lean.lean_csv_loader import load_lean_histories

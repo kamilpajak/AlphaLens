@@ -4,8 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from alphalens.config_gemini import build_gemini_config
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+from alphalens.config_gemini import build_gemini_config
 
 config = build_gemini_config()
 

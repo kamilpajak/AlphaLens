@@ -1,8 +1,8 @@
 # Fundamental Analysis Report: Kratos Defense & Security Solutions, Inc. (KTOS)
-**Date:** October 20, 2023  
-**Ticker:** KTOS  
-**Sector:** Industrials  
-**Industry:** Aerospace & Defense  
+**Date:** October 20, 2023
+**Ticker:** KTOS
+**Sector:** Industrials
+**Industry:** Aerospace & Defense
 
 ---
 

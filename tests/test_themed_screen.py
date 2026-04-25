@@ -62,8 +62,10 @@ class TestThemedPipelineToCandidates(unittest.TestCase):
         from alphalens.screeners.themed.pipeline import ThemedPipeline
 
         df = pd.DataFrame(
-            [{"ticker": f"T{i}", "momentum_score": 1.0 - i * 0.1, "themes": ["X"]}
-             for i in range(5)]
+            [
+                {"ticker": f"T{i}", "momentum_score": 1.0 - i * 0.1, "themes": ["X"]}
+                for i in range(5)
+            ]
         )
         candidates = ThemedPipeline().to_candidates(df, weighting="equal")
         weights = [c.payload["weight"] for c in candidates]
@@ -96,9 +98,7 @@ class TestThemedScreenCLIAnalyzeFlag(unittest.TestCase):
         {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c"},
         clear=False,
     )
-    def test_analyze_flag_submits_candidates_to_queue(
-        self, _mock_telegram, mock_queue_path
-    ):
+    def test_analyze_flag_submits_candidates_to_queue(self, _mock_telegram, mock_queue_path):
         from alphalens_cli.commands.themed import themed_app
 
         mock_queue_path.return_value = self.db
@@ -109,7 +109,15 @@ class TestThemedScreenCLIAnalyzeFlag(unittest.TestCase):
         ):
             result = self.runner.invoke(
                 themed_app,
-                ["screen", "--scorer", "momentum", "--top-n", "2", "--analyze", "--dry-run"],
+                [
+                    "screen",
+                    "--scorer",
+                    "momentum",
+                    "--top-n",
+                    "2",
+                    "--analyze",
+                    "--dry-run",
+                ],
             )
 
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
@@ -130,9 +138,7 @@ class TestThemedScreenCLIAnalyzeFlag(unittest.TestCase):
         {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c"},
         clear=False,
     )
-    def test_without_analyze_flag_queue_stays_empty(
-        self, _mock_telegram, mock_queue_path
-    ):
+    def test_without_analyze_flag_queue_stays_empty(self, _mock_telegram, mock_queue_path):
         from alphalens_cli.commands.themed import themed_app
 
         mock_queue_path.return_value = self.db
@@ -187,9 +193,7 @@ class TestThemedScreenQueueFailureTelegramFallback(unittest.TestCase):
         {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c"},
         clear=False,
     )
-    def test_queue_failure_still_sends_telegram_with_alert(
-        self, mock_queue_cls, mock_telegram_cls
-    ):
+    def test_queue_failure_still_sends_telegram_with_alert(self, mock_queue_cls, mock_telegram_cls):
         from alphalens_cli.commands.themed import themed_app
 
         mock_queue_cls.side_effect = RuntimeError("database is locked")

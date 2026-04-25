@@ -19,8 +19,8 @@ Split into two conceptual tiers (per Perplexity's 2025-2026 guidance):
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -204,9 +204,7 @@ def decile_spread(
     return float(top_mean - bottom_mean)
 
 
-def hit_rate(
-    portfolio_returns: Sequence[float], universe_median_returns: Sequence[float]
-) -> float:
+def hit_rate(portfolio_returns: Sequence[float], universe_median_returns: Sequence[float]) -> float:
     """Fraction of days where the portfolio beats the universe median.
 
     Both inputs must align by date. NaN rows are dropped pairwise.
@@ -319,7 +317,7 @@ def summarise_portfolio(
     arr = np.asarray(list(daily_returns), dtype=float)
     arr = arr[~np.isnan(arr)]
     if len(arr) < 2:
-        return PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, int(len(arr)))
+        return PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, len(arr))
     cum = np.cumprod(1 + arr)
     years = len(arr) / periods_per_year
     annual = cum[-1] ** (1 / years) - 1 if years > 0 else 0.0
@@ -334,5 +332,5 @@ def summarise_portfolio(
         max_drawdown=max_drawdown(cum),
         calmar=calmar_ratio(daily_returns, periods_per_year=periods_per_year),
         hit_rate=hit,
-        days=int(len(arr)),
+        days=len(arr),
     )

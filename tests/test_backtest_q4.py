@@ -6,7 +6,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-
 SAMPLE_Q4_CSV = """\
 DATE,R_F,R_MKT,R_ME,R_IA,R_ROE,R_EG
 20200102,0.0054,0.8135,-0.3421,0.2100,-0.1500,0.0500
@@ -57,9 +56,7 @@ class TestLoadQ4Daily(unittest.TestCase):
         idx = pd.date_range(f"{year}-01-03", periods=5, freq="B")
         rows = ["DATE,R_F,R_MKT,R_ME,R_IA,R_ROE,R_EG"]
         for d in idx:
-            rows.append(
-                f"{d.strftime('%Y%m%d')},0.005,0.05,0.02,0.01,0.03,0.01"
-            )
+            rows.append(f"{d.strftime('%Y%m%d')},0.005,0.05,0.02,0.01,0.03,0.01")
         return "\n".join(rows) + "\n"
 
     def test_concatenates_cumulative_and_yearly_files(self):
@@ -67,9 +64,12 @@ class TestLoadQ4Daily(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             cache = Path(td)
+
             # Fetcher returns a distinct stubbed CSV per URL.
             def fetch(url):
-                if "daily.csv" in url and "_" not in url.rsplit("/", 1)[-1].replace("q5_factors_daily", ""):
+                if "daily.csv" in url and "_" not in url.rsplit("/", 1)[-1].replace(
+                    "q5_factors_daily", ""
+                ):
                     return self._synth_csv(2018)
                 # Yearly
                 for y in range(2019, 2025):
@@ -182,8 +182,7 @@ class TestQ4Attribution(unittest.TestCase):
         factors = self._synth_factors()
         rng = np.random.default_rng(17)
         portfolio = (
-            0.0002 + 0.5 * factors["Mkt-RF"] + factors["RF"]
-            + rng.normal(0, 0.005, len(factors))
+            0.0002 + 0.5 * factors["Mkt-RF"] + factors["RF"] + rng.normal(0, 0.005, len(factors))
         )
 
         result = run_q4_attribution(portfolio, factors)

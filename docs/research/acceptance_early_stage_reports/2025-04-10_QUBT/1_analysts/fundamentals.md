@@ -1,6 +1,6 @@
 # Fundamental Analysis Report: Quantum Computing Inc. (QUBT)
 
-**Date of Analysis:** April 10, 2025  
+**Date of Analysis:** April 10, 2025
 **Sector:** Technology | **Industry:** Computer Hardware
 
 ---

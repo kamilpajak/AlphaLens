@@ -28,9 +28,7 @@ class TestLoadFf5Umd(unittest.TestCase):
         from alphalens.backtest.factors import load_ff5_umd_daily
 
         # Integration-style: exercise the actual Dartmouth CSVs.
-        df = load_ff5_umd_daily(
-            start=date(2023, 1, 1), end=date(2023, 12, 31)
-        )
+        df = load_ff5_umd_daily(start=date(2023, 1, 1), end=date(2023, 12, 31))
 
         for col in ("Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom", "RF"):
             self.assertIn(col, df.columns)
@@ -53,10 +51,7 @@ class TestFf5UmdAttribution(unittest.TestCase):
         # Synthesize a portfolio return = 0.5 × Mkt-RF + RF + 2 bps/day alpha + noise
         rng = np.random.default_rng(7)
         portfolio = (
-            0.0002
-            + 0.5 * factors["Mkt-RF"]
-            + factors["RF"]
-            + rng.normal(0, 0.008, len(factors))
+            0.0002 + 0.5 * factors["Mkt-RF"] + factors["RF"] + rng.normal(0, 0.008, len(factors))
         )
 
         result = run_ff5_umd_attribution(portfolio, factors)

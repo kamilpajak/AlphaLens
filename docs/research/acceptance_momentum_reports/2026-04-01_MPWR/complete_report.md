@@ -108,9 +108,9 @@ While `MPWR`'s fundamentals are excellent, the current macroeconomic volatility 
 
 ### Fundamentals Analyst
 ### **Fundamental Analysis Report: Monolithic Power Systems, Inc. (MPWR)**
-**Date:** April 1, 2026  
-**Ticker:** MPWR  
-**Sector:** Technology | **Industry:** Semiconductors  
+**Date:** April 1, 2026
+**Ticker:** MPWR
+**Sector:** Technology | **Industry:** Semiconductors
 
 ---
 
@@ -121,7 +121,7 @@ Monolithic Power Systems (MPWR) continues to establish itself as a premier high-
 
 #### **2. Financial Performance Analysis**
 *   **Revenue Growth:** MPWR has demonstrated consistent top-line expansion. Annual revenue grew from **$1.82B in 2023** to **$2.79B in 2025**, representing a CAGR of approximately **23.8%**. Quarterly revenue growth remains strong at **20.8% YoY**.
-*   **Earnings & Margins:** 
+*   **Earnings & Margins:**
     *   **Net Income:** The 2024 net income of $1.78B was significantly inflated by a one-time tax benefit of ~$1.21B. Normalizing for this, the 2025 net income of **$615.9 million** represents a more accurate reflection of operational profitability.
     *   **Margins:** Operating margins are healthy at **26.6% (TTM)** with a gross profit margin of **55.2%**. The company’s ability to maintain these margins despite semiconductor cyclicality highlights its pricing power and high-value product mix.
 *   **Earnings per Share (EPS):** Current TTM EPS stands at **$12.82**. The forward P/E of **67.11** indicates that markets expect significant earnings expansion in the 2026-2027 fiscal years.
@@ -137,7 +137,7 @@ Monolithic Power Systems (MPWR) continues to establish itself as a premier high-
 
 #### **4. Cash Flow & Shareholder Returns**
 *   **Operating Cash Flow:** MPWR generated **$838.2 million** in operating cash flow in 2025, up from $788.4M in 2024.
-*   **Capital Allocation:** 
+*   **Capital Allocation:**
     *   **Dividends:** The company pays a dividend of **$6.24 per share** (yield ~0.42%). While low, the dividend payout has been increasing annually ($284.8M total in 2025 vs. $240.6M in 2024).
     *   **R&D Commitment:** R&D spending rose to **$382.3 million** in 2025 (approx. 13.7% of revenue), ensuring its product pipeline remains competitive in the high-stakes AI power module market.
 
@@ -180,19 +180,19 @@ Monolithic Power Systems (MPWR) continues to establish itself as a premier high-
 
 ### Bull Researcher
 
-Bull Analyst: Look, I understand why the bears are growling right now. When you see Brent crude hitting $115 and headlines dominated by geopolitical tensions in the Middle East, the natural instinct is to run for the "defensive" hills. But if you’re looking at **MPWR (Monolithic Power Systems)** and seeing a reason to sell, you’re missing the forest for the trees. 
+Bull Analyst: Look, I understand why the bears are growling right now. When you see Brent crude hitting $115 and headlines dominated by geopolitical tensions in the Middle East, the natural instinct is to run for the "defensive" hills. But if you’re looking at **MPWR (Monolithic Power Systems)** and seeing a reason to sell, you’re missing the forest for the trees.
 
 Let’s have a real conversation about why this "correction" is actually a gift-wrapped entry point for one of the most resilient growth stories in the semiconductor space.
 
 ### 1. The "Valuation Trap" Myth
-The bear case loves to harp on that triple-digit trailing P/E. But let’s be sophisticated analysts here: **valuation is a function of quality and trajectory.** 
+The bear case loves to harp on that triple-digit trailing P/E. But let’s be sophisticated analysts here: **valuation is a function of quality and trajectory.**
 
-MPWR isn't just another chip maker; they are the "arms dealer" for the power requirements of the AI revolution. You can have the fastest Nvidia or AMD GPUs in the world, but without MPWR’s high-performance power management modules, those chips are just expensive paperweights. 
+MPWR isn't just another chip maker; they are the "arms dealer" for the power requirements of the AI revolution. You can have the fastest Nvidia or AMD GPUs in the world, but without MPWR’s high-performance power management modules, those chips are just expensive paperweights.
 
 Our data shows a **Forward P/E of 67.11**, which tells you the market is already pricing in a massive earnings ramp-up. We’re seeing a **23.8% CAGR in revenue** since 2023. Show me another company with **zero long-term debt**, **$1.1 billion in cash**, and **55% gross margins** that isn't trading at a premium. You pay for quality, and MPWR is the "Goldman Sachs" of power management.
 
 ### 2. Addressing the "Risk-Off" Macro Noise
-The bears point to the U.S.-Iran conflict and the "higher-for-longer" rate environment. I get it—it’s scary. But look at the technicals from our April 1st report. While the S&P 500 has dropped for five straight weeks, MPWR just staged a **"Bollinger Bounce"** off the $1,000 psychological support level. 
+The bears point to the U.S.-Iran conflict and the "higher-for-longer" rate environment. I get it—it’s scary. But look at the technicals from our April 1st report. While the S&P 500 has dropped for five straight weeks, MPWR just staged a **"Bollinger Bounce"** off the $1,000 psychological support level.
 
 Think about that: in the face of a potential energy shock, the market stepped in aggressively at $1,000 to drive the price back to $1,093 in just 48 hours. That is not the behavior of a stock that people are "dumping." That is the behavior of institutional "smart money" (like Dakota Wealth and CCM) waiting for a discount to buy more. The **MACD Histogram has already turned positive**, signaling that the downward momentum has been exhausted. The bears are shouting into a megaphone while the bulls are quietly buying the dip.
 
@@ -203,16 +203,16 @@ The bears love to mention the $113 million in executive selling. Let’s be real
 The bears are worried about Google’s *TurboQuant* algorithm reducing memory needs, potentially lowering power demand. This is a fundamental misunderstanding of the AI hardware roadmap. As AI models become more efficient, we don’t use *less* power; we just pack *more compute* into the same space. The "Thermal Design Power" (TDP) of next-gen chips is only going up. MPWR’s ability to handle high-heat, high-density power management makes them *more* essential as AI models evolve, not less.
 
 ### Reflection and Strategy: Learning from the Past
-In the past, I’ve seen analysts get caught off guard by ignoring macro shifts. I’m not doing that here. I acknowledge the $115 oil and the inflation fears. However, the lesson I’ve learned is that **secular winners outperform macro headwinds.** 
+In the past, I’ve seen analysts get caught off guard by ignoring macro shifts. I’m not doing that here. I acknowledge the $115 oil and the inflation fears. However, the lesson I’ve learned is that **secular winners outperform macro headwinds.**
 
-In 2022, people sold quality tech because of rate hikes, and they missed the 300% AI rally that followed. I won't make that mistake again. MPWR is currently trading at a **16% cushion above its 200-day SMA ($938)**. The long-term trend is undeniably up. 
+In 2022, people sold quality tech because of rate hikes, and they missed the 300% AI rally that followed. I won't make that mistake again. MPWR is currently trading at a **16% cushion above its 200-day SMA ($938)**. The long-term trend is undeniably up.
 
-**My Challenge to the Bear:** 
-If you’re so worried about the "high P/E," where are you going to put your money? Into utilities that grow at 3%? Into oil that’s pegged to a volatile conflict? 
+**My Challenge to the Bear:**
+If you’re so worried about the "high P/E," where are you going to put your money? Into utilities that grow at 3%? Into oil that’s pegged to a volatile conflict?
 
-I’ll take the company with a **20.8% YoY revenue growth**, **pristine balance sheet**, and a **monopoly-like position in AI power management**. The technicals say the bottom is in at $1,000. The fundamentals say we’re heading to the **$1,389 analyst target**. 
+I’ll take the company with a **20.8% YoY revenue growth**, **pristine balance sheet**, and a **monopoly-like position in AI power management**. The technicals say the bottom is in at $1,000. The fundamentals say we’re heading to the **$1,389 analyst target**.
 
-The "correction" is over. It’s time to buy. 
+The "correction" is over. It’s time to buy.
 
 **What’s your counter? Are you really going to bet against the backbone of the AI era because of a temporary spike in energy prices?**
 
@@ -223,27 +223,27 @@ Bear Analyst: Listen, I appreciate the optimism. Calling a 116x trailing P/E a "
 Let’s pull back the curtain on this "resilient" story and look at why MPWR is actually one of the most dangerous places to park capital right now.
 
 ### 1. The "Priced for Perfection" Problem
-You call the Forward P/E of 67.11 "sophisticated." I call it a hallucination. At a **116.29 trailing P/E**, MPWR isn't just trading at a premium; it’s trading at a valuation that assumes the company will literally never have a bad quarter, a supply chain hiccup, or a competitive threat. 
+You call the Forward P/E of 67.11 "sophisticated." I call it a hallucination. At a **116.29 trailing P/E**, MPWR isn't just trading at a premium; it’s trading at a valuation that assumes the company will literally never have a bad quarter, a supply chain hiccup, or a competitive threat.
 
 The PEG ratio of **2.42** clearly shows the stock is overvalued even relative to its high growth rates. In a "higher-for-longer" interest rate environment—which is exactly where we are with Brent crude at $115 and inflation reigniting—multiples like these don't just "compress"; they collapse. My lesson from the 2021-2022 tech wreck is this: **Quality doesn't save you when the starting price is astronomical.** If MPWR misses an EPS target by even a cent, or if guidance is even slightly "conservative," that $1,000 support level won't just break; it will disintegrate.
 
 ### 2. The "Dead Cat Bounce" vs. The Trend
-You’re celebrating a "Bollinger Bounce" off $1,000, but let’s look at the actual technical chart. MPWR is still trading **below its 50-day SMA ($1,117)**. That "bounce" you’re so excited about is a classic relief rally in a nascent downtrend. 
+You’re celebrating a "Bollinger Bounce" off $1,000, but let’s look at the actual technical chart. MPWR is still trading **below its 50-day SMA ($1,117)**. That "bounce" you’re so excited about is a classic relief rally in a nascent downtrend.
 
 The **MACD is still negative (-8.22)**. While the histogram is improving, the stock hasn’t actually reclaimed any major resistance. In fact, we’ve seen five consecutive weekly declines in the S&P 500. Betting on a high-beta stock (Beta: 1.48) to lead a recovery when the macro environment is shifting to "risk-off" and defensive sectors (Utilities/Healthcare) is a recipe for getting trapped. The "smart money" you mentioned? They’re the ones who sold the top, evidenced by the **$113 million in executive insider selling**.
 
 ### 3. Let's Talk About the "Arms Dealer" Risk
-You claim MPWR is essential for AI chips. I agree. But being an essential component makes you **hypersensitive to the supply chain.** 
+You claim MPWR is essential for AI chips. I agree. But being an essential component makes you **hypersensitive to the supply chain.**
 *   **The Helium Crisis:** The U.S.-Iran conflict isn't just about oil; it’s about the supply of industrial gases like helium, which is critical for semiconductor fabrication. If fabrication slows down because of a gas shortage, it doesn't matter how high the demand for AI is—the chips won't be made, and MPWR's power modules won't be sold.
 *   **The Efficiency Threat:** You dismissed Google’s *TurboQuant* algorithm, but you’re missing the point. It’s not just about "packing more compute"; it’s about the shift toward **custom silicon (ASICs)** and software-defined power optimization. As hyperscalers (Google, Amazon, Meta) move more toward in-house chip design, they gain the leverage to squeeze suppliers like MPWR on margins. MPWR’s 55% gross margin is a giant target on its back.
 
 ### 4. Responding to Your Challenge: Where Else?
-You asked where I’d put my money. I’d put it in **TIPS (Treasury Inflation-Protected Securities)** or high-yielding defensive sectors that actually benefit from the $115 oil price you’re trying to hand-wave away. 
+You asked where I’d put my money. I’d put it in **TIPS (Treasury Inflation-Protected Securities)** or high-yielding defensive sectors that actually benefit from the $115 oil price you’re trying to hand-wave away.
 
-In 2000 and 2008, the "secular growth" stories were the ones that fell the hardest because their valuations were built on the assumption of infinite stability. You’re betting on a "monopoly-like position" in an industry that is currently facing a literal war in its primary energy and logistics corridors. 
+In 2000 and 2008, the "secular growth" stories were the ones that fell the hardest because their valuations were built on the assumption of infinite stability. You’re betting on a "monopoly-like position" in an industry that is currently facing a literal war in its primary energy and logistics corridors.
 
 ### My Final Counter:
-You’re relying on a technical "bounce" and an AI narrative to justify a triple-digit P/E. But the fundamentals show **inventory levels rising to $564.6M** (tying up cash) and **insiders fleeing to the tune of $113M**. 
+You’re relying on a technical "bounce" and an AI narrative to justify a triple-digit P/E. But the fundamentals show **inventory levels rising to $564.6M** (tying up cash) and **insiders fleeing to the tune of $113M**.
 
 If the executives who run the company don't think the stock is a "buy" at these levels, why should we? This isn't a "gift-wrapped entry point"—it's a "bull trap" being set by people who need liquidity to get out before the macro reality catches up to the valuation.
 
@@ -252,23 +252,23 @@ If the executives who run the company don't think the stock is a "buy" at these 
 ### Research Manager
 After closely listening to both the bull and bear arguments today, I have made my decision. We are going to align with the bear analyst. My official recommendation for MPWR is a Sell.
 
-Let us walk through exactly why I am taking this stance and summarize the core of the debate. 
+Let us walk through exactly why I am taking this stance and summarize the core of the debate.
 
 The bull analyst made a spirited case, leaning heavily into MPWR's undeniably strong fundamentals as an arms dealer for the AI secular growth trend. They rightfully pointed out the company's pristine balance sheet with zero long-term debt, 1.1 billion dollars in cash, and robust 55 percent gross margins. They also highlighted a recent technical bounce off the 1,000 dollar psychological support level, arguing that the forward P/E of 67 already prices in explosive earnings growth, making this macro-driven correction a buying opportunity.
 
-However, the bear analyst brought forward a reality check that we simply cannot ignore in the current macroeconomic climate. The most compelling argument from the bear is the severe vulnerability of MPWR's valuation in a risk-off, higher-for-longer interest rate environment. With Brent crude sitting at 115 dollars, inflation and rate pressures are not going away. Paying a 116 trailing P/E and a forward P/E of over 67 for a stock with a 2.42 PEG ratio leaves absolutely zero room for error. 
+However, the bear analyst brought forward a reality check that we simply cannot ignore in the current macroeconomic climate. The most compelling argument from the bear is the severe vulnerability of MPWR's valuation in a risk-off, higher-for-longer interest rate environment. With Brent crude sitting at 115 dollars, inflation and rate pressures are not going away. Paying a 116 trailing P/E and a forward P/E of over 67 for a stock with a 2.42 PEG ratio leaves absolutely zero room for error.
 
 The bear also highlighted significant fundamental red flags that the bull tried to dismiss as noise: a ballooning inventory of 564.6 million dollars, combined with a massive 113 million dollars in executive insider selling. Furthermore, the supply chain risks involving critical semiconductor manufacturing materials like helium due to Middle East tensions, combined with the stock still trading below its 50-day moving average, strongly suggest the recent bounce is merely a relief rally in a broader downtrend.
 
-The rationale for my Sell decision boils down to the intersection of valuation and macroeconomics. MPWR might be a fantastic company, but at these multiples, it is priced for absolute perfection. In an environment where energy shocks are reigniting inflation fears, high-beta stocks trading at triple-digit multiples are the first to experience severe multiple compression. The rising inventory levels and heavy insider selling tell me that even management might be acknowledging a near-term peak. The macro risks currently outweigh the secular AI tailwinds for this specific stock. 
+The rationale for my Sell decision boils down to the intersection of valuation and macroeconomics. MPWR might be a fantastic company, but at these multiples, it is priced for absolute perfection. In an environment where energy shocks are reigniting inflation fears, high-beta stocks trading at triple-digit multiples are the first to experience severe multiple compression. The rising inventory levels and heavy insider selling tell me that even management might be acknowledging a near-term peak. The macro risks currently outweigh the secular AI tailwinds for this specific stock.
 
-Here are the strategic actions I want you to execute. 
+Here are the strategic actions I want you to execute.
 
-First, if we currently hold long positions in MPWR, initiate a phased exit. Sell 50 percent of the position immediately at current market prices to lock in liquidity. Set tight trailing stop losses just below the recent 1,000 dollar support level for the remainder to protect against a sudden breakdown. 
+First, if we currently hold long positions in MPWR, initiate a phased exit. Sell 50 percent of the position immediately at current market prices to lock in liquidity. Set tight trailing stop losses just below the recent 1,000 dollar support level for the remainder to protect against a sudden breakdown.
 
-Second, absolutely do not initiate any new long positions and cancel any existing buy limit orders. 
+Second, absolutely do not initiate any new long positions and cancel any existing buy limit orders.
 
-Third, reallocate the freed-up capital into defensive sectors or short-duration Treasury Inflation-Protected Securities, to shelter our portfolio from the ongoing energy shock. 
+Third, reallocate the freed-up capital into defensive sectors or short-duration Treasury Inflation-Protected Securities, to shelter our portfolio from the ongoing energy shock.
 
 Finally, for our more aggressive accounts, look into buying out-of-the-money put options expiring in the next quarter to capitalize on potential multiple compression if the broader market downtrend continues.
 
@@ -331,7 +331,7 @@ The Aggressive Analyst dismisses the inventory buildup as an "arsenal," but in t
 
 Technically, you’re pointing to a "Bollinger Bounce" and a positive MACD histogram as a reason to "step on the gas." I see a stock that is still trading below its 50-day moving average and facing massive overhead resistance at $1,117. Relying on a short-term bounce off a psychological level like $1,000 while the broader S&P 500 has dropped for five consecutive weeks is the definition of catching a falling knife. The "relief rally" lacks volume and macro backing. If that $1,000 level fails—and with a Beta of 1.48, it very well could in a heartbeat—the drop to the 200-day SMA at $938 will be swift and painful.
 
-The Aggressive Analyst mocks the move to TIPS and defensive assets as a "fundamental misunderstanding." On the contrary, it is the only move that respects the current reality of the U.S.-Iran conflict and the resulting energy shock. High energy prices fuel inflation, which forces the Fed’s hand, which in turn kills the "AI narrative" premium. We aren't "playing not to lose"; we are ensuring that when the market eventually bottoms, we actually have the capital left to buy at sensible valuations. 
+The Aggressive Analyst mocks the move to TIPS and defensive assets as a "fundamental misunderstanding." On the contrary, it is the only move that respects the current reality of the U.S.-Iran conflict and the resulting energy shock. High energy prices fuel inflation, which forces the Fed’s hand, which in turn kills the "AI narrative" premium. We aren't "playing not to lose"; we are ensuring that when the market eventually bottoms, we actually have the capital left to buy at sensible valuations.
 
 The trader’s decision to sell 50% is actually the middle ground here. From a strict risk-preservation standpoint, I’d argue for a larger exit. Protecting gains is not "surrendering"; it is the disciplined execution of a strategy that prioritizes the firm's survival over speculative hope. We should proceed with the sell order, cancel the buy limits, and let the Aggressive Analyst chase the "rail" while we secure the floor.
 
@@ -347,7 +347,7 @@ The trader's original plan to sell 50% is too aggressive on the downside. It’s
 
 And let’s talk about that inventory. Conservative Analyst, you see it as a liability, but Aggressive Analyst, you see it as an arsenal. The truth is probably somewhere in the middle. It’s a hedge against the very supply chain disruptions the Middle East conflict might cause. If helium supplies get choked off, that inventory becomes MPWR’s greatest competitive advantage. We shouldn't treat it as a pure negative until we see demand actually slowing down, which the Q4 earnings beat suggests isn't happening yet.
 
-Instead of the trader's tight stop at $985, which is almost guaranteed to get triggered in a high-beta swing, we should look at the 200-day SMA at $938 as our ultimate line in the sand. That gives the stock room to breathe while still protecting us from a total breakdown. Selling 50% and buying put options simultaneously, as the trader suggested, is essentially double-hedging, which is expensive and inefficient. 
+Instead of the trader's tight stop at $985, which is almost guaranteed to get triggered in a high-beta swing, we should look at the 200-day SMA at $938 as our ultimate line in the sand. That gives the stock room to breathe while still protecting us from a total breakdown. Selling 50% and buying put options simultaneously, as the trader suggested, is essentially double-hedging, which is expensive and inefficient.
 
 Let's stop trying to predict if the world is ending or if we're going to the moon tomorrow. The most sustainable strategy here is a moderate trim to manage the immediate macro risk while keeping the core of the position intact to benefit from the very real technical recovery and the AI tailwinds that haven't changed. We don't need to exit the "high-speed rail," but we should probably check the brakes. Trim slightly, hold the rest, and move the stop-loss down to give the trade a chance to work.
 
@@ -358,18 +358,18 @@ Let's stop trying to predict if the world is ending or if we're going to the moo
 
 **Executive Summary**:
 *   **Action Strategy**: Initiate a phased exit from `MPWR`. Immediately sell 50% of any existing long positions at current market prices to lock in liquidity and protect capital. Absolutely no new long positions are to be initiated; cancel all existing buy limit orders.
-*   **Risk Management**: For the remaining 50% position, place a tight trailing stop-loss at $985 (just beneath the $1,000 psychological support level) to defend against a swift technical breakdown. 
+*   **Risk Management**: For the remaining 50% position, place a tight trailing stop-loss at $985 (just beneath the $1,000 psychological support level) to defend against a swift technical breakdown.
 *   **Capital Reallocation**: Redirect the freed-up capital into defensive sectors and short-duration Treasury Inflation-Protected Securities (TIPS) to shelter the portfolio from the ongoing energy-driven inflation shock.
 *   **Speculative Hedge**: For aggressive accounts, purchase out-of-the-money put options on `MPWR` expiring in the next quarter to capitalize on anticipated multiple compression.
 *   **Time Horizon**: Immediate execution for the equity sales and stop-losses, with a defensive posture targeted over the next quarter.
 
 **Investment Thesis**:
-After synthesizing the risk analysts' debate and reflecting on fundamental macroeconomic shifts, my decisive stance for `MPWR` is to align with the bear thesis. The core of this decision stems from a critical lesson learned in previous market cycles: we must never confuse a great company with a great stock, especially when the macroeconomic regime is hostile. 
+After synthesizing the risk analysts' debate and reflecting on fundamental macroeconomic shifts, my decisive stance for `MPWR` is to align with the bear thesis. The core of this decision stems from a critical lesson learned in previous market cycles: we must never confuse a great company with a great stock, especially when the macroeconomic regime is hostile.
 
 The Aggressive Analyst made a spirited case for `MPWR`'s secular tailwinds as a Tier-1 AI infrastructure arms dealer, pointing to its pristine balance sheet, zero long-term debt, $1.1 billion in cash, 20% year-over-year revenue growth, and robust 55% gross margins. However, at a trailing P/E of 116, a forward P/E of 67, and an extended PEG ratio of 2.42, `MPWR` is priced for absolute perfection. Valuations matter. In an environment where Brent crude is sitting at $115, energy shocks are reigniting inflation fears and cementing a "higher-for-longer" interest rate environment. As the Conservative Analyst correctly identified, elevated costs of capital aggressively discount the present value of future cash flows. Multiple compression does not care how revolutionary the underlying technology is.
 
-Furthermore, we cannot dismiss the glaring internal red flags as mere noise. A ballooning inventory of $564.6 million—a 34% year-over-year increase—paired with a massive $113 million in executive insider selling strongly suggests that management may be acknowledging a near-term peak. While the Aggressive and Neutral analysts attempted to frame this inventory buildup as a strategic "arsenal" against Middle East supply chain disruptions involving critical gases like helium, excess inventory in the semiconductor space is historically where margins go to die if demand cools. 
+Furthermore, we cannot dismiss the glaring internal red flags as mere noise. A ballooning inventory of $564.6 million—a 34% year-over-year increase—paired with a massive $113 million in executive insider selling strongly suggests that management may be acknowledging a near-term peak. While the Aggressive and Neutral analysts attempted to frame this inventory buildup as a strategic "arsenal" against Middle East supply chain disruptions involving critical gases like helium, excess inventory in the semiconductor space is historically where margins go to die if demand cools.
 
-Technically, `MPWR` remains highly vulnerable. The stock is trading below its 50-day moving average. While the Neutral Analyst noted a bullish MACD divergence and a textbook bounce off the $1,000 level, this relief rally lacks the requisite volume and macro tailwinds to confirm a sustained reversal. Giving a stock with a 1.48 Beta wide breathing room down to the 200-day SMA at $938, as the Neutral Analyst suggested, is an unacceptable risk. A breakdown below the $1,000 psychological support would likely trigger a swift cascade of institutional stop-losses. 
+Technically, `MPWR` remains highly vulnerable. The stock is trading below its 50-day moving average. While the Neutral Analyst noted a bullish MACD divergence and a textbook bounce off the $1,000 level, this relief rally lacks the requisite volume and macro tailwinds to confirm a sustained reversal. Giving a stock with a 1.48 Beta wide breathing room down to the 200-day SMA at $938, as the Neutral Analyst suggested, is an unacceptable risk. A breakdown below the $1,000 psychological support would likely trigger a swift cascade of institutional stop-losses.
 
 I have paid the price in the past for holding high-flying tech darlings under the assumption that their secular growth narratives would shield them from rising rates and commodity spikes. I will not repeat that mistake. The macroeconomic risks currently outweigh the secular AI tailwinds for `MPWR`. We are managing risk first and prioritizing capital preservation over speculative hope. Execute the phased exit immediately.

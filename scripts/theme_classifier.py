@@ -16,43 +16,90 @@ from dataclasses import dataclass
 # Semiconductors — tight set; 3674 is canonical.
 SEMIS_SIC = {"3674", "3679", "3559", "3827"}
 SEMIS_DESC_SUBSTRINGS = (
-    "semiconductor", "electronic component", "special industry machinery",
-    "optical instruments", "integrated circuit",
+    "semiconductor",
+    "electronic component",
+    "special industry machinery",
+    "optical instruments",
+    "integrated circuit",
 )
 SEMIS_NAME_KEYWORDS = (
-    "semiconductor", "semi ", " semi", "silicon", "wafer", "photomask",
+    "semiconductor",
+    "semi ",
+    " semi",
+    "silicon",
+    "wafer",
+    "photomask",
     "photon",  # caveat: photon can be biomed — we cross-check with SIC
 )
 
 # AI — mostly software; 7372 prepackaged software dominates.
 AI_SIC = {"7372", "7371", "7374", "7370", "3571"}
 AI_DESC_SUBSTRINGS = (
-    "prepackaged software", "computer programming", "data processing",
+    "prepackaged software",
+    "computer programming",
+    "data processing",
     "electronic computers",
 )
 AI_NAME_KEYWORDS = (
-    " ai ", " ai,", "ai)", "artificial intel", "machine lear", "deep lear",
-    "neural", "cogniti", "autonom", "robot", "soundhound", "upstart", "pegasyst",
-    "palantir", "c3.ai", "bigbear", "innodata", "applied digital", "core scient",
+    " ai ",
+    " ai,",
+    "ai)",
+    "artificial intel",
+    "machine lear",
+    "deep lear",
+    "neural",
+    "cogniti",
+    "autonom",
+    "robot",
+    "soundhound",
+    "upstart",
+    "pegasyst",
+    "palantir",
+    "c3.ai",
+    "bigbear",
+    "innodata",
+    "applied digital",
+    "core scient",
 )
 
 # Quantum — too niche for SIC alone; keyword-driven.
 QUANTUM_NAME_KEYWORDS = (
-    "quantum comput", "quantum corp", " qubit", "ionq", "rigetti", "d-wave",
-    "atomera", "formfactor",  # semicap-quantum adjacent
+    "quantum comput",
+    "quantum corp",
+    " qubit",
+    "ionq",
+    "rigetti",
+    "d-wave",
+    "atomera",
+    "formfactor",  # semicap-quantum adjacent
 )
 
 # Biotech — pharma + biologics + diagnostics. Therapeutics/Biosciences name tag is gold.
 BIOTECH_SIC = {"2834", "2836", "2835", "2833", "8731"}
 BIOTECH_DESC_SUBSTRINGS = (
-    "biological products", "pharmaceutical preparations", "in vitro",
-    "diagnostic substances", "medicinal chemicals",
+    "biological products",
+    "pharmaceutical preparations",
+    "in vitro",
+    "diagnostic substances",
+    "medicinal chemicals",
     "commercial physical & biological research",
 )
 BIOTECH_NAME_KEYWORDS = (
-    "therapeutics", "therapeutic ", "biosciences", "bioscience",
-    "pharmaceutic", "biopharm", "bio-", "genomics", "gene therap",
-    "immuno", "oncolog", "crispr", "gene editing", "rna ", "mrna",
+    "therapeutics",
+    "therapeutic ",
+    "biosciences",
+    "bioscience",
+    "pharmaceutic",
+    "biopharm",
+    "bio-",
+    "genomics",
+    "gene therap",
+    "immuno",
+    "oncolog",
+    "crispr",
+    "gene editing",
+    "rna ",
+    "mrna",
 )
 
 # Hard excludes — SICs we never want matched, even if name has keywords.
@@ -66,9 +113,13 @@ EXCLUDED_SIC = {
 }
 
 EXCLUDED_NAME_KEYWORDS = (
-    "spac", "acquisition corp", "holdings",  # SPACs
-    "trust", "fund", "reit",                 # funds/REITs
-    "royalty",                               # royalty companies
+    "spac",
+    "acquisition corp",
+    "holdings",  # SPACs
+    "trust",
+    "fund",
+    "reit",  # funds/REITs
+    "royalty",  # royalty companies
 )
 
 
@@ -157,7 +208,13 @@ if __name__ == "__main__":
         (None, None, "Quantum Computing Inc", "quantum", "medium"),
         ("6770", None, "Digital World Acquisition Corp", None, "none"),
         ("2836", "BIOLOGICAL PRODUCTS", "Taysha Gene Therapies", "biotech", "high"),
-        ("7372", "SERVICES-PREPACKAGED SOFTWARE", "Salesforce Inc", "ai", None),  # false positive risk
+        (
+            "7372",
+            "SERVICES-PREPACKAGED SOFTWARE",
+            "Salesforce Inc",
+            "ai",
+            None,
+        ),  # false positive risk
         ("3679", "ELECTRONIC COMPONENTS, NEC", "Vishay Intertechnology", "semis", "high"),
     ]
     for sic, desc, name, expected_theme, expected_conf in cases:

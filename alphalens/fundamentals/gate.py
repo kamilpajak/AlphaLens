@@ -15,7 +15,7 @@ NaN) is treated as "no information" → no penalty.
 from __future__ import annotations
 
 import math
-from typing import Mapping
+from collections.abc import Mapping
 
 
 def _is_valid(x) -> bool:

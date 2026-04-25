@@ -51,11 +51,11 @@ def _check_data_files(iwm_path: Path, cik_path: Path) -> None:
             "  .venv/bin/python -c 'from pathlib import Path; "
             "from alphalens.alt_data.sec_edgar_client import SecEdgarClient; "
             "from alphalens.alt_data.ticker_cik_refresher import refresh_ticker_cik_map; "
-            "refresh_ticker_cik_map(SecEdgarClient(user_agent=\"YOUR UA\"), "
-            f"Path(\"{_DEFAULT_CIK_MAP_PATH}\"))'\n"
+            'refresh_ticker_cik_map(SecEdgarClient(user_agent="YOUR UA"), '
+            f'Path("{_DEFAULT_CIK_MAP_PATH}"))\'\n'
             "  .venv/bin/python -c 'from pathlib import Path; "
             "from alphalens.alt_data.iwm_refresher import refresh_iwm_current; "
-            f"refresh_iwm_current(Path(\"{_DEFAULT_IWM_PATH}\"))'\n"
+            f'refresh_iwm_current(Path("{_DEFAULT_IWM_PATH}"))\'\n'
         )
         raise typer.BadParameter(hint)
 
@@ -72,12 +72,8 @@ def screen(
     report: Path = typer.Option(
         None, help="Write markdown report to this path (in addition to stdout/telegram)"
     ),
-    universe_file: Path = typer.Option(
-        _DEFAULT_IWM_PATH, help="IWM current snapshot yaml"
-    ),
-    cik_map_file: Path = typer.Option(
-        _DEFAULT_CIK_MAP_PATH, help="Ticker↔CIK map yaml"
-    ),
+    universe_file: Path = typer.Option(_DEFAULT_IWM_PATH, help="IWM current snapshot yaml"),
+    cik_map_file: Path = typer.Option(_DEFAULT_CIK_MAP_PATH, help="Ticker↔CIK map yaml"),
 ) -> None:
     """Scan IWM universe for Form 4 cluster buys; report top-N.
 
@@ -85,7 +81,6 @@ def screen(
     ≥3 distinct officers+directors within 30 days, code P (open-market),
     exclude 10b5-1 plans adopted ≥90 days before transaction.
     """
-    import pandas as pd
 
     from alphalens.alt_data.russell_universe import load_iwm_current
     from alphalens.alt_data.sec_edgar_client import SecEdgarClient
@@ -99,9 +94,7 @@ def screen(
     cik_map = TickerCikMap.load(cik_map_file)
     edgar = SecEdgarClient(user_agent=user_agent)
     _DEFAULT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    scorer = InsiderScorer(
-        edgar_client=edgar, ticker_cik_map=cik_map, cache_dir=_DEFAULT_CACHE_DIR
-    )
+    scorer = InsiderScorer(edgar_client=edgar, ticker_cik_map=cik_map, cache_dir=_DEFAULT_CACHE_DIR)
     pipeline = InsiderPipeline(
         scorer=scorer,
         universe_loader=lambda: load_iwm_current(universe_file),
@@ -124,7 +117,7 @@ def screen(
             with CandidateQueue(default_queue_path()) as queue:
                 submitted = queue.submit(pipeline.to_candidates(result))
             typer.echo(f"queued {submitted} insider candidate(s) for Layer 3")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             typer.echo(f"queue submit failed: {exc}", err=True)
 
     if dry_run or report is not None:
@@ -159,8 +152,10 @@ def _format_report(df, curr_date: _date) -> str:
     if df.empty:
         lines.append("No clusters detected in IWM universe today.")
         lines.append("")
-        lines.append("Cluster spec: ≥3 distinct officers+directors in 30 days, "
-                     "code P (open-market), exclude 10b5-1 plans ≥90 days old.")
+        lines.append(
+            "Cluster spec: ≥3 distinct officers+directors in 30 days, "
+            "code P (open-market), exclude 10b5-1 plans ≥90 days old."
+        )
         return "\n".join(lines)
     lines.append(f"**{len(df)} cluster event(s)** in IWM universe:")
     lines.append("")

@@ -1,6 +1,6 @@
 # Technical Analysis Report: BBAI (BigBear.ai Holdings, Inc.)
-**Date:** May 27, 2025  
-**Instrument:** BBAI  
+**Date:** May 27, 2025
+**Instrument:** BBAI
 **Current Price:** ~$3.64 - $3.82 range (based on latest data)
 
 ---
@@ -11,8 +11,8 @@ BBAI has exhibited a strong bullish recovery over the past month, successfully t
 ---
 
 ### **1. Trend Analysis: Bullish Confirmation**
-The price action for BBAI has turned decidedly positive. 
-- **Moving Averages:** The stock has reclaimed both the **50-day SMA ($3.19)** and the **200-day SMA ($3.05)**. Being above the 200-day SMA is a significant long-term bullish signal. 
+The price action for BBAI has turned decidedly positive.
+- **Moving Averages:** The stock has reclaimed both the **50-day SMA ($3.19)** and the **200-day SMA ($3.05)**. Being above the 200-day SMA is a significant long-term bullish signal.
 - **Golden Cross Potential:** The 50-day SMA ($3.18) is now above the 200-day SMA ($3.05), confirming a "Golden Cross." This is a classic indicator of a long-term trend reversal from bearish to bullish.
 - **Short-Term Response:** The **10-day EMA ($3.77)** is acting as immediate dynamic support, with price riding just above it. This indicates high responsiveness to recent buying interest.
 
@@ -30,7 +30,7 @@ The price action for BBAI has turned decidedly positive.
 
 ### **Actionable Insights for Traders**
 - **For New Positions (BUY):** Consider entering on a minor pullback towards the **Middle Bollinger Band (~$3.50)** or the **10-day EMA (~$3.77)** to optimize the risk/reward ratio, as the RSI is currently quite high.
-- **For Existing Positions (HOLD):** Maintain positions with a trailing stop-loss just below the **50-day SMA ($3.19)** or the **200-day SMA ($3.05)**. 
+- **For Existing Positions (HOLD):** Maintain positions with a trailing stop-loss just below the **50-day SMA ($3.19)** or the **200-day SMA ($3.05)**.
 - **Risk Management:** Watch for a failure to hold above $3.50, which could signal a retest of the $3.05-$3.15 support cluster.
 
 ---

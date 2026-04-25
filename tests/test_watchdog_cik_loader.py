@@ -61,6 +61,7 @@ class TestCIKLoader(unittest.TestCase):
         self.cache_path.write_text(json.dumps(FAKE_TICKERS_JSON))
         eight_days_ago = time.time() - (8 * 86400)
         import os
+
         os.utime(self.cache_path, (eight_days_ago, eight_days_ago))
 
         loader = CIKLoader(

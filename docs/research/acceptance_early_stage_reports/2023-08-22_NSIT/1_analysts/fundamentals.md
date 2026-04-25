@@ -11,7 +11,7 @@ Insight Enterprises, Inc. is a global provider of information technology (IT) ha
 #### **2. Financial Performance & Profitability**
 *   **Revenue Trends:** NSIT reported TTM revenue of **$8.25 billion**. While quarterly revenue growth showed a slight dip of **-1.2% YOY**, the company has demonstrated a consistent ability to generate massive volume.
 *   **Earnings Growth:** Despite the revenue headwind, NSIT achieved a remarkable **66.5% YOY growth in quarterly earnings**. This discrepancy suggests a significant improvement in operational efficiency or a shift toward higher-margin service contracts rather than just hardware distribution.
-*   **Margins:** 
+*   **Margins:**
     *   **Gross Margin:** Currently around **21.3%** (TTM Gross Profit $1.76B on $8.25B Revenue), showing improvement from historical levels (approx. 15.7% in 2022).
     *   **Operating Margin:** **7.08%**.
     *   **Profit Margin:** **1.91%**.

@@ -7,6 +7,7 @@ This script runs the same config through the upgraded attribution pipeline:
   CAPM → FF3 → Carhart-4F, all with Newey-West HAC standard errors.
 The Carhart row answers: does alpha survive once UMD (momentum factor) is in the RHS?
 """
+
 from __future__ import annotations
 
 import sys
@@ -17,20 +18,20 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from alphalens.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens.backtest.factor_analysis import (  # noqa: E402
+from alphalens.backtest.engine import BacktestEngine
+from alphalens.backtest.factor_analysis import (
     format_attribution_table,
     run_carhart_attribution,
     run_regression,
 )
-from alphalens.backtest.factors import load_carhart_daily, load_industry12_daily  # noqa: E402
-from alphalens.backtest.history_store import HistoryStore  # noqa: E402
-from alphalens.backtest.metrics import rank_ic_tstat, sharpe  # noqa: E402
-from alphalens.screeners.lean.config import DATA_DIR  # noqa: E402
-from alphalens.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
-from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter  # noqa: E402
-from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH  # noqa: E402
-from alphalens.screeners.themed.universe import flatten_universe  # noqa: E402
+from alphalens.backtest.factors import load_carhart_daily, load_industry12_daily
+from alphalens.backtest.history_store import HistoryStore
+from alphalens.backtest.metrics import rank_ic_tstat, sharpe
+from alphalens.screeners.lean.config import DATA_DIR
+from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter
+from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+from alphalens.screeners.themed.universe import flatten_universe
 
 START = date(2021, 4, 19)
 END = date(2026, 4, 17)
@@ -101,9 +102,13 @@ def main() -> None:
     full_factors = carhart_factors.join(industries_excess, how="inner")
 
     carhart_ind = run_regression(
-        returns, full_factors,
+        returns,
+        full_factors,
         factor_columns=[
-            "Mkt-RF", "SMB", "HML", "Mom",
+            "Mkt-RF",
+            "SMB",
+            "HML",
+            "Mom",
             *industries_excess.columns,
         ],
         spec_name="Carhart-4F + 12 Industries",
@@ -125,8 +130,10 @@ def main() -> None:
     print(f"  FF3 alpha t-stat              = {ff3.alpha_tstat:+.2f}")
     print(f"  Carhart-4F alpha t-stat       = {carhart.alpha_tstat:+.2f}  (with Mom factor)")
     print(f"  Carhart + 12 Ind alpha t-stat = {carhart_ind.alpha_tstat:+.2f}  (+ sector controls)")
-    print(f"  FF3 → Carhart → +Industries   = {ff3.alpha_annualized * 100:+.2f}% → "
-          f"{carhart.alpha_annualized * 100:+.2f}% → {carhart_ind.alpha_annualized * 100:+.2f}% ann")
+    print(
+        f"  FF3 → Carhart → +Industries   = {ff3.alpha_annualized * 100:+.2f}% → "
+        f"{carhart.alpha_annualized * 100:+.2f}% → {carhart_ind.alpha_annualized * 100:+.2f}% ann"
+    )
     print("")
     if carhart_ind.alpha_tstat > 2.0:
         verdict = "STRONG — alpha survives both Carhart AND industry controls. Edge is stock-specific, not sector timing or momentum factor."

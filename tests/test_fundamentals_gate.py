@@ -8,9 +8,7 @@ is used by the Guardrails layer to skip doomed tickers before scoring.
 
 from __future__ import annotations
 
-import math
 import unittest
-
 
 DEFAULT_CONFIG = {
     "fundamental_gate_enabled": True,
@@ -29,7 +27,7 @@ class TestFundamentalGateScore(unittest.TestCase):
         features = {
             "cash_runway_months": 36.0,
             "ps_ratio": 8.0,
-            "net_income_ttm": 5_000_000.0,   # profitable
+            "net_income_ttm": 5_000_000.0,  # profitable
             "consecutive_neg_ocf_quarters": 0,
         }
         self.assertEqual(fundamental_gate_score(features, DEFAULT_CONFIG), 1.0)
@@ -58,7 +56,7 @@ class TestFundamentalGateScore(unittest.TestCase):
         from alphalens.fundamentals.gate import fundamental_gate_score
 
         features = {
-            "cash_runway_months": 24.0,    # > 12 threshold
+            "cash_runway_months": 24.0,  # > 12 threshold
             "ps_ratio": 8.0,
             "net_income_ttm": 5_000_000.0,
             "consecutive_neg_ocf_quarters": 0,
@@ -83,17 +81,15 @@ class TestFundamentalGateScore(unittest.TestCase):
             "consecutive_neg_ocf_quarters": 0,
         }
         self.assertLess(fundamental_gate_score(preprofit, DEFAULT_CONFIG), 1.0)
-        self.assertAlmostEqual(
-            fundamental_gate_score(profitable, DEFAULT_CONFIG), 1.0, places=6
-        )
+        self.assertAlmostEqual(fundamental_gate_score(profitable, DEFAULT_CONFIG), 1.0, places=6)
 
     def test_all_red_flags_clipped_at_floor(self):
         from alphalens.fundamentals.gate import fundamental_gate_score
 
         features = {
-            "cash_runway_months": 4.0,             # just above hard-reject, below penalty_full
+            "cash_runway_months": 4.0,  # just above hard-reject, below penalty_full
             "ps_ratio": 500.0,
-            "net_income_ttm": -50_000_000.0,       # pre-profit
+            "net_income_ttm": -50_000_000.0,  # pre-profit
             "consecutive_neg_ocf_quarters": 12,
         }
         score = fundamental_gate_score(features, DEFAULT_CONFIG)

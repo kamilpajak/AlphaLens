@@ -17,11 +17,8 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-
 _ENABLED = os.environ.get("ALPHALENS_INTEGRATION") == "1"
-_USER_AGENT = os.environ.get(
-    "SEC_EDGAR_USER_AGENT", "AlphaLens research@example.com"
-)
+_USER_AGENT = os.environ.get("SEC_EDGAR_USER_AGENT", "AlphaLens research@example.com")
 
 
 @unittest.skipUnless(_ENABLED, "set ALPHALENS_INTEGRATION=1 to enable")

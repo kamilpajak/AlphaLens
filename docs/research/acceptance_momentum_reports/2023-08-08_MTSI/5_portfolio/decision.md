@@ -2,12 +2,12 @@
 
 2. **Executive Summary**:
 - **Entry Strategy**: Liquidate all existing long positions of MTSI immediately at current market levels (approximately $75.46) to lock in recent double-digit gains. Step away from the trade and do not chase this recent breakout with any new capital.
-- **Position Sizing**: Reduce MTSI exposure to 0% in the portfolio. 
-- **Key Risk Levels**: Set a new watch price at the $65 level, which aligns with the 50-day moving average and represents a logical zone for mean reversion. Disregard the near-term 10-day EMA at $72.17 as a safety net; if that level breaks, downward momentum could accelerate rapidly. 
+- **Position Sizing**: Reduce MTSI exposure to 0% in the portfolio.
+- **Key Risk Levels**: Set a new watch price at the $65 level, which aligns with the 50-day moving average and represents a logical zone for mean reversion. Disregard the near-term 10-day EMA at $72.17 as a safety net; if that level breaks, downward momentum could accelerate rapidly.
 - **Time Horizon**: Immediate execution for the sale. The timeline for potential re-entry is delayed for at least two quarters to evaluate the actual profit margins, capital expenditures, and integration costs tied to the Wolfspeed acquisition.
 
 3. **Investment Thesis**:
-As the Portfolio Manager, I have synthesized the debate regarding MTSI. While I acknowledge the profound technological shift highlighted by the Aggressive Analyst, my definitive conclusion aligns with the Conservative Analyst: we must strictly separate a great company from a poorly priced stock. 
+As the Portfolio Manager, I have synthesized the debate regarding MTSI. While I acknowledge the profound technological shift highlighted by the Aggressive Analyst, my definitive conclusion aligns with the Conservative Analyst: we must strictly separate a great company from a poorly priced stock.
 
 **Valuation Gravity and Integration Risk**
 The bull narrative centers on MTSI expanding its structural moat in mission-critical GaN-on-SiC technology via the $125 million Wolfspeed RF acquisition. However, the market has pulled years of future perfection into the current share price. A trailing P/E of over 126, a forward P/E of nearly 64, and a P/S ratio exceeding 20 are multiples reserved for asset-light software hyper-growth, not hardware-intensive semiconductor firms facing heavy capital expenditures. Furthermore, treating a major carve-out acquisition as an immediate, friction-less victory ignores the severe integration risks associated with merging manufacturing processes and teams.

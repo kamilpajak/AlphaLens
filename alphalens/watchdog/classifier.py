@@ -15,29 +15,29 @@ from .types import Event, FormType
 #   5.02(e)/(f) = compensation / salary — procedural
 # Extraction captures the subsection letter, so classifier routes precisely.
 HIGH_IMPACT_8K_ITEMS = {
-    "2.04",     # Triggering events for material financial obligation (Aharony -1.5 to -3%)
-    "4.02",     # Non-reliance on prior financial statements (Beneish -1.2 to -1.5%)
+    "2.04",  # Triggering events for material financial obligation (Aharony -1.5 to -3%)
+    "4.02",  # Non-reliance on prior financial statements (Beneish -1.2 to -1.5%)
     "5.02(b)",  # Principal officer termination
     "5.02(c)",  # Principal officer appointment
-    "5.03",     # Amendments to bylaws / fiscal year change
+    "5.03",  # Amendments to bylaws / fiscal year change
 }
 MEDIUM_IMPACT_8K_ITEMS = {
-    "1.01",     # Material definitive agreement (+0.3%, weak)
-    "1.02",     # Termination of material agreement (-0.5%, weak)
-    "2.01",     # Completion of acquisition
-    "3.02",     # Unregistered shares
-    "5.01",     # Change in control
-    "5.02",     # Bare 5.02 without subsection (rare; primary HTML parse miss)
+    "1.01",  # Material definitive agreement (+0.3%, weak)
+    "1.02",  # Termination of material agreement (-0.5%, weak)
+    "2.01",  # Completion of acquisition
+    "3.02",  # Unregistered shares
+    "5.01",  # Change in control
+    "5.02",  # Bare 5.02 without subsection (rare; primary HTML parse miss)
     "5.02(a)",  # Director resignation/removal
     "5.02(d)",  # Director election (non-annual)
 }
 LOW_IMPACT_8K_ITEMS = {
-    "2.02",     # Earnings release (priced in via press release)
+    "2.02",  # Earnings release (priced in via press release)
     "5.02(e)",  # Compensatory arrangements
     "5.02(f)",  # Salary/bonus determination
-    "7.01",     # Regulation FD disclosure
-    "8.01",     # Other events
-    "9.01",     # Financial statements and exhibits
+    "7.01",  # Regulation FD disclosure
+    "8.01",  # Other events
+    "9.01",  # Financial statements and exhibits
 }
 
 LARGE_INSIDER_BUY_USD = 500_000

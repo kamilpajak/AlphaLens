@@ -1,6 +1,6 @@
 ## Lumentum Holdings Inc. (LITE) Technical Analysis Report
 
-**Current Date:** 2024-11-25  
+**Current Date:** 2024-11-25
 **Current Price:** $89.09 (as of Nov 22 close)
 
 ### Executive Summary
@@ -13,7 +13,7 @@ Lumentum Holdings Inc. (`LITE`) is currently exhibiting a **strong bullish momen
 #### 1. Trend Analysis: Moving Averages (50 SMA, 200 SMA)
 *   **Close 50-day SMA:** $70.04
 *   **Close 200-day SMA:** $54.06
-*   **Observation:** `LITE` is trading significantly above both its 50-day and 200-day Simple Moving Averages. The price is ~27% above the 50 SMA and ~65% above the 200 SMA. This confirms a robust "Golden" market structure where the short-term trend is accelerating faster than the long-term trend. 
+*   **Observation:** `LITE` is trading significantly above both its 50-day and 200-day Simple Moving Averages. The price is ~27% above the 50 SMA and ~65% above the 200 SMA. This confirms a robust "Golden" market structure where the short-term trend is accelerating faster than the long-term trend.
 *   **Insight:** The wide gap between the current price and the 200 SMA suggests the stock is in a "parabolic" phase. While bullish, this increases the risk of a mean-reversion event if the trend exhausts.
 
 #### 2. Momentum Analysis: MACD & RSI
@@ -28,7 +28,7 @@ Lumentum Holdings Inc. (`LITE`) is currently exhibiting a **strong bullish momen
 
 #### 4. Volume-Weighted Analysis: VWMA
 *   **VWMA:** $83.07
-*   **Observation:** The Volume Weighted Moving Average (VWMA) is currently at $83.07. 
+*   **Observation:** The Volume Weighted Moving Average (VWMA) is currently at $83.07.
 *   **Insight:** Since the price is holding above the VWMA, we can conclude that the average buyer during this recent high-volume period is "in the money." The $83 level represents a critical "Value" zone. If the price retests this level, it is likely to act as strong support.
 
 ---

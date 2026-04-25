@@ -4,12 +4,12 @@ Bull Analyst: Look, I hear the bears loud and clear—they’re staring at a $14
 Here is why the bull case for PLXS is not just strong—it’s the most logical play in the current market.
 
 ### 1. The "Valuation Illusion": Focus on the Forward P/E
-Bears love to point at the Trailing P/E of ~37 and scream "overvalued." But that is a rearview mirror perspective. The **Forward P/E sits at an incredibly attractive 15.36**. 
+Bears love to point at the Trailing P/E of ~37 and scream "overvalued." But that is a rearview mirror perspective. The **Forward P/E sits at an incredibly attractive 15.36**.
 
 Think about what that tells you: the market is anticipating a massive acceleration in earnings over the next year. With net income already jumping from $111M to $172M (a 54% increase!), management is clearly optimizing operations. We are looking at a company that is successfully transitioning from a "stable builder" to a "profit-margin powerhouse." You don't sell a company right as its earnings are about to explode.
 
 ### 2. High-Moat Specialization: This Isn't Your Average EMS
-The bear argument often treats PLXS like a commodity consumer electronics manufacturer. That’s a mistake. Plexus focuses on **Medical, Aerospace, and Defense**. 
+The bear argument often treats PLXS like a commodity consumer electronics manufacturer. That’s a mistake. Plexus focuses on **Medical, Aerospace, and Defense**.
 *   **Sticky Revenue:** These sectors have high barriers to entry and massive regulatory hurdles. Once a customer like a major medical device maker or an aerospace firm integrates with Plexus, they don't leave.
 *   **AI Tailwind:** The "thawing" of investment dollars into AI-driven data centers isn't just for chipmakers. It requires the high-complexity networking hardware that Plexus excels at building. We are positioned to capture the hardware side of the AI revolution without the "bubble" pricing of the software giants.
 

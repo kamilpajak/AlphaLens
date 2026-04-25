@@ -106,14 +106,24 @@ class TestFundamentalScorerAll(unittest.TestCase):
         scorer = FundamentalScorer()
         fundamentals = {
             "GOOD": {
-                "trailingPE": 15, "pegRatio": 1.0, "returnOnEquity": 0.20,
-                "debtToEquity": 50, "totalDebt": 5e9, "ebitda": 1e10,
-                "earningsGrowth": 0.20, "marketCap": 3e12,
+                "trailingPE": 15,
+                "pegRatio": 1.0,
+                "returnOnEquity": 0.20,
+                "debtToEquity": 50,
+                "totalDebt": 5e9,
+                "ebitda": 1e10,
+                "earningsGrowth": 0.20,
+                "marketCap": 3e12,
             },
             "BAD": {
-                "trailingPE": 50, "pegRatio": 3.0, "returnOnEquity": 0.03,
-                "debtToEquity": 400, "totalDebt": 4e10, "ebitda": 1e9,
-                "earningsGrowth": -0.10, "marketCap": 5e9,
+                "trailingPE": 50,
+                "pegRatio": 3.0,
+                "returnOnEquity": 0.03,
+                "debtToEquity": 400,
+                "totalDebt": 4e10,
+                "ebitda": 1e9,
+                "earningsGrowth": -0.10,
+                "marketCap": 5e9,
             },
         }
         result = scorer.score_all(fundamentals)
@@ -134,7 +144,15 @@ class TestFundamentalScorerAll(unittest.TestCase):
 
         scorer = FundamentalScorer()
         result = scorer.score_all({"AAPL": {"trailingPE": 20}})
-        for col in ["ticker", "pe_score", "peg_score", "roe_score", "debt_score", "growth_score", "fundamental_score"]:
+        for col in [
+            "ticker",
+            "pe_score",
+            "peg_score",
+            "roe_score",
+            "debt_score",
+            "growth_score",
+            "fundamental_score",
+        ]:
             self.assertIn(col, result.columns, f"Missing column: {col}")
 
 

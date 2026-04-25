@@ -1,7 +1,7 @@
 ### **Protagonist Therapeutics, Inc. (PTGX) Fundamental Analysis Report**
-**Date:** March 18, 2025  
-**Ticker:** PTGX  
-**Sector:** Healthcare (Biotechnology)  
+**Date:** March 18, 2025
+**Ticker:** PTGX
+**Sector:** Healthcare (Biotechnology)
 
 ---
 
@@ -12,33 +12,33 @@ Protagonist Therapeutics (PTGX) is a clinical-stage biopharmaceutical company th
 
 #### **2. Financial Performance & Trends**
 
-*   **Revenue Volatility:** 
+*   **Revenue Volatility:**
     PTGX's revenue is highly dependent on partnership milestones. In **2024**, the company reported a record **$434.4 million** in revenue, leading to a net income of **$275.2 million**. This was largely attributed to milestones from its J&J partnership for JNJ-2113 (an oral IL-23 receptor antagonist). However, for the fiscal year ending **2025**, revenue normalized to **$46.0 million**, resulting in a net loss of **$130.1 million**.
 *   **Operating Expenses & Burn Rate:**
     The company continues to invest heavily in its pipeline. **Research & Development (R&D)** expenses rose to **$159.3 million** in 2025, up from $138.1 million in 2024. Despite the net loss, the operating cash flow in 2025 was a positive **$57.7 million**, bolstered by stock-based compensation and working capital adjustments.
-*   **Earnings Per Share (EPS):** 
+*   **Earnings Per Share (EPS):**
     The Diluted EPS (TTM) stands at **-$2.05**. However, the forward-looking sentiment remains positive, with a Forward P/E ratio of **25.25**, indicating that analysts expect a return to profitability as clinical milestones are met.
 
 ---
 
 #### **3. Balance Sheet & Liquidity**
 
-*   **Strong Cash Position:** 
-    As of December 31, 2025, PTGX boasts an exceptionally strong liquidity position with **$567.4 million** in cash and short-term investments ($128.4M cash + $439.0M short-term investments). 
-*   **Solvency:** 
+*   **Strong Cash Position:**
+    As of December 31, 2025, PTGX boasts an exceptionally strong liquidity position with **$567.4 million** in cash and short-term investments ($128.4M cash + $439.0M short-term investments).
+*   **Solvency:**
     The company has virtually no long-term debt (Short/Long Term Debt Total: $10.3M). With a total shareholder equity of **$614.7 million** and a high current ratio, the company has a "runway" of at least **2.5 to 3 years** at its current burn rate, even without further milestone payments.
-*   **Asset Growth:** 
+*   **Asset Growth:**
     Total assets grew significantly from $357.9M in 2023 to **$669.9M** in 2025, reflecting the successful monetization of its partnership assets.
 
 ---
 
 #### **4. Ownership & Market Sentiment**
 
-*   **Institutional Conviction:** 
+*   **Institutional Conviction:**
     Institutional ownership is remarkably high at **113.6%** (reflecting heavy indexing and synthetic positions), signaling extreme confidence from professional fund managers.
-*   **Analyst Ratings:** 
+*   **Analyst Ratings:**
     Wall Street is overwhelmingly bullish. Out of 12 analysts, **11 have a "Buy" or "Strong Buy" rating**, with a consensus price target of **$113.33**, representing nearly 10% upside from current levels.
-*   **Price Performance:** 
+*   **Price Performance:**
     The stock is currently trading near its 52-week high ($107.84), supported by a 50-day moving average of $95.13 and a 200-day moving average of $77.59.
 
 ---

@@ -1,4 +1,4 @@
-This report provides a comprehensive analysis of the macroeconomic landscape and its implications for **Krystal Biotech, Inc. (KRYS)** as of February 27, 2025. 
+This report provides a comprehensive analysis of the macroeconomic landscape and its implications for **Krystal Biotech, Inc. (KRYS)** as of February 27, 2025.
 
 ### **Executive Summary**
 The final week of February 2025 is characterized by divergent signals in Federal Reserve policy expectations, a rotation from mega-cap technology to value and mid-cap sectors, and heightened market volatility driven by shifting trade policies. For **KRYS**, a mid-cap leader in the gene therapy space, these conditions present a mix of valuation pressure from sustained interest rates and potential opportunities as investors seek outperforming mid-cap growth stories outside of the traditional "Magnificent Seven" tech stocks.
@@ -7,7 +7,7 @@ The final week of February 2025 is characterized by divergent signals in Federal
 
 ### **1. Global Macroeconomic Outlook**
 #### **Fed Policy and Interest Rate Uncertainty**
-Recent reports indicate a split in sentiment regarding the Federal Reserve's next moves. While some market segments have cheered recent rate cuts, **Bank of America CEO Brian Moynihan** recently stated expectations for the Fed to **hold rates steady through 2025 and into 2026** to combat persistent inflation. 
+Recent reports indicate a split in sentiment regarding the Federal Reserve's next moves. While some market segments have cheered recent rate cuts, **Bank of America CEO Brian Moynihan** recently stated expectations for the Fed to **hold rates steady through 2025 and into 2026** to combat persistent inflation.
 *   **Impact on KRYS:** As a biotechnology company whose valuation is heavily dependent on the present value of future cash flows, a "higher-for-longer" rate environment acts as a headwind for P/E expansion.
 
 #### **Geopolitical Volatility and Domestic Manufacturing**
@@ -27,7 +27,7 @@ While broad biotech indices have been quiet, leveraged ETFs in the sector have s
 ---
 
 ### **3. Krystal Biotech (KRYS) Strategic Outlook**
-Although specific news items for **KRYS** were absent from the immediate 7-day feed, the company is in a critical window (late February) typically associated with **Q4 earnings and 2025 guidance**. 
+Although specific news items for **KRYS** were absent from the immediate 7-day feed, the company is in a critical window (late February) typically associated with **Q4 earnings and 2025 guidance**.
 
 *   **Commercial Momentum:** The focus remains on the uptake of **Vyjuvek** for dystrophic epidermolysis bullosa (DEB). Any commentary on expanded access or international approvals (EMA/Japan) will be the primary driver for the stock.
 *   **Pipeline Catalysts:** Investors are awaiting updates on **KB407** (Cystic Fibrosis) and **KRX-0101** (Aesthetics). In a volatile market, pipeline diversification provides a safety net against single-product risk.

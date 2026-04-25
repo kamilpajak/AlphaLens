@@ -19,6 +19,7 @@ Primary interface:
 
 All factor values are assumed pre-converted to decimals by `factors.load_*`.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -30,14 +31,14 @@ import statsmodels.api as sm
 
 @dataclass(frozen=True)
 class AlphaResult:
-    spec_name: str                    # e.g. "CAPM", "FF3", "Carhart-4F", "Carhart-4F + BusEq"
+    spec_name: str  # e.g. "CAPM", "FF3", "Carhart-4F", "Carhart-4F + BusEq"
     alpha_daily: float
     alpha_annualized: float
-    alpha_tstat: float                # t-stat from cov_type (HAC by default)
-    betas: dict[str, float]           # one entry per factor in regression
+    alpha_tstat: float  # t-stat from cov_type (HAC by default)
+    betas: dict[str, float]  # one entry per factor in regression
     r_squared: float
     n_observations: int
-    cov_type: str                     # "HAC" | "nonrobust"
+    cov_type: str  # "HAC" | "nonrobust"
 
 
 def _newey_west_maxlags(n: int) -> int:
@@ -68,13 +69,9 @@ def run_regression(
     if subtract_rf and "RF" not in factors.columns:
         raise ValueError("factors DataFrame must contain an 'RF' column when subtract_rf=True")
 
-    aligned = pd.concat(
-        [portfolio_returns.rename("port"), factors], axis=1, join="inner"
-    ).dropna()
+    aligned = pd.concat([portfolio_returns.rename("port"), factors], axis=1, join="inner").dropna()
     if len(aligned) < 20:
-        raise ValueError(
-            f"Need at least 20 overlapping observations, got {len(aligned)}"
-        )
+        raise ValueError(f"Need at least 20 overlapping observations, got {len(aligned)}")
 
     y = aligned["port"] - aligned["RF"] if subtract_rf else aligned["port"]
     X = sm.add_constant(aligned[factor_columns])
@@ -97,7 +94,7 @@ def run_regression(
         alpha_tstat=float(model.tvalues["const"]),
         betas={col: float(model.params[col]) for col in factor_columns},
         r_squared=float(model.rsquared),
-        n_observations=int(len(aligned)),
+        n_observations=len(aligned),
         cov_type=cov_type,
     )
 
@@ -183,9 +180,7 @@ def run_rolling_regression(
     if subtract_rf and "RF" not in factors.columns:
         raise ValueError("factors DataFrame must contain an 'RF' column when subtract_rf=True")
 
-    aligned = pd.concat(
-        [portfolio_returns.rename("port"), factors], axis=1, join="inner"
-    ).dropna()
+    aligned = pd.concat([portfolio_returns.rename("port"), factors], axis=1, join="inner").dropna()
 
     y_full = aligned["port"] - aligned["RF"] if subtract_rf else aligned["port"]
     X_full = sm.add_constant(aligned[factor_columns])

@@ -18,6 +18,7 @@ Decision:
 
 Requires QUIVER_API_KEY env var (api.quiverquant.com, 1-month free trial with code TWITTER).
 """
+
 from __future__ import annotations
 
 import os
@@ -25,7 +26,6 @@ import sys
 from datetime import date
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import yaml
 from dotenv import load_dotenv
@@ -34,13 +34,12 @@ load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from alphalens.backtest.factor_analysis import format_attribution_table, run_regression  # noqa: E402
+from alphalens.backtest.factor_analysis import (  # noqa: E402
+    format_attribution_table,
+    run_regression,
+)
 from alphalens.backtest.factors import load_carhart_daily  # noqa: E402
 from alphalens.backtest.history_store import HistoryStore  # noqa: E402
-from alphalens.screeners.lean.config import DATA_DIR  # noqa: E402
-from alphalens.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
-from alphalens.screeners.themed.config import UNIVERSE_PATH  # noqa: E402
-from alphalens.screeners.themed.universe import flatten_universe  # noqa: E402
 from alphalens.quiver_screener.client import (  # noqa: E402
     fetch_congress_for_tickers,
     fetch_insiders_for_tickers,
@@ -49,6 +48,10 @@ from alphalens.quiver_screener.features import (  # noqa: E402
     build_congress_feature_panel,
     build_insider_feature_panel,
 )
+from alphalens.screeners.lean.config import DATA_DIR  # noqa: E402
+from alphalens.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
+from alphalens.screeners.themed.config import UNIVERSE_PATH  # noqa: E402
+from alphalens.screeners.themed.universe import flatten_universe  # noqa: E402
 
 START = date(2021, 4, 19)
 END = date(2026, 4, 17)
@@ -99,7 +102,9 @@ def main() -> None:
     api_key = os.environ.get("QUIVER_API_KEY")
     if not api_key:
         print("ERROR: QUIVER_API_KEY not set in environment (.env).")
-        print("Sign up at https://api.quiverquant.com with promo code TWITTER for 1-month free trial.")
+        print(
+            "Sign up at https://api.quiverquant.com with promo code TWITTER for 1-month free trial."
+        )
         print("Then add QUIVER_API_KEY=<your_key> to .env and re-run.")
         sys.exit(1)
 
@@ -133,12 +138,16 @@ def main() -> None:
     ret_panel = close_panel.pct_change().shift(-FORWARD_DAYS)  # next-day return
 
     # Build signal panel
-    print(f"Building congress_net_flow panel ({len(dates)} days × {len(tickers)} tickers, lookback={LOOKBACK_DAYS}d)…")
+    print(
+        f"Building congress_net_flow panel ({len(dates)} days × {len(tickers)} tickers, lookback={LOOKBACK_DAYS}d)…"
+    )
     signal_panel = build_congress_feature_panel(
         congress, tickers=tickers, dates=dates, lookback_days=LOOKBACK_DAYS, feature="net_flow"
     )
     active_share = (signal_panel != 0).mean().mean()
-    print(f"  signal density: {active_share * 100:.1f}% of (date, ticker) cells have non-zero signal")
+    print(
+        f"  signal density: {active_share * 100:.1f}% of (date, ticker) cells have non-zero signal"
+    )
 
     # Construct long-short factor
     print("\nConstructing Quiver long-short factor (top quintile − bottom quintile)…")
@@ -152,13 +161,16 @@ def main() -> None:
     print("\nRegressing Quiver factor return on Carhart-4F (HAC)…")
     # factor_ret is already a long-short (excess) return; don't subtract RF.
     res = run_regression(
-        factor_ret, carhart,
+        factor_ret,
+        carhart,
         factor_columns=["Mkt-RF", "SMB", "HML", "Mom"],
         spec_name="Quiver L/S ~ Carhart-4F",
         subtract_rf=False,
     )
     print(format_attribution_table([res]))
-    print(f"\n  beta[Mom] = {res.betas['Mom']:+.3f}  (|β|>0.3 → signal loads heavily on momentum → redundant)")
+    print(
+        f"\n  beta[Mom] = {res.betas['Mom']:+.3f}  (|β|>0.3 → signal loads heavily on momentum → redundant)"
+    )
 
     congress_t = res.alpha_tstat
     congress_ann = res.alpha_annualized * 100
@@ -197,7 +209,8 @@ def main() -> None:
     else:
         print("\nRegressing insider factor on Carhart-4F (HAC)…")
         ins_res = run_regression(
-            ins_factor, carhart,
+            ins_factor,
+            carhart,
             factor_columns=["Mkt-RF", "SMB", "HML", "Mom"],
             spec_name="Insider L/S ~ Carhart-4F",
             subtract_rf=False,
@@ -211,11 +224,15 @@ def main() -> None:
     print("\n" + "=" * 70)
     print("FINAL DECISION")
     print("=" * 70)
-    print(f"  Congress L/S:  α ann = {congress_ann:+.2f}%, t = {congress_t:+.2f} HAC, density {(signal_panel != 0).mean().mean() * 100:.1f}%")
+    print(
+        f"  Congress L/S:  α ann = {congress_ann:+.2f}%, t = {congress_t:+.2f} HAC, density {(signal_panel != 0).mean().mean() * 100:.1f}%"
+    )
     if ins_res is None:
         print("  Insider  L/S:  INSUFFICIENT_DATA (endpoint likely paywalled)")
     else:
-        print(f"  Insider  L/S:  α ann = {ins_res.alpha_annualized * 100:+.2f}%, t = {ins_res.alpha_tstat:+.2f} HAC, density {ins_density * 100:.1f}%")
+        print(
+            f"  Insider  L/S:  α ann = {ins_res.alpha_annualized * 100:+.2f}%, t = {ins_res.alpha_tstat:+.2f} HAC, density {ins_density * 100:.1f}%"
+        )
 
     def verdict(t: float) -> str:
         if t > 1.5:
@@ -227,13 +244,19 @@ def main() -> None:
         return "REVERSE-SIGNAL-OR-NOISE"
 
     print(f"\n  Congress verdict: {verdict(congress_t)}")
-    print(f"  Insider  verdict: {'INSUFFICIENT_DATA' if ins_res is None else verdict(ins_res.alpha_tstat)}")
+    print(
+        f"  Insider  verdict: {'INSUFFICIENT_DATA' if ins_res is None else verdict(ins_res.alpha_tstat)}"
+    )
 
     best_t = max([congress_t] + ([ins_res.alpha_tstat] if ins_res else []))
     if best_t > 1.5:
-        print("\n  → GO on whichever passed. Subscribe Hobbyist $10/mo, proceed to Phase 2 with that feature.")
+        print(
+            "\n  → GO on whichever passed. Subscribe Hobbyist $10/mo, proceed to Phase 2 with that feature."
+        )
     else:
-        print("\n  → KILL on both. No Quiver subscription. Document in project_quiver_validation.md.")
+        print(
+            "\n  → KILL on both. No Quiver subscription. Document in project_quiver_validation.md."
+        )
 
 
 if __name__ == "__main__":

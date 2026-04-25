@@ -13,8 +13,9 @@ Mirrors the themed pipeline contract: ``run(curr_date, top_n) -> DataFrame`` +
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
-from typing import Callable, Protocol
+from collections.abc import Callable
+from datetime import UTC, date, datetime
+from typing import Protocol
 
 import pandas as pd
 
@@ -52,16 +53,21 @@ class InsiderPipeline:
         for idx, ticker in enumerate(tickers, start=1):
             feat = self._scorer.features_as_of(ticker, curr_date)
             if feat:
-                rows.append({
-                    "ticker": ticker,
-                    "insider_count": feat["insider_count"],
-                    "aggregate_dollar": feat["aggregate_dollar"],
-                    "asof": feat.get("asof", curr_date.isoformat()),
-                })
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "insider_count": feat["insider_count"],
+                        "aggregate_dollar": feat["aggregate_dollar"],
+                        "asof": feat.get("asof", curr_date.isoformat()),
+                    }
+                )
             if idx % log_every == 0 or idx == total:
                 logger.info(
                     "insider scan %d/%d (%.0f%%) — %d clusters so far",
-                    idx, total, idx / total * 100, len(rows),
+                    idx,
+                    total,
+                    idx / total * 100,
+                    len(rows),
                 )
 
         if not rows:
@@ -73,19 +79,18 @@ class InsiderPipeline:
             .reset_index(drop=True)
         )
 
-    def to_candidates(
-        self, df: pd.DataFrame, weighting: str = "linear"
-    ) -> list[Candidate]:
+    def to_candidates(self, df: pd.DataFrame, weighting: str = "linear") -> list[Candidate]:
         if df.empty:
             return []
 
         try:
             from alphalens.backtest.weighting import compute_position_weights
+
             weights = compute_position_weights(len(df), weighting).tolist()
         except (ImportError, ValueError):
             weights = [1.0 / len(df)] * len(df)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         discriminator = now.date().isoformat()
 
         return [

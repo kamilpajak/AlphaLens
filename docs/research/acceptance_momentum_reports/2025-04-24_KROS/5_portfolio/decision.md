@@ -2,8 +2,8 @@
 
 **2. Executive Summary:**
 *   **Entry/Exit Strategy:** Execute an immediate exit of all long positions in KROS into the current speculative market liquidity. Absolutely do not initiate any new long positions at these levels. For accounts with an aggressive mandate, look to scale into a risk-managed short position or purchase put options dated a few months out to capitalize on a likely reversion to the mean once buyout hype deflates.
-*   **Position Sizing:** Reduce long exposure to 0%. 
-*   **Key Risk Levels:** The stock is currently hitting heavy technical resistance near the upper Bollinger Band of $15.46 and remains structurally trapped below its 200-day SMA of $35.88. Downside targets are the intermediate support at $12.00, with a catastrophic floor at $9.00 if the acquisition falls through. 
+*   **Position Sizing:** Reduce long exposure to 0%.
+*   **Key Risk Levels:** The stock is currently hitting heavy technical resistance near the upper Bollinger Band of $15.46 and remains structurally trapped below its 200-day SMA of $35.88. Downside targets are the intermediate support at $12.00, with a catastrophic floor at $9.00 if the acquisition falls through.
 *   **Time Horizon:** Immediate execution. We must exit before the speculative 60-day strategic review window closes and the reality of the company's depleted cash runway sets in.
 
 **3. Investment Thesis:**
@@ -13,6 +13,6 @@ The core of this decision is rooted in asymmetric risk and fundamental biotech v
 
 Furthermore, the technical setup flashes severe warning signs of exhaustion. Buying a stock with an RSI exceeding 71 solely on the rumor of a buyout is gambling. The stock remains in a long-term structural downtrend, trading well below its 200-day moving average of $35.88, and is heavily overbought as it tests resistance at $15.46. The Neutral Analyst noted that a retracement to $12.50 or lower is highly probable given the technical gravity.
 
-Looking back at my past mistakes in similar situations, I have learned the hard way that "chasing the M&A dragon" usually leads to severe capital destruction. I have previously fallen into the trap of confusing defensive corporate maneuvers—like poison pills and aggressive stock buybacks—for guaranteed buyout premiums. In reality, a poison pill is often a defensive shield indicating management's weakness, rather than a welcome mat for suitors. 
+Looking back at my past mistakes in similar situations, I have learned the hard way that "chasing the M&A dragon" usually leads to severe capital destruction. I have previously fallen into the trap of confusing defensive corporate maneuvers—like poison pills and aggressive stock buybacks—for guaranteed buyout premiums. In reality, a poison pill is often a defensive shield indicating management's weakness, rather than a welcome mat for suitors.
 
 If a buyer does not materialize within this speculative 60-day window, KROS will violently crash to its fundamental baseline of $9.00 because the company has halved the cash it desperately needs to survive the clinical "valley of death." We will not repeat the mistake of holding the bag when the rumor mill stops. We are selling into the current strength, locking in any speculative premium, and stepping aside to protect the portfolio from catastrophic downside risk.

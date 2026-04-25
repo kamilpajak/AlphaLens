@@ -82,9 +82,7 @@ class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):
 
         with patch(cik_loader_cls) as mock_cik, patch(portfolio_cls) as mock_portfolio:
             mock_cik.return_value.load = MagicMock()
-            mock_portfolio.load.return_value = MagicMock(
-                held=["AAPL"], watchlist=["MSFT"]
-            )
+            mock_portfolio.load.return_value = MagicMock(held=["AAPL"], watchlist=["MSFT"])
             from alphalens_cli.commands.watchdog import _build_watchdog
 
             try:
@@ -123,7 +121,11 @@ class TestRootTyperSubprocessSmoke(unittest.TestCase):
 
     def test_root_app_imports_cleanly(self):
         result = subprocess.run(
-            [sys.executable, "-c", "from alphalens_cli.main import app; assert app is not None"],
+            [
+                sys.executable,
+                "-c",
+                "from alphalens_cli.main import app; assert app is not None",
+            ],
             capture_output=True,
             text=True,
             timeout=30,

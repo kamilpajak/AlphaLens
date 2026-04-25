@@ -2,7 +2,7 @@
 
 2. **Executive Summary**:
    - **Entry Strategy**: Immediately liquidate any existing long positions in PEGA across all portfolios. We will not wait around for a "dead cat bounce" to salvage a few extra points. For aggressive, alpha-seeking accounts, authorize the initiation of short positions at current market levels.
-   - **Position Sizing**: Zero allocation for long strategies. Size short positions conservatively due to the stock's high volatility (ATR of 1.28) and the low float dynamics created by heavy insider ownership. 
+   - **Position Sizing**: Zero allocation for long strategies. Size short positions conservatively due to the stock's high volatility (ATR of 1.28) and the low float dynamics created by heavy insider ownership.
    - **Key Risk Levels**: Implement a strict stop-loss order on short positions just above the 50-day simple moving average of $23.83. This is a vital risk-mitigation tool to protect capital against sudden, irrational relief rallies often seen in heavily shorted tech stocks.
    - **Time Horizon**: Immediate execution. Take the proceeds from the PEGA liquidation and pivot immediately toward high-quality software names that exhibit fortress balance sheets, expanding top-line revenue, and positive operating cash flow.
 

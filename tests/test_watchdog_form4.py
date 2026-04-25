@@ -169,9 +169,7 @@ class TestForm4Parser(unittest.TestCase):
         result = parse_form4_xml(SAMPLE_FORM4_EXERCISE_ONLY)
         self.assertEqual(result["insider_action"], "EXERCISE")
         self.assertEqual(result["total_shares"], 2500.0)  # 2000 (M) + 500 (F)
-        self.assertAlmostEqual(
-            result["transaction_value_usd"], 2000 * 50 + 500 * 180
-        )
+        self.assertAlmostEqual(result["transaction_value_usd"], 2000 * 50 + 500 * 180)
 
     def test_parse_real_sell_overrides_exercise(self):
         """Mixed filing: real S sale + M exercise. Real market action is the signal —

@@ -108,10 +108,11 @@ class TestRun(unittest.TestCase):
 
 class TestToCandidates(unittest.TestCase):
     def test_empty_df_returns_empty_list(self):
-        from alphalens.screeners.insider.pipeline import InsiderPipeline
         import pandas as pd
 
-        pipeline = InsiderPipeline(scorer=MagicMock(), universe_loader=lambda: [])
+        from alphalens.screeners.insider.pipeline import InsiderPipeline
+
+        pipeline = InsiderPipeline(scorer=MagicMock(), universe_loader=list)
 
         candidates = pipeline.to_candidates(pd.DataFrame(columns=["ticker", "insider_count"]))
 
@@ -154,7 +155,7 @@ class TestSourceNaming(unittest.TestCase):
     def test_default_source_name_is_insider(self):
         from alphalens.screeners.insider.pipeline import InsiderPipeline
 
-        pipeline = InsiderPipeline(scorer=MagicMock(), universe_loader=lambda: [])
+        pipeline = InsiderPipeline(scorer=MagicMock(), universe_loader=list)
 
         self.assertEqual(pipeline.source_name, "insider")
 
@@ -163,7 +164,7 @@ class TestSourceNaming(unittest.TestCase):
 
         pipeline = InsiderPipeline(
             scorer=MagicMock(),
-            universe_loader=lambda: [],
+            universe_loader=list,
             source_name="insider-cluster",
         )
 

@@ -1,6 +1,5 @@
 import unittest
 
-import numpy as np
 import pandas as pd
 
 
@@ -103,13 +102,16 @@ class TestTechnicalScorerAll(unittest.TestCase):
         """Create a synthetic OHLCV DataFrame."""
         n = len(close_values)
         dates = pd.bdate_range(end="2024-01-15", periods=n)
-        return pd.DataFrame({
-            "Open": close_values,
-            "High": [c * 1.02 for c in close_values],
-            "Low": [c * 0.98 for c in close_values],
-            "Close": close_values,
-            "Volume": [volume] * n,
-        }, index=dates)
+        return pd.DataFrame(
+            {
+                "Open": close_values,
+                "High": [c * 1.02 for c in close_values],
+                "Low": [c * 0.98 for c in close_values],
+                "Close": close_values,
+                "Volume": [volume] * n,
+            },
+            index=dates,
+        )
 
     def test_score_all_returns_expected_columns(self):
         from alphalens.screeners.prescreener.technical_scorer import TechnicalScorer
@@ -119,7 +121,13 @@ class TestTechnicalScorerAll(unittest.TestCase):
         prices = self._make_price_df([100 + i * 0.5 for i in range(250)])
         price_data = {"AAPL": prices}
         result = scorer.score_all(price_data, ["AAPL"], "2024-01-15")
-        for col in ["ticker", "rsi_score", "trend_score", "adx_score", "technical_score"]:
+        for col in [
+            "ticker",
+            "rsi_score",
+            "trend_score",
+            "adx_score",
+            "technical_score",
+        ]:
             self.assertIn(col, result.columns)
 
     def test_uptrend_scores_higher_than_downtrend(self):

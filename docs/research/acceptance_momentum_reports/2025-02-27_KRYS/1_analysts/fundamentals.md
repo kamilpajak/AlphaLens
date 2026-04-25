@@ -1,6 +1,6 @@
 ### **Fundamental Analysis Report: Krystal Biotech, Inc. (KRYS)**
-**Date:** February 27, 2025  
-**Sector:** Healthcare | **Industry:** Biotechnology  
+**Date:** February 27, 2025
+**Sector:** Healthcare | **Industry:** Biotechnology
 
 ---
 
@@ -12,7 +12,7 @@ Krystal Biotech (KRYS) has successfully transitioned from a clinical-stage resea
 #### **2. Financial Performance Analysis**
 
 *   **Revenue Growth:** KRYS has achieved a rare trajectory in biotech. Revenue grew from $0 in 2022 to **$389.13 million** by the end of 2025. This 2024–2025 period alone saw a year-over-year revenue increase of approximately **17.5%**, underpinned by the successful commercial adoption of VYJUVEK.
-*   **Profitability & Margins:** 
+*   **Profitability & Margins:**
     *   **Net Income:** The company turned profitable in 2023 ($10.9M, aided by a voucher sale) and surged to **$204.83 million** in 2025.
     *   **Operating Margin:** TTM operating margin stands at a healthy **41.3%**, showcasing an efficient commercial infrastructure.
     *   **Earnings Per Share (EPS):** TTM EPS of **$6.83** reflects the high-margin nature of gene therapies.
@@ -25,7 +25,7 @@ Krystal Biotech (KRYS) has successfully transitioned from a clinical-stage resea
 KRYS maintains an exceptionally clean and liquid balance sheet, which is a significant competitive advantage in a high-interest-rate environment.
 
 *   **Cash Position:** Total cash and short-term investments reached **$496.3 million** as of Dec 31, 2025.
-*   **Total Assets vs. Liabilities:** Total assets stand at **$1.33 billion**, while total liabilities are a mere **$114.2 million**. 
+*   **Total Assets vs. Liabilities:** Total assets stand at **$1.33 billion**, while total liabilities are a mere **$114.2 million**.
 *   **Debt Profile:** The company is virtually debt-free, with no long-term debt and only minor capital lease obligations ($9.3M). This allows KRYS to self-fund its pipeline and potential M&A activity without share dilution.
 *   **Equity Growth:** Shareholder equity has grown steadily to **$1.22 billion**, reflecting retained earnings and a strong asset base.
 
@@ -40,7 +40,7 @@ KRYS maintains an exceptionally clean and liquid balance sheet, which is a signi
 
 #### **5. Market Valuation & Analyst Outlook**
 
-*   **Valuation Ratios:** 
+*   **Valuation Ratios:**
     *   **Trailing P/E:** 40.48
     *   **Forward P/E:** 47.39
     *   **Price-to-Sales (P/S):** 20.92

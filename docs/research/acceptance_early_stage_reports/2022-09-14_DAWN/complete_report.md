@@ -70,7 +70,7 @@ The biotechnology sector, represented by the XBI index, remains in what experts 
 *   **Recession Fears:** Falling global freight rates and slowing trade volumes (reported by S&P Global and the WTO) are increasing concerns of a global recession, which typically leads investors to rotate out of "risk-on" assets like clinical-stage biotechs.
 
 ### Instrument Analysis: DAWN (Day One Biopharmaceuticals)
-While no specific corporate news or clinical data updates for **DAWN** were captured in major feeds during the last seven days, the stock is heavily influenced by the aforementioned macro shifts. 
+While no specific corporate news or clinical data updates for **DAWN** were captured in major feeds during the last seven days, the stock is heavily influenced by the aforementioned macro shifts.
 *   **Conference Presentations:** **DAWN** presented at the Wells Fargo Healthcare Conference (Sept 7) and the H.C. Wainwright Global Investment Conference (Sept 12–14). These presentations generally reinforce the company's clinical progress in pediatric oncology, but such "soft" catalysts are currently overshadowed by macro volatility.
 *   **Valuation Pressure:** As a growth-oriented biotech, **DAWN**'s valuation is highly sensitive to the Nasdaq sell-off. The shock from the CPI report likely led to a significant pullback in the stock price as investors fled speculative assets.
 
@@ -94,8 +94,8 @@ FINAL TRANSACTION PROPOSAL: **SELL**
 
 ### Fundamentals Analyst
 ### Fundamental Analysis Report: Day One Biopharmaceuticals Inc. (DAWN)
-**Date:** September 14, 2022  
-**Ticker:** DAWN (NASDAQ)  
+**Date:** September 14, 2022
+**Ticker:** DAWN (NASDAQ)
 **Sector/Industry:** Healthcare / Biotechnology
 
 ---
@@ -108,7 +108,7 @@ As a clinical-stage biotech, DAWN does not currently generate product revenue. I
 
 *   **Revenue:** $0 (Consistent with clinical-stage status).
 *   **Net Loss:** For the quarter ended June 30, 2022, the company reported a net loss of **$36.53 million**, compared to **$27.75 million** in Q1 2022. This increasing loss reflects the ramp-up in clinical trial activities.
-*   **Operating Expenses:** 
+*   **Operating Expenses:**
     *   **Research & Development (R&D):** $22.56 million (Q2 2022). This is a significant portion of their spend, dedicated to advancing tovorafenib and other pipeline candidates.
     *   **Selling, General & Administrative (SG&A):** $14.16 million (Q2 2022).
 
@@ -146,47 +146,47 @@ DAWN maintains a very robust and "clean" balance sheet, which is a primary stren
 | **Institutional Ownership** | 85.49% | High professional conviction |
 | **Analyst Target Price** | $21.50 | ~20% upside from current levels |
 
-**FINAL TRANSACTION PROPOSAL: HOLD**  
+**FINAL TRANSACTION PROPOSAL: HOLD**
 DAWN is fundamentally sound with an exceptional cash runway and high institutional support. However, with the stock trading near its 52-week high and a "Hold" consensus from analysts, investors should maintain current positions and wait for pivotal clinical trial data before increasing exposure. For new traders, a pullback toward the 50-day moving average ($17.61) may offer a more attractive entry point.
 
 ## II. Research Team Decision
 
 ### Bull Researcher
 
-Bull Analyst: Look, I hear the panic in the room. The CPI print was a gut punch to the Nasdaq, and sure, if you’re looking at a 24-hour chart, the "Sell" button looks tempting. But as a Bull Analyst, I’m looking at the landscape for **Day One Biopharmaceuticals (DAWN)** and seeing a massive disconnect between macro-market hysteria and micro-company strength. 
+Bull Analyst: Look, I hear the panic in the room. The CPI print was a gut punch to the Nasdaq, and sure, if you’re looking at a 24-hour chart, the "Sell" button looks tempting. But as a Bull Analyst, I’m looking at the landscape for **Day One Biopharmaceuticals (DAWN)** and seeing a massive disconnect between macro-market hysteria and micro-company strength.
 
 Let’s stop reacting to the headlines for a second and look at the actual engine under the hood. Here is why the bear case is missing the forest for the trees.
 
 ### 1. The "Cash is King" Defense (Countering Macro Fears)
-The bear argument leans heavily on rising interest rates and the "bubble crunch." But let’s be real: rate hikes kill companies that need to tap the debt markets or dilute shareholders every six months to keep the lights on. 
+The bear argument leans heavily on rising interest rates and the "bubble crunch." But let’s be real: rate hikes kill companies that need to tap the debt markets or dilute shareholders every six months to keep the lights on.
 
-**DAWN is not that company.** With **$395 million in cash** and a burn rate that gives them a **three-year runway**, DAWN is essentially an island of stability in a stormy sea. They don't need to go hat-in-hand to the capital markets during this Fed hiking cycle. While other biotechs are facing "liquidity traps," DAWN has the luxury of time to let their clinical data mature. 
+**DAWN is not that company.** With **$395 million in cash** and a burn rate that gives them a **three-year runway**, DAWN is essentially an island of stability in a stormy sea. They don't need to go hat-in-hand to the capital markets during this Fed hiking cycle. While other biotechs are facing "liquidity traps," DAWN has the luxury of time to let their clinical data mature.
 
 ### 2. The Technical "Healthy Reset"
-The bears see a "sharp corrective phase" from $26 down to $23.75. I see a textbook **reversion to the mean**. 
+The bears see a "sharp corrective phase" from $26 down to $23.75. I see a textbook **reversion to the mean**.
 *   **The RSI has reset to 49.** We were overbought; now we’re neutral. This is exactly what you want to see before the next leg up.
-*   **Support is holding.** We are currently trading comfortably above the 50-day SMA ($21.72) and miles above the 200-day SMA ($15.00). 
+*   **Support is holding.** We are currently trading comfortably above the 50-day SMA ($21.72) and miles above the 200-day SMA ($15.00).
 *   **The Negative Beta Factor:** DAWN has a beta of **-1.75**. In a market where everything is correlated to the downside, DAWN has shown a historical tendency to move *independently*. If the Nasdaq continues to bleed, DAWN is precisely the kind of idiosyncratic growth story that institutional investors rotate into to hide from the carnage.
 
 ### 3. Tovorafenib: A Niche Powerhouse
-Let’s talk about why we’re here: **Tovorafenib (DAY101)**. This isn't just another "me-too" drug. It’s an oral, brain-penetrant Type II RAF inhibitor. The pediatric oncology market is underserved and desperate for innovation. 
-*   **Competitive Advantage:** Because they are targeting pediatric populations with high unmet needs, they are looking at potential **Breakthrough Therapy designations** and faster regulatory pathways. 
+Let’s talk about why we’re here: **Tovorafenib (DAY101)**. This isn't just another "me-too" drug. It’s an oral, brain-penetrant Type II RAF inhibitor. The pediatric oncology market is underserved and desperate for innovation.
+*   **Competitive Advantage:** Because they are targeting pediatric populations with high unmet needs, they are looking at potential **Breakthrough Therapy designations** and faster regulatory pathways.
 *   **Institutional Conviction:** You don’t get **85% institutional ownership** by accident. The "smart money" isn't dumping their shares because of a one-day CPI report; they are holding because they understand that a successful FIREFLY-1 readout changes the valuation of this company overnight, regardless of what Jerome Powell says.
 
 ### 4. Direct Response to the Bear: "Why the Sell Call is Pre-mature"
-My colleague on the bear side says "sell" to preserve capital. I argue that selling now is **locking in a bottom** right as the stock hits its most attractive support levels ($21.72–$22.64). 
+My colleague on the bear side says "sell" to preserve capital. I argue that selling now is **locking in a bottom** right as the stock hits its most attractive support levels ($21.72–$22.64).
 
 Past mistakes in this sector usually involve "catching falling knives" of companies with no cash. I’ve learned that lesson. But DAWN is the opposite. This is a high-conviction play where the fundamental value (the pipeline + $400M cash) provides a massive floor. If you sell now because of a 5% drop in the Nasdaq, you are going to miss the gap-up when the next clinical update hits the wires.
 
 ### The Verdict: Buy the Dip
-We are looking at a company that has transitioned from a $6 stock to a $23+ powerhouse in three months. A 10% pullback after a 300% run isn't a "collapse"—it’s an opportunity. 
+We are looking at a company that has transitioned from a $6 stock to a $23+ powerhouse in three months. A 10% pullback after a 300% run isn't a "collapse"—it’s an opportunity.
 
-**The Bull Case is clear:** 
+**The Bull Case is clear:**
 *   **Unmatched Liquidity:** 3+ years of runway.
 *   **Clinical Moat:** Leading-edge pediatric oncology focus.
 *   **Institutional Backing:** 85% of the shares are in "strong hands."
 
-Don’t let the macro-noise scare you out of a generational biotech winner. While the bears are hiding in cash, we should be accumulating **DAWN** as it tests the $22 support zone. This isn't a time to retreat; it's a time to focus on quality. And DAWN is high-quality growth. 
+Don’t let the macro-noise scare you out of a generational biotech winner. While the bears are hiding in cash, we should be accumulating **DAWN** as it tests the $22 support zone. This isn't a time to retreat; it's a time to focus on quality. And DAWN is high-quality growth.
 
 **I am firmly in the BUY camp.** Let the market have its tantrum; we’ll take the shares.
 
@@ -197,53 +197,53 @@ Bear Analyst: Listen, I appreciate the optimism. My colleague sees a "healthy re
 Here is the bear case that the bulls are conveniently ignoring:
 
 ### 1. The "Cash Runway" is a False Security Blanket
-My colleague is obsessed with that $395 million cash pile. In a 0% interest rate world, that’s a fortress. In a world where the Fed is looking at a 100bps hike and terminal rates are climbing, that cash is simply a buffer for a burning building. 
+My colleague is obsessed with that $395 million cash pile. In a 0% interest rate world, that’s a fortress. In a world where the Fed is looking at a 100bps hike and terminal rates are climbing, that cash is simply a buffer for a burning building.
 *   **The Valuation Gap:** DAWN has a **$2.22 billion market cap with $0 revenue.** Investors are paying a massive premium for "potential" at a time when the market is punishing anything that doesn't produce immediate cash flow.
 *   **The Burn Reality:** You mentioned a 3-year runway based on current burn. But let’s look at the trajectory: Net loss increased from $27.7M to $36.5M in just one quarter. As they ramp up for pivotal trials and potential commercialization, that "3-year" runway will shrink faster than you think. **Cash is a defensive metric; it is not a catalyst for growth.**
 
 ### 2. The Technicals: This Isn't a "Reset," It’s a Distribution
-The bull calls this a "reversion to the mean." I call it **overhead supply.** 
+The bull calls this a "reversion to the mean." I call it **overhead supply.**
 *   **Under Water:** The stock is trading below its **VWMA of $24.27**. That means the average person who bought recently is currently losing money. When the price rallies back to $24, those "weak hands" aren't going to hold for the moon—they’re going to sell to break even, creating a ceiling that will be incredibly hard to break.
 *   **The MACD Death Cross:** Look at the MACD. It’s "rounding over" and declining from its peak. This is the hallmark of momentum exhaustion. The RSI didn't just "cool off"—it fell off a cliff from 66 to 49 in 48 hours. That’s not a pause; that’s a mass exodus.
 *   **The 50-Day SMA Trap:** The bull wants you to buy the support at $21.72. That is nearly **10% below the current price.** Recommending a "buy" here is essentially telling investors to catch a falling knife while it still has plenty of room to drop.
 
 ### 3. The "Negative Beta" Fallacy
-The bull claims DAWN is an "idiosyncratic hedge" because of its negative beta. This is a dangerous misunderstanding of biotech volatility. 
-*   **Correlation 1.0:** In a liquidity crisis—which is what a 8.3% CPI print triggers—correlations go to 1. Small-cap growth is the first thing institutions sell to cover margins and de-risk. 
+The bull claims DAWN is an "idiosyncratic hedge" because of its negative beta. This is a dangerous misunderstanding of biotech volatility.
+*   **Correlation 1.0:** In a liquidity crisis—which is what a 8.3% CPI print triggers—correlations go to 1. Small-cap growth is the first thing institutions sell to cover margins and de-risk.
 *   **Lessons Learned:** I’ve made the mistake before of thinking a "good story" could outrun a bad market. I remember the "bubble crunch" of early 2021 where fundamentally "sound" biotechs with "years of cash" lost 60% of their value because the sector's multiple compressed. **DAWN is not immune to the cost of capital.** If the Nasdaq is down 5% in a day, DAWN’s "special story" doesn't matter; it’s just another line item on a sell ticket.
 
 ### 4. Binary Clinical Risk: The "All-In" Bet
-Everything depends on **Tovorafenib**. 
-*   **No Margin for Error:** At a $2.2B valuation, a "good" trial result is already priced in. But what if the data is just "okay"? What if the safety profile shows a hint of brain toxicity in pediatric patients? In this "risk-off" environment, the market will not give DAWN the benefit of the doubt. 
+Everything depends on **Tovorafenib**.
+*   **No Margin for Error:** At a $2.2B valuation, a "good" trial result is already priced in. But what if the data is just "okay"? What if the safety profile shows a hint of brain toxicity in pediatric patients? In this "risk-off" environment, the market will not give DAWN the benefit of the doubt.
 *   **Concentration Risk:** Unlike a big pharma play, DAWN is a one-trick pony for now. If FIREFLY-1 hits a snag, there is no revenue from other products to catch the fall. You are essentially gambling on a clinical outcome during a global recession.
 
 ### The Verdict: Preserve Capital, Don't Fight the Fed
-My colleague says "Don't let the macro-noise scare you." I say **"Don't let a good story blind you to the math."** 
+My colleague says "Don't let the macro-noise scare you." I say **"Don't let a good story blind you to the math."**
 
-The cost of capital is rising, the technicals are breaking down, and the stock is still trading near its 52-week highs despite a fundamental shift in the global economy. Selling now isn't "locking in a bottom"—it’s **harvesting gains before they evaporate.** 
+The cost of capital is rising, the technicals are breaking down, and the stock is still trading near its 52-week highs despite a fundamental shift in the global economy. Selling now isn't "locking in a bottom"—it’s **harvesting gains before they evaporate.**
 
 **Final Counter:** If you’re so confident in the $21.72 support, why buy at $23.75? The smart move is to exit, let the market find its floor after the Sept 21 Fed meeting, and see if DAWN is still standing. Right now, this stock is a high-beta asset in a low-appetite world.
 
 **I am firmly in the SELL camp.** This "dip" has plenty of room to become a crater.
 
 ### Research Manager
-Let's break down this debate and figure out the right move for DAWN. 
+Let's break down this debate and figure out the right move for DAWN.
 
-To summarize the arguments, the bull believes DAWN is shielded from macroeconomic headwinds because of its $395 million cash pile and three-year runway, meaning no immediate need for dilution. They see the recent price drop as a healthy reset, pointing to a cooled-off RSI, strong support levels, and a negative beta that supposedly makes it a safe haven. The bull is also highly confident in Tovorafenib, noting its potential as a breakthrough pediatric oncology drug backed by heavy institutional ownership. 
+To summarize the arguments, the bull believes DAWN is shielded from macroeconomic headwinds because of its $395 million cash pile and three-year runway, meaning no immediate need for dilution. They see the recent price drop as a healthy reset, pointing to a cooled-off RSI, strong support levels, and a negative beta that supposedly makes it a safe haven. The bull is also highly confident in Tovorafenib, noting its potential as a breakthrough pediatric oncology drug backed by heavy institutional ownership.
 
 On the other side, the bear paints a much more cautious picture. They argue that a $2.2 billion market cap for a zero-revenue company is extremely fragile in a rising interest rate environment, regardless of the cash on hand. The bear points out that technical indicators are breaking down, with the stock falling below its volume-weighted moving average and momentum rolling over. They also completely reject the negative beta argument, warning that in a true liquidity crunch driven by hot inflation data, correlations go to one and speculative assets get dumped. Furthermore, the bear highlights the binary risk of relying on a single drug whose success is largely already priced in.
 
-After weighing both sides, my recommendation is to Sell DAWN. 
+After weighing both sides, my recommendation is to Sell DAWN.
 
-The rationale for this decision is grounded in the reality of the current macroeconomic environment. The bear makes a highly convincing point that a massive valuation on a pre-revenue biotech leaves absolutely no margin for error when the cost of capital is rising. Cash runway is great for survival, but it does not justify a $2.2 billion valuation when the market is actively punishing duration risk and speculative growth. The bull's argument relies heavily on negative beta, but the bear correctly points out that when the market panics over inflation and rate hikes, institutions sell their zero-revenue assets first to reduce risk. Additionally, the bull's technical argument is flawed; telling a trader to buy now when the stated support level is another ten percent lower is simply bad risk management. 
+The rationale for this decision is grounded in the reality of the current macroeconomic environment. The bear makes a highly convincing point that a massive valuation on a pre-revenue biotech leaves absolutely no margin for error when the cost of capital is rising. Cash runway is great for survival, but it does not justify a $2.2 billion valuation when the market is actively punishing duration risk and speculative growth. The bull's argument relies heavily on negative beta, but the bear correctly points out that when the market panics over inflation and rate hikes, institutions sell their zero-revenue assets first to reduce risk. Additionally, the bull's technical argument is flawed; telling a trader to buy now when the stated support level is another ten percent lower is simply bad risk management.
 
-Here are the strategic actions for your investment plan. 
+Here are the strategic actions for your investment plan.
 
-First, exit your long positions in DAWN at the current market price to protect your capital from further downside. The overhead supply created by recent buyers who are now underwater will act as a ceiling, making a near-term rally incredibly difficult. 
+First, exit your long positions in DAWN at the current market price to protect your capital from further downside. The overhead supply created by recent buyers who are now underwater will act as a ceiling, making a near-term rally incredibly difficult.
 
-Second, keep the proceeds in cash or short-duration fixed income to weather the upcoming Federal Reserve volatility. 
+Second, keep the proceeds in cash or short-duration fixed income to weather the upcoming Federal Reserve volatility.
 
-Finally, you can keep DAWN on your watchlist. If the stock washes out toward its 200-day moving average around 15 dollars, and the clinical data for Tovorafenib remains solid, we can re-evaluate the stock when the risk-to-reward ratio actually makes sense. 
+Finally, you can keep DAWN on your watchlist. If the stock washes out toward its 200-day moving average around 15 dollars, and the clinical data for Tovorafenib remains solid, we can re-evaluate the stock when the risk-to-reward ratio actually makes sense.
 
 Reflecting on past mistakes in similar market conditions, I have previously fallen into the trap of letting a compelling micro story blind me to a deteriorating macro environment. I have held onto zero-revenue biotechs with strong pipelines and plenty of cash, mistakenly believing they were immune to broader market selloffs, only to watch their multiples compress violently. I have learned the hard way that when liquidity dries up and interest rates spike, a good story cannot outrun the rising cost of capital. By choosing to sell DAWN today, I am actively applying that lesson, prioritizing capital preservation, and refusing to catch a falling knife in a hostile market.
 
@@ -283,7 +283,7 @@ The trader mentioned that the negative beta of -1.748 is a "false safe haven." I
 
 And this technical analysis about "overhead supply" and "waiting for $15"? That is pure fantasy. If you wait for $15, you’re going to be waiting forever while the stock rockets to $30 on the next Tovorafenib data readout. The RSI cooling down to 49 is exactly what we want to see; it’s a healthy reset that flushed out the weak hands and day traders. It’s a gift. The "path of least resistance" isn't down; it’s sideways-to-up as the market realizes that pediatric oncology doesn't care about the price of eggs or gas.
 
-The neutral stance of "holding" is just as bad. It’s passive. We should be aggressive. The 50-day SMA at $21.72 is a massive floor. If we’re at $23.75 now, we are looking at a minor 8% downside risk versus a 100% or 200% upside potential when Ojemda hits the next milestone. That is a professional's risk-to-reward ratio. 
+The neutral stance of "holding" is just as bad. It’s passive. We should be aggressive. The 50-day SMA at $21.72 is a massive floor. If we’re at $23.75 now, we are looking at a minor 8% downside risk versus a 100% or 200% upside potential when Ojemda hits the next milestone. That is a professional's risk-to-reward ratio.
 
 Stop treating DAWN like a generic tech stock. It’s a specialized medical disruptor with a three-year runway and a drug that has the potential to dominate a niche market. The "higher-for-longer" narrative is a distraction. You don't sell a clinical leader because of a macro "bubble crunch" when they have the cash to outlast the bubble. My recommendation? Ignore the noise, lean into the volatility, and **BUY** the dip before the window closes. Fortune favors the bold, not the ones hiding in cash while the next big winner consolidates.
 
@@ -291,13 +291,13 @@ Stop treating DAWN like a generic tech stock. It’s a specialized medical disru
 
 Conservative Analyst: The Aggressive Analyst’s argument for "leaning into the volatility" is exactly the kind of thinking that leads to catastrophic capital impairment during a market regime shift. Calling a SELL recommendation a "panic move" fundamentally misunderstands the difference between emotional reacting and cold, hard risk management. We aren't looking at a "tantrum" in the Nasdaq; we are looking at a fundamental repricing of risk following an 8.3% CPI print that has shattered the soft-landing narrative.
 
-To the point about DAWN’s cash position: having $395 million is a safety net, yes, but it is not a suit of armor against valuation compression. The Aggressive Analyst claims they are "insulated" from rate hikes because they don't need to borrow. This ignores the "discount rate" reality. In a higher-for-longer environment, the present value of every dollar DAWN might earn five or ten years from now shrinks. You can have all the cash in the world, but if the market decides that a pre-revenue biotech is only worth a 2.0x book multiple instead of 5.0x, your stock price is going to get cut in half regardless of the balance sheet. 
+To the point about DAWN’s cash position: having $395 million is a safety net, yes, but it is not a suit of armor against valuation compression. The Aggressive Analyst claims they are "insulated" from rate hikes because they don't need to borrow. This ignores the "discount rate" reality. In a higher-for-longer environment, the present value of every dollar DAWN might earn five or ten years from now shrinks. You can have all the cash in the world, but if the market decides that a pre-revenue biotech is only worth a 2.0x book multiple instead of 5.0x, your stock price is going to get cut in half regardless of the balance sheet.
 
 Furthermore, the reliance on a negative beta as a "safe haven" is a dangerous academic trap. History shows us that during systemic liquidity shocks—like the one we just saw on September 13th where $500 billion was wiped out of tech in a single day—correlations move toward 1.0. When institutional desks face margin calls or need to de-risk their portfolios, they don't sell their losers; they sell their winners because that’s where the liquidity is. With 85% institutional ownership, DAWN isn't "protected" by big money; it is a giant piggy bank that those same institutions will smash open the moment they need to cover losses elsewhere.
 
 The Aggressive Analyst also calls the technical breakdown a "healthy reset." Let’s look at the facts. The price is currently below the Volume-Weighted Moving Average of $24.27. That means the average buyer over the last period is sitting on a loss. That "overhead supply" is a wall of sellers waiting to exit at break-even the moment the price ticks up. The MACD is rounding over, and the ATR of 1.46 tells us this stock is swinging wildly. In a conservative framework, we do not "buy the dip" on a high-beta asset when the macro environment is actively deteriorating. We preserve the principle so we have the fire-power to buy when the dust settles.
 
-And to the Neutral Analyst's "hold" suggestion: "Wait-and-see" is just a slow way to lose money when the floor is falling out. Being in "no-man's land" between $23 and $21 is not a strategy; it’s indecision. The 200-day moving average is all the way down at $15. If we hold now and the 50-day SMA at $21.72 fails—which is highly likely given the Fed's trajectory—we are looking at another 30% downside just to find the next structural support. 
+And to the Neutral Analyst's "hold" suggestion: "Wait-and-see" is just a slow way to lose money when the floor is falling out. Being in "no-man's land" between $23 and $21 is not a strategy; it’s indecision. The 200-day moving average is all the way down at $15. If we hold now and the 50-day SMA at $21.72 fails—which is highly likely given the Fed's trajectory—we are looking at another 30% downside just to find the next structural support.
 
 My objective is to ensure this firm doesn't take a 30% hit on a "clinical story" during a global macro-economic contraction. The most prudent, risk-averse path is to exit the position now. We don't need to be "bold" to be successful; we need to be alive. Let the speculators gamble on the "coiled spring." We will take our capital to the sidelines and wait for a market that isn't being hit by an inflation sledgehammer. SELL.
 
@@ -319,13 +319,13 @@ By holding, we are respecting the long-term clinical story that the aggressive s
 **1. Rating**: **Sell**
 
 **2. Executive Summary**
-*   **Entry/Exit Strategy**: Immediately exit all long positions in DAWN at the current market price (approximately $23.75) to protect capital from deteriorating macroeconomic conditions. 
+*   **Entry/Exit Strategy**: Immediately exit all long positions in DAWN at the current market price (approximately $23.75) to protect capital from deteriorating macroeconomic conditions.
 *   **Position Sizing**: Reduce DAWN exposure to 0%. Reallocate the proceeds into cash or short-duration fixed income to buffer against expected Federal Reserve volatility.
-*   **Key Risk Levels**: DAWN is currently trading below its Volume-Weighted Moving Average (VWAP) of $24.27, creating heavy overhead supply. While the 50-day SMA at $21.72 provides near-term theoretical support, a breakdown there exposes the stock to a precipitous 30% drop toward the 200-day SMA at ~$15.00. 
+*   **Key Risk Levels**: DAWN is currently trading below its Volume-Weighted Moving Average (VWAP) of $24.27, creating heavy overhead supply. While the 50-day SMA at $21.72 provides near-term theoretical support, a breakdown there exposes the stock to a precipitous 30% drop toward the 200-day SMA at ~$15.00.
 *   **Time Horizon**: Immediate execution for the exit. DAWN will be placed on a long-term watchlist; we will only consider re-evaluating the stock if it washes out toward the $15.00 level and the clinical thesis for Tovorafenib (Ojemda) remains fundamentally intact.
 
 **3. Investment Thesis**
-The debate surrounding DAWN presents a textbook collision between a compelling microeconomic narrative and a hostile macroeconomic reality. While the Aggressive Analyst accurately highlights DAWN's robust $395 million cash pile, three-year runway, and promising pediatric oncology pipeline, I firmly align with the Conservative Analyst, the Trader, and my own historical lessons: a strong clinical story cannot outrun a rising cost of capital. 
+The debate surrounding DAWN presents a textbook collision between a compelling microeconomic narrative and a hostile macroeconomic reality. While the Aggressive Analyst accurately highlights DAWN's robust $395 million cash pile, three-year runway, and promising pediatric oncology pipeline, I firmly align with the Conservative Analyst, the Trader, and my own historical lessons: a strong clinical story cannot outrun a rising cost of capital.
 
 First, the valuation and duration risk on DAWN are untenable for our current portfolio posture. Maintaining a $2.2 billion market capitalization for a pre-revenue biotech in a "higher-for-longer" interest rate environment leaves zero margin for error. The Aggressive Analyst argues that DAWN's cash insulates it from rate hikes because it doesn't need to borrow. However, the Conservative Analyst correctly diagnoses the fundamental flaw in this thinking: valuation compression. In an environment shocked by an 8.3% CPI print, the discount rate applied to DAWN's future earnings crushes its present value. Survival cash does not justify a peak multiple when the market is actively punishing duration risk.
 

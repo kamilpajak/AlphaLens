@@ -7,10 +7,9 @@ import pandas as pd
 
 
 def _make_picks(tickers_themes_scores):
-    return pd.DataFrame([
-        {"ticker": t, "momentum_score": s, "themes": th}
-        for t, th, s in tickers_themes_scores
-    ])
+    return pd.DataFrame(
+        [{"ticker": t, "momentum_score": s, "themes": th} for t, th, s in tickers_themes_scores]
+    )
 
 
 class TestThemedHistoryStoreBasic(unittest.TestCase):
@@ -39,11 +38,13 @@ class TestThemedHistoryStoreBasic(unittest.TestCase):
         from alphalens.screeners.themed.history_store import ThemedHistoryStore
 
         store = ThemedHistoryStore(self.db)
-        picks = _make_picks([
-            ("A", ["quantum"], 0.9),
-            ("B", ["ai", "biotech"], 0.8),
-            ("C", ["semis"], 0.7),
-        ])
+        picks = _make_picks(
+            [
+                ("A", ["quantum"], 0.9),
+                ("B", ["ai", "biotech"], 0.8),
+                ("C", ["semis"], 0.7),
+            ]
+        )
         run_id = store.record_run(picks, config={}, universe_size=50)
 
         df = store.picks_for_run(run_id)
@@ -76,8 +77,11 @@ class TestThemedHistoryStoreBasic(unittest.TestCase):
         store = ThemedHistoryStore(self.db)
         picks = _make_picks([("A", ["q"], 0.9), ("B", ["q"], 0.8)])
         run_id = store.record_run(
-            picks, {}, universe_size=10,
-            weighting_scheme="linear", weights=[0.7, 0.3],
+            picks,
+            {},
+            universe_size=10,
+            weighting_scheme="linear",
+            weights=[0.7, 0.3],
         )
         df = store.picks_for_run(run_id)
         self.assertAlmostEqual(df.iloc[0]["weight"], 0.7)
@@ -115,14 +119,16 @@ class TestStaleness(unittest.TestCase):
         from alphalens.screeners.themed.history_store import compute_staleness
 
         # A jest top-1 przez 5 dni, B pojawił się raz
-        timeline = pd.DataFrame([
-            {"run_date": "2024-01-01", "rank": 1, "ticker": "A"},
-            {"run_date": "2024-01-02", "rank": 1, "ticker": "A"},
-            {"run_date": "2024-01-03", "rank": 1, "ticker": "A"},
-            {"run_date": "2024-01-04", "rank": 1, "ticker": "A"},
-            {"run_date": "2024-01-05", "rank": 1, "ticker": "A"},
-            {"run_date": "2024-01-05", "rank": 2, "ticker": "B"},
-        ])
+        timeline = pd.DataFrame(
+            [
+                {"run_date": "2024-01-01", "rank": 1, "ticker": "A"},
+                {"run_date": "2024-01-02", "rank": 1, "ticker": "A"},
+                {"run_date": "2024-01-03", "rank": 1, "ticker": "A"},
+                {"run_date": "2024-01-04", "rank": 1, "ticker": "A"},
+                {"run_date": "2024-01-05", "rank": 1, "ticker": "A"},
+                {"run_date": "2024-01-05", "rank": 2, "ticker": "B"},
+            ]
+        )
         stale = compute_staleness(timeline, top_n=5)
         row_a = stale[stale["ticker"] == "A"].iloc[0]
         self.assertEqual(row_a["consecutive_days"], 5)
@@ -137,14 +143,16 @@ class TestTurnover(unittest.TestCase):
     def test_turnover_by_day(self):
         from alphalens.screeners.themed.history_store import compute_turnover_by_day
 
-        timeline = pd.DataFrame([
-            {"run_date": "2024-01-01", "rank": 1, "ticker": "A"},
-            {"run_date": "2024-01-01", "rank": 2, "ticker": "B"},
-            {"run_date": "2024-01-02", "rank": 1, "ticker": "A"},
-            {"run_date": "2024-01-02", "rank": 2, "ticker": "C"},  # B -> C swap
-            {"run_date": "2024-01-03", "rank": 1, "ticker": "X"},  # full turnover
-            {"run_date": "2024-01-03", "rank": 2, "ticker": "Y"},
-        ])
+        timeline = pd.DataFrame(
+            [
+                {"run_date": "2024-01-01", "rank": 1, "ticker": "A"},
+                {"run_date": "2024-01-01", "rank": 2, "ticker": "B"},
+                {"run_date": "2024-01-02", "rank": 1, "ticker": "A"},
+                {"run_date": "2024-01-02", "rank": 2, "ticker": "C"},  # B -> C swap
+                {"run_date": "2024-01-03", "rank": 1, "ticker": "X"},  # full turnover
+                {"run_date": "2024-01-03", "rank": 2, "ticker": "Y"},
+            ]
+        )
         df = compute_turnover_by_day(timeline, top_n=5)
         self.assertEqual(len(df), 3)
         # Dzień 2: 1/2 zmieniło → 50%
@@ -159,11 +167,28 @@ class TestThemeHHI(unittest.TestCase):
     def test_single_theme_hhi_one(self):
         from alphalens.screeners.themed.history_store import compute_theme_hhi_by_day
 
-        timeline = pd.DataFrame([
-            {"run_date": "2024-01-01", "rank": 1, "ticker": "A", "themes": "quantum"},
-            {"run_date": "2024-01-01", "rank": 2, "ticker": "B", "themes": "quantum"},
-            {"run_date": "2024-01-01", "rank": 3, "ticker": "C", "themes": "quantum"},
-        ])
+        timeline = pd.DataFrame(
+            [
+                {
+                    "run_date": "2024-01-01",
+                    "rank": 1,
+                    "ticker": "A",
+                    "themes": "quantum",
+                },
+                {
+                    "run_date": "2024-01-01",
+                    "rank": 2,
+                    "ticker": "B",
+                    "themes": "quantum",
+                },
+                {
+                    "run_date": "2024-01-01",
+                    "rank": 3,
+                    "ticker": "C",
+                    "themes": "quantum",
+                },
+            ]
+        )
         df = compute_theme_hhi_by_day(timeline, top_n=5)
         self.assertAlmostEqual(df.iloc[0]["hhi"], 1.0)
         self.assertEqual(df.iloc[0]["dominant_theme"], "quantum")
@@ -171,11 +196,23 @@ class TestThemeHHI(unittest.TestCase):
     def test_balanced_themes_hhi_diversified(self):
         from alphalens.screeners.themed.history_store import compute_theme_hhi_by_day
 
-        timeline = pd.DataFrame([
-            {"run_date": "2024-01-01", "rank": 1, "ticker": "A", "themes": "quantum"},
-            {"run_date": "2024-01-01", "rank": 2, "ticker": "B", "themes": "ai"},
-            {"run_date": "2024-01-01", "rank": 3, "ticker": "C", "themes": "biotech"},
-        ])
+        timeline = pd.DataFrame(
+            [
+                {
+                    "run_date": "2024-01-01",
+                    "rank": 1,
+                    "ticker": "A",
+                    "themes": "quantum",
+                },
+                {"run_date": "2024-01-01", "rank": 2, "ticker": "B", "themes": "ai"},
+                {
+                    "run_date": "2024-01-01",
+                    "rank": 3,
+                    "ticker": "C",
+                    "themes": "biotech",
+                },
+            ]
+        )
         df = compute_theme_hhi_by_day(timeline, top_n=5)
         # 3 równe tematy → HHI = 3 × (1/3)² = 1/3
         self.assertAlmostEqual(df.iloc[0]["hhi"], 1 / 3, places=3)

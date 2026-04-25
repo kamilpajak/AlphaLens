@@ -1,8 +1,8 @@
 ### Relay Therapeutics, Inc. (RLAY) Fundamental Analysis Report
 
-**Current Date:** March 6, 2026  
-**Ticker:** RLAY  
-**Sector:** Healthcare (Biotechnology)  
+**Current Date:** March 6, 2026
+**Ticker:** RLAY
+**Sector:** Healthcare (Biotechnology)
 
 ---
 

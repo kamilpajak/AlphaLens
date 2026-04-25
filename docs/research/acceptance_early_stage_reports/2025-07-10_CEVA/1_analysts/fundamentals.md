@@ -5,7 +5,7 @@
 ---
 
 ### **1. Company Profile & Business Model**
-CEVA, Inc. is a leading licensor of silicon and software intellectual property (IP) for the semiconductor industry. The company specializes in Digital Signal Processors (DSPs), AI engines, wireless platforms, and complementary software for sensor fusion, image enhancement, and voice processing. 
+CEVA, Inc. is a leading licensor of silicon and software intellectual property (IP) for the semiconductor industry. The company specializes in Digital Signal Processors (DSPs), AI engines, wireless platforms, and complementary software for sensor fusion, image enhancement, and voice processing.
 
 **Key Market Segments:**
 *   **Wireless:** 5G, Wi-Fi 6/7, and Bluetooth IP.
@@ -23,7 +23,7 @@ CEVA's recent TTM (Trailing Twelve Months) performance highlights a transition p
 
 *   **Revenue Stability:** Revenue for the TTM period ending mid-2025 stands at **$109.6 million**. Quarterly revenue has shown resilience, hovering between **$24M and $31M** over the last four quarters.
 *   **Exceptional Margins:** As an IP company, CEVA maintains an elite **Gross Margin of ~87%** ($95.4M gross profit on $109.6M revenue). This indicates that the cost of delivering their technology is minimal, allowing for significant operating leverage if revenue scales.
-*   **Profitability Pressure:** The company reported a **Net Loss of $10.6 million (TTM)**. This is primarily driven by high **Research & Development (R&D) expenses of $74.8 million**, representing roughly 68% of total revenue. 
+*   **Profitability Pressure:** The company reported a **Net Loss of $10.6 million (TTM)**. This is primarily driven by high **Research & Development (R&D) expenses of $74.8 million**, representing roughly 68% of total revenue.
 *   **Forward Outlook:** Despite current losses, the **Forward PE of 29.59** and a **Forward EPS of $0.808** suggest that analysts expect a swing back to profitability as recent R&D investments begin to yield new licenses and royalty streams.
 
 ---
@@ -31,9 +31,9 @@ CEVA's recent TTM (Trailing Twelve Months) performance highlights a transition p
 ### **3. Balance Sheet & Liquidity**
 The most compelling aspect of CEVA’s fundamentals is its "fortress" balance sheet.
 
-*   **Cash Position:** CEVA holds **$40.6 million in cash** and **$181.4 million in short-term investments**, totaling **$222 million**. 
+*   **Cash Position:** CEVA holds **$40.6 million in cash** and **$181.4 million in short-term investments**, totaling **$222 million**.
 *   **Liquidity:** The **Current Ratio of 9.93** is exceptional, indicating the company has nearly 10x the assets needed to cover its short-term obligations.
-*   **Capital Structure:** With a **Debt-to-Equity ratio of 4.79%**, CEVA is virtually debt-free. 
+*   **Capital Structure:** With a **Debt-to-Equity ratio of 4.79%**, CEVA is virtually debt-free.
 *   **Asset Value:** Roughly **33% of the company's $663M market cap is backed by cold cash and investments**. This provides a significant "valuation floor" for investors.
 
 ---

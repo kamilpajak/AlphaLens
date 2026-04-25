@@ -8,7 +8,7 @@ validation of MomentumScorer vs EarlyStageScorer.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 ACCEPT_DECISIONS = ("BUY", "OVERWEIGHT")
@@ -25,7 +25,7 @@ def compute_scorer_stats(db_path: Path | str, since_days: int = 30) -> list[dict
         oldest_finished, newest_finished.
     """
     db_path = Path(db_path)
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=since_days)).isoformat()
 
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -42,22 +42,25 @@ def compute_scorer_stats(db_path: Path | str, since_days: int = 30) -> list[dict
     by_source: dict[str, dict] = {}
     for r in rows:
         src = r["source"]
-        entry = by_source.setdefault(src, {
-            "source": src,
-            "total": 0,
-            "buy_count": 0,
-            "overweight_count": 0,
-            "hold_count": 0,
-            "underweight_count": 0,
-            "sell_count": 0,
-            "unknown_count": 0,
-            "duration_sum": 0.0,
-            "duration_n": 0,
-            "cost_sum": 0.0,
-            "cost_n": 0,
-            "oldest_finished": r["finished_at"],
-            "newest_finished": r["finished_at"],
-        })
+        entry = by_source.setdefault(
+            src,
+            {
+                "source": src,
+                "total": 0,
+                "buy_count": 0,
+                "overweight_count": 0,
+                "hold_count": 0,
+                "underweight_count": 0,
+                "sell_count": 0,
+                "unknown_count": 0,
+                "duration_sum": 0.0,
+                "duration_n": 0,
+                "cost_sum": 0.0,
+                "cost_n": 0,
+                "oldest_finished": r["finished_at"],
+                "newest_finished": r["finished_at"],
+            },
+        )
         entry["total"] += 1
         dec = (r["decision"] or "").upper()
         key = f"{dec.lower()}_count"
@@ -78,9 +81,7 @@ def compute_scorer_stats(db_path: Path | str, since_days: int = 30) -> list[dict
     for src, e in by_source.items():
         accept = e["buy_count"] + e["overweight_count"]
         e["accept_rate"] = accept / e["total"] if e["total"] else 0.0
-        e["mean_duration_sec"] = (
-            e["duration_sum"] / e["duration_n"] if e["duration_n"] else None
-        )
+        e["mean_duration_sec"] = e["duration_sum"] / e["duration_n"] if e["duration_n"] else None
         e["mean_cost_usd"] = e["cost_sum"] / e["cost_n"] if e["cost_n"] else None
         # Drop intermediate aggregation fields from the public dict
         for k in ("duration_sum", "duration_n", "cost_sum", "cost_n"):

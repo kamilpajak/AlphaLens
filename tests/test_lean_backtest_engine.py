@@ -10,7 +10,9 @@ import pandas as pd
 def _mk_bar(d, price, vol=100_000):
     from alphalens.screeners.lean.lean_csv_writer import DailyBar
 
-    return DailyBar(date=d, open=price, high=price * 1.01, low=price * 0.99, close=price, volume=vol)
+    return DailyBar(
+        date=d, open=price, high=price * 1.01, low=price * 0.99, close=price, volume=vol
+    )
 
 
 def _prime_store(tmpdir: Path, per_ticker_bars: dict[str, list]):
@@ -30,9 +32,7 @@ def _long_history(n: int, start_price: float, drift: float = 0.0):
     """Generate `n` trading-day-esque bars starting 2024-01-01, advancing by weekdays."""
     dates = pd.bdate_range(start="2024-01-01", periods=n)
     prices = start_price * np.exp(np.cumsum(np.full(n, drift)))
-    return [
-        _mk_bar(d.strftime("%Y%m%d"), float(p)) for d, p in zip(dates, prices)
-    ]
+    return [_mk_bar(d.strftime("%Y%m%d"), float(p)) for d, p in zip(dates, prices)]
 
 
 class TestBacktestEngineBasic(unittest.TestCase):
@@ -118,6 +118,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
                     {"ticker": "BBB", "score": 0.0},
                 ]
             )
+
         fake_scorer.MIN_BARS_REQUIRED = 25
 
         engine = BacktestEngine(
@@ -161,6 +162,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
                     {"ticker": "E", "score": 1.0},
                 ]
             )
+
         fake_scorer.MIN_BARS_REQUIRED = 25
 
         engine = BacktestEngine(
@@ -245,7 +247,10 @@ class TestBacktestReport(unittest.TestCase):
 
     def test_ic_series(self):
         r = self._make_report(
-            [self._mock_daily("2024-01-02", ic=0.1), self._mock_daily("2024-01-03", ic=0.05)]
+            [
+                self._mock_daily("2024-01-02", ic=0.1),
+                self._mock_daily("2024-01-03", ic=0.05),
+            ]
         )
         self.assertEqual(list(r.ic_series.values), [0.1, 0.05])
 
@@ -291,8 +296,10 @@ class TestIntegrationWithRealScorer(unittest.TestCase):
 
         self.assertGreater(len(report.daily_results), 0)
         top_tickers = [t for r in report.daily_results for t in r.top_n_tickers]
-        self.assertGreater(top_tickers.count("UP1") + top_tickers.count("UP2"),
-                           top_tickers.count("DOWN"))
+        self.assertGreater(
+            top_tickers.count("UP1") + top_tickers.count("UP2"),
+            top_tickers.count("DOWN"),
+        )
 
 
 class TestBacktestEngineScorerMinBars(unittest.TestCase):
@@ -309,7 +316,7 @@ class TestBacktestEngineScorerMinBars(unittest.TestCase):
 
         tickers_seen_at_scorer: list[int] = []
 
-        def scorer(histories, config):  # noqa: ARG001
+        def scorer(histories, config):
             tickers_seen_at_scorer.append(len(histories))
             tickers = list(histories.keys())
             return pd.DataFrame({"ticker": tickers, "score": np.linspace(1.0, 0.1, len(tickers))})
@@ -321,8 +328,8 @@ class TestBacktestEngineScorerMinBars(unittest.TestCase):
                 Path(tmp),
                 {
                     "SPY": _long_history(260, 400.0, drift=0.0005),
-                    "A":   _long_history(260, 50.0, drift=0.001),
-                    "B":   _long_history(260, 80.0, drift=0.0008),
+                    "A": _long_history(260, 50.0, drift=0.001),
+                    "B": _long_history(260, 80.0, drift=0.0008),
                 },
             )
             engine = BacktestEngine(
@@ -338,7 +345,8 @@ class TestBacktestEngineScorerMinBars(unittest.TestCase):
 
         # 260 bars < 300 declared → no ticker ever qualifies → scorer never called.
         self.assertEqual(
-            tickers_seen_at_scorer, [],
+            tickers_seen_at_scorer,
+            [],
             "scorer.MIN_BARS_REQUIRED=300 was not respected by engine "
             "(tickers only had 260 bars but were passed to scorer anyway)",
         )
@@ -348,10 +356,11 @@ class TestBacktestEngineScorerMinBars(unittest.TestCase):
 
         called_count: list[int] = []
 
-        def scorer(histories, config):  # noqa: ARG001
+        def scorer(histories, config):
             called_count.append(len(histories))
             tickers = list(histories.keys())
             return pd.DataFrame({"ticker": tickers, "score": np.linspace(1.0, 0.1, len(tickers))})
+
         # Note: no MIN_BARS_REQUIRED attribute on this scorer
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -359,8 +368,8 @@ class TestBacktestEngineScorerMinBars(unittest.TestCase):
                 Path(tmp),
                 {
                     "SPY": _long_history(260, 400.0, drift=0.0005),
-                    "A":   _long_history(260, 50.0, drift=0.001),
-                    "B":   _long_history(260, 80.0, drift=0.0008),
+                    "A": _long_history(260, 50.0, drift=0.001),
+                    "B": _long_history(260, 80.0, drift=0.0008),
                 },
             )
             engine = BacktestEngine(
@@ -376,7 +385,8 @@ class TestBacktestEngineScorerMinBars(unittest.TestCase):
 
         # 260 > default 220 → scorer should have been called on most days.
         self.assertGreater(
-            len(called_count), 0,
+            len(called_count),
+            0,
             "without scorer.MIN_BARS_REQUIRED engine should use class default (220), "
             "and 260 bars > 220 means scorer should have been called",
         )

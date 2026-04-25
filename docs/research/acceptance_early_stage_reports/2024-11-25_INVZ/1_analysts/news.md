@@ -1,5 +1,5 @@
 ### **Weekly Macro and Market Analysis Report: Innoviz Technologies (INVZ)**
-**Date:** November 25, 2024  
+**Date:** November 25, 2024
 **Instrument:** `INVZ` (Innoviz Technologies Ltd.)
 
 ---
@@ -46,5 +46,5 @@ The past week has been characterized by a shifting macroeconomic narrative as ma
 | **Geopolitical** | Israel-based operations | **Neutral/Variable** (Ongoing risk premium) |
 | **Company** | No recent catalysts | **Neutral** (Lack of news leads to sideways trading) |
 
-**FINAL TRANSACTION PROPOSAL: HOLD**  
+**FINAL TRANSACTION PROPOSAL: HOLD**
 *Recommendation: Maintain existing positions but avoid new entries until the LiDAR sector shows signs of stabilization following the Luminar distress signal. Monitor the $1.00 psychological level for potential listing compliance risks.*

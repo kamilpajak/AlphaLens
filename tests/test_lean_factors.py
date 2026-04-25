@@ -3,7 +3,6 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-
 _SAMPLE_CSV = """This file was created by using the 202602 CRSP database.
 The Tbill return is the simple daily rate.
 Starting from 202406, the 1-month TBill rate is from ICE BofA.
@@ -50,6 +49,7 @@ class TestLoadFF3Daily(unittest.TestCase):
             df = load_ff3_daily(path=_write_csv(Path(tmp)))
 
         import pandas as pd
+
         self.assertIsInstance(df.index, pd.DatetimeIndex)
         self.assertEqual(df.index[0].date(), date(2024, 1, 2))
 
@@ -91,7 +91,7 @@ class TestLoadFF3Daily(unittest.TestCase):
 
         df = load_ff3_daily(start=date(2024, 4, 1), end=date(2024, 12, 31))
         self.assertGreater(len(df), 100)  # ~190 trading days
-        self.assertTrue((df["RF"] >= 0).all())        # risk-free ≥ 0
+        self.assertTrue((df["RF"] >= 0).all())  # risk-free ≥ 0
         self.assertLess(df["Mkt-RF"].abs().max(), 0.20)  # no single-day |Mkt-RF| > 20%
 
 

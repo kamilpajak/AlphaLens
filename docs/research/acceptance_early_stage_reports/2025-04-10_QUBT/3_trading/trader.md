@@ -1,7 +1,7 @@
-Analysis of the investment plan for **QUBT** reveals a classic conflict between visionary potential and fundamental reality. 
+Analysis of the investment plan for **QUBT** reveals a classic conflict between visionary potential and fundamental reality.
 
 ### Fundamental Analysis
-The core issue with **QUBT** is the extreme disconnect between its market valuation and its commercial performance. With a market capitalization of approximately $2.2 billion against trailing revenue of just $682,000, the company is trading at a Price-to-Sales (P/S) ratio of over 3,000x. This is an unsustainable multiple, even in the high-growth quantum computing sector. 
+The core issue with **QUBT** is the extreme disconnect between its market valuation and its commercial performance. With a market capitalization of approximately $2.2 billion against trailing revenue of just $682,000, the company is trading at a Price-to-Sales (P/S) ratio of over 3,000x. This is an unsustainable multiple, even in the high-growth quantum computing sector.
 
 The "liquidity fortress" mentioned by bulls is indeed a double-edged sword. While the cash on hand provides a runway, it has been built through aggressive share dilution. For an investor, dilution at these levels means that even if the company eventually succeeds, the value per share is being systematically eroded.
 

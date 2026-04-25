@@ -32,8 +32,7 @@ def _evict_to_capacity(cache: dict, max_size: int) -> None:
     via ``pop(next(iter(cache)))``. Intended to be called right before a
     new insertion to reserve space.
     """
-    if max_size < 0:
-        max_size = 0
+    max_size = max(max_size, 0)
     while len(cache) > max_size:
         cache.pop(next(iter(cache)))
 
@@ -49,9 +48,7 @@ class SecEdgarClient:
         if not user_agent:
             raise ValueError("SEC EDGAR requires a non-empty User-Agent")
         if "@" not in user_agent and "http" not in user_agent.lower():
-            raise ValueError(
-                "SEC EDGAR User-Agent must include a contact (email or URL)"
-            )
+            raise ValueError("SEC EDGAR User-Agent must include a contact (email or URL)")
         self._user_agent = user_agent
         self._min_interval_s = 1.0 / max(rate_limit_per_sec, 1)
         self._session = session or requests.Session()
@@ -110,10 +107,7 @@ class SecEdgarClient:
             return cached
         cik_no_zeros = str(int(cik))
         acc_no_dashes = accession_number.replace("-", "")
-        url = (
-            f"{_ARCHIVES_BASE}/Archives/edgar/data/"
-            f"{cik_no_zeros}/{acc_no_dashes}/{primary_doc}"
-        )
+        url = f"{_ARCHIVES_BASE}/Archives/edgar/data/{cik_no_zeros}/{acc_no_dashes}/{primary_doc}"
         data = self._get_bytes(url)
         _evict_to_capacity(self._form4_xml_cache, self._form4_xml_cache_capacity - 1)
         self._form4_xml_cache[cache_key] = data
@@ -157,7 +151,8 @@ class SecEdgarClient:
             if resp.status_code == 429:
                 logger.warning(
                     "sec edgar 429 rate-limited (attempt %d/%d); sleeping %ds",
-                    attempt + 1, self._MAX_REQUEST_ATTEMPTS,
+                    attempt + 1,
+                    self._MAX_REQUEST_ATTEMPTS,
                     self._RATE_LIMIT_BACKOFF,
                 )
                 self._sleep(self._RATE_LIMIT_BACKOFF)
@@ -168,8 +163,10 @@ class SecEdgarClient:
                 ]
                 logger.warning(
                     "sec edgar %d server error (attempt %d/%d); sleeping %ds",
-                    resp.status_code, attempt + 1,
-                    self._MAX_REQUEST_ATTEMPTS, backoff,
+                    resp.status_code,
+                    attempt + 1,
+                    self._MAX_REQUEST_ATTEMPTS,
+                    backoff,
                 )
                 self._sleep(backoff)
                 continue

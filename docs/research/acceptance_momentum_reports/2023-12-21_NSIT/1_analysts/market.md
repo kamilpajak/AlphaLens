@@ -23,7 +23,7 @@ The following report provides a comprehensive technical analysis of **NSIT** (In
 
 ### **Actionable Insights**
 
-*   **For Existing Holders (Long):** The current price action suggests "exhaustion." Consider **locking in partial profits** or trailing stop-losses tightly at the **$177 level** (aligned with the 10 EMA and VWMA). 
+*   **For Existing Holders (Long):** The current price action suggests "exhaustion." Consider **locking in partial profits** or trailing stop-losses tightly at the **$177 level** (aligned with the 10 EMA and VWMA).
 *   **For Potential Buyers (Entry):** Entering at current levels carries a high risk-to-reward ratio due to the extreme extension from the 50-day SMA. A more favorable entry would be a pullback to the **$168–$170 zone** or a period of sideways consolidation to allow the RSI to return to the 50-60 range.
 *   **Risk Factors:** A decisive break below **$177** could trigger a rapid decline toward the **$165–$168** support zone as momentum traders exit their positions.
 

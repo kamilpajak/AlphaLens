@@ -1,9 +1,9 @@
 # Comprehensive Fundamental Analysis Report: Amkor Technology, Inc. (AMKR)
 
-**Date of Analysis:** June 20, 2023  
-**Ticker:** AMKR  
-**Sector:** Technology  
-**Industry:** Semiconductor Equipment & Materials  
+**Date of Analysis:** June 20, 2023
+**Ticker:** AMKR
+**Sector:** Technology
+**Industry:** Semiconductor Equipment & Materials
 
 ---
 
@@ -21,7 +21,7 @@ Amkor is a pioneer in Advanced Packaging technologies (like Flip Chip, Wafer-Lev
 *   **Historical Growth:** Revenue surged in 2022 to **$7.09 billion**, up from $6.14 billion in 2021. However, current trends indicate a cyclical cooling in the semiconductor industry.
 *   **TTM Revenue (as of mid-2023):** Approximately **$6.71 billion**, reflecting a slight contraction relative to the 2022 peak.
 *   **Net Income:** 2022 saw record net income of **$765.8 million**. The TTM net income has moderated to approximately **$373.9 million**, signaling margin pressure from lower utilization rates and rising operational costs.
-*   **Profit Margins:** 
+*   **Profit Margins:**
     *   Operating Margin (TTM): **9.77%**
     *   Profit Margin (TTM): **5.57%**
     *   Return on Equity (ROE TTM): **8.66%**

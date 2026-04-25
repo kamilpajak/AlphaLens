@@ -1,7 +1,7 @@
 import tempfile
 import time
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 
@@ -116,7 +116,7 @@ class TestCandidateQueueFailureAndRetry(unittest.TestCase):
         self.tmp.cleanup()
 
     def _now(self):
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     def test_mark_failure_increments_attempts_and_schedules_retry(self):
         from alphalens.queue import CandidateQueue

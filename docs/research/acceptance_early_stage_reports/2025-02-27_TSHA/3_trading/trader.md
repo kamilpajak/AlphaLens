@@ -1,12 +1,12 @@
-Analysis of **TSHA (Taysha Gene Therapies, Inc.)** reveals a compelling case for a strategic entry, centered on the company’s unusually robust balance sheet relative to its peers in the clinical-stage biotech sector. 
+Analysis of **TSHA (Taysha Gene Therapies, Inc.)** reveals a compelling case for a strategic entry, centered on the company’s unusually robust balance sheet relative to its peers in the clinical-stage biotech sector.
 
 ### Fundamental Analysis
 The core of the "Buy" thesis lies in the **asymmetric risk-to-reward ratio** created by TSHA’s cash position. With approximately **$319 million in cash** against an annual burn rate of roughly **$93 million**, the company maintains a three-year operational runway. In the current high-interest-rate environment, this is a critical differentiator; TSHA is not desperate for immediate capital, which protects shareholders from the predatory, highly dilutive financing rounds that often plague small-cap biotechs. The high institutional ownership (96%) suggests a "vote of confidence" from sophisticated investors, though it does necessitate caution regarding liquidity during high-volatility events.
 
 ### Technical Analysis
-The stock is currently exhibiting a "coiled spring" pattern. 
-*   **Support:** A firm historical floor has been established between **1.43 and 1.50**. 
-*   **Resistance:** The immediate hurdle is the **1.70 level** (aligned with the 50-day moving average). 
+The stock is currently exhibiting a "coiled spring" pattern.
+*   **Support:** A firm historical floor has been established between **1.43 and 1.50**.
+*   **Resistance:** The immediate hurdle is the **1.70 level** (aligned with the 50-day moving average).
 *   **Target:** The **2.22 level** represents the 200-day moving average, a natural point for profit-taking and trend reassessment.
 
 ### Risk Management

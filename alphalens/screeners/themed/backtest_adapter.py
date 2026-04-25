@@ -11,8 +11,8 @@ DataFrame — both handled here.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
-from typing import Mapping
 
 import pandas as pd
 
@@ -48,7 +48,7 @@ def _latest_asof(histories: Mapping[str, pd.DataFrame]) -> date | None:
             continue
         try:
             dates.append(df.index.max().date())
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
     return max(dates) if dates else None
 
@@ -81,7 +81,6 @@ def momentum_scorer_adapter(
     histories: Mapping[str, pd.DataFrame],
     config: Mapping | None = None,
 ) -> pd.DataFrame:  # MIN_BARS_REQUIRED attached below at module scope
-
     """Call Layer 2b's MomentumScorer with the column rename + benchmark wiring.
 
     Config may override `benchmark` (default "SPY") and the seven metric weights.
@@ -92,10 +91,9 @@ def momentum_scorer_adapter(
     # Preserve underscore-prefixed internal keys (e.g. `_fundamentals_store`)
     # through the merge so adapter helpers can read them off merged_config.
     merged_config = dict(THEMED_DEFAULTS)
-    merged_config.update({
-        k: v for k, v in config.items()
-        if k in THEMED_DEFAULTS or k.startswith("_")
-    })
+    merged_config.update(
+        {k: v for k, v in config.items() if k in THEMED_DEFAULTS or k.startswith("_")}
+    )
 
     benchmark_ticker = config.get("benchmark", merged_config.get("benchmark", "SPY"))
     prices: dict[str, pd.DataFrame] = {
@@ -107,12 +105,15 @@ def momentum_scorer_adapter(
     else:
         bench_series = benchmark_ticker
 
-    tickers = [t for t in prices.keys() if t != benchmark_ticker]
+    tickers = [t for t in prices if t != benchmark_ticker]
     fundamentals = _fundamentals_for_backtest(tickers, histories, merged_config)
 
     scorer = MomentumScorer(merged_config)
     scored = scorer.score_all(
-        tickers, prices, benchmark_ticker=bench_series, fundamentals=fundamentals,
+        tickers,
+        prices,
+        benchmark_ticker=bench_series,
+        fundamentals=fundamentals,
     )
     if scored.empty:
         return pd.DataFrame(columns=["ticker", "score"])
@@ -124,7 +125,6 @@ def early_stage_scorer_adapter(
     histories: Mapping[str, pd.DataFrame],
     config: Mapping | None = None,
 ) -> pd.DataFrame:  # MIN_BARS_REQUIRED attached below at module scope
-
     """Call EarlyStageScorer with the column rename (lowercase → capitalised).
 
     Unlike MomentumScorer, the early-stage scorer ignores the benchmark (no
@@ -133,23 +133,25 @@ def early_stage_scorer_adapter(
     """
     config = dict(config or {})
     merged_config = dict(EARLY_STAGE_DEFAULTS)
-    merged_config.update({
-        k: v for k, v in config.items()
-        if k in EARLY_STAGE_DEFAULTS or k.startswith("_")
-    })
+    merged_config.update(
+        {k: v for k, v in config.items() if k in EARLY_STAGE_DEFAULTS or k.startswith("_")}
+    )
 
     prices: dict[str, pd.DataFrame] = {
         ticker: _to_capitalised(df) for ticker, df in histories.items()
     }
 
     benchmark_ticker = config.get("benchmark", merged_config.get("benchmark", "SPY"))
-    tickers = [t for t in prices.keys() if t != benchmark_ticker]
+    tickers = [t for t in prices if t != benchmark_ticker]
 
     fundamentals = _fundamentals_for_backtest(tickers, histories, merged_config)
 
     scorer = EarlyStageScorer(merged_config)
     scored = scorer.score_all(
-        tickers, prices, benchmark_ticker=None, fundamentals=fundamentals,
+        tickers,
+        prices,
+        benchmark_ticker=None,
+        fundamentals=fundamentals,
     )
     if scored.empty:
         return pd.DataFrame(columns=["ticker", "score"])

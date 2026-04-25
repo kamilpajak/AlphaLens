@@ -6,11 +6,7 @@ from unittest.mock import MagicMock
 def _payload(entries_by_taxonomy: dict) -> dict:
     facts = {}
     for tax, entries in entries_by_taxonomy.items():
-        facts[tax] = {
-            "EntityCommonStockSharesOutstanding": {
-                "units": {"shares": entries}
-            }
-        }
+        facts[tax] = {"EntityCommonStockSharesOutstanding": {"units": {"shares": entries}}}
     return {"cik": 320193, "facts": facts}
 
 
@@ -18,14 +14,26 @@ class TestParseCompanyFacts(unittest.TestCase):
     def test_happy_path_us_gaap(self):
         from alphalens.alt_data.shares_outstanding import parse_company_facts
 
-        payload = _payload({
-            "us-gaap": [
-                {"val": 1000000, "end": "2024-03-31", "filed": "2024-05-02",
-                 "accn": "acc-1", "form": "10-Q"},
-                {"val": 1010000, "end": "2024-06-30", "filed": "2024-08-05",
-                 "accn": "acc-2", "form": "10-Q"},
-            ]
-        })
+        payload = _payload(
+            {
+                "us-gaap": [
+                    {
+                        "val": 1000000,
+                        "end": "2024-03-31",
+                        "filed": "2024-05-02",
+                        "accn": "acc-1",
+                        "form": "10-Q",
+                    },
+                    {
+                        "val": 1010000,
+                        "end": "2024-06-30",
+                        "filed": "2024-08-05",
+                        "accn": "acc-2",
+                        "form": "10-Q",
+                    },
+                ]
+            }
+        )
 
         facts = parse_company_facts(payload, cik="0000320193")
 
@@ -42,12 +50,19 @@ class TestParseCompanyFacts(unittest.TestCase):
         not us-gaap. Parser must try both."""
         from alphalens.alt_data.shares_outstanding import parse_company_facts
 
-        payload = _payload({
-            "dei": [
-                {"val": 5000, "end": "2024-03-31", "filed": "2024-05-01",
-                 "accn": "a", "form": "10-Q"},
-            ]
-        })
+        payload = _payload(
+            {
+                "dei": [
+                    {
+                        "val": 5000,
+                        "end": "2024-03-31",
+                        "filed": "2024-05-01",
+                        "accn": "a",
+                        "form": "10-Q",
+                    },
+                ]
+            }
+        )
 
         facts = parse_company_facts(payload, cik="0000000001")
 
@@ -57,16 +72,28 @@ class TestParseCompanyFacts(unittest.TestCase):
     def test_us_gaap_preferred_over_dei_if_both_present(self):
         from alphalens.alt_data.shares_outstanding import parse_company_facts
 
-        payload = _payload({
-            "us-gaap": [
-                {"val": 999, "end": "2024-03-31", "filed": "2024-05-01",
-                 "accn": "a", "form": "10-Q"},
-            ],
-            "dei": [
-                {"val": 555, "end": "2024-03-31", "filed": "2024-05-01",
-                 "accn": "a", "form": "10-Q"},
-            ],
-        })
+        payload = _payload(
+            {
+                "us-gaap": [
+                    {
+                        "val": 999,
+                        "end": "2024-03-31",
+                        "filed": "2024-05-01",
+                        "accn": "a",
+                        "form": "10-Q",
+                    },
+                ],
+                "dei": [
+                    {
+                        "val": 555,
+                        "end": "2024-03-31",
+                        "filed": "2024-05-01",
+                        "accn": "a",
+                        "form": "10-Q",
+                    },
+                ],
+            }
+        )
 
         facts = parse_company_facts(payload, cik="0000000001")
 
@@ -88,18 +115,40 @@ class TestParseCompanyFacts(unittest.TestCase):
     def test_malformed_entries_skipped(self):
         from alphalens.alt_data.shares_outstanding import parse_company_facts
 
-        payload = _payload({
-            "us-gaap": [
-                {"val": 100, "end": "2024-03-31", "filed": "2024-05-01",
-                 "accn": "a", "form": "10-Q"},
-                {"val": "not-int", "end": "2024-06-30", "filed": "2024-08-01",
-                 "accn": "b", "form": "10-Q"},
-                {"val": 200, "end": "bad-date", "filed": "2024-11-01",
-                 "accn": "c", "form": "10-Q"},
-                {"val": 300, "end": "2024-12-31", "filed": "2025-02-01",
-                 "accn": "d", "form": "10-K"},
-            ]
-        })
+        payload = _payload(
+            {
+                "us-gaap": [
+                    {
+                        "val": 100,
+                        "end": "2024-03-31",
+                        "filed": "2024-05-01",
+                        "accn": "a",
+                        "form": "10-Q",
+                    },
+                    {
+                        "val": "not-int",
+                        "end": "2024-06-30",
+                        "filed": "2024-08-01",
+                        "accn": "b",
+                        "form": "10-Q",
+                    },
+                    {
+                        "val": 200,
+                        "end": "bad-date",
+                        "filed": "2024-11-01",
+                        "accn": "c",
+                        "form": "10-Q",
+                    },
+                    {
+                        "val": 300,
+                        "end": "2024-12-31",
+                        "filed": "2025-02-01",
+                        "accn": "d",
+                        "form": "10-K",
+                    },
+                ]
+            }
+        )
 
         facts = parse_company_facts(payload, cik="0000000001")
 

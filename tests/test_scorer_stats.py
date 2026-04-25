@@ -1,15 +1,14 @@
 """Tests for scorer-stats analytics: acceptance rates per scorer source."""
 
-import json
 import sqlite3
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 
 def _seed_candidate(conn, ticker, source, decision, status="done", finished_days_ago=0):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     enq = now - timedelta(days=finished_days_ago + 1)
     fin = now - timedelta(days=finished_days_ago)
     conn.execute(
@@ -17,9 +16,20 @@ def _seed_candidate(conn, ticker, source, decision, status="done", finished_days
            (ticker, source, priority, payload, dedup_key, status,
             enqueued_at, started_at, finished_at, decision, duration_sec, cost_usd, model_used)
            VALUES (?, ?, 10, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (ticker, source, "{}", f"{ticker}-{source}-{fin.isoformat()}", status,
-         enq.isoformat(), enq.isoformat(), fin.isoformat(), decision,
-         30.0, None, "gemini-2.5-flash"),
+        (
+            ticker,
+            source,
+            "{}",
+            f"{ticker}-{source}-{fin.isoformat()}",
+            status,
+            enq.isoformat(),
+            enq.isoformat(),
+            fin.isoformat(),
+            decision,
+            30.0,
+            None,
+            "gemini-2.5-flash",
+        ),
     )
     conn.commit()
 
@@ -31,6 +41,7 @@ class TestScorerStats(unittest.TestCase):
         db_path = Path(tmp.name)
         # Initialize schema via CandidateQueue
         from alphalens.queue import CandidateQueue
+
         CandidateQueue(db_path).close() if False else CandidateQueue(db_path)
         return db_path
 

@@ -17,7 +17,7 @@ Momentum has shifted from extreme panic to cautious optimism over the last 30 da
 *   **MACD (-0.13):** While still technically in negative territory, the MACD line has been on a consistent upward trajectory since late June. The narrowing gap and movement toward the zero-line indicate that bearish momentum is dissipating and a bullish crossover is in progress.
 
 #### **3. Volatility & Price Action: Bollinger Band Analysis**
-*   **Bollinger Bands:** The stock has moved from the Lower Band ($4.85) toward the Upper Band ($9.28). 
+*   **Bollinger Bands:** The stock has moved from the Lower Band ($4.85) toward the Upper Band ($9.28).
 *   **Bollinger Middle ($7.06):** Price is now trading comfortably above the 20-day basis. This shift often indicates a change in the "fair value" perception of the market for the short term.
 *   **Upper Band Resistance:** The $9.28 level coincides closely with previous local highs, making it a critical resistance zone for this rally.
 

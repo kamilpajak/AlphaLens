@@ -1,5 +1,5 @@
 
-Neutral Analyst: You both are making valid points, but you're both falling into the trap of looking for a binary outcome in a market that is currently defined by its lack of clarity. 
+Neutral Analyst: You both are making valid points, but you're both falling into the trap of looking for a binary outcome in a market that is currently defined by its lack of clarity.
 
 Aggressive Analyst, I have to challenge your "table-pounding buy" narrative. You’re treating the $3.06 inducement price as a structural floor, but in this macro environment, an option strike price for new employees isn't a support level—it’s just a data point. If the company is forced to do a secondary offering to bridge that nine-month cash gap, the market isn't going to care about where the new hires got their options. They’re going to demand a discount to the current price, likely pushing us well below that $3.00 mark. You're asking us to ignore the massive gravity of a $100 million quarterly burn rate. Science doesn't pay the bills; cash does. Calling this a "moonshot" while ignoring the looming dilution is how portfolios get gutted. You’re right that the upside is huge, but "winning" isn't about ignoring risk, it's about timing it.
 

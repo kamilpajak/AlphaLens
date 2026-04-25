@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from theme_classifier import classify_theme  # noqa: E402
+from theme_classifier import classify_theme
 
 CACHE_DIR = Path.home() / ".alphalens" / "survivorship"
 
@@ -89,21 +89,23 @@ def main() -> None:
         dv_2021 = snap_row.get("dollar_volume", 0.0)
         close_2021 = snap_row.get("close", 0.0)
 
-        thematic_rows.append({
-            "ticker": ticker,
-            "theme": match.theme,
-            "confidence": match.confidence,
-            "reason": match.reason,
-            "name": name,
-            "sic_code": sic_code or "",
-            "sic_description": sic_desc or "",
-            "delisted_utc": delisted,
-            "dollar_volume_2021_jun": dv_2021,
-            "close_2021_jun": close_2021,
-        })
+        thematic_rows.append(
+            {
+                "ticker": ticker,
+                "theme": match.theme,
+                "confidence": match.confidence,
+                "reason": match.reason,
+                "name": name,
+                "sic_code": sic_code or "",
+                "sic_description": sic_desc or "",
+                "delisted_utc": delisted,
+                "dollar_volume_2021_jun": dv_2021,
+                "close_2021_jun": close_2021,
+            }
+        )
 
     # Output summary
-    print(f"=== Summary ===")
+    print("=== Summary ===")
     print(f"  examined: {examined} tickers (populated details)")
     print(f"  with delisted_utc populated: {has_delisted_utc}")
     print(f"  thematic matches: {len(thematic_rows)}")
@@ -118,29 +120,41 @@ def main() -> None:
     high_med.sort(key=lambda r: -r["dollar_volume_2021_jun"])
 
     # Print top 40 by $ADV
-    print(f"\n=== Top 40 thematic delisted by 2021 dollar volume ===")
+    print("\n=== Top 40 thematic delisted by 2021 dollar volume ===")
     print(f"{'ticker':<8}{'theme':<8}{'conf':<8}{'$ADV':>10}  {'delisted':<22}  {'name':<40}")
     print("-" * 105)
     for r in high_med[:40]:
-        print(f"{r['ticker']:<8}{r['theme']:<8}{r['confidence']:<8}"
-              f"{r['dollar_volume_2021_jun']/1e6:>8.1f}M  "
-              f"{(r['delisted_utc'] or '?')[:22]:<22}  {r['name'][:40]}")
+        print(
+            f"{r['ticker']:<8}{r['theme']:<8}{r['confidence']:<8}"
+            f"{r['dollar_volume_2021_jun'] / 1e6:>8.1f}M  "
+            f"{(r['delisted_utc'] or '?')[:22]:<22}  {r['name'][:40]}"
+        )
 
     # Write full CSV
     out_csv = CACHE_DIR / "delisted_thematic_candidates_v2.csv"
     with out_csv.open("w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=[
-            "ticker", "theme", "confidence", "reason", "name",
-            "sic_code", "sic_description", "delisted_utc",
-            "dollar_volume_2021_jun", "close_2021_jun",
-        ])
+        w = csv.DictWriter(
+            fh,
+            fieldnames=[
+                "ticker",
+                "theme",
+                "confidence",
+                "reason",
+                "name",
+                "sic_code",
+                "sic_description",
+                "delisted_utc",
+                "dollar_volume_2021_jun",
+                "close_2021_jun",
+            ],
+        )
         w.writeheader()
         for r in thematic_rows:
             w.writerow(r)
     print(f"\nWrote {out_csv} ({len(thematic_rows)} rows)")
 
     # Sanity check: known high-profile delistings
-    print(f"\n=== Sanity check — known high-profile delistings ===")
+    print("\n=== Sanity check — known high-profile delistings ===")
     for ticker, expected_name, expected_theme, note in KNOWN_DELISTINGS:
         df = CACHE_DIR / f"details_{ticker}.json"
         if df.exists():
@@ -148,10 +162,14 @@ def main() -> None:
             if d:
                 m = classify_theme(d.get("sic_code"), d.get("sic_description"), d.get("name", ""))
                 status = "✓" if m.theme == expected_theme else "✗"
-                print(f"  [{status}] {ticker:6s} expected={expected_theme or 'None':8s} got={m.theme or 'None':8s} "
-                      f"conf={m.confidence:7s}  ({note})")
+                print(
+                    f"  [{status}] {ticker:6s} expected={expected_theme or 'None':8s} got={m.theme or 'None':8s} "
+                    f"conf={m.confidence:7s}  ({note})"
+                )
             else:
-                print(f"  [?] {ticker:6s} — empty details (not in shortlist or API returned nothing)")
+                print(
+                    f"  [?] {ticker:6s} — empty details (not in shortlist or API returned nothing)"
+                )
         else:
             print(f"  [?] {ticker:6s} — not in fetched details cache")
 

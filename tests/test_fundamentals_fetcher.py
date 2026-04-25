@@ -15,7 +15,6 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-
 OVERVIEW_FIXTURE = {
     "Symbol": "AAPL",
     "MarketCapitalization": "3000000000000",
@@ -66,18 +65,30 @@ class TestExtractFeatures(unittest.TestCase):
 
         bundle = {
             "overview": OVERVIEW_FIXTURE,
-            "balance_sheet": {"quarterlyReports": [
-                {"fiscalDateEnding": "2024-09-30", "cashAndShortTermInvestments": "50000000000"},
-            ]},
-            "cash_flow": {"quarterlyReports": [
-                {"fiscalDateEnding": "2024-09-30", "operatingCashflow": "25000000000"},
-            ]},
-            "income_statement": {"quarterlyReports": [
-                {"fiscalDateEnding": "2024-09-30", "netIncome": "24000000000"},
-                {"fiscalDateEnding": "2024-06-30", "netIncome": "22000000000"},
-                {"fiscalDateEnding": "2024-03-31", "netIncome": "26000000000"},
-                {"fiscalDateEnding": "2023-12-31", "netIncome": "28000000000"},
-            ]},
+            "balance_sheet": {
+                "quarterlyReports": [
+                    {
+                        "fiscalDateEnding": "2024-09-30",
+                        "cashAndShortTermInvestments": "50000000000",
+                    },
+                ]
+            },
+            "cash_flow": {
+                "quarterlyReports": [
+                    {
+                        "fiscalDateEnding": "2024-09-30",
+                        "operatingCashflow": "25000000000",
+                    },
+                ]
+            },
+            "income_statement": {
+                "quarterlyReports": [
+                    {"fiscalDateEnding": "2024-09-30", "netIncome": "24000000000"},
+                    {"fiscalDateEnding": "2024-06-30", "netIncome": "22000000000"},
+                    {"fiscalDateEnding": "2024-03-31", "netIncome": "26000000000"},
+                    {"fiscalDateEnding": "2023-12-31", "netIncome": "28000000000"},
+                ]
+            },
         }
 
         f = extract_features(bundle)
@@ -155,12 +166,17 @@ class TestExtractFeatures(unittest.TestCase):
         bundle = {
             "overview": {},
             "balance_sheet": {"quarterlyReports": []},
-            "cash_flow": {"quarterlyReports": [
-                {"fiscalDateEnding": "2024-09-30", "operatingCashflow": "-5000000"},
-                {"fiscalDateEnding": "2024-06-30", "operatingCashflow": "-3000000"},
-                {"fiscalDateEnding": "2024-03-31", "operatingCashflow": "2000000"},  # breaks streak
-                {"fiscalDateEnding": "2023-12-31", "operatingCashflow": "-1000000"},
-            ]},
+            "cash_flow": {
+                "quarterlyReports": [
+                    {"fiscalDateEnding": "2024-09-30", "operatingCashflow": "-5000000"},
+                    {"fiscalDateEnding": "2024-06-30", "operatingCashflow": "-3000000"},
+                    {
+                        "fiscalDateEnding": "2024-03-31",
+                        "operatingCashflow": "2000000",
+                    },  # breaks streak
+                    {"fiscalDateEnding": "2023-12-31", "operatingCashflow": "-1000000"},
+                ]
+            },
             "income_statement": {"quarterlyReports": []},
         }
         f = extract_features(bundle)
@@ -173,7 +189,11 @@ class TestFetchTickerBundle(unittest.TestCase):
     @patch("alphalens.fundamentals.fetcher._av_balance_sheet")
     @patch("alphalens.fundamentals.fetcher._av_overview")
     def test_fetch_bundle_calls_all_four_endpoints(
-        self, mock_ov, mock_bs, mock_cf, mock_is,
+        self,
+        mock_ov,
+        mock_bs,
+        mock_cf,
+        mock_is,
     ):
         from alphalens.fundamentals.fetcher import fetch_ticker_bundle
 
@@ -197,9 +217,11 @@ class TestFetchTickerBundle(unittest.TestCase):
         from alphalens.fundamentals.fetcher import fetch_ticker_bundle
 
         mock_ov.side_effect = RuntimeError("av timeout")
-        with patch("alphalens.fundamentals.fetcher._av_balance_sheet", return_value={}), \
-             patch("alphalens.fundamentals.fetcher._av_cashflow", return_value={}), \
-             patch("alphalens.fundamentals.fetcher._av_income_statement", return_value={}):
+        with (
+            patch("alphalens.fundamentals.fetcher._av_balance_sheet", return_value={}),
+            patch("alphalens.fundamentals.fetcher._av_cashflow", return_value={}),
+            patch("alphalens.fundamentals.fetcher._av_income_statement", return_value={}),
+        ):
             bundle = fetch_ticker_bundle("X")
 
         self.assertEqual(bundle["overview"], {})

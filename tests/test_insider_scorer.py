@@ -54,7 +54,7 @@ def _record_xml(
   </transactionAmounts>
 </nonDerivativeTransaction>
 </nonDerivativeTable>
-</ownershipDocument>""".encode("utf-8")
+</ownershipDocument>""".encode()
 
 
 def _submissions_payload(filings: list[dict]) -> dict:
@@ -71,12 +71,20 @@ def _submissions_payload(filings: list[dict]) -> dict:
     }
 
 
-def _build_scorer(*, xml_by_accession: dict[str, bytes], submissions: dict, ticker_cik: dict[str, str] | None = None, cache_dir: Path | None = None):
+def _build_scorer(
+    *,
+    xml_by_accession: dict[str, bytes],
+    submissions: dict,
+    ticker_cik: dict[str, str] | None = None,
+    cache_dir: Path | None = None,
+):
     from alphalens.screeners.insider.scorer import InsiderScorer
 
     edgar = MagicMock()
     edgar.fetch_submissions.return_value = submissions
-    edgar.fetch_form4_xml.side_effect = lambda cik, accession_number, primary_doc: xml_by_accession[accession_number]
+    edgar.fetch_form4_xml.side_effect = lambda cik, accession_number, primary_doc: xml_by_accession[
+        accession_number
+    ]
 
     cik_map = MagicMock()
     mapping = ticker_cik or {"AAPL": "0000320193"}
@@ -109,19 +117,22 @@ class TestPitFilingDateFilter(unittest.TestCase):
     def test_filing_after_asof_excluded(self):
         """Transaction is before asof but filing_date is after asof → PIT excludes it."""
         filings = [
-            {"form": "4", "accession": f"acc-{i}", "filing_date": fd, "primary": "f.xml"}
+            {
+                "form": "4",
+                "accession": f"acc-{i}",
+                "filing_date": fd,
+                "primary": "f.xml",
+            }
             for i, fd in enumerate(["2025-03-10", "2025-03-11", "2025-03-25"])
         ]
         xmls = {
-            "acc-0": _record_xml(owner_cik=f"000000000{i+1}", tx_date="2025-03-08")
+            "acc-0": _record_xml(owner_cik=f"000000000{i + 1}", tx_date="2025-03-08")
             for i, _ in enumerate(filings)
         }
         # All three insiders have transaction_date = 2025-03-08 (before asof 2025-03-20),
         # but filing acc-2 has filing_date = 2025-03-25 (after asof) and must be dropped.
         for i, f in enumerate(filings):
-            xmls[f["accession"]] = _record_xml(
-                owner_cik=f"000000000{i+1}", tx_date="2025-03-08"
-            )
+            xmls[f["accession"]] = _record_xml(owner_cik=f"000000000{i + 1}", tx_date="2025-03-08")
 
         scorer, _ = _build_scorer(
             xml_by_accession=xmls,
@@ -135,11 +146,16 @@ class TestPitFilingDateFilter(unittest.TestCase):
 
     def test_three_filings_all_pre_asof_form_cluster(self):
         filings = [
-            {"form": "4", "accession": f"acc-{i}", "filing_date": "2025-03-10", "primary": "f.xml"}
+            {
+                "form": "4",
+                "accession": f"acc-{i}",
+                "filing_date": "2025-03-10",
+                "primary": "f.xml",
+            }
             for i in range(3)
         ]
         xmls = {
-            f"acc-{i}": _record_xml(owner_cik=f"000000000{i+1}", tx_date="2025-03-08")
+            f"acc-{i}": _record_xml(owner_cik=f"000000000{i + 1}", tx_date="2025-03-08")
             for i in range(3)
         }
 
@@ -157,10 +173,30 @@ class TestPitFilingDateFilter(unittest.TestCase):
 class TestFormTypeFilter(unittest.TestCase):
     def test_non_form_4_skipped(self):
         filings = [
-            {"form": "4", "accession": "a1", "filing_date": "2025-03-10", "primary": "f.xml"},
-            {"form": "10-Q", "accession": "a2", "filing_date": "2025-03-11", "primary": "q.htm"},
-            {"form": "4", "accession": "a3", "filing_date": "2025-03-12", "primary": "f.xml"},
-            {"form": "4", "accession": "a4", "filing_date": "2025-03-13", "primary": "f.xml"},
+            {
+                "form": "4",
+                "accession": "a1",
+                "filing_date": "2025-03-10",
+                "primary": "f.xml",
+            },
+            {
+                "form": "10-Q",
+                "accession": "a2",
+                "filing_date": "2025-03-11",
+                "primary": "q.htm",
+            },
+            {
+                "form": "4",
+                "accession": "a3",
+                "filing_date": "2025-03-12",
+                "primary": "f.xml",
+            },
+            {
+                "form": "4",
+                "accession": "a4",
+                "filing_date": "2025-03-13",
+                "primary": "f.xml",
+            },
         ]
         xmls = {
             "a1": _record_xml(owner_cik="0000000001", tx_date="2025-03-10"),
@@ -177,7 +213,10 @@ class TestFormTypeFilter(unittest.TestCase):
 
         self.assertIsNotNone(result)
         # a2 (10-Q) never fetched
-        fetched = {call.kwargs.get("accession_number") or call.args[1] for call in edgar.fetch_form4_xml.call_args_list}
+        fetched = {
+            call.kwargs.get("accession_number") or call.args[1]
+            for call in edgar.fetch_form4_xml.call_args_list
+        }
         self.assertNotIn("a2", fetched)
 
 
@@ -186,11 +225,21 @@ class TestFeaturesDict(unittest.TestCase):
         import json
 
         filings = [
-            {"form": "4", "accession": f"acc-{i}", "filing_date": "2025-03-10", "primary": "f.xml"}
+            {
+                "form": "4",
+                "accession": f"acc-{i}",
+                "filing_date": "2025-03-10",
+                "primary": "f.xml",
+            }
             for i in range(3)
         ]
         xmls = {
-            f"acc-{i}": _record_xml(owner_cik=f"000000000{i+1}", tx_date="2025-03-08", shares="100", price="10.00")
+            f"acc-{i}": _record_xml(
+                owner_cik=f"000000000{i + 1}",
+                tx_date="2025-03-08",
+                shares="100",
+                price="10.00",
+            )
             for i in range(3)
         }
 
@@ -229,9 +278,14 @@ class TestCacheConfigFingerprint(unittest.TestCase):
                 edgar_client=edgar, ticker_cik_map=cik_map, cache_dir=cache
             )
             default_scorer._cache_store(
-                "AAPL", date(2024, 1, 15),
-                {"insider_count": 3, "aggregate_dollar": 1000.0,
-                 "cluster_window_days": 30, "asof": "2024-01-15"},
+                "AAPL",
+                date(2024, 1, 15),
+                {
+                    "insider_count": 3,
+                    "aggregate_dollar": 1000.0,
+                    "cluster_window_days": 30,
+                    "asof": "2024-01-15",
+                },
             )
 
             hit_default = default_scorer._cache_load("AAPL", date(2024, 1, 15))
@@ -250,6 +304,7 @@ class TestCacheConfigFingerprint(unittest.TestCase):
         """Backward compat: ~2M VPS-prewarmed entries lack config_hash.
         Accept them when current scorer uses default config."""
         import json
+
         from alphalens.alt_data.ticker_cik_map import TickerCikMap
         from alphalens.screeners.insider.scorer import InsiderScorer
 
@@ -259,11 +314,19 @@ class TestCacheConfigFingerprint(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             cache = Path(td)
             legacy_path = cache / "AAPL_2024-01-15.json"
-            legacy_path.write_text(json.dumps({
-                "features": {"insider_count": 3, "aggregate_dollar": 1000.0,
-                             "cluster_window_days": 30, "asof": "2024-01-15"},
-                "cached_at": "2024-01-15T00:00:00+00:00",
-            }))
+            legacy_path.write_text(
+                json.dumps(
+                    {
+                        "features": {
+                            "insider_count": 3,
+                            "aggregate_dollar": 1000.0,
+                            "cluster_window_days": 30,
+                            "asof": "2024-01-15",
+                        },
+                        "cached_at": "2024-01-15T00:00:00+00:00",
+                    }
+                )
+            )
 
             scorer = InsiderScorer(edgar_client=edgar, ticker_cik_map=cik_map, cache_dir=cache)
             hit = scorer._cache_load("AAPL", date(2024, 1, 15))
@@ -272,6 +335,7 @@ class TestCacheConfigFingerprint(unittest.TestCase):
 
     def test_legacy_cache_without_hash_rejected_by_custom_config(self):
         import json
+
         from alphalens.alt_data.ticker_cik_map import TickerCikMap
         from alphalens.screeners.insider.scorer import InsiderScorer, _ScorerConfig
 
@@ -281,11 +345,19 @@ class TestCacheConfigFingerprint(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             cache = Path(td)
             legacy_path = cache / "AAPL_2024-01-15.json"
-            legacy_path.write_text(json.dumps({
-                "features": {"insider_count": 3, "aggregate_dollar": 1000.0,
-                             "cluster_window_days": 30, "asof": "2024-01-15"},
-                "cached_at": "2024-01-15T00:00:00+00:00",
-            }))
+            legacy_path.write_text(
+                json.dumps(
+                    {
+                        "features": {
+                            "insider_count": 3,
+                            "aggregate_dollar": 1000.0,
+                            "cluster_window_days": 30,
+                            "asof": "2024-01-15",
+                        },
+                        "cached_at": "2024-01-15T00:00:00+00:00",
+                    }
+                )
+            )
 
             custom = InsiderScorer(
                 edgar_client=edgar,
@@ -300,11 +372,16 @@ class TestCacheConfigFingerprint(unittest.TestCase):
 class TestCacheContract(unittest.TestCase):
     def test_second_call_same_inputs_does_not_refetch(self):
         filings = [
-            {"form": "4", "accession": f"acc-{i}", "filing_date": "2025-03-10", "primary": "f.xml"}
+            {
+                "form": "4",
+                "accession": f"acc-{i}",
+                "filing_date": "2025-03-10",
+                "primary": "f.xml",
+            }
             for i in range(3)
         ]
         xmls = {
-            f"acc-{i}": _record_xml(owner_cik=f"000000000{i+1}", tx_date="2025-03-08")
+            f"acc-{i}": _record_xml(owner_cik=f"000000000{i + 1}", tx_date="2025-03-08")
             for i in range(3)
         }
 

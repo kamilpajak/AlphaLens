@@ -37,15 +37,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pandas as pd  # noqa: E402
-import yaml  # noqa: E402
+import pandas as pd
+import yaml
 
-from alphalens.alt_data.pit_universe import UniverseConfig, build_pit_universe  # noqa: E402
-from alphalens.alt_data.russell_universe import load_iwm_current  # noqa: E402
-from alphalens.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError  # noqa: E402
-from alphalens.alt_data.shares_outstanding import SharesFact, parse_company_facts  # noqa: E402
-from alphalens.alt_data.ticker_cik_map import TickerCikMap  # noqa: E402
-from alphalens.alt_data.yfinance_cache import (  # noqa: E402
+from alphalens.alt_data.pit_universe import UniverseConfig, build_pit_universe
+from alphalens.alt_data.russell_universe import load_iwm_current
+from alphalens.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
+from alphalens.alt_data.shares_outstanding import SharesFact, parse_company_facts
+from alphalens.alt_data.ticker_cik_map import TickerCikMap
+from alphalens.alt_data.yfinance_cache import (
     download_and_cache,
     load_cached_histories,
 )
@@ -142,9 +142,7 @@ def stage_snapshots(
             cik_map=cik_map,
             config=config,
         )
-        snapshot_path.write_text(
-            yaml.safe_dump({"asof": asof.isoformat(), "tickers": universe})
-        )
+        snapshot_path.write_text(yaml.safe_dump({"asof": asof.isoformat(), "tickers": universe}))
         written += 1
     logger.info("snapshots: %d written (of %d month-ends)", written, len(month_ends))
     return written
@@ -160,8 +158,9 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--start", type=date.fromisoformat, default=date(2009, 1, 1))
     ap.add_argument("--end", type=date.fromisoformat, default=date.today())
     ap.add_argument("--limit", type=int, default=0, help="Only first N tickers (smoke)")
-    ap.add_argument("--tickers", type=str, default="",
-                    help="Comma-separated ticker override (bypasses IWM)")
+    ap.add_argument(
+        "--tickers", type=str, default="", help="Comma-separated ticker override (bypasses IWM)"
+    )
     ap.add_argument("--cap-min", type=float, default=300_000_000.0)
     ap.add_argument("--cap-max", type=float, default=3_000_000_000.0)
     return ap.parse_args()

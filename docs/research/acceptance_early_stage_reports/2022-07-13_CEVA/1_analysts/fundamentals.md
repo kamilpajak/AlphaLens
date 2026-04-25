@@ -11,7 +11,7 @@ CEVA Inc. is a leading licensor of wireless connectivity and smart sensing techn
 ### **1. Company Profile and Business Model**
 CEVA operates as a premier licensor of Digital Signal Processing (DSP) cores and AI processors. Their technology is integrated into over 1.5 billion devices annually.
 *   **Key Markets:** Mobile (5G), Automotive (ADAs, infotainment), IoT (Bluetooth, Wi-Fi, NB-IoT), and Industrial.
-*   **Revenue Streams:** 
+*   **Revenue Streams:**
     *   **Licensing:** Upfront fees for access to IP. This is a leading indicator of future royalty potential.
     *   **Royalties:** Per-unit fees paid once products containing CEVA IP reach the market.
 

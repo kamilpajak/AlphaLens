@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,7 +15,7 @@ def _classified(ticker="AAPL", severity=None, relevance=None, action=None, form=
             ticker=ticker,
             form_type=form or FormType.FORM_8K,
             accession_number="ACC-001",
-            filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc),
+            filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=UTC),
             url="https://sec.gov/filing",
             raw_data={"items": items or ["4.02"]},
         ),

@@ -1,5 +1,5 @@
 ### **Fundamental Analysis Report: Ambarella, Inc. (AMBA)**
-**Analysis Date:** May 27, 2025  
+**Analysis Date:** May 27, 2025
 **Sector:** Technology | **Industry:** Semiconductor Equipment & Materials
 
 ---
@@ -31,7 +31,7 @@ Despite the GAAP net loss, Ambarella’s cash flow position is better than its e
 *   **Market Capitalization:** ~$2.60 billion.
 *   **Price to Sales (P/S) TTM:** 6.64.
 *   **Forward P/E:** 79.37, indicating that the market expects significant future earnings growth as the company scales its AI vision products.
-*   **Analyst Outlook:** The sentiment is generally bullish. There are **8 "Buy" or "Strong Buy"** ratings versus **6 "Hold"** ratings and **0 "Sell"** ratings. 
+*   **Analyst Outlook:** The sentiment is generally bullish. There are **8 "Buy" or "Strong Buy"** ratings versus **6 "Hold"** ratings and **0 "Sell"** ratings.
 *   **Price Target:** The average analyst target is **$89.58**, representing a significant upside from current levels (based on a current 200-day moving average of $70.99).
 
 #### **6. Growth Catalysts and Risks**

@@ -1,9 +1,9 @@
 # BigBear.ai Holdings, Inc. (BBAI) Fundamental Analysis Report
 
-**Date:** May 27, 2025  
-**Ticker:** BBAI  
-**Exchange:** NYSE  
-**Sector:** Technology  
+**Date:** May 27, 2025
+**Ticker:** BBAI
+**Exchange:** NYSE
+**Sector:** Technology
 **Industry:** Information Technology Services
 
 ---
@@ -16,7 +16,7 @@ BigBear.ai Holdings, Inc. (BBAI) is a provider of artificial intelligence and ma
 ### **1. Financial Performance & Profitability**
 *   **Revenue Decline:** BBAI's annual revenue for 2025 was **$127.67 million**, a significant drop from **$158.24 million** in 2024. Quarterly revenue growth was down **37.7% YoY**, indicating a contraction in its core business activities or the loss of key contracts.
 *   **Net Losses:** The company reported a net loss of **-$293.91 million** for the fiscal year 2025. This loss is substantial relative to its revenue, driven by high operating expenses ($111.88M) and non-cash charges.
-*   **Margins:** 
+*   **Margins:**
     *   **Gross Profit Margin:** ~22.3% (Gross Profit of $28.48M on $127.67M revenue), which is low for a specialized AI software provider.
     *   **Operating Margin:** -76.7%, reflecting inefficient operations or heavy investment relative to current scale.
     *   **Net Margin:** -230%, largely skewed by financing costs and potential write-downs.

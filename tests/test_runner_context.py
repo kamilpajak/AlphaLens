@@ -4,7 +4,6 @@ Actual injection into the TradingAgents graph is deferred to an upstream PR
 (touching vendored code would conflict with subtree pulls). For now: log only.
 """
 
-import logging
 import unittest
 from unittest.mock import MagicMock
 
@@ -76,9 +75,7 @@ class TestRunnerLogsContextBeforePropagate(unittest.TestCase):
             graph_factory=lambda _cfg: graph,
         )
 
-        candidate = _cand(
-            "momentum", {"momentum_score": 0.91, "themes": ["AI"]}, ticker="NVDA"
-        )
+        candidate = _cand("momentum", {"momentum_score": 0.91, "themes": ["AI"]}, ticker="NVDA")
 
         with self.assertLogs("alphalens.runner", level="INFO") as cm:
             runner.run(candidate, candidate_id=1)

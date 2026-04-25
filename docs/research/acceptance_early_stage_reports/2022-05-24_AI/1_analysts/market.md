@@ -8,7 +8,7 @@ C3.ai (AI) has been in a persistent long-term downtrend since late 2021. However
 ### **Technical Indicator Analysis**
 
 #### **1. Trend Identification (Moving Averages)**
-*   **Long-Term (200 SMA):** The **200-day SMA stands at $32.89**, more than 80% above the current price. This highlights a deep and sustained bearish regime. 
+*   **Long-Term (200 SMA):** The **200-day SMA stands at $32.89**, more than 80% above the current price. This highlights a deep and sustained bearish regime.
 *   **Medium-Term (50 SMA):** The **50-day SMA is at $19.36**. The price is currently trading just below this level ($17.78 as of the last close). The 50 SMA is sloping downward but flattening, acting as a critical overhead resistance.
 *   **Observation:** The stock remains in a bearish configuration (Price < 50 SMA < 200 SMA), but the narrowing gap between the price and the 50 SMA indicates a slowing of the primary downtrend.
 
@@ -22,7 +22,7 @@ C3.ai (AI) has been in a persistent long-term downtrend since late 2021. However
 *   **Support/Resistance:** The **Lower Band ($14.18)** provided excellent support during the mid-May sell-off.
 
 #### **4. Volume Confirmation (VWMA)**
-*   **VWMA:** The **Volume-Weighted Moving Average is $16.38**. 
+*   **VWMA:** The **Volume-Weighted Moving Average is $16.38**.
 *   **Insight:** The fact that the current price ($17.78) is higher than the VWMA ($16.38) is a bullish signal. It implies that the buyers who entered during the recent high-volume "bottoming" period are currently in profit, which reduces immediate selling pressure.
 
 ---

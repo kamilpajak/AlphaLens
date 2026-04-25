@@ -9,7 +9,7 @@ Allegro MicroSystems (ALGM) is currently navigating a transitional phase followi
 ---
 
 ## 1. Company Profile & Strategic Positioning
-Allegro MicroSystems is a leader in power and sensing solutions for the automotive and industrial markets. Their products—specifically magnetic sensors and power ICs—are critical components in electric vehicles (EVs), advanced driver-assistance systems (ADAS), and green energy infrastructure. 
+Allegro MicroSystems is a leader in power and sensing solutions for the automotive and industrial markets. Their products—specifically magnetic sensors and power ICs—are critical components in electric vehicles (EVs), advanced driver-assistance systems (ADAS), and green energy infrastructure.
 
 **Strategic Insight:** Despite a rough 2024-2025, ALGM maintains a high Beta (1.695), indicating it will outperform in a bull market but carries higher risk during volatility. The company is doubling down on innovation, with Research & Development expenses remaining high at nearly $180M annually, even as revenues compressed.
 

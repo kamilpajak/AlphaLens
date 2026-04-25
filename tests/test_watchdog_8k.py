@@ -1,5 +1,5 @@
 """Tests for 8-K item-number extraction and primary-document selection."""
-import json
+
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -152,7 +152,9 @@ class TestInfer502Subsection(unittest.TestCase):
         """CEO/CFO/COO + departure/resignation/termination → 5.02(b)."""
         from alphalens.watchdog.sources.eightk import infer_5_02_subsection
 
-        text = "John Smith, the Company's Chief Executive Officer, resigned effective April 1, 2026."
+        text = (
+            "John Smith, the Company's Chief Executive Officer, resigned effective April 1, 2026."
+        )
         self.assertEqual(infer_5_02_subsection(text), "5.02(b)")
 
     def test_infers_502b_from_cfo_termination(self):

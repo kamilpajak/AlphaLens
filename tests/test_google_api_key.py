@@ -11,8 +11,16 @@ class TestGoogleApiKeyStandardization(unittest.TestCase):
     def test_api_key_handling(self, mock_chat):
         test_cases = [
             ("unified api_key is mapped", {"api_key": "test-key-123"}, "test-key-123"),
-            ("legacy google_api_key still works", {"google_api_key": "legacy-key-456"}, "legacy-key-456"),
-            ("unified api_key takes precedence", {"api_key": "unified", "google_api_key": "legacy"}, "unified"),
+            (
+                "legacy google_api_key still works",
+                {"google_api_key": "legacy-key-456"},
+                "legacy-key-456",
+            ),
+            (
+                "unified api_key takes precedence",
+                {"api_key": "unified", "google_api_key": "legacy"},
+                "unified",
+            ),
         ]
 
         for msg, kwargs, expected_key in test_cases:

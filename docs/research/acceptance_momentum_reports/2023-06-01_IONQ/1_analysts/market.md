@@ -14,7 +14,7 @@ IONQ has undergone a massive bullish transformation over the last 30 days. After
 *   **MACD (1.23):** The MACD remains positive and high. The histogram showed a peak in momentum in late May and has since leveled off, suggesting that while the price is still rising, the *rate* of acceleration is beginning to slow.
 
 #### **3. Volatility & Volume (High Risk/High Reward)**
-*   **Bollinger Bands:** The price is trading near the **Upper Band ($12.36)**, but the bands themselves have widened dramatically (Lower Band at **$4.67**). This "opening of the jaws" indicates a massive increase in volatility. 
+*   **Bollinger Bands:** The price is trading near the **Upper Band ($12.36)**, but the bands themselves have widened dramatically (Lower Band at **$4.67**). This "opening of the jaws" indicates a massive increase in volatility.
 *   **ATR (0.88):** The Average True Range has more than doubled from early May (0.36). This means daily swings of 8-10% are now the norm for IONQ. Traders must adjust position sizes downward to account for this increased risk.
 *   **VWMA ($9.61):** The Volume Weighted Moving Average is currently at $9.61. Since the price ($10.79) is above the VWMA, it indicates that the average buyer over the last period is in profit, providing a "cushion" of support if the stock pulls back.
 

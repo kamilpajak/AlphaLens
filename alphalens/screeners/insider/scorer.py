@@ -20,7 +20,7 @@ import json
 import logging
 import re
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from alphalens.alt_data.form4_filter import filter_eligible
@@ -102,9 +102,7 @@ class InsiderScorer:
                     )
                 )
             except (SecEdgarError, Form4ParseError) as exc:
-                logger.warning(
-                    "skipping Form 4 %s for %s: %s", f["accession"], ticker, exc
-                )
+                logger.warning("skipping Form 4 %s for %s: %s", f["accession"], ticker, exc)
 
         eligible = filter_eligible(records)
         cluster = detect_cluster(
@@ -169,7 +167,7 @@ class InsiderScorer:
             return
         payload = {
             "features": features,
-            "cached_at": datetime.now(timezone.utc).isoformat(),
+            "cached_at": datetime.now(UTC).isoformat(),
             "config_hash": self._config_hash(),
         }
         path.write_text(json.dumps(payload))
@@ -186,9 +184,7 @@ def _strip_xsl_prefix(primary_doc: str) -> str:
     return _XSL_PREFIX_RE.sub("", primary_doc)
 
 
-def _iter_form4_filings(
-    submissions: dict, *, asof: date, min_filing_date: date
-) -> list[dict]:
+def _iter_form4_filings(submissions: dict, *, asof: date, min_filing_date: date) -> list[dict]:
     recent = (submissions.get("filings") or {}).get("recent") or {}
     forms = recent.get("form") or []
     accessions = recent.get("accessionNumber") or []
@@ -196,9 +192,7 @@ def _iter_form4_filings(
     primary_docs = recent.get("primaryDocument") or []
 
     out: list[dict] = []
-    for form, accession, fd_str, primary in zip(
-        forms, accessions, filing_dates, primary_docs
-    ):
+    for form, accession, fd_str, primary in zip(forms, accessions, filing_dates, primary_docs):
         if form not in {"4", "4/A"}:
             continue
         try:
@@ -207,10 +201,12 @@ def _iter_form4_filings(
             continue
         if fd > asof or fd < min_filing_date:
             continue
-        out.append({
-            "form": form,
-            "accession": accession,
-            "filing_date": fd,
-            "primary": _strip_xsl_prefix(primary),
-        })
+        out.append(
+            {
+                "form": form,
+                "accession": accession,
+                "filing_date": fd,
+                "primary": _strip_xsl_prefix(primary),
+            }
+        )
     return out

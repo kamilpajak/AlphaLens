@@ -106,6 +106,7 @@ class TestBuildDockerArgs(unittest.TestCase):
 class TestRun(unittest.TestCase):
     def _fake_runner(self, returncode=0, stdout="ok", stderr="", write_payload=None):
         """Return a callable that pretends to invoke docker and writes JSON side-effect."""
+
         def runner(cmd, timeout):
             if write_payload is not None:
                 # Infer /Results mount target from args.
@@ -119,6 +120,7 @@ class TestRun(unittest.TestCase):
             proc.stdout = stdout
             proc.stderr = stderr
             return proc
+
         return runner
 
     def test_success_returns_lean_output(self):
@@ -245,7 +247,11 @@ class TestDockerAvailable(unittest.TestCase):
 class TestDefaultRunConfig(unittest.TestCase):
     def test_builds_from_alphalens_defaults(self):
         from alphalens.screeners.lean.config import (
-            DATA_DIR, LEAN_DOCKER_IMAGE, LEAN_PROJECT_DIR, LOGS_DIR, RESULTS_DIR,
+            DATA_DIR,
+            LEAN_DOCKER_IMAGE,
+            LEAN_PROJECT_DIR,
+            LOGS_DIR,
+            RESULTS_DIR,
         )
         from alphalens.screeners.lean.runner import default_run_config
 

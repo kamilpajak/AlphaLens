@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
-from typing import Callable
 
 import pandas as pd
 
@@ -101,7 +101,7 @@ def download_and_cache(
             continue
         try:
             df = fetch(ticker, start, end)
-        except Exception as exc:  # noqa: BLE001 — log-and-continue on any fetch error
+        except Exception as exc:
             logger.warning("yfinance fetch %s failed: %s", ticker, exc)
             continue
         if df is None or df.empty:
@@ -114,9 +114,7 @@ def download_and_cache(
     return new_count
 
 
-def load_cached_histories(
-    tickers: list[str], cache_dir: Path
-) -> dict[str, pd.DataFrame]:
+def load_cached_histories(tickers: list[str], cache_dir: Path) -> dict[str, pd.DataFrame]:
     """Load pre-cached parquets into a dict compatible with ``HistoryStore``.
 
     Tickers without a parquet on disk are silently skipped — caller's

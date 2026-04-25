@@ -5,10 +5,10 @@ Let’s look at the "pre-loaded spring" of inventory. The aggressive stance trea
 
 The argument that ACMR has an untouchable technological moat also fails to account for the "insider" risk. The more successful ACMR is in China, the more they become a target for both US regulators looking to slow China’s progress and Chinese domestic competitors looking to catch up. The aggressive analyst mentions SMEE’s 28nm machine as "laughable," but in risk assessment, we don't laugh at the first signs of domestic substitution. We recognize it as the beginning of a trend toward 100% domestic supply chains that eventually excludes US-domiciled entities like ACMR.
 
-Technically, the stock is overextended. Hugging the upper Bollinger Band with an RSI of 64 isn't a sign of safety; it’s a sign that the "easy money" has already been made. Buying at the top of a parabolic move when the macroeconomic backdrop is this hostile is not "bold"—it’s reckless. 
+Technically, the stock is overextended. Hugging the upper Bollinger Band with an RSI of 64 isn't a sign of safety; it’s a sign that the "easy money" has already been made. Buying at the top of a parabolic move when the macroeconomic backdrop is this hostile is not "bold"—it’s reckless.
 
-The neutral analyst's suggestion to "hold" or wait for a pullback is equally problematic because it fails to address the binary nature of the risk. A "hold" is a decision to remain exposed to a potential 50% overnight drop if a new executive order is signed or if China retaliates against US tech curbs. 
+The neutral analyst's suggestion to "hold" or wait for a pullback is equally problematic because it fails to address the binary nature of the risk. A "hold" is a decision to remain exposed to a potential 50% overnight drop if a new executive order is signed or if China retaliates against US tech curbs.
 
-We cannot value a company based on a $70 price target if the path to that target is blocked by a regulatory wall we don't control. My recommendation remains firm: scale out of this position immediately. Let the aggressive traders chase the last 5% of a move while we protect our principal. We prioritize steady, reliable growth over "rocket ships" that lack a flight plan or a parachute. 
+We cannot value a company based on a $70 price target if the path to that target is blocked by a regulatory wall we don't control. My recommendation remains firm: scale out of this position immediately. Let the aggressive traders chase the last 5% of a move while we protect our principal. We prioritize steady, reliable growth over "rocket ships" that lack a flight plan or a parachute.
 
 FINAL TRANSACTION PROPOSAL: SELL to protect capital and move into assets with lower geopolitical sensitivity.

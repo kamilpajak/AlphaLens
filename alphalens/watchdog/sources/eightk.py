@@ -7,6 +7,7 @@ items from that HTML without building a DOM tree — regex-only extraction is
 sufficient for this grammar and avoids the overhead of a full parser on
 potentially multi-MB filings.
 """
+
 from __future__ import annotations
 
 import html as _html
@@ -16,12 +17,34 @@ import re
 # Any "Item X.YY" match outside this set is a cross-reference to another schedule
 # (e.g. Item 10.1 of Regulation S-K), not a Form 8-K section.
 _VALID_ITEMS = (
-    "1.01", "1.02", "1.03", "1.04",
-    "2.01", "2.02", "2.03", "2.04", "2.05", "2.06",
-    "3.01", "3.02", "3.03",
-    "4.01", "4.02",
-    "5.01", "5.02", "5.03", "5.04", "5.05", "5.06", "5.07", "5.08",
-    "6.01", "6.02", "6.03", "6.04", "6.05",
+    "1.01",
+    "1.02",
+    "1.03",
+    "1.04",
+    "2.01",
+    "2.02",
+    "2.03",
+    "2.04",
+    "2.05",
+    "2.06",
+    "3.01",
+    "3.02",
+    "3.03",
+    "4.01",
+    "4.02",
+    "5.01",
+    "5.02",
+    "5.03",
+    "5.04",
+    "5.05",
+    "5.06",
+    "5.07",
+    "5.08",
+    "6.01",
+    "6.02",
+    "6.03",
+    "6.04",
+    "6.05",
     "7.01",
     "8.01",
     "9.01",
@@ -112,7 +135,7 @@ def extract_5_02_section(html: str) -> str:
     if not heading:
         return ""
     start = heading.start()
-    tail = text[heading.end():]
+    tail = text[heading.end() :]
     end_candidates: list[int] = []
     next_item = _NEXT_ITEM_RE.search(tail)
     if next_item:

@@ -1,4 +1,4 @@
-Analysis of KROS (Keros Therapeutics) reveals a high-stakes environment where corporate financial engineering is clashing with fundamental biotech valuation principles. 
+Analysis of KROS (Keros Therapeutics) reveals a high-stakes environment where corporate financial engineering is clashing with fundamental biotech valuation principles.
 
 ### Market Context & Fundamental Analysis
 The decision by management to initiate a **$375 million share buyback** is highly irregular for a clinical-stage biotech company. In this sector, cash is the most critical asset, required to navigate the "valley of death" between Phase 1 safety trials and Phase 3 pivotal data. By deploying nearly half of its cash reserves to repurchase shares, KROS is significantly shortening its operational runway. While bulls interpret this as a signal of undervaluation or a precursor to an acquisition, it more likely serves as a defensive maneuver to fend off activist pressure or artificially support the stock price during a strategic review.

@@ -1,7 +1,7 @@
 ### **UiPath Inc. (PATH) Fundamental Analysis Report**
-**Date:** April 10, 2025  
-**Ticker:** PATH  
-**Exchange:** NYSE  
+**Date:** April 10, 2025
+**Ticker:** PATH
+**Exchange:** NYSE
 
 ---
 

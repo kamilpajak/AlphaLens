@@ -1,9 +1,9 @@
 ### Lumentum Holdings Inc. (LITE) Fundamental Analysis Report
 
-**Date:** November 25, 2024  
-**Ticker:** LITE  
-**Sector:** Technology  
-**Industry:** Communication Equipment  
+**Date:** November 25, 2024
+**Ticker:** LITE
+**Sector:** Technology
+**Industry:** Communication Equipment
 
 ---
 
@@ -30,7 +30,7 @@ Lumentum's recent financial history shows a company transitioning from significa
 #### 5. Market Valuation & Analyst Sentiment
 *   **Market Capitalization:** Approximately **$63.91 billion**.
 *   **Valuation Multiples:** LITE is trading at a very high Trailing PE of **256.48**, though the Forward PE is a more moderate **58.82**, reflecting expectations of substantial earnings growth in the coming year.
-*   **Analyst Outlook:** The consensus among analysts is overwhelmingly positive, with **18 "Buy" or "Strong Buy"** ratings and only **5 "Hold"** ratings. No analysts currently recommend a "Sell." 
+*   **Analyst Outlook:** The consensus among analysts is overwhelmingly positive, with **18 "Buy" or "Strong Buy"** ratings and only **5 "Hold"** ratings. No analysts currently recommend a "Sell."
 *   **Price Targets:** The average target price is **$773.35**. Note that the current stock price (near its 52-week high of $960) has significantly exceeded the average analyst target, which may indicate a near-term valuation risk.
 
 ---

@@ -15,6 +15,7 @@ date rows (YYYYMMDD), then a blank line and optionally another section
 (equal-weighted returns for the industry portfolio file) or a copyright footer.
 All returns are published in **percent** and are converted to decimals on load.
 """
+
 from __future__ import annotations
 
 import logging
@@ -36,8 +37,18 @@ DEFAULT_INDUSTRY12_PATH = DEFAULT_FACTORS_DIR / "12_Industry_Portfolios_Daily.cs
 
 _FF5_COLUMNS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"]
 _INDUSTRY12_COLUMNS = [
-    "NoDur", "Durbl", "Manuf", "Enrgy", "Chems", "BusEq",
-    "Telcm", "Utils", "Shops", "Hlth", "Money", "Other",
+    "NoDur",
+    "Durbl",
+    "Manuf",
+    "Enrgy",
+    "Chems",
+    "BusEq",
+    "Telcm",
+    "Utils",
+    "Shops",
+    "Hlth",
+    "Money",
+    "Other",
 ]
 
 
@@ -66,7 +77,7 @@ def _parse_dartmouth_section(
         )
 
     data_lines: list[str] = []
-    for line in lines[header_idx + 1:]:
+    for line in lines[header_idx + 1 :]:
         if _DATE_ROW_RE.match(line):
             data_lines.append(line)
         elif data_lines:
@@ -89,13 +100,11 @@ def _parse_dartmouth_section(
     return raw[expected_columns]
 
 
-def _apply_date_filter(
-    df: pd.DataFrame, start: date | None, end: date | None
-) -> pd.DataFrame:
+def _apply_date_filter(df: pd.DataFrame, start: date | None, end: date | None) -> pd.DataFrame:
     if start is not None:
-        df = df.loc[pd.Timestamp(start):]
+        df = df.loc[pd.Timestamp(start) :]
     if end is not None:
-        df = df.loc[:pd.Timestamp(end)]
+        df = df.loc[: pd.Timestamp(end)]
     return df
 
 
@@ -196,7 +205,13 @@ def _parse_q4_csv(text: str) -> pd.DataFrame:
         raw[col] = pd.to_numeric(raw[col], errors="coerce") / 100.0
 
     return raw.rename(
-        columns={"R_F": "RF", "R_MKT": "Mkt-RF", "R_ME": "ME", "R_IA": "IA", "R_ROE": "ROE"}
+        columns={
+            "R_F": "RF",
+            "R_MKT": "Mkt-RF",
+            "R_ME": "ME",
+            "R_IA": "IA",
+            "R_ROE": "ROE",
+        }
     )[["Mkt-RF", "ME", "IA", "ROE", "RF"]]
 
 
@@ -213,7 +228,7 @@ def load_q4_daily(
     start: date | None = None,
     end: date | None = None,
     *,
-    fetch: "callable | None" = None,
+    fetch: callable | None = None,
 ) -> pd.DataFrame:
     """Load Hou-Xue-Zhang q-factor daily returns (Q4: Mkt-RF, ME, I/A, ROE).
 
@@ -243,16 +258,12 @@ def load_q4_daily(
         if not path.exists():
             try:
                 path.write_text(fetcher(url))
-            except Exception as exc:  # noqa: BLE001 — skip unpublished year files
+            except Exception as exc:
                 logger.debug("q4 yearly file %s not available: %s", filename, exc)
                 continue
         frames.append(_parse_q4_csv(path.read_text()))
 
-    combined = (
-        pd.concat(frames)
-        .sort_index()
-        .loc[lambda df: ~df.index.duplicated(keep="last")]
-    )
+    combined = pd.concat(frames).sort_index().loc[lambda df: ~df.index.duplicated(keep="last")]
     return _apply_date_filter(combined, start, end)
 
 

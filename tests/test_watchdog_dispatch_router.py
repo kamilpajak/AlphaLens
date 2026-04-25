@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 
@@ -13,7 +13,7 @@ def _classified(action):
             ticker="AAPL",
             form_type=FormType.FORM_8K,
             accession_number="ACC-1",
-            filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc),
+            filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=UTC),
             url="https://sec.gov/x",
             raw_data={},
         ),
@@ -32,12 +32,14 @@ class TestDispatchRouter(unittest.TestCase):
         approval = MagicMock()
         digest = MagicMock()
 
-        router = DispatchRouter({
-            Action.AUTO_TRIGGER: [auto],
-            Action.APPROVAL: [approval],
-            Action.DIGEST: [digest],
-            Action.IGNORE: [],
-        })
+        router = DispatchRouter(
+            {
+                Action.AUTO_TRIGGER: [auto],
+                Action.APPROVAL: [approval],
+                Action.DIGEST: [digest],
+                Action.IGNORE: [],
+            }
+        )
 
         router.dispatch(_classified(Action.AUTO_TRIGGER))
         router.dispatch(_classified(Action.APPROVAL))

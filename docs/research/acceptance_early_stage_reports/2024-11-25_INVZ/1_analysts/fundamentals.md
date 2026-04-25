@@ -1,7 +1,7 @@
 ### **Innoviz Technologies Ltd. (INVZ) Fundamental Analysis Report**
-**Date:** November 25, 2024  
-**Ticker:** INVZ  
-**Sector:** Consumer Cyclical / Auto Parts  
+**Date:** November 25, 2024
+**Ticker:** INVZ
+**Sector:** Consumer Cyclical / Auto Parts
 
 ---
 
@@ -10,8 +10,8 @@ Innoviz Technologies Ltd., headquartered in Rosh HaAyin, Israel, is a leading pr
 
 #### **2. Financial Performance & Earnings Trend**
 Innoviz is in a high-growth but pre-profitability stage, characteristic of the LiDAR industry.
-*   **Revenue Growth:** The company has shown significant top-line expansion. Revenue for the trailing twelve months (TTM) stands at **$55.09M**. Recent quarterly data indicates a volatile but upward trend, with a peak revenue of approximately **$17.39M** in the most recent quarterly cycle (labeled Q1 2025 in data, likely 2024). 
-*   **Profitability:** The company remains unprofitable. Net losses range between **$12M and $21M per quarter**. 
+*   **Revenue Growth:** The company has shown significant top-line expansion. Revenue for the trailing twelve months (TTM) stands at **$55.09M**. Recent quarterly data indicates a volatile but upward trend, with a peak revenue of approximately **$17.39M** in the most recent quarterly cycle (labeled Q1 2025 in data, likely 2024).
+*   **Profitability:** The company remains unprofitable. Net losses range between **$12M and $21M per quarter**.
     *   **Gross Profit (TTM):** $12.91M.
     *   **Operating Margin (TTM):** -165.1%, reflecting high R&D and SG&A expenses required to scale.
     *   **EBITDA (TTM):** -$62.38M.
@@ -19,7 +19,7 @@ Innoviz is in a high-growth but pre-profitability stage, characteristic of the L
 #### **3. Balance Sheet & Liquidity Analysis**
 The balance sheet shows a company managing its "cash runway" carefully as it moves toward mass production.
 *   **Cash Position:** As of the latest report, Innoviz holds **$8.65M** in cash and **$63.48M** in short-term investments, totaling roughly **$72.13M** in liquid assets.
-*   **Debt:** Total debt stands at **$64.55M**, largely composed of lease obligations and short-term debt. 
+*   **Debt:** Total debt stands at **$64.55M**, largely composed of lease obligations and short-term debt.
 *   **Shareholder Equity:** Total equity is **$77.72M**. The **Price-to-Book ratio is 1.82**, suggesting the market values the company at nearly twice its accounting net worth, which is common for tech-heavy firms with significant intellectual property.
 *   **Burn Rate:** With a quarterly net loss average of ~$17M and ~$72M in liquid assets, the company has a runway of approximately **4 quarters** (1 year) unless they reduce expenses, increase revenue significantly, or raise further capital.
 
@@ -51,5 +51,5 @@ The balance sheet shows a company managing its "cash runway" carefully as it mov
 | **Beta** | 1.52 | High volatility; sensitive to market swings. |
 | **Institutional Ownership**| 25.96% | Moderate institutional support for a small-cap firm. |
 
-**FINAL TRANSACTION PROPOSAL: HOLD**  
+**FINAL TRANSACTION PROPOSAL: HOLD**
 *Rationale:* While the upside potential based on analyst targets and revenue growth is massive, the limited cash runway and persistent losses make a "Buy" high-risk. A "Hold" is recommended until the company demonstrates either a successful capital raise or a further reduction in quarterly burn.

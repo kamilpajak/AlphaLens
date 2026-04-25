@@ -19,8 +19,8 @@ Używany w dwóch miejscach:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 
 import pandas as pd
 
@@ -33,8 +33,8 @@ class ThemeSnapshot:
     top_n_tickers: tuple[str, ...]
     theme_weights: Mapping[str, float]  # normalized, sum ≤ 1.0 (może < 1.0 gdy niesklasyfikowane)
     dominant_theme: str | None
-    hhi: float                           # Herfindahl index w przestrzeni wag tematów, [0, 1]
-    unclassified_fraction: float         # nazwy bez żadnego theme mapping'u
+    hhi: float  # Herfindahl index w przestrzeni wag tematów, [0, 1]
+    unclassified_fraction: float  # nazwy bez żadnego theme mapping'u
 
 
 def snapshot_themes(
@@ -100,7 +100,8 @@ def snapshot_themes(
     hhi = sum(w * w for w in all_weights) if all_weights else 0.0
     uncl_frac = (
         unclassified / (total_classified + unclassified)
-        if (total_classified + unclassified) > 0 else 0.0
+        if (total_classified + unclassified) > 0
+        else 0.0
     )
 
     return ThemeSnapshot(
@@ -118,10 +119,10 @@ class ThemeSeriesStats:
     """Agregaty koncentracji tematów przez całe okno backtestu."""
 
     all_themes: tuple[str, ...]
-    mean_weights: Mapping[str, float]         # średnia waga per theme przez okno
-    days_dominant: Mapping[str, int]           # ile dni dany theme był dominujący
-    mean_hhi: float                            # średnia HHI przez okno
-    concentration_alert_days: int              # dni gdzie max theme > threshold
+    mean_weights: Mapping[str, float]  # średnia waga per theme przez okno
+    days_dominant: Mapping[str, int]  # ile dni dany theme był dominujący
+    mean_hhi: float  # średnia HHI przez okno
+    concentration_alert_days: int  # dni gdzie max theme > threshold
     concentration_threshold: float
 
 
@@ -188,18 +189,26 @@ def theme_series(
 def format_theme_summary(stats: ThemeSeriesStats, n_total_days: int) -> str:
     """Ludzko-czytelny raport dla markdown sekcji."""
     lines = []
-    lines.append(f"Okno backtestu: {n_total_days} dni, próg koncentracji = {stats.concentration_threshold * 100:.0f}%")
+    lines.append(
+        f"Okno backtestu: {n_total_days} dni, próg koncentracji = {stats.concentration_threshold * 100:.0f}%"
+    )
     lines.append(f"Średni HHI: {stats.mean_hhi:.3f} (0 = idealna dywersyfikacja, 1 = jeden theme)")
-    lines.append(f"Dni z max theme > {stats.concentration_threshold * 100:.0f}%: "
-                 f"{stats.concentration_alert_days} / {n_total_days} "
-                 f"({stats.concentration_alert_days / max(n_total_days, 1) * 100:.1f}%)")
+    lines.append(
+        f"Dni z max theme > {stats.concentration_threshold * 100:.0f}%: "
+        f"{stats.concentration_alert_days} / {n_total_days} "
+        f"({stats.concentration_alert_days / max(n_total_days, 1) * 100:.1f}%)"
+    )
     lines.append("")
     lines.append("| Theme | Średnia waga | Dni dominujący |")
     lines.append("|---|---:|---:|")
-    for theme in sorted(stats.all_themes, key=lambda t: stats.mean_weights.get(t, 0.0), reverse=True):
+    for theme in sorted(
+        stats.all_themes, key=lambda t: stats.mean_weights.get(t, 0.0), reverse=True
+    ):
         avg = stats.mean_weights.get(theme, 0.0)
         dom = stats.days_dominant.get(theme, 0)
-        lines.append(f"| {theme} | {avg * 100:.1f}% | {dom} ({dom / max(n_total_days, 1) * 100:.1f}%) |")
+        lines.append(
+            f"| {theme} | {avg * 100:.1f}% | {dom} ({dom / max(n_total_days, 1) * 100:.1f}%) |"
+        )
     return "\n".join(lines)
 
 
@@ -214,9 +223,11 @@ def snapshots_from_backtest(
     """
     out = []
     for r in daily_results:
-        out.append(snapshot_themes(
-            top_n_tickers=r.top_n_tickers,
-            themes_map=themes_map,
-            date=r.date,
-        ))
+        out.append(
+            snapshot_themes(
+                top_n_tickers=r.top_n_tickers,
+                themes_map=themes_map,
+                date=r.date,
+            )
+        )
     return out

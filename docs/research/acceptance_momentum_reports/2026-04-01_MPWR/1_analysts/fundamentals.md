@@ -1,7 +1,7 @@
 ### **Fundamental Analysis Report: Monolithic Power Systems, Inc. (MPWR)**
-**Date:** April 1, 2026  
-**Ticker:** MPWR  
-**Sector:** Technology | **Industry:** Semiconductors  
+**Date:** April 1, 2026
+**Ticker:** MPWR
+**Sector:** Technology | **Industry:** Semiconductors
 
 ---
 
@@ -12,7 +12,7 @@ Monolithic Power Systems (MPWR) continues to establish itself as a premier high-
 
 #### **2. Financial Performance Analysis**
 *   **Revenue Growth:** MPWR has demonstrated consistent top-line expansion. Annual revenue grew from **$1.82B in 2023** to **$2.79B in 2025**, representing a CAGR of approximately **23.8%**. Quarterly revenue growth remains strong at **20.8% YoY**.
-*   **Earnings & Margins:** 
+*   **Earnings & Margins:**
     *   **Net Income:** The 2024 net income of $1.78B was significantly inflated by a one-time tax benefit of ~$1.21B. Normalizing for this, the 2025 net income of **$615.9 million** represents a more accurate reflection of operational profitability.
     *   **Margins:** Operating margins are healthy at **26.6% (TTM)** with a gross profit margin of **55.2%**. The company’s ability to maintain these margins despite semiconductor cyclicality highlights its pricing power and high-value product mix.
 *   **Earnings per Share (EPS):** Current TTM EPS stands at **$12.82**. The forward P/E of **67.11** indicates that markets expect significant earnings expansion in the 2026-2027 fiscal years.
@@ -28,7 +28,7 @@ Monolithic Power Systems (MPWR) continues to establish itself as a premier high-
 
 #### **4. Cash Flow & Shareholder Returns**
 *   **Operating Cash Flow:** MPWR generated **$838.2 million** in operating cash flow in 2025, up from $788.4M in 2024.
-*   **Capital Allocation:** 
+*   **Capital Allocation:**
     *   **Dividends:** The company pays a dividend of **$6.24 per share** (yield ~0.42%). While low, the dividend payout has been increasing annually ($284.8M total in 2025 vs. $240.6M in 2024).
     *   **R&D Commitment:** R&D spending rose to **$382.3 million** in 2025 (approx. 13.7% of revenue), ensuring its product pipeline remains competitive in the high-stakes AI power module market.
 

@@ -1,10 +1,10 @@
 ### Rocket Lab USA Inc. (RKLB) Fundamental Analysis Report
 
-**Date of Analysis:** August 8, 2023  
-**Ticker:** RKLB  
-**Exchange:** NASDAQ  
-**Sector:** Industrials  
-**Industry:** Aerospace & Defense  
+**Date of Analysis:** August 8, 2023
+**Ticker:** RKLB
+**Exchange:** NASDAQ
+**Sector:** Industrials
+**Industry:** Aerospace & Defense
 
 ---
 
@@ -15,7 +15,7 @@ Rocket Lab USA Inc. is a premier aerospace and defense company that has establis
 Rocket Lab is in a high-growth phase, characterized by rapidly increasing revenue alongside significant investment-driven losses.
 
 *   **Revenue Growth:** Revenue has shown a strong upward trajectory. For the fiscal year ending 2022, the company reported **$211M** in total revenue, a massive jump from **$62.2M** in 2021. The trailing twelve months (TTM) revenue as of mid-2023 reached **$601.8M**, indicating a robust scaling of operations.
-*   **Profitability & Margins:** 
+*   **Profitability & Margins:**
     *   **Gross Profit:** The company turned gross-margin positive on an annual basis in 2022 ($19M) and has significantly improved this in the first half of 2023. Quarterly gross profit for Q2 2023 was **$14.6M**.
     *   **Net Losses:** RKLB continues to report net losses due to heavy reinvestment. Net income for 2022 was **-$135.9M**. The most recent quarter (Q2 2023) saw a net loss of **-$45.9M**.
     *   **Operating Expenses:** A major driver of expenses is Research and Development (R&D), which was **$31M** in Q2 2023 alone, reflecting the ongoing development of the **Neutron** rocket (a larger, reusable launch vehicle).
@@ -23,8 +23,8 @@ Rocket Lab is in a high-growth phase, characterized by rapidly increasing revenu
 #### **3. Financial Health & Solvency (Balance Sheet)**
 The company maintains a strong liquidity position to fund its ambitious growth plans.
 
-*   **Cash Position:** As of June 30, 2023, Rocket Lab held approximately **$341M** in cash and short-term investments (**$197.2M** in cash + **$144M** in short-term investments). 
-*   **Assets vs. Liabilities:** Total assets stand at **$981.5M**, comfortably exceeding total liabilities of **$370.4M**. 
+*   **Cash Position:** As of June 30, 2023, Rocket Lab held approximately **$341M** in cash and short-term investments (**$197.2M** in cash + **$144M** in short-term investments).
+*   **Assets vs. Liabilities:** Total assets stand at **$981.5M**, comfortably exceeding total liabilities of **$370.4M**.
 *   **Debt:** The company has a manageable debt-to-equity profile, with long-term debt and capital lease obligations totaling roughly **$163M**. This provides sufficient "runway" to continue R&D without immediate solvency concerns.
 *   **Inventory:** Inventory levels increased to **$102.2M** by mid-2023, up from **$92.3M** at the end of 2022, suggesting the company is scaling up production for future launches and space systems orders.
 

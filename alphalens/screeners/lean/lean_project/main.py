@@ -17,15 +17,14 @@ import json
 import logging
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
 import yaml
 
 # Lean-only imports — resolved inside the container.
-from AlgorithmImports import *  # noqa: F401,F403  # pylint: disable=wildcard-import
-
+from AlgorithmImports import *  # noqa: F403  # pylint: disable=wildcard-import
 from features import dollar_volume_average  # noqa: F401  (smoke import)
 from scorer import rank_universe
 
@@ -92,23 +91,23 @@ def _atomic_write_json(path: str, payload: dict) -> None:
 class LeanBatchScreener(QCAlgorithm):  # type: ignore[name-defined]  # noqa: F405
     def initialize(self):
         self.SetCash(100_000)
-        end = self.Time if hasattr(self, "Time") else datetime.now(timezone.utc)
+        end = self.Time if hasattr(self, "Time") else datetime.now(UTC)
         self.SetStartDate(end.year - 1, end.month, max(end.day - 1, 1))
 
         self._universe = _load_universe()
         for ticker in self._universe:
             try:
                 self.AddEquity(ticker, Resolution.Daily)  # noqa: F405
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logging.warning("skip %s: %s", ticker, exc)
 
         logging.info("LeanBatchScreener initialized with %d tickers", len(self._universe))
 
-    def on_data(self, _data):  # noqa: D401  (Lean hook)
+    def on_data(self, _data):
         """No per-bar work — all the computation happens at end-of-algorithm."""
         return
 
-    def on_end_of_algorithm(self):  # noqa: D401  (Lean hook)
+    def on_end_of_algorithm(self):
         histories: dict[str, pd.DataFrame] = {}
         for ticker in self._universe:
             symbol = self.Symbol(ticker) if hasattr(self, "Symbol") else None
@@ -116,7 +115,7 @@ class LeanBatchScreener(QCAlgorithm):  # type: ignore[name-defined]  # noqa: F40
                 continue
             try:
                 history = self.History(symbol, _HISTORY_BARS, Resolution.Daily)  # noqa: F405
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logging.debug("no history for %s: %s", ticker, exc)
                 continue
             if history is None or history.empty:
@@ -131,9 +130,9 @@ class LeanBatchScreener(QCAlgorithm):  # type: ignore[name-defined]  # noqa: F40
 
         payload = {
             "status": "success",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "version": SCHEMA_VERSION,
-            "total_scored": int(len(ranked)),
+            "total_scored": len(ranked),
             "universe_size": len(self._universe),
             "rankings": [
                 {

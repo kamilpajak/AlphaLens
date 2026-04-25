@@ -1,9 +1,9 @@
 **Fundamental Analysis Report: Lattice Semiconductor Corporation (LSCC)**
 
-**Date:** May 20, 2022  
-**Ticker:** LSCC  
-**Exchange:** NASDAQ  
-**Sector/Industry:** Technology / Semiconductors  
+**Date:** May 20, 2022
+**Ticker:** LSCC
+**Exchange:** NASDAQ
+**Sector/Industry:** Technology / Semiconductors
 
 ---
 

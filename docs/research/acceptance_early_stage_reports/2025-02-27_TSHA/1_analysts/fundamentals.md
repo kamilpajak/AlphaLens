@@ -1,13 +1,13 @@
 ### **Fundamental Analysis Report: Taysha Gene Therapies, Inc. (TSHA)**
-**Date:** February 27, 2025  
-**Ticker:** TSHA  
-**Sector:** Healthcare  
+**Date:** February 27, 2025
+**Ticker:** TSHA
+**Sector:** Healthcare
 **Industry:** Biotechnology
 
 ---
 
 #### **1. Company Profile & Strategic Overview**
-Taysha Gene Therapies (TSHA) is a clinical-stage biotechnology company focused on developing adeno-associated virus (AAV)-based gene therapies for monogenic diseases of the central nervous system (CNS). Its lead programs target high-unmet-need conditions such as **Rett Syndrome** and **GAN (Giant Axonal Neuropathy)**. 
+Taysha Gene Therapies (TSHA) is a clinical-stage biotechnology company focused on developing adeno-associated virus (AAV)-based gene therapies for monogenic diseases of the central nervous system (CNS). Its lead programs target high-unmet-need conditions such as **Rett Syndrome** and **GAN (Giant Axonal Neuropathy)**.
 
 As of early 2025, TSHA is in a critical execution phase, transitioning from early-stage research to potentially pivotal clinical milestones. The company’s focus remains on its proprietary "capsid" technology and regulatory pathways that could fast-track its treatments to market.
 
@@ -19,7 +19,7 @@ As of early 2025, TSHA is in a critical execution phase, transitioning from earl
 
 #### **3. Financial Position & Liquidity (Balance Sheet)**
 *   **Cash Position:** TSHA maintains a strong liquidity profile with **$319.77 million** in cash and short-term investments as of the latest reporting period (Dec 2025). This represents a significant increase from previous years, likely due to successful capital raises.
-*   **Total Assets vs. Liabilities:** Total assets stand at **$343.32 million** against total liabilities of **$96.38 million**. 
+*   **Total Assets vs. Liabilities:** Total assets stand at **$343.32 million** against total liabilities of **$96.38 million**.
 *   **Shareholder Equity:** Total equity has improved to **$246.94 million**, providing a solid cushion for continued operations.
 *   **Debt:** The company has long-term debt of approximately **$50.11 million**, which is manageable given the current cash-to-debt ratio.
 

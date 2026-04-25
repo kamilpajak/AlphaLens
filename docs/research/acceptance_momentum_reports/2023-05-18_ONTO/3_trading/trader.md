@@ -11,7 +11,7 @@ ONTO is currently exhibiting classic signs of technical exhaustion following a v
 ### Strategic Move
 The most prudent course of action is to prioritize risk management. Following a parabolic move into a resistance wall, "hope" is not a strategy. Trimming the position allows for the locking in of realized gains while retaining a core long-term exposure to the AI sector. By selling 25-30% of the position now, you insulate the portfolio against a likely pullback toward the $88–$92 support range, where shares can be re-accumulated at a more favorable valuation.
 
-Failure to take profits in these "perfect" momentum setups often leads to watching paper gains evaporate during the inevitable shakeout. 
+Failure to take profits in these "perfect" momentum setups often leads to watching paper gains evaporate during the inevitable shakeout.
 
 **Decision:** Sell a portion of the holdings to lock in profits and reduce exposure ahead of the $100 resistance level.
 

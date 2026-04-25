@@ -51,16 +51,40 @@ class TestSimFinHelpers(unittest.TestCase):
     def test_runway_computed_from_bs_plus_trailing_ocf(self):
         from alphalens.fundamentals.simfin_store import _runway_from_frames
 
-        bs = _frame("X", [
-            {"Report Date": "2024-03-31", "Cash, Cash Equivalents & Short Term Investments": 40_000_000},
-            {"Report Date": "2024-06-30", "Cash, Cash Equivalents & Short Term Investments": 50_000_000},
-        ]).loc["X"]
-        cf = _frame("X", [
-            {"Report Date": "2023-09-30", "Net Cash from Operating Activities": -10_000_000},
-            {"Report Date": "2023-12-31", "Net Cash from Operating Activities": -15_000_000},
-            {"Report Date": "2024-03-31", "Net Cash from Operating Activities": -18_000_000},
-            {"Report Date": "2024-06-30", "Net Cash from Operating Activities": -20_000_000},
-        ]).loc["X"]
+        bs = _frame(
+            "X",
+            [
+                {
+                    "Report Date": "2024-03-31",
+                    "Cash, Cash Equivalents & Short Term Investments": 40_000_000,
+                },
+                {
+                    "Report Date": "2024-06-30",
+                    "Cash, Cash Equivalents & Short Term Investments": 50_000_000,
+                },
+            ],
+        ).loc["X"]
+        cf = _frame(
+            "X",
+            [
+                {
+                    "Report Date": "2023-09-30",
+                    "Net Cash from Operating Activities": -10_000_000,
+                },
+                {
+                    "Report Date": "2023-12-31",
+                    "Net Cash from Operating Activities": -15_000_000,
+                },
+                {
+                    "Report Date": "2024-03-31",
+                    "Net Cash from Operating Activities": -18_000_000,
+                },
+                {
+                    "Report Date": "2024-06-30",
+                    "Net Cash from Operating Activities": -20_000_000,
+                },
+            ],
+        ).loc["X"]
 
         # avg TTM OCF = (10 + 15 + 18 + 20)/4 = 15.75M burn per quarter
         # runway = 50M / 15.75M * 3 ≈ 9.52 months
@@ -69,44 +93,83 @@ class TestSimFinHelpers(unittest.TestCase):
     def test_runway_none_when_cash_flow_positive(self):
         from alphalens.fundamentals.simfin_store import _runway_from_frames
 
-        bs = _frame("X", [
-            {"Report Date": "2024-06-30", "Cash, Cash Equivalents & Short Term Investments": 50_000_000},
-        ]).loc["X"]
-        cf = _frame("X", [
-            {"Report Date": "2024-03-31", "Net Cash from Operating Activities": 5_000_000},
-            {"Report Date": "2024-06-30", "Net Cash from Operating Activities": 8_000_000},
-        ]).loc["X"]
+        bs = _frame(
+            "X",
+            [
+                {
+                    "Report Date": "2024-06-30",
+                    "Cash, Cash Equivalents & Short Term Investments": 50_000_000,
+                },
+            ],
+        ).loc["X"]
+        cf = _frame(
+            "X",
+            [
+                {
+                    "Report Date": "2024-03-31",
+                    "Net Cash from Operating Activities": 5_000_000,
+                },
+                {
+                    "Report Date": "2024-06-30",
+                    "Net Cash from Operating Activities": 8_000_000,
+                },
+            ],
+        ).loc["X"]
         self.assertIsNone(_runway_from_frames(bs, cf))
 
     def test_net_income_ttm_sums_last_4_quarters(self):
         from alphalens.fundamentals.simfin_store import _net_income_ttm_from_frame
 
-        inc = _frame("X", [
-            {"Report Date": "2023-09-30", "Net Income": -5_000_000},
-            {"Report Date": "2023-12-31", "Net Income": -3_000_000},
-            {"Report Date": "2024-03-31", "Net Income": -2_000_000},
-            {"Report Date": "2024-06-30", "Net Income": -1_000_000},
-        ]).loc["X"]
+        inc = _frame(
+            "X",
+            [
+                {"Report Date": "2023-09-30", "Net Income": -5_000_000},
+                {"Report Date": "2023-12-31", "Net Income": -3_000_000},
+                {"Report Date": "2024-03-31", "Net Income": -2_000_000},
+                {"Report Date": "2024-06-30", "Net Income": -1_000_000},
+            ],
+        ).loc["X"]
         self.assertEqual(_net_income_ttm_from_frame(inc), -11_000_000)
 
     def test_net_income_ttm_none_with_fewer_than_4_quarters(self):
         from alphalens.fundamentals.simfin_store import _net_income_ttm_from_frame
 
-        inc = _frame("X", [
-            {"Report Date": "2024-06-30", "Net Income": -1_000_000},
-        ]).loc["X"]
+        inc = _frame(
+            "X",
+            [
+                {"Report Date": "2024-06-30", "Net Income": -1_000_000},
+            ],
+        ).loc["X"]
         self.assertIsNone(_net_income_ttm_from_frame(inc))
 
     def test_consecutive_neg_ocf_counts_from_most_recent(self):
         from alphalens.fundamentals.simfin_store import _consecutive_neg_ocf_from_frame
 
-        cf = _frame("X", [
-            {"Report Date": "2023-06-30", "Net Cash from Operating Activities": -5_000_000},
-            {"Report Date": "2023-09-30", "Net Cash from Operating Activities": 2_000_000},  # breaks
-            {"Report Date": "2023-12-31", "Net Cash from Operating Activities": -1_000_000},
-            {"Report Date": "2024-03-31", "Net Cash from Operating Activities": -3_000_000},
-            {"Report Date": "2024-06-30", "Net Cash from Operating Activities": -4_000_000},
-        ]).loc["X"]
+        cf = _frame(
+            "X",
+            [
+                {
+                    "Report Date": "2023-06-30",
+                    "Net Cash from Operating Activities": -5_000_000,
+                },
+                {
+                    "Report Date": "2023-09-30",
+                    "Net Cash from Operating Activities": 2_000_000,
+                },  # breaks
+                {
+                    "Report Date": "2023-12-31",
+                    "Net Cash from Operating Activities": -1_000_000,
+                },
+                {
+                    "Report Date": "2024-03-31",
+                    "Net Cash from Operating Activities": -3_000_000,
+                },
+                {
+                    "Report Date": "2024-06-30",
+                    "Net Cash from Operating Activities": -4_000_000,
+                },
+            ],
+        ).loc["X"]
         # Reports sorted ascending by date; newest is 2024-06-30. Iterate newest→oldest:
         # -4, -3, -1, +2 → streak 3
         self.assertEqual(_consecutive_neg_ocf_from_frame(cf), 3)
@@ -114,21 +177,27 @@ class TestSimFinHelpers(unittest.TestCase):
     def test_ps_ratio_pit_uses_close_and_shares_outstanding(self):
         from alphalens.fundamentals.simfin_store import _ps_ratio_pit
 
-        prices_df = _prices_frame("X", [
-            {"Date": "2024-06-28", "Close": 50.0, "Shares Outstanding": 10_000_000},
-            {"Date": "2024-06-29", "Close": 55.0, "Shares Outstanding": 10_000_000},
-            {"Date": "2024-07-01", "Close": 60.0, "Shares Outstanding": 10_000_000},
-        ])
+        prices_df = _prices_frame(
+            "X",
+            [
+                {"Date": "2024-06-28", "Close": 50.0, "Shares Outstanding": 10_000_000},
+                {"Date": "2024-06-29", "Close": 55.0, "Shares Outstanding": 10_000_000},
+                {"Date": "2024-07-01", "Close": 60.0, "Shares Outstanding": 10_000_000},
+            ],
+        )
         # Pre-split into dict (mimicking what preload does).
         prices_by_ticker = {
             "X": prices_df.loc["X"].sort_index(),
         }
-        inc = _frame("X", [
-            {"Report Date": "2023-09-30", "Revenue": 20_000_000},
-            {"Report Date": "2023-12-31", "Revenue": 22_000_000},
-            {"Report Date": "2024-03-31", "Revenue": 25_000_000},
-            {"Report Date": "2024-06-30", "Revenue": 33_000_000},
-        ]).loc["X"]
+        inc = _frame(
+            "X",
+            [
+                {"Report Date": "2023-09-30", "Revenue": 20_000_000},
+                {"Report Date": "2023-12-31", "Revenue": 22_000_000},
+                {"Report Date": "2024-03-31", "Revenue": 25_000_000},
+                {"Report Date": "2024-06-30", "Revenue": 33_000_000},
+            ],
+        ).loc["X"]
         # asof 2024-06-29: close 55 × shares 10M = 550M market cap; TTM revenue
         # 20+22+25+33 = 100M → P/S = 5.5
         ps = _ps_ratio_pit(prices_by_ticker, inc, "X", pd.Timestamp("2024-06-29"))
@@ -137,9 +206,12 @@ class TestSimFinHelpers(unittest.TestCase):
     def test_ps_ratio_none_when_prices_not_loaded(self):
         from alphalens.fundamentals.simfin_store import _ps_ratio_pit
 
-        inc = _frame("X", [
-            {"Report Date": "2024-06-30", "Revenue": 100_000_000},
-        ]).loc["X"]
+        inc = _frame(
+            "X",
+            [
+                {"Report Date": "2024-06-30", "Revenue": 100_000_000},
+            ],
+        ).loc["X"]
         self.assertIsNone(_ps_ratio_pit(None, inc, "X", pd.Timestamp("2024-06-29")))
 
 
@@ -152,22 +224,65 @@ class TestSimFinFundamentalsStoreEndToEnd(unittest.TestCase):
         with patch.dict(os.environ, {"SIMFIN_API_KEY": "testkey"}):
             store = SimFinFundamentalsStore()
         # Populate directly — skip the real sf.load_* calls.
-        store._balance = _frame("ACME", [
-            {"Report Date": "2024-03-31", "Cash, Cash Equivalents & Short Term Investments": 30_000_000},
-            {"Report Date": "2024-06-30", "Cash, Cash Equivalents & Short Term Investments": 25_000_000},
-        ])
-        store._cashflow = _frame("ACME", [
-            {"Report Date": "2023-09-30", "Net Cash from Operating Activities": -8_000_000},
-            {"Report Date": "2023-12-31", "Net Cash from Operating Activities": -7_000_000},
-            {"Report Date": "2024-03-31", "Net Cash from Operating Activities": -6_000_000},
-            {"Report Date": "2024-06-30", "Net Cash from Operating Activities": -5_000_000},
-        ])
-        store._income = _frame("ACME", [
-            {"Report Date": "2023-09-30", "Net Income": -4_000_000, "Revenue": 10_000_000},
-            {"Report Date": "2023-12-31", "Net Income": -3_000_000, "Revenue": 11_000_000},
-            {"Report Date": "2024-03-31", "Net Income": -2_000_000, "Revenue": 13_000_000},
-            {"Report Date": "2024-06-30", "Net Income": -1_000_000, "Revenue": 16_000_000},
-        ])
+        store._balance = _frame(
+            "ACME",
+            [
+                {
+                    "Report Date": "2024-03-31",
+                    "Cash, Cash Equivalents & Short Term Investments": 30_000_000,
+                },
+                {
+                    "Report Date": "2024-06-30",
+                    "Cash, Cash Equivalents & Short Term Investments": 25_000_000,
+                },
+            ],
+        )
+        store._cashflow = _frame(
+            "ACME",
+            [
+                {
+                    "Report Date": "2023-09-30",
+                    "Net Cash from Operating Activities": -8_000_000,
+                },
+                {
+                    "Report Date": "2023-12-31",
+                    "Net Cash from Operating Activities": -7_000_000,
+                },
+                {
+                    "Report Date": "2024-03-31",
+                    "Net Cash from Operating Activities": -6_000_000,
+                },
+                {
+                    "Report Date": "2024-06-30",
+                    "Net Cash from Operating Activities": -5_000_000,
+                },
+            ],
+        )
+        store._income = _frame(
+            "ACME",
+            [
+                {
+                    "Report Date": "2023-09-30",
+                    "Net Income": -4_000_000,
+                    "Revenue": 10_000_000,
+                },
+                {
+                    "Report Date": "2023-12-31",
+                    "Net Income": -3_000_000,
+                    "Revenue": 11_000_000,
+                },
+                {
+                    "Report Date": "2024-03-31",
+                    "Net Income": -2_000_000,
+                    "Revenue": 13_000_000,
+                },
+                {
+                    "Report Date": "2024-06-30",
+                    "Net Income": -1_000_000,
+                    "Revenue": 16_000_000,
+                },
+            ],
+        )
         # Optional: populate prices so the P/S branch is exercised in the
         # integration test. None by default — ps_ratio returns None.
         return store

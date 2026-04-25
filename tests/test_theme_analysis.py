@@ -89,11 +89,13 @@ class TestThemeSeries(unittest.TestCase):
         from alphalens.backtest.theme_analysis import theme_series
 
         themes_map = {"A": ["quantum"], "B": ["ai"]}
-        snaps = self._make_snaps([
-            ("2024-01-02", themes_map, ["A", "A", "A"]),  # all quantum
-            ("2024-01-03", themes_map, ["A", "B"]),       # 50/50
-            ("2024-01-04", themes_map, ["B", "B", "B"]),  # all ai
-        ])
+        snaps = self._make_snaps(
+            [
+                ("2024-01-02", themes_map, ["A", "A", "A"]),  # all quantum
+                ("2024-01-03", themes_map, ["A", "B"]),  # 50/50
+                ("2024-01-04", themes_map, ["B", "B", "B"]),  # all ai
+            ]
+        )
         df, stats = theme_series(snaps, concentration_threshold=0.9)
 
         self.assertEqual(len(df), 3)
@@ -114,11 +116,13 @@ class TestThemeSeries(unittest.TestCase):
         from alphalens.backtest.theme_analysis import theme_series
 
         themes_map = {"A": ["quantum"], "B": ["ai"]}
-        snaps = self._make_snaps([
-            ("2024-01-01", themes_map, ["A"]),        # quantum
-            ("2024-01-02", themes_map, ["A", "A"]),   # quantum
-            ("2024-01-03", themes_map, ["B"]),        # ai
-        ])
+        snaps = self._make_snaps(
+            [
+                ("2024-01-01", themes_map, ["A"]),  # quantum
+                ("2024-01-02", themes_map, ["A", "A"]),  # quantum
+                ("2024-01-03", themes_map, ["B"]),  # ai
+            ]
+        )
         _, stats = theme_series(snaps)
         self.assertEqual(stats.days_dominant["quantum"], 2)
         self.assertEqual(stats.days_dominant["ai"], 1)

@@ -9,7 +9,7 @@
 Kymera Therapeutics (KYMR) is a clinical-stage biopharmaceutical company pioneering targeted protein degradation (TPD) to treat diseases previously considered "undruggable." As of April 2026, Kymera presents a robust fundamental profile characterized by a **massive cash reserve** following a significant 2025 financing round, aggressive R&D investment, and overwhelming institutional support. While the company remains pre-profitability—typical for biotech—its financial runway is exceptionally long, providing a multi-year safety net for clinical execution.
 
 #### 2. Financial Health & Liquidity
-Kymera’s most striking fundamental feature is its liquidity position. 
+Kymera’s most striking fundamental feature is its liquidity position.
 *   **Total Liquidity:** As of December 31, 2025, the company held **$1.62 billion** in cash, short-term, and long-term investments (Cash & ST: ~$848M, LT: ~$771M).
 *   **Cash Runway:** In 2025, Kymera reported an operating cash burn of approximately **$232.9 million**. At this burn rate, the company has a **runway of 6–7 years**, placing it in the top tier of well-capitalized biotech firms.
 *   **Recent Financing:** The company successfully raised **$990.7 million** through financing in 2025, significantly diluting shares (from ~58M in 2023 to ~84M in 2025) but effectively removing near-term insolvency or "emergency" capital raise risks.

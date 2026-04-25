@@ -1,6 +1,6 @@
 # Fundamental Analysis Report: TG Therapeutics, Inc. (TGTX)
-**Date:** May 1, 2024  
-**Ticker:** TGTX (NASDAQ)  
+**Date:** May 1, 2024
+**Ticker:** TGTX (NASDAQ)
 **Sector:** Healthcare | **Industry:** Biotechnology
 
 ---
@@ -63,5 +63,5 @@ Analyst sentiment is overwhelmingly positive:
 | **Analyst Target Price** | $44.57 | Significant upside potential (>40%). |
 | **Product Focus** | Briumvi (MS) | Strong market adoption in a multi-billion dollar market. |
 
-**FINAL TRANSACTION PROPOSAL: BUY**  
+**FINAL TRANSACTION PROPOSAL: BUY**
 TGTX represents a compelling "growth-at-a-reasonable-price" (GARP) opportunity in the biotech sector. The company has successfully navigated the highest-risk phase (FDA approval and initial launch) and is now demonstrating the operational leverage inherent in specialty pharmaceuticals. With a solid cash cushion and explosive revenue growth, the risk-reward profile favors a long position.

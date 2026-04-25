@@ -15,10 +15,10 @@ ACMR develops, manufactures, and sells specialized equipment for the cleaning of
 ### 2. Financial Performance Analysis (Historical & TTM)
 The financial trajectory of ACMR has been exceptional over the last three years:
 
-*   **Revenue Growth:** 
+*   **Revenue Growth:**
     *   2021: $259.8M
     *   2022: $388.8M (~50% YoY growth)
-    *   H1 2023: $218.8M (Q1: $74.2M + Q2: $144.6M). 
+    *   H1 2023: $218.8M (Q1: $74.2M + Q2: $144.6M).
     *   *Insight:* ACMR is on track to significantly exceed its 2022 performance, with Q2 2023 showing nearly 100% growth over Q1 2023, indicating accelerating momentum.
 *   **Profitability:**
     *   **Gross Margin:** Remains stable around **44-47%**, demonstrating pricing power and technological differentiation.

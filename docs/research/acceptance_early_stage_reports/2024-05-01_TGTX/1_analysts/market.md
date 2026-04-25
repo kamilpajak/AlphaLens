@@ -30,7 +30,7 @@ TGTX has experienced a significant corrective phase over the last two months. Af
     *   **Stop-Loss:** Place a stop-loss just below the recent swing low and 200 SMA, around **$12.90**.
 
 *   **For Bearish Traders (Sell/Short):**
-    *   **Caution:** Shorting here is risky as the stock is reacting strongly to long-term support. 
+    *   **Caution:** Shorting here is risky as the stock is reacting strongly to long-term support.
     *   **Entry Signal:** If the price fails to break the 50-day SMA ($15.09) and shows a "rejection" candle (long upper wick), it may provide a shorting opportunity back down to the 200 SMA.
     *   **Stop-Loss:** A close above **$15.20** invalidates the bearish thesis.
 
@@ -49,5 +49,5 @@ TGTX has experienced a significant corrective phase over the last two months. Af
 | **Bollinger LB** | $13.02 | **Support Zone** | Defines the extreme low of current volatility. |
 | **ATR** | 0.927 | **High Volatility** | Expect significant daily swings; adjust risk. |
 
-**FINAL TRANSACTION PROPOSAL: HOLD/BUY.** 
+**FINAL TRANSACTION PROPOSAL: HOLD/BUY.**
 TGTX is currently showing a high-probability reversal setup off the 200-day SMA. While conservative investors may wait for a close above $14.62 (VWMA) for confirmation, aggressive traders can look to accumulate near current levels with a tight stop below $13.00.

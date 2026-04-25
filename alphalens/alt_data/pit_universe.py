@@ -14,9 +14,10 @@ under the 3-scenario sensitivity table from design doc §3b.2.6.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
-from typing import Mapping, Protocol
+from typing import Protocol
 
 import pandas as pd
 

@@ -1,6 +1,6 @@
 ### Market Analysis Report: Rocket Lab USA, Inc. (RKLB)
-**Date:** August 8, 2023  
-**Instrument:** RKLB (Nasdaq)  
+**Date:** August 8, 2023
+**Instrument:** RKLB (Nasdaq)
 **Sentiment:** Cautiously Bullish (Short-term) / Bullish (Long-term)
 
 ---
@@ -14,10 +14,10 @@ The broader market has been characterized by increased volatility over the past 
 #### 2. Rocket Lab (RKLB) Specific Performance & Recent Developments
 Rocket Lab has entered August with significant operational momentum, having achieved several critical milestones in July and early August.
 
-*   **Launch Cadence & Reliability:** 
+*   **Launch Cadence & Reliability:**
     *   On July 18, 2023, Rocket Lab successfully completed its 39th Electron mission, **"Baby Come Back,"** which deployed seven satellites. Crucially, the mission featured a successful ocean splashdown and recovery of the Electron's first stage, a vital step toward their goal of rocket reusability.
     *   The 40th mission, **"We Love the Nightlife,"** for Capella Space, was successfully launched in early August. This mission marked the first of four dedicated launches for Capella's next-generation "Acadia" satellites, showcasing Rocket Lab's ability to retain and expand major commercial contracts.
-*   **Backlog & Business Growth:** 
+*   **Backlog & Business Growth:**
     *   Rocket Lab signed a multi-launch deal with Japanese Earth-imaging firm **Synspective** for two additional dedicated missions, bringing the total contracted launches for Synspective to six.
     *   The company is increasingly seen as the primary "small-launch" alternative to SpaceX, with a growing revenue stream from its "Space Systems" division (satellite components and software).
 

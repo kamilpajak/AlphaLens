@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Callable, Iterable, Literal, Mapping
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -38,10 +39,10 @@ class LLMVerdict:
     """Output of the pluggable scorer function for one (ticker, date) pair."""
 
     verdict: Verdict
-    confidence: float        # [0, 1]; 1 = sure, 0 = pure noise
-    reasoning: str = ""      # optional — for post-hoc audit
+    confidence: float  # [0, 1]; 1 = sure, 0 = pure noise
+    reasoning: str = ""  # optional — for post-hoc audit
     latency_sec: float = 0.0
-    cost_usd: float = 0.0    # approximate; -1 if unknown
+    cost_usd: float = 0.0  # approximate; -1 if unknown
 
 
 ScorerFn = Callable[[str, date, Mapping], LLMVerdict]
@@ -65,7 +66,7 @@ class PickRecord:
     rank: int
     momentum_score: float
     themes: list[str]
-    forward_return: float       # actual realized, e.g. 5-day
+    forward_return: float  # actual realized, e.g. 5-day
 
 
 @dataclass
@@ -76,13 +77,13 @@ class ValidationResult:
     n_accept: int
     n_reject: int
     n_uncertain: int
-    accept_rate: float                        # n_accept / n_total
-    accept_mean_return: float                 # mean forward_return among accepted
-    reject_mean_return: float                 # mean forward_return among rejected
-    delta_accept_minus_reject: float          # key metric: >0 = LLM helps
-    accept_hit_rate: float                    # % of accepted with fwd_return > 0
-    reject_hit_rate: float                    # % of rejected with fwd_return > 0
-    accept_sharpe_proxy: float                # mean/std of accepted fwd returns
+    accept_rate: float  # n_accept / n_total
+    accept_mean_return: float  # mean forward_return among accepted
+    reject_mean_return: float  # mean forward_return among rejected
+    delta_accept_minus_reject: float  # key metric: >0 = LLM helps
+    accept_hit_rate: float  # % of accepted with fwd_return > 0
+    reject_hit_rate: float  # % of rejected with fwd_return > 0
+    accept_sharpe_proxy: float  # mean/std of accepted fwd returns
     reject_sharpe_proxy: float
     total_llm_cost_usd: float
     total_llm_latency_sec: float
@@ -108,11 +109,20 @@ def evaluate_historical_picks(
     n = len(pick_list)
     if n == 0:
         return ValidationResult(
-            n_total=0, n_accept=0, n_reject=0, n_uncertain=0,
-            accept_rate=0.0, accept_mean_return=0.0, reject_mean_return=0.0,
-            delta_accept_minus_reject=0.0, accept_hit_rate=0.0, reject_hit_rate=0.0,
-            accept_sharpe_proxy=0.0, reject_sharpe_proxy=0.0,
-            total_llm_cost_usd=0.0, total_llm_latency_sec=0.0,
+            n_total=0,
+            n_accept=0,
+            n_reject=0,
+            n_uncertain=0,
+            accept_rate=0.0,
+            accept_mean_return=0.0,
+            reject_mean_return=0.0,
+            delta_accept_minus_reject=0.0,
+            accept_hit_rate=0.0,
+            reject_hit_rate=0.0,
+            accept_sharpe_proxy=0.0,
+            reject_sharpe_proxy=0.0,
+            total_llm_cost_usd=0.0,
+            total_llm_latency_sec=0.0,
         )
 
     rows: list[dict] = []
@@ -133,24 +143,26 @@ def evaluate_historical_picks(
         t0 = time.perf_counter()
         try:
             verdict = scorer_fn(pick.ticker, pick.asof_date, context)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("scorer raised on %s @ %s: %s", pick.ticker, pick.asof_date, exc)
             verdict = LLMVerdict(verdict="uncertain", confidence=0.0, reasoning=f"error: {exc}")
         latency = time.perf_counter() - t0
 
-        rows.append({
-            "date": pick.asof_date.isoformat(),
-            "ticker": pick.ticker,
-            "rank": pick.rank,
-            "momentum_score": pick.momentum_score,
-            "themes": ",".join(pick.themes),
-            "forward_return": pick.forward_return,
-            "verdict": verdict.verdict,
-            "confidence": verdict.confidence,
-            "reasoning": verdict.reasoning,
-            "llm_cost": verdict.cost_usd,
-            "llm_latency_sec": verdict.latency_sec or latency,
-        })
+        rows.append(
+            {
+                "date": pick.asof_date.isoformat(),
+                "ticker": pick.ticker,
+                "rank": pick.rank,
+                "momentum_score": pick.momentum_score,
+                "themes": ",".join(pick.themes),
+                "forward_return": pick.forward_return,
+                "verdict": verdict.verdict,
+                "confidence": verdict.confidence,
+                "reasoning": verdict.reasoning,
+                "llm_cost": verdict.cost_usd,
+                "llm_latency_sec": verdict.latency_sec or latency,
+            }
+        )
         total_cost += max(verdict.cost_usd, 0.0)
         total_latency += verdict.latency_sec or latency
 
@@ -183,9 +195,9 @@ def evaluate_historical_picks(
 
     return ValidationResult(
         n_total=n,
-        n_accept=int(len(accepted)),
-        n_reject=int(len(rejected)),
-        n_uncertain=int(len(uncertain)),
+        n_accept=len(accepted),
+        n_reject=len(rejected),
+        n_uncertain=len(uncertain),
         accept_rate=len(accepted) / n,
         accept_mean_return=_safe_mean(accepted["forward_return"]),
         reject_mean_return=_safe_mean(rejected["forward_return"]),
@@ -205,31 +217,31 @@ def evaluate_historical_picks(
 def format_decision_matrix(result: ValidationResult) -> str:
     """Ludzko-czytelny raport z rekomendacją deploy / iterate / abandon."""
     lines = [
-        f"=== Historical Validation Results ===",
-        f"",
+        "=== Historical Validation Results ===",
+        "",
         f"Evaluated:        {result.n_total} picks",
         f"  accepted:       {result.n_accept} ({result.accept_rate * 100:.1f}%)",
         f"  rejected:       {result.n_reject}",
         f"  uncertain:      {result.n_uncertain}",
-        f"",
-        f"Forward returns:",
+        "",
+        "Forward returns:",
         f"  accepted mean:  {result.accept_mean_return * 100:+.3f}%",
         f"  rejected mean:  {result.reject_mean_return * 100:+.3f}%",
         f"  **delta**:      {result.delta_accept_minus_reject * 100:+.3f}% (accept - reject)",
-        f"",
-        f"Hit rates (fwd return > 0):",
+        "",
+        "Hit rates (fwd return > 0):",
         f"  accepted:       {result.accept_hit_rate * 100:.1f}%",
         f"  rejected:       {result.reject_hit_rate * 100:.1f}%",
-        f"",
-        f"Sharpe proxy (mean/std × √252):",
+        "",
+        "Sharpe proxy (mean/std × √252):",
         f"  accepted:       {result.accept_sharpe_proxy:+.2f}",
         f"  rejected:       {result.reject_sharpe_proxy:+.2f}",
-        f"",
+        "",
         f"LLM cost:         ${result.total_llm_cost_usd:.2f}",
         f"LLM latency:      {result.total_llm_latency_sec:.1f} s "
         f"({result.total_llm_latency_sec / max(result.n_total, 1):.2f} s/pick)",
-        f"",
-        f"=== Decision ===",
+        "",
+        "=== Decision ===",
     ]
 
     delta = result.delta_accept_minus_reject
@@ -237,7 +249,9 @@ def format_decision_matrix(result: ValidationResult) -> str:
 
     if delta > 0.005 and hit_delta > 0.05:
         lines.append("**DEPLOY** — LLM reject-rate correlates with underperformance")
-        lines.append(f"  (delta {delta * 100:+.2f}% AND hit-rate delta {hit_delta * 100:+.1f} p.p.)")
+        lines.append(
+            f"  (delta {delta * 100:+.2f}% AND hit-rate delta {hit_delta * 100:+.1f} p.p.)"
+        )
         lines.append("  → Integracja 3-tier adaptive architecture warta kosztów.")
     elif delta > 0.002 or hit_delta > 0.02:
         lines.append("**ITERATE** — marginal signal, wymaga większej sample lub lepszego promptu")
@@ -274,20 +288,20 @@ def picks_from_backtest_report(report) -> list[PickRecord]:
         ):
             if fwd is None or (isinstance(fwd, float) and np.isnan(fwd)):
                 continue
-            out.append(PickRecord(
-                asof_date=r.date.date(),
-                ticker=ticker,
-                rank=rank_idx,
-                momentum_score=float(score),
-                themes=[],  # scored_frames would carry themes; report doesn't
-                forward_return=float(fwd),
-            ))
+            out.append(
+                PickRecord(
+                    asof_date=r.date.date(),
+                    ticker=ticker,
+                    rank=rank_idx,
+                    momentum_score=float(score),
+                    themes=[],  # scored_frames would carry themes; report doesn't
+                    forward_return=float(fwd),
+                )
+            )
     return out
 
 
-def picks_from_history_store(
-    store, days: int = 60, top_n: int = 5
-) -> list[PickRecord]:
+def picks_from_history_store(store, days: int = 60, top_n: int = 5) -> list[PickRecord]:
     """Ekstraktuj z ThemedHistoryStore (z produkcji Layer 2b).
 
     Musi byc `themed_history.db` wypełniony przez daily runs. Forward return
@@ -320,14 +334,16 @@ def picks_from_history_store(
         if fwd is None:
             continue
         themes = [t for t in str(row["themes"]).split(",") if t]
-        out.append(PickRecord(
-            asof_date=asof,
-            ticker=str(row["ticker"]),
-            rank=int(row["rank"]),
-            momentum_score=float(row["momentum_score"]),
-            themes=themes,
-            forward_return=fwd,
-        ))
+        out.append(
+            PickRecord(
+                asof_date=asof,
+                ticker=str(row["ticker"]),
+                rank=int(row["rank"]),
+                momentum_score=float(row["momentum_score"]),
+                themes=themes,
+                forward_return=fwd,
+            )
+        )
     return out
 
 
@@ -336,9 +352,7 @@ def picks_from_history_store(
 # ---------------------------------------------------------------------------
 
 
-def rule_based_tractability_scorer(
-    ticker: str, asof: date, context: Mapping
-) -> LLMVerdict:
+def rule_based_tractability_scorer(ticker: str, asof: date, context: Mapping) -> LLMVerdict:
     """Deterministic baseline — **żaden** LLM, pure rules.
 
     Accept criteria:

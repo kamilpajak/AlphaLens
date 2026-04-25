@@ -26,7 +26,7 @@ def screen(
     scorer: str = typer.Option(
         ...,
         help="Required. Which scorer to run: 'momentum' (late-stage trend continuation) or "
-             "'early-stage' (CAN SLIM / VCP / Jegadeesh 11-1 base-breakout detection)",
+        "'early-stage' (CAN SLIM / VCP / Jegadeesh 11-1 base-breakout detection)",
     ),
 ) -> None:
     """Run the Layer 2b screener; optionally queue top-N for Layer 3.
@@ -39,7 +39,6 @@ def screen(
 
     from alphalens.screeners.themed.pipeline import ThemedPipeline
     from alphalens.screeners.themed.reporter import format_telegram_report
-
 
     curr_date = pd.Timestamp.today().strftime("%Y-%m-%d")
 
@@ -69,7 +68,9 @@ def screen(
         from alphalens.backtest.weighting import compute_position_weights
         from alphalens.screeners.themed.history_store import ThemedHistoryStore
 
-        weights_list = compute_position_weights(len(result), "linear").tolist() if not result.empty else []
+        weights_list = (
+            compute_position_weights(len(result), "linear").tolist() if not result.empty else []
+        )
         ThemedHistoryStore().record_run(
             picks_df=result,
             config=pipeline.config,
@@ -77,7 +78,7 @@ def screen(
             weighting_scheme="linear",
             weights=weights_list,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         typer.echo(f"history store skipped: {exc}")
 
     if analyze:
@@ -85,7 +86,7 @@ def screen(
             with CandidateQueue(default_queue_path()) as queue:
                 submitted = queue.submit(pipeline.to_candidates(result))
             typer.echo(f"queued {submitted} {scorer} candidate(s) for Layer 3")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             typer.echo(f"queue submit failed: {exc}", err=True)
             text += f"\n\n[ALERT] queue submit failed: {exc}"
 
@@ -107,9 +108,7 @@ def status(
     staleness_threshold: int = typer.Option(
         10, help="Flag nazw które są w top-N przez ≥ N kolejnych runów"
     ),
-    hhi_alert: float = typer.Option(
-        0.70, help="Alert gdy dominujący theme weight > próg"
-    ),
+    hhi_alert: float = typer.Option(0.70, help="Alert gdy dominujący theme weight > próg"),
 ) -> None:
     """Dashboard monitoringu Layer 2b — rolling metrics z historic runs."""
     from alphalens.screeners.themed.history_store import (
@@ -122,7 +121,9 @@ def status(
     store = ThemedHistoryStore()
     runs = store.recent_runs(days=days)
     if not runs:
-        typer.echo("Brak runów w historii. Uruchom `alphalens themed screen` żeby zacząć zbierać dane.")
+        typer.echo(
+            "Brak runów w historii. Uruchom `alphalens themed screen` żeby zacząć zbierać dane."
+        )
         raise typer.Exit(0)
 
     timeline = store.picks_timeline(days=days)
@@ -133,7 +134,9 @@ def status(
     typer.echo("-" * 55)
     for r in runs[:15]:
         err = (r.error[:18] + "..") if r.error else ""
-        typer.echo(f"{r.run_date.isoformat():<12} {r.scored_count:>6} {r.universe_size:>10} {err:<20}")
+        typer.echo(
+            f"{r.run_date.isoformat():<12} {r.scored_count:>6} {r.universe_size:>10} {err:<20}"
+        )
     if len(runs) > 15:
         typer.echo(f"  ... ({len(runs) - 15} starszych)")
     typer.echo("")
@@ -149,14 +152,19 @@ def status(
         max_hhi_day = hhi_df.loc[hhi_df["hhi"].idxmax()]
         alert_days = int((hhi_df["dominant_weight"] > hhi_alert).sum())
         typer.echo(f"  Średnie HHI:        {mean_hhi:.3f}  (0 = rozproszona, 1 = jeden theme)")
-        typer.echo(f"  Max HHI dzień:      {max_hhi_day['run_date']} — {max_hhi_day['hhi']:.3f} "
-                   f"({max_hhi_day['dominant_theme']} {max_hhi_day['dominant_weight'] * 100:.0f}%)")
-        typer.echo(f"  Dni alert >{hhi_alert * 100:.0f}%:    {alert_days}/{len(hhi_df)} "
-                   f"({alert_days / len(hhi_df) * 100:.1f}%)")
+        typer.echo(
+            f"  Max HHI dzień:      {max_hhi_day['run_date']} — {max_hhi_day['hhi']:.3f} "
+            f"({max_hhi_day['dominant_theme']} {max_hhi_day['dominant_weight'] * 100:.0f}%)"
+        )
+        typer.echo(
+            f"  Dni alert >{hhi_alert * 100:.0f}%:    {alert_days}/{len(hhi_df)} "
+            f"({alert_days / len(hhi_df) * 100:.1f}%)"
+        )
         dom_counts = hhi_df["dominant_theme"].value_counts()
-        typer.echo("  Dominujący:         " + ", ".join(
-            f"{t}: {c} dni" for t, c in dom_counts.head(5).items()
-        ))
+        typer.echo(
+            "  Dominujący:         "
+            + ", ".join(f"{t}: {c} dni" for t, c in dom_counts.head(5).items())
+        )
     typer.echo("")
 
     turn_df = compute_turnover_by_day(timeline, top_n=top_n)
@@ -165,7 +173,9 @@ def status(
         tds = turn_df.iloc[1:]
         mean_turn = float(tds["turnover"].mean())
         last_turn = float(tds.iloc[-1]["turnover"])
-        typer.echo(f"  Średni turnover:    {mean_turn * 100:.1f}% (fraction names changing per day)")
+        typer.echo(
+            f"  Średni turnover:    {mean_turn * 100:.1f}% (fraction names changing per day)"
+        )
         typer.echo(f"  Ostatni dzień:      {last_turn * 100:.1f}%")
     typer.echo("")
 

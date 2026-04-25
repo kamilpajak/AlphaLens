@@ -13,8 +13,9 @@ Default thresholds (on 60-day trailing return):
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Mapping
+from typing import Literal
 
 import pandas as pd
 
@@ -75,8 +76,7 @@ def regime_breakdown(
 
     # Align by intersection of all inputs.
     idx = (
-        portfolio_returns.index
-        .intersection(ic_series.index)
+        portfolio_returns.index.intersection(ic_series.index)
         .intersection(universe_median_returns.index)
         .intersection(regime_labels.index)
     )
@@ -97,8 +97,8 @@ def regime_breakdown(
         years = max(len(port_slice) / periods_per_year, 1e-9)
         annual = float(cum ** (1 / years) - 1) if years > 0 else 0.0
         out[label] = RegimeStats(
-            regime=label,                                # type: ignore[arg-type]
-            days=int(len(port_slice)),
+            regime=label,  # type: ignore[arg-type]
+            days=len(port_slice),
             sharpe=sharpe(port_slice.tolist(), periods_per_year=periods_per_year),
             annual_return=annual,
             mean_ic=float(ic_slice.mean()) if not ic_slice.empty else 0.0,

@@ -39,8 +39,15 @@ FALLBACK_END = "2026-04-17"
 
 # Strict biotech name keywords — drop "pharm" only (too broad, catches pharmacies).
 BIOTECH_NAME_PATTERNS = [
-    "therapeutics", "therapeutic ", "biosciences", "bioscience",
-    "biopharm", "biogen", "oncology", "genomics", "gene therap",
+    "therapeutics",
+    "therapeutic ",
+    "biosciences",
+    "bioscience",
+    "biopharm",
+    "biogen",
+    "oncology",
+    "genomics",
+    "gene therap",
     "immuno",
 ]
 # Semis we accept (filter false positives like Desktop Metal / SPI Energy)
@@ -85,7 +92,9 @@ def main() -> None:
 
     csv_path = SURV_DIR / "delisted_thematic_candidates_v2.csv"
     rows = list(csv.DictReader(csv_path.open()))
-    to_fetch = [r for r in rows if should_fetch(r["ticker"], r["theme"], r["name"], r["confidence"])]
+    to_fetch = [
+        r for r in rows if should_fetch(r["ticker"], r["theme"], r["name"], r["confidence"])
+    ]
 
     by_theme: dict[str, int] = {}
     for r in to_fetch:
@@ -121,7 +130,11 @@ def main() -> None:
         daily_bars = [
             DailyBar(
                 date=datetime.utcfromtimestamp(b.timestamp_ms / 1000).strftime("%Y%m%d"),
-                open=b.open, high=b.high, low=b.low, close=b.close, volume=b.volume,
+                open=b.open,
+                high=b.high,
+                low=b.low,
+                close=b.close,
+                volume=b.volume,
             )
             for b in bars
         ]
@@ -130,14 +143,16 @@ def main() -> None:
         print(f"  [{i}/{len(to_fetch)}] {ticker:8s} {r['theme']:8s} {len(daily_bars)} bars → {end}")
 
     # Summary
-    print(f"\n=== Summary ===")
+    print("\n=== Summary ===")
     print(f"  fetched: {len(fetched)}")
     print(f"  skipped (too short): {len(skipped_short)}")
     print(f"  skipped (error): {len(skipped_error)}")
 
     # Save a manifest
     manifest = {
-        "fetched": [{"ticker": t, "theme": th, "bars": b, "end_date": e} for t, th, b, e in fetched],
+        "fetched": [
+            {"ticker": t, "theme": th, "bars": b, "end_date": e} for t, th, b, e in fetched
+        ],
         "skipped_short": skipped_short,
         "skipped_error": skipped_error,
     }

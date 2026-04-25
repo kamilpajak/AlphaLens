@@ -18,7 +18,7 @@ While ONTO has not released major press releases in the last seven days, its pos
 ## 2. Macroeconomic & Industry Trends
 ### A. The AI Revolution & GPU Demand
 The "Generative AI" theme has reached a fever pitch this week:
-*   **NVIDIA (NVDA)** continues to dominate sentiment, announcing a major partnership with **ServiceNow** to build enterprise-grade AI. 
+*   **NVIDIA (NVDA)** continues to dominate sentiment, announcing a major partnership with **ServiceNow** to build enterprise-grade AI.
 *   The launch of the **Roundhill Generative AI & Technology ETF (CHAT)** and **YieldMax NVDA Option Income Strategy ETF (NVDY)** this week signals massive retail and institutional capital inflow into the AI sector.
 *   **Actionable Insight for ONTO:** As GPU demand spikes, the complexity of manufacturing these chips (using HBM3 memory and CoWoS packaging) increases. ONTO is a primary beneficiary of this complexity, as higher precision metrology is required to maintain profitable yields.
 
@@ -33,7 +33,7 @@ The "Generative AI" theme has reached a fever pitch this week:
 ---
 
 ## 3. Trading & Macroeconomic Outlook
-Traders should view **ONTO** as a high-conviction play on the *manufacturing complexity* of the AI boom. While NVIDIA designs the chips, ONTO ensures they can be made at scale without crippling defect rates. 
+Traders should view **ONTO** as a high-conviction play on the *manufacturing complexity* of the AI boom. While NVIDIA designs the chips, ONTO ensures they can be made at scale without crippling defect rates.
 
 *   **Bullish Case:** Accelerated transition to 2nm and 3D packaging; Q2 2023 industry trough confirmed by peers.
 *   **Bearish Case:** Prolonged high-interest-rate environment dampens broad tech valuations; escalation in U.S.-China trade restrictions on semiconductor equipment.

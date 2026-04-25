@@ -4,12 +4,12 @@ Bull Analyst: Listen, I hear the caution coming from the bear camp, but if you�
 Let’s break down why the bull case for ACMR isn't just strong—it’s the only logical conclusion for a growth-oriented investor right now.
 
 ### 1. The "China Catalyst" is a Tailbrand, Not a Tailrisk
-Bears love to point at US-China tensions as a reason to run. I see it as the ultimate "moat" builder. The recent Huawei Mate 60 Pro launch, powered by SMIC’s 7nm process, was a watershed moment. It proved that China’s domestic chip ecosystem isn't just surviving; it’s innovating. 
+Bears love to point at US-China tensions as a reason to run. I see it as the ultimate "moat" builder. The recent Huawei Mate 60 Pro launch, powered by SMIC’s 7nm process, was a watershed moment. It proved that China’s domestic chip ecosystem isn't just surviving; it’s innovating.
 
 As Chinese foundries accelerate their push for self-sufficiency to bypass U.S. export controls, who do they turn to? They turn to **ACMR**. Our proprietary **SAPS** and **TEBO** cleaning technologies are no longer "alternatives" to Western equipment—they are the *essential standard* for domestic 3D NAND and advanced logic production. When SMIC and other Tier-1 foundries ramp up, ACMR is the first call they make. We are the "localized" winner in a market that literally *has* to buy what we sell.
 
 ### 2. Financials That Demand a Double-Take
-Let’s look at the numbers, because they don't lie. In H1 2023, ACMR’s Net Income hit **$33.9M**. To put that in perspective, that’s **86% of what they made in the entire year of 2022**, achieved in just six months! 
+Let’s look at the numbers, because they don't lie. In H1 2023, ACMR’s Net Income hit **$33.9M**. To put that in perspective, that’s **86% of what they made in the entire year of 2022**, achieved in just six months!
 
 The bears might worry about the inventory build-up ($471.1M), but in the semiconductor equipment world, inventory doesn't mean "unsold junk"—it means "orders in progress." With revenue growing nearly 100% between Q1 and Q2 2023, that inventory is a signal of massive demand and upcoming shipments. We are looking at a company with a **forward P/E of ~30x** that is growing revenue at **50%+**. In any other sector, that PEG ratio would make this the steal of the century.
 
@@ -25,8 +25,8 @@ The bear case usually rests on two pillars: **Geopolitical Risk** and **Customer
 *   **To the Inventory/Cash Flow Argument:** Bears see negative operating cash flow and panic. I see a company with **$257M in cash** and only **$15.9M in long-term debt**. ACMR is using its fortress balance sheet to front-load the parts and components needed to meet the massive order book coming in H2. This is offensive spending, not defensive struggling.
 
 ### The Bottom Line
-In my past analyses, I’ve learned that the biggest mistake an analyst can make is ignoring the "structural shift" in favor of "short-term noise." The shift here is the AI-driven infrastructure boom and the total transformation of the Chinese semiconductor landscape. 
+In my past analyses, I’ve learned that the biggest mistake an analyst can make is ignoring the "structural shift" in favor of "short-term noise." The shift here is the AI-driven infrastructure boom and the total transformation of the Chinese semiconductor landscape.
 
-ACMR is at the intersection of both. With a price target of **$70.50** representing a 40%+ upside, and fundamentals that are accelerating rather than slowing, "Holding" is for the timid. **This is a conviction Buy.** The consolidation we see today is your window of opportunity before the Q3 earnings report likely triggers another massive leg up. 
+ACMR is at the intersection of both. With a price target of **$70.50** representing a 40%+ upside, and fundamentals that are accelerating rather than slowing, "Holding" is for the timid. **This is a conviction Buy.** The consolidation we see today is your window of opportunity before the Q3 earnings report likely triggers another massive leg up.
 
 **Are you going to bet against 100% quarter-over-quarter growth? I’m certainly not.**

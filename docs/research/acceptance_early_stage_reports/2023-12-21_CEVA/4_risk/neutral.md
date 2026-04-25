@@ -1,5 +1,5 @@
 
-Neutral Analyst: You both make compelling points, but I think you’re both leaning too far into your respective corners and missing the tactical middle ground that actually protects our capital while keeping us in the game for 2024. 
+Neutral Analyst: You both make compelling points, but I think you’re both leaning too far into your respective corners and missing the tactical middle ground that actually protects our capital while keeping us in the game for 2024.
 
 Aggressive Analyst, you’re right to be frustrated by that 9% revenue decline in a year where semiconductors are flying. It’s a clear sign of underperformance. However, your call to go short here is frankly dangerous. You are suggesting we bet against a company that has zero debt and $222 million in liquidity—which is literally a third of its market cap. If CEVA announces a single major licensing deal or a stock buyback with that cash, your short position gets incinerated in an afternoon. You’re also ignoring the 92% institutional ownership. These aren't retail hands that panic; these are professional funds that have the stomach to wait for a turnaround. Shorting a debt-free company during a Fed-induced market rally is picking up pennies in front of a steamroller.
 

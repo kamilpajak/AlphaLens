@@ -67,7 +67,7 @@ def load_ff3_daily(
         raw[col] = pd.to_numeric(raw[col], errors="coerce") / 100.0
 
     if start is not None:
-        raw = raw.loc[pd.Timestamp(start):]
+        raw = raw.loc[pd.Timestamp(start) :]
     if end is not None:
-        raw = raw.loc[:pd.Timestamp(end)]
+        raw = raw.loc[: pd.Timestamp(end)]
     return raw[_FF3_COLUMNS]

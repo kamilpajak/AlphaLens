@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -45,20 +45,27 @@ class PrescreenerPipeline:
         available_tickers = sorted(set(prices.keys()) | set(fundamentals.keys()))
 
         logger.info("Scoring %d tickers...", len(available_tickers))
-        tech_scores = TechnicalScorer(self.config).score_all(prices, available_tickers, self.curr_date)
+        tech_scores = TechnicalScorer(self.config).score_all(
+            prices, available_tickers, self.curr_date
+        )
         fund_scores = FundamentalScorer(self.config).score_all(fundamentals)
-        vol_scores = VolumeScorer(self.config).score_all(prices, fundamentals, available_tickers, self.curr_date)
+        vol_scores = VolumeScorer(self.config).score_all(
+            prices, fundamentals, available_tickers, self.curr_date
+        )
 
         ranker = CompositeRanker(self.config)
         ranked = ranker.rank(tech_scores, fund_scores, vol_scores)
 
-        logger.info("Top 5: %s", ranked.head(5)[["ticker", "composite_score"]].to_string(index=False))
+        logger.info(
+            "Top 5: %s",
+            ranked.head(5)[["ticker", "composite_score"]].to_string(index=False),
+        )
         return ranked
 
     def to_candidates(self, df: pd.DataFrame) -> list[Candidate]:
         if df.empty:
             return []
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return [
             Candidate.from_screener(
                 ticker=row["ticker"],

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import date, datetime, timezone
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, date, datetime
+from typing import Any
 
 from .candidates import AnalysisResult, Candidate
 from .config_gemini import build_gemini_config
@@ -39,8 +40,7 @@ def _format_themed(p: dict[str, Any]) -> str:
 
 def _format_watchdog_sec(p: dict[str, Any]) -> str:
     return (
-        f"Triggered by SEC filing: Form {p.get('form', '?')}, "
-        f"accession {p.get('accession', '?')}"
+        f"Triggered by SEC filing: Form {p.get('form', '?')}, accession {p.get('accession', '?')}"
     )
 
 
@@ -69,7 +69,7 @@ _FORMATTERS: dict[str, Callable[[dict[str, Any]], str]] = {
 }
 
 
-def build_trigger_context(candidate: "Candidate") -> str:
+def build_trigger_context(candidate: Candidate) -> str:
     """Per-source prose describing why this ticker reached Layer 3.
 
     Logged today; forwarded into the TradingAgents graph once an upstream
@@ -119,7 +119,7 @@ class TradingAgentsRunner:
             graph = self._graph_factory(config, selected_analysts=selected_analysts)
         else:
             graph = self._graph_factory(config)
-        replay_date = curr_date or datetime.now(timezone.utc).date()
+        replay_date = curr_date or datetime.now(UTC).date()
         date_str = replay_date.isoformat()
 
         logger.info(
@@ -153,7 +153,7 @@ class TradingAgentsRunner:
             duration_sec=duration,
             cost_usd=None,  # populated once token accounting lands
             model_used=model_used,
-            completed_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(UTC),
             final_state=final_state or {},
         )
         logger.info(

@@ -1,9 +1,9 @@
 ### **IONS (Ionis Pharmaceuticals, Inc.) Technical Analysis Report**
-**Date:** October 20, 2023  
+**Date:** October 20, 2023
 **Current Price (Approx.):** $46.00 - $46.50 (based on recent trend and indicator shifts)
 
 #### **1. Trend Analysis: Strong Bullish Foundation**
-The long-term and medium-term trends for **IONS** remain decisively bullish. 
+The long-term and medium-term trends for **IONS** remain decisively bullish.
 - **Moving Averages:** The stock is trading significantly above both its **50-day SMA ($42.98)** and its **200-day SMA ($39.63)**. This "Golden Cross" alignment (50 SMA > 200 SMA) typically indicates a sustained long-term uptrend.
 - **VWMA Confirmation:** The **Volume-Weighted Moving Average (VWMA) at $46.19** is currently acting as a "gravity point" for the price. The fact that the price is hovering near the VWMA suggests that current trading levels are well-supported by volume and represent a fair consensus of value following the recent rally.
 
@@ -13,7 +13,7 @@ While the trend is up, momentum indicators suggest a short-term pause or minor c
 - **RSI Normalization:** After hitting near-overbought levels (RSI > 68) on October 17, the **RSI has cooled to 54.22**. This is healthy for a trending stock, as it removes the immediate "overextended" risk, though it also indicates that a rapid vertical climb is unlikely in the immediate few sessions.
 
 #### **3. Volatility & Key Price Levels**
-- **Bollinger Bands:** The price recently touched and rejected the **Upper Bollinger Band ($49.26)**. It is now moving back toward the middle of the range. 
+- **Bollinger Bands:** The price recently touched and rejected the **Upper Bollinger Band ($49.26)**. It is now moving back toward the middle of the range.
 - **Support Zones:** The first major support is found at the **50-day SMA ($42.98)**, which coincides closely with the **Lower Bollinger Band ($42.82)**. This ~$43.00 area represents a high-probability "Buy the Dip" zone.
 - **Resistance Zones:** The recent high of **$48.51** and the Upper Bollinger Band ($49.26) serve as the primary overhead hurdles for the next leg up.
 

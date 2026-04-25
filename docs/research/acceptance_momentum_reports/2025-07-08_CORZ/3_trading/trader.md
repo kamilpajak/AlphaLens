@@ -1,4 +1,4 @@
-The analysis of **CORZ** (Core Scientific, Inc.) presents a classic conflict between a compelling fundamental narrative—the pivot from cryptocurrency mining to high-demand AI infrastructure—and the harsh reality of market price action. 
+The analysis of **CORZ** (Core Scientific, Inc.) presents a classic conflict between a compelling fundamental narrative—the pivot from cryptocurrency mining to high-demand AI infrastructure—and the harsh reality of market price action.
 
 ### Market Analysis & Technical Breakdown
 The most significant data point in this evaluation is the 18% price collapse occurring on a volume of 107 million shares. In technical analysis, volume represents conviction. When a stock drops significantly on five times its average volume immediately following "positive" news (the CoreWeave acquisition offer), it indicates a massive transfer of shares from institutions to retail investors. This is institutional distribution, not a simple consolidation.
@@ -9,7 +9,7 @@ The "bull case" relies on the $9 billion acquisition offer providing a valuation
 From a balance sheet perspective, CORZ is in a precarious position. Having recently emerged from bankruptcy, the company carries over $3 billion in liabilities and exhibits negative shareholder equity. The capital expenditure (CapEx) required to transition power infrastructure from Bitcoin mining to AI data centers is immense. Financing this pivot with a debt-heavy balance sheet in a high-interest-rate environment introduces significant execution risk. Furthermore, a Beta of over 6 indicates that CORZ will experience extreme volatility relative to the broader market, making it a high-risk vehicle for capital preservation.
 
 ### Strategic Implementation
-The "tape" is clearly signaling that the smart money is exiting. Ignoring a high-volume breakdown of this magnitude is a frequent mistake made by traders who fall in love with a fundamental story while ignoring price action. 
+The "tape" is clearly signaling that the smart money is exiting. Ignoring a high-volume breakdown of this magnitude is a frequent mistake made by traders who fall in love with a fundamental story while ignoring price action.
 
 1.  **Immediate Action:** Exit existing long positions. The supply of "trapped" buyers between the current price and the recent highs will create heavy overhead resistance, capping the potential for a meaningful recovery in the short term.
 2.  **Short Strategy:** For aggressive profiles, the Volume-Weighted Average Price (VWAP) around **$15.08** serves as a logical resistance level for short entries, with a stop-loss placed just above the recent swing high.

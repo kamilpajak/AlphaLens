@@ -11,7 +11,7 @@ current bar. Insufficient history raises `ValueError`.
 from __future__ import annotations
 
 import math
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -25,9 +25,7 @@ def _as_series(values: Sequence[float] | pd.Series) -> pd.Series:
 
 def _require_length(series: pd.Series, needed: int, feature: str) -> None:
     if len(series) < needed:
-        raise ValueError(
-            f"{feature}: need at least {needed} bars, got {len(series)}"
-        )
+        raise ValueError(f"{feature}: need at least {needed} bars, got {len(series)}")
 
 
 def rate_of_change(close: Sequence[float] | pd.Series, window: int) -> float:
@@ -48,13 +46,11 @@ def sma(close: Sequence[float] | pd.Series, window: int) -> float:
     return float(s.iloc[-window:].mean())
 
 
-def volume_surprise(
-    volume: Sequence[float] | pd.Series, window: int
-) -> float:
+def volume_surprise(volume: Sequence[float] | pd.Series, window: int) -> float:
     """Today's volume divided by the trailing `window`-day average (>1 = above avg)."""
     s = _as_series(volume)
     _require_length(s, window + 1, "volume_surprise")
-    avg = float(s.iloc[-window - 1:-1].mean())
+    avg = float(s.iloc[-window - 1 : -1].mean())
     if avg <= 0.0:
         return float("nan")
     return float(s.iloc[-1]) / avg
@@ -89,8 +85,8 @@ def breakout(
     _require_length(c, window + 1, "breakout")
     _require_length(v, window + 1, "breakout")
     # Prior window's max (exclude today) — we want a "new" high.
-    prior_high = float(c.iloc[-window - 1:-1].max())
-    prior_vol_avg = float(v.iloc[-window - 1:-1].mean())
+    prior_high = float(c.iloc[-window - 1 : -1].max())
+    prior_vol_avg = float(v.iloc[-window - 1 : -1].mean())
     today_close = float(c.iloc[-1])
     today_vol = float(v.iloc[-1])
     if prior_vol_avg <= 0.0 or math.isnan(prior_high):

@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -14,11 +14,16 @@ class TestPrescreenerPipeline(unittest.TestCase):
         fetcher = mock_fetcher_cls.return_value
 
         dates = pd.bdate_range(end="2024-01-15", periods=250)
-        prices = pd.DataFrame({
-            "Open": [100.0] * 250, "High": [101.0] * 250,
-            "Low": [99.0] * 250, "Close": [100.0] * 250,
-            "Volume": [1_000_000] * 250,
-        }, index=dates)
+        prices = pd.DataFrame(
+            {
+                "Open": [100.0] * 250,
+                "High": [101.0] * 250,
+                "Low": [99.0] * 250,
+                "Close": [100.0] * 250,
+                "Volume": [1_000_000] * 250,
+            },
+            index=dates,
+        )
         fetcher.fetch_prices.return_value = {"AAPL": prices, "MSFT": prices}
         fetcher.fetch_fundamentals.return_value = {
             "AAPL": {"trailingPE": 20, "marketCap": 3e12, "averageVolume": 50e6},
@@ -39,11 +44,16 @@ class TestPrescreenerPipeline(unittest.TestCase):
 
         fetcher = mock_fetcher_cls.return_value
         dates = pd.bdate_range(end="2024-01-15", periods=250)
-        prices = pd.DataFrame({
-            "Open": [100.0] * 250, "High": [101.0] * 250,
-            "Low": [99.0] * 250, "Close": [100.0] * 250,
-            "Volume": [1_000_000] * 250,
-        }, index=dates)
+        prices = pd.DataFrame(
+            {
+                "Open": [100.0] * 250,
+                "High": [101.0] * 250,
+                "Low": [99.0] * 250,
+                "Close": [100.0] * 250,
+                "Volume": [1_000_000] * 250,
+            },
+            index=dates,
+        )
         fetcher.fetch_prices.return_value = {"TSLA": prices}
         fetcher.fetch_fundamentals.return_value = {
             "TSLA": {"trailingPE": 50, "marketCap": 800e9, "averageVolume": 100e6}

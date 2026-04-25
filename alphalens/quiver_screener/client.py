@@ -8,6 +8,7 @@ Raw Quiver column names vary across API versions. This module tries the most
 common aliases and raises a clear error if the schema has drifted — so we fix
 the mapping once rather than silently miscomputing features.
 """
+
 from __future__ import annotations
 
 import re
@@ -20,20 +21,26 @@ DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "quiver"
 
 
 _CONGRESS_COL_ALIASES = {
-    "ticker":         ["Ticker", "Stock", "stock"],
-    "date":           ["TransactionDate", "Traded", "transaction_date"],
+    "ticker": ["Ticker", "Stock", "stock"],
+    "date": ["TransactionDate", "Traded", "transaction_date"],
     "representative": ["Representative", "Member", "Name", "name"],
-    "transaction":    ["Transaction", "Type", "transaction"],
-    "amount":         ["Amount", "Range", "Trade_Size_USD", "amount"],
+    "transaction": ["Transaction", "Type", "transaction"],
+    "amount": ["Amount", "Range", "Trade_Size_USD", "amount"],
 }
 
 _INSIDER_COL_ALIASES = {
-    "ticker":      ["Ticker", "Stock", "stock", "Symbol"],
-    "date":        ["Date", "TransactionDate", "transaction_date"],
-    "name":        ["Name", "Insider", "InsiderName", "name"],
-    "transaction": ["AcquistionOrDisposition", "AcquiredDisposed", "Transaction", "Code", "transaction"],
-    "shares":      ["Shares", "SharesTraded", "shares"],
-    "price":       ["PricePerShare", "Price", "price"],
+    "ticker": ["Ticker", "Stock", "stock", "Symbol"],
+    "date": ["Date", "TransactionDate", "transaction_date"],
+    "name": ["Name", "Insider", "InsiderName", "name"],
+    "transaction": [
+        "AcquistionOrDisposition",
+        "AcquiredDisposed",
+        "Transaction",
+        "Code",
+        "transaction",
+    ],
+    "shares": ["Shares", "SharesTraded", "shares"],
+    "price": ["PricePerShare", "Price", "price"],
 }
 
 
@@ -69,20 +76,26 @@ def _parse_amount(val) -> float:
 def normalize_congress(raw: pd.DataFrame) -> pd.DataFrame:
     """Quiver raw congress_trading DataFrame → normalized schema."""
     if raw.empty:
-        return pd.DataFrame(columns=["ticker", "date", "representative", "transaction", "amount_mid"])
+        return pd.DataFrame(
+            columns=["ticker", "date", "representative", "transaction", "amount_mid"]
+        )
 
     cols = {k: _resolve_column(raw, v) for k, v in _CONGRESS_COL_ALIASES.items()}
-    out = pd.DataFrame({
-        "ticker":         raw[cols["ticker"]].astype(str).str.upper(),
-        "date":           pd.to_datetime(raw[cols["date"]]),
-        "representative": raw[cols["representative"]].astype(str),
-        "transaction":    raw[cols["transaction"]].astype(str).str.upper(),
-        "amount_mid":     raw[cols["amount"]].map(_parse_amount),
-    })
+    out = pd.DataFrame(
+        {
+            "ticker": raw[cols["ticker"]].astype(str).str.upper(),
+            "date": pd.to_datetime(raw[cols["date"]]),
+            "representative": raw[cols["representative"]].astype(str),
+            "transaction": raw[cols["transaction"]].astype(str).str.upper(),
+            "amount_mid": raw[cols["amount"]].map(_parse_amount),
+        }
+    )
     # Canonicalise transaction codes we've seen: "Purchase", "Sale (Partial)", etc.
     out["transaction"] = out["transaction"].where(
         out["transaction"].isin(["PURCHASE", "SALE", "EXCHANGE"]),
-        out["transaction"].apply(lambda s: "PURCHASE" if "PURCHASE" in s else ("SALE" if "SALE" in s else "EXCHANGE")),
+        out["transaction"].apply(
+            lambda s: "PURCHASE" if "PURCHASE" in s else ("SALE" if "SALE" in s else "EXCHANGE")
+        ),
     )
     return out
 
@@ -93,7 +106,17 @@ def normalize_insiders(raw: pd.DataFrame) -> pd.DataFrame:
     Transaction code normalised to 'A' (acquired/buy) or 'D' (disposed/sell).
     """
     if raw.empty:
-        return pd.DataFrame(columns=["ticker", "date", "name", "transaction", "shares", "price", "value"])
+        return pd.DataFrame(
+            columns=[
+                "ticker",
+                "date",
+                "name",
+                "transaction",
+                "shares",
+                "price",
+                "value",
+            ]
+        )
 
     cols = {k: _resolve_column(raw, v) for k, v in _INSIDER_COL_ALIASES.items()}
     raw_trans = raw[cols["transaction"]].astype(str).str.upper()
@@ -101,14 +124,16 @@ def normalize_insiders(raw: pd.DataFrame) -> pd.DataFrame:
     # to stay conservative — misclassifying a buy as sell biases signal to zero,
     # which is safer than misclassifying a sell as buy.
     is_buy = raw_trans.str.contains(r"^(?:P|A|PURCHASE|ACQUIRED|BUY)", regex=True, na=False)
-    out = pd.DataFrame({
-        "ticker":      raw[cols["ticker"]].astype(str).str.upper(),
-        "date":        pd.to_datetime(raw[cols["date"]]),
-        "name":        raw[cols["name"]].astype(str),
-        "transaction": np.where(is_buy, "A", "D"),
-        "shares":      pd.to_numeric(raw[cols["shares"]], errors="coerce").fillna(0).astype(int),
-        "price":       pd.to_numeric(raw[cols["price"]], errors="coerce").fillna(0.0),
-    })
+    out = pd.DataFrame(
+        {
+            "ticker": raw[cols["ticker"]].astype(str).str.upper(),
+            "date": pd.to_datetime(raw[cols["date"]]),
+            "name": raw[cols["name"]].astype(str),
+            "transaction": np.where(is_buy, "A", "D"),
+            "shares": pd.to_numeric(raw[cols["shares"]], errors="coerce").fillna(0).astype(int),
+            "price": pd.to_numeric(raw[cols["price"]], errors="coerce").fillna(0.0),
+        }
+    )
     out["value"] = out["shares"] * out["price"]
     return out
 
@@ -139,7 +164,9 @@ def fetch_congress_for_tickers(
         norm.to_pickle(cache_file)
         frames.append(norm)
     if not frames:
-        return pd.DataFrame(columns=["ticker", "date", "representative", "transaction", "amount_mid"])
+        return pd.DataFrame(
+            columns=["ticker", "date", "representative", "transaction", "amount_mid"]
+        )
     return pd.concat(frames, ignore_index=True)
 
 
@@ -168,5 +195,15 @@ def fetch_insiders_for_tickers(
         norm.to_pickle(cache_file)
         frames.append(norm)
     if not frames:
-        return pd.DataFrame(columns=["ticker", "date", "name", "transaction", "shares", "price", "value"])
+        return pd.DataFrame(
+            columns=[
+                "ticker",
+                "date",
+                "name",
+                "transaction",
+                "shares",
+                "price",
+                "value",
+            ]
+        )
     return pd.concat(frames, ignore_index=True)

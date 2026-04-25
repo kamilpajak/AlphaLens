@@ -14,6 +14,7 @@ dependencies = [
     "tradingagents",
     "quiverquant",
     "simfin>=1.0.1",
+    "pyarrow>=15.0",  # explicit: pandas parquet I/O (FRED cache, history snapshots)
 ]
 
 [project.scripts]
@@ -22,5 +23,91 @@ alphalens = "alphalens_cli.main:app"
 [tool.setuptools.packages.find]
 include = ["alphalens*", "alphalens_cli*"]
 
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6.0",
+    "coverage>=7.4",
+    "pre-commit>=3.7",
+    "bandit>=1.7",
+]
+
 [tool.uv.sources]
 tradingagents = { path = "./TradingAgents", editable = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+exclude = [
+    ".venv",
+    "TradingAgents",  # Vendored upstream — don't lint their code
+    "build",
+    "dist",
+    "*.egg-info",
+    "logs",
+    "reports",
+    ".alphalens",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "C4",  # comprehensions
+    "PIE", # misc
+    "RUF", # ruff-specific
+    "SIM", # simplify
+    "PL",  # pylint subset
+    "N",   # pep8-naming
+]
+ignore = [
+    "E501",   # line-too-long (formatter handles it)
+    "PLR2004",  # magic numbers — quant code uses many literals (lookback windows, thresholds)
+    "PLR0913",  # too many args — research code often has wide signatures
+    "PLR0915",  # too many statements — backtest functions are linear sequences
+    "PLR0912",  # too many branches — verdict logic
+    "N803",   # arg should be lowercase (pandas idioms: X, y)
+    "N806",   # variable should be lowercase
+    "B008",   # function call in default arg — typer.Option uses this
+    "SIM108", # ternary refactor — sometimes hurts readability
+    "PLC0415", # imports inside functions/methods — project pattern (lazy imports in tests + CLI)
+    "RUF001",  # ambiguous unicode in strings — Polish docstrings/comments
+    "RUF002",  # ambiguous unicode in docstrings — Polish-language docstrings
+    "RUF003",  # ambiguous unicode in comments — Polish-language comments
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "PLR0915",  # tests can be long
+    "B011",     # asserts in tests OK
+    "B017",     # generic Exception in assertRaises is OK in test scaffolding
+    "N801",     # SEC rule class names (TestPlan10b5_1Exclusion, TestJegadeesh11_1)
+    "F841",     # unused vars w fixture defs are OK
+]
+"alphalens/watchdog_lock.py" = [
+    "N818",     # WorkerLockBusy is a state signal, not a fatal error — keep without Error suffix
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.coverage.run]
+source = ["alphalens", "alphalens_cli"]
+omit = [
+    "*/tests/*",
+    "*/TradingAgents/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

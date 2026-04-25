@@ -83,8 +83,7 @@ def parse_form4_xml(
         raise Form4ParseError("missing <reportingOwner>")
 
     footnotes = tuple(
-        (f.get("id") or "", (f.text or "").strip())
-        for f in root.findall("footnotes/footnote")
+        (f.get("id") or "", (f.text or "").strip()) for f in root.findall("footnotes/footnote")
     )
 
     non_derivative_txs = root.findall("nonDerivativeTable/nonDerivativeTransaction")

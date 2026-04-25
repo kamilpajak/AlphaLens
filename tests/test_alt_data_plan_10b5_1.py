@@ -59,9 +59,7 @@ class TestSpelledMonthPattern(unittest.TestCase):
     def test_abbreviated_month_name(self):
         from alphalens.alt_data.plan_10b5_1 import extract_10b5_1_adoption
 
-        _, adopted = extract_10b5_1_adoption(
-            "Rule 10b5-1 plan adopted on Oct 3, 2023."
-        )
+        _, adopted = extract_10b5_1_adoption("Rule 10b5-1 plan adopted on Oct 3, 2023.")
         self.assertEqual(adopted, date(2023, 10, 3))
 
 
@@ -69,17 +67,13 @@ class TestUsNumericPattern(unittest.TestCase):
     def test_slash_dates_us_convention(self):
         from alphalens.alt_data.plan_10b5_1 import extract_10b5_1_adoption
 
-        _, adopted = extract_10b5_1_adoption(
-            "Trade per Rule 10b5-1 plan dated 10/15/2025."
-        )
+        _, adopted = extract_10b5_1_adoption("Trade per Rule 10b5-1 plan dated 10/15/2025.")
         self.assertEqual(adopted, date(2025, 10, 15))
 
     def test_slash_dates_two_digit_year(self):
         from alphalens.alt_data.plan_10b5_1 import extract_10b5_1_adoption
 
-        _, adopted = extract_10b5_1_adoption(
-            "10b5-1 plan entered on 10/15/25."
-        )
+        _, adopted = extract_10b5_1_adoption("10b5-1 plan entered on 10/15/25.")
         self.assertEqual(adopted, date(2025, 10, 15))
 
 
@@ -105,9 +99,7 @@ class TestUnparseable(unittest.TestCase):
     def test_plan_mentioned_no_date_returns_true_none(self):
         from alphalens.alt_data.plan_10b5_1 import extract_10b5_1_adoption
 
-        has, adopted = extract_10b5_1_adoption(
-            "Transaction made pursuant to a Rule 10b5-1 plan."
-        )
+        has, adopted = extract_10b5_1_adoption("Transaction made pursuant to a Rule 10b5-1 plan.")
         self.assertTrue(has)
         self.assertIsNone(adopted)
 

@@ -66,50 +66,62 @@ class TestRoleFilter(unittest.TestCase):
     def test_drops_pure_ten_percent_holder(self):
         from alphalens.alt_data.form4_filter import filter_eligible
 
-        kept = filter_eligible([
-            _record(is_director=False, is_officer=False, is_ten_percent_owner=True),
-        ])
+        kept = filter_eligible(
+            [
+                _record(is_director=False, is_officer=False, is_ten_percent_owner=True),
+            ]
+        )
         self.assertEqual(kept, [])
 
     def test_drops_pure_other(self):
         from alphalens.alt_data.form4_filter import filter_eligible
 
-        kept = filter_eligible([
-            _record(is_director=False, is_officer=False, is_other=True),
-        ])
+        kept = filter_eligible(
+            [
+                _record(is_director=False, is_officer=False, is_other=True),
+            ]
+        )
         self.assertEqual(kept, [])
 
     def test_keeps_pure_officer(self):
         from alphalens.alt_data.form4_filter import filter_eligible
 
-        kept = filter_eligible([
-            _record(is_director=False, is_officer=True, is_ten_percent_owner=False),
-        ])
+        kept = filter_eligible(
+            [
+                _record(is_director=False, is_officer=True, is_ten_percent_owner=False),
+            ]
+        )
         self.assertEqual(len(kept), 1)
 
     def test_keeps_pure_director(self):
         from alphalens.alt_data.form4_filter import filter_eligible
 
-        kept = filter_eligible([
-            _record(is_director=True, is_officer=False, is_ten_percent_owner=False),
-        ])
+        kept = filter_eligible(
+            [
+                _record(is_director=True, is_officer=False, is_ten_percent_owner=False),
+            ]
+        )
         self.assertEqual(len(kept), 1)
 
     def test_keeps_joint_officer_director(self):
         from alphalens.alt_data.form4_filter import filter_eligible
 
-        kept = filter_eligible([
-            _record(is_director=True, is_officer=True, is_ten_percent_owner=False),
-        ])
+        kept = filter_eligible(
+            [
+                _record(is_director=True, is_officer=True, is_ten_percent_owner=False),
+            ]
+        )
         self.assertEqual(len(kept), 1)
 
     def test_keeps_officer_who_also_owns_10_percent(self):
         """Insider wearing both hats — officer role triggers keep."""
         from alphalens.alt_data.form4_filter import filter_eligible
 
-        kept = filter_eligible([
-            _record(is_director=False, is_officer=True, is_ten_percent_owner=True),
-        ])
+        kept = filter_eligible(
+            [
+                _record(is_director=False, is_officer=True, is_ten_percent_owner=True),
+            ]
+        )
         self.assertEqual(len(kept), 1)
 
 
@@ -126,12 +138,15 @@ class TestMixedBatch(unittest.TestCase):
         from alphalens.alt_data.form4_filter import filter_eligible
 
         records = [
-            _record(transaction_code="P", is_officer=True),   # keep
-            _record(transaction_code="S", is_officer=True),   # drop: code
-            _record(transaction_code="P", is_officer=False,
-                    is_director=False, is_ten_percent_owner=True),  # drop: role
-            _record(transaction_code="P", is_director=True,
-                    is_officer=False),                          # keep
+            _record(transaction_code="P", is_officer=True),  # keep
+            _record(transaction_code="S", is_officer=True),  # drop: code
+            _record(
+                transaction_code="P",
+                is_officer=False,
+                is_director=False,
+                is_ten_percent_owner=True,
+            ),  # drop: role
+            _record(transaction_code="P", is_director=True, is_officer=False),  # keep
         ]
 
         kept = filter_eligible(records)

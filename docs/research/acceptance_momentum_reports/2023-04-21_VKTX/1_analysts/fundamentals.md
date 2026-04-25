@@ -8,7 +8,7 @@
 Viking Therapeutics is currently in the clinical stage, meaning it generates **zero revenue** from product sales. Its financial health is primarily measured by its research and development (R&D) efficiency and its cash runway.
 
 *   **Net Loss:** For the fiscal year ending December 31, 2022, VKTX reported a net loss of **$68.9 million**, compared to **$55.0 million** in 2021. This widening loss is driven by increased clinical trial activity.
-*   **Quarterly Update (Q1 2023):** As of the quarter ending March 31, 2023, the company reported a quarterly net loss of **$19.5 million**. 
+*   **Quarterly Update (Q1 2023):** As of the quarter ending March 31, 2023, the company reported a quarterly net loss of **$19.5 million**.
 *   **Operating Expenses:** R&D expenses rose to **$54.2 million** in 2022 (up from $45.0M in 2021), reflecting the advancement of its key pipeline candidates, VK2809 and VK2735.
 
 ### 2. Balance Sheet and Liquidity Analysis

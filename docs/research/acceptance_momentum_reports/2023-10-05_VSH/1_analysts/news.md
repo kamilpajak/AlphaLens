@@ -1,6 +1,6 @@
 ## Comprehensive Market and News Analysis: VSH (Vishay Intertechnology)
 
-**Date:** October 5, 2023  
+**Date:** October 5, 2023
 **Subject:** Macroeconomic Trends and Sector Analysis for VSH
 
 ### Executive Summary
@@ -21,7 +21,7 @@ Oil prices have flirted with the $100/barrel mark recently. This upward pressure
 *   **Manufacturing Costs:** Energy-intensive semiconductor fabrication and component manufacturing will see margin compression if these costs cannot be fully passed on to customers.
 
 #### 3. Monetary Policy: "Higher for Longer" Interest Rates
-The consensus among financial analysts is that interest rates will remain restrictive for a longer duration than previously anticipated. 
+The consensus among financial analysts is that interest rates will remain restrictive for a longer duration than previously anticipated.
 *   **Sector Impact:** Growth in the "Clean Energy" sector—a key growth driver for VSH’s power MOSFETs and capacitors—has stalled due to the high cost of financing projects.
 *   **Consumer Sentiment:** Declining consumer confidence, as noted in recent PCE and GDP reports, suggests a potential slowdown in the computing and consumer electronics end-markets, which are significant for VSH’s product portfolio.
 

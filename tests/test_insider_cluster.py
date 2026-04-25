@@ -71,7 +71,7 @@ class TestWindowBoundary(unittest.TestCase):
     def _three_insiders_at(self, *tx_dates: date):
         return [
             _record(
-                reporting_owner_cik=f"000000000{i+1}",
+                reporting_owner_cik=f"000000000{i + 1}",
                 transaction_date=d,
             )
             for i, d in enumerate(tx_dates)
@@ -102,7 +102,9 @@ class TestWindowBoundary(unittest.TestCase):
 
         asof = date(2025, 3, 15)
         records = self._three_insiders_at(
-            date(2025, 3, 10), date(2025, 3, 12), date(2025, 3, 20),  # 20th is future
+            date(2025, 3, 10),
+            date(2025, 3, 12),
+            date(2025, 3, 20),  # 20th is future
         )
 
         self.assertIsNone(detect_cluster(records, asof=asof))
@@ -162,7 +164,10 @@ class TestPlan10b5_1Exclusion(unittest.TestCase):
 
         records = [
             _record(reporting_owner_cik="0000000001"),  # empty footnotes
-            _record(reporting_owner_cik="0000000002", footnotes=(("F1", "Direct ownership only."),)),
+            _record(
+                reporting_owner_cik="0000000002",
+                footnotes=(("F1", "Direct ownership only."),),
+            ),
             _record(reporting_owner_cik="0000000003"),
         ]
 
@@ -174,12 +179,21 @@ class TestClusterMetrics(unittest.TestCase):
         from alphalens.screeners.insider.cluster import detect_cluster
 
         records = [
-            _record(reporting_owner_cik="0000000001", transaction_shares=Decimal("100"),
-                    transaction_price_per_share=Decimal("10.00")),
-            _record(reporting_owner_cik="0000000002", transaction_shares=Decimal("200"),
-                    transaction_price_per_share=Decimal("20.00")),
-            _record(reporting_owner_cik="0000000003", transaction_shares=Decimal("50"),
-                    transaction_price_per_share=Decimal("30.00")),
+            _record(
+                reporting_owner_cik="0000000001",
+                transaction_shares=Decimal("100"),
+                transaction_price_per_share=Decimal("10.00"),
+            ),
+            _record(
+                reporting_owner_cik="0000000002",
+                transaction_shares=Decimal("200"),
+                transaction_price_per_share=Decimal("20.00"),
+            ),
+            _record(
+                reporting_owner_cik="0000000003",
+                transaction_shares=Decimal("50"),
+                transaction_price_per_share=Decimal("30.00"),
+            ),
         ]
 
         cluster = detect_cluster(records, asof=date(2025, 3, 20))
@@ -190,12 +204,21 @@ class TestClusterMetrics(unittest.TestCase):
         from alphalens.screeners.insider.cluster import detect_cluster
 
         records = [
-            _record(reporting_owner_cik="0000000001", transaction_shares=Decimal("100"),
-                    transaction_price_per_share=None),
-            _record(reporting_owner_cik="0000000002", transaction_shares=Decimal("200"),
-                    transaction_price_per_share=Decimal("20.00")),
-            _record(reporting_owner_cik="0000000003", transaction_shares=Decimal("50"),
-                    transaction_price_per_share=Decimal("30.00")),
+            _record(
+                reporting_owner_cik="0000000001",
+                transaction_shares=Decimal("100"),
+                transaction_price_per_share=None,
+            ),
+            _record(
+                reporting_owner_cik="0000000002",
+                transaction_shares=Decimal("200"),
+                transaction_price_per_share=Decimal("20.00"),
+            ),
+            _record(
+                reporting_owner_cik="0000000003",
+                transaction_shares=Decimal("50"),
+                transaction_price_per_share=Decimal("30.00"),
+            ),
         ]
 
         cluster = detect_cluster(records, asof=date(2025, 3, 20))

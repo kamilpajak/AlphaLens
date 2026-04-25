@@ -58,17 +58,19 @@ def collect_rejections(scorer: str) -> list[dict]:
         if not decision_file.exists():
             print(f"  skip {r['date']}_{r['ticker']} — no decision.md")
             continue
-        rows.append({
-            "scorer": scorer,
-            "date": r["date"],
-            "ticker": r["ticker"],
-            "regime": r["regime"],
-            "rating": r["rating"],
-            "fwd_20d": r.get("fwd_20d"),
-            "alpha_20d": r.get("alpha_20d"),
-            "alpha_120d": r.get("alpha_120d"),
-            "verdict_text": decision_file.read_text(),
-        })
+        rows.append(
+            {
+                "scorer": scorer,
+                "date": r["date"],
+                "ticker": r["ticker"],
+                "regime": r["regime"],
+                "rating": r["rating"],
+                "fwd_20d": r.get("fwd_20d"),
+                "alpha_20d": r.get("alpha_20d"),
+                "alpha_120d": r.get("alpha_120d"),
+                "verdict_text": decision_file.read_text(),
+            }
+        )
     return rows
 
 
@@ -133,16 +135,18 @@ def main() -> None:
     print(f"\nJSONL → {out_jsonl}")
 
     # Aggregate
-    md_lines = ["# Layer 3 Rejection Analysis — what patterns would a scorer filter catch?",
-                "",
-                f"Analyzed {len(all_rows)} rejected picks across both scorers "
-                f"({sum(1 for r in all_rows if r['scorer']=='momentum')} momentum, "
-                f"{sum(1 for r in all_rows if r['scorer']=='early-stage')} early-stage).",
-                "",
-                "## Primary rejection reasons",
-                "",
-                "| Reason | Momentum | Early-stage | Total |",
-                "| --- | ---: | ---: | ---: |"]
+    md_lines = [
+        "# Layer 3 Rejection Analysis — what patterns would a scorer filter catch?",
+        "",
+        f"Analyzed {len(all_rows)} rejected picks across both scorers "
+        f"({sum(1 for r in all_rows if r['scorer'] == 'momentum')} momentum, "
+        f"{sum(1 for r in all_rows if r['scorer'] == 'early-stage')} early-stage).",
+        "",
+        "## Primary rejection reasons",
+        "",
+        "| Reason | Momentum | Early-stage | Total |",
+        "| --- | ---: | ---: | ---: |",
+    ]
     reasons = Counter()
     by_scorer = {"momentum": Counter(), "early-stage": Counter()}
     for r in all_rows:
@@ -171,20 +175,22 @@ def main() -> None:
     for flt, count in filters.most_common(15):
         md_lines.append(f"- ({count}×) {flt}")
 
-    md_lines += ["",
-                 "## False negative focus (rejected picks that rallied ≥10% in 20d)",
-                 "",
-                 "These are where Layer 3 rejected a winner — scorer improvement is "
-                 "less valuable here (we want LESS filtering, not more), but the "
-                 "categorization shows if Layer 3 has systemic blind spots.",
-                 "",
-                 "| Date | Ticker | Scorer | Regime | fwd20d | Primary reason | Filter suggested |",
-                 "| --- | --- | --- | --- | ---: | --- | --- |"]
+    md_lines += [
+        "",
+        "## False negative focus (rejected picks that rallied ≥10% in 20d)",
+        "",
+        "These are where Layer 3 rejected a winner — scorer improvement is "
+        "less valuable here (we want LESS filtering, not more), but the "
+        "categorization shows if Layer 3 has systemic blind spots.",
+        "",
+        "| Date | Ticker | Scorer | Regime | fwd20d | Primary reason | Filter suggested |",
+        "| --- | --- | --- | --- | ---: | --- | --- |",
+    ]
     for r in sorted(all_rows, key=lambda x: -(x.get("fwd_20d") or -1)):
         if (r.get("fwd_20d") or 0) >= 0.10:
             md_lines.append(
                 f"| {r['date']} | {r['ticker']} | {r['scorer']} | {r['regime']} | "
-                f"{(r['fwd_20d'] or 0)*100:+.1f}% | {r.get('primary_reason','')} | "
+                f"{(r['fwd_20d'] or 0) * 100:+.1f}% | {r.get('primary_reason', '')} | "
                 f"{(r.get('suggested_scorer_filter') or '')[:80]} |"
             )
 

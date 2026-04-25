@@ -11,7 +11,7 @@ The biotechnology sector, represented by the XBI index, remains in what experts 
 *   **Recession Fears:** Falling global freight rates and slowing trade volumes (reported by S&P Global and the WTO) are increasing concerns of a global recession, which typically leads investors to rotate out of "risk-on" assets like clinical-stage biotechs.
 
 ### Instrument Analysis: DAWN (Day One Biopharmaceuticals)
-While no specific corporate news or clinical data updates for **DAWN** were captured in major feeds during the last seven days, the stock is heavily influenced by the aforementioned macro shifts. 
+While no specific corporate news or clinical data updates for **DAWN** were captured in major feeds during the last seven days, the stock is heavily influenced by the aforementioned macro shifts.
 *   **Conference Presentations:** **DAWN** presented at the Wells Fargo Healthcare Conference (Sept 7) and the H.C. Wainwright Global Investment Conference (Sept 12–14). These presentations generally reinforce the company's clinical progress in pediatric oncology, but such "soft" catalysts are currently overshadowed by macro volatility.
 *   **Valuation Pressure:** As a growth-oriented biotech, **DAWN**'s valuation is highly sensitive to the Nasdaq sell-off. The shock from the CPI report likely led to a significant pullback in the stock price as investors fled speculative assets.
 

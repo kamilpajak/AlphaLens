@@ -1,15 +1,12 @@
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 
 class TestMomentumConfig(unittest.TestCase):
     def test_metric_weights_sum_to_one(self):
         from alphalens.screeners.themed.config import THEMED_DEFAULTS
 
-        total = sum(
-            v for k, v in THEMED_DEFAULTS.items() if k.startswith("weight_")
-        )
+        total = sum(v for k, v in THEMED_DEFAULTS.items() if k.startswith("weight_"))
         self.assertAlmostEqual(total, 1.0, places=6)
 
     def test_guardrails_positive(self):

@@ -1,7 +1,7 @@
 As of July 8, 2025, **PLXS (Plexus Corp.)** is navigating a critical technical junction. After a significant rally from the April lows (around $110), the stock is currently testing long-term resistance and undergoing a healthy short-term consolidation.
 
 ### Technical Trend Analysis
-The stock is exhibiting a **medium-term bullish trend** but remains capped by **long-term resistance**. 
+The stock is exhibiting a **medium-term bullish trend** but remains capped by **long-term resistance**.
 - **Moving Averages:** The price is comfortably above its 50-day SMA ($131.59), which has been sloping upward, indicating a sustained recovery over the last few months. However, it recently encountered significant friction at the 200-day SMA ($140.25). This level is a major psychological and technical hurdle; the stock's inability to close decisively above it on July 3rd suggests that the long-term "bearish" shadow has not yet fully cleared.
 - **Bollinger Bands:** The recent peak at $140.00 coincided almost exactly with the Upper Bollinger Band ($140.14). The subsequent pullback to $137.06 is a standard "mean reversion" move, with the stock now gravitating toward the Middle Band ($134.58).
 

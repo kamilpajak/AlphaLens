@@ -68,13 +68,20 @@ def _build_watchdog() -> Watchdog:
     digest = DigestHandler(db_path=home / "digest.db", sender=telegram)
     enqueue = AutoTriggerEnqueueHandler(queue_path=default_queue_path())
 
-    router = DispatchRouter({
-        Action.AUTO_TRIGGER: [enqueue, telegram],
-        Action.APPROVAL: [telegram],
-        Action.DIGEST: [digest],
-    })
+    router = DispatchRouter(
+        {
+            Action.AUTO_TRIGGER: [enqueue, telegram],
+            Action.APPROVAL: [telegram],
+            Action.DIGEST: [digest],
+        }
+    )
 
-    return Watchdog(sources=[source], classifier=SignalClassifier(), portfolio=portfolio, router=router)
+    return Watchdog(
+        sources=[source],
+        classifier=SignalClassifier(),
+        portfolio=portfolio,
+        router=router,
+    )
 
 
 @watchdog_app.command(name="run-once")

@@ -1,7 +1,6 @@
 import unittest
 
 import numpy as np
-import pandas as pd
 
 
 class TestCostModelFromProfile(unittest.TestCase):
@@ -71,7 +70,9 @@ class TestSensitivityTable(unittest.TestCase):
         df = cost_sensitivity_table(returns)
 
         self.assertEqual(len(df), 4)
-        self.assertListEqual(list(df["profile"]), ["gross", "aggressive", "moderate", "conservative"])
+        self.assertListEqual(
+            list(df["profile"]), ["gross", "aggressive", "moderate", "conservative"]
+        )
         # Sharpe should decrease as drag increases.
         self.assertTrue((df["sharpe"].diff().dropna() <= 0).all())
 
@@ -80,9 +81,7 @@ class TestApplyScalarToSharpe(unittest.TestCase):
     def test_gross_sharpe_unchanged_for_zero_drag(self):
         from alphalens.backtest.cost_model import CostModel
 
-        self.assertEqual(
-            CostModel(annual_drag_bps=0.0).apply_scalar_to_sharpe(1.0, 0.01), 1.0
-        )
+        self.assertEqual(CostModel(annual_drag_bps=0.0).apply_scalar_to_sharpe(1.0, 0.01), 1.0)
 
     def test_nonzero_drag_reduces_sharpe(self):
         from alphalens.backtest.cost_model import CostModel

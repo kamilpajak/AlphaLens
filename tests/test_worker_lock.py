@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import time
 import unittest
 from pathlib import Path
 
@@ -29,7 +28,7 @@ class TestWorkerLock(unittest.TestCase):
             self.lock_path.unlink()
 
     def test_acquire_releases_context_manager(self):
-        from alphalens.watchdog_lock import worker_lock, WorkerLockBusy
+        from alphalens.watchdog_lock import worker_lock
 
         with worker_lock(self.lock_path) as pid:
             self.assertEqual(pid, os.getpid())
@@ -41,16 +40,15 @@ class TestWorkerLock(unittest.TestCase):
             pass
 
     def test_second_acquire_in_same_process_raises(self):
-        from alphalens.watchdog_lock import worker_lock, WorkerLockBusy
+        from alphalens.watchdog_lock import WorkerLockBusy, worker_lock
 
-        with worker_lock(self.lock_path):
-            with self.assertRaises(WorkerLockBusy):
-                with worker_lock(self.lock_path):
-                    pass
+        with worker_lock(self.lock_path), self.assertRaises(WorkerLockBusy):
+            with worker_lock(self.lock_path):
+                pass
 
     def test_second_acquire_in_different_process_raises(self):
         """Kernel-level flock prevents subprocess from stealing the lock."""
-        from alphalens.watchdog_lock import worker_lock, WorkerLockBusy
+        from alphalens.watchdog_lock import worker_lock
 
         repo_root = str(Path(__file__).resolve().parent.parent)
         code = textwrap.dedent(f"""
@@ -66,12 +64,13 @@ class TestWorkerLock(unittest.TestCase):
         """)
 
         with worker_lock(self.lock_path):
-            result = subprocess.run(
-                [sys.executable, "-c", code], capture_output=True, timeout=10
+            result = subprocess.run([sys.executable, "-c", code], capture_output=True, timeout=10)
+            self.assertEqual(
+                result.returncode,
+                42,
+                f"expected exit 42 (lock busy), got {result.returncode}; "
+                f"stderr={result.stderr.decode()}",
             )
-            self.assertEqual(result.returncode, 42,
-                             f"expected exit 42 (lock busy), got {result.returncode}; "
-                             f"stderr={result.stderr.decode()}")
 
     def test_lock_released_on_subprocess_exit(self):
         """When the subprocess holding the lock dies, we can reacquire."""
@@ -86,9 +85,7 @@ class TestWorkerLock(unittest.TestCase):
             with worker_lock(Path({str(self.lock_path)!r})):
                 pass
         """)
-        result = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, timeout=10
-        )
+        result = subprocess.run([sys.executable, "-c", code], capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, f"subprocess failed: {result.stderr.decode()}")
 
         # Now we can acquire.

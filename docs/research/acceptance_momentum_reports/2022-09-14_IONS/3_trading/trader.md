@@ -17,6 +17,6 @@ The mention of over 100% institutional ownership is a double-edged sword. While 
 ### Strategic Conclusion
 The risk-to-reward ratio for holding IONS at current levels is unfavorable. The clinical catalysts are largely behind us, and the macro and commercial hurdles are ahead. Protecting capital by locking in gains or exiting before a deeper correction is the most prudent path. The recommendation to wait for a test of the 200-day moving average (approximately $36) provides a safer entry point should the long-term thesis remain intact after the current valuation froth settles.
 
-I concur with the provided investment plan's cautious stance. 
+I concur with the provided investment plan's cautious stance.
 
 FINAL TRANSACTION PROPOSAL: **SELL**

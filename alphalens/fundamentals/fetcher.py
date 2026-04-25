@@ -15,7 +15,8 @@ handles rate-limit detection + PIT `_filter_reports_by_date`.
 from __future__ import annotations
 
 import logging
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +55,11 @@ def fetch_ticker_bundle(ticker: str, curr_date: str | None = None) -> dict:
     Individual endpoint failures return {} so partial data still flows through
     — extract_features defends against missing sections.
     """
+
     def _safe(fn):
         try:
             return fn(ticker, curr_date=curr_date)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("AV fetch failed for %s: %s", ticker, exc)
             return {}
 

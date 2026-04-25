@@ -15,17 +15,17 @@ My bear colleagues are terrified of the $21.00 to $14.00 gap. I see it as a "was
 *   **The Squeeze:** Bollinger Bands are narrowing while the price stabilizes. When volatility contracts like this after a massive drop, the subsequent move is usually explosive. With the RSI trending up, that move is biased to the upside.
 
 ### 3. Refuting the "Insolvency" Narrative
-The bears scream "Negative Equity!" and "Insolvency!" Let's look at the reality. Yes, the balance sheet is lean, but QMCO is sitting on **$25.75 million in cash**. They aren’t running out of lightbulbs tomorrow. 
+The bears scream "Negative Equity!" and "Insolvency!" Let's look at the reality. Yes, the balance sheet is lean, but QMCO is sitting on **$25.75 million in cash**. They aren’t running out of lightbulbs tomorrow.
 
 The negative equity is a result of accounting for the transition—impairments and legacy debt. But look at the **Price-to-Sales ratio of 0.40x**. This is a company generating over $260 million in revenue with a market cap of barely $100 million. In any other sector, a P/S that low for a company at the center of a tech revolution would be considered an absolute steal. The "risk of bankruptcy" is a bear's boogeyman used to scare you away from a classic turnaround play.
 
 ### 4. Engaging the Bear Argument: Addressing the "Value Trap"
-The bear analyst calls this a "valuation trap." I call it a **"coiled spring."** 
+The bear analyst calls this a "valuation trap." I call it a **"coiled spring."**
 
 They argue that high interest rates punish micro-caps. While true for companies with *no* revenue, QMCO has a massive installed base. They are "sticky." You don't just rip out an entire enterprise data archive overnight. As the Fed nears the end of its hiking cycle, the "risk-off" sentiment that has crushed micro-caps will reverse. When the IWC/SPY ratio bottoms, the stocks with the lowest P/S and the highest AI-utility will lead the charge. QMCO is first in line.
 
 ### My Reflection & Lesson Learned
-In the past, I’ve seen analysts get caught waiting for a "perfect" balance sheet before buying. By the time the equity turns positive, the stock is already back at $25. The lesson? **Invest in the turnaround, not the finished product.** 
+In the past, I’ve seen analysts get caught waiting for a "perfect" balance sheet before buying. By the time the equity turns positive, the stock is already back at $25. The lesson? **Invest in the turnaround, not the finished product.**
 
 ### The Bull Verdict: Speculative Buy
 We are at the point of maximum pessimism. The technicals show a momentum shift, the macro environment (energy costs) favors QMCO’s product mix, and the valuation is so compressed that any "less-than-terrible" news will send this stock back toward its 50-day SMA of **$14.40** (a 15-20% upside from current levels) in a heartbeat.

@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -28,7 +28,7 @@ def _fake_result(candidate_id, ticker, source, rating="BUY"):
         duration_sec=1.0,
         cost_usd=None,
         model_used="gemini-3-pro-preview",
-        completed_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(UTC),
         final_state={},
     )
 
@@ -195,11 +195,16 @@ class TestAnalysisWorker(unittest.TestCase):
 
         with CandidateQueue(self.db) as q:
             q.submit([_cand(ticker="LO", priority=20, discriminator="dL")])
-            q.submit([
-                _cand(
-                    ticker="HI", source="watchdog_sec", priority=0, discriminator="dH"
-                )
-            ])
+            q.submit(
+                [
+                    _cand(
+                        ticker="HI",
+                        source="watchdog_sec",
+                        priority=0,
+                        discriminator="dH",
+                    )
+                ]
+            )
 
         worker.process_one()
         first_ticker = runner.run.call_args.args[0].ticker
@@ -212,10 +217,12 @@ class TestAnalysisWorker(unittest.TestCase):
         )
         worker = self._make_worker(runner)
 
-        worker.queue.submit([
-            _cand(ticker="A", discriminator="d1"),
-            _cand(ticker="B", discriminator="d2"),
-        ])
+        worker.queue.submit(
+            [
+                _cand(ticker="A", discriminator="d1"),
+                _cand(ticker="B", discriminator="d2"),
+            ]
+        )
 
         processed = worker.process_all()
         self.assertEqual(processed, 2)

@@ -149,9 +149,7 @@ class SECEdgarSource(EventSource):
         if not primary:
             return
 
-        html_text = self._get(
-            f"{base_dir}/{primary}", context=f"8-k html {event.accession_number}"
-        )
+        html_text = self._get(f"{base_dir}/{primary}", context=f"8-k html {event.accession_number}")
         if html_text is None:
             return
 
@@ -160,9 +158,7 @@ class SECEdgarSource(EventSource):
             # Upgrade bare "5.02" to explicit subsection when the section
             # narrative gives a clear signal (Perplexity 2026-04-18: ~60-70%
             # of real principal-officer events use bare "Item 5.02" headings).
-            if "5.02" in items and not any(
-                i.startswith("5.02(") for i in items
-            ):
+            if "5.02" in items and not any(i.startswith("5.02(") for i in items):
                 inferred = infer_5_02_subsection(extract_5_02_section(html_text))
                 if inferred:
                     items = [inferred if i == "5.02" else i for i in items]
@@ -209,7 +205,9 @@ class SECEdgarSource(EventSource):
         url = link.get("href", "") if link is not None else ""
 
         updated = entry.find("atom:updated", ATOM_NS)
-        filed_at = _parse_iso_datetime(updated.text) if updated is not None and updated.text else None
+        filed_at = (
+            _parse_iso_datetime(updated.text) if updated is not None and updated.text else None
+        )
         if filed_at is None:
             return None
 

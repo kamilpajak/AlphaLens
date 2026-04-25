@@ -12,6 +12,7 @@ congress_trades DataFrame:
 insider_trades DataFrame:
     ticker, date, name, transaction ('A'|'D'), shares (int), price (float), value (float $)
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -25,11 +26,7 @@ def _window_filter(
     if df.empty:
         return df.iloc[0:0]
     lower = as_of - pd.Timedelta(days=lookback_days)
-    return df[
-        (df["ticker"] == ticker)
-        & (df["date"] > lower)
-        & (df["date"] <= as_of)
-    ]
+    return df[(df["ticker"] == ticker) & (df["date"] > lower) & (df["date"] <= as_of)]
 
 
 def congress_net_flow(
@@ -136,11 +133,13 @@ def _rolling_net_flow_panel(
         return pd.DataFrame(0.0, index=pd.DatetimeIndex(dates), columns=tickers)
 
     daily = (
-        pd.DataFrame({
-            "date_norm": trades["date"].dt.normalize(),
-            "ticker": trades["ticker"],
-            "net": signed_amount.values,
-        })
+        pd.DataFrame(
+            {
+                "date_norm": trades["date"].dt.normalize(),
+                "ticker": trades["ticker"],
+                "net": signed_amount.values,
+            }
+        )
         .groupby(["date_norm", "ticker"])["net"]
         .sum()
         .unstack("ticker")
@@ -185,7 +184,9 @@ def build_insider_feature_panel(
     if feature == "net_flow":
         if trades.empty:
             return pd.DataFrame(0.0, index=pd.DatetimeIndex(dates), columns=tickers)
-        signed_value = trades["value"] * trades["transaction"].map({"A": 1.0, "D": -1.0}).fillna(0.0)
+        signed_value = trades["value"] * trades["transaction"].map({"A": 1.0, "D": -1.0}).fillna(
+            0.0
+        )
         return _rolling_net_flow_panel(trades, signed_value, tickers, dates, lookback_days)
     if feature == "buy_ratio":
         return _slow_panel(trades, insider_buy_ratio, tickers, dates, lookback_days)
@@ -208,7 +209,10 @@ def build_congress_feature_panel(
     if feature == "net_flow":
         if trades.empty:
             return pd.DataFrame(0.0, index=pd.DatetimeIndex(dates), columns=tickers)
-        signed_amount = trades["transaction"].map({"PURCHASE": 1.0, "SALE": -1.0}).fillna(0.0) * trades["amount_mid"]
+        signed_amount = (
+            trades["transaction"].map({"PURCHASE": 1.0, "SALE": -1.0}).fillna(0.0)
+            * trades["amount_mid"]
+        )
         return _rolling_net_flow_panel(trades, signed_amount, tickers, dates, lookback_days)
     if feature == "unique_members":
         return _slow_panel(trades, congress_unique_members, tickers, dates, lookback_days)

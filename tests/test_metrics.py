@@ -2,7 +2,6 @@ import math
 import unittest
 
 import numpy as np
-import pandas as pd
 
 
 class TestSharpe(unittest.TestCase):

@@ -1,0 +1,36 @@
+# Pre-commit hooks — minimal Astral-driven setup per Perplexity 2026-04-25
+# Run: uv run pre-commit install (one-time)
+# Then: uv run pre-commit run --all-files (initial sweep)
+# Hooks fire automatically on `git commit`.
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      # Autofix what ruff can safely fix; un-autofixable violations are surfaced
+      # in CI (which DOES fail on them) — local hook never blocks commit on them
+      # so dev flow stays fast. Format always succeeds (idempotent).
+      - id: ruff
+        name: ruff lint (autofix only)
+        args: [--fix, --exit-zero]
+      - id: ruff-format
+        name: ruff format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+        exclude: ^(reports/|TradingAgents/|\.alphalens/)
+      - id: trailing-whitespace
+        exclude: ^(reports/|TradingAgents/)
+      - id: check-yaml
+        exclude: ^TradingAgents/  # vendored upstream — don't enforce
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+        exclude: ^(uv\.lock|reports/|data/sp500_pit/)
+
+# Type checker (ty) and security scanner (bandit) live in CI only —
+# too slow for local commit hook (delays development).

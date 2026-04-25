@@ -15,8 +15,8 @@ All DataFrames must be sorted ascending by date and use a `DatetimeIndex`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
-from typing import Mapping
 
 import pandas as pd
 
@@ -47,11 +47,9 @@ class HistoryStore:
         df = self._cache.get(up)
         if df is None:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-        return df.loc[:pd.Timestamp(asof)]
+        return df.loc[: pd.Timestamp(asof)]
 
-    def forward_return(
-        self, ticker: str, entry_date: date, holding_period: int
-    ) -> float | None:
+    def forward_return(self, ticker: str, entry_date: date, holding_period: int) -> float | None:
         """Forward return from entry at next-close after `entry_date` to exit
         `holding_period` bars later.
 
@@ -74,9 +72,7 @@ class HistoryStore:
             return None
         return exit_price / entry_price - 1.0
 
-    def trading_days_between(
-        self, ticker: str, start: date, end: date
-    ) -> list[pd.Timestamp]:
+    def trading_days_between(self, ticker: str, start: date, end: date) -> list[pd.Timestamp]:
         """Trading days for `ticker` in [start, end] inclusive.
 
         Uses a specific ticker's index as the trading-day proxy. Pass a
@@ -91,7 +87,7 @@ class HistoryStore:
 
     @staticmethod
     def benchmark_calendar(
-        store: "HistoryStore", benchmark: str, start: date, end: date
+        store: HistoryStore, benchmark: str, start: date, end: date
     ) -> list[pd.Timestamp]:
         """Canonical trading calendar derived from a benchmark ticker's bars.
 

@@ -41,14 +41,16 @@ def compute_position_weights(n: int, scheme: WeightingScheme = "equal") -> np.nd
     if scheme == "conviction":
         # Three tiers (rounded): top ceil(n/3) × 2.0, middle floor(n/3) × 1.0,
         # bottom rest × 0.5. For small n these collapse gracefully.
-        top = max(1, (n + 2) // 3)        # rounded up third
-        bottom = max(1, n // 3)            # rounded down third
+        top = max(1, (n + 2) // 3)  # rounded up third
+        bottom = max(1, n // 3)  # rounded down third
         middle = n - top - bottom
-        raw = np.concatenate([
-            np.full(top, 2.0),
-            np.full(max(0, middle), 1.0),
-            np.full(bottom, 0.5),
-        ])
+        raw = np.concatenate(
+            [
+                np.full(top, 2.0),
+                np.full(max(0, middle), 1.0),
+                np.full(bottom, 0.5),
+            ]
+        )
         # Safety for tiny n that collapsed to single tier.
         raw = raw[:n]
         if raw.sum() == 0:

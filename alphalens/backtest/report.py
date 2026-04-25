@@ -7,9 +7,9 @@ produces a human-readable summary suitable for committing to
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
 
 import pandas as pd
 
@@ -122,7 +122,7 @@ def write_markdown_report(
 ) -> None:
     """Write the full markdown decision-matrix report to `path`."""
     lines: list[str] = []
-    lines.append(f"# MVP1 Backtest Report")
+    lines.append("# MVP1 Backtest Report")
     lines.append("")
     lines.append(f"- **Window**: {report.start} → {report.end}")
     lines.append(f"- **Benchmark**: {report.benchmark}")
@@ -180,7 +180,9 @@ def write_markdown_report(
     if decile_ic:
         lines.append("## IC by score decile (tail-concentration test)")
         lines.append("")
-        lines.append(f"**Tail concentration score**: {tail_score:.2f} (>1.5 = strong tails, ~1.0 = flat)")
+        lines.append(
+            f"**Tail concentration score**: {tail_score:.2f} (>1.5 = strong tails, ~1.0 = flat)"
+        )
         lines.append("")
         lines.append("| Decile | n samples | Mean return | Std | Sharpe within |")
         lines.append("| ---: | ---: | ---: | ---: | ---: |")
@@ -198,8 +200,10 @@ def write_markdown_report(
         lines.append(format_vol_decomposition(vol_decomp))
         lines.append("```")
         lines.append("")
-        lines.append("Interpretation: if **vol_ratio < 0.8 AND excess_return near zero**, "
-                     "top-N is capturing defensive low-vol positioning rather than predictive alpha.")
+        lines.append(
+            "Interpretation: if **vol_ratio < 0.8 AND excess_return near zero**, "
+            "top-N is capturing defensive low-vol positioning rather than predictive alpha."
+        )
         lines.append("")
 
     if theme_stats is not None and theme_stats.all_themes:
@@ -210,7 +214,9 @@ def write_markdown_report(
         lines.append("```")
         lines.append("")
         if theme_stats.concentration_alert_days > 0:
-            alert_pct = theme_stats.concentration_alert_days / max(len(report.daily_results), 1) * 100
+            alert_pct = (
+                theme_stats.concentration_alert_days / max(len(report.daily_results), 1) * 100
+            )
             lines.append(
                 f"**Alert**: {alert_pct:.1f}% dni miało koncentrację w jednym temacie "
                 f"> {theme_stats.concentration_threshold * 100:.0f}%. Portfolio zachowuje się "
@@ -252,7 +258,9 @@ def write_markdown_report(
     if pass_count == 3:
         lines.append("**Recommendation: DEPLOY** — proceed to launchd + 3-6 month paper trade.")
     elif pass_count >= 1:
-        lines.append("**Recommendation: ITERATE** — tweak rule weights or guardrails before deploy.")
+        lines.append(
+            "**Recommendation: ITERATE** — tweak rule weights or guardrails before deploy."
+        )
     else:
         lines.append("**Recommendation: ABANDON** — no edge detected; rely on Layer 1 + 2b only.")
     lines.append("")
@@ -261,9 +269,7 @@ def write_markdown_report(
     Path(path).write_text("\n".join(lines))
 
 
-def make_decision(
-    summary: BacktestSummary, attribution: list[AlphaResult] | None
-) -> str:
+def make_decision(summary: BacktestSummary, attribution: list[AlphaResult] | None) -> str:
     """Pure helper — returns 'deploy' / 'iterate' / 'abandon' based on criteria.
 
     Uses the Carhart-4F spec (with Mom factor) as the alpha gate: it's the

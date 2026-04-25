@@ -17,25 +17,24 @@ Addresses three questions Perplexity flagged about the baseline run:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 import numpy as np
 import pandas as pd
 
 from alphalens.backtest.metrics import rank_ic
-from alphalens.backtest.regime import RegimeStats
 
 from .engine import BacktestReport
 
 
 @dataclass(frozen=True)
 class DecileICResult:
-    decile: int                   # 1 = bottom 10%, 10 = top 10%
+    decile: int  # 1 = bottom 10%, 10 = top 10%
     n_samples: int
     mean_return: float
     std_return: float
-    sharpe_within_decile: float   # annualised Sharpe of this slice
+    sharpe_within_decile: float  # annualised Sharpe of this slice
 
 
 @dataclass(frozen=True)
@@ -54,7 +53,7 @@ class VolDecomposition:
     universe_median_vol_annualised: float
     top_n_mean_return_annualised: float
     universe_median_mean_return_annualised: float
-    vol_ratio: float              # top_n / universe_median
+    vol_ratio: float  # top_n / universe_median
     excess_return_annualised: float
 
 
@@ -185,13 +184,10 @@ def ic_at_horizon(
     for snap in report.daily_results:
         scores = snap.top_n_scores
         fwd_rets = [
-            history_store.forward_return(t, snap.date.date(), horizon)
-            for t in snap.top_n_tickers
+            history_store.forward_return(t, snap.date.date(), horizon) for t in snap.top_n_tickers
         ]
         # Filter None
-        pairs = [
-            (s, r) for s, r in zip(scores, fwd_rets) if r is not None
-        ]
+        pairs = [(s, r) for s, r in zip(scores, fwd_rets) if r is not None]
         if len(pairs) < 3:
             continue
         scores_v, rets_v = zip(*pairs)
@@ -201,9 +197,7 @@ def ic_at_horizon(
         return HorizonICResult(horizon=horizon, mean_ic=0.0, ic_tstat=0.0, n_dates=0)
     mean = float(np.mean(ic_values))
     tstat = rank_ic_tstat(ic_values)
-    return HorizonICResult(
-        horizon=horizon, mean_ic=mean, ic_tstat=tstat, n_dates=len(ic_values)
-    )
+    return HorizonICResult(horizon=horizon, mean_ic=mean, ic_tstat=tstat, n_dates=len(ic_values))
 
 
 # ---------------------------------------------------------------------------

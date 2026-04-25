@@ -24,8 +24,8 @@ import json
 import logging
 import os
 import time
+from collections.abc import Mapping
 from datetime import date
-from typing import Mapping
 
 from .historical_validation import LLMVerdict
 
@@ -83,8 +83,7 @@ def gemini_flash_tractability_scorer(
         from google.genai import types
     except ImportError as exc:
         raise RuntimeError(
-            "google-genai SDK not installed. `uv add google-genai` or use "
-            "an alternative scorer."
+            "google-genai SDK not installed. `uv add google-genai` or use an alternative scorer."
         ) from exc
 
     prompt = _TRACTABILITY_PROMPT.format(
@@ -119,7 +118,7 @@ def gemini_flash_tractability_scorer(
                 max_output_tokens=2000,
             ),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         latency = time.perf_counter() - t0
         return LLMVerdict(
             verdict="uncertain",
@@ -141,7 +140,7 @@ def gemini_flash_tractability_scorer(
         brace_end = raw.rfind("}")
         if brace_start >= 0 and brace_end > brace_start:
             try:
-                parsed = json.loads(raw[brace_start:brace_end + 1])
+                parsed = json.loads(raw[brace_start : brace_end + 1])
             except json.JSONDecodeError:
                 pass
 
@@ -187,8 +186,9 @@ def tradingagents_reduced_scorer(
 
     Użyć gdy chcesz REALISTIC PRODUCTION EVAL (jakby odpalić Layer 3 na picku).
     """
-    from alphalens.config_gemini import build_gemini_config
     from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    from alphalens.config_gemini import build_gemini_config
 
     config = build_gemini_config()
     graph = TradingAgentsGraph(
@@ -200,7 +200,7 @@ def tradingagents_reduced_scorer(
     t0 = time.perf_counter()
     try:
         _final_state, decision = graph.propagate(ticker, asof.isoformat())
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return LLMVerdict(
             verdict="uncertain",
             confidence=0.0,
@@ -219,7 +219,9 @@ def tradingagents_reduced_scorer(
         v = "uncertain"
 
     # Rough cost estimate: ~10 LLM calls × ~1k tokens each × Gemini 2.5 Flash blended
-    cost_approx = 10 * 1500 * (0.30 + 0.075) / 1_000_000  # ~$0.006 actually lol; for Pro model it's ~$0.50+
+    cost_approx = (
+        10 * 1500 * (0.30 + 0.075) / 1_000_000
+    )  # ~$0.006 actually lol; for Pro model it's ~$0.50+
 
     return LLMVerdict(
         verdict=v,  # type: ignore[arg-type]

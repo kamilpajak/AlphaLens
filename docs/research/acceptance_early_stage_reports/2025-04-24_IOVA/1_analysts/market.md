@@ -1,7 +1,7 @@
-The analysis for **Iovance Biotherapeutics, Inc. (IOVA)** as of **April 24, 2025**, reveals a stock that has undergone a severe long-term devaluation but is currently attempting to establish a consolidation floor. 
+The analysis for **Iovance Biotherapeutics, Inc. (IOVA)** as of **April 24, 2025**, reveals a stock that has undergone a severe long-term devaluation but is currently attempting to establish a consolidation floor.
 
 ### **Trend Analysis: Persistent Weakness vs. Short-Term Stability**
-The primary trend remains aggressively bearish. **IOVA** is trading significantly below its **200-day SMA ($7.63)** and **50-day SMA ($3.92)**. The massive gap between the current price (~$3.19) and these long-term averages highlights the extent of the sell-off over the past six months. 
+The primary trend remains aggressively bearish. **IOVA** is trading significantly below its **200-day SMA ($7.63)** and **50-day SMA ($3.92)**. The massive gap between the current price (~$3.19) and these long-term averages highlights the extent of the sell-off over the past six months.
 
 However, a shift in character is visible in the short-term timeframe. The **10-day EMA ($3.21)** is now almost converged with the current price, indicating that the sharp "falling knife" phase of February and March has transitioned into a sideways consolidation range. The price is currently oscillating between **$2.80 and $3.50**, searching for a definitive bottom.
 

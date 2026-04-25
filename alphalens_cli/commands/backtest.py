@@ -14,7 +14,7 @@ def backtest(
         "momentum",
         "--scorer",
         help="Scorer: 'momentum' (Layer 2b, validated), 'early-stage' (Layer 2b, "
-             "production scheduled from 2026-04-21), or 'lean' (Layer 2c, archived)",
+        "production scheduled from 2026-04-21), or 'lean' (Layer 2c, archived)",
     ),
     top_n: int = typer.Option(5, help="Top-N names to hold at each rebalance"),
     holding: int = typer.Option(5, help="Holding period in trading days"),
@@ -26,11 +26,11 @@ def backtest(
         "docs/backtest/mvp1_report.md",
         help="Markdown report output path (relative to repo root)",
     ),
-    csv: str = typer.Option(
-        "", help="Optional daily results CSV output path (empty = skip)"
-    ),
+    csv: str = typer.Option("", help="Optional daily results CSV output path (empty = skip)"),
     no_attrib: bool = typer.Option(
-        False, "--no-attrib", help="Skip factor attribution (CAPM/FF3/Carhart-4F) regressions"
+        False,
+        "--no-attrib",
+        help="Skip factor attribution (CAPM/FF3/Carhart-4F) regressions",
     ),
     diagnose: bool = typer.Option(
         False,
@@ -41,24 +41,24 @@ def backtest(
         False,
         "--fundamental-gate/--no-fundamental-gate",
         help="Apply Layer 2b fundamental soft-guardrail (issue #14). Pre-loads "
-             "fundamentals once for the universe and multiplies the technical composite by "
-             "the gate score. Only meaningful for --scorer momentum | early-stage.",
+        "fundamentals once for the universe and multiplies the technical composite by "
+        "the gate score. Only meaningful for --scorer momentum | early-stage.",
     ),
     fundamentals_source: str = typer.Option(
         "simfin",
         "--fundamentals-source",
         help="Data source when --fundamental-gate is on: 'simfin' (free 5y bulk CSV, "
-             "requires SIMFIN_API_KEY in .env; recommended) or 'av' (Alpha Vantage, "
-             "25 req/day free tier so 113 tickers × 4 endpoints will throttle).",
+        "requires SIMFIN_API_KEY in .env; recommended) or 'av' (Alpha Vantage, "
+        "25 req/day free tier so 113 tickers × 4 endpoints will throttle).",
     ),
     with_prices: bool = typer.Option(
         False,
         "--with-prices/--no-prices",
         help="SimFin-only: load daily share-prices CSV for PIT P/S gate. Requires "
-             "~/.alphalens/simfin_cache/us-shareprices-daily.csv (~435MB). If "
-             "missing, simfin will download it (download speed varies — can be "
-             "slow on throttled broadband). When off, P/S penalty is skipped "
-             "and gate uses only runway/OCF/net_income.",
+        "~/.alphalens/simfin_cache/us-shareprices-daily.csv (~435MB). If "
+        "missing, simfin will download it (download speed varies — can be "
+        "slow on throttled broadband). When off, P/S penalty is skipped "
+        "and gate uses only runway/OCF/net_income.",
     ),
 ) -> None:
     """Run backtest over Lean CSV data and emit a decision-matrix report.
@@ -88,7 +88,6 @@ def backtest(
     from alphalens.screeners.lean.config import DATA_DIR
     from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
 
-
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
 
@@ -103,7 +102,9 @@ def backtest(
         scorer_config = dict(THEMED_DEFAULTS, benchmark=benchmark)
         typer.echo(f"Scorer: Layer 2b momentum ({len(screener_tickers)} curated tickers)")
     elif scorer == "early-stage":
-        from alphalens.screeners.themed.backtest_adapter import early_stage_scorer_adapter
+        from alphalens.screeners.themed.backtest_adapter import (
+            early_stage_scorer_adapter,
+        )
         from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
         from alphalens.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS
         from alphalens.screeners.themed.universe import flatten_universe
@@ -111,13 +112,17 @@ def backtest(
         universe = yaml.safe_load(UNIVERSE_PATH.read_text())
         screener_tickers = sorted(flatten_universe(universe).keys())
         scorer_fn = early_stage_scorer_adapter
-        scorer_config = {**THEMED_DEFAULTS, **EARLY_STAGE_DEFAULTS, "benchmark": benchmark}
-        typer.echo(
-            f"Scorer: Layer 2b early-stage ({len(screener_tickers)} curated tickers)"
-        )
+        scorer_config = {
+            **THEMED_DEFAULTS,
+            **EARLY_STAGE_DEFAULTS,
+            "benchmark": benchmark,
+        }
+        typer.echo(f"Scorer: Layer 2b early-stage ({len(screener_tickers)} curated tickers)")
     elif scorer == "lean":
         from alphalens.screeners.lean.config import BENCHMARKS, LEAN_DEFAULTS
-        from alphalens.screeners.lean.lean_project.scorer import rank_universe as lean_rank
+        from alphalens.screeners.lean.lean_project.scorer import (
+            rank_universe as lean_rank,
+        )
         from alphalens.screeners.lean.universe import all_tickers
 
         screener_tickers = all_tickers()
@@ -167,8 +172,7 @@ def backtest(
         )
     else:
         raise typer.BadParameter(
-            f"Unknown --scorer: {scorer!r} "
-            "(expected: momentum | early-stage | lean | insider)"
+            f"Unknown --scorer: {scorer!r} (expected: momentum | early-stage | lean | insider)"
         )
 
     if fundamental_gate and scorer in ("momentum", "early-stage"):
@@ -181,7 +185,9 @@ def backtest(
             )
             fundamentals_store = SimFinFundamentalsStore(with_prices=with_prices)
         elif fundamentals_source == "av":
-            from alphalens.fundamentals.backtest_store import HistoricalFundamentalsStore
+            from alphalens.fundamentals.backtest_store import (
+                HistoricalFundamentalsStore,
+            )
 
             typer.echo(
                 f"Preloading Alpha Vantage fundamentals for {len(screener_tickers)} tickers…"
@@ -189,8 +195,7 @@ def backtest(
             fundamentals_store = HistoricalFundamentalsStore()
         else:
             raise typer.BadParameter(
-                f"Unknown --fundamentals-source: {fundamentals_source!r} "
-                "(expected: simfin | av)"
+                f"Unknown --fundamentals-source: {fundamentals_source!r} (expected: simfin | av)"
             )
         fundamentals_store.preload(screener_tickers)
         scorer_config["fundamental_gate_enabled"] = True
@@ -233,7 +238,10 @@ def backtest(
     benchmark_close = store.full(benchmark)["close"]
     regime_labels = classify_regime(benchmark_close)
     regimes = regime_breakdown(
-        result.portfolio_returns, result.ic_series, result.universe_median_returns, regime_labels
+        result.portfolio_returns,
+        result.ic_series,
+        result.universe_median_returns,
+        regime_labels,
     )
 
     attribution = None
@@ -258,19 +266,23 @@ def backtest(
         decile_ic = ic_by_decile_from_scored_frames(result.scored_frames)
         tail_score = tail_concentration_score(decile_ic)
         vol_decomp = vol_decomposition_by_regime(result, regime_labels)
-        typer.echo("  diagnostics: tail concentration score = {:.2f}".format(tail_score))
+        typer.echo(f"  diagnostics: tail concentration score = {tail_score:.2f}")
         typer.echo(format_vol_decomposition(vol_decomp))
 
     from alphalens.backtest.theme_analysis import (
         snapshots_from_backtest,
         theme_series,
     )
+
     themes_map: dict[str, list[str]] = {}
     try:
         from alphalens.screeners.themed.universe import (
             flatten_universe as flatten_2b,
+        )
+        from alphalens.screeners.themed.universe import (
             load_universe as load_2b,
         )
+
         themes_map.update(flatten_2b(load_2b()))
     except Exception as exc:
         typer.echo(f"  theme mapping skipped (2b universe not available): {exc}")
@@ -289,8 +301,15 @@ def backtest(
     if not report_path.is_absolute():
         report_path = Path.cwd() / report_path
     write_markdown_report(
-        result, report_path, summary, attribution, regimes, cost_df,
-        decile_ic=decile_ic, vol_decomp=vol_decomp, tail_score=tail_score,
+        result,
+        report_path,
+        summary,
+        attribution,
+        regimes,
+        cost_df,
+        decile_ic=decile_ic,
+        vol_decomp=vol_decomp,
+        tail_score=tail_score,
         theme_stats=theme_stats,
     )
     typer.echo(f"Report written to {report_path}")

@@ -4,6 +4,7 @@
 - Form 4 primary_doc.xml fetch + merge
 - CIKLoader integration
 """
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -80,6 +81,7 @@ def _url_dispatch(atom_text, form4_xml_text, index_json_text=None):
         if url.endswith(".xml") and "Archives" in url:
             return _mock_resp(form4_xml_text)
         return _mock_resp(atom_text)
+
     return _dispatch
 
 
@@ -140,7 +142,9 @@ class TestEdgarEnhanced(unittest.TestCase):
 
         # Only the Atom feed call, no index.json or Form 4 XML fetch
         urls = [call.args[0] for call in mock_get.call_args_list]
-        self.assertFalse(any("index.json" in u or "Archives" in u and u.endswith(".xml") for u in urls))
+        self.assertFalse(
+            any("index.json" in u or ("Archives" in u and u.endswith(".xml")) for u in urls)
+        )
 
     @patch("alphalens.watchdog.sources.edgar.requests.get")
     def test_form4_fetch_failure_does_not_break_detect(self, mock_get):

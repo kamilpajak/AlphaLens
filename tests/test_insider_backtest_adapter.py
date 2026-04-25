@@ -25,8 +25,18 @@ class TestAdapterContract(unittest.TestCase):
 
         store = MagicMock()
         store.features_as_of.side_effect = lambda t, asof: {
-            "AAPL": {"insider_count": 4, "aggregate_dollar": 1e6, "cluster_window_days": 30, "asof": str(asof)},
-            "MSFT": {"insider_count": 3, "aggregate_dollar": 5e5, "cluster_window_days": 30, "asof": str(asof)},
+            "AAPL": {
+                "insider_count": 4,
+                "aggregate_dollar": 1e6,
+                "cluster_window_days": 30,
+                "asof": str(asof),
+            },
+            "MSFT": {
+                "insider_count": 3,
+                "aggregate_dollar": 5e5,
+                "cluster_window_days": 30,
+                "asof": str(asof),
+            },
             "NVDA": None,
         }.get(t)
 
@@ -48,7 +58,12 @@ class TestAdapterContract(unittest.TestCase):
 
         store = MagicMock()
         store.features_as_of.side_effect = lambda t, asof: (
-            {"insider_count": 3, "aggregate_dollar": 1.0, "cluster_window_days": 30, "asof": str(asof)}
+            {
+                "insider_count": 3,
+                "aggregate_dollar": 1.0,
+                "cluster_window_days": 30,
+                "asof": str(asof),
+            }
             if t == "AAPL"
             else None
         )
@@ -105,7 +120,6 @@ class TestAsofInference(unittest.TestCase):
 
         def fake_features(ticker, asof):
             captured_asofs.append(asof)
-            return None
 
         store = MagicMock()
         store.features_as_of.side_effect = fake_features
@@ -140,9 +154,24 @@ class TestScoringDesign(unittest.TestCase):
 
         store = MagicMock()
         store.features_as_of.side_effect = lambda t, asof: {
-            "A": {"insider_count": 3, "aggregate_dollar": 100, "cluster_window_days": 30, "asof": str(asof)},
-            "B": {"insider_count": 5, "aggregate_dollar": 50, "cluster_window_days": 30, "asof": str(asof)},
-            "C": {"insider_count": 4, "aggregate_dollar": 200, "cluster_window_days": 30, "asof": str(asof)},
+            "A": {
+                "insider_count": 3,
+                "aggregate_dollar": 100,
+                "cluster_window_days": 30,
+                "asof": str(asof),
+            },
+            "B": {
+                "insider_count": 5,
+                "aggregate_dollar": 50,
+                "cluster_window_days": 30,
+                "asof": str(asof),
+            },
+            "C": {
+                "insider_count": 4,
+                "aggregate_dollar": 200,
+                "cluster_window_days": 30,
+                "asof": str(asof),
+            },
         }[t]
 
         histories = {
@@ -174,7 +203,12 @@ class TestConfigPassthrough(unittest.TestCase):
 
         store = MagicMock()
         store.features_as_of.side_effect = lambda t, asof: (
-            {"insider_count": 3, "aggregate_dollar": 1, "cluster_window_days": 30, "asof": str(asof)}
+            {
+                "insider_count": 3,
+                "aggregate_dollar": 1,
+                "cluster_window_days": 30,
+                "asof": str(asof),
+            }
             if t != "SPY"
             else None
         )
@@ -184,9 +218,7 @@ class TestConfigPassthrough(unittest.TestCase):
             "AAPL": _history(["2025-03-20"]),
         }
 
-        df = insider_scorer_adapter(
-            histories, {"_insider_store": store, "benchmark": "SPY"}
-        )
+        df = insider_scorer_adapter(histories, {"_insider_store": store, "benchmark": "SPY"})
 
         self.assertNotIn("SPY", list(df["ticker"]))
         self.assertIn("AAPL", list(df["ticker"]))

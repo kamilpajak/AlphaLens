@@ -31,10 +31,10 @@ All three consume a single merged `DelistingEvent` table loaded via
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -47,12 +47,10 @@ from alphalens.backtest.engine import (
     DailyResult,
     Scorer,
 )
-from alphalens.backtest.factor_analysis import AlphaResult, run_carhart_attribution
-from alphalens.backtest.factors import load_carhart_daily
+from alphalens.backtest.factor_analysis import run_carhart_attribution
 from alphalens.backtest.history_store import HistoryStore
-from alphalens.backtest.metrics import rank_ic, rank_ic_tstat, sharpe
+from alphalens.backtest.metrics import rank_ic_tstat, sharpe
 from alphalens.backtest.weighting import weighted_return
-
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -67,7 +65,7 @@ class DelistingEvent:
 
 @dataclass(frozen=True)
 class CohortSplitResult:
-    cohort_label: str              # "pre-existing" | "post-IPO" | "full"
+    cohort_label: str  # "pre-existing" | "post-IPO" | "full"
     ticker_count: int
     daily_snapshots: int
     sharpe_gross: float
@@ -313,18 +311,13 @@ def compute_selection_bias(
             t = row["ticker"]
             pick_date = row["pick_date"]
             delistings = events_by_ticker.get(t, [])
-            if any(
-                pick_date <= d <= pick_date + timedelta(days=window)
-                for d in delistings
-            ):
+            if any(pick_date <= d <= pick_date + timedelta(days=window) for d in delistings):
                 n_delistings_in_picks += 1
 
         # Universe rate: for each ticker in universe, did *any* delisting
         # happen during backtest window? Equivalent to unconditional
         # delisting probability across the sample.
-        universe_delistings = sum(
-            1 for t in universe_set if events_by_ticker.get(t)
-        )
+        universe_delistings = sum(1 for t in universe_set if events_by_ticker.get(t))
 
         pick_rate = n_delistings_in_picks / n_picks if n_picks else 0.0
         uni_rate = universe_delistings / universe_n if universe_n else 0.0
@@ -362,9 +355,7 @@ def compute_selection_bias(
 # C3 — mid-holding wipeout audit
 
 
-def _compute_portfolio_return(
-    snap: DailyResult, weighting_scheme: str
-) -> tuple[float, float]:
+def _compute_portfolio_return(snap: DailyResult, weighting_scheme: str) -> tuple[float, float]:
     """Recompute 1-day and holding-period portfolio returns from a snapshot.
 
     Used after overwriting per-ticker forward returns to replay wipeout
@@ -414,8 +405,7 @@ def reprice_picks_with_wipeout(
             delistings = events_by_ticker.get(ticker, [])
             # Mid-holding: delisted strictly after entry, up to entry+hold
             mid_holding = any(
-                entry_date < d <= entry_date + timedelta(days=hold + 2)
-                for d in delistings
+                entry_date < d <= entry_date + timedelta(days=hold + 2) for d in delistings
             )
             if mid_holding and new_fwd[idx] != -1.0:
                 new_fwd[idx] = -1.0
@@ -488,10 +478,7 @@ def audit_mid_holding_wipeout(
         for ticker in snap.top_n_tickers:
             n_total += 1
             delistings = events_by_ticker.get(ticker, [])
-            if any(
-                entry_date < d <= entry_date + timedelta(days=hold + 2)
-                for d in delistings
-            ):
+            if any(entry_date < d <= entry_date + timedelta(days=hold + 2) for d in delistings):
                 affected.append(ticker)
 
     repriced = reprice_picks_with_wipeout(baseline, events_list, weighting_scheme=weighting_scheme)
@@ -564,8 +551,7 @@ def evaluate_decision_gate(
     # dying names (favourable). Only the high-lift direction is bias.
     c2 = all(r.lift_ratio <= 1.5 for r in bias_results)
     hard_fail_c2 = any(
-        r.lift_ratio > 2.0
-        or (r.window_days == 30 and r.fisher_p < 0.01 and r.lift_ratio > 1.0)
+        r.lift_ratio > 2.0 or (r.window_days == 30 and r.fisher_p < 0.01 and r.lift_ratio > 1.0)
         for r in bias_results
     )
     c2 = c2 and not hard_fail_c2
@@ -697,8 +683,7 @@ def _format_audit_block(a: MidHoldingAuditResult) -> str:
         "| --- | ---: | ---: |",
         f"| baseline (NaN re-norm) | {a.sharpe_baseline:+.3f} | "
         f"{a.carhart_alpha_tstat_baseline:+.2f} |",
-        f"| wipeout (−100%) | {a.sharpe_wipeout:+.3f} | "
-        f"{a.carhart_alpha_tstat_wipeout:+.2f} |",
+        f"| wipeout (−100%) | {a.sharpe_wipeout:+.3f} | {a.carhart_alpha_tstat_wipeout:+.2f} |",
         f"| **Δ** | **{a.delta_sharpe:+.3f}** | **{a.delta_alpha_tstat:+.2f}** |",
     ]
     if a.affected_tickers:

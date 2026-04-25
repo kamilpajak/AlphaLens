@@ -1,9 +1,9 @@
 ### **MACOM Technology Solutions Holdings, Inc. (MTSI) Fundamental Analysis Report**
 
-**Date:** August 8, 2023  
-**Ticker:** MTSI  
-**Sector:** Technology  
-**Industry:** Semiconductors  
+**Date:** August 8, 2023
+**Ticker:** MTSI
+**Sector:** Technology
+**Industry:** Semiconductors
 
 ---
 

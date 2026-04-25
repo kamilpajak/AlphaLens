@@ -13,12 +13,12 @@ high-churn ones. Net returns = gross returns − (turnover × per-trade cost).
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, Sequence
+from typing import Literal
 
 import numpy as np
 import pandas as pd
-
 
 CostProfile = Literal["aggressive", "moderate", "conservative", "gross"]
 
@@ -37,7 +37,7 @@ class CostModel:
     annual_drag_bps: float = 100.0  # default moderate
 
     @classmethod
-    def from_profile(cls, profile: CostProfile) -> "CostModel":
+    def from_profile(cls, profile: CostProfile) -> CostModel:
         if profile not in _PROFILE_BPS:
             raise ValueError(
                 f"unknown cost profile {profile!r}; expected one of {list(_PROFILE_BPS)}"
@@ -71,9 +71,7 @@ class CostModel:
         else:
             turnover = pd.Series(list(daily_turnover), dtype=float)
             if len(turnover) != len(gross):
-                raise ValueError(
-                    f"turnover length {len(turnover)} != returns length {len(gross)}"
-                )
+                raise ValueError(f"turnover length {len(turnover)} != returns length {len(gross)}")
             cost = turnover * drag
         return gross - cost
 
@@ -123,9 +121,7 @@ class RealisticCostModel:
     def primary_round_trip_bps(self, half_spread_bps: float) -> float:
         return 2.0 * self.primary_one_way_bps(half_spread_bps)
 
-    def primary_period_drag_bps(
-        self, half_spread_bps: float, turnover_fraction: float
-    ) -> float:
+    def primary_period_drag_bps(self, half_spread_bps: float, turnover_fraction: float) -> float:
         return self.primary_round_trip_bps(half_spread_bps) * turnover_fraction
 
     def secondary_market_impact_bps(
@@ -245,7 +241,9 @@ def cost_sensitivity_table(
                 "profile": name,
                 "drag_bps": bps,
                 "sharpe": sharpe(net.tolist(), periods_per_year=periods_per_year),
-                "annual_return": float((1 + net).prod() ** (periods_per_year / max(len(net), 1)) - 1),
+                "annual_return": float(
+                    (1 + net).prod() ** (periods_per_year / max(len(net), 1)) - 1
+                ),
             }
         )
     return pd.DataFrame(rows).sort_values("drag_bps").reset_index(drop=True)

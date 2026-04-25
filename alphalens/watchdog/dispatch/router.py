@@ -19,9 +19,11 @@ class DispatchRouter:
         for handler in handlers:
             try:
                 handler.handle(classified)
-            except Exception as exc:  # noqa: BLE001 — don't let one handler crash others
+            except Exception as exc:
                 logger.error(
                     "Handler %s failed for %s: %s",
-                    type(handler).__name__, classified.event.ticker, exc,
+                    type(handler).__name__,
+                    classified.event.ticker,
+                    exc,
                     exc_info=True,
                 )

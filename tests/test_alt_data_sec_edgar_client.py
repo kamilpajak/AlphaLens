@@ -263,16 +263,12 @@ class TestCacheEviction(unittest.TestCase):
         return client, session
 
     def test_form4_xml_cache_respects_capacity(self):
-        from alphalens.alt_data.sec_edgar_client import SecEdgarClient
 
         client, session = self._make_client()
         client._form4_xml_cache_capacity = 3
 
         # Generate 5 distinct filings; each returns unique XML.
-        session.get.side_effect = [
-            _response(200, content=f"<xml{i}/>".encode())
-            for i in range(5)
-        ]
+        session.get.side_effect = [_response(200, content=f"<xml{i}/>".encode()) for i in range(5)]
         for i in range(5):
             client.fetch_form4_xml(
                 cik="0000320193",
@@ -287,9 +283,7 @@ class TestCacheEviction(unittest.TestCase):
         client, session = self._make_client()
         client._submissions_cache_capacity = 2
 
-        session.get.side_effect = [
-            _response(200, {"cik": f"{i:010d}"}) for i in range(4)
-        ]
+        session.get.side_effect = [_response(200, {"cik": f"{i:010d}"}) for i in range(4)]
         for i in range(4):
             client.fetch_submissions(f"{i:010d}")
 

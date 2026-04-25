@@ -1,13 +1,13 @@
 **1. Rating**: **Sell**
 
 **2. Executive Summary**
-*   **Entry/Exit Strategy**: Immediately exit all long positions in DAWN at the current market price (approximately $23.75) to protect capital from deteriorating macroeconomic conditions. 
+*   **Entry/Exit Strategy**: Immediately exit all long positions in DAWN at the current market price (approximately $23.75) to protect capital from deteriorating macroeconomic conditions.
 *   **Position Sizing**: Reduce DAWN exposure to 0%. Reallocate the proceeds into cash or short-duration fixed income to buffer against expected Federal Reserve volatility.
-*   **Key Risk Levels**: DAWN is currently trading below its Volume-Weighted Moving Average (VWAP) of $24.27, creating heavy overhead supply. While the 50-day SMA at $21.72 provides near-term theoretical support, a breakdown there exposes the stock to a precipitous 30% drop toward the 200-day SMA at ~$15.00. 
+*   **Key Risk Levels**: DAWN is currently trading below its Volume-Weighted Moving Average (VWAP) of $24.27, creating heavy overhead supply. While the 50-day SMA at $21.72 provides near-term theoretical support, a breakdown there exposes the stock to a precipitous 30% drop toward the 200-day SMA at ~$15.00.
 *   **Time Horizon**: Immediate execution for the exit. DAWN will be placed on a long-term watchlist; we will only consider re-evaluating the stock if it washes out toward the $15.00 level and the clinical thesis for Tovorafenib (Ojemda) remains fundamentally intact.
 
 **3. Investment Thesis**
-The debate surrounding DAWN presents a textbook collision between a compelling microeconomic narrative and a hostile macroeconomic reality. While the Aggressive Analyst accurately highlights DAWN's robust $395 million cash pile, three-year runway, and promising pediatric oncology pipeline, I firmly align with the Conservative Analyst, the Trader, and my own historical lessons: a strong clinical story cannot outrun a rising cost of capital. 
+The debate surrounding DAWN presents a textbook collision between a compelling microeconomic narrative and a hostile macroeconomic reality. While the Aggressive Analyst accurately highlights DAWN's robust $395 million cash pile, three-year runway, and promising pediatric oncology pipeline, I firmly align with the Conservative Analyst, the Trader, and my own historical lessons: a strong clinical story cannot outrun a rising cost of capital.
 
 First, the valuation and duration risk on DAWN are untenable for our current portfolio posture. Maintaining a $2.2 billion market capitalization for a pre-revenue biotech in a "higher-for-longer" interest rate environment leaves zero margin for error. The Aggressive Analyst argues that DAWN's cash insulates it from rate hikes because it doesn't need to borrow. However, the Conservative Analyst correctly diagnoses the fundamental flaw in this thinking: valuation compression. In an environment shocked by an 8.3% CPI print, the discount rate applied to DAWN's future earnings crushes its present value. Survival cash does not justify a peak multiple when the market is actively punishing duration risk.
 

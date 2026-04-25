@@ -12,8 +12,8 @@ its own loader without touching the generic harness.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import pandas as pd
 
@@ -39,9 +39,7 @@ def _bars_to_dataframe(bars: list) -> pd.DataFrame:
     return df.sort_index()
 
 
-def load_lean_histories(
-    data_dir: Path, tickers: Iterable[str]
-) -> dict[str, pd.DataFrame]:
+def load_lean_histories(data_dir: Path, tickers: Iterable[str]) -> dict[str, pd.DataFrame]:
     """Eagerly read zipped OHLCV bars for `tickers` from the Lean CSV store.
 
     Missing zips are skipped silently (delisted tickers with no bars, etc.).

@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -11,7 +11,7 @@ def _mk_event(accession: str, ticker: str = "AAPL"):
         ticker=ticker,
         form_type=FormType.FORM_8K,
         accession_number=accession,
-        filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc),
+        filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=UTC),
         url=f"https://sec.gov/{accession}",
         raw_data={},
     )
@@ -50,13 +50,18 @@ class TestSeenEventStore(unittest.TestCase):
         store.mark_seen("ACC-1")
         store.mark_seen("ACC-3")
 
-        events = [_mk_event("ACC-1"), _mk_event("ACC-2"), _mk_event("ACC-3"), _mk_event("ACC-4")]
+        events = [
+            _mk_event("ACC-1"),
+            _mk_event("ACC-2"),
+            _mk_event("ACC-3"),
+            _mk_event("ACC-4"),
+        ]
         unseen = store.filter_unseen(events)
 
         self.assertEqual([e.accession_number for e in unseen], ["ACC-2", "ACC-4"])
 
     def test_default_path_is_in_tradingagents_home(self):
-        from alphalens.watchdog.storage import SeenEventStore, default_db_path
+        from alphalens.watchdog.storage import default_db_path
 
         expected = Path.home() / ".alphalens" / "watchdog" / "seen_events.db"
         self.assertEqual(default_db_path(), expected)

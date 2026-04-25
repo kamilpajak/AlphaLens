@@ -13,13 +13,13 @@ CEVA is currently navigating a complex technical landscape. While the long-term 
 *   **Risk Management (ATR):** The **Average True Range (ATR) is $0.95**, suggesting a daily price swing of nearly a dollar. Traders should use this to set stop-losses, ideally placed at least 1.5x to 2x the ATR below entry points to avoid being stopped out by normal market noise.
 
 ### **Actionable Insights & Trading Strategy**
-1.  **Entry Strategy:** 
+1.  **Entry Strategy:**
     *   **Conservative:** Wait for a daily close above the Upper Bollinger Band ($23.73) to confirm the breakout.
     *   **Aggressive:** Market buy near current levels, utilizing the 50-day SMA ($21.67) as a hard floor.
-2.  **Price Targets:** 
+2.  **Price Targets:**
     *   **Primary Target:** $27.00 - $27.10 (The 200-day SMA is a major psychological and technical "magnet").
     *   **Secondary Target:** $30.00 (Historical resistance from March 2025).
-3.  **Stop-Loss Levels:** 
+3.  **Stop-Loss Levels:**
     *   Place a stop-loss at **$21.50** (just below the 50 SMA) to protect against a trend failure.
 
 ---

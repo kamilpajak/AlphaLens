@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Callable, Mapping
 
 import pandas as pd
 
@@ -65,11 +65,11 @@ class DailyResult:
     scored_count: int
     top_n_tickers: list[str]
     top_n_scores: list[float]
-    top_n_forward_returns: list[float]        # holding_period forward returns (IC-horizon, NaN OK)
-    portfolio_return: float                    # 1-day forward return of top-N (Sharpe-ready)
-    portfolio_return_holding: float            # holding_period forward return of top-N (signal diagnostic)
-    universe_median_return: float              # 1-day median across scored set
-    ic: float                                  # Rank IC over holding_period horizon
+    top_n_forward_returns: list[float]  # holding_period forward returns (IC-horizon, NaN OK)
+    portfolio_return: float  # 1-day forward return of top-N (Sharpe-ready)
+    portfolio_return_holding: float  # holding_period forward return of top-N (signal diagnostic)
+    universe_median_return: float  # 1-day median across scored set
+    ic: float  # Rank IC over holding_period horizon
 
 
 @dataclass
@@ -169,9 +169,7 @@ class BacktestEngine:
         # Scorer's declared requirement is authoritative (it knows its own
         # indicator lookbacks). Class attr is only a fallback when the scorer
         # doesn't declare one.
-        self._min_bars = int(
-            getattr(scorer, "MIN_BARS_REQUIRED", type(self).MIN_BARS_REQUIRED)
-        )
+        self._min_bars = int(getattr(scorer, "MIN_BARS_REQUIRED", type(self).MIN_BARS_REQUIRED))
 
     def run(self, start: date, end: date) -> BacktestReport:
         calendar = HistoryStore.benchmark_calendar(self.store, self.benchmark, start, end)
@@ -180,7 +178,7 @@ class BacktestEngine:
                 f"No trading days found for benchmark {self.benchmark!r} in [{start}, {end}]"
             )
         if self.rebalance_stride > 1:
-            calendar = calendar[::self.rebalance_stride]
+            calendar = calendar[:: self.rebalance_stride]
 
         tickers = self._screener_tickers or [
             t for t in self.store.tickers() if t != self.benchmark.upper()
@@ -198,8 +196,13 @@ class BacktestEngine:
 
         logger.info(
             "backtest run: %s..%s benchmark=%s tickers=%d days=%d top_n=%d hold=%d",
-            start, end, self.benchmark, len(tickers), len(calendar),
-            self.top_n, self.holding_period,
+            start,
+            end,
+            self.benchmark,
+            len(tickers),
+            len(calendar),
+            self.top_n,
+            self.holding_period,
         )
 
         total_days = len(calendar)
@@ -218,13 +221,17 @@ class BacktestEngine:
             if (idx + 1) % progress_stride == 0 or idx == total_days - 1:
                 logger.info(
                     "backtest progress: %d/%d days (%.0f%%) — latest snap %s scored=%d",
-                    idx + 1, total_days, 100 * (idx + 1) / total_days,
-                    day, snap.scored_count,
+                    idx + 1,
+                    total_days,
+                    100 * (idx + 1) / total_days,
+                    day,
+                    snap.scored_count,
                 )
 
         logger.info(
             "backtest done: %d daily snapshots out of %d trading days",
-            len(report.daily_results), len(calendar),
+            len(report.daily_results),
+            len(calendar),
         )
         return report
 
@@ -271,18 +278,15 @@ class BacktestEngine:
         universe_median_ret_1d = (
             float(scored["fwd_1d"].dropna().median()) if scored["fwd_1d"].notna().any() else 0.0
         )
-        ic_value = rank_ic(
-            valid_holding["score"].tolist(), valid_holding["fwd_holding"].tolist()
-        )
+        ic_value = rank_ic(valid_holding["score"].tolist(), valid_holding["fwd_holding"].tolist())
 
         snap = DailyResult(
             date=pd.Timestamp(day),
-            scored_count=int(len(valid_holding)),
+            scored_count=len(valid_holding),
             top_n_tickers=top_n["ticker"].tolist(),
             top_n_scores=[float(x) for x in top_n["score"].tolist()],
             top_n_forward_returns=[
-                float(x) if not _is_nan(x) else float("nan")
-                for x in top_n["fwd_holding"].tolist()
+                float(x) if not _is_nan(x) else float("nan") for x in top_n["fwd_holding"].tolist()
             ],
             portfolio_return=portfolio_ret_1d if not _is_nan(portfolio_ret_1d) else 0.0,
             portfolio_return_holding=(

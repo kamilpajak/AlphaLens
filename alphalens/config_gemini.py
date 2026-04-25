@@ -3,6 +3,7 @@
 Single source of truth for both `run_gemini.py` (ad-hoc runs) and
 `cli.watchdog_main._build_worker` (launchd process-queue).
 """
+
 from __future__ import annotations
 
 from copy import deepcopy

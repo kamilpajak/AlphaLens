@@ -17,9 +17,9 @@ SimFin Report-Date bug fixed in issue #18.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
-from typing import Mapping
 
 
 @dataclass(frozen=True)

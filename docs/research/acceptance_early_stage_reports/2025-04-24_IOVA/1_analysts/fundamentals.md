@@ -14,7 +14,7 @@ The most significant development for IOVA over the past year has been the commer
 *   **Operating Margins:** TTM Operating Margin stands at **-84.7%**, reflecting the high costs of manufacturing cell therapies and the intensive SG&A required for a nationwide product launch.
 
 ### **2. Balance Sheet & Liquidity**
-*   **Cash Position:** As of March 31, 2025, IOVA held **$359.7M** in cash and short-term investments. 
+*   **Cash Position:** As of March 31, 2025, IOVA held **$359.7M** in cash and short-term investments.
 *   **Burn Rate & Runway:** With a quarterly operating cash burn between **$60M and $100M**, the current cash reserves provide a runway of approximately **9 to 12 months**.
 *   **Capital Structure:** The company frequently utilizes equity markets to fund operations. Financing cash flow was positive at **$143.3M** in Q1 2025, confirming ongoing dilution but ensuring liquidity. Total long-term debt is negligible ($1M), though the company carries ~$52M in capital lease obligations.
 *   **Inventory:** Inventory grew to **$65.5M** by Q1 2025, a necessary ramp-up to support commercial demand for TIL therapies.

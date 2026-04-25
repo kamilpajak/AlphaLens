@@ -11,7 +11,7 @@ Based on the technical analysis of **CEVA** as of **December 21, 2023**, the sto
 
 ### Actionable Insights
 *   **For Bullish Traders:** A decisive daily close above **$24.00** (clearing both the 200 SMA and the Bollinger Upper Band) would signal a long-term trend reversal and potentially open the door for a move toward the $26.00 level.
-*   **For Cautious/Defensive Traders:** The failure to hold above $24.00 suggests a potential pullback to test support. Key support levels are at the **VWMA ($22.67)** and the recent swing low near **$21.50**. 
+*   **For Cautious/Defensive Traders:** The failure to hold above $24.00 suggests a potential pullback to test support. Key support levels are at the **VWMA ($22.67)** and the recent swing low near **$21.50**.
 *   **Risk Management:** Consider a stop-loss below the 50-day SMA ($20.61) for medium-term positions, or a tighter volatility-adjusted stop 2*ATR (approx. $1.78) below your entry price.
 
 ### Key Indicator Summary (2023-12-21)

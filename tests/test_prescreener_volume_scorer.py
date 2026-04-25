@@ -57,11 +57,16 @@ class TestVolumeScorerAll(unittest.TestCase):
     def _make_price_df(self, volumes, close=100.0):
         n = len(volumes)
         dates = pd.bdate_range(end="2024-01-15", periods=n)
-        return pd.DataFrame({
-            "Open": [close] * n, "High": [close * 1.01] * n,
-            "Low": [close * 0.99] * n, "Close": [close] * n,
-            "Volume": volumes,
-        }, index=dates)
+        return pd.DataFrame(
+            {
+                "Open": [close] * n,
+                "High": [close * 1.01] * n,
+                "Low": [close * 0.99] * n,
+                "Close": [close] * n,
+                "Volume": volumes,
+            },
+            index=dates,
+        )
 
     def test_score_all_returns_expected_columns(self):
         from alphalens.screeners.prescreener.volume_scorer import VolumeScorer
@@ -69,8 +74,10 @@ class TestVolumeScorerAll(unittest.TestCase):
         scorer = VolumeScorer()
         prices = self._make_price_df([1_000_000] * 60)
         result = scorer.score_all(
-            {"AAPL": prices}, {"AAPL": {"marketCap": 3e12, "averageVolume": 50_000_000}},
-            ["AAPL"], "2024-01-15",
+            {"AAPL": prices},
+            {"AAPL": {"marketCap": 3e12, "averageVolume": 50_000_000}},
+            ["AAPL"],
+            "2024-01-15",
         )
         for col in ["ticker", "volume_score"]:
             self.assertIn(col, result.columns)
@@ -83,9 +90,12 @@ class TestVolumeScorerAll(unittest.TestCase):
         illiquid = self._make_price_df([50_000] * 60)
         result = scorer.score_all(
             {"LIQ": liquid, "ILLIQ": illiquid},
-            {"LIQ": {"marketCap": 50e9, "averageVolume": 5_000_000},
-             "ILLIQ": {"marketCap": 200e6, "averageVolume": 50_000}},
-            ["LIQ", "ILLIQ"], "2024-01-15",
+            {
+                "LIQ": {"marketCap": 50e9, "averageVolume": 5_000_000},
+                "ILLIQ": {"marketCap": 200e6, "averageVolume": 50_000},
+            },
+            ["LIQ", "ILLIQ"],
+            "2024-01-15",
         )
         liq_score = result.loc[result["ticker"] == "LIQ", "volume_score"].values[0]
         illiq_score = result.loc[result["ticker"] == "ILLIQ", "volume_score"].values[0]

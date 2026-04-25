@@ -1,6 +1,6 @@
 ### **News & Macroeconomic Analysis Report: ACMR (ACM Research, Inc.)**
-**Date:** September 11, 2023  
-**Instrument:** `ACMR`  
+**Date:** September 11, 2023
+**Instrument:** `ACMR`
 
 ---
 

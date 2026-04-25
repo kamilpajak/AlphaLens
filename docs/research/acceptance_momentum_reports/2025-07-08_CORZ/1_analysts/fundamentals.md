@@ -20,7 +20,7 @@ Core Scientific’s primary value proposition has shifted toward its **power cap
 *   **The "AI Multiple" Re-rating:** CORZ is no longer being valued solely as a miner (which typically trade at lower P/S multiples). Traders should watch for further AI hosting deal announcements, as each megawatt (MW) converted from mining to AI hosting represents a significant increase in enterprise value.
 *   **High Volatility (Beta: 6.36):** This is not a stock for the risk-averse. Its sensitivity to Bitcoin prices is amplified by its high debt load and speculative growth in AI.
 *   **Short Interest and Ownership:** The >100% institutional ownership figure suggests a "crowded" trade and potential for short-squeeze dynamics or high volatility during earnings as reports catch up with reality.
-*   **Analyst Sentiment:** Analysts are overwhelmingly bullish, with a consensus target of **$26.36** (representing ~55% upside from the current ~$17 range). 
+*   **Analyst Sentiment:** Analysts are overwhelmingly bullish, with a consensus target of **$26.36** (representing ~55% upside from the current ~$17 range).
 
 ### **Key Financial Metrics Summary**
 

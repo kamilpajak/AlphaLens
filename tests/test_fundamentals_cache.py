@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 
@@ -47,7 +47,7 @@ class TestFundamentalsCache(unittest.TestCase):
 
         cache = FundamentalsCache(root=self.root, ttl_days=90)
         # Simulate an old entry by writing with a timestamp past TTL.
-        stale_ts = (datetime.now(timezone.utc) - timedelta(days=100)).isoformat()
+        stale_ts = (datetime.now(UTC) - timedelta(days=100)).isoformat()
         (self.root / "AAPL.json").write_text(
             json.dumps({"features": {"ps_ratio": 1.0}, "fetched_at": stale_ts})
         )
@@ -57,7 +57,7 @@ class TestFundamentalsCache(unittest.TestCase):
         from alphalens.fundamentals.cache import FundamentalsCache
 
         cache = FundamentalsCache(root=self.root, ttl_days=90)
-        fresh_ts = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        fresh_ts = (datetime.now(UTC) - timedelta(days=30)).isoformat()
         (self.root / "AAPL.json").write_text(
             json.dumps({"features": {"ps_ratio": 5.0}, "fetched_at": fresh_ts})
         )
@@ -79,6 +79,7 @@ class TestFundamentalsCache(unittest.TestCase):
         cache.put("AAPL", {"ps_ratio": 7.5})
 
         call_count = [0]
+
         def fetcher(_ticker):
             call_count[0] += 1
             return {"ps_ratio": 999.0}

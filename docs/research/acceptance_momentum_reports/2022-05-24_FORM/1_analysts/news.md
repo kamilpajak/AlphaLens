@@ -4,7 +4,7 @@
 The week leading up to May 24, 2022, has been characterized by intense market volatility and a significant shift in investor sentiment toward bearishness. Persistent inflation, aggressive central bank tightening, and disappointing earnings from major retailers have fueled fears of a looming global recession and potential stagflation. The semiconductor sector, including **FORM** (FormFactor, Inc.), finds itself at the intersection of long-term growth prospects and immediate macroeconomic headwinds.
 
 ## Macroeconomic Environment: Inflation and Recession Fears
-The dominant theme this week is the "inflation shock" rippling through the U.S. and global economies. 
+The dominant theme this week is the "inflation shock" rippling through the U.S. and global economies.
 *   **Retail Meltdown**: Market leaders Walmart (**WMT**) and Target (**TGT**) reported massive misses in quarterly profits, citing surging fuel, freight, and labor costs. Target’s stock saw its largest single-day plunge since 1987 (approx. 25%), signaling that even robust consumer demand cannot offset the margin erosion caused by inflation.
 *   **Monetary Policy and Sentiment**: Hawkish signals from the Federal Reserve continue to pressure growth stocks. A Bank of America survey indicated that investors are holding the highest levels of cash since September 2001, reflecting deep pessimism regarding global growth.
 *   **Geopolitical Factors**: China’s zero-COVID policy and the ongoing war in Ukraine remain significant tail risks, contributing to supply chain disruptions and energy price volatility.

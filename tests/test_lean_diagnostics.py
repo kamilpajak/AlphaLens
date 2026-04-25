@@ -18,7 +18,8 @@ def _synthetic_scored_frames(n_days=50, n_tickers=100, tail_alpha=True, seed=0):
             # Top 10%: strong positive, bottom 10%: strong negative, middle: pure noise.
             pct_rank = pd.Series(scores).rank(pct=True)
             signal = np.where(
-                pct_rank >= 0.9, 0.03,
+                pct_rank >= 0.9,
+                0.03,
                 np.where(pct_rank <= 0.1, -0.03, 0.0),
             )
             returns = signal + rng.normal(0, 0.02, n_tickers)
@@ -26,8 +27,12 @@ def _synthetic_scored_frames(n_days=50, n_tickers=100, tail_alpha=True, seed=0):
             returns = rng.normal(0, 0.02, n_tickers)
         ts = pd.Timestamp("2024-01-01") + pd.Timedelta(days=i)
         frames[ts] = pd.DataFrame(
-            {"ticker": [f"T{j}" for j in range(n_tickers)],
-             "score": scores, "fwd_holding": returns, "fwd_1d": returns / 5}
+            {
+                "ticker": [f"T{j}" for j in range(n_tickers)],
+                "score": scores,
+                "fwd_holding": returns,
+                "fwd_1d": returns / 5,
+            }
         )
     return frames
 
@@ -89,15 +94,24 @@ class TestVolDecomposition(unittest.TestCase):
 
         # Build fake daily_results to satisfy BacktestReport shape.
         report = BacktestReport(
-            scorer_config={}, holding_period=5, top_n=30,
-            start=idx[0].date(), end=idx[-1].date(), benchmark="SPY",
+            scorer_config={},
+            holding_period=5,
+            top_n=30,
+            start=idx[0].date(),
+            end=idx[-1].date(),
+            benchmark="SPY",
             universe_ticker_count=100,
             daily_results=[
                 DailyResult(
-                    date=d, scored_count=10, top_n_tickers=["A"],
-                    top_n_scores=[1.0], top_n_forward_returns=[p],
-                    portfolio_return=p, portfolio_return_holding=p,
-                    universe_median_return=m, ic=0.0,
+                    date=d,
+                    scored_count=10,
+                    top_n_tickers=["A"],
+                    top_n_scores=[1.0],
+                    top_n_forward_returns=[p],
+                    portfolio_return=p,
+                    portfolio_return_holding=p,
+                    universe_median_return=m,
+                    ic=0.0,
                 )
                 for d, p, m in zip(idx, port.values, median.values)
             ],
@@ -117,10 +131,13 @@ class TestVolDecomposition(unittest.TestCase):
         from alphalens.backtest.engine import BacktestReport
 
         report = BacktestReport(
-            scorer_config={}, holding_period=5, top_n=30,
+            scorer_config={},
+            holding_period=5,
+            top_n=30,
             start=pd.Timestamp("2024-01-01").date(),
             end=pd.Timestamp("2024-01-02").date(),
-            benchmark="SPY", universe_ticker_count=1,
+            benchmark="SPY",
+            universe_ticker_count=1,
         )
         regime = pd.Series(["bull"] * 10, index=pd.date_range("2024-01-01", periods=10))
         out = vol_decomposition_by_regime(report, regime)
@@ -136,10 +153,14 @@ class TestFormatVolDecomposition(unittest.TestCase):
 
         stats = {
             "bull": VolDecomposition(
-                regime="bull", days=100,
-                top_n_vol_annualised=0.15, universe_median_vol_annualised=0.20,
-                top_n_mean_return_annualised=0.30, universe_median_mean_return_annualised=0.10,
-                vol_ratio=0.75, excess_return_annualised=0.20,
+                regime="bull",
+                days=100,
+                top_n_vol_annualised=0.15,
+                universe_median_vol_annualised=0.20,
+                top_n_mean_return_annualised=0.30,
+                universe_median_mean_return_annualised=0.10,
+                vol_ratio=0.75,
+                excess_return_annualised=0.20,
             ),
         }
         text = format_vol_decomposition(stats)

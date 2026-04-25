@@ -27,7 +27,7 @@ Immunovant, Inc. (IMVT) is a clinical-stage biopharmaceutical company focused on
 *   **Shareholder Equity:** Total shareholder equity stands at **$986.1 million**, bolstered by recent financing activities.
 
 **3. Cash Flow Insights:**
-*   **Burn Rate:** The quarterly operating cash burn is approximately **$100 million**. 
+*   **Burn Rate:** The quarterly operating cash burn is approximately **$100 million**.
 *   **Cash Runway:** Based on the current cash reserves of ~$994.5 million and a burn rate of ~$100 million per quarter, Immunovant has a **runway of approximately 10 quarters (2.5 years)**. This provides a significant cushion to reach major clinical milestones without the immediate need for dilutive financing.
 *   **Financing:** The cash flow statement reveals a massive **$564.6 million** inflow from financing activities in the quarter ending December 31, 2025, confirming a large-scale equity issuance.
 

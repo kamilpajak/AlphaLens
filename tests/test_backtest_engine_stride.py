@@ -35,7 +35,13 @@ def _make_store(n_days: int = 100, n_tickers: int = 5) -> HistoryStore:
     # Benchmark
     bench_px = 400 * np.exp(np.cumsum(0.0004 + 0.008 * rng.standard_normal(n_days)))
     histories["SPY"] = pd.DataFrame(
-        {"open": bench_px, "high": bench_px, "low": bench_px, "close": bench_px, "volume": 0},
+        {
+            "open": bench_px,
+            "high": bench_px,
+            "low": bench_px,
+            "close": bench_px,
+            "volume": 0,
+        },
         index=dates,
     )
     return HistoryStore(histories)
@@ -245,9 +251,7 @@ class TestSharpeAutocorrAdjusted(unittest.TestCase):
         from alphalens.backtest.metrics import sharpe_autocorr_adjusted
 
         self.assertEqual(sharpe_autocorr_adjusted([], periods_per_year=52), 0.0)
-        self.assertEqual(
-            sharpe_autocorr_adjusted([0.01] * 20, periods_per_year=52), 0.0
-        )
+        self.assertEqual(sharpe_autocorr_adjusted([0.01] * 20, periods_per_year=52), 0.0)
 
 
 if __name__ == "__main__":

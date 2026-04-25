@@ -1,7 +1,7 @@
 FINAL TRANSACTION PROPOSAL: **HOLD**
 
 ### **Technical Analysis Report: Krystal Biotech, Inc. (KRYS)**
-**Analysis Date:** February 27, 2025  
+**Analysis Date:** February 27, 2025
 **Current Price:** $176.39 (as of Feb 26 Close)
 
 #### **1. Market Context & Trend Analysis**

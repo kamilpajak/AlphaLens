@@ -9,7 +9,9 @@ import pandas as pd
 def _mk_bar(d, price, vol=1000):
     from alphalens.screeners.lean.lean_csv_writer import DailyBar
 
-    return DailyBar(date=d, open=price, high=price * 1.01, low=price * 0.99, close=price, volume=vol)
+    return DailyBar(
+        date=d, open=price, high=price * 1.01, low=price * 0.99, close=price, volume=vol
+    )
 
 
 def _prime_dir(tmpdir: Path, tickers_to_bars: dict[str, list]) -> Path:

@@ -18,7 +18,13 @@ class TestPrescreenerConfig(unittest.TestCase):
     def test_thresholds_are_positive(self):
         from alphalens.screeners.prescreener.config import PRESCREENER_DEFAULTS
 
-        for key in ["pe_max", "peg_max", "roe_min", "debt_ebitda_max", "eps_growth_min"]:
+        for key in [
+            "pe_max",
+            "peg_max",
+            "roe_min",
+            "debt_ebitda_max",
+            "eps_growth_min",
+        ]:
             self.assertGreater(PRESCREENER_DEFAULTS[key], 0, f"{key} must be positive")
 
     def test_top_n_is_reasonable(self):
@@ -33,9 +39,7 @@ class TestSP500Universe(unittest.TestCase):
     def test_fetch_returns_list_of_strings(self, mock_read_html):
         from alphalens.screeners.prescreener.universe import get_sp500_tickers
 
-        mock_read_html.return_value = [
-            pd.DataFrame({"Symbol": ["AAPL", "MSFT", "GOOGL"]})
-        ]
+        mock_read_html.return_value = [pd.DataFrame({"Symbol": ["AAPL", "MSFT", "GOOGL"]})]
         tickers = get_sp500_tickers()
         self.assertIsInstance(tickers, list)
         self.assertTrue(all(isinstance(t, str) for t in tickers))

@@ -5,8 +5,8 @@ import xml.etree.ElementTree as ET
 
 logger = logging.getLogger(__name__)
 
-BUY_CODES = {"P"}        # Open-market purchase
-SELL_CODES = {"S"}       # Open-market sale
+BUY_CODES = {"P"}  # Open-market purchase
+SELL_CODES = {"S"}  # Open-market sale
 EXERCISE_CODES = {"M", "F"}  # M = option exercise, F = tax withholding on exercise
 
 

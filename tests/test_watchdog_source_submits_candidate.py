@@ -2,7 +2,7 @@
 
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -16,7 +16,7 @@ def _classified(ticker="AAPL", accession="ACC-001", url="https://sec.gov/f"):
             ticker=ticker,
             form_type=FormType.FORM_8K,
             accession_number=accession,
-            filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc),
+            filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=UTC),
             url=url,
             raw_data={"items": ["4.02"]},
         ),

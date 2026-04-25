@@ -1,7 +1,7 @@
 This report provides a technical analysis of **ACMR** as of **September 11, 2023**. After a significant rally starting in late August, the stock is showing signs of consolidation at elevated levels.
 
 ### **Trend Analysis**
-**ACMR** is currently in a confirmed long-term and medium-term bullish trend. 
+**ACMR** is currently in a confirmed long-term and medium-term bullish trend.
 - **Moving Averages:** The stock is trading significantly above its **200-day SMA ($11.52)** and **50-day SMA ($14.32)**. A "Golden Cross" (50 SMA crossing above 200 SMA) occurred earlier this year, and the widening gap between these averages indicates strengthening momentum.
 - **Short-term Momentum:** The **10-day EMA ($17.92)** is serving as immediate dynamic support. As long as the price stays above this level, the short-term parabolic trend remains intact.
 - **Volume Confirmation:** The **VWMA ($17.03)** is below the current price but trending upward. The fact that the price is significantly above the volume-weighted average indicates that the recent rally was supported by strong buying conviction.

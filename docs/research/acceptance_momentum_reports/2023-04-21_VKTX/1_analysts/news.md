@@ -9,7 +9,7 @@ For traders, this environment has shifted focus toward **defensive growth** sect
 The biotechnology sector, where **VKTX** operates, has experienced significant tailwinds this week:
 
 1.  **High-Profile M&A:** The headline event was **Merck’s (MRK) $10.8 billion acquisition of Prometheus Biosciences (RXDX)**. This deal, priced at a significant premium, highlights a critical trend: "Big Pharma" is aggressively looking to fill patent cliffs by acquiring high-potential clinical-stage assets. This creates a "halo effect" for companies like **VKTX**, which are viewed as potential targets due to their innovative pipelines.
-2.  **Obesity Drug Momentum:** The GLP-1 (glucagon-like peptide-1) space continues to be the hottest area in pharma. 
+2.  **Obesity Drug Momentum:** The GLP-1 (glucagon-like peptide-1) space continues to be the hottest area in pharma.
     *   **Eli Lilly (LLY)** announced an additional $1.6 billion investment in manufacturing facilities to meet soaring demand for its metabolic drugs.
     *   **WeightWatchers (WW)** formally entered the market by acquiring Sequence, a telemedicine provider for obesity drugs.
     *   **Implication for VKTX:** As a developer of both injectable and oral GLP-1/GIP agonists (VK2735), **VKTX** is positioned in the epicenter of this high-demand therapeutic class. The sector's expansion and infrastructure growth are highly bullish for Viking’s long-term valuation.

@@ -10,10 +10,10 @@ The rationale here comes down to the unforgiving nature of market cycles and val
 
 Reflecting on my past mistakes, I have previously fallen into the trap of buying into the secular growth narrative for semiconductor stocks, believing that new technologies made them immune to traditional business cycles. I learned the hard way that when the macro environment tightens and the Federal Reserve raises rates, high-multiple cyclical stocks are the first to get aggressively re-rated downward, regardless of how strong their balance sheets might be. I will not make that mistake again by ignoring the macro signals flashing right in front of us.
 
-Here is the detailed investment plan and strategic actions for the trader. 
+Here is the detailed investment plan and strategic actions for the trader.
 
-First, if you currently hold long positions in FORM, use this recent bounce to the $39 to $40 range as a liquidity event to exit your positions. You are getting an opportunity to sell near the 200-day moving average resistance, and you should take it. 
+First, if you currently hold long positions in FORM, use this recent bounce to the $39 to $40 range as a liquidity event to exit your positions. You are getting an opportunity to sell near the 200-day moving average resistance, and you should take it.
 
-Second, for those looking to capitalize on the downside, initiate a short position here at current levels. Keep a tight stop-loss just above the 200-day moving average, around the $41.50 mark, to protect your capital against an unexpected technical breakout. 
+Second, for those looking to capitalize on the downside, initiate a short position here at current levels. Keep a tight stop-loss just above the 200-day moving average, around the $41.50 mark, to protect your capital against an unexpected technical breakout.
 
 Finally, allocate the raised capital into defensive, low-beta sectors or keep it in cash until the broader market volatility and interest rate trajectory stabilize. We will re-evaluate FORM only when its valuation normalizes to a level appropriate for a cyclical trough.

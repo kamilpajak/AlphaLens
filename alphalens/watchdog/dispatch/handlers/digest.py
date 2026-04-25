@@ -40,9 +40,7 @@ class DigestHandler(AlertHandler):
         self._conn.commit()
 
     def buffered(self) -> list[ClassifiedEvent]:
-        rows = self._conn.execute(
-            "SELECT payload FROM digest_buffer ORDER BY id"
-        ).fetchall()
+        rows = self._conn.execute("SELECT payload FROM digest_buffer ORDER BY id").fetchall()
         return [_deserialize(r[0]) for r in rows]
 
     def flush(self) -> None:
@@ -59,17 +57,19 @@ class DigestHandler(AlertHandler):
 
 
 def _serialize(c: ClassifiedEvent) -> str:
-    return json.dumps({
-        "ticker": c.event.ticker,
-        "form_type": c.event.form_type.value,
-        "accession_number": c.event.accession_number,
-        "filed_at": c.event.filed_at.isoformat(),
-        "url": c.event.url,
-        "raw_data": c.event.raw_data,
-        "severity": c.severity.value,
-        "relevance": c.relevance.value,
-        "action": c.action.value,
-    })
+    return json.dumps(
+        {
+            "ticker": c.event.ticker,
+            "form_type": c.event.form_type.value,
+            "accession_number": c.event.accession_number,
+            "filed_at": c.event.filed_at.isoformat(),
+            "url": c.event.url,
+            "raw_data": c.event.raw_data,
+            "severity": c.severity.value,
+            "relevance": c.relevance.value,
+            "action": c.action.value,
+        }
+    )
 
 
 def _deserialize(payload: str) -> ClassifiedEvent:

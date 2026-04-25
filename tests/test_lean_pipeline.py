@@ -41,9 +41,18 @@ class TestOutputToDataFrame(unittest.TestCase):
 
         self.assertEqual(len(df), 2)
         for col in [
-            "ticker", "rank", "score", "roc5", "roc20", "roc60",
-            "volume_surprise", "trend_strength", "breakout", "near_high",
-            "last_close", "avg_dollar_volume",
+            "ticker",
+            "rank",
+            "score",
+            "roc5",
+            "roc20",
+            "roc60",
+            "volume_surprise",
+            "trend_strength",
+            "breakout",
+            "near_high",
+            "last_close",
+            "avg_dollar_volume",
         ]:
             self.assertIn(col, df.columns)
         self.assertEqual(df.iloc[0]["ticker"], "T0")
@@ -73,7 +82,9 @@ class TestPipelineRun(unittest.TestCase):
         runner.run.return_value = _valid_output(5)
         sync = MagicMock()
         sync.incremental_sync.return_value = MagicMock(
-            dates_synced=["2026-04-17"], tickers_written=500, bars_written=500,
+            dates_synced=["2026-04-17"],
+            tickers_written=500,
+            bars_written=500,
         )
 
         pipe = LeanScreenerPipeline(runner=runner, sync=sync)
@@ -129,8 +140,15 @@ class TestToCandidates(unittest.TestCase):
         cand = LeanScreenerPipeline().to_candidates(df)[0]
 
         for key in (
-            "score", "rank", "roc20", "roc60", "volume_surprise",
-            "trend_strength", "breakout", "near_high", "last_close",
+            "score",
+            "rank",
+            "roc20",
+            "roc60",
+            "volume_surprise",
+            "trend_strength",
+            "breakout",
+            "near_high",
+            "last_close",
         ):
             self.assertIn(key, cand.payload)
 

@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import copy
 import logging
+from collections.abc import Callable, Mapping
 from datetime import date
-from typing import Callable, Mapping
 
 from .fetcher import extract_features, fetch_ticker_bundle
 
@@ -47,7 +47,7 @@ class HistoricalFundamentalsStore:
             attempted += 1
             try:
                 bundle = self._fetcher(up)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("preload fetch failed for %s: %s", up, exc)
                 failures += 1
                 continue
@@ -55,7 +55,9 @@ class HistoricalFundamentalsStore:
         loaded = attempted - failures
         logger.info(
             "HistoricalFundamentalsStore preload: %d/%d tickers loaded (failures=%d)",
-            loaded, attempted, failures,
+            loaded,
+            attempted,
+            failures,
         )
         if attempted > 0 and failures / attempted > self.PRELOAD_FAILURE_THRESHOLD:
             raise RuntimeError(
@@ -101,7 +103,8 @@ def _filter_bundle_by_date(bundle: Mapping, asof_iso: str) -> dict:
         cloned = copy.deepcopy(dict(section))
         reports = cloned.get("quarterlyReports") or []
         cloned["quarterlyReports"] = [
-            r for r in reports
+            r
+            for r in reports
             if (r.get("reportedDate") or r.get("fiscalDateEnding") or "") <= asof_iso
         ]
         out[key] = cloned

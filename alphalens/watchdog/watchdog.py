@@ -31,7 +31,7 @@ class Watchdog:
             try:
                 events = source.detect()
                 all_events.extend(events)
-            except Exception as exc:  # noqa: BLE001 — one source must not kill the run
+            except Exception as exc:
                 logger.error("Source %s failed: %s", type(source).__name__, exc, exc_info=True)
 
         dispatched = 0

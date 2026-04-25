@@ -1,12 +1,12 @@
 Based on the comprehensive investment plan provided and a current assessment of the market conditions surrounding **CEVA**, the following analysis supports a definitive trading decision.
 
 ### Fundamental Analysis
-While **CEVA** maintains a strong balance sheet with zero long-term debt and a significant cash reserve (approximately 25% of its market capitalization), the company’s operational profile remains risky in the current macroeconomic climate. The "bear case" highlighted in the plan is particularly persuasive: **CEVA** continues to struggle with GAAP profitability, largely due to its massive research and development expenditure, which consumes a disproportionate share of its revenue (nearly 60%). 
+While **CEVA** maintains a strong balance sheet with zero long-term debt and a significant cash reserve (approximately 25% of its market capitalization), the company’s operational profile remains risky in the current macroeconomic climate. The "bear case" highlighted in the plan is particularly persuasive: **CEVA** continues to struggle with GAAP profitability, largely due to its massive research and development expenditure, which consumes a disproportionate share of its revenue (nearly 60%).
 
 In an environment where capital is expensive and investors prioritize tangible earnings over "non-GAAP fantasy," **CEVA**'s high valuation multiples relative to its actual earnings make it vulnerable. The dependency on OEM R&D budgets is a cyclical liability; as global economic growth remains uncertain, these budgets are often the first to be curtailed, threatening the sustainability of **CEVA**'s licensing growth.
 
 ### Technical and Macro Indicators
-Technically, **CEVA** has struggled to maintain momentum above key moving averages, with the 50-day and 200-day averages often acting as resistance rather than support. The broader macroeconomic headwinds—specifically the "higher for longer" interest rate environment—continue to compress multiples for small-cap technology companies that lack consistent GAAP net income. 
+Technically, **CEVA** has struggled to maintain momentum above key moving averages, with the 50-day and 200-day averages often acting as resistance rather than support. The broader macroeconomic headwinds—specifically the "higher for longer" interest rate environment—continue to compress multiples for small-cap technology companies that lack consistent GAAP net income.
 
 The strategy of "protecting capital" outweighs the "coiled spring" theory of the bulls. As noted in the provided plan, a high cash balance does not provide alpha in a sector-wide downturn; it merely funds continued operating losses.
 

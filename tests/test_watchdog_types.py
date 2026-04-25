@@ -1,12 +1,12 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 class TestEventDataclass(unittest.TestCase):
     def test_event_holds_required_fields(self):
         from alphalens.watchdog.types import Event, FormType
 
-        filed_at = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+        filed_at = datetime(2026, 4, 17, 12, 0, tzinfo=UTC)
         event = Event(
             ticker="AAPL",
             form_type=FormType.FORM_8K,
@@ -26,7 +26,7 @@ class TestEventDataclass(unittest.TestCase):
     def test_event_equality_by_accession_number(self):
         from alphalens.watchdog.types import Event, FormType
 
-        filed_at = datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc)
+        filed_at = datetime(2026, 4, 17, 12, 0, tzinfo=UTC)
         event_a = Event(
             ticker="AAPL",
             form_type=FormType.FORM_4,
@@ -59,7 +59,14 @@ class TestEventDataclass(unittest.TestCase):
     def test_form_type_enum_covers_mvp_forms(self):
         from alphalens.watchdog.types import FormType
 
-        required = {"FORM_8K", "FORM_4", "FORM_13D", "FORM_13G", "FORM_13D_A", "FORM_13G_A"}
+        required = {
+            "FORM_8K",
+            "FORM_4",
+            "FORM_13D",
+            "FORM_13G",
+            "FORM_13D_A",
+            "FORM_13G_A",
+        }
         actual = {member.name for member in FormType}
         missing = required - actual
         self.assertFalse(missing, f"Missing FormType members: {missing}")

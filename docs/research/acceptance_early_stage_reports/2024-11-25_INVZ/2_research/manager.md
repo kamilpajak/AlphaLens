@@ -1,8 +1,8 @@
-As the portfolio manager evaluating this debate on Innoviz Technologies, ticker INVZ, I have carefully weighed both the bull and bear arguments. 
+As the portfolio manager evaluating this debate on Innoviz Technologies, ticker INVZ, I have carefully weighed both the bull and bear arguments.
 
 To summarize the key points, the bull analyst builds a compelling narrative around revenue acceleration, highlighting a 17 million dollar quarterly print, a 55 million dollar trailing twelve-month revenue, and strong Tier 1 OEM integrations with BMW and VW. The bull argues that the stock is technically bottoming and mispriced due to sector contagion from peers like Luminar. On the other side, the bear analyst surgically targets the balance sheet, pointing out that a 67.8 million dollar trailing net loss against only 72 million dollars in liquid assets leaves INVZ with roughly a 12-month cash runway. The bear emphasizes that raising capital at a 141 million dollar market cap will lead to catastrophic dilution for retail investors, especially if OEMs delay their rollouts.
 
-My definitive recommendation is to Sell INVZ. 
+My definitive recommendation is to Sell INVZ.
 
 The rationale for this decision comes down to the brutal math of cash burn versus market capitalization. While the bull is correct that INVZ is successfully scaling its top-line revenue, the cost of that growth is a burn rate that the current balance sheet simply cannot sustain. With about four quarters of liquidity remaining, management is walking a tightrope. To secure the capital needed to survive until profitability, they will likely be forced into an equity raise. Doing so at a depressed share price of around 0.53 dollars will result in massive shareholder dilution, effectively wiping out the value for anyone buying at these levels. Furthermore, the broader macroeconomic reality of slowing EV rollouts means that any timeline delay from BMW or VW could be devastating to Innoviz's survival. The risk of sector commoditization and shrinking margins only adds to the bearish reality.
 

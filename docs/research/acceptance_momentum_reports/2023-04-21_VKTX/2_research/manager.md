@@ -1,4 +1,4 @@
-Hello. Let us review the debate we just had regarding VKTX. Both analysts brought strong arguments to the table, but we need to cut through the noise and make a definitive decision. 
+Hello. Let us review the debate we just had regarding VKTX. Both analysts brought strong arguments to the table, but we need to cut through the noise and make a definitive decision.
 
 The bull case for VKTX rests on the massive potential of the obesity market and the promising Phase 1 data of VK2735. The bull argues that the stock is undergoing a fundamental rerating, driven by institutional accumulation and acquisition speculation, comparing it to the recent Prometheus deal. Furthermore, they highlight the dual opportunity with the NASH pipeline, painting a picture of a well-capitalized company that is a prime takeover target.
 

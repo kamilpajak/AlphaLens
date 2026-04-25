@@ -1,5 +1,5 @@
 
-Conservative Analyst: Listen, I appreciate the enthusiasm for a potential breakout, but calling a 27% gap above the 200-day moving average a gift is exactly how capital gets destroyed in a bear market. While you’re focused on the engine firing up, you’re ignoring the fact that the entire track is currently on fire. 
+Conservative Analyst: Listen, I appreciate the enthusiasm for a potential breakout, but calling a 27% gap above the 200-day moving average a gift is exactly how capital gets destroyed in a bear market. While you’re focused on the engine firing up, you’re ignoring the fact that the entire track is currently on fire.
 
 We have to look at the reality of the September 13th CPI report. The Nasdaq didn't just have a bad day; it suffered its worst session since 2020, falling over 5%. Inflation is sticky, the Fed is about to get even more aggressive with rate hikes, and you’re suggesting we go long on a company that hasn't seen a dime of profit yet? In this macro environment, cash is king, and while Ionis has a $2 billion cushion, their quarterly burn rate of $160 to $180 million means that cushion isn't as soft as you think when milestone payments are lumpy and unpredictable.
 
@@ -7,7 +7,7 @@ You dismissed the idea of the clinical success being priced in, but look at the 
 
 And let’s talk about that institutional ownership you’re so proud of. Over 100% ownership isn't just a sign of confidence; it’s the definition of a crowded trade. When everyone is already in, who is left to buy and push the price to that $96 target? More importantly, if one or two of those major funds face redemption pressures because of the macro crash, they’ll have to sell what’s liquid and what’s performed well. IONS becomes a prime candidate for profit-taking to cover losses elsewhere. Without a retail floor to catch it, that drop will be sharp and painful.
 
-You also assume AstraZeneca will just steamroll Alnylam. Being second-to-market against an entrenched competitor with established physician relationships is an expensive, uphill battle. Clinical data is a milestone, but commercial execution is a marathon that eats margins. 
+You also assume AstraZeneca will just steamroll Alnylam. Being second-to-market against an entrenched competitor with established physician relationships is an expensive, uphill battle. Clinical data is a milestone, but commercial execution is a marathon that eats margins.
 
 The neutral stance of holding is just as risky because it ignores the opportunity cost and the very real threat of a deeper correction. Waiting for stabilization sounds prudent, but the data says the stabilization isn't coming this month. Protecting our assets means recognizing when a rally has exhausted itself against a deteriorating global backdrop. We shouldn't be playing for the dollar when we’re standing on a trapdoor. The safest and most disciplined move is to exit now, lock in the gains from this run-up, and wait for the price to return to a sensible valuation—ideally near that $36 support level—before even considering a re-entry.
 

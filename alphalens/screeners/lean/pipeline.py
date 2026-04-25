@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pandas as pd
@@ -42,9 +42,18 @@ def lean_output_to_dataframe(output: LeanOutput) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(
             columns=[
-                "ticker", "rank", "score", "roc5", "roc20", "roc60",
-                "volume_surprise", "trend_strength", "breakout", "near_high",
-                "last_close", "avg_dollar_volume",
+                "ticker",
+                "rank",
+                "score",
+                "roc5",
+                "roc20",
+                "roc60",
+                "volume_surprise",
+                "trend_strength",
+                "breakout",
+                "near_high",
+                "last_close",
+                "avg_dollar_volume",
             ]
         )
     return pd.DataFrame(rows)
@@ -54,7 +63,7 @@ class LeanScreenerPipeline:
     def __init__(
         self,
         config: dict | None = None,
-        sync=None,                   # PolygonLeanSync | None
+        sync=None,  # PolygonLeanSync | None
         runner: LeanDockerRunner | None = None,
     ):
         self.config = config or LEAN_DEFAULTS
@@ -68,14 +77,16 @@ class LeanScreenerPipeline:
         top_n: int | None = None,
     ) -> pd.DataFrame:
         if self._sync is not None:
-            today = today or datetime.now(timezone.utc).date()
+            today = today or datetime.now(UTC).date()
             report = self._sync.incremental_sync(
                 today=today,
                 bootstrap_days=self.config["history_bootstrap_days"],
             )
             logger.info(
                 "polygon sync: dates=%d tickers=%d bars=%d",
-                len(report.dates_synced), report.tickers_written, report.bars_written,
+                len(report.dates_synced),
+                report.tickers_written,
+                report.bars_written,
             )
 
         if self._runner is None:
@@ -89,7 +100,7 @@ class LeanScreenerPipeline:
     def to_candidates(self, df: pd.DataFrame) -> list[Candidate]:
         if df.empty:
             return []
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         discriminator = now.date().isoformat()
         return [
             Candidate.from_screener(

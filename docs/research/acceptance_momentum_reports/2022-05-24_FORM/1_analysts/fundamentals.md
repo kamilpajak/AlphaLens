@@ -12,9 +12,9 @@ FormFactor, Inc. (FORM) is a leading provider of essential test and measurement 
 
 #### 3. Financial Performance (Income Statement Analysis)
 As of the latest available data leading up to May 2022:
-*   **Revenue Growth:** FormFactor has demonstrated consistent top-line growth. Revenue increased from **$589M in 2019** to **$769M in 2021**. 
+*   **Revenue Growth:** FormFactor has demonstrated consistent top-line growth. Revenue increased from **$589M in 2019** to **$769M in 2021**.
 *   **Quarterly Momentum:** The first quarter of 2022 (ending March 31, 2022) reported revenue of **$197.2M**, putting the company on a run-rate to exceed its 2021 performance.
-*   **Profitability:** 
+*   **Profitability:**
     *   **Gross Margin:** Trailing Twelve Months (TTM) Gross Profit stands at **$307.6M**, reflecting the company's ability to maintain high margins in a competitive equipment sector.
     *   **Net Income:** Net income grew from **$39M in 2019** to **$83.9M in 2021**.
     *   **Operating Margin (TTM):** **13.6%**, which is healthy for the semiconductor equipment industry, though subject to the cyclicality of the broader chip market.

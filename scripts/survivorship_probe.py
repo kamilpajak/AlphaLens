@@ -17,7 +17,6 @@ import csv
 import json
 import os
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,19 +31,46 @@ from alphalens.screeners.lean.polygon_client import PolygonClient  # noqa: E402
 CACHE_DIR = Path.home() / ".alphalens" / "survivorship"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-START_DATE = "2021-06-01"  # Polygon plan boundary; original backtest start 2021-04-19 is past entitlement
+START_DATE = (
+    "2021-06-01"  # Polygon plan boundary; original backtest start 2021-04-19 is past entitlement
+)
 END_DATE = "2026-04-17"
 
 # Keyword heuristic for thematic shortlist. Crude but fast.
 THEMATIC_KEYWORDS = [
     # biotech / gene therapy
-    "therap", "pharma", "biosci", "bio ", "gene", "cell ", "rna", "crispr",
-    "oncolog", "neuro", "cancer", "antibod", "clinical",
+    "therap",
+    "pharma",
+    "biosci",
+    "bio ",
+    "gene",
+    "cell ",
+    "rna",
+    "crispr",
+    "oncolog",
+    "neuro",
+    "cancer",
+    "antibod",
+    "clinical",
     # semis
-    "semicond", "silicon", "microchip", "chip", "wafer", "litho", "photon",
+    "semicond",
+    "silicon",
+    "microchip",
+    "chip",
+    "wafer",
+    "litho",
+    "photon",
     # AI / quantum / robotics
-    "artificial intel", "machine lear", "quantum", "robot", "autonom", "a.i.",
-    "cogniti", "neural", "cloud comp", "data center",
+    "artificial intel",
+    "machine lear",
+    "quantum",
+    "robot",
+    "autonom",
+    "a.i.",
+    "cogniti",
+    "neural",
+    "cloud comp",
+    "data center",
 ]
 
 
@@ -77,14 +103,30 @@ def match_theme(sic: str | None, name: str) -> str | None:
     """Coarse mapping: SIC + name keywords → theme label."""
     sic = (sic or "").lower()
     n = name.lower()
-    if any(k in sic for k in ("biolog", "pharma", "medicinal", "drug"))  or any(
+    if any(k in sic for k in ("biolog", "pharma", "medicinal", "drug")) or any(
         k in n for k in ("therap", "biosci", "gene ", "gene-", "onc", "crispr", "rna")
     ):
         return "biotech"
-    if "semicond" in sic or any(k in n for k in ("semicond", "silicon", "wafer", "litho", "photon", "microchip")):
+    if "semicond" in sic or any(
+        k in n for k in ("semicond", "silicon", "wafer", "litho", "photon", "microchip")
+    ):
         return "semis"
     if "services-computer" in sic or "prepackaged software" in sic:
-        if any(k in n for k in ("a.i.", "artificial", "machine lear", "quantum", "robot", "autonom", "cogniti", "neural", "cloud", "data center")):
+        if any(
+            k in n
+            for k in (
+                "a.i.",
+                "artificial",
+                "machine lear",
+                "quantum",
+                "robot",
+                "autonom",
+                "cogniti",
+                "neural",
+                "cloud",
+                "data center",
+            )
+        ):
             return "ai"
     if any(k in n for k in ("quantum", "quantum comp")):
         return "quantum"
@@ -148,12 +190,14 @@ def main() -> None:
             continue
         # Name keyword prefilter — avoid 7000+ API calls, keep likely thematics
         # (we'll look up names later; for now just keep all liquid candidates)
-        shortlist.append(Candidate(
-            ticker=t,
-            name="",  # filled in next step
-            dollar_volume_2021=dv,
-            close_2021=row["close"],
-        ))
+        shortlist.append(
+            Candidate(
+                ticker=t,
+                name="",  # filled in next step
+                dollar_volume_2021=dv,
+                close_2021=row["close"],
+            )
+        )
     shortlist.sort(key=lambda c: -c.dollar_volume_2021)
     print(f"      after liquidity filter ($3M+ ADV, $2+ price): {len(shortlist)}")
 
@@ -173,21 +217,42 @@ def main() -> None:
         if cand.theme:
             thematic.append(cand)
         if (i + 1) % 100 == 0:
-            print(f"      {i+1}/{len(shortlist)} checked; {len(thematic)} thematic so far")
+            print(f"      {i + 1}/{len(shortlist)} checked; {len(thematic)} thematic so far")
 
     print(f"\n=== Thematic delisted small/mid caps: {len(thematic)} ===")
     for c in sorted(thematic, key=lambda c: -c.dollar_volume_2021):
-        print(f"  {c.ticker:8s} {c.theme:8s} ${c.dollar_volume_2021/1e6:6.1f}M  "
-              f"delisted={c.delisted_utc or '?':24s}  {c.name[:50]}")
+        print(
+            f"  {c.ticker:8s} {c.theme:8s} ${c.dollar_volume_2021 / 1e6:6.1f}M  "
+            f"delisted={c.delisted_utc or '?':24s}  {c.name[:50]}"
+        )
 
     # Write CSV
     out_csv = CACHE_DIR / "delisted_thematic_candidates.csv"
     with out_csv.open("w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["ticker", "theme", "name", "sic_description", "dollar_volume_2021_apr", "close_2021_apr", "delisted_utc"])
+        w.writerow(
+            [
+                "ticker",
+                "theme",
+                "name",
+                "sic_description",
+                "dollar_volume_2021_apr",
+                "close_2021_apr",
+                "delisted_utc",
+            ]
+        )
         for c in sorted(thematic, key=lambda c: -c.dollar_volume_2021):
-            w.writerow([c.ticker, c.theme, c.name, c.sic_description,
-                        f"{c.dollar_volume_2021:.0f}", f"{c.close_2021:.2f}", c.delisted_utc or ""])
+            w.writerow(
+                [
+                    c.ticker,
+                    c.theme,
+                    c.name,
+                    c.sic_description,
+                    f"{c.dollar_volume_2021:.0f}",
+                    f"{c.close_2021:.2f}",
+                    c.delisted_utc or "",
+                ]
+            )
     print(f"\nWrote {out_csv}")
 
 

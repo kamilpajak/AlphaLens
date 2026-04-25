@@ -12,7 +12,7 @@ This report provides a comprehensive technical analysis of **Core Scientific Inc
 *   **MACD (Moving Average Convergence Divergence):** The MACD remains positive at **1.36**, but its trajectory has turned downward from a peak of 1.74. This indicates a loss of upward momentum. A potential "bearish crossover" with the signal line may be imminent if the price does not stabilize quickly.
 
 ### **Volatility & Support/Resistance**
-*   **Bollinger Bands:** The stock's parabolic move pushed it against the **Upper Band ($18.58)** last week. The subsequent crash has brought the price back toward the **Middle Band (20-day SMA) at $13.85**. 
+*   **Bollinger Bands:** The stock's parabolic move pushed it against the **Upper Band ($18.58)** last week. The subsequent crash has brought the price back toward the **Middle Band (20-day SMA) at $13.85**.
     *   **Immediate Support:** $13.85 (Bollinger Middle Band).
     *   **Secondary Support:** $12.20 (200-day SMA).
     *   **Immediate Resistance:** $15.08 (VWMA) and $17.00 - $18.00 (Previous supply zone).

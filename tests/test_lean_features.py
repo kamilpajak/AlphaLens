@@ -101,17 +101,13 @@ class TestTrendStrength(unittest.TestCase):
         from alphalens.screeners.lean.lean_project.features import trend_strength
 
         close = list(range(1, 201))  # steadily rising 1..200
-        self.assertAlmostEqual(
-            trend_strength(close, sma_short=5, sma_medium=20, sma_long=50), 1.0
-        )
+        self.assertAlmostEqual(trend_strength(close, sma_short=5, sma_medium=20, sma_long=50), 1.0)
 
     def test_full_downtrend_scores_zero(self):
         from alphalens.screeners.lean.lean_project.features import trend_strength
 
         close = list(range(200, 0, -1))
-        self.assertAlmostEqual(
-            trend_strength(close, sma_short=5, sma_medium=20, sma_long=50), 0.0
-        )
+        self.assertAlmostEqual(trend_strength(close, sma_short=5, sma_medium=20, sma_long=50), 0.0)
 
     def test_invalid_window_order_raises(self):
         from alphalens.screeners.lean.lean_project.features import trend_strength

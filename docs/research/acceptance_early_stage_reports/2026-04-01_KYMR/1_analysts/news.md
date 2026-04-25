@@ -5,8 +5,8 @@ The past week has been characterized by significant geopolitical volatility, shi
 ## 1. Global Macroeconomic Environment
 
 ### Geopolitical Tensions and Energy Shock
-The conflict between the U.S. and Iran remains the primary driver of market sentiment. 
-*   **Oil Prices:** Brent crude surged to approximately **$115-$116 per barrel** following threats to Iranian energy infrastructure (specifically the Kharg Island hub). 
+The conflict between the U.S. and Iran remains the primary driver of market sentiment.
+*   **Oil Prices:** Brent crude surged to approximately **$115-$116 per barrel** following threats to Iranian energy infrastructure (specifically the Kharg Island hub).
 *   **Market Volatility:** The VIX spiked to over 31, reflecting a "risk-off" environment. However, recent signals from the U.S. administration regarding a potential exit from hostilities and efforts to keep the **Strait of Hormuz** open have provided a late-week rally in equities.
 *   **Regional Impact:** Europe continues to face severe economic headwinds due to its reliance on energy imports, leading to a bearish outlook for European ETFs.
 
@@ -34,8 +34,8 @@ The most significant news for `KYMR` this week was the presentation of **Phase 1
 ## 3. Actionable Insights for Traders
 
 *   **For Macro Traders:** Monitor the **Strait of Hormuz** situation. Any confirmed de-escalation will likely trigger a massive relief rally in tech and consumer discretionary stocks, while a breakdown in talks will favor energy and gold.
-*   **For `KYMR` Investors:** 
-    *   **Strategic Positioning:** The technical setup for `KYMR` shows a favorable risk-reward ratio (estimated 45:1 by some analysts) targeting a ~13% near-term gain. 
+*   **For `KYMR` Investors:**
+    *   **Strategic Positioning:** The technical setup for `KYMR` shows a favorable risk-reward ratio (estimated 45:1 by some analysts) targeting a ~13% near-term gain.
     *   **Volatility Management:** Expect continued volatility as the market balances the "breakthrough" clinical data against the current "risk-off" macroeconomic backdrop and insider selling.
     *   **Long-term Horizon:** The potential for KT-621 to disrupt the atopic dermatitis market (competing with injectables like Dupixent) remains the core long-term value driver.
 

@@ -7,9 +7,7 @@ import yaml
 
 class TestTickerCikMap(unittest.TestCase):
     def _write(self, content: dict) -> Path:
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
-        )
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8")
         self.addCleanup(Path(tmp.name).unlink, missing_ok=True)
         tmp.write(yaml.safe_dump(content))
         tmp.close()

@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Iterable
 
 from .candidates import Candidate
 
@@ -170,7 +170,7 @@ class CandidateQueue:
             )
         else:
             delay = self.base_retry_s * (2 ** (attempts - 1))
-            next_retry_at = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
+            next_retry_at = (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
             self._conn.execute(
                 "UPDATE candidates SET status = 'pending', attempts = ?, "
                 "next_retry_at = ?, error = ?, started_at = NULL WHERE id = ?",
@@ -181,16 +181,13 @@ class CandidateQueue:
     # ------------------------------------------------------------------ queries
 
     def list_by_status(self, status: str) -> list[dict]:
-        cur = self._conn.execute(
-            "SELECT * FROM candidates WHERE status = ? ORDER BY id", (status,)
-        )
+        cur = self._conn.execute("SELECT * FROM candidates WHERE status = ? ORDER BY id", (status,))
         return [dict(r) for r in cur.fetchall()]
 
     def count_done_today(self) -> int:
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = datetime.now(UTC).date().isoformat()
         cur = self._conn.execute(
-            "SELECT COUNT(*) FROM candidates "
-            "WHERE status = 'done' AND DATE(finished_at) = ?",
+            "SELECT COUNT(*) FROM candidates WHERE status = 'done' AND DATE(finished_at) = ?",
             (today,),
         )
         return cur.fetchone()[0]
@@ -200,7 +197,7 @@ class CandidateQueue:
     def close(self) -> None:
         self._conn.close()
 
-    def __enter__(self) -> "CandidateQueue":
+    def __enter__(self) -> CandidateQueue:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -208,4 +205,4 @@ class CandidateQueue:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

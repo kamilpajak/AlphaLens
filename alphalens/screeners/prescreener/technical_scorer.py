@@ -59,14 +59,15 @@ class TechnicalScorer:
             trend_sma = self._trend_score(close, sma200)
             trend_s = trend_ema * 0.5 + trend_sma * 0.5
             adx_s = self._adx_score(adx, self.config["adx_min"])
-            macd_s = 0.7 if macd_hist is not None and macd_hist > 0 else 0.3 if macd_hist is not None else 0.5
-
-            technical_score = (
-                rsi_s * 0.25
-                + trend_s * 0.35
-                + adx_s * 0.20
-                + macd_s * 0.20
+            macd_s = (
+                0.7
+                if macd_hist is not None and macd_hist > 0
+                else 0.3
+                if macd_hist is not None
+                else 0.5
             )
+
+            technical_score = rsi_s * 0.25 + trend_s * 0.35 + adx_s * 0.20 + macd_s * 0.20
 
             return {
                 "ticker": ticker,

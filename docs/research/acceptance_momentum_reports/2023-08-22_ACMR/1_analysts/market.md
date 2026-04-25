@@ -3,7 +3,7 @@ This technical analysis for **ACMR** (ACM Research, Inc.) as of **August 22, 202
 ### **Technical Indicator Analysis**
 
 #### **1. Trend Strength and Direction**
-ACMR is currently in a confirmed bullish structural trend. 
+ACMR is currently in a confirmed bullish structural trend.
 - **Moving Averages:** The price is trading well above both its **50-day SMA ($12.88)** and **200-day SMA ($10.94)**. The 50 SMA is significantly higher than the 200 SMA, indicating that a "Golden Cross" occurred previously, and the long-term trend remains firmly up.
 - **VWMA (Volume Weighted Moving Average):** The VWMA stands at **$13.39**. As the price (last recorded at $13.73 on Aug 21 and likely higher today based on indicators) is above the VWMA, it suggests the current price appreciation is supported by healthy trading volume, validating the upward move.
 
@@ -18,10 +18,10 @@ ACMR is currently in a confirmed bullish structural trend.
 ### **Actionable Insights**
 
 *   **Bullish Bias:** The alignment of price above major SMAs and the VWMA suggests that the path of least resistance is higher.
-*   **Support & Resistance:** 
+*   **Support & Resistance:**
     *   **Immediate Support:** $13.39 (VWMA) and $12.88 (50-day SMA).
     *   **Immediate Resistance:** $14.47 (Bollinger Upper Band) and recent swing highs.
-*   **Strategy for Traders:** 
+*   **Strategy for Traders:**
     *   **Swing Traders:** Look for entries on minor pullbacks toward the VWMA ($13.39). The RSI suggests the stock is not yet "too expensive," but buying near the $14.47 resistance carries a lower risk-reward ratio.
     *   **Long-term Investors:** Maintain holdings as the price remains comfortably above the 200-day SMA. A break below the 50-day SMA ($12.88) would be the first signal of a potential trend change.
 

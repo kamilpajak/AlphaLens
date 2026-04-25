@@ -143,25 +143,25 @@ The company maintains a healthy financial position, providing it with the flexib
 
 Bull Analyst: Look, I hear the noise about the macro environment—the 9.1% CPI print, the aggressive Fed, and the recession whispers. But if you’re looking at **Bel Fuse Inc. (BELFB)** and seeing anything other than a coiled spring ready for more upside, you’re missing the forest for the trees.
 
-Let’s stop talking about "what-ifs" and look at the "what-is." 
+Let’s stop talking about "what-ifs" and look at the "what-is."
 
 ### 1. The "Operating Leverage" Story (Growth Potential)
-The bears want to talk about a slowdown, but have they looked at the Q2 2022 numbers? We aren't just seeing incremental growth; we’re seeing an absolute **explosion in profitability**. Revenue grew 24.7% quarter-over-quarter to $170.57 million, but the real magic is in the bottom line: **Net income more than tripled** from $5.06 million to over $17 million in just three months. 
+The bears want to talk about a slowdown, but have they looked at the Q2 2022 numbers? We aren't just seeing incremental growth; we’re seeing an absolute **explosion in profitability**. Revenue grew 24.7% quarter-over-quarter to $170.57 million, but the real magic is in the bottom line: **Net income more than tripled** from $5.06 million to over $17 million in just three months.
 
 This tells us that BELFB has reached a critical scale where every additional dollar of revenue is dropping straight to the bottom line. When a company triples its profit in a single quarter while the rest of the market is crying about "input costs," that’s not a fluke—that’s an elite operational execution.
 
 ### 2. The Margin Expansion Tailwind (Competitive Advantage)
-The bear case usually hinges on rising costs. But here’s the reality: **Copper prices have experienced their steepest decline in a year.** As a manufacturer of magnetics and interconnect products, copper is a primary input for BELFB. While the market worries about inflation, Bel Fuse is actually entering a period where its **raw material costs are plummeting** while it maintains its newfound pricing power. 
+The bear case usually hinges on rising costs. But here’s the reality: **Copper prices have experienced their steepest decline in a year.** As a manufacturer of magnetics and interconnect products, copper is a primary input for BELFB. While the market worries about inflation, Bel Fuse is actually entering a period where its **raw material costs are plummeting** while it maintains its newfound pricing power.
 
 We saw gross margins jump from 24.9% to 26.6% recently. With copper prices cooling, I expect those margins to continue their northward climb. This is a company that has successfully passed costs to customers (just like PepsiCo did) but is now about to keep the difference as commodity prices drop.
 
 ### 3. "Smart Money" is Cornering the Market
-You want to talk about risk? Look at the ownership. **99.9% institutional ownership.** The "Smart Money" isn't just nibbling; they have virtually locked up the float. Why? Because professional money managers recognize that BELFB serves non-cyclical, high-barrier industries like **commercial aerospace and military**. These aren't sectors that disappear during a rate hike cycle. 
+You want to talk about risk? Look at the ownership. **99.9% institutional ownership.** The "Smart Money" isn't just nibbling; they have virtually locked up the float. Why? Because professional money managers recognize that BELFB serves non-cyclical, high-barrier industries like **commercial aerospace and military**. These aren't sectors that disappear during a rate hike cycle.
 
 ### 4. Debating the Bear Counterpoints
-I know the bears are pointing at the **Strong Dollar (DXY)** hitting parity with the Euro as a major headwind for an international player like Bel Fuse. I'll grant you that currency translation is a headache. However, it is a *temporary accounting headwind*, not a fundamental business failure. 
+I know the bears are pointing at the **Strong Dollar (DXY)** hitting parity with the Euro as a major headwind for an international player like Bel Fuse. I'll grant you that currency translation is a headache. However, it is a *temporary accounting headwind*, not a fundamental business failure.
 
-The bear argues that a strong USD makes products more expensive abroad. But look at the demand: the backlog remains robust because Bel Fuse’s products are **technological necessities**, not discretionary luxuries. If you're building a satellite or a high-speed data center, you don't switch your connectivity provider because of a 10% swing in the Euro; you pay for the quality and the specs. 
+The bear argues that a strong USD makes products more expensive abroad. But look at the demand: the backlog remains robust because Bel Fuse’s products are **technological necessities**, not discretionary luxuries. If you're building a satellite or a high-speed data center, you don't switch your connectivity provider because of a 10% swing in the Euro; you pay for the quality and the specs.
 
 Furthermore, the technicals back me up completely. As of July 18, we are trading comfortably above the 200-day SMA ($14.32) and the 50-day SMA ($15.89). The **MACD is accelerating**, and the RSI at 64.06 shows we have plenty of "white space" before we hit overbought territory. We aren't chasing a peak; we are riding a trend that is just getting its second wind.
 
@@ -169,7 +169,7 @@ Furthermore, the technicals back me up completely. As of July 18, we are trading
 In the past, I’ve seen analysts get spooked by macro "scary stories" and miss out on companies with strong internal catalysts. The mistake is over-weighting the Fed’s transcript and under-weighting the company’s balance sheet. With a **Current Ratio of 2.80**, Bel Fuse has a fortress of liquidity. They have the cash ($65.83M) to weather any storm the Fed brews up.
 
 **The Verdict:**
-The bears are focused on the "Strong Dollar" and "Recession Fears." I’m focused on **tripling net income**, **falling copper prices**, and **unanimous institutional backing**. 
+The bears are focused on the "Strong Dollar" and "Recession Fears." I’m focused on **tripling net income**, **falling copper prices**, and **unanimous institutional backing**.
 
 BELFB is currently in a breakout phase because it has proven it can grow *faster* than inflation can eat it. If you wait for the "perfect" macro environment to buy, you’re going to be buying at the $20.00+ resistance level. The time to get in is now, while the momentum is confirmed but the RSI still says there’s room to run.
 
@@ -185,42 +185,42 @@ Let’s dismantle the bull case with some cold, hard reality.
 The Bull points to **99.9% institutional ownership** as a badge of honor. I see it as a terrifying liquidity trap. When the "Smart Money" already owns the entire room, **who is left to buy?** You’ve reached a state of buyer exhaustion. If even one or two of these institutions decide to rotate out of mid-cap industrials because of the 9.1% CPI print or the looming recession—which JPMorgan is already bracing for by building loan loss reserves—there will be no retail floor to catch the fall. We’ve seen this movie before: when the big players head for the exit at the same time, the door isn’t wide enough, and the stock price collapses.
 
 ### 2. The "Strong Dollar" is a Structural Hammer, Not "Accounting Noise"
-I have to push back hard on the idea that the U.S. Dollar at a 20-year high is just a "temporary accounting headwind." BELFB operates globally. When the Dollar hits parity with the Euro, Bel Fuse’s products become significantly more expensive for European customers compared to local competitors. 
+I have to push back hard on the idea that the U.S. Dollar at a 20-year high is just a "temporary accounting headwind." BELFB operates globally. When the Dollar hits parity with the Euro, Bel Fuse’s products become significantly more expensive for European customers compared to local competitors.
 
 My colleague suggests customers won't switch because of "quality." That is dangerously over-optimistic. In a high-interest-rate environment, every CFO is looking to cut costs. If a German or Asian competitor offers a "good enough" interconnect solution at a 15-20% discount due to currency advantages, Bel Fuse’s "technological necessity" argument vanishes. This isn't just about how the earnings look on a spreadsheet; it’s about **lost market share** that you don't just get back when the DXY settles.
 
 ### 3. The Copper Paradox
-The Bull is cheering for falling copper prices. I’m looking at *why* they are falling. Copper is "Doctor Copper" because it has a PhD in predicting recessions. The "steepest decline in a year" isn't a gift to BELFB's margins; it’s a flashing red light that global industrial demand is cratering. 
+The Bull is cheering for falling copper prices. I’m looking at *why* they are falling. Copper is "Doctor Copper" because it has a PhD in predicting recessions. The "steepest decline in a year" isn't a gift to BELFB's margins; it’s a flashing red light that global industrial demand is cratering.
 
 You cannot celebrate lower input costs while ignoring the fact that the very same economic forces will likely lead to an order book freeze in the second half of 2022. We’re seeing a cooling U.S. housing market and rising rates that will inevitably hit the "consumer electronics and construction" sectors BELFB serves. The Bull is looking at the margin on a single part; I’m looking at the fact that they might be selling far fewer parts by Q4.
 
 ### 4. Technical Overextension and Mean Reversion
-Let's talk about the "momentum." The stock is trading at roughly **$16.89**, while its **200-day SMA is way down at $14.32**. That is a massive 18% gap from the long-term trend line. History teaches us that stocks eventually revert to their mean. With an RSI of 64.06, we are knocking on the door of "overbought" territory. 
+Let's talk about the "momentum." The stock is trading at roughly **$16.89**, while its **200-day SMA is way down at $14.32**. That is a massive 18% gap from the long-term trend line. History teaches us that stocks eventually revert to their mean. With an RSI of 64.06, we are knocking on the door of "overbought" territory.
 
 The Bull says "buy the breakout." I say, you’re buying the **peak of the cycle**. Looking at the Bollinger Upper Band of 17.48, the upside is capped at maybe 3.5%, while the downside to the 50-day SMA ($15.89) or the 200-day ($14.32) represents a potential loss of 6% to 15%. That is a terrible risk-reward ratio.
 
 ### 5. Lessons from the Past: The "Peak Earnings" Mirage
-I’ve made the mistake before of buying into a company right after a "profit explosion." In 2018, many analysts fell for similar spikes in the industrial sector, only to realize those earnings were the "last hurrah" of a cycle, fueled by a temporary clearing of supply chain backlogs rather than sustainable growth. 
+I’ve made the mistake before of buying into a company right after a "profit explosion." In 2018, many analysts fell for similar spikes in the industrial sector, only to realize those earnings were the "last hurrah" of a cycle, fueled by a temporary clearing of supply chain backlogs rather than sustainable growth.
 
 BELFB’s Q2 jump looks exactly like that—a "catch-up" quarter. Management successfully passed on costs *this time*, but with the Fed hiking rates aggressively (and the Bank of Canada moving a full 100 bps), the "pricing power" argument is going to hit a wall. You can only squeeze your customers so many times before they break.
 
 ### The Verdict: SELL / AVOID
-The bull case relies on everything staying perfect: copper staying low but demand staying high, and the "Smart Money" staying put despite a looming recession. 
+The bull case relies on everything staying perfect: copper staying low but demand staying high, and the "Smart Money" staying put despite a looming recession.
 
-**I don't bet on "perfection" when the CPI is at 9.1%.** 
+**I don't bet on "perfection" when the CPI is at 9.1%.**
 
-BELFB is a cyclical company being priced as if it’s a secular growth tech stock. With the strong dollar eating international competitiveness and a technical profile that screams "exhaustion," the smart move isn't to buy the breakout—it’s to take your profits and run before the "Smart Money" beats you to it. 
+BELFB is a cyclical company being priced as if it’s a secular growth tech stock. With the strong dollar eating international competitiveness and a technical profile that screams "exhaustion," the smart move isn't to buy the breakout—it’s to take your profits and run before the "Smart Money" beats you to it.
 
 **Wait for the Q2 earnings to reveal the cracks.** Do not buy the top.
 
 ### Research Manager
-As the portfolio manager, I have carefully reviewed the arguments from both sides regarding BELFB, and I am ready to make a definitive call. 
+As the portfolio manager, I have carefully reviewed the arguments from both sides regarding BELFB, and I am ready to make a definitive call.
 
 To summarize the debate, the bull makes a compelling backward-looking case. They highlight BELFB's explosive recent profitability, noting that net income tripled and margins expanded due to falling copper costs. They view the 99.9 percent institutional ownership as a sign of smart money backing and see the technical momentum as a coiled spring. The bear, however, counters with a forward-looking macroeconomic warning. They argue that 99.9 percent institutional ownership actually represents buyer exhaustion, meaning there is no one left to drive the price higher. They also point out that the strong dollar will crush international competitiveness, falling copper is a recessionary warning sign for demand rather than just a cost-saver, and the stock is technically overextended with a poor risk-to-reward ratio.
 
-My recommendation is a firm Sell. 
+My recommendation is a firm Sell.
 
-My rationale is grounded in the reality of market mechanics and macroeconomic cycles. I am aligning with the bear analyst here because the argument regarding institutional ownership is a massive red flag. When 99.9 percent of a stock is owned by institutions, the smart money is fully allocated. If even a fraction of those funds decide to take profits due to recession fears, there will be no retail floor to absorb the selling pressure, leading to a steep drop. Furthermore, the bear's point on Doctor Copper is absolutely correct. While falling raw material costs look fantastic on a trailing earnings report, in a 9.1 percent inflation environment, a sudden collapse in copper prices screams demand destruction. When you combine this with a strong U.S. dollar making BELFB products significantly more expensive for European customers, we are looking at a classic peak-earnings trap. From a technical standpoint, buying near the top of the Bollinger band with limited upside, while facing a potential 15 percent drop to the 200-day moving average, is simply bad portfolio math. 
+My rationale is grounded in the reality of market mechanics and macroeconomic cycles. I am aligning with the bear analyst here because the argument regarding institutional ownership is a massive red flag. When 99.9 percent of a stock is owned by institutions, the smart money is fully allocated. If even a fraction of those funds decide to take profits due to recession fears, there will be no retail floor to absorb the selling pressure, leading to a steep drop. Furthermore, the bear's point on Doctor Copper is absolutely correct. While falling raw material costs look fantastic on a trailing earnings report, in a 9.1 percent inflation environment, a sudden collapse in copper prices screams demand destruction. When you combine this with a strong U.S. dollar making BELFB products significantly more expensive for European customers, we are looking at a classic peak-earnings trap. From a technical standpoint, buying near the top of the Bollinger band with limited upside, while facing a potential 15 percent drop to the 200-day moving average, is simply bad portfolio math.
 
 Here are our strategic actions moving forward. First, we will execute a sell order to liquidate any existing long positions in BELFB, locking in profits from this recent breakout before the institutional rotation begins. Second, we will keep BELFB on our watchlist but set price alerts significantly lower, specifically around the 200-day moving average near 14.32. If the stock reverts to the mean and the macroeconomic picture stabilizes, we can re-evaluate it for a safer entry. Third, we will reallocate the freed-up capital into non-cyclical defensive names or hold it in cash. With inflation running hot and recession risks rising, capital preservation is far more important than chasing a stretched mid-cap industrial stock.
 
@@ -255,7 +255,7 @@ And this talk about "Doctor Copper" signaling a recession? You’re missing the 
 
 Now, let’s talk technicals, because the "overextended" argument is flat-out wrong. You’re citing the Bollinger bands like they’re a brick wall. Have you looked at the RSI? It’s at 64.06. In what world is under 70 "exhausted"? That is the definition of a healthy, strong momentum play. The MACD is positive and expanding. We aren't "chasing" a peak; we are riding a confirmed bullish trend that has "room to run" to the 17.48 upper band and beyond toward that $20.00 yearly high. Waiting for a "mean reversion" to the 200-day SMA is a strategy for people who like to watch others get rich. By the time it hits your "value zone," the real move will be over.
 
-The "Peak Earnings" trap is a ghost story. You don’t sell a company that just tripled its profit and maintained a 2.80 current ratio. That’s not a cyclical peak; that’s an operational breakout. The conservative approach here isn't "protecting gains"; it’s leaving a massive amount of money on the table because you're afraid of the dark. 
+The "Peak Earnings" trap is a ghost story. You don’t sell a company that just tripled its profit and maintained a 2.80 current ratio. That’s not a cyclical peak; that’s an operational breakout. The conservative approach here isn't "protecting gains"; it’s leaving a massive amount of money on the table because you're afraid of the dark.
 
 The data is screaming BUY. The momentum is there, the margin expansion from lower copper is there, and the institutional floor is rock solid. While the neutral analysts wait for "clarity" and the conservatives run for the exits, we should be aggressive. Fortune favors the bold, not the people waiting for a 200-day moving average that the market has clearly outpaced. Let’s take the position and ride this momentum to the top.
 
@@ -267,7 +267,7 @@ You’re also being far too dismissive of the macroeconomic signals. You see cop
 
 Regarding the technicals, you mentioned the RSI is only at 64, but you’re ignoring the massive 17% gap between the current price and the 200-day moving average. Trading at the very top of the Bollinger bands is statistically the most dangerous time to enter or hold a position. We are seeing a classic "mean reversion" setup. Chasing momentum at these levels isn't "fortune favoring the bold"; it’s ignoring the laws of physics. Markets don't move in straight lines forever, and the further we drift from the long-term support of $14.32, the more violent the eventual correction will be.
 
-Finally, let’s talk about that "3.3x profit jump." Buying a cyclical industrial after a record-breaking quarter is exactly how you get caught in the "peak earnings trap." These results reflect the past, but our job is to protect the future. With major banks like JPMorgan already building massive loan-loss reserves and the Fed preparing for aggressive rate hikes, the environment that allowed Bel Fuse to thrive in the first half of the year is disappearing. 
+Finally, let’s talk about that "3.3x profit jump." Buying a cyclical industrial after a record-breaking quarter is exactly how you get caught in the "peak earnings trap." These results reflect the past, but our job is to protect the future. With major banks like JPMorgan already building massive loan-loss reserves and the Fed preparing for aggressive rate hikes, the environment that allowed Bel Fuse to thrive in the first half of the year is disappearing.
 
 The aggressive stance ignores the fact that we have already won. We have the gains. Staying in now isn't about "growth," it's about gambling that we can exit a split second before everyone else does. I won't bet the firm's assets on being faster than an institutional sell-off. The safest, most responsible path is to sell now, lock in these exceptional profits, and wait for the inevitable macro-driven pullback to find a safer entry point. Capital preservation must come before momentum chasing.
 
@@ -279,9 +279,9 @@ Aggressive Analyst, I have to challenge your dismissive attitude toward the U.S.
 
 However, Conservative Analyst, your "sell everything and run" approach is equally problematic. You’re looking at a company that just grew revenue by nearly 25% in a single quarter and has a Current Ratio of 2.80, and you’re treating it like a sinking ship. You can’t just ignore the fact that Bel Fuse is effectively managing its supply chain and actually seeing a massive recovery in operating cash flow—from negative $7.7 million to nearly $19 million. If we sell now, we’re essentially betting that the macro environment will instantly override these stellar micro-level fundamentals. That's a gamble on timing, which is just as risky as the momentum-chasing you’re criticizing.
 
-The middle ground is where the most reliable strategy lives. We shouldn’t be "buying the breakout" at the top of the Bollinger bands like the Aggressive Analyst suggests, because the risk-to-reward ratio at $16.89 is objectively poor when the immediate resistance is $17.48. But we also shouldn't be liquidating a position that is showing a confirmed bullish trend with an RSI that is strong but not yet overbought. 
+The middle ground is where the most reliable strategy lives. We shouldn’t be "buying the breakout" at the top of the Bollinger bands like the Aggressive Analyst suggests, because the risk-to-reward ratio at $16.89 is objectively poor when the immediate resistance is $17.48. But we also shouldn't be liquidating a position that is showing a confirmed bullish trend with an RSI that is strong but not yet overbought.
 
-The smartest move here isn't a "Sell" or a "Buy"—it’s a strategic "Hold" with a very specific defensive plan. We should be keeping our current position to see if that lower copper cost actually shows up as a margin expansion in the upcoming Q2 earnings guidance. That is the "missing link" that will prove which of you is right. If management confirms they are capturing those raw material savings, the stock could easily re-rate toward the $20 target. 
+The smartest move here isn't a "Sell" or a "Buy"—it’s a strategic "Hold" with a very specific defensive plan. We should be keeping our current position to see if that lower copper cost actually shows up as a margin expansion in the upcoming Q2 earnings guidance. That is the "missing link" that will prove which of you is right. If management confirms they are capturing those raw material savings, the stock could easily re-rate toward the $20 target.
 
 Instead of exiting now, why don't we implement a trailing stop-loss below the 50-day SMA at $15.89? This protects us from the "air-pocket decline" the Conservative Analyst is worried about while allowing us to capture the upside the Aggressive Analyst is so excited about. We should wait for the Q2 earnings report to provide the clarity we need on the battle between the "Strong Dollar" and "Lower Copper Costs." To act decisively before that data is released is just guesswork, whether you're calling it "boldness" or "preservation." Let's stay in the game, but stop pretending we know for sure which way the macro wind is going to blow tomorrow.
 
@@ -290,10 +290,10 @@ Instead of exiting now, why don't we implement a trailing stop-loss below the 50
 ### Portfolio Manager
 **1. Rating**: **Sell**
 
-**2. Executive Summary**: 
-*   **Action Plan**: Execute an immediate sell order to fully liquidate any existing long positions in `BELFB`. Take profits from the recent cyclical breakout before institutional sector rotation occurs. Reallocate the freed-up capital into non-cyclical defensive names or hold it in cash to prioritize capital preservation. 
-*   **Position Sizing**: Reduce `BELFB` exposure to 0%. 
-*   **Key Risk Levels**: Set downside price alerts significantly lower around the 200-day moving average near $14.32. Immediate overhead resistance sits at the upper Bollinger Band near $17.48, and the 50-day SMA at $15.89 serves as the first level of technical breakdown. 
+**2. Executive Summary**:
+*   **Action Plan**: Execute an immediate sell order to fully liquidate any existing long positions in `BELFB`. Take profits from the recent cyclical breakout before institutional sector rotation occurs. Reallocate the freed-up capital into non-cyclical defensive names or hold it in cash to prioritize capital preservation.
+*   **Position Sizing**: Reduce `BELFB` exposure to 0%.
+*   **Key Risk Levels**: Set downside price alerts significantly lower around the 200-day moving average near $14.32. Immediate overhead resistance sits at the upper Bollinger Band near $17.48, and the 50-day SMA at $15.89 serves as the first level of technical breakdown.
 *   **Time Horizon**: Immediate execution for the exit. We will monitor the stock on a long-term horizon to see if macroeconomic stabilization and a reversion to the $14.32 mean present a safer re-entry point in the future.
 
 **3. Investment Thesis**:
@@ -301,15 +301,15 @@ After a thorough review of the risk analysts' debate, it is clear that `BELFB` i
 
 My decision is driven by three foundational pillars:
 
-**Institutional Exhaustion vs. Coiled Spring:** 
-The aggressive analyst views the 99.9% institutional ownership as a "coiled spring" and a sign of smart money backing. In reality, as the conservative analyst rightly points out, this is a dangerous "crowded trade." When institutions own virtually the entire float, buyer exhaustion has set in. There is no retail floor left to absorb selling pressure. If even a fraction of these funds decide to take profits or rebalance due to rising recessionary fears, `BELFB` will experience a steep, uncontrolled "air-pocket" decline. 
+**Institutional Exhaustion vs. Coiled Spring:**
+The aggressive analyst views the 99.9% institutional ownership as a "coiled spring" and a sign of smart money backing. In reality, as the conservative analyst rightly points out, this is a dangerous "crowded trade." When institutions own virtually the entire float, buyer exhaustion has set in. There is no retail floor left to absorb selling pressure. If even a fraction of these funds decide to take profits or rebalance due to rising recessionary fears, `BELFB` will experience a steep, uncontrolled "air-pocket" decline.
 
-**Macroeconomic Divergence and "Doctor Copper":** 
+**Macroeconomic Divergence and "Doctor Copper":**
 The bull thesis leans heavily on falling copper prices as a direct margin injection. However, in an environment where CPI has hit 9.1%, the collapse of "Doctor Copper" is a glaring recessionary warning sign signaling industrial demand destruction. Furthermore, the aggressive analyst dismisses the U.S. Dollar reaching parity with the Euro by claiming `BELFB` products are "mission-critical." As the neutral analyst noted, even mission-critical budgets have limits. The strong dollar will severely damage `BELFB`'s international competitiveness and devalue overseas profits, directly attacking their bottom line over the coming quarters.
 
-**Technical Overextension and Past Reflections:** 
-Technically, buying or holding near the top of the Bollinger bands creates a deeply unfavorable risk-to-reward ratio. The stock has drifted dangerously far from its 200-day moving average, leaving a 15% to 17% gap down to the $14.32 support level. A mean reversion is highly probable. 
+**Technical Overextension and Past Reflections:**
+Technically, buying or holding near the top of the Bollinger bands creates a deeply unfavorable risk-to-reward ratio. The stock has drifted dangerously far from its 200-day moving average, leaving a 15% to 17% gap down to the $14.32 support level. A mean reversion is highly probable.
 
-Reflecting on my past mistakes, I have previously been lured into holding or buying cyclical industrial stocks right after a massive earnings beat, only to realize I was buying the absolute top of the economic cycle. In the past, I overweighted trailing profit explosions while ignoring macro red flags like currency headwinds and collapsing commodity prices. Historical earnings offer zero protection when the macro environment violently shifts. 
+Reflecting on my past mistakes, I have previously been lured into holding or buying cyclical industrial stocks right after a massive earnings beat, only to realize I was buying the absolute top of the economic cycle. In the past, I overweighted trailing profit explosions while ignoring macro red flags like currency headwinds and collapsing commodity prices. Historical earnings offer zero protection when the macro environment violently shifts.
 
 By choosing to sell `BELFB` today, we are actively applying this hard-learned lesson. We will not gamble the firm's assets on being faster than an institutional sell-off, nor will we wait for a lagging 50-day moving average stop-loss to trigger as suggested by the neutral analyst. We will prioritize forward-looking risks, lock in our exceptional profits, and step aside.

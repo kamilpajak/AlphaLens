@@ -1,7 +1,7 @@
 **Report: Market Analysis and Outlook for Lattice Semiconductor (LSCC)**
 
-**Date:** May 20, 2022  
-**Subject:** Macroeconomic Volatility and Semiconductor Industry Trends  
+**Date:** May 20, 2022
+**Subject:** Macroeconomic Volatility and Semiconductor Industry Trends
 **Instrument:** LSCC (Lattice Semiconductor)
 
 ### **Executive Summary**
@@ -10,7 +10,7 @@ The week ending May 20, 2022, has been characterized by significant market turbu
 ---
 
 ### **1. Macroeconomic Overview: The "Retail Rout"**
-The primary driver of market sentiment this week was the disastrous earnings reports from retail giants **Walmart (WMT)** and **Target (TGT)**. 
+The primary driver of market sentiment this week was the disastrous earnings reports from retail giants **Walmart (WMT)** and **Target (TGT)**.
 *   **Inflation Impact:** Target reported a 50% drop in quarterly profit, and Walmart saw its largest single-day stock drop since 1987. Both companies cited soaring fuel, freight, and labor costs as major margin killers.
 *   **Market Reaction:** This sparked fears that inflation is "out of control" and a recession may be looming. On May 18, the S&P 500 dropped 4% and the Nasdaq fell nearly 5%—the largest daily decline in nearly two years.
 *   **Investor Behavior:** Bank of America reports that investors are hoarding cash at the highest levels since September 2001, indicating a lack of confidence in near-term growth.
@@ -21,7 +21,7 @@ Recent data from S&P Global suggests a shift in the semiconductor landscape:
 *   **Valuation Reset:** The Philadelphia Semiconductor Index (SOX) peaked in January 2022 and has been in a downward trend as the market adjusts to a higher interest rate environment.
 
 ### **3. LSCC Specific Analysis**
-**Lattice Semiconductor (LSCC)**, a leader in low-power FPGAs, is currently caught in the crosshairs of a broad "growth stock" sell-off. 
+**Lattice Semiconductor (LSCC)**, a leader in low-power FPGAs, is currently caught in the crosshairs of a broad "growth stock" sell-off.
 *   **Exposure:** As a high-beta technology stock, LSCC is highly sensitive to the Nasdaq's movements. The recent flight from growth to value/defensive sectors (Utilities, Agriculture) is a significant headwind.
 *   **Fundamentals vs. Macro:** While LSCC maintains a strong niche in industrial, automotive, and 5G infrastructure, the macro environment—specifically rising discount rates (interest rates) used to value future earnings—is devaluing high-growth companies.
 

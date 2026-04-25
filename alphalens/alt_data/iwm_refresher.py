@@ -28,8 +28,8 @@ import io
 import logging
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import requests
 import yaml

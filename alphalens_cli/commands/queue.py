@@ -55,7 +55,9 @@ def process() -> None:
 
 @queue_app.command(name="scorer-stats")
 def scorer_stats(
-    since_days: int = typer.Option(30, help="Only count Layer 3 runs finished within the last N days"),
+    since_days: int = typer.Option(
+        30, help="Only count Layer 3 runs finished within the last N days"
+    ),
 ) -> None:
     """Layer 3 acceptance rate per scorer — used for paper-trade validation.
 

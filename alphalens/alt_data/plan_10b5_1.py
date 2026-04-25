@@ -21,18 +21,30 @@ _PLAN_REF_RE = re.compile(r"10\s*b\s*5\s*-\s*1", re.IGNORECASE)
 
 # Month name → index lookup; intentionally tolerant of common abbreviations.
 _MONTHS: dict[str, int] = {
-    "jan": 1, "january": 1,
-    "feb": 2, "february": 2,
-    "mar": 3, "march": 3,
-    "apr": 4, "april": 4,
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
     "may": 5,
-    "jun": 6, "june": 6,
-    "jul": 7, "july": 7,
-    "aug": 8, "august": 8,
-    "sep": 9, "sept": 9, "september": 9,
-    "oct": 10, "october": 10,
-    "nov": 11, "november": 11,
-    "dec": 12, "december": 12,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
 }
 
 _MONTH_PATTERN = "|".join(sorted(_MONTHS, key=len, reverse=True))
@@ -40,7 +52,10 @@ _MONTH_PATTERN = "|".join(sorted(_MONTHS, key=len, reverse=True))
 # Ordered by specificity. First successful match wins at each text position.
 _DATE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b"), "iso"),
-    (re.compile(rf"\b({_MONTH_PATTERN})\.?\s+(\d{{1,2}}),?\s+(\d{{4}})\b", re.IGNORECASE), "spelled"),
+    (
+        re.compile(rf"\b({_MONTH_PATTERN})\.?\s+(\d{{1,2}}),?\s+(\d{{4}})\b", re.IGNORECASE),
+        "spelled",
+    ),
     (re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b"), "us_numeric"),
 )
 

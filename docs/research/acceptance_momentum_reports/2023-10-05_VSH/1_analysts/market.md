@@ -6,7 +6,7 @@ As of the latest trading session on October 4, 2023, **VSH** closed at **$23.10*
 ---
 
 ### **1. Trend Analysis: Testing Long-Term Support**
-The medium-term trend for **VSH** is clearly bearish, as evidenced by the **50 SMA** currently sitting at **$24.60**, well above the current price. However, the stock is currently engaging with its **200 SMA ($22.86)**. 
+The medium-term trend for **VSH** is clearly bearish, as evidenced by the **50 SMA** currently sitting at **$24.60**, well above the current price. However, the stock is currently engaging with its **200 SMA ($22.86)**.
 *   **The 200 SMA** often serves as a "line in the sand" for long-term investors. The fact that **VSH** bounced from a low of $22.61 on October 4 to close at $23.10 suggests that buyers are actively defending this level.
 *   **VWMA ($23.19):** The price is currently just below the volume-weighted moving average. A move back above $23.20 would suggest that recent volume-weighted price action is turning positive.
 

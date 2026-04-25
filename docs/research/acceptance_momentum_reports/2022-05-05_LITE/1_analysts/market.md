@@ -1,6 +1,6 @@
 # Financial Market Analysis Report: LITE (Lumentum Holdings Inc.)
-**Date:** 2022-05-05  
-**Current Price (Est.):** ~$88.82  
+**Date:** 2022-05-05
+**Current Price (Est.):** ~$88.82
 
 ## 1. Market Context & Trend Analysis
 LITE (Lumentum Holdings Inc.) has recently emerged from a significant period of downward pressure that saw the stock decline from its January highs of ~$107 to a recent low near $81 in late April. However, the price action on **May 4, 2022**, marked a potential structural shift. A massive volume spike (3.4M shares vs. the typical 700k-1M) propelled the stock nearly 9%, signaling strong institutional interest and a breakout from short-term consolidation.
@@ -44,5 +44,5 @@ For a more conservative entry, monitor for a "retest" of the support zone betwee
 | **Bollinger Upper Band** | $91.63 | **Resistance** | Acts as a volatility-based ceiling for the current move. |
 | **ATR (14)** | 3.38 | **High Volatility** | Suggests a wide daily trading range; requires wider stops. |
 
-**FINAL TRANSACTION PROPOSAL: HOLD**  
+**FINAL TRANSACTION PROPOSAL: HOLD**
 While the recent momentum is extremely positive, LITE is currently trading just below a massive cluster of resistance (SMAs and Bollinger Upper Band). The risk/reward for a new entry at $89 is sub-optimal. **HOLD** existing positions and look to **BUY** a confirmed breakout above $91.70 or a successful retest of the $85.50 support level.

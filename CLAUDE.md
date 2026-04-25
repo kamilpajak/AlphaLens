@@ -4,9 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**AlphaLens** is a stock analysis pipeline. Own code lives in `alphalens/`. Upstream **TradingAgents** (multi-agent LLM trading framework, v0.2.3) is vendored at `TradingAgents/` as a `git subtree --squash` from `TauricResearch/TradingAgents` and powers Layer 3 deep analysis. Screener pipelines live under `alphalens/screeners/` (`themed`, `prescreener`, `lean`). AlphaLens additions: Layer 1 SEC EDGAR watchdog (live), Layer 2b themed screener (**validated alpha, live** — curated YAML universe + pluggable scorer: `momentum` default, `early-stage` alternative), Layer 2a S&P 500 prescreener (unvalidated, no CLI), Layer 2c Lean batch screener (**archived after failed 5-year validation** — infrastructure reusable, not deployed).
+**AlphaLens** — research/learning infrastructure dla retail quant active alpha experimentation. **Status 2026-04-25:** project pivoted z "active alpha generation" na "research lab tooling" po **5/5 paradigm failures** (Layer 2b small-cap momentum, 2d insider Form 4, 2e tactical sector rotation, 2f 8-K event-driven screen, 2g LLM-researcher GuruAgent). User explicitly rejected pivot do passive — kod pozostaje as research framework dla future ideas, periodic literature review, kill-fast methodology. Patrz `docs/research/5_paradigm_failures_postmortem.md` dla pełnego rozliczenia.
+
+Own code lives in `alphalens/`. Upstream **TradingAgents** (multi-agent LLM trading framework, v0.2.3) is vendored at `TradingAgents/` as a `git subtree --squash` from `TauricResearch/TradingAgents`. Screener pipelines under `alphalens/screeners/` (themed/prescreener/lean — wszystkie CLOSED post-validation). New research modules: `alphalens/rotation/` (overlay strategies + sanity_checks framework), `alphalens/macro/` (FRED, signals, scorer), `alphalens/guru/` (LLM-researcher pilot), `alphalens/events/` (8-K screener), `alphalens/backtest/` (factor analysis, multiple-testing, bootstrap CI).
+
+**Layer 1 SEC EDGAR watchdog (live)** — pozostaje active w launchd, daily digest, near-zero maintenance. Wszystkie pozostałe layers CLOSED ale infrastructure preserved for re-use.
 
 Project root belongs to AlphaLens. Upstream sits in its own subfolder — edit patches there, sync with `git subtree pull`. The top-level CLI package is named `alphalens_cli/` (not `cli/`) to avoid namespace collision with TradingAgents' own `cli/` package.
+
+## Research lab posture (2026-04-25 →)
+
+Co projekt teraz REPRESENTuje:
+- **Reusable research framework** — backtest engines, factor attribution, sanity checks, pre-commit discipline (`alphalens/rotation/precommit.py`)
+- **Anti-pattern catalog** dla retail active alpha (`docs/research/5_paradigm_failures_postmortem.md`)
+- **Production-grade data clients** — Polygon (fundamentals + market data), FRED, SEC EDGAR
+- **LLM scoring infrastructure** — TradingAgents multi-agent + GuruScorer single-prompt
+- **Layer 1 watchdog** — live SEC EDGAR event detection (read-only, no capital deploy)
+
+Co projekt NIE robi:
+- Deploy capital based na current strategies
+- Iterate na failed paradigms (2b/2d/2e/2f/2g all KILLED)
+- Pursue passive+tax pivot (off-table per user, see `feedback_no_passive_pivot.md`)
+
+Trigger conditions for re-activation: new academic paper z proper OOS validation, market regime change, broker switch acceptable, lub data subscription budget grows. Patrz `project_research_infrastructure_pivot.md` w memory.
 
 ## Commands
 

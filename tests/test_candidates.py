@@ -1,6 +1,6 @@
 import dataclasses
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 class TestCandidate(unittest.TestCase):
@@ -10,7 +10,7 @@ class TestCandidate(unittest.TestCase):
         c = Candidate(
             ticker="AAPL",
             source="momentum",
-            detected_at=datetime(2026, 4, 17, tzinfo=timezone.utc),
+            detected_at=datetime(2026, 4, 17, tzinfo=UTC),
             priority=10,
             payload={"momentum_score": 0.5},
             dedup_key="k1",
@@ -60,10 +60,18 @@ class TestCandidate(unittest.TestCase):
         from alphalens.candidates import Candidate
 
         c1 = Candidate.from_screener(
-            ticker="AAPL", source="watchdog_sec", priority=0, payload={}, discriminator="ACC-1"
+            ticker="AAPL",
+            source="watchdog_sec",
+            priority=0,
+            payload={},
+            discriminator="ACC-1",
         )
         c2 = Candidate.from_screener(
-            ticker="AAPL", source="watchdog_sec", priority=0, payload={}, discriminator="ACC-2"
+            ticker="AAPL",
+            source="watchdog_sec",
+            priority=0,
+            payload={},
+            discriminator="ACC-2",
         )
         self.assertNotEqual(c1.dedup_key, c2.dedup_key)
 
@@ -75,7 +83,7 @@ class TestCandidate(unittest.TestCase):
         )
         self.assertIsNotNone(c.detected_at.tzinfo)
         # within a few seconds of now
-        delta = datetime.now(timezone.utc) - c.detected_at
+        delta = datetime.now(UTC) - c.detected_at
         self.assertLess(delta.total_seconds(), 5)
 
 
@@ -91,7 +99,7 @@ class TestAnalysisResult(unittest.TestCase):
             duration_sec=12.5,
             cost_usd=None,
             model_used="gemini-3-pro-preview",
-            completed_at=datetime(2026, 4, 17, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 4, 17, tzinfo=UTC),
             final_state={"any": "state"},
         )
         self.assertEqual(r.rating, "BUY")

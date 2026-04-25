@@ -18,7 +18,7 @@ As of July 2022, MARA is navigating a challenging "crypto winter." The company's
 ### **3. Balance Sheet & Liquidity**
 MARA's balance sheet is a mix of high-value mining hardware and volatile digital assets.
 
-*   **Cash Position:** As of June 30, 2022, the company held **$86.46 million** in cash and cash equivalents, down from $138.95 million in March 2022. 
+*   **Cash Position:** As of June 30, 2022, the company held **$86.46 million** in cash and cash equivalents, down from $138.95 million in March 2022.
 *   **Digital Assets:** In addition to cash, the company holds significant short-term investments (Bitcoin holdings), valued at approximately **$136.84 million** at the end of Q2 2022.
 *   **Debt Profile:** The company has a substantial long-term debt of **$730.35 million**, primarily stemming from convertible notes issued during the crypto peak in 2021. This debt carries risk if the company cannot generate sufficient cash flow to cover interest or if the stock price remains below conversion levels.
 

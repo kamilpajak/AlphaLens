@@ -22,12 +22,18 @@ class CompositeRanker:
         w_tech = self.config["weight_technical"]
         w_vol = self.config["weight_volume"]
 
-        merged = technical_scores[["ticker", "technical_score"]].merge(
-            fundamental_scores[["ticker", "fundamental_score"]],
-            on="ticker", how="left",
-        ).merge(
-            volume_scores[["ticker", "volume_score"]],
-            on="ticker", how="left",
+        merged = (
+            technical_scores[["ticker", "technical_score"]]
+            .merge(
+                fundamental_scores[["ticker", "fundamental_score"]],
+                on="ticker",
+                how="left",
+            )
+            .merge(
+                volume_scores[["ticker", "volume_score"]],
+                on="ticker",
+                how="left",
+            )
         )
 
         merged["fundamental_score"] = merged["fundamental_score"].fillna(0.5)

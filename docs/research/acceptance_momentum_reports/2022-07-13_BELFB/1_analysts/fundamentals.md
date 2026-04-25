@@ -11,7 +11,7 @@ Bel Fuse Inc. (BELFB) is a global manufacturer of electronic components that pow
 #### **Financial Performance Analysis**
 
 **1. Revenue and Profitability Trends**
-*   **Recent Momentum:** BELFB has shown strong growth entering 2022. For the fiscal year 2021, the company reported revenue of **$543.5 million**, a nearly 17% increase over 2020. 
+*   **Recent Momentum:** BELFB has shown strong growth entering 2022. For the fiscal year 2021, the company reported revenue of **$543.5 million**, a nearly 17% increase over 2020.
 *   **Quarterly Acceleration:** The first quarter of 2022 (ending March 31) saw revenue of **$136.7 million**. Crucially, prospective data for Q2 2022 (ending June 30) indicates a massive spike to **$170.6 million**, representing a 25% sequential increase.
 *   **Net Income Surge:** While 2021 net income was $24.8 million, the Q2 2022 performance is a standout, with net income reaching **$17.0 million** in a single quarter. This explosive bottom-line growth suggests significant margin expansion or a shift toward higher-value product mixes.
 
@@ -29,7 +29,7 @@ Bel Fuse Inc. (BELFB) is a global manufacturer of electronic components that pow
 *   **Capital Structure:** Total debt (short and long-term) is approximately **$120 million**. With a shareholders' equity of **$215.4 million**, the debt-to-equity ratio is manageable, especially given the rising EBITDA ($133.5 million TTM).
 
 **2. Cash Flow Dynamics**
-*   **Working Capital Pressure:** BELFB experienced negative operating cash flow in Q1 2022 (-$7.7 million) due to heavy investment in inventory and receivables. 
+*   **Working Capital Pressure:** BELFB experienced negative operating cash flow in Q1 2022 (-$7.7 million) due to heavy investment in inventory and receivables.
 *   **Recovery:** However, as of Q2 2022, operating cash flow turned significantly positive (**$18.9 million**), signaling that the previous quarter's investments are successfully converting into cash.
 
 ---

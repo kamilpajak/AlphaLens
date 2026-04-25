@@ -67,7 +67,7 @@ class AnalysisWorker:
                 model_used=result.model_used,
             )
             self._notify(_format_success(candidate, result.rating, job))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error(
                 "Worker runner failed for %s (source=%s): %s",
                 candidate.ticker,
@@ -92,7 +92,7 @@ class AnalysisWorker:
     def _notify(self, msg: str) -> None:
         try:
             self.notifier.send_message(msg)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("Notifier send failed: %s", exc)
 
 

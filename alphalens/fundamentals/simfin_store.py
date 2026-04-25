@@ -21,7 +21,8 @@ import logging
 import os
 from datetime import date
 from pathlib import Path
-from typing import Mapping
+
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -67,14 +68,14 @@ class SimFinFundamentalsStore:
                 "key to .env, or pass api_key= explicitly."
             )
         self.with_prices = with_prices
-        self._balance = None      # pd.DataFrame indexed by (Ticker, Report Date)
+        self._balance = None  # pd.DataFrame indexed by (Ticker, Report Date)
         self._cashflow = None
         self._income = None
         # Pre-split per-ticker price frames (key = upper ticker). Storing the
         # full 6.2M-row multi-index frame forces an O(n) slice at every lookup
         # (1226 days × 113 tickers = 138k slices → hours). Pre-splitting once
         # at preload drops this to O(1) dict lookup + per-series boolean mask.
-        self._prices_by_ticker: dict[str, "pd.DataFrame"] | None = None
+        self._prices_by_ticker: dict[str, pd.DataFrame] | None = None
         self._preload_tickers: set[str] = set()
 
     def preload(self, tickers: list[str]) -> None:
@@ -118,12 +119,14 @@ class SimFinFundamentalsStore:
 
         self._preload_tickers = {t.upper() for t in tickers}
         covered = sum(
-            1 for t in self._preload_tickers
+            1
+            for t in self._preload_tickers
             if self._balance is not None and t in self._balance.index.get_level_values("Ticker")
         )
         logger.info(
             "SimFinFundamentalsStore preload: %d/%d requested tickers have balance sheet data",
-            covered, len(self._preload_tickers),
+            covered,
+            len(self._preload_tickers),
         )
         # Mirror the AV store's failure-threshold abort — if <50% coverage the
         # backtest result would be dominated by tickers without gate data.

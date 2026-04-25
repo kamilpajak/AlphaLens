@@ -16,9 +16,9 @@ import errno
 import fcntl
 import logging
 import os
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 logger = logging.getLogger(__name__)
 

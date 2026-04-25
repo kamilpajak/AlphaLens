@@ -4,12 +4,12 @@ Bull Analyst: Look, I hear the bears loud and clear—they love to talk about "m
 Let’s break down why the "Bull Case" isn't just optimistic—it's the only logical conclusion based on the evidence.
 
 ### 1. The "Growth" is No Longer Theoretical—It’s Exploding
-My bear colleagues want to focus on high interest rates, but have they looked at the **Q2 2023 numbers**? ACMR just posted **$144.6 million in revenue**, nearly doubling its performance from the previous quarter. That isn't just "steady growth"; that is a vertical takeoff. 
+My bear colleagues want to focus on high interest rates, but have they looked at the **Q2 2023 numbers**? ACMR just posted **$144.6 million in revenue**, nearly doubling its performance from the previous quarter. That isn't just "steady growth"; that is a vertical takeoff.
 
 While the bears worry about a "5% world" affecting valuations, ACMR is busy delivering a **53% Revenue CAGR**. When a company grows its top line that fast while maintaining a **44% gross margin**, the "discounted cash flow" argument starts to favor the bulls. We aren't betting on a "maybe" here; we are betting on a proven execution machine.
 
 ### 2. The Competitive Moat: SAPS and TEBO
-Let’s talk tech. In the semiconductor world, "cleaning" sounds mundane until you realize that at the 5nm and 3nm nodes, a single microscopic particle is a billion-dollar disaster. ACMR’s **SAPS (Space Alternated Phase Shift)** and **TEBO (Timely Energized Bubble Oscillation)** technologies are unique. They allow for cleaning sophisticated 3D structures without damaging them. 
+Let’s talk tech. In the semiconductor world, "cleaning" sounds mundane until you realize that at the 5nm and 3nm nodes, a single microscopic particle is a billion-dollar disaster. ACMR’s **SAPS (Space Alternated Phase Shift)** and **TEBO (Timely Energized Bubble Oscillation)** technologies are unique. They allow for cleaning sophisticated 3D structures without damaging them.
 
 The bear argument often cites domestic competition like SMEE. But SMEE is focused on lithography; ACMR owns the **wet cleaning niche**. As China pushes for 70% semiconductor self-sufficiency, ACMR isn't just a participant—they are the *infrastructure*. You can't build a domestic chip industry without the world-class cleaning tools ACMR provides.
 
@@ -22,8 +22,8 @@ The bear argument often cites domestic competition like SMEE. But SMEE is focuse
 In the past, I’ve seen analysts get burned by ignoring "high-beta" stocks during rate hikes. But the lesson learned is that **earnings growth is the ultimate hedge.** A company with a 30.4 forward P/E and nearly 100% QoQ revenue growth is actually *undervalued* compared to its peers. We shouldn't repeat the mistake of being "macro-right and micro-wrong." The micro-fundamentals here are screaming "Buy."
 
 ### The Bottom Line
-We have a consensus **target price of $70.50** from analysts who have actually done the math. Even with the stock currently showing strength around $14, the upside is astronomical. 
+We have a consensus **target price of $70.50** from analysts who have actually done the math. Even with the stock currently showing strength around $14, the upside is astronomical.
 
-To my bear counterpart: You’re betting on a headline about interest rates. I’m betting on the fact that the world—and especially China—cannot build the future of AI and high-performance computing without ACMR’s proprietary tech. 
+To my bear counterpart: You’re betting on a headline about interest rates. I’m betting on the fact that the world—and especially China—cannot build the future of AI and high-performance computing without ACMR’s proprietary tech.
 
 **The trend is bullish, the tech is proprietary, and the growth is undeniable. It’s time to BUY the pullbacks.**

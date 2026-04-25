@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def _event(form_type, ticker="AAPL", raw_data=None, accession="ACC-1"):
@@ -9,7 +9,7 @@ def _event(form_type, ticker="AAPL", raw_data=None, accession="ACC-1"):
         ticker=ticker,
         form_type=form_type,
         accession_number=accession,
-        filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc),
+        filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=UTC),
         url=f"https://sec.gov/{accession}",
         raw_data=raw_data or {},
     )

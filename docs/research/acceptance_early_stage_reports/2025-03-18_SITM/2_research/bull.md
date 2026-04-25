@@ -9,12 +9,12 @@ The bears love to talk about "concentration risk" with Apple, but let’s look a
 We just saw **61.1% YoY revenue growth**. You don't see that kind of acceleration in a "struggling" company. We are moving from a $200M revenue run rate toward $326M+ because SiTime is the only player that can offer the precision needed for AI data centers and 5G infrastructure in a fraction of the footprint.
 
 ### 2. Addressing the "Profitability" Myth
-The bear argument usually hinges on GAAP net losses. But let's get real: SiTime just hit a massive milestone. In 2025, **Operating Cash Flow (OCF) skyrocketed to $87.15M**, up from $23M the year before. 
+The bear argument usually hinges on GAAP net losses. But let's get real: SiTime just hit a massive milestone. In 2025, **Operating Cash Flow (OCF) skyrocketed to $87.15M**, up from $23M the year before.
 
 This is the "de-risking" event we’ve been waiting for. The company is now generating significant cash before stock-based compensation. Combine that with a **$808 million cash fortress** and virtually zero debt, and you have a company that can outspend its competitors in R&D and weather any macro storm—including the tariff fears that have the rest of the market on edge.
 
 ### 3. Technicals: The "Line in the Sand"
-I’ve heard the bears say the 200-day SMA ($173.56) is a ceiling. I see it as a springboard. We are currently at **$170.46**, testing that level. Look at the short-term momentum: we are already trading above the 10-day EMA and the VWMA ($165.43). The selling pressure that took us down in February has neutralized, and the MACD is showing a clear **bullish convergence**. 
+I’ve heard the bears say the 200-day SMA ($173.56) is a ceiling. I see it as a springboard. We are currently at **$170.46**, testing that level. Look at the short-term momentum: we are already trading above the 10-day EMA and the VWMA ($165.43). The selling pressure that took us down in February has neutralized, and the MACD is showing a clear **bullish convergence**.
 
 While the bears are waiting for "confirmation," the smart money (which owns 91.8% of this stock, by the way) is looking at an RSI of 51 and realizing the "oversold" panic is over. We are in a classic "coiling" phase before the next leg up.
 
@@ -25,9 +25,9 @@ While the bears are waiting for "confirmation," the smart money (which owns 91.8
 *   **My Response:** SiTime’s $808M in liquidity is their insurance policy. While other small-caps will be begging for credit, SITM can use its "fortress balance sheet" to navigate supply chain shifts or even move into M&A to consolidate the market.
 
 ### 5. Lessons Learned & Reflection
-In the past, I’ve seen analysts (myself included) get caught up in the "valuation trap" and miss the big winners like NVIDIA or ARM because they looked too expensive on paper. I’ve learned that in the semiconductor space, **design wins and cash flow inflection are the only metrics that truly matter.** 
+In the past, I’ve seen analysts (myself included) get caught up in the "valuation trap" and miss the big winners like NVIDIA or ARM because they looked too expensive on paper. I’ve learned that in the semiconductor space, **design wins and cash flow inflection are the only metrics that truly matter.**
 
-Wait for the "perfect" valuation, and you’ll be buying SITM at $300 once it reclaims its 52-week highs. 
+Wait for the "perfect" valuation, and you’ll be buying SITM at $300 once it reclaims its 52-week highs.
 
 ### Final Verdict: The Case for BUY
 We have a 60%+ revenue grower, a strategic lock on the iPhone 16e, a turning point in operating cash flow, and a stock that is currently testing a major long-term support level. The macro "flight to quality" eventually finds its way back to high-growth tech once the relief rally kicks in.

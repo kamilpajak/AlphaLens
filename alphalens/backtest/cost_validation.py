@@ -59,10 +59,11 @@ SSRN 3229719 / AQR working paper.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Literal, Mapping, Sequence
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -70,9 +71,8 @@ import pandas as pd
 from alphalens.backtest.cost_model import CostModel
 from alphalens.backtest.engine import BacktestReport
 from alphalens.backtest.history_store import HistoryStore
-from alphalens.backtest.metrics import sharpe, turnover_pct
+from alphalens.backtest.metrics import sharpe
 from alphalens.backtest.weighting import compute_position_weights
-
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -81,7 +81,7 @@ from alphalens.backtest.weighting import compute_position_weights
 @dataclass(frozen=True)
 class TierDefinition:
     name: str
-    adv_percentile_low: float       # 0.0 - 1.0
+    adv_percentile_low: float  # 0.0 - 1.0
     adv_percentile_high: float
     bps_annual: float
 
@@ -89,9 +89,9 @@ class TierDefinition:
 # AQR-anchored defaults per Frazzini-Israel-Moskowitz (2018). Micro tier is
 # an extrapolation past the paper's coverage; flagged in the report.
 DEFAULT_TIERS: tuple[TierDefinition, ...] = (
-    TierDefinition("mega",  0.80, 1.00, 3.0),
+    TierDefinition("mega", 0.80, 1.00, 3.0),
     TierDefinition("large", 0.60, 0.80, 10.0),
-    TierDefinition("mid",   0.40, 0.60, 25.0),
+    TierDefinition("mid", 0.40, 0.60, 25.0),
     TierDefinition("small", 0.20, 0.40, 50.0),
     TierDefinition("micro", 0.00, 0.20, 100.0),
 )
@@ -105,7 +105,7 @@ class PickParticipation:
     ticker: str
     rank: int
     tier: str
-    participation: float            # fraction of dollar ADV
+    participation: float  # fraction of dollar ADV
     dollar_position: float
     dollar_adv: float
 
@@ -129,7 +129,7 @@ class TieredCostComparison:
     sharpe_gross: float
     sharpe_flat_100bps: float
     sharpe_tiered: float
-    annual_drag_tiered_bps: float    # effective tiered drag (gross→tiered Sharpe delta)
+    annual_drag_tiered_bps: float  # effective tiered drag (gross→tiered Sharpe delta)
     tier_counts_on_last_date: dict[str, int]
 
 
@@ -352,9 +352,7 @@ def run_scale_path(
 
     per_tier_max: dict[str, float] = {}
     per_tier_median: dict[str, float] = {}
-    df = pd.DataFrame(
-        {"tier": [p.tier for p in all_picks], "p": participations}
-    )
+    df = pd.DataFrame({"tier": [p.tier for p in all_picks], "p": participations})
     for tier, group in df.groupby("tier"):
         per_tier_max[str(tier)] = float(group["p"].max())
         per_tier_median[str(tier)] = float(group["p"].median())
@@ -437,14 +435,17 @@ def compare_cost_scenarios(
 
     gross_sharpe = sharpe(returns.tolist()) if len(returns) else 0.0
 
-    flat_net = CostModel(annual_drag_bps=_FLAT_100BPS).apply(
-        returns, daily_turnover=None
-    )
+    flat_net = CostModel(annual_drag_bps=_FLAT_100BPS).apply(returns, daily_turnover=None)
     flat_sharpe = sharpe(flat_net.tolist()) if len(flat_net) else 0.0
 
     tiered_net = apply_tiered_cost(
-        returns, daily_top_n, daily_dates, per_date_tiers, bps_per_tier,
-        daily_turnover=None, weighting=weighting,
+        returns,
+        daily_top_n,
+        daily_dates,
+        per_date_tiers,
+        bps_per_tier,
+        daily_turnover=None,
+        weighting=weighting,
     )
     tiered_sharpe = sharpe(tiered_net.tolist()) if len(tiered_net) else 0.0
 

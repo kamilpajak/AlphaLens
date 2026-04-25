@@ -2,11 +2,11 @@ Based on the recent news and macroeconomic data leading up to October 20, 2023, 
 
 ### **Macroeconomic Environment and Global Trends**
 
-The week of October 13–20, 2023, was defined by a "higher-for-longer" interest rate narrative that significantly pressured global markets. 
+The week of October 13–20, 2023, was defined by a "higher-for-longer" interest rate narrative that significantly pressured global markets.
 
 1.  **Bond Yield Volatility:** U.S. Treasury bonds experienced unusual volatility, with long-term yields hitting multi-year highs (the 10-year Treasury yield approached 5%). This volatility, described as exceeding that of the S&P 500, has been driven by increased government debt issuance and the Federal Reserve's persistent hawkish stance.
 2.  **Fiscal Concerns:** The U.S. federal budget deficit is expanding more than expected, forcing the Treasury to issue more longer-term bonds. This oversupply, combined with cooling demand, has exacerbated the rise in yields, creating a challenging environment for growth-oriented sectors.
-3.  **Sector-Specific Impacts:** 
+3.  **Sector-Specific Impacts:**
     *   **Automotive/Tech:** High rates are beginning to bite into consumer affordability, as noted by Elon Musk during Tesla’s Q3 earnings call, where he adopted a cautious tone regarding expansion and production.
     *   **Banking:** Large institutions like Bank of America reported significant unrealized losses on securities ($131.6 billion) due to the rapid rise in interest rates, highlighting systemic stress in the financial sector despite strong current earnings.
 4.  **Geopolitical and Cybersecurity Risks:** Ongoing tensions in the Middle East were reflected in cybersecurity reports, such as the discovery of malicious applications targeting Israeli citizens, emphasizing a heightened risk environment.

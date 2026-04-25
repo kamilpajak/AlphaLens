@@ -1,7 +1,7 @@
 The analysis for **PTGX** (Protagonist Therapeutics) as of March 18, 2025, reveals a stock undergoing a massive structural shift characterized by a parabolic breakout followed by a high-level consolidation.
 
 ### **Trend Analysis**
-**PTGX** experienced a dramatic price surge starting on March 10, 2025, gapping up from the $38 range to a peak of nearly $60.60. This move has completely detached the price from its long-term averages. 
+**PTGX** experienced a dramatic price surge starting on March 10, 2025, gapping up from the $38 range to a peak of nearly $60.60. This move has completely detached the price from its long-term averages.
 - **Moving Averages:** The **50 SMA ($40.31)** is currently trending up and approaching the **200 SMA ($40.54)**. While a "Golden Cross" (50 SMA crossing above 200 SMA) is imminent, the current price ($53.01) is significantly extended above both. This indicates a very strong bullish regime but also a high degree of "mean reversion" risk if the catalyst fades.
 - **VWMA:** The **Volume-Weighted Moving Average ($48.75)** is rising sharply. The fact that the price remains above the VWMA suggests that the average buyer during this high-volume surge is still in profit, which typically acts as a psychological support level.
 

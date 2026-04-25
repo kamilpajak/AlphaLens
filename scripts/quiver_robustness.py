@@ -8,6 +8,7 @@ handful of big outliers, not a distributed cross-sectional effect.
 
 Reads cached trades from previous validate run (no new API calls).
 """
+
 from __future__ import annotations
 
 import sys
@@ -19,17 +20,20 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from alphalens.backtest.factor_analysis import format_attribution_table, run_regression  # noqa: E402
-from alphalens.backtest.factors import load_carhart_daily  # noqa: E402
-from alphalens.backtest.history_store import HistoryStore  # noqa: E402
-from alphalens.screeners.lean.config import DATA_DIR  # noqa: E402
-from alphalens.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
-from alphalens.screeners.themed.config import UNIVERSE_PATH  # noqa: E402
-from alphalens.screeners.themed.universe import flatten_universe  # noqa: E402
-from alphalens.quiver_screener.features import build_congress_feature_panel  # noqa: E402
+from alphalens.backtest.factor_analysis import (
+    format_attribution_table,
+    run_regression,
+)
+from alphalens.backtest.factors import load_carhart_daily
+from alphalens.backtest.history_store import HistoryStore
+from alphalens.quiver_screener.features import build_congress_feature_panel
+from alphalens.screeners.lean.config import DATA_DIR
+from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+from alphalens.screeners.themed.config import UNIVERSE_PATH
+from alphalens.screeners.themed.universe import flatten_universe
 
 # Replicate exactly what quiver_validate.py does, minus the SDK fetch (use cache).
-from scripts.quiver_validate import build_long_short_factor  # noqa: E402
+from scripts.quiver_validate import build_long_short_factor
 
 CACHE_DIR = Path.home() / ".alphalens" / "quiver" / "congress"
 START = date(2021, 4, 19)
@@ -56,7 +60,8 @@ def regress(trades: pd.DataFrame, tickers, dates, ret_panel, carhart, label: str
     density = (panel != 0).mean().mean()
     factor = build_long_short_factor(panel, ret_panel, n_quintiles=N_QUINTILES)
     res = run_regression(
-        factor, carhart,
+        factor,
+        carhart,
         factor_columns=["Mkt-RF", "SMB", "HML", "Mom"],
         spec_name=label,
         subtract_rf=False,
@@ -87,26 +92,36 @@ def main() -> None:
     carhart = load_carhart_daily(start=START, end=END)
 
     print("\n=== BASELINE (all trades) ===")
-    res_base, d_base, n_base = regress(all_trades, tickers, dates, ret_panel, carhart, "baseline (all)")
+    res_base, d_base, n_base = regress(
+        all_trades, tickers, dates, ret_panel, carhart, "baseline (all)"
+    )
     print(format_attribution_table([res_base]))
     print(f"  signal density {d_base * 100:.1f}%, {n_base} valid days")
 
     # Robustness: drop top-10, top-25, top-50 trades by |amount_mid|
     for top_n in [10, 25, 50]:
-        sorted_trades = all_trades.reindex(all_trades["amount_mid"].abs().sort_values(ascending=False).index)
+        sorted_trades = all_trades.reindex(
+            all_trades["amount_mid"].abs().sort_values(ascending=False).index
+        )
         dropped = sorted_trades.head(top_n)
         kept = sorted_trades.iloc[top_n:].reset_index(drop=True)
         print(f"\n=== DROP TOP {top_n} TRADES BY $-MAGNITUDE ===")
-        print(f"  dropped $-range: ${dropped['amount_mid'].min():,.0f} … ${dropped['amount_mid'].max():,.0f}")
+        print(
+            f"  dropped $-range: ${dropped['amount_mid'].min():,.0f} … ${dropped['amount_mid'].max():,.0f}"
+        )
         print(f"  kept {len(kept)} trades (removed {top_n})")
-        res, density, n_valid = regress(kept, tickers, dates, ret_panel, carhart, f"drop-top-{top_n}")
+        res, density, n_valid = regress(
+            kept, tickers, dates, ret_panel, carhart, f"drop-top-{top_n}"
+        )
         print(format_attribution_table([res]))
         print(f"  density {density * 100:.1f}%, {n_valid} valid days")
         delta_t = res.alpha_tstat - res_base.alpha_tstat
         print(f"  Δ alpha_tstat vs baseline: {delta_t:+.2f}")
 
     print("\n=== INTERPRETATION GUIDE ===")
-    print("  If |t| falls toward 0 as we drop trades → signal is driven by a few big outliers (artifact risk).")
+    print(
+        "  If |t| falls toward 0 as we drop trades → signal is driven by a few big outliers (artifact risk)."
+    )
     print("  If |t| stays stable or grows → signal is distributed, real but universe-specific.")
 
 

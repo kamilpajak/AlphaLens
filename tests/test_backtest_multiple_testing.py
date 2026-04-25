@@ -6,17 +6,13 @@ class TestBonferroniCriticalTstat(unittest.TestCase):
         """n=1 with α=0.05 two-tailed → critical z ≈ 1.96."""
         from alphalens.backtest.multiple_testing import bonferroni_critical_tstat
 
-        self.assertAlmostEqual(
-            bonferroni_critical_tstat(n_tests=1, alpha=0.05), 1.96, places=2
-        )
+        self.assertAlmostEqual(bonferroni_critical_tstat(n_tests=1, alpha=0.05), 1.96, places=2)
 
     def test_n2_matches_design_doc_value(self):
         """n=2 α=0.05 → α_adj=0.025 → critical z ≈ 2.24 per design doc §1."""
         from alphalens.backtest.multiple_testing import bonferroni_critical_tstat
 
-        self.assertAlmostEqual(
-            bonferroni_critical_tstat(n_tests=2, alpha=0.05), 2.24, places=2
-        )
+        self.assertAlmostEqual(bonferroni_critical_tstat(n_tests=2, alpha=0.05), 2.24, places=2)
 
     def test_threshold_grows_with_n(self):
         """Bonferroni conservativeness: more tests → higher bar."""
@@ -49,18 +45,14 @@ class TestApplyBonferroni(unittest.TestCase):
         from alphalens.backtest.multiple_testing import apply_bonferroni
 
         # n=2 threshold ≈ 2.24; t=3.0 clearly above
-        result = apply_bonferroni(
-            alpha_tstats={"H1": 3.0, "H2": 2.5}, n_tests=2, alpha=0.05
-        )
+        result = apply_bonferroni(alpha_tstats={"H1": 3.0, "H2": 2.5}, n_tests=2, alpha=0.05)
 
         self.assertEqual(result, {"H1": True, "H2": True})
 
     def test_fail_when_below_threshold(self):
         from alphalens.backtest.multiple_testing import apply_bonferroni
 
-        result = apply_bonferroni(
-            alpha_tstats={"H1": 1.8, "H2": 2.0}, n_tests=2, alpha=0.05
-        )
+        result = apply_bonferroni(alpha_tstats={"H1": 1.8, "H2": 2.0}, n_tests=2, alpha=0.05)
 
         self.assertEqual(result, {"H1": False, "H2": False})
 
@@ -68,9 +60,7 @@ class TestApplyBonferroni(unittest.TestCase):
         """Two-tailed test: -3.0 rejects null just as +3.0 does."""
         from alphalens.backtest.multiple_testing import apply_bonferroni
 
-        result = apply_bonferroni(
-            alpha_tstats={"H1": -3.0, "H2": 1.0}, n_tests=2, alpha=0.05
-        )
+        result = apply_bonferroni(alpha_tstats={"H1": -3.0, "H2": 1.0}, n_tests=2, alpha=0.05)
 
         self.assertTrue(result["H1"])
         self.assertFalse(result["H2"])

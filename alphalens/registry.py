@@ -29,7 +29,7 @@ SOURCE_PRIORITY = {
     "watchdog_sec": 0,
     "momentum": 10,
     "early-stage": 10,  # Layer 2b variant — base-breakout scorer, same priority as classic momentum
-    "insider": 12,       # Layer 2d — Form 4 cluster buys; time-sensitive but less urgent than live SEC events
+    "insider": 12,  # Layer 2d — Form 4 cluster buys; time-sensitive but less urgent than live SEC events
     "lean": 15,
     "prescreener": 20,
 }

@@ -22,7 +22,7 @@ _PRICE_SCALE = 10_000
 
 @dataclass(frozen=True)
 class DailyBar:
-    date: str            # "YYYYMMDD"
+    date: str  # "YYYYMMDD"
     open: float
     high: float
     low: float
@@ -63,9 +63,7 @@ class LeanCsvWriter:
         self.data_dir = Path(data_dir)
 
     def path_for(self, ticker: str) -> Path:
-        return (
-            self.data_dir / "equity" / "usa" / "daily" / f"{ticker.lower()}.zip"
-        )
+        return self.data_dir / "equity" / "usa" / "daily" / f"{ticker.lower()}.zip"
 
     def read_bars(self, ticker: str) -> list[DailyBar]:
         target = self.path_for(ticker)

@@ -88,8 +88,12 @@ class TestSecondaryMarketImpact(unittest.TestCase):
         from alphalens.backtest.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(k=0.05)
-        small = cm.secondary_market_impact_bps(trade_size=100, adv=10_000, annual_vol=0.3, horizon_days=21)
-        large = cm.secondary_market_impact_bps(trade_size=400, adv=10_000, annual_vol=0.3, horizon_days=21)
+        small = cm.secondary_market_impact_bps(
+            trade_size=100, adv=10_000, annual_vol=0.3, horizon_days=21
+        )
+        large = cm.secondary_market_impact_bps(
+            trade_size=400, adv=10_000, annual_vol=0.3, horizon_days=21
+        )
 
         # sqrt(400/10000) / sqrt(100/10000) = sqrt(4) = 2
         self.assertAlmostEqual(large / small, 2.0, places=6)
@@ -98,8 +102,12 @@ class TestSecondaryMarketImpact(unittest.TestCase):
         from alphalens.backtest.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(k=0.05)
-        low = cm.secondary_market_impact_bps(trade_size=100, adv=10_000, annual_vol=0.20, horizon_days=21)
-        high = cm.secondary_market_impact_bps(trade_size=100, adv=10_000, annual_vol=0.40, horizon_days=21)
+        low = cm.secondary_market_impact_bps(
+            trade_size=100, adv=10_000, annual_vol=0.20, horizon_days=21
+        )
+        high = cm.secondary_market_impact_bps(
+            trade_size=100, adv=10_000, annual_vol=0.40, horizon_days=21
+        )
 
         self.assertAlmostEqual(high / low, 2.0, places=6)
 
@@ -107,8 +115,12 @@ class TestSecondaryMarketImpact(unittest.TestCase):
         from alphalens.backtest.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(k=0.05)
-        one_day = cm.secondary_market_impact_bps(trade_size=100, adv=10_000, annual_vol=0.3, horizon_days=1)
-        four_days = cm.secondary_market_impact_bps(trade_size=100, adv=10_000, annual_vol=0.3, horizon_days=4)
+        one_day = cm.secondary_market_impact_bps(
+            trade_size=100, adv=10_000, annual_vol=0.3, horizon_days=1
+        )
+        four_days = cm.secondary_market_impact_bps(
+            trade_size=100, adv=10_000, annual_vol=0.3, horizon_days=4
+        )
 
         self.assertAlmostEqual(four_days / one_day, 2.0, places=6)
 
@@ -222,7 +234,7 @@ class TestApplyAnnualDrag(unittest.TestCase):
 class TestBackwardCompatibility(unittest.TestCase):
     def test_existing_cost_model_unchanged(self):
         """P1 must not break existing CostModel callers (Lean, themed)."""
-        from alphalens.backtest.cost_model import CostModel, _PROFILE_BPS
+        from alphalens.backtest.cost_model import _PROFILE_BPS, CostModel
 
         # Profile bps values unchanged.
         self.assertEqual(_PROFILE_BPS["aggressive"], 75.0)

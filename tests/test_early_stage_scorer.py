@@ -19,7 +19,9 @@ import pandas as pd
 # ----- Fixtures --------------------------------------------------------------
 
 
-def _base_building_df(days: int = 260, base_level: float = 10.0, breakout_pct: float = 0.10) -> pd.DataFrame:
+def _base_building_df(
+    days: int = 260, base_level: float = 10.0, breakout_pct: float = 0.10
+) -> pd.DataFrame:
     """Stepwise construction that lands ratio (close-SMA_50)/(SMA_50-SMA_200) ∈ [0.05, 0.25].
 
     Segments (total 260 bars):
@@ -33,26 +35,32 @@ def _base_building_df(days: int = 260, base_level: float = 10.0, breakout_pct: f
     """
     idx = pd.date_range(end="2026-04-17", periods=days, freq="B")
     lift = 1 + breakout_pct / 10  # small push above the steady zone
-    close = np.concatenate([
-        np.full(150, 0.80 * base_level),   # 150 × 8.00
-        np.full(60, 1.20 * base_level),    # 60 × 12.00
-        np.full(49, 1.25 * base_level),    # 49 × 12.50
-        np.array([1.25 * base_level * lift])  # breakout day
-    ])
+    close = np.concatenate(
+        [
+            np.full(150, 0.80 * base_level),  # 150 × 8.00
+            np.full(60, 1.20 * base_level),  # 60 × 12.00
+            np.full(49, 1.25 * base_level),  # 49 × 12.50
+            np.array([1.25 * base_level * lift]),  # breakout day
+        ]
+    )
     assert len(close) == days, f"expected {days} bars, got {len(close)}"
     vol = np.full(days, 1_000_000.0)
     vol[-20:] = 1_300_000.0  # accumulation (1.3x)
     return pd.DataFrame(
         {
-            "Open": close * 0.998, "High": close * 1.003,
-            "Low": close * 0.997, "Close": close,
+            "Open": close * 0.998,
+            "High": close * 1.003,
+            "Low": close * 0.997,
+            "Close": close,
             "Volume": vol,
         },
         index=idx,
     )
 
 
-def _choppy_rally_df(days: int = 260, start: float = 10.0, total_gain: float = 0.80) -> pd.DataFrame:
+def _choppy_rally_df(
+    days: int = 260, start: float = 10.0, total_gain: float = 0.80
+) -> pd.DataFrame:
     """Extended rally with heavy intra-period noise → BB_width stays wide throughout.
     Used to test VCP detection (BB should NOT be at 30th percentile → score 0).
     """
@@ -63,14 +71,20 @@ def _choppy_rally_df(days: int = 260, start: float = 10.0, total_gain: float = 0
     noise = rng.normal(0, start * 0.05, days)
     close = trend + noise
     return pd.DataFrame(
-        {"Open": close * 0.995, "High": close * 1.01,
-         "Low": close * 0.99, "Close": close,
-         "Volume": [1_500_000.0] * days},
+        {
+            "Open": close * 0.995,
+            "High": close * 1.01,
+            "Low": close * 0.99,
+            "Close": close,
+            "Volume": [1_500_000.0] * days,
+        },
         index=idx,
     )
 
 
-def _extended_rally_df(days: int = 260, start: float = 10.0, total_gain: float = 0.80) -> pd.DataFrame:
+def _extended_rally_df(
+    days: int = 260, start: float = 10.0, total_gain: float = 0.80
+) -> pd.DataFrame:
     """Stock up 80% over 4-6 months, now far extended above SMA_50."""
     idx = pd.date_range(end="2026-04-17", periods=days, freq="B")
     # Flat first half, then big run
@@ -82,8 +96,10 @@ def _extended_rally_df(days: int = 260, start: float = 10.0, total_gain: float =
     vol[-10:] = 5_000_000.0  # climactic
     return pd.DataFrame(
         {
-            "Open": close * 0.995, "High": close * 1.01,
-            "Low": close * 0.99, "Close": close,
+            "Open": close * 0.995,
+            "High": close * 1.01,
+            "Low": close * 0.99,
+            "Close": close,
             "Volume": vol,
         },
         index=idx,
@@ -93,8 +109,13 @@ def _extended_rally_df(days: int = 260, start: float = 10.0, total_gain: float =
 def _flat_df(days: int = 260, price: float = 10.0) -> pd.DataFrame:
     idx = pd.date_range(end="2026-04-17", periods=days, freq="B")
     return pd.DataFrame(
-        {"Open": [price]*days, "High": [price]*days, "Low": [price]*days,
-         "Close": [price]*days, "Volume": [1_000_000.0]*days},
+        {
+            "Open": [price] * days,
+            "High": [price] * days,
+            "Low": [price] * days,
+            "Close": [price] * days,
+            "Volume": [1_000_000.0] * days,
+        },
         index=idx,
     )
 
@@ -105,11 +126,16 @@ def _accelerating_df(days: int = 260, start: float = 10.0) -> pd.DataFrame:
     # Flat base then quadratic rise last 10 bars
     base_length = days - 10
     base = np.full(base_length, start)
-    accel = np.array([start + 0.02 * (i ** 1.8) for i in range(10)])
+    accel = np.array([start + 0.02 * (i**1.8) for i in range(10)])
     close = np.concatenate([base, accel])
     return pd.DataFrame(
-        {"Open": close, "High": close * 1.005, "Low": close * 0.995,
-         "Close": close, "Volume": [1_000_000.0]*days},
+        {
+            "Open": close,
+            "High": close * 1.005,
+            "Low": close * 0.995,
+            "Close": close,
+            "Volume": [1_000_000.0] * days,
+        },
         index=idx,
     )
 
@@ -122,6 +148,7 @@ class TestBaseBreakout(unittest.TestCase):
 
     def test_stock_in_base_breakout_zone_scores_high(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         df = _base_building_df(breakout_pct=0.12)
         # Close ~12% above base; SMA_50 should be between base and close
         s = EarlyStageScorer._base_breakout_score(df)
@@ -129,6 +156,7 @@ class TestBaseBreakout(unittest.TestCase):
 
     def test_extended_rally_scores_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         df = _extended_rally_df(total_gain=0.80)
         # Close way above SMA_50, ratio >> 0.25 → should score 0
         s = EarlyStageScorer._base_breakout_score(df)
@@ -136,6 +164,7 @@ class TestBaseBreakout(unittest.TestCase):
 
     def test_flat_stock_scores_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         df = _flat_df()
         # SMA_50 == SMA_200 → divide by zero; should gracefully return 0
         s = EarlyStageScorer._base_breakout_score(df)
@@ -143,6 +172,7 @@ class TestBaseBreakout(unittest.TestCase):
 
     def test_insufficient_bars_returns_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         df = _flat_df(days=150)  # <200 bars
         s = EarlyStageScorer._base_breakout_score(df)
         self.assertEqual(s, 0.0)
@@ -153,18 +183,21 @@ class TestAcceleration(unittest.TestCase):
 
     def test_accelerating_scores_high(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         df = _accelerating_df()
         s = EarlyStageScorer._acceleration_score(df)
         self.assertEqual(s, 1.0)
 
     def test_flat_scores_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         df = _flat_df()
         s = EarlyStageScorer._acceleration_score(df)
         self.assertEqual(s, 0.0)
 
     def test_insufficient_bars_returns_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         df = _accelerating_df(days=40)  # <60 bars
         s = EarlyStageScorer._acceleration_score(df)
         self.assertEqual(s, 0.0)
@@ -175,6 +208,7 @@ class TestVCP(unittest.TestCase):
 
     def test_tight_range_above_sma20_scores_high(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         # Mostly flat (tight BB), tiny uptick at end to be above SMA_20
         days = 260
         idx = pd.date_range(end="2026-04-17", periods=days, freq="B")
@@ -186,13 +220,22 @@ class TestVCP(unittest.TestCase):
         tight = np.full(40, 10.05)
         tight[-1] = 10.15  # above SMA_20
         close = np.concatenate([wide, tight])
-        df = pd.DataFrame({"Open": close, "High": close*1.002, "Low": close*0.998,
-                           "Close": close, "Volume": [1_000_000.0]*days}, index=idx)
+        df = pd.DataFrame(
+            {
+                "Open": close,
+                "High": close * 1.002,
+                "Low": close * 0.998,
+                "Close": close,
+                "Volume": [1_000_000.0] * days,
+            },
+            index=idx,
+        )
         s = EarlyStageScorer._vcp_score(df)
         self.assertEqual(s, 1.0)
 
     def test_choppy_rally_scores_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         # Heavy noise throughout → BB_width never contracts to p30
         df = _choppy_rally_df()
         s = EarlyStageScorer._vcp_score(df)
@@ -200,6 +243,7 @@ class TestVCP(unittest.TestCase):
 
     def test_insufficient_bars_returns_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         df = _flat_df(days=40)
         s = EarlyStageScorer._vcp_score(df)
         self.assertEqual(s, 0.0)
@@ -210,26 +254,31 @@ class TestRSIEmergence(unittest.TestCase):
 
     def test_rsi_in_emergence_zone(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         s = EarlyStageScorer._rsi_emergence_score(rsi=55.0)
         self.assertEqual(s, 1.0)
 
     def test_rsi_overbought_penalty(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         s = EarlyStageScorer._rsi_emergence_score(rsi=78.0)
         self.assertEqual(s, 0.0)
 
     def test_rsi_oversold_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         s = EarlyStageScorer._rsi_emergence_score(rsi=30.0)
         self.assertEqual(s, 0.0)
 
     def test_rsi_none_neutral(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         s = EarlyStageScorer._rsi_emergence_score(rsi=None)
         self.assertEqual(s, 0.5)
 
     def test_rsi_boundary_inclusive(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         self.assertEqual(EarlyStageScorer._rsi_emergence_score(rsi=45.0), 1.0)
         self.assertEqual(EarlyStageScorer._rsi_emergence_score(rsi=65.0), 1.0)
 
@@ -239,26 +288,31 @@ class TestADXBuilding(unittest.TestCase):
 
     def test_adx_building_scores_high(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         s = EarlyStageScorer._adx_building_score(adx_current=28.0, adx_5d_ago=24.0)
         self.assertEqual(s, 1.0)
 
     def test_adx_mature_scores_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         s = EarlyStageScorer._adx_building_score(adx_current=45.0, adx_5d_ago=40.0)
         self.assertEqual(s, 0.0)
 
     def test_adx_low_scores_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         s = EarlyStageScorer._adx_building_score(adx_current=15.0, adx_5d_ago=12.0)
         self.assertEqual(s, 0.0)
 
     def test_adx_in_range_but_flat_scores_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         s = EarlyStageScorer._adx_building_score(adx_current=28.0, adx_5d_ago=28.0)
         self.assertEqual(s, 0.0)  # delta < +2
 
     def test_adx_none_neutral(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         s = EarlyStageScorer._adx_building_score(adx_current=None, adx_5d_ago=None)
         self.assertEqual(s, 0.5)
 
@@ -268,37 +322,55 @@ class TestVolumeAccumulation(unittest.TestCase):
 
     def test_accumulation_range(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         # Build vol where last-20d avg = 1.3x last-60d avg
         days = 80
-        vol = np.concatenate([np.full(40, 1_000_000), np.full(20, 1_000_000), np.full(20, 1_900_000)])
+        vol = np.concatenate(
+            [np.full(40, 1_000_000), np.full(20, 1_000_000), np.full(20, 1_900_000)]
+        )
         # mean(last 20) = 1_900_000; mean(last 60) = (40*1M + 20*1M + 20*1.9M)/60 = 1_300_000
         # ratio = 1_900_000 / 1_300_000 = 1.46 → in [1.1, 1.5]
-        df = pd.DataFrame({
-            "Open": [10.0]*days, "High": [10.1]*days, "Low": [9.9]*days,
-            "Close": [10.0]*days, "Volume": vol,
-        }, index=pd.date_range(end="2026-04-17", periods=days, freq="B"))
+        df = pd.DataFrame(
+            {
+                "Open": [10.0] * days,
+                "High": [10.1] * days,
+                "Low": [9.9] * days,
+                "Close": [10.0] * days,
+                "Volume": vol,
+            },
+            index=pd.date_range(end="2026-04-17", periods=days, freq="B"),
+        )
         s = EarlyStageScorer._volume_accumulation_score(df)
         self.assertEqual(s, 1.0)
 
     def test_climactic_volume_penalty(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         days = 80
         vol = np.concatenate([np.full(60, 1_000_000), np.full(20, 3_000_000)])  # ratio ~2.33x
-        df = pd.DataFrame({
-            "Open": [10.0]*days, "High": [10.1]*days, "Low": [9.9]*days,
-            "Close": [10.0]*days, "Volume": vol,
-        }, index=pd.date_range(end="2026-04-17", periods=days, freq="B"))
+        df = pd.DataFrame(
+            {
+                "Open": [10.0] * days,
+                "High": [10.1] * days,
+                "Low": [9.9] * days,
+                "Close": [10.0] * days,
+                "Volume": vol,
+            },
+            index=pd.date_range(end="2026-04-17", periods=days, freq="B"),
+        )
         s = EarlyStageScorer._volume_accumulation_score(df)
         self.assertEqual(s, 0.0)
 
     def test_flat_volume_below_range(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         df = _flat_df()
         s = EarlyStageScorer._volume_accumulation_score(df)
         self.assertEqual(s, 0.0)
 
     def test_insufficient_bars_returns_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         df = _flat_df(days=30)
         s = EarlyStageScorer._volume_accumulation_score(df)
         self.assertEqual(s, 0.0)
@@ -309,45 +381,67 @@ class TestJegadeesh11_1(unittest.TestCase):
 
     def test_positive_11_1_with_live_trend(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         # 260-day series: start=10, 11m ago (t-252) price=10, 1m ago (t-21) price=14, now=14.5
         days = 260
         close = np.full(days, 10.0)
         close[-252:-21] = np.linspace(10.0, 14.0, 231)
         close[-21:] = np.linspace(14.0, 14.5, 21)
-        df = pd.DataFrame({
-            "Open": close, "High": close, "Low": close,
-            "Close": close, "Volume": [1_000_000.0]*days,
-        }, index=pd.date_range(end="2026-04-17", periods=days, freq="B"))
+        df = pd.DataFrame(
+            {
+                "Open": close,
+                "High": close,
+                "Low": close,
+                "Close": close,
+                "Volume": [1_000_000.0] * days,
+            },
+            index=pd.date_range(end="2026-04-17", periods=days, freq="B"),
+        )
         s = EarlyStageScorer._jegadeesh_11_1_score(df)
         self.assertEqual(s, 1.0)
 
     def test_negative_11_1_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         days = 260
         close = np.linspace(20.0, 10.0, days)  # steady decline
-        df = pd.DataFrame({
-            "Open": close, "High": close, "Low": close,
-            "Close": close, "Volume": [1_000_000.0]*days,
-        }, index=pd.date_range(end="2026-04-17", periods=days, freq="B"))
+        df = pd.DataFrame(
+            {
+                "Open": close,
+                "High": close,
+                "Low": close,
+                "Close": close,
+                "Volume": [1_000_000.0] * days,
+            },
+            index=pd.date_range(end="2026-04-17", periods=days, freq="B"),
+        )
         s = EarlyStageScorer._jegadeesh_11_1_score(df)
         self.assertEqual(s, 0.0)
 
     def test_positive_11_1_but_trend_broken(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         # Up 40% in months 2-11, then down 10% in last month → 11-1 still positive but trend dead
         days = 260
         close = np.full(days, 10.0)
         close[-252:-21] = np.linspace(10.0, 14.0, 231)
         close[-21:] = np.linspace(14.0, 12.5, 21)  # declining last 20d
-        df = pd.DataFrame({
-            "Open": close, "High": close, "Low": close,
-            "Close": close, "Volume": [1_000_000.0]*days,
-        }, index=pd.date_range(end="2026-04-17", periods=days, freq="B"))
+        df = pd.DataFrame(
+            {
+                "Open": close,
+                "High": close,
+                "Low": close,
+                "Close": close,
+                "Volume": [1_000_000.0] * days,
+            },
+            index=pd.date_range(end="2026-04-17", periods=days, freq="B"),
+        )
         s = EarlyStageScorer._jegadeesh_11_1_score(df)
         self.assertEqual(s, 0.0)
 
     def test_insufficient_bars_returns_zero(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         df = _flat_df(days=100)  # need 252+
         s = EarlyStageScorer._jegadeesh_11_1_score(df)
         self.assertEqual(s, 0.0)
@@ -358,6 +452,7 @@ class TestCompositeScore(unittest.TestCase):
 
     def test_base_building_beats_extended_rally(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         scorer = EarlyStageScorer()
         df_base = _base_building_df(breakout_pct=0.12)
         df_ext = _extended_rally_df(total_gain=0.80)
@@ -368,28 +463,40 @@ class TestCompositeScore(unittest.TestCase):
         )
         base_row = score_base[score_base["ticker"] == "BASE"].iloc[0]
         ext_row = score_base[score_base["ticker"] == "EXT"].iloc[0]
-        self.assertGreater(base_row["early_stage_score"], ext_row["early_stage_score"],
-                           f"base={base_row['early_stage_score']} ext={ext_row['early_stage_score']}")
+        self.assertGreater(
+            base_row["early_stage_score"],
+            ext_row["early_stage_score"],
+            f"base={base_row['early_stage_score']} ext={ext_row['early_stage_score']}",
+        )
 
     def test_all_zero_on_empty_df(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         scorer = EarlyStageScorer()
         result = scorer.score_all(["X"], {"X": pd.DataFrame()}, benchmark_ticker=None)
         self.assertEqual(result.iloc[0]["early_stage_score"], 0.0)
 
     def test_output_schema(self):
         from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
+
         scorer = EarlyStageScorer()
         df = _base_building_df()
         result = scorer.score_all(["BASE"], {"BASE": df}, benchmark_ticker=None)
         expected_cols = {
-            "ticker", "base_breakout_score", "acceleration_score",
-            "vcp_score", "rsi_emergence_score", "adx_building_score",
-            "volume_accumulation_score", "jegadeesh_11_1_score",
+            "ticker",
+            "base_breakout_score",
+            "acceleration_score",
+            "vcp_score",
+            "rsi_emergence_score",
+            "adx_building_score",
+            "volume_accumulation_score",
+            "jegadeesh_11_1_score",
             "early_stage_score",
         }
-        self.assertTrue(expected_cols.issubset(set(result.columns)),
-                        f"missing: {expected_cols - set(result.columns)}")
+        self.assertTrue(
+            expected_cols.issubset(set(result.columns)),
+            f"missing: {expected_cols - set(result.columns)}",
+        )
 
 
 if __name__ == "__main__":

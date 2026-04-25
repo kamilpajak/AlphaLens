@@ -1,8 +1,8 @@
 # Pegasystems Inc. (PEGA) Fundamental Analysis Report
 
-**Date:** April 21, 2023  
-**Ticker:** PEGA (NASDAQ)  
-**Sector:** Technology  
+**Date:** April 21, 2023
+**Ticker:** PEGA (NASDAQ)
+**Sector:** Technology
 **Industry:** Software - Application
 
 ---
@@ -14,7 +14,7 @@ Pegasystems Inc. (PEGA) is a leading provider of customer relationship managemen
 As of early 2023, Pegasystems is navigating a significant transition period, primarily moving towards a subscription-based (SaaS) model, which often results in temporary headwinds for recognized revenue but improved long-term predictability.
 
 *   **Revenue Growth:** TTM Revenue stands at approximately **$1.75 billion** (based on updated figures). However, looking at the fiscal year 2022 (the last full year prior to April 2023), the company reported **$1.317 billion** in revenue.
-*   **Profitability:** 2022 was a challenging year with a net loss of **$345.6 million**. This was driven by high operating expenses ($1.058 billion) and an unusually high income tax expense of $183 million. 
+*   **Profitability:** 2022 was a challenging year with a net loss of **$345.6 million**. This was driven by high operating expenses ($1.058 billion) and an unusually high income tax expense of $183 million.
 *   **Recent Momentum:** The Q1 2023 results (ended March 31, 2023) show signs of stabilization. Revenue was **$325.5 million** with a narrowed net loss of **$20.7 million** compared to the heavy losses in 2022.
 *   **Margins:** TTM Operating Margin is reported at **24.9%**, and Profit Margin at **22.5%**. This indicates a sharp recovery in efficiency and profitability heading into 2023 and beyond.
 
@@ -33,7 +33,7 @@ Cash flow provides a more optimistic view of the company's "real" performance th
 *   **Shareholder Returns:** PEGA pays a small dividend of **$0.09 per share** (yield ~0.21%), signaling management's commitment to returning some capital even during growth phases.
 
 ## 5. Analyst Outlook & Market Valuation
-*   **Analyst Sentiment:** Analysts are overwhelmingly bullish. There are **12 "Buy/Strong Buy"** ratings and **0 "Sell"** ratings. 
+*   **Analyst Sentiment:** Analysts are overwhelmingly bullish. There are **12 "Buy/Strong Buy"** ratings and **0 "Sell"** ratings.
 *   **Price Target:** The average analyst target price is **$58.91**, representing a significant upside from the current trading range (implied by the 50-day moving average of $43.01).
 *   **Valuation Ratios:**
     *   **Forward P/E:** 15.97 (Attractive for a high-growth tech company).
@@ -69,5 +69,5 @@ Cash flow provides a more optimistic view of the company's "real" performance th
 | **Target Price** | $58.91 |
 | **52-Week High / Low** | $68.02 / $35.86 |
 
-**Final Transaction Proposal:** **HOLD/BUY**  
+**Final Transaction Proposal:** **HOLD/BUY**
 Traders looking for a value play in the software sector should consider **BUYING** on dips toward the 50-day MA ($43.01), targeting a recovery toward the $58 analyst mark. Current holders should **HOLD** as the company's transition to subscription revenue begins to yield significantly improved cash flow.

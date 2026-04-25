@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +49,8 @@ class FundamentalsCache:
         except ValueError:
             return None
         if fetched_at.tzinfo is None:
-            fetched_at = fetched_at.replace(tzinfo=timezone.utc)
-        if datetime.now(timezone.utc) - fetched_at > self.ttl:
+            fetched_at = fetched_at.replace(tzinfo=UTC)
+        if datetime.now(UTC) - fetched_at > self.ttl:
             return None
         return raw.get("features")
 
@@ -58,13 +58,11 @@ class FundamentalsCache:
         path = self._path(ticker)
         payload = {
             "features": features,
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "fetched_at": datetime.now(UTC).isoformat(),
         }
         path.write_text(json.dumps(payload, default=str))
 
-    def get_or_fetch(
-        self, ticker: str, fetcher: Callable[[str], dict]
-    ) -> dict:
+    def get_or_fetch(self, ticker: str, fetcher: Callable[[str], dict]) -> dict:
         cached = self.get(ticker)
         if cached is not None:
             return cached

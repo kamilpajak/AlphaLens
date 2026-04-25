@@ -27,17 +27,17 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from alphalens.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens.backtest.history_store import HistoryStore  # noqa: E402
-from alphalens.backtest.metrics import sharpe  # noqa: E402
-from alphalens.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
-from alphalens.screeners.themed.backtest_adapter import (  # noqa: E402
+from alphalens.backtest.engine import BacktestEngine
+from alphalens.backtest.history_store import HistoryStore
+from alphalens.backtest.metrics import sharpe
+from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+from alphalens.screeners.themed.backtest_adapter import (
     early_stage_scorer_adapter,
     momentum_scorer_adapter,
 )
-from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH  # noqa: E402
-from alphalens.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS  # noqa: E402
-from alphalens.screeners.themed.universe import flatten_universe  # noqa: E402
+from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+from alphalens.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS
+from alphalens.screeners.themed.universe import flatten_universe
 
 LEAN_DATA = Path.home() / ".alphalens" / "lean" / "data"
 
@@ -53,9 +53,14 @@ def _max_dd(returns: pd.Series) -> float:
 def run_scorer(store: HistoryStore, tickers: list[str], scorer_fn, cfg: dict, label: str):
     print(f"\n[{label}] running …")
     engine = BacktestEngine(
-        store, scorer=scorer_fn, scorer_config=cfg,
-        holding_period=5, top_n=5, benchmark="SPY",
-        screener_tickers=tickers, weighting="linear",
+        store,
+        scorer=scorer_fn,
+        scorer_config=cfg,
+        holding_period=5,
+        top_n=5,
+        benchmark="SPY",
+        screener_tickers=tickers,
+        weighting="linear",
     )
     engine.MIN_BARS_REQUIRED = 252
     return engine.run(start=date(2021, 6, 1), end=date(2026, 4, 17))
@@ -78,7 +83,7 @@ def compare(report, label: str):
         turnover_weekly = float("nan")
     else:
         changes = [
-            len(set(weekly_top_n[i]) ^ set(weekly_top_n[i-1])) / max(len(weekly_top_n[i-1]), 1)
+            len(set(weekly_top_n[i]) ^ set(weekly_top_n[i - 1])) / max(len(weekly_top_n[i - 1]), 1)
             for i in range(1, len(weekly_top_n))
         ]
         turnover_weekly = sum(changes) / len(changes) * 100
@@ -106,8 +111,10 @@ def main() -> None:
     store = HistoryStore(histories)
     print(f"universe: {len(curated)} names")
 
-    mom_cfg = dict(THEMED_DEFAULTS); mom_cfg["benchmark"] = "SPY"
-    early_cfg = dict(EARLY_STAGE_DEFAULTS); early_cfg["benchmark"] = "SPY"
+    mom_cfg = dict(THEMED_DEFAULTS)
+    mom_cfg["benchmark"] = "SPY"
+    early_cfg = dict(EARLY_STAGE_DEFAULTS)
+    early_cfg["benchmark"] = "SPY"
 
     mom_report = run_scorer(store, curated, momentum_scorer_adapter, mom_cfg, "momentum")
     early_report = run_scorer(store, curated, early_stage_scorer_adapter, early_cfg, "early_stage")
@@ -118,31 +125,49 @@ def main() -> None:
     print("\n=== Weekly-rebalance sanity check ===\n")
     print(f"{'metric':<25} {'momentum':>15} {'early_stage':>15}")
     print("-" * 58)
-    for k in ["daily_n", "weekly_n",
-              "sharpe_daily", "sharpe_weekly", "sharpe_recovery",
-              "turnover_daily_pct", "turnover_weekly_pct",
-              "max_dd_daily", "max_dd_weekly",
-              "mean_daily_ret_bps", "mean_weekly_ret_bps"]:
+    for k in [
+        "daily_n",
+        "weekly_n",
+        "sharpe_daily",
+        "sharpe_weekly",
+        "sharpe_recovery",
+        "turnover_daily_pct",
+        "turnover_weekly_pct",
+        "max_dd_daily",
+        "max_dd_weekly",
+        "mean_daily_ret_bps",
+        "mean_weekly_ret_bps",
+    ]:
         mv = mom_stats[k]
         ev = early_stats[k]
         try:
             print(f"{k:<25} {mv:>15.4f} {ev:>15.4f}")
         except (TypeError, ValueError):
-            print(f"{k:<25} {str(mv):>15} {str(ev):>15}")
+            print(f"{k:<25} {mv!s:>15} {ev!s:>15}")
 
     # Interpret
     print("\n=== Interpretation ===\n")
     if early_stats["sharpe_recovery"] > 0.15:
-        print(f"✓ EarlyStage Sharpe recovers +{early_stats['sharpe_recovery']:.2f} on weekly rebalance.")
-        print(f"  Turnover drops from {early_stats['turnover_daily_pct']:.0f}% → {early_stats['turnover_weekly_pct']:.0f}%.")
-        print(f"  → Perplexity Q1 hypothesis CONFIRMED: daily rebalance friction is the Sharpe killer.")
-        print(f"  → Consider weekly rebalance in production pipeline.")
+        print(
+            f"✓ EarlyStage Sharpe recovers +{early_stats['sharpe_recovery']:.2f} on weekly rebalance."
+        )
+        print(
+            f"  Turnover drops from {early_stats['turnover_daily_pct']:.0f}% → {early_stats['turnover_weekly_pct']:.0f}%."
+        )
+        print(
+            "  → Perplexity Q1 hypothesis CONFIRMED: daily rebalance friction is the Sharpe killer."
+        )
+        print("  → Consider weekly rebalance in production pipeline.")
     elif early_stats["sharpe_recovery"] > 0.0:
-        print(f"△ EarlyStage Sharpe recovers +{early_stats['sharpe_recovery']:.2f} — small but positive.")
-        print(f"  Partial confirmation of turnover hypothesis; signal contribution is not purely mechanical.")
+        print(
+            f"△ EarlyStage Sharpe recovers +{early_stats['sharpe_recovery']:.2f} — small but positive."
+        )
+        print(
+            "  Partial confirmation of turnover hypothesis; signal contribution is not purely mechanical."
+        )
     else:
         print(f"✗ EarlyStage Sharpe does NOT recover ({early_stats['sharpe_recovery']:+.2f}).")
-        print(f"  → Turnover hypothesis REJECTED. Signal itself has lower quality per-pick.")
+        print("  → Turnover hypothesis REJECTED. Signal itself has lower quality per-pick.")
 
     # Save CSV
     out = Path.home() / ".alphalens" / "phase2" / "weekly_rebalance.csv"

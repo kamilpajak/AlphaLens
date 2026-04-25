@@ -19,7 +19,7 @@ in a future use case, switch :func:`bonferroni_critical_tstat` to
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from scipy import stats
 

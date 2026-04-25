@@ -1,6 +1,6 @@
 ### News Analysis and Macroeconomic Report: ALGM (Allegro MicroSystems, Inc.)
 
-**Date:** July 10, 2025  
+**Date:** July 10, 2025
 **Instrument:** ALGM (Allegro MicroSystems, Inc.)
 
 ---
@@ -14,7 +14,7 @@ The past week has been characterized by a complex interplay of shifting interest
 *   **Sector Performance:** Utility and Mega-cap Tech stocks continue to outperform, fueled by data center demand and AI optimism. However, HSBC has downgraded major banks (JPM, GS, BAC), citing concerns that the recent rally hasn't accounted for slowing economic growth risks in 2025-2026.
 
 #### 3. Instrument Analysis: ALGM
-Recent industry data highlights **ALGM** as a key player in the **Magnetic Current Sensor Market**, which is projected to grow from USD 1.98 billion in 2025 to USD 3.51 billion by 2030 (a **12.1% CAGR**). 
+Recent industry data highlights **ALGM** as a key player in the **Magnetic Current Sensor Market**, which is projected to grow from USD 1.98 billion in 2025 to USD 3.51 billion by 2030 (a **12.1% CAGR**).
 *   **Growth Drivers:** The electrification of vehicles (EVs), expansion of renewable energy, and industrial automation are the primary catalysts. **ALGM**’s Hall-effect sensors are expected to maintain dominance due to their accuracy and compact design.
 *   **Regional Strength:** The Asia Pacific region is noted as the fastest-growing market, which aligns with the global footprint of major semiconductor and automotive supply chains.
 
@@ -33,5 +33,5 @@ Recent industry data highlights **ALGM** as a key player in the **Magnetic Curre
 | **Market Sentiment** | BofA and Goldman Sachs raised S&P 500 year-end targets. | **Positive**: Broad market optimism supports individual equity prices. |
 | **Sector Trend** | Electrification and automation remain dominant secular themes. | **Positive**: Aligns perfectly with ALGM’s product portfolio. |
 
-**Final Transaction Proposal: BUY**  
+**Final Transaction Proposal: BUY**
 *Rationale: Strong industry-specific tailwinds and a favorable shift in macroeconomic sentiment (rate cut expectations) outweigh the moderate risks posed by renewed tariffs.*

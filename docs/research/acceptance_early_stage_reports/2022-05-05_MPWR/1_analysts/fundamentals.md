@@ -1,5 +1,5 @@
 ### **Monolithic Power Systems, Inc. (MPWR) Fundamental Analysis Report**
-**Date of Analysis:** May 5, 2022  
+**Date of Analysis:** May 5, 2022
 **Current Stock Price Environment:** Historically volatile period for tech; MPWR showing strong relative strength.
 
 ---

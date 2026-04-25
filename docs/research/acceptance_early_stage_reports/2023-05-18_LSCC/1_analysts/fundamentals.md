@@ -23,8 +23,8 @@ Lattice Semiconductor (LSCC) is a high-growth leader in the low-power, small-for
 *   **Equity:** Total shareholder equity grew to **$515.0M** by March 2023, up from **$411.6M** at the end of 2021, reflecting the company’s transition into sustained high profitability.
 
 #### Cash Flow Analysis
-*   **Cash Generation:** Lattice is a "cash-cow" in its niche. Operating cash flow for 2022 was **$238.8M**, significantly exceeding its net income of $178.9M. 
-*   **Free Cash Flow (FCF):** 2022 FCF was approximately **$215.5M**. 
+*   **Cash Generation:** Lattice is a "cash-cow" in its niche. Operating cash flow for 2022 was **$238.8M**, significantly exceeding its net income of $178.9M.
+*   **Free Cash Flow (FCF):** 2022 FCF was approximately **$215.5M**.
 *   **Capital Allocation:** The company uses its FCF for two primary shareholder-friendly activities:
     1.  **Debt Repayment:** Systematically reducing its leverage.
     2.  **Share Repurchases:** In 2022, the company repurchased approximately **$110.1M** of its own stock.

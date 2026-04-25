@@ -1,7 +1,7 @@
-The analysis of KRYS presents a compelling case for a transition from a speculative biotech firm to a high-margin, commercial-stage powerhouse. 
+The analysis of KRYS presents a compelling case for a transition from a speculative biotech firm to a high-margin, commercial-stage powerhouse.
 
 ### Fundamental Analysis
-The core strength of KRYS lies in its flagship product, VYJUVEK. Unlike traditional gene therapies that aim for a one-time cure—effectively "curing" the company out of a market—KRYS’s redosable platform ensures a recurring revenue model. This distinction is vital; it transforms the patient pool into a long-term revenue stream, justifying higher valuation multiples than those applied to "one-and-done" drug developers. 
+The core strength of KRYS lies in its flagship product, VYJUVEK. Unlike traditional gene therapies that aim for a one-time cure—effectively "curing" the company out of a market—KRYS’s redosable platform ensures a recurring revenue model. This distinction is vital; it transforms the patient pool into a long-term revenue stream, justifying higher valuation multiples than those applied to "one-and-done" drug developers.
 
 The financial health of KRYS is exemplary for the biotech sector. With $500 million in cash, zero debt, and operating margins exceeding 40%, the company is shielded from interest rate volatility and has the capital necessary to fund its pipeline (including cystic fibrosis treatments) without dilutive financing. While a P/S of 21 and P/E of 40 are high by traditional standards, they reflect the market's anticipation of the earnings ramp-up following a successful commercial launch.
 

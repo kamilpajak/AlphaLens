@@ -4,7 +4,7 @@ The analysis of TGTX presents a compelling case for a company undergoing a funda
 The most critical factor in this recommendation is the de-risking of the balance sheet. With **$210 million in cash** and an operating loss that has narrowed to **less than $10 million per quarter**, TGTX has effectively removed the threat of near-term dilutive financing—a primary fear for biotech investors in a high-interest-rate environment. The **$63 million in Q1 revenue** for Briumvi demonstrates that the drug is gaining traction against established competitors, likely aided by the administrative ease provided by the permanent J-code.
 
 ### Technical Landscape
-The technical setup shows a classic battle between short-term momentum and long-term support. 
+The technical setup shows a classic battle between short-term momentum and long-term support.
 *   **Support:** The 200-day moving average (DMA) near $13.37 provides a strong structural floor.
 *   **Resistance:** The 50-day moving average at $15.09 serves as the immediate ceiling.
 *   **Strategy:** The plan to split the entry—buying half now and half upon a breakout above the 50-DMA—is a sophisticated approach to risk management. It ensures participation in the recovery while demanding "proof of momentum" before committing full capital.

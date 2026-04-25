@@ -17,7 +17,7 @@ LSCC has demonstrated a strong long-term uptrend over the past year, rising from
 *   **RSI Neutrality:** The **RSI (49.46)** has recovered from an oversold reading of **30.26** on April 27. It is now near the 50-neutral mark, suggesting a balance between buyers and sellers. This recovery indicates that the immediate panic selling has subsided.
 
 #### **3. Volatility and Support/Resistance**
-*   **Bollinger Bands:** The price is currently trading within the middle of the Bollinger Bands. 
+*   **Bollinger Bands:** The price is currently trading within the middle of the Bollinger Bands.
     *   **Support:** The **Lower Band ($77.49)** recently provided a floor for the price, roughly coinciding with the April lows.
     *   **Resistance:** The **Upper Band ($89.40)** aligns closely with the 50-day SMA, creating a "confluence of resistance" near $88–$90.
 
@@ -28,7 +28,7 @@ LSCC has demonstrated a strong long-term uptrend over the past year, rising from
 *   **For Long-Term Investors:** The current price range ($81–$83) represents a healthy retracement in a strong uptrend. LSCC remains fundamentally strong as it stays above its 200-day SMA. Accumulating at these levels or on pullbacks toward $78 is a viable strategy.
 *   **For Swing Traders:**
     *   **Entry:** Look for a break above the **10-day EMA ($83.08)** with increased volume as a trigger for a long position.
-    *   **Target:** The primary target is the **50-day SMA (~$88.40)**. 
+    *   **Target:** The primary target is the **50-day SMA (~$88.40)**.
     *   **Stop-Loss:** A stop-loss should be placed just below the recent swing low at **$79.00** or the Lower Bollinger Band at **$77.50**.
 
 ---

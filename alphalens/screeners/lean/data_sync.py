@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Iterable
 
 from .lean_csv_writer import DailyBar, LeanCsvWriter
 from .polygon_client import PolygonClient
@@ -28,7 +28,7 @@ class SyncReport:
 
 
 def _ts_to_yyyymmdd(ts_ms: int) -> str:
-    return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y%m%d")
+    return datetime.fromtimestamp(ts_ms / 1000, tz=UTC).strftime("%Y%m%d")
 
 
 class PolygonLeanSync:
@@ -92,9 +92,7 @@ class PolygonLeanSync:
             self.writer.upsert_bars(ticker, ticker_bars)
             bars_written += len(ticker_bars)
 
-        logger.info(
-            "synced date=%s tickers=%d bars=%d", iso, len(by_ticker), bars_written
-        )
+        logger.info("synced date=%s tickers=%d bars=%d", iso, len(by_ticker), bars_written)
         return len(by_ticker), bars_written
 
     def sync_range(self, start: date, end: date) -> SyncReport:

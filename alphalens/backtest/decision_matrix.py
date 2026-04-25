@@ -24,8 +24,9 @@ Ambiguous zone (design doc §8 "paper-track 6-12mo"): Carhart α_t in
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Mapping
+from typing import Literal
 
 from .factor_analysis import AlphaResult
 from .multiple_testing import bonferroni_critical_tstat
@@ -36,7 +37,7 @@ Verdict = Literal["GO", "KILL", "PAPER_TRACK"]
 @dataclass(frozen=True)
 class DecisionReport:
     verdict: Verdict
-    gates: dict[str, bool]               # gate_name → passes
+    gates: dict[str, bool]  # gate_name → passes
     failing_gates: list[str]
     notes: list[str]
 
@@ -79,9 +80,7 @@ def evaluate_exit_criteria(
         # attenuation" — gate passes.
         carhart_alpha = abs(carhart.alpha_annualized)
         if carhart_alpha > 1e-9:
-            attenuation = (
-                carhart_alpha - abs(ff5_umd.alpha_annualized)
-            ) / carhart_alpha
+            attenuation = (carhart_alpha - abs(ff5_umd.alpha_annualized)) / carhart_alpha
         else:
             attenuation = 0.0
         gates["ff5_umd_attenuation"] = attenuation < _FF5_ATTENUATION_THRESHOLD
@@ -113,6 +112,4 @@ def evaluate_exit_criteria(
     else:
         verdict = "KILL"
 
-    return DecisionReport(
-        verdict=verdict, gates=gates, failing_gates=failing, notes=notes
-    )
+    return DecisionReport(verdict=verdict, gates=gates, failing_gates=failing, notes=notes)

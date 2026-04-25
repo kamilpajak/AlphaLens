@@ -23,7 +23,7 @@ class TestDecisionMatrix(unittest.TestCase):
             "carhart": _alpha_result("Carhart-4F", t=3.0),
             "ff5_umd": _alpha_result("FF5+UMD", t=2.5),
             "q4": _alpha_result("Q4", t=2.5),
-            "net_alpha_primary": 0.05,     # +5% annualized net
+            "net_alpha_primary": 0.05,  # +5% annualized net
             "net_alpha_stress_k15": 0.02,  # +2% net under k=0.15
             "bootstrap_95ci_excludes_zero": True,
             "sharpe_net": 1.2,

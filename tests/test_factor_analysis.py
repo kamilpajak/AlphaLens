@@ -1,4 +1,5 @@
 """Tests for alphalens.backtest.factor_analysis — Carhart 4F + HAC + rolling + industry."""
+
 from __future__ import annotations
 
 import unittest
@@ -49,7 +50,8 @@ class TestRunRegression(unittest.TestCase):
         port = ff["Mom"] + ff["RF"] + rng.normal(0, 0.0005, len(ff))
 
         res = run_regression(
-            port, ff,
+            port,
+            ff,
             factor_columns=["Mkt-RF", "SMB", "HML", "Mom"],
             spec_name="Carhart-4F",
         )
@@ -86,8 +88,16 @@ class TestRunRegression(unittest.TestCase):
             noise[i] = rho * noise[i - 1] + eps[i]
         port = ff["Mkt-RF"] + ff["RF"] + pd.Series(noise, index=ff.index)
 
-        res_ols = run_regression(port, ff, factor_columns=["Mkt-RF"], cov_type="nonrobust", spec_name="CAPM-OLS")
-        res_hac = run_regression(port, ff, factor_columns=["Mkt-RF"], cov_type="HAC", spec_name="CAPM-HAC")
+        res_ols = run_regression(
+            port,
+            ff,
+            factor_columns=["Mkt-RF"],
+            cov_type="nonrobust",
+            spec_name="CAPM-OLS",
+        )
+        res_hac = run_regression(
+            port, ff, factor_columns=["Mkt-RF"], cov_type="HAC", spec_name="CAPM-HAC"
+        )
 
         self.assertAlmostEqual(res_ols.alpha_daily, res_hac.alpha_daily, places=10)
         self.assertLess(abs(res_hac.alpha_tstat), abs(res_ols.alpha_tstat))
@@ -122,9 +132,11 @@ class TestRunRegression(unittest.TestCase):
         ls_factor = pd.Series(0.0005 + rng.normal(0, 0.002, len(ff)), index=ff.index)
 
         res = run_regression(
-            ls_factor, ff,
+            ls_factor,
+            ff,
             factor_columns=["Mkt-RF", "SMB", "HML"],
-            spec_name="L/S factor", subtract_rf=False,
+            spec_name="L/S factor",
+            subtract_rf=False,
         )
         self.assertGreater(res.alpha_daily, 0.0002)
         # Sanity: requesting subtract_rf=True without RF still raises
@@ -238,24 +250,29 @@ class TestIndustryControls(unittest.TestCase):
         mkt = rng.normal(0.0004, 0.01, n)
         buseq = mkt + rng.normal(0.0003, 0.012, n)  # tech: mkt correlated, higher vol
 
-        factors = pd.DataFrame({
-            "Mkt-RF": mkt,
-            "SMB": rng.normal(0.0001, 0.006, n),
-            "HML": rng.normal(0.0001, 0.005, n),
-            "Mom": rng.normal(0.0002, 0.008, n),
-            "BusEq": buseq,
-            "RF": np.full(n, 0.00002),
-        }, index=idx)
+        factors = pd.DataFrame(
+            {
+                "Mkt-RF": mkt,
+                "SMB": rng.normal(0.0001, 0.006, n),
+                "HML": rng.normal(0.0001, 0.005, n),
+                "Mom": rng.normal(0.0002, 0.008, n),
+                "BusEq": buseq,
+                "RF": np.full(n, 0.00002),
+            },
+            index=idx,
+        )
 
         port = factors["BusEq"] + factors["RF"] + rng.normal(0, 0.0005, n)
 
         carhart_only = run_regression(
-            port, factors,
+            port,
+            factors,
             factor_columns=["Mkt-RF", "SMB", "HML", "Mom"],
             spec_name="Carhart-4F",
         )
         with_industry = run_regression(
-            port, factors,
+            port,
+            factors,
             factor_columns=["Mkt-RF", "SMB", "HML", "Mom", "BusEq"],
             spec_name="Carhart-4F + BusEq",
         )
@@ -277,8 +294,18 @@ class TestCarhartPlusIndustryRobustness(unittest.TestCase):
         idx = pd.date_range("2020-01-01", periods=n, freq="B")
 
         industry_names = [
-            "NoDur", "Durbl", "Manuf", "Enrgy", "Chems", "BusEq",
-            "Telcm", "Utils", "Shops", "Hlth", "Money", "Other",
+            "NoDur",
+            "Durbl",
+            "Manuf",
+            "Enrgy",
+            "Chems",
+            "BusEq",
+            "Telcm",
+            "Utils",
+            "Shops",
+            "Hlth",
+            "Money",
+            "Other",
         ]
         industries = pd.DataFrame(
             rng.normal(0.0003, 0.012, (n, 12)),
@@ -288,20 +315,24 @@ class TestCarhartPlusIndustryRobustness(unittest.TestCase):
         # Mkt-RF mostly driven by industry mean (near-collinear) + small idiosyncratic noise.
         mkt_rf = 0.85 * industries.mean(axis=1) + 0.15 * rng.normal(0.0004, 0.01, n)
 
-        factors = pd.DataFrame({
-            "Mkt-RF": mkt_rf.values,
-            "SMB": rng.normal(0.0001, 0.006, n),
-            "HML": rng.normal(0.0001, 0.005, n),
-            "Mom": rng.normal(0.0002, 0.008, n),
-            "RF": np.full(n, 0.00002),
-        }, index=idx)
+        factors = pd.DataFrame(
+            {
+                "Mkt-RF": mkt_rf.values,
+                "SMB": rng.normal(0.0001, 0.006, n),
+                "HML": rng.normal(0.0001, 0.005, n),
+                "Mom": rng.normal(0.0002, 0.008, n),
+                "RF": np.full(n, 0.00002),
+            },
+            index=idx,
+        )
         factors = pd.concat([factors, industries], axis=1)
 
         port = factors["Mkt-RF"] + factors["RF"] + rng.normal(0, 0.001, n)
 
         carhart_cols = ["Mkt-RF", "SMB", "HML", "Mom"]
         res = run_regression(
-            port, factors,
+            port,
+            factors,
             factor_columns=carhart_cols + industry_names,
             spec_name="Carhart-4F + 12 Industries",
         )
@@ -336,12 +367,33 @@ class TestFormatSummary(unittest.TestCase):
         self.assertIn("HAC", text)
 
     def test_attribution_table_lists_each_spec_on_one_line(self):
-        from alphalens.backtest.factor_analysis import AlphaResult, format_attribution_table
+        from alphalens.backtest.factor_analysis import (
+            AlphaResult,
+            format_attribution_table,
+        )
 
         results = [
             AlphaResult("CAPM", 0.0003, 0.076, 2.5, {"Mkt-RF": 1.0}, 0.4, 1000, "HAC"),
-            AlphaResult("FF3", 0.0002, 0.050, 1.9, {"Mkt-RF": 1.0, "SMB": 0.2, "HML": 0.1}, 0.45, 1000, "HAC"),
-            AlphaResult("Carhart-4F", 0.00005, 0.013, 0.5, {"Mkt-RF": 1.0, "SMB": 0.2, "HML": 0.1, "Mom": 0.7}, 0.55, 1000, "HAC"),
+            AlphaResult(
+                "FF3",
+                0.0002,
+                0.050,
+                1.9,
+                {"Mkt-RF": 1.0, "SMB": 0.2, "HML": 0.1},
+                0.45,
+                1000,
+                "HAC",
+            ),
+            AlphaResult(
+                "Carhart-4F",
+                0.00005,
+                0.013,
+                0.5,
+                {"Mkt-RF": 1.0, "SMB": 0.2, "HML": 0.1, "Mom": 0.7},
+                0.55,
+                1000,
+                "HAC",
+            ),
         ]
 
         text = format_attribution_table(results)

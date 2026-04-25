@@ -15,12 +15,26 @@ from typing import Any
 SUPPORTED_VERSION = "1.0"
 
 _REQUIRED_TOP_LEVEL = (
-    "status", "timestamp", "version", "total_scored", "universe_size", "rankings",
+    "status",
+    "timestamp",
+    "version",
+    "total_scored",
+    "universe_size",
+    "rankings",
 )
 _REQUIRED_RANKING_FIELDS = (
-    "ticker", "rank", "score", "roc5", "roc20", "roc60",
-    "volume_surprise", "trend_strength", "breakout", "near_high",
-    "last_close", "avg_dollar_volume",
+    "ticker",
+    "rank",
+    "score",
+    "roc5",
+    "roc20",
+    "roc60",
+    "volume_surprise",
+    "trend_strength",
+    "breakout",
+    "near_high",
+    "last_close",
+    "avg_dollar_volume",
 )
 
 
@@ -50,7 +64,7 @@ class LeanOutput:
     rankings: list[RankingRow] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "LeanOutput":
+    def from_dict(cls, payload: dict[str, Any]) -> LeanOutput:
         for key in _REQUIRED_TOP_LEVEL:
             if key not in payload:
                 raise ValueError(f"Lean output missing top-level '{key}'")
@@ -69,7 +83,7 @@ class LeanOutput:
         )
 
     @classmethod
-    def from_file(cls, path: Path) -> "LeanOutput":
+    def from_file(cls, path: Path) -> LeanOutput:
         text = Path(path).read_text()
         return cls.from_dict(json.loads(text))
 

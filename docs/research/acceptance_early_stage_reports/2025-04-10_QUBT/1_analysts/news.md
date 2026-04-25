@@ -1,7 +1,7 @@
 ### Global Macroeconomic & `QUBT` News Report: April 10, 2025
 
 #### 1. Macroeconomic Context: The "Liberation Day" Tariff Shock
-The current trading week has been defined by the fallout from President Trump's "Liberation Day" tariff announcements. Effective import rates are projected to rise to 17%-22%, marking the highest levels since the 1930s. 
+The current trading week has been defined by the fallout from President Trump's "Liberation Day" tariff announcements. Effective import rates are projected to rise to 17%-22%, marking the highest levels since the 1930s.
 
 *   **Market Volatility & Recession Fears:** Major financial institutions, including Morgan Stanley and T. Rowe Price, have significantly increased the odds of a U.S. recession (now estimated at 30%-40%) or a period of stagflation.
 *   **Sector Performance:** Technology and energy were the hardest-hit sectors initially. While the Nasdaq staged a historic intraday recovery on April 7th, the overall sentiment remains "risk-off."

@@ -1,7 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 
@@ -12,7 +11,7 @@ def _mk_event(ticker="AAPL", accession="ACC-1"):
         ticker=ticker,
         form_type=FormType.FORM_8K,
         accession_number=accession,
-        filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc),
+        filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=UTC),
         url=f"https://sec.gov/{accession}",
         raw_data={"items": ["4.02"]},
     )

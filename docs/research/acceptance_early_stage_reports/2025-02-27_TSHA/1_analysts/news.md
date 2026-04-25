@@ -13,7 +13,7 @@ The healthcare sector remains a "promising" area for 2025, but it faces a bifurc
 *   **Small-Cap/Developmental Biotech (e.g., TSHA):** These companies are highly sensitive to interest rates. A "hold" on rates through 2026 increases the cost of capital, making it more expensive for pre-revenue firms to fund clinical trials and operations.
 
 #### **3. Taysha Gene Therapies (TSHA) Specific Analysis**
-As of February 27, 2025, there has been a **notable absence of major news or press releases** for `TSHA` over the past 30 days. 
+As of February 27, 2025, there has been a **notable absence of major news or press releases** for `TSHA` over the past 30 days.
 
 *   **Current State:** The lack of recent news suggests `TSHA` is in a "clinical waiting period." The company’s primary focus remains its lead program, **TSHA-102**, for Rett syndrome.
 *   **Financial Headwinds:** Operating in a high-interest-rate environment without a current product on the market puts significant pressure on `TSHA`'s cash runway. Investors should closely monitor the upcoming **Q4 and Full Year 2024 earnings report** (typically expected in late March) for updates on cash reserves and clinical milestones.

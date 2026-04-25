@@ -17,7 +17,7 @@ it's pluggable via the BacktestEngine scorer_adapter pattern.
 from __future__ import annotations
 
 import logging
-from typing import Mapping
+from collections.abc import Mapping
 
 import numpy as np
 import pandas as pd
@@ -29,41 +29,41 @@ logger = logging.getLogger(__name__)
 
 EARLY_STAGE_DEFAULTS = {
     # Weights per Perplexity recommendation (sum to 1.00)
-    "weight_base_breakout":       0.20,
-    "weight_acceleration":        0.15,
-    "weight_vcp":                 0.15,
-    "weight_rsi_emergence":       0.15,
-    "weight_adx_building":        0.15,
+    "weight_base_breakout": 0.20,
+    "weight_acceleration": 0.15,
+    "weight_vcp": 0.15,
+    "weight_rsi_emergence": 0.15,
+    "weight_adx_building": 0.15,
     "weight_volume_accumulation": 0.10,
-    "weight_jegadeesh_11_1":      0.10,
+    "weight_jegadeesh_11_1": 0.10,
     # Thresholds
-    "base_breakout_min":      0.05,
-    "base_breakout_max":      0.25,
-    "rsi_emergence_low":      45.0,
-    "rsi_emergence_high":     65.0,
-    "rsi_overbought":         70.0,
-    "adx_building_min":       20.0,
-    "adx_building_max":       35.0,
-    "adx_delta_min":          2.0,
-    "volume_accum_min":       1.1,
-    "volume_accum_max":       1.5,
-    "volume_climactic_max":   2.0,
-    "vcp_width_percentile":   30.0,
-    "vcp_lookback_days":      90,
-    "acceleration_lookback":  60,
+    "base_breakout_min": 0.05,
+    "base_breakout_max": 0.25,
+    "rsi_emergence_low": 45.0,
+    "rsi_emergence_high": 65.0,
+    "rsi_overbought": 70.0,
+    "adx_building_min": 20.0,
+    "adx_building_max": 35.0,
+    "adx_delta_min": 2.0,
+    "volume_accum_min": 1.1,
+    "volume_accum_max": 1.5,
+    "volume_climactic_max": 2.0,
+    "vcp_width_percentile": 30.0,
+    "vcp_lookback_days": 90,
+    "acceleration_lookback": 60,
     # Guardrails — inherit from MomentumScorer defaults (can override from outside)
-    "min_market_cap":         300_000_000,
-    "min_avg_volume":         1_000_000,
-    "min_price":              2.0,
-    "benchmark":              "SPY",
-    "top_n":                  5,
+    "min_market_cap": 300_000_000,
+    "min_avg_volume": 1_000_000,
+    "min_price": 2.0,
+    "benchmark": "SPY",
+    "top_n": 5,
     # Fundamental soft-guardrail (issue #14). Defaults disabled — opt-in.
-    "fundamental_gate_enabled":          False,
-    "cash_runway_months_hard_reject":    3,
-    "cash_runway_months_penalty_full":   12,
+    "fundamental_gate_enabled": False,
+    "cash_runway_months_hard_reject": 3,
+    "cash_runway_months_penalty_full": 12,
     "ps_ceiling_preprofit_penalty_full": 100,
-    "consecutive_neg_ocf_penalty":       4,
-    "fundamental_gate_floor":            0.3,
+    "consecutive_neg_ocf_penalty": 4,
+    "fundamental_gate_floor": 0.3,
 }
 
 METRIC_COLS = (
@@ -92,10 +92,7 @@ class EarlyStageScorer:
         benchmark_ticker: str | None = None,
         fundamentals: Mapping[str, Mapping] | None = None,
     ) -> pd.DataFrame:
-        rows = [
-            self._score_one(t, prices.get(t), (fundamentals or {}).get(t, {}))
-            for t in tickers
-        ]
+        rows = [self._score_one(t, prices.get(t), (fundamentals or {}).get(t, {})) for t in tickers]
         return pd.DataFrame(rows)
 
     def _score_one(
@@ -108,11 +105,15 @@ class EarlyStageScorer:
             return self._zero_row(ticker)
         try:
             base = self._base_breakout_score(
-                df, self.config["base_breakout_min"], self.config["base_breakout_max"],
+                df,
+                self.config["base_breakout_min"],
+                self.config["base_breakout_max"],
             )
             accel = self._acceleration_score(df, self.config["acceleration_lookback"])
             vcp = self._vcp_score(
-                df, self.config["vcp_width_percentile"], self.config["vcp_lookback_days"],
+                df,
+                self.config["vcp_width_percentile"],
+                self.config["vcp_lookback_days"],
             )
             rsi_val, adx_cur, adx_5d = self._indicators(df)
             rsi_e = self._rsi_emergence_score(
@@ -122,7 +123,8 @@ class EarlyStageScorer:
                 self.config["rsi_overbought"],
             )
             adx_b = self._adx_building_score(
-                adx_cur, adx_5d,
+                adx_cur,
+                adx_5d,
                 self.config["adx_building_min"],
                 self.config["adx_building_max"],
                 self.config["adx_delta_min"],
@@ -136,13 +138,13 @@ class EarlyStageScorer:
             jeg = self._jegadeesh_11_1_score(df)
 
             technical_composite = (
-                base  * self.config["weight_base_breakout"]
+                base * self.config["weight_base_breakout"]
                 + accel * self.config["weight_acceleration"]
-                + vcp   * self.config["weight_vcp"]
+                + vcp * self.config["weight_vcp"]
                 + rsi_e * self.config["weight_rsi_emergence"]
                 + adx_b * self.config["weight_adx_building"]
                 + vol_a * self.config["weight_volume_accumulation"]
-                + jeg   * self.config["weight_jegadeesh_11_1"]
+                + jeg * self.config["weight_jegadeesh_11_1"]
             )
 
             gate = fundamental_gate_score(ticker_fundamentals or {}, self.config)
@@ -150,15 +152,15 @@ class EarlyStageScorer:
 
             return {
                 "ticker": ticker,
-                "base_breakout_score":       base,
-                "acceleration_score":        accel,
-                "vcp_score":                 vcp,
-                "rsi_emergence_score":       rsi_e,
-                "adx_building_score":        adx_b,
+                "base_breakout_score": base,
+                "acceleration_score": accel,
+                "vcp_score": vcp,
+                "rsi_emergence_score": rsi_e,
+                "adx_building_score": adx_b,
                 "volume_accumulation_score": vol_a,
-                "jegadeesh_11_1_score":      jeg,
-                "fundamental_gate":          gate,
-                "early_stage_score":         composite,
+                "jegadeesh_11_1_score": jeg,
+                "fundamental_gate": gate,
+                "early_stage_score": composite,
             }
         except Exception:
             logger.warning("EarlyStage scoring failed for %s", ticker, exc_info=True)
@@ -175,7 +177,9 @@ class EarlyStageScorer:
 
     @staticmethod
     def _base_breakout_score(
-        df: pd.DataFrame, lo: float = 0.05, hi: float = 0.25,
+        df: pd.DataFrame,
+        lo: float = 0.05,
+        hi: float = 0.25,
     ) -> float:
         """(close - SMA_50) / (SMA_50 - SMA_200) ∈ [lo, hi] → 1.0, else 0.
 
@@ -214,7 +218,9 @@ class EarlyStageScorer:
 
     @staticmethod
     def _vcp_score(
-        df: pd.DataFrame, percentile: float = 30.0, lookback: int = 90,
+        df: pd.DataFrame,
+        percentile: float = 30.0,
+        lookback: int = 90,
     ) -> float:
         """BB_width < p30(BB_width, `lookback`d) AND close > SMA_20 → 1.0.
 
@@ -312,7 +318,9 @@ class EarlyStageScorer:
         return 1.0
 
     @staticmethod
-    def _indicators(df: pd.DataFrame) -> tuple[float | None, float | None, float | None]:
+    def _indicators(
+        df: pd.DataFrame,
+    ) -> tuple[float | None, float | None, float | None]:
         """Return (RSI_14_current, ADX_14_current, ADX_14_5d_ago). stockstats-based."""
         try:
             ss = wrap(df[["Open", "High", "Low", "Close", "Volume"]].copy())

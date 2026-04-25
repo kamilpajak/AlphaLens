@@ -69,7 +69,7 @@ class TestCloseAsOf(unittest.TestCase):
 
 class TestBuildPitUniverse(unittest.TestCase):
     def test_ticker_in_cap_band_included(self):
-        from alphalens.alt_data.pit_universe import UniverseConfig, build_pit_universe
+        from alphalens.alt_data.pit_universe import build_pit_universe
 
         # shares=10M, close=$50 → mcap=$500M, in band $300M-$3B
         tickers = build_pit_universe(

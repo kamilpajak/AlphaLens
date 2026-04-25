@@ -1,6 +1,6 @@
 # Weekly Market and Macroeconomic Analysis: `KROS` (Keros Therapeutics, Inc.)
 
-**Date:** April 24, 2025  
+**Date:** April 24, 2025
 **Current Outlook:** Bullish (Speculative)
 
 ## Executive Summary

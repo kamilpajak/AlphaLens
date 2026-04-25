@@ -59,17 +59,13 @@ class TestGuardrails(unittest.TestCase):
         from alphalens.screeners.lean.lean_project.scorer import guardrails_pass
 
         df = _history([2.0] * 30, [100_000] * 30)
-        self.assertFalse(
-            guardrails_pass(df, min_price=5, max_price=100, min_avg_dollar_volume=1)
-        )
+        self.assertFalse(guardrails_pass(df, min_price=5, max_price=100, min_avg_dollar_volume=1))
 
     def test_rejects_above_max_price(self):
         from alphalens.screeners.lean.lean_project.scorer import guardrails_pass
 
         df = _history([500.0] * 30, [1000] * 30)
-        self.assertFalse(
-            guardrails_pass(df, min_price=5, max_price=100, min_avg_dollar_volume=1)
-        )
+        self.assertFalse(guardrails_pass(df, min_price=5, max_price=100, min_avg_dollar_volume=1))
 
     def test_rejects_thin_liquidity(self):
         from alphalens.screeners.lean.lean_project.scorer import guardrails_pass
@@ -83,9 +79,7 @@ class TestGuardrails(unittest.TestCase):
         from alphalens.screeners.lean.lean_project.scorer import guardrails_pass
 
         df = _history([50.0] * 5)
-        self.assertFalse(
-            guardrails_pass(df, min_price=5, max_price=100, min_avg_dollar_volume=1)
-        )
+        self.assertFalse(guardrails_pass(df, min_price=5, max_price=100, min_avg_dollar_volume=1))
 
 
 class TestRankUniverse(unittest.TestCase):
@@ -167,7 +161,7 @@ class TestComputeMetrics(unittest.TestCase):
         volume = [100_000] * 249 + [300_000]
         metrics = compute_metrics("TEST", _history(close, volume), _default_config())
 
-        self.assertGreater(metrics.roc60, 0.0)   # uptrend
+        self.assertGreater(metrics.roc60, 0.0)  # uptrend
         self.assertGreater(metrics.trend_strength, 0.6)
         self.assertGreater(metrics.volume_surprise, 2.0)
         self.assertAlmostEqual(metrics.last_close, 100.0, places=3)

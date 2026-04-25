@@ -5,11 +5,11 @@ Let’s break down why the bull case isn’t just optimistic—it’s the only o
 
 ### 1. The "Cash Fortress": Why Macro Fears are Overblown
 The biggest bear argument right now is the "higher for longer" interest rate environment. Sure, that crushes biotechs that need to beg for cash every six months. But TSHA? They’ve built a fortress.
-*   **The Data:** TSHA is sitting on **$319.77 million** in cash. With an annual burn rate of roughly $93 million, they have a **three-year runway**. 
+*   **The Data:** TSHA is sitting on **$319.77 million** in cash. With an annual burn rate of roughly $93 million, they have a **three-year runway**.
 *   **The Rebuttal:** Bears say high rates make capital expensive. I say: **Who cares?** TSHA doesn't need to go back to the well until 2027 or 2028. By then, TSHA-102 could already be nearing commercialization. They have the luxury of time that 90% of their peers lack.
 
 ### 2. Institutional Conviction vs. Retail Fear
-You want to know where the "smart money" is? Look at the institutional ownership: **96.16%**. 
+You want to know where the "smart money" is? Look at the institutional ownership: **96.16%**.
 The big players—the ones with the doctors and PhDs on staff who actually understand the AAV-based gene therapy—aren't selling. They are holding firm. Why? Because they know that in gene therapy, the "quiet periods" (like the one we are in now) are exactly when you accumulate before a major clinical readout. 11 out of 14 analysts have a "Buy" or "Strong Buy" rating with a target of **$11.57**. That’s not a typo—that is nearly **700% upside** from current levels.
 
 ### 3. Technicals: The "Squeeze" is Coming
@@ -29,7 +29,7 @@ The bear analyst will tell you the price is below the 50-day SMA ($1.70). I’ll
 In the past, I’ve seen analysts get burned by ignoring the "burn rate." I’ve learned that a great drug candidate means nothing if the company goes bankrupt before the trial ends. **TSHA is the exception.** They have the drug candidate *and* the bank account to see it through.
 
 **The Strategy:**
-I’m not just saying "Hold." I’m saying that at **$1.62**, the market is giving you a gift. The $1.70 resistance is a psychological hurdle, not a structural one. Once we clear that, the volume profile suggests a fast run to the **$2.22 (200-day SMA)**. 
+I’m not just saying "Hold." I’m saying that at **$1.62**, the market is giving you a gift. The $1.70 resistance is a psychological hurdle, not a structural one. Once we clear that, the volume profile suggests a fast run to the **$2.22 (200-day SMA)**.
 
 Don't let the macro "higher for longer" noise drown out the fact that TSHA is a high-quality, high-conviction biotech with a three-year shield against market volatility. **The bull case is simple: You are buying a potential $11.00 stock for less than the price of a cup of coffee because the market is distracted by interest rates that TSHA doesn't even need to pay.**
 

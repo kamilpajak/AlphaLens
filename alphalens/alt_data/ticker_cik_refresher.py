@@ -5,7 +5,7 @@ so a production workflow is::
 
     client = SecEdgarClient(user_agent="AlphaLens research@example.com")
     refresh_ticker_cik_map(client, Path("alphalens/alt_data/data/ticker_cik_map.yaml"))
-    TickerCikMap.load(path).lookup("AAPL")   # → "0000320193"
+    TickerCikMap.load(path).lookup("AAPL")  # → "0000320193"
 
 SEC publishes the mapping at ``/files/company_tickers.json`` as a dict keyed
 by an integer index, so we iterate values() ignoring keys. Duplicates (which
@@ -14,8 +14,8 @@ SEC shouldn't publish but we can't guarantee) are resolved last-wins.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 import yaml
 

@@ -11,7 +11,7 @@ Ionis Pharmaceuticals (IONS) is a leader in RNA-targeted therapy, currently valu
 #### 2. Financial Performance (Income Statement Analysis)
 Ionis’ financial strategy is centered on heavy reinvestment into its proprietary platform.
 *   **Revenue Growth:** The Trailing Twelve Month (TTM) revenue stands at **$943.71 million**. However, quarterly revenue fluctuates significantly based on milestone payments from partners (e.g., Biogen, AstraZeneca). For example, Q2 2023 saw revenue of **$188.4M**, while Q3 2023 revenue was **$144.2M**.
-*   **Operating Losses:** The company is currently unprofitable, with a TTM Net Income of **-$381M** (diluted EPS of **-$2.38**). 
+*   **Operating Losses:** The company is currently unprofitable, with a TTM Net Income of **-$381M** (diluted EPS of **-$2.38**).
 *   **R&D Dominance:** Operating expenses are driven by R&D, which consistently exceeds **$200M per quarter** ($215M in Q3 2023). This represents the core "engine" of the company, fueling a pipeline that analysts believe justifies the current valuation.
 *   **Profit Margins:** The profit margin is deeply negative at **-40.4%**, reflecting the "burn" phase as Ionis transitions more programs to commercial stages.
 

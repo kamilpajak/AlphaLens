@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any
 
 import requests
 
@@ -89,7 +90,11 @@ class PolygonClient:
         """
         payload = self._get(
             f"/v2/aggs/ticker/{ticker}/range/1/day/{from_date}/{to_date}",
-            params={"adjusted": "true" if adjusted else "false", "limit": 50000, "sort": "asc"},
+            params={
+                "adjusted": "true" if adjusted else "false",
+                "limit": 50000,
+                "sort": "asc",
+            },
         )
         results = payload.get("results") or []
         return [
@@ -196,7 +201,9 @@ class PolygonClient:
                 if attempt < len(backoffs):
                     logger.warning(
                         "polygon transient net error (attempt %d/3): %s; sleeping %ds",
-                        attempt + 1, exc, backoffs[attempt],
+                        attempt + 1,
+                        exc,
+                        backoffs[attempt],
                     )
                     self._sleep(backoffs[attempt])
                     continue

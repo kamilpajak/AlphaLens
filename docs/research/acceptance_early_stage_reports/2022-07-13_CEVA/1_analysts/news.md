@@ -16,7 +16,7 @@ Despite the broader market's struggles with high interest rates, the semiconduct
 
 *   **Royalty Resilience:** CEVA’s business model relies on royalties from units shipped by its customers. If the "growing demand" in semiconductors translates to sustained volumes in IoT, automotive, and 5G infrastructure, CEVA’s royalty revenue should remain stable even in a high-inflation environment.
 *   **Licensing Risks:** The licensing side of the business (initial fees paid by companies to use CEVA's IP) may face headwinds if customers' R&D budgets are slashed during a recession.
-*   **Trading Strategy:** 
+*   **Trading Strategy:**
     *   **Short-Term Caution:** The 9.1% CPI shock is likely to trigger a broad-based sell-off in high-multiple tech stocks. Traders should expect volatility in `CEVA` as the market reprices the risk of a "hard landing" for the U.S. economy.
     *   **Long-Term Positioning:** For investors looking through the cycle, `CEVA`’s lack of manufacturing overhead (as an IP-only company) makes it more capital-efficient than traditional chipmakers, providing a potential "safe haven" within the tech sector if unit volumes hold steady.
 

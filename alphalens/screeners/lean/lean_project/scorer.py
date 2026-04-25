@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 import numpy as np
 import pandas as pd
@@ -28,7 +28,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-_METRIC_KEYS = ("roc20", "roc60", "volume_surprise", "trend_strength", "breakout", "near_high")
+_METRIC_KEYS = (
+    "roc20",
+    "roc60",
+    "volume_surprise",
+    "trend_strength",
+    "breakout",
+    "near_high",
+)
 
 
 @dataclass(frozen=True)
@@ -43,7 +50,7 @@ class TickerMetrics:
     volume_surprise: float
     trend_strength: float
     breakout: bool
-    near_high: float              # 1 - distance_to_high
+    near_high: float  # 1 - distance_to_high
     last_close: float
     avg_dollar_volume: float
 
@@ -133,9 +140,7 @@ def _normalize(values: pd.Series) -> pd.Series:
     return pd.Series(np.clip(z / 2.0 + 0.5, 0.0, 1.0), index=values.index)
 
 
-def rank_universe(
-    histories: Mapping[str, pd.DataFrame], config: Mapping
-) -> pd.DataFrame:
+def rank_universe(histories: Mapping[str, pd.DataFrame], config: Mapping) -> pd.DataFrame:
     """Score every ticker whose history passes guardrails and rank cross-sectionally.
 
     Returns DataFrame with columns:
@@ -164,9 +169,18 @@ def rank_universe(
     if not rows:
         return pd.DataFrame(
             columns=[
-                "ticker", "score", "roc5", "roc20", "roc60",
-                "volume_surprise", "trend_strength", "breakout",
-                "near_high", "last_close", "avg_dollar_volume", "rank",
+                "ticker",
+                "score",
+                "roc5",
+                "roc20",
+                "roc60",
+                "volume_surprise",
+                "trend_strength",
+                "breakout",
+                "near_high",
+                "last_close",
+                "avg_dollar_volume",
+                "rank",
             ]
         )
 

@@ -1,12 +1,12 @@
 The analysis for **TSHA** (Taysha Gene Therapies, Inc.) as of **February 27, 2025**, reveals a stock currently navigating a consolidation phase following a prolonged period of bearish pressure. While the long-term trend remains firmly down, there are emerging signs of momentum stabilization.
 
 ### **Trend and Momentum Analysis**
-**TSHA** is currently trading below its major moving averages, which characterizes a defensive market posture. The **200-day SMA ($2.22)** and **50-day SMA ($1.70)** are significantly higher than the current price (approx. **$1.62**), indicating that both long-term and medium-term trends are bearish. 
+**TSHA** is currently trading below its major moving averages, which characterizes a defensive market posture. The **200-day SMA ($2.22)** and **50-day SMA ($1.70)** are significantly higher than the current price (approx. **$1.62**), indicating that both long-term and medium-term trends are bearish.
 
 However, the short-term picture shows signs of "bottoming" behavior. The **10-day EMA ($1.63)** is currently acting as a pivot point; the price is hovering just below it, suggesting a battle between bulls and bears for immediate control. Most notably, the **MACD (-0.021)** has been steadily climbing from its January lows of -0.15. This bullish convergence indicates that while the price is still in negative territory, the selling pressure is dissipating.
 
 ### **Volatility and Support/Resistance**
-The **Bollinger Bands** have narrowed significantly from the high-volatility swings seen in late 2024. This contraction typically precedes a "squeeze" or a significant price move. 
+The **Bollinger Bands** have narrowed significantly from the high-volatility swings seen in late 2024. This contraction typically precedes a "squeeze" or a significant price move.
 - **Immediate Resistance:** The first hurdle is the **10-day EMA ($1.63)**, followed by a dense resistance zone between **$1.68 (VWMA)** and **$1.70 (50-day SMA)**. A decisive break above $1.70 would be the first major signal of a trend reversal.
 - **Immediate Support:** The **Lower Bollinger Band ($1.46)** serves as the primary technical floor. The stock successfully tested the $1.43–$1.50 range multiple times in late January/early February, establishing a reliable support base.
 

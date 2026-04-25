@@ -18,11 +18,10 @@ returning an empty frame — that's a CLI wiring bug and should fail loud.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
-from typing import Mapping
 
 import pandas as pd
-
 
 _OUTPUT_COLUMNS = ["ticker", "score", "insider_count", "aggregate_dollar"]
 
@@ -34,7 +33,7 @@ def _latest_asof(histories: Mapping[str, pd.DataFrame]) -> date | None:
             continue
         try:
             dates.append(df.index.max().date())
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
     return max(dates) if dates else None
 

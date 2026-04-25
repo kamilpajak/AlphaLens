@@ -16,7 +16,7 @@ import pandas as pd
 
 from alphalens.backtest.cost_validation import (
     DEFAULT_TIERS,
-    TierDefinition,
+    ScalePathSummary,
     apply_tiered_cost,
     build_per_date_tiers,
     classify_tier_as_of,
@@ -24,7 +24,6 @@ from alphalens.backtest.cost_validation import (
     evaluate_cost_gate,
     rolling_dollar_adv,
     run_scale_path,
-    ScalePathSummary,
 )
 from alphalens.backtest.engine import BacktestReport, DailyResult
 from alphalens.backtest.history_store import HistoryStore
@@ -98,8 +97,10 @@ class TestRollingDollarAdv(unittest.TestCase):
         # a dip. Assert all values are exactly $100k (no dip).
         for i in range(21, 30):
             self.assertAlmostEqual(
-                float(series.iloc[i]), 100_000.0, places=3,
-                msg=f"zero-vol day not ffilled at index {i}"
+                float(series.iloc[i]),
+                100_000.0,
+                places=3,
+                msg=f"zero-vol day not ffilled at index {i}",
             )
 
 
@@ -115,7 +116,7 @@ class TestClassifyTierAsOf(unittest.TestCase):
         for tier_name in ("mega", "large", "mid", "small", "micro"):
             self.assertTrue(
                 18 <= counts.get(tier_name, 0) <= 22,
-                f"{tier_name} count = {counts.get(tier_name, 0)}, expected ~20"
+                f"{tier_name} count = {counts.get(tier_name, 0)}, expected ~20",
             )
 
 
@@ -149,8 +150,9 @@ class TestBuildPerDateTiersLookahead(unittest.TestCase):
         # Must be different tiers — that proves the rolling window actually
         # changes with time, not fixed from end-of-backtest
         self.assertNotEqual(
-            early_tier, late_tier,
-            f"tier unchanged across volume regime: {early_tier} vs {late_tier}"
+            early_tier,
+            late_tier,
+            f"tier unchanged across volume regime: {early_tier} vs {late_tier}",
         )
 
 
@@ -159,10 +161,7 @@ class TestRunScalePathSynthetic(unittest.TestCase):
         # 5 days, top-3 picks, 3 distinct tickers all day.
         # Portfolio $1M, linear weighting [0.50, 0.33, 0.17] approx.
         start = pd.Timestamp("2022-01-03")
-        daily_specs = [
-            (start + pd.Timedelta(days=i), ["A", "B", "C"])
-            for i in range(5)
-        ]
+        daily_specs = [(start + pd.Timedelta(days=i), ["A", "B", "C"]) for i in range(5)]
         baseline = _report(daily_specs)
 
         # Fake ADV: A=$10M, B=$1M, C=$100k (mega/mid/micro-ish)
@@ -180,9 +179,12 @@ class TestRunScalePathSynthetic(unittest.TestCase):
     def test_participation_formula(self):
         baseline, rolling_adv, per_date_tiers = self._common_fixture()
         summary = run_scale_path(
-            baseline, rolling_adv, per_date_tiers,
+            baseline,
+            rolling_adv,
+            per_date_tiers,
             portfolio_value=1_000_000,
-            threshold_pct=15.0, max_threshold_pct=20.0,
+            threshold_pct=15.0,
+            max_threshold_pct=20.0,
         )
         # 5 days × 3 picks = 15, but first day's turnover = 100% (no prior);
         # subsequent days: same picks → turnover 0% → participation 0
@@ -197,9 +199,12 @@ class TestRunScalePathSynthetic(unittest.TestCase):
     def test_flags_worst_offender(self):
         baseline, rolling_adv, per_date_tiers = self._common_fixture()
         summary = run_scale_path(
-            baseline, rolling_adv, per_date_tiers,
+            baseline,
+            rolling_adv,
+            per_date_tiers,
             portfolio_value=1_000_000,
-            threshold_pct=15.0, max_threshold_pct=20.0,
+            threshold_pct=15.0,
+            max_threshold_pct=20.0,
             n_worst=5,
         )
         # Worst offender should be ticker C (lowest ADV) on day 1 (full turnover)
@@ -214,10 +219,7 @@ class TestApplyTieredCost(unittest.TestCase):
         daily_specs = [(start + pd.Timedelta(days=i), ["A", "B", "C"]) for i in range(2)]
         baseline = _report(daily_specs, ret=0.0)
 
-        per_date_tiers = {
-            d: {"A": "mega", "B": "mid", "C": "micro"}
-            for d, _ in daily_specs
-        }
+        per_date_tiers = {d: {"A": "mega", "B": "mid", "C": "micro"} for d, _ in daily_specs}
         bps_per_tier = {"mega": 3, "mid": 25, "micro": 100}
 
         returns = baseline.portfolio_returns
@@ -225,8 +227,13 @@ class TestApplyTieredCost(unittest.TestCase):
         dates = [snap.date for snap in baseline.daily_results]
 
         net = apply_tiered_cost(
-            returns, top_n_lists, dates, per_date_tiers, bps_per_tier,
-            daily_turnover=None, weighting="linear",
+            returns,
+            top_n_lists,
+            dates,
+            per_date_tiers,
+            bps_per_tier,
+            daily_turnover=None,
+            weighting="linear",
         )
         # Weighted bps = linear([2.0, 1.1, 0.2]/3.3) · [3, 25, 100]
         # = [0.606, 0.333, 0.061] · [3, 25, 100] = 1.82 + 8.33 + 6.1 = ~16.25 bps
@@ -272,9 +279,13 @@ class TestCompareCostScenarios(unittest.TestCase):
         for i, r in enumerate(noisy_returns):
             daily.append(_daily(start + pd.Timedelta(days=i), ["A", "B"], ret=float(r)))
         baseline = BacktestReport(
-            scorer_config={}, holding_period=5, top_n=2,
-            start=daily[0].date.date(), end=daily[-1].date.date(),
-            benchmark="SPY", universe_ticker_count=10,
+            scorer_config={},
+            holding_period=5,
+            top_n=2,
+            start=daily[0].date.date(),
+            end=daily[-1].date.date(),
+            benchmark="SPY",
+            universe_ticker_count=10,
             daily_results=daily,
         )
         per_date_tiers = {snap.date: {"A": "mega", "B": "mid"} for snap in daily}

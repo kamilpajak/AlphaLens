@@ -8,7 +8,7 @@ As of March 6, 2026, **IMVT** exhibits a strong long-term bullish structure char
 ## Technical Analysis & Indicator Observations
 
 ### 1. Trend Benchmarks (Moving Averages)
-*   **Long-Term Health**: The **200-day SMA ($20.29)** remains well below the current price ($26.72), indicating that the primary trend for the past year has been aggressively bullish. 
+*   **Long-Term Health**: The **200-day SMA ($20.29)** remains well below the current price ($26.72), indicating that the primary trend for the past year has been aggressively bullish.
 *   **Medium-Term Support**: The **50-day SMA ($26.35)** is currently acting as a critical pivot. Over the last three sessions, the price has hovered just above this level. A sustained close below the 50 SMA would signal a shift from a "buy-the-dip" market to a deeper correction.
 *   **Short-Term Resistance**: The **10-day EMA ($26.94)** has recently crossed above the price. This inversion suggests that short-term sellers currently have the upper hand, and the $27.00 level now serves as immediate overhead resistance.
 
@@ -25,7 +25,7 @@ As of March 6, 2026, **IMVT** exhibits a strong long-term bullish structure char
 ## Actionable Insights for Traders
 
 *   **For Bullish Entries**: Look for a "bounce" confirmation off the **50-day SMA ($26.35)**. An ideal entry would be a bullish engulfing candle on the daily chart accompanied by an uptick in RSI.
-*   **For Bearish/Cautionary Plays**: A decisive daily close below **$26.30** (50 SMA) could trigger a slide toward the **Bollinger Lower Band ($25.58)**. 
+*   **For Bearish/Cautionary Plays**: A decisive daily close below **$26.30** (50 SMA) could trigger a slide toward the **Bollinger Lower Band ($25.58)**.
 *   **Resistance to Watch**: The **$27.00 - $27.40** range is the primary hurdle. Until IMVT can clear its 10-day EMA and VWMA, the stock is likely to trade sideways.
 
 ---

@@ -1,7 +1,7 @@
 This report provides an analysis of recent global macroeconomic trends and news specifically related to **PLXS (Plexus Corp.)** for the period leading up to July 8, 2025.
 
 ### **Macroeconomic Context**
-The broader market sentiment in the first week of July 2025 has been characterized by a "thawing" of investment dollars and a resurgence in equity targets. 
+The broader market sentiment in the first week of July 2025 has been characterized by a "thawing" of investment dollars and a resurgence in equity targets.
 *   **Bullish S&P 500 Outlook:** Major financial institutions, including Bank of America and Goldman Sachs, have raised their year-end targets for the S&P 500 to 6300 and 6600, respectively. This optimism is driven by reduced policy uncertainty, resilient corporate earnings, and the anticipation of interest rate cuts.
 *   **Interest Rate Expectations:** Market participants are largely anticipating a 25-50 bps rate cut by the Fed later in 2025. This prospect has already begun to lower mortgage rates (hitting a 3-month low of 6.67%) and is fueling inflows into dividend-paying stocks and interest-sensitive sectors.
 *   **Commodity Headwinds:** Copper prices have surged to a three-month high due to supply shortages. As a critical component in electronic manufacturing, this represents a potential headwind for the cost of goods sold (COGS) for companies like **PLXS**.

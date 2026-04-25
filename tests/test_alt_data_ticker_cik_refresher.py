@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 
 import yaml
 
-
 SAMPLE_SEC_PAYLOAD = {
     "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
     "1": {"cik_str": 789019, "ticker": "MSFT", "title": "Microsoft Corporation"},
@@ -43,9 +42,7 @@ class TestParseSecTickers(unittest.TestCase):
     def test_upper_cases_tickers(self):
         from alphalens.alt_data.ticker_cik_refresher import parse_sec_company_tickers
 
-        result = parse_sec_company_tickers(
-            {"0": {"cik_str": 1, "ticker": "aapl"}}
-        )
+        result = parse_sec_company_tickers({"0": {"cik_str": 1, "ticker": "aapl"}})
 
         self.assertEqual(result, {"AAPL": 1})
 

@@ -1,9 +1,9 @@
 ### CEVA Inc. (CEVA) Fundamental Analysis Report
 
-**Current Date:** December 21, 2023  
-**Ticker:** CEVA  
-**Sector:** Technology  
-**Industry:** Semiconductors  
+**Current Date:** December 21, 2023
+**Ticker:** CEVA
+**Sector:** Technology
+**Industry:** Semiconductors
 
 ---
 
@@ -14,7 +14,7 @@ CEVA Inc. is a leading licensor of wireless connectivity and smart sensing techn
 CEVA’s recent financial trajectory shows a company in a transitional phase, heavily investing in AI and advanced signal processing while facing a temporary contraction in revenue.
 
 *   **Revenue Dynamics:** TTM Revenue stands at approximately **$109.6 million**, reflecting a decline from the $120.6 million reported in 2022. This contraction is likely due to headwinds in the smartphone market and consumer electronics, which are major drivers of royalty revenue.
-*   **Profitability:** The company is currently operating at a loss, with a **TTM Net Income of -$10.6 million** and a Diluted EPS of **-$0.45**. 
+*   **Profitability:** The company is currently operating at a loss, with a **TTM Net Income of -$10.6 million** and a Diluted EPS of **-$0.45**.
 *   **R&D Intensity:** CEVA maintains an exceptionally high R&D spend, reaching **$74.8 million** (approx. 68% of revenue). This underscores the company's commitment to maintaining its technological edge in AI and IoT, though it weighs heavily on current margins.
 *   **Operating Margins:** TTM Operating Margin is **-1.27%**, indicating that the company is near break-even on an operating basis but is being pulled down by high fixed costs relative to current revenue levels.
 
@@ -59,5 +59,5 @@ One of CEVA’s strongest fundamental pillars is its robust balance sheet, provi
 | **Beta** | 1.528 | Higher volatility than the broad market. |
 | **P/B Ratio** | 1.93 | Attractive valuation relative to net assets. |
 
-**FINAL TRANSACTION PROPOSAL: HOLD/BUY**  
+**FINAL TRANSACTION PROPOSAL: HOLD/BUY**
 For long-term investors, the current valuation combined with a debt-free balance sheet and high institutional support makes CEVA an attractive accumulation candidate, particularly as a play on the recovery of the semiconductor cycle and the proliferation of edge-AI. Short-term traders should wait for a confirmed trend reversal in quarterly royalty numbers before sizing up.

@@ -46,17 +46,13 @@ def cost_validation(
     ),
     top_n: int = typer.Option(5, help="Top-N picks per day"),
     holding: int = typer.Option(5, help="Holding period in trading days"),
-    weighting: str = typer.Option(
-        "linear", help="Position weighting: linear | equal | conviction"
-    ),
+    weighting: str = typer.Option("linear", help="Position weighting: linear | equal | conviction"),
     benchmark: str = typer.Option("SPY", help="Benchmark for calendar"),
     report: str = typer.Option(
         "docs/backtest/cost_validation.md",
         help="Markdown report output path (relative to repo root)",
     ),
-    csv: str = typer.Option(
-        "", help="Optional per-pick-day participation CSV output path"
-    ),
+    csv: str = typer.Option("", help="Optional per-pick-day participation CSV output path"),
 ) -> None:
     """Tiered flat-bps cost model + scale-path validation.
 
@@ -75,13 +71,15 @@ def cost_validation(
 
     from alphalens.backtest.cost_validation import (
         DEFAULT_TIERS,
+        CostValidationReport,
         build_per_date_tiers,
         compare_cost_scenarios,
-        compile_report as cv_compile_report,
-        CostValidationReport,
         evaluate_cost_gate,
         rolling_dollar_adv,
         run_scale_path,
+    )
+    from alphalens.backtest.cost_validation import (
+        compile_report as cv_compile_report,
     )
     from alphalens.backtest.engine import BacktestEngine
     from alphalens.backtest.history_store import HistoryStore
@@ -139,7 +137,9 @@ def cost_validation(
     # Scale-path analysis
     typer.echo("\n[scale-path] computing participation distribution…")
     scale_path = run_scale_path(
-        baseline, rolling_adv, per_date_tiers,
+        baseline,
+        rolling_adv,
+        per_date_tiers,
         portfolio_value=portfolio_value,
         threshold_pct=threshold_pct,
         max_threshold_pct=max_threshold_pct,
@@ -155,9 +155,7 @@ def cost_validation(
     # Tiered cost model comparison
     typer.echo("\n[tiered-cost] comparing gross / flat 100 / tiered Sharpe…")
     bps_per_tier = {t.name: t.bps_annual for t in DEFAULT_TIERS}
-    tiered = compare_cost_scenarios(
-        baseline, per_date_tiers, bps_per_tier, weighting=weighting
-    )
+    tiered = compare_cost_scenarios(baseline, per_date_tiers, bps_per_tier, weighting=weighting)
     typer.echo(
         f"  gross={tiered.sharpe_gross:+.3f}  "
         f"flat 100bps={tiered.sharpe_flat_100bps:+.3f}  "
@@ -168,7 +166,9 @@ def cost_validation(
     # Gate
     verdict = evaluate_cost_gate(scale_path)
     typer.echo(f"\nverdict: {verdict.overall}")
-    typer.echo(f"  fraction: {'PASS' if verdict.fraction_pass else 'FAIL'} — {verdict.reasons['fraction']}")
+    typer.echo(
+        f"  fraction: {'PASS' if verdict.fraction_pass else 'FAIL'} — {verdict.reasons['fraction']}"
+    )
     typer.echo(f"  max:      {'PASS' if verdict.max_pass else 'FAIL'} — {verdict.reasons['max']}")
 
     # Report
@@ -185,13 +185,16 @@ def cost_validation(
     if not report_path.is_absolute():
         report_path = Path.cwd() / report_path
     cv_compile_report(
-        report_path, cv_report,
-        start=start_date, end=end_date,
+        report_path,
+        cv_report,
+        start=start_date,
+        end=end_date,
     )
     typer.echo(f"\nReport written to {report_path}")
 
     if csv:
         import csv as _csv
+
         csv_path = Path(csv)
         if not csv_path.is_absolute():
             csv_path = Path.cwd() / csv_path
@@ -199,15 +202,28 @@ def cost_validation(
         with csv_path.open("w", newline="") as fh:
             writer = _csv.writer(fh)
             writer.writerow(
-                ["date", "ticker", "rank", "tier", "participation", "dollar_position", "dollar_adv"]
+                [
+                    "date",
+                    "ticker",
+                    "rank",
+                    "tier",
+                    "participation",
+                    "dollar_position",
+                    "dollar_adv",
+                ]
             )
             for p in scale_path.worst_offenders:
-                writer.writerow([
-                    p.date, p.ticker, p.rank, p.tier,
-                    f"{p.participation:.6f}",
-                    f"{p.dollar_position:.2f}",
-                    f"{p.dollar_adv:.2f}",
-                ])
+                writer.writerow(
+                    [
+                        p.date,
+                        p.ticker,
+                        p.rank,
+                        p.tier,
+                        f"{p.participation:.6f}",
+                        f"{p.dollar_position:.2f}",
+                        f"{p.dollar_adv:.2f}",
+                    ]
+                )
         typer.echo(f"Worst-offenders CSV: {csv_path}")
 
 
@@ -225,16 +241,15 @@ def walk_forward(
     weighting: str = typer.Option("linear", help="Position weighting: linear | equal | conviction"),
     benchmark: str = typer.Option("SPY", help="Benchmark for calendar + regime classification"),
     no_attrib: bool = typer.Option(
-        False, "--no-attrib",
+        False,
+        "--no-attrib",
         help="Skip Carhart per-window attribution (useful when FF factor files are unavailable).",
     ),
     report: str = typer.Option(
         "docs/backtest/walk_forward.md",
         help="Markdown report output path (relative to repo root)",
     ),
-    csv: str = typer.Option(
-        "", help="Optional per-window CSV output path (empty = skip)"
-    ),
+    csv: str = typer.Option("", help="Optional per-window CSV output path (empty = skip)"),
 ) -> None:
     """Walk-forward OOS validation — rolling 252-day test windows.
 
@@ -266,8 +281,7 @@ def walk_forward(
     start_date = _date.fromisoformat(start)
     end_date = _date.fromisoformat(end)
     typer.echo(
-        f"Walk-forward OOS — {start_date} → {end_date}, "
-        f"window={window_days}d, step={step_days}d"
+        f"Walk-forward OOS — {start_date} → {end_date}, window={window_days}d, step={step_days}d"
     )
 
     # Load universe + histories
@@ -351,21 +365,43 @@ def walk_forward(
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         with csv_path.open("w", newline="") as fh:
             writer = _csv.writer(fh)
-            writer.writerow([
-                "test_start", "test_end", "n_days", "regime", "regime_reversed_within",
-                "sharpe_gross", "sharpe_moderate",
-                "carhart_alpha_daily", "carhart_alpha_tstat",
-                "ic_mean", "ic_tstat", "max_drawdown", "turnover", "cumulative_return",
-            ])
+            writer.writerow(
+                [
+                    "test_start",
+                    "test_end",
+                    "n_days",
+                    "regime",
+                    "regime_reversed_within",
+                    "sharpe_gross",
+                    "sharpe_moderate",
+                    "carhart_alpha_daily",
+                    "carhart_alpha_tstat",
+                    "ic_mean",
+                    "ic_tstat",
+                    "max_drawdown",
+                    "turnover",
+                    "cumulative_return",
+                ]
+            )
             for r in wf_report.window_results:
-                writer.writerow([
-                    r.test_start, r.test_end, r.n_days, r.regime, r.regime_reversed_within,
-                    f"{r.sharpe_gross:.4f}", f"{r.sharpe_moderate:.4f}",
-                    f"{r.carhart_alpha_daily:.6f}" if r.carhart_alpha_daily is not None else "",
-                    f"{r.carhart_alpha_tstat:.4f}" if r.carhart_alpha_tstat is not None else "",
-                    f"{r.ic_mean:.6f}", f"{r.ic_tstat:.4f}",
-                    f"{r.max_drawdown:.4f}", f"{r.turnover:.4f}", f"{r.cumulative_return:.4f}",
-                ])
+                writer.writerow(
+                    [
+                        r.test_start,
+                        r.test_end,
+                        r.n_days,
+                        r.regime,
+                        r.regime_reversed_within,
+                        f"{r.sharpe_gross:.4f}",
+                        f"{r.sharpe_moderate:.4f}",
+                        f"{r.carhart_alpha_daily:.6f}" if r.carhart_alpha_daily is not None else "",
+                        f"{r.carhart_alpha_tstat:.4f}" if r.carhart_alpha_tstat is not None else "",
+                        f"{r.ic_mean:.6f}",
+                        f"{r.ic_tstat:.4f}",
+                        f"{r.max_drawdown:.4f}",
+                        f"{r.turnover:.4f}",
+                        f"{r.cumulative_return:.4f}",
+                    ]
+                )
         typer.echo(f"Per-window CSV: {csv_path}")
 
 
@@ -471,12 +507,17 @@ def survivorship_pit(
         pre, post = split_universe_by_ipo_cohort(store, screener_tickers, start_date)
         typer.echo(f"  pre-existing: {len(pre)}  post-IPO: {len(post)}")
         cohort_results = run_cohort_backtests(
-            store, pre, post,
+            store,
+            pre,
+            post,
             scorer=momentum_scorer_adapter,
             scorer_config=scorer_config,
-            start=start_date, end=end_date,
-            benchmark=benchmark, top_n=top_n,
-            holding_period=holding, weighting=weighting,
+            start=start_date,
+            end=end_date,
+            benchmark=benchmark,
+            top_n=top_n,
+            holding_period=holding,
+            weighting=weighting,
             carhart_factors=carhart,
         )
         for r in cohort_results:
@@ -504,6 +545,7 @@ def survivorship_pit(
         if "c2" in tests_set:
             typer.echo("\n[C2] selection bias…")
             from alphalens.backtest.survivorship_pit import picks_from_report
+
             picks_df = picks_from_report(baseline)
             bias_results = compute_selection_bias(
                 picks_df, events, screener_tickers, windows=(30, 90, 180)
@@ -517,7 +559,8 @@ def survivorship_pit(
         if "c3" in tests_set:
             typer.echo("\n[C3] mid-holding wipeout audit…")
             audit = audit_mid_holding_wipeout(
-                baseline, events,
+                baseline,
+                events,
                 carhart_factors=carhart,
                 weighting_scheme=weighting,
             )
@@ -566,7 +609,7 @@ def validate_llm_filter(
     scorer: str = typer.Option(
         "rule",
         help="Scorer: 'rule' (baseline, $0), 'gemini' (Flash, ~$0.02/pick), "
-             "'hybrid' (rule→Gemini fallback), 'tradingagents' (full pipeline, ~$0.50/pick)",
+        "'hybrid' (rule→Gemini fallback), 'tradingagents' (full pipeline, ~$0.50/pick)",
     ),
     report: str = typer.Option(
         "docs/backtest/llm_filter_validation.md", help="Ścieżka do raportu MD"
@@ -582,21 +625,22 @@ def validate_llm_filter(
     from datetime import date
 
     from alphalens.backtest.engine import BacktestEngine
-    from alphalens.backtest.history_store import HistoryStore
     from alphalens.backtest.historical_validation import (
         evaluate_historical_picks,
         format_decision_matrix,
         picks_from_backtest_report,
         rule_based_tractability_scorer,
     )
+    from alphalens.backtest.history_store import HistoryStore
     from alphalens.screeners.lean.config import BENCHMARKS, DATA_DIR, LEAN_DEFAULTS
     from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
     from alphalens.screeners.lean.lean_project.scorer import rank_universe as lean_rank
     from alphalens.screeners.themed.universe import (
         flatten_universe,
+    )
+    from alphalens.screeners.themed.universe import (
         load_universe as load_2b,
     )
-
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
@@ -611,9 +655,14 @@ def validate_llm_filter(
     # Scorer declares its own warmup requirement — engine reads on __init__.
     lean_rank.MIN_BARS_REQUIRED = 252
     engine = BacktestEngine(
-        store, scorer=lean_rank, scorer_config=LEAN_DEFAULTS,
-        holding_period=5, top_n=top_n, benchmark="SPY",
-        screener_tickers=screener_tickers, weighting="linear",
+        store,
+        scorer=lean_rank,
+        scorer_config=LEAN_DEFAULTS,
+        holding_period=5,
+        top_n=top_n,
+        benchmark="SPY",
+        screener_tickers=screener_tickers,
+        weighting="linear",
     )
 
     typer.echo("Generuję historical picks via BacktestEngine...")
@@ -622,12 +671,17 @@ def validate_llm_filter(
     picks_with_themes = []
     for p in all_picks:
         from alphalens.backtest.historical_validation import PickRecord
-        picks_with_themes.append(PickRecord(
-            asof_date=p.asof_date, ticker=p.ticker, rank=p.rank,
-            momentum_score=p.momentum_score,
-            themes=themes_map.get(p.ticker, []),
-            forward_return=p.forward_return,
-        ))
+
+        picks_with_themes.append(
+            PickRecord(
+                asof_date=p.asof_date,
+                ticker=p.ticker,
+                rank=p.rank,
+                momentum_score=p.momentum_score,
+                themes=themes_map.get(p.ticker, []),
+                forward_return=p.forward_return,
+            )
+        )
     typer.echo(f"  {len(picks_with_themes)} picks (dni × top-{top_n}) z forward returns")
 
     if not picks_with_themes:
@@ -642,6 +696,7 @@ def validate_llm_filter(
         typer.echo("Scorer: rule-based deterministic (no LLM cost)")
     elif scorer == "gemini":
         from alphalens.backtest.llm_scorers import gemini_flash_tractability_scorer
+
         scorer_fn = gemini_flash_tractability_scorer
         typer.echo(
             f"Scorer: Gemini Flash tractability — szacunkowy koszt "
@@ -649,10 +704,12 @@ def validate_llm_filter(
         )
     elif scorer == "hybrid":
         from alphalens.backtest.llm_scorers import rule_and_gemini_hybrid_scorer
+
         scorer_fn = rule_and_gemini_hybrid_scorer
         typer.echo("Scorer: hybrid (rule first, Gemini on uncertain)")
     elif scorer == "tradingagents":
         from alphalens.backtest.llm_scorers import tradingagents_reduced_scorer
+
         scorer_fn = tradingagents_reduced_scorer
         typer.echo(
             f"Scorer: TradingAgents reduced (market+news) — szacunkowy koszt "
@@ -685,6 +742,7 @@ def validate_llm_filter(
             csv_path = Path.cwd() / csv_path
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         import pandas as pd
+
         pd.DataFrame(result.per_pick_evaluations).to_csv(csv_path, index=False)
         typer.echo(f"CSV: {csv_path}")
 
@@ -721,9 +779,10 @@ def _at_pick_trailing_return(store, ticker: str, pick_date, lookback: int) -> fl
     """Trailing `lookback`-day return for `ticker` ending at `pick_date` (inclusive)."""
     try:
         df = store.full(ticker)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
     import pandas as pd
+
     ts = pd.Timestamp(pick_date)
     try:
         closes = df["close"].loc[:ts]
@@ -734,7 +793,7 @@ def _at_pick_trailing_return(store, ticker: str, pick_date, lookback: int) -> fl
         if then <= 0:
             return None
         return (now - then) / then
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -753,12 +812,12 @@ def _compute_forward_features(store, ticker: str, benchmark: str, pick_date) -> 
     try:
         df_t = store.full(ticker)
         tkr_close = df_t["close"].loc[df_t.index > ts]
-    except Exception:  # noqa: BLE001
+    except Exception:
         tkr_close = None
     try:
         df_b = store.full(benchmark)
         bench_close = df_b["close"].loc[df_b.index > ts]
-    except Exception:  # noqa: BLE001
+    except Exception:
         bench_close = None
 
     def _window_metrics(closes, horizon):
@@ -800,7 +859,8 @@ def historical_acceptance(
         help="Which scorer's picks to replay: 'momentum' or 'early-stage'",
     ),
     samples_per_regime: int = typer.Option(
-        10, help="How many (date, ticker) samples per regime bucket to run through Layer 3"
+        10,
+        help="How many (date, ticker) samples per regime bucket to run through Layer 3",
     ),
     seed: int = typer.Option(42, help="Random seed for reproducibility"),
     picks_csv: str = typer.Option(
@@ -812,15 +872,15 @@ def historical_acceptance(
         False,
         "--include-social/--exclude-social",
         help="Include social analyst. Default: exclude (social has look-ahead risk on "
-             "historical replay). Off for clean PIT rigor.",
+        "historical replay). Off for clean PIT rigor.",
     ),
     report: str = typer.Option("", help="Markdown summary report output path"),
     results_csv: str = typer.Option("", help="Per-sample results CSV"),
     reports_dir: str = typer.Option(
         "",
         help="Directory for per-sample full reports (analyst + research + trader + "
-             "risk markdowns + final_state.json). Default: "
-             "docs/research/acceptance_{scorer}_reports/",
+        "risk markdowns + final_state.json). Default: "
+        "docs/research/acceptance_{scorer}_reports/",
     ),
     dry_run: bool = typer.Option(
         False, help="Print sampling plan + cost estimate, skip Layer 3 invocation"
@@ -846,7 +906,6 @@ def historical_acceptance(
     import json
     import random
     from collections import defaultdict
-    from datetime import date as _date
 
     import pandas as pd
 
@@ -859,14 +918,16 @@ def historical_acceptance(
 
     try:
         from cli.main import save_report_to_disk as _save_ta_report
-    except Exception:  # noqa: BLE001
+    except Exception:
         _save_ta_report = None
 
     if scorer not in {"momentum", "early-stage"}:
         raise typer.BadParameter(f"Unknown scorer: {scorer!r} (expected: momentum | early-stage)")
 
-    picks_path = Path(picks_csv) if picks_csv else Path(
-        f"docs/backtest/compare_{scorer.replace('-', '_')}_2026-04-21.csv"
+    picks_path = (
+        Path(picks_csv)
+        if picks_csv
+        else Path(f"docs/backtest/compare_{scorer.replace('-', '_')}_2026-04-21.csv")
     )
     if not picks_path.exists():
         raise typer.BadParameter(f"Picks CSV not found: {picks_path}")
@@ -880,14 +941,16 @@ def historical_acceptance(
         tickers_list = [t.strip().upper() for t in str(r["top_n_tickers"]).split(",")]
         scores_list = [float(s.strip()) for s in str(r["top_n_scores"]).split(",")]
         for rank, (t, s) in enumerate(zip(tickers_list, scores_list), 1):
-            rows.append({
-                "date": d,
-                "ticker": t,
-                "rank": rank,
-                "scorer_score": s,
-                "daily_ic": float(r.get("ic", float("nan"))) if "ic" in r else float("nan"),
-                "scored_count": int(r.get("scored_count", 0)) if "scored_count" in r else 0,
-            })
+            rows.append(
+                {
+                    "date": d,
+                    "ticker": t,
+                    "rank": rank,
+                    "scorer_score": s,
+                    "daily_ic": float(r.get("ic", float("nan"))) if "ic" in r else float("nan"),
+                    "scored_count": int(r.get("scored_count", 0)) if "scored_count" in r else 0,
+                }
+            )
     picks = pd.DataFrame(rows)
     typer.echo(f"  {len(picks)} (date, ticker) pairs over {picks['date'].nunique()} days")
 
@@ -959,8 +1022,10 @@ def historical_acceptance(
     )
     runner = TradingAgentsRunner()
 
-    reports_root = Path(reports_dir) if reports_dir else Path(
-        f"docs/research/acceptance_{scorer.replace('-', '_')}_reports"
+    reports_root = (
+        Path(reports_dir)
+        if reports_dir
+        else Path(f"docs/research/acceptance_{scorer.replace('-', '_')}_reports")
     )
     if not reports_root.is_absolute():
         reports_root = Path.cwd() / reports_root
@@ -1004,9 +1069,7 @@ def historical_acceptance(
             # regression / quantile analysis without re-running Layer 3.
             fwd = _compute_forward_features(store, s["ticker"], benchmark, s["date"])
             # At-pick-time market context.
-            fwd["spy_trailing_60d"] = _at_pick_trailing_return(
-                store, benchmark, s["date"], 60
-            )
+            fwd["spy_trailing_60d"] = _at_pick_trailing_return(store, benchmark, s["date"], 60)
 
             # Persist the full state + upstream's markdown render for post-hoc
             # analysis of why Layer 3 accepted/rejected this pick.
@@ -1016,12 +1079,12 @@ def historical_acceptance(
                 (sample_dir / "final_state.json").write_text(
                     json.dumps(result.final_state, default=str, indent=2)
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 typer.echo(f"    warn: final_state.json failed: {exc}", err=True)
             if _save_ta_report is not None:
                 try:
                     _save_ta_report(result.final_state, s["ticker"], sample_dir)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     typer.echo(f"    warn: save_report_to_disk failed: {exc}", err=True)
 
             row = {
@@ -1036,7 +1099,9 @@ def historical_acceptance(
                 "accepted": accepted,
                 "duration_sec": round(result.duration_sec, 1),
                 "model": result.model_used,
-                "report_dir": str(sample_dir.relative_to(Path.cwd())) if sample_dir.is_relative_to(Path.cwd()) else str(sample_dir),
+                "report_dir": str(sample_dir.relative_to(Path.cwd()))
+                if sample_dir.is_relative_to(Path.cwd())
+                else str(sample_dir),
                 "error": "",
                 **fwd,
             }
@@ -1048,8 +1113,10 @@ def historical_acceptance(
                 if (fwd_20 is not None and alpha_20 is not None)
                 else "  fwd20d=n/a"
             )
-            typer.echo(f"    → {rating}  ({result.duration_sec:.0f}s){fwd_str}  → {sample_dir.name}/")
-        except Exception as exc:  # noqa: BLE001
+            typer.echo(
+                f"    → {rating}  ({result.duration_sec:.0f}s){fwd_str}  → {sample_dir.name}/"
+            )
+        except Exception as exc:
             err_row: dict = {
                 "date": s["date"].isoformat(),
                 "ticker": s["ticker"],
@@ -1066,9 +1133,7 @@ def historical_acceptance(
                 "error": str(exc)[:200],
             }
             err_row.update(_compute_forward_features(store, s["ticker"], benchmark, s["date"]))
-            err_row["spy_trailing_60d"] = _at_pick_trailing_return(
-                store, benchmark, s["date"], 60
-            )
+            err_row["spy_trailing_60d"] = _at_pick_trailing_return(store, benchmark, s["date"], 60)
             results.append(err_row)
             typer.echo(f"    → ERROR: {exc}")
 
@@ -1092,8 +1157,10 @@ def historical_acceptance(
             typer.echo(f"  {regime}:   {_accept_rate(lst) * 100:.1f}% ({sum(lst)}/{len(lst)})")
 
     # Reports.
-    report_path = Path(report) if report else Path(
-        f"docs/research/historical_acceptance_{scorer.replace('-', '_')}.md"
+    report_path = (
+        Path(report)
+        if report
+        else Path(f"docs/research/historical_acceptance_{scorer.replace('-', '_')}.md")
     )
     if not report_path.is_absolute():
         report_path = Path.cwd() / report_path

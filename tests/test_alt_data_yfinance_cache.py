@@ -53,14 +53,20 @@ class TestDownloadAndCache(unittest.TestCase):
 
             download_and_cache(
                 tickers=["AAPL"],
-                start=date(2024, 1, 1), end=date(2024, 3, 31),
-                cache_dir=cache, fetcher=fetcher, sleep_between=0,
+                start=date(2024, 1, 1),
+                end=date(2024, 3, 31),
+                cache_dir=cache,
+                fetcher=fetcher,
+                sleep_between=0,
             )
             # Second call should not re-fetch.
             new = download_and_cache(
                 tickers=["AAPL", "MSFT"],
-                start=date(2024, 1, 1), end=date(2024, 3, 31),
-                cache_dir=cache, fetcher=fetcher, sleep_between=0,
+                start=date(2024, 1, 1),
+                end=date(2024, 3, 31),
+                cache_dir=cache,
+                fetcher=fetcher,
+                sleep_between=0,
             )
 
         self.assertEqual(new, 1)  # only MSFT newly cached
@@ -79,8 +85,11 @@ class TestDownloadAndCache(unittest.TestCase):
 
             count = download_and_cache(
                 tickers=["GOOD", "BAD"],
-                start=date(2024, 1, 1), end=date(2024, 3, 31),
-                cache_dir=cache, fetcher=fetcher, sleep_between=0,
+                start=date(2024, 1, 1),
+                end=date(2024, 3, 31),
+                cache_dir=cache,
+                fetcher=fetcher,
+                sleep_between=0,
             )
 
             self.assertEqual(count, 1)
@@ -98,8 +107,11 @@ class TestDownloadAndCache(unittest.TestCase):
 
             count = download_and_cache(
                 tickers=["DEAD"],
-                start=date(2024, 1, 1), end=date(2024, 3, 31),
-                cache_dir=cache, fetcher=fetcher, sleep_between=0,
+                start=date(2024, 1, 1),
+                end=date(2024, 3, 31),
+                cache_dir=cache,
+                fetcher=fetcher,
+                sleep_between=0,
             )
 
         self.assertEqual(count, 0)
@@ -108,7 +120,10 @@ class TestDownloadAndCache(unittest.TestCase):
 
 class TestLoadCachedHistories(unittest.TestCase):
     def test_loads_cached_parquets(self):
-        from alphalens.alt_data.yfinance_cache import download_and_cache, load_cached_histories
+        from alphalens.alt_data.yfinance_cache import (
+            download_and_cache,
+            load_cached_histories,
+        )
 
         fetcher = MagicMock(side_effect=lambda t, s, e: _synthetic_ohlcv())
 
@@ -116,8 +131,11 @@ class TestLoadCachedHistories(unittest.TestCase):
             cache = Path(td)
             download_and_cache(
                 tickers=["AAPL", "MSFT"],
-                start=date(2024, 1, 1), end=date(2024, 3, 31),
-                cache_dir=cache, fetcher=fetcher, sleep_between=0,
+                start=date(2024, 1, 1),
+                end=date(2024, 3, 31),
+                cache_dir=cache,
+                fetcher=fetcher,
+                sleep_between=0,
             )
 
             histories = load_cached_histories(["AAPL", "MSFT"], cache)
@@ -135,7 +153,10 @@ class TestLoadCachedHistories(unittest.TestCase):
         self.assertEqual(histories, {})
 
     def test_round_trip_preserves_index(self):
-        from alphalens.alt_data.yfinance_cache import download_and_cache, load_cached_histories
+        from alphalens.alt_data.yfinance_cache import (
+            download_and_cache,
+            load_cached_histories,
+        )
 
         fetcher = MagicMock(side_effect=lambda t, s, e: _synthetic_ohlcv())
 
@@ -143,8 +164,11 @@ class TestLoadCachedHistories(unittest.TestCase):
             cache = Path(td)
             download_and_cache(
                 tickers=["AAPL"],
-                start=date(2024, 1, 1), end=date(2024, 3, 31),
-                cache_dir=cache, fetcher=fetcher, sleep_between=0,
+                start=date(2024, 1, 1),
+                end=date(2024, 3, 31),
+                cache_dir=cache,
+                fetcher=fetcher,
+                sleep_between=0,
             )
             histories = load_cached_histories(["AAPL"], cache)
 
@@ -180,9 +204,13 @@ class TestDefaultFetcher(unittest.TestCase):
 
         raw = pd.DataFrame(
             {
-                "Open": [100.0], "High": [101.0], "Low": [99.0],
-                "Close": [100.5], "Volume": [1000],
-                "Dividends": [0.0], "Stock Splits": [0.0],
+                "Open": [100.0],
+                "High": [101.0],
+                "Low": [99.0],
+                "Close": [100.5],
+                "Volume": [1000],
+                "Dividends": [0.0],
+                "Stock Splits": [0.0],
             },
             index=pd.DatetimeIndex(["2024-01-03"]),
         )
@@ -209,8 +237,13 @@ class TestDefaultFetcher(unittest.TestCase):
         from alphalens.alt_data.yfinance_cache import _normalize_ohlcv
 
         raw = pd.DataFrame(
-            {"Open": [100.0], "High": [101.0], "Low": [99.0],
-             "Close": [100.5], "Volume": [1000]},
+            {
+                "Open": [100.0],
+                "High": [101.0],
+                "Low": [99.0],
+                "Close": [100.5],
+                "Volume": [1000],
+            },
             index=pd.DatetimeIndex(["2024-01-03"], tz="America/New_York"),
         )
 

@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 
@@ -68,7 +68,7 @@ class TestTradingAgentsRunner(unittest.TestCase):
         args, _ = graph.propagate.call_args
         self.assertEqual(args[0], "NVDA")
         # second arg is today's date in ISO format
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = datetime.now(UTC).date().isoformat()
         self.assertEqual(args[1], today)
 
     def test_runner_propagates_exception(self):

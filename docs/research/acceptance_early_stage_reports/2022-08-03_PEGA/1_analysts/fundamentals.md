@@ -10,10 +10,10 @@ This comprehensive fundamental analysis report for Pegasystems Inc. (PEGA) is ba
 ### **2. Financial Performance Summary**
 Pegasystems has shown a consistent trend of revenue growth over the past few years, transitioning its business model toward a subscription-based (cloud) revenue stream. However, this transition has been accompanied by significant net losses and margin volatility.
 
-*   **Revenue Growth:** 
+*   **Revenue Growth:**
     *   Annual revenue grew from $1.017B in 2020 to $1.211B in 2021 (+19%).
     *   Trailing Twelve Months (TTM) revenue stands at approximately $1.745B.
-*   **Profitability:** 
+*   **Profitability:**
     *   The company reported a net loss of $63M in 2021 and $61M in 2020.
     *   **Crucial Alert:** In the most recent reported quarter (Q2 2022, ending June 30, 2022), the company suffered a massive quarterly net loss of **$286.3 million**. This was driven by a sharp decline in revenue ($274M vs $376M in Q1 2022) and high operating expenses.
     *   Operating Margin (TTM) is healthy at **24.9%**, but the net profit margin is often pressured by non-operating items and taxes.

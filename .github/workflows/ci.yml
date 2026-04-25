@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * 1"  # Weekly Monday 02:00 UTC — detect dependency drift
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-latest  # match dev env (M-series Mac)
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history for SonarCloud blame + coverage
+
+      - name: Set up Python via uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --extra dev --frozen
+
+      - name: Ruff lint
+        run: uv run ruff check alphalens/ alphalens_cli/ tests/
+
+      - name: Ruff format check
+        run: uv run ruff format --check alphalens/ alphalens_cli/ tests/
+
+      - name: Bandit security scan
+        run: uv run bandit -r alphalens/ alphalens_cli/ -ll -q
+        continue-on-error: true  # surface findings without blocking initially
+
+      - name: Run tests with coverage
+        run: |
+          uv run coverage run -m unittest discover -s tests
+          uv run coverage report
+          uv run coverage xml -o coverage.xml
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 14
+
+      - name: SonarCloud scan
+        if: github.event_name != 'schedule'
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true  # don't block CI if SonarCloud is down or misconfigured

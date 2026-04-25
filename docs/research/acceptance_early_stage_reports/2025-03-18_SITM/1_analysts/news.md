@@ -21,12 +21,12 @@ The global economic landscape is currently defined by high volatility and a sign
 ## 2. SiTime Corporation (SITM) Deep Dive
 
 ### **Strategic Apple Partnership**
-The defining catalyst for SITM in March 2025 has been the "iPhone 16e" teardown. 
+The defining catalyst for SITM in March 2025 has been the "iPhone 16e" teardown.
 *   **Discovery:** Components from SiTime were identified in Apple's latest iPhone 16e model. This discovery triggered a **20% rally** in the stock within a single day.
 *   **Revenue Impact:** Apple is estimated to account for approximately **22% of SiTime's annual revenue**. The inclusion in the 16e model suggests that SiTime’s MEMS (Micro-Electro-Mechanical Systems) timing solutions are becoming more integral to Apple’s hardware ecosystem as it shifts away from traditional quartz and moves toward custom internal chipsets (like the C1 modem).
 
 ### **Market Positioning**
-*   **Disruption:** SiTime is successfully disrupting the multi-billion dollar timing market by replacing legacy quartz crystals with silicon-based MEMS oscillators. 
+*   **Disruption:** SiTime is successfully disrupting the multi-billion dollar timing market by replacing legacy quartz crystals with silicon-based MEMS oscillators.
 *   **Financial Profile:** With roughly $200M in revenue last year, the company remains a high-growth "small-cap" player in the semiconductor space, making it highly sensitive to design wins in flagship consumer electronics.
 
 ---

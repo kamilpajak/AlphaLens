@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -17,7 +17,7 @@ def _classified_digest_event(ticker: str, accession: str):
             ticker=ticker,
             form_type=FormType.FORM_8K,
             accession_number=accession,
-            filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc),
+            filed_at=datetime(2026, 4, 17, 12, 0, tzinfo=UTC),
             url=f"https://sec.gov/{accession}",
             raw_data={},
         ),
@@ -123,13 +123,21 @@ class TestFormatStatus(unittest.TestCase):
 
         status = {
             "queue": {
-                "pending": 2, "in_progress": 0,
-                "done_today": 3, "done_week": 7, "dead": 1,
+                "pending": 2,
+                "in_progress": 0,
+                "done_today": 3,
+                "done_week": 7,
+                "dead": 1,
                 "budget_per_day": 5,
-                "latest_done": {"ticker": "AAPL", "decision": "BUY", "finished_at": "2026-04-17T14:35:00+00:00"},
+                "latest_done": {
+                    "ticker": "AAPL",
+                    "decision": "BUY",
+                    "finished_at": "2026-04-17T14:35:00+00:00",
+                },
             },
             "digest": {
-                "total": 12, "per_ticker": {"AAPL": 8, "MSFT": 4},
+                "total": 12,
+                "per_ticker": {"AAPL": 8, "MSFT": 4},
                 "latest": {"ticker": "AAPL", "at": "2026-04-17T12:00:00+00:00"},
             },
             "seen_events": {"total": 134},

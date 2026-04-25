@@ -15,26 +15,34 @@ def _build_xml(
     footnotes: list[tuple[str, str]] | None = None,
 ) -> bytes:
     """Render a minimal, schema-faithful Form 4 XML body for tests."""
-    owners = reporting_owners if reporting_owners is not None else [
-        {
-            "cik": "0001111111",
-            "name": "Jane Doe",
-            "is_director": "1",
-            "is_officer": "1",
-            "is_ten_percent_owner": "0",
-            "is_other": "0",
-            "officer_title": "CEO",
-        }
-    ]
-    txs = non_derivative if non_derivative is not None else [
-        {
-            "date": "2025-03-15",
-            "code": "P",
-            "shares": "1000",
-            "price": "150.25",
-            "acquired_disposed": "A",
-        }
-    ]
+    owners = (
+        reporting_owners
+        if reporting_owners is not None
+        else [
+            {
+                "cik": "0001111111",
+                "name": "Jane Doe",
+                "is_director": "1",
+                "is_officer": "1",
+                "is_ten_percent_owner": "0",
+                "is_other": "0",
+                "officer_title": "CEO",
+            }
+        ]
+    )
+    txs = (
+        non_derivative
+        if non_derivative is not None
+        else [
+            {
+                "date": "2025-03-15",
+                "code": "P",
+                "shares": "1000",
+                "price": "150.25",
+                "acquired_disposed": "A",
+            }
+        ]
+    )
     derivs = derivative or []
     foot = footnotes or []
 
@@ -42,15 +50,15 @@ def _build_xml(
         f"""
 <reportingOwner>
   <reportingOwnerId>
-    <rptOwnerCik>{o['cik']}</rptOwnerCik>
-    <rptOwnerName>{o['name']}</rptOwnerName>
+    <rptOwnerCik>{o["cik"]}</rptOwnerCik>
+    <rptOwnerName>{o["name"]}</rptOwnerName>
   </reportingOwnerId>
   <reportingOwnerRelationship>
-    <isDirector>{o.get('is_director', '0')}</isDirector>
-    <isOfficer>{o.get('is_officer', '0')}</isOfficer>
-    <isTenPercentOwner>{o.get('is_ten_percent_owner', '0')}</isTenPercentOwner>
-    <isOther>{o.get('is_other', '0')}</isOther>
-    {f"<officerTitle>{o['officer_title']}</officerTitle>" if o.get('officer_title') else ''}
+    <isDirector>{o.get("is_director", "0")}</isDirector>
+    <isOfficer>{o.get("is_officer", "0")}</isOfficer>
+    <isTenPercentOwner>{o.get("is_ten_percent_owner", "0")}</isTenPercentOwner>
+    <isOther>{o.get("is_other", "0")}</isOther>
+    {f"<officerTitle>{o['officer_title']}</officerTitle>" if o.get("officer_title") else ""}
   </reportingOwnerRelationship>
 </reportingOwner>"""
         for o in owners
@@ -65,16 +73,16 @@ def _build_xml(
         return f"""
 <nonDerivativeTransaction>
   <securityTitle><value>Common Stock</value></securityTitle>
-  <transactionDate><value>{tx['date']}</value></transactionDate>
+  <transactionDate><value>{tx["date"]}</value></transactionDate>
   <transactionCoding>
     <transactionFormType>4</transactionFormType>
-    <transactionCode>{tx['code']}</transactionCode>
+    <transactionCode>{tx["code"]}</transactionCode>
     <equitySwapInvolved>0</equitySwapInvolved>
   </transactionCoding>
   <transactionAmounts>
-    <transactionShares><value>{tx['shares']}</value></transactionShares>
+    <transactionShares><value>{tx["shares"]}</value></transactionShares>
     {price_xml}
-    <transactionAcquiredDisposedCode><value>{tx.get('acquired_disposed', 'A')}</value></transactionAcquiredDisposedCode>
+    <transactionAcquiredDisposedCode><value>{tx.get("acquired_disposed", "A")}</value></transactionAcquiredDisposedCode>
   </transactionAmounts>
 </nonDerivativeTransaction>"""
 
@@ -85,13 +93,13 @@ def _build_xml(
         return f"""
 <derivativeTransaction>
   <securityTitle><value>Stock Option</value></securityTitle>
-  <transactionDate><value>{tx['date']}</value></transactionDate>
+  <transactionDate><value>{tx["date"]}</value></transactionDate>
   <transactionCoding>
     <transactionFormType>4</transactionFormType>
-    <transactionCode>{tx['code']}</transactionCode>
+    <transactionCode>{tx["code"]}</transactionCode>
   </transactionCoding>
   <transactionAmounts>
-    <transactionShares><value>{tx['shares']}</value></transactionShares>
+    <transactionShares><value>{tx["shares"]}</value></transactionShares>
   </transactionAmounts>
 </derivativeTransaction>"""
 
@@ -159,12 +167,24 @@ class TestMultipleReportingOwners(unittest.TestCase):
 
         xml = _build_xml(
             reporting_owners=[
-                {"cik": "1111", "name": "CEO Person", "is_director": "0",
-                 "is_officer": "1", "is_ten_percent_owner": "0", "is_other": "0",
-                 "officer_title": "CEO"},
-                {"cik": "2222", "name": "CFO Person", "is_director": "0",
-                 "is_officer": "1", "is_ten_percent_owner": "0", "is_other": "0",
-                 "officer_title": "CFO"},
+                {
+                    "cik": "1111",
+                    "name": "CEO Person",
+                    "is_director": "0",
+                    "is_officer": "1",
+                    "is_ten_percent_owner": "0",
+                    "is_other": "0",
+                    "officer_title": "CEO",
+                },
+                {
+                    "cik": "2222",
+                    "name": "CFO Person",
+                    "is_director": "0",
+                    "is_officer": "1",
+                    "is_ten_percent_owner": "0",
+                    "is_other": "0",
+                    "officer_title": "CFO",
+                },
             ],
         )
 
@@ -257,9 +277,14 @@ class TestMissingRelationshipFields(unittest.TestCase):
 
         xml = _build_xml(
             reporting_owners=[
-                {"cik": "1111", "name": "Director Person",
-                 "is_director": "1", "is_officer": "0",
-                 "is_ten_percent_owner": "0", "is_other": "0"},
+                {
+                    "cik": "1111",
+                    "name": "Director Person",
+                    "is_director": "1",
+                    "is_officer": "0",
+                    "is_ten_percent_owner": "0",
+                    "is_other": "0",
+                },
             ],
         )
 
@@ -293,7 +318,10 @@ class TestFootnotesExtracted(unittest.TestCase):
 
         xml = _build_xml(
             footnotes=[
-                ("F1", "Transaction made pursuant to a 10b5-1 plan adopted on October 15, 2024."),
+                (
+                    "F1",
+                    "Transaction made pursuant to a 10b5-1 plan adopted on October 15, 2024.",
+                ),
                 ("F2", "Direct ownership only."),
             ],
         )
@@ -356,12 +384,19 @@ class TestTolerantDateParse(unittest.TestCase):
 
         xml = _build_xml(
             non_derivative=[
-                {"date": "2026-04-09-05:00", "code": "S", "shares": "5000", "price": "68"},
+                {
+                    "date": "2026-04-09-05:00",
+                    "code": "S",
+                    "shares": "5000",
+                    "price": "68",
+                },
             ],
         )
 
         records = parse_form4_xml(
-            xml, accession_number="A", filing_date=date(2026, 4, 10),
+            xml,
+            accession_number="A",
+            filing_date=date(2026, 4, 10),
         )
 
         self.assertEqual(records[0].transaction_date, date(2026, 4, 9))

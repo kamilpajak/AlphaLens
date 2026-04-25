@@ -26,12 +26,12 @@ Vishay Intertechnology (VSH) presents a complex fundamental profile as of Octobe
 *   **Debt Position:** Total debt is approximately $946.6M, which is well-covered by the cash balance, resulting in a **negative net debt** position—a strong sign of financial health.
 
 #### Cash Flow Analysis
-*   **Operating Cash Flow:** Q3 2023 generated $122.3M in operating cash flow. 
+*   **Operating Cash Flow:** Q3 2023 generated $122.3M in operating cash flow.
 *   **Capital Expenditures:** The company is investing heavily in its future, with CapEx tracking at $325M+ annually.
 *   **Shareholder Returns:** VSH maintains a consistent dividend policy, currently yielding 1.54% ($0.40/share annually).
 
 ### 4. Valuation and Market Sentiment
-*   **Valuation Ratios:** 
+*   **Valuation Ratios:**
     *   **Price-to-Sales (P/S):** 1.17 (Relatively low for the tech sector).
     *   **Forward P/E:** 70.92 (High, suggesting the market expects an earnings recovery or is pricing in a temporary trough).
     *   **Price-to-Book (P/B):** 1.72 (Reasonable for a hardware manufacturer).

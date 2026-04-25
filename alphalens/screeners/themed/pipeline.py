@@ -7,7 +7,7 @@ pipeline's invariant is the themed universe loader, not the scoring math.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -62,7 +62,7 @@ class ThemedPipeline:
                         ticker,
                         lambda tk: extract_features(fetch_ticker_bundle(tk)),
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.warning("Fundamental fetch failed for %s: %s", ticker, exc)
                     continue
                 fundamentals.setdefault(ticker, {}).update(av_features)
@@ -80,7 +80,10 @@ class ThemedPipeline:
             return pd.DataFrame(columns=["ticker", "momentum_score", "themes"])
 
         scores = self.scorer.score_all(
-            kept, prices, benchmark_ticker=benchmark, fundamentals=fundamentals,
+            kept,
+            prices,
+            benchmark_ticker=benchmark,
+            fundamentals=fundamentals,
         )
         # Normalise scorer-specific column to canonical "momentum_score" so all
         # downstream code (history_store, to_candidates, reporter) keeps working
@@ -93,9 +96,7 @@ class ThemedPipeline:
         ranked = scores.sort_values("momentum_score", ascending=False).reset_index(drop=True)
         return ranked.head(n)
 
-    def to_candidates(
-        self, df: pd.DataFrame, weighting: str = "linear"
-    ) -> list[Candidate]:
+    def to_candidates(self, df: pd.DataFrame, weighting: str = "linear") -> list[Candidate]:
         """Emit `Candidate` rows with per-position `weight` in payload.
 
         `weighting` controls suggested position sizing (nie TradingAgents decision —
@@ -110,11 +111,12 @@ class ThemedPipeline:
         # pipeline działa niezmiennie gdy plik zniknie (fallback do equal).
         try:
             from alphalens.backtest.weighting import compute_position_weights
+
             weights = compute_position_weights(len(df), weighting).tolist()
         except (ImportError, ValueError):
             weights = [1.0 / len(df)] * len(df)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         discriminator = now.date().isoformat()
         # df jest już posortowane descending by momentum_score w run().
         return [

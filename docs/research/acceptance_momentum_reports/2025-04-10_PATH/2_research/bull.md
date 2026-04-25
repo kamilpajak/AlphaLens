@@ -18,7 +18,7 @@ When you look at a **Forward P/E of 12.72** and a **PEG ratio of 0.363**, you ar
 
 ### 3. Addressing the Bear Technical Concerns
 My counterpart will point to the "Death Cross" and the $12.24 resistance. I see those as lagging indicators.
-The **12.2% jump on April 9** wasn't a fluke; it was a "shot across the bow" by institutional buyers who realized the $9.38 bottom was an absurdity. 
+The **12.2% jump on April 9** wasn't a fluke; it was a "shot across the bow" by institutional buyers who realized the $9.38 bottom was an absurdity.
 
 *   **The MACD Bullish Convergence:** While price was flat, momentum began trending up. This tells us the selling pressure is exhausted.
 *   **VWMA Support:** We are now trading above the **Volume Weighted Moving Average ($10.41)**. This means the "average" buyer from the last month is now in profit. These buyers will defend $10.40, creating a launchpad to fill that March 13 gap.
@@ -26,14 +26,14 @@ The **12.2% jump on April 9** wasn't a fluke; it was a "shot across the bow" by 
 ### 4. Direct Rebuttal to the Bear Argument
 **Bear Argument:** *"The March 13 crash broke the structural trend; any rally is a dead cat bounce."*
 
-**My Response:** That "crash" was a capitulation event, not a fundamental failure. Since then, the company reported **80%+ gross margins** and a successful pivot to Agentic AI. The "structural trend" you see is a lag in sentiment. If you wait for the stock to cross the 200-day SMA ($12.67) to buy, you’ve already missed the 15-20% recovery gain. 
+**My Response:** That "crash" was a capitulation event, not a fundamental failure. Since then, the company reported **80%+ gross margins** and a successful pivot to Agentic AI. The "structural trend" you see is a lag in sentiment. If you wait for the stock to cross the 200-day SMA ($12.67) to buy, you’ve already missed the 15-20% recovery gain.
 
 **Bear Argument:** *"Stock-Based Compensation (SBC) is diluting shareholders."*
 
 **My Response:** Look at the data. Management spent **$329.1 million on share repurchases** last year. They are literally using their massive cash flow to swallow the dilution and bet on themselves. When management buys back stock at these levels, they’re telling you the stock is cheap. Why wouldn’t we listen?
 
 ### The Verdict: The "Buy" Case
-We have a company that is **GAAP profitable**, **debt-free**, **growing ARR at 14%**, and providing the **exact solution** (cost-cutting automation) that the current tariff-strained economy demands. 
+We have a company that is **GAAP profitable**, **debt-free**, **growing ARR at 14%**, and providing the **exact solution** (cost-cutting automation) that the current tariff-strained economy demands.
 
 The technicals are screaming "bottoming process," and the fundamentals are screaming "undervalued." I’m not just holding; I’m advocating for an aggressive **BUY**. We are looking at a clear path back to the $13.80 analyst price target, representing a **25% upside** from current levels.
 

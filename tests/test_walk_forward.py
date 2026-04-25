@@ -9,7 +9,6 @@ independence invariant and block-return autocorr gate).
 from __future__ import annotations
 
 import unittest
-from dataclasses import replace
 from datetime import date
 
 import numpy as np
@@ -84,9 +83,7 @@ class TestSliceReport(unittest.TestCase):
         returns = [0.01] * 500  # all +1%
         baseline = _report(returns)
         cal = [snap.date for snap in baseline.daily_results]
-        window = WindowSpec(
-            test_start=cal[100].date(), test_end=cal[100 + 251].date()
-        )
+        window = WindowSpec(test_start=cal[100].date(), test_end=cal[100 + 251].date())
         sliced = slice_report_to_window(baseline, window)
         self.assertEqual(len(sliced.daily_results), 252)
         # Sharpe on constant positive series is extremely high by construction —
@@ -285,12 +282,18 @@ def _summary_with(
     max_turnover: float = 0.6,
 ) -> DistributionSummary:
     return DistributionSummary(
-        sharpe_min=0.0, sharpe_q25=0.5, sharpe_median=1.0,
-        sharpe_q75=1.5, sharpe_max=2.0,
+        sharpe_min=0.0,
+        sharpe_q25=0.5,
+        sharpe_median=1.0,
+        sharpe_q75=1.5,
+        sharpe_max=2.0,
         fraction_sharpe_gt_0_5=fraction_sharpe_gt_0_5,
         fraction_sharpe_gt_1_0=0.5,
-        alpha_t_min=0.0, alpha_t_q25=1.0, alpha_t_median=1.8,
-        alpha_t_q75=2.5, alpha_t_max=3.0,
+        alpha_t_min=0.0,
+        alpha_t_q25=1.0,
+        alpha_t_median=1.8,
+        alpha_t_q75=2.5,
+        alpha_t_max=3.0,
         fraction_alpha_t_gt_1_5=fraction_alpha_t_gt_1_5,
         fraction_alpha_t_gt_2_0=0.4 if fraction_alpha_t_gt_1_5 is not None else None,
         ic_t_median=1.6,

@@ -1,13 +1,13 @@
 ### **Macroeconomic and Tech Sector Analysis Report (August 22, 2023)**
 
 #### **1. Macroeconomic Environment: The "Higher for Longer" Narrative**
-The global financial landscape is currently dominated by a significant surge in bond yields. The **10-year US Treasury note yield has hit a 16-year high**, nearing 4.35%. This movement is driven by a resilient US economy and strong economic data, which have convinced markets that the Federal Reserve will maintain high interest rates for an extended period. 
+The global financial landscape is currently dominated by a significant surge in bond yields. The **10-year US Treasury note yield has hit a 16-year high**, nearing 4.35%. This movement is driven by a resilient US economy and strong economic data, which have convinced markets that the Federal Reserve will maintain high interest rates for an extended period.
 
 *   **Impact on Equities:** High yields provide a "risk-free" alternative to stocks, leading to a valuation compression across equity markets.
 *   **Bond Market Volatility:** Bond ETFs have tumbled to 2023 lows. Short-duration bonds (under 3 years) are currently seen as a safer "escape velocity" play, while long-dated debt is being aggressively repriced.
 
 #### **2. Technology Sector Sell-Off**
-The technology sector, which is highly sensitive to interest rate fluctuations, has entered a period of sharp correction. 
+The technology sector, which is highly sensitive to interest rate fluctuations, has entered a period of sharp correction.
 *   **ARK ETF Performance:** Cathie Wood’s flagship ARK Innovation ETF (ARKK) has plummeted **20% in August**, erasing a significant portion of its year-to-date gains.
 *   **Tech Sentiment:** The sell-off is broad-based, affecting everything from speculative growth stocks to established hardware and software names. Rising yields reduce the present value of future earnings, which is the primary driver for tech valuations.
 

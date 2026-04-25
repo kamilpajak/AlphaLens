@@ -179,8 +179,9 @@ class TestDelistedLoader(unittest.TestCase):
         self.assertGreater(len(records), 100, "expected 1000+ delisted CS in 2-year window")
 
     def test_filter_on_or_after(self):
-        from alphalens.screeners.lean.universe import delisted_tickers_on_or_after
         from datetime import date
+
+        from alphalens.screeners.lean.universe import delisted_tickers_on_or_after
 
         tmp = Path("/tmp/test_lean_delisted_filter.yaml")
         tmp.write_text(
@@ -196,9 +197,7 @@ class TestDelistedLoader(unittest.TestCase):
             "    name: new\n"
         )
         try:
-            result = list(
-                delisted_tickers_on_or_after(date(2024, 4, 19), tmp)
-            )
+            result = list(delisted_tickers_on_or_after(date(2024, 4, 19), tmp))
         finally:
             tmp.unlink()
 

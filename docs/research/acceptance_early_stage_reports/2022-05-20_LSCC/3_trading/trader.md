@@ -1,7 +1,7 @@
 The analysis of Lattice Semiconductor Corporation (LSCC) presents a classic conflict between impressive micro-level execution and overwhelming macro-level risks. After evaluating the provided investment plan, which weighs high growth metrics against valuation extremes and a tightening economic environment, the following conclusion is reached:
 
 ### Market Context & Fundamental Analysis
-LSCC is a leader in a specialized niche—low-power FPGAs—which are vital for the automotive, industrial, and 5G sectors. While a **30% YoY revenue growth** and a **doubling of net income** are exceptional, they are backward-looking indicators. The semiconductor industry is notorious for its "bullwhip effect," where periods of supply shortages lead to panic over-ordering, followed by a painful inventory correction. 
+LSCC is a leader in a specialized niche—low-power FPGAs—which are vital for the automotive, industrial, and 5G sectors. While a **30% YoY revenue growth** and a **doubling of net income** are exceptional, they are backward-looking indicators. The semiconductor industry is notorious for its "bullwhip effect," where periods of supply shortages lead to panic over-ordering, followed by a painful inventory correction.
 
 The most glaring red flag is the **144x trailing P/E ratio**. In a high-interest-rate environment, the discount rate applied to future earnings increases, which disproportionately punishes high-multiple stocks. Even with a seemingly attractive PEG ratio, the risk of "multiple compression" (where the market refuses to pay a premium for growth) is high.
 

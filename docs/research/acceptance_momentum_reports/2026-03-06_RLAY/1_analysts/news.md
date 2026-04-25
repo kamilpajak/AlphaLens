@@ -11,9 +11,9 @@ The past week has been dominated by a sharp escalation in geopolitical tensions 
 Despite the broad market sell-off, **Relay Therapeutics (RLAY)** has demonstrated remarkable idiosyncratic strength, significantly outperforming the biotech sector and the wider indices.
 
 *   **Significant Regulatory Milestone:** The primary driver for RLAY's recent 15–19% surge is the **FDA's Breakthrough Therapy Designation** for its lead PI3Kα inhibitor, **zovegalisib (RLY-2608)**, intended for patients with advanced breast cancer. This designation accelerates the development and review process, providing a major competitive edge.
-*   **Strong 2025 Financial Performance:** RLAY reported a Q4/Full-Year 2025 beat, featuring narrower-than-expected net losses and growing revenue ($15.4 million for the year). 
+*   **Strong 2025 Financial Performance:** RLAY reported a Q4/Full-Year 2025 beat, featuring narrower-than-expected net losses and growing revenue ($15.4 million for the year).
 *   **Exceptional Cash Runway:** Perhaps most critical for a clinical-stage biotech in a high-interest-rate environment, RLAY ended 2025 with ~$555 million in cash and investments. Management has guided that this is sufficient to fund operations into **2029**, greatly reducing the immediate risk of dilutive equity offerings.
-*   **Upcoming Catalysts:** 
+*   **Upcoming Catalysts:**
     *   **Investor Conferences:** Management will participate in the TD Cowen 46th Annual Health Care Conference and the Barclays 28th Annual Global Healthcare Conference in mid-March 2026.
     *   **Clinical Data:** Initial Phase 1 data for zovegalisib in vascular anomalies and triplet breast cancer data are expected later in 2026.
 

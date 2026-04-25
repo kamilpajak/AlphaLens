@@ -33,7 +33,9 @@ class TestSyncDate(unittest.TestCase):
 
         writer = LeanCsvWriter(self.dir)
         state_path = self.dir / "sync_state.json"
-        return PolygonLeanSync(client=client, writer=writer, universe=universe, state_path=state_path), writer
+        return PolygonLeanSync(
+            client=client, writer=writer, universe=universe, state_path=state_path
+        ), writer
 
     def test_filters_to_universe(self):
         client = MagicMock()
@@ -85,7 +87,11 @@ class TestSyncRange(unittest.TestCase):
 
         writer = LeanCsvWriter(self.dir)
         state_path = self.dir / "sync_state.json"
-        return PolygonLeanSync(client=client, writer=writer, universe=universe, state_path=state_path), writer, state_path
+        return (
+            PolygonLeanSync(client=client, writer=writer, universe=universe, state_path=state_path),
+            writer,
+            state_path,
+        )
 
     def test_skips_weekends(self):
         client = MagicMock()
@@ -142,7 +148,9 @@ class TestIncrementalSync(unittest.TestCase):
 
         writer = LeanCsvWriter(self.dir)
         state_path = self.dir / "sync_state.json"
-        return PolygonLeanSync(client=client, writer=writer, universe=universe, state_path=state_path), state_path
+        return PolygonLeanSync(
+            client=client, writer=writer, universe=universe, state_path=state_path
+        ), state_path
 
     def test_bootstrap_when_no_state(self):
         client = MagicMock()

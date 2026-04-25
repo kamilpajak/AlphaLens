@@ -22,19 +22,18 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from alphalens.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens.backtest.factor_analysis import run_carhart_attribution  # noqa: E402
-from alphalens.backtest.factors import load_carhart_daily  # noqa: E402
-from alphalens.backtest.history_store import HistoryStore  # noqa: E402
-from alphalens.backtest.metrics import (  # noqa: E402
+from alphalens.backtest.engine import BacktestEngine
+from alphalens.backtest.factor_analysis import run_carhart_attribution
+from alphalens.backtest.factors import load_carhart_daily
+from alphalens.backtest.history_store import HistoryStore
+from alphalens.backtest.metrics import (
     rank_ic_tstat,
     sharpe,
-    summarise_portfolio,
 )
-from alphalens.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
-from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter  # noqa: E402
-from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH  # noqa: E402
-from alphalens.screeners.themed.universe import flatten_universe  # noqa: E402
+from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter
+from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+from alphalens.screeners.themed.universe import flatten_universe
 
 MAIN_DATA = Path.home() / ".alphalens" / "lean" / "data"
 SURV_DATA = Path.home() / ".alphalens" / "survivorship" / "lean_data"
@@ -136,19 +135,33 @@ def main() -> None:
     store, curated, delisted = build_augmented_store()
 
     baseline_report, baseline_metrics, baseline_picks = run(store, curated, "baseline")
-    augmented_report, augmented_metrics, augmented_picks = run(store, curated + delisted, "augmented")
+    augmented_report, augmented_metrics, augmented_picks = run(
+        store, curated + delisted, "augmented"
+    )
 
     # Difference in picks — how often a delisted name made it into top-5
-    delisted_appearances = {t: augmented_picks.get(t, 0) for t in delisted if augmented_picks.get(t, 0) > 0}
+    delisted_appearances = {
+        t: augmented_picks.get(t, 0) for t in delisted if augmented_picks.get(t, 0) > 0
+    }
     delisted_sorted = sorted(delisted_appearances.items(), key=lambda x: -x[1])
 
     print("\n=== Metrics comparison ===")
     print(f"{'metric':<25} {'baseline':>15} {'augmented':>15} {'delta':>15}")
-    for k in ["universe_size", "daily_snapshots", "sharpe_gross",
-              "ic_mean", "ic_tstat", "annual_return_gross_pct",
-              "max_drawdown_pct",
-              "ff3_alpha_ann_pct", "ff3_alpha_tstat", "ff3_r2",
-              "carhart_4f_alpha_ann_pct", "carhart_4f_alpha_tstat", "carhart_4f_r2"]:
+    for k in [
+        "universe_size",
+        "daily_snapshots",
+        "sharpe_gross",
+        "ic_mean",
+        "ic_tstat",
+        "annual_return_gross_pct",
+        "max_drawdown_pct",
+        "ff3_alpha_ann_pct",
+        "ff3_alpha_tstat",
+        "ff3_r2",
+        "carhart_4f_alpha_ann_pct",
+        "carhart_4f_alpha_tstat",
+        "carhart_4f_r2",
+    ]:
         b = baseline_metrics.get(k)
         a = augmented_metrics.get(k)
         if b is None or a is None:
@@ -160,13 +173,15 @@ def main() -> None:
         except TypeError:
             print(f"{k:<25} {str(b)[:15]:>15} {str(a)[:15]:>15} -")
 
-    print(f"\n=== Delisted names that entered top-5 (augmented run) ===")
+    print("\n=== Delisted names that entered top-5 (augmented run) ===")
     print(f"  {len(delisted_sorted)} of {len(delisted)} delisted names appeared in top-5")
     for t, n in delisted_sorted[:30]:
         print(f"    {t:8s} appeared in top-5 on {n} days")
 
     # Write report
-    out_md = Path(__file__).resolve().parent.parent / "docs" / "backtest" / "layer2b_survivorship.md"
+    out_md = (
+        Path(__file__).resolve().parent.parent / "docs" / "backtest" / "layer2b_survivorship.md"
+    )
     out_md.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# Layer 2b survivorship-bias probe",
@@ -176,7 +191,7 @@ def main() -> None:
         "acquired or liquidated, semi photonics, consumer robotics) identified via",
         "Polygon `active=false` sweep over 2021-06-01 → 2026-04-17.",
         "",
-        f"- **Window**: 2021-06-01 → 2026-04-17 (Polygon plan boundary; original backtest started 2021-04-19)",
+        "- **Window**: 2021-06-01 → 2026-04-17 (Polygon plan boundary; original backtest started 2021-04-19)",
         f"- **Delisted candidates fetched**: {len(delisted)} (from 4265 disappeared tickers, 969 liquidity-filtered, 72 thematic, 50 fetchable with ≥60 bars)",
         "",
         "## Metrics comparison",
@@ -184,11 +199,21 @@ def main() -> None:
         "| Metric | Baseline (curated 113) | Augmented (+delisted thematic) | Delta |",
         "| --- | ---: | ---: | ---: |",
     ]
-    for k in ["universe_size", "daily_snapshots", "sharpe_gross",
-              "ic_mean", "ic_tstat", "annual_return_gross_pct",
-              "max_drawdown_pct",
-              "ff3_alpha_ann_pct", "ff3_alpha_tstat", "ff3_r2",
-              "carhart_4f_alpha_ann_pct", "carhart_4f_alpha_tstat", "carhart_4f_r2"]:
+    for k in [
+        "universe_size",
+        "daily_snapshots",
+        "sharpe_gross",
+        "ic_mean",
+        "ic_tstat",
+        "annual_return_gross_pct",
+        "max_drawdown_pct",
+        "ff3_alpha_ann_pct",
+        "ff3_alpha_tstat",
+        "ff3_r2",
+        "carhart_4f_alpha_ann_pct",
+        "carhart_4f_alpha_tstat",
+        "carhart_4f_r2",
+    ]:
         b = baseline_metrics.get(k)
         a = augmented_metrics.get(k)
         if b is None or a is None:
@@ -200,15 +225,17 @@ def main() -> None:
         except TypeError:
             lines.append(f"| {k} | {b} | {a} | - |")
 
-    lines.extend([
-        "",
-        "## Delisted names that entered top-5 in augmented run",
-        "",
-        f"- {len(delisted_sorted)} of {len(delisted)} delisted names ever scored into top-5",
-        "",
-        "| Ticker | Days in top-5 |",
-        "| --- | ---: |",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Delisted names that entered top-5 in augmented run",
+            "",
+            f"- {len(delisted_sorted)} of {len(delisted)} delisted names ever scored into top-5",
+            "",
+            "| Ticker | Days in top-5 |",
+            "| --- | ---: |",
+        ]
+    )
     for t, n in delisted_sorted:
         lines.append(f"| {t} | {n} |")
 

@@ -15,7 +15,7 @@ Ionis is headquartered in Carlsbad, California, and specializes in antisense tec
 *   **Book Value:** The book value per share is **$2.99**, while the stock trades at a high Price-to-Book (P/B) ratio of **25.29**, indicating that investors are pricing in the future value of the drug pipeline rather than current tangible assets.
 
 #### **Cash Flow Dynamics**
-*   **Operational Burn:** Excluding milestone-heavy quarters, the company typically sees an operating cash outflow. In Q1 2022, the operating cash flow was **-$31.6 million**. 
+*   **Operational Burn:** Excluding milestone-heavy quarters, the company typically sees an operating cash outflow. In Q1 2022, the operating cash flow was **-$31.6 million**.
 *   **Sustainability:** The 2021 full-year operating cash flow was positive (**$30.8 million**) thanks to successful collaborations, proving that the business model can be self-sustaining if pipeline milestones are hit consistently.
 
 ### **Market Sentiment & Technical Indicators**

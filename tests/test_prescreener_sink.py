@@ -75,8 +75,10 @@ class TestPrescreenerToCandidates(unittest.TestCase):
         dates = pd.bdate_range(end="2024-01-15", periods=250)
         prices = pd.DataFrame(
             {
-                "Open": [100.0] * 250, "High": [101.0] * 250,
-                "Low": [99.0] * 250, "Close": [100.0] * 250,
+                "Open": [100.0] * 250,
+                "High": [101.0] * 250,
+                "Low": [99.0] * 250,
+                "Close": [100.0] * 250,
                 "Volume": [1_000_000] * 250,
             },
             index=dates,

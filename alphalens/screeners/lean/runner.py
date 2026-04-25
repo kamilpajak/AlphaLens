@@ -10,10 +10,10 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 from .schema import LeanOutput
 
@@ -63,24 +63,37 @@ class LeanDockerRunner:
     def build_docker_args(self) -> list[str]:
         cfg = self.config
         args = [
-            "docker", "run", "--rm",
-            "-v", f"{cfg.project_dir}:/Project",
-            "-v", f"{cfg.data_dir}:/Data",
-            "-v", f"{cfg.results_dir}:/Results",
-            "-v", f"{cfg.logs_dir}:/Logs",
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{cfg.project_dir}:/Project",
+            "-v",
+            f"{cfg.data_dir}:/Data",
+            "-v",
+            f"{cfg.results_dir}:/Results",
+            "-v",
+            f"{cfg.logs_dir}:/Logs",
         ]
         for key, value in cfg.extra_env.items():
             args.extend(["-e", f"{key}={value}"])
         args.append(cfg.image)
         # The Lean base image's default ENTRYPOINT runs the backtest when
         # pointed at the project + data folders via these args.
-        args.extend([
-            "--data-folder", "/Data",
-            "--results-destination-folder", "/Results",
-            "--algorithm-location", "/Project/main.py",
-            "--algorithm-language", "Python",
-            "--algorithm-type-name", "LeanBatchScreener",
-        ])
+        args.extend(
+            [
+                "--data-folder",
+                "/Data",
+                "--results-destination-folder",
+                "/Results",
+                "--algorithm-location",
+                "/Project/main.py",
+                "--algorithm-language",
+                "Python",
+                "--algorithm-type-name",
+                "LeanBatchScreener",
+            ]
+        )
         return args
 
     def run(self) -> LeanOutput:
@@ -95,7 +108,7 @@ class LeanDockerRunner:
 
         args = self.build_docker_args()
         logger.info("lean docker run: %s", " ".join(args))
-        started = datetime.now(timezone.utc)
+        started = datetime.now(UTC)
 
         try:
             completed = self._runner(args, cfg.timeout_sec)
@@ -113,8 +126,7 @@ class LeanDockerRunner:
 
         if not target.exists():
             raise LeanRunError(
-                f"Lean finished cleanly but did not write {target}. "
-                "Check algorithm logs."
+                f"Lean finished cleanly but did not write {target}. Check algorithm logs."
             )
 
         output = LeanOutput.from_file(target)
@@ -146,7 +158,11 @@ def docker_available(subprocess_runner: SubprocessRunner | None = None) -> bool:
 def default_run_config() -> LeanRunConfig:
     """Standard layout — drop-in for CLI/launchd callers."""
     from .config import (
-        DATA_DIR, LEAN_DOCKER_IMAGE, LEAN_PROJECT_DIR, LOGS_DIR, RESULTS_DIR,
+        DATA_DIR,
+        LEAN_DOCKER_IMAGE,
+        LEAN_PROJECT_DIR,
+        LOGS_DIR,
+        RESULTS_DIR,
     )
 
     extra_env: dict[str, str] = {}

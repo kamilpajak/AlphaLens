@@ -4,7 +4,7 @@ relative strength vs benchmark, RSI, ADX, MACD histogram."""
 from __future__ import annotations
 
 import logging
-from typing import Mapping
+from collections.abc import Mapping
 
 import pandas as pd
 from stockstats import wrap
@@ -47,7 +47,9 @@ class MomentumScorer:
         benchmark = prices.get(benchmark_ticker) if benchmark_ticker else None
         rows = [
             self._score_one(
-                t, prices.get(t), benchmark,
+                t,
+                prices.get(t),
+                benchmark,
                 (fundamentals or {}).get(t, {}),
             )
             for t in tickers
@@ -156,9 +158,7 @@ class MomentumScorer:
         return max(0.0, min(1.0, 0.5 + 0.5 * (ratio - 1.0) / span))
 
     @staticmethod
-    def _rel_strength_score(
-        stock: pd.DataFrame, benchmark: pd.DataFrame | None
-    ) -> float:
+    def _rel_strength_score(stock: pd.DataFrame, benchmark: pd.DataFrame | None) -> float:
         """Stock's 3mo return vs benchmark's 3mo return."""
         if benchmark is None or benchmark.empty:
             return 0.5
@@ -196,7 +196,9 @@ class MomentumScorer:
         return 0.75 if macd_hist > 0 else 0.25
 
     @staticmethod
-    def _indicators(df: pd.DataFrame) -> tuple[float | None, float | None, float | None]:
+    def _indicators(
+        df: pd.DataFrame,
+    ) -> tuple[float | None, float | None, float | None]:
         """Extract RSI(14), ADX(14), MACD histogram from the frame."""
         try:
             ss = wrap(df[["Open", "High", "Low", "Close", "Volume"]].copy())
