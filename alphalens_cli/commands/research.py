@@ -108,7 +108,7 @@ def cost_validation(
     universe_yaml = yaml.safe_load(UNIVERSE_PATH.read_text())
     screener_tickers = sorted(flatten_universe(universe_yaml).keys())
     typer.echo(f"Loading OHLCV for {len(screener_tickers)} themed tickers + {benchmark}…")
-    histories = load_lean_histories(DATA_DIR, screener_tickers + [benchmark])
+    histories = load_lean_histories(DATA_DIR, [*screener_tickers, benchmark])
     store = HistoryStore(histories)
     typer.echo(f"  loaded {len(store.tickers())} tickers")
 
@@ -234,6 +234,64 @@ def cost_validation(
         typer.echo(f"Worst-offenders CSV: {csv_path}")
 
 
+def _print_walk_forward_verdict(wf_report) -> None:
+    """Echo PASS/FAIL/N/A for c1..c5 — used by `research walk-forward`."""
+    _MARK = {None: "N/A", True: "PASS", False: "FAIL"}
+    typer.echo(f"  verdict: {wf_report.verdict.overall}")
+    for key in ("c1", "c2", "c3", "c4", "c5"):
+        flag = getattr(wf_report.verdict, f"{key}_pass")
+        reason = wf_report.verdict.reasons.get(key, "")
+        typer.echo(f"    {key.upper()} {_MARK[flag]} — {reason}")
+
+
+def _write_walk_forward_csv(csv_path: Path, wf_report) -> None:
+    import csv as _csv
+
+    if not csv_path.is_absolute():
+        csv_path = Path.cwd() / csv_path
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", newline="") as fh:
+        writer = _csv.writer(fh)
+        writer.writerow(
+            [
+                "test_start",
+                "test_end",
+                "n_days",
+                "regime",
+                "regime_reversed_within",
+                "sharpe_gross",
+                "sharpe_moderate",
+                "carhart_alpha_daily",
+                "carhart_alpha_tstat",
+                "ic_mean",
+                "ic_tstat",
+                "max_drawdown",
+                "turnover",
+                "cumulative_return",
+            ]
+        )
+        for r in wf_report.window_results:
+            writer.writerow(
+                [
+                    r.test_start,
+                    r.test_end,
+                    r.n_days,
+                    r.regime,
+                    r.regime_reversed_within,
+                    f"{r.sharpe_gross:.4f}",
+                    f"{r.sharpe_moderate:.4f}",
+                    f"{r.carhart_alpha_daily:.6f}" if r.carhart_alpha_daily is not None else "",
+                    f"{r.carhart_alpha_tstat:.4f}" if r.carhart_alpha_tstat is not None else "",
+                    f"{r.ic_mean:.6f}",
+                    f"{r.ic_tstat:.4f}",
+                    f"{r.max_drawdown:.4f}",
+                    f"{r.turnover:.4f}",
+                    f"{r.cumulative_return:.4f}",
+                ]
+            )
+    typer.echo(f"Per-window CSV: {csv_path}")
+
+
 @research_app.command(name="walk-forward")
 def walk_forward(
     start: str = typer.Option(
@@ -295,7 +353,7 @@ def walk_forward(
     universe_yaml = yaml.safe_load(UNIVERSE_PATH.read_text())
     screener_tickers = sorted(flatten_universe(universe_yaml).keys())
     typer.echo(f"Loading OHLCV for {len(screener_tickers)} themed tickers + {benchmark}…")
-    histories = load_lean_histories(DATA_DIR, screener_tickers + [benchmark])
+    histories = load_lean_histories(DATA_DIR, [*screener_tickers, benchmark])
     store = HistoryStore(histories)
     typer.echo(f"  loaded {len(store.tickers())} tickers")
 
@@ -344,17 +402,7 @@ def walk_forward(
             else ""
         )
     )
-    typer.echo(f"  verdict: {wf_report.verdict.overall}")
-    for key in ("c1", "c2", "c3", "c4", "c5"):
-        reason = wf_report.verdict.reasons.get(key, "")
-        flag = getattr(wf_report.verdict, f"{key}_pass")
-        if flag is None:
-            mark = "N/A"
-        elif flag:
-            mark = "PASS"
-        else:
-            mark = "FAIL"
-        typer.echo(f"    {key.upper()} {mark} — {reason}")
+    _print_walk_forward_verdict(wf_report)
 
     report_path = Path(report)
     if not report_path.is_absolute():
@@ -369,52 +417,7 @@ def walk_forward(
     typer.echo(f"\nReport written to {report_path}")
 
     if csv:
-        import csv as _csv
-
-        csv_path = Path(csv)
-        if not csv_path.is_absolute():
-            csv_path = Path.cwd() / csv_path
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        with csv_path.open("w", newline="") as fh:
-            writer = _csv.writer(fh)
-            writer.writerow(
-                [
-                    "test_start",
-                    "test_end",
-                    "n_days",
-                    "regime",
-                    "regime_reversed_within",
-                    "sharpe_gross",
-                    "sharpe_moderate",
-                    "carhart_alpha_daily",
-                    "carhart_alpha_tstat",
-                    "ic_mean",
-                    "ic_tstat",
-                    "max_drawdown",
-                    "turnover",
-                    "cumulative_return",
-                ]
-            )
-            for r in wf_report.window_results:
-                writer.writerow(
-                    [
-                        r.test_start,
-                        r.test_end,
-                        r.n_days,
-                        r.regime,
-                        r.regime_reversed_within,
-                        f"{r.sharpe_gross:.4f}",
-                        f"{r.sharpe_moderate:.4f}",
-                        f"{r.carhart_alpha_daily:.6f}" if r.carhart_alpha_daily is not None else "",
-                        f"{r.carhart_alpha_tstat:.4f}" if r.carhart_alpha_tstat is not None else "",
-                        f"{r.ic_mean:.6f}",
-                        f"{r.ic_tstat:.4f}",
-                        f"{r.max_drawdown:.4f}",
-                        f"{r.turnover:.4f}",
-                        f"{r.cumulative_return:.4f}",
-                    ]
-                )
-        typer.echo(f"Per-window CSV: {csv_path}")
+        _write_walk_forward_csv(Path(csv), wf_report)
 
 
 @research_app.command(name="survivorship-pit")
@@ -480,7 +483,7 @@ def survivorship_pit(
     universe_yaml = yaml.safe_load(UNIVERSE_PATH.read_text())
     screener_tickers = sorted(flatten_universe(universe_yaml).keys())
     typer.echo(f"Loading OHLCV for {len(screener_tickers)} themed tickers + {benchmark}…")
-    histories = load_lean_histories(DATA_DIR, screener_tickers + [benchmark])
+    histories = load_lean_histories(DATA_DIR, [*screener_tickers, benchmark])
     store = HistoryStore(histories)
     typer.echo(f"  loaded {len(store.tickers())} tickers")
 
@@ -864,6 +867,147 @@ def _compute_forward_features(store, ticker: str, benchmark: str, pick_date) -> 
     return out
 
 
+def _load_acceptance_picks(picks_path: Path) -> pd.DataFrame:  # noqa: F821
+    """Load picks CSV and explode top_n_tickers/scores into per-(date, ticker) rows."""
+    import pandas as pd
+
+    picks_raw = pd.read_csv(picks_path)
+    rows = []
+    for _, r in picks_raw.iterrows():
+        d = pd.to_datetime(r["date"]).date()
+        tickers_list = [t.strip().upper() for t in str(r["top_n_tickers"]).split(",")]
+        scores_list = [float(s.strip()) for s in str(r["top_n_scores"]).split(",")]
+        for rank, (t, s) in enumerate(zip(tickers_list, scores_list, strict=False), 1):
+            rows.append(
+                {
+                    "date": d,
+                    "ticker": t,
+                    "rank": rank,
+                    "scorer_score": s,
+                    "daily_ic": float(r.get("ic", float("nan"))) if "ic" in r else float("nan"),
+                    "scored_count": int(r.get("scored_count", 0)) if "scored_count" in r else 0,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _classify_picks_by_regime(
+    picks: pd.DataFrame,  # noqa: F821
+    store,
+    benchmark: str,
+) -> pd.DataFrame:  # noqa: F821
+    """Attach 'regime' column (bull/bear/flat) by mapping pick_date → benchmark regime."""
+    from alphalens.backtest.regime import classify_regime
+
+    bench_close = store.full(benchmark)["close"]
+    regime_labels = classify_regime(bench_close)
+    regime_labels.index = regime_labels.index.date
+    picks = picks.copy()
+    picks["regime"] = picks["date"].map(regime_labels.to_dict())
+    return picks.dropna(subset=["regime"])
+
+
+def _stratified_sample_picks(
+    picks: pd.DataFrame,  # noqa: F821
+    samples_per_regime: int,
+    seed: int,
+) -> list[dict]:
+    import random
+
+    rng = random.Random(seed)
+    sampled: list[dict] = []
+    for regime in ("bull", "bear", "flat"):
+        pool = picks[picks["regime"] == regime]
+        if pool.empty:
+            typer.echo(f"  [{regime}] empty pool, skipping")
+            continue
+        k = min(samples_per_regime, len(pool))
+        idx = rng.sample(range(len(pool)), k)
+        sampled.extend(pool.iloc[idx].to_dict(orient="records"))
+    return sampled
+
+
+def _print_dry_run_plan(sampled: list[dict]) -> None:
+    typer.echo("--- sampling plan ---")
+    for s in sampled[:10]:
+        typer.echo(f"  {s['date']}  {s['ticker']:<6}  rank={s['rank']}  regime={s['regime']}")
+    if len(sampled) > 10:
+        typer.echo(f"  … ({len(sampled) - 10} more)")
+    typer.echo(
+        f"\nEstimated cost: ~{len(sampled)} Layer 3 runs × ~15 min each "
+        f"= ~{len(sampled) * 15 / 60:.1f}h sequential"
+    )
+    typer.echo("Dry-run complete — no Layer 3 calls made.")
+
+
+def _build_acceptance_row(
+    sample: dict,
+    *,
+    rating: str,
+    accepted: int,
+    duration_sec: float,
+    model: str,
+    sample_dir: Path,
+    fwd: dict,
+) -> dict:
+    return {
+        "date": sample["date"].isoformat(),
+        "ticker": sample["ticker"],
+        "rank": sample["rank"],
+        "scorer_score": sample.get("scorer_score"),
+        "daily_ic": sample.get("daily_ic"),
+        "scored_count": sample.get("scored_count"),
+        "regime": sample["regime"],
+        "rating": rating,
+        "accepted": accepted,
+        "duration_sec": round(duration_sec, 1),
+        "model": model,
+        "report_dir": str(sample_dir.relative_to(Path.cwd()))
+        if sample_dir.is_relative_to(Path.cwd())
+        else str(sample_dir),
+        "error": "",
+        **fwd,
+    }
+
+
+def _build_acceptance_error_row(sample: dict, exc: Exception, store, benchmark: str) -> dict:
+    err_row: dict = {
+        "date": sample["date"].isoformat(),
+        "ticker": sample["ticker"],
+        "rank": sample["rank"],
+        "scorer_score": sample.get("scorer_score"),
+        "daily_ic": sample.get("daily_ic"),
+        "scored_count": sample.get("scored_count"),
+        "regime": sample["regime"],
+        "rating": "",
+        "accepted": 0,
+        "duration_sec": 0,
+        "model": "",
+        "report_dir": "",
+        "error": str(exc)[:200],
+    }
+    err_row.update(_compute_forward_features(store, sample["ticker"], benchmark, sample["date"]))
+    err_row["spy_trailing_60d"] = _at_pick_trailing_return(store, benchmark, sample["date"], 60)
+    return err_row
+
+
+def _persist_layer3_artifacts(result, sample: dict, sample_dir: Path, save_ta_report) -> None:
+    import json
+
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        (sample_dir / "final_state.json").write_text(
+            json.dumps(result.final_state, default=str, indent=2)
+        )
+    except Exception as exc:
+        typer.echo(f"    warn: final_state.json failed: {exc}", err=True)
+    if save_ta_report is not None:
+        try:
+            save_ta_report(result.final_state, sample["ticker"], sample_dir)
+        except Exception as exc:
+            typer.echo(f"    warn: save_report_to_disk failed: {exc}", err=True)
+
+
 @research_app.command(name="historical-acceptance")
 def historical_acceptance(
     scorer: str = typer.Option(
@@ -915,14 +1059,11 @@ def historical_acceptance(
 
     Acceptance metric: fraction of samples where Layer 3 returns BUY or OVERWEIGHT.
     """
-    import json
-    import random
     from collections import defaultdict
 
     import pandas as pd
 
     from alphalens.backtest.history_store import HistoryStore
-    from alphalens.backtest.regime import classify_regime
     from alphalens.candidates import Candidate
     from alphalens.runner import TradingAgentsRunner
     from alphalens.screeners.lean.config import DATA_DIR
@@ -945,25 +1086,7 @@ def historical_acceptance(
         raise typer.BadParameter(f"Picks CSV not found: {picks_path}")
 
     typer.echo(f"Loading picks from {picks_path}")
-    picks_raw = pd.read_csv(picks_path)
-    # Explode top_n_tickers (comma-separated) into (date, ticker, score) rows.
-    rows = []
-    for _, r in picks_raw.iterrows():
-        d = pd.to_datetime(r["date"]).date()
-        tickers_list = [t.strip().upper() for t in str(r["top_n_tickers"]).split(",")]
-        scores_list = [float(s.strip()) for s in str(r["top_n_scores"]).split(",")]
-        for rank, (t, s) in enumerate(zip(tickers_list, scores_list), 1):
-            rows.append(
-                {
-                    "date": d,
-                    "ticker": t,
-                    "rank": rank,
-                    "scorer_score": s,
-                    "daily_ic": float(r.get("ic", float("nan"))) if "ic" in r else float("nan"),
-                    "scored_count": int(r.get("scored_count", 0)) if "scored_count" in r else 0,
-                }
-            )
-    picks = pd.DataFrame(rows)
+    picks = _load_acceptance_picks(picks_path)
     typer.echo(f"  {len(picks)} (date, ticker) pairs over {picks['date'].nunique()} days")
 
     # Dry-run only needs the benchmark (for regime classification). A full run
@@ -974,9 +1097,7 @@ def historical_acceptance(
     from alphalens.screeners.themed.config import UNIVERSE_PATH
     from alphalens.screeners.themed.universe import flatten_universe
 
-    universe_yaml = yaml.safe_load(UNIVERSE_PATH.read_text())
-    universe_tickers = sorted(flatten_universe(universe_yaml).keys())
-
+    universe_tickers = sorted(flatten_universe(yaml.safe_load(UNIVERSE_PATH.read_text())).keys())
     if dry_run:
         typer.echo(f"Loading OHLCV for {benchmark} only (dry-run — no forward returns)…")
         histories = load_lean_histories(DATA_DIR, [benchmark])
@@ -985,44 +1106,18 @@ def historical_acceptance(
             f"Loading OHLCV for {len(universe_tickers)} universe tickers + {benchmark} "
             f"(regime + forward returns)…"
         )
-        histories = load_lean_histories(DATA_DIR, universe_tickers + [benchmark])
+        histories = load_lean_histories(DATA_DIR, [*universe_tickers, benchmark])
     store = HistoryStore(histories)
-    bench_close = store.full(benchmark)["close"]
-    regime_labels = classify_regime(bench_close)
-    regime_labels.index = regime_labels.index.date
-    picks["regime"] = picks["date"].map(regime_labels.to_dict())
-    picks = picks.dropna(subset=["regime"])
 
-    regime_counts = picks["regime"].value_counts().to_dict()
-    typer.echo(f"  population by regime: {regime_counts}")
+    picks = _classify_picks_by_regime(picks, store, benchmark)
+    typer.echo(f"  population by regime: {picks['regime'].value_counts().to_dict()}")
 
-    # Stratified sample.
-    rng = random.Random(seed)
-    sampled = []
-    for regime in ("bull", "bear", "flat"):
-        pool = picks[picks["regime"] == regime]
-        if pool.empty:
-            typer.echo(f"  [{regime}] empty pool, skipping")
-            continue
-        k = min(samples_per_regime, len(pool))
-        idx = rng.sample(range(len(pool)), k)
-        sampled.extend(pool.iloc[idx].to_dict(orient="records"))
-
+    sampled = _stratified_sample_picks(picks, samples_per_regime, seed)
     typer.echo(f"Sampled {len(sampled)} (date, ticker) pairs across regimes")
     if dry_run:
-        typer.echo("--- sampling plan ---")
-        for s in sampled[:10]:
-            typer.echo(f"  {s['date']}  {s['ticker']:<6}  rank={s['rank']}  regime={s['regime']}")
-        if len(sampled) > 10:
-            typer.echo(f"  … ({len(sampled) - 10} more)")
-        typer.echo(
-            f"\nEstimated cost: ~{len(sampled)} Layer 3 runs × ~15 min each "
-            f"= ~{len(sampled) * 15 / 60:.1f}h sequential"
-        )
-        typer.echo("Dry-run complete — no Layer 3 calls made.")
+        _print_dry_run_plan(sampled)
         raise typer.Exit(0)
 
-    # Real runs.
     analysts = None if include_social else list(_PIT_SAFE_ANALYSTS)
     if analysts is not None and not analysts:
         raise typer.BadParameter(
@@ -1072,84 +1167,43 @@ def historical_acceptance(
                 curr_date=s["date"],
                 selected_analysts=analysts,
             )
-            rating = _classify_rating(result.rating)
-            accepted = 1 if rating in _ACCEPT_RATINGS else 0
-            accept_by_regime[s["regime"]].append(accepted)
-
-            # Forward returns + realized vol + max drawdown — full post-hoc
-            # feature vector so the CSV is self-sufficient for any later
-            # regression / quantile analysis without re-running Layer 3.
-            fwd = _compute_forward_features(store, s["ticker"], benchmark, s["date"])
-            # At-pick-time market context.
-            fwd["spy_trailing_60d"] = _at_pick_trailing_return(store, benchmark, s["date"], 60)
-
-            # Persist the full state + upstream's markdown render for post-hoc
-            # analysis of why Layer 3 accepted/rejected this pick.
-            sample_dir = reports_root / f"{s['date'].isoformat()}_{s['ticker']}"
-            sample_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                (sample_dir / "final_state.json").write_text(
-                    json.dumps(result.final_state, default=str, indent=2)
-                )
-            except Exception as exc:
-                typer.echo(f"    warn: final_state.json failed: {exc}", err=True)
-            if _save_ta_report is not None:
-                try:
-                    _save_ta_report(result.final_state, s["ticker"], sample_dir)
-                except Exception as exc:
-                    typer.echo(f"    warn: save_report_to_disk failed: {exc}", err=True)
-
-            row = {
-                "date": s["date"].isoformat(),
-                "ticker": s["ticker"],
-                "rank": s["rank"],
-                "scorer_score": s.get("scorer_score"),
-                "daily_ic": s.get("daily_ic"),
-                "scored_count": s.get("scored_count"),
-                "regime": s["regime"],
-                "rating": rating,
-                "accepted": accepted,
-                "duration_sec": round(result.duration_sec, 1),
-                "model": result.model_used,
-                "report_dir": str(sample_dir.relative_to(Path.cwd()))
-                if sample_dir.is_relative_to(Path.cwd())
-                else str(sample_dir),
-                "error": "",
-                **fwd,
-            }
-            results.append(row)
-            fwd_20 = fwd.get("fwd_20d")
-            alpha_20 = fwd.get("alpha_20d")
-            fwd_str = (
-                f"  fwd20d={fwd_20 * 100:+.1f}% α={alpha_20 * 100:+.1f}%"
-                if (fwd_20 is not None and alpha_20 is not None)
-                else "  fwd20d=n/a"
-            )
-            typer.echo(
-                f"    → {rating}  ({result.duration_sec:.0f}s){fwd_str}  → {sample_dir.name}/"
-            )
         except Exception as exc:
-            err_row: dict = {
-                "date": s["date"].isoformat(),
-                "ticker": s["ticker"],
-                "rank": s["rank"],
-                "scorer_score": s.get("scorer_score"),
-                "daily_ic": s.get("daily_ic"),
-                "scored_count": s.get("scored_count"),
-                "regime": s["regime"],
-                "rating": "",
-                "accepted": 0,
-                "duration_sec": 0,
-                "model": "",
-                "report_dir": "",
-                "error": str(exc)[:200],
-            }
-            err_row.update(_compute_forward_features(store, s["ticker"], benchmark, s["date"]))
-            err_row["spy_trailing_60d"] = _at_pick_trailing_return(store, benchmark, s["date"], 60)
-            results.append(err_row)
+            results.append(_build_acceptance_error_row(s, exc, store, benchmark))
             typer.echo(f"    → ERROR: {exc}")
+            if csv_path is not None:
+                pd.DataFrame(results).to_csv(csv_path, index=False)
+            continue
 
-        # Flush CSV after every sample — survives crashes / interruptions.
+        rating = _classify_rating(result.rating)
+        accepted = 1 if rating in _ACCEPT_RATINGS else 0
+        accept_by_regime[s["regime"]].append(accepted)
+
+        fwd = _compute_forward_features(store, s["ticker"], benchmark, s["date"])
+        fwd["spy_trailing_60d"] = _at_pick_trailing_return(store, benchmark, s["date"], 60)
+
+        sample_dir = reports_root / f"{s['date'].isoformat()}_{s['ticker']}"
+        _persist_layer3_artifacts(result, s, sample_dir, _save_ta_report)
+        results.append(
+            _build_acceptance_row(
+                s,
+                rating=rating,
+                accepted=accepted,
+                duration_sec=result.duration_sec,
+                model=result.model_used,
+                sample_dir=sample_dir,
+                fwd=fwd,
+            )
+        )
+
+        fwd_20 = fwd.get("fwd_20d")
+        alpha_20 = fwd.get("alpha_20d")
+        fwd_str = (
+            f"  fwd20d={fwd_20 * 100:+.1f}% α={alpha_20 * 100:+.1f}%"
+            if (fwd_20 is not None and alpha_20 is not None)
+            else "  fwd20d=n/a"
+        )
+        typer.echo(f"    → {rating}  ({result.duration_sec:.0f}s){fwd_str}  → {sample_dir.name}/")
+
         if csv_path is not None:
             pd.DataFrame(results).to_csv(csv_path, index=False)
 

@@ -103,6 +103,37 @@ def _build_pilot_years(
     return results
 
 
+_OHLCV_COLS = ["open", "high", "low", "close", "volume"]
+
+
+def _extract_ohlcv(sub: pd.DataFrame) -> pd.DataFrame | None:
+    """Lowercase columns + drop empty rows. Return None if OHLCV columns are missing."""
+    cleaned = sub.rename(columns=str.lower).dropna(how="all")
+    if cleaned.empty or not all(c in cleaned.columns for c in _OHLCV_COLS):
+        return None
+    return cleaned[_OHLCV_COLS]
+
+
+def _slice_yfinance_frame(df: pd.DataFrame, tickers: list[str]) -> dict[str, pd.DataFrame]:
+    """Slice batch yfinance output into {ticker: ohlcv_df}, handling MultiIndex/flat shapes."""
+    out: dict[str, pd.DataFrame] = {}
+    if isinstance(df.columns, pd.MultiIndex):
+        for t in tickers:
+            try:
+                ohlcv = _extract_ohlcv(df[t])
+            except (KeyError, IndexError):
+                continue
+            if ohlcv is not None:
+                out[t] = ohlcv
+        return out
+    # Single-ticker response — columns are plain
+    if len(tickers) == 1:
+        ohlcv = _extract_ohlcv(df)
+        if ohlcv is not None:
+            out[tickers[0]] = ohlcv
+    return out
+
+
 def _default_price_loader(tickers: list[str], *, year: int) -> dict[str, pd.DataFrame]:
     """Batch yfinance loader — uses multi-ticker download for speed.
 
@@ -111,14 +142,11 @@ def _default_price_loader(tickers: list[str], *, year: int) -> dict[str, pd.Data
     """
     import yfinance as yf
 
-    start = pd.Timestamp(f"{year - 1}-12-01")
-    end = pd.Timestamp(f"{year + 1}-03-01")
-
     try:
         df = yf.download(
             tickers,
-            start=start,
-            end=end,
+            start=pd.Timestamp(f"{year - 1}-12-01"),
+            end=pd.Timestamp(f"{year + 1}-03-01"),
             progress=False,
             auto_adjust=True,
             group_by="ticker",
@@ -128,29 +156,9 @@ def _default_price_loader(tickers: list[str], *, year: int) -> dict[str, pd.Data
         logger.warning("batch yfinance download failed: %s", exc)
         return {}
 
-    out: dict[str, pd.DataFrame] = {}
     if df is None or df.empty:
-        return out
-
-    if isinstance(df.columns, pd.MultiIndex):
-        for t in tickers:
-            try:
-                sub = df[t].rename(columns=str.lower).dropna(how="all")
-                if sub.empty:
-                    continue
-                cols = ["open", "high", "low", "close", "volume"]
-                if all(c in sub.columns for c in cols):
-                    out[t] = sub[cols]
-            except (KeyError, IndexError):
-                continue
-    else:
-        # Single-ticker response — columns are plain
-        sub = df.rename(columns=str.lower).dropna(how="all")
-        if len(tickers) == 1 and not sub.empty:
-            cols = ["open", "high", "low", "close", "volume"]
-            if all(c in sub.columns for c in cols):
-                out[tickers[0]] = sub[cols]
-    return out
+        return {}
+    return _slice_yfinance_frame(df, tickers)
 
 
 @guru_app.command(name="pilot")

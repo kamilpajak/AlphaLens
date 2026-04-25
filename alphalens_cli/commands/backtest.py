@@ -2,12 +2,199 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import typer
 
 
-def backtest(
+def _resolve_scorer(
+    scorer_name: str, benchmark: str
+) -> tuple[Callable, dict[str, Any], list[str], list[str]]:
+    """Return (scorer_fn, scorer_config, screener_tickers, extra_history_tickers).
+
+    `extra_history_tickers` are the additional symbols beyond the screener
+    universe + benchmark that need to be loaded into the HistoryStore (lean
+    needs its full BENCHMARKS list for the calendar).
+    """
+    import yaml
+
+    if scorer_name == "momentum":
+        from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter
+        from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+        from alphalens.screeners.themed.universe import flatten_universe
+
+        universe = yaml.safe_load(UNIVERSE_PATH.read_text())
+        screener_tickers = sorted(flatten_universe(universe).keys())
+        scorer_config = dict(THEMED_DEFAULTS, benchmark=benchmark)
+        typer.echo(f"Scorer: Layer 2b momentum ({len(screener_tickers)} curated tickers)")
+        return momentum_scorer_adapter, scorer_config, screener_tickers, [benchmark]
+
+    if scorer_name == "early-stage":
+        from alphalens.screeners.themed.backtest_adapter import early_stage_scorer_adapter
+        from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+        from alphalens.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS
+        from alphalens.screeners.themed.universe import flatten_universe
+
+        universe = yaml.safe_load(UNIVERSE_PATH.read_text())
+        screener_tickers = sorted(flatten_universe(universe).keys())
+        scorer_config = {**THEMED_DEFAULTS, **EARLY_STAGE_DEFAULTS, "benchmark": benchmark}
+        typer.echo(f"Scorer: Layer 2b early-stage ({len(screener_tickers)} curated tickers)")
+        return early_stage_scorer_adapter, scorer_config, screener_tickers, [benchmark]
+
+    if scorer_name == "lean":
+        from alphalens.screeners.lean.config import BENCHMARKS, LEAN_DEFAULTS
+        from alphalens.screeners.lean.lean_project.scorer import rank_universe as lean_rank
+        from alphalens.screeners.lean.universe import all_tickers
+
+        screener_tickers = all_tickers()
+        typer.echo(
+            f"Scorer: Layer 2c Lean (archived, {len(screener_tickers)} tickers) — "
+            "this strategy failed 5-year validation per CLAUDE.md"
+        )
+        return lean_rank, dict(LEAN_DEFAULTS), screener_tickers, list(BENCHMARKS)
+
+    if scorer_name == "insider":
+        return _resolve_insider_scorer(benchmark)
+
+    raise typer.BadParameter(
+        f"Unknown --scorer: {scorer_name!r} (expected: momentum | early-stage | lean | insider)"
+    )
+
+
+def _resolve_insider_scorer(
+    benchmark: str,
+) -> tuple[Callable, dict[str, Any], list[str], list[str]]:
+    import os
+
+    from alphalens.alt_data.russell_universe import load_iwm_current
+    from alphalens.alt_data.sec_edgar_client import SecEdgarClient
+    from alphalens.alt_data.ticker_cik_map import TickerCikMap
+    from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+    from alphalens.screeners.insider.scorer import InsiderScorer
+
+    iwm_path = Path("alphalens/alt_data/data/iwm_current.yaml")
+    cik_map_path = Path("alphalens/alt_data/data/ticker_cik_map.yaml")
+    for p in (iwm_path, cik_map_path):
+        if not p.exists():
+            raise typer.BadParameter(
+                f"Missing {p}. Seed via P3/P4 refreshers before running insider backtest."
+            )
+    ua = os.environ.get("SEC_EDGAR_USER_AGENT")
+    if not ua:
+        raise typer.BadParameter("SEC_EDGAR_USER_AGENT env var required")
+
+    screener_tickers = sorted(load_iwm_current(iwm_path))
+    cache_root = Path.home() / ".alphalens" / "insider_form4"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    insider_store = InsiderScorer(
+        edgar_client=SecEdgarClient(user_agent=ua),
+        ticker_cik_map=TickerCikMap.load(cik_map_path),
+        cache_dir=cache_root,
+    )
+    scorer_config = {"benchmark": benchmark, "_insider_store": insider_store}
+    typer.echo(
+        f"Scorer: Layer 2d insider cluster ({len(screener_tickers)} IWM tickers) — "
+        "Phase 3a live universe; Phase 3b backtest uses PIT reconstruction"
+    )
+    return insider_scorer_adapter, scorer_config, screener_tickers, [benchmark]
+
+
+def _apply_fundamental_gate(
+    scorer_config: dict,
+    screener_tickers: list[str],
+    *,
+    source: str,
+    with_prices: bool,
+) -> None:
+    """Pre-load fundamentals and wire them into scorer_config in place."""
+    if source == "simfin":
+        from alphalens.fundamentals.simfin_store import SimFinFundamentalsStore
+
+        typer.echo(
+            f"Preloading SimFin fundamentals (bulk CSV, 5y US quarterly, "
+            f"with_prices={with_prices})…"
+        )
+        store = SimFinFundamentalsStore(with_prices=with_prices)
+    elif source == "av":
+        from alphalens.fundamentals.backtest_store import HistoricalFundamentalsStore
+
+        typer.echo(f"Preloading Alpha Vantage fundamentals for {len(screener_tickers)} tickers…")
+        store = HistoricalFundamentalsStore()
+    else:
+        raise typer.BadParameter(
+            f"Unknown --fundamentals-source: {source!r} (expected: simfin | av)"
+        )
+
+    store.preload(screener_tickers)
+    scorer_config["fundamental_gate_enabled"] = True
+    scorer_config["_fundamentals_store"] = store
+    typer.echo(f"  fundamental gate: ON (source={source})")
+
+
+def _compute_diagnostics(result, regime_labels) -> tuple[list, dict, float]:
+    """IC by decile + vol decomposition, only meaningful when retain_scored_frames=True."""
+    from alphalens.backtest.diagnostics import (
+        format_vol_decomposition,
+        ic_by_decile_from_scored_frames,
+        tail_concentration_score,
+        vol_decomposition_by_regime,
+    )
+
+    if not result.scored_frames:
+        return [], {}, 0.0
+    decile_ic = ic_by_decile_from_scored_frames(result.scored_frames)
+    tail_score = tail_concentration_score(decile_ic)
+    vol_decomp = vol_decomposition_by_regime(result, regime_labels)
+    typer.echo(f"  diagnostics: tail concentration score = {tail_score:.2f}")
+    typer.echo(format_vol_decomposition(vol_decomp))
+    return decile_ic, vol_decomp, tail_score
+
+
+def _compute_theme_stats(result):
+    from alphalens.backtest.theme_analysis import snapshots_from_backtest, theme_series
+
+    themes_map: dict[str, list[str]] = {}
+    try:
+        from alphalens.screeners.themed.universe import flatten_universe as flatten_2b
+        from alphalens.screeners.themed.universe import load_universe as load_2b
+
+        themes_map.update(flatten_2b(load_2b()))
+    except Exception as exc:
+        typer.echo(f"  theme mapping skipped (2b universe not available): {exc}")
+        return None
+
+    if not themes_map:
+        return None
+
+    snaps = snapshots_from_backtest(result.daily_results, themes_map)
+    _, theme_stats = theme_series(snaps, concentration_threshold=0.70)
+    if theme_stats.all_themes:
+        typer.echo(
+            f"  themes: mean HHI={theme_stats.mean_hhi:.3f}, "
+            f"alert days={theme_stats.concentration_alert_days}"
+        )
+    return theme_stats
+
+
+def _print_headline(summary, attribution) -> None:
+    typer.echo("")
+    typer.echo("=== HEADLINE ===")
+    typer.echo(f"  sharpe_gross      = {summary.sharpe_gross:+.3f}")
+    typer.echo(f"  sharpe_moderate   = {summary.sharpe_moderate:+.3f}")
+    typer.echo(f"  mean_ic           = {summary.mean_ic:+.4f}  (t={summary.ic_tstat:+.2f})")
+    typer.echo(f"  ic_positive_pct   = {summary.ic_positive_pct * 100:.1f}%")
+    typer.echo(f"  turnover          = {summary.turnover * 100:.1f}%")
+    if attribution:
+        for r in attribution:
+            typer.echo(
+                f"  {r.spec_name:<12} alpha_ann = {r.alpha_annualized * 100:+.2f}% "
+                f"(t={r.alpha_tstat:+.2f} HAC, R²={r.r_squared:.3f})"
+            )
+
+
+def backtest(  # NOSONAR(S107) — typer CLI signature is the public API; collapsing into a dataclass would break Typer's option parsing
     start: str = typer.Option("2021-04-19", help="Backtest window start (YYYY-MM-DD)"),
     end: str = typer.Option("2026-04-17", help="Backtest window end (YYYY-MM-DD)"),
     scorer: str = typer.Option(
@@ -69,17 +256,12 @@ def backtest(
     """
     from datetime import date
 
-    import yaml
-
     from alphalens.backtest.cost_model import cost_sensitivity_table
     from alphalens.backtest.engine import BacktestEngine
     from alphalens.backtest.factor_analysis import run_carhart_attribution
     from alphalens.backtest.factors import load_carhart_daily
     from alphalens.backtest.history_store import HistoryStore
-    from alphalens.backtest.regime import (
-        classify_regime,
-        regime_breakdown,
-    )
+    from alphalens.backtest.regime import classify_regime, regime_breakdown
     from alphalens.backtest.report import (
         build_summary,
         daily_results_to_dataframe,
@@ -91,123 +273,18 @@ def backtest(
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
 
-    if scorer == "momentum":
-        from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter
-        from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
-        from alphalens.screeners.themed.universe import flatten_universe
-
-        universe = yaml.safe_load(UNIVERSE_PATH.read_text())
-        screener_tickers = sorted(flatten_universe(universe).keys())
-        scorer_fn = momentum_scorer_adapter
-        scorer_config = dict(THEMED_DEFAULTS, benchmark=benchmark)
-        typer.echo(f"Scorer: Layer 2b momentum ({len(screener_tickers)} curated tickers)")
-    elif scorer == "early-stage":
-        from alphalens.screeners.themed.backtest_adapter import (
-            early_stage_scorer_adapter,
-        )
-        from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
-        from alphalens.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS
-        from alphalens.screeners.themed.universe import flatten_universe
-
-        universe = yaml.safe_load(UNIVERSE_PATH.read_text())
-        screener_tickers = sorted(flatten_universe(universe).keys())
-        scorer_fn = early_stage_scorer_adapter
-        scorer_config = {
-            **THEMED_DEFAULTS,
-            **EARLY_STAGE_DEFAULTS,
-            "benchmark": benchmark,
-        }
-        typer.echo(f"Scorer: Layer 2b early-stage ({len(screener_tickers)} curated tickers)")
-    elif scorer == "lean":
-        from alphalens.screeners.lean.config import BENCHMARKS, LEAN_DEFAULTS
-        from alphalens.screeners.lean.lean_project.scorer import (
-            rank_universe as lean_rank,
-        )
-        from alphalens.screeners.lean.universe import all_tickers
-
-        screener_tickers = all_tickers()
-        scorer_fn = lean_rank
-        scorer_config = LEAN_DEFAULTS
-        typer.echo(
-            f"Scorer: Layer 2c Lean (archived, {len(screener_tickers)} tickers) — "
-            "this strategy failed 5-year validation per CLAUDE.md"
-        )
-    elif scorer == "insider":
-        import os
-        from pathlib import Path as _P
-
-        from alphalens.alt_data.russell_universe import load_iwm_current
-        from alphalens.alt_data.sec_edgar_client import SecEdgarClient
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
-        from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
-        from alphalens.screeners.insider.scorer import InsiderScorer
-
-        iwm_path = _P("alphalens/alt_data/data/iwm_current.yaml")
-        cik_map_path = _P("alphalens/alt_data/data/ticker_cik_map.yaml")
-        for p in (iwm_path, cik_map_path):
-            if not p.exists():
-                raise typer.BadParameter(
-                    f"Missing {p}. Seed via P3/P4 refreshers before running insider backtest."
-                )
-        ua = os.environ.get("SEC_EDGAR_USER_AGENT")
-        if not ua:
-            raise typer.BadParameter("SEC_EDGAR_USER_AGENT env var required")
-
-        screener_tickers = sorted(load_iwm_current(iwm_path))
-        cache_root = _P.home() / ".alphalens" / "insider_form4"
-        cache_root.mkdir(parents=True, exist_ok=True)
-        insider_store = InsiderScorer(
-            edgar_client=SecEdgarClient(user_agent=ua),
-            ticker_cik_map=TickerCikMap.load(cik_map_path),
-            cache_dir=cache_root,
-        )
-        scorer_fn = insider_scorer_adapter
-        scorer_config = {
-            "benchmark": benchmark,
-            "_insider_store": insider_store,
-        }
-        typer.echo(
-            f"Scorer: Layer 2d insider cluster ({len(screener_tickers)} IWM tickers) — "
-            "Phase 3a live universe; Phase 3b backtest uses PIT reconstruction"
-        )
-    else:
-        raise typer.BadParameter(
-            f"Unknown --scorer: {scorer!r} (expected: momentum | early-stage | lean | insider)"
-        )
+    scorer_fn, scorer_config, screener_tickers, extra_history = _resolve_scorer(scorer, benchmark)
 
     if fundamental_gate and scorer in ("momentum", "early-stage"):
-        if fundamentals_source == "simfin":
-            from alphalens.fundamentals.simfin_store import SimFinFundamentalsStore
-
-            typer.echo(
-                f"Preloading SimFin fundamentals (bulk CSV, 5y US quarterly, "
-                f"with_prices={with_prices})…"
-            )
-            fundamentals_store = SimFinFundamentalsStore(with_prices=with_prices)
-        elif fundamentals_source == "av":
-            from alphalens.fundamentals.backtest_store import (
-                HistoricalFundamentalsStore,
-            )
-
-            typer.echo(
-                f"Preloading Alpha Vantage fundamentals for {len(screener_tickers)} tickers…"
-            )
-            fundamentals_store = HistoricalFundamentalsStore()
-        else:
-            raise typer.BadParameter(
-                f"Unknown --fundamentals-source: {fundamentals_source!r} (expected: simfin | av)"
-            )
-        fundamentals_store.preload(screener_tickers)
-        scorer_config["fundamental_gate_enabled"] = True
-        scorer_config["_fundamentals_store"] = fundamentals_store
-        typer.echo(f"  fundamental gate: ON (source={fundamentals_source})")
+        _apply_fundamental_gate(
+            scorer_config,
+            screener_tickers,
+            source=fundamentals_source,
+            with_prices=with_prices,
+        )
 
     typer.echo(f"Loading OHLCV into HistoryStore ({start_date} → {end_date})…")
-    if scorer == "lean":
-        tickers = screener_tickers + list(BENCHMARKS)  # type: ignore[possibly-undefined]
-    else:
-        tickers = screener_tickers + [benchmark]  # themed pipeline scorers (momentum, early-stage)
-    histories = load_lean_histories(DATA_DIR, tickers)
+    histories = load_lean_histories(DATA_DIR, screener_tickers + extra_history)
     store = HistoryStore(histories)
     typer.echo(f"  loaded {len(store.tickers())} tickers")
 
@@ -226,7 +303,6 @@ def backtest(
     typer.echo("Running backtest replay…")
     result = engine.run(start=start_date, end=end_date)
     typer.echo(f"  {len(result.daily_results)} daily snapshots")
-
     if not result.daily_results:
         raise typer.BadParameter(
             "Backtest produced no daily snapshots — check data coverage / warmup"
@@ -252,50 +328,10 @@ def backtest(
         except (FileNotFoundError, ValueError) as exc:
             typer.echo(f"  Factor attribution skipped: {exc}")
 
-    decile_ic = []
-    vol_decomp = {}
-    tail_score = 0.0
-    if diagnose and result.scored_frames:
-        from alphalens.backtest.diagnostics import (
-            format_vol_decomposition,
-            ic_by_decile_from_scored_frames,
-            tail_concentration_score,
-            vol_decomposition_by_regime,
-        )
-
-        decile_ic = ic_by_decile_from_scored_frames(result.scored_frames)
-        tail_score = tail_concentration_score(decile_ic)
-        vol_decomp = vol_decomposition_by_regime(result, regime_labels)
-        typer.echo(f"  diagnostics: tail concentration score = {tail_score:.2f}")
-        typer.echo(format_vol_decomposition(vol_decomp))
-
-    from alphalens.backtest.theme_analysis import (
-        snapshots_from_backtest,
-        theme_series,
+    decile_ic, vol_decomp, tail_score = (
+        _compute_diagnostics(result, regime_labels) if diagnose else ([], {}, 0.0)
     )
-
-    themes_map: dict[str, list[str]] = {}
-    try:
-        from alphalens.screeners.themed.universe import (
-            flatten_universe as flatten_2b,
-        )
-        from alphalens.screeners.themed.universe import (
-            load_universe as load_2b,
-        )
-
-        themes_map.update(flatten_2b(load_2b()))
-    except Exception as exc:
-        typer.echo(f"  theme mapping skipped (2b universe not available): {exc}")
-
-    theme_stats = None
-    if themes_map:
-        snaps = snapshots_from_backtest(result.daily_results, themes_map)
-        _, theme_stats = theme_series(snaps, concentration_threshold=0.70)
-        if theme_stats.all_themes:
-            typer.echo(
-                f"  themes: mean HHI={theme_stats.mean_hhi:.3f}, "
-                f"alert days={theme_stats.concentration_alert_days}"
-            )
+    theme_stats = _compute_theme_stats(result)
 
     report_path = Path(report)
     if not report_path.is_absolute():
@@ -322,16 +358,4 @@ def backtest(
         daily_results_to_dataframe(result).to_csv(csv_path, index=False)
         typer.echo(f"Daily CSV written to {csv_path}")
 
-    typer.echo("")
-    typer.echo("=== HEADLINE ===")
-    typer.echo(f"  sharpe_gross      = {summary.sharpe_gross:+.3f}")
-    typer.echo(f"  sharpe_moderate   = {summary.sharpe_moderate:+.3f}")
-    typer.echo(f"  mean_ic           = {summary.mean_ic:+.4f}  (t={summary.ic_tstat:+.2f})")
-    typer.echo(f"  ic_positive_pct   = {summary.ic_positive_pct * 100:.1f}%")
-    typer.echo(f"  turnover          = {summary.turnover * 100:.1f}%")
-    if attribution:
-        for r in attribution:
-            typer.echo(
-                f"  {r.spec_name:<12} alpha_ann = {r.alpha_annualized * 100:+.2f}% "
-                f"(t={r.alpha_tstat:+.2f} HAC, R²={r.r_squared:.3f})"
-            )
+    _print_headline(summary, attribution)
