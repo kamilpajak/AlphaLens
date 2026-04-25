@@ -13,6 +13,13 @@ research_app = typer.Typer(
     no_args_is_help=True,
 )
 
+_HELP_START = "Backtest start (YYYY-MM-DD). Polygon Basic entitlement floor is 2021-06-01."
+_HELP_END = "Backtest end (YYYY-MM-DD)"
+_HELP_TOP_N = "Top-N picks per day"
+_HELP_HOLDING = "Holding period in trading days"
+_HELP_WEIGHTING = "Position weighting: linear | equal | conviction"
+_HELP_REPORT = "Markdown report output path (relative to repo root)"
+
 
 @research_app.callback()
 def _research_callback() -> None:
@@ -23,9 +30,9 @@ def _research_callback() -> None:
 def cost_validation(
     start: str = typer.Option(
         "2021-06-01",
-        help="Backtest start (YYYY-MM-DD). Polygon Basic entitlement floor is 2021-06-01.",
+        help=_HELP_START,
     ),
-    end: str = typer.Option("2026-04-17", help="Backtest end (YYYY-MM-DD)"),
+    end: str = typer.Option("2026-04-17", help=_HELP_END),
     portfolio_value: float = typer.Option(
         10_000_000.0,
         "--portfolio-value",
@@ -44,13 +51,13 @@ def cost_validation(
     window_days: int = typer.Option(
         21, help="Trailing window for dollar-ADV computation (trading days)"
     ),
-    top_n: int = typer.Option(5, help="Top-N picks per day"),
-    holding: int = typer.Option(5, help="Holding period in trading days"),
-    weighting: str = typer.Option("linear", help="Position weighting: linear | equal | conviction"),
+    top_n: int = typer.Option(5, help=_HELP_TOP_N),
+    holding: int = typer.Option(5, help=_HELP_HOLDING),
+    weighting: str = typer.Option("linear", help=_HELP_WEIGHTING),
     benchmark: str = typer.Option("SPY", help="Benchmark for calendar"),
     report: str = typer.Option(
         "docs/backtest/cost_validation.md",
-        help="Markdown report output path (relative to repo root)",
+        help=_HELP_REPORT,
     ),
     csv: str = typer.Option("", help="Optional per-pick-day participation CSV output path"),
 ) -> None:
@@ -231,14 +238,14 @@ def cost_validation(
 def walk_forward(
     start: str = typer.Option(
         "2021-06-01",
-        help="Backtest start (YYYY-MM-DD). Polygon Basic entitlement floor is 2021-06-01.",
+        help=_HELP_START,
     ),
-    end: str = typer.Option("2026-04-17", help="Backtest end (YYYY-MM-DD)"),
+    end: str = typer.Option("2026-04-17", help=_HELP_END),
     window_days: int = typer.Option(252, help="Test window size in trading days (~1 year)"),
     step_days: int = typer.Option(21, help="Stride between windows in trading days (~1 month)"),
-    top_n: int = typer.Option(5, help="Top-N picks per day"),
-    holding: int = typer.Option(5, help="Holding period in trading days"),
-    weighting: str = typer.Option("linear", help="Position weighting: linear | equal | conviction"),
+    top_n: int = typer.Option(5, help=_HELP_TOP_N),
+    holding: int = typer.Option(5, help=_HELP_HOLDING),
+    weighting: str = typer.Option("linear", help=_HELP_WEIGHTING),
     benchmark: str = typer.Option("SPY", help="Benchmark for calendar + regime classification"),
     no_attrib: bool = typer.Option(
         False,
@@ -247,7 +254,7 @@ def walk_forward(
     ),
     report: str = typer.Option(
         "docs/backtest/walk_forward.md",
-        help="Markdown report output path (relative to repo root)",
+        help=_HELP_REPORT,
     ),
     csv: str = typer.Option("", help="Optional per-window CSV output path (empty = skip)"),
 ) -> None:
@@ -409,12 +416,12 @@ def walk_forward(
 def survivorship_pit(
     start: str = typer.Option(
         "2021-06-01",
-        help="Backtest start (YYYY-MM-DD). Polygon Basic entitlement floor is 2021-06-01.",
+        help=_HELP_START,
     ),
-    end: str = typer.Option("2026-04-17", help="Backtest end (YYYY-MM-DD)"),
-    top_n: int = typer.Option(5, help="Top-N picks per day"),
-    holding: int = typer.Option(5, help="Holding period in trading days"),
-    weighting: str = typer.Option("linear", help="Position weighting: linear | equal | conviction"),
+    end: str = typer.Option("2026-04-17", help=_HELP_END),
+    top_n: int = typer.Option(5, help=_HELP_TOP_N),
+    holding: int = typer.Option(5, help=_HELP_HOLDING),
+    weighting: str = typer.Option("linear", help=_HELP_WEIGHTING),
     benchmark: str = typer.Option("SPY", help="Benchmark for calendar"),
     tests: str = typer.Option(
         "c1,c2,c3",
@@ -422,7 +429,7 @@ def survivorship_pit(
     ),
     report: str = typer.Option(
         "docs/backtest/survivorship_pit_a.md",
-        help="Markdown report output path (relative to repo root)",
+        help=_HELP_REPORT,
     ),
     parquet: str = typer.Option(
         "",

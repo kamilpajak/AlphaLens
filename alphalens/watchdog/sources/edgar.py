@@ -170,7 +170,7 @@ class SECEdgarSource(EventSource):
             resp = requests.get(url, params=params, headers=headers, timeout=10)
             resp.raise_for_status()
             return resp.text
-        except (requests.RequestException, OSError) as exc:
+        except requests.RequestException as exc:
             logger.error("EDGAR fetch failed (%s): %s", context, exc)
             return None
 
@@ -276,7 +276,7 @@ def _pick_form4_xml_name(index_json_text: str) -> str | None:
     """
     try:
         data = json.loads(index_json_text)
-    except (json.JSONDecodeError, ValueError):
+    except ValueError:
         return None
 
     items = data.get("directory", {}).get("item", [])

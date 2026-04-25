@@ -483,7 +483,6 @@ def evaluate_cost_gate(
     """Zen-revised gate: PASS iff <5% of pick-days exceed the participation
     threshold AND max participation stays below the max threshold.
     """
-    threshold_frac = scale_path.threshold_pct / 100.0
     max_threshold_frac = scale_path.max_threshold_pct / 100.0
 
     fraction_pass = scale_path.fraction_exceeding_threshold < fraction_threshold

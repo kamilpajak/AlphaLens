@@ -105,7 +105,6 @@ class LeanBatchScreener(QCAlgorithm):  # type: ignore[name-defined]  # noqa: F40
 
     def on_data(self, _data):
         """No per-bar work — all the computation happens at end-of-algorithm."""
-        return
 
     def on_end_of_algorithm(self):
         histories: dict[str, pd.DataFrame] = {}

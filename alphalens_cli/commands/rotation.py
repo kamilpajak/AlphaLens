@@ -30,10 +30,12 @@ rotation_app = typer.Typer(
     no_args_is_help=True,
 )
 
+_HELP_CONFIG = "Path to rotation YAML config"
+
 
 @rotation_app.command(name="backtest")
 def backtest(
-    config: Path = typer.Option(..., help="Path to rotation YAML config"),
+    config: Path = typer.Option(..., help=_HELP_CONFIG),
     start: str = typer.Option(..., help="Backtest start date (YYYY-MM-DD)"),
     end: str = typer.Option(..., help="Backtest end date (YYYY-MM-DD)"),
     output: Path = typer.Option(..., help="Markdown report output path"),
@@ -72,7 +74,7 @@ def backtest(
 
 @rotation_app.command(name="run")
 def run(
-    config: Path = typer.Option(..., help="Path to rotation YAML config"),
+    config: Path = typer.Option(..., help=_HELP_CONFIG),
     lookback_days: int = typer.Option(400, help="Days of history to load for signal computation"),
 ) -> None:
     """Compute today's target weights using latest available data."""
@@ -105,7 +107,7 @@ def run(
 
 @rotation_app.command(name="sanity-check")
 def sanity_check(
-    config: Path = typer.Option(..., help="Path to rotation YAML config"),
+    config: Path = typer.Option(..., help=_HELP_CONFIG),
     start: str = typer.Option(..., help="IS start date (YYYY-MM-DD)"),
     end: str = typer.Option(..., help="IS end date (YYYY-MM-DD)"),
 ) -> None:
@@ -153,7 +155,7 @@ def sanity_check(
 
 @rotation_app.command(name="status")
 def status(
-    config: Path = typer.Option(..., help="Path to rotation YAML config"),
+    config: Path = typer.Option(..., help=_HELP_CONFIG),
     allow_dirty: bool = typer.Option(True),
 ) -> None:
     """Show config fingerprint and git SHA for reproducibility."""

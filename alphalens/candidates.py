@@ -21,7 +21,7 @@ class Candidate:
     source: str
     detected_at: datetime
     priority: int  # lower = higher priority (0 top)
-    payload: dict[str, Any]  # JSON-serialisable; interpretation is source-specific
+    payload: dict[str, Any]  # JSON-serialisable, source-specific shape
     dedup_key: str  # stable hash; UNIQUE in the queue
 
     @classmethod

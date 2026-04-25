@@ -54,7 +54,7 @@ class PolygonLeanSync:
         try:
             data = json.loads(self.state_path.read_text())
             return date.fromisoformat(data["last_synced"])
-        except (ValueError, KeyError, json.JSONDecodeError):
+        except (ValueError, KeyError):
             return None
 
     def save_last_synced(self, d: date) -> None:

@@ -150,7 +150,7 @@ def docker_available(subprocess_runner: SubprocessRunner | None = None) -> bool:
     runner = subprocess_runner or _default_subprocess_runner
     try:
         completed = runner(["docker", "--version"], 5)
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+    except (subprocess.TimeoutExpired, OSError):
         return False
     return completed.returncode == 0
 
