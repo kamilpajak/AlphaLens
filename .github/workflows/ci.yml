@@ -63,8 +63,14 @@ jobs:
 
       - name: SonarCloud scan
         if: github.event_name != 'schedule'
-        uses: SonarSource/sonarqube-scan-action@v4
+        uses: SonarSource/sonarqube-scan-action@v6  # v4 deprecated 2026-Q1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Explicit branch name on push to main — disambiguates when repo has
+          # multiple feature/dependabot branches and SonarCloud auto-detection
+          # picks the wrong one as Main Branch.
+          args: >-
+            ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '-Dsonar.branch.name=main' || '' }}
         continue-on-error: true  # don't block CI if SonarCloud is down or misconfigured
