@@ -17,7 +17,7 @@ class TestComputePositionWeights(unittest.TestCase):
 
         w = compute_position_weights(10, "linear")
         self.assertAlmostEqual(w.sum(), 1.0)
-        # w[0] najwyższa, w[-1] najniższa
+        # w[0] highest, w[-1] lowest
         for i in range(len(w) - 1):
             self.assertGreater(w[i], w[i + 1])
 
@@ -49,7 +49,7 @@ class TestComputePositionWeights(unittest.TestCase):
         self.assertAlmostEqual(mid / bottom, 2.0, places=5)
 
     def test_conviction_small_n(self):
-        """N=3 powinno rozpaść się gracefully na 1 top, 1 mid, 1 bottom."""
+        """N=3 should collapse gracefully to 1 top, 1 mid, 1 bottom."""
         from alphalens.backtest.weighting import compute_position_weights
 
         w = compute_position_weights(3, "conviction")

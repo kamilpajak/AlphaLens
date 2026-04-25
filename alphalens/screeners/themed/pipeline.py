@@ -99,16 +99,17 @@ class ThemedPipeline:
     def to_candidates(self, df: pd.DataFrame, weighting: str = "linear") -> list[Candidate]:
         """Emit `Candidate` rows with per-position `weight` in payload.
 
-        `weighting` controls suggested position sizing (nie TradingAgents decision —
-        to jest sygnał dla ewentualnego downstream rebalansu albo eksternalnego
-        sizingu). Domyślnie `"linear"` bo weighting-sweep pokazał że linear top-5
-        daje +7% Sharpe i +27% Calmar vs equal weights. Schematy: `equal`, `linear`,
-        `conviction` (zobacz `alphalens/backtest/weighting.py`).
+        `weighting` controls the suggested position sizing (not a TradingAgents
+        decision — it's a signal for any downstream rebalance or external
+        sizing). Default is `"linear"`: the weighting sweep showed that
+        linear top-5 yields +7% Sharpe and +27% Calmar vs equal weights.
+        Schemes: `equal`, `linear`, `conviction` (see
+        `alphalens/backtest/weighting.py`).
         """
         if df.empty:
             return []
-        # Lokalny import — backtest'owy moduł nie jest dependency produkcji;
-        # pipeline działa niezmiennie gdy plik zniknie (fallback do equal).
+        # Local import — the backtest module is not a production dependency;
+        # the pipeline keeps working even if the file is missing (fallback to equal).
         try:
             from alphalens.backtest.weighting import compute_position_weights
 
@@ -118,7 +119,7 @@ class ThemedPipeline:
 
         now = datetime.now(UTC)
         discriminator = now.date().isoformat()
-        # df jest już posortowane descending by momentum_score w run().
+        # df is already sorted descending by momentum_score in run().
         return [
             Candidate.from_screener(
                 ticker=row["ticker"],

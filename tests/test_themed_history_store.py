@@ -118,7 +118,7 @@ class TestStaleness(unittest.TestCase):
     def test_detects_persistent_name(self):
         from alphalens.screeners.themed.history_store import compute_staleness
 
-        # A jest top-1 przez 5 dni, B pojawił się raz
+        # A is top-1 for 5 days, B appears once
         timeline = pd.DataFrame(
             [
                 {"run_date": "2024-01-01", "rank": 1, "ticker": "A"},
@@ -155,10 +155,10 @@ class TestTurnover(unittest.TestCase):
         )
         df = compute_turnover_by_day(timeline, top_n=5)
         self.assertEqual(len(df), 3)
-        # Dzień 2: 1/2 zmieniło → 50%
+        # Day 2: 1/2 changed → 50%
         row2 = df[df["run_date"] == "2024-01-02"].iloc[0]
         self.assertAlmostEqual(row2["turnover"], 0.5)
-        # Dzień 3: 100% turnover
+        # Day 3: 100% turnover
         row3 = df[df["run_date"] == "2024-01-03"].iloc[0]
         self.assertAlmostEqual(row3["turnover"], 1.0)
 
@@ -214,7 +214,7 @@ class TestThemeHHI(unittest.TestCase):
             ]
         )
         df = compute_theme_hhi_by_day(timeline, top_n=5)
-        # 3 równe tematy → HHI = 3 × (1/3)² = 1/3
+        # 3 equal themes → HHI = 3 × (1/3)² = 1/3
         self.assertAlmostEqual(df.iloc[0]["hhi"], 1 / 3, places=3)
 
 

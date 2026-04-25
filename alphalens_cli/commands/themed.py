@@ -103,14 +103,14 @@ def screen(
 
 @themed_app.command(name="status")
 def status(
-    days: int = typer.Option(30, help="Ile ostatnich dni runów pokazać"),
-    top_n: int = typer.Option(5, help="Rozmiar top-N używanego w analizach"),
+    days: int = typer.Option(30, help="How many recent days of runs to show"),
+    top_n: int = typer.Option(5, help="Top-N size used in the analyses"),
     staleness_threshold: int = typer.Option(
-        10, help="Flag nazw które są w top-N przez ≥ N kolejnych runów"
+        10, help="Flag names that stay in top-N for ≥ N consecutive runs"
     ),
-    hhi_alert: float = typer.Option(0.70, help="Alert gdy dominujący theme weight > próg"),
+    hhi_alert: float = typer.Option(0.70, help="Alert when dominant theme weight > threshold"),
 ) -> None:
-    """Dashboard monitoringu Layer 2b — rolling metrics z historic runs."""
+    """Layer 2b monitoring dashboard — rolling metrics from historic runs."""
     from alphalens.screeners.themed.history_store import (
         ThemedHistoryStore,
         compute_staleness,
@@ -121,16 +121,14 @@ def status(
     store = ThemedHistoryStore()
     runs = store.recent_runs(days=days)
     if not runs:
-        typer.echo(
-            "Brak runów w historii. Uruchom `alphalens themed screen` żeby zacząć zbierać dane."
-        )
+        typer.echo("No runs in history. Run `alphalens themed screen` to start collecting data.")
         raise typer.Exit(0)
 
     timeline = store.picks_timeline(days=days)
 
-    typer.echo(f"=== Layer 2b Monitoring — ostatnie {len(runs)} runów (limit {days} dni) ===")
+    typer.echo(f"=== Layer 2b Monitoring — last {len(runs)} runs (limit {days} days) ===")
     typer.echo("")
-    typer.echo(f"{'Data':<12} {'Picks':>6} {'Universe':>10} {'Error':<20}")
+    typer.echo(f"{'Date':<12} {'Picks':>6} {'Universe':>10} {'Error':<20}")
     typer.echo("-" * 55)
     for r in runs[:15]:
         err = (r.error[:18] + "..") if r.error else ""
@@ -138,11 +136,11 @@ def status(
             f"{r.run_date.isoformat():<12} {r.scored_count:>6} {r.universe_size:>10} {err:<20}"
         )
     if len(runs) > 15:
-        typer.echo(f"  ... ({len(runs) - 15} starszych)")
+        typer.echo(f"  ... ({len(runs) - 15} older)")
     typer.echo("")
 
     if timeline.empty:
-        typer.echo("Brak picks w timelinie — nie ma co analizować.")
+        typer.echo("No picks in the timeline — nothing to analyse.")
         raise typer.Exit(0)
 
     hhi_df = compute_theme_hhi_by_day(timeline, top_n=top_n)
@@ -151,19 +149,19 @@ def status(
         mean_hhi = float(hhi_df["hhi"].mean())
         max_hhi_day = hhi_df.loc[hhi_df["hhi"].idxmax()]
         alert_days = int((hhi_df["dominant_weight"] > hhi_alert).sum())
-        typer.echo(f"  Średnie HHI:        {mean_hhi:.3f}  (0 = rozproszona, 1 = jeden theme)")
+        typer.echo(f"  Mean HHI:           {mean_hhi:.3f}  (0 = diffuse, 1 = single theme)")
         typer.echo(
-            f"  Max HHI dzień:      {max_hhi_day['run_date']} — {max_hhi_day['hhi']:.3f} "
+            f"  Max HHI day:        {max_hhi_day['run_date']} — {max_hhi_day['hhi']:.3f} "
             f"({max_hhi_day['dominant_theme']} {max_hhi_day['dominant_weight'] * 100:.0f}%)"
         )
         typer.echo(
-            f"  Dni alert >{hhi_alert * 100:.0f}%:    {alert_days}/{len(hhi_df)} "
+            f"  Days alert >{hhi_alert * 100:.0f}%:  {alert_days}/{len(hhi_df)} "
             f"({alert_days / len(hhi_df) * 100:.1f}%)"
         )
         dom_counts = hhi_df["dominant_theme"].value_counts()
         typer.echo(
-            "  Dominujący:         "
-            + ", ".join(f"{t}: {c} dni" for t, c in dom_counts.head(5).items())
+            "  Dominant:           "
+            + ", ".join(f"{t}: {c} days" for t, c in dom_counts.head(5).items())
         )
     typer.echo("")
 
@@ -174,20 +172,20 @@ def status(
         mean_turn = float(tds["turnover"].mean())
         last_turn = float(tds.iloc[-1]["turnover"])
         typer.echo(
-            f"  Średni turnover:    {mean_turn * 100:.1f}% (fraction names changing per day)"
+            f"  Mean turnover:      {mean_turn * 100:.1f}% (fraction of names changing per day)"
         )
-        typer.echo(f"  Ostatni dzień:      {last_turn * 100:.1f}%")
+        typer.echo(f"  Last day:           {last_turn * 100:.1f}%")
     typer.echo("")
 
     stale_df = compute_staleness(timeline, top_n=top_n)
     flagged = stale_df[stale_df["consecutive_days"] >= staleness_threshold]
-    typer.echo(f"=== Staleness (w top-{top_n} przez ≥{staleness_threshold} dni) ===")
+    typer.echo(f"=== Staleness (in top-{top_n} for ≥{staleness_threshold} days) ===")
     if flagged.empty:
-        typer.echo(f"  Żaden ticker nie stoi w top-{top_n} dłużej niż {staleness_threshold} dni.")
+        typer.echo(f"  No ticker has stayed in top-{top_n} longer than {staleness_threshold} days.")
     else:
         typer.echo(f"{'Ticker':<8} {'Days':>6} {'Last rank':>10}")
         for _, row in flagged.head(10).iterrows():
             typer.echo(f"{row['ticker']:<8} {row['consecutive_days']:>6} {row['last_rank']:>10}")
         if len(flagged) > 10:
-            typer.echo(f"  ... ({len(flagged) - 10} więcej)")
+            typer.echo(f"  ... ({len(flagged) - 10} more)")
     typer.echo("")

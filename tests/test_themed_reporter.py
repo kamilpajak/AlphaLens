@@ -75,11 +75,11 @@ class TestMomentumReporter(unittest.TestCase):
         )
         text = format_telegram_report(df, curr_date="2026-04-17")
         self.assertIn("Themes:", text)
-        # Każdy theme powinien mieć ~33% weight
+        # Each theme should hold ~33% weight
         self.assertIn("33%", text)
 
     def test_concentration_warning_when_one_theme_dominates(self):
-        """Gdy >70% picks w jednym temacie, raport emituje ⚠️ ostrzeżenie."""
+        """When >70% of picks sit in one theme, the report emits a warning."""
         from alphalens.screeners.themed.reporter import format_telegram_report
 
         df = pd.DataFrame(

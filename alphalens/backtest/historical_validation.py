@@ -1,20 +1,20 @@
-"""Historical validation: czy LLM rejections correlate z subsequent underperformance.
+"""Historical validation: do LLM rejections correlate with subsequent underperformance.
 
 Phase 0 audit per Perplexity recommendation (2026-04-19):
 "Audit last 60 days: Of your top-5 daily candidates, what % led to actionable
 insights? What % were 'can't find edge'?"
 
-Ten moduł iteruje over historical top-N picks (z `BacktestReport` lub
-`ThemedHistoryStore`), puszcza pluggable LLM scorer na każdy, porównuje:
-- accept_rate: % picks gdzie LLM daje approve
-- accept_hit_rate: mean forward return w accepted
-- reject_hit_rate: mean forward return w rejected
-- delta: accept_hit - reject_hit; >0 znaczy LLM dodaje value, ~0 znaczy noise
+This module iterates over historical top-N picks (from `BacktestReport` or
+`ThemedHistoryStore`), runs a pluggable LLM scorer on each, and compares:
+- accept_rate: % of picks where the LLM approves
+- accept_hit_rate: mean forward return on accepted picks
+- reject_hit_rate: mean forward return on rejected picks
+- delta: accept_hit − reject_hit; >0 means the LLM adds value, ~0 means noise
 
-Scorer function może być:
-- Custom lightweight Gemini call (~2-3 LLM calls, $0.01-0.05/analysis)
-- TradingAgentsGraph z reduced analysts (~10 calls, $0.50-1/analysis)
-- Cokolwiek innego co zwraca `LLMVerdict`
+The scorer function can be:
+- a custom lightweight Gemini call (~2-3 LLM calls, $0.01-0.05/analysis)
+- TradingAgentsGraph with reduced analysts (~10 calls, $0.50-1/analysis)
+- anything else returning an `LLMVerdict`
 """
 
 from __future__ import annotations
@@ -225,7 +225,7 @@ def evaluate_historical_picks(
 
 
 def format_decision_matrix(result: ValidationResult) -> str:
-    """Ludzko-czytelny raport z rekomendacją deploy / iterate / abandon."""
+    """Human-readable report with a deploy / iterate / abandon recommendation."""
     lines = [
         "=== Historical Validation Results ===",
         "",
@@ -262,16 +262,16 @@ def format_decision_matrix(result: ValidationResult) -> str:
         lines.append(
             f"  (delta {delta * 100:+.2f}% AND hit-rate delta {hit_delta * 100:+.1f} p.p.)"
         )
-        lines.append("  → Integracja 3-tier adaptive architecture warta kosztów.")
+        lines.append("  → Integrating the 3-tier adaptive architecture is worth the cost.")
     elif delta > 0.002 or hit_delta > 0.02:
-        lines.append("**ITERATE** — marginal signal, wymaga większej sample lub lepszego promptu")
+        lines.append("**ITERATE** — marginal signal, needs a larger sample or a better prompt")
         lines.append(f"  (delta {delta * 100:+.2f}%, hit-rate delta {hit_delta * 100:+.1f} p.p.)")
-        lines.append("  → Rozszerzyć sample do 90+ dni, przetestować różne scorer prompts.")
+        lines.append("  → Extend the sample to 90+ days and test different scorer prompts.")
     else:
-        lines.append("**SKIP** — LLM nie dodaje signal value vs rule-based alone")
+        lines.append("**SKIP** — LLM does not add signal value over the rule-based scorer")
         lines.append(f"  (delta {delta * 100:+.2f}%, hit-rate delta {hit_delta * 100:+.1f} p.p.)")
-        lines.append("  → Status quo (rule-based screener + Layer 3 post-analysis) jest optimal")
-        lines.append("    dla solo retail. Nie integrować pre-screening filter.")
+        lines.append("  → Status quo (rule-based screener + Layer 3 post-analysis) is optimal")
+        lines.append("    for a solo retail setup. Do not integrate a pre-screening filter.")
 
     return "\n".join(lines)
 
@@ -282,9 +282,9 @@ def format_decision_matrix(result: ValidationResult) -> str:
 
 
 def picks_from_backtest_report(report) -> list[PickRecord]:
-    """Ekstraktuj PickRecord z BacktestReport.daily_results.
+    """Extract PickRecord from BacktestReport.daily_results.
 
-    Używa `top_n_forward_returns` jako holding-period fwd return (5-day).
+    Uses `top_n_forward_returns` as the holding-period forward return (5-day).
     """
     from alphalens.backtest.engine import BacktestReport  # late import
 
@@ -312,12 +312,15 @@ def picks_from_backtest_report(report) -> list[PickRecord]:
 
 
 def picks_from_history_store(store, days: int = 60, top_n: int = 5) -> list[PickRecord]:
-    """Ekstraktuj z ThemedHistoryStore (z produkcji Layer 2b).
+    """Extract picks from ThemedHistoryStore (Layer 2b production).
 
-    Musi byc `themed_history.db` wypełniony przez daily runs. Forward return
-    liczymy z późniejszych picks — jeśli ticker pojawił się w historii później
-    też, używamy późniejszej ceny jako proxy. Fallback: None (skip).
+    Requires `themed_history.db` populated by daily runs. Forward return is
+    derived from later picks — if the same ticker appears in history again, we
+    use the later price as a proxy. Fallback: None (skip).
     """
+    # RESEARCH-ONLY: Layer 2b (themed) CLOSED 2026-04-22 (momentum overfit + cost
+    # drag). Production history store is the only source of recorded picks for
+    # historical-acceptance validation. Exempt from backtest/ ↔ screeners/ rule.
     from alphalens.screeners.themed.history_store import ThemedHistoryStore  # late
 
     if not isinstance(store, ThemedHistoryStore):
@@ -328,7 +331,11 @@ def picks_from_history_store(store, days: int = 60, top_n: int = 5) -> list[Pick
     if timeline.empty:
         return []
 
-    # Forward return z HistoryStore (OHLCV) — loader lives Lean-side, store is generic.
+    # Forward return from HistoryStore (OHLCV) — store is generic, loader lives Lean-side.
+    # RESEARCH-ONLY: Layer 2c (Lean) ARCHIVED 2026-04-19 after Sharpe 0.25 net /
+    # FF3 alpha t=0.14 failure. The Lean CSV loader is the only readily-available
+    # OHLCV source for backtest replay; imports are intentional and exempt from
+    # the backtest/ ↔ screeners/ dependency rule. Do not extend.
     from alphalens.backtest.history_store import HistoryStore
     from alphalens.screeners.lean.config import DATA_DIR
     from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
@@ -363,14 +370,14 @@ def picks_from_history_store(store, days: int = 60, top_n: int = 5) -> list[Pick
 
 
 def rule_based_tractability_scorer(_ticker: str, _asof: date, context: Mapping) -> LLMVerdict:
-    """Deterministic baseline — **żaden** LLM, pure rules.
+    """Deterministic baseline — **no** LLM, pure rules.
 
     Accept criteria:
     - rank in top 2 OR momentum_score > 0.7
-    - NOT single-theme concentration (jeśli w context są theme_weights)
+    - NOT single-theme concentration (when `theme_weights` is in context)
 
-    Używany jako floor — jeśli LLM nie pokonuje tego scoringu w delta,
-    LLM nie dodaje value.
+    Used as a floor — if an LLM cannot beat this scorer's delta, the LLM
+    is not adding value.
     """
     rank = context.get("rank", 99)
     score = context.get("momentum_score", 0.0)

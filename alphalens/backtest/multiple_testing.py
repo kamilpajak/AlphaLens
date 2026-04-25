@@ -5,7 +5,7 @@ n=2 decision-critical hypotheses (H1 primary + H2 sector-neutral from
 design doc §1). Robustness checks (FF5+UMD, Q4 Hou-Xue-Zhang) and regime
 subsets (bull/bear/flat) do NOT inflate the Bonferroni denominator —
 they are consistency validations on the same H1, not independent tests
-(Harvey-Liu-Zhu 2016; Bailey-López de Prado "Sharper Angle").
+(Harvey-Liu-Zhu 2016; Bailey-Lopez de Prado "Sharper Angle").
 
 Threshold at n=2, α=0.05:
     α_adj = 0.05 / 2 = 0.025

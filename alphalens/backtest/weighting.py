@@ -1,16 +1,18 @@
-"""Schematy wag pozycji dla portfolio top-N.
+"""Position-weighting schemes for top-N portfolios.
 
-Equal-weight to domyślny wybór dla większości szkolnych backtestów, ale
-literatura o thematic momentum (Perplexity research, ARK operationalization)
-pokazuje że **conviction-scaling** — overweight najwyżej oceniane nazwy — daje
-wyższy Sharpe bez dramatycznie większego drawdown.
+Equal-weight is the default for textbook backtests, but the thematic-momentum
+literature (Perplexity research, ARK operationalisation) shows that
+**conviction-scaling** — overweighting the highest-scored names — delivers
+higher Sharpe without a dramatically larger drawdown.
 
-Dostępne schematy:
-- `equal` — każda pozycja = 1/N (baseline)
-- `linear` — waga maleje liniowo od top (2.0/N) do bottom (0.2/N), potem normalizowane do 1.0
-- `conviction` — trzy segmenty: top 1/3 × 2.0, mid 1/3 × 1.0, bottom 1/3 × 0.5, znormalizowane
+Available schemes:
+- `equal` — each position = 1/N (baseline)
+- `linear` — weight decreases linearly from top (2.0/N) to bottom (0.2/N),
+  then normalised to sum to 1.0
+- `conviction` — three tiers: top 1/3 × 2.0, mid 1/3 × 1.0, bottom 1/3 × 0.5,
+  normalised
 
-Wszystkie schematy zwracają wagi sumujące do 1.0 (bez leverage).
+All schemes return weights summing to 1.0 (no leverage).
 """
 
 from __future__ import annotations
@@ -23,9 +25,9 @@ WeightingScheme = Literal["equal", "linear", "conviction"]
 
 
 def compute_position_weights(n: int, scheme: WeightingScheme = "equal") -> np.ndarray:
-    """Zwróć tablicę wag [w_1, w_2, ..., w_n] gdzie w_i > w_{i+1} (top-down).
+    """Return a weights array [w_1, w_2, ..., w_n] with w_i > w_{i+1} (top-down).
 
-    Wagi sumują się do 1.0. Pozycja rank 1 dostaje największą wagę.
+    Weights sum to 1.0. The rank-1 position receives the largest weight.
     """
     if n <= 0:
         return np.array([], dtype=float)
@@ -61,11 +63,11 @@ def compute_position_weights(n: int, scheme: WeightingScheme = "equal") -> np.nd
 
 
 def weighted_return(returns: np.ndarray, weights: np.ndarray) -> float:
-    """Zwrot portfela = suma(wagi × zwroty) przy założeniu że obie tablice są
-    aligned per position rank (rank 1 = najwyższy score).
+    """Portfolio return = sum(weights × returns), assuming both arrays are
+    aligned per position rank (rank 1 = highest score).
 
-    NaN w returns traktowane jako 0 (stocki które się zdelisowały mid-hold).
-    Wagi są re-normalizowane po maskowaniu NaN.
+    NaN returns are treated as 0 (stocks that delisted mid-hold). Weights are
+    re-normalised after masking NaNs.
     """
     if len(returns) == 0 or len(weights) == 0:
         return 0.0

@@ -40,7 +40,7 @@ class TestThemedPipelineToCandidates(unittest.TestCase):
         self.assertEqual(ThemedPipeline().to_candidates(df), [])
 
     def test_linear_weighting_emits_descending_weights(self):
-        """Rank 1 (najwyższy score) dostaje największą wagę, wagi sumują do 1.0."""
+        """Rank 1 (highest score) gets the largest weight; weights sum to 1.0."""
         from alphalens.screeners.themed.pipeline import ThemedPipeline
 
         df = pd.DataFrame(

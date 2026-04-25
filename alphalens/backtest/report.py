@@ -236,9 +236,10 @@ def _section_theme_concentration(
     if theme_stats.concentration_alert_days > 0:
         alert_pct = theme_stats.concentration_alert_days / max(n_total_days, 1) * 100
         lines.append(
-            f"**Alert**: {alert_pct:.1f}% dni miało koncentrację w jednym temacie "
-            f"> {theme_stats.concentration_threshold * 100:.0f}%. Portfolio zachowuje się "
-            f"jak single-theme bet a nie diversified thematic basket w tym oknie."
+            f"**Alert**: {alert_pct:.1f}% of days had a single-theme concentration "
+            f"> {theme_stats.concentration_threshold * 100:.0f}%. The portfolio "
+            f"behaves as a single-theme bet, not a diversified thematic basket, "
+            f"over this window."
         )
         lines.append("")
     return lines

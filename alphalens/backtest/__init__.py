@@ -9,3 +9,7 @@ histories is the caller's responsibility — e.g.
 `alphalens.screeners.lean.lean_csv_loader.load_lean_histories` for the Lean
 zip-CSV store.
 """
+
+from typing import Literal
+
+__status__: Literal["ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"] = "ACTIVE"
