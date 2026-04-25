@@ -1,6 +1,6 @@
 # Watchdog launchd setup
 
-Four launchd jobs run the pipeline on macOS:
+Two launchd jobs run the live pipeline on macOS:
 
 - **detect** (`com.alphalens.watchdog.detect.plist`) — every 15 min
   - Polls SEC EDGAR, classifies, dispatches alerts.
@@ -9,21 +9,12 @@ Four launchd jobs run the pipeline on macOS:
   - Drains the auto-trigger queue one job at a time.
   - Each job runs `TradingAgents.propagate` (~15 min, costs API $).
   - Daily budget cap (default 5 analyses/day, configurable in code).
-- **themed** (`com.alphalens.watchdog.themed.plist`) — daily 22:00 CET
-  - Layer 2b themed scan over the curated YAML universe.
-  - Wrapper runs `--scorer early-stage --analyze` → top-5 auto-queued to Layer 3 + Telegram report.
-  - Early-stage scorer is in paper-trade observation; momentum (validated Sharpe 1.53, FF3 α_t 2.60) is ad-hoc only.
-  - If queue submit raises, Telegram still fires with an `[ALERT]` note so you aren't blinded.
-- **insider** (`com.alphalens.insider.screen.plist`) — daily 22:00 CET
-  - Layer 2d Form 4 cluster-buy scan over IWM current constituents.
-  - Wrapper runs `--dry-run --top-n 20 --report ~/.alphalens/insider/daily_{date}.md`.
-  - Feeds GATE 1 firing-rate check: aggregate ≥5 trading days of reports
-    to decide whether to invest Phase 2.5 PIT reconstruction (Perplexity R8 Q5).
-  - Requires seeded `alphalens/alt_data/data/{ticker_cik_map,iwm_current}.yaml`
-    and `SEC_EDGAR_USER_AGENT` env var.
 
-**Archived strategies** (nie deployowane) — zobacz `archived/README.md`:
-- Layer 2c Lean-based broad Russell screener — failed 5-year validation (Sharpe 0.25).
+**Archived strategies** (no longer scheduled) — see `archived/README.md`:
+
+- Layer 2b themed scan (`com.alphalens.watchdog.themed.plist`) — CLOSED 2026-04-22 (momentum overfit OOS, realistic execution cost ~100% ann eats signal).
+- Layer 2c Lean Russell screener (`com.alphalens.watchdog.lean.plist`) — ARCHIVED 2026-04-19 (5y Sharpe 0.25 net, FF3 α t-stat 0.14).
+- Layer 2d Form 4 insider scan (`com.alphalens.insider.screen.plist`) — CLOSED 2026-04-24 (Carhart t=2.14 in-sample → 0.68 OOS, classic overfit).
 
 ## Install
 
@@ -48,7 +39,7 @@ EOF
 # (the CLI uses python-dotenv to load them)
 
 # Load the jobs
-for job in detect worker themed; do
+for job in detect worker; do
   launchctl load ~/Library/LaunchAgents/com.alphalens.watchdog.${job}.plist
 done
 
@@ -57,12 +48,12 @@ launchctl start com.alphalens.watchdog.detect
 tail -f ~/.alphalens/watchdog/detect.log
 ```
 
-Dla Layer 2c (archived) — plist w `archived/` można skopiować gdy zdecydujesz się wskrzesić strategię. Wymaga Docker Desktop + `POLYGON_API_KEY`.
+To revive an archived strategy (themed/lean/insider): copy its plist back from `archived/` and `launchctl load`. Verify the underlying validation gap was addressed first — see `docs/research/5_paradigm_failures_postmortem.md`.
 
 ## Stop / remove
 
 ```bash
-for job in detect worker themed; do
+for job in detect worker; do
   launchctl unload ~/Library/LaunchAgents/com.alphalens.watchdog.${job}.plist
 done
 rm ~/Library/LaunchAgents/com.alphalens.watchdog.*.plist
@@ -71,7 +62,8 @@ rm ~/Library/LaunchAgents/com.alphalens.watchdog.*.plist
 ## Inspect state
 
 ```bash
-# Queue status (unified candidate queue — watchdog SEC, momentum, prescreener all land here)
+# Queue status (unified candidate queue — watchdog SEC writes here; archived
+# screeners used to write here too)
 sqlite3 ~/.alphalens/candidates.db \
   "SELECT id, ticker, source, priority, status, decision, enqueued_at FROM candidates ORDER BY id DESC LIMIT 20;"
 

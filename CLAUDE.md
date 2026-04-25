@@ -1,232 +1,121 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repo.
 
-## Project Overview
+## Project status (2026-04-25 →)
 
-**AlphaLens** — research/learning infrastructure dla retail quant active alpha experimentation. **Status 2026-04-25:** project pivoted z "active alpha generation" na "research lab tooling" po **5/5 paradigm failures** (Layer 2b small-cap momentum, 2d insider Form 4, 2e tactical sector rotation, 2f 8-K event-driven screen, 2g LLM-researcher GuruAgent). User explicitly rejected pivot do passive — kod pozostaje as research framework dla future ideas, periodic literature review, kill-fast methodology. Patrz `docs/research/5_paradigm_failures_postmortem.md` dla pełnego rozliczenia.
+**AlphaLens** = research/learning infrastructure dla retail quant active alpha experimentation, **NIE** active alpha generation product. Po 5/5 paradigm failures (Layer 2b/2c/2d/2e/2f/2g) projekt został repositioned. Capital deployment based na current strategies jest off-table.
 
-Own code lives in `alphalens/`. Upstream **TradingAgents** (multi-agent LLM trading framework, v0.2.3) is vendored at `TradingAgents/` as a `git subtree --squash` from `TauricResearch/TradingAgents`. Screener pipelines under `alphalens/screeners/` (themed/prescreener/lean — wszystkie CLOSED post-validation). New research modules: `alphalens/rotation/` (overlay strategies + sanity_checks framework), `alphalens/macro/` (FRED, signals, scorer), `alphalens/guru/` (LLM-researcher pilot), `alphalens/events/` (8-K screener), `alphalens/backtest/` (factor analysis, multiple-testing, bootstrap CI).
+**Live production:** Layer 1 SEC EDGAR watchdog (launchd `detect` + `worker`).
+**Wszystko inne:** CLOSED, ARCHIVED lub RESEARCH_ONLY — kod zostaje jako reusable framework + anti-pattern catalog.
 
-**Layer 1 SEC EDGAR watchdog (live)** — pozostaje active w launchd, daily digest, near-zero maintenance. Wszystkie pozostałe layers CLOSED ale infrastructure preserved for re-use.
+Pełny rozliczenie: `docs/research/5_paradigm_failures_postmortem.md`. Decyzje architektoniczne: `docs/adr/` (5 ADRs).
 
-Project root belongs to AlphaLens. Upstream sits in its own subfolder — edit patches there, sync with `git subtree pull`. The top-level CLI package is named `alphalens_cli/` (not `cli/`) to avoid namespace collision with TradingAgents' own `cli/` package.
+## Layer status
 
-## Research lab posture (2026-04-25 →)
+Lifecycle status każdej warstwy żyje w jej `__init__.py` jako `__status__` constant (enforced przez `tests/test_layer_status.py`):
 
-Co projekt teraz REPRESENTuje:
-- **Reusable research framework** — backtest engines, factor attribution, sanity checks, pre-commit discipline (`alphalens/rotation/precommit.py`)
-- **Anti-pattern catalog** dla retail active alpha (`docs/research/5_paradigm_failures_postmortem.md`)
-- **Production-grade data clients** — Polygon (fundamentals + market data), FRED, SEC EDGAR
-- **LLM scoring infrastructure** — TradingAgents multi-agent + GuruScorer single-prompt
-- **Layer 1 watchdog** — live SEC EDGAR event detection (read-only, no capital deploy)
+| Path | Status | Notatka |
+|------|--------|---------|
+| `alphalens/watchdog/` | ACTIVE | Layer 1 — live w launchd |
+| `alphalens/backtest/` | ACTIVE | screener-agnostic harness |
+| `alphalens/screeners/themed/` | CLOSED 2026-04-22 | Layer 2b — momentum overfit + cost eats signal |
+| `alphalens/screeners/lean/` | ARCHIVED 2026-04-19 | Layer 2c — Sharpe 0.25 net, FF3 α t=0.14 |
+| `alphalens/screeners/insider/` | CLOSED 2026-04-24 | Layer 2d — Carhart t=2.14 IS → 0.68 OOS |
+| `alphalens/screeners/prescreener/` | RESEARCH_ONLY | Layer 2a — unvalidated, manual ad-hoc |
+| `alphalens/rotation/` | CLOSED | Layer 2e — failed IS+OOS sanity |
+| `alphalens/events/` | CLOSED | Layer 2f — 8-K event screen failed |
+| `alphalens/guru/` | CLOSED | Layer 2g — LLM-researcher pilot failed |
+| `alphalens/macro/` | RESEARCH_ONLY | reusable infra, no standalone strategy |
 
-Co projekt NIE robi:
-- Deploy capital based na current strategies
-- Iterate na failed paradigms (2b/2d/2e/2f/2g all KILLED)
-- Pursue passive+tax pivot (off-table per user, see `feedback_no_passive_pivot.md`)
-
-Trigger conditions for re-activation: new academic paper z proper OOS validation, market regime change, broker switch acceptable, lub data subscription budget grows. Patrz `project_research_infrastructure_pivot.md` w memory.
+Core abstractions (zawsze ACTIVE, nie należą do żadnej layer): `candidates.py`, `queue.py`, `worker.py`, `runner.py`, `registry.py`, `config_gemini.py`.
 
 ## Commands
 
 ```bash
-# Setup (fresh clone) — requires Python 3.13 (tiktoken has no 3.14 prebuilt wheel)
+# Setup (fresh clone) — requires Python 3.13
 uv venv --python 3.13
-uv sync                               # installs both alphalens and tradingagents editable (via tool.uv.sources)
+uv sync                                          # alphalens + tradingagents editable
 
-# Run tests (unittest, not pytest)
+# Tests (unittest, NOT pytest)
 .venv/bin/python -m unittest discover tests -v
 
-# Filter tests
-.venv/bin/python -m unittest discover tests -p "test_prescreener_*" -v
+# Live workflows
+.venv/bin/alphalens watchdog run-once            # Layer 1: poll EDGAR, classify, dispatch
+.venv/bin/alphalens queue process                # drain unified queue → Layer 3
+.venv/bin/alphalens queue scorer-stats --since-days 30
+.venv/bin/alphalens analyze TICKER               # Layer 3 ad-hoc deep analysis
+.venv/bin/alphalens status                       # global queue + digest + dedup
 
-# CLI tree
-.venv/bin/alphalens status                                       # global: queue + digest + dedup
-.venv/bin/alphalens analyze TICKER                               # Layer 3 ad-hoc deep analysis
+# Backtest replay (closed scorers — research only, NOT for capital deploy)
+.venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose
+.venv/bin/alphalens backtest --scorer lean
+.venv/bin/alphalens themed status --days 90      # historical themed monitoring
+.venv/bin/alphalens research validate-llm-filter --scorer rule
 
-# Layer 1 watchdog (SEC EDGAR)
-.venv/bin/alphalens watchdog run-once                            # poll EDGAR, classify, dispatch
-
-# Layer 3 queue ops
-.venv/bin/alphalens queue process                                # drain unified candidate queue → Layer 3
-.venv/bin/alphalens queue scorer-stats --since-days 30           # per-scorer acceptance rate
-
-# Layer 2b themed screener (--scorer REQUIRED: momentum | early-stage)
-.venv/bin/alphalens themed screen --scorer momentum --dry-run               # report only, Telegram
-.venv/bin/alphalens themed screen --scorer momentum --analyze --dry-run     # screen + submit top-N to queue
-.venv/bin/alphalens themed screen --scorer early-stage --analyze            # base-breakout scorer
-.venv/bin/alphalens themed status --days 90                                 # monitoring dashboard (theme HHI, staleness, turnover)
-# Daily plist (22:00 CET) odpala `--scorer early-stage --analyze` — momentum już zwalidowane, available only ad-hoc.
-
-# Backtest (screener-agnostic)
-.venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose   # pełny 5-letni backtest + diagnostyki
-.venv/bin/alphalens backtest --scorer lean                       # re-examine archived Layer 2c
-
-# Layer 2d insider backtest (Phase 3b runbook)
-# --rebalance-stride 1 = daily (design default, wymaga warm EDGAR cache),
-# --rebalance-stride 5 = weekly (cold-cache fallback, ~6h/split)
-.venv/bin/python scripts/run_layer2d_backtest.py --split insample \
-    --start 2011-01-01 --end 2022-12-31 --top-n 15 --rebalance-stride 1
-.venv/bin/python scripts/run_layer2d_backtest.py --split oos \
-    --start 2023-01-01 --end 2026-04-22 --top-n 15 --rebalance-stride 1
-
-# Prewarm Layer 2d EDGAR Form 4 disk cache (out-of-band, e.g. on VPS 24/7)
-# Populates ~/.alphalens/insider_form4/*.json dla wszystkich (ticker, asof) par,
-# żeby kolejne daily backtest runs byly cache-only (zero EDGAR fetches)
-export SEC_EDGAR_USER_AGENT="AlphaLens-Prewarm pajakkamil@gmail.com"
-.venv/bin/python scripts/prewarm_form4_cache.py --start 2011-01-01 --end 2026-04-22 --stride 1
-
-# Research / walidacja
-.venv/bin/alphalens research validate-llm-filter --scorer rule   # Phase 0 LLM filter validation
-
-# Ad-hoc Gemini deep analysis on one ticker
-.venv/bin/python run_gemini.py
-
-# Upstream TradingAgents interactive menu (their console script)
+# Upstream TradingAgents interactive menu
 .venv/bin/tradingagents
 ```
 
-## Architecture
+CLI komendy dla CLOSED layers istnieją jako research replay tooling — patrz `docs/adr/0005-closed-layers-as-anti-pattern-catalog.md`.
 
-### Layered pipeline
+## Conventions
 
-```
-Layer 1 — watchdog          → SEC EDGAR event detection            (real-time,  <1 min) ─┐
-Layer 2a — prescreener      → S&P 500 screen (unvalidated)         (~30 min, ad-hoc)    ─┤
-Layer 2b — themed screener  → curated YAML universe (quantum/AI/…) (daily 22:00 CET)    ─┼─► CandidateQueue ─► AnalysisWorker ─► Layer 3
-Layer 2c — Lean screener    → ARCHIVED (failed 5-year validation)                       ─┘                        (TradingAgents)
-                                                                                                                   BUY / OVERWEIGHT /
-                                                                                                                   HOLD / UNDERWEIGHT / SELL
-```
+**Status markers** — każdy layer/screener `__init__.py` deklaruje `__status__: Literal["ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"]` plus `__closed_date__` i `__closed_reason__` jeśli applicable. Dodawanie nowej warstwy wymaga aktualizacji `LAYERS_WITH_STATUS` w `tests/test_layer_status.py`.
 
-Every screener emits a `Candidate` (in `alphalens/candidates.py`) into the shared priority queue at `~/.alphalens/candidates.db`. The worker drains FIFO within priority (watchdog_sec=0 > momentum=10 > lean=15 > prescreener=20), hands each candidate to `TradingAgentsRunner`, and records outcomes inline. Retry with exponential backoff + DLQ (`status='dead'` after 5 attempts).
+**English-only w kodzie** — komentarze, docstrings, identifiery po angielsku. Math notation (α, ρ, ×, −) zostaje. Polish prose żyje w CLAUDE.md, MEMORY, rozmowach, commit messages, postmortemach. Enforcement: `tests/test_no_polish_chars.py`.
 
-### TradingAgents agent flow (Layer 3)
+**Dependency direction** — `alphalens.backtest.*` NIE importuje z `alphalens.screeners.*` (poza explicit exemption: `historical_validation.py`, RESEARCH-ONLY). Adaptery żyją przy screenerach. Enforcement: `tests/test_module_dependencies.py`.
 
-```
-Analyst Team (parallel, quick_think_llm)
-  ├── Market Analyst     → technical indicators
-  ├── Social Analyst     → sentiment
-  ├── News Analyst       → news impact
-  └── Fundamentals Analyst → financials
-         │
-         ▼
-Research Team (debate, deep_think_llm): Bull ↔ Bear → Research Manager
-         │
-         ▼
-Trader → investment plan
-         │
-         ▼
-Risk Mgmt (3-way): Aggressive ↔ Neutral ↔ Conservative
-         │
-         ▼
-Portfolio Manager → final 5-tier rating
-```
+**Config parity** — `SCORER_CONFIG` w `lean_project/main.py` (Docker-inlined) musi matchować `LEAN_DEFAULTS` na shared keys. Enforcement: `tests/test_lean_config_parity.py`.
 
-### Key abstractions
+**Lazy CLI imports** — `alphalens_cli/commands/research.py` celowo NIE promote'uje cross-function duplikatów do top-level. Pomiar wykazał +913ms regresji startup time per `alphalens` invoke (Layer 1 watchdog cron odpala często, nie może płacić).
 
-**AlphaLens core** (`alphalens/`):
-- **`candidates.py`** — `Candidate` (frozen dataclass: ticker, source, priority, payload, dedup_key), `AnalysisResult`, `CandidateSink` Protocol. Every screener produces Candidates; nothing else is allowed through to Layer 3.
-- **`queue.py`** — `CandidateQueue` implementing `CandidateSink`. SQLite table `candidates` with `UNIQUE(dedup_key)`, priority + retry window scheduling, inline cost/duration columns. `default_queue_path()` → `~/.alphalens/candidates.db`.
-- **`worker.py`** — `AnalysisWorker` drains the queue, respects daily budget, handles failure/retry/DLQ, notifies via injected sender.
-- **`runner.py`** — `TradingAgentsRunner` is the only place that constructs `TradingAgentsGraph`. Builds per-source trigger context via `build_trigger_context()` (logged only; upstream PR tracks injection into graph state).
-- **`registry.py`** — `SCREENERS` dict (pipeline identity → class) + `SOURCE_PRIORITY` mapping (scorer identity → priority). Keys decoupled: `themed` pipeline emits candidates tagged `momentum` or `early-stage` depending on injected scorer. Add a new screener = one entry here.
-- **`config_gemini.py`** — `build_gemini_config()` deep-copies upstream `DEFAULT_CONFIG` and overrides for Gemini. Used by `run_gemini.py` and `TradingAgentsRunner`.
+**No backward compatibility** — solo project, zero external users. Rename, refactor, drop old behavior w jednym commicie bez aliases. Wyjątek: vendored patches w `TradingAgents/` muszą zostać mergeable z upstream sync.
 
-**Screener pipelines** (`alphalens/screeners/`):
-- **`themed/`** (Layer 2b — live/validated): `ThemedPipeline` + `THEMED_DEFAULTS` + curated `universe.yaml` + pluggable scorer (`MomentumScorer` default, `EarlyStageScorer` alternative) + `ThemedHistoryStore` for monitoring.
-- **`prescreener/`** (Layer 2a — unvalidated): `PrescreenerPipeline` — S&P 500 composite fundamentals + technicals + volume scan, **no CLI**.
-- **`lean/`** (Layer 2c — **ARCHIVED**): strategia failed 5-year rigorous validation (Sharpe 0.25 net, FF3 α t-stat 0.14 = zero alpha). Kod pozostaje dostępny dla `backtest --scorer lean`. Plist w `launchd/archived/`; `registry.SCREENERS["lean"]` zachowane.
+**New components** — zawsze w `alphalens/<name>/` lub `alphalens_cli/`. Nigdy w `TradingAgents/` (upstream territory), nigdy w top-level.
 
-**Generic backtest harness** (`alphalens/backtest/`) — screener-agnostic, reusable dla dowolnej Layer 2 strategii:
-- **`engine.py`** — `BacktestEngine(scorer, scorer_config, ...)` — replay loop z pluggable scorerem (typ `Scorer = Callable[[Mapping[str, pd.DataFrame], Mapping], pd.DataFrame]`). Dowolna Layer 2 strategia podłącza się przez adapter (np. `alphalens.screeners.themed.backtest_adapter.momentum_scorer_adapter`, albo `lean_project.scorer.rank_universe` dla archived Lean'a).
-- **`history_store.py`** — `HistoryStore(histories: dict[str, pd.DataFrame])` — point-in-time cache z `truncate_to` i `forward_return`. Zero I/O; ładowanie jest odpowiedzialnością callera (Lean zip-CSV: `alphalens.screeners.lean.lean_csv_loader.load_lean_histories`).
-- **`report.py`** — markdown + CSV + decision matrix generation z `BacktestReport`.
-- **`diagnostics.py`** — IC by decile, bear-regime vol decomposition; operuje na `BacktestReport` z engine'u.
-- **`weighting.py`** — `compute_position_weights(n, scheme)` dla position-sizing (linear najlepiej performs per 2026-04-19 sweep). Używane przez produkcyjny Layer 2b `screeners/themed/pipeline.py`.
-- **`metrics.py`** — Sharpe, IC + t-stat + rolling, decile spread, max DD, Calmar, concentration.
-- **`cost_model.py`** — 75/100/150 bps annual drag scenarios.
-- **`regime.py`** — bull/bear/flat classifier na trailing benchmark return.
-- **`factor_analysis.py`** — Fama-French 3-factor regression przez `statsmodels` OLS.
-- **`theme_analysis.py`** — HHI + dominant theme per day + concentration alerts.
-- **`historical_validation.py`** — pluggable scorer evaluation harness (PickRecord, LLMVerdict, decision matrix).
-- **`llm_scorers.py`** — reference LLM scorers (Gemini Flash, hybrid, TradingAgents reduced).
+## Where to find "why"
 
-**Screener adapters** — każda Layer 2 strategia trzyma swój adapter przy sobie:
-- `alphalens/screeners/themed/backtest_adapter.py` — `momentum_scorer_adapter`, `early_stage_scorer_adapter` (column rename + benchmark wiring dla Layer 2b `MomentumScorer` / `EarlyStageScorer`).
-- Lean scorer (archived) nie wymaga adaptera — `lean_project.scorer.rank_universe` ma już sygnaturę zgodną z `Scorer`.
+- **Architectural decisions:** `docs/adr/` (5 ADRs: pivot, queue contract, screener-agnostic backtest, vendored upstream, closed-layer policy)
+- **Why each layer was closed:** `docs/research/5_paradigm_failures_postmortem.md` + per-layer `__closed_reason__` w `__init__.py`
+- **Backtest reports archive:** `docs/backtest/`
+- **Per-strategy design + audit docs:** `docs/research/`
 
-**Upstream** (`TradingAgents/`):
-- **LLM Factory** (`TradingAgents/tradingagents/llm_clients/factory.py`): provider-agnostic client creation
-- **Vendor routing** (`TradingAgents/tradingagents/agents/utils/agent_utils.py`): `data_vendors` dict routes data by category
-- **Memory** (`TradingAgents/tradingagents/agents/utils/memory.py`): BM25 similarity, no embeddings
-- **State graph** (`TradingAgents/tradingagents/graph/setup.py`): LangGraph conditional edges
+## Configuration
 
-### Configuration
+Base config: `TradingAgents/tradingagents/default_config.py` (upstream, OpenAI-centric). **Always wrap with `alphalens.config_gemini.build_gemini_config()`** — deep-copies DEFAULT_CONFIG i override'uje dla Gemini.
 
-Base config: `TradingAgents/tradingagents/default_config.py` (upstream defaults, OpenAI-centric). **Always wrap with `alphalens.config_gemini.build_gemini_config()`** — it deep-copies DEFAULT_CONFIG and overrides for Gemini.
+Key params: `llm_provider="google"`, `deep_think_llm` / `quick_think_llm`, `max_debate_rounds`, `backend_url=None` (must be None dla Google), `data_vendors`.
 
-Key parameters (override as needed on returned dict):
+## Upstream relationship (TradingAgents)
 
-- `llm_provider`: "google" (default from build_gemini_config), or "openai", "anthropic", etc.
-- `deep_think_llm` / `quick_think_llm`: model IDs
-- `max_debate_rounds` / `max_risk_discuss_rounds`: 1 (fast) – 5 (thorough)
-- `backend_url`: **must be `None` for Google**
-- `data_vendors`: yfinance (default) or alpha_vantage (fundamentals/news better)
+`origin` → `kamilpajak/AlphaLens`. `upstream` → `TauricResearch/TradingAgents` via `git subtree --squash`. Pełen rationale: `docs/adr/0004-tradingagents-as-subtree.md`.
 
-## Upstream relationship
-
-- `origin` → `kamilpajak/AlphaLens` (private, my repo)
-- `upstream` → `TauricResearch/TradingAgents` (pulled via subtree)
-
-**Pull upstream updates:**
 ```bash
-git subtree pull --prefix=TradingAgents https://github.com/TauricResearch/TradingAgents.git main --squash
+git subtree pull --prefix=TradingAgents \
+  https://github.com/TauricResearch/TradingAgents.git main --squash
 ```
-Reapply `fix(vendored)` patches afterward (currently: Gemini 429 retry in `TradingAgents/tradingagents/llm_clients/google_client.py`). Submit these as PRs upstream to shrink the patch surface.
 
-## Output
+Po sync reapply local patches (currently: Gemini 429 retry w `TradingAgents/tradingagents/llm_clients/google_client.py`). Pending upstream PRs tracked w memory: `project_pr_tradingagents_retry.md`, `project_pr_signal_context_injection.md`.
 
-TradingAgents state logs: `~/.tradingagents/logs/{TICKER}/TradingAgentsStrategy_logs/full_states_log_{DATE}.json`.
+## Known issues (LIVE)
 
-Generate human-readable reports:
-```python
-from cli.main import save_report_to_disk   # upstream util, resolves to TradingAgents/cli/main.py via editable install
-```
-(Path changed — this helper lives in the subtree's CLI, not mine.)
+- **Gemini 429 RESOURCE_EXHAUSTED**: Google free tier 1M input tokens/min na gemini-2.5-flash. Alpha Vantage fundamentals ~1.8MB triggerują. Custom retry w `TradingAgents/tradingagents/llm_clients/google_client.py` (10 retries, ~40s base delay).
+- **`backend_url` must be `None` for Google**: upstream DEFAULT_CONFIG ma OpenAI URL → 404 dla Google. `build_gemini_config()` handles.
+- **Signal-context injection deferred**: `runner.py::build_trigger_context(candidate)` formatuje per-source trigger string ale tylko loguje. Injection do TradingAgents initial state wymaga `trigger_context` kwarg na `propagate()` — planned upstream PR.
+- **Cost tracking placeholder**: `candidates.cost_usd` jest NULL — TradingAgents nie eksponuje token accounting. Duration + `model_used` populated.
+- **Prescreener (Layer 2a) unvalidated**: 45% fundamentals weight wymaga PIT historicals których Polygon Starter ($29/mo) nie dostarcza. Manual ad-hoc tylko, no performance guarantee.
 
-## Project stage conventions
-
-- **Solo, early-stage, zero external users.** No backward-compatibility shims, no dual-path logic, no deprecated-but-still-works branches. Rename, refactor, drop old behavior in a single commit without aliases or fallbacks. If a runtime schema (SQLite, yaml) changes, drop/migrate the data — don't keep version markers.
-- **Exception:** vendored patches in `TradingAgents/` must stay mergeable with upstream sync (that interface has an external stakeholder).
-- **New components always go in `alphalens/<name>/`** — never into `TradingAgents/` (upstream territory), never at top level.
-
-## Known issues
-
-- **Gemini 429 RESOURCE_EXHAUSTED**: Google free tier has 1M input tokens/min on gemini-2.5-flash. Alpha Vantage fundamentals ~1.8MB trigger it. Custom retry in `TradingAgents/tradingagents/llm_clients/google_client.py` (10 retries, ~40s base delay). Planned upstream PR.
-- **`backend_url` must be `None` for Google**: upstream DEFAULT_CONFIG has OpenAI URL → 404 for Google. `build_gemini_config()` handles this.
-- **Prescreener (Layer 2a) unvalidated**: 45% fundamentals weight wymaga point-in-time historical data którego Polygon Starter ($29/mo) nie dostarcza. Backtest na samych technicals+volume byłby biased. Status: manual ad-hoc use only, **no performance guarantee**. Pełna walidacja wymaga upgrade do Polygon Advanced $199/mo albo alternatywa (Sharadar, FactSet).
-- **Prescreener value traps**: low P/E in cyclicals (semis, materials) can be peak-earnings trap. Layer 3 catches these — pipeline works as designed.
-- **Signal-context injection deferred**: `alphalens/runner.py::build_trigger_context(candidate)` formats a per-source trigger string (e.g. "Triggered by themed screener (scorer=momentum): score=0.85, themes=AI") but only logs it. Injecting into the TradingAgents initial state requires a `trigger_context` kwarg on `propagate()` — tracked as a planned upstream PR to stay subtree-mergeable.
-- **Cost tracking columns are placeholders**: `candidates.cost_usd` is written as `NULL` for now — TradingAgents doesn't expose token accounting. Duration + `model_used` populated on every successful run.
-- **Layer 2c (Lean screener) archived**: failed 5-year rigorous validation (Sharpe 0.25 net, FF3 alpha t-stat 0.14). Kod w `alphalens/screeners/lean/` pozostaje bo `backtest --scorer lean` i `backtest/` submodule są nadal używane do porównań/walidacji. Plist przeniesiony do `launchd/archived/`. Komenda `lean-screen` została usunięta z CLI. Wszystkie notatki operacyjne poniżej (Docker, Polygon, Lean aux data) dotyczą **gdyby** strategia została wskrzeszona w przyszłości z lepszym designem — **nie używać obecnie w produkcji**.
-- **Lean screener requires Docker + Polygon Basic key** (gdy wskrzesić): pipeline shells out to `quantconnect/lean:latest` via `docker run`. Install/start Docker Desktop and set `POLYGON_API_KEY` (free Stocks Basic tier is enough — the grouped-daily endpoint is one call per trading day). First run bootstraps ~2 years of history at 5 req/min, ~100 min of wall time (one-time). `SCORER_CONFIG` in `lean_project/main.py` duplicates `LEAN_DEFAULTS` values because the algorithm runs inside Lean without the host package on its path — **keep the two in sync manually**.
-- **Lean aux data must be extracted from the image once**: Lean expects `symbol-properties/`, `market-hours/`, `map_files/`, `factor_files/` alongside `equity/usa/daily/`. The Docker image ships them at `/Lean/Data/`, but our `-v /Data` bind mount shadows that path. One-time extraction (run once after `docker pull`, again after fresh image upgrades):
-  ```bash
-  docker run --rm --entrypoint sh -v ~/.alphalens/lean/data:/host quantconnect/lean:latest \
-    -c 'for d in /Lean/Data/*/; do cp -rn "$d" /host/ 2>/dev/null || true; done'
-  ```
-  Symptom if missing: `FileNotFoundException: /Data/symbol-properties/symbol-properties-database.csv`.
+Issues dotyczące CLOSED warstw (Lean Docker setup, Layer 2d backtest workflow, themed gate Phase 2) → patrz `launchd/archived/README.md` + `docs/research/5_paradigm_failures_postmortem.md`.
 
 ## Environment
 
-- API keys in `.env` at repo root (GOOGLE_API_KEY, ALPHA_VANTAGE_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, POLYGON_API_KEY)
-- Google API key also in macOS Keychain under `google-api-key`
-- Current LLM config: Gemini 3.1 Pro (deep) + Gemini 2.5 Flash (quick)
-- Runtime data:
-  - `~/.alphalens/candidates.db` — unified Layer 1+2a+2b+2c → Layer 3 queue (all screeners write here)
-  - `~/.alphalens/watchdog/` — portfolio.yaml, EDGAR dedup, digest buffer, launchd logs
-  - `~/.alphalens/lean/{data,results,logs}/` + `sync_state.json` — Lean CSV inputs, Docker outputs, launchd/Docker logs, last-synced date
-  - `~/.tradingagents/{cache,logs}/` — upstream state (hardcoded in their code)
-  - All survive git operations (outside repo)
+- API keys w `.env` (GOOGLE_API_KEY, ALPHA_VANTAGE_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, POLYGON_API_KEY)
+- Google API key też w macOS Keychain pod `google-api-key`
+- LLM config: Gemini 3.1 Pro (deep) + Gemini 2.5 Flash (quick)
+- Runtime data (poza repo, survives git ops):
+  - `~/.alphalens/candidates.db` — unified Layer 1 → Layer 3 queue
+  - `~/.alphalens/watchdog/` — portfolio.yaml, EDGAR dedup, digest, launchd logs
+  - `~/.alphalens/lean/{data,results,logs}/` — Lean OHLCV cache (also used by backtest replay)
+  - `~/.tradingagents/{cache,logs}/` — upstream state (hardcoded w ich kodzie)
