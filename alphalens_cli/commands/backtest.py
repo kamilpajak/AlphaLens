@@ -194,10 +194,10 @@ def _print_headline(summary, attribution) -> None:
             )
 
 
-# Typer CLI signature is the public API; can't collapse parameters without breaking
-# option parsing. NOSONAR placed on the first-parameter line where Sonar pinpoints S107.
 def backtest(
-    start: str = typer.Option("2021-04-19", help="Backtest window start (YYYY-MM-DD)"),  # NOSONAR
+    start: str = typer.Option(
+        "2021-04-19", help="Backtest window start (YYYY-MM-DD)"
+    ),  # NOSONAR(S107: Typer CLI options are the public API; collapsing into a dataclass would break option parsing)
     end: str = typer.Option("2026-04-17", help="Backtest window end (YYYY-MM-DD)"),
     scorer: str = typer.Option(
         "momentum",

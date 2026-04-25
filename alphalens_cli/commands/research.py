@@ -1113,22 +1113,16 @@ def _print_acceptance_summary(
     return total_accept, total_rate
 
 
-def _render_acceptance_report(
-    *,
+def _render_acceptance_header(
     scorer: str,
     picks_path: Path,
     samples_per_regime: int,
     seed: int,
     analysts,
     sampled: list[dict],
-    results: list[dict],
-    accept_by_regime: dict[str, list[int]],
     total_accept: list[int],
-    total_rate: float,
 ) -> list[str]:
-    from collections import defaultdict
-
-    lines = [
+    return [
         f"# Historical Layer 3 Acceptance — {scorer}",
         "",
         f"- Picks source: `{picks_path}`",
@@ -1138,6 +1132,15 @@ def _render_acceptance_report(
         + ("" if analysts is None else " (social excluded for PIT rigor)"),
         f"- Total samples: {len(sampled)}  (attempted), {len(total_accept)} (completed)",
         "",
+    ]
+
+
+def _render_acceptance_rate_section(
+    accept_by_regime: dict[str, list[int]],
+    total_accept: list[int],
+    total_rate: float,
+) -> list[str]:
+    lines = [
         "## Acceptance rate",
         "",
         "| Regime | n | Accepted | Rate |",
@@ -1147,22 +1150,44 @@ def _render_acceptance_report(
         lst = accept_by_regime.get(regime, [])
         if lst:
             lines.append(f"| {regime} | {len(lst)} | {sum(lst)} | {_accept_rate(lst) * 100:.1f}% |")
-    lines += [
-        f"| **overall** | **{len(total_accept)}** | **{sum(total_accept)}** | **{total_rate * 100:.1f}%** |",
-        "",
-        "## Rating distribution",
-        "",
-    ]
+    lines.append(
+        f"| **overall** | **{len(total_accept)}** | **{sum(total_accept)}** | **{total_rate * 100:.1f}%** |"
+    )
+    lines.append("")
+    return lines
+
+
+def _render_rating_distribution_section(results: list[dict]) -> list[str]:
+    from collections import defaultdict
+
     rating_counts: dict[str, int] = defaultdict(int)
     for r in results:
         if r["rating"]:
             rating_counts[r["rating"]] += 1
-    for rating in ("BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL"):
-        lines.append(f"- {rating}: {rating_counts.get(rating, 0)}")
+    return [
+        "## Rating distribution",
+        "",
+        *[
+            f"- {rating}: {rating_counts.get(rating, 0)}"
+            for rating in (
+                "BUY",
+                "OVERWEIGHT",
+                "HOLD",
+                "UNDERWEIGHT",
+                "SELL",
+            )
+        ],
+    ]
 
+
+def _format_alpha_cell(alpha: float | None, n: int) -> str:
+    return f"{alpha * 100:+.2f}% ({n})" if alpha is not None else f"n/a ({n})"
+
+
+def _render_forward_returns_section(results: list[dict]) -> list[str]:
     accepted_rows = [r for r in results if r["accepted"] == 1]
     rejected_rows = [r for r in results if r["accepted"] == 0 and r["rating"]]
-    lines += [
+    lines = [
         "",
         "## Forward returns by Layer 3 decision (vs SPY benchmark)",
         "",
@@ -1178,11 +1203,34 @@ def _render_acceptance_report(
         a_alpha, a_n = _mean_alpha(accepted_rows, horizon)
         r_alpha, r_n = _mean_alpha(rejected_rows, horizon)
         delta = (a_alpha - r_alpha) if (a_alpha is not None and r_alpha is not None) else None
-        a_str = f"{a_alpha * 100:+.2f}% ({a_n})" if a_alpha is not None else f"n/a ({a_n})"
-        r_str = f"{r_alpha * 100:+.2f}% ({r_n})" if r_alpha is not None else f"n/a ({r_n})"
         d_str = f"{delta * 100:+.2f}%" if delta is not None else "n/a"
-        lines.append(f"| {horizon}d | {a_str} | {r_str} | {d_str} |")
+        lines.append(
+            f"| {horizon}d | {_format_alpha_cell(a_alpha, a_n)} | {_format_alpha_cell(r_alpha, r_n)} | {d_str} |"
+        )
     return lines
+
+
+def _render_acceptance_report(
+    *,
+    scorer: str,
+    picks_path: Path,
+    samples_per_regime: int,
+    seed: int,
+    analysts,
+    sampled: list[dict],
+    results: list[dict],
+    accept_by_regime: dict[str, list[int]],
+    total_accept: list[int],
+    total_rate: float,
+) -> list[str]:
+    return [
+        *_render_acceptance_header(
+            scorer, picks_path, samples_per_regime, seed, analysts, sampled, total_accept
+        ),
+        *_render_acceptance_rate_section(accept_by_regime, total_accept, total_rate),
+        *_render_rating_distribution_section(results),
+        *_render_forward_returns_section(results),
+    ]
 
 
 @research_app.command(name="historical-acceptance")
