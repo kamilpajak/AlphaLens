@@ -108,6 +108,191 @@ def daily_results_to_dataframe(report: BacktestReport) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _section_header(report: BacktestReport, summary: BacktestSummary) -> list[str]:
+    return [
+        "# MVP1 Backtest Report",
+        "",
+        f"- **Window**: {report.start} → {report.end}",
+        f"- **Benchmark**: {report.benchmark}",
+        f"- **Top-N**: {report.top_n}",
+        f"- **Holding period**: {report.holding_period} trading days",
+        f"- **Screener universe**: {report.universe_ticker_count} tickers",
+        f"- **Backtest days**: {summary.days}",
+        "",
+    ]
+
+
+def _section_headline_metrics(summary: BacktestSummary) -> list[str]:
+    return [
+        "## Headline metrics",
+        "",
+        "| Metric | Value |",
+        "| --- | --- |",
+        f"| Sharpe (gross) | {summary.sharpe_gross:+.3f} |",
+        f"| Sharpe (moderate 100 bps) | {summary.sharpe_moderate:+.3f} |",
+        f"| Sharpe (conservative 150 bps) | {summary.sharpe_conservative:+.3f} |",
+        f"| Annual return (moderate net) | {summary.annual_return_moderate * 100:+.2f}% |",
+        f"| Max drawdown | {summary.max_drawdown * 100:+.2f}% |",
+        f"| Calmar ratio | {summary.calmar:+.3f} |",
+        f"| Hit rate (vs universe median) | {summary.hit_rate * 100:.1f}% |",
+        f"| Mean Rank IC | {summary.mean_ic:+.4f} |",
+        f"| IC t-stat | {summary.ic_tstat:+.2f} |",
+        f"| IC positive windows (20d) | {summary.ic_positive_pct * 100:.1f}% |",
+        f"| Turnover (daily rebalance) | {summary.turnover * 100:.1f}% |",
+        f"| Concentration top-5 | {summary.concentration_top5 * 100:.1f}% |",
+        "",
+    ]
+
+
+def _section_cost_sensitivity(cost_sensitivity: pd.DataFrame | None) -> list[str]:
+    if cost_sensitivity is None or cost_sensitivity.empty:
+        return []
+    lines = [
+        "## Cost sensitivity",
+        "",
+        "| Profile | Drag (bps/yr) | Sharpe | Annual return |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    for _, row in cost_sensitivity.iterrows():
+        lines.append(
+            f"| {row['profile']} | {row['drag_bps']:.0f} | "
+            f"{row['sharpe']:+.3f} | {row['annual_return'] * 100:+.2f}% |"
+        )
+    lines.append("")
+    return lines
+
+
+def _section_regime_breakdown(regime_stats: Mapping[str, RegimeStats] | None) -> list[str]:
+    if not regime_stats:
+        return []
+    lines = [
+        "## Regime breakdown",
+        "",
+        "| Regime | Days | Sharpe | Annual return | Mean IC | Hit rate |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for label in ("bull", "bear", "flat"):
+        if label not in regime_stats:
+            continue
+        s = regime_stats[label]
+        lines.append(
+            f"| {label} | {s.days} | {s.sharpe:+.3f} | "
+            f"{s.annual_return * 100:+.2f}% | {s.mean_ic:+.4f} | "
+            f"{s.hit_rate * 100:.1f}% |"
+        )
+    lines.append("")
+    return lines
+
+
+def _section_decile_ic(decile_ic: list[DecileICResult] | None, tail_score: float) -> list[str]:
+    if not decile_ic:
+        return []
+    lines = [
+        "## IC by score decile (tail-concentration test)",
+        "",
+        f"**Tail concentration score**: {tail_score:.2f} (>1.5 = strong tails, ~1.0 = flat)",
+        "",
+        "| Decile | n samples | Mean return | Std | Sharpe within |",
+        "| ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for r in decile_ic:
+        lines.append(
+            f"| {r.decile} | {r.n_samples:,} | {r.mean_return * 100:+.3f}% "
+            f"| {r.std_return * 100:.3f}% | {r.sharpe_within_decile:+.2f} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _section_vol_decomp(vol_decomp: Mapping[str, VolDecomposition] | None) -> list[str]:
+    if not vol_decomp:
+        return []
+    return [
+        "## Regime vol decomposition (is top-N just defensive?)",
+        "",
+        "```",
+        format_vol_decomposition(vol_decomp),
+        "```",
+        "",
+        "Interpretation: if **vol_ratio < 0.8 AND excess_return near zero**, "
+        "top-N is capturing defensive low-vol positioning rather than predictive alpha.",
+        "",
+    ]
+
+
+def _section_theme_concentration(
+    theme_stats: ThemeSeriesStats | None, n_total_days: int
+) -> list[str]:
+    if theme_stats is None or not theme_stats.all_themes:
+        return []
+    lines = [
+        "## Factor/theme concentration (factor-aware monitoring)",
+        "",
+        "```",
+        format_theme_summary(theme_stats, n_total_days=n_total_days),
+        "```",
+        "",
+    ]
+    if theme_stats.concentration_alert_days > 0:
+        alert_pct = theme_stats.concentration_alert_days / max(n_total_days, 1) * 100
+        lines.append(
+            f"**Alert**: {alert_pct:.1f}% dni miało koncentrację w jednym temacie "
+            f"> {theme_stats.concentration_threshold * 100:.0f}%. Portfolio zachowuje się "
+            f"jak single-theme bet a nie diversified thematic basket w tym oknie."
+        )
+        lines.append("")
+    return lines
+
+
+def _section_attribution(attribution: list[AlphaResult] | None) -> list[str]:
+    if not attribution:
+        return []
+    return [
+        "## Factor attribution (CAPM / FF3 / Carhart-4F, HAC t-stats)",
+        "",
+        "```",
+        format_attribution_table(attribution),
+        "```",
+        "",
+        "Alpha that survives the Carhart row (with momentum factor Mom) is "
+        "independent of generic momentum beta. If alpha collapses between FF3 "
+        "and Carhart-4F, the strategy is re-packaged UMD exposure.",
+        "",
+    ]
+
+
+def _section_decision_criteria(
+    summary: BacktestSummary, attribution: list[AlphaResult] | None
+) -> list[str]:
+    carhart = (
+        next((r for r in attribution if r.spec_name == "Carhart-4F"), None) if attribution else None
+    )
+    deploy_criteria = [
+        ("Sharpe (net moderate) > 0.3", summary.sharpe_moderate > 0.3),
+        ("IC positive windows > 60%", summary.ic_positive_pct > 0.60),
+        (
+            "Carhart-4F alpha t-stat > 1.5 (HAC)",
+            carhart is not None and carhart.alpha_tstat > 1.5,
+        ),
+    ]
+    lines = ["## Decision criteria (MVP1 → paper trade gate)", ""]
+    for name, ok in deploy_criteria:
+        lines.append(f"- {'[x]' if ok else '[ ]'} {name}")
+    lines.append("")
+
+    pass_count = sum(1 for _, ok in deploy_criteria if ok)
+    if pass_count == 3:
+        lines.append("**Recommendation: DEPLOY** — proceed to launchd + 3-6 month paper trade.")
+    elif pass_count >= 1:
+        lines.append(
+            "**Recommendation: ITERATE** — tweak rule weights or guardrails before deploy."
+        )
+    else:
+        lines.append("**Recommendation: ABANDON** — no edge detected; rely on Layer 1 + 2b only.")
+    lines.append("")
+    return lines
+
+
 def write_markdown_report(
     report: BacktestReport,
     path: Path,
@@ -121,150 +306,17 @@ def write_markdown_report(
     theme_stats: ThemeSeriesStats | None = None,
 ) -> None:
     """Write the full markdown decision-matrix report to `path`."""
-    lines: list[str] = []
-    lines.append("# MVP1 Backtest Report")
-    lines.append("")
-    lines.append(f"- **Window**: {report.start} → {report.end}")
-    lines.append(f"- **Benchmark**: {report.benchmark}")
-    lines.append(f"- **Top-N**: {report.top_n}")
-    lines.append(f"- **Holding period**: {report.holding_period} trading days")
-    lines.append(f"- **Screener universe**: {report.universe_ticker_count} tickers")
-    lines.append(f"- **Backtest days**: {summary.days}")
-    lines.append("")
-
-    lines.append("## Headline metrics")
-    lines.append("")
-    lines.append("| Metric | Value |")
-    lines.append("| --- | --- |")
-    lines.append(f"| Sharpe (gross) | {summary.sharpe_gross:+.3f} |")
-    lines.append(f"| Sharpe (moderate 100 bps) | {summary.sharpe_moderate:+.3f} |")
-    lines.append(f"| Sharpe (conservative 150 bps) | {summary.sharpe_conservative:+.3f} |")
-    lines.append(f"| Annual return (moderate net) | {summary.annual_return_moderate * 100:+.2f}% |")
-    lines.append(f"| Max drawdown | {summary.max_drawdown * 100:+.2f}% |")
-    lines.append(f"| Calmar ratio | {summary.calmar:+.3f} |")
-    lines.append(f"| Hit rate (vs universe median) | {summary.hit_rate * 100:.1f}% |")
-    lines.append(f"| Mean Rank IC | {summary.mean_ic:+.4f} |")
-    lines.append(f"| IC t-stat | {summary.ic_tstat:+.2f} |")
-    lines.append(f"| IC positive windows (20d) | {summary.ic_positive_pct * 100:.1f}% |")
-    lines.append(f"| Turnover (daily rebalance) | {summary.turnover * 100:.1f}% |")
-    lines.append(f"| Concentration top-5 | {summary.concentration_top5 * 100:.1f}% |")
-    lines.append("")
-
-    if cost_sensitivity is not None and not cost_sensitivity.empty:
-        lines.append("## Cost sensitivity")
-        lines.append("")
-        lines.append("| Profile | Drag (bps/yr) | Sharpe | Annual return |")
-        lines.append("| --- | ---: | ---: | ---: |")
-        for _, row in cost_sensitivity.iterrows():
-            lines.append(
-                f"| {row['profile']} | {row['drag_bps']:.0f} | "
-                f"{row['sharpe']:+.3f} | {row['annual_return'] * 100:+.2f}% |"
-            )
-        lines.append("")
-
-    if regime_stats:
-        lines.append("## Regime breakdown")
-        lines.append("")
-        lines.append("| Regime | Days | Sharpe | Annual return | Mean IC | Hit rate |")
-        lines.append("| --- | ---: | ---: | ---: | ---: | ---: |")
-        for label in ("bull", "bear", "flat"):
-            if label in regime_stats:
-                s = regime_stats[label]
-                lines.append(
-                    f"| {label} | {s.days} | {s.sharpe:+.3f} | "
-                    f"{s.annual_return * 100:+.2f}% | {s.mean_ic:+.4f} | "
-                    f"{s.hit_rate * 100:.1f}% |"
-                )
-        lines.append("")
-
-    if decile_ic:
-        lines.append("## IC by score decile (tail-concentration test)")
-        lines.append("")
-        lines.append(
-            f"**Tail concentration score**: {tail_score:.2f} (>1.5 = strong tails, ~1.0 = flat)"
-        )
-        lines.append("")
-        lines.append("| Decile | n samples | Mean return | Std | Sharpe within |")
-        lines.append("| ---: | ---: | ---: | ---: | ---: |")
-        for r in decile_ic:
-            lines.append(
-                f"| {r.decile} | {r.n_samples:,} | {r.mean_return * 100:+.3f}% "
-                f"| {r.std_return * 100:.3f}% | {r.sharpe_within_decile:+.2f} |"
-            )
-        lines.append("")
-
-    if vol_decomp:
-        lines.append("## Regime vol decomposition (is top-N just defensive?)")
-        lines.append("")
-        lines.append("```")
-        lines.append(format_vol_decomposition(vol_decomp))
-        lines.append("```")
-        lines.append("")
-        lines.append(
-            "Interpretation: if **vol_ratio < 0.8 AND excess_return near zero**, "
-            "top-N is capturing defensive low-vol positioning rather than predictive alpha."
-        )
-        lines.append("")
-
-    if theme_stats is not None and theme_stats.all_themes:
-        lines.append("## Factor/theme concentration (factor-aware monitoring)")
-        lines.append("")
-        lines.append("```")
-        lines.append(format_theme_summary(theme_stats, n_total_days=len(report.daily_results)))
-        lines.append("```")
-        lines.append("")
-        if theme_stats.concentration_alert_days > 0:
-            alert_pct = (
-                theme_stats.concentration_alert_days / max(len(report.daily_results), 1) * 100
-            )
-            lines.append(
-                f"**Alert**: {alert_pct:.1f}% dni miało koncentrację w jednym temacie "
-                f"> {theme_stats.concentration_threshold * 100:.0f}%. Portfolio zachowuje się "
-                f"jak single-theme bet a nie diversified thematic basket w tym oknie."
-            )
-            lines.append("")
-
-    carhart = None
-    if attribution:
-        carhart = next((r for r in attribution if r.spec_name == "Carhart-4F"), None)
-        lines.append("## Factor attribution (CAPM / FF3 / Carhart-4F, HAC t-stats)")
-        lines.append("")
-        lines.append("```")
-        lines.append(format_attribution_table(attribution))
-        lines.append("```")
-        lines.append("")
-        lines.append(
-            "Alpha that survives the Carhart row (with momentum factor Mom) is "
-            "independent of generic momentum beta. If alpha collapses between FF3 "
-            "and Carhart-4F, the strategy is re-packaged UMD exposure."
-        )
-        lines.append("")
-
-    lines.append("## Decision criteria (MVP1 → paper trade gate)")
-    lines.append("")
-    deploy_criteria = [
-        ("Sharpe (net moderate) > 0.3", summary.sharpe_moderate > 0.3),
-        ("IC positive windows > 60%", summary.ic_positive_pct > 0.60),
-        (
-            "Carhart-4F alpha t-stat > 1.5 (HAC)",
-            carhart is not None and carhart.alpha_tstat > 1.5,
-        ),
+    lines: list[str] = [
+        *_section_header(report, summary),
+        *_section_headline_metrics(summary),
+        *_section_cost_sensitivity(cost_sensitivity),
+        *_section_regime_breakdown(regime_stats),
+        *_section_decile_ic(decile_ic, tail_score),
+        *_section_vol_decomp(vol_decomp),
+        *_section_theme_concentration(theme_stats, len(report.daily_results)),
+        *_section_attribution(attribution),
+        *_section_decision_criteria(summary, attribution),
     ]
-    pass_count = sum(1 for _, ok in deploy_criteria if ok)
-    for name, ok in deploy_criteria:
-        marker = "[x]" if ok else "[ ]"
-        lines.append(f"- {marker} {name}")
-    lines.append("")
-    if pass_count == 3:
-        lines.append("**Recommendation: DEPLOY** — proceed to launchd + 3-6 month paper trade.")
-    elif pass_count >= 1:
-        lines.append(
-            "**Recommendation: ITERATE** — tweak rule weights or guardrails before deploy."
-        )
-    else:
-        lines.append("**Recommendation: ABANDON** — no edge detected; rely on Layer 1 + 2b only.")
-    lines.append("")
-
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text("\n".join(lines))
 

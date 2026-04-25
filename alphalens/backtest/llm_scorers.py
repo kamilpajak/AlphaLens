@@ -60,6 +60,48 @@ and one-sentence reasoning explaining tractability.
 """
 
 
+def _load_genai_sdk():
+    """Import google-genai SDK; raise with actionable message if absent."""
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:
+        raise RuntimeError(
+            "google-genai SDK not installed. `uv add google-genai` or use an alternative scorer."
+        ) from exc
+    return genai, types
+
+
+def _parse_gemini_response(raw: str) -> dict | None:
+    """Parse JSON from Gemini text. Falls back to greedy `{...}` extraction on preamble."""
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    brace_start = raw.find("{")
+    brace_end = raw.rfind("}")
+    if brace_start >= 0 and brace_end > brace_start:
+        try:
+            return json.loads(raw[brace_start : brace_end + 1])
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+# Approximate Flash cost: input ~300 tokens @ $0.075/1M + output ~50 tokens @ $0.30/1M
+_GEMINI_FLASH_APPROX_COST_USD = (300 * 0.075 + 50 * 0.30) / 1_000_000
+
+_TRACTABILITY_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["accept", "reject", "uncertain"]},
+        "confidence": {"type": "number"},
+        "reasoning": {"type": "string"},
+    },
+    "required": ["verdict", "confidence", "reasoning"],
+}
+
+
 def gemini_flash_tractability_scorer(
     ticker: str,
     asof: date,
@@ -78,14 +120,7 @@ def gemini_flash_tractability_scorer(
     if not api_key:
         raise RuntimeError("GOOGLE_API_KEY not set — cannot call Gemini")
 
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError as exc:
-        raise RuntimeError(
-            "google-genai SDK not installed. `uv add google-genai` or use an alternative scorer."
-        ) from exc
-
+    genai, types = _load_genai_sdk()
     prompt = _TRACTABILITY_PROMPT.format(
         ticker=ticker,
         asof=asof.isoformat(),
@@ -93,17 +128,6 @@ def gemini_flash_tractability_scorer(
         rank=context.get("rank", 99),
         score=context.get("momentum_score", 0.0),
     )
-
-    # Enforced schema — Gemini musi zwrócić dokładnie tę strukturę
-    response_schema = {
-        "type": "object",
-        "properties": {
-            "verdict": {"type": "string", "enum": ["accept", "reject", "uncertain"]},
-            "confidence": {"type": "number"},
-            "reasoning": {"type": "string"},
-        },
-        "required": ["verdict", "confidence", "reasoning"],
-    }
 
     client = genai.Client(api_key=api_key)
     t0 = time.perf_counter()
@@ -113,37 +137,23 @@ def gemini_flash_tractability_scorer(
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
-                response_schema=response_schema,
+                response_schema=_TRACTABILITY_RESPONSE_SCHEMA,
                 temperature=0.0,
                 max_output_tokens=2000,
             ),
         )
     except Exception as exc:
-        latency = time.perf_counter() - t0
         return LLMVerdict(
             verdict="uncertain",
             confidence=0.0,
             reasoning=f"Gemini API error: {exc}",
-            latency_sec=latency,
+            latency_sec=time.perf_counter() - t0,
             cost_usd=0.0,
         )
     latency = time.perf_counter() - t0
 
-    # Strategia parsowania: spróbuj raw, potem fallback ze znalezieniem pierwszego '{'
     raw = response.text if response else ""
-    parsed = None
-    try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        # Fallback: wyciągnij JSON z preambuły
-        brace_start = raw.find("{")
-        brace_end = raw.rfind("}")
-        if brace_start >= 0 and brace_end > brace_start:
-            try:
-                parsed = json.loads(raw[brace_start : brace_end + 1])
-            except json.JSONDecodeError:
-                pass
-
+    parsed = _parse_gemini_response(raw)
     if parsed is None:
         return LLMVerdict(
             verdict="uncertain",
@@ -154,21 +164,15 @@ def gemini_flash_tractability_scorer(
         )
 
     verdict = parsed.get("verdict", "uncertain")
-    confidence = float(parsed.get("confidence", 0.0))
-    reasoning = str(parsed.get("reasoning", ""))[:280]
-
     if verdict not in ("accept", "reject", "uncertain"):
         verdict = "uncertain"
 
-    # Approximate Flash cost: input ~300 tokens @ $0.075/1M + output ~50 tokens @ $0.30/1M
-    cost_approx = (300 * 0.075 + 50 * 0.30) / 1_000_000
-
     return LLMVerdict(
         verdict=verdict,  # type: ignore[arg-type]
-        confidence=confidence,
-        reasoning=reasoning,
+        confidence=float(parsed.get("confidence", 0.0)),
+        reasoning=str(parsed.get("reasoning", ""))[:280],
         latency_sec=latency,
-        cost_usd=cost_approx,
+        cost_usd=_GEMINI_FLASH_APPROX_COST_USD,
     )
 
 

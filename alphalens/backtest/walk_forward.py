@@ -485,74 +485,82 @@ _THR_C4 = 12
 _THR_C5 = 1.0
 
 
-def evaluate_gate(summary: DistributionSummary) -> GateVerdict:
-    reasons: dict[str, str] = {}
-
-    c1_pass = summary.fraction_sharpe_gt_0_5 >= _THR_C1
-    reasons["c1"] = (
-        f"fraction windows Sharpe>0.5 = {summary.fraction_sharpe_gt_0_5:.2%}"
-        f" (threshold ≥ {_THR_C1:.0%})"
+def _eval_c1(summary: DistributionSummary) -> tuple[bool, str, bool]:
+    val = summary.fraction_sharpe_gt_0_5
+    return (
+        val >= _THR_C1,
+        f"fraction windows Sharpe>0.5 = {val:.2%} (threshold ≥ {_THR_C1:.0%})",
+        val >= _THR_C1 * 0.9,  # borderline: within 10% of threshold
     )
 
-    if summary.fraction_alpha_t_gt_1_5 is None:
-        c2_pass: bool | None = None
-        reasons["c2"] = "N/A — Carhart factors unavailable"
-    else:
-        c2_pass = summary.fraction_alpha_t_gt_1_5 >= _THR_C2
-        reasons["c2"] = (
-            f"fraction windows Carhart α_t>1.5 = {summary.fraction_alpha_t_gt_1_5:.2%}"
-            f" (threshold ≥ {_THR_C2:.0%})"
-        )
 
+def _eval_c2(summary: DistributionSummary) -> tuple[bool | None, str, bool]:
+    val = summary.fraction_alpha_t_gt_1_5
+    if val is None:
+        return None, "N/A — Carhart factors unavailable", False
+    return (
+        val >= _THR_C2,
+        f"fraction windows Carhart α_t>1.5 = {val:.2%} (threshold ≥ {_THR_C2:.0%})",
+        val >= _THR_C2 * 0.9,
+    )
+
+
+def _eval_c3(summary: DistributionSummary) -> tuple[bool, str, bool]:
     ac = summary.block_return_autocorr_lag1
-    c3_pass = (not np.isnan(ac)) and ac < _THR_C3
-    reasons["c3"] = f"21-day block-return autocorr lag-1 = {ac:.3f} (threshold < {_THR_C3})"
-
-    c4_pass = summary.longest_negative_sharpe_stretch < _THR_C4
-    reasons["c4"] = (
-        f"longest negative-Sharpe stretch = {summary.longest_negative_sharpe_stretch} windows"
-        f" (threshold < {_THR_C4})"
+    finite = not np.isnan(ac)
+    return (
+        finite and ac < _THR_C3,
+        f"21-day block-return autocorr lag-1 = {ac:.3f} (threshold < {_THR_C3})",
+        finite and ac < _THR_C3 * 1.1,
     )
 
-    c5_pass = summary.max_turnover < _THR_C5
-    reasons["c5"] = (
-        f"max per-window turnover = {summary.max_turnover:.2%} (threshold < {_THR_C5:.0%})"
+
+def _eval_c4(summary: DistributionSummary) -> tuple[bool, str, bool]:
+    val = summary.longest_negative_sharpe_stretch
+    return (
+        val < _THR_C4,
+        f"longest negative-Sharpe stretch = {val} windows (threshold < {_THR_C4})",
+        val <= int(_THR_C4 * 1.1),
     )
 
-    gate_passes = [c1_pass, c3_pass, c4_pass, c5_pass]
-    if c2_pass is not None:
-        gate_passes.append(c2_pass)
 
-    failed = [not p for p in gate_passes].count(True)
+def _eval_c5(summary: DistributionSummary) -> tuple[bool, str, bool]:
+    val = summary.max_turnover
+    return (
+        val < _THR_C5,
+        f"max per-window turnover = {val:.2%} (threshold < {_THR_C5:.0%})",
+        val < _THR_C5 * 1.1,
+    )
 
-    if failed == 0:
-        overall: Literal["PASS", "BORDERLINE", "FAIL"] = "PASS"
-    elif failed == 1:
-        # Check if the single failure is within 10% of the threshold
-        borderline = False
-        if (
-            (not c1_pass and summary.fraction_sharpe_gt_0_5 >= _THR_C1 * 0.9)
-            or (
-                c2_pass is False
-                and summary.fraction_alpha_t_gt_1_5 is not None
-                and summary.fraction_alpha_t_gt_1_5 >= _THR_C2 * 0.9
-            )
-            or (not c3_pass and not np.isnan(ac) and ac < _THR_C3 * 1.1)
-            or (not c4_pass and summary.longest_negative_sharpe_stretch <= int(_THR_C4 * 1.1))
-            or (not c5_pass and summary.max_turnover < _THR_C5 * 1.1)
-        ):
-            borderline = True
-        overall = "BORDERLINE" if borderline else "FAIL"
-    else:
-        overall = "FAIL"
 
+def _resolve_overall(
+    gate_results: dict[str, tuple[bool | None, str, bool]],
+) -> Literal["PASS", "BORDERLINE", "FAIL"]:
+    """PASS if zero failures; BORDERLINE if exactly one failure within 10% of threshold; else FAIL."""
+    failed_keys = [k for k, (passed, _, _) in gate_results.items() if passed is False]
+    if not failed_keys:
+        return "PASS"
+    if len(failed_keys) == 1 and gate_results[failed_keys[0]][2]:
+        return "BORDERLINE"
+    return "FAIL"
+
+
+def evaluate_gate(summary: DistributionSummary) -> GateVerdict:
+    gate_results = {
+        "c1": _eval_c1(summary),
+        "c2": _eval_c2(summary),
+        "c3": _eval_c3(summary),
+        "c4": _eval_c4(summary),
+        "c5": _eval_c5(summary),
+    }
+    reasons = {k: r for k, (_, r, _) in gate_results.items()}
     return GateVerdict(
-        c1_pass=c1_pass,
-        c2_pass=c2_pass,
-        c3_pass=c3_pass,
-        c4_pass=c4_pass,
-        c5_pass=c5_pass,
-        overall=overall,
+        c1_pass=gate_results["c1"][0],
+        c2_pass=gate_results["c2"][0],
+        c3_pass=gate_results["c3"][0],
+        c4_pass=gate_results["c4"][0],
+        c5_pass=gate_results["c5"][0],
+        overall=_resolve_overall(gate_results),
         reasons=reasons,
     )
 

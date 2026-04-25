@@ -253,6 +253,72 @@ def build_per_date_tiers(
 # Scale-path analysis
 
 
+def _empty_scale_path_summary(threshold_pct: float, max_threshold_pct: float) -> ScalePathSummary:
+    return ScalePathSummary(
+        n_pick_days=0,
+        threshold_pct=threshold_pct,
+        max_threshold_pct=max_threshold_pct,
+        fraction_exceeding_threshold=0.0,
+        max_participation=0.0,
+        q95_participation=0.0,
+        median_participation=0.0,
+        worst_offenders=(),
+        per_tier_max={},
+        per_tier_median={},
+    )
+
+
+def _lookup_dollar_adv(
+    rolling_adv: Mapping[str, pd.Series], ticker: str, day: pd.Timestamp
+) -> float:
+    series = rolling_adv.get(ticker)
+    if series is None or day not in series.index:
+        return _ADV_FLOOR_DOLLARS
+    val = series.loc[day]
+    return float(val) if not pd.isna(val) else _ADV_FLOOR_DOLLARS
+
+
+def _picks_for_day(
+    snap,
+    weights,
+    turnover_today: float,
+    portfolio_value: float,
+    tier_map: Mapping[str, str],
+    rolling_adv: Mapping[str, pd.Series],
+) -> list[PickParticipation]:
+    out: list[PickParticipation] = []
+    for rank, ticker in enumerate(snap.top_n_tickers, start=1):
+        position_dollars = portfolio_value * float(weights[rank - 1])
+        rebalance_dollars = position_dollars * turnover_today
+        dollar_adv = _lookup_dollar_adv(rolling_adv, ticker, snap.date)
+        out.append(
+            PickParticipation(
+                date=snap.date.date(),
+                ticker=ticker,
+                rank=rank,
+                tier=tier_map.get(ticker, "mid"),
+                participation=rebalance_dollars / max(dollar_adv, _ADV_FLOOR_DOLLARS),
+                dollar_position=position_dollars,
+                dollar_adv=dollar_adv,
+            )
+        )
+    return out
+
+
+def _per_tier_stats(
+    all_picks: list[PickParticipation],
+) -> tuple[dict[str, float], dict[str, float]]:
+    per_tier_max: dict[str, float] = {}
+    per_tier_median: dict[str, float] = {}
+    df = pd.DataFrame(
+        {"tier": [p.tier for p in all_picks], "p": [p.participation for p in all_picks]}
+    )
+    for tier, group in df.groupby("tier"):
+        per_tier_max[str(tier)] = float(group["p"].max())
+        per_tier_median[str(tier)] = float(group["p"].median())
+    return per_tier_max, per_tier_median
+
+
 def run_scale_path(
     baseline: BacktestReport,
     rolling_adv: Mapping[str, pd.Series],
@@ -271,101 +337,47 @@ def run_scale_path(
     of the report, we use 100% turnover as a conservative fill (worst
     case — no prior basket to compare against).
     """
-    all_picks: list[PickParticipation] = []
-    daily = baseline.daily_results
-    if not daily:
-        return ScalePathSummary(
-            n_pick_days=0,
-            threshold_pct=threshold_pct,
-            max_threshold_pct=max_threshold_pct,
-            fraction_exceeding_threshold=0.0,
-            max_participation=0.0,
-            q95_participation=0.0,
-            median_participation=0.0,
-            worst_offenders=(),
-            per_tier_max={},
-            per_tier_median={},
-        )
+    if not baseline.daily_results:
+        return _empty_scale_path_summary(threshold_pct, max_threshold_pct)
 
+    all_picks: list[PickParticipation] = []
     prev_top_n: set[str] | None = None
-    for snap in daily:
+    for snap in baseline.daily_results:
         n = len(snap.top_n_tickers)
         if n == 0:
             prev_top_n = set()
             continue
         weights = compute_position_weights(n, weighting)  # type: ignore[arg-type]
-        # Per-day turnover: names in today's top-N not in previous (normalised by N)
-        if prev_top_n is None:
-            turnover_today = 1.0
-        else:
-            current_set = set(snap.top_n_tickers)
-            turnover_today = len(current_set - prev_top_n) / n if n > 0 else 0.0
-        prev_top_n = set(snap.top_n_tickers)
-
-        tier_map = per_date_tiers.get(snap.date, {})
-        for rank, ticker in enumerate(snap.top_n_tickers, start=1):
-            position_dollars = portfolio_value * float(weights[rank - 1])
-            rebalance_dollars = position_dollars * turnover_today
-            # dollar ADV lookup
-            series = rolling_adv.get(ticker)
-            if series is None or snap.date not in series.index:
-                dollar_adv = _ADV_FLOOR_DOLLARS
-            else:
-                val = series.loc[snap.date]
-                dollar_adv = float(val) if not pd.isna(val) else _ADV_FLOOR_DOLLARS
-            participation = rebalance_dollars / max(dollar_adv, _ADV_FLOOR_DOLLARS)
-            tier = tier_map.get(ticker, "mid")
-            all_picks.append(
-                PickParticipation(
-                    date=snap.date.date(),
-                    ticker=ticker,
-                    rank=rank,
-                    tier=tier,
-                    participation=participation,
-                    dollar_position=position_dollars,
-                    dollar_adv=dollar_adv,
-                )
+        current_set = set(snap.top_n_tickers)
+        turnover_today = 1.0 if prev_top_n is None else len(current_set - prev_top_n) / n
+        prev_top_n = current_set
+        all_picks.extend(
+            _picks_for_day(
+                snap,
+                weights,
+                turnover_today,
+                portfolio_value,
+                per_date_tiers.get(snap.date, {}),
+                rolling_adv,
             )
+        )
 
     if not all_picks:
-        return ScalePathSummary(
-            n_pick_days=0,
-            threshold_pct=threshold_pct,
-            max_threshold_pct=max_threshold_pct,
-            fraction_exceeding_threshold=0.0,
-            max_participation=0.0,
-            q95_participation=0.0,
-            median_participation=0.0,
-            worst_offenders=(),
-            per_tier_max={},
-            per_tier_median={},
-        )
+        return _empty_scale_path_summary(threshold_pct, max_threshold_pct)
 
     participations = np.array([p.participation for p in all_picks])
     threshold_frac = threshold_pct / 100.0
-    fraction_exceed = float((participations > threshold_frac).mean())
-    max_part = float(participations.max())
-    q95 = float(np.quantile(participations, 0.95))
-    median_part = float(np.quantile(participations, 0.5))
-
-    worst_sorted = sorted(all_picks, key=lambda p: -p.participation)[:n_worst]
-
-    per_tier_max: dict[str, float] = {}
-    per_tier_median: dict[str, float] = {}
-    df = pd.DataFrame({"tier": [p.tier for p in all_picks], "p": participations})
-    for tier, group in df.groupby("tier"):
-        per_tier_max[str(tier)] = float(group["p"].max())
-        per_tier_median[str(tier)] = float(group["p"].median())
+    per_tier_max, per_tier_median = _per_tier_stats(all_picks)
 
     return ScalePathSummary(
         n_pick_days=len(all_picks),
         threshold_pct=threshold_pct,
         max_threshold_pct=max_threshold_pct,
-        fraction_exceeding_threshold=fraction_exceed,
-        max_participation=max_part,
-        q95_participation=q95,
-        median_participation=median_part,
-        worst_offenders=tuple(worst_sorted),
+        fraction_exceeding_threshold=float((participations > threshold_frac).mean()),
+        max_participation=float(participations.max()),
+        q95_participation=float(np.quantile(participations, 0.95)),
+        median_participation=float(np.quantile(participations, 0.5)),
+        worst_offenders=tuple(sorted(all_picks, key=lambda p: -p.participation)[:n_worst]),
         per_tier_max=per_tier_max,
         per_tier_median=per_tier_median,
     )

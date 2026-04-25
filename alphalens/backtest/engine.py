@@ -237,50 +237,36 @@ class BacktestEngine:
 
     # ------------------------------------------------------------------ internal
 
-    def _simulate_day(
-        self, day: date, tickers: list[str]
-    ) -> tuple[DailyResult, pd.DataFrame | None] | None:
+    def _build_histories(self, day: date, tickers: list[str]) -> dict[str, pd.DataFrame]:
         histories: dict[str, pd.DataFrame] = {}
         for ticker in tickers:
             df = self.store.truncate_to(ticker, day)
-            if len(df) < self._min_bars:
-                continue
-            histories[ticker] = df
+            if len(df) >= self._min_bars:
+                histories[ticker] = df
+        return histories
 
-        if not histories:
-            return None
-
-        scored = self._scorer(histories, self.scorer_config)
-        if scored.empty:
-            return None
-
-        fwd_1d = []
-        fwd_holding = []
+    def _attach_forward_returns(self, scored: pd.DataFrame, day: date) -> pd.DataFrame:
+        fwd_1d: list[float] = []
+        fwd_holding: list[float] = []
         for ticker in scored["ticker"]:
             r1 = self.store.forward_return(ticker, day, 1)
             rh = self.store.forward_return(ticker, day, self.holding_period)
             fwd_1d.append(float("nan") if r1 is None else r1)
             fwd_holding.append(float("nan") if rh is None else rh)
-        scored = scored.assign(fwd_1d=fwd_1d, fwd_holding=fwd_holding)
+        return scored.assign(fwd_1d=fwd_1d, fwd_holding=fwd_holding)
 
-        valid_holding = scored.dropna(subset=["fwd_holding"])
-        if valid_holding.empty:
-            return None
-
+    def _build_daily_result(
+        self, day: date, scored: pd.DataFrame, valid_holding: pd.DataFrame
+    ) -> DailyResult:
         top_n = scored.sort_values("score", ascending=False).head(self.top_n)
-
         weights = compute_position_weights(len(top_n), self.weighting)
-        fwd_1d_arr = top_n["fwd_1d"].to_numpy(dtype=float)
-        fwd_h_arr = top_n["fwd_holding"].to_numpy(dtype=float)
-
-        portfolio_ret_1d = weighted_return(fwd_1d_arr, weights)
-        portfolio_ret_holding = weighted_return(fwd_h_arr, weights)
+        portfolio_ret_1d = weighted_return(top_n["fwd_1d"].to_numpy(dtype=float), weights)
+        portfolio_ret_holding = weighted_return(top_n["fwd_holding"].to_numpy(dtype=float), weights)
         universe_median_ret_1d = (
             float(scored["fwd_1d"].dropna().median()) if scored["fwd_1d"].notna().any() else 0.0
         )
         ic_value = rank_ic(valid_holding["score"].tolist(), valid_holding["fwd_holding"].tolist())
-
-        snap = DailyResult(
+        return DailyResult(
             date=pd.Timestamp(day),
             scored_count=len(valid_holding),
             top_n_tickers=top_n["ticker"].tolist(),
@@ -296,6 +282,23 @@ class BacktestEngine:
             ic=ic_value,
         )
 
+    def _simulate_day(
+        self, day: date, tickers: list[str]
+    ) -> tuple[DailyResult, pd.DataFrame | None] | None:
+        histories = self._build_histories(day, tickers)
+        if not histories:
+            return None
+
+        scored = self._scorer(histories, self.scorer_config)
+        if scored.empty:
+            return None
+
+        scored = self._attach_forward_returns(scored, day)
+        valid_holding = scored.dropna(subset=["fwd_holding"])
+        if valid_holding.empty:
+            return None
+
+        snap = self._build_daily_result(day, scored, valid_holding)
         scored_frame = (
             scored[["ticker", "score", "fwd_1d", "fwd_holding"]].copy()
             if self.retain_scored_frames

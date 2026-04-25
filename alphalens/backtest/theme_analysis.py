@@ -37,6 +37,47 @@ class ThemeSnapshot:
     unclassified_fraction: float  # nazwy bez żadnego theme mapping'u
 
 
+def _resolve_position_weights(
+    tickers: list[str], position_weights: Iterable[float] | None
+) -> list[float]:
+    if position_weights is None:
+        return [1.0 / len(tickers)] * len(tickers)
+    weights = list(position_weights)
+    if len(weights) != len(tickers):
+        raise ValueError(f"position_weights length {len(weights)} != tickers {len(tickers)}")
+    return weights
+
+
+def _accumulate_theme_weights(
+    tickers: list[str],
+    weights: list[float],
+    themes_map: Mapping[str, list[str]],
+) -> tuple[dict[str, float], float]:
+    """Build {theme → summed weight} + unclassified bucket. Multi-theme tickers split equally."""
+    theme_sums: dict[str, float] = {}
+    unclassified = 0.0
+    for ticker, weight in zip(tickers, weights):
+        themes = themes_map.get(ticker, [])
+        if not themes:
+            unclassified += weight
+            continue
+        split = weight / len(themes)
+        for theme in themes:
+            theme_sums[theme] = theme_sums.get(theme, 0.0) + split
+    return theme_sums, unclassified
+
+
+def _empty_snapshot(date: pd.Timestamp | None) -> ThemeSnapshot:
+    return ThemeSnapshot(
+        date=date or pd.Timestamp(0),
+        top_n_tickers=(),
+        theme_weights={},
+        dominant_theme=None,
+        hhi=0.0,
+        unclassified_fraction=0.0,
+    )
+
+
 def snapshot_themes(
     top_n_tickers: Iterable[str],
     themes_map: Mapping[str, list[str]],
@@ -54,55 +95,23 @@ def snapshot_themes(
     """
     tickers = list(top_n_tickers)
     if not tickers:
-        return ThemeSnapshot(
-            date=date or pd.Timestamp(0),
-            top_n_tickers=(),
-            theme_weights={},
-            dominant_theme=None,
-            hhi=0.0,
-            unclassified_fraction=0.0,
-        )
+        return _empty_snapshot(date)
 
-    if position_weights is None:
-        position_weights = [1.0 / len(tickers)] * len(tickers)
+    weights = _resolve_position_weights(tickers, position_weights)
+    theme_sums, unclassified = _accumulate_theme_weights(tickers, weights, themes_map)
+
+    total = sum(theme_sums.values()) + unclassified
+    if total <= 0:
+        theme_weights: dict[str, float] = {}
+        uncl_frac = 0.0
     else:
-        position_weights = list(position_weights)
-        if len(position_weights) != len(tickers):
-            raise ValueError(
-                f"position_weights length {len(position_weights)} != tickers {len(tickers)}"
-            )
+        theme_weights = {k: v / total for k, v in theme_sums.items()}
+        uncl_frac = unclassified / total
 
-    theme_sums: dict[str, float] = {}
-    unclassified = 0.0
-    for ticker, weight in zip(tickers, position_weights):
-        themes = themes_map.get(ticker, [])
-        if not themes:
-            unclassified += weight
-            continue
-        split = weight / len(themes)
-        for theme in themes:
-            theme_sums[theme] = theme_sums.get(theme, 0.0) + split
-
-    total_classified = sum(theme_sums.values())
-    if total_classified > 0:
-        theme_weights = {k: v / (total_classified + unclassified) for k, v in theme_sums.items()}
-    else:
-        theme_weights = {}
-
-    dominant = None
-    if theme_weights:
-        dominant = max(theme_weights, key=theme_weights.get)
-
-    # HHI w przestrzeni tematów + unclassified bucket (żeby unclassified liczyło się też).
-    all_weights = list(theme_weights.values())
-    if total_classified + unclassified > 0:
-        all_weights.append(unclassified / (total_classified + unclassified))
-    hhi = sum(w * w for w in all_weights) if all_weights else 0.0
-    uncl_frac = (
-        unclassified / (total_classified + unclassified)
-        if (total_classified + unclassified) > 0
-        else 0.0
-    )
+    dominant = max(theme_weights, key=theme_weights.get) if theme_weights else None
+    # HHI includes the unclassified bucket so it's not free to grow.
+    all_weights = [*theme_weights.values(), uncl_frac] if total > 0 else []
+    hhi = sum(w * w for w in all_weights)
 
     return ThemeSnapshot(
         date=date or pd.Timestamp(0),

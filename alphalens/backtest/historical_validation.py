@@ -90,6 +90,64 @@ class ValidationResult:
     per_pick_evaluations: list[dict] = field(default_factory=list)  # audit trail
 
 
+def _empty_validation_result() -> ValidationResult:
+    return ValidationResult(
+        n_total=0,
+        n_accept=0,
+        n_reject=0,
+        n_uncertain=0,
+        accept_rate=0.0,
+        accept_mean_return=0.0,
+        reject_mean_return=0.0,
+        delta_accept_minus_reject=0.0,
+        accept_hit_rate=0.0,
+        reject_hit_rate=0.0,
+        accept_sharpe_proxy=0.0,
+        reject_sharpe_proxy=0.0,
+        total_llm_cost_usd=0.0,
+        total_llm_latency_sec=0.0,
+    )
+
+
+def _evaluate_one_pick(
+    pick: PickRecord,
+    scorer_fn: ScorerFn,
+    extra_context_fn: Callable[[PickRecord], Mapping] | None,
+) -> tuple[dict, float, float]:
+    """Run the scorer once and produce (row_dict, cost_contribution, latency_contribution)."""
+    context = {
+        "scorer_name": "layer2b_momentum",
+        "momentum_score": pick.momentum_score,
+        "themes": list(pick.themes),
+        "rank": pick.rank,
+    }
+    if extra_context_fn is not None:
+        context.update(extra_context_fn(pick) or {})
+
+    t0 = time.perf_counter()
+    try:
+        verdict = scorer_fn(pick.ticker, pick.asof_date, context)
+    except Exception as exc:
+        logger.warning("scorer raised on %s @ %s: %s", pick.ticker, pick.asof_date, exc)
+        verdict = LLMVerdict(verdict="uncertain", confidence=0.0, reasoning=f"error: {exc}")
+    latency = verdict.latency_sec or (time.perf_counter() - t0)
+
+    row = {
+        "date": pick.asof_date.isoformat(),
+        "ticker": pick.ticker,
+        "rank": pick.rank,
+        "momentum_score": pick.momentum_score,
+        "themes": ",".join(pick.themes),
+        "forward_return": pick.forward_return,
+        "verdict": verdict.verdict,
+        "confidence": verdict.confidence,
+        "reasoning": verdict.reasoning,
+        "llm_cost": verdict.cost_usd,
+        "llm_latency_sec": latency,
+    }
+    return row, max(verdict.cost_usd, 0.0), latency
+
+
 def evaluate_historical_picks(
     picks: Iterable[PickRecord],
     scorer_fn: ScorerFn,
@@ -108,64 +166,16 @@ def evaluate_historical_picks(
     pick_list = list(picks)
     n = len(pick_list)
     if n == 0:
-        return ValidationResult(
-            n_total=0,
-            n_accept=0,
-            n_reject=0,
-            n_uncertain=0,
-            accept_rate=0.0,
-            accept_mean_return=0.0,
-            reject_mean_return=0.0,
-            delta_accept_minus_reject=0.0,
-            accept_hit_rate=0.0,
-            reject_hit_rate=0.0,
-            accept_sharpe_proxy=0.0,
-            reject_sharpe_proxy=0.0,
-            total_llm_cost_usd=0.0,
-            total_llm_latency_sec=0.0,
-        )
+        return _empty_validation_result()
 
     rows: list[dict] = []
     total_cost = 0.0
     total_latency = 0.0
-
     for idx, pick in enumerate(pick_list):
-        context = {
-            "scorer_name": "layer2b_momentum",
-            "momentum_score": pick.momentum_score,
-            "themes": list(pick.themes),
-            "rank": pick.rank,
-        }
-        if extra_context_fn is not None:
-            extra = extra_context_fn(pick) or {}
-            context.update(extra)
-
-        t0 = time.perf_counter()
-        try:
-            verdict = scorer_fn(pick.ticker, pick.asof_date, context)
-        except Exception as exc:
-            logger.warning("scorer raised on %s @ %s: %s", pick.ticker, pick.asof_date, exc)
-            verdict = LLMVerdict(verdict="uncertain", confidence=0.0, reasoning=f"error: {exc}")
-        latency = time.perf_counter() - t0
-
-        rows.append(
-            {
-                "date": pick.asof_date.isoformat(),
-                "ticker": pick.ticker,
-                "rank": pick.rank,
-                "momentum_score": pick.momentum_score,
-                "themes": ",".join(pick.themes),
-                "forward_return": pick.forward_return,
-                "verdict": verdict.verdict,
-                "confidence": verdict.confidence,
-                "reasoning": verdict.reasoning,
-                "llm_cost": verdict.cost_usd,
-                "llm_latency_sec": verdict.latency_sec or latency,
-            }
-        )
-        total_cost += max(verdict.cost_usd, 0.0)
-        total_latency += verdict.latency_sec or latency
-
+        row, cost, latency = _evaluate_one_pick(pick, scorer_fn, extra_context_fn)
+        rows.append(row)
+        total_cost += cost
+        total_latency += latency
         if (idx + 1) % progress_every == 0:
             logger.info("validation progress: %d/%d, cost so far $%.2f", idx + 1, n, total_cost)
 

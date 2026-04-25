@@ -108,6 +108,39 @@ class MidHoldingAuditResult:
 # Event loading
 
 
+def _build_events_index(events: Iterable[DelistingEvent]) -> dict[str, list[date]]:
+    """{ticker → list[delisted_date]} — reused across selection-bias / audit logic."""
+    index: dict[str, list[date]] = {}
+    for ev in events:
+        index.setdefault(ev.ticker, []).append(ev.delisted_date)
+    return index
+
+
+def _load_events_from_parquet(parquet_path: Path) -> list[DelistingEvent]:
+    df = pd.read_parquet(parquet_path)
+    return [
+        DelistingEvent(
+            ticker=str(r["ticker"]),
+            delisted_date=pd.Timestamp(r["delisted_date"]).date(),
+            reason=str(r.get("reason", "unknown")),
+        )
+        for _, r in df.iterrows()
+    ]
+
+
+def _load_events_from_yaml(yaml_path: Path) -> list[DelistingEvent]:
+    data = yaml.safe_load(yaml_path.read_text()) or {}
+    out: list[DelistingEvent] = []
+    for entry in data.get("delisted", []) or []:
+        ticker = str(entry.get("ticker") or "")
+        d_raw = entry.get("delisted")
+        if not ticker or not d_raw:
+            continue
+        d = d_raw if isinstance(d_raw, date) else pd.Timestamp(d_raw).date()
+        out.append(DelistingEvent(ticker=ticker, delisted_date=d, reason="unknown"))
+    return out
+
+
 def load_delisting_events(
     parquet_path: Path | None = None,
     yaml_path: Path | None = None,
@@ -118,29 +151,18 @@ def load_delisting_events(
     what window is covered. The parquet is produced by
     `scripts/backfill_delisted_2021_2024.py`; the YAML ships with the
     repo at `alphalens/screeners/lean/lean_project/delisted_universe.yaml`.
+
+    On collision (same ticker+date), parquet wins (carries the better reason).
     """
     rows: dict[tuple[str, date], DelistingEvent] = {}
 
     if parquet_path and parquet_path.exists():
-        df = pd.read_parquet(parquet_path)
-        for _, r in df.iterrows():
-            t = str(r["ticker"])
-            d = pd.Timestamp(r["delisted_date"]).date()
-            reason = str(r.get("reason", "unknown"))
-            rows[(t, d)] = DelistingEvent(ticker=t, delisted_date=d, reason=reason)
+        for ev in _load_events_from_parquet(parquet_path):
+            rows[(ev.ticker, ev.delisted_date)] = ev
 
     if yaml_path and yaml_path.exists():
-        data = yaml.safe_load(yaml_path.read_text()) or {}
-        for entry in data.get("delisted", []) or []:
-            t = str(entry.get("ticker") or "")
-            d_raw = entry.get("delisted")
-            if not t or not d_raw:
-                continue
-            d = pd.Timestamp(d_raw).date() if not isinstance(d_raw, date) else d_raw
-            rows.setdefault(
-                (t, d),
-                DelistingEvent(ticker=t, delisted_date=d, reason="unknown"),
-            )
+        for ev in _load_events_from_yaml(yaml_path):
+            rows.setdefault((ev.ticker, ev.delisted_date), ev)
 
     return sorted(rows.values(), key=lambda e: (e.delisted_date, e.ticker))
 
@@ -282,6 +304,36 @@ def picks_from_report(report: BacktestReport) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _count_picks_with_delisting_in_window(
+    picks_df: pd.DataFrame,
+    events_by_ticker: dict[str, list[date]],
+    window_days: int,
+) -> int:
+    n = 0
+    for _, row in picks_df.iterrows():
+        pick_date = row["pick_date"]
+        delistings = events_by_ticker.get(row["ticker"], [])
+        if any(pick_date <= d <= pick_date + timedelta(days=window_days) for d in delistings):
+            n += 1
+    return n
+
+
+def _fisher_p(
+    n_delistings_in_picks: int, n_picks: int, universe_delistings: int, universe_n: int
+) -> float:
+    table = np.array(
+        [
+            [n_delistings_in_picks, n_picks - n_delistings_in_picks],
+            [universe_delistings, universe_n - universe_delistings],
+        ]
+    )
+    try:
+        _, p = stats.fisher_exact(table, alternative="two-sided")
+    except ValueError:
+        return float("nan")
+    return float(p) if not np.isnan(p) else float("nan")
+
+
 def compute_selection_bias(
     picks_df: pd.DataFrame,
     events: Iterable[DelistingEvent],
@@ -296,44 +348,22 @@ def compute_selection_bias(
     Rate comparison is: pick-delistings / pick-count vs
     universe-delistings / universe-count. Fisher exact on 2×2 table.
     """
-    events_by_ticker: dict[str, list[date]] = {}
-    for ev in events:
-        events_by_ticker.setdefault(ev.ticker, []).append(ev.delisted_date)
-
+    events_by_ticker = _build_events_index(events)
     universe_set = set(universe_tickers)
     universe_n = len(universe_set)
+    universe_delistings = sum(1 for t in universe_set if events_by_ticker.get(t))
+    uni_rate = universe_delistings / universe_n if universe_n else 0.0
+
+    n_picks = len(picks_df)
 
     results: list[SelectionBiasResult] = []
     for window in windows:
-        n_picks = len(picks_df)
-        n_delistings_in_picks = 0
-        for _, row in picks_df.iterrows():
-            t = row["ticker"]
-            pick_date = row["pick_date"]
-            delistings = events_by_ticker.get(t, [])
-            if any(pick_date <= d <= pick_date + timedelta(days=window) for d in delistings):
-                n_delistings_in_picks += 1
-
-        # Universe rate: for each ticker in universe, did *any* delisting
-        # happen during backtest window? Equivalent to unconditional
-        # delisting probability across the sample.
-        universe_delistings = sum(1 for t in universe_set if events_by_ticker.get(t))
-
-        pick_rate = n_delistings_in_picks / n_picks if n_picks else 0.0
-        uni_rate = universe_delistings / universe_n if universe_n else 0.0
-        lift = (pick_rate / uni_rate) if uni_rate > 0 else 0.0
-
-        # Fisher exact on 2x2: [pick-delisted, pick-not], [univ-delisted, univ-not]
-        table = np.array(
-            [
-                [n_delistings_in_picks, n_picks - n_delistings_in_picks],
-                [universe_delistings, universe_n - universe_delistings],
-            ]
+        n_delistings_in_picks = _count_picks_with_delisting_in_window(
+            picks_df, events_by_ticker, window
         )
-        try:
-            _, p = stats.fisher_exact(table, alternative="two-sided")
-        except ValueError:
-            p = float("nan")
+        pick_rate = n_delistings_in_picks / n_picks if n_picks else 0.0
+        lift = (pick_rate / uni_rate) if uni_rate > 0 else 0.0
+        p = _fisher_p(n_delistings_in_picks, n_picks, universe_delistings, universe_n)
 
         results.append(
             SelectionBiasResult(
@@ -345,7 +375,7 @@ def compute_selection_bias(
                 universe_n_delistings=universe_delistings,
                 universe_delisting_rate=uni_rate,
                 lift_ratio=lift,
-                fisher_p=float(p) if not np.isnan(p) else float("nan"),
+                fisher_p=p,
             )
         )
     return results
@@ -457,6 +487,18 @@ def reprice_picks_with_wipeout(
     return new_report
 
 
+def _safe_carhart_alpha_t(returns: pd.Series, factors: pd.DataFrame | None) -> float:
+    """Carhart-4F α t-stat, or 0.0 on insufficient data / regression failure."""
+    if factors is None or len(returns) <= 30:
+        return 0.0
+    try:
+        specs = run_carhart_attribution(returns, factors)
+    except Exception:
+        return 0.0
+    car = next((s for s in specs if s.spec_name == "Carhart-4F"), None)
+    return car.alpha_tstat if car else 0.0
+
+
 def audit_mid_holding_wipeout(
     baseline: BacktestReport,
     events: Iterable[DelistingEvent],
@@ -466,15 +508,13 @@ def audit_mid_holding_wipeout(
 ) -> MidHoldingAuditResult:
     """Compare baseline vs wipeout-repriced Sharpe + Carhart α t-stat."""
     events_list = list(events)
-    events_by_ticker: dict[str, list[date]] = {}
-    for ev in events_list:
-        events_by_ticker.setdefault(ev.ticker, []).append(ev.delisted_date)
+    events_by_ticker = _build_events_index(events_list)
 
     affected: list[str] = []
     n_total = 0
+    hold = baseline.holding_period
     for snap in baseline.daily_results:
         entry_date = snap.date.date()
-        hold = baseline.holding_period
         for ticker in snap.top_n_tickers:
             n_total += 1
             delistings = events_by_ticker.get(ticker, [])
@@ -485,22 +525,8 @@ def audit_mid_holding_wipeout(
 
     sharpe_base = sharpe(baseline.portfolio_returns.tolist())
     sharpe_wipe = sharpe(repriced.portfolio_returns.tolist())
-
-    alpha_base_t = 0.0
-    alpha_wipe_t = 0.0
-    if carhart_factors is not None and len(baseline.portfolio_returns) > 30:
-        try:
-            specs = run_carhart_attribution(baseline.portfolio_returns, carhart_factors)
-            car = next((s for s in specs if s.spec_name == "Carhart-4F"), None)
-            alpha_base_t = car.alpha_tstat if car else 0.0
-        except Exception:
-            pass
-        try:
-            specs = run_carhart_attribution(repriced.portfolio_returns, carhart_factors)
-            car = next((s for s in specs if s.spec_name == "Carhart-4F"), None)
-            alpha_wipe_t = car.alpha_tstat if car else 0.0
-        except Exception:
-            pass
+    alpha_base_t = _safe_carhart_alpha_t(baseline.portfolio_returns, carhart_factors)
+    alpha_wipe_t = _safe_carhart_alpha_t(repriced.portfolio_returns, carhart_factors)
 
     return MidHoldingAuditResult(
         n_total_picks=n_total,
@@ -696,6 +722,39 @@ def _format_audit_block(a: MidHoldingAuditResult) -> str:
     return "\n".join(lines)
 
 
+def _build_decision_gate_section(
+    cohort_results: list[CohortSplitResult],
+    bias_results: list[SelectionBiasResult],
+    audit: MidHoldingAuditResult,
+) -> list[str]:
+    gate = evaluate_decision_gate(cohort_results, bias_results, audit)
+
+    pre = next((r for r in cohort_results if r.cohort_label == "pre-existing"), None)
+    post = next((r for r in cohort_results if r.cohort_label == "post-IPO"), None)
+    if pre and post and pre.sharpe_gross > 0 and post.ticker_count > 0:
+        c1_reason = f"post/pre Sharpe ratio {post.sharpe_gross / pre.sharpe_gross:.2f}"
+    else:
+        c1_reason = "trivial (no post-IPO cohort)"
+
+    max_lift = max(r.lift_ratio for r in bias_results)
+    c2_reason = f"max lift {max_lift:.2f} across windows"
+
+    c3_reason = (
+        "0 affected picks" if audit.n_picks_affected == 0 else f"Δ Sharpe {audit.delta_sharpe:+.3f}"
+    )
+
+    return [
+        "## Decision gate",
+        "",
+        f"- C1 (cohort split): **{'PASS' if gate['c1_pass'] else 'FAIL'}** — {c1_reason}",
+        f"- C2 (selection bias): **{'PASS' if gate['c2_pass'] else 'FAIL'}** — {c2_reason}",
+        f"- C3 (mid-holding): **{'PASS' if gate['c3_pass'] else 'FAIL'}** — {c3_reason}",
+        "",
+        f"**Overall: {gate['overall']}**",
+        "",
+    ]
+
+
 def compile_report(
     out_path: Path,
     *,
@@ -772,35 +831,8 @@ def compile_report(
             "",
         ]
 
-    # Decision gate
     if cohort_results and bias_results and audit:
-        gate = evaluate_decision_gate(cohort_results, bias_results, audit)
-
-        pre = next((r for r in cohort_results if r.cohort_label == "pre-existing"), None)
-        post = next((r for r in cohort_results if r.cohort_label == "post-IPO"), None)
-        if pre and post and pre.sharpe_gross > 0 and post.ticker_count > 0:
-            c1_reason = f"post/pre Sharpe ratio {post.sharpe_gross / pre.sharpe_gross:.2f}"
-        else:
-            c1_reason = "trivial (no post-IPO cohort)"
-
-        max_lift = max(r.lift_ratio for r in bias_results)
-        c2_reason = f"max lift {max_lift:.2f} across windows"
-
-        if audit.n_picks_affected == 0:
-            c3_reason = "0 affected picks"
-        else:
-            c3_reason = f"Δ Sharpe {audit.delta_sharpe:+.3f}"
-
-        lines += [
-            "## Decision gate",
-            "",
-            f"- C1 (cohort split): **{'PASS' if gate['c1_pass'] else 'FAIL'}** — {c1_reason}",
-            f"- C2 (selection bias): **{'PASS' if gate['c2_pass'] else 'FAIL'}** — {c2_reason}",
-            f"- C3 (mid-holding): **{'PASS' if gate['c3_pass'] else 'FAIL'}** — {c3_reason}",
-            "",
-            f"**Overall: {gate['overall']}**",
-            "",
-        ]
+        lines += _build_decision_gate_section(cohort_results, bias_results, audit)
 
     if limitations:
         lines += ["## Limitations", ""]
