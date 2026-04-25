@@ -8,6 +8,7 @@ Subcommands:
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -223,7 +224,7 @@ def pilot(
 
     verdict = report.evaluate_kill_thresholds(min_year_tolerance=min_year_tolerance)
     typer.echo(f"\n=== VERDICT: {verdict.label} ===")
-    if min_year_tolerance != 0.0:
+    if not math.isclose(min_year_tolerance, 0.0):
         typer.echo(f"(relaxed gate: min-year tolerance {min_year_tolerance:+.2%})")
     typer.echo(f"{verdict.summary}")
     typer.echo(f"Passed: {', '.join(verdict.passed_gates) or '(none)'}")

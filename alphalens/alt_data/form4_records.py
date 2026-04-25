@@ -194,7 +194,7 @@ def _parse_iso_date(raw: str) -> date:
 def _text_value(elem: ET.Element, tag: str) -> str:
     """Read ``<tag><value>...</value></tag>`` returning '' if absent."""
     node = elem.find(f"{tag}/value")
-    return (node.text or "").strip() if node is not None and node.text else ""
+    return node.text.strip() if node is not None and node.text else ""
 
 
 def _decimal(raw: str, *, field: str, optional: bool = False) -> Decimal | None:

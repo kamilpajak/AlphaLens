@@ -34,7 +34,7 @@ def rate_of_change(close: Sequence[float] | pd.Series, window: int) -> float:
     _require_length(s, window + 1, "rate_of_change")
     past = float(s.iloc[-window - 1])
     current = float(s.iloc[-1])
-    if past == 0.0:
+    if past <= 0.0:
         return float("nan")
     return current / past - 1.0
 
@@ -65,7 +65,7 @@ def distance_to_high(close: Sequence[float] | pd.Series, window: int) -> float:
     s = _as_series(close)
     _require_length(s, window, "distance_to_high")
     window_high = float(s.iloc[-window:].max())
-    if window_high == 0.0:
+    if window_high <= 0.0:
         return float("nan")
     dist = 1.0 - float(s.iloc[-1]) / window_high
     return float(max(0.0, min(1.0, dist)))
@@ -135,6 +135,6 @@ def z_score(values: Sequence[float]) -> np.ndarray:
     arr = np.asarray(list(values), dtype=float)
     mean = np.nanmean(arr)
     std = np.nanstd(arr)
-    if std == 0.0 or math.isnan(std):
+    if std <= 0.0 or math.isnan(std):
         return np.zeros_like(arr)
     return (arr - mean) / std

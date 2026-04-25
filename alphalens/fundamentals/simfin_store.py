@@ -18,6 +18,7 @@ Python package caches downloaded CSVs under the configured data directory
 from __future__ import annotations
 
 import logging
+import math
 import os
 from datetime import date
 from pathlib import Path
@@ -185,7 +186,7 @@ def _runway_from_frames(bs, cf) -> float | None:
     if bs is None or cf is None or bs.empty or cf.empty:
         return None
     cash = bs[_COL_CASH].iloc[-1]
-    if cash is None or cash != cash or cash <= 0:  # NaN check via != self
+    if cash is None or math.isnan(cash) or cash <= 0:
         return None
     recent_ocf = cf[_COL_OCF].tail(4).dropna()
     if recent_ocf.empty:
@@ -211,7 +212,7 @@ def _consecutive_neg_ocf_from_frame(cf) -> int:
     streak = 0
     # iterate newest → oldest
     for v in cf[_COL_OCF].iloc[::-1]:
-        if v is None or v != v or v >= 0:
+        if v is None or math.isnan(v) or v >= 0:
             break
         streak += 1
     return streak
@@ -237,7 +238,7 @@ def _ps_ratio_pit(prices_by_ticker, inc, ticker: str, asof_ts) -> float | None:
     row = ticker_prices.iloc[idx]
     close = row.get(_COL_CLOSE)
     shares = row.get(_COL_SHARES)
-    if close is None or shares is None or close != close or shares != shares:
+    if close is None or shares is None or math.isnan(close) or math.isnan(shares):
         return None
     market_cap = float(close) * float(shares)
     if market_cap <= 0:

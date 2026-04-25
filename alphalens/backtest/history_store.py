@@ -68,7 +68,7 @@ class HistoryStore:
             return None
         entry_price = float(future.iloc[0]["close"])
         exit_price = float(future.iloc[holding_period]["close"])
-        if entry_price == 0.0:
+        if entry_price <= 0.0:
             return None
         return exit_price / entry_price - 1.0
 

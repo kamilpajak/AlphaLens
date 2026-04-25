@@ -213,7 +213,7 @@ def calibrate_k(
     x_arr = np.asarray(xs, dtype=float)
     y_arr = np.asarray(ys, dtype=float)
     denom = float((x_arr * x_arr).sum())
-    if denom == 0.0:
+    if math.isclose(denom, 0.0):
         raise ValueError("degenerate inputs (all predictors zero)")
     return float((x_arr * y_arr).sum() / denom)
 
