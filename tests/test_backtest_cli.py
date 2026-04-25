@@ -23,6 +23,7 @@ Strategy (per zen review):
 
 from __future__ import annotations
 
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +32,19 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 from typer.testing import CliRunner
+
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mK]")
+
+
+def _normalize_cli_output(text: str) -> str:
+    """Strip ANSI escape codes + collapse whitespace.
+
+    Typer renders --help and BadParameter messages with terminal-width-aware
+    wrapping that breaks ``--scorer`` across two lines as ``-`` + ``-scorer`` on
+    the narrow GitHub Actions terminal (no TTY). Tests assert presence of flag
+    names and error keywords without depending on rendering width.
+    """
+    return re.sub(r"\s+", " ", _ANSI_ESCAPE.sub("", text))
 
 
 def _minimal_ohlcv(n_bars: int = 500) -> pd.DataFrame:
@@ -85,22 +99,20 @@ class TestBacktestCLIHelp(unittest.TestCase):
     """Catches import errors and Typer registration regressions."""
 
     def setUp(self):
-        # COLUMNS=200 prevents Typer from wrapping flag names mid-line on the
-        # narrow CI terminal — without this, `--scorer` becomes `-scorer`+wrap
-        # in the rendered output and substring asserts fail.
-        self.runner = CliRunner(env={"COLUMNS": "200", "NO_COLOR": "1"})
+        self.runner = CliRunner()
 
     def test_backtest_help_renders(self):
+        """Assertions check each flag's presence in normalized output —
+        Typer wraps long flag names mid-line on narrow CI terminals, so we
+        strip ANSI escapes + collapse whitespace before substring search.
+        """
         from alphalens_cli.main import app
 
         result = self.runner.invoke(app, ["backtest", "--help"])
         self.assertEqual(result.exit_code, 0, msg=result.output)
-        self.assertIn("--scorer", result.output)
-        self.assertIn("--weighting", result.output)
-        self.assertIn("--start", result.output)
-        self.assertIn("--end", result.output)
-        self.assertIn("--no-attrib", result.output)
-        self.assertIn("--diagnose", result.output)
+        normalized = _normalize_cli_output(result.output)
+        for flag in ("--scorer", "--weighting", "--start", "--end", "--no-attrib", "--diagnose"):
+            self.assertIn(flag, normalized, msg=f"flag {flag} missing from help output")
 
 
 class TestBacktestCLIEndToEnd(unittest.TestCase):
@@ -331,9 +343,7 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
 
 class TestBacktestCLIArgValidation(unittest.TestCase):
     def setUp(self):
-        # COLUMNS=200 / NO_COLOR=1 same as TestBacktestCLIHelp — keeps Typer
-        # error messages on a single line so substring assertions work in CI.
-        self.runner = CliRunner(env={"COLUMNS": "200", "NO_COLOR": "1"})
+        self.runner = CliRunner()
 
     def test_invalid_scorer_exits_cleanly(self):
         """Typer should intercept `BadParameter` and exit with a non-zero code
@@ -355,7 +365,9 @@ class TestBacktestCLIArgValidation(unittest.TestCase):
             ],
         )
         self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("Unknown --scorer", result.output)
+        # Strip ANSI + collapse whitespace so the assertion survives Typer's
+        # narrow-terminal wrapping (e.g. `--scorer` rendered as `-` `-scorer`).
+        self.assertIn("Unknown --scorer", _normalize_cli_output(result.output))
 
 
 class TestBacktestInsiderDispatch(unittest.TestCase):
