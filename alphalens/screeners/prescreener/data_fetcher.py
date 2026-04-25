@@ -13,6 +13,33 @@ from .config import PRESCREENER_DEFAULTS
 logger = logging.getLogger(__name__)
 
 
+def _extract_chunk_data(
+    raw: pd.DataFrame,
+    chunk: list[str],
+    end_date: pd.Timestamp,
+) -> dict[str, pd.DataFrame]:
+    """Slice yfinance batch output into per-ticker frames, dropping look-ahead rows."""
+    if raw.empty:
+        return {}
+    if len(chunk) == 1:
+        ticker = chunk[0]
+        # yfinance may return MultiIndex columns even for a single ticker
+        if isinstance(raw.columns, pd.MultiIndex):
+            raw = raw.droplevel("Ticker", axis=1)
+        filtered = raw[raw.index <= end_date]
+        return {ticker: filtered} if not filtered.empty else {}
+    extracted: dict[str, pd.DataFrame] = {}
+    for ticker in chunk:
+        try:
+            ticker_df = raw.xs(ticker, level=1, axis=1)
+        except (KeyError, ValueError):
+            continue
+        filtered = ticker_df[ticker_df.index <= end_date].dropna(subset=["Close"])
+        if not filtered.empty:
+            extracted[ticker] = filtered
+    return extracted
+
+
 class BatchDataFetcher:
     def __init__(self, tickers: list[str], curr_date: str, config: dict | None = None):
         self.tickers = tickers
@@ -47,30 +74,10 @@ class BatchDataFetcher:
                     threads=True,
                     auto_adjust=True,
                 )
-                if raw.empty:
-                    continue
-
-                if len(chunk) == 1:
-                    ticker = chunk[0]
-                    # yfinance may return MultiIndex columns even for 1 ticker
-                    if isinstance(raw.columns, pd.MultiIndex):
-                        raw = raw.droplevel("Ticker", axis=1)
-                    filtered = raw[raw.index <= end_date]
-                    if not filtered.empty:
-                        all_data[ticker] = filtered
-                else:
-                    for ticker in chunk:
-                        try:
-                            ticker_df = raw.xs(ticker, level=1, axis=1)
-                            filtered = ticker_df[ticker_df.index <= end_date].dropna(
-                                subset=["Close"]
-                            )
-                            if not filtered.empty:
-                                all_data[ticker] = filtered
-                        except (KeyError, ValueError):
-                            continue
             except Exception:
                 logger.warning("Batch download failed for chunk %d", i, exc_info=True)
+                continue
+            all_data.update(_extract_chunk_data(raw, chunk, end_date))
 
         self._price_cache = all_data
         return all_data

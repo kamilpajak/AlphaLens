@@ -51,6 +51,23 @@ class IsharesCsvFormatError(ValueError):
     """Raised when the iShares CSV payload doesn't contain a header row."""
 
 
+def _extract_equity_ticker(record: dict) -> str | None:
+    """Return canonical ticker if record is a valid equity row, else None.
+
+    Rejects: missing/dash ticker, non-equity asset class, non-ticker strings
+    (footer disclaimers smashed into the first column).
+    """
+    ticker = (record.get("Ticker") or "").strip().upper()
+    if not ticker or ticker == "-":
+        return None
+    asset_class = (record.get("Asset Class") or "").strip()
+    if asset_class and asset_class.lower() != "equity":
+        return None
+    if not _VALID_TICKER_RE.match(ticker):
+        return None
+    return ticker
+
+
 def parse_ishares_csv(csv_text: str) -> list[str]:
     """Extract the list of equity tickers from an iShares IWM holdings CSV."""
     reader = csv.reader(io.StringIO(csv_text))
@@ -63,23 +80,10 @@ def parse_ishares_csv(csv_text: str) -> list[str]:
             if row and row[0].strip().lower() == "ticker":
                 header_cols = [c.strip() for c in row]
             continue
-
         if not row or all(not cell.strip() for cell in row):
             continue
-
-        record = dict(zip(header_cols, row))
-        ticker = (record.get("Ticker") or "").strip().upper()
-        if not ticker or ticker == "-":
-            continue
-        asset_class = (record.get("Asset Class") or "").strip()
-        if asset_class and asset_class.lower() != "equity":
-            continue
-        # Reject non-ticker strings (iShares CSV has footer disclaimer rows
-        # that smash legal text into the first column; length-only check is
-        # insufficient because short non-tickers like "P5N994" also appear).
-        if not _VALID_TICKER_RE.match(ticker):
-            continue
-        if ticker in seen:
+        ticker = _extract_equity_ticker(dict(zip(header_cols, row)))
+        if ticker is None or ticker in seen:
             continue
         seen.add(ticker)
         out.append(ticker)

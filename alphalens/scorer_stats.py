@@ -15,6 +15,51 @@ ACCEPT_DECISIONS = ("BUY", "OVERWEIGHT")
 DECISION_TYPES = ("BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL")
 
 
+def _init_source_entry(src: str, finished_at: str) -> dict:
+    return {
+        "source": src,
+        "total": 0,
+        "buy_count": 0,
+        "overweight_count": 0,
+        "hold_count": 0,
+        "underweight_count": 0,
+        "sell_count": 0,
+        "unknown_count": 0,
+        "duration_sum": 0.0,
+        "duration_n": 0,
+        "cost_sum": 0.0,
+        "cost_n": 0,
+        "oldest_finished": finished_at,
+        "newest_finished": finished_at,
+    }
+
+
+def _update_source_entry(entry: dict, row) -> None:
+    entry["total"] += 1
+    key = f"{(row['decision'] or '').lower()}_count"
+    entry[key if key in entry else "unknown_count"] += 1
+    if row["duration_sec"] is not None:
+        entry["duration_sum"] += row["duration_sec"]
+        entry["duration_n"] += 1
+    if row["cost_usd"] is not None:
+        entry["cost_sum"] += row["cost_usd"]
+        entry["cost_n"] += 1
+    entry["oldest_finished"] = min(entry["oldest_finished"], row["finished_at"])
+    entry["newest_finished"] = max(entry["newest_finished"], row["finished_at"])
+
+
+def _finalize_entry(entry: dict) -> dict:
+    accept = entry["buy_count"] + entry["overweight_count"]
+    entry["accept_rate"] = accept / entry["total"] if entry["total"] else 0.0
+    entry["mean_duration_sec"] = (
+        entry["duration_sum"] / entry["duration_n"] if entry["duration_n"] else None
+    )
+    entry["mean_cost_usd"] = entry["cost_sum"] / entry["cost_n"] if entry["cost_n"] else None
+    for k in ("duration_sum", "duration_n", "cost_sum", "cost_n"):
+        entry.pop(k, None)
+    return entry
+
+
 def compute_scorer_stats(db_path: Path | str, since_days: int = 30) -> list[dict]:
     """Return per-source summary of decisions in the last `since_days`.
 
@@ -41,53 +86,10 @@ def compute_scorer_stats(db_path: Path | str, since_days: int = 30) -> list[dict
 
     by_source: dict[str, dict] = {}
     for r in rows:
-        src = r["source"]
-        entry = by_source.setdefault(
-            src,
-            {
-                "source": src,
-                "total": 0,
-                "buy_count": 0,
-                "overweight_count": 0,
-                "hold_count": 0,
-                "underweight_count": 0,
-                "sell_count": 0,
-                "unknown_count": 0,
-                "duration_sum": 0.0,
-                "duration_n": 0,
-                "cost_sum": 0.0,
-                "cost_n": 0,
-                "oldest_finished": r["finished_at"],
-                "newest_finished": r["finished_at"],
-            },
-        )
-        entry["total"] += 1
-        dec = (r["decision"] or "").upper()
-        key = f"{dec.lower()}_count"
-        if key in entry:
-            entry[key] += 1
-        else:
-            entry["unknown_count"] += 1
-        if r["duration_sec"] is not None:
-            entry["duration_sum"] += r["duration_sec"]
-            entry["duration_n"] += 1
-        if r["cost_usd"] is not None:
-            entry["cost_sum"] += r["cost_usd"]
-            entry["cost_n"] += 1
-        entry["oldest_finished"] = min(entry["oldest_finished"], r["finished_at"])
-        entry["newest_finished"] = max(entry["newest_finished"], r["finished_at"])
+        entry = by_source.setdefault(r["source"], _init_source_entry(r["source"], r["finished_at"]))
+        _update_source_entry(entry, r)
 
-    result = []
-    for src, e in by_source.items():
-        accept = e["buy_count"] + e["overweight_count"]
-        e["accept_rate"] = accept / e["total"] if e["total"] else 0.0
-        e["mean_duration_sec"] = e["duration_sum"] / e["duration_n"] if e["duration_n"] else None
-        e["mean_cost_usd"] = e["cost_sum"] / e["cost_n"] if e["cost_n"] else None
-        # Drop intermediate aggregation fields from the public dict
-        for k in ("duration_sum", "duration_n", "cost_sum", "cost_n"):
-            e.pop(k, None)
-        result.append(e)
-
+    result = [_finalize_entry(e) for e in by_source.values()]
     result.sort(key=lambda e: e["source"])
     return result
 
