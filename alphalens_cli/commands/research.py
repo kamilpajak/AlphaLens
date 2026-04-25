@@ -1008,6 +1008,183 @@ def _persist_layer3_artifacts(result, sample: dict, sample_dir: Path, save_ta_re
             typer.echo(f"    warn: save_report_to_disk failed: {exc}", err=True)
 
 
+def _resolve_path(custom: str, default: Path) -> Path:
+    """Use `custom` if provided, else `default`; ensure absolute (cwd-anchored)."""
+    p = Path(custom) if custom else default
+    return p if p.is_absolute() else Path.cwd() / p
+
+
+def _run_layer3_samples(
+    sampled: list[dict],
+    *,
+    scorer: str,
+    runner,
+    store,
+    benchmark: str,
+    analysts,
+    reports_root: Path,
+    csv_path: Path | None,
+    save_ta_report,
+) -> tuple[list[dict], dict[str, list[int]]]:
+    """Drive Layer 3 over the sampled (date, ticker) pairs. CSV is flushed per sample."""
+    from collections import defaultdict
+
+    import pandas as pd
+
+    from alphalens.candidates import Candidate
+
+    results: list[dict] = []
+    accept_by_regime: dict[str, list[int]] = defaultdict(list)
+
+    for i, s in enumerate(sampled, 1):
+        typer.echo(f"[{i}/{len(sampled)}] {s['date']} {s['ticker']} (regime={s['regime']})")
+        candidate = Candidate.from_screener(
+            ticker=s["ticker"],
+            source=scorer,
+            priority=10,
+            payload={"rank": s["rank"], "replay_date": s["date"].isoformat()},
+            discriminator=f"replay-{s['date']}",
+        )
+        try:
+            result = runner.run(
+                candidate, candidate_id=i, curr_date=s["date"], selected_analysts=analysts
+            )
+        except Exception as exc:
+            results.append(_build_acceptance_error_row(s, exc, store, benchmark))
+            typer.echo(f"    → ERROR: {exc}")
+            if csv_path is not None:
+                pd.DataFrame(results).to_csv(csv_path, index=False)
+            continue
+
+        rating = _classify_rating(result.rating)
+        accepted = 1 if rating in _ACCEPT_RATINGS else 0
+        accept_by_regime[s["regime"]].append(accepted)
+
+        fwd = _compute_forward_features(store, s["ticker"], benchmark, s["date"])
+        fwd["spy_trailing_60d"] = _at_pick_trailing_return(store, benchmark, s["date"], 60)
+
+        sample_dir = reports_root / f"{s['date'].isoformat()}_{s['ticker']}"
+        _persist_layer3_artifacts(result, s, sample_dir, save_ta_report)
+        results.append(
+            _build_acceptance_row(
+                s,
+                rating=rating,
+                accepted=accepted,
+                duration_sec=result.duration_sec,
+                model=result.model_used,
+                sample_dir=sample_dir,
+                fwd=fwd,
+            )
+        )
+
+        fwd_20 = fwd.get("fwd_20d")
+        alpha_20 = fwd.get("alpha_20d")
+        fwd_str = (
+            f"  fwd20d={fwd_20 * 100:+.1f}% α={alpha_20 * 100:+.1f}%"
+            if (fwd_20 is not None and alpha_20 is not None)
+            else "  fwd20d=n/a"
+        )
+        typer.echo(f"    → {rating}  ({result.duration_sec:.0f}s){fwd_str}  → {sample_dir.name}/")
+
+        if csv_path is not None:
+            pd.DataFrame(results).to_csv(csv_path, index=False)
+
+    return results, accept_by_regime
+
+
+def _accept_rate(lst: list[int]) -> float:
+    return sum(lst) / len(lst) if lst else float("nan")
+
+
+def _print_acceptance_summary(
+    scorer: str,
+    results: list[dict],
+    accept_by_regime: dict[str, list[int]],
+) -> tuple[list[int], float]:
+    total_accept = [r["accepted"] for r in results if not r["error"]]
+    total_rate = _accept_rate(total_accept)
+    typer.echo("")
+    typer.echo(f"=== Acceptance rate — scorer={scorer} ===")
+    typer.echo(f"  Overall: {total_rate * 100:.1f}% ({sum(total_accept)}/{len(total_accept)})")
+    for regime in ("bull", "bear", "flat"):
+        lst = accept_by_regime.get(regime, [])
+        if lst:
+            typer.echo(f"  {regime}:   {_accept_rate(lst) * 100:.1f}% ({sum(lst)}/{len(lst)})")
+    return total_accept, total_rate
+
+
+def _render_acceptance_report(
+    *,
+    scorer: str,
+    picks_path: Path,
+    samples_per_regime: int,
+    seed: int,
+    analysts,
+    sampled: list[dict],
+    results: list[dict],
+    accept_by_regime: dict[str, list[int]],
+    total_accept: list[int],
+    total_rate: float,
+) -> list[str]:
+    from collections import defaultdict
+
+    lines = [
+        f"# Historical Layer 3 Acceptance — {scorer}",
+        "",
+        f"- Picks source: `{picks_path}`",
+        f"- Samples per regime: {samples_per_regime}",
+        f"- Seed: {seed}",
+        f"- Analysts: {'all 4' if analysts is None else ', '.join(analysts)}"
+        + ("" if analysts is None else " (social excluded for PIT rigor)"),
+        f"- Total samples: {len(sampled)}  (attempted), {len(total_accept)} (completed)",
+        "",
+        "## Acceptance rate",
+        "",
+        "| Regime | n | Accepted | Rate |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    for regime in ("bull", "bear", "flat"):
+        lst = accept_by_regime.get(regime, [])
+        if lst:
+            lines.append(f"| {regime} | {len(lst)} | {sum(lst)} | {_accept_rate(lst) * 100:.1f}% |")
+    lines += [
+        f"| **overall** | **{len(total_accept)}** | **{sum(total_accept)}** | **{total_rate * 100:.1f}%** |",
+        "",
+        "## Rating distribution",
+        "",
+    ]
+    rating_counts: dict[str, int] = defaultdict(int)
+    for r in results:
+        if r["rating"]:
+            rating_counts[r["rating"]] += 1
+    for rating in ("BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL"):
+        lines.append(f"- {rating}: {rating_counts.get(rating, 0)}")
+
+    accepted_rows = [r for r in results if r["accepted"] == 1]
+    rejected_rows = [r for r in results if r["accepted"] == 0 and r["rating"]]
+    lines += [
+        "",
+        "## Forward returns by Layer 3 decision (vs SPY benchmark)",
+        "",
+        "Higher α on accepted rows = Layer 3 correctly picked winners. "
+        "If rejected rows have similar/higher α, Layer 3 is destroying value. "
+        "`n` reflects rows with a valid alpha at that horizon — recent picks "
+        "may be missing at longer horizons.",
+        "",
+        "| Horizon | Accepted α (n) | Rejected α (n) | Δ (accepted − rejected) |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    for horizon in _FWD_HORIZONS:
+        a_alpha, a_n = _mean_alpha(accepted_rows, horizon)
+        r_alpha, r_n = _mean_alpha(rejected_rows, horizon)
+        delta = (a_alpha - r_alpha) if (a_alpha is not None and r_alpha is not None) else None
+        a_str = f"{a_alpha * 100:+.2f}% ({a_n})" if a_alpha is not None else f"n/a ({a_n})"
+        r_str = f"{r_alpha * 100:+.2f}% ({r_n})" if r_alpha is not None else f"n/a ({r_n})"
+        d_str = f"{delta * 100:+.2f}%" if delta is not None else "n/a"
+        lines.append(f"| {horizon}d | {a_str} | {r_str} | {d_str} |")
+    return lines
+
+
 @research_app.command(name="historical-acceptance")
 def historical_acceptance(
     scorer: str = typer.Option(
@@ -1059,12 +1236,9 @@ def historical_acceptance(
 
     Acceptance metric: fraction of samples where Layer 3 returns BUY or OVERWEIGHT.
     """
-    from collections import defaultdict
-
     import pandas as pd
 
     from alphalens.backtest.history_store import HistoryStore
-    from alphalens.candidates import Candidate
     from alphalens.runner import TradingAgentsRunner
     from alphalens.screeners.lean.config import DATA_DIR
     from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
@@ -1077,10 +1251,8 @@ def historical_acceptance(
     if scorer not in {"momentum", "early-stage"}:
         raise typer.BadParameter(f"Unknown scorer: {scorer!r} (expected: momentum | early-stage)")
 
-    picks_path = (
-        Path(picks_csv)
-        if picks_csv
-        else Path(f"docs/backtest/compare_{scorer.replace('-', '_')}_2026-04-21.csv")
+    picks_path = _resolve_path(
+        picks_csv, Path(f"docs/backtest/compare_{scorer.replace('-', '_')}_2026-04-21.csv")
     )
     if not picks_path.exists():
         raise typer.BadParameter(f"Picks CSV not found: {picks_path}")
@@ -1127,15 +1299,10 @@ def historical_acceptance(
         f"Running Layer 3 with selected_analysts="
         f"{'default (all 4)' if analysts is None else analysts}"
     )
-    runner = TradingAgentsRunner()
 
-    reports_root = (
-        Path(reports_dir)
-        if reports_dir
-        else Path(f"docs/research/acceptance_{scorer.replace('-', '_')}_reports")
+    reports_root = _resolve_path(
+        reports_dir, Path(f"docs/research/acceptance_{scorer.replace('-', '_')}_reports")
     )
-    if not reports_root.is_absolute():
-        reports_root = Path.cwd() / reports_root
     reports_root.mkdir(parents=True, exist_ok=True)
     typer.echo(f"Per-sample reports → {reports_root}")
 
@@ -1144,150 +1311,39 @@ def historical_acceptance(
     # /Ctrl-C. Per-sample flush protects ~6M tokens of API spend.
     csv_path: Path | None = None
     if results_csv:
-        csv_path = Path(results_csv)
-        if not csv_path.is_absolute():
-            csv_path = Path.cwd() / csv_path
+        csv_path = _resolve_path(results_csv, Path(results_csv))
         csv_path.parent.mkdir(parents=True, exist_ok=True)
-    results: list[dict] = []
-    accept_by_regime: dict[str, list[int]] = defaultdict(list)
 
-    for i, s in enumerate(sampled, 1):
-        typer.echo(f"[{i}/{len(sampled)}] {s['date']} {s['ticker']} (regime={s['regime']})")
-        candidate = Candidate.from_screener(
-            ticker=s["ticker"],
-            source=scorer,
-            priority=10,
-            payload={"rank": s["rank"], "replay_date": s["date"].isoformat()},
-            discriminator=f"replay-{s['date']}",
-        )
-        try:
-            result = runner.run(
-                candidate,
-                candidate_id=i,
-                curr_date=s["date"],
-                selected_analysts=analysts,
-            )
-        except Exception as exc:
-            results.append(_build_acceptance_error_row(s, exc, store, benchmark))
-            typer.echo(f"    → ERROR: {exc}")
-            if csv_path is not None:
-                pd.DataFrame(results).to_csv(csv_path, index=False)
-            continue
-
-        rating = _classify_rating(result.rating)
-        accepted = 1 if rating in _ACCEPT_RATINGS else 0
-        accept_by_regime[s["regime"]].append(accepted)
-
-        fwd = _compute_forward_features(store, s["ticker"], benchmark, s["date"])
-        fwd["spy_trailing_60d"] = _at_pick_trailing_return(store, benchmark, s["date"], 60)
-
-        sample_dir = reports_root / f"{s['date'].isoformat()}_{s['ticker']}"
-        _persist_layer3_artifacts(result, s, sample_dir, _save_ta_report)
-        results.append(
-            _build_acceptance_row(
-                s,
-                rating=rating,
-                accepted=accepted,
-                duration_sec=result.duration_sec,
-                model=result.model_used,
-                sample_dir=sample_dir,
-                fwd=fwd,
-            )
-        )
-
-        fwd_20 = fwd.get("fwd_20d")
-        alpha_20 = fwd.get("alpha_20d")
-        fwd_str = (
-            f"  fwd20d={fwd_20 * 100:+.1f}% α={alpha_20 * 100:+.1f}%"
-            if (fwd_20 is not None and alpha_20 is not None)
-            else "  fwd20d=n/a"
-        )
-        typer.echo(f"    → {rating}  ({result.duration_sec:.0f}s){fwd_str}  → {sample_dir.name}/")
-
-        if csv_path is not None:
-            pd.DataFrame(results).to_csv(csv_path, index=False)
-
-    # Aggregate.
-    def _accept_rate(lst):
-        return sum(lst) / len(lst) if lst else float("nan")
-
-    total_accept = [r["accepted"] for r in results if not r["error"]]
-    total_rate = _accept_rate(total_accept)
-
-    typer.echo("")
-    typer.echo(f"=== Acceptance rate — scorer={scorer} ===")
-    typer.echo(f"  Overall: {total_rate * 100:.1f}% ({sum(total_accept)}/{len(total_accept)})")
-    for regime in ("bull", "bear", "flat"):
-        lst = accept_by_regime.get(regime, [])
-        if lst:
-            typer.echo(f"  {regime}:   {_accept_rate(lst) * 100:.1f}% ({sum(lst)}/{len(lst)})")
-
-    # Reports.
-    report_path = (
-        Path(report)
-        if report
-        else Path(f"docs/research/historical_acceptance_{scorer.replace('-', '_')}.md")
+    results, accept_by_regime = _run_layer3_samples(
+        sampled,
+        scorer=scorer,
+        runner=TradingAgentsRunner(),
+        store=store,
+        benchmark=benchmark,
+        analysts=analysts,
+        reports_root=reports_root,
+        csv_path=csv_path,
+        save_ta_report=_save_ta_report,
     )
-    if not report_path.is_absolute():
-        report_path = Path.cwd() / report_path
+
+    total_accept, total_rate = _print_acceptance_summary(scorer, results, accept_by_regime)
+
+    report_path = _resolve_path(
+        report, Path(f"docs/research/historical_acceptance_{scorer.replace('-', '_')}.md")
+    )
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        f"# Historical Layer 3 Acceptance — {scorer}",
-        "",
-        f"- Picks source: `{picks_path}`",
-        f"- Samples per regime: {samples_per_regime}",
-        f"- Seed: {seed}",
-        f"- Analysts: {'all 4' if analysts is None else ', '.join(analysts)}"
-        + ("" if analysts is None else " (social excluded for PIT rigor)"),
-        f"- Total samples: {len(sampled)}  (attempted), {len(total_accept)} (completed)",
-        "",
-        "## Acceptance rate",
-        "",
-        "| Regime | n | Accepted | Rate |",
-        "| --- | ---: | ---: | ---: |",
-    ]
-    for regime in ("bull", "bear", "flat"):
-        lst = accept_by_regime.get(regime, [])
-        if lst:
-            lines.append(f"| {regime} | {len(lst)} | {sum(lst)} | {_accept_rate(lst) * 100:.1f}% |")
-    lines += [
-        f"| **overall** | **{len(total_accept)}** | **{sum(total_accept)}** | **{total_rate * 100:.1f}%** |",
-        "",
-        "## Rating distribution",
-        "",
-    ]
-    rating_counts: dict[str, int] = defaultdict(int)
-    for r in results:
-        if r["rating"]:
-            rating_counts[r["rating"]] += 1
-    for rating in ("BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL"):
-        lines.append(f"- {rating}: {rating_counts.get(rating, 0)}")
-
-    # Forward-return post-hoc: did Layer 3's decisions actually predict future returns?
-    accepted_rows = [r for r in results if r["accepted"] == 1]
-    rejected_rows = [r for r in results if r["accepted"] == 0 and r["rating"]]
-
-    lines += [
-        "",
-        "## Forward returns by Layer 3 decision (vs SPY benchmark)",
-        "",
-        "Higher α on accepted rows = Layer 3 correctly picked winners. "
-        "If rejected rows have similar/higher α, Layer 3 is destroying value. "
-        "`n` reflects rows with a valid alpha at that horizon — recent picks "
-        "may be missing at longer horizons.",
-        "",
-        "| Horizon | Accepted α (n) | Rejected α (n) | Δ (accepted − rejected) |",
-        "| --- | ---: | ---: | ---: |",
-    ]
-    for horizon in _FWD_HORIZONS:
-        a_alpha, a_n = _mean_alpha(accepted_rows, horizon)
-        r_alpha, r_n = _mean_alpha(rejected_rows, horizon)
-        delta = (a_alpha - r_alpha) if (a_alpha is not None and r_alpha is not None) else None
-        a_str = f"{a_alpha * 100:+.2f}% ({a_n})" if a_alpha is not None else f"n/a ({a_n})"
-        r_str = f"{r_alpha * 100:+.2f}% ({r_n})" if r_alpha is not None else f"n/a ({r_n})"
-        d_str = f"{delta * 100:+.2f}%" if delta is not None else "n/a"
-        lines.append(f"| {horizon}d | {a_str} | {r_str} | {d_str} |")
-
+    lines = _render_acceptance_report(
+        scorer=scorer,
+        picks_path=picks_path,
+        samples_per_regime=samples_per_regime,
+        seed=seed,
+        analysts=analysts,
+        sampled=sampled,
+        results=results,
+        accept_by_regime=accept_by_regime,
+        total_accept=total_accept,
+        total_rate=total_rate,
+    )
     report_path.write_text("\n".join(lines))
     typer.echo(f"Report: {report_path}")
 
