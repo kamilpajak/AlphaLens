@@ -624,7 +624,12 @@ def _format_gate_block(v: GateVerdict) -> str:
     lines = ["## Decision gate", ""]
 
     def line(key: str, pass_flag: bool | None) -> str:
-        mark = "PASS" if pass_flag else ("N/A" if pass_flag is None else "FAIL")
+        if pass_flag is None:
+            mark = "N/A"
+        elif pass_flag:
+            mark = "PASS"
+        else:
+            mark = "FAIL"
         return f"- **{key.upper()}**: {mark} — {v.reasons[key]}"
 
     lines.append(line("c1", v.c1_pass))

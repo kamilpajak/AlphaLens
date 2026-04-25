@@ -348,7 +348,12 @@ def walk_forward(
     for key in ("c1", "c2", "c3", "c4", "c5"):
         reason = wf_report.verdict.reasons.get(key, "")
         flag = getattr(wf_report.verdict, f"{key}_pass")
-        mark = "PASS" if flag else ("N/A" if flag is None else "FAIL")
+        if flag is None:
+            mark = "N/A"
+        elif flag:
+            mark = "PASS"
+        else:
+            mark = "FAIL"
         typer.echo(f"    {key.upper()} {mark} — {reason}")
 
     report_path = Path(report)

@@ -73,6 +73,14 @@ def _parse_amount(val) -> float:
         return 0.0
 
 
+def _canonicalize_transaction(s: str) -> str:
+    if "PURCHASE" in s:
+        return "PURCHASE"
+    if "SALE" in s:
+        return "SALE"
+    return "EXCHANGE"
+
+
 def normalize_congress(raw: pd.DataFrame) -> pd.DataFrame:
     """Quiver raw congress_trading DataFrame → normalized schema."""
     if raw.empty:
@@ -93,9 +101,7 @@ def normalize_congress(raw: pd.DataFrame) -> pd.DataFrame:
     # Canonicalise transaction codes we've seen: "Purchase", "Sale (Partial)", etc.
     out["transaction"] = out["transaction"].where(
         out["transaction"].isin(["PURCHASE", "SALE", "EXCHANGE"]),
-        out["transaction"].apply(
-            lambda s: "PURCHASE" if "PURCHASE" in s else ("SALE" if "SALE" in s else "EXCHANGE")
-        ),
+        out["transaction"].apply(_canonicalize_transaction),
     )
     return out
 

@@ -183,7 +183,8 @@ def run_rolling_regression(
     aligned = pd.concat([portfolio_returns.rename("port"), factors], axis=1, join="inner").dropna()
 
     y_full = aligned["port"] - aligned["RF"] if subtract_rf else aligned["port"]
-    X_full = sm.add_constant(aligned[factor_columns])
+    # Capital X is the standard statsmodels/sklearn convention for a design matrix.
+    X_full = sm.add_constant(aligned[factor_columns])  # NOSONAR
 
     res = RollingOLS(y_full, X_full, window=window).fit()
     params = res.params

@@ -23,8 +23,9 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-# Lean-only imports — resolved inside the container.
-from AlgorithmImports import *  # noqa: F403  # pylint: disable=wildcard-import
+# Lean-only imports — resolved inside the container. AlgorithmImports is QC's
+# runtime symbol bag; wildcard is intentional and required by the framework.
+from AlgorithmImports import *  # noqa: F403  # pylint: disable=wildcard-import  # NOSONAR
 from features import dollar_volume_average  # noqa: F401  (smoke import)
 from scorer import rank_universe
 
