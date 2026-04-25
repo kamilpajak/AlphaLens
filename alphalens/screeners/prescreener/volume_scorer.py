@@ -20,7 +20,6 @@ class VolumeScorer:
         price_data: dict[str, pd.DataFrame],
         fundamentals: dict[str, dict],
         tickers: list[str],
-        curr_date: str,
     ) -> pd.DataFrame:
         rows = []
         for ticker in tickers:

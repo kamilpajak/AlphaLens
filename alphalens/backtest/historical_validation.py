@@ -352,7 +352,7 @@ def picks_from_history_store(store, days: int = 60, top_n: int = 5) -> list[Pick
 # ---------------------------------------------------------------------------
 
 
-def rule_based_tractability_scorer(ticker: str, asof: date, context: Mapping) -> LLMVerdict:
+def rule_based_tractability_scorer(_ticker: str, _asof: date, context: Mapping) -> LLMVerdict:
     """Deterministic baseline — **żaden** LLM, pure rules.
 
     Accept criteria:

@@ -77,7 +77,6 @@ class TestVolumeScorerAll(unittest.TestCase):
             {"AAPL": prices},
             {"AAPL": {"marketCap": 3e12, "averageVolume": 50_000_000}},
             ["AAPL"],
-            "2024-01-15",
         )
         for col in ["ticker", "volume_score"]:
             self.assertIn(col, result.columns)
@@ -95,7 +94,6 @@ class TestVolumeScorerAll(unittest.TestCase):
                 "ILLIQ": {"marketCap": 200e6, "averageVolume": 50_000},
             },
             ["LIQ", "ILLIQ"],
-            "2024-01-15",
         )
         liq_score = result.loc[result["ticker"] == "LIQ", "volume_score"].values[0]
         illiq_score = result.loc[result["ticker"] == "ILLIQ", "volume_score"].values[0]

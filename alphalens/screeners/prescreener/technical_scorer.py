@@ -20,14 +20,12 @@ class TechnicalScorer:
         self,
         price_data: dict[str, pd.DataFrame],
         tickers: list[str],
-        curr_date: str,
     ) -> pd.DataFrame:
         """Score all tickers on technical criteria.
 
         Args:
             price_data: {ticker: OHLCV DataFrame} with DatetimeIndex
             tickers: list of ticker symbols
-            curr_date: reference date string
 
         Returns:
             DataFrame with columns: ticker, rsi_score, trend_score,

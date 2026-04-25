@@ -17,7 +17,6 @@ class Guardrails:
 
     def check(
         self,
-        ticker: str,
         price_df: pd.DataFrame | None,
         info: dict,
     ) -> tuple[bool, str]:
@@ -61,7 +60,7 @@ class Guardrails:
         kept: list[str] = []
         rejected: dict[str, str] = {}
         for ticker in tickers:
-            ok, reason = self.check(ticker, prices.get(ticker), fundamentals.get(ticker, {}))
+            ok, reason = self.check(prices.get(ticker), fundamentals.get(ticker, {}))
             if ok:
                 kept.append(ticker)
             else:

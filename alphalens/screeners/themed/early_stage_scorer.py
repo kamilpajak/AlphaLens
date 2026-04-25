@@ -92,6 +92,8 @@ class EarlyStageScorer:
         benchmark_ticker: str | None = None,
         fundamentals: Mapping[str, Mapping] | None = None,
     ) -> pd.DataFrame:
+        # benchmark_ticker accepted for interface parity with MomentumScorer.score_all
+        _ = benchmark_ticker
         rows = [self._score_one(t, prices.get(t), (fundamentals or {}).get(t, {})) for t in tickers]
         return pd.DataFrame(rows)
 

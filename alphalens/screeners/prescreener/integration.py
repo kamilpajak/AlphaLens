@@ -45,13 +45,9 @@ class PrescreenerPipeline:
         available_tickers = sorted(set(prices.keys()) | set(fundamentals.keys()))
 
         logger.info("Scoring %d tickers...", len(available_tickers))
-        tech_scores = TechnicalScorer(self.config).score_all(
-            prices, available_tickers, self.curr_date
-        )
+        tech_scores = TechnicalScorer(self.config).score_all(prices, available_tickers)
         fund_scores = FundamentalScorer(self.config).score_all(fundamentals)
-        vol_scores = VolumeScorer(self.config).score_all(
-            prices, fundamentals, available_tickers, self.curr_date
-        )
+        vol_scores = VolumeScorer(self.config).score_all(prices, fundamentals, available_tickers)
 
         ranker = CompositeRanker(self.config)
         ranked = ranker.rank(tech_scores, fund_scores, vol_scores)

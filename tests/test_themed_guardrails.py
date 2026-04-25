@@ -20,41 +20,41 @@ class TestGuardrailCheckSingle(unittest.TestCase):
     def test_passes_healthy_stock(self):
         df = _df([10.0] * 60, [2_000_000] * 60)
         info = {"marketCap": 1_000_000_000, "averageVolume": 2_000_000}
-        ok, reason = self.g.check("ABC", df, info)
+        ok, reason = self.g.check(df, info)
         self.assertTrue(ok, f"expected pass, got reason={reason}")
         self.assertEqual(reason, "")
 
     def test_rejects_below_min_market_cap(self):
         df = _df([10.0] * 60, [2_000_000] * 60)
         info = {"marketCap": 100_000_000, "averageVolume": 2_000_000}
-        ok, reason = self.g.check("ABC", df, info)
+        ok, reason = self.g.check(df, info)
         self.assertFalse(ok)
         self.assertIn("market_cap", reason)
 
     def test_rejects_below_min_avg_volume(self):
         df = _df([10.0] * 60, [100_000] * 60)
         info = {"marketCap": 1_000_000_000, "averageVolume": 100_000}
-        ok, reason = self.g.check("ABC", df, info)
+        ok, reason = self.g.check(df, info)
         self.assertFalse(ok)
         self.assertIn("volume", reason)
 
     def test_rejects_penny_stock(self):
         df = _df([1.5] * 60, [2_000_000] * 60)
         info = {"marketCap": 1_000_000_000, "averageVolume": 2_000_000}
-        ok, reason = self.g.check("ABC", df, info)
+        ok, reason = self.g.check(df, info)
         self.assertFalse(ok)
         self.assertIn("price", reason)
 
     def test_rejects_empty_price_data(self):
         info = {"marketCap": 1_000_000_000, "averageVolume": 2_000_000}
-        ok, reason = self.g.check("ABC", None, info)
+        ok, reason = self.g.check(None, info)
         self.assertFalse(ok)
         self.assertIn("no_data", reason)
 
     def test_rejects_missing_market_cap(self):
         df = _df([10.0] * 60, [2_000_000] * 60)
         info = {"averageVolume": 2_000_000}
-        ok, reason = self.g.check("ABC", df, info)
+        ok, reason = self.g.check(df, info)
         self.assertFalse(ok)
         self.assertIn("market_cap", reason)
 
@@ -71,7 +71,7 @@ class TestGuardrailCheckSingle(unittest.TestCase):
         )
         info["actions"] = actions
         g = Guardrails(asof=pd.Timestamp("2026-04-17"))
-        ok, reason = g.check("ABC", df, info)
+        ok, reason = g.check(df, info)
         self.assertFalse(ok)
         self.assertIn("reverse_split", reason)
 
@@ -86,7 +86,7 @@ class TestGuardrailCheckSingle(unittest.TestCase):
         )
         info["actions"] = actions
         g = Guardrails(asof=pd.Timestamp("2026-04-17"))
-        ok, reason = g.check("ABC", df, info)
+        ok, reason = g.check(df, info)
         self.assertTrue(ok, f"forward split should pass, got reason={reason}")
 
     def test_allows_old_reverse_split(self):
@@ -101,7 +101,7 @@ class TestGuardrailCheckSingle(unittest.TestCase):
         )
         info["actions"] = actions
         g = Guardrails(asof=pd.Timestamp("2026-04-17"))
-        ok, reason = g.check("ABC", df, info)
+        ok, reason = g.check(df, info)
         self.assertTrue(ok, f"old reverse split should pass, got reason={reason}")
 
 

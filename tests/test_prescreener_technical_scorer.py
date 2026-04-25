@@ -120,7 +120,7 @@ class TestTechnicalScorerAll(unittest.TestCase):
         # 250 days of steadily rising prices
         prices = self._make_price_df([100 + i * 0.5 for i in range(250)])
         price_data = {"AAPL": prices}
-        result = scorer.score_all(price_data, ["AAPL"], "2024-01-15")
+        result = scorer.score_all(price_data, ["AAPL"])
         for col in [
             "ticker",
             "rsi_score",
@@ -137,7 +137,7 @@ class TestTechnicalScorerAll(unittest.TestCase):
         up_prices = self._make_price_df([50 + i * 0.5 for i in range(250)])
         down_prices = self._make_price_df([175 - i * 0.5 for i in range(250)])
         price_data = {"UP": up_prices, "DOWN": down_prices}
-        result = scorer.score_all(price_data, ["UP", "DOWN"], "2024-01-15")
+        result = scorer.score_all(price_data, ["UP", "DOWN"])
 
         up_score = result.loc[result["ticker"] == "UP", "trend_score"].values[0]
         down_score = result.loc[result["ticker"] == "DOWN", "trend_score"].values[0]
@@ -150,7 +150,7 @@ class TestTechnicalScorerAll(unittest.TestCase):
         # Only 10 data points — not enough for SMA(200)
         short_prices = self._make_price_df([100 + i for i in range(10)])
         price_data = {"SHORT": short_prices}
-        result = scorer.score_all(price_data, ["SHORT"], "2024-01-15")
+        result = scorer.score_all(price_data, ["SHORT"])
         score = result.loc[result["ticker"] == "SHORT", "technical_score"].values[0]
         # Should not crash, and score should be reasonable
         self.assertGreaterEqual(score, 0.0)

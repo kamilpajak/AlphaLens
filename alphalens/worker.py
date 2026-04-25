@@ -66,7 +66,7 @@ class AnalysisWorker:
                 cost_usd=result.cost_usd,
                 model_used=result.model_used,
             )
-            self._notify(_format_success(candidate, result.rating, job))
+            self._notify(_format_success(candidate, result.rating))
         except Exception as exc:
             logger.error(
                 "Worker runner failed for %s (source=%s): %s",
@@ -112,7 +112,7 @@ def _rehydrate_candidate(job: dict) -> Candidate:
     )
 
 
-def _format_success(candidate: Candidate, rating: str, job: dict) -> str:
+def _format_success(candidate: Candidate, rating: str) -> str:
     lines = [
         f"🤖 Auto-analysis done — {candidate.ticker}",
         f"Decision: *{rating}*",
