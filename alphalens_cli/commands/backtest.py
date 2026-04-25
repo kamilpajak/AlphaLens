@@ -194,10 +194,8 @@ def _print_headline(summary, attribution) -> None:
             )
 
 
-def backtest(
-    start: str = typer.Option(
-        "2021-04-19", help="Backtest window start (YYYY-MM-DD)"
-    ),  # NOSONAR(S107: Typer CLI options are the public API; collapsing into a dataclass would break option parsing)
+def backtest(  # NOSONAR Typer CLI options are the public API; collapsing into a dataclass would break option parsing
+    start: str = typer.Option("2021-04-19", help="Backtest window start (YYYY-MM-DD)"),
     end: str = typer.Option("2026-04-17", help="Backtest window end (YYYY-MM-DD)"),
     scorer: str = typer.Option(
         "momentum",
