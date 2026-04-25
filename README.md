@@ -7,36 +7,43 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Research lab infrastructure for retail active alpha experimentation — combines real-time event detection, quantitative screening, and multi-agent LLM analysis. **Status 2026-04-25:** project pivoted from active alpha generation to research/learning infrastructure after [5 paradigm failures](docs/research/5_paradigm_failures_postmortem.md). Code remains as reusable framework: backtest engines, factor attribution, sanity checks, pre-commit discipline. Layer 1 SEC EDGAR watchdog runs live as read-only event detection.
+Research lab infrastructure for retail active alpha experimentation — combines real-time SEC EDGAR event detection, quantitative screening, and multi-agent LLM analysis built around [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents).
 
-> **Setup**: private, solo developer, macOS-only (runs under `launchd`). Built around [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents), vendored as a `git subtree --squash` at `TradingAgents/`.
+## Status (2026-04-25 →)
+
+The project pivoted from "active alpha generation" to **research / learning infrastructure** after [5 paradigm failures](docs/research/5_paradigm_failures_postmortem.md) (Layer 2b/2c/2d/2e/2f/2g, all KILLed in OOS validation). Capital deployment based on the current strategies is **off the table**. The codebase remains as:
+
+- **Reusable research framework** — backtest engine, factor attribution, sanity checks, multiple-testing corrections, regime classifier, cost models, weighting schemes
+- **Production-grade data clients** — Polygon, FRED, SEC EDGAR
+- **LLM scoring infrastructure** — TradingAgents multi-agent + GuruScorer single-prompt
+- **Anti-pattern catalog** — every closed strategy ships a `__closed_reason__` marker plus a postmortem entry
+
+**Live in launchd**: only Layer 1 SEC EDGAR watchdog (read-only event detection, daily Telegram digest, near-zero maintenance).
+
+> Architectural rationale: see [`docs/adr/`](docs/adr/) (5 ADRs).
+> Per-layer postmortem: [`docs/research/5_paradigm_failures_postmortem.md`](docs/research/5_paradigm_failures_postmortem.md).
+> Quick contributor guide: [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
-## Architecture
+## Layer status
 
-The pipeline filters a broad universe of stocks down to a handful of candidates for expensive final LLM analysis. **One deployed screener (Layer 2b themed) + Layer 1 event-driven** after rigorous validation; Layer 2a kept as manual ad-hoc, Layer 2c archived:
+Each layer/screener package declares its lifecycle in `__init__.py` as `__status__ ∈ {ACTIVE, CLOSED, RESEARCH_ONLY, ARCHIVED}`, enforced by `tests/test_layer_status.py`.
 
-```
-Layer 1 — watchdog          → SEC EDGAR event detection            (real-time, <1 min)  ─┐
-Layer 2a — prescreener      → S&P 500 fundamentals (unvalidated)   (~30 min, ad-hoc)    ─┤
-Layer 2b — themed screener  → curated YAML universe (validated)    (daily 22:00 CET)    ─┼─► CandidateQueue ─► AnalysisWorker ─► Layer 3
-Layer 2c — Lean screener    → ARCHIVED (failed 5-year backtest)                         ─┘     (SQLite)         (budget + retry)    TradingAgents
-                                                                                                                                   → BUY / OVERWEIGHT /
-                                                                                                                                     HOLD / UNDERWEIGHT / SELL
-```
+| Path | Status | Notes |
+|------|--------|-------|
+| `alphalens/watchdog/` | ACTIVE | Layer 1 — live in launchd (`detect` + `worker`) |
+| `alphalens/backtest/` | ACTIVE | Screener-agnostic harness, reused across all replay |
+| `alphalens/screeners/themed/` | CLOSED 2026-04-22 | Layer 2b — momentum overfit OOS, realistic execution cost ~100% ann eats signal |
+| `alphalens/screeners/lean/` | ARCHIVED 2026-04-19 | Layer 2c — Sharpe 0.25 net, FF3 α t-stat 0.14 |
+| `alphalens/screeners/insider/` | CLOSED 2026-04-24 | Layer 2d — Carhart t=2.14 IS → 0.68 OOS, classic overfit |
+| `alphalens/screeners/prescreener/` | RESEARCH_ONLY | Layer 2a — unvalidated, manual ad-hoc only |
+| `alphalens/rotation/` | CLOSED | Layer 2e — failed IS+OOS sanity (R12 macro overlay) |
+| `alphalens/events/` | CLOSED | Layer 2f — 8-K event-driven screen failed |
+| `alphalens/guru/` | CLOSED | Layer 2g — LLM-researcher pilot failed |
+| `alphalens/macro/` | RESEARCH_ONLY | Reusable infra (FRED client, regime scorer) |
 
-**Validation status** (5-year backtest 2021-04 to 2026-04):
-- **Layer 2b** ✅ validated: Sharpe 1.53 net, FF3 alpha +96% annualized t-stat +2.60, IC t-stat +1.83 (all above deploy gates)
-- **Layer 2c** ❌ archived: Sharpe 0.25 net, FF3 alpha t-stat 0.14 — no statistical alpha, plist in `launchd/archived/`
-- **Layer 2a** ⚠️ unvalidated: fundamentals-heavy scorer requires point-in-time Compustat / Polygon Advanced data; use as ad-hoc manual tool
-
-**Post-hoc audit** (Perplexity's 3 flagged gaps, reports in `docs/backtest/`):
-- **PIT survivorship** ✅ PASS (`survivorship_pit_a.md`): 0 / 5155 picks delisted within 30/90/180d vs 0.88% universe base rate — the scorer actively avoids names about to die.
-- **Walk-forward OOS** ✅ PASS (`walk_forward.md`): 38 rolling 252-day windows, 86.84% with Sharpe > 0.5, 63.16% with Carhart α_t > 1.5 HAC, zero consecutive-negative-Sharpe stretches.
-- **Cost validation / scale-path** ❌ FAIL at $10M AUM (`cost_validation.md`): 8.87% of pick-days would require > 15% of daily volume. Strategy has a hard AUM ceiling < $10M at the top-5 daily-rebalance configuration. Flat 100 bps remains the production cost model.
-
-**Unified handoff**: every screener emits `Candidate(ticker, source, priority, payload, dedup_key)` into `~/.alphalens/candidates.db`. The worker drains FIFO within priority (watchdog_sec=0 > momentum=10 > lean=15 > prescreener=20), applies a daily budget cap, retries with exponential backoff, and moves persistent failures to DLQ (`status='dead'` after 5 attempts). The Layer 2c `backtest/` submodule is actively reused for Layer 2b validation.
+CLOSED-layer code is retained as a research framework + anti-pattern record (see [ADR 0005](docs/adr/0005-closed-layers-as-anti-pattern-catalog.md)).
 
 ---
 
@@ -44,108 +51,75 @@ Layer 2c — Lean screener    → ARCHIVED (failed 5-year backtest)             
 
 ### Prerequisites
 
-- macOS (launchd scheduling assumed; other platforms can still run the CLI manually)
-- Python 3.13 (not 3.14 yet — transitive dep `tiktoken 0.9.0` has no 3.14 prebuilt wheel, and we don't want a Rust toolchain on the critical path) — managed via [`uv`](https://github.com/astral-sh/uv)
-- API keys: Google AI (Gemini), Alpha Vantage, Telegram bot token + chat ID
+- macOS (launchd scheduling assumed; CLI runs anywhere)
+- Python 3.13 via [`uv`](https://github.com/astral-sh/uv) (3.14 not yet — `tiktoken 0.9.0` lacks a 3.14 prebuilt wheel)
+- API keys: Google AI (Gemini), Alpha Vantage, Telegram bot, optional Polygon Stocks Basic
 
 ### Setup
 
 ```bash
 git clone git@github.com:kamilpajak/AlphaLens.git
 cd AlphaLens
-
-uv venv --python 3.13       # tiktoken has no 3.14 prebuilt wheel
-uv sync                      # installs both alphalens and tradingagents editable via tool.uv.sources
+uv venv --python 3.13
+uv sync                      # installs alphalens + tradingagents editable
 ```
 
-Create `.env` at repo root (see `.env.example`):
+Create `.env` at repo root:
 
 ```
 GOOGLE_API_KEY=...
 ALPHA_VANTAGE_API_KEY=...
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
-POLYGON_API_KEY=...            # free "Stocks Basic" tier — https://polygon.io
+POLYGON_API_KEY=...           # only for backtest replay against Lean OHLCV
 ```
 
-Layer 2c (Lean screener — archived) requires **Docker Desktop** only if the strategy is ever revived. The plist currently lives in `launchd/archived/`, and `POLYGON_API_KEY` is already wired up for the backtest harness.
-
-Populate portfolio at `~/.alphalens/watchdog/portfolio.yaml`:
+Populate `~/.alphalens/watchdog/portfolio.yaml` (held + watchlist for Layer 1 routing):
 
 ```yaml
-held:
-  - AAPL
-  - MSFT
-watchlist:
-  - NVDA
-  - GOOGL
+held:    [AAPL, MSFT]
+watchlist: [NVDA, GOOGL]
 ```
 
 ### Running things
 
-Two console scripts are installed:
-- `alphalens` — my CLI (groups: `watchdog`, `queue`, `themed`, `research`; top-level: `analyze`, `status`, `backtest`)
-- `tradingagents` — upstream's interactive analysis menu
+Two console scripts are installed: `alphalens` (this project) and `tradingagents` (upstream's interactive menu).
 
 ```bash
-# Deep analysis of a single ticker (Layer 3 ad-hoc, Gemini config)
-.venv/bin/alphalens analyze TSHA
-.venv/bin/python run_gemini.py                 # alternative no-CLI entry point
+# Live workflows (Layer 1 + Layer 3)
+.venv/bin/alphalens watchdog run-once          # poll EDGAR, classify, dispatch
+.venv/bin/alphalens queue process              # drain unified queue → Layer 3
+.venv/bin/alphalens analyze TICKER             # ad-hoc Layer 3 deep analysis
+.venv/bin/alphalens status                     # queue + digest + dedup
 
-# Upstream TradingAgents interactive menu (their flow for deep analysis)
-.venv/bin/tradingagents
-
-# Layer 1 — EDGAR poll once, classify, dispatch (SEC events → queue)
-.venv/bin/alphalens watchdog run-once
-
-# Drain the candidate queue — runs Layer 3 on whichever candidates are waiting
-.venv/bin/alphalens queue process
-
-# Layer 2b — themed universe scan (--scorer REQUIRED: momentum | early-stage)
-.venv/bin/alphalens themed screen --scorer momentum --dry-run
-.venv/bin/alphalens themed screen --scorer momentum --analyze --dry-run
-.venv/bin/alphalens themed screen --scorer early-stage --analyze   # base-breakout scorer (daily plist default)
-
-# Monitoring Layer 2b (last 90 days of runs — theme HHI, staleness, turnover)
-.venv/bin/alphalens themed status --days 90
-
-# Backtest (5-year, with diagnostics + factor decomposition)
+# Backtest replay (closed scorers — research only, NOT for capital deploy)
 .venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose
-.venv/bin/alphalens backtest --scorer lean                   # re-examine archived Layer 2c
+.venv/bin/alphalens backtest --scorer lean
+.venv/bin/alphalens themed status --days 90    # historical themed monitoring
+.venv/bin/alphalens research validate-llm-filter --scorer rule
 
-# Research / audit (diagnostic tools, write reports to docs/backtest/)
-.venv/bin/alphalens research survivorship-pit                # PIT universe reconstruction (Test A-lite)
-.venv/bin/alphalens research walk-forward                    # rolling OOS stability test
-.venv/bin/alphalens research cost-validation                 # tiered flat-bps + scale-path gate
-.venv/bin/alphalens research validate-llm-filter --scorer rule   # LLM filter validation
-
-# Status: queue breakdown (pending/in_progress/done/dead), digest buffer, dedup
-.venv/bin/alphalens status
+# Tests (unittest, not pytest) — 1278 tests
+.venv/bin/python -m unittest discover tests -v
 
 # Inspect the queue directly
 sqlite3 ~/.alphalens/candidates.db \
   "SELECT id, ticker, source, priority, status, decision FROM candidates ORDER BY id DESC LIMIT 20;"
-
-# Tests (unittest, not pytest)
-.venv/bin/python -m unittest discover tests -v
 ```
 
 ### Scheduled jobs (launchd)
 
-Four jobs in `launchd/`:
+Two live jobs in `launchd/`:
 
 | Job | Interval | Purpose |
 |---|---|---|
-| `com.alphalens.watchdog.detect` | every 15 min  | Layer 1 EDGAR poll → submit Candidates |
-| `com.alphalens.watchdog.worker` | every 5 min   | Drain `candidates.db` → Layer 3 |
-| `com.alphalens.watchdog.themed` | daily 22:00 CET | Layer 2b themed scan (Telegram + optional `--analyze`) |
-| ~~`com.alphalens.watchdog.lean`~~ | ~~daily 23:30 CET~~ | **Archived** — failed 5-year validation (plist w `launchd/archived/`) |
+| `com.alphalens.watchdog.detect` | every 15 min | Layer 1 EDGAR poll → submit Candidates |
+| `com.alphalens.watchdog.worker` | every 5 min  | Drain `candidates.db` → Layer 3 |
 
-Install:
+Closed-strategy plists live in `launchd/archived/` with reactivation notes (themed, lean, insider). See [`launchd/README.md`](launchd/README.md).
 
 ```bash
 cp launchd/com.alphalens.watchdog.*.plist ~/Library/LaunchAgents/
-for job in detect worker themed; do
+for job in detect worker; do
   launchctl load ~/Library/LaunchAgents/com.alphalens.watchdog.${job}.plist
 done
 ```
@@ -155,84 +129,63 @@ done
 ## Components
 
 ```
-alphalens/                             ← my code (Python package)
-├── candidates.py                      shared domain model — Candidate, AnalysisResult, CandidateSink Protocol
-├── queue.py                           SQLite priority queue (CandidateQueue) with dedup + retry + DLQ
-├── worker.py                          AnalysisWorker — drains queue, budget guard, notifier
-├── runner.py                          TradingAgentsRunner — only place constructing TradingAgentsGraph
-├── registry.py                        SCREENERS dict — register a new screener with one line
-├── config_gemini.py                   shared Gemini TradingAgentsGraph config
-├── watchdog/                          Layer 1: EDGAR detection + classifier + dispatch
-├── backtest/                          screener-agnostic backtest harness
-├── tick_data/                         tick-level trade data loader (Polygon)
-└── screeners/                         pipeline strategies
-    ├── themed/                        Layer 2b: curated YAML universe + pluggable scorer (momentum|early-stage)
-    ├── prescreener/                   Layer 2a: S&P 500 scoring (technical, fundamental, volume, composite)
-    └── lean/                          Layer 2c — ARCHIVED: Polygon sync + QuantConnect Lean in Docker
+alphalens/                     ← my code (Python package)
+├── candidates.py              shared domain — Candidate, AnalysisResult, CandidateSink Protocol
+├── queue.py                   SQLite priority queue with dedup + retry + DLQ
+├── worker.py                  AnalysisWorker — drains queue, budget guard, notifier
+├── runner.py                  TradingAgentsRunner — only place constructing TradingAgentsGraph
+├── registry.py                SCREENERS dict — register a new screener in one line
+├── config_gemini.py           Gemini TradingAgentsGraph config
+├── watchdog/                  Layer 1: EDGAR detection + classifier + dispatch (ACTIVE)
+├── backtest/                  Screener-agnostic backtest harness (ACTIVE)
+├── tick_data/                 Tick-level trade data loader (Polygon)
+├── macro/                     FRED client + regime signals (RESEARCH_ONLY)
+├── rotation/                  Layer 2e tactical sector rotation (CLOSED)
+├── events/                    Layer 2f 8-K event screener (CLOSED)
+├── guru/                      Layer 2g LLM-researcher (CLOSED)
+└── screeners/                 pipeline strategies
+    ├── themed/                Layer 2b themed momentum (CLOSED)
+    ├── prescreener/           Layer 2a S&P 500 composite (RESEARCH_ONLY)
+    ├── insider/               Layer 2d Form 4 cluster-buy (CLOSED)
+    └── lean/                  Layer 2c Russell rule-based (ARCHIVED)
 
-alphalens_cli/                         ← my CLI (separate package to avoid collision with TradingAgents/cli/)
-├── main.py                            entry point — `alphalens` console script (root Typer)
-└── commands/                          one file per group/command
-    ├── analyze.py, status.py, backtest.py   top-level commands
-    ├── watchdog.py                          Layer 1 group (run-once)
-    ├── queue.py                             Layer 3 ops group (process, scorer-stats)
-    ├── themed.py                            Layer 2b group (screen, status)
-    └── research.py                          research group (validate-llm-filter)
+alphalens_cli/                 ← my CLI (separate package — no namespace clash with TradingAgents/cli/)
 
-TradingAgents/                         ← upstream vendored via git subtree --squash
-├── tradingagents/                     their Python package (agents, graph, llm_clients, dataflows)
-├── cli/                               their interactive menu (reachable via `tradingagents` console script)
-├── main.py, Dockerfile, ...           their project-root files, isolated here
-└── pyproject.toml                     their config (active via uv editable install)
+TradingAgents/                 ← upstream vendored via git subtree --squash (see ADR 0004)
 
-launchd/                               macOS scheduled jobs (plists + bash wrappers)
-tests/                                 unittest suite (758 tests)
+docs/
+├── adr/                       Architecture Decision Records (5 ADRs)
+├── research/                  paradigm postmortem + per-strategy design + audit reports
+└── backtest/                  historical backtest run outputs
+
+launchd/                       macOS scheduled jobs (live: detect, worker; archived: themed, lean, insider)
+tests/                         unittest suite (1278 tests; 4 are architectural enforcement)
 ```
 
-See `CLAUDE.md` for detailed agent flow and configuration reference.
+Full architecture detail and key abstractions: [`CLAUDE.md`](CLAUDE.md). Mermaid layer diagram: [`docs/architecture.mmd.txt`](docs/architecture.mmd.txt).
 
 ---
 
 ## Configuration
 
-**LLM config**: `alphalens/config_gemini.py` (single source of truth — both `run_gemini.py` and the watchdog worker route through `build_gemini_config()`).
+**LLM**: `alphalens/config_gemini.py::build_gemini_config()` is the single source of truth. Override returned dict for non-Gemini providers.
 
-**Data vendors**: `core_stock_apis` and `technical_indicators` use yfinance (free). `fundamental_data` and `news_data` use Alpha Vantage (requires key).
+**Data vendors**: `core_stock_apis` + `technical_indicators` use yfinance (free); `fundamental_data` + `news_data` use Alpha Vantage.
 
-**Themed universe**: `alphalens/screeners/themed/universe.yaml` — curated tickers grouped by theme (quantum, AI, semis, nuclear, crypto, …).
+**Themed universe** (Layer 2b — closed): `alphalens/screeners/themed/universe.yaml`. Quarterly refresh runbook: [`docs/runbook_layer2b_refresh.md`](docs/runbook_layer2b_refresh.md).
 
-**Lean universe** (archived): `alphalens/screeners/lean/lean_project/universe.yaml` — ~780 Russell-like US small/mid caps grouped by GICS sector (technology, healthcare, financials, …). Refresh quarterly.
-
-**Lean scoring config** (archived): `alphalens/screeners/lean/config.py::LEAN_DEFAULTS` (host) + `lean_project/main.py::SCORER_CONFIG` (algo). Weights cover ROC(20/60), volume surprise, trend stack, breakout flag, near-high. Keep the two dicts in sync.
-
-**Portfolio**: `~/.alphalens/watchdog/portfolio.yaml` — your held + watchlist tickers for Layer 1 dispatch routing.
+**Portfolio**: `~/.alphalens/watchdog/portfolio.yaml`.
 
 ---
 
 ## Runtime data
 
-Lives outside the repo, split between directories that survive git operations:
+Lives outside the repo, survives git operations:
 
-```
-~/.alphalens/                       ← AlphaLens runtime (mine)
-├── candidates.db                   SQLite — unified screener→Layer 3 queue (all screeners)
-├── watchdog/
-│   ├── seen_events.db              SQLite — EDGAR event dedup
-│   ├── digest.db                   SQLite — quiet-hour digest buffer
-│   ├── portfolio.yaml              your held + watchlist
-│   ├── company_tickers.json        SEC CIK mapping (cached)
-│   └── {detect,worker,themed}.{log,err}
-└── lean/
-    ├── data/equity/usa/daily/      Lean-format OHLCV zips (populated by Polygon sync)
-    ├── results/candidates.json     last Lean algo output (ranked tickers + metrics)
-    ├── logs/                       Lean stdout/stderr per run
-    ├── sync_state.json             last-synced trading date
-    └── launchd.{log,err}
-
-~/.tradingagents/                   ← upstream TradingAgents runtime (hardcoded in their code)
-├── cache/                          yfinance OHLCV cache
-└── logs/                           TradingAgents full-state JSON logs
-```
+- `~/.alphalens/candidates.db` — unified Layer 1 → Layer 3 queue
+- `~/.alphalens/watchdog/` — portfolio.yaml, EDGAR dedup, digest buffer, launchd logs
+- `~/.alphalens/lean/{data,results,logs}/` — Lean OHLCV cache (used by backtest replay)
+- `~/.tradingagents/{cache,logs}/` — upstream state (paths hardcoded upstream)
 
 ---
 
@@ -240,24 +193,31 @@ Lives outside the repo, split between directories that survive git operations:
 
 - **Package manager**: `uv` (not pip / poetry)
 - **Testing**: unittest (not pytest) — `python -m unittest discover tests`
-- **Commits**: Conventional Commits enforced (`feat(scope):`, `fix(scope):`, `refactor(scope):`, etc.)
-- **New screener pipelines go in `alphalens/screeners/<name>/`**, other components in `alphalens/<name>/` — never in `TradingAgents/` (upstream territory) or at top level
+- **Commits**: Conventional Commits (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …)
+- **Code language**: English in source code (`alphalens/`, `alphalens_cli/`, `tests/`); enforced by `tests/test_no_polish_chars.py`
+- **New components** go in `alphalens/<name>/` or `alphalens_cli/`, never in `TradingAgents/` (upstream territory) or at top level
 
-See `docs/architecture.mmd.txt` for a mermaid diagram of the layer interactions.
+Four enforcement tests guard architectural invariants — they are not regular unit tests:
+
+- `tests/test_layer_status.py` — every layer `__init__.py` declares `__status__`
+- `tests/test_module_dependencies.py` — `alphalens.backtest.*` ⇏ `alphalens.screeners.*`
+- `tests/test_lean_config_parity.py` — Docker `SCORER_CONFIG` ↔ host `LEAN_DEFAULTS`
+- `tests/test_no_polish_chars.py` — English-only in source
 
 ---
 
 ## Upstream relationship
 
-AlphaLens vendors [`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents) (v0.2.3) at `TradingAgents/` via `git subtree --squash`. The upstream framework powers Layer 3 deep analysis and is editable-installed so `import tradingagents.*` works transparently.
+AlphaLens vendors [`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents) at `TradingAgents/` via `git subtree --squash`. Rationale: [ADR 0004](docs/adr/0004-tradingagents-as-subtree.md). Editable-installed so `import tradingagents.*` works transparently.
 
-To pull upstream updates:
+```bash
+git subtree pull --prefix=TradingAgents \
+  https://github.com/TauricResearch/TradingAgents.git main --squash
 ```
-git subtree pull --prefix=TradingAgents https://github.com/TauricResearch/TradingAgents.git main --squash
-```
-After each sync, reapply the single vendored patch: Gemini 429 retry logic in `TradingAgents/tradingagents/llm_clients/google_client.py` (~33 lines, stable region). Goal is to upstream this as a PR so future syncs replay cleanly.
 
-Upstream's own README lives at [`TradingAgents/README.md`](TradingAgents/README.md).
+After each sync, reapply the live patch (Gemini 429 retry in `TradingAgents/tradingagents/llm_clients/google_client.py`). Goal is to upstream it as a PR to keep the patch surface minimal.
+
+Upstream's own README: [`TradingAgents/README.md`](TradingAgents/README.md).
 
 ---
 
