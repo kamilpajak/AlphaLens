@@ -101,7 +101,6 @@ source = ["alphalens", "alphalens_cli"]
 omit = [
     "*/tests/*",
     "*/TradingAgents/*",
-    "*/__init__.py",
 ]
 
 [tool.coverage.report]
