@@ -2,7 +2,7 @@ import unittest
 
 
 class TestBuildGeminiConfig(unittest.TestCase):
-    """Shared Gemini config used by run_gemini.py and the watchdog worker."""
+    """Shared Gemini config used by `alphalens analyze` and the watchdog worker."""
 
     def test_llm_provider_is_google(self):
         from alphalens.config_gemini import build_gemini_config

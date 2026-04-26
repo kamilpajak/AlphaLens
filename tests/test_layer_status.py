@@ -14,10 +14,13 @@ import unittest
 VALID_STATUSES = {"ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"}
 
 LAYERS_WITH_STATUS = (
+    "alphalens.alt_data",
     "alphalens.backtest",
     "alphalens.events",
+    "alphalens.fundamentals",
     "alphalens.guru",
     "alphalens.macro",
+    "alphalens.quiver_screener",
     "alphalens.rotation",
     "alphalens.screeners.insider",
     "alphalens.screeners.lean",
