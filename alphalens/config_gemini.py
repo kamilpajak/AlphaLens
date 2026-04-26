@@ -1,6 +1,6 @@
 """Shared Gemini configuration for TradingAgentsGraph.
 
-Single source of truth for both `run_gemini.py` (ad-hoc runs) and
+Single source of truth for both `alphalens analyze TICKER` (ad-hoc runs) and
 `cli.watchdog_main._build_worker` (launchd process-queue).
 """
 

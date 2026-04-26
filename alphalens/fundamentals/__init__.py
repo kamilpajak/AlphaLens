@@ -14,10 +14,19 @@ Public API:
 
 See docs/research/rejection_analysis.md for the motivating data + perplexity
 literature synthesis (CAN SLIM, Quality-Minus-Junk).
+
+Layer 2b (themed momentum) and the fundamental-gate family (#14/#15/#17) are
+CLOSED. This package retained as RESEARCH_ONLY: still imported by Layer 2a
+(prescreener, RESEARCH_ONLY) and the historical fundamentals store powers
+backtest replay across multiple closed scorer variants.
 """
 
 from __future__ import annotations
 
+from typing import Literal
+
 from .gate import fundamental_gate_score, should_hard_reject
+
+__status__: Literal["ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"] = "RESEARCH_ONLY"
 
 __all__ = ["fundamental_gate_score", "should_hard_reject"]

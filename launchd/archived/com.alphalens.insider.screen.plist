@@ -8,7 +8,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jacoren/Developer/Personal/AlphaLens/launchd/bin/alphalens-insider</string>
+        <string>/Users/jacoren/Developer/Personal/AlphaLens/launchd/archived/bin/alphalens-insider</string>
     </array>
 
     <key>WorkingDirectory</key>
