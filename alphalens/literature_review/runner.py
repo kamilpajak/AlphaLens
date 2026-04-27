@@ -30,9 +30,10 @@ logger = logging.getLogger(__name__)
 Cadence = Literal["monthly", "weekly"]
 
 TRIGGER_HEADING_RE = re.compile(
-    r"^#{1,3}\s*TRIGGER_REACTIVATION[^\n]*$\n+([\s\S]*?)(?=(?:^#{1,3}\s|\Z))",
+    r"^#{1,3}\s*TRIGGER_REACTIVATION[^\n]*$",
     re.MULTILINE,
 )
+NEXT_HEADING_RE = re.compile(r"^#{1,3}\s", re.MULTILINE)
 TELEGRAM_DIGEST_LIMIT = 600
 WEEKLY_TELEGRAM_LIMIT = 400
 
@@ -58,10 +59,13 @@ def has_reactivation_trigger(response: str) -> bool:
     Accepts variants like 'None of the above', 'None at this time',
     'No papers this period', 'No relevant work surfaced', 'Nothing meaningful'.
     """
-    match = TRIGGER_HEADING_RE.search(response)
-    if not match:
+    heading = TRIGGER_HEADING_RE.search(response)
+    if not heading:
         return False
-    body = match.group(1).strip()
+    body_start = heading.end()
+    next_heading = NEXT_HEADING_RE.search(response, body_start)
+    body_end = next_heading.start() if next_heading else len(response)
+    body = response[body_start:body_end].strip()
     if not body:
         return False
     return not _DISMISSAL_RE.match(body)
