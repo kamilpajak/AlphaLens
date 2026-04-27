@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 Cadence = Literal["monthly", "weekly"]
 
 TRIGGER_HEADING_RE = re.compile(
-    r"^#{1,3}\s*TRIGGER_REACTIVATION[^\n]*$\n+([\s\S]*?)(?=^#{1,3}\s|\Z)",
+    r"^#{1,3}\s*TRIGGER_REACTIVATION[^\n]*$\n+([\s\S]*?)(?=(?:^#{1,3}\s|\Z))",
     re.MULTILINE,
 )
 TELEGRAM_DIGEST_LIMIT = 600
