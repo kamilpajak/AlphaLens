@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import logging
+from typing import Literal
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+API_URL = "https://api.perplexity.ai/chat/completions"
+DEFAULT_MODEL = "sonar-pro"
+DEFAULT_TIMEOUT_SECONDS = 120
+
+SearchContextSize = Literal["low", "medium", "high"]
+
+
+class PerplexityClient:
+    def __init__(
+        self,
+        api_key: str,
+        model: str = DEFAULT_MODEL,
+        timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    ):
+        if not api_key:
+            raise ValueError("api_key required")
+        self.api_key = api_key
+        self.model = model
+        self.timeout = timeout
+
+    def ask(
+        self,
+        query: str,
+        search_context_size: SearchContextSize = "medium",
+        search_recency_filter: str | None = None,
+    ) -> str:
+        payload: dict = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": query}],
+            "web_search_options": {"search_context_size": search_context_size},
+        }
+        if search_recency_filter:
+            payload["search_recency_filter"] = search_recency_filter
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        resp = requests.post(API_URL, json=payload, headers=headers, timeout=self.timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]

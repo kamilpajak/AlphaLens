@@ -18,6 +18,7 @@ Lifecycle status każdej warstwy żyje w jej `__init__.py` jako `__status__` con
 | Path | Status | Notatka |
 |------|--------|---------|
 | `alphalens/watchdog/` | ACTIVE | Layer 1 — live w launchd |
+| `alphalens/literature_review/` | ACTIVE | Monthly + weekly Perplexity scan, live w launchd |
 | `alphalens/backtest/` | ACTIVE | screener-agnostic harness |
 | `alphalens/screeners/themed/` | CLOSED 2026-04-22 | Layer 2b — momentum overfit + cost eats signal |
 | `alphalens/screeners/lean/` | ARCHIVED 2026-04-19 | Layer 2c — Sharpe 0.25 net, FF3 α t=0.14 |
@@ -46,6 +47,8 @@ uv sync                                          # alphalens + tradingagents edi
 .venv/bin/alphalens queue scorer-stats --since-days 30
 .venv/bin/alphalens analyze TICKER               # Layer 3 ad-hoc deep analysis
 .venv/bin/alphalens status                       # global queue + digest + dedup
+.venv/bin/alphalens literature monthly           # ad-hoc deep literature scan (Perplexity high)
+.venv/bin/alphalens literature weekly            # ad-hoc weekly RSS scan
 
 # Backtest replay (closed scorers — research only, NOT for capital deploy)
 .venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose
@@ -111,7 +114,7 @@ Issues dotyczące CLOSED warstw (Lean Docker setup, Layer 2d backtest workflow, 
 
 ## Environment
 
-- API keys w `.env` (GOOGLE_API_KEY, ALPHA_VANTAGE_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, POLYGON_API_KEY)
+- API keys w `.env` (GOOGLE_API_KEY, ALPHA_VANTAGE_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, POLYGON_API_KEY, PERPLEXITY_API_KEY)
 - Google API key też w macOS Keychain pod `google-api-key`
 - LLM config: Gemini 3.1 Pro (deep) + Gemini 2.5 Flash (quick)
 - Runtime data (poza repo, survives git ops):
