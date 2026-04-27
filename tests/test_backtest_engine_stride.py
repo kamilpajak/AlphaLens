@@ -101,9 +101,9 @@ class TestRebalanceStride(unittest.TestCase):
         daily_report = daily_engine.run(date(2020, 1, 2), date(2020, 3, 30))
         weekly_report = weekly_engine.run(date(2020, 1, 2), date(2020, 3, 30))
         # Weekly should produce ~1/5 the snapshots.
-        self.assertGreater(len(daily_report.daily_results), 0)
-        self.assertGreater(len(weekly_report.daily_results), 0)
-        ratio = len(weekly_report.daily_results) / len(daily_report.daily_results)
+        self.assertGreater(len(daily_report.rebalance_results), 0)
+        self.assertGreater(len(weekly_report.rebalance_results), 0)
+        ratio = len(weekly_report.rebalance_results) / len(daily_report.rebalance_results)
         self.assertGreater(ratio, 0.15)
         self.assertLess(ratio, 0.25)
 

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from alphalens.backtest.engine import BacktestReport, DailyResult
+from alphalens.backtest.engine import BacktestReport, RebalanceSnapshot
 from alphalens.backtest.history_store import HistoryStore
 from alphalens.backtest.survivorship_pit import (
     DelistingEvent,
@@ -41,8 +41,8 @@ def _synth_history(start: str, n_bars: int = 260) -> pd.DataFrame:
     )
 
 
-def _daily_result(d: str, tickers: list[str], fwd_returns: list[float]) -> DailyResult:
-    return DailyResult(
+def _rebalance_snapshot(d: str, tickers: list[str], fwd_returns: list[float]) -> RebalanceSnapshot:
+    return RebalanceSnapshot(
         date=pd.Timestamp(d),
         scored_count=len(tickers),
         top_n_tickers=list(tickers),
@@ -147,9 +147,9 @@ class TestWipeoutReprice(unittest.TestCase):
             end=date(2023, 1, 6),
             benchmark="SPY",
             universe_ticker_count=2,
-            daily_results=[
-                _daily_result("2023-01-02", ["A", "B"], [fwd_a, fwd_b]),
-                _daily_result("2023-01-03", ["A", "B"], [fwd_a, fwd_b]),
+            rebalance_results=[
+                _rebalance_snapshot("2023-01-02", ["A", "B"], [fwd_a, fwd_b]),
+                _rebalance_snapshot("2023-01-03", ["A", "B"], [fwd_a, fwd_b]),
             ],
         )
         return rep
@@ -164,12 +164,12 @@ class TestWipeoutReprice(unittest.TestCase):
 
         # Day 1: A delisted on 2023-01-04, entry 2023-01-02, hold 5
         # → inside window → wiped
-        day1_fwd = repriced.daily_results[0].top_n_forward_returns
+        day1_fwd = repriced.rebalance_results[0].top_n_forward_returns
         self.assertEqual(day1_fwd[0], -1.0)
         self.assertAlmostEqual(day1_fwd[1], -0.02)  # B unchanged
 
         # Day 2 entry 2023-01-03, A delisting 2023-01-04 still inside window
-        day2_fwd = repriced.daily_results[1].top_n_forward_returns
+        day2_fwd = repriced.rebalance_results[1].top_n_forward_returns
         self.assertEqual(day2_fwd[0], -1.0)
 
     def test_unaffected_days_preserved(self):
@@ -177,7 +177,7 @@ class TestWipeoutReprice(unittest.TestCase):
         baseline = self._make_report()
         events: list[DelistingEvent] = []  # no events at all
         repriced = reprice_picks_with_wipeout(baseline, events)
-        self.assertIs(repriced.daily_results[0], baseline.daily_results[0])
+        self.assertIs(repriced.rebalance_results[0], baseline.rebalance_results[0])
 
     def test_wipeout_is_idempotent(self):
         """Re-priced twice produces the same result — already-wiped picks
@@ -188,8 +188,8 @@ class TestWipeoutReprice(unittest.TestCase):
         once = reprice_picks_with_wipeout(baseline, events)
         twice = reprice_picks_with_wipeout(once, events)
         self.assertEqual(
-            twice.daily_results[0].top_n_forward_returns,
-            once.daily_results[0].top_n_forward_returns,
+            twice.rebalance_results[0].top_n_forward_returns,
+            once.rebalance_results[0].top_n_forward_returns,
         )
 
 

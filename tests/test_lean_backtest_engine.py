@@ -68,7 +68,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
             "top_n": 3,
         }
 
-    def test_runs_and_produces_daily_results(self):
+    def test_runs_and_produces_rebalance_results(self):
         from alphalens.backtest.engine import BacktestEngine
         from alphalens.screeners.lean.lean_project.scorer import rank_universe
 
@@ -94,7 +94,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
         )
         report = engine.run(start=date(2024, 4, 1), end=date(2024, 4, 30))
 
-        self.assertGreater(len(report.daily_results), 0)
+        self.assertGreater(len(report.rebalance_results), 0)
         self.assertEqual(report.top_n, 2)
         self.assertEqual(report.holding_period, 3)
 
@@ -133,8 +133,8 @@ class TestBacktestEngineBasic(unittest.TestCase):
 
         report = engine.run(start=date(2024, 3, 1), end=date(2024, 3, 15))
 
-        self.assertGreater(len(report.daily_results), 0)
-        for r in report.daily_results:
+        self.assertGreater(len(report.rebalance_results), 0)
+        for r in report.rebalance_results:
             self.assertEqual(r.top_n_tickers[0], "AAA")
 
     def test_top_n_picks_highest_scores(self):
@@ -176,7 +176,7 @@ class TestBacktestEngineBasic(unittest.TestCase):
         )
         report = engine.run(start=date(2024, 3, 1), end=date(2024, 3, 15))
 
-        for r in report.daily_results:
+        for r in report.rebalance_results:
             self.assertEqual(r.top_n_tickers[:3], ["A", "B", "C"])
 
     def test_skips_days_without_enough_history(self):
@@ -202,11 +202,11 @@ class TestBacktestEngineBasic(unittest.TestCase):
         )
         report = engine.run(start=date(2024, 1, 2), end=date(2024, 3, 1))
 
-        self.assertEqual(len(report.daily_results), 0)
+        self.assertEqual(len(report.rebalance_results), 0)
 
 
 class TestBacktestReport(unittest.TestCase):
-    def _make_report(self, daily_results):
+    def _make_report(self, rebalance_results):
         from alphalens.backtest.engine import BacktestReport
 
         return BacktestReport(
@@ -217,14 +217,14 @@ class TestBacktestReport(unittest.TestCase):
             end=date(2024, 1, 31),
             benchmark="SPY",
             universe_ticker_count=10,
-            daily_results=daily_results,
+            rebalance_results=rebalance_results,
         )
 
     def _mock_daily(self, date_str, port_ret=0.01, tickers=None, ic=0.05):
-        from alphalens.backtest.engine import DailyResult
+        from alphalens.backtest.engine import RebalanceSnapshot
 
         tickers = tickers or ["A", "B", "C"]
-        return DailyResult(
+        return RebalanceSnapshot(
             date=pd.Timestamp(date_str),
             scored_count=10,
             top_n_tickers=tickers,
@@ -294,8 +294,8 @@ class TestIntegrationWithRealScorer(unittest.TestCase):
             )
             report = engine.run(start=date(2024, 12, 1), end=date(2024, 12, 31))
 
-        self.assertGreater(len(report.daily_results), 0)
-        top_tickers = [t for r in report.daily_results for t in r.top_n_tickers]
+        self.assertGreater(len(report.rebalance_results), 0)
+        top_tickers = [t for r in report.rebalance_results for t in r.top_n_tickers]
         self.assertGreater(
             top_tickers.count("UP1") + top_tickers.count("UP2"),
             top_tickers.count("DOWN"),

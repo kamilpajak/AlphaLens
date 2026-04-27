@@ -11,7 +11,7 @@
 
 Rolling 252-day test windows stepped monthly across the baseline
 backtest span. All per-window metrics computed by slicing the
-baseline's `daily_results` — the engine is deterministic for fixed
+baseline's `rebalance_results` — the engine is deterministic for fixed
 scorer/config, so sliced metrics match a per-window re-run at a
 fraction of the wall time.
 

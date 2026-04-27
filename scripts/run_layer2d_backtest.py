@@ -282,7 +282,7 @@ def run_split(
     report = engine.run(start, end)
     logger.info(
         "backtest done; %d daily snapshots, mean IC=%.4f",
-        len(report.daily_results),
+        len(report.rebalance_results),
         report.ic_series.mean() if len(report.ic_series) else 0.0,
     )
 
@@ -316,7 +316,7 @@ def run_split(
         bootstrap_ci_excludes_zero,
     )
 
-    avg_rebal_turnover = turnover_pct(r.top_n_tickers for r in report.daily_results)
+    avg_rebal_turnover = turnover_pct(r.top_n_tickers for r in report.rebalance_results)
     rebalances_per_year = 252 / max(1, engine.rebalance_stride)
     net_alpha_primary, net_alpha_stress, primary_drag, stress_drag = compute_net_alpha(
         carhart.alpha_annualized, avg_rebal_turnover, rebalances_per_year

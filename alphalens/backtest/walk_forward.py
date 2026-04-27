@@ -16,7 +16,7 @@ all reported metrics come from OOS test windows.
 
 The engine is deterministic for fixed scorer/config/histories, so running
 one full `BacktestEngine.run(start, end)` and slicing the resulting
-`daily_results` per window gives numerics identical to ~25 per-window
+`rebalance_results` per window gives numerics identical to ~25 per-window
 re-runs at a fraction of the wall time.
 
 ## Path-independence invariant (per zen review)
@@ -179,7 +179,7 @@ def generate_windows(
 
 
 def slice_report_to_window(baseline: BacktestReport, window: WindowSpec) -> BacktestReport:
-    """Return a shallow copy of `baseline` with `daily_results` filtered to
+    """Return a shallow copy of `baseline` with `rebalance_results` filtered to
     the window's date range (inclusive).
 
     The engine is deterministic for fixed scorer/config/histories, so
@@ -188,9 +188,9 @@ def slice_report_to_window(baseline: BacktestReport, window: WindowSpec) -> Back
     """
     start_ts = pd.Timestamp(window.test_start)
     end_ts = pd.Timestamp(window.test_end)
-    filtered = [snap for snap in baseline.daily_results if start_ts <= snap.date <= end_ts]
+    filtered = [snap for snap in baseline.rebalance_results if start_ts <= snap.date <= end_ts]
     sliced = copy.copy(baseline)
-    sliced.daily_results = filtered
+    sliced.rebalance_results = filtered
     return sliced
 
 
@@ -268,7 +268,7 @@ def compute_window_metrics(
     ic_mean = float(ic.mean()) if len(ic) else 0.0
     ic_tstat_val = rank_ic_tstat(ic.tolist()) if len(ic) else 0.0
 
-    tn_lists = [snap.top_n_tickers for snap in sliced.daily_results]
+    tn_lists = [snap.top_n_tickers for snap in sliced.rebalance_results]
     turnover = turnover_pct(tn_lists)
 
     # Carhart per-window attribution
@@ -379,10 +379,10 @@ def run_walk_forward(
     metrics, summarise, evaluate the gate. Single-baseline slice path —
     no engine re-runs.
     """
-    if not baseline.daily_results:
-        raise ValueError("baseline has no daily_results")
+    if not baseline.rebalance_results:
+        raise ValueError("baseline has no rebalance_results")
 
-    calendar = [snap.date for snap in baseline.daily_results]
+    calendar = [snap.date for snap in baseline.rebalance_results]
     windows = generate_windows(calendar, window_days=window_days, step_days=step_days)
 
     results: list[WindowResult] = []
@@ -713,7 +713,7 @@ def compile_report(
         "",
         "Rolling 252-day test windows stepped monthly across the baseline",
         "backtest span. All per-window metrics computed by slicing the",
-        "baseline's `daily_results` — the engine is deterministic for fixed",
+        "baseline's `rebalance_results` — the engine is deterministic for fixed",
         "scorer/config, so sliced metrics match a per-window re-run at a",
         "fraction of the wall time.",
         "",

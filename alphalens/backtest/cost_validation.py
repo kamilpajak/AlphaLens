@@ -337,12 +337,12 @@ def run_scale_path(
     of the report, we use 100% turnover as a conservative fill (worst
     case — no prior basket to compare against).
     """
-    if not baseline.daily_results:
+    if not baseline.rebalance_results:
         return _empty_scale_path_summary(threshold_pct, max_threshold_pct)
 
     all_picks: list[PickParticipation] = []
     prev_top_n: set[str] | None = None
-    for snap in baseline.daily_results:
+    for snap in baseline.rebalance_results:
         n = len(snap.top_n_tickers)
         if n == 0:
             prev_top_n = set()
@@ -442,8 +442,8 @@ def compare_cost_scenarios(
 ) -> TieredCostComparison:
     """Gross / flat 100bps / tiered Sharpe side-by-side."""
     returns = baseline.portfolio_returns
-    daily_top_n = [snap.top_n_tickers for snap in baseline.daily_results]
-    daily_dates = [snap.date for snap in baseline.daily_results]
+    daily_top_n = [snap.top_n_tickers for snap in baseline.rebalance_results]
+    daily_dates = [snap.date for snap in baseline.rebalance_results]
 
     gross_sharpe = sharpe(returns.tolist()) if len(returns) else 0.0
 

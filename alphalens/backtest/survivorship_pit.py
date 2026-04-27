@@ -44,7 +44,7 @@ from scipy import stats
 from alphalens.backtest.engine import (
     BacktestEngine,
     BacktestReport,
-    DailyResult,
+    RebalanceSnapshot,
     Scorer,
 )
 from alphalens.backtest.factor_analysis import run_carhart_attribution
@@ -217,7 +217,7 @@ def _summarise_cohort(
     return CohortSplitResult(
         cohort_label=label,
         ticker_count=ticker_count,
-        daily_snapshots=len(report.daily_results),
+        daily_snapshots=len(report.rebalance_results),
         sharpe_gross=sharpe(returns.tolist()) if len(returns) else 0.0,
         cumulative_return=cum_return,
         ic_mean=float(ic.mean()) if len(ic) else 0.0,
@@ -292,7 +292,7 @@ def run_cohort_backtests(
 def picks_from_report(report: BacktestReport) -> pd.DataFrame:
     """Flatten daily top-N into a long DataFrame [pick_date, ticker, rank]."""
     rows: list[dict] = []
-    for snap in report.daily_results:
+    for snap in report.rebalance_results:
         for rank, ticker in enumerate(snap.top_n_tickers, start=1):
             rows.append(
                 {
@@ -385,7 +385,9 @@ def compute_selection_bias(
 # C3 — mid-holding wipeout audit
 
 
-def _compute_portfolio_return(snap: DailyResult, weighting_scheme: str) -> tuple[float, float]:
+def _compute_portfolio_return(
+    snap: RebalanceSnapshot, weighting_scheme: str
+) -> tuple[float, float]:
     """Recompute 1-day and holding-period portfolio returns from a snapshot.
 
     Used after overwriting per-ticker forward returns to replay wipeout
@@ -425,8 +427,8 @@ def reprice_picks_with_wipeout(
     for ev in events:
         events_by_ticker.setdefault(ev.ticker, []).append(ev.delisted_date)
 
-    new_daily: list[DailyResult] = []
-    for snap in report.daily_results:
+    new_daily: list[RebalanceSnapshot] = []
+    for snap in report.rebalance_results:
         entry_date = snap.date.date()
         hold = report.holding_period
         new_fwd = list(snap.top_n_forward_returns)
@@ -443,14 +445,14 @@ def reprice_picks_with_wipeout(
         if not changed:
             new_daily.append(snap)
             continue
-        mutated = DailyResult(
+        mutated = RebalanceSnapshot(
             date=snap.date,
             scored_count=snap.scored_count,
             top_n_tickers=list(snap.top_n_tickers),
             top_n_scores=list(snap.top_n_scores),
             top_n_forward_returns=new_fwd,
             portfolio_return=_compute_portfolio_return(
-                DailyResult(
+                RebalanceSnapshot(
                     date=snap.date,
                     scored_count=snap.scored_count,
                     top_n_tickers=snap.top_n_tickers,
@@ -464,7 +466,7 @@ def reprice_picks_with_wipeout(
                 weighting_scheme,
             )[0],
             portfolio_return_holding=_compute_portfolio_return(
-                DailyResult(
+                RebalanceSnapshot(
                     date=snap.date,
                     scored_count=snap.scored_count,
                     top_n_tickers=snap.top_n_tickers,
@@ -483,7 +485,7 @@ def reprice_picks_with_wipeout(
         new_daily.append(mutated)
 
     new_report = copy.copy(report)
-    new_report.daily_results = new_daily
+    new_report.rebalance_results = new_daily
     return new_report
 
 
@@ -513,7 +515,7 @@ def audit_mid_holding_wipeout(
     affected: list[str] = []
     n_total = 0
     hold = baseline.holding_period
-    for snap in baseline.daily_results:
+    for snap in baseline.rebalance_results:
         entry_date = snap.date.date()
         for ticker in snap.top_n_tickers:
             n_total += 1

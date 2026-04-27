@@ -151,12 +151,12 @@ class TestFormatThemeSummary(unittest.TestCase):
 
 
 class TestSnapshotsFromBacktest(unittest.TestCase):
-    def test_from_daily_results(self):
-        from alphalens.backtest.engine import DailyResult
+    def test_from_rebalance_results(self):
+        from alphalens.backtest.engine import RebalanceSnapshot
         from alphalens.backtest.theme_analysis import snapshots_from_backtest
 
         daily = [
-            DailyResult(
+            RebalanceSnapshot(
                 date=pd.Timestamp("2024-01-02"),
                 scored_count=10,
                 top_n_tickers=["A", "B"],

@@ -168,7 +168,7 @@ def _compute_theme_stats(result):
     if not themes_map:
         return None
 
-    snaps = snapshots_from_backtest(result.daily_results, themes_map)
+    snaps = snapshots_from_backtest(result.rebalance_results, themes_map)
     _, theme_stats = theme_series(snaps, concentration_threshold=0.70)
     if theme_stats.all_themes:
         typer.echo(
@@ -264,7 +264,7 @@ def backtest(
     from alphalens.backtest.regime import classify_regime, regime_breakdown
     from alphalens.backtest.report import (
         build_summary,
-        daily_results_to_dataframe,
+        rebalance_results_to_dataframe,
         write_markdown_report,
     )
     from alphalens.screeners.lean.config import DATA_DIR
@@ -302,8 +302,8 @@ def backtest(
 
     typer.echo("Running backtest replay…")
     result = engine.run(start=start_date, end=end_date)
-    typer.echo(f"  {len(result.daily_results)} daily snapshots")
-    if not result.daily_results:
+    typer.echo(f"  {len(result.rebalance_results)} daily snapshots")
+    if not result.rebalance_results:
         raise typer.BadParameter(
             "Backtest produced no daily snapshots — check data coverage / warmup"
         )
@@ -355,7 +355,7 @@ def backtest(
         if not csv_path.is_absolute():
             csv_path = Path.cwd() / csv_path
         csv_path.parent.mkdir(parents=True, exist_ok=True)
-        daily_results_to_dataframe(result).to_csv(csv_path, index=False)
+        rebalance_results_to_dataframe(result).to_csv(csv_path, index=False)
         typer.echo(f"Daily CSV written to {csv_path}")
 
     _print_headline(summary, attribution)

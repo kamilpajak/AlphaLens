@@ -231,7 +231,7 @@ class TestRuleBasedTractabilityScorer(unittest.TestCase):
 
 class TestPicksFromBacktestReport(unittest.TestCase):
     def test_extracts_picks_with_forward_returns(self):
-        from alphalens.backtest.engine import BacktestReport, DailyResult
+        from alphalens.backtest.engine import BacktestReport, RebalanceSnapshot
         from alphalens.backtest.historical_validation import (
             picks_from_backtest_report,
         )
@@ -244,8 +244,8 @@ class TestPicksFromBacktestReport(unittest.TestCase):
             end=date(2024, 1, 5),
             benchmark="SPY",
             universe_ticker_count=100,
-            daily_results=[
-                DailyResult(
+            rebalance_results=[
+                RebalanceSnapshot(
                     date=pd.Timestamp("2024-01-02"),
                     scored_count=50,
                     top_n_tickers=["A", "B", "C"],

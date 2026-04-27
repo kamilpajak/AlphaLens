@@ -218,13 +218,13 @@ def hit_rate(portfolio_returns: Sequence[float], universe_median_returns: Sequen
     return float((p > u).mean())
 
 
-def turnover_pct(daily_top_n_lists: Iterable[Iterable[str]]) -> float:
+def turnover_pct(rebalance_top_n_lists: Iterable[Iterable[str]]) -> float:
     """Average turnover between consecutive rebalance snapshots.
 
     Turnover = names exiting top-N / N. 100% means a full reshuffle each day.
     Returns 0 if fewer than two snapshots.
     """
-    snapshots = [frozenset(s) for s in daily_top_n_lists]
+    snapshots = [frozenset(s) for s in rebalance_top_n_lists]
     if len(snapshots) < 2:
         return 0.0
     turnovers = []

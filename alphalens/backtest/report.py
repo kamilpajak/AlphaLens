@@ -1,6 +1,6 @@
 """Markdown + CSV report assembly for a `BacktestReport`.
 
-Consumes `BacktestReport.daily_results` plus cost/regime/factor outputs and
+Consumes `BacktestReport.rebalance_results` plus cost/regime/factor outputs and
 produces a human-readable summary suitable for committing to
 `docs/backtest/mvp1_*.md` or pasting into Telegram.
 """
@@ -57,10 +57,10 @@ def build_summary(report: BacktestReport) -> BacktestSummary:
     summary = summarise_portfolio(port.tolist(), median.tolist())
     cost_df = cost_sensitivity_table(port.tolist())
 
-    # Top-5 concentration — if the engine is using equal weights, each daily top-N
-    # entry contributes 1/N. Look at the most recent snapshot for a snapshot estimate.
-    if report.daily_results:
-        last = report.daily_results[-1]
+    # Top-5 concentration — if the engine is using equal weights, each
+    # rebalance top-N entry contributes 1/N. Look at the most recent snapshot.
+    if report.rebalance_results:
+        last = report.rebalance_results[-1]
         weights = [1.0 / max(len(last.top_n_tickers), 1)] * len(last.top_n_tickers)
         conc = concentration_top_k(weights, k=5)
     else:
@@ -88,12 +88,12 @@ def build_summary(report: BacktestReport) -> BacktestSummary:
     )
 
 
-def daily_results_to_dataframe(report: BacktestReport) -> pd.DataFrame:
-    """Flatten `daily_results` into a single DataFrame for CSV export."""
-    if not report.daily_results:
+def rebalance_results_to_dataframe(report: BacktestReport) -> pd.DataFrame:
+    """Flatten `rebalance_results` into a single DataFrame for CSV export."""
+    if not report.rebalance_results:
         return pd.DataFrame()
     rows = []
-    for r in report.daily_results:
+    for r in report.rebalance_results:
         rows.append(
             {
                 "date": r.date.date().isoformat(),
@@ -138,7 +138,7 @@ def _section_headline_metrics(summary: BacktestSummary) -> list[str]:
         f"| Mean Rank IC | {summary.mean_ic:+.4f} |",
         f"| IC t-stat | {summary.ic_tstat:+.2f} |",
         f"| IC positive windows (20d) | {summary.ic_positive_pct * 100:.1f}% |",
-        f"| Turnover (daily rebalance) | {summary.turnover * 100:.1f}% |",
+        f"| Turnover (per rebalance) | {summary.turnover * 100:.1f}% |",
         f"| Concentration top-5 | {summary.concentration_top5 * 100:.1f}% |",
         "",
     ]
@@ -314,7 +314,7 @@ def write_markdown_report(
         *_section_regime_breakdown(regime_stats),
         *_section_decile_ic(decile_ic, tail_score),
         *_section_vol_decomp(vol_decomp),
-        *_section_theme_concentration(theme_stats, len(report.daily_results)),
+        *_section_theme_concentration(theme_stats, len(report.rebalance_results)),
         *_section_attribution(attribution),
         *_section_decision_criteria(summary, attribution),
     ]

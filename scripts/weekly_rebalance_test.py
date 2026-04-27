@@ -78,7 +78,7 @@ def compare(report, label: str):
     sharpe_weekly = sharpe(weekly_returns.tolist(), periods_per_year=52)
     turnover_daily = float(report.turnover * 100)
     # Weekly turnover proxy: recompute from every-5th-day top-5 lists
-    weekly_top_n = [r.top_n_tickers for r in report.daily_results[::5]]
+    weekly_top_n = [r.top_n_tickers for r in report.rebalance_results[::5]]
     if len(weekly_top_n) < 2:
         turnover_weekly = float("nan")
     else:

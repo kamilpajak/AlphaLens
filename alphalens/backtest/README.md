@@ -17,13 +17,13 @@ HistoryStore  ← entry point, point-in-time truncation
        ▼
 BacktestEngine.run(start, end)
        │
-       │  daily loop:
+       │  rebalance loop (every `rebalance_stride` trading days):
        │    truncate_to(t) → scorer(histories) → top-N → forward_return(1d, Nd)
        │
        ▼
 BacktestReport       ── portfolio_returns (Sharpe-ready, non-overlapping)
        │             ├─ portfolio_returns_holding (signal diagnostic, overlaps)
-       │             ├─ ic_series (Rank IC per day)
+       │             ├─ ic_series (Rank IC per rebalance)
        │             ├─ universe_median_returns
        │             └─ scored_frames (optional, for diagnostics)
        │
@@ -76,7 +76,7 @@ store = HistoryStore(histories)
 - `portfolio_returns_holding` — holding-period forward return of top-N (overlapping, for signal diagnostics, **not** Sharpe)
 - `ic_series` — cross-sectional Rank IC on `holding_period`-day forward returns
 - `universe_median_returns` — 1-day median across the whole scored universe
-- `daily_results` — per-day snapshots (`DailyResult`: tickers, scores, forward returns, IC)
+- `rebalance_results` — per-day snapshots (`RebalanceSnapshot`: tickers, scores, forward returns, IC)
 - `scored_frames` — optional (pass `retain_scored_frames=True`) — full scored DataFrame per day, needed for IC-by-decile and tail concentration diagnostics
 
 ## Data prerequisites
@@ -117,7 +117,7 @@ All three are free at [Ken French's data library](https://mba.tuck.dartmouth.edu
 
 Default outputs:
 - `docs/backtest/mvp1_report.md` — markdown with summary, regime breakdown, factor attribution, cost table, diagnostics
-- `--csv path.csv` — optional daily CSV with portfolio returns, IC, top-N
+- `--csv path.csv` — optional per-rebalance CSV with portfolio returns, IC, top-N
 
 ### Programmatic
 
@@ -197,7 +197,7 @@ All three use **Newey-West HAC** covariance (`maxlag = int(4·(n/100)^(2/9))`, a
 
 | File | Purpose |
 |---|---|
-| `engine.py` | `BacktestEngine`, `DailyResult`, `BacktestReport` — the core replay loop |
+| `engine.py` | `BacktestEngine`, `RebalanceSnapshot`, `BacktestReport` — the core replay loop |
 | `history_store.py` | `HistoryStore` — point-in-time OHLCV cache + forward-return lookup |
 | `weighting.py` | `compute_position_weights(n, scheme)` — `equal` / `linear` / `conviction`. Linear is the best performer (+7% Sharpe, +27% Calmar vs equal per the 2026-04-19 sweep) |
 | `metrics.py` | Sharpe, IC + t-stat + rolling, decile spread, max DD, Calmar, Herfindahl concentration |
@@ -209,7 +209,7 @@ All three use **Newey-West HAC** covariance (`maxlag = int(4·(n/100)^(2/9))`, a
 | `theme_analysis.py` | Theme HHI + dominant theme per day + concentration alerts (Layer 2b specific) |
 | `historical_validation.py` | `evaluate_historical_picks(picks, scorer_fn)` — pluggable LLM / rule scorer evaluation + decision matrix |
 | `llm_scorers.py` | Reference LLM scorers: Gemini Flash tractability, hybrid rule → Gemini, TradingAgents reduced |
-| `report.py` | `build_summary`, `write_markdown_report`, `daily_results_to_dataframe` |
+| `report.py` | `build_summary`, `write_markdown_report`, `rebalance_results_to_dataframe` |
 
 ## Known limitations
 

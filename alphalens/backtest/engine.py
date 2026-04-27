@@ -42,13 +42,10 @@ Scorer = Callable[[Mapping[str, pd.DataFrame], Mapping], pd.DataFrame]
 
 
 @dataclass(frozen=True)
-class DailyResult:
-    """One **per-rebalance** snapshot of the backtest.
-
-    Name is historical (pre-``rebalance_stride``). Actual semantic: one entry
-    per scorer invocation, i.e. per rebalance event. With stride=1 this is
-    literally daily; with stride=5 it is weekly; stride=21 monthly. The API
-    name is preserved for backward compatibility across ~25 callers.
+class RebalanceSnapshot:
+    """One per-rebalance snapshot of the backtest — one entry per scorer
+    invocation. With ``rebalance_stride=1`` this is daily; stride=5 weekly;
+    stride=21 monthly.
 
     ``portfolio_return`` is the **1-period (=1 trading day) forward return** of
     the top-N picks selected at that rebalance. For stride>1 the strategy is
@@ -81,7 +78,7 @@ class BacktestReport:
     end: date
     benchmark: str
     universe_ticker_count: int
-    daily_results: list[DailyResult] = field(default_factory=list)
+    rebalance_results: list[RebalanceSnapshot] = field(default_factory=list)
     scored_frames: dict[pd.Timestamp, pd.DataFrame] = field(default_factory=dict)
 
     @property
@@ -89,44 +86,45 @@ class BacktestReport:
         """1-period (=1 trading day) forward returns of top-N, one entry per
         rebalance date. Non-overlapping. For stride>1 the series is sampled
         at the rebalance cadence; annualise Sharpe at ``252/stride``."""
-        if not self.daily_results:
+        if not self.rebalance_results:
             return pd.Series(dtype=float)
-        idx = [r.date for r in self.daily_results]
-        vals = [r.portfolio_return for r in self.daily_results]
+        idx = [r.date for r in self.rebalance_results]
+        vals = [r.portfolio_return for r in self.rebalance_results]
         return pd.Series(vals, index=pd.DatetimeIndex(idx), name="portfolio")
 
     @property
     def portfolio_returns_holding(self) -> pd.Series:
         """Holding-period forward returns of top-N (signal-quality diagnostic; overlaps)."""
-        if not self.daily_results:
+        if not self.rebalance_results:
             return pd.Series(dtype=float)
-        idx = [r.date for r in self.daily_results]
-        vals = [r.portfolio_return_holding for r in self.daily_results]
+        idx = [r.date for r in self.rebalance_results]
+        vals = [r.portfolio_return_holding for r in self.rebalance_results]
         return pd.Series(vals, index=pd.DatetimeIndex(idx), name="portfolio_holding")
 
     @property
     def universe_median_returns(self) -> pd.Series:
-        if not self.daily_results:
+        if not self.rebalance_results:
             return pd.Series(dtype=float)
-        idx = [r.date for r in self.daily_results]
-        vals = [r.universe_median_return for r in self.daily_results]
+        idx = [r.date for r in self.rebalance_results]
+        vals = [r.universe_median_return for r in self.rebalance_results]
         return pd.Series(vals, index=pd.DatetimeIndex(idx), name="universe_median")
 
     @property
     def ic_series(self) -> pd.Series:
-        if not self.daily_results:
+        if not self.rebalance_results:
             return pd.Series(dtype=float)
-        idx = [r.date for r in self.daily_results]
-        vals = [r.ic for r in self.daily_results]
+        idx = [r.date for r in self.rebalance_results]
+        vals = [r.ic for r in self.rebalance_results]
         return pd.Series(vals, index=pd.DatetimeIndex(idx), name="ic")
 
     @property
     def turnover(self) -> float:
-        return turnover_pct(r.top_n_tickers for r in self.daily_results)
+        return turnover_pct(r.top_n_tickers for r in self.rebalance_results)
 
 
 class BacktestEngine:
-    """Daily-rebalance backtest over a universe, using a pluggable scorer.
+    """Backtest over a universe with configurable rebalance stride, using a
+    pluggable scorer.
 
     The scorer must match the signature `scorer(histories, config) -> DataFrame`
     and return a frame with at minimum columns `ticker` and `score`. Any tickers
@@ -211,11 +209,11 @@ class BacktestEngine:
 
         for idx, ts in enumerate(calendar):
             day = ts.date()
-            simulated = self._simulate_day(day, tickers)
+            simulated = self._simulate_rebalance(day, tickers)
             if simulated is None:
                 continue
             snap, scored_frame = simulated
-            report.daily_results.append(snap)
+            report.rebalance_results.append(snap)
             if self.retain_scored_frames and scored_frame is not None:
                 report.scored_frames[pd.Timestamp(day)] = scored_frame
             if (idx + 1) % progress_stride == 0 or idx == total_days - 1:
@@ -229,8 +227,8 @@ class BacktestEngine:
                 )
 
         logger.info(
-            "backtest done: %d daily snapshots out of %d trading days",
-            len(report.daily_results),
+            "backtest done: %d rebalance snapshots out of %d trading days",
+            len(report.rebalance_results),
             len(calendar),
         )
         return report
@@ -255,9 +253,9 @@ class BacktestEngine:
             fwd_holding.append(float("nan") if rh is None else rh)
         return scored.assign(fwd_1d=fwd_1d, fwd_holding=fwd_holding)
 
-    def _build_daily_result(
+    def _build_rebalance_snapshot(
         self, day: date, scored: pd.DataFrame, valid_holding: pd.DataFrame
-    ) -> DailyResult:
+    ) -> RebalanceSnapshot:
         top_n = scored.sort_values("score", ascending=False).head(self.top_n)
         weights = compute_position_weights(len(top_n), self.weighting)
         portfolio_ret_1d = weighted_return(top_n["fwd_1d"].to_numpy(dtype=float), weights)
@@ -266,7 +264,7 @@ class BacktestEngine:
             float(scored["fwd_1d"].dropna().median()) if scored["fwd_1d"].notna().any() else 0.0
         )
         ic_value = rank_ic(valid_holding["score"].tolist(), valid_holding["fwd_holding"].tolist())
-        return DailyResult(
+        return RebalanceSnapshot(
             date=pd.Timestamp(day),
             scored_count=len(valid_holding),
             top_n_tickers=top_n["ticker"].tolist(),
@@ -282,9 +280,9 @@ class BacktestEngine:
             ic=ic_value,
         )
 
-    def _simulate_day(
+    def _simulate_rebalance(
         self, day: date, tickers: list[str]
-    ) -> tuple[DailyResult, pd.DataFrame | None] | None:
+    ) -> tuple[RebalanceSnapshot, pd.DataFrame | None] | None:
         histories = self._build_histories(day, tickers)
         if not histories:
             return None
@@ -298,7 +296,7 @@ class BacktestEngine:
         if valid_holding.empty:
             return None
 
-        snap = self._build_daily_result(day, scored, valid_holding)
+        snap = self._build_rebalance_snapshot(day, scored, valid_holding)
         scored_frame = (
             scored[["ticker", "score", "fwd_1d", "fwd_holding"]].copy()
             if self.retain_scored_frames

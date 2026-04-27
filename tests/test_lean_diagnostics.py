@@ -83,7 +83,7 @@ class TestVolDecomposition(unittest.TestCase):
         from alphalens.backtest.diagnostics import (
             vol_decomposition_by_regime,
         )
-        from alphalens.backtest.engine import BacktestReport, DailyResult
+        from alphalens.backtest.engine import BacktestReport, RebalanceSnapshot
 
         rng = np.random.default_rng(0)
         # Bear days: port vol 10% ann, median vol 20% ann, same mean returns.
@@ -92,7 +92,7 @@ class TestVolDecomposition(unittest.TestCase):
         median = pd.Series(rng.normal(0, 0.012, 100), index=idx)
         regime_labels = pd.Series(["bear"] * 100, index=idx)
 
-        # Build fake daily_results to satisfy BacktestReport shape.
+        # Build fake rebalance_results to satisfy BacktestReport shape.
         report = BacktestReport(
             scorer_config={},
             holding_period=5,
@@ -101,8 +101,8 @@ class TestVolDecomposition(unittest.TestCase):
             end=idx[-1].date(),
             benchmark="SPY",
             universe_ticker_count=100,
-            daily_results=[
-                DailyResult(
+            rebalance_results=[
+                RebalanceSnapshot(
                     date=d,
                     scored_count=10,
                     top_n_tickers=["A"],
