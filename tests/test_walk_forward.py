@@ -1,6 +1,6 @@
 """Unit tests for `alphalens.backtest.walk_forward`.
 
-All tests use in-memory synthetic `BacktestReport` / `DailyResult` fixtures —
+All tests use in-memory synthetic `BacktestReport` / `RebalanceSnapshot` fixtures —
 no Polygon, no real BacktestEngine runs. Focuses on the ten critical
 behaviours flagged in the plan (including the zen-integrated path-
 independence invariant and block-return autocorr gate).
@@ -14,7 +14,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from alphalens.backtest.engine import BacktestReport, DailyResult
+from alphalens.backtest.engine import BacktestReport, RebalanceSnapshot
 from alphalens.backtest.walk_forward import (
     DistributionSummary,
     WindowResult,
@@ -28,9 +28,9 @@ from alphalens.backtest.walk_forward import (
 )
 
 
-def _daily(d: pd.Timestamp, ret: float, tickers: list[str] | None = None) -> DailyResult:
+def _daily(d: pd.Timestamp, ret: float, tickers: list[str] | None = None) -> RebalanceSnapshot:
     tks = tickers or ["A", "B", "C"]
-    return DailyResult(
+    return RebalanceSnapshot(
         date=d,
         scored_count=10,
         top_n_tickers=list(tks),
@@ -54,7 +54,7 @@ def _report(returns: list[float], start: str = "2022-01-03") -> BacktestReport:
         end=idx[-1].date(),
         benchmark="SPY",
         universe_ticker_count=10,
-        daily_results=daily,
+        rebalance_results=daily,
     )
 
 
@@ -82,14 +82,14 @@ class TestSliceReport(unittest.TestCase):
     def test_slice_preserves_metrics(self):
         returns = [0.01] * 500  # all +1%
         baseline = _report(returns)
-        cal = [snap.date for snap in baseline.daily_results]
+        cal = [snap.date for snap in baseline.rebalance_results]
         window = WindowSpec(test_start=cal[100].date(), test_end=cal[100 + 251].date())
         sliced = slice_report_to_window(baseline, window)
-        self.assertEqual(len(sliced.daily_results), 252)
+        self.assertEqual(len(sliced.rebalance_results), 252)
         # Sharpe on constant positive series is extremely high by construction —
         # assert the slice's first/last dates match expectations
-        self.assertEqual(sliced.daily_results[0].date, cal[100])
-        self.assertEqual(sliced.daily_results[-1].date, cal[100 + 251])
+        self.assertEqual(sliced.rebalance_results[0].date, cal[100])
+        self.assertEqual(sliced.rebalance_results[-1].date, cal[100 + 251])
 
 
 class TestMaxDDPathIndependence(unittest.TestCase):
@@ -107,13 +107,13 @@ class TestMaxDDPathIndependence(unittest.TestCase):
         rep_b = _report(series_b)
 
         bench = _flat_benchmark_series(
-            start=rep_a.daily_results[0].date.strftime("%Y-%m-%d"),
+            start=rep_a.rebalance_results[0].date.strftime("%Y-%m-%d"),
             periods=len(series_a) + 10,
         )
         # Slice to the middle 3 days, same absolute dates in both reports
         window = WindowSpec(
-            test_start=rep_a.daily_results[2].date.date(),
-            test_end=rep_a.daily_results[4].date.date(),
+            test_start=rep_a.rebalance_results[2].date.date(),
+            test_end=rep_a.rebalance_results[4].date.date(),
         )
         sliced_a = slice_report_to_window(rep_a, window)
         sliced_b = slice_report_to_window(rep_b, window)
@@ -130,12 +130,12 @@ class TestComputeWindowMetrics(unittest.TestCase):
         returns = [0.01, -0.005, 0.02, 0.0, -0.01] * 10  # 50 days
         baseline = _report(returns)
         window = WindowSpec(
-            test_start=baseline.daily_results[0].date.date(),
-            test_end=baseline.daily_results[-1].date.date(),
+            test_start=baseline.rebalance_results[0].date.date(),
+            test_end=baseline.rebalance_results[-1].date.date(),
         )
         sliced = slice_report_to_window(baseline, window)
         bench = _flat_benchmark_series(
-            start=baseline.daily_results[0].date.strftime("%Y-%m-%d"),
+            start=baseline.rebalance_results[0].date.strftime("%Y-%m-%d"),
             periods=100,
         )
         metrics = compute_window_metrics(sliced, window, bench, None)
@@ -150,15 +150,15 @@ class TestComputeWindowMetrics(unittest.TestCase):
         returns = rng.normal(0.001, 0.01, size=100).tolist()
         baseline = _report(returns)
         window = WindowSpec(
-            test_start=baseline.daily_results[0].date.date(),
-            test_end=baseline.daily_results[-1].date.date(),
+            test_start=baseline.rebalance_results[0].date.date(),
+            test_end=baseline.rebalance_results[-1].date.date(),
         )
         sliced = slice_report_to_window(baseline, window)
         bench = _flat_benchmark_series(
-            start=baseline.daily_results[0].date.strftime("%Y-%m-%d"),
+            start=baseline.rebalance_results[0].date.strftime("%Y-%m-%d"),
             periods=200,
         )
-        idx = pd.DatetimeIndex([d.date for d in baseline.daily_results])
+        idx = pd.DatetimeIndex([d.date for d in baseline.rebalance_results])
         # All-zero factors + small RF → alpha tracks mean return
         carhart = pd.DataFrame(
             {"Mkt-RF": 0.0, "SMB": 0.0, "HML": 0.0, "Mom": 0.0, "RF": 0.0},

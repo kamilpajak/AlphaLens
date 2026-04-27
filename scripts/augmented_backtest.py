@@ -84,7 +84,7 @@ def run(store: HistoryStore, screener_tickers: list[str], label: str) -> tuple:
     start = date(2021, 6, 1)
     end = date(2026, 4, 17)
     report = engine.run(start=start, end=end)
-    print(f"[{label}] {len(report.daily_results)} daily snapshots")
+    print(f"[{label}] {len(report.rebalance_results)} daily snapshots")
 
     returns = report.portfolio_returns
     ic = report.ic_series
@@ -92,7 +92,7 @@ def run(store: HistoryStore, screener_tickers: list[str], label: str) -> tuple:
     metrics = {
         "label": label,
         "universe_size": len(screener_tickers),
-        "daily_snapshots": len(report.daily_results),
+        "daily_snapshots": len(report.rebalance_results),
         "sharpe_gross": sharpe(returns.tolist()),
         "ic_mean": float(ic.mean()) if len(ic) else float("nan"),
         "ic_tstat": rank_ic_tstat(ic.tolist()),
@@ -118,7 +118,7 @@ def run(store: HistoryStore, screener_tickers: list[str], label: str) -> tuple:
 
     # Count appearances of delisted names in top-5 picks
     counter: dict[str, int] = {}
-    for d in report.daily_results:
+    for d in report.rebalance_results:
         for t in d.top_n_tickers:
             counter[t] = counter.get(t, 0) + 1
     return report, metrics, counter

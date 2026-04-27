@@ -133,12 +133,12 @@ def cost_validation(
         weighting=weighting,
     )
     baseline = engine.run(start=start_date, end=end_date)
-    typer.echo(f"  {len(baseline.daily_results)} daily snapshots")
+    typer.echo(f"  {len(baseline.rebalance_results)} daily snapshots")
 
     # Rolling ADV + per-date tier assignments
     typer.echo("\n[adv] computing rolling 21-day dollar-ADV + per-date tiers…")
     rolling_adv = rolling_dollar_adv(store, screener_tickers, window_days=window_days)
-    calendar = [snap.date for snap in baseline.daily_results]
+    calendar = [snap.date for snap in baseline.rebalance_results]
     per_date_tiers = build_per_date_tiers(rolling_adv, calendar, DEFAULT_TIERS)
     if calendar:
         last_tiers = per_date_tiers.get(calendar[-1], {})
@@ -325,7 +325,7 @@ def walk_forward(
     """Walk-forward OOS validation — rolling 252-day test windows.
 
     Runs one baseline `BacktestEngine.run` over the full span, slices the
-    daily_results per window, computes per-window Sharpe / Carhart α_t / IC_t
+    rebalance_results per window, computes per-window Sharpe / Carhart α_t / IC_t
     / MaxDD / turnover, and reports distribution + decision gate (5 rules).
 
     Detects regime-specific performance and data-snooping bias. Gate C3
@@ -385,7 +385,7 @@ def walk_forward(
         weighting=weighting,
     )
     baseline = engine.run(start=start_date, end=end_date)
-    typer.echo(f"  {len(baseline.daily_results)} daily snapshots")
+    typer.echo(f"  {len(baseline.rebalance_results)} daily snapshots")
 
     benchmark_close = store.full(benchmark)["close"]
 
@@ -559,7 +559,7 @@ def survivorship_pit(
             weighting=weighting,
         )
         baseline = engine.run(start=start_date, end=end_date)
-        typer.echo(f"  {len(baseline.daily_results)} daily snapshots")
+        typer.echo(f"  {len(baseline.rebalance_results)} daily snapshots")
 
         if "c2" in tests_set:
             typer.echo("\n[C2] selection bias…")

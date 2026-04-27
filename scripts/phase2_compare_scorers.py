@@ -168,7 +168,7 @@ def _run_scorer(
     engine.MIN_BARS_REQUIRED = 252
 
     report = engine.run(start=date(2021, 6, 1), end=date(2026, 4, 17))
-    print(f"[{label}] {len(report.daily_results)} daily snapshots")
+    print(f"[{label}] {len(report.rebalance_results)} daily snapshots")
 
     returns = report.portfolio_returns
     ic = report.ic_series
@@ -198,7 +198,7 @@ def _run_scorer(
     # Per-pick feature dataframe
     print(f"[{label}] computing per-pick features …")
     pick_rows = []
-    for d in report.daily_results:
+    for d in report.rebalance_results:
         for rank, ticker in enumerate(d.top_n_tickers, 1):
             feat = _compute_pick_features(store, d.date, ticker, themes_map)
             feat["date"] = d.date

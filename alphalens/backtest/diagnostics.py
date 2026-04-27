@@ -63,7 +63,7 @@ class VolDecomposition:
 
 
 def decile_returns_panel(report: BacktestReport) -> pd.DataFrame:
-    """Flatten (date, decile, return) from daily_results into long-format DataFrame.
+    """Flatten (date, decile, return) from rebalance_results into long-format DataFrame.
 
     For each snapshot we bucket scored tickers into 10 deciles by score and
     record the forward return. The bucket column uses 1 = lowest decile,
@@ -75,7 +75,7 @@ def decile_returns_panel(report: BacktestReport) -> pd.DataFrame:
     # the scorer. Instead, approximate from top_n_scores + top_n_forward_returns
     # which gives us DECILE 10 behaviour; the rest requires engine instrumentation.
     # Returns empty if report doesn't carry enough info.
-    for snap in report.daily_results:
+    for snap in report.rebalance_results:
         # Using only the top-N stored in the report.
         for ticker, score, fwd_ret in zip(
             snap.top_n_tickers,
@@ -181,7 +181,7 @@ def ic_at_horizon(
     from .metrics import rank_ic_tstat
 
     ic_values: list[float] = []
-    for snap in report.daily_results:
+    for snap in report.rebalance_results:
         scores = snap.top_n_scores
         fwd_rets = [
             history_store.forward_return(t, snap.date.date(), horizon) for t in snap.top_n_tickers

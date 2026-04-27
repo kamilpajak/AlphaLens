@@ -1,6 +1,6 @@
 """Theme concentration analysis over time — factor-aware monitoring.
 
-Backtest `daily_results` carry the top-N tickers each day. This module maps
+Backtest `rebalance_results` carry the top-N tickers each day. This module maps
 tickers to themes (from the curated `universe.yaml` basket) and computes:
 
 - daily theme weights (% of portfolio per theme)
@@ -223,16 +223,16 @@ def format_theme_summary(stats: ThemeSeriesStats, n_total_days: int) -> str:
 
 
 def snapshots_from_backtest(
-    daily_results: Iterable,
+    rebalance_results: Iterable,
     themes_map: Mapping[str, list[str]],
 ) -> list[ThemeSnapshot]:
-    """Convenience: build snapshots from `BacktestReport.daily_results`.
+    """Convenience: build snapshots from `BacktestReport.rebalance_results`.
 
     Uses score-equal-weight (ignores linear/conviction). For an accurate
     weighted theme breakdown, pass `position_weights` per snap explicitly.
     """
     out = []
-    for r in daily_results:
+    for r in rebalance_results:
         out.append(
             snapshot_themes(
                 top_n_tickers=r.top_n_tickers,

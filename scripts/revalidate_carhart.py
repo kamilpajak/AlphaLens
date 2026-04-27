@@ -70,7 +70,7 @@ def main() -> None:
     report = engine.run(start=START, end=END)
     returns = report.portfolio_returns
     ic = report.ic_series
-    print(f"  {len(report.daily_results)} daily snapshots, {len(returns)} return observations")
+    print(f"  {len(report.rebalance_results)} daily snapshots, {len(returns)} return observations")
 
     sharpe_gross = sharpe(returns.tolist())
     mean_ic = float(ic.mean()) if len(ic) else float("nan")

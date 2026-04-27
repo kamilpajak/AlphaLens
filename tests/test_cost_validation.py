@@ -25,7 +25,7 @@ from alphalens.backtest.cost_validation import (
     rolling_dollar_adv,
     run_scale_path,
 )
-from alphalens.backtest.engine import BacktestReport, DailyResult
+from alphalens.backtest.engine import BacktestReport, RebalanceSnapshot
 from alphalens.backtest.history_store import HistoryStore
 
 
@@ -43,8 +43,8 @@ def _history(close: list[float], volume: list[int], start: str = "2022-01-03") -
     )
 
 
-def _daily(d: pd.Timestamp, tickers: list[str], ret: float = 0.001) -> DailyResult:
-    return DailyResult(
+def _daily(d: pd.Timestamp, tickers: list[str], ret: float = 0.001) -> RebalanceSnapshot:
+    return RebalanceSnapshot(
         date=d,
         scored_count=10,
         top_n_tickers=list(tickers),
@@ -70,7 +70,7 @@ def _report(
         end=daily_specs[-1][0].date() if daily_specs else date(2022, 1, 3),
         benchmark="SPY",
         universe_ticker_count=10,
-        daily_results=daily,
+        rebalance_results=daily,
     )
 
 
@@ -223,8 +223,8 @@ class TestApplyTieredCost(unittest.TestCase):
         bps_per_tier = {"mega": 3, "mid": 25, "micro": 100}
 
         returns = baseline.portfolio_returns
-        top_n_lists = [snap.top_n_tickers for snap in baseline.daily_results]
-        dates = [snap.date for snap in baseline.daily_results]
+        top_n_lists = [snap.top_n_tickers for snap in baseline.rebalance_results]
+        dates = [snap.date for snap in baseline.rebalance_results]
 
         net = apply_tiered_cost(
             returns,
@@ -251,8 +251,8 @@ class TestApplyTieredCost(unittest.TestCase):
         daily_specs = [(start + pd.Timedelta(days=i), ["A"]) for i in range(2)]
         baseline = _report(daily_specs, ret=0.0)
         returns = baseline.portfolio_returns
-        top_n_lists = [snap.top_n_tickers for snap in baseline.daily_results]
-        dates = [snap.date for snap in baseline.daily_results]
+        top_n_lists = [snap.top_n_tickers for snap in baseline.rebalance_results]
+        dates = [snap.date for snap in baseline.rebalance_results]
 
         # Day 1: A is mega (cheap). Day 2: A is micro (expensive).
         per_date_tiers = {
@@ -286,7 +286,7 @@ class TestCompareCostScenarios(unittest.TestCase):
             end=daily[-1].date.date(),
             benchmark="SPY",
             universe_ticker_count=10,
-            daily_results=daily,
+            rebalance_results=daily,
         )
         per_date_tiers = {snap.date: {"A": "mega", "B": "mid"} for snap in daily}
         bps_per_tier = {"mega": 3, "mid": 25}

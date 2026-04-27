@@ -282,7 +282,7 @@ def format_decision_matrix(result: ValidationResult) -> str:
 
 
 def picks_from_backtest_report(report) -> list[PickRecord]:
-    """Extract PickRecord from BacktestReport.daily_results.
+    """Extract PickRecord from BacktestReport.rebalance_results.
 
     Uses `top_n_forward_returns` as the holding-period forward return (5-day).
     """
@@ -292,7 +292,7 @@ def picks_from_backtest_report(report) -> list[PickRecord]:
         raise TypeError(f"expected BacktestReport, got {type(report)}")
 
     out: list[PickRecord] = []
-    for r in report.daily_results:
+    for r in report.rebalance_results:
         for rank_idx, (ticker, score, fwd) in enumerate(
             zip(r.top_n_tickers, r.top_n_scores, r.top_n_forward_returns), start=1
         ):
