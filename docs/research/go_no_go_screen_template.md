@@ -6,6 +6,7 @@
 **Companions:**
 - `docs/research/active_alpha_anti_patterns.md` — vulnerability checklist (AP-1..14)
 - `docs/research/5_paradigm_failures_postmortem.md` — narrative of what failed and why
+- `docs/research/kill_verdict_checklist.md` — 7-gate evidence template for KILL verdicts
 
 ## Purpose
 
@@ -132,6 +133,9 @@ Every pilot must produce, at minimum:
 - Pilot passed ≠ full strategy will work. Build minimal infrastructure for true OOS validation on independent window.
 - Re-screen anti-patterns at full-OOS scale.
 - Pre-commit capital-deployment thresholds (separate from research thresholds).
+
+**On KILL verdict — evidence checklist:**
+See `docs/research/kill_verdict_checklist.md` for the 7-gate evidence template. Future `__status__ = "CLOSED"` declarations require `__closed_evidence__: dict[str, str]` mapping all 7 gates to a documentation path, `"N/A: <reason>"` (gate doesn't apply), or `"UNTESTED: <reason>"` (gate applies but consciously not run).
 
 ## YAML schema (full template)
 
