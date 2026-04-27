@@ -1,6 +1,6 @@
 # Watchdog launchd setup
 
-Two launchd jobs run the live pipeline on macOS:
+Four launchd jobs run the live pipeline on macOS:
 
 - **detect** (`com.alphalens.watchdog.detect.plist`) — every 15 min
   - Polls SEC EDGAR, classifies, dispatches alerts.
@@ -9,6 +9,13 @@ Two launchd jobs run the live pipeline on macOS:
   - Drains the auto-trigger queue one job at a time.
   - Each job runs `TradingAgents.propagate` (~15 min, costs API $).
   - Daily budget cap (default 5 analyses/day, configurable in code).
+- **literature-review monthly** (`com.alphalens.literature-review.monthly.plist`) — 1st of month, 09:00 local
+  - Perplexity high-context scan across 4 baskets (retail order flow,
+    LLM 10-K intangibles, cross-asset overlays, factor decay 2025+).
+  - 5-filter triage; output to `docs/research/literature_review/YYYY-MM.md` + Telegram digest.
+- **literature-review weekly** (`com.alphalens.literature-review.weekly.plist`) — Sundays, 18:00 local
+  - Top-3 paper RSS scan, recency=week.
+  - Output to `docs/research/literature_review/weekly/YYYY-Www.md` + terse Telegram digest.
 
 **Archived strategies** (no longer scheduled) — see `archived/README.md`:
 
@@ -21,6 +28,7 @@ Two launchd jobs run the live pipeline on macOS:
 ```bash
 # Copy the plists to LaunchAgents (user-level, survives reboots)
 cp launchd/com.alphalens.watchdog.*.plist ~/Library/LaunchAgents/
+cp launchd/com.alphalens.literature-review.*.plist ~/Library/LaunchAgents/
 
 # Create state dir (for logs + SQLite)
 mkdir -p ~/.alphalens/watchdog
@@ -35,12 +43,17 @@ watchlist:
   - NVDA
 EOF
 
-# Make sure TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set in .env
-# (the CLI uses python-dotenv to load them)
+# Make sure TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, and PERPLEXITY_API_KEY
+# are set in .env (the CLI uses python-dotenv to load them).
 
-# Load the jobs
+# Load the watchdog jobs
 for job in detect worker; do
   launchctl load ~/Library/LaunchAgents/com.alphalens.watchdog.${job}.plist
+done
+
+# Load the literature-review jobs
+for cadence in monthly weekly; do
+  launchctl load ~/Library/LaunchAgents/com.alphalens.literature-review.${cadence}.plist
 done
 
 # Optional: trigger once to smoke test
@@ -56,7 +69,11 @@ To revive an archived strategy (themed/lean/insider): copy its plist back from `
 for job in detect worker; do
   launchctl unload ~/Library/LaunchAgents/com.alphalens.watchdog.${job}.plist
 done
+for cadence in monthly weekly; do
+  launchctl unload ~/Library/LaunchAgents/com.alphalens.literature-review.${cadence}.plist
+done
 rm ~/Library/LaunchAgents/com.alphalens.watchdog.*.plist
+rm ~/Library/LaunchAgents/com.alphalens.literature-review.*.plist
 ```
 
 ## Inspect state
