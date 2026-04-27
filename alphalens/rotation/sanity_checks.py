@@ -153,7 +153,10 @@ def check_per_regime_vs_passive(
         summary[label] = float(slice_["s"].mean() - slice_["p"].mean())
 
     outperform = sum(1 for v in summary.values() if v > 0)
-    passed = outperform >= 2 and len(summary) >= 2
+    # Strict kill-gate: docstring says "≥ 2 of 3 regimes". All three must
+    # be exercised by the backtest; otherwise the gate would silently pass
+    # strategies whose flat-regime behavior was never tested.
+    passed = outperform >= 2 and len(summary) == 3
     detail = ", ".join(f"{k}: Δmean={v:+.5f}/d" for k, v in sorted(summary.items()))
     return SanityCheckResult(
         name="per_regime_vs_passive",

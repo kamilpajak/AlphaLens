@@ -12,6 +12,7 @@ All four must pass for OOS single-shot to be statistically justified.
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -144,23 +145,31 @@ class TestRollingSharpeStability(unittest.TestCase):
         self.assertFalse(result.passed)
 
 
+def _three_regime_benchmark(n_per_regime: int = 400):
+    """Benchmark fixture spanning bull → bear → flat regimes via daily drift.
+
+    With classify_regime defaults (lookback=60, ±5% threshold), drift sequences
+    of ~+0.10%/day, ~-0.10%/day, and ~0/day (with low noise) reliably classify
+    into bull / bear / flat respectively after the lookback warmup window.
+    """
+    n = n_per_regime * 3
+    idx = pd.date_range("2015-01-02", periods=n, freq="B")
+    rng = np.random.default_rng(7)
+    bull = rng.normal(0.0010, 0.0003, n_per_regime)  # ~+25%/yr
+    bear = rng.normal(-0.0010, 0.0003, n_per_regime)  # ~-25%/yr
+    flat = rng.normal(0.0000, 0.0003, n_per_regime)  # ~0%/yr drift
+    bench_daily = np.concatenate([bull, bear, flat])
+    bench_close = pd.Series(np.cumprod(1 + bench_daily) * 100, index=idx)
+    passive = pd.Series(bench_daily * 0.5, index=idx)  # half-beta passive
+    return idx, bench_close, passive
+
+
 class TestPerRegimeVsPassive(unittest.TestCase):
-    def test_passes_when_outperforms_in_two_plus_regimes(self):
+    def test_passes_when_all_three_regimes_outperform(self):
         from alphalens.rotation.sanity_checks import check_per_regime_vs_passive
 
-        # Synthesize 1000 bars with known regimes (bull/bear mix)
-        n = 1000
-        idx = pd.date_range("2015-01-02", periods=n, freq="B")
-        # Benchmark: bull half, bear half
-        bench_daily = np.concatenate([np.full(500, 0.001), np.full(500, -0.0005)])
-        bench_close = pd.Series(np.cumprod(1 + bench_daily) * 100, index=idx)
-
-        # Passive: same as benchmark-ish, 0.0005 mean
-        passive = pd.Series(
-            np.concatenate([np.full(500, 0.0005), np.full(500, -0.0003)]), index=idx
-        )
-        # Strategy: 50 bps better than passive in all regimes (deterministic)
-        strategy = passive + 0.0005
+        _, bench_close, passive = _three_regime_benchmark()
+        strategy = passive + 0.0005  # +5 bps/day across the board
 
         result = check_per_regime_vs_passive(
             strategy_returns=strategy,
@@ -173,23 +182,43 @@ class TestPerRegimeVsPassive(unittest.TestCase):
     def test_fails_when_outperforms_in_only_one_regime(self):
         from alphalens.rotation.sanity_checks import check_per_regime_vs_passive
 
-        n = 1000
-        idx = pd.date_range("2015-01-02", periods=n, freq="B")
-        bench_daily = np.concatenate([np.full(500, 0.001), np.full(500, -0.0005)])
-        bench_close = pd.Series(np.cumprod(1 + bench_daily) * 100, index=idx)
-
-        passive = pd.Series(
-            np.concatenate([np.full(500, 0.0005), np.full(500, -0.0003)]), index=idx
-        )
-        # Strategy: outperforms only in bull regime (first 500), worse after
+        _, bench_close, passive = _three_regime_benchmark()
         strategy = passive.copy()
-        strategy.iloc[:500] += 0.001  # bull: +10bps better
-        strategy.iloc[500:] -= 0.001  # bear: worse
+        # Outperform only in the first segment (bull), underperform in bear+flat
+        n = len(strategy)
+        third = n // 3
+        strategy.iloc[:third] += 0.0010
+        strategy.iloc[third:] -= 0.0010
 
         result = check_per_regime_vs_passive(
             strategy_returns=strategy,
             passive_returns=passive,
             benchmark_close=bench_close,
+        )
+
+        self.assertFalse(result.passed)
+
+    @patch("alphalens.rotation.sanity_checks.classify_regime")
+    def test_fails_when_classifier_emits_only_two_regime_labels(self, mock_classify):
+        """Kill-gate per docstring: '≥ 2 of 3 regimes' demands all 3 are
+        exercised. We force a 2-regime classifier output (no flat label)
+        with both regimes outperforming — the strict gate must reject so
+        the user extends the window until a flat regime appears.
+        """
+        from alphalens.rotation.sanity_checks import check_per_regime_vs_passive
+
+        n = 600
+        idx = pd.date_range("2015-01-02", periods=n, freq="B")
+        mock_classify.return_value = pd.Series(["bull"] * 300 + ["bear"] * 300, index=idx)
+
+        passive = pd.Series(np.full(n, 0.0005), index=idx)
+        strategy = passive + 0.001  # uniform outperformance across both labels
+        bench = pd.Series(np.cumprod(1 + np.full(n, 0.0005)) * 100, index=idx)
+
+        result = check_per_regime_vs_passive(
+            strategy_returns=strategy,
+            passive_returns=passive,
+            benchmark_close=bench,
         )
 
         self.assertFalse(result.passed)
