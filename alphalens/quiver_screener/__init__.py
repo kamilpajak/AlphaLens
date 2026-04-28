@@ -19,12 +19,14 @@ __closed_reason__ = (
     "filter — signal inverted from published academic edge, evidence of "
     "extreme alt-data crowding (AP-9)."
 )
+_POSTMORTEM = "docs/research/5_paradigm_failures_postmortem.md"
+
 __closed_evidence__: dict[str, str] = {
-    "carhart_4f_hac": "docs/research/5_paradigm_failures_postmortem.md",
+    "carhart_4f_hac": _POSTMORTEM,
     "sanity_checks_4gate": "N/A: alt-data L/S screen, not rotation overlay",
-    "walk_forward_oos": "docs/research/5_paradigm_failures_postmortem.md",
+    "walk_forward_oos": _POSTMORTEM,
     "multiple_testing_correction": "N/A: single hypothesis, inverted sign sufficient",
     "cost_drag": "N/A: alt-data crowding kill, cost not relevant to verdict",
-    "bootstrap_ci": "docs/research/5_paradigm_failures_postmortem.md",
+    "bootstrap_ci": _POSTMORTEM,
     "survivorship_pit": "N/A: live alt-data feed, no historical backfill bias",
 }

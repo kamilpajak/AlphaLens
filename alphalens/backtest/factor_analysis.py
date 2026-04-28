@@ -155,14 +155,14 @@ def bootstrap_carhart_alpha_ci(
     n_blocks = int(np.ceil(n / block_len))
 
     y_arr = (aligned["port"] - aligned["RF"]).to_numpy()
-    X_arr = sm.add_constant(aligned[factor_cols]).to_numpy()
+    x_arr = sm.add_constant(aligned[factor_cols]).to_numpy()
 
     rng = np.random.default_rng(seed)
     alphas_daily = np.empty(iterations)
     for i in range(iterations):
         starts = rng.integers(0, n - block_len + 1, size=n_blocks)
         idx = np.concatenate([np.arange(s, s + block_len) for s in starts])[:n]
-        beta, *_ = np.linalg.lstsq(X_arr[idx], y_arr[idx], rcond=None)
+        beta, *_ = np.linalg.lstsq(x_arr[idx], y_arr[idx], rcond=None)
         alphas_daily[i] = beta[0]
 
     tail = (1 - confidence) / 2
