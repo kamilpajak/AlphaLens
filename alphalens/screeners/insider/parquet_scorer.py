@@ -43,7 +43,6 @@ class ParquetInsiderScorer:
                 "insider_count",
                 "aggregate_dollar",
                 "cluster_window_days",
-                "asof",
             ]
         )
         df = table.to_pandas()
@@ -58,7 +57,6 @@ class ParquetInsiderScorer:
                 "insider_count": int(row.insider_count),
                 "aggregate_dollar": float(row.aggregate_dollar),
                 "cluster_window_days": int(row.cluster_window_days),
-                "asof": (row.asof.isoformat() if row.asof is not None else row.date.isoformat()),
             }
 
         self._features = features
@@ -73,8 +71,16 @@ class ParquetInsiderScorer:
           - Cache hit with no cluster detected (``has_features=False`` row)
           - Cache miss (no row for this key in the parquet)
         Callers downstream don't need to distinguish — both mean "no signal".
+
+        The returned dict's ``asof`` field echoes the caller-supplied argument
+        (matching :class:`InsiderScorer` contract); the parquet's stored
+        ``asof`` column is dropped at construction to save ~50 MB of redundant
+        date strings across 6.5M rows.
         """
-        return self._features.get((ticker.upper(), asof))
+        feat = self._features.get((ticker.upper(), asof))
+        if feat is None:
+            return None
+        return {**feat, "asof": asof.isoformat()}
 
     @property
     def stats(self) -> dict[str, int]:

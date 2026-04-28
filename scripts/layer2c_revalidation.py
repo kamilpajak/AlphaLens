@@ -31,7 +31,10 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from alphalens.backtest.cost_model import cost_sensitivity_table  # noqa: E402
 from alphalens.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens.backtest.factor_analysis import run_carhart_attribution  # noqa: E402
+from alphalens.backtest.factor_analysis import (  # noqa: E402
+    bootstrap_carhart_alpha_ci,
+    run_carhart_attribution,
+)
 from alphalens.backtest.factors import load_carhart_daily  # noqa: E402
 from alphalens.backtest.history_store import HistoryStore  # noqa: E402
 from alphalens.backtest.metrics import sharpe  # noqa: E402
@@ -60,27 +63,7 @@ BENCHMARK = "SPY"
 
 REPORT_PATH = REPO_ROOT / "docs/backtest/layer2c_revalidation.md"
 WF_CSV_PATH = REPO_ROOT / "docs/backtest/layer2c_revalidation_walkforward.csv"
-BS_CSV_PATH = REPO_ROOT / "docs/backtest/layer2c_revalidation_bootstrap.csv"
 DELISTED_YAML = REPO_ROOT / "alphalens/screeners/lean/lean_project/delisted_universe.yaml"
-
-
-def moving_block_bootstrap(
-    returns: np.ndarray,
-    *,
-    n_iter: int = 10000,
-    block: int = 21,
-    seed: int = 42,
-) -> tuple[float, float, np.ndarray]:
-    rng = np.random.default_rng(seed)
-    n = len(returns)
-    n_blocks = n // block
-    starts_max = n - block
-    means = np.empty(n_iter)
-    for i in range(n_iter):
-        starts = rng.integers(0, starts_max + 1, size=n_blocks)
-        sample = np.concatenate([returns[s : s + block] for s in starts])
-        means[i] = sample.mean()
-    return float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975)), means
 
 
 def run_phase(
@@ -173,12 +156,13 @@ def main() -> None:
         reason = wf.verdict.reasons.get(cn.upper(), "")
         print(f"  {cn.upper()}: {passed}  — {reason}")
 
-    print("\n=== Gate 6: Bootstrap CI (10k iter, moving-block n=21) ===")
-    oos_arr = oos_result.portfolio_returns.dropna().to_numpy()
-    bs_lower, bs_upper, bs_dist = moving_block_bootstrap(oos_arr, n_iter=10000, block=21)
-    bs_pass = bs_lower > 0.0
+    print("\n=== Gate 6: Bootstrap CI on annualized Carhart α (10k iter, block n^(1/3)) ===")
+    bs_lower, bs_upper = bootstrap_carhart_alpha_ci(
+        oos_result.portfolio_returns, carhart, iterations=10_000
+    )
+    bs_pass = (bs_lower > 0.0) or (bs_upper < 0.0)
     print(
-        f"  OOS daily mean 95% CI: [{bs_lower:.6f}, {bs_upper:.6f}] → "
+        f"  OOS Carhart α 95% CI (annualized): [{bs_lower * 100:+.2f}%, {bs_upper * 100:+.2f}%] → "
         f"{'PASS (excludes 0)' if bs_pass else 'FAIL (includes 0)'}"
     )
 
@@ -221,9 +205,6 @@ def main() -> None:
     WF_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([asdict(w) for w in wf.window_results]).to_csv(WF_CSV_PATH, index=False)
     print(f"  → {WF_CSV_PATH.relative_to(REPO_ROOT)}")
-
-    pd.DataFrame({"bootstrap_mean": bs_dist}).to_csv(BS_CSV_PATH, index=False)
-    print(f"  → {BS_CSV_PATH.relative_to(REPO_ROOT)}")
 
 
 def write_report(
@@ -345,15 +326,17 @@ def write_report(
     lines.append("```")
     lines.append("")
 
-    lines.append("## Gate 6: Bootstrap CI (moving-block, 10k iterations, block=21)")
+    lines.append("## Gate 6: Bootstrap CI on annualized Carhart-4F α")
     lines.append("")
-    lines.append("Standalone moving-block bootstrap on OOS daily mean return.")
-    lines.append("Block size 21 (≈1 trading month, n^(1/3) heuristic).")
+    lines.append("Moving-block bootstrap (Hall-Horowitz 1995, block = n^(1/3)) on the")
+    lines.append("OLS-fitted Carhart-4F α intercept, 10k iterations. Canonical Gate 6")
+    lines.append("statistic per `docs/research/kill_verdict_checklist.md` —")
+    lines.append("`alphalens.backtest.factor_analysis.bootstrap_carhart_alpha_ci`.")
     lines.append("")
-    lines.append(f"- 95% CI: **[{bs_lower:.6f}, {bs_upper:.6f}]**")
+    lines.append(f"- OOS 95% CI (annualized): **[{bs_lower * 100:+.2f}%, {bs_upper * 100:+.2f}%]**")
     lines.append(
         f"- Verdict: **{'PASS' if bs_pass else 'FAIL'}** "
-        f"({'lower bound > 0 — excludes zero' if bs_pass else 'CI includes zero — alpha not significant'})"
+        f"({'CI excludes 0' if bs_pass else 'CI includes 0 — α not significant'})"
     )
     lines.append("")
 

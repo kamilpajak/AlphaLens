@@ -61,11 +61,12 @@ Each gate is named, has a reusable implementation in this repo, and a documented
 - **Implementation:** `alphalens/backtest/cost_model.py::cost_sensitivity_table` reports Sharpe across gross / 75 bps / 100 bps / 150 bps annual drag profiles, scaled by realized turnover. For micro-cap or high-turnover strategies use `RealisticCostModel` with Almgren-Chriss impact (`k × sqrt(size/adv) × annual_vol × sqrt(horizon/252)`).
 - **Acceptance:** Net Sharpe (after moderate cost profile, turnover-scaled) remains > 0.5 and net α retains a meaningful fraction of gross α (rule of thumb: drag ratio < 50%).
 
-### 6. `bootstrap_ci` — Moving-block bootstrap on headline statistic
+### 6. `bootstrap_ci` — Moving-block bootstrap on annualized Carhart-4F α
 
-- **Measures:** Sampling uncertainty of mean α / mean return without parametric distributional assumptions.
-- **Implementation:** Moving-block bootstrap, block size ≈ n^(1/3) (typically 21 = ~1 trading month for daily series). ≥10k iterations. Pattern in `alphalens/rotation/gates.py::gate_bootstrap_ci`; for non-rotation use a standalone helper that operates on the daily return series.
-- **Acceptance:** 95% CI lower bound > 0 (excludes zero).
+- **Measures:** Sampling uncertainty of the **residual α** (intercept after factor controls), without parametric distributional assumptions. CI is on annualized α, NOT on raw mean return — bootstrapping mean return answers a different question (raw profitability) than the headline α t-stat (factor-orthogonal edge).
+- **Canonical implementation:** `alphalens/backtest/factor_analysis.py::bootstrap_carhart_alpha_ci` — moving-block (Hall-Horowitz 1995, block = n^(1/3)), 10k iterations, OLS-fitted intercept per iteration, returned as `(ci_low_annualized, ci_high_annualized)`. Used by both `scripts/run_layer2d_backtest.py` and `scripts/layer2c_revalidation.py`.
+- **Variant for rotation strategies:** `alphalens/rotation/gates.py::gate_bootstrap_ci` operates on `OverlayBacktestResult.daily_returns_net` (raw mean return CI) — appropriate for overlay strategies where the gate-level question IS \"is the cumulative net return positive\". When in doubt about which to use, default to the Carhart-α version.
+- **Acceptance:** 95% CI lower bound > 0 (excludes zero). For strategies with structurally-negative-α (e.g., inverted-published-edge alt-data) the bound `upper_ci < 0` also counts as significant — but flips the verdict to *negative-alpha confirmed*, never to PASS.
 
 ### 7. `survivorship_pit` — Cohort split + delisting selection bias
 

@@ -86,13 +86,15 @@ conservative     150.0 0.875456       0.311804
 conservative     150.0 -0.521463      -0.278785
 ```
 
-## Gate 6: Bootstrap CI (moving-block, 10k iterations, block=21)
+## Gate 6: Bootstrap CI on annualized Carhart-4F α
 
-Standalone moving-block bootstrap on OOS daily mean return.
-Block size 21 (≈1 trading month, n^(1/3) heuristic).
+Moving-block bootstrap (Hall-Horowitz 1995, block = n^(1/3)) on the
+OLS-fitted Carhart-4F α intercept, 10k iterations. Canonical Gate 6
+statistic per `docs/research/kill_verdict_checklist.md` —
+`alphalens.backtest.factor_analysis.bootstrap_carhart_alpha_ci`.
 
-- 95% CI: **[-0.003559, 0.001764]**
-- Verdict: **FAIL** (CI includes zero — alpha not significant)
+- OOS 95% CI (annualized): **[-87.82%, +47.80%]**
+- Verdict: **FAIL** (CI includes 0 — α not significant)
 
 ## Gate 7: Survivorship / PIT — delisting selection bias
 

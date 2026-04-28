@@ -129,8 +129,10 @@ class TestLayerStatus(unittest.TestCase):
                         f"{pkg}.{key}: value must be a .md path or start with one of {EVIDENCE_PREFIXES}; got {value!r}"
                     )
                     continue
-                if not (REPO_ROOT / value).exists():
-                    errors.append(f"{pkg}.{key}: evidence path does not exist: {value}")
+                if not (REPO_ROOT / value).is_file():
+                    errors.append(
+                        f"{pkg}.{key}: evidence path does not point to an existing file: {value}"
+                    )
 
         self.assertEqual(errors, [], "evidence violations:\n  " + "\n  ".join(errors))
 

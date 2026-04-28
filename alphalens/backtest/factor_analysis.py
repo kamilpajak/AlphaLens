@@ -118,6 +118,58 @@ def run_carhart_attribution(
     ]
 
 
+def bootstrap_carhart_alpha_ci(
+    portfolio_returns: pd.Series,
+    carhart_factors: pd.DataFrame,
+    *,
+    iterations: int = 10_000,
+    seed: int = 42,
+    confidence: float = 0.95,
+) -> tuple[float, float]:
+    """Moving-block bootstrap 95% CI on annualized Carhart-4F alpha.
+
+    Per Hall-Horowitz 1995 the block length is ``n^(1/3)``. HAC on the
+    full-sample test handles serial correlation asymptotically; this
+    bootstrap provides finite-sample robustness so the decision matrix
+    can gate on "CI excludes 0" independently of the HAC t-stat
+    threshold. Returns ``(ci_low_annualized, ci_high_annualized)``.
+
+    ``carhart_factors`` must contain columns Mkt-RF, SMB, HML, Mom, RF.
+
+    The kill_verdict_checklist Gate 6 spec uses this function as its
+    canonical implementation — bootstrap the *Carhart alpha* (residual
+    after factor controls), not raw mean return, so the CI answers the
+    same question as the headline α t-stat.
+    """
+    factor_cols = ["Mkt-RF", "SMB", "HML", "Mom"]
+    aligned = pd.concat(
+        [portfolio_returns.rename("port"), carhart_factors],
+        axis=1,
+        join="inner",
+    ).dropna()
+    n = len(aligned)
+    if n < 50:
+        raise ValueError(f"Need >=50 obs for bootstrap, got {n}")
+
+    block_len = max(1, int(np.floor(n ** (1 / 3))))
+    n_blocks = int(np.ceil(n / block_len))
+
+    y_arr = (aligned["port"] - aligned["RF"]).to_numpy()
+    X_arr = sm.add_constant(aligned[factor_cols]).to_numpy()
+
+    rng = np.random.default_rng(seed)
+    alphas_daily = np.empty(iterations)
+    for i in range(iterations):
+        starts = rng.integers(0, n - block_len + 1, size=n_blocks)
+        idx = np.concatenate([np.arange(s, s + block_len) for s in starts])[:n]
+        beta, *_ = np.linalg.lstsq(X_arr[idx], y_arr[idx], rcond=None)
+        alphas_daily[i] = beta[0]
+
+    tail = (1 - confidence) / 2
+    ci_low_daily, ci_high_daily = np.percentile(alphas_daily, [tail * 100, (1 - tail) * 100])
+    return float(ci_low_daily * 252), float(ci_high_daily * 252)
+
+
 def run_ff5_umd_attribution(
     portfolio_returns: pd.Series,
     ff5_umd_factors: pd.DataFrame,
