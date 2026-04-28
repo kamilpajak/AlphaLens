@@ -401,5 +401,78 @@ class TestFormatSummary(unittest.TestCase):
             self.assertIn(spec, text)
 
 
+class TestBootstrapCarhartAlphaCi(unittest.TestCase):
+    """Moving-block bootstrap on Carhart-4F α intercept."""
+
+    def test_zero_alpha_strategy_ci_brackets_zero(self):
+        from alphalens.backtest.factor_analysis import bootstrap_carhart_alpha_ci
+
+        carhart = _synthetic_carhart(n=500, seed=1)
+        rng = np.random.default_rng(2)
+        # Returns = 1.0 × Mkt-RF + RF + zero-mean noise → no residual α
+        returns = (carhart["Mkt-RF"] + carhart["RF"] + rng.normal(0, 0.005, len(carhart))).rename(
+            "port"
+        )
+
+        ci_low, ci_high = bootstrap_carhart_alpha_ci(returns, carhart, iterations=500, seed=42)
+
+        self.assertLess(ci_low, 0)
+        self.assertGreater(ci_high, 0)
+
+    def test_strong_positive_alpha_ci_excludes_zero(self):
+        from alphalens.backtest.factor_analysis import bootstrap_carhart_alpha_ci
+
+        n = 1000
+        carhart = _synthetic_carhart(n=n, seed=3)
+        # Inject ~50 bps daily α (~125% annualized) — far from any noise band
+        returns = (
+            carhart["Mkt-RF"] + carhart["RF"] + 0.005 + np.random.default_rng(4).normal(0, 0.003, n)
+        ).rename("port")
+
+        ci_low, ci_high = bootstrap_carhart_alpha_ci(returns, carhart, iterations=500, seed=42)
+
+        self.assertGreater(ci_low, 0)
+        self.assertLess(ci_low, ci_high)
+
+    def test_ci_returned_in_annualized_units(self):
+        from alphalens.backtest.factor_analysis import bootstrap_carhart_alpha_ci
+
+        carhart = _synthetic_carhart(n=300, seed=5)
+        returns = (carhart["Mkt-RF"] + carhart["RF"]).rename("port")
+
+        ci_low, ci_high = bootstrap_carhart_alpha_ci(returns, carhart, iterations=200, seed=42)
+
+        # Annualized α magnitudes should easily land in [-2, 2] for benign noise;
+        # daily α would be ~250× smaller. Sanity-check the scale only.
+        self.assertLess(abs(ci_low), 2.0)
+        self.assertLess(abs(ci_high), 2.0)
+
+    def test_too_few_observations_raises(self):
+        from alphalens.backtest.factor_analysis import bootstrap_carhart_alpha_ci
+
+        carhart = _synthetic_carhart(n=40, seed=6)
+        returns = (carhart["Mkt-RF"] + carhart["RF"]).rename("port")
+
+        with self.assertRaises(ValueError):
+            bootstrap_carhart_alpha_ci(returns, carhart, iterations=100, seed=42)
+
+    def test_confidence_level_widens_ci(self):
+        from alphalens.backtest.factor_analysis import bootstrap_carhart_alpha_ci
+
+        carhart = _synthetic_carhart(n=400, seed=7)
+        returns = (carhart["Mkt-RF"] + carhart["RF"]).rename("port")
+
+        low_95, high_95 = bootstrap_carhart_alpha_ci(
+            returns, carhart, iterations=300, seed=42, confidence=0.95
+        )
+        low_99, high_99 = bootstrap_carhart_alpha_ci(
+            returns, carhart, iterations=300, seed=42, confidence=0.99
+        )
+
+        # 99% CI must be at least as wide as 95% CI on both sides
+        self.assertLessEqual(low_99, low_95)
+        self.assertGreaterEqual(high_99, high_95)
+
+
 if __name__ == "__main__":
     unittest.main()

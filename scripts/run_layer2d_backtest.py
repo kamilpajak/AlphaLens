@@ -47,9 +47,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import numpy as np
 import pandas as pd
-import statsmodels.api as sm
 import yaml
 
 from alphalens.alt_data.sec_edgar_client import SecEdgarClient
@@ -59,6 +57,7 @@ from alphalens.backtest.cost_model import RealisticCostModel
 from alphalens.backtest.decision_matrix import evaluate_exit_criteria
 from alphalens.backtest.engine import BacktestEngine
 from alphalens.backtest.factor_analysis import (
+    bootstrap_carhart_alpha_ci,
     run_carhart_attribution,
     run_ff5_umd_attribution,
     run_q4_attribution,
@@ -85,7 +84,6 @@ _CIK_MAP_PATH = Path("alphalens/alt_data/data/ticker_cik_map.yaml")
 
 _CARHART_FACTORS = ["Mkt-RF", "SMB", "HML", "Mom"]
 _BOOTSTRAP_ITERATIONS = 10_000
-_BOOTSTRAP_SEED = 42
 # Primary spread assumption per design doc §5 R8 — 5 bps half-spread on R2000 retail.
 _PRIMARY_HALF_SPREAD_BPS = 5.0
 # k=0.15 stress: Almgren-Chriss requires per-trade ADV/size which the daily
@@ -95,48 +93,6 @@ _PRIMARY_HALF_SPREAD_BPS = 5.0
 _STRESS_HALF_SPREAD_BPS = 15.0
 _ADVERSE_SELECTION_BPS = 5.0
 _REGIME_MIN_OBS = 30
-
-
-def bootstrap_carhart_alpha_ci(
-    portfolio_returns: pd.Series,
-    carhart_factors: pd.DataFrame,
-    iterations: int = _BOOTSTRAP_ITERATIONS,
-    seed: int = _BOOTSTRAP_SEED,
-) -> tuple[float, float]:
-    """Moving-block bootstrap 95% CI for annualized Carhart-4F alpha.
-
-    Block length follows Hall-Horowitz 1995: n^(1/3). HAC on the full-sample
-    test handles serial correlation asymptotically; bootstrap CI provides
-    finite-sample robustness so the decision matrix can gate on "CI excludes 0"
-    independently of the HAC t-stat threshold.
-    """
-    aligned = pd.concat(
-        [portfolio_returns.rename("port"), carhart_factors],
-        axis=1,
-        join="inner",
-    ).dropna()
-    n = len(aligned)
-    if n < 50:
-        raise ValueError(f"Need >=50 obs for bootstrap, got {n}")
-
-    block_len = max(1, int(np.floor(n ** (1 / 3))))
-    n_blocks = int(np.ceil(n / block_len))
-
-    y_arr = (aligned["port"] - aligned["RF"]).to_numpy()
-    X_arr = sm.add_constant(aligned[_CARHART_FACTORS]).to_numpy()
-
-    rng = np.random.default_rng(seed)
-    alphas_daily = np.empty(iterations)
-    for i in range(iterations):
-        starts = rng.integers(0, n - block_len + 1, size=n_blocks)
-        idx = np.concatenate([np.arange(s, s + block_len) for s in starts])[:n]
-        y_b = y_arr[idx]
-        X_b = X_arr[idx]
-        beta, *_ = np.linalg.lstsq(X_b, y_b, rcond=None)
-        alphas_daily[i] = beta[0]
-
-    ci_low_daily, ci_high_daily = np.percentile(alphas_daily, [2.5, 97.5])
-    return float(ci_low_daily * 252), float(ci_high_daily * 252)
 
 
 def compute_regime_alpha_tstats(
@@ -252,7 +208,7 @@ def run_split(
         logger.error("empty universe; build PIT snapshots first (Phase 2.5)")
         sys.exit(2)
 
-    tickers_with_bench = universe + [benchmark]
+    tickers_with_bench = [*universe, benchmark]
     histories = load_cached_histories(tickers_with_bench, _PRICES_DIR)
     if benchmark not in histories:
         logger.error("benchmark %s missing from cache; add to yfinance cache", benchmark)
