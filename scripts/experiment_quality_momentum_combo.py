@@ -109,9 +109,15 @@ def quality_momentum_adapter(
         return pd.DataFrame(columns=["ticker", "score"])
 
     df = pd.DataFrame(rows)
-    # Z-score within universe (winsorize at ±3 to limit outlier influence)
+    # Z-score within universe (winsorize at ±3 to limit outlier influence).
+    # std<=0 guard matches the pattern in tri_factor_adapter / momentum_lowvol —
+    # degenerate input (all tickers identical) divides by zero without it.
     for col in ("mom", "roe"):
-        z = (df[col] - df[col].mean()) / df[col].std(ddof=0)
+        std = df[col].std(ddof=0)
+        if std <= 0:
+            df[f"z_{col}"] = 0.0
+            continue
+        z = (df[col] - df[col].mean()) / std
         df[f"z_{col}"] = z.clip(-3.0, 3.0)
     df["score"] = df["z_mom"] + df["z_roe"]
     return df.sort_values("score", ascending=False).reset_index(drop=True)
