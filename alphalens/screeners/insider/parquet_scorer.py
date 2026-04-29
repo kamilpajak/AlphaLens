@@ -18,8 +18,26 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pyarrow.dataset as ds
+
+
+def _to_date(value: Any) -> date:
+    """Normalise a parquet date cell to ``datetime.date``.
+
+    The migration tool emits the ``date`` column as timezone-naive
+    ``datetime64[ns]``; pandas surfaces those as ``pd.Timestamp`` on
+    ``itertuples``. ``pd.Timestamp == datetime.date`` is False, which
+    silently turned every cache lookup into a miss prior to this guard.
+    """
+    if isinstance(value, date) and not hasattr(value, "to_pydatetime"):
+        return value
+    if hasattr(value, "date"):
+        return value.date()
+    if isinstance(value, str):
+        return date.fromisoformat(value)
+    raise TypeError(f"unsupported date cell type: {type(value).__name__}")
 
 
 class ParquetInsiderScorer:
@@ -49,7 +67,7 @@ class ParquetInsiderScorer:
 
         features: dict[tuple[str, date], dict | None] = {}
         for row in df.itertuples(index=False):
-            key = (row.ticker.upper(), row.date)
+            key = (row.ticker.upper(), _to_date(row.date))
             if not row.has_features:
                 features[key] = None
                 continue

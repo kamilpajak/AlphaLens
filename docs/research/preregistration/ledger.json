@@ -1,0 +1,143 @@
+{
+  "entries": [
+    {
+      "id": "mom_lowvol_combo_2026_04_29",
+      "signal_class": "price_factor_search_2026_04_29",
+      "hypothesis": "z(mom_12_1m) − vol_w·z(vol_60d) at vol_w=1.0 generates phase-robust net positive OOS excess vs SPY with multi-phase mean α t ≥ 2.39 (Bonferroni-corrected at n=3, α=0.05) on R2000-like PIT universe, ADV ≥ $5M, 5–15bp cost.",
+      "scorer_path": "scripts/experiment_momentum_lowvol_combo.py",
+      "params_frozen": {
+        "score": "z(mom_12_1m) - vol_w * z(vol_60d), vol_w=1.0",
+        "top_n": 15,
+        "holding_signal_days": 60,
+        "rebalance_stride": 5,
+        "adv_thresholds_usd": [
+          5000000,
+          20000000
+        ],
+        "cost_half_spreads_bps": [
+          5,
+          15
+        ],
+        "universe": "AlphaLens R2000-like PIT, no survivorship bias"
+      },
+      "periods": {
+        "is_start": "2011-01-01",
+        "is_end": "2022-12-31",
+        "oos_start": "2023-01-01",
+        "oos_end": "2026-04-22"
+      },
+      "success_criteria": {
+        "mode": "multi_phase",
+        "pass_rule": "Multi-phase audit per docs/research/strategy_validation_playbook.md Step 4-5: every-phase α t ≥ 1.5 AND mean α t ≥ Bonferroni threshold AND every-phase excess net ≥ 0",
+        "min_alpha_t_pass": 1.5,
+        "min_alpha_t_mid": 1.0,
+        "regime_caveat": "2017-2022 subsample IS Sharpe 0.16, excess −11.3% — STRUCTURAL hole, not vol-regime-filterable per orthogonal experiments"
+      },
+      "registered_at": "2026-04-29",
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": 0.49,
+        "mean_excess_net": -0.057,
+        "audit_path": "docs/research/mom_lowvol_combo_multi_phase_audit.json",
+        "completed_at": "2026-04-29",
+        "notes": "Phase-robust FAIL. OOS 2023-2026 mean αt=+0.49 (±1.05, min=-0.53 max=+1.66), mean excess net -5.7%/y (±44.5pp dispersion). IS 2011-2022 mean αt=+0.67, mean excess net -1.1%/y. Majority of phases negative on excess net. Single-phase OOS Sharpe 0.55 from 2026-04-29 strategy search was phase-1 outlier; phases 2+3 produced αt=-0.39/-0.53 with excess net -33.9%/-67.0%. The 44.5pp OOS dispersion confirms phase-aliasing was the source of apparent alpha. Pre-registered Bonferroni gate t≥2.39 (n=3) FAR from cleared."
+      },
+      "notes": ""
+    },
+    {
+      "id": "pure_contrarian_2026_04_29",
+      "signal_class": "price_factor_search_2026_04_29",
+      "hypothesis": "60d-drawdown + 5d bounce contrarian, ADV+cost-stressed, generates positive OOS net 4F α on R2000-like PIT universe.",
+      "scorer_path": "scripts/experiment_constrained_contrarian.py",
+      "params_frozen": {
+        "score": "60d-drawdown + 5d bounce",
+        "top_n": 15,
+        "holding_signal_days": 60,
+        "rebalance_stride": 5,
+        "adv_thresholds_usd": [
+          0,
+          1000000,
+          5000000,
+          20000000,
+          100000000
+        ],
+        "cost_half_spreads_bps": [
+          5,
+          15
+        ],
+        "universe": "AlphaLens R2000-like PIT, no survivorship bias"
+      },
+      "periods": {
+        "is_start": "2011-01-01",
+        "is_end": "2022-12-31",
+        "oos_start": "2023-01-01",
+        "oos_end": "2026-04-22"
+      },
+      "success_criteria": {
+        "mode": "is_oos_classic",
+        "pass_rule": "OOS net 4F α t ≥ 1.0 AND OOS Sharpe ≥ 0.5 AND α stable across ADV ≥ $5M/$20M",
+        "min_alpha_t_pass": 1.5,
+        "min_alpha_t_mid": 1.0
+      },
+      "registered_at": "2026-04-29",
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": -0.88,
+        "mean_excess_net": -0.52,
+        "audit_path": "docs/research/contrarian_constrained.md",
+        "completed_at": "2026-04-29",
+        "notes": "OOS net α at ADV ≥ $5M = −52%/y (t=−0.88). The 150%/y zero-ADV headline was tail-rebound artifact of un-tradeable names. Backfilled retrospectively."
+      },
+      "notes": ""
+    },
+    {
+      "id": "pure_momentum_2026_04_29",
+      "signal_class": "price_factor_search_2026_04_29",
+      "hypothesis": "12-1m Jegadeesh-Titman momentum, ADV+cost-stressed, generates positive OOS net excess vs SPY on R2000-like PIT universe.",
+      "scorer_path": "scripts/experiment_constrained_momentum.py",
+      "params_frozen": {
+        "score": "12-1m Jegadeesh-Titman cumulative return",
+        "top_n": 15,
+        "holding_signal_days": 60,
+        "rebalance_stride": 5,
+        "adv_thresholds_usd": [
+          0,
+          1000000,
+          5000000,
+          20000000,
+          100000000
+        ],
+        "cost_half_spreads_bps": [
+          5,
+          15
+        ],
+        "universe": "AlphaLens R2000-like PIT, no survivorship bias"
+      },
+      "periods": {
+        "is_start": "2011-01-01",
+        "is_end": "2022-12-31",
+        "oos_start": "2023-01-01",
+        "oos_end": "2026-04-22"
+      },
+      "success_criteria": {
+        "mode": "is_oos_classic",
+        "pass_rule": "OOS net Sharpe ≥ 0.5 AND OOS net excess vs SPY ≥ 5%/y AND ADV-stable across $5M+, $20M+",
+        "min_alpha_t_pass": 1.5,
+        "min_alpha_t_mid": 1.0
+      },
+      "registered_at": "2026-04-29",
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": -0.5,
+        "mean_excess_net": -0.47,
+        "audit_path": "docs/research/momentum_constrained.md",
+        "completed_at": "2026-04-29",
+        "notes": "OOS net excess −47%/y to −89%/y across all ADV thresholds. IS+OOS classic framework; multi-phase not run. Backfilled 2026-04-29 retrospectively."
+      },
+      "notes": ""
+    }
+  ]
+}

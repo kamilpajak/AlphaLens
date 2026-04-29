@@ -14,9 +14,12 @@ estimate. This module is the small library piece; experiment scripts call
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Sequence
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Headline metrics aggregated across phases. Add new keys here; the helper
 # walks them defensively so missing keys never raise.
@@ -38,6 +41,7 @@ def summarise_phase_results(
     so each metric's distribution can be inspected independently.
     """
     summary: dict[str, dict[str, float]] = {}
+    total = len(phase_results)
     for key in _AGGREGATED_KEYS:
         values = [
             float(r[key])
@@ -46,6 +50,17 @@ def summarise_phase_results(
         ]
         if not values:
             continue
+        if len(values) != total:
+            # Per-key independent NaN filtering means cross-metric comparisons
+            # may draw from non-overlapping samples. WARNING (not INFO) so it
+            # surfaces under Python's default root config — direct script
+            # invocations of the audit driver do not configure logging.
+            logger.warning(
+                "summarise_phase_results: partial coverage on %r — n=%d of %d phases",
+                key,
+                len(values),
+                total,
+            )
         summary[key] = {
             "mean": sum(values) / len(values),
             "std": _stdev(values),

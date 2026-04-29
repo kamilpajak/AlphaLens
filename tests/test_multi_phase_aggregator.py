@@ -121,6 +121,82 @@ class MultiPhaseAggregatorTests(unittest.TestCase):
         ]
         self.assertEqual(robust_verdict(rows), "PASS")
 
+    def test_summarise_logs_when_metric_has_partial_coverage(self):
+        """Per issue #38 item 2 (Option A): per-key independent NaN filtering
+        is retained for the diagnostic summary, but partial coverage (any
+        metric's `n` differing from total phase count) is surfaced via a
+        single INFO log so silent column-misalignment doesn't pass review.
+        """
+        from alphalens.backtest.multi_phase import summarise_phase_results
+
+        rows = [
+            {
+                "sharpe_gross": 0.4,
+                "sharpe_net": 0.2,
+                "excess_gross_ann": 0.18,
+                "excess_net_ann": 0.15,
+                "alpha_t": 1.5,
+            },
+            {
+                "sharpe_gross": 0.6,
+                "sharpe_net": 0.4,
+                "excess_gross_ann": 0.22,
+                "excess_net_ann": float("nan"),
+                "alpha_t": 1.8,
+            },
+            {
+                "sharpe_gross": 0.5,
+                "sharpe_net": 0.3,
+                "excess_gross_ann": 0.20,
+                "excess_net_ann": 0.17,
+                "alpha_t": 1.6,
+            },
+        ]
+
+        with self.assertLogs("alphalens.backtest.multi_phase", level="WARNING") as cm:
+            summary = summarise_phase_results(rows)
+
+        # Logged the partial-coverage warning
+        self.assertTrue(
+            any("excess_net_ann" in m and "partial" in m.lower() for m in cm.output),
+            f"expected partial-coverage log mentioning excess_net_ann; got {cm.output}",
+        )
+        # Per-metric counts unchanged (Option A is observability, not breaking change)
+        self.assertEqual(summary["excess_net_ann"]["n"], 2)
+        self.assertEqual(summary["alpha_t"]["n"], 3)
+
+    def test_summarise_silent_when_all_metrics_complete(self):
+        """No log when every metric has full coverage — must not spam normal runs."""
+        import logging
+
+        from alphalens.backtest.multi_phase import summarise_phase_results
+
+        rows = [
+            {
+                "sharpe_gross": 0.4,
+                "sharpe_net": 0.2,
+                "excess_gross_ann": 0.18,
+                "excess_net_ann": 0.15,
+                "alpha_t": 1.5,
+            },
+            {
+                "sharpe_gross": 0.6,
+                "sharpe_net": 0.4,
+                "excess_gross_ann": 0.22,
+                "excess_net_ann": 0.18,
+                "alpha_t": 1.8,
+            },
+        ]
+
+        # `assertNoLogs` is 3.10+; emulate by capturing and asserting empty.
+        logger = logging.getLogger("alphalens.backtest.multi_phase")
+        with self.assertLogs(logger, level="WARNING") as cm:
+            logger.warning("anchor")  # ensure the context produces at least one record
+            summarise_phase_results(rows)
+
+        partial_logs = [m for m in cm.output if "partial" in m.lower()]
+        self.assertEqual(partial_logs, [])
+
     def test_single_pass_filter_does_not_promote_truncated_to_pass(self):
         """Regression: the old `zip(strict=False)` would truncate the tail of
         the longer list. If the LAST phase happened to be the only failing

@@ -36,6 +36,7 @@ LAYERS_WITH_STATUS = (
     "alphalens.guru",
     "alphalens.literature_review",
     "alphalens.macro",
+    "alphalens.preregistration",
     "alphalens.quiver_screener",
     "alphalens.rotation",
     "alphalens.screeners.insider",
