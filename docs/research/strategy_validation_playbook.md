@@ -4,18 +4,62 @@
 
 This is the **canonical pipeline for any future strategy candidate** in AlphaLens. Each step has its own infrastructure and tests.
 
-## The 6-step pipeline
+## The 7-step pipeline
 
 ```
+0. Pre-register hypothesis          ───►  alphalens preregister add ...
 1. Define scorer adapter            ───►  experiment_<name>.py
 2. Smoke run                        ───►  6m IS + 6m OOS, single ADV/cost
 3. Full IS + OOS run                ───►  domyslny --phase-offset 0
 4. Multi-phase audit (KEY GATE)     ───►  scripts/audit_multi_phase.py
-5. Read robust_verdict (PASS/MID/FAIL)
-6. PASS → forward-walk z pre-registration
-   MID  → regime-conditional sizing + tighter monitoring
-   FAIL → close, document anti-pattern, kill verdict in __init__.py
+5. Read robust_verdict (PASS/MID/FAIL) — compare αt vs Bonferroni threshold
+6. PASS → forward-walk + alphalens preregister complete --verdict PASS
+   MID  → regime-conditional sizing + complete --verdict MID
+   FAIL → close + complete --verdict FAIL, document anti-pattern
 ```
+
+## Step 0 — Pre-register (BEFORE step 1)
+
+Closes Gap #1. Pre-registration is the commitment device that prevents
+post-hoc parameter selection from inflating the apparent t-stat.
+
+Compose a JSON file `params.json`:
+
+```json
+{
+  "params_frozen": {
+    "top_n": 5, "holding": 20, "rebalance_stride": 5,
+    "weights": {"factor_a": 0.5, "factor_b": 0.5}
+  },
+  "periods": {
+    "is_start": "2015-01-01", "is_end": "2022-12-31",
+    "oos_start": "2023-01-01", "oos_end": "2026-04-22"
+  },
+  "success_criteria": {
+    "mode": "multi_phase",
+    "min_alpha_t_pass": 1.5, "min_alpha_t_mid": 1.0
+  }
+}
+```
+
+Then register, and look up the Bonferroni-corrected threshold for the
+signal class **as it stands now** — the freshly-added entry counts as
+the n-th test:
+
+```bash
+.venv/bin/alphalens preregister add \
+    --id <slug> --signal-class <class> \
+    --hypothesis "..." --scorer-path scripts/experiment_<name>.py \
+    --params-file params.json
+
+.venv/bin/alphalens preregister threshold --signal-class <class>
+# → "<class>: N tests at α=0.05 → critical |t| ≈ ..." where N includes
+#   the entry you just added.
+```
+
+Ledger lives at `docs/research/preregistration/ledger.json` (git-tracked).
+Re-running with different parameters requires a NEW id — the original
+registration is frozen.
 
 ## Step 1 — Scorer adapter
 
@@ -156,7 +200,7 @@ Total: 1349/1349 tests green; ~600 LOC of reusable validation infrastructure.
 
 ## What this playbook does NOT yet have (open gaps)
 
-1. **Pre-registration ledger.** No system tracks "how many strategies have we tested in signal class X?". Bonferroni correction is informal. Future iteration needs this.
+1. ~~**Pre-registration ledger.**~~ **CLOSED 2026-04-29** — `alphalens preregister add/list/show/complete/threshold` ships with a JSON ledger at `docs/research/preregistration/ledger.json`. `bonferroni_threshold()` returns the corrected critical |t| for the signal class as it stands. Step 0 above.
 2. **One-command wrapper.** Steps 2-5 are 4 separate invocations. A `alphalens validate <name>` CLI consolidating them would reduce friction.
 3. **Forward-walk harness.** Step 6 (PASS path) is descriptive. No tooling for "run from 2026-Q3 forward, kill if Sharpe < threshold".
 4. **Regime detector library.** Step 6 (MID path) requires regime-conditional sizing — no shared utilities yet.

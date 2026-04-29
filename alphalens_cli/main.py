@@ -31,6 +31,7 @@ from alphalens_cli.commands.events import events_app
 from alphalens_cli.commands.guru import guru_app
 from alphalens_cli.commands.insider import insider_app
 from alphalens_cli.commands.literature import literature_app
+from alphalens_cli.commands.preregister import preregister_app
 from alphalens_cli.commands.queue import queue_app
 from alphalens_cli.commands.research import research_app
 from alphalens_cli.commands.rotation import rotation_app
@@ -66,6 +67,7 @@ app.add_typer(queue_app, name="queue")
 app.add_typer(themed_app, name="themed")
 app.add_typer(insider_app, name="insider")
 app.add_typer(literature_app, name="literature")
+app.add_typer(preregister_app, name="preregister")
 app.add_typer(research_app, name="research")
 app.add_typer(rotation_app, name="rotation")
 app.add_typer(events_app, name="events")
