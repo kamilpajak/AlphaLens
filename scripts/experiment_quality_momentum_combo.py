@@ -1,18 +1,21 @@
 """Quality + momentum combo strategy on the same constrained framework.
 
-Backup experiment in case constrained momentum fails. Combo signal:
+Combo signal:
 
   score = z_score(mom_12_1m) + z_score(roe_ttm)
 
 where ``mom_12_1m`` is the canonical Jegadeesh-Titman 12-1 month return and
-``roe_ttm`` is TTM net income divided by latest reported total equity.
-Both PIT-filtered: SimFin reports use Publish Date ≤ asof.
+``roe_ttm`` is TTM net income (common-equity-adjusted when preferred capital
+is present) divided by stockholders' equity, both pulled from SEC EDGAR
+companyfacts. PIT-correct via filed-date filter; matched-pair concept
+hierarchy avoids parent/consolidated mixing; TTM via the Compustat formula
+``current_YTD + prior_FY - prior_YTD``.
 
 Universe: PIT R2000-like; ADV ≥ threshold; weekly stride; 5/15 bps cost
 stress. Same gate as `experiment_constrained_momentum.py`.
 
-Reads SimFin CSVs directly — no API key required, but data must already
-be cached at ``~/.alphalens/simfin_cache/us-{income,balance}-quarterly.csv``.
+Reads ``~/.alphalens/companyfacts/{CIK}.json`` (raw SEC bulk dump). Resolves
+ticker → CIK via ``alphalens/alt_data/data/ticker_cik_map.yaml``.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from alphalens.alt_data.ticker_cik_map import TickerCikMap
 from alphalens.alt_data.yfinance_cache import load_cached_histories
 from alphalens.backtest.cost_model import RealisticCostModel
 from alphalens.backtest.engine import BacktestEngine
@@ -37,12 +41,20 @@ from alphalens.backtest.factor_analysis import run_regression
 from alphalens.backtest.factors import load_carhart_daily
 from alphalens.backtest.history_store import HistoryStore
 from alphalens.backtest.metrics import sharpe, turnover_pct
+from alphalens.fundamentals.edgar_companyfacts import EdgarCompanyfactsROEStore
 
 logger = logging.getLogger(__name__)
 
 _PIT_DIR = Path.home() / ".alphalens" / "pit_universe"
 _PRICES_DIR = Path.home() / ".alphalens" / "prices"
-_SIMFIN_DIR = Path.home() / ".alphalens" / "simfin_cache"
+_COMPANYFACTS_DIR = Path.home() / ".alphalens" / "companyfacts"
+_TICKER_CIK_MAP_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "alphalens"
+    / "alt_data"
+    / "data"
+    / "ticker_cik_map.yaml"
+)
 _STR_PATH = Path.home() / ".alphalens" / "factors" / "str_daily.csv"
 
 _CARHART_FACTORS = ["Mkt-RF", "SMB", "HML", "Mom"]
@@ -58,74 +70,6 @@ def load_pit_union(start: date, end: date) -> list[str]:
         for ticker in data.get("tickers", []):
             union.add(ticker)
     return sorted(union)
-
-
-class FundamentalsROEStore:
-    """Lightweight TTM-ROE store reading SimFin CSVs directly.
-
-    Builds two per-ticker dicts at construction:
-      - income_by_ticker: list of (publish_date, report_date, net_income)
-      - balance_by_ticker: list of (publish_date, report_date, total_equity)
-
-    features_as_of(ticker, asof):
-      - filter income to publish_date ≤ asof, sort by report_date
-      - sum last 4 quarters' net_income → TTM
-      - filter balance to publish_date ≤ asof, take latest by report_date
-      - return TTM_NI / latest_equity
-    """
-
-    def __init__(self, simfin_dir: Path):
-        income_csv = simfin_dir / "us-income-quarterly.csv"
-        balance_csv = simfin_dir / "us-balance-quarterly.csv"
-        if not income_csv.exists() or not balance_csv.exists():
-            raise FileNotFoundError(f"SimFin CSVs missing in {simfin_dir}")
-
-        logger.info("loading SimFin income/balance CSVs")
-        inc = pd.read_csv(income_csv, sep=";", low_memory=False)
-        bal = pd.read_csv(balance_csv, sep=";", low_memory=False)
-
-        for col in ("Publish Date", "Report Date"):
-            inc[col] = pd.to_datetime(inc[col], errors="coerce")
-            bal[col] = pd.to_datetime(bal[col], errors="coerce")
-        inc = inc.dropna(subset=["Publish Date", "Report Date", "Net Income", "Ticker"])
-        bal = bal.dropna(subset=["Publish Date", "Report Date", "Total Equity", "Ticker"])
-
-        self._income_by_ticker: dict[str, pd.DataFrame] = {}
-        for ticker, sub in inc.groupby("Ticker"):
-            self._income_by_ticker[ticker.upper()] = (
-                sub[["Publish Date", "Report Date", "Net Income"]]
-                .sort_values("Report Date")
-                .reset_index(drop=True)
-            )
-        self._balance_by_ticker: dict[str, pd.DataFrame] = {}
-        for ticker, sub in bal.groupby("Ticker"):
-            self._balance_by_ticker[ticker.upper()] = (
-                sub[["Publish Date", "Report Date", "Total Equity"]]
-                .sort_values("Report Date")
-                .reset_index(drop=True)
-            )
-        logger.info(
-            "fundamentals: %d tickers with income, %d with balance",
-            len(self._income_by_ticker),
-            len(self._balance_by_ticker),
-        )
-
-    def roe_ttm(self, ticker: str, asof: date) -> float | None:
-        up = ticker.upper()
-        inc = self._income_by_ticker.get(up)
-        bal = self._balance_by_ticker.get(up)
-        if inc is None or bal is None:
-            return None
-        ts = pd.Timestamp(asof)
-        inc_visible = inc[inc["Publish Date"] <= ts]
-        bal_visible = bal[bal["Publish Date"] <= ts]
-        if len(inc_visible) < 4 or bal_visible.empty:
-            return None
-        ttm_ni = float(inc_visible.tail(4)["Net Income"].sum())
-        equity = float(bal_visible.tail(1)["Total Equity"].iloc[0])
-        if equity <= 0:
-            return None
-        return ttm_ni / equity
 
 
 def quality_momentum_adapter(
@@ -249,6 +193,30 @@ def main() -> int:
         type=float,
         default=[5.0, 15.0],
     )
+    ap.add_argument(
+        "--is-start",
+        type=date.fromisoformat,
+        default=date(2015, 1, 1),
+        help="In-sample start date (default: 2015-01-01, when EDGAR fundamentals coverage stabilises).",
+    )
+    ap.add_argument(
+        "--is-end",
+        type=date.fromisoformat,
+        default=date(2022, 12, 31),
+        help="In-sample end date (default: 2022-12-31, just before OOS).",
+    )
+    ap.add_argument(
+        "--oos-start",
+        type=date.fromisoformat,
+        default=date(2023, 1, 1),
+        help="Out-of-sample start date (default: 2023-01-01).",
+    )
+    ap.add_argument(
+        "--oos-end",
+        type=date.fromisoformat,
+        default=date(2026, 4, 22),
+        help="Out-of-sample end date (default: 2026-04-22, last data refresh).",
+    )
     ap.add_argument("--out", type=Path, default=Path("docs/research/quality_momentum_combo.md"))
     args = ap.parse_args()
 
@@ -256,14 +224,15 @@ def main() -> int:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
 
-    full_universe = load_pit_union(date(2011, 1, 1), date(2026, 4, 22))
+    full_universe = load_pit_union(args.is_start, args.oos_end)
     histories = load_cached_histories([*full_universe, args.benchmark], _PRICES_DIR)
     history_store = HistoryStore(histories)
-    fundamentals = FundamentalsROEStore(_SIMFIN_DIR)
+    cik_map = TickerCikMap.load(_TICKER_CIK_MAP_PATH)
+    fundamentals = EdgarCompanyfactsROEStore(_COMPANYFACTS_DIR, cik_map)
 
     periods = [
-        ("Full IS 2011-2022", date(2011, 1, 1), date(2022, 12, 31)),
-        ("OOS 2023-2026", date(2023, 1, 1), date(2026, 4, 22)),
+        (f"IS {args.is_start.year}-{args.is_end.year}", args.is_start, args.is_end),
+        (f"OOS {args.oos_start.year}-{args.oos_end.year}", args.oos_start, args.oos_end),
     ]
 
     sections: list[str] = [
