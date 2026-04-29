@@ -121,6 +121,152 @@ class TestRebalanceStride(unittest.TestCase):
         self.assertEqual(engine.rebalance_stride, 1)
 
 
+class TestPhaseOffset(unittest.TestCase):
+    """`rebalance_stride > 1` samples 1-in-stride trading days as rebalance
+    dates. Which 1-in-stride depends on the calendar start, creating a
+    phase-aliasing artifact: two backtests of the same strategy on the same
+    period with different start dates can produce wildly different Sharpes
+    purely from sampling noise (validated empirically 2026-04-29:
+    `docs/research/methodology_audit_2026_04_29.md`).
+
+    `phase_offset` lets the caller pin the sampling phase explicitly so
+    multi-phase analyses or partition checks can be done deterministically.
+    """
+
+    def test_phase_offset_default_is_zero(self):
+        """Backwards compat: existing call sites use phase 0 implicitly."""
+        store = _make_store(n_days=30)
+        engine = BacktestEngine(
+            store,
+            scorer=_constant_scorer,
+            scorer_config={"benchmark": "SPY"},
+            holding_period=5,
+            top_n=3,
+            benchmark="SPY",
+            rebalance_stride=5,
+        )
+        self.assertEqual(engine.phase_offset, 0)
+
+    def test_phase_offset_shifts_first_rebalance_date(self):
+        """phase_offset=k starts the strided calendar at calendar[k]."""
+        store = _make_store(n_days=60)
+        phase0 = BacktestEngine(
+            store,
+            scorer=_constant_scorer,
+            scorer_config={"benchmark": "SPY"},
+            holding_period=5,
+            top_n=3,
+            benchmark="SPY",
+            rebalance_stride=5,
+            phase_offset=0,
+        )
+        phase2 = BacktestEngine(
+            store,
+            scorer=_constant_scorer,
+            scorer_config={"benchmark": "SPY"},
+            holding_period=5,
+            top_n=3,
+            benchmark="SPY",
+            rebalance_stride=5,
+            phase_offset=2,
+        )
+        r0 = phase0.run(date(2020, 1, 2), date(2020, 3, 30))
+        r2 = phase2.run(date(2020, 1, 2), date(2020, 3, 30))
+        self.assertGreater(len(r0.rebalance_results), 0)
+        self.assertGreater(len(r2.rebalance_results), 0)
+        # Phase-2 first rebalance should fall 2 trading days after phase-0's first.
+        diff_days = (r2.rebalance_results[0].date - r0.rebalance_results[0].date).days
+        # 2 trading days (Mon-Fri) ≈ 2 calendar days, but spans weekends sometimes
+        self.assertIn(diff_days, (2, 4))  # 2 weekday or 4 if Fri→Tue
+
+    def test_phase_offset_below_stride_required(self):
+        store = _make_store(n_days=10)
+        with self.assertRaises(ValueError):
+            BacktestEngine(
+                store,
+                scorer=_constant_scorer,
+                scorer_config={"benchmark": "SPY"},
+                holding_period=5,
+                top_n=3,
+                benchmark="SPY",
+                rebalance_stride=5,
+                phase_offset=5,
+            )
+
+    def test_phase_offset_negative_rejected(self):
+        store = _make_store(n_days=10)
+        with self.assertRaises(ValueError):
+            BacktestEngine(
+                store,
+                scorer=_constant_scorer,
+                scorer_config={"benchmark": "SPY"},
+                holding_period=5,
+                top_n=3,
+                benchmark="SPY",
+                rebalance_stride=5,
+                phase_offset=-1,
+            )
+
+    def test_phase_offset_with_stride_one_is_noop(self):
+        """When stride=1 every trading day is a rebalance — phase_offset=k
+        just trims the first k days. With offset=0 (default) no trim."""
+        store = _make_store(n_days=60)
+        engine_no_offset = BacktestEngine(
+            store,
+            scorer=_constant_scorer,
+            scorer_config={"benchmark": "SPY"},
+            holding_period=5,
+            top_n=3,
+            benchmark="SPY",
+            rebalance_stride=1,
+            phase_offset=0,
+        )
+        report = engine_no_offset.run(date(2020, 1, 2), date(2020, 2, 28))
+        # Daily cadence over ~40 business days minus warmup (5 min_bars) and
+        # tail (5 holding-period horizon) ≈ 30 valid snapshots.
+        self.assertGreaterEqual(len(report.rebalance_results), 30)
+
+    def test_partitioned_full_run_equals_phase_aligned_subrun(self):
+        """Regression test for the phase-aliasing bug. Running engine on the
+        full window then slicing portfolio_returns by date must equal running
+        engine on the sub-window with the SAME phase_offset. This guarantees
+        callers can do offline partitioning without re-running the engine.
+        """
+        store = _make_store(n_days=120)
+        full = BacktestEngine(
+            store,
+            scorer=_constant_scorer,
+            scorer_config={"benchmark": "SPY"},
+            holding_period=5,
+            top_n=3,
+            benchmark="SPY",
+            rebalance_stride=5,
+            phase_offset=0,
+        )
+        full_report = full.run(date(2020, 1, 2), date(2020, 6, 12))
+        full_rets = full_report.portfolio_returns
+
+        # Half the window starting at the same first trading day (so phase_offset=0
+        # picks the SAME calendar phase for the sub-run).
+        sub = BacktestEngine(
+            store,
+            scorer=_constant_scorer,
+            scorer_config={"benchmark": "SPY"},
+            holding_period=5,
+            top_n=3,
+            benchmark="SPY",
+            rebalance_stride=5,
+            phase_offset=0,
+        )
+        sub_report = sub.run(date(2020, 1, 2), date(2020, 3, 27))
+        sub_rets = sub_report.portfolio_returns
+
+        common = full_rets.index.intersection(sub_rets.index)
+        self.assertGreater(len(common), 0)
+        max_diff = (full_rets.loc[common] - sub_rets.loc[common]).abs().max()
+        self.assertLess(float(max_diff), 1e-12)
+
+
 class TestNetAlphaScaling(unittest.TestCase):
     """compute_net_alpha must scale cost drag at the requested cadence,
     otherwise weekly and daily backtests produce mis-scaled net-alpha numbers.
