@@ -1,0 +1,526 @@
+{
+  "strategy": "tri_factor",
+  "rebalance_stride": 5,
+  "configs": [
+    {
+      "config": "2026-04-29 14:08:22,978 INFO __main__: IS 2019-2022 | rw=1.0 vw=1.0 ADV\u2265$5M cost=5bps",
+      "n_phases": 1,
+      "summary": {
+        "sharpe_gross": {
+          "mean": -0.33,
+          "std": 0.0,
+          "min": -0.33,
+          "max": -0.33,
+          "n": 1
+        },
+        "sharpe_net": {
+          "mean": -0.48,
+          "std": 0.0,
+          "min": -0.48,
+          "max": -0.48,
+          "n": 1
+        },
+        "excess_gross_ann": {
+          "mean": -0.379,
+          "std": 0.0,
+          "min": -0.379,
+          "max": -0.379,
+          "n": 1
+        },
+        "excess_net_ann": {
+          "mean": -0.405,
+          "std": 0.0,
+          "min": -0.405,
+          "max": -0.405,
+          "n": 1
+        },
+        "alpha_t": {
+          "mean": -0.82,
+          "std": 0.0,
+          "min": -0.82,
+          "max": -0.82,
+          "n": 1
+        }
+      },
+      "verdict": "FAIL",
+      "per_phase": [
+        {
+          "phase_offset": 0,
+          "sharpe_gross": -0.33,
+          "sharpe_net": -0.48,
+          "excess_gross_ann": -0.379,
+          "excess_net_ann": -0.405,
+          "alpha_t": -0.82
+        }
+      ]
+    },
+    {
+      "config": "2026-04-29 14:08:53,570 INFO __main__: OOS 2023-2023 | rw=1.0 vw=1.0 ADV\u2265$5M cost=5bps",
+      "n_phases": 1,
+      "summary": {
+        "sharpe_gross": {
+          "mean": -0.29,
+          "std": 0.0,
+          "min": -0.29,
+          "max": -0.29,
+          "n": 1
+        },
+        "sharpe_net": {
+          "mean": -0.51,
+          "std": 0.0,
+          "min": -0.51,
+          "max": -0.51,
+          "n": 1
+        },
+        "excess_gross_ann": {
+          "mean": -1.0490000000000002,
+          "std": 0.0,
+          "min": -1.0490000000000002,
+          "max": -1.0490000000000002,
+          "n": 1
+        },
+        "excess_net_ann": {
+          "mean": -1.074,
+          "std": 0.0,
+          "min": -1.074,
+          "max": -1.074,
+          "n": 1
+        },
+        "alpha_t": {
+          "mean": -0.58,
+          "std": 0.0,
+          "min": -0.58,
+          "max": -0.58,
+          "n": 1
+        }
+      },
+      "verdict": "FAIL",
+      "per_phase": [
+        {
+          "phase_offset": 0,
+          "sharpe_gross": -0.29,
+          "sharpe_net": -0.51,
+          "excess_gross_ann": -1.0490000000000002,
+          "excess_net_ann": -1.074,
+          "alpha_t": -0.58
+        }
+      ]
+    },
+    {
+      "config": "2026-04-29 14:12:11,352 INFO __main__: IS 2019-2022 | rw=1.0 vw=1.0 ADV\u2265$5M cost=5bps",
+      "n_phases": 1,
+      "summary": {
+        "sharpe_gross": {
+          "mean": -0.32,
+          "std": 0.0,
+          "min": -0.32,
+          "max": -0.32,
+          "n": 1
+        },
+        "sharpe_net": {
+          "mean": -0.51,
+          "std": 0.0,
+          "min": -0.51,
+          "max": -0.51,
+          "n": 1
+        },
+        "excess_gross_ann": {
+          "mean": -0.649,
+          "std": 0.0,
+          "min": -0.649,
+          "max": -0.649,
+          "n": 1
+        },
+        "excess_net_ann": {
+          "mean": -0.675,
+          "std": 0.0,
+          "min": -0.675,
+          "max": -0.675,
+          "n": 1
+        },
+        "alpha_t": {
+          "mean": -0.95,
+          "std": 0.0,
+          "min": -0.95,
+          "max": -0.95,
+          "n": 1
+        }
+      },
+      "verdict": "FAIL",
+      "per_phase": [
+        {
+          "phase_offset": 1,
+          "sharpe_gross": -0.32,
+          "sharpe_net": -0.51,
+          "excess_gross_ann": -0.649,
+          "excess_net_ann": -0.675,
+          "alpha_t": -0.95
+        }
+      ]
+    },
+    {
+      "config": "2026-04-29 14:12:30,733 INFO __main__: OOS 2023-2023 | rw=1.0 vw=1.0 ADV\u2265$5M cost=5bps",
+      "n_phases": 1,
+      "summary": {
+        "sharpe_gross": {
+          "mean": 0.21,
+          "std": 0.0,
+          "min": 0.21,
+          "max": 0.21,
+          "n": 1
+        },
+        "sharpe_net": {
+          "mean": 0.01,
+          "std": 0.0,
+          "min": 0.01,
+          "max": 0.01,
+          "n": 1
+        },
+        "excess_gross_ann": {
+          "mean": -0.122,
+          "std": 0.0,
+          "min": -0.122,
+          "max": -0.122,
+          "n": 1
+        },
+        "excess_net_ann": {
+          "mean": -0.147,
+          "std": 0.0,
+          "min": -0.147,
+          "max": -0.147,
+          "n": 1
+        },
+        "alpha_t": {
+          "mean": 0.14,
+          "std": 0.0,
+          "min": 0.14,
+          "max": 0.14,
+          "n": 1
+        }
+      },
+      "verdict": "FAIL",
+      "per_phase": [
+        {
+          "phase_offset": 1,
+          "sharpe_gross": 0.21,
+          "sharpe_net": 0.01,
+          "excess_gross_ann": -0.122,
+          "excess_net_ann": -0.147,
+          "alpha_t": 0.14
+        }
+      ]
+    },
+    {
+      "config": "2026-04-29 14:15:54,692 INFO __main__: IS 2019-2022 | rw=1.0 vw=1.0 ADV\u2265$5M cost=5bps",
+      "n_phases": 1,
+      "summary": {
+        "sharpe_gross": {
+          "mean": 0.15,
+          "std": 0.0,
+          "min": 0.15,
+          "max": 0.15,
+          "n": 1
+        },
+        "sharpe_net": {
+          "mean": -0.01,
+          "std": 0.0,
+          "min": -0.01,
+          "max": -0.01,
+          "n": 1
+        },
+        "excess_gross_ann": {
+          "mean": 0.322,
+          "std": 0.0,
+          "min": 0.322,
+          "max": 0.322,
+          "n": 1
+        },
+        "excess_net_ann": {
+          "mean": 0.297,
+          "std": 0.0,
+          "min": 0.297,
+          "max": 0.297,
+          "n": 1
+        },
+        "alpha_t": {
+          "mean": 0.55,
+          "std": 0.0,
+          "min": 0.55,
+          "max": 0.55,
+          "n": 1
+        }
+      },
+      "verdict": "FAIL",
+      "per_phase": [
+        {
+          "phase_offset": 2,
+          "sharpe_gross": 0.15,
+          "sharpe_net": -0.01,
+          "excess_gross_ann": 0.322,
+          "excess_net_ann": 0.297,
+          "alpha_t": 0.55
+        }
+      ]
+    },
+    {
+      "config": "2026-04-29 14:16:24,593 INFO __main__: OOS 2023-2023 | rw=1.0 vw=1.0 ADV\u2265$5M cost=5bps",
+      "n_phases": 1,
+      "summary": {
+        "sharpe_gross": {
+          "mean": 0.39,
+          "std": 0.0,
+          "min": 0.39,
+          "max": 0.39,
+          "n": 1
+        },
+        "sharpe_net": {
+          "mean": 0.19,
+          "std": 0.0,
+          "min": 0.19,
+          "max": 0.19,
+          "n": 1
+        },
+        "excess_gross_ann": {
+          "mean": 0.54,
+          "std": 0.0,
+          "min": 0.54,
+          "max": 0.54,
+          "n": 1
+        },
+        "excess_net_ann": {
+          "mean": 0.514,
+          "std": 0.0,
+          "min": 0.514,
+          "max": 0.514,
+          "n": 1
+        },
+        "alpha_t": {
+          "mean": 0.58,
+          "std": 0.0,
+          "min": 0.58,
+          "max": 0.58,
+          "n": 1
+        }
+      },
+      "verdict": "FAIL",
+      "per_phase": [
+        {
+          "phase_offset": 2,
+          "sharpe_gross": 0.39,
+          "sharpe_net": 0.19,
+          "excess_gross_ann": 0.54,
+          "excess_net_ann": 0.514,
+          "alpha_t": 0.58
+        }
+      ]
+    },
+    {
+      "config": "2026-04-29 14:19:20,019 INFO __main__: IS 2019-2022 | rw=1.0 vw=1.0 ADV\u2265$5M cost=5bps",
+      "n_phases": 1,
+      "summary": {
+        "sharpe_gross": {
+          "mean": 0.29,
+          "std": 0.0,
+          "min": 0.29,
+          "max": 0.29,
+          "n": 1
+        },
+        "sharpe_net": {
+          "mean": 0.12,
+          "std": 0.0,
+          "min": 0.12,
+          "max": 0.12,
+          "n": 1
+        },
+        "excess_gross_ann": {
+          "mean": 0.006,
+          "std": 0.0,
+          "min": 0.006,
+          "max": 0.006,
+          "n": 1
+        },
+        "excess_net_ann": {
+          "mean": -0.019,
+          "std": 0.0,
+          "min": -0.019,
+          "max": -0.019,
+          "n": 1
+        },
+        "alpha_t": {
+          "mean": 0.66,
+          "std": 0.0,
+          "min": 0.66,
+          "max": 0.66,
+          "n": 1
+        }
+      },
+      "verdict": "FAIL",
+      "per_phase": [
+        {
+          "phase_offset": 3,
+          "sharpe_gross": 0.29,
+          "sharpe_net": 0.12,
+          "excess_gross_ann": 0.006,
+          "excess_net_ann": -0.019,
+          "alpha_t": 0.66
+        }
+      ]
+    },
+    {
+      "config": "2026-04-29 14:19:45,984 INFO __main__: OOS 2023-2023 | rw=1.0 vw=1.0 ADV\u2265$5M cost=5bps",
+      "n_phases": 1,
+      "summary": {
+        "sharpe_gross": {
+          "mean": -0.16,
+          "std": 0.0,
+          "min": -0.16,
+          "max": -0.16,
+          "n": 1
+        },
+        "sharpe_net": {
+          "mean": -0.4,
+          "std": 0.0,
+          "min": -0.4,
+          "max": -0.4,
+          "n": 1
+        },
+        "excess_gross_ann": {
+          "mean": -0.498,
+          "std": 0.0,
+          "min": -0.498,
+          "max": -0.498,
+          "n": 1
+        },
+        "excess_net_ann": {
+          "mean": -0.524,
+          "std": 0.0,
+          "min": -0.524,
+          "max": -0.524,
+          "n": 1
+        },
+        "alpha_t": {
+          "mean": -0.32,
+          "std": 0.0,
+          "min": -0.32,
+          "max": -0.32,
+          "n": 1
+        }
+      },
+      "verdict": "FAIL",
+      "per_phase": [
+        {
+          "phase_offset": 3,
+          "sharpe_gross": -0.16,
+          "sharpe_net": -0.4,
+          "excess_gross_ann": -0.498,
+          "excess_net_ann": -0.524,
+          "alpha_t": -0.32
+        }
+      ]
+    },
+    {
+      "config": "2026-04-29 14:22:36,306 INFO __main__: IS 2019-2022 | rw=1.0 vw=1.0 ADV\u2265$5M cost=5bps",
+      "n_phases": 1,
+      "summary": {
+        "sharpe_gross": {
+          "mean": 0.83,
+          "std": 0.0,
+          "min": 0.83,
+          "max": 0.83,
+          "n": 1
+        },
+        "sharpe_net": {
+          "mean": 0.65,
+          "std": 0.0,
+          "min": 0.65,
+          "max": 0.65,
+          "n": 1
+        },
+        "excess_gross_ann": {
+          "mean": 0.401,
+          "std": 0.0,
+          "min": 0.401,
+          "max": 0.401,
+          "n": 1
+        },
+        "excess_net_ann": {
+          "mean": 0.375,
+          "std": 0.0,
+          "min": 0.375,
+          "max": 0.375,
+          "n": 1
+        },
+        "alpha_t": {
+          "mean": 2.24,
+          "std": 0.0,
+          "min": 2.24,
+          "max": 2.24,
+          "n": 1
+        }
+      },
+      "verdict": "PASS",
+      "per_phase": [
+        {
+          "phase_offset": 4,
+          "sharpe_gross": 0.83,
+          "sharpe_net": 0.65,
+          "excess_gross_ann": 0.401,
+          "excess_net_ann": 0.375,
+          "alpha_t": 2.24
+        }
+      ]
+    },
+    {
+      "config": "2026-04-29 14:23:02,912 INFO __main__: OOS 2023-2023 | rw=1.0 vw=1.0 ADV\u2265$5M cost=5bps",
+      "n_phases": 1,
+      "summary": {
+        "sharpe_gross": {
+          "mean": 2.73,
+          "std": 0.0,
+          "min": 2.73,
+          "max": 2.73,
+          "n": 1
+        },
+        "sharpe_net": {
+          "mean": 2.46,
+          "std": 0.0,
+          "min": 2.46,
+          "max": 2.46,
+          "n": 1
+        },
+        "excess_gross_ann": {
+          "mean": 0.679,
+          "std": 0.0,
+          "min": 0.679,
+          "max": 0.679,
+          "n": 1
+        },
+        "excess_net_ann": {
+          "mean": 0.655,
+          "std": 0.0,
+          "min": 0.655,
+          "max": 0.655,
+          "n": 1
+        },
+        "alpha_t": {
+          "mean": 2.19,
+          "std": 0.0,
+          "min": 2.19,
+          "max": 2.19,
+          "n": 1
+        }
+      },
+      "verdict": "PASS",
+      "per_phase": [
+        {
+          "phase_offset": 4,
+          "sharpe_gross": 2.73,
+          "sharpe_net": 2.46,
+          "excess_gross_ann": 0.679,
+          "excess_net_ann": 0.655,
+          "alpha_t": 2.19
+        }
+      ]
+    }
+  ]
+}
