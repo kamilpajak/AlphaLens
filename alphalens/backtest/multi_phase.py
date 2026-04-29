@@ -59,43 +59,49 @@ def summarise_phase_results(
 def robust_verdict(phase_results: Sequence[dict[str, Any]]) -> str:
     """Decision-gate verdict that accounts for phase-dispersion.
 
-    PASS  — every phase has alpha_t >= 1.5 AND excess_net_ann >= 0.
-    MID   — mean(alpha_t) >= 1.5 AND mean(excess_net_ann) > 0, but at least
-            one phase is materially negative (signals regime fragility).
-    FAIL  — anything else, including mean(alpha_t) < 1.0, or mean excess
-            non-positive, or majority of phases negative.
+    PASS  — every phase has alpha_t >= 1.5 AND excess_net_ann >= 0
+            (this implies mean alpha_t >= 1.5 and mean excess >= 0).
+    FAIL  — mean(alpha_t) < 1.0, OR mean excess non-positive, OR majority
+            of phases negative on either metric.
+    MID   — anything between (mean ≥ 1.0 with positive excess but the gate
+            is not uniformly cleared, signalling regime fragility).
 
     The thresholds match the original gate matrix from
-    `project_next_session_edgar_backfill.md` adapted to require robustness
+    `project_next_session_edgar_backfill.md`, adapted to require robustness
     across the full set of sampling phases rather than a single point estimate.
+
+    Filtering correctness: drop a phase row when EITHER required metric is
+    missing/NaN. Independent per-metric filtering would let the verdict
+    pair phase-i of one metric with phase-j of the other in the
+    majority-negative count — silently mis-aligning the data.
     """
-    t_values = [
-        float(r["alpha_t"])
+    valid_phases = [
+        r
         for r in phase_results
-        if "alpha_t" in r and r["alpha_t"] is not None and not _is_nan(r["alpha_t"])
+        if r.get("alpha_t") is not None
+        and not _is_nan(r.get("alpha_t"))
+        and r.get("excess_net_ann") is not None
+        and not _is_nan(r.get("excess_net_ann"))
     ]
-    excess_values = [
-        float(r["excess_net_ann"])
-        for r in phase_results
-        if "excess_net_ann" in r
-        and r["excess_net_ann"] is not None
-        and not _is_nan(r["excess_net_ann"])
-    ]
-    if not t_values or not excess_values:
+    if not valid_phases:
         return "FAIL"
+    t_values = [float(r["alpha_t"]) for r in valid_phases]
+    excess_values = [float(r["excess_net_ann"]) for r in valid_phases]
     mean_t = sum(t_values) / len(t_values)
     mean_excess = sum(excess_values) / len(excess_values)
 
     if mean_t < 1.0 or mean_excess <= 0:
         return "FAIL"
     # Count materially-negative phases (alpha_t < 0 OR excess_net_ann < 0).
-    n_neg = sum(1 for t, e in zip(t_values, excess_values, strict=False) if t < 0 or e < 0)
+    # Pairing is now correct because both lists were drawn from `valid_phases`.
+    n_neg = sum(1 for t, e in zip(t_values, excess_values, strict=True) if t < 0 or e < 0)
     # If a majority of phases are negative the mean is being pulled by an
     # outlier — distrust the headline.
-    if n_neg > len(t_values) / 2:
+    if n_neg > len(valid_phases) / 2:
         return "FAIL"
-    all_phases_pass = all(t >= 1.5 for t in t_values) and all(e >= 0 for e in excess_values)
-    if all_phases_pass and mean_t >= 1.5:
+    # `all(t >= 1.5)` mathematically implies `mean_t >= 1.5`, so no separate
+    # mean check is needed for the PASS predicate.
+    if all(t >= 1.5 for t in t_values) and all(e >= 0 for e in excess_values):
         return "PASS"
     return "MID"
 
