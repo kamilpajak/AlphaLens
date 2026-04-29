@@ -492,5 +492,95 @@ class EdgarROEAppleAcceptanceTests(unittest.TestCase):
         self.assertLess(roe, 2.0)
 
 
+class EdgarROECacheBoundTests(unittest.TestCase):
+    """Issue #38 item 1: `_facts_cache` must FIFO-evict above capacity.
+
+    Working set on a typical R2000 backtest is ~1200 unique CIKs × ~3MB
+    JSON each ≈ 3.6GB peak. Default capacity 1500 (25% margin) caps RAM
+    around 4.5GB on dev hardware while leaving room for legitimate
+    cross-period universe expansion.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.cf_dir = self.tmp / "companyfacts"
+        self.cf_dir.mkdir()
+        self.map_path = self.tmp / "ticker_cik_map.yaml"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _store_with_n_tickers(self, n: int) -> tuple[EdgarCompanyfactsROEStore, list[str]]:
+        """Write n distinct CIK fixtures and return (store, ticker_list)."""
+        mapping: dict[str, int] = {}
+        for i in range(n):
+            cik = i + 1  # CIKs 1..n
+            ticker = f"T{i:04d}"
+            mapping[ticker] = cik
+            _write_companyfacts(
+                self.cf_dir,
+                cik=cik,
+                NetIncomeLoss=[
+                    _entry(
+                        end="2023-12-31",
+                        val=100,
+                        start="2023-01-01",
+                        fp="FY",
+                        form="10-K",
+                        filed="2024-02-15",
+                    ),
+                ],
+                StockholdersEquity=[
+                    _entry(end="2023-12-31", val=1000, fp="FY", form="10-K", filed="2024-02-15"),
+                ],
+            )
+        _write_ticker_cik_map(self.map_path, mapping)
+        store = EdgarCompanyfactsROEStore(
+            companyfacts_dir=self.cf_dir,
+            ticker_cik_map=TickerCikMap.load(self.map_path),
+        )
+        return store, list(mapping.keys())
+
+    def test_cache_evicts_oldest_when_capacity_exceeded(self):
+        store, tickers = self._store_with_n_tickers(3)
+        store._facts_cache_capacity = 2  # force eviction after the second insert
+
+        # Load CIK 0000000001, then 2, then 3 — oldest (CIK 1) should be gone.
+        for ticker in tickers:
+            store.roe_ttm(ticker, date(2024, 3, 1))
+
+        self.assertEqual(len(store._facts_cache), 2)
+        # CIK strings are 10-digit zero-padded.
+        self.assertNotIn("0000000001", store._facts_cache)
+        self.assertIn("0000000002", store._facts_cache)
+        self.assertIn("0000000003", store._facts_cache)
+
+    def test_default_capacity_does_not_evict_typical_universe(self):
+        store, tickers = self._store_with_n_tickers(50)
+        # Default capacity 1500; 50 entries shouldn't trigger eviction.
+        self.assertEqual(store._facts_cache_capacity, 1500)
+
+        for ticker in tickers:
+            store.roe_ttm(ticker, date(2024, 3, 1))
+
+        self.assertEqual(len(store._facts_cache), 50)
+
+    def test_eviction_event_emits_warning(self):
+        """Warning fires only when an eviction actually happened — eviction
+        means the working-set assumption was violated, which is the anomaly
+        a reviewer needs to know about. Size-threshold warnings are dead
+        code when working set is bounded."""
+        store, tickers = self._store_with_n_tickers(3)
+        store._facts_cache_capacity = 2
+
+        with self.assertLogs("alphalens.fundamentals.edgar_companyfacts", level="WARNING") as cm:
+            for ticker in tickers:
+                store.roe_ttm(ticker, date(2024, 3, 1))
+
+        eviction_logs = [m for m in cm.output if "evicted" in m.lower()]
+        self.assertTrue(eviction_logs, f"expected eviction warning; got {cm.output}")
+
+
 if __name__ == "__main__":
     unittest.main()
