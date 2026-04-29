@@ -7,6 +7,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 
+import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -93,6 +94,66 @@ class TestParquetInsiderScorer(unittest.TestCase):
         self.assertEqual(stats["total_rows"], 3)
         self.assertEqual(stats["with_features"], 2)
         self.assertEqual(stats["no_cluster"], 1)
+
+
+class TestParquetInsiderScorerDateNormalisation(unittest.TestCase):
+    """Reproduces the cache-key type-mismatch bug from issue #38.
+
+    The real migration tool writes the date column as timezone-naive
+    `pd.Timestamp`/`datetime64[ns]`. PyArrow round-trips that to a Pandas
+    Timestamp on `itertuples`. When `features_as_of` is called with a
+    Python `datetime.date`, `pd.Timestamp == datetime.date` evaluates to
+    False and every lookup misses silently — the strategy returns None
+    for every ticker.
+
+    The fixture below pins that real-world column dtype; the scorer must
+    normalise both sides of the cache key to `datetime.date`.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name) / "insider_form4.parquet"
+        self.root.mkdir()
+
+        year_dir = self.root / "year=2020"
+        year_dir.mkdir()
+        df = pd.DataFrame(
+            {
+                "ticker": ["AAPL", "MSFT"],
+                "date": pd.to_datetime(["2020-06-15", "2020-07-01"]),
+                "has_features": [True, False],
+                "insider_count": [4, None],
+                "aggregate_dollar": [12500.0, None],
+                "cluster_window_days": [30, None],
+                "asof": pd.to_datetime(["2020-06-15", None]),
+                "cached_at": [None, None],
+            }
+        )
+        # Sanity: this is the dtype the real migration tool emits.
+        assert df["date"].dtype.kind == "M", (
+            f"fixture must use datetime64 to reproduce the bug, got {df['date'].dtype}"
+        )
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        pq.write_table(table, year_dir / "part-0.parquet")
+
+        self.scorer = ParquetInsiderScorer(self.root)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_features_as_of_with_python_date_against_timestamp_column(self):
+        """The original bug: caller passes datetime.date, parquet stores
+        timezone-naive Timestamp → universal cache miss."""
+        feat = self.scorer.features_as_of("AAPL", date(2020, 6, 15))
+
+        self.assertIsNotNone(feat)
+        self.assertEqual(feat["insider_count"], 4)
+        self.assertEqual(feat["asof"], "2020-06-15")
+
+    def test_no_cluster_row_with_python_date_against_timestamp_column(self):
+        feat = self.scorer.features_as_of("MSFT", date(2020, 7, 1))
+
+        self.assertIsNone(feat)
 
 
 if __name__ == "__main__":
