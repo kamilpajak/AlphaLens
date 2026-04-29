@@ -149,6 +149,7 @@ class BacktestEngine:
         retain_scored_frames: bool = False,
         weighting: WeightingScheme = "equal",
         rebalance_stride: int = 1,
+        phase_offset: int = 0,
     ):
         self.store = history_store
         self._scorer = scorer
@@ -164,6 +165,17 @@ class BacktestEngine:
         # per-day EDGAR fetches would push daily-rebalance runtime past 24h
         # on 12y × 1400-ticker sweeps.
         self.rebalance_stride = max(1, int(rebalance_stride))
+        # Which 1-in-stride trading day to sample as the rebalance. Default 0 =
+        # start at calendar[0]. Necessary to avoid phase-aliasing bias when
+        # comparing subsamples across a longer window — see
+        # docs/research/methodology_audit_2026_04_29.md and
+        # tests/test_backtest_engine_stride.py::TestPhaseOffset.
+        if not 0 <= int(phase_offset) < self.rebalance_stride:
+            raise ValueError(
+                f"phase_offset must satisfy 0 <= offset < rebalance_stride "
+                f"({self.rebalance_stride}); got {phase_offset}"
+            )
+        self.phase_offset = int(phase_offset)
         # Scorer's declared requirement is authoritative (it knows its own
         # indicator lookbacks). Class attr is only a fallback when the scorer
         # doesn't declare one.
@@ -175,8 +187,8 @@ class BacktestEngine:
             raise RuntimeError(
                 f"No trading days found for benchmark {self.benchmark!r} in [{start}, {end}]"
             )
-        if self.rebalance_stride > 1:
-            calendar = calendar[:: self.rebalance_stride]
+        if self.rebalance_stride > 1 or self.phase_offset > 0:
+            calendar = calendar[self.phase_offset :: self.rebalance_stride]
 
         tickers = self._screener_tickers or [
             t for t in self.store.tickers() if t != self.benchmark.upper()
