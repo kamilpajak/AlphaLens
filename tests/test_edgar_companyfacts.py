@@ -314,6 +314,57 @@ class EdgarROESyntheticTests(unittest.TestCase):
         roe = store.roe_ttm("PRF", date(2024, 3, 1))
         self.assertAlmostEqual(roe, 0.10, places=4)
 
+    def test_partial_coverage_common_ni_does_not_subtract_preferred(self):
+        # Matched-pair invariant: if NetIncomeLossAvailableToCommonStockholdersBasic
+        # is reported but lacks the period entries needed to compute TTM at the
+        # selected target_end, we must NOT silently fall back to (parent_NI /
+        # common_equity) — that mixes incompatible numerator and denominator.
+        # Setup: parent NI/Equity fully available at FY end. Common-NI block is
+        # present but only has a Q1 entry (no FY → common_ttm returns None at
+        # FY target_end). Preferred is reported at the same FY end.
+        # Expected: ROE = parent_NI / parent_Equity (preferred NOT subtracted),
+        # because the common-NI fallback failed and we must keep numerator and
+        # denominator on the same paradigm.
+        _write_companyfacts(
+            self.cf_dir,
+            cik=70,
+            NetIncomeLoss=[
+                _entry(
+                    end="2023-12-31",
+                    val=100,
+                    start="2023-01-01",
+                    fp="FY",
+                    form="10-K",
+                    filed="2024-02-15",
+                ),
+            ],
+            NetIncomeLossAvailableToCommonStockholdersBasic=[
+                # Only a Q1 entry — no FY entry, so _ttm_net_income at the FY
+                # target_end returns None and the common-NI substitution silently
+                # fails. The preferred subtraction must not happen.
+                _entry(
+                    end="2023-03-31",
+                    val=20,
+                    start="2023-01-01",
+                    fp="Q1",
+                    form="10-Q",
+                    filed="2023-05-01",
+                ),
+            ],
+            StockholdersEquity=[
+                _entry(end="2023-12-31", val=1000, fp="FY", form="10-K", filed="2024-02-15"),
+            ],
+            PreferredStockValue=[
+                _entry(end="2023-12-31", val=200, fp="FY", form="10-K", filed="2024-02-15"),
+            ],
+        )
+        store = self._store({"PARTIAL": 70})
+        roe = store.roe_ttm("PARTIAL", date(2024, 3, 1))
+        # Must be parent_NI / parent_Equity = 100/1000 = 0.10.
+        # The buggy path would yield 100/(1000-200) = 0.125 (parent NI over
+        # common-adjusted equity — the matched-pair violation).
+        self.assertAlmostEqual(roe, 0.10, places=4)
+
     def test_8k_preliminary_falls_back_to_matched_period(self):
         # 8-K issues a preliminary FY24 NI before the 10-K is filed; the
         # balance sheet for FY24 is not yet public. Latest matched (NI end

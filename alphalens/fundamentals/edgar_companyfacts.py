@@ -312,16 +312,28 @@ class EdgarCompanyfactsROEStore:
         """Subtract preferred dividends from numerator and preferred capital
         from denominator when the SEC tags those concepts. When absent (most
         non-preferred-issuing firms) the inputs pass through unchanged.
+
+        Matched-pair invariant: if `_NI_COMMON` is reported but cannot be
+        resolved at `target_end` (e.g., the tag has only Q1 entries while
+        target_end is FY), we must NOT subtract preferred from equity —
+        doing so would pair parent NI (which still includes preferred
+        dividends) with common equity. Track resolution state explicitly.
         """
         ni_common_block = gaap.get(_NI_COMMON)
+        common_resolved = False
         if ni_common_block is not None:
             ni_common_entries = _pit_filter(_parse_entries(ni_common_block["units"]), asof)
             ni_common_per_period = _latest_per_period(ni_common_entries)
             common_ttm = _ttm_net_income(ni_common_per_period, end_date=target_end)
             if common_ttm is not None:
                 ttm_ni = common_ttm
+                common_resolved = True
         preferred_block = gaap.get(_PREFERRED_VALUE)
-        if preferred_block is not None:
+        # Subtract preferred only when the firm doesn't tag preferred dividends
+        # (so parent NI already represents common shareholders) OR when we
+        # successfully replaced parent NI with common NI. Otherwise keep
+        # parent NI / parent equity to preserve the matched-pair invariant.
+        if preferred_block is not None and (ni_common_block is None or common_resolved):
             pref_entries = _pit_filter(_parse_entries(preferred_block["units"]), asof)
             pref_per_end = _latest_per_end(pref_entries)
             pref_at_end = pref_per_end.get(target_end)
