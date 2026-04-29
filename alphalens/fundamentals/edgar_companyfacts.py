@@ -50,6 +50,22 @@ from alphalens.alt_data.ticker_cik_map import TickerCikMap
 logger = logging.getLogger(__name__)
 
 
+def _evict_to_capacity(cache: dict, max_size: int) -> int:
+    """FIFO eviction: drop oldest entries until ``len(cache) <= max_size``.
+
+    Duplicate of the same helper in ``alphalens.alt_data.sec_edgar_client``;
+    kept independent to avoid coupling ``alphalens.fundamentals`` to
+    ``alphalens.alt_data``. Returns the number of entries actually evicted
+    so the caller can warn on the anomaly.
+    """
+    max_size = max(max_size, 0)
+    evicted = 0
+    while len(cache) > max_size:
+        cache.pop(next(iter(cache)))
+        evicted += 1
+    return evicted
+
+
 # --- Concept names (US-GAAP taxonomy) ---------------------------------------
 
 _NI_PARENT = "NetIncomeLoss"
@@ -255,6 +271,11 @@ class EdgarCompanyfactsROEStore:
         self._dir = Path(companyfacts_dir)
         self._cik_map = ticker_cik_map
         self._facts_cache: dict[str, dict | None] = {}
+        # Working set on a typical R2000 backtest is ~1200 unique CIKs ×
+        # ~3MB JSON ≈ 3.6GB. Capacity 1500 (25% margin) caps RAM around
+        # 4.5GB while leaving room for legitimate cross-period universe
+        # expansion. Override per instance for stress tests.
+        self._facts_cache_capacity = 1500
 
     # ---- top-level ----
 
@@ -347,17 +368,28 @@ class EdgarCompanyfactsROEStore:
             return cached
         path = self._dir / f"{cik}.json"
         if not path.exists():
-            self._facts_cache[cik] = None
+            self._store_in_cache(cik, None)
             return None
         try:
             payload = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             logger.warning("companyfacts unreadable: %s", path)
-            self._facts_cache[cik] = None
+            self._store_in_cache(cik, None)
             return None
         gaap = payload.get("facts", {}).get("us-gaap")
-        self._facts_cache[cik] = gaap
+        self._store_in_cache(cik, gaap)
         return gaap
+
+    def _store_in_cache(self, cik: str, gaap: dict | None) -> None:
+        evicted = _evict_to_capacity(self._facts_cache, self._facts_cache_capacity - 1)
+        if evicted > 0:
+            logger.warning(
+                "_facts_cache evicted %d entries (capacity=%d); working-set "
+                "assumption violated — investigate universe size or raise capacity",
+                evicted,
+                self._facts_cache_capacity,
+            )
+        self._facts_cache[cik] = gaap
 
     @staticmethod
     def _select_pair(gaap: dict) -> tuple[str, str] | None:
