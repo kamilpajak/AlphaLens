@@ -64,6 +64,48 @@ _RESULT_LINE = re.compile(
 _LOG_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+ \w+ [\w._]+: ")
 
 
+def _parse_results(stderr_text: str, phase_offset: int) -> list[dict[str, float]]:
+    """Run `_RESULT_LINE` over each stderr line and emit one row per match.
+
+    Pure function — split out from `_run_one_phase` for unit testing.
+    """
+    rows: list[dict[str, float]] = []
+    for line in stderr_text.splitlines():
+        m = _RESULT_LINE.search(line)
+        if not m:
+            continue
+        rows.append(
+            {
+                "sharpe_gross": float(m.group("sg")),
+                "sharpe_net": float(m.group("sn")),
+                "excess_gross_ann": float(m.group("eg")) / 100.0,
+                "excess_net_ann": float(m.group("en")) / 100.0,
+                "alpha_t": float(m.group("t")),
+                "phase_offset": phase_offset,
+                "raw_line": line.strip(),
+            }
+        )
+    return rows
+
+
+def _config_key_from_line(raw_line: str) -> str:
+    """Strip the timestamp/log prefix and trailing per-phase stats; what's
+    left is the parameter combo (period + ROE/vol weight + ADV + cost) that
+    is shared across all phases of the same config — the right grouping key.
+    """
+    stripped = _LOG_PREFIX.sub("", raw_line)
+    return stripped.split(" | n=")[0]
+
+
+def _group_by_config(rows_per_phase: list[list[dict]]) -> dict[str, list[dict]]:
+    """Flatten per-phase row batches and bucket by config key."""
+    by_config: dict[str, list[dict]] = {}
+    for phase_rows in rows_per_phase:
+        for r in phase_rows:
+            by_config.setdefault(_config_key_from_line(r["raw_line"]), []).append(r)
+    return by_config
+
+
 def _run_one_phase(
     script: Path,
     forwarded_args: list[str],
@@ -95,23 +137,7 @@ def _run_one_phase(
             f"phase {phase_offset} run failed (exit {proc.returncode}):\n"
             f"stderr tail:\n{proc.stderr[-2000:]}"
         )
-    rows: list[dict[str, float]] = []
-    for line in proc.stderr.splitlines():
-        m = _RESULT_LINE.search(line)
-        if not m:
-            continue
-        rows.append(
-            {
-                "sharpe_gross": float(m.group("sg")),
-                "sharpe_net": float(m.group("sn")),
-                "excess_gross_ann": float(m.group("eg")) / 100.0,
-                "excess_net_ann": float(m.group("en")) / 100.0,
-                "alpha_t": float(m.group("t")),
-                "phase_offset": phase_offset,
-                "raw_line": line.strip(),
-            }
-        )
-    return rows
+    return _parse_results(proc.stderr, phase_offset)
 
 
 def main() -> int:
@@ -147,15 +173,7 @@ def main() -> int:
             print(f"    {r['raw_line']}", flush=True)
         all_rows.append(rows)
 
-    # Group rows by their config (everything except phase-specific stats) so
-    # we aggregate phases for the SAME parameter combo. Use raw_line minus
-    # the trailing stats as the grouping key.
-    by_config: dict[str, list[dict]] = {}
-    for phase_rows in all_rows:
-        for r in phase_rows:
-            stripped = _LOG_PREFIX.sub("", r["raw_line"])
-            config_key = stripped.split(" | n=")[0]  # everything before n=...
-            by_config.setdefault(config_key, []).append(r)
+    by_config = _group_by_config(all_rows)
 
     output: dict = {
         "strategy": args.strategy,
