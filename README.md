@@ -17,6 +17,7 @@ The project pivoted from "active alpha generation" to **research / learning infr
 - **Production-grade data clients** — Polygon, FRED, SEC EDGAR
 - **LLM scoring infrastructure** — TradingAgents multi-agent + GuruScorer single-prompt
 - **Anti-pattern catalog** — every closed strategy ships a `__closed_reason__` marker plus a postmortem entry
+- **Spin-off OSS toolkit** — pre-registration ledger + multi-phase audit + Bonferroni helpers extracted as a standalone library: [`kamilpajak/phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting) (see [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md))
 
 **Live in launchd**: only Layer 1 SEC EDGAR watchdog (read-only event detection, daily Telegram digest, near-zero maintenance).
 

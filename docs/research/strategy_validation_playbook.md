@@ -198,6 +198,8 @@ Per `feedback_phase_aliasing_in_strided_backtests.md`:
 
 Total: 1349/1349 tests green; ~600 LOC of reusable validation infrastructure.
 
+The Step 0 + Step 4 infrastructure (pre-registration ledger + multi-phase audit + Bonferroni helpers + audit driver) also ships as a standalone OSS toolkit at [`kamilpajak/phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting). See [ADR 0006](../adr/0006-phase-robust-backtesting-extraction.md) for the extraction rationale.
+
 ## What this playbook does NOT yet have (open gaps)
 
 1. ~~**Pre-registration ledger.**~~ **CLOSED 2026-04-29** — `alphalens preregister add/list/show/complete/threshold` ships with a JSON ledger at `docs/research/preregistration/ledger.json`. `bonferroni_threshold()` returns the corrected critical |t| for the signal class as it stands. Step 0 above.
