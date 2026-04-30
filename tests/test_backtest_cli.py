@@ -412,11 +412,11 @@ class TestBacktestInsiderDispatch(unittest.TestCase):
         with (
             patch("pathlib.Path.exists", return_value=True),
             patch(
-                "alphalens.alt_data.russell_universe.load_iwm_current",
+                "alphalens.data.alt_data.russell_universe.load_iwm_current",
                 return_value=["UPST", "SMCI"],
             ),
             patch(
-                "alphalens.alt_data.ticker_cik_map.TickerCikMap.load",
+                "alphalens.data.alt_data.ticker_cik_map.TickerCikMap.load",
             ),
             patch.dict("os.environ", {}, clear=True),
         ):

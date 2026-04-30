@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from alphalens.alt_data.ticker_cik_map import TickerCikMap
+from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,9 @@ logger = logging.getLogger(__name__)
 def _evict_to_capacity(cache: dict, max_size: int) -> int:
     """FIFO eviction: drop oldest entries until ``len(cache) <= max_size``.
 
-    Duplicate of the same helper in ``alphalens.alt_data.sec_edgar_client``;
-    kept independent to avoid coupling ``alphalens.fundamentals`` to
-    ``alphalens.alt_data``. Returns the number of entries actually evicted
+    Duplicate of the same helper in ``alphalens.data.alt_data.sec_edgar_client``;
+    kept independent to avoid coupling ``alphalens.data.fundamentals`` to
+    ``alphalens.data.alt_data``. Returns the number of entries actually evicted
     so the caller can warn on the anomaly.
     """
     max_size = max(max_size, 0)

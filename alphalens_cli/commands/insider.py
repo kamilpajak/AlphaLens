@@ -49,12 +49,12 @@ def _check_data_files(iwm_path: Path, cik_path: Path) -> None:
             "Missing data file(s): " + ", ".join(missing) + "\n\n"
             "Bootstrap with:\n"
             "  .venv/bin/python -c 'from pathlib import Path; "
-            "from alphalens.alt_data.sec_edgar_client import SecEdgarClient; "
-            "from alphalens.alt_data.ticker_cik_refresher import refresh_ticker_cik_map; "
+            "from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient; "
+            "from alphalens.data.alt_data.ticker_cik_refresher import refresh_ticker_cik_map; "
             'refresh_ticker_cik_map(SecEdgarClient(user_agent="YOUR UA"), '
             f'Path("{_DEFAULT_CIK_MAP_PATH}"))\'\n'
             "  .venv/bin/python -c 'from pathlib import Path; "
-            "from alphalens.alt_data.iwm_refresher import refresh_iwm_current; "
+            "from alphalens.data.alt_data.iwm_refresher import refresh_iwm_current; "
             f'refresh_iwm_current(Path("{_DEFAULT_IWM_PATH}"))\'\n'
         )
         raise typer.BadParameter(hint)
@@ -82,11 +82,11 @@ def screen(
     exclude 10b5-1 plans adopted ≥90 days before transaction.
     """
 
-    from alphalens.alt_data.russell_universe import load_iwm_current
-    from alphalens.alt_data.sec_edgar_client import SecEdgarClient
-    from alphalens.alt_data.ticker_cik_map import TickerCikMap
     from alphalens.archive.screeners.insider.pipeline import InsiderPipeline
     from alphalens.archive.screeners.insider.scorer import InsiderScorer
+    from alphalens.data.alt_data.russell_universe import load_iwm_current
+    from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient
+    from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
     _check_data_files(universe_file, cik_map_file)
     user_agent = _require_user_agent()

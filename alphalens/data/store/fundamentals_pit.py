@@ -16,7 +16,7 @@ import logging
 from collections.abc import Callable, Mapping
 from datetime import date
 
-from .fetcher import extract_features, fetch_ticker_bundle
+from alphalens.data.fundamentals.fetcher import extract_features, fetch_ticker_bundle
 
 logger = logging.getLogger(__name__)
 

@@ -30,13 +30,13 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from alphalens.alt_data.yfinance_cache import load_cached_histories
 from alphalens.backtest.cost_model import RealisticCostModel
 from alphalens.backtest.engine import BacktestEngine
 from alphalens.backtest.factor_analysis import run_regression
-from alphalens.backtest.factors import load_carhart_daily
-from alphalens.backtest.history_store import HistoryStore
 from alphalens.backtest.metrics import sharpe, turnover_pct
+from alphalens.data.alt_data.yfinance_cache import load_cached_histories
+from alphalens.data.factors import load_carhart_daily
+from alphalens.data.store.history import HistoryStore
 
 logger = logging.getLogger(__name__)
 

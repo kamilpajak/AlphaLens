@@ -338,7 +338,7 @@ def picks_from_history_store(store, days: int = 60, top_n: int = 5) -> list[Pick
     # the backtest/ ↔ screeners/ dependency rule. Do not extend.
     from alphalens.archive.screeners.lean.config import DATA_DIR
     from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
-    from alphalens.backtest.history_store import HistoryStore
+    from alphalens.data.store.history import HistoryStore
 
     tickers = sorted(timeline["ticker"].unique())
     histories = load_lean_histories(DATA_DIR, tickers)

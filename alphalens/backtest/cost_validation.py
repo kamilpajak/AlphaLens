@@ -70,9 +70,9 @@ import pandas as pd
 
 from alphalens.backtest.cost_model import CostModel
 from alphalens.backtest.engine import BacktestReport
-from alphalens.backtest.history_store import HistoryStore
 from alphalens.backtest.metrics import sharpe
 from alphalens.backtest.weighting import compute_position_weights
+from alphalens.data.store.history import HistoryStore
 
 # ---------------------------------------------------------------------------
 # Dataclasses

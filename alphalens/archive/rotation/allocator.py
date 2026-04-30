@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from alphalens.macro.scorer import MacroRegime
+from alphalens.data.macro.scorer import MacroRegime
 
 _WEIGHT_TOL = 1e-9
 

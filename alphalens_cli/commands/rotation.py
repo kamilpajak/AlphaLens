@@ -22,7 +22,7 @@ from alphalens.archive.rotation.sanity_checks import (
     run_all_sanity_checks,
 )
 from alphalens.backtest.metrics import sharpe, sharpe_autocorr_adjusted
-from alphalens.macro.scorer import RuleBasedScorer
+from alphalens.data.macro.scorer import RuleBasedScorer
 
 rotation_app = typer.Typer(
     name="rotation",

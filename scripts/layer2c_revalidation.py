@@ -43,19 +43,19 @@ from alphalens.backtest.factor_analysis import (  # noqa: E402
     bootstrap_carhart_alpha_ci,
     run_carhart_attribution,
 )
-from alphalens.backtest.factors import load_carhart_daily  # noqa: E402
-from alphalens.backtest.history_store import HistoryStore  # noqa: E402
 from alphalens.backtest.metrics import sharpe  # noqa: E402
 from alphalens.backtest.multiple_testing import (  # noqa: E402
     apply_bonferroni,
     bonferroni_critical_tstat,
 )
-from alphalens.backtest.survivorship_pit import (  # noqa: E402
+from alphalens.backtest.walk_forward import run_walk_forward  # noqa: E402
+from alphalens.data.factors import load_carhart_daily  # noqa: E402
+from alphalens.data.store.history import HistoryStore  # noqa: E402
+from alphalens.data.store.survivorship_pit import (  # noqa: E402
     compute_selection_bias,
     load_delisting_events,
     picks_from_report,
 )
-from alphalens.backtest.walk_forward import run_walk_forward  # noqa: E402
 
 IS_START = date(2021, 4, 19)
 IS_END = date(2024, 4, 19)

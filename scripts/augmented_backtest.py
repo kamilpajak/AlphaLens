@@ -28,12 +28,12 @@ from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_
 from alphalens.archive.screeners.themed.universe import flatten_universe
 from alphalens.backtest.engine import BacktestEngine
 from alphalens.backtest.factor_analysis import run_carhart_attribution
-from alphalens.backtest.factors import load_carhart_daily
-from alphalens.backtest.history_store import HistoryStore
 from alphalens.backtest.metrics import (
     rank_ic_tstat,
     sharpe,
 )
+from alphalens.data.factors import load_carhart_daily
+from alphalens.data.store.history import HistoryStore
 
 MAIN_DATA = Path.home() / ".alphalens" / "lean" / "data"
 SURV_DATA = Path.home() / ".alphalens" / "survivorship" / "lean_data"

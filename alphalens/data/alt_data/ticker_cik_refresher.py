@@ -1,6 +1,6 @@
 """Refresh the ticker↔CIK map from SEC's master table.
 
-The refreshed YAML is compatible with :class:`alphalens.alt_data.ticker_cik_map.TickerCikMap`,
+The refreshed YAML is compatible with :class:`alphalens.data.alt_data.ticker_cik_map.TickerCikMap`,
 so a production workflow is::
 
     client = SecEdgarClient(user_agent="AlphaLens research@example.com")

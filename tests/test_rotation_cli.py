@@ -11,8 +11,8 @@ import numpy as np
 import pandas as pd
 from typer.testing import CliRunner
 
-from alphalens.backtest.history_store import HistoryStore
-from alphalens.macro.signals import SignalSet
+from alphalens.data.macro.signals import SignalSet
+from alphalens.data.store.history import HistoryStore
 
 
 def _ohlcv(n_bars: int = 520, daily_ret: float = 0.0003):

@@ -21,8 +21,8 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
-from alphalens.alt_data.form4_records import Form4Record
-from alphalens.alt_data.plan_10b5_1 import extract_10b5_1_adoption, plan_age_days
+from alphalens.data.alt_data.form4_records import Form4Record
+from alphalens.data.alt_data.plan_10b5_1 import extract_10b5_1_adoption, plan_age_days
 
 
 @dataclass(frozen=True)

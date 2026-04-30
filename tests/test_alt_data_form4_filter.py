@@ -4,7 +4,7 @@ from decimal import Decimal
 
 
 def _record(**overrides):
-    from alphalens.alt_data.form4_records import Form4Record
+    from alphalens.data.alt_data.form4_records import Form4Record
 
     defaults = dict(
         issuer_cik="0000320193",
@@ -32,31 +32,31 @@ def _record(**overrides):
 
 class TestTransactionCodeFilter(unittest.TestCase):
     def test_keeps_code_p(self):
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         kept = filter_eligible([_record(transaction_code="P")])
         self.assertEqual(len(kept), 1)
 
     def test_drops_code_s(self):
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         kept = filter_eligible([_record(transaction_code="S")])
         self.assertEqual(kept, [])
 
     def test_drops_code_f_tax_withhold(self):
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         kept = filter_eligible([_record(transaction_code="F")])
         self.assertEqual(kept, [])
 
     def test_drops_code_a_award(self):
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         kept = filter_eligible([_record(transaction_code="A")])
         self.assertEqual(kept, [])
 
     def test_drops_code_g_gift(self):
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         kept = filter_eligible([_record(transaction_code="G")])
         self.assertEqual(kept, [])
@@ -64,7 +64,7 @@ class TestTransactionCodeFilter(unittest.TestCase):
 
 class TestRoleFilter(unittest.TestCase):
     def test_drops_pure_ten_percent_holder(self):
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         kept = filter_eligible(
             [
@@ -74,7 +74,7 @@ class TestRoleFilter(unittest.TestCase):
         self.assertEqual(kept, [])
 
     def test_drops_pure_other(self):
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         kept = filter_eligible(
             [
@@ -84,7 +84,7 @@ class TestRoleFilter(unittest.TestCase):
         self.assertEqual(kept, [])
 
     def test_keeps_pure_officer(self):
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         kept = filter_eligible(
             [
@@ -94,7 +94,7 @@ class TestRoleFilter(unittest.TestCase):
         self.assertEqual(len(kept), 1)
 
     def test_keeps_pure_director(self):
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         kept = filter_eligible(
             [
@@ -104,7 +104,7 @@ class TestRoleFilter(unittest.TestCase):
         self.assertEqual(len(kept), 1)
 
     def test_keeps_joint_officer_director(self):
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         kept = filter_eligible(
             [
@@ -115,7 +115,7 @@ class TestRoleFilter(unittest.TestCase):
 
     def test_keeps_officer_who_also_owns_10_percent(self):
         """Insider wearing both hats — officer role triggers keep."""
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         kept = filter_eligible(
             [
@@ -127,7 +127,7 @@ class TestRoleFilter(unittest.TestCase):
 
 class TestAmendmentPassThrough(unittest.TestCase):
     def test_amendment_flag_does_not_affect_filter(self):
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         kept = filter_eligible([_record(is_amendment=True, transaction_code="P")])
         self.assertEqual(len(kept), 1)
@@ -135,7 +135,7 @@ class TestAmendmentPassThrough(unittest.TestCase):
 
 class TestMixedBatch(unittest.TestCase):
     def test_filter_returns_only_qualifying_records(self):
-        from alphalens.alt_data.form4_filter import filter_eligible
+        from alphalens.data.alt_data.form4_filter import filter_eligible
 
         records = [
             _record(transaction_code="P", is_officer=True),  # keep

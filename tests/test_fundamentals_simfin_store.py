@@ -49,7 +49,7 @@ def _prices_frame(ticker: str, rows: list[dict]) -> pd.DataFrame:
 
 class TestSimFinHelpers(unittest.TestCase):
     def test_runway_computed_from_bs_plus_trailing_ocf(self):
-        from alphalens.fundamentals.simfin_store import _runway_from_frames
+        from alphalens.data.store.simfin import _runway_from_frames
 
         bs = _frame(
             "X",
@@ -91,7 +91,7 @@ class TestSimFinHelpers(unittest.TestCase):
         self.assertAlmostEqual(_runway_from_frames(bs, cf), 9.52, places=1)
 
     def test_runway_none_when_cash_flow_positive(self):
-        from alphalens.fundamentals.simfin_store import _runway_from_frames
+        from alphalens.data.store.simfin import _runway_from_frames
 
         bs = _frame(
             "X",
@@ -118,7 +118,7 @@ class TestSimFinHelpers(unittest.TestCase):
         self.assertIsNone(_runway_from_frames(bs, cf))
 
     def test_net_income_ttm_sums_last_4_quarters(self):
-        from alphalens.fundamentals.simfin_store import _net_income_ttm_from_frame
+        from alphalens.data.store.simfin import _net_income_ttm_from_frame
 
         inc = _frame(
             "X",
@@ -132,7 +132,7 @@ class TestSimFinHelpers(unittest.TestCase):
         self.assertEqual(_net_income_ttm_from_frame(inc), -11_000_000)
 
     def test_net_income_ttm_none_with_fewer_than_4_quarters(self):
-        from alphalens.fundamentals.simfin_store import _net_income_ttm_from_frame
+        from alphalens.data.store.simfin import _net_income_ttm_from_frame
 
         inc = _frame(
             "X",
@@ -143,7 +143,7 @@ class TestSimFinHelpers(unittest.TestCase):
         self.assertIsNone(_net_income_ttm_from_frame(inc))
 
     def test_consecutive_neg_ocf_counts_from_most_recent(self):
-        from alphalens.fundamentals.simfin_store import _consecutive_neg_ocf_from_frame
+        from alphalens.data.store.simfin import _consecutive_neg_ocf_from_frame
 
         cf = _frame(
             "X",
@@ -175,7 +175,7 @@ class TestSimFinHelpers(unittest.TestCase):
         self.assertEqual(_consecutive_neg_ocf_from_frame(cf), 3)
 
     def test_ps_ratio_pit_uses_close_and_shares_outstanding(self):
-        from alphalens.fundamentals.simfin_store import _ps_ratio_pit
+        from alphalens.data.store.simfin import _ps_ratio_pit
 
         prices_df = _prices_frame(
             "X",
@@ -204,7 +204,7 @@ class TestSimFinHelpers(unittest.TestCase):
         self.assertAlmostEqual(ps, 5.5, places=2)
 
     def test_ps_ratio_none_when_prices_not_loaded(self):
-        from alphalens.fundamentals.simfin_store import _ps_ratio_pit
+        from alphalens.data.store.simfin import _ps_ratio_pit
 
         inc = _frame(
             "X",
@@ -219,7 +219,7 @@ class TestSimFinFundamentalsStoreEndToEnd(unittest.TestCase):
     """Features_as_of correctness without touching the actual simfin package."""
 
     def _build_store_with_synthetic_data(self):
-        from alphalens.fundamentals.simfin_store import SimFinFundamentalsStore
+        from alphalens.data.store.simfin import SimFinFundamentalsStore
 
         with patch.dict(os.environ, {"SIMFIN_API_KEY": "testkey"}):
             store = SimFinFundamentalsStore()
@@ -323,7 +323,7 @@ class TestSimFinFundamentalsStoreEndToEnd(unittest.TestCase):
         self.assertIsNone(features["ps_ratio"])
 
     def test_init_without_api_key_raises(self):
-        from alphalens.fundamentals.simfin_store import SimFinFundamentalsStore
+        from alphalens.data.store.simfin import SimFinFundamentalsStore
 
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(RuntimeError) as ctx:

@@ -50,8 +50,8 @@ from alphalens.backtest.factor_analysis import (  # noqa: E402
     format_attribution_table,
     run_regression,
 )
-from alphalens.backtest.factors import load_carhart_daily  # noqa: E402
-from alphalens.backtest.history_store import HistoryStore  # noqa: E402
+from alphalens.data.factors import load_carhart_daily  # noqa: E402
+from alphalens.data.store.history import HistoryStore  # noqa: E402
 
 START = date(2021, 4, 19)
 END = date(2026, 4, 17)

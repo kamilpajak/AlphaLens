@@ -29,8 +29,8 @@ from alphalens.backtest.factor_analysis import (
     format_attribution_table,
     run_regression,
 )
-from alphalens.backtest.factors import load_carhart_daily
-from alphalens.backtest.history_store import HistoryStore
+from alphalens.data.factors import load_carhart_daily
+from alphalens.data.store.history import HistoryStore
 
 # Replicate exactly what quiver_validate.py does, minus the SDK fetch (use cache).
 from scripts.quiver_validate import build_long_short_factor

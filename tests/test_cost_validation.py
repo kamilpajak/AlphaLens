@@ -26,7 +26,7 @@ from alphalens.backtest.cost_validation import (
     run_scale_path,
 )
 from alphalens.backtest.engine import BacktestReport, RebalanceSnapshot
-from alphalens.backtest.history_store import HistoryStore
+from alphalens.data.store.history import HistoryStore
 
 
 def _history(close: list[float], volume: list[int], start: str = "2022-01-03") -> pd.DataFrame:

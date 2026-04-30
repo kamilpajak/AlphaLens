@@ -5,9 +5,9 @@ import pandas as pd
 
 from alphalens.archive.rotation.allocator import OverlayAllocator
 from alphalens.archive.rotation.config import Rule
-from alphalens.backtest.history_store import HistoryStore
-from alphalens.macro.scorer import MacroRegime, RuleBasedScorer
-from alphalens.macro.signals import SignalSet
+from alphalens.data.macro.scorer import MacroRegime, RuleBasedScorer
+from alphalens.data.macro.signals import SignalSet
+from alphalens.data.store.history import HistoryStore
 
 
 def _ohlcv_constant_return(daily_return: float, n_bars: int, start: str = "2020-01-02"):

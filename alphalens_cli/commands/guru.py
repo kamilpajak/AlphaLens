@@ -50,7 +50,7 @@ def _build_pilot_years(
     from alphalens.archive.guru.llm_scorer import GuruScorer
     from alphalens.archive.guru.pilot_runner import sample_tickers
     from alphalens.archive.guru.universe import load_sp500_pit
-    from alphalens.backtest.history_store import HistoryStore
+    from alphalens.data.store.history import HistoryStore
 
     scorer = GuruScorer(prompt=prompt, llm=llm_client, cache_dir=cache_dir)
     results: list[SingleYearResult] = []

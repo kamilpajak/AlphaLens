@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from alphalens.backtest.engine import BacktestEngine
-from alphalens.backtest.history_store import HistoryStore
+from alphalens.data.store.history import HistoryStore
 
 
 def _make_store(n_days: int = 100, n_tickers: int = 5) -> HistoryStore:

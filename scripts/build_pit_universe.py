@@ -40,12 +40,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pandas as pd
 import yaml
 
-from alphalens.alt_data.pit_universe import UniverseConfig, build_pit_universe
-from alphalens.alt_data.russell_universe import load_iwm_current
-from alphalens.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
-from alphalens.alt_data.shares_outstanding import SharesFact, parse_company_facts
-from alphalens.alt_data.ticker_cik_map import TickerCikMap
-from alphalens.alt_data.yfinance_cache import (
+from alphalens.data.alt_data.pit_universe import UniverseConfig, build_pit_universe
+from alphalens.data.alt_data.russell_universe import load_iwm_current
+from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
+from alphalens.data.alt_data.shares_outstanding import SharesFact, parse_company_facts
+from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
+from alphalens.data.alt_data.yfinance_cache import (
     download_and_cache,
     load_cached_histories,
 )

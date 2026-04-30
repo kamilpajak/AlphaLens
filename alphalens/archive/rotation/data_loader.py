@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from alphalens.backtest.history_store import HistoryStore
-from alphalens.macro.fred_client import FREDClient
-from alphalens.macro.signals import SignalSet, build_signal_set
+from alphalens.data.macro.fred_client import FREDClient
+from alphalens.data.macro.signals import SignalSet, build_signal_set
+from alphalens.data.store.history import HistoryStore
 
 ETF_TICKERS = ("SPY", "QQQ", "IWM")
 

@@ -1,6 +1,6 @@
 import unittest
 
-from alphalens.macro.scorer import MacroRegime
+from alphalens.data.macro.scorer import MacroRegime
 
 
 class TestOverlayAllocator(unittest.TestCase):

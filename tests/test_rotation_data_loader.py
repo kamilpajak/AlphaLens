@@ -42,7 +42,7 @@ class TestLoadRotationDataHandlesMultiIndex(unittest.TestCase):
         flatten them before the lowercase rename, else downstream KeyError.
         """
         from alphalens.archive.rotation.data_loader import load_rotation_data
-        from alphalens.macro.signals import SignalSet
+        from alphalens.data.macro.signals import SignalSet
 
         def fake_download(ticker, **kwargs):
             return _multiindex_ohlcv(ticker)

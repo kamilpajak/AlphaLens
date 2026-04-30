@@ -14,7 +14,7 @@ class TestTickerCikMap(unittest.TestCase):
         return Path(tmp.name)
 
     def test_lookup_returns_zero_padded_10_digit_cik(self):
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
         path = self._write({"AAPL": 320193, "MSFT": 789019})
         m = TickerCikMap.load(path)
@@ -23,7 +23,7 @@ class TestTickerCikMap(unittest.TestCase):
         self.assertEqual(m.lookup("MSFT"), "0000789019")
 
     def test_unknown_ticker_returns_none(self):
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
         path = self._write({"AAPL": 320193})
         m = TickerCikMap.load(path)
@@ -31,7 +31,7 @@ class TestTickerCikMap(unittest.TestCase):
         self.assertIsNone(m.lookup("NOPE"))
 
     def test_case_insensitive_lookup(self):
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
         path = self._write({"AAPL": 320193})
         m = TickerCikMap.load(path)
@@ -40,7 +40,7 @@ class TestTickerCikMap(unittest.TestCase):
         self.assertEqual(m.lookup("Aapl"), "0000320193")
 
     def test_accepts_string_cik(self):
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
         path = self._write({"AAPL": "320193"})
         m = TickerCikMap.load(path)
@@ -48,7 +48,7 @@ class TestTickerCikMap(unittest.TestCase):
         self.assertEqual(m.lookup("AAPL"), "0000320193")
 
     def test_rejects_non_numeric_cik(self):
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
         path = self._write({"AAPL": "abc123"})
 
@@ -56,7 +56,7 @@ class TestTickerCikMap(unittest.TestCase):
             TickerCikMap.load(path)
 
     def test_rejects_cik_longer_than_10_digits(self):
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
         path = self._write({"AAPL": 12345678901})
 
@@ -64,13 +64,13 @@ class TestTickerCikMap(unittest.TestCase):
             TickerCikMap.load(path)
 
     def test_missing_file_raises(self):
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
         with self.assertRaises(FileNotFoundError):
             TickerCikMap.load(Path("/nonexistent/map.yaml"))
 
     def test_empty_map_lookup_returns_none(self):
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
         path = self._write({})
         m = TickerCikMap.load(path)

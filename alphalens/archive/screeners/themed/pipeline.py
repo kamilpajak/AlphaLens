@@ -53,8 +53,8 @@ class ThemedPipeline:
         # the soft gate is enabled. Cache handles the 90-day TTL so we do at
         # most ~113 API calls per quarter, not per daily run.
         if self.config.get("fundamental_gate_enabled", False):
-            from alphalens.fundamentals.cache import FundamentalsCache
-            from alphalens.fundamentals.fetcher import extract_features, fetch_ticker_bundle
+            from alphalens.data.fundamentals.cache import FundamentalsCache
+            from alphalens.data.fundamentals.fetcher import extract_features, fetch_ticker_bundle
 
             cache = FundamentalsCache()
             for ticker in tickers:

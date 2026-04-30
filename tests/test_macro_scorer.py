@@ -9,7 +9,7 @@ def _rule(name, signal, op, threshold, tilt):
 
 class TestMacroRegimeFrozen(unittest.TestCase):
     def test_macro_regime_is_frozen(self):
-        from alphalens.macro.scorer import MacroRegime
+        from alphalens.data.macro.scorer import MacroRegime
 
         regime = MacroRegime(flags={"yield_steep": True}, tilt_sum={"SPY": -0.05})
         with self.assertRaises(Exception):
@@ -18,7 +18,7 @@ class TestMacroRegimeFrozen(unittest.TestCase):
 
 class TestRuleBasedScorer(unittest.TestCase):
     def test_rule_fires_when_operator_matches(self):
-        from alphalens.macro.scorer import RuleBasedScorer
+        from alphalens.data.macro.scorer import RuleBasedScorer
 
         rules = (
             _rule(
@@ -38,7 +38,7 @@ class TestRuleBasedScorer(unittest.TestCase):
         self.assertAlmostEqual(regime.tilt_sum["SPY"], -0.05)
 
     def test_rule_does_not_fire_when_condition_false(self):
-        from alphalens.macro.scorer import RuleBasedScorer
+        from alphalens.data.macro.scorer import RuleBasedScorer
 
         rules = (
             _rule(
@@ -58,7 +58,7 @@ class TestRuleBasedScorer(unittest.TestCase):
 
     def test_missing_signal_leaves_rule_unfired(self):
         """Safe default when a signal is NaN / unavailable."""
-        from alphalens.macro.scorer import RuleBasedScorer
+        from alphalens.data.macro.scorer import RuleBasedScorer
 
         rules = (
             _rule(
@@ -77,7 +77,7 @@ class TestRuleBasedScorer(unittest.TestCase):
         self.assertEqual(regime.tilt_sum, {})
 
     def test_multiple_rules_compose_tilts(self):
-        from alphalens.macro.scorer import RuleBasedScorer
+        from alphalens.data.macro.scorer import RuleBasedScorer
 
         rules = (
             _rule(
@@ -106,7 +106,7 @@ class TestRuleBasedScorer(unittest.TestCase):
         self.assertAlmostEqual(regime.tilt_sum.get("SPY", 0.0), 0.0)
 
     def test_operators_lt_ge_le(self):
-        from alphalens.macro.scorer import RuleBasedScorer
+        from alphalens.data.macro.scorer import RuleBasedScorer
 
         rules = (
             _rule("lt_rule", "x", "lt", 1.0, {"SPY": 0.01}),
@@ -122,7 +122,7 @@ class TestRuleBasedScorer(unittest.TestCase):
         self.assertTrue(regime.flags["le_rule"])
 
     def test_explain_returns_per_rule_detail(self):
-        from alphalens.macro.scorer import RuleBasedScorer
+        from alphalens.data.macro.scorer import RuleBasedScorer
 
         rules = (
             _rule(
@@ -143,7 +143,7 @@ class TestRuleBasedScorer(unittest.TestCase):
         self.assertEqual(detail["yield_steep"]["operator"], "gt")
 
     def test_rule_order_preserved_in_flags(self):
-        from alphalens.macro.scorer import RuleBasedScorer
+        from alphalens.data.macro.scorer import RuleBasedScorer
 
         rules = (
             _rule("a", "x", "gt", 0.0, {"SPY": 0.01}),

@@ -22,28 +22,28 @@ _SAMPLE_CSV = """\
 
 class TestParseIsharesCsv(unittest.TestCase):
     def test_extracts_equity_tickers_only(self):
-        from alphalens.alt_data.iwm_refresher import parse_ishares_csv
+        from alphalens.data.alt_data.iwm_refresher import parse_ishares_csv
 
         tickers = parse_ishares_csv(_SAMPLE_CSV)
 
         self.assertEqual(tickers, ["UPST", "SMCI", "GPC", "SWK"])
 
     def test_drops_cash_ticker_dash(self):
-        from alphalens.alt_data.iwm_refresher import parse_ishares_csv
+        from alphalens.data.alt_data.iwm_refresher import parse_ishares_csv
 
         tickers = parse_ishares_csv(_SAMPLE_CSV)
 
         self.assertNotIn("-", tickers)
 
     def test_drops_cash_collateral_rows(self):
-        from alphalens.alt_data.iwm_refresher import parse_ishares_csv
+        from alphalens.data.alt_data.iwm_refresher import parse_ishares_csv
 
         tickers = parse_ishares_csv(_SAMPLE_CSV)
 
         self.assertNotIn("MYMKT", tickers)
 
     def test_uppercases_tickers(self):
-        from alphalens.alt_data.iwm_refresher import parse_ishares_csv
+        from alphalens.data.alt_data.iwm_refresher import parse_ishares_csv
 
         csv = '\n\n\n"Ticker","Name","Asset Class"\n"aapl","Apple","Equity"\n'
 
@@ -52,7 +52,7 @@ class TestParseIsharesCsv(unittest.TestCase):
         self.assertEqual(tickers, ["AAPL"])
 
     def test_missing_header_raises(self):
-        from alphalens.alt_data.iwm_refresher import (
+        from alphalens.data.alt_data.iwm_refresher import (
             IsharesCsvFormatError,
             parse_ishares_csv,
         )
@@ -63,7 +63,7 @@ class TestParseIsharesCsv(unittest.TestCase):
             parse_ishares_csv(csv)
 
     def test_empty_data_after_header_returns_empty(self):
-        from alphalens.alt_data.iwm_refresher import parse_ishares_csv
+        from alphalens.data.alt_data.iwm_refresher import parse_ishares_csv
 
         csv = '"Ticker","Name","Asset Class"\n'
 
@@ -72,7 +72,7 @@ class TestParseIsharesCsv(unittest.TestCase):
     def test_footer_disclaimer_row_dropped(self):
         """iShares CSV has a multi-line legal disclaimer that smashes into
         the first column. Reject anything that doesn't match a ticker pattern."""
-        from alphalens.alt_data.iwm_refresher import parse_ishares_csv
+        from alphalens.data.alt_data.iwm_refresher import parse_ishares_csv
 
         csv_text = (
             '"Ticker","Name","Asset Class"\n'
@@ -87,7 +87,7 @@ class TestParseIsharesCsv(unittest.TestCase):
 
     def test_numeric_pseudo_ticker_dropped(self):
         """iShares includes rows like 'P5N994' (internal codes) that aren't real tickers."""
-        from alphalens.alt_data.iwm_refresher import parse_ishares_csv
+        from alphalens.data.alt_data.iwm_refresher import parse_ishares_csv
 
         csv_text = (
             '"Ticker","Name","Asset Class"\n'
@@ -102,7 +102,7 @@ class TestParseIsharesCsv(unittest.TestCase):
 
     def test_class_share_suffix_allowed(self):
         """BRK.B / GOOG-L style class shares must be kept."""
-        from alphalens.alt_data.iwm_refresher import parse_ishares_csv
+        from alphalens.data.alt_data.iwm_refresher import parse_ishares_csv
 
         csv_text = (
             '"Ticker","Name","Asset Class"\n'
@@ -115,7 +115,7 @@ class TestParseIsharesCsv(unittest.TestCase):
         self.assertEqual(set(tickers), {"BRK.B", "GOOG-L"})
 
     def test_dedups_preserving_first_occurrence(self):
-        from alphalens.alt_data.iwm_refresher import parse_ishares_csv
+        from alphalens.data.alt_data.iwm_refresher import parse_ishares_csv
 
         csv = (
             '"Ticker","Name","Asset Class"\n'
@@ -131,8 +131,8 @@ class TestParseIsharesCsv(unittest.TestCase):
 
 class TestRefresh(unittest.TestCase):
     def test_writes_yaml_compatible_with_load_iwm_current(self):
-        from alphalens.alt_data.iwm_refresher import refresh_iwm_current
-        from alphalens.alt_data.russell_universe import load_iwm_current
+        from alphalens.data.alt_data.iwm_refresher import refresh_iwm_current
+        from alphalens.data.alt_data.russell_universe import load_iwm_current
 
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "iwm.yaml"
@@ -148,8 +148,8 @@ class TestRefresh(unittest.TestCase):
         self.assertEqual(tickers, ["UPST", "SMCI", "GPC", "SWK"])
 
     def test_fallback_on_fetch_error_copies_fallback(self):
-        from alphalens.alt_data.iwm_refresher import refresh_iwm_current
-        from alphalens.alt_data.russell_universe import load_iwm_current
+        from alphalens.data.alt_data.iwm_refresher import refresh_iwm_current
+        from alphalens.data.alt_data.russell_universe import load_iwm_current
 
         def broken_fetcher():
             raise RuntimeError("network down")
@@ -171,7 +171,7 @@ class TestRefresh(unittest.TestCase):
             self.assertEqual(load_iwm_current(out), ["FALLBACK1", "FALLBACK2"])
 
     def test_fallback_missing_reraises(self):
-        from alphalens.alt_data.iwm_refresher import refresh_iwm_current
+        from alphalens.data.alt_data.iwm_refresher import refresh_iwm_current
 
         def broken_fetcher():
             raise RuntimeError("network down")
@@ -184,7 +184,7 @@ class TestRefresh(unittest.TestCase):
 
     def test_format_error_also_triggers_fallback(self):
         """Parse failure should fallback-or-raise, same as fetch failure."""
-        from alphalens.alt_data.iwm_refresher import refresh_iwm_current
+        from alphalens.data.alt_data.iwm_refresher import refresh_iwm_current
 
         def garbage_fetcher():
             return "nothing resembling a CSV"
@@ -203,7 +203,7 @@ class TestRefresh(unittest.TestCase):
             self.assertEqual(count, 1)
 
     def test_creates_parent_dirs(self):
-        from alphalens.alt_data.iwm_refresher import refresh_iwm_current
+        from alphalens.data.alt_data.iwm_refresher import refresh_iwm_current
 
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "nested" / "deeper" / "iwm.yaml"

@@ -3,7 +3,7 @@
 Where the backtest adapter (:mod:`alphalens.archive.screeners.insider.backtest_adapter`)
 scores a universe supplied by the engine as OHLCV histories, this pipeline is
 the live counterpart invoked from the CLI and launchd. Universe comes from the
-injected loader (typically :func:`alphalens.alt_data.russell_universe.load_iwm_current`),
+injected loader (typically :func:`alphalens.data.alt_data.russell_universe.load_iwm_current`),
 not from price histories.
 
 Mirrors the themed pipeline contract: ``run(curr_date, top_n) -> DataFrame`` +
