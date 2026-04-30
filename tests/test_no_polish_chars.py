@@ -36,9 +36,6 @@ def _python_sources():
         for path in (REPO_ROOT / pkg).rglob("*.py"):
             if "__pycache__" in path.parts:
                 continue
-            # Vendored upstream is out of scope (managed via git subtree).
-            if "TradingAgents" in path.parts:
-                continue
             if str(path.relative_to(REPO_ROOT)) in EXEMPT_FILES:
                 continue
             yield path

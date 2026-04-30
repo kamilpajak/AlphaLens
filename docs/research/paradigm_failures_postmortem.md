@@ -200,9 +200,8 @@ These modules survive the project pivot and are usable for future research:
 
 ### LLM infrastructure
 - `alphalens/archive/guru/llm_scorer.py` — disk-cached GuruScorer with structured JSON output, cost tracking
-- `alphalens/core/runner.py` — TradingAgentsRunner (per-stock multi-agent analysis)
-- `alphalens/core/config_gemini.py` — Gemini config builder
-- TradingAgents framework (vendored) — multi-agent graph for deep per-stock analysis
+- `alphalens_cli/commands/guru.py` — Layer 2f GuruAgent pilot (LangChain + Gemini directly, no shared wrapper)
+- (TradingAgents-based per-stock multi-agent analysis removed 2026-04-30 per ADR 0008)
 
 ### Live systems
 - Layer 1 SEC EDGAR watchdog (launchd, daily digest) — keeps eyes on real-time events without capital commitment

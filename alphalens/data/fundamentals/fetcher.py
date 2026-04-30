@@ -1,12 +1,12 @@
 """Alpha Vantage fundamentals fetcher + feature extraction.
 
-Delegates the four AV endpoint calls (OVERVIEW, BALANCE_SHEET, CASH_FLOW,
-INCOME_STATEMENT) to the upstream TradingAgents wrapper, which already
-handles rate-limit detection + PIT `_filter_reports_by_date`.
+Calls the four AV endpoints (OVERVIEW, BALANCE_SHEET, CASH_FLOW,
+INCOME_STATEMENT) directly via stdlib `urllib.request` and applies a PIT
+filter on `fiscalDateEnding` to drop reports ending after `curr_date`.
 
 `extract_features` produces the canonical feature dict consumed by
 `alphalens.data.fundamentals.gate`:
-  - cash_runway_months: cash / abs(quarterly OCF) × 3
+  - cash_runway_months: cash / abs(quarterly OCF) x 3
   - ps_ratio: from OVERVIEW.PriceToSalesRatioTTM
   - net_income_ttm: sum of last 4 quarterly netIncome values
   - consecutive_neg_ocf_quarters: count from most recent quarter backwards
@@ -14,51 +14,114 @@ handles rate-limit detection + PIT `_filter_reports_by_date`.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from collections.abc import Mapping
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import urlopen
 
 logger = logging.getLogger(__name__)
 
+_AV_BASE_URL = "https://www.alphavantage.co/query"
+
+
+class AlphaVantageRateLimitError(RuntimeError):
+    """Alpha Vantage signalled rate-limit / quota exhaustion.
+
+    Distinct from generic fetch failures so callers that want to abort a batch
+    rather than degrade to null features can branch on it.
+    """
+
+
+def _filter_reports_by_date(result: Any, curr_date: str | None) -> Any:
+    """Drop annualReports/quarterlyReports entries with fiscalDateEnding > curr_date.
+
+    Prevents look-ahead bias by removing fiscal periods that end after the
+    simulation's current date. Returns the input unchanged if no curr_date
+    or the result is not a dict.
+    """
+    if not curr_date or not isinstance(result, dict):
+        return result
+    for key in ("annualReports", "quarterlyReports"):
+        if key in result:
+            result[key] = [r for r in result[key] if r.get("fiscalDateEnding", "") <= curr_date]
+    return result
+
+
+def _make_av_request(function_name: str, symbol: str) -> dict:
+    """Call the Alpha Vantage REST API and return parsed JSON.
+
+    Returns {} on application-level errors (invalid ticker, malformed JSON).
+    Raises AlphaVantageRateLimitError on rate-limit / quota signals so the
+    caller can abort a batch instead of polluting it with null features.
+    Network errors propagate as urllib.error.URLError / HTTPError.
+    """
+    api_key = os.getenv("ALPHA_VANTAGE_API_KEY")
+    if not api_key:
+        raise ValueError("ALPHA_VANTAGE_API_KEY environment variable is not set.")
+
+    params = {"function": function_name, "symbol": symbol, "apikey": api_key}
+    url = f"{_AV_BASE_URL}?{urlencode(params)}"
+    with urlopen(url, timeout=30) as resp:
+        body = resp.read().decode("utf-8")
+
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return {}
+
+    if isinstance(data, dict):
+        if "Information" in data:
+            info = str(data["Information"]).lower()
+            if "rate limit" in info or "api key" in info:
+                raise AlphaVantageRateLimitError(
+                    f"Alpha Vantage rate-limited on {function_name}/{symbol}: {data['Information']}"
+                )
+        if "Error Message" in data:
+            logger.warning(
+                "Alpha Vantage error on %s/%s: %s", function_name, symbol, data["Error Message"]
+            )
+            return {}
+
+    return data if isinstance(data, dict) else {}
+
 
 def _av_overview(ticker: str, curr_date: str | None = None) -> Mapping:
-    from tradingagents.dataflows.alpha_vantage_fundamentals import get_fundamentals
-
-    result = get_fundamentals(ticker, curr_date=curr_date)
-    return result if isinstance(result, Mapping) else {}
+    return _make_av_request("OVERVIEW", ticker)
 
 
 def _av_balance_sheet(ticker: str, curr_date: str | None = None) -> Mapping:
-    from tradingagents.dataflows.alpha_vantage_fundamentals import get_balance_sheet
-
-    result = get_balance_sheet(ticker, curr_date=curr_date)
-    return result if isinstance(result, Mapping) else {}
+    return _filter_reports_by_date(_make_av_request("BALANCE_SHEET", ticker), curr_date)
 
 
 def _av_cashflow(ticker: str, curr_date: str | None = None) -> Mapping:
-    from tradingagents.dataflows.alpha_vantage_fundamentals import get_cashflow
-
-    result = get_cashflow(ticker, curr_date=curr_date)
-    return result if isinstance(result, Mapping) else {}
+    return _filter_reports_by_date(_make_av_request("CASH_FLOW", ticker), curr_date)
 
 
 def _av_income_statement(ticker: str, curr_date: str | None = None) -> Mapping:
-    from tradingagents.dataflows.alpha_vantage_fundamentals import get_income_statement
-
-    result = get_income_statement(ticker, curr_date=curr_date)
-    return result if isinstance(result, Mapping) else {}
+    return _filter_reports_by_date(_make_av_request("INCOME_STATEMENT", ticker), curr_date)
 
 
 def fetch_ticker_bundle(ticker: str, curr_date: str | None = None) -> dict:
     """Fetch all four AV endpoints for a ticker and bundle them.
 
-    Individual endpoint failures return {} so partial data still flows through
-    — extract_features defends against missing sections.
+    Individual application-level endpoint failures return {} so partial data
+    still flows through — extract_features defends against missing sections.
+    Rate-limit signals (AlphaVantageRateLimitError) propagate to the caller
+    so a batch can be aborted instead of polluted with null features.
     """
 
     def _safe(fn):
         try:
             return fn(ticker, curr_date=curr_date)
+        except AlphaVantageRateLimitError:
+            raise
+        except (HTTPError, URLError) as exc:
+            logger.warning("AV network error for %s: %s", ticker, exc)
+            return {}
         except Exception as exc:
             logger.warning("AV fetch failed for %s: %s", ticker, exc)
             return {}
@@ -72,7 +135,7 @@ def fetch_ticker_bundle(ticker: str, curr_date: str | None = None) -> dict:
 
 
 def _to_float(x: Any) -> float | None:
-    """AV returns strings; 'None' / '' / missing → None. Returns float or None."""
+    """AV returns strings; 'None' / '' / missing -> None. Returns float or None."""
     if x is None:
         return None
     if isinstance(x, str):
@@ -103,7 +166,7 @@ def _consecutive_neg_ocf(cash_flow: Mapping) -> int:
 
 
 def _cash_runway_months(balance_sheet: Mapping, cash_flow: Mapping) -> float | None:
-    """Monthly runway = cash_and_short_term_investments / |TTM avg quarterly OCF| × 3.
+    """Monthly runway = cash_and_short_term_investments / |TTM avg quarterly OCF| x 3.
 
     Uses trailing-4-quarter average OCF to smooth one-time items (legal
     settlements, inventory builds, tax windfalls) that otherwise risk

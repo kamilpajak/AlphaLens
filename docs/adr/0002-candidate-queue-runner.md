@@ -13,11 +13,12 @@ meant re-implementing dedup, priority, retry, daily budget, and notifier
 plumbing each time.
 
 We needed a single shape for "this is a name worth analysing" and a single
-choke point that turned that shape into a TradingAgents run.
+choke point that turned that shape into whatever downstream consumer was
+attached at the time.
 
 ## Decision
 
-Three abstractions, all in `alphalens/`:
+Two abstractions, both in `alphalens/`:
 
 1. **`Candidate`** (`candidates.py`) — frozen dataclass: `(ticker, source,
    priority, payload, dedup_key)`. The only legal currency between screeners
@@ -26,11 +27,12 @@ Three abstractions, all in `alphalens/`:
 2. **`CandidateQueue`** (`queue.py`) — SQLite-backed implementation of
    `CandidateSink` at `~/.alphalens/candidates.db`. `UNIQUE(dedup_key)` plus
    priority + retry-window scheduling enforce idempotency and fairness.
-3. **`AnalysisWorker` + `TradingAgentsRunner`** (`worker.py`, `runner.py`) —
-   `AnalysisWorker` drains the queue, respects daily budget, retries with
-   exponential backoff, and dead-letters after 5 failures. `TradingAgentsRunner`
-   is the **only** site in the codebase allowed to construct a
-   `TradingAgentsGraph`.
+
+Originally a third abstraction (`AnalysisWorker` + a screener-agnostic runner)
+drained the queue and forwarded each candidate to a per-stock LLM analysis
+pipeline. That consumer was removed by [ADR 0008](0008-sunset-tradingagents-integration.md);
+the queue still records candidates as a historical log, but no live process
+drains them today.
 
 Per-screener identity (which pipeline produced what) is decoupled from
 per-source priority via `registry.py::SCREENERS` and `SOURCE_PRIORITY`. This
@@ -43,17 +45,14 @@ the priority is per-source.
 - + Adding a screener is one entry in `registry.SCREENERS` plus a class
   emitting `Candidate` objects. Nothing else.
 - + Dedup, retry, DLQ, budget, and notifier plumbing are written once.
-- + The "only Runner constructs TradingAgentsGraph" rule means LLM cost
-  accounting and Gemini config (see `config_gemini.py`) live in one place.
+- + Decoupling the queue from any specific consumer made it cheap to remove
+  the original Layer 3 runner (ADR 0008) without touching producers.
 - − Schema changes in `Candidate` or the SQLite store ripple through every
   producer. Mitigated by the early-stage-project posture (ADR-style: break
   freely until users depend on stability).
-- ⚠ The `trigger_context` upstream-PR is deferred — runner currently logs the
-  per-source trigger string but does not inject it into the TradingAgents
-  initial state (see memory `project_pr_signal_context_injection.md`).
 
 ## References
 
 - `CLAUDE.md` — "Key abstractions" + "Layered pipeline" sections
-- `alphalens/core/candidates.py`, `alphalens/core/queue.py`, `alphalens/core/worker.py`,
-  `alphalens/core/runner.py`, `alphalens/core/registry.py`
+- `alphalens/core/candidates.py`, `alphalens/core/queue.py`,
+  `alphalens/core/registry.py`

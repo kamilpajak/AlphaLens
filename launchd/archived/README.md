@@ -2,6 +2,23 @@
 
 Pliki w tym katalogu to plisty strategii które były rozważane lub działały produkcyjnie, ale NIE są obecnie deployowane. Kod źródłowy w `alphalens/` pozostaje — infrastruktura jest reużywana — ale te konkretne joby NIE ładują się do launchd. Pełny postmortem każdej strategii: `docs/research/paradigm_failures_postmortem.md`.
 
+## `com.alphalens.watchdog.worker.plist` + `bin/alphalens-worker` (Layer 3 LLM runner)
+
+**Status**: ARCHIVED 2026-04-30 ([ADR 0008](../../docs/adr/0008-sunset-tradingagents-integration.md))
+
+**Strategia**: every 5 min, drain `~/.alphalens/candidates.db` one job at a time and run each candidate through `TradingAgentsGraph.propagate()` for multi-agent LLM analysis. Daily budget cap (5 analyses/day).
+
+**Przyczyna**: TradingAgents subtree removed entirely. After 10/10 paradigm failures, no live strategy needed the multi-agent verdict — the worker was dormant and would only burn Gemini quota against research already concluded. Layer 1 watchdog still writes to the queue, but no consumer drains it today.
+
+**Reactivation gate**: a phase-robust PASS that genuinely depends on per-stock LLM analysis. Reverting would require re-adding the TradingAgents subtree, the `[tool.uv.sources]` entry, the Gemini 429 retry patch, and rewriting `runner.py` + `worker.py` (intentionally hard).
+
+**Manual cleanup the user needs to do** (not a repo op):
+```
+launchctl unload ~/Library/LaunchAgents/com.alphalens.watchdog.worker.plist
+rm ~/Library/LaunchAgents/com.alphalens.watchdog.worker.plist
+rm -rf ~/.tradingagents/
+```
+
 ## `com.alphalens.watchdog.themed.plist` (Layer 2b — themed momentum)
 
 **Status**: CLOSED 2026-04-22 (PR #18 audit)

@@ -60,7 +60,7 @@ class TestSeenEventStore(unittest.TestCase):
 
         self.assertEqual([e.accession_number for e in unseen], ["ACC-2", "ACC-4"])
 
-    def test_default_path_is_in_tradingagents_home(self):
+    def test_default_path_is_in_alphalens_home(self):
         from alphalens.watchdog.storage import default_db_path
 
         expected = Path.home() / ".alphalens" / "watchdog" / "seen_events.db"

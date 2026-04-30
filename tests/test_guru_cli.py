@@ -203,12 +203,88 @@ class TestGuruPilot(unittest.TestCase):
 
 class TestGuruImports(unittest.TestCase):
     def test_real_llm_client_import_path_is_valid(self):
-        """Regression: the CLI uses lowercase `tradingagents.llm_clients`,
-        not `TradingAgents.tradingagents.llm_clients`. Import must resolve."""
+        """Regression: guru pilot constructs ChatGoogleGenerativeAI directly."""
         import importlib
 
-        mod = importlib.import_module("tradingagents.llm_clients.google_client")
-        self.assertTrue(hasattr(mod, "GoogleClient"))
+        mod = importlib.import_module("langchain_google_genai")
+        self.assertTrue(hasattr(mod, "ChatGoogleGenerativeAI"))
+
+
+class TestNormalizeBlockContent(unittest.TestCase):
+    def test_string_content_returned_unchanged(self):
+        from alphalens_cli.commands.guru import _normalize_block_content
+
+        self.assertEqual(_normalize_block_content("plain answer"), "plain answer")
+
+    def test_list_of_text_blocks_joined(self):
+        from alphalens_cli.commands.guru import _normalize_block_content
+
+        blocks = [
+            {"type": "reasoning", "text": "internal monologue"},
+            {"type": "text", "text": "first paragraph"},
+            {"type": "text", "text": "second paragraph"},
+        ]
+        self.assertEqual(
+            _normalize_block_content(blocks),
+            "first paragraph\nsecond paragraph",
+        )
+
+    def test_list_with_string_items_kept(self):
+        from alphalens_cli.commands.guru import _normalize_block_content
+
+        self.assertEqual(_normalize_block_content(["alpha", "beta"]), "alpha\nbeta")
+
+    def test_list_with_unknown_block_type_dropped(self):
+        from alphalens_cli.commands.guru import _normalize_block_content
+
+        blocks = [{"type": "tool_use", "data": "ignored"}, {"type": "text", "text": "kept"}]
+        self.assertEqual(_normalize_block_content(blocks), "kept")
+
+
+class TestNormalizedChatInvoke(unittest.TestCase):
+    def test_invoke_normalizes_list_content_via_model_copy(self):
+        """_NormalizedChat must collapse list-of-blocks → str without mutating input."""
+        from unittest.mock import patch
+
+        from langchain_core.messages import AIMessage
+
+        from alphalens_cli.commands.guru import _NormalizedChat
+
+        original = AIMessage(
+            content=[{"type": "text", "text": "hello"}, {"type": "text", "text": "world"}]
+        )
+
+        with patch.object(_NormalizedChat, "__init__", return_value=None):
+            chat = _NormalizedChat()
+            with patch(
+                "langchain_google_genai.ChatGoogleGenerativeAI.invoke",
+                return_value=original,
+            ):
+                result = chat.invoke("any prompt")
+
+        self.assertEqual(result.content, "hello\nworld")
+        # Source AIMessage was not mutated in place.
+        self.assertEqual(
+            original.content,
+            [{"type": "text", "text": "hello"}, {"type": "text", "text": "world"}],
+        )
+
+    def test_invoke_passes_through_string_content(self):
+        from unittest.mock import patch
+
+        from langchain_core.messages import AIMessage
+
+        from alphalens_cli.commands.guru import _NormalizedChat
+
+        original = AIMessage(content="already a string")
+        with patch.object(_NormalizedChat, "__init__", return_value=None):
+            chat = _NormalizedChat()
+            with patch(
+                "langchain_google_genai.ChatGoogleGenerativeAI.invoke",
+                return_value=original,
+            ):
+                result = chat.invoke("any prompt")
+        self.assertIs(result, original)
 
 
 if __name__ == "__main__":

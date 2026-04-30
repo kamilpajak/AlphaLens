@@ -208,7 +208,7 @@ All three use **Newey-West HAC** covariance (`maxlag = int(4·(n/100)^(2/9))`, a
 | `diagnostics.py` | IC-by-decile, tail-concentration score, vol decomposition by regime |
 | `theme_analysis.py` | Theme HHI + dominant theme per day + concentration alerts (Layer 2b specific) |
 | `historical_validation.py` | `evaluate_historical_picks(picks, scorer_fn)` — pluggable LLM / rule scorer evaluation + decision matrix |
-| `llm_scorers.py` | Reference LLM scorers: Gemini Flash tractability, hybrid rule → Gemini, TradingAgents reduced |
+| `llm_scorers.py` | Reference LLM scorers: Gemini Flash tractability + hybrid rule → Gemini |
 | `report.py` | `build_summary`, `write_markdown_report`, `rebalance_results_to_dataframe` |
 
 ## Known limitations

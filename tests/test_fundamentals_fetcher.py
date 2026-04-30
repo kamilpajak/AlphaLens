@@ -227,6 +227,199 @@ class TestFetchTickerBundle(unittest.TestCase):
         self.assertEqual(bundle["overview"], {})
         self.assertEqual(bundle["balance_sheet"], {})
 
+    @patch("alphalens.data.fundamentals.fetcher._av_overview")
+    def test_fetch_bundle_propagates_rate_limit(self, mock_ov):
+        """Rate-limit must abort the batch (not degrade to null features)."""
+        from alphalens.data.fundamentals.fetcher import (
+            AlphaVantageRateLimitError,
+            fetch_ticker_bundle,
+        )
+
+        mock_ov.side_effect = AlphaVantageRateLimitError("daily quota exhausted")
+        with self.assertRaises(AlphaVantageRateLimitError):
+            fetch_ticker_bundle("X")
+
+
+class TestMakeAVRequest(unittest.TestCase):
+    def test_rate_limit_information_raises(self):
+        from alphalens.data.fundamentals.fetcher import (
+            AlphaVantageRateLimitError,
+            _make_av_request,
+        )
+
+        rate_limit_body = '{"Information": "Thank you for using Alpha Vantage! ...rate limit..."}'
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return rate_limit_body.encode()
+
+        with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "test"}):
+            with patch("alphalens.data.fundamentals.fetcher.urlopen", return_value=_Resp()):
+                with self.assertRaises(AlphaVantageRateLimitError):
+                    _make_av_request("OVERVIEW", "AAPL")
+
+    def test_error_message_returns_empty(self):
+        """Invalid ticker / malformed request → {} with warning, not exception."""
+        from alphalens.data.fundamentals.fetcher import _make_av_request
+
+        body = '{"Error Message": "Invalid API call. Please retry..."}'
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return body.encode()
+
+        with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "test"}):
+            with patch("alphalens.data.fundamentals.fetcher.urlopen", return_value=_Resp()):
+                self.assertEqual(_make_av_request("OVERVIEW", "BOGUS"), {})
+
+    def test_missing_api_key_raises_value_error(self):
+        from alphalens.data.fundamentals.fetcher import _make_av_request
+
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(ValueError):
+                _make_av_request("OVERVIEW", "AAPL")
+
+    def test_non_json_response_returns_empty(self):
+        from alphalens.data.fundamentals.fetcher import _make_av_request
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b"<html>not json</html>"
+
+        with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "test"}):
+            with patch("alphalens.data.fundamentals.fetcher.urlopen", return_value=_Resp()):
+                self.assertEqual(_make_av_request("OVERVIEW", "AAPL"), {})
+
+    def test_non_dict_json_returns_empty(self):
+        """AV occasionally returns a JSON list / scalar — coerce to {}."""
+        from alphalens.data.fundamentals.fetcher import _make_av_request
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b"[1, 2, 3]"
+
+        with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "test"}):
+            with patch("alphalens.data.fundamentals.fetcher.urlopen", return_value=_Resp()):
+                self.assertEqual(_make_av_request("OVERVIEW", "AAPL"), {})
+
+
+class TestFilterReportsByDate(unittest.TestCase):
+    def test_no_curr_date_returns_input_unchanged(self):
+        from alphalens.data.fundamentals.fetcher import _filter_reports_by_date
+
+        bundle = {"quarterlyReports": [{"fiscalDateEnding": "2024-09-30"}]}
+        self.assertIs(_filter_reports_by_date(bundle, None), bundle)
+
+    def test_non_dict_input_returned_unchanged(self):
+        from alphalens.data.fundamentals.fetcher import _filter_reports_by_date
+
+        self.assertEqual(_filter_reports_by_date("not a dict", "2024-10-15"), "not a dict")
+
+    def test_filters_quarterly_and_annual_reports_by_curr_date(self):
+        from alphalens.data.fundamentals.fetcher import _filter_reports_by_date
+
+        bundle = {
+            "annualReports": [
+                {"fiscalDateEnding": "2023-12-31"},
+                {"fiscalDateEnding": "2024-12-31"},  # after curr_date → drop
+            ],
+            "quarterlyReports": [
+                {"fiscalDateEnding": "2024-06-30"},
+                {"fiscalDateEnding": "2024-09-30"},  # after curr_date → drop
+            ],
+        }
+        filtered = _filter_reports_by_date(bundle, "2024-08-31")
+        self.assertEqual(len(filtered["annualReports"]), 1)
+        self.assertEqual(filtered["annualReports"][0]["fiscalDateEnding"], "2023-12-31")
+        self.assertEqual(len(filtered["quarterlyReports"]), 1)
+        self.assertEqual(filtered["quarterlyReports"][0]["fiscalDateEnding"], "2024-06-30")
+
+
+class TestSafeNetworkErrors(unittest.TestCase):
+    def test_network_error_in_individual_endpoint_logs_and_returns_empty(self):
+        """HTTPError / URLError must degrade per-endpoint without aborting the bundle."""
+        from urllib.error import URLError
+
+        from alphalens.data.fundamentals.fetcher import fetch_ticker_bundle
+
+        with (
+            patch(
+                "alphalens.data.fundamentals.fetcher._av_overview",
+                side_effect=URLError("DNS lookup failed"),
+            ),
+            patch("alphalens.data.fundamentals.fetcher._av_balance_sheet", return_value={}),
+            patch("alphalens.data.fundamentals.fetcher._av_cashflow", return_value={}),
+            patch("alphalens.data.fundamentals.fetcher._av_income_statement", return_value={}),
+        ):
+            bundle = fetch_ticker_bundle("AAPL")
+
+        self.assertEqual(bundle["overview"], {})
+
+
+class TestEndpointWrappers(unittest.TestCase):
+    """Cover the four single-line wrappers that delegate to _make_av_request."""
+
+    def test_av_overview_calls_make_request(self):
+        from alphalens.data.fundamentals.fetcher import _av_overview
+
+        with patch(
+            "alphalens.data.fundamentals.fetcher._make_av_request",
+            return_value={"Symbol": "AAPL"},
+        ) as m:
+            self.assertEqual(_av_overview("AAPL"), {"Symbol": "AAPL"})
+            m.assert_called_once_with("OVERVIEW", "AAPL")
+
+    def test_av_balance_sheet_filters_by_date(self):
+        from alphalens.data.fundamentals.fetcher import _av_balance_sheet
+
+        raw = {
+            "quarterlyReports": [
+                {"fiscalDateEnding": "2024-06-30"},
+                {"fiscalDateEnding": "2024-09-30"},
+            ]
+        }
+        with patch("alphalens.data.fundamentals.fetcher._make_av_request", return_value=raw):
+            result = _av_balance_sheet("AAPL", curr_date="2024-08-01")
+        self.assertEqual(len(result["quarterlyReports"]), 1)
+
+    def test_av_cashflow_filters_by_date(self):
+        from alphalens.data.fundamentals.fetcher import _av_cashflow
+
+        raw = {"quarterlyReports": [{"fiscalDateEnding": "2024-06-30"}]}
+        with patch("alphalens.data.fundamentals.fetcher._make_av_request", return_value=raw):
+            self.assertEqual(_av_cashflow("AAPL", curr_date="2024-12-31"), raw)
+
+    def test_av_income_statement_filters_by_date(self):
+        from alphalens.data.fundamentals.fetcher import _av_income_statement
+
+        raw = {"quarterlyReports": [{"fiscalDateEnding": "2024-06-30"}]}
+        with patch("alphalens.data.fundamentals.fetcher._make_av_request", return_value=raw):
+            self.assertEqual(_av_income_statement("AAPL", curr_date="2024-12-31"), raw)
+
 
 if __name__ == "__main__":
     unittest.main()

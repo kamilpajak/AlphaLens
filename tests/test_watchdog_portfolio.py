@@ -56,7 +56,7 @@ class TestPortfolioState(unittest.TestCase):
         state = PortfolioState(held=["AAPL"], watchlist=["GOOG"])
         self.assertEqual(state.relevance_for("TSLA"), Relevance.FOREIGN)
 
-    def test_default_path_is_in_tradingagents_home(self):
+    def test_default_path_is_in_alphalens_home(self):
         from alphalens.watchdog.portfolio import default_portfolio_path
 
         expected = Path.home() / ".alphalens" / "watchdog" / "portfolio.yaml"

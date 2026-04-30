@@ -33,7 +33,7 @@ class TestTyperAppRegistration(unittest.TestCase):
         from alphalens_cli.commands.queue import queue_app
 
         names = {cmd.name for cmd in queue_app.registered_commands}
-        self.assertEqual(names, {"process", "scorer-stats"})
+        self.assertEqual(names, {"scorer-stats"})
 
     def test_themed_commands(self):
         from alphalens_cli.commands.themed import themed_app
@@ -52,7 +52,6 @@ class TestTyperAppRegistration(unittest.TestCase):
                 "survivorship-pit",
                 "walk-forward",
                 "cost-validation",
-                "historical-acceptance",
             },
         )
 
@@ -60,7 +59,7 @@ class TestTyperAppRegistration(unittest.TestCase):
         from alphalens_cli.main import app
 
         names = {cmd.name for cmd in app.registered_commands}
-        self.assertEqual(names, {"analyze", "status", "backtest"})
+        self.assertEqual(names, {"status", "backtest"})
 
 
 class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):
@@ -87,25 +86,6 @@ class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):
 
             try:
                 _build_watchdog()
-            except ImportError:
-                raise
-            except Exception:
-                pass
-
-    @patch.dict(os.environ, {}, clear=False)
-    def test_build_worker_resolves_without_import_error(self):
-        os.environ.update(self.env_patches)
-
-        runner_cls = f"{OUR_PACKAGE_PREFIX}.core.runner.TradingAgentsRunner"
-        queue_cls = f"{OUR_PACKAGE_PREFIX}.core.queue.CandidateQueue"
-
-        with patch(runner_cls) as mock_runner, patch(queue_cls) as mock_queue:
-            mock_runner.return_value = MagicMock()
-            mock_queue.return_value = MagicMock()
-            from alphalens_cli.commands.queue import _build_worker
-
-            try:
-                _build_worker()
             except ImportError:
                 raise
             except Exception:

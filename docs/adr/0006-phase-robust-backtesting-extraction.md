@@ -53,8 +53,7 @@ MIT-licensed, pip-installable, with its own minimal CI (ruff + unittest discover
 
 ### Vendoring policy (back into AlphaLens)
 
-If future fixes flow back, use `git subtree pull` (same convention as
-TradingAgents per [ADR 0004](0004-tradingagents-as-subtree.md)):
+If future fixes flow back, use `git subtree pull`:
 
 ```bash
 git subtree pull --prefix=alphalens/preregistration \
@@ -72,8 +71,8 @@ otherwise the local copies stay authoritative for AlphaLens-specific use.
   reusable independent of AlphaLens's strategy outcomes. Anti-pattern catalog
   is citable for anyone hitting the same retail-quant traps. Closes #39
   Phase 1.
-- **Positive.** The OSS repo's CI is minimal (no SonarCloud / bandit /
-  TradingAgents subtree), so it's far cheaper to maintain than AlphaLens.
+- **Positive.** The OSS repo's CI is minimal (no SonarCloud / bandit), so
+  it's far cheaper to maintain than AlphaLens.
 - **Negative (mild).** Two copies of the same code now exist. AlphaLens's
   `alphalens/preregistration/` and `alphalens/backtest/{multi_phase,
   multiple_testing}.py` are NOT replaced by a `pip install` dependency; we
@@ -100,5 +99,4 @@ otherwise the local copies stay authoritative for AlphaLens-specific use.
 - Issue: [#39](https://github.com/kamilpajak/AlphaLens/issues/39)
 - New repo: <https://github.com/kamilpajak/phase-robust-backtesting>
 - Anti-pattern catalog: <https://github.com/kamilpajak/phase-robust-backtesting/blob/main/docs/anti_patterns.md>
-- Subtree precedent: [ADR 0004](0004-tradingagents-as-subtree.md)
 - Closed-layer policy: [ADR 0005](0005-closed-layers-as-anti-pattern-catalog.md)
