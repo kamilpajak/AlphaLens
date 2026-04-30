@@ -4,7 +4,7 @@ Inputs (assumed already built by earlier phases):
 - ``~/.alphalens/pit_universe/{YYYY-MM}.yaml`` — PIT universe snapshots (Phase 2.5)
 - ``~/.alphalens/prices/{TICKER}.parquet`` — yfinance OHLCV cache (Phase 2.5)
 - ``~/.alphalens/insider_form4/{TICKER}_{ASOF}.json`` — scorer cache (Phase 3a)
-- ``alphalens/alt_data/data/ticker_cik_map.yaml`` — SEC ticker map (Phase 2)
+- ``alphalens/data/alt_data/data/ticker_cik_map.yaml`` — SEC ticker map (Phase 2)
 - Ken French factor CSVs under ``~/.alphalens/factors/`` (one-time manual refresh)
 
 Outputs:
@@ -79,7 +79,7 @@ logger = logging.getLogger(__name__)
 _PIT_DIR = Path.home() / ".alphalens" / "pit_universe"
 _PRICES_DIR = Path.home() / ".alphalens" / "prices"
 _CACHE_DIR = Path.home() / ".alphalens" / "insider_form4"
-_CIK_MAP_PATH = Path("alphalens/alt_data/data/ticker_cik_map.yaml")
+_CIK_MAP_PATH = Path("alphalens/data/alt_data/data/ticker_cik_map.yaml")
 
 
 _CARHART_FACTORS = ["Mkt-RF", "SMB", "HML", "Mom"]

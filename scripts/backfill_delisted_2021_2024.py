@@ -1,6 +1,6 @@
 """Backfill delisted-ticker events for the 2021-04-19 → 2024-04-18 gap.
 
-The existing `alphalens/screeners/lean/lean_project/delisted_universe.yaml`
+The existing `alphalens/archive/screeners/lean/lean_project/delisted_universe.yaml`
 only covers 2024-04-19 → 2026-04-17 (1114 events). The Layer 2b backtest
 runs 2021-04-19 → 2026-04-17, so we need events from the earlier ~3 years
 to run the survivorship_pit diagnostic battery (C2 selection bias + C3

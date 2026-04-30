@@ -74,8 +74,8 @@ def _resolve_insider_scorer(
     from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient
     from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
-    iwm_path = Path("alphalens/alt_data/data/iwm_current.yaml")
-    cik_map_path = Path("alphalens/alt_data/data/ticker_cik_map.yaml")
+    iwm_path = Path("alphalens/data/alt_data/data/iwm_current.yaml")
+    cik_map_path = Path("alphalens/data/alt_data/data/ticker_cik_map.yaml")
     for p in (iwm_path, cik_map_path):
         if not p.exists():
             raise typer.BadParameter(
