@@ -55,16 +55,16 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
-from alphalens.backtest.cost_model import CostModel
+from alphalens.attribution.cost_model import CostModel
+from alphalens.attribution.factor_analysis import run_carhart_attribution
+from alphalens.attribution.regime import classify_regime
 from alphalens.backtest.engine import BacktestReport
-from alphalens.backtest.factor_analysis import run_carhart_attribution
 from alphalens.backtest.metrics import (
     max_drawdown,
     rank_ic_tstat,
     sharpe,
     turnover_pct,
 )
-from alphalens.backtest.regime import classify_regime
 
 # ---------------------------------------------------------------------------
 # Dataclasses

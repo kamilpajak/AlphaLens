@@ -5,7 +5,7 @@ import pandas as pd
 
 from alphalens.archive.rotation.config import GateConfig
 from alphalens.archive.rotation.overlay_engine import OverlayBacktestResult, RebalanceEvent
-from alphalens.backtest.factor_analysis import AlphaResult
+from alphalens.attribution.factor_analysis import AlphaResult
 
 
 def _result(

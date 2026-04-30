@@ -29,7 +29,7 @@ import pandas as pd
 import yaml
 
 from alphalens.archive.screeners.insider.parquet_scorer import ParquetInsiderScorer
-from alphalens.backtest.factor_analysis import run_carhart_attribution
+from alphalens.attribution.factor_analysis import run_carhart_attribution
 from alphalens.backtest.metrics import sharpe
 from alphalens.data.alt_data.yfinance_cache import load_cached_histories
 from alphalens.data.factors import load_carhart_daily

@@ -27,9 +27,19 @@ RULES = (
         "exemptions": {
             # Layer 2c (Lean) ARCHIVED + Layer 2b (themed) CLOSED — historical
             # validation replays recorded picks against the only available OHLCV
-            # loader (Lean CSV). Imports are flagged RESEARCH-ONLY in source.
+            # loader. Imports are flagged RESEARCH-ONLY in source.
             "alphalens/backtest/historical_validation.py",
         },
+    },
+    {
+        # ADR 0007 + Phase 4 reorg: Layer 3 (engine) produces BacktestReport;
+        # Layer 5 (attribution) consumes it. The reverse direction (engine
+        # importing attribution metrics, factor regressions, verdict gates)
+        # would create a cycle where the engine self-attributes its own output.
+        "name": "engine must stay attribution-agnostic (BacktestReport flows L3 -> L5, not back)",
+        "from_pkg": "alphalens.backtest",
+        "forbidden_prefix": "alphalens.attribution.",
+        "exemptions": set(),
     },
 )
 

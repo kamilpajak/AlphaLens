@@ -6,21 +6,21 @@ import pandas as pd
 
 class TestPrimaryFormula(unittest.TestCase):
     def test_one_way_bps_adds_adverse_selection(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(adverse_selection_bps=5.0)
 
         self.assertEqual(cm.primary_one_way_bps(half_spread_bps=3.0), 8.0)
 
     def test_round_trip_is_two_one_way(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(adverse_selection_bps=5.0)
 
         self.assertEqual(cm.primary_round_trip_bps(half_spread_bps=3.0), 16.0)
 
     def test_period_drag_scales_linearly_with_turnover(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(adverse_selection_bps=5.0)
         full = cm.primary_period_drag_bps(half_spread_bps=3.0, turnover_fraction=1.0)
@@ -30,7 +30,7 @@ class TestPrimaryFormula(unittest.TestCase):
         self.assertEqual(half, 8.0)
 
     def test_period_drag_zero_turnover_zero_cost(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(adverse_selection_bps=5.0)
 
@@ -40,7 +40,7 @@ class TestPrimaryFormula(unittest.TestCase):
         )
 
     def test_custom_adverse_selection(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(adverse_selection_bps=10.0)
 
@@ -49,7 +49,7 @@ class TestPrimaryFormula(unittest.TestCase):
 
 class TestSecondaryMarketImpact(unittest.TestCase):
     def test_impact_formula_basic(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(k=0.05)
         # k=0.05, size/adv=0.01, vol=0.30, horizon=21d
@@ -63,7 +63,7 @@ class TestSecondaryMarketImpact(unittest.TestCase):
         self.assertAlmostEqual(impact, expected, places=6)
 
     def test_impact_zero_adv_returns_zero(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(k=0.05)
 
@@ -73,7 +73,7 @@ class TestSecondaryMarketImpact(unittest.TestCase):
         )
 
     def test_impact_zero_size_returns_zero(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(k=0.05)
 
@@ -85,7 +85,7 @@ class TestSecondaryMarketImpact(unittest.TestCase):
         )
 
     def test_impact_scales_sqrt_size_over_adv(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(k=0.05)
         small = cm.secondary_market_impact_bps(
@@ -99,7 +99,7 @@ class TestSecondaryMarketImpact(unittest.TestCase):
         self.assertAlmostEqual(large / small, 2.0, places=6)
 
     def test_impact_scales_linearly_with_vol(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(k=0.05)
         low = cm.secondary_market_impact_bps(
@@ -112,7 +112,7 @@ class TestSecondaryMarketImpact(unittest.TestCase):
         self.assertAlmostEqual(high / low, 2.0, places=6)
 
     def test_impact_scales_with_sqrt_horizon(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(k=0.05)
         one_day = cm.secondary_market_impact_bps(
@@ -127,7 +127,7 @@ class TestSecondaryMarketImpact(unittest.TestCase):
 
 class TestSecondaryOneWay(unittest.TestCase):
     def test_secondary_combines_all_components(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel(adverse_selection_bps=5.0, k=0.05)
 
@@ -148,7 +148,7 @@ class TestSecondaryOneWay(unittest.TestCase):
 class TestCalibrateK(unittest.TestCase):
     def test_recovers_known_k(self):
         """Synthesize observations from a known k, verify calibration inverts."""
-        from alphalens.backtest.cost_model import RealisticCostModel, calibrate_k
+        from alphalens.attribution.cost_model import RealisticCostModel, calibrate_k
 
         true_k = 0.08
         horizon = 21
@@ -175,7 +175,7 @@ class TestCalibrateK(unittest.TestCase):
         self.assertAlmostEqual(fitted, true_k, places=6)
 
     def test_calibrate_empty_raises(self):
-        from alphalens.backtest.cost_model import calibrate_k
+        from alphalens.attribution.cost_model import calibrate_k
 
         with self.assertRaises(ValueError):
             calibrate_k(
@@ -187,7 +187,7 @@ class TestCalibrateK(unittest.TestCase):
 
     def test_calibrate_zero_adv_row_skipped(self):
         """ADV = 0 is meaningless; ignore such rows."""
-        from alphalens.backtest.cost_model import RealisticCostModel, calibrate_k
+        from alphalens.attribution.cost_model import RealisticCostModel, calibrate_k
 
         true_k = 0.10
         model = RealisticCostModel(k=true_k)
@@ -212,7 +212,7 @@ class TestCalibrateK(unittest.TestCase):
 
 class TestApplyAnnualDrag(unittest.TestCase):
     def test_subtracts_uniform_daily_drag(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel()
         gross = pd.Series([0.01] * 252)
@@ -222,7 +222,7 @@ class TestApplyAnnualDrag(unittest.TestCase):
         self.assertAlmostEqual(total_drag, 0.0150, places=6)  # 150 bps
 
     def test_zero_drag_returns_gross(self):
-        from alphalens.backtest.cost_model import RealisticCostModel
+        from alphalens.attribution.cost_model import RealisticCostModel
 
         cm = RealisticCostModel()
         gross = pd.Series([0.01, -0.005, 0.02])
@@ -234,7 +234,7 @@ class TestApplyAnnualDrag(unittest.TestCase):
 class TestBackwardCompatibility(unittest.TestCase):
     def test_existing_cost_model_unchanged(self):
         """P1 must not break existing CostModel callers (Lean, themed)."""
-        from alphalens.backtest.cost_model import _PROFILE_BPS, CostModel
+        from alphalens.attribution.cost_model import _PROFILE_BPS, CostModel
 
         # Profile bps values unchanged.
         self.assertEqual(_PROFILE_BPS["aggressive"], 75.0)

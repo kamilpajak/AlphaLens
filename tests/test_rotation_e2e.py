@@ -20,7 +20,7 @@ from alphalens.archive.rotation.allocator import OverlayAllocator
 from alphalens.archive.rotation.config import load_config
 from alphalens.archive.rotation.gates import evaluate_all_gates
 from alphalens.archive.rotation.overlay_engine import OverlayBacktestEngine
-from alphalens.backtest.factor_analysis import AlphaResult
+from alphalens.attribution.factor_analysis import AlphaResult
 from alphalens.data.macro.scorer import RuleBasedScorer
 from alphalens.data.macro.signals import build_signal_set
 from alphalens.data.store.history import HistoryStore

@@ -39,7 +39,7 @@ def _synthetic_scored_frames(n_days=50, n_tickers=100, tail_alpha=True, seed=0):
 
 class TestICByDecile(unittest.TestCase):
     def test_tail_alpha_shows_u_shape(self):
-        from alphalens.backtest.diagnostics import (
+        from alphalens.attribution.diagnostics import (
             ic_by_decile_from_scored_frames,
             tail_concentration_score,
         )
@@ -56,7 +56,7 @@ class TestICByDecile(unittest.TestCase):
         self.assertGreater(tail_concentration_score(results), 1.2)
 
     def test_noise_shows_flat_deciles(self):
-        from alphalens.backtest.diagnostics import (
+        from alphalens.attribution.diagnostics import (
             ic_by_decile_from_scored_frames,
             tail_concentration_score,
         )
@@ -70,7 +70,7 @@ class TestICByDecile(unittest.TestCase):
         self.assertLess(score, 2.0)  # not meaningfully concentrated
 
     def test_empty_input_returns_empty(self):
-        from alphalens.backtest.diagnostics import (
+        from alphalens.attribution.diagnostics import (
             ic_by_decile_from_scored_frames,
         )
 
@@ -80,7 +80,7 @@ class TestICByDecile(unittest.TestCase):
 class TestVolDecomposition(unittest.TestCase):
     def test_detects_defensive_positioning(self):
         """Synthetic: top-N has lower vol in bear but similar mean as median."""
-        from alphalens.backtest.diagnostics import (
+        from alphalens.attribution.diagnostics import (
             vol_decomposition_by_regime,
         )
         from alphalens.backtest.engine import BacktestReport, RebalanceSnapshot
@@ -125,7 +125,7 @@ class TestVolDecomposition(unittest.TestCase):
         self.assertLess(bear.vol_ratio, 0.8)
 
     def test_missing_regime_omitted(self):
-        from alphalens.backtest.diagnostics import (
+        from alphalens.attribution.diagnostics import (
             vol_decomposition_by_regime,
         )
         from alphalens.backtest.engine import BacktestReport
@@ -146,7 +146,7 @@ class TestVolDecomposition(unittest.TestCase):
 
 class TestFormatVolDecomposition(unittest.TestCase):
     def test_format_contains_header_and_regimes(self):
-        from alphalens.backtest.diagnostics import (
+        from alphalens.attribution.diagnostics import (
             VolDecomposition,
             format_vol_decomposition,
         )

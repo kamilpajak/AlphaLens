@@ -108,7 +108,7 @@ Adopt a **5-layer architecture** for AlphaLens active-alpha experimentation. Eac
 - The boundary between Layer 2 (selection-gate) and Layer 4 (risk-overlay) is sometimes fuzzy. Rule of thumb: if it modifies *which* tickers are held, Layer 2; if it modifies *how much exposure* the basket carries, Layer 4. Edge case (binary "deploy / don't deploy" overlays) lives at Layer 2 by construction (the wrapper deletes the selection on OFF days).
 
 **Limitation — time-varying betas:**
-Risk overlays make the resulting portfolio's market beta time-varying. The OLS Carhart-4F regressions in `alphalens.backtest.factor_analysis` assume constant betas. For overlay-bearing strategies the reported α t-stat is therefore distorted. The convention (locked into the strategy validation playbook 2026-04-30):
+Risk overlays make the resulting portfolio's market beta time-varying. The OLS Carhart-4F regressions in `alphalens.attribution.factor_analysis` assume constant betas. For overlay-bearing strategies the reported α t-stat is therefore distorted. The convention (locked into the strategy validation playbook 2026-04-30):
 
 - **Primary success metric for overlay-bearing strategies:** Sharpe-net-improvement vs ungated BASE, multi-phase mean (robust to time-varying beta). Implemented in `alphalens.risk_overlay.assess.compute_overlay_stats` — see the `sharpe_improvement_net` key.
 - **Secondary metric:** Carhart-4F α t-stat (reported but flagged as upper-bound estimate).

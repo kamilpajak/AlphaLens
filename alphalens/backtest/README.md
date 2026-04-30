@@ -145,9 +145,9 @@ report = engine.run(start=date(2021, 4, 19), end=date(2026, 4, 17))
 ```
 
 From there:
-- `alphalens.backtest.report.build_summary(report)` → `BacktestSummary` (Sharpe gross/moderate, IC, IC t-stat, turnover)
-- `alphalens.backtest.factor_analysis.run_carhart_attribution(report.portfolio_returns, factors)` → `[CAPM, FF3, Carhart-4F]` with HAC t-stats
-- `alphalens.backtest.regime.regime_breakdown(returns, ic, median, labels)` → per-regime Sharpe / IC
+- `alphalens.attribution.report.build_summary(report)` → `BacktestSummary` (Sharpe gross/moderate, IC, IC t-stat, turnover)
+- `alphalens.attribution.factor_analysis.run_carhart_attribution(report.portfolio_returns, factors)` → `[CAPM, FF3, Carhart-4F]` with HAC t-stats
+- `alphalens.attribution.regime.regime_breakdown(returns, ic, median, labels)` → per-regime Sharpe / IC
 
 ## Adding a new scorer
 

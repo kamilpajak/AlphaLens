@@ -28,9 +28,9 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from alphalens.backtest.factor_analysis import run_regression
+from alphalens.attribution.factor_analysis import run_regression
+from alphalens.attribution.regime import classify_regime
 from alphalens.backtest.metrics import sharpe
-from alphalens.backtest.regime import classify_regime
 from alphalens.data.store.history import HistoryStore
 
 

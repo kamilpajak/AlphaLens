@@ -46,7 +46,7 @@ from alphalens.archive.screeners.lean.config import DATA_DIR  # noqa: E402
 from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
 from alphalens.archive.screeners.themed.config import UNIVERSE_PATH  # noqa: E402
 from alphalens.archive.screeners.themed.universe import flatten_universe  # noqa: E402
-from alphalens.backtest.factor_analysis import (  # noqa: E402
+from alphalens.attribution.factor_analysis import (  # noqa: E402
     format_attribution_table,
     run_regression,
 )

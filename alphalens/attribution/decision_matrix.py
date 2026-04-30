@@ -28,8 +28,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from alphalens.backtest.multiple_testing import bonferroni_critical_tstat
+
 from .factor_analysis import AlphaResult
-from .multiple_testing import bonferroni_critical_tstat
 
 Verdict = Literal["GO", "KILL", "PAPER_TRACK"]
 

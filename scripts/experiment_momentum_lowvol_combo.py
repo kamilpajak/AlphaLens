@@ -31,9 +31,9 @@ import numpy as np
 import pandas as pd
 import yaml
 
-from alphalens.backtest.cost_model import RealisticCostModel
+from alphalens.attribution.cost_model import RealisticCostModel
+from alphalens.attribution.factor_analysis import run_regression
 from alphalens.backtest.engine import BacktestEngine
-from alphalens.backtest.factor_analysis import run_regression
 from alphalens.backtest.metrics import sharpe, turnover_pct
 from alphalens.data.alt_data.yfinance_cache import load_cached_histories
 from alphalens.data.factors import load_carhart_daily

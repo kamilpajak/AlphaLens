@@ -61,7 +61,7 @@ class TestLoadFf5Umd(unittest.TestCase):
 
 class TestFf5UmdAttribution(unittest.TestCase):
     def test_returns_alpha_result_with_six_factor_betas(self):
-        from alphalens.backtest.factor_analysis import run_ff5_umd_attribution
+        from alphalens.attribution.factor_analysis import run_ff5_umd_attribution
 
         factors = _synthetic_ff5_umd()
         # Synthesize a portfolio return = 0.5 × Mkt-RF + RF + 2 bps/day alpha + noise
@@ -79,7 +79,7 @@ class TestFf5UmdAttribution(unittest.TestCase):
         )
 
     def test_alpha_recovered_within_noise_margin(self):
-        from alphalens.backtest.factor_analysis import run_ff5_umd_attribution
+        from alphalens.attribution.factor_analysis import run_ff5_umd_attribution
 
         true_alpha_daily = 0.0003  # 3 bps/day ≈ 7.5% ann
         factors = _synthetic_ff5_umd(n=2000)
@@ -97,7 +97,7 @@ class TestFf5UmdAttribution(unittest.TestCase):
         self.assertAlmostEqual(result.alpha_daily, true_alpha_daily, delta=1.5e-4)
 
     def test_hac_cov_type_used_by_default(self):
-        from alphalens.backtest.factor_analysis import run_ff5_umd_attribution
+        from alphalens.attribution.factor_analysis import run_ff5_umd_attribution
 
         factors = _synthetic_ff5_umd()
         portfolio = factors["Mkt-RF"] + factors["RF"]

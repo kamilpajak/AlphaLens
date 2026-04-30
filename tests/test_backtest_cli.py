@@ -83,7 +83,7 @@ def _fake_scorer(histories, config):
 
 def _assert_report_has_structural_markers(test_case: unittest.TestCase, report_path: Path) -> None:
     """Assert the rendered markdown report contains the stable section/table
-    anchors produced by `alphalens.backtest.report.write_markdown_report`.
+    anchors produced by `alphalens.attribution.report.write_markdown_report`.
 
     Structural asserts (not string-match on stdout) guard against silent
     truncation of the report while tolerating cosmetic wording changes in

@@ -5,7 +5,7 @@ import numpy as np
 
 class TestCostModelFromProfile(unittest.TestCase):
     def test_known_profiles(self):
-        from alphalens.backtest.cost_model import CostModel
+        from alphalens.attribution.cost_model import CostModel
 
         self.assertEqual(CostModel.from_profile("gross").annual_drag_bps, 0.0)
         self.assertEqual(CostModel.from_profile("aggressive").annual_drag_bps, 75.0)
@@ -13,7 +13,7 @@ class TestCostModelFromProfile(unittest.TestCase):
         self.assertEqual(CostModel.from_profile("conservative").annual_drag_bps, 150.0)
 
     def test_unknown_profile_raises(self):
-        from alphalens.backtest.cost_model import CostModel
+        from alphalens.attribution.cost_model import CostModel
 
         with self.assertRaises(ValueError):
             CostModel.from_profile("wild")  # type: ignore[arg-type]
@@ -21,7 +21,7 @@ class TestCostModelFromProfile(unittest.TestCase):
 
 class TestPerPeriodDrag(unittest.TestCase):
     def test_100bps_annual_split_over_252(self):
-        from alphalens.backtest.cost_model import CostModel
+        from alphalens.attribution.cost_model import CostModel
 
         drag = CostModel(annual_drag_bps=100.0).per_period_drag()
         # 100 bps = 0.01; /252 ≈ 3.97e-5
@@ -30,14 +30,14 @@ class TestPerPeriodDrag(unittest.TestCase):
 
 class TestApply(unittest.TestCase):
     def test_gross_returns_unchanged_for_zero_drag(self):
-        from alphalens.backtest.cost_model import CostModel
+        from alphalens.attribution.cost_model import CostModel
 
         returns = [0.01, -0.005, 0.02]
         net = CostModel(annual_drag_bps=0.0).apply(returns)
         self.assertEqual(list(net), returns)
 
     def test_moderate_subtracts_small_drag(self):
-        from alphalens.backtest.cost_model import CostModel
+        from alphalens.attribution.cost_model import CostModel
 
         returns = [0.01] * 252  # one year of 1% days
         net = CostModel(annual_drag_bps=100.0).apply(returns)
@@ -46,7 +46,7 @@ class TestApply(unittest.TestCase):
         self.assertAlmostEqual(total_drag, 0.01, places=6)
 
     def test_turnover_scales_cost(self):
-        from alphalens.backtest.cost_model import CostModel
+        from alphalens.attribution.cost_model import CostModel
 
         returns = [0.01] * 10
         full_net = CostModel(annual_drag_bps=100.0).apply(returns)
@@ -55,7 +55,7 @@ class TestApply(unittest.TestCase):
         self.assertTrue((half_net > full_net).all())
 
     def test_mismatched_lengths_raise(self):
-        from alphalens.backtest.cost_model import CostModel
+        from alphalens.attribution.cost_model import CostModel
 
         with self.assertRaises(ValueError):
             CostModel().apply([0.01, 0.02], daily_turnover=[0.5])
@@ -63,7 +63,7 @@ class TestApply(unittest.TestCase):
 
 class TestSensitivityTable(unittest.TestCase):
     def test_returns_all_four_profiles(self):
-        from alphalens.backtest.cost_model import cost_sensitivity_table
+        from alphalens.attribution.cost_model import cost_sensitivity_table
 
         rng = np.random.default_rng(0)
         returns = rng.normal(0.001, 0.01, 252)
@@ -79,12 +79,12 @@ class TestSensitivityTable(unittest.TestCase):
 
 class TestApplyScalarToSharpe(unittest.TestCase):
     def test_gross_sharpe_unchanged_for_zero_drag(self):
-        from alphalens.backtest.cost_model import CostModel
+        from alphalens.attribution.cost_model import CostModel
 
         self.assertEqual(CostModel(annual_drag_bps=0.0).apply_scalar_to_sharpe(1.0, 0.01), 1.0)
 
     def test_nonzero_drag_reduces_sharpe(self):
-        from alphalens.backtest.cost_model import CostModel
+        from alphalens.attribution.cost_model import CostModel
 
         reduced = CostModel(annual_drag_bps=100.0).apply_scalar_to_sharpe(1.0, 0.01)
         self.assertLess(reduced, 1.0)

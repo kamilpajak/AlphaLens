@@ -20,7 +20,7 @@ readers can compare it against Layer 2b/2d (rigorous) vs 2f/2g
 
 ## Gate 1: Carhart-4F + HAC
 
-Fitted via `alphalens.backtest.factor_analysis.run_carhart_attribution`
+Fitted via `alphalens.attribution.factor_analysis.run_carhart_attribution`
 with Newey-West HAC (lag = `int(4·(n/100)^(2/9))`).
 
 | Phase | α annualized | t-stat (HAC) | R² | Verdict (|t|>2.0) |
@@ -91,7 +91,7 @@ conservative     150.0 -0.521463      -0.278785
 Moving-block bootstrap (Hall-Horowitz 1995, block = n^(1/3)) on the
 OLS-fitted Carhart-4F α intercept, 10k iterations. Canonical Gate 6
 statistic per `docs/research/kill_verdict_checklist.md` —
-`alphalens.backtest.factor_analysis.bootstrap_carhart_alpha_ci`.
+`alphalens.attribution.factor_analysis.bootstrap_carhart_alpha_ci`.
 
 - OOS 95% CI (annualized): **[-87.82%, +47.80%]**
 - Verdict: **FAIL** (CI includes 0 — α not significant)
