@@ -21,10 +21,10 @@ from typing import Protocol
 
 import pandas as pd
 
+from alphalens.archive.rotation.allocator import OverlayAllocator
 from alphalens.backtest.history_store import HistoryStore
 from alphalens.macro.scorer import MacroRegime
 from alphalens.macro.signals import SignalSet
-from alphalens.rotation.allocator import OverlayAllocator
 
 
 class MacroRegimeScorer(Protocol):

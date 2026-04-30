@@ -1,10 +1,13 @@
-"""AlphaLens — stock analysis pipeline wrapping TradingAgents.
+"""AlphaLens — research/learning infrastructure for retail quant active alpha experimentation.
 
-Layered architecture:
-    alphalens.watchdog               — Layer 1: SEC EDGAR event monitor
-    alphalens.screeners.prescreener  — Layer 2a: S&P 500 fundamental + technical filter
-    alphalens.screeners.themed       — Layer 2b: curated themed YAML universe (pluggable scorer)
-    alphalens.screeners.lean         — Layer 2c: archived (failed 5-year validation)
+Layered architecture per ADR 0007 (5 layers):
+    alphalens.watchdog       — Layer 1 SEC EDGAR event monitor (ACTIVE)
+    alphalens.screeners      — Layer 2 selection (cross-sectional rank @ t)
+    alphalens.regime_gate    — Layer 2 selection-gate (RESEARCH_ONLY)
+    alphalens.backtest       — Layer 3 strided rebalance engine
+    alphalens.risk_overlay   — Layer 4 time-series sizing overlays (RESEARCH_ONLY)
+    alphalens.backtest       — Layer 5 attribution (cost, factor, metrics, verdict)
 
-Layer 3 is the upstream `tradingagents` framework (imported as a dependency).
+Closed strategies (10 paradigm failures) live under `alphalens.archive.*` per
+ADR 0005 (anti-pattern catalog). See `docs/research/paradigm_failures_postmortem.md`.
 """

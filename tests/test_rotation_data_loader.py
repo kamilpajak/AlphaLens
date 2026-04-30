@@ -1,4 +1,4 @@
-"""Tests for alphalens.rotation.data_loader — yfinance + FRED orchestration.
+"""Tests for alphalens.archive.rotation.data_loader — yfinance + FRED orchestration.
 
 Covers the MultiIndex-columns edge case (modern yfinance returns
 DataFrames with ``(column, ticker)`` MultiIndex even for single-ticker
@@ -41,8 +41,8 @@ class TestLoadRotationDataHandlesMultiIndex(unittest.TestCase):
         """Regression: yfinance returns MultiIndex columns; loader must
         flatten them before the lowercase rename, else downstream KeyError.
         """
+        from alphalens.archive.rotation.data_loader import load_rotation_data
         from alphalens.macro.signals import SignalSet
-        from alphalens.rotation.data_loader import load_rotation_data
 
         def fake_download(ticker, **kwargs):
             return _multiindex_ohlcv(ticker)
@@ -61,7 +61,7 @@ class TestLoadRotationDataHandlesMultiIndex(unittest.TestCase):
         with (
             patch("yfinance.download", side_effect=fake_download) as mock_yf,
             patch(
-                "alphalens.rotation.data_loader.FREDClient.from_env",
+                "alphalens.archive.rotation.data_loader.FREDClient.from_env",
                 return_value=fake_fred,
             ),
         ):
@@ -77,7 +77,7 @@ class TestLoadRotationDataHandlesMultiIndex(unittest.TestCase):
 
     def test_handles_flat_columns_too(self):
         """Some yfinance versions / flags return flat columns; also OK."""
-        from alphalens.rotation.data_loader import load_rotation_data
+        from alphalens.archive.rotation.data_loader import load_rotation_data
 
         def fake_download(ticker, **kwargs):
             return _flat_ohlcv()
@@ -95,7 +95,7 @@ class TestLoadRotationDataHandlesMultiIndex(unittest.TestCase):
         with (
             patch("yfinance.download", side_effect=fake_download),
             patch(
-                "alphalens.rotation.data_loader.FREDClient.from_env",
+                "alphalens.archive.rotation.data_loader.FREDClient.from_env",
                 return_value=fake_fred,
             ),
         ):
@@ -106,11 +106,11 @@ class TestLoadRotationDataHandlesMultiIndex(unittest.TestCase):
             self.assertListEqual(list(df.columns), ["open", "high", "low", "close", "volume"])
 
     def test_raises_when_yfinance_returns_empty(self):
-        from alphalens.rotation.data_loader import load_rotation_data
+        from alphalens.archive.rotation.data_loader import load_rotation_data
 
         with (
             patch("yfinance.download", return_value=pd.DataFrame()),
-            patch("alphalens.rotation.data_loader.FREDClient.from_env"),
+            patch("alphalens.archive.rotation.data_loader.FREDClient.from_env"),
             self.assertRaises(RuntimeError) as ctx,
         ):
             load_rotation_data(start="2019-01-02", end="2019-12-31")

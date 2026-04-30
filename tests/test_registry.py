@@ -3,11 +3,11 @@ import unittest
 
 class TestScreenerRegistry(unittest.TestCase):
     def test_registry_exposes_all_screeners(self):
+        from alphalens.archive.screeners.insider.pipeline import InsiderPipeline
+        from alphalens.archive.screeners.lean.pipeline import LeanScreenerPipeline
+        from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
         from alphalens.registry import SCREENERS
-        from alphalens.screeners.insider.pipeline import InsiderPipeline
-        from alphalens.screeners.lean.pipeline import LeanScreenerPipeline
         from alphalens.screeners.prescreener.integration import PrescreenerPipeline
-        from alphalens.screeners.themed.pipeline import ThemedPipeline
 
         self.assertIs(SCREENERS["themed"], ThemedPipeline)
         self.assertIs(SCREENERS["prescreener"], PrescreenerPipeline)

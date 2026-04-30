@@ -1,4 +1,4 @@
-"""Tests for alphalens.rotation.sanity_checks — 4 kill-gate IS diagnostics.
+"""Tests for alphalens.archive.rotation.sanity_checks — 4 kill-gate IS diagnostics.
 
 Per Perplexity R12 follow-up consultation 2026-04-24 (post-IS-backtest):
   1. passive_correlation — strategy must NOT track 60/30/10 too tightly
@@ -50,7 +50,7 @@ def _synthetic_store(n: int = 800):
 class TestBuildPassiveBenchmark(unittest.TestCase):
     def test_returns_weighted_buy_and_hold_daily_returns(self):
         """Deterministic test: constant daily returns per ticker → exact passive mean."""
-        from alphalens.rotation.sanity_checks import build_passive_benchmark
+        from alphalens.archive.rotation.sanity_checks import build_passive_benchmark
 
         # Constant daily growth → exact pct_change per ticker
         n = 400
@@ -80,7 +80,7 @@ class TestBuildPassiveBenchmark(unittest.TestCase):
         self.assertAlmostEqual(passive.mean(), expected, places=9)
 
     def test_raises_if_core_ticker_missing(self):
-        from alphalens.rotation.sanity_checks import build_passive_benchmark
+        from alphalens.archive.rotation.sanity_checks import build_passive_benchmark
 
         store = HistoryStore(
             {"SPY": _prices(100, 0.0004, 0.01, 1), "QQQ": _prices(100, 0.0004, 0.01, 2)}
@@ -92,7 +92,7 @@ class TestBuildPassiveBenchmark(unittest.TestCase):
 class TestPassiveCorrelation(unittest.TestCase):
     def test_fails_when_correlation_above_threshold(self):
         """Strategy = passive + tiny noise → correlation ≈ 1.0 → reject."""
-        from alphalens.rotation.sanity_checks import check_passive_correlation
+        from alphalens.archive.rotation.sanity_checks import check_passive_correlation
 
         rng = np.random.default_rng(7)
         idx = pd.date_range("2015-01-02", periods=400, freq="B")
@@ -105,7 +105,7 @@ class TestPassiveCorrelation(unittest.TestCase):
         self.assertGreater(result.value, 0.95)
 
     def test_passes_when_correlation_below_threshold(self):
-        from alphalens.rotation.sanity_checks import check_passive_correlation
+        from alphalens.archive.rotation.sanity_checks import check_passive_correlation
 
         rng = np.random.default_rng(8)
         idx = pd.date_range("2015-01-02", periods=400, freq="B")
@@ -121,7 +121,7 @@ class TestPassiveCorrelation(unittest.TestCase):
 
 class TestRollingSharpeStability(unittest.TestCase):
     def test_passes_when_sharpe_stable(self):
-        from alphalens.rotation.sanity_checks import check_rolling_sharpe_stability
+        from alphalens.archive.rotation.sanity_checks import check_rolling_sharpe_stability
 
         rng = np.random.default_rng(9)
         idx = pd.date_range("2015-01-02", periods=800, freq="B")
@@ -133,7 +133,7 @@ class TestRollingSharpeStability(unittest.TestCase):
         self.assertGreater(result.value, 0.4)
 
     def test_fails_when_any_window_collapses(self):
-        from alphalens.rotation.sanity_checks import check_rolling_sharpe_stability
+        from alphalens.archive.rotation.sanity_checks import check_rolling_sharpe_stability
 
         rng = np.random.default_rng(10)
         idx = pd.date_range("2015-01-02", periods=800, freq="B")
@@ -166,7 +166,7 @@ def _three_regime_benchmark(n_per_regime: int = 400):
 
 class TestPerRegimeVsPassive(unittest.TestCase):
     def test_passes_when_all_three_regimes_outperform(self):
-        from alphalens.rotation.sanity_checks import check_per_regime_vs_passive
+        from alphalens.archive.rotation.sanity_checks import check_per_regime_vs_passive
 
         _, bench_close, passive = _three_regime_benchmark()
         strategy = passive + 0.0005  # +5 bps/day across the board
@@ -180,7 +180,7 @@ class TestPerRegimeVsPassive(unittest.TestCase):
         self.assertTrue(result.passed)
 
     def test_fails_when_outperforms_in_only_one_regime(self):
-        from alphalens.rotation.sanity_checks import check_per_regime_vs_passive
+        from alphalens.archive.rotation.sanity_checks import check_per_regime_vs_passive
 
         _, bench_close, passive = _three_regime_benchmark()
         strategy = passive.copy()
@@ -198,14 +198,14 @@ class TestPerRegimeVsPassive(unittest.TestCase):
 
         self.assertFalse(result.passed)
 
-    @patch("alphalens.rotation.sanity_checks.classify_regime")
+    @patch("alphalens.archive.rotation.sanity_checks.classify_regime")
     def test_fails_when_classifier_emits_only_two_regime_labels(self, mock_classify):
         """Kill-gate per docstring: '≥ 2 of 3 regimes' demands all 3 are
         exercised. We force a 2-regime classifier output (no flat label)
         with both regimes outperforming — the strict gate must reject so
         the user extends the window until a flat regime appears.
         """
-        from alphalens.rotation.sanity_checks import check_per_regime_vs_passive
+        from alphalens.archive.rotation.sanity_checks import check_per_regime_vs_passive
 
         n = 600
         idx = pd.date_range("2015-01-02", periods=n, freq="B")
@@ -226,7 +226,7 @@ class TestPerRegimeVsPassive(unittest.TestCase):
 
 class TestOverlayAlpha(unittest.TestCase):
     def test_passes_when_alpha_positive_and_t_above_threshold(self):
-        from alphalens.rotation.sanity_checks import check_overlay_alpha
+        from alphalens.archive.rotation.sanity_checks import check_overlay_alpha
 
         rng = np.random.default_rng(11)
         idx = pd.date_range("2015-01-02", periods=1260, freq="B")
@@ -240,7 +240,7 @@ class TestOverlayAlpha(unittest.TestCase):
         self.assertGreater(result.value, 20)  # bps/yr
 
     def test_fails_when_alpha_below_threshold(self):
-        from alphalens.rotation.sanity_checks import check_overlay_alpha
+        from alphalens.archive.rotation.sanity_checks import check_overlay_alpha
 
         rng = np.random.default_rng(12)
         idx = pd.date_range("2015-01-02", periods=1260, freq="B")
@@ -254,7 +254,7 @@ class TestOverlayAlpha(unittest.TestCase):
 
 class TestRunAllSanityChecks(unittest.TestCase):
     def test_aggregates_all_four_checks(self):
-        from alphalens.rotation.sanity_checks import (
+        from alphalens.archive.rotation.sanity_checks import (
             SanityCheckReport,
             run_all_sanity_checks,
         )

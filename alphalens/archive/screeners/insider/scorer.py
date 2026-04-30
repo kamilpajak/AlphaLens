@@ -27,7 +27,7 @@ from alphalens.alt_data.form4_filter import filter_eligible
 from alphalens.alt_data.form4_records import Form4ParseError, parse_form4_xml
 from alphalens.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
 from alphalens.alt_data.ticker_cik_map import TickerCikMap
-from alphalens.screeners.insider.cluster import detect_cluster
+from alphalens.archive.screeners.insider.cluster import detect_cluster
 
 logger = logging.getLogger(__name__)
 

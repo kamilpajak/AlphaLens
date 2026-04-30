@@ -50,16 +50,16 @@ Scorer = Callable[[Mapping[str, pd.DataFrame], Mapping], pd.DataFrame]
 - **Invariant**: the engine hands the scorer truncated histories — the scorer must not look into the future. Every rolling window (SMA, ROC, RSI) must be computed on `histories[ticker]` without extending it.
 
 Example adapters:
-- `alphalens.screeners.themed.backtest_adapter.momentum_scorer_adapter` — Layer 2b `MomentumScorer` (7-metric classic momentum)
-- `alphalens.screeners.themed.backtest_adapter.early_stage_scorer_adapter` — Layer 2b `EarlyStageScorer` (base-breakout / VCP)
-- `alphalens.screeners.lean.lean_project.scorer.rank_universe` — archived Layer 2c (already matches `Scorer` signature, no adapter needed)
+- `alphalens.archive.screeners.themed.backtest_adapter.momentum_scorer_adapter` — Layer 2b `MomentumScorer` (7-metric classic momentum)
+- `alphalens.archive.screeners.themed.backtest_adapter.early_stage_scorer_adapter` — Layer 2b `EarlyStageScorer` (base-breakout / VCP)
+- `alphalens.archive.screeners.lean.lean_project.scorer.rank_universe` — archived Layer 2c (already matches `Scorer` signature, no adapter needed)
 
 ### `HistoryStore` (data)
 
 In-memory, pure pandas, zero I/O in the hot loop. Loading is the caller's responsibility:
 
 ```python
-from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
 from alphalens.backtest.history_store import HistoryStore
 
 histories = load_lean_histories(DATA_DIR, tickers)  # zip-CSV → dict[ticker, DataFrame]
@@ -125,10 +125,10 @@ Default outputs:
 from datetime import date
 from alphalens.backtest.engine import BacktestEngine
 from alphalens.backtest.history_store import HistoryStore
-from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter
-from alphalens.screeners.themed.config import THEMED_DEFAULTS
-from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
-from alphalens.screeners.lean.config import DATA_DIR
+from alphalens.archive.screeners.themed.backtest_adapter import momentum_scorer_adapter
+from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS
+from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
+from alphalens.archive.screeners.lean.config import DATA_DIR
 
 universe = ["NVDA", "AMD", "AVGO", ...]  # add the benchmark separately
 store = HistoryStore(load_lean_histories(DATA_DIR, universe + ["SPY"]))

@@ -7,7 +7,7 @@ class TestOverlayAllocator(unittest.TestCase):
     CORE = {"SPY": 0.60, "QQQ": 0.30, "IWM": 0.10}
 
     def _make(self, core=None, max_tilt: float = 0.10):
-        from alphalens.rotation.allocator import OverlayAllocator
+        from alphalens.archive.rotation.allocator import OverlayAllocator
 
         return OverlayAllocator(core_weights=core or self.CORE, max_tilt=max_tilt)
 
@@ -67,7 +67,7 @@ class TestOverlayAllocator(unittest.TestCase):
 
     def test_refuses_tilt_causing_negative_weight(self):
         """Sanity check: clamp + residual spread must never push a weight below zero."""
-        from alphalens.rotation.allocator import AllocationError
+        from alphalens.archive.rotation.allocator import AllocationError
 
         alloc = self._make(max_tilt=0.25)
         # SPY would go to 0.60 - 0.25 - residual = very negative after residual spread

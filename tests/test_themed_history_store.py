@@ -21,7 +21,7 @@ class TestThemedHistoryStoreBasic(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_record_and_retrieve_run(self):
-        from alphalens.screeners.themed.history_store import ThemedHistoryStore
+        from alphalens.archive.screeners.themed.history_store import ThemedHistoryStore
 
         store = ThemedHistoryStore(self.db)
         picks = _make_picks([("A", ["quantum"], 0.9), ("B", ["ai"], 0.8)])
@@ -35,7 +35,7 @@ class TestThemedHistoryStoreBasic(unittest.TestCase):
         self.assertIsNone(runs[0].error)
 
     def test_picks_persisted_with_rank(self):
-        from alphalens.screeners.themed.history_store import ThemedHistoryStore
+        from alphalens.archive.screeners.themed.history_store import ThemedHistoryStore
 
         store = ThemedHistoryStore(self.db)
         picks = _make_picks(
@@ -55,7 +55,7 @@ class TestThemedHistoryStoreBasic(unittest.TestCase):
         self.assertEqual(df.iloc[1]["themes"], "ai,biotech")
 
     def test_empty_picks_still_records_run(self):
-        from alphalens.screeners.themed.history_store import ThemedHistoryStore
+        from alphalens.archive.screeners.themed.history_store import ThemedHistoryStore
 
         store = ThemedHistoryStore(self.db)
         picks = _make_picks([])
@@ -64,7 +64,7 @@ class TestThemedHistoryStoreBasic(unittest.TestCase):
         self.assertEqual(store.picks_for_run(run_id).shape[0], 0)
 
     def test_error_field_persisted(self):
-        from alphalens.screeners.themed.history_store import ThemedHistoryStore
+        from alphalens.archive.screeners.themed.history_store import ThemedHistoryStore
 
         store = ThemedHistoryStore(self.db)
         store.record_run(_make_picks([]), {}, universe_size=0, error="fetcher failed")
@@ -72,7 +72,7 @@ class TestThemedHistoryStoreBasic(unittest.TestCase):
         self.assertEqual(runs[0].error, "fetcher failed")
 
     def test_weights_and_scheme_persist(self):
-        from alphalens.screeners.themed.history_store import ThemedHistoryStore
+        from alphalens.archive.screeners.themed.history_store import ThemedHistoryStore
 
         store = ThemedHistoryStore(self.db)
         picks = _make_picks([("A", ["q"], 0.9), ("B", ["q"], 0.8)])
@@ -98,7 +98,7 @@ class TestPicksTimeline(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_timeline_joins_runs_and_picks(self):
-        from alphalens.screeners.themed.history_store import ThemedHistoryStore
+        from alphalens.archive.screeners.themed.history_store import ThemedHistoryStore
 
         store = ThemedHistoryStore(self.db)
         today = date.today()
@@ -116,7 +116,7 @@ class TestPicksTimeline(unittest.TestCase):
 
 class TestStaleness(unittest.TestCase):
     def test_detects_persistent_name(self):
-        from alphalens.screeners.themed.history_store import compute_staleness
+        from alphalens.archive.screeners.themed.history_store import compute_staleness
 
         # A is top-1 for 5 days, B appears once
         timeline = pd.DataFrame(
@@ -134,14 +134,14 @@ class TestStaleness(unittest.TestCase):
         self.assertEqual(row_a["consecutive_days"], 5)
 
     def test_empty_input(self):
-        from alphalens.screeners.themed.history_store import compute_staleness
+        from alphalens.archive.screeners.themed.history_store import compute_staleness
 
         self.assertTrue(compute_staleness(pd.DataFrame()).empty)
 
 
 class TestTurnover(unittest.TestCase):
     def test_turnover_by_day(self):
-        from alphalens.screeners.themed.history_store import compute_turnover_by_day
+        from alphalens.archive.screeners.themed.history_store import compute_turnover_by_day
 
         timeline = pd.DataFrame(
             [
@@ -165,7 +165,7 @@ class TestTurnover(unittest.TestCase):
 
 class TestThemeHHI(unittest.TestCase):
     def test_single_theme_hhi_one(self):
-        from alphalens.screeners.themed.history_store import compute_theme_hhi_by_day
+        from alphalens.archive.screeners.themed.history_store import compute_theme_hhi_by_day
 
         timeline = pd.DataFrame(
             [
@@ -194,7 +194,7 @@ class TestThemeHHI(unittest.TestCase):
         self.assertEqual(df.iloc[0]["dominant_theme"], "quantum")
 
     def test_balanced_themes_hhi_diversified(self):
-        from alphalens.screeners.themed.history_store import compute_theme_hhi_by_day
+        from alphalens.archive.screeners.themed.history_store import compute_theme_hhi_by_day
 
         timeline = pd.DataFrame(
             [

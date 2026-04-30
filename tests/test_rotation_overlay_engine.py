@@ -3,11 +3,11 @@ import unittest
 import numpy as np
 import pandas as pd
 
+from alphalens.archive.rotation.allocator import OverlayAllocator
+from alphalens.archive.rotation.config import Rule
 from alphalens.backtest.history_store import HistoryStore
 from alphalens.macro.scorer import MacroRegime, RuleBasedScorer
 from alphalens.macro.signals import SignalSet
-from alphalens.rotation.allocator import OverlayAllocator
-from alphalens.rotation.config import Rule
 
 
 def _ohlcv_constant_return(daily_return: float, n_bars: int, start: str = "2020-01-02"):
@@ -59,7 +59,7 @@ class TestOverlayBacktestEngine(unittest.TestCase):
         )
 
     def _engine(self, store, scorer=None, signals=None, spread_bps=None):
-        from alphalens.rotation.overlay_engine import OverlayBacktestEngine
+        from alphalens.archive.rotation.overlay_engine import OverlayBacktestEngine
 
         scorer = scorer or _StaticScorer(MacroRegime(flags={}, tilt_sum={}))
         alloc = OverlayAllocator(core_weights=self.CORE, max_tilt=0.10)
@@ -179,7 +179,7 @@ class TestEngineWithRealScorer(unittest.TestCase):
     """End-to-end: RuleBasedScorer wired into engine."""
 
     def test_rule_fires_only_when_signal_above_threshold(self):
-        from alphalens.rotation.overlay_engine import OverlayBacktestEngine
+        from alphalens.archive.rotation.overlay_engine import OverlayBacktestEngine
 
         n_bars = 260
         store = HistoryStore(

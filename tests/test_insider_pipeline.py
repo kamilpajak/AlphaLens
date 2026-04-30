@@ -13,7 +13,7 @@ def _feature(insider_count: int, aggregate_dollar: float = 100_000.0) -> dict:
 
 
 def _make_pipeline(features_by_ticker: dict, universe: list[str]):
-    from alphalens.screeners.insider.pipeline import InsiderPipeline
+    from alphalens.archive.screeners.insider.pipeline import InsiderPipeline
 
     scorer = MagicMock()
     scorer.features_as_of.side_effect = lambda t, asof: features_by_ticker.get(t)
@@ -110,7 +110,7 @@ class TestToCandidates(unittest.TestCase):
     def test_empty_df_returns_empty_list(self):
         import pandas as pd
 
-        from alphalens.screeners.insider.pipeline import InsiderPipeline
+        from alphalens.archive.screeners.insider.pipeline import InsiderPipeline
 
         pipeline = InsiderPipeline(scorer=MagicMock(), universe_loader=list)
 
@@ -153,14 +153,14 @@ class TestToCandidates(unittest.TestCase):
 
 class TestSourceNaming(unittest.TestCase):
     def test_default_source_name_is_insider(self):
-        from alphalens.screeners.insider.pipeline import InsiderPipeline
+        from alphalens.archive.screeners.insider.pipeline import InsiderPipeline
 
         pipeline = InsiderPipeline(scorer=MagicMock(), universe_loader=list)
 
         self.assertEqual(pipeline.source_name, "insider")
 
     def test_custom_source_name_override(self):
-        from alphalens.screeners.insider.pipeline import InsiderPipeline
+        from alphalens.archive.screeners.insider.pipeline import InsiderPipeline
 
         pipeline = InsiderPipeline(
             scorer=MagicMock(),

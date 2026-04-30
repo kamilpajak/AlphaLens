@@ -22,7 +22,7 @@ from typing import Any
 
 import pandas as pd
 
-from alphalens.guru.prompt import GuruPrompt
+from alphalens.archive.guru.prompt import GuruPrompt
 
 logger = logging.getLogger(__name__)
 

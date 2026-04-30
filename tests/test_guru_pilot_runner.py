@@ -1,4 +1,4 @@
-"""Tests for alphalens.guru.pilot_runner — sample → score → top-N → 1y return."""
+"""Tests for alphalens.archive.guru.pilot_runner — sample → score → top-N → 1y return."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pandas as pd
 
-from alphalens.guru.llm_scorer import ConvictionResult
+from alphalens.archive.guru.llm_scorer import ConvictionResult
 
 
 def _price_series(daily_ret: float, n_bars: int = 520, start: str = "2017-01-02") -> pd.Series:
@@ -18,7 +18,7 @@ def _price_series(daily_ret: float, n_bars: int = 520, start: str = "2017-01-02"
 
 class TestSampleTickers(unittest.TestCase):
     def test_deterministic_with_seed(self):
-        from alphalens.guru.pilot_runner import sample_tickers
+        from alphalens.archive.guru.pilot_runner import sample_tickers
 
         universe = [f"T{i:03d}" for i in range(500)]
         s1 = sample_tickers(universe, size=30, seed=42)
@@ -31,7 +31,7 @@ class TestSampleTickers(unittest.TestCase):
         self.assertEqual(len(set(s1)), 30)  # no duplicates
 
     def test_size_larger_than_universe_raises(self):
-        from alphalens.guru.pilot_runner import sample_tickers
+        from alphalens.archive.guru.pilot_runner import sample_tickers
 
         with self.assertRaises(ValueError):
             sample_tickers(["A", "B"], size=5, seed=1)
@@ -67,7 +67,7 @@ class TestRunSingleYear(unittest.TestCase):
         return store
 
     def test_runs_pilot_for_single_year_and_returns_outperformance(self):
-        from alphalens.guru.pilot_runner import run_single_year
+        from alphalens.archive.guru.pilot_runner import run_single_year
 
         tickers = [f"T{i:03d}" for i in range(40)]
         # T000..T009 are winners (0.001/day, +28% annual)
@@ -102,7 +102,7 @@ class TestRunSingleYear(unittest.TestCase):
         self.assertGreater(result.outperformance, 0.0)
 
     def test_skips_tickers_without_context_data(self):
-        from alphalens.guru.pilot_runner import run_single_year
+        from alphalens.archive.guru.pilot_runner import run_single_year
 
         tickers = ["A", "B", "C", "D", "E"]
         prices = {t: _price_series(0.0004) for t in tickers}
@@ -138,7 +138,7 @@ class TestRunSingleYear(unittest.TestCase):
         self.assertTrue(picked_tickers.issubset({"A", "C", "E"}))
 
     def test_picks_top_n_by_conviction(self):
-        from alphalens.guru.pilot_runner import run_single_year
+        from alphalens.archive.guru.pilot_runner import run_single_year
 
         tickers = ["A", "B", "C", "D", "E"]
         prices = {t: _price_series(0.0004) for t in tickers}
@@ -165,7 +165,7 @@ class TestRunSingleYear(unittest.TestCase):
 
     def test_context_builder_exception_treats_ticker_as_skipped(self):
         """AV rate limit / network errors in build_context shouldn't kill year."""
-        from alphalens.guru.pilot_runner import run_single_year
+        from alphalens.archive.guru.pilot_runner import run_single_year
 
         tickers = ["A", "B", "C", "D", "E"]
         prices = {t: _price_series(0.0004) for t in tickers}
@@ -197,7 +197,7 @@ class TestRunSingleYear(unittest.TestCase):
         self.assertIn("B", result.skipped_tickers)
 
     def test_totals_cost_across_all_scorer_calls(self):
-        from alphalens.guru.pilot_runner import run_single_year
+        from alphalens.archive.guru.pilot_runner import run_single_year
 
         tickers = ["A", "B", "C", "D", "E"]
         prices = {t: _price_series(0.0004) for t in tickers}

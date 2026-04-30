@@ -11,8 +11,8 @@ from typer.testing import CliRunner
 
 class TestThemedPipelineToCandidates(unittest.TestCase):
     def test_to_candidates_maps_dataframe_rows_to_candidate_objects(self):
+        from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
         from alphalens.candidates import Candidate
-        from alphalens.screeners.themed.pipeline import ThemedPipeline
 
         df = pd.DataFrame(
             [
@@ -34,14 +34,14 @@ class TestThemedPipelineToCandidates(unittest.TestCase):
         self.assertEqual(first.payload["themes"], ["AI", "MegaCap"])
 
     def test_to_candidates_on_empty_dataframe_returns_empty_list(self):
-        from alphalens.screeners.themed.pipeline import ThemedPipeline
+        from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
 
         df = pd.DataFrame(columns=["ticker", "momentum_score", "themes"])
         self.assertEqual(ThemedPipeline().to_candidates(df), [])
 
     def test_linear_weighting_emits_descending_weights(self):
         """Rank 1 (highest score) gets the largest weight; weights sum to 1.0."""
-        from alphalens.screeners.themed.pipeline import ThemedPipeline
+        from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
 
         df = pd.DataFrame(
             [
@@ -59,7 +59,7 @@ class TestThemedPipelineToCandidates(unittest.TestCase):
             self.assertEqual(c.payload["weighting_scheme"], "linear")
 
     def test_equal_weighting_fallback(self):
-        from alphalens.screeners.themed.pipeline import ThemedPipeline
+        from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
 
         df = pd.DataFrame(
             [
@@ -104,7 +104,7 @@ class TestThemedScreenCLIAnalyzeFlag(unittest.TestCase):
         mock_queue_path.return_value = self.db
 
         with patch(
-            "alphalens.screeners.themed.pipeline.ThemedPipeline.run",
+            "alphalens.archive.screeners.themed.pipeline.ThemedPipeline.run",
             return_value=self._fake_df(),
         ):
             result = self.runner.invoke(
@@ -144,7 +144,7 @@ class TestThemedScreenCLIAnalyzeFlag(unittest.TestCase):
         mock_queue_path.return_value = self.db
 
         with patch(
-            "alphalens.screeners.themed.pipeline.ThemedPipeline.run",
+            "alphalens.archive.screeners.themed.pipeline.ThemedPipeline.run",
             return_value=self._fake_df(),
         ):
             result = self.runner.invoke(
@@ -199,7 +199,7 @@ class TestThemedScreenQueueFailureTelegramFallback(unittest.TestCase):
         mock_queue_cls.side_effect = RuntimeError("database is locked")
 
         with patch(
-            "alphalens.screeners.themed.pipeline.ThemedPipeline.run",
+            "alphalens.archive.screeners.themed.pipeline.ThemedPipeline.run",
             return_value=self._fake_df(),
         ):
             result = self.runner.invoke(

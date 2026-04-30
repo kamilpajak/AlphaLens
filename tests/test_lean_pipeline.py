@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 
 def _valid_output(n=3):
-    from alphalens.screeners.lean.schema import LeanOutput, RankingRow
+    from alphalens.archive.screeners.lean.schema import LeanOutput, RankingRow
 
     rows = [
         RankingRow(
@@ -35,7 +35,7 @@ def _valid_output(n=3):
 
 class TestOutputToDataFrame(unittest.TestCase):
     def test_columns_and_rows(self):
-        from alphalens.screeners.lean.pipeline import lean_output_to_dataframe
+        from alphalens.archive.screeners.lean.pipeline import lean_output_to_dataframe
 
         df = lean_output_to_dataframe(_valid_output(2))
 
@@ -58,8 +58,8 @@ class TestOutputToDataFrame(unittest.TestCase):
         self.assertEqual(df.iloc[0]["ticker"], "T0")
 
     def test_empty_output_returns_empty_frame_with_columns(self):
-        from alphalens.screeners.lean.pipeline import lean_output_to_dataframe
-        from alphalens.screeners.lean.schema import LeanOutput
+        from alphalens.archive.screeners.lean.pipeline import lean_output_to_dataframe
+        from alphalens.archive.screeners.lean.schema import LeanOutput
 
         empty = LeanOutput(
             status="success",
@@ -76,7 +76,7 @@ class TestOutputToDataFrame(unittest.TestCase):
 
 class TestPipelineRun(unittest.TestCase):
     def test_run_calls_sync_then_runner_and_returns_top_n(self):
-        from alphalens.screeners.lean.pipeline import LeanScreenerPipeline
+        from alphalens.archive.screeners.lean.pipeline import LeanScreenerPipeline
 
         runner = MagicMock()
         runner.run.return_value = _valid_output(5)
@@ -95,7 +95,7 @@ class TestPipelineRun(unittest.TestCase):
         self.assertEqual(len(df), 3)
 
     def test_run_without_sync_just_runs_lean(self):
-        from alphalens.screeners.lean.pipeline import LeanScreenerPipeline
+        from alphalens.archive.screeners.lean.pipeline import LeanScreenerPipeline
 
         runner = MagicMock()
         runner.run.return_value = _valid_output(5)
@@ -107,7 +107,7 @@ class TestPipelineRun(unittest.TestCase):
         runner.run.assert_called_once()
 
     def test_run_without_runner_raises(self):
-        from alphalens.screeners.lean.pipeline import LeanScreenerPipeline
+        from alphalens.archive.screeners.lean.pipeline import LeanScreenerPipeline
 
         with self.assertRaises(RuntimeError):
             LeanScreenerPipeline().run()
@@ -115,7 +115,7 @@ class TestPipelineRun(unittest.TestCase):
 
 class TestToCandidates(unittest.TestCase):
     def test_builds_lean_source_priority_15(self):
-        from alphalens.screeners.lean.pipeline import (
+        from alphalens.archive.screeners.lean.pipeline import (
             LeanScreenerPipeline,
             lean_output_to_dataframe,
         )
@@ -131,7 +131,7 @@ class TestToCandidates(unittest.TestCase):
         self.assertEqual(cands[0].ticker, "T0")
 
     def test_payload_carries_score_and_features(self):
-        from alphalens.screeners.lean.pipeline import (
+        from alphalens.archive.screeners.lean.pipeline import (
             LeanScreenerPipeline,
             lean_output_to_dataframe,
         )
@@ -155,12 +155,12 @@ class TestToCandidates(unittest.TestCase):
     def test_empty_dataframe_produces_no_candidates(self):
         import pandas as pd
 
-        from alphalens.screeners.lean.pipeline import LeanScreenerPipeline
+        from alphalens.archive.screeners.lean.pipeline import LeanScreenerPipeline
 
         self.assertEqual(LeanScreenerPipeline().to_candidates(pd.DataFrame()), [])
 
     def test_dedup_key_unique_across_tickers(self):
-        from alphalens.screeners.lean.pipeline import (
+        from alphalens.archive.screeners.lean.pipeline import (
             LeanScreenerPipeline,
             lean_output_to_dataframe,
         )

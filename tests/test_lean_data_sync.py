@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 
 def _bar(ticker, close, volume=1000):
-    from alphalens.screeners.lean.polygon_client import GroupedBar
+    from alphalens.archive.screeners.lean.polygon_client import GroupedBar
 
     return GroupedBar(
         ticker=ticker,
@@ -28,8 +28,8 @@ class TestSyncDate(unittest.TestCase):
         self._tmp.cleanup()
 
     def _build_sync(self, client, universe):
-        from alphalens.screeners.lean.data_sync import PolygonLeanSync
-        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
+        from alphalens.archive.screeners.lean.data_sync import PolygonLeanSync
+        from alphalens.archive.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(self.dir)
         state_path = self.dir / "sync_state.json"
@@ -82,8 +82,8 @@ class TestSyncRange(unittest.TestCase):
         self._tmp.cleanup()
 
     def _build_sync(self, client, universe):
-        from alphalens.screeners.lean.data_sync import PolygonLeanSync
-        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
+        from alphalens.archive.screeners.lean.data_sync import PolygonLeanSync
+        from alphalens.archive.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(self.dir)
         state_path = self.dir / "sync_state.json"
@@ -143,8 +143,8 @@ class TestIncrementalSync(unittest.TestCase):
         self._tmp.cleanup()
 
     def _build_sync(self, client, universe):
-        from alphalens.screeners.lean.data_sync import PolygonLeanSync
-        from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
+        from alphalens.archive.screeners.lean.data_sync import PolygonLeanSync
+        from alphalens.archive.screeners.lean.lean_csv_writer import LeanCsvWriter
 
         writer = LeanCsvWriter(self.dir)
         state_path = self.dir / "sync_state.json"

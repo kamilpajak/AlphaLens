@@ -27,17 +27,17 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from alphalens.backtest.engine import BacktestEngine
-from alphalens.backtest.history_store import HistoryStore
-from alphalens.backtest.metrics import sharpe
-from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
-from alphalens.screeners.themed.backtest_adapter import (
+from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
+from alphalens.archive.screeners.themed.backtest_adapter import (
     early_stage_scorer_adapter,
     momentum_scorer_adapter,
 )
-from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
-from alphalens.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS
-from alphalens.screeners.themed.universe import flatten_universe
+from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+from alphalens.archive.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS
+from alphalens.archive.screeners.themed.universe import flatten_universe
+from alphalens.backtest.engine import BacktestEngine
+from alphalens.backtest.history_store import HistoryStore
+from alphalens.backtest.metrics import sharpe
 
 LEAN_DATA = Path.home() / ".alphalens" / "lean" / "data"
 

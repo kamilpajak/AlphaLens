@@ -12,8 +12,8 @@ import pandas as pd
 import yaml
 from typer.testing import CliRunner
 
-from alphalens.guru.llm_scorer import ConvictionResult
-from alphalens.guru.pilot_runner import SingleYearResult
+from alphalens.archive.guru.llm_scorer import ConvictionResult
+from alphalens.archive.guru.pilot_runner import SingleYearResult
 
 _SAMPLE_PROMPT = "You are a value investor. Score the company 0-100.\n"
 
@@ -62,7 +62,7 @@ class TestGuruStatus(unittest.TestCase):
             prompt_path.write_text(_SAMPLE_PROMPT)
 
             with patch(
-                "alphalens.guru.prompt.subprocess.run",
+                "alphalens.archive.guru.prompt.subprocess.run",
                 return_value=MagicMock(returncode=0, stdout="d" * 40 + "\n", stderr=""),
             ):
                 result = runner.invoke(
@@ -114,7 +114,7 @@ class TestGuruPilot(unittest.TestCase):
                     return_value=stub_years,
                 ),
                 patch(
-                    "alphalens.guru.prompt.subprocess.run",
+                    "alphalens.archive.guru.prompt.subprocess.run",
                     return_value=MagicMock(returncode=0, stdout="e" * 40 + "\n", stderr=""),
                 ),
             ):
@@ -177,7 +177,7 @@ class TestGuruPilot(unittest.TestCase):
                     return_value=stub_years,
                 ),
                 patch(
-                    "alphalens.guru.prompt.subprocess.run",
+                    "alphalens.archive.guru.prompt.subprocess.run",
                     return_value=MagicMock(returncode=0, stdout="f" * 40 + "\n", stderr=""),
                 ),
             ):

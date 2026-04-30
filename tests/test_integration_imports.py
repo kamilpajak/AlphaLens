@@ -11,8 +11,14 @@ import unittest
 
 OUR_PACKAGE_PREFIX = "alphalens"
 
-TOP_LEVEL_SUBPACKAGES = ("watchdog", "backtest", "screeners")
-SCREENER_SUBPACKAGES = ("screeners.themed", "screeners.prescreener", "screeners.lean")
+TOP_LEVEL_SUBPACKAGES = ("watchdog", "backtest", "screeners", "archive")
+SCREENER_SUBPACKAGES = (
+    "screeners.prescreener",
+    "screeners.momentum_lowvol",
+    "archive.screeners.themed",
+    "archive.screeners.lean",
+    "archive.screeners.insider",
+)
 
 
 class TestPackageImports(unittest.TestCase):
@@ -39,7 +45,7 @@ class TestPackageImports(unittest.TestCase):
         """Walk each package and try to import every .py file (excluding __pycache__)."""
         # lean_project/ is Lean Docker-side code — imports AlgorithmImports which
         # is only provided inside the Lean container. Expected to fail on host.
-        docker_only = {"alphalens.screeners.lean.lean_project"}
+        docker_only = {"alphalens.archive.screeners.lean.lean_project"}
         failures: list[tuple[str, Exception]] = []
         for sub in TOP_LEVEL_SUBPACKAGES:
             pkg = importlib.import_module(f"{OUR_PACKAGE_PREFIX}.{sub}")
@@ -59,7 +65,7 @@ class TestThemedScreenerPackageData(unittest.TestCase):
     """Catch regressions where universe.yaml stops shipping with the package."""
 
     def test_universe_yaml_reachable(self):
-        mod = importlib.import_module(f"{OUR_PACKAGE_PREFIX}.screeners.themed.config")
+        mod = importlib.import_module(f"{OUR_PACKAGE_PREFIX}.archive.screeners.themed.config")
         self.assertTrue(
             mod.UNIVERSE_PATH.exists(),
             f"universe.yaml not found at {mod.UNIVERSE_PATH} — package_data regression?",

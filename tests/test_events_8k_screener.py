@@ -11,12 +11,12 @@ import pandas as pd
 
 class TestParseItemsString(unittest.TestCase):
     def test_single_item(self):
-        from alphalens.events.eightk_screener import parse_items_string
+        from alphalens.archive.events.eightk_screener import parse_items_string
 
         self.assertEqual(parse_items_string("5.02"), ["5.02"])
 
     def test_multiple_items_comma_separated(self):
-        from alphalens.events.eightk_screener import parse_items_string
+        from alphalens.archive.events.eightk_screener import parse_items_string
 
         self.assertEqual(
             parse_items_string("5.07,9.01"),
@@ -24,12 +24,12 @@ class TestParseItemsString(unittest.TestCase):
         )
 
     def test_items_with_whitespace(self):
-        from alphalens.events.eightk_screener import parse_items_string
+        from alphalens.archive.events.eightk_screener import parse_items_string
 
         self.assertEqual(parse_items_string(" 1.01 , 8.01 "), ["1.01", "8.01"])
 
     def test_empty_string_returns_empty_list(self):
-        from alphalens.events.eightk_screener import parse_items_string
+        from alphalens.archive.events.eightk_screener import parse_items_string
 
         self.assertEqual(parse_items_string(""), [])
         self.assertEqual(parse_items_string(None), [])
@@ -37,7 +37,7 @@ class TestParseItemsString(unittest.TestCase):
 
 class TestEightKFiling(unittest.TestCase):
     def test_is_frozen_dataclass(self):
-        from alphalens.events.eightk_screener import EightKFiling
+        from alphalens.archive.events.eightk_screener import EightKFiling
 
         f = EightKFiling(
             cik="0000320193",
@@ -52,7 +52,7 @@ class TestEightKFiling(unittest.TestCase):
 
 class TestExtractFilingsFromSubmissions(unittest.TestCase):
     def test_filters_only_8k_forms(self):
-        from alphalens.events.eightk_screener import extract_8k_filings
+        from alphalens.archive.events.eightk_screener import extract_8k_filings
 
         submissions = {
             "filings": {
@@ -79,7 +79,7 @@ class TestExtractFilingsFromSubmissions(unittest.TestCase):
         self.assertEqual(filings[1].items, ("1.01",))
 
     def test_filters_by_date_range(self):
-        from alphalens.events.eightk_screener import extract_8k_filings
+        from alphalens.archive.events.eightk_screener import extract_8k_filings
 
         submissions = {
             "filings": {
@@ -104,7 +104,7 @@ class TestExtractFilingsFromSubmissions(unittest.TestCase):
         self.assertEqual(filings[0].items, ("1.01",))
 
     def test_empty_submissions_returns_empty(self):
-        from alphalens.events.eightk_screener import extract_8k_filings
+        from alphalens.archive.events.eightk_screener import extract_8k_filings
 
         self.assertEqual(
             extract_8k_filings(submissions={"filings": {"recent": {}}}, cik="x", ticker="X"),
@@ -119,7 +119,7 @@ class TestComputeAbnormalReturn(unittest.TestCase):
         return pd.Series(close, index=idx)
 
     def test_abnormal_return_is_ticker_minus_benchmark(self):
-        from alphalens.events.eightk_screener import compute_abnormal_return
+        from alphalens.archive.events.eightk_screener import compute_abnormal_return
 
         ticker_close = self._flat_series(0.001)  # +0.1%/day
         bench_close = self._flat_series(0.0004)  # +0.04%/day
@@ -134,7 +134,7 @@ class TestComputeAbnormalReturn(unittest.TestCase):
         self.assertAlmostEqual(car, expected, places=6)
 
     def test_returns_nan_when_insufficient_data_after_event(self):
-        from alphalens.events.eightk_screener import compute_abnormal_return
+        from alphalens.archive.events.eightk_screener import compute_abnormal_return
 
         ticker_close = self._flat_series(0.001, n=100)
         bench_close = self._flat_series(0.0004, n=100)
@@ -148,7 +148,7 @@ class TestComputeAbnormalReturn(unittest.TestCase):
 
     def test_handles_event_date_not_in_series(self):
         """Event filed on weekend/holiday — use next trading day as entry."""
-        from alphalens.events.eightk_screener import compute_abnormal_return
+        from alphalens.archive.events.eightk_screener import compute_abnormal_return
 
         ticker_close = self._flat_series(0.001)
         bench_close = self._flat_series(0.0004)
@@ -161,7 +161,7 @@ class TestComputeAbnormalReturn(unittest.TestCase):
 
 class TestAggregateCarByItem(unittest.TestCase):
     def test_aggregates_mean_std_count_per_item_per_window(self):
-        from alphalens.events.eightk_screener import aggregate_car_by_item
+        from alphalens.archive.events.eightk_screener import aggregate_car_by_item
 
         # Fake records: 3 events of Item 1.01 with CARs [0.01, 0.015, 0.02] at 20d
         #               2 events of Item 8.01 with CARs [-0.005, 0.003] at 20d
@@ -183,7 +183,7 @@ class TestAggregateCarByItem(unittest.TestCase):
         self.assertEqual(row_101["n"], 3)
 
     def test_multiple_windows_per_item(self):
-        from alphalens.events.eightk_screener import aggregate_car_by_item
+        from alphalens.archive.events.eightk_screener import aggregate_car_by_item
 
         records = pd.DataFrame(
             {
@@ -205,7 +205,7 @@ class TestAggregateCarByItem(unittest.TestCase):
 
     def test_verdict_column_based_on_thresholds(self):
         """New verdict requires winsorized mean + t-stat + std bound."""
-        from alphalens.events.eightk_screener import aggregate_car_by_item
+        from alphalens.archive.events.eightk_screener import aggregate_car_by_item
 
         # 50 records per item, low-noise signals
         rng = np.random.default_rng(42)
@@ -249,7 +249,7 @@ class TestRunScreen(unittest.TestCase):
         return pd.Series((1.0 + daily_ret) ** np.arange(n) * 100.0, index=idx)
 
     def test_runs_end_to_end_with_mocked_client(self):
-        from alphalens.events.eightk_screener import run_screen
+        from alphalens.archive.events.eightk_screener import run_screen
 
         # Mock SEC client returning one 8-K filing for AAPL
         client = MagicMock()
@@ -295,7 +295,7 @@ class TestRunScreen(unittest.TestCase):
 
 class TestRobustStatistics(unittest.TestCase):
     def test_aggregate_reports_median_and_tstat(self):
-        from alphalens.events.eightk_screener import aggregate_car_by_item
+        from alphalens.archive.events.eightk_screener import aggregate_car_by_item
 
         # 100 filings: 99 modest, 1 extreme outlier
         cars = [0.005] * 99 + [1.0]
@@ -326,7 +326,7 @@ class TestRobustStatistics(unittest.TestCase):
         Implementation: also require t-stat > 2 so we never promote outlier-
         driven mean without underlying consistency.
         """
-        from alphalens.events.eightk_screener import aggregate_car_by_item
+        from alphalens.archive.events.eightk_screener import aggregate_car_by_item
 
         # Clean high-signal: mean=200bps, low std, high t-stat → PROCEED
         clean = pd.DataFrame(

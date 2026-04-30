@@ -29,8 +29,8 @@ import pandas as pd
 import yaml
 
 from alphalens.alt_data.yfinance_cache import load_cached_histories
+from alphalens.archive.screeners.insider.parquet_scorer import ParquetInsiderScorer
 from alphalens.backtest.history_store import HistoryStore
-from alphalens.screeners.insider.parquet_scorer import ParquetInsiderScorer
 
 logger = logging.getLogger(__name__)
 

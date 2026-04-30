@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def _mk_bar(d, price, vol=1000):
-    from alphalens.screeners.lean.lean_csv_writer import DailyBar
+    from alphalens.archive.screeners.lean.lean_csv_writer import DailyBar
 
     return DailyBar(
         date=d, open=price, high=price * 1.01, low=price * 0.99, close=price, volume=vol
@@ -12,7 +12,7 @@ def _mk_bar(d, price, vol=1000):
 
 
 def _prime_dir(tmpdir: Path, tickers_to_bars: dict[str, list]) -> Path:
-    from alphalens.screeners.lean.lean_csv_writer import LeanCsvWriter
+    from alphalens.archive.screeners.lean.lean_csv_writer import LeanCsvWriter
 
     writer = LeanCsvWriter(tmpdir)
     for t, bars in tickers_to_bars.items():
@@ -29,7 +29,7 @@ class TestLoadLeanHistories(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_load_returns_dict_of_dataframes(self):
-        from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+        from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
 
         _prime_dir(
             self.dir,
@@ -46,20 +46,20 @@ class TestLoadLeanHistories(unittest.TestCase):
         )
 
     def test_unknown_ticker_skipped(self):
-        from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+        from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
 
         histories = load_lean_histories(self.dir, ["NOPE"])
         self.assertEqual(histories, {})
 
     def test_dedup_tickers(self):
-        from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+        from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
 
         _prime_dir(self.dir, {"AAPL": [_mk_bar("20240419", 100)]})
         histories = load_lean_histories(self.dir, ["AAPL", "aapl", "AAPL"])
         self.assertEqual(list(histories.keys()), ["AAPL"])
 
     def test_data_sorted_ascending(self):
-        from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
+        from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
 
         _prime_dir(
             self.dir,

@@ -33,7 +33,7 @@ def _valid_payload(status="success"):
 
 
 def _build_config(tmp: Path):
-    from alphalens.screeners.lean.runner import LeanRunConfig
+    from alphalens.archive.screeners.lean.runner import LeanRunConfig
 
     (tmp / "project").mkdir()
     (tmp / "data").mkdir()
@@ -51,7 +51,7 @@ def _build_config(tmp: Path):
 
 class TestBuildDockerArgs(unittest.TestCase):
     def test_includes_all_volume_mounts(self):
-        from alphalens.screeners.lean.runner import LeanDockerRunner
+        from alphalens.archive.screeners.lean.runner import LeanDockerRunner
 
         with tempfile.TemporaryDirectory() as tmp:
             cfg = _build_config(Path(tmp))
@@ -69,7 +69,7 @@ class TestBuildDockerArgs(unittest.TestCase):
         self.assertIn("fake/lean", args)
 
     def test_passes_algo_location_and_data_folder(self):
-        from alphalens.screeners.lean.runner import LeanDockerRunner
+        from alphalens.archive.screeners.lean.runner import LeanDockerRunner
 
         with tempfile.TemporaryDirectory() as tmp:
             cfg = _build_config(Path(tmp))
@@ -85,7 +85,7 @@ class TestBuildDockerArgs(unittest.TestCase):
         self.assertIn("LeanBatchScreener", args)
 
     def test_extra_env_included(self):
-        from alphalens.screeners.lean.runner import LeanDockerRunner, LeanRunConfig
+        from alphalens.archive.screeners.lean.runner import LeanDockerRunner, LeanRunConfig
 
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_config(Path(tmp))
@@ -124,7 +124,7 @@ class TestRun(unittest.TestCase):
         return runner
 
     def test_success_returns_lean_output(self):
-        from alphalens.screeners.lean.runner import LeanDockerRunner
+        from alphalens.archive.screeners.lean.runner import LeanDockerRunner
 
         with tempfile.TemporaryDirectory() as tmp:
             cfg = _build_config(Path(tmp))
@@ -137,7 +137,7 @@ class TestRun(unittest.TestCase):
         self.assertEqual(len(output.rankings), 1)
 
     def test_nonzero_exit_raises(self):
-        from alphalens.screeners.lean.runner import LeanDockerRunner, LeanRunError
+        from alphalens.archive.screeners.lean.runner import LeanDockerRunner, LeanRunError
 
         with tempfile.TemporaryDirectory() as tmp:
             cfg = _build_config(Path(tmp))
@@ -148,7 +148,7 @@ class TestRun(unittest.TestCase):
                 runner.run()
 
     def test_missing_output_raises(self):
-        from alphalens.screeners.lean.runner import LeanDockerRunner, LeanRunError
+        from alphalens.archive.screeners.lean.runner import LeanDockerRunner, LeanRunError
 
         with tempfile.TemporaryDirectory() as tmp:
             cfg = _build_config(Path(tmp))
@@ -159,7 +159,7 @@ class TestRun(unittest.TestCase):
                 runner.run()
 
     def test_timeout_raises_lean_run_error(self):
-        from alphalens.screeners.lean.runner import LeanDockerRunner, LeanRunError
+        from alphalens.archive.screeners.lean.runner import LeanDockerRunner, LeanRunError
 
         def raising_runner(cmd, timeout):
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
@@ -172,7 +172,7 @@ class TestRun(unittest.TestCase):
                 runner.run()
 
     def test_status_error_payload_raises(self):
-        from alphalens.screeners.lean.runner import LeanDockerRunner, LeanRunError
+        from alphalens.archive.screeners.lean.runner import LeanDockerRunner, LeanRunError
 
         with tempfile.TemporaryDirectory() as tmp:
             cfg = _build_config(Path(tmp))
@@ -185,7 +185,7 @@ class TestRun(unittest.TestCase):
                 runner.run()
 
     def test_stale_results_removed_before_run(self):
-        from alphalens.screeners.lean.runner import LeanDockerRunner, LeanRunError
+        from alphalens.archive.screeners.lean.runner import LeanDockerRunner, LeanRunError
 
         with tempfile.TemporaryDirectory() as tmp:
             cfg = _build_config(Path(tmp))
@@ -204,7 +204,7 @@ class TestRun(unittest.TestCase):
                 LeanDockerRunner(cfg, subprocess_runner=fake).run()
 
     def test_persists_logs_for_postmortem(self):
-        from alphalens.screeners.lean.runner import LeanDockerRunner
+        from alphalens.archive.screeners.lean.runner import LeanDockerRunner
 
         with tempfile.TemporaryDirectory() as tmp:
             cfg = _build_config(Path(tmp))
@@ -222,14 +222,14 @@ class TestRun(unittest.TestCase):
 
 class TestDockerAvailable(unittest.TestCase):
     def test_true_when_docker_returns_zero(self):
-        from alphalens.screeners.lean.runner import docker_available
+        from alphalens.archive.screeners.lean.runner import docker_available
 
         fake = MagicMock()
         fake.returncode = 0
         self.assertTrue(docker_available(lambda cmd, t: fake))
 
     def test_false_when_binary_missing(self):
-        from alphalens.screeners.lean.runner import docker_available
+        from alphalens.archive.screeners.lean.runner import docker_available
 
         def raise_fnf(cmd, t):
             raise FileNotFoundError("docker not installed")
@@ -237,7 +237,7 @@ class TestDockerAvailable(unittest.TestCase):
         self.assertFalse(docker_available(raise_fnf))
 
     def test_false_on_nonzero_exit(self):
-        from alphalens.screeners.lean.runner import docker_available
+        from alphalens.archive.screeners.lean.runner import docker_available
 
         fake = MagicMock()
         fake.returncode = 127
@@ -246,14 +246,14 @@ class TestDockerAvailable(unittest.TestCase):
 
 class TestDefaultRunConfig(unittest.TestCase):
     def test_builds_from_alphalens_defaults(self):
-        from alphalens.screeners.lean.config import (
+        from alphalens.archive.screeners.lean.config import (
             DATA_DIR,
             LEAN_DOCKER_IMAGE,
             LEAN_PROJECT_DIR,
             LOGS_DIR,
             RESULTS_DIR,
         )
-        from alphalens.screeners.lean.runner import default_run_config
+        from alphalens.archive.screeners.lean.runner import default_run_config
 
         cfg = default_run_config()
 

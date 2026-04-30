@@ -16,10 +16,10 @@ import os
 
 import pandas as pd
 
-from alphalens.guru.polygon_fundamentals import PolygonFundamentalsClient
+from alphalens.archive.guru.polygon_fundamentals import PolygonFundamentalsClient
 
 # Module-level singleton client; tests can monkeypatch by patching
-# ``alphalens.guru.financial_context._get_client``.
+# ``alphalens.archive.guru.financial_context._get_client``.
 _CLIENT: PolygonFundamentalsClient | None = None
 
 

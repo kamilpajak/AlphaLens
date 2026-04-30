@@ -33,8 +33,8 @@ sys.path.insert(0, str(REPO))
 
 import pandas as pd  # noqa: E402
 
+from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
 from alphalens.macro.fred_client import FREDClient  # noqa: E402
-from alphalens.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
 
 IS_START = pd.Timestamp("2017-01-03")
 IS_END = pd.Timestamp("2022-12-30")

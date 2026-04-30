@@ -1,8 +1,12 @@
-"""Screener pipelines — each module implements `Pipeline.to_candidates(df)`
-so the CLI can funnel results through the shared `CandidateQueue`.
+"""Layer 2 screener pipelines — cross-sectional rank @ time t.
 
-Active:
-    themed       — Layer 2b curated themed YAML universe (pluggable scorer)
-    prescreener  — Layer 2a S&P 500 composite (unvalidated, manual)
-    lean         — Layer 2c archived (failed 5-year validation)
+Each subpackage implements `Pipeline.to_candidates(df)` so the CLI can funnel
+results through the shared `CandidateQueue`.
+
+Active subpackages:
+    prescreener      — Layer 2a S&P 500 composite (RESEARCH_ONLY, manual ad-hoc)
+    momentum_lowvol  — RESEARCH_ONLY; BASE for Layer 4 vol-target overlay test
+
+Closed Layer 2 screeners moved to `alphalens.archive.screeners.*` (themed, lean,
+insider) per ADR 0005.
 """

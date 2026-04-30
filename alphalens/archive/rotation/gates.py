@@ -21,12 +21,12 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from alphalens.archive.rotation.config import GateConfig
+from alphalens.archive.rotation.overlay_engine import OverlayBacktestResult
 from alphalens.backtest.factor_analysis import AlphaResult
 from alphalens.backtest.metrics import sharpe
 from alphalens.backtest.multiple_testing import bonferroni_critical_tstat
 from alphalens.backtest.regime import classify_regime
-from alphalens.rotation.config import GateConfig
-from alphalens.rotation.overlay_engine import OverlayBacktestResult
 
 
 @dataclass(frozen=True)

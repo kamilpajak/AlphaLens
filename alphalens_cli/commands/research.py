@@ -82,6 +82,11 @@ def cost_validation(
     """
     import yaml
 
+    from alphalens.archive.screeners.lean.config import DATA_DIR
+    from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
+    from alphalens.archive.screeners.themed.backtest_adapter import momentum_scorer_adapter
+    from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+    from alphalens.archive.screeners.themed.universe import flatten_universe
     from alphalens.backtest.cost_validation import (
         DEFAULT_TIERS,
         CostValidationReport,
@@ -97,11 +102,6 @@ def cost_validation(
     from alphalens.backtest.engine import BacktestEngine
     from alphalens.backtest.history_store import HistoryStore
     from alphalens.backtest.metrics import sharpe
-    from alphalens.screeners.lean.config import DATA_DIR
-    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
-    from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter
-    from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
-    from alphalens.screeners.themed.universe import flatten_universe
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
@@ -337,15 +337,15 @@ def walk_forward(
     """
     import yaml
 
+    from alphalens.archive.screeners.lean.config import DATA_DIR
+    from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
+    from alphalens.archive.screeners.themed.backtest_adapter import momentum_scorer_adapter
+    from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+    from alphalens.archive.screeners.themed.universe import flatten_universe
     from alphalens.backtest.engine import BacktestEngine
     from alphalens.backtest.factors import load_carhart_daily
     from alphalens.backtest.history_store import HistoryStore
     from alphalens.backtest.walk_forward import compile_report, run_walk_forward
-    from alphalens.screeners.lean.config import DATA_DIR
-    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
-    from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter
-    from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
-    from alphalens.screeners.themed.universe import flatten_universe
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
@@ -460,6 +460,11 @@ def survivorship_pit(
     """
     import yaml
 
+    from alphalens.archive.screeners.lean.config import DATA_DIR
+    from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
+    from alphalens.archive.screeners.themed.backtest_adapter import momentum_scorer_adapter
+    from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+    from alphalens.archive.screeners.themed.universe import flatten_universe
     from alphalens.backtest.engine import BacktestEngine
     from alphalens.backtest.factors import load_carhart_daily
     from alphalens.backtest.history_store import HistoryStore
@@ -471,11 +476,6 @@ def survivorship_pit(
         run_cohort_backtests,
         split_universe_by_ipo_cohort,
     )
-    from alphalens.screeners.lean.config import DATA_DIR
-    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
-    from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter
-    from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
-    from alphalens.screeners.themed.universe import flatten_universe
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
@@ -644,6 +644,15 @@ def validate_llm_filter(
     + decision."""
     from datetime import date
 
+    from alphalens.archive.screeners.lean.config import BENCHMARKS, DATA_DIR, LEAN_DEFAULTS
+    from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
+    from alphalens.archive.screeners.lean.lean_project.scorer import rank_universe as lean_rank
+    from alphalens.archive.screeners.themed.universe import (
+        flatten_universe,
+    )
+    from alphalens.archive.screeners.themed.universe import (
+        load_universe as load_2b,
+    )
     from alphalens.backtest.engine import BacktestEngine
     from alphalens.backtest.historical_validation import (
         evaluate_historical_picks,
@@ -652,15 +661,6 @@ def validate_llm_filter(
         rule_based_tractability_scorer,
     )
     from alphalens.backtest.history_store import HistoryStore
-    from alphalens.screeners.lean.config import BENCHMARKS, DATA_DIR, LEAN_DEFAULTS
-    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
-    from alphalens.screeners.lean.lean_project.scorer import rank_universe as lean_rank
-    from alphalens.screeners.themed.universe import (
-        flatten_universe,
-    )
-    from alphalens.screeners.themed.universe import (
-        load_universe as load_2b,
-    )
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
@@ -1291,10 +1291,10 @@ def historical_acceptance(
     """
     import pandas as pd
 
+    from alphalens.archive.screeners.lean.config import DATA_DIR
+    from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
     from alphalens.backtest.history_store import HistoryStore
     from alphalens.runner import TradingAgentsRunner
-    from alphalens.screeners.lean.config import DATA_DIR
-    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
 
     try:
         from cli.main import save_report_to_disk as _save_ta_report
@@ -1319,8 +1319,8 @@ def historical_acceptance(
     # on sampled tickers). Skipping the 113-ticker load on --dry-run saves ~30s.
     import yaml
 
-    from alphalens.screeners.themed.config import UNIVERSE_PATH
-    from alphalens.screeners.themed.universe import flatten_universe
+    from alphalens.archive.screeners.themed.config import UNIVERSE_PATH
+    from alphalens.archive.screeners.themed.universe import flatten_universe
 
     universe_tickers = sorted(flatten_universe(yaml.safe_load(UNIVERSE_PATH.read_text())).keys())
     if dry_run:

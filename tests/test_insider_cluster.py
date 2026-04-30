@@ -32,7 +32,7 @@ def _record(**overrides):
 
 class TestMinimumInsiderCount(unittest.TestCase):
     def test_exactly_3_distinct_is_cluster(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         records = [
             _record(reporting_owner_cik="0000000001"),
@@ -46,7 +46,7 @@ class TestMinimumInsiderCount(unittest.TestCase):
         self.assertEqual(cluster.insider_count, 3)
 
     def test_2_distinct_not_cluster(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         records = [
             _record(reporting_owner_cik="0000000001"),
@@ -56,7 +56,7 @@ class TestMinimumInsiderCount(unittest.TestCase):
         self.assertIsNone(detect_cluster(records, asof=date(2025, 3, 20)))
 
     def test_same_insider_multiple_trades_counts_once(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         records = [
             _record(reporting_owner_cik="0000000001", transaction_date=date(2025, 3, 10)),
@@ -78,7 +78,7 @@ class TestWindowBoundary(unittest.TestCase):
         ]
 
     def test_exactly_30d_before_is_inclusive(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         asof = date(2025, 3, 31)
         boundary = asof - timedelta(days=30)  # 2025-03-01
@@ -88,7 +88,7 @@ class TestWindowBoundary(unittest.TestCase):
         self.assertIsNotNone(detect_cluster(records, asof=asof))
 
     def test_31d_before_is_excluded(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         asof = date(2025, 3, 31)
         too_old = asof - timedelta(days=31)
@@ -98,7 +98,7 @@ class TestWindowBoundary(unittest.TestCase):
         self.assertIsNone(detect_cluster(records, asof=asof))
 
     def test_future_tx_ignored(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         asof = date(2025, 3, 15)
         records = self._three_insiders_at(
@@ -113,7 +113,7 @@ class TestWindowBoundary(unittest.TestCase):
 class TestPlan10b5_1Exclusion(unittest.TestCase):
     def test_excludes_record_with_old_plan_90d(self):
         """Plan adopted ≥90 days before asof = pre-committed → exclude."""
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         asof = date(2025, 3, 20)
         old_plan_footnote = (("F1", "Rule 10b5-1 trading plan adopted on 2024-10-01."),)
@@ -129,7 +129,7 @@ class TestPlan10b5_1Exclusion(unittest.TestCase):
 
     def test_keeps_record_with_fresh_plan_less_than_90d(self):
         """Plan adopted <90 days = recent conviction → keep."""
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         asof = date(2025, 3, 20)
         fresh_plan_footnote = (("F1", "Rule 10b5-1 plan adopted on 2025-03-01."),)  # 19 days old
@@ -144,7 +144,7 @@ class TestPlan10b5_1Exclusion(unittest.TestCase):
 
     def test_excludes_record_with_unknown_plan_age(self):
         """Plan mentioned but adoption date not parseable → conservative exclude."""
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         asof = date(2025, 3, 20)
         ambiguous_footnote = (("F1", "Made under a Rule 10b5-1 plan."),)
@@ -158,7 +158,7 @@ class TestPlan10b5_1Exclusion(unittest.TestCase):
         self.assertIsNone(detect_cluster(records, asof=asof))
 
     def test_keeps_records_without_plan_mention(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         asof = date(2025, 3, 20)
 
@@ -176,7 +176,7 @@ class TestPlan10b5_1Exclusion(unittest.TestCase):
 
 class TestClusterMetrics(unittest.TestCase):
     def test_aggregate_dollar_sum(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         records = [
             _record(
@@ -201,7 +201,7 @@ class TestClusterMetrics(unittest.TestCase):
         self.assertEqual(cluster.aggregate_dollar, Decimal("6500.00"))
 
     def test_aggregate_dollar_skips_none_price(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         records = [
             _record(
@@ -227,7 +227,7 @@ class TestClusterMetrics(unittest.TestCase):
         self.assertEqual(cluster.aggregate_dollar, Decimal("5500.00"))
 
     def test_records_tuple_preserves_eligible_only(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         asof = date(2025, 3, 20)
         old_plan = (("F1", "10b5-1 plan adopted on 2024-01-01."),)
@@ -248,7 +248,7 @@ class TestClusterMetrics(unittest.TestCase):
 
 class TestParameters(unittest.TestCase):
     def test_custom_min_distinct_insiders(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         records = [
             _record(reporting_owner_cik="0000000001"),
@@ -260,7 +260,7 @@ class TestParameters(unittest.TestCase):
         )
 
     def test_custom_window_days(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         asof = date(2025, 3, 20)
         records = [
@@ -275,7 +275,7 @@ class TestParameters(unittest.TestCase):
 
 class TestEmptyInput(unittest.TestCase):
     def test_empty_records_returns_none(self):
-        from alphalens.screeners.insider.cluster import detect_cluster
+        from alphalens.archive.screeners.insider.cluster import detect_cluster
 
         self.assertIsNone(detect_cluster([], asof=date(2025, 3, 20)))
 

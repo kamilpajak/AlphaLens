@@ -15,9 +15,9 @@ from pathlib import Path
 import pandas as pd
 import typer
 
-from alphalens.guru.pilot_runner import SingleYearResult, run_single_year
-from alphalens.guru.prompt import load_guru_prompt
-from alphalens.guru.report import PilotReport
+from alphalens.archive.guru.pilot_runner import SingleYearResult, run_single_year
+from alphalens.archive.guru.prompt import load_guru_prompt
+from alphalens.archive.guru.report import PilotReport
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +46,11 @@ def _build_pilot_years(
     wiring constructs GuruScorer + universe + price_store + context_builder
     here then delegates each year to ``run_single_year``.
     """
+    from alphalens.archive.guru.financial_context import build_context, context_to_prompt
+    from alphalens.archive.guru.llm_scorer import GuruScorer
+    from alphalens.archive.guru.pilot_runner import sample_tickers
+    from alphalens.archive.guru.universe import load_sp500_pit
     from alphalens.backtest.history_store import HistoryStore
-    from alphalens.guru.financial_context import build_context, context_to_prompt
-    from alphalens.guru.llm_scorer import GuruScorer
-    from alphalens.guru.pilot_runner import sample_tickers
-    from alphalens.guru.universe import load_sp500_pit
 
     scorer = GuruScorer(prompt=prompt, llm=llm_client, cache_dir=cache_dir)
     results: list[SingleYearResult] = []

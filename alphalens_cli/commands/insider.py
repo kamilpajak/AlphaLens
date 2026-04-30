@@ -85,8 +85,8 @@ def screen(
     from alphalens.alt_data.russell_universe import load_iwm_current
     from alphalens.alt_data.sec_edgar_client import SecEdgarClient
     from alphalens.alt_data.ticker_cik_map import TickerCikMap
-    from alphalens.screeners.insider.pipeline import InsiderPipeline
-    from alphalens.screeners.insider.scorer import InsiderScorer
+    from alphalens.archive.screeners.insider.pipeline import InsiderPipeline
+    from alphalens.archive.screeners.insider.scorer import InsiderScorer
 
     _check_data_files(universe_file, cik_map_file)
     user_agent = _require_user_agent()

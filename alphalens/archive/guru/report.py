@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from alphalens.guru.pilot_runner import SingleYearResult
+from alphalens.archive.guru.pilot_runner import SingleYearResult
 
 KILL_MEAN_OUTPERF_BPS = 200.0
 PROCEED_MEAN_OUTPERF_BPS = 500.0

@@ -15,7 +15,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from alphalens.rotation.config import Rule
+from alphalens.archive.rotation.config import Rule
 
 _OPS = {
     "gt": lambda x, t: x > t,

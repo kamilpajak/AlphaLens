@@ -53,6 +53,8 @@ import yaml
 from alphalens.alt_data.sec_edgar_client import SecEdgarClient
 from alphalens.alt_data.ticker_cik_map import TickerCikMap
 from alphalens.alt_data.yfinance_cache import load_cached_histories
+from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
+from alphalens.archive.screeners.insider.scorer import InsiderScorer
 from alphalens.backtest.cost_model import RealisticCostModel
 from alphalens.backtest.decision_matrix import evaluate_exit_criteria
 from alphalens.backtest.engine import BacktestEngine
@@ -71,8 +73,6 @@ from alphalens.backtest.factors import (
 from alphalens.backtest.history_store import HistoryStore
 from alphalens.backtest.metrics import sharpe, sharpe_autocorr_adjusted, turnover_pct
 from alphalens.backtest.regime import classify_regime
-from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
-from alphalens.screeners.insider.scorer import InsiderScorer
 
 logger = logging.getLogger(__name__)
 

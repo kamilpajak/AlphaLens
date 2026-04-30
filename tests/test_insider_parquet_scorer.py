@@ -1,4 +1,4 @@
-"""Tests for alphalens.screeners.insider.parquet_scorer.ParquetInsiderScorer."""
+"""Tests for alphalens.archive.screeners.insider.parquet_scorer.ParquetInsiderScorer."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from alphalens.screeners.insider.parquet_scorer import ParquetInsiderScorer
+from alphalens.archive.screeners.insider.parquet_scorer import ParquetInsiderScorer
 
 
 def _write_test_dataset(root: Path) -> None:

@@ -6,7 +6,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ...fundamentals.gate import should_hard_reject
+from alphalens.fundamentals.gate import should_hard_reject
+
 from .config import THEMED_DEFAULTS
 
 

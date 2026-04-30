@@ -21,9 +21,9 @@ def _resolve_scorer(
     import yaml
 
     if scorer_name == "momentum":
-        from alphalens.screeners.themed.backtest_adapter import momentum_scorer_adapter
-        from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
-        from alphalens.screeners.themed.universe import flatten_universe
+        from alphalens.archive.screeners.themed.backtest_adapter import momentum_scorer_adapter
+        from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+        from alphalens.archive.screeners.themed.universe import flatten_universe
 
         universe = yaml.safe_load(UNIVERSE_PATH.read_text())
         screener_tickers = sorted(flatten_universe(universe).keys())
@@ -32,10 +32,10 @@ def _resolve_scorer(
         return momentum_scorer_adapter, scorer_config, screener_tickers, [benchmark]
 
     if scorer_name == "early-stage":
-        from alphalens.screeners.themed.backtest_adapter import early_stage_scorer_adapter
-        from alphalens.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
-        from alphalens.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS
-        from alphalens.screeners.themed.universe import flatten_universe
+        from alphalens.archive.screeners.themed.backtest_adapter import early_stage_scorer_adapter
+        from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
+        from alphalens.archive.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS
+        from alphalens.archive.screeners.themed.universe import flatten_universe
 
         universe = yaml.safe_load(UNIVERSE_PATH.read_text())
         screener_tickers = sorted(flatten_universe(universe).keys())
@@ -44,9 +44,9 @@ def _resolve_scorer(
         return early_stage_scorer_adapter, scorer_config, screener_tickers, [benchmark]
 
     if scorer_name == "lean":
-        from alphalens.screeners.lean.config import BENCHMARKS, LEAN_DEFAULTS
-        from alphalens.screeners.lean.lean_project.scorer import rank_universe as lean_rank
-        from alphalens.screeners.lean.universe import all_tickers
+        from alphalens.archive.screeners.lean.config import BENCHMARKS, LEAN_DEFAULTS
+        from alphalens.archive.screeners.lean.lean_project.scorer import rank_universe as lean_rank
+        from alphalens.archive.screeners.lean.universe import all_tickers
 
         screener_tickers = all_tickers()
         typer.echo(
@@ -71,8 +71,8 @@ def _resolve_insider_scorer(
     from alphalens.alt_data.russell_universe import load_iwm_current
     from alphalens.alt_data.sec_edgar_client import SecEdgarClient
     from alphalens.alt_data.ticker_cik_map import TickerCikMap
-    from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
-    from alphalens.screeners.insider.scorer import InsiderScorer
+    from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
+    from alphalens.archive.screeners.insider.scorer import InsiderScorer
 
     iwm_path = Path("alphalens/alt_data/data/iwm_current.yaml")
     cik_map_path = Path("alphalens/alt_data/data/ticker_cik_map.yaml")
@@ -157,8 +157,8 @@ def _compute_theme_stats(result):
 
     themes_map: dict[str, list[str]] = {}
     try:
-        from alphalens.screeners.themed.universe import flatten_universe as flatten_2b
-        from alphalens.screeners.themed.universe import load_universe as load_2b
+        from alphalens.archive.screeners.themed.universe import flatten_universe as flatten_2b
+        from alphalens.archive.screeners.themed.universe import load_universe as load_2b
 
         themes_map.update(flatten_2b(load_2b()))
     except Exception as exc:
@@ -256,6 +256,8 @@ def backtest(
     """
     from datetime import date
 
+    from alphalens.archive.screeners.lean.config import DATA_DIR
+    from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
     from alphalens.backtest.cost_model import cost_sensitivity_table
     from alphalens.backtest.engine import BacktestEngine
     from alphalens.backtest.factor_analysis import run_carhart_attribution
@@ -267,8 +269,6 @@ def backtest(
         rebalance_results_to_dataframe,
         write_markdown_report,
     )
-    from alphalens.screeners.lean.config import DATA_DIR
-    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
