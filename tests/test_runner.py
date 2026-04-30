@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 
 def _cand(ticker="AAPL", source="momentum", priority=10, payload=None, discriminator="D"):
-    from alphalens.candidates import Candidate
+    from alphalens.core.candidates import Candidate
 
     return Candidate.from_screener(
         ticker=ticker,
@@ -17,7 +17,7 @@ def _cand(ticker="AAPL", source="momentum", priority=10, payload=None, discrimin
 
 class TestTradingAgentsRunner(unittest.TestCase):
     def test_runner_builds_graph_with_gemini_config(self):
-        from alphalens.runner import TradingAgentsRunner
+        from alphalens.core.runner import TradingAgentsRunner
 
         config = {"llm_provider": "google", "deep_think_llm": "gemini-3-pro"}
         graph = MagicMock()
@@ -33,7 +33,7 @@ class TestTradingAgentsRunner(unittest.TestCase):
         graph_factory.assert_called_once_with(config)
 
     def test_runner_returns_analysis_result_with_duration(self):
-        from alphalens.runner import TradingAgentsRunner
+        from alphalens.core.runner import TradingAgentsRunner
 
         graph = MagicMock()
         graph.propagate.return_value = ({"foo": "bar"}, "BUY")
@@ -54,7 +54,7 @@ class TestTradingAgentsRunner(unittest.TestCase):
         self.assertEqual(result.final_state, {"foo": "bar"})
 
     def test_runner_passes_ticker_and_today_to_propagate(self):
-        from alphalens.runner import TradingAgentsRunner
+        from alphalens.core.runner import TradingAgentsRunner
 
         graph = MagicMock()
         graph.propagate.return_value = ({}, "HOLD")
@@ -72,7 +72,7 @@ class TestTradingAgentsRunner(unittest.TestCase):
         self.assertEqual(args[1], today)
 
     def test_runner_propagates_exception(self):
-        from alphalens.runner import TradingAgentsRunner
+        from alphalens.core.runner import TradingAgentsRunner
 
         graph = MagicMock()
         graph.propagate.side_effect = RuntimeError("429")
@@ -91,7 +91,7 @@ class TestTradingAgentsRunnerPITReplay(unittest.TestCase):
     def test_runner_forwards_curr_date_to_propagate(self):
         from datetime import date
 
-        from alphalens.runner import TradingAgentsRunner
+        from alphalens.core.runner import TradingAgentsRunner
 
         graph = MagicMock()
         graph.propagate.return_value = ({}, "BUY")
@@ -107,7 +107,7 @@ class TestTradingAgentsRunnerPITReplay(unittest.TestCase):
         self.assertEqual(args[1], "2023-06-15")
 
     def test_runner_forwards_selected_analysts_to_graph_factory(self):
-        from alphalens.runner import TradingAgentsRunner
+        from alphalens.core.runner import TradingAgentsRunner
 
         graph = MagicMock()
         graph.propagate.return_value = ({}, "HOLD")
@@ -132,7 +132,7 @@ class TestTradingAgentsRunnerPITReplay(unittest.TestCase):
 
     def test_runner_skips_selected_analysts_kwarg_when_none(self):
         """Backward compat: existing 1-arg graph_factory callables must still work."""
-        from alphalens.runner import TradingAgentsRunner
+        from alphalens.core.runner import TradingAgentsRunner
 
         graph = MagicMock()
         graph.propagate.return_value = ({}, "HOLD")

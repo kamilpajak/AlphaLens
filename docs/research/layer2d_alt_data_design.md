@@ -178,7 +178,7 @@ R5: no empirical insider × SI interaction literature for small-cap. Disciplined
 
 ### Phase 4 — Decision (est. 0.5 session)
 - Apply §8 exit criteria
-- If PASS: write production pipeline w `alphalens/screeners/insider/pipeline.py`, register w `alphalens.registry.SCREENERS["insider"]`, priority 12 (between watchdog=0 and themed=10)
+- If PASS: write production pipeline w `alphalens/screeners/insider/pipeline.py`, register w `alphalens.core.registry.SCREENERS["insider"]`, priority 12 (between watchdog=0 and themed=10)
 - If FAIL: close, write post-mortem, return do pivot decision
 
 ## 11. What this doc is NOT

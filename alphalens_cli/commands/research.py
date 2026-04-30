@@ -1036,7 +1036,7 @@ def _run_layer3_samples(
 
     import pandas as pd
 
-    from alphalens.candidates import Candidate
+    from alphalens.core.candidates import Candidate
 
     results: list[dict] = []
     accept_by_regime: dict[str, list[int]] = defaultdict(list)
@@ -1294,7 +1294,7 @@ def historical_acceptance(
     from alphalens.archive.screeners.lean.config import DATA_DIR
     from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
     from alphalens.backtest.history_store import HistoryStore
-    from alphalens.runner import TradingAgentsRunner
+    from alphalens.core.runner import TradingAgentsRunner
 
     try:
         from cli.main import save_report_to_disk as _save_ta_report

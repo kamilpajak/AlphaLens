@@ -7,7 +7,8 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
-from ...candidates import Candidate
+from alphalens.core.candidates import Candidate
+
 from .composite_ranker import CompositeRanker
 from .config import PRESCREENER_DEFAULTS
 from .data_fetcher import BatchDataFetcher

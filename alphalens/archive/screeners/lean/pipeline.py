@@ -12,7 +12,7 @@ from typing import Any
 
 import pandas as pd
 
-from alphalens.candidates import Candidate
+from alphalens.core.candidates import Candidate
 
 from .config import LEAN_DEFAULTS
 from .runner import LeanDockerRunner

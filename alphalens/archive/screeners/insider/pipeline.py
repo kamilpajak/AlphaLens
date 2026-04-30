@@ -19,7 +19,7 @@ from typing import Protocol
 
 import pandas as pd
 
-from alphalens.candidates import Candidate
+from alphalens.core.candidates import Candidate
 
 logger = logging.getLogger(__name__)
 

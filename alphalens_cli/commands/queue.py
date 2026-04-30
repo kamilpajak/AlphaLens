@@ -6,10 +6,10 @@ import os
 
 import typer
 
-from alphalens.queue import CandidateQueue, default_queue_path
-from alphalens.runner import TradingAgentsRunner
+from alphalens.core.queue import CandidateQueue, default_queue_path
+from alphalens.core.runner import TradingAgentsRunner
+from alphalens.core.worker import AnalysisWorker
 from alphalens.watchdog.dispatch.handlers.telegram import TelegramHandler
-from alphalens.worker import AnalysisWorker
 
 queue_app = typer.Typer(
     name="queue",
@@ -65,7 +65,7 @@ def scorer_stats(
     `source` (e.g. 'momentum' vs 'early-stage'), and reports decision
     distribution + accept rate (BUY+OVERWEIGHT / total).
     """
-    from alphalens.scorer_stats import compute_scorer_stats, format_stats_table
+    from alphalens.core.scorer_stats import compute_scorer_stats, format_stats_table
 
     stats = compute_scorer_stats(default_queue_path(), since_days=since_days)
     typer.echo(f"=== Scorer stats — last {since_days} days ===")

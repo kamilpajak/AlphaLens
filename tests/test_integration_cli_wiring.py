@@ -96,8 +96,8 @@ class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):
     def test_build_worker_resolves_without_import_error(self):
         os.environ.update(self.env_patches)
 
-        runner_cls = f"{OUR_PACKAGE_PREFIX}.runner.TradingAgentsRunner"
-        queue_cls = f"{OUR_PACKAGE_PREFIX}.queue.CandidateQueue"
+        runner_cls = f"{OUR_PACKAGE_PREFIX}.core.runner.TradingAgentsRunner"
+        queue_cls = f"{OUR_PACKAGE_PREFIX}.core.queue.CandidateQueue"
 
         with patch(runner_cls) as mock_runner, patch(queue_cls) as mock_queue:
             mock_runner.return_value = MagicMock()

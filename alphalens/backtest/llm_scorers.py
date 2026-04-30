@@ -194,7 +194,7 @@ def tradingagents_reduced_scorer(
     """
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
-    from alphalens.config_gemini import build_gemini_config
+    from alphalens.core.config_gemini import build_gemini_config
 
     config = build_gemini_config()
     graph = TradingAgentsGraph(

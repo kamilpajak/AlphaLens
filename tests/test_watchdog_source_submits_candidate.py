@@ -35,7 +35,7 @@ class TestAutoTriggerHandlerWritesCandidate(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_handle_submits_watchdog_sec_candidate(self):
-        from alphalens.queue import CandidateQueue
+        from alphalens.core.queue import CandidateQueue
         from alphalens.watchdog.dispatch.handlers.auto_trigger import (
             AutoTriggerEnqueueHandler,
         )
@@ -59,7 +59,7 @@ class TestAutoTriggerHandlerWritesCandidate(unittest.TestCase):
             self.assertEqual(payload["form"], "8-K")
 
     def test_handle_deduplicates_by_accession_number(self):
-        from alphalens.queue import CandidateQueue
+        from alphalens.core.queue import CandidateQueue
         from alphalens.watchdog.dispatch.handlers.auto_trigger import (
             AutoTriggerEnqueueHandler,
         )

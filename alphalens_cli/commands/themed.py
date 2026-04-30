@@ -6,7 +6,7 @@ import os
 
 import typer
 
-from alphalens.queue import CandidateQueue, default_queue_path
+from alphalens.core.queue import CandidateQueue, default_queue_path
 from alphalens.watchdog.dispatch.handlers.telegram import TelegramHandler
 
 themed_app = typer.Typer(

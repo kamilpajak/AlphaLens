@@ -40,13 +40,13 @@ class TestScorerStats(unittest.TestCase):
         tmp.close()
         db_path = Path(tmp.name)
         # Initialize schema via CandidateQueue
-        from alphalens.queue import CandidateQueue
+        from alphalens.core.queue import CandidateQueue
 
         CandidateQueue(db_path).close() if False else CandidateQueue(db_path)
         return db_path
 
     def test_groups_by_source_and_counts_decisions(self):
-        from alphalens.scorer_stats import compute_scorer_stats
+        from alphalens.core.scorer_stats import compute_scorer_stats
 
         db = self._make_queue()
         conn = sqlite3.connect(str(db))
@@ -77,7 +77,7 @@ class TestScorerStats(unittest.TestCase):
         self.assertAlmostEqual(early["accept_rate"], 2 / 3)
 
     def test_since_days_filter(self):
-        from alphalens.scorer_stats import compute_scorer_stats
+        from alphalens.core.scorer_stats import compute_scorer_stats
 
         db = self._make_queue()
         conn = sqlite3.connect(str(db))
@@ -92,7 +92,7 @@ class TestScorerStats(unittest.TestCase):
         self.assertEqual(stats_90[0]["total"], 2)
 
     def test_pending_and_failed_excluded(self):
-        from alphalens.scorer_stats import compute_scorer_stats
+        from alphalens.core.scorer_stats import compute_scorer_stats
 
         db = self._make_queue()
         conn = sqlite3.connect(str(db))

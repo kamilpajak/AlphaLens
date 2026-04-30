@@ -111,7 +111,7 @@ def screen(
         typer.echo(f"wrote report → {report}")
 
     if analyze and not result.empty:
-        from alphalens.queue import CandidateQueue, default_queue_path
+        from alphalens.core.queue import CandidateQueue, default_queue_path
 
         try:
             with CandidateQueue(default_queue_path()) as queue:
