@@ -4,7 +4,7 @@ from decimal import Decimal
 
 
 def _record(**overrides):
-    from alphalens.alt_data.form4_records import Form4Record
+    from alphalens.data.alt_data.form4_records import Form4Record
 
     defaults = dict(
         issuer_cik="0000320193",

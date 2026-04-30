@@ -14,12 +14,12 @@ from pathlib import Path
 import pandas as pd
 import typer
 
-from alphalens.alt_data.sec_edgar_client import SecEdgarClient
 from alphalens.archive.events.eightk_screener import (
     KILL_THRESHOLD_BPS,
     PROCEED_THRESHOLD_BPS,
     run_screen,
 )
+from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient
 
 events_app = typer.Typer(
     name="events",

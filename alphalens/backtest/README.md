@@ -60,7 +60,7 @@ In-memory, pure pandas, zero I/O in the hot loop. Loading is the caller's respon
 
 ```python
 from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
-from alphalens.backtest.history_store import HistoryStore
+from alphalens.data.store.history import HistoryStore
 
 histories = load_lean_histories(DATA_DIR, tickers)  # zip-CSV → dict[ticker, DataFrame]
 store = HistoryStore(histories)
@@ -124,7 +124,7 @@ Default outputs:
 ```python
 from datetime import date
 from alphalens.backtest.engine import BacktestEngine
-from alphalens.backtest.history_store import HistoryStore
+from alphalens.data.store.history import HistoryStore
 from alphalens.archive.screeners.themed.backtest_adapter import momentum_scorer_adapter
 from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS
 from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories

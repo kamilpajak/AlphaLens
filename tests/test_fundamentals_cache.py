@@ -18,13 +18,13 @@ class TestFundamentalsCache(unittest.TestCase):
         self.root = Path(self.tmp.name)
 
     def test_get_missing_returns_none(self):
-        from alphalens.fundamentals.cache import FundamentalsCache
+        from alphalens.data.fundamentals.cache import FundamentalsCache
 
         cache = FundamentalsCache(root=self.root)
         self.assertIsNone(cache.get("AAPL"))
 
     def test_put_then_get_roundtrips(self):
-        from alphalens.fundamentals.cache import FundamentalsCache
+        from alphalens.data.fundamentals.cache import FundamentalsCache
 
         cache = FundamentalsCache(root=self.root)
         features = {"cash_runway_months": 24.0, "ps_ratio": 10.0}
@@ -35,7 +35,7 @@ class TestFundamentalsCache(unittest.TestCase):
         self.assertEqual(fetched["ps_ratio"], 10.0)
 
     def test_ticker_is_uppercased_in_cache_file(self):
-        from alphalens.fundamentals.cache import FundamentalsCache
+        from alphalens.data.fundamentals.cache import FundamentalsCache
 
         cache = FundamentalsCache(root=self.root)
         cache.put("aapl", {"ps_ratio": 1.0})
@@ -43,7 +43,7 @@ class TestFundamentalsCache(unittest.TestCase):
         self.assertEqual(cache.get("aapl")["ps_ratio"], 1.0)
 
     def test_stale_entry_beyond_ttl_returns_none(self):
-        from alphalens.fundamentals.cache import FundamentalsCache
+        from alphalens.data.fundamentals.cache import FundamentalsCache
 
         cache = FundamentalsCache(root=self.root, ttl_days=90)
         # Simulate an old entry by writing with a timestamp past TTL.
@@ -54,7 +54,7 @@ class TestFundamentalsCache(unittest.TestCase):
         self.assertIsNone(cache.get("AAPL"))
 
     def test_fresh_entry_within_ttl_returned(self):
-        from alphalens.fundamentals.cache import FundamentalsCache
+        from alphalens.data.fundamentals.cache import FundamentalsCache
 
         cache = FundamentalsCache(root=self.root, ttl_days=90)
         fresh_ts = (datetime.now(UTC) - timedelta(days=30)).isoformat()
@@ -66,14 +66,14 @@ class TestFundamentalsCache(unittest.TestCase):
     def test_corrupted_json_returns_none(self):
         """If the cache file is malformed (manual edit / partial write), treat
         it as missing rather than crashing."""
-        from alphalens.fundamentals.cache import FundamentalsCache
+        from alphalens.data.fundamentals.cache import FundamentalsCache
 
         cache = FundamentalsCache(root=self.root)
         (self.root / "X.json").write_text("{not valid json")
         self.assertIsNone(cache.get("X"))
 
     def test_get_or_fetch_uses_cache_when_fresh(self):
-        from alphalens.fundamentals.cache import FundamentalsCache
+        from alphalens.data.fundamentals.cache import FundamentalsCache
 
         cache = FundamentalsCache(root=self.root)
         cache.put("AAPL", {"ps_ratio": 7.5})
@@ -89,7 +89,7 @@ class TestFundamentalsCache(unittest.TestCase):
         self.assertEqual(call_count[0], 0)
 
     def test_get_or_fetch_invokes_fetcher_on_miss(self):
-        from alphalens.fundamentals.cache import FundamentalsCache
+        from alphalens.data.fundamentals.cache import FundamentalsCache
 
         cache = FundamentalsCache(root=self.root)
 

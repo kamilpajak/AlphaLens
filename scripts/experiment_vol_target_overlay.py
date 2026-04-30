@@ -40,11 +40,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 
-from alphalens.alt_data.yfinance_cache import load_cached_histories
 from alphalens.backtest.engine import BacktestEngine
 from alphalens.backtest.factor_analysis import run_regression
-from alphalens.backtest.factors import load_carhart_daily
-from alphalens.backtest.history_store import HistoryStore
+from alphalens.data.alt_data.yfinance_cache import load_cached_histories
+from alphalens.data.factors import load_carhart_daily
+from alphalens.data.store.history import HistoryStore
 from alphalens.risk_overlay import VolTargeter, apply_vol_target
 from alphalens.risk_overlay.assess import compute_overlay_stats
 from alphalens.screeners.momentum_lowvol import momentum_lowvol_adapter

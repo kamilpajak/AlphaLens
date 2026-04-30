@@ -17,7 +17,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from alphalens.backtest.history_store import HistoryStore
+from alphalens.data.store.history import HistoryStore
 
 
 def _prices(n: int, daily_mu: float, daily_vol: float, seed: int) -> pd.DataFrame:

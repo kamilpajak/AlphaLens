@@ -27,7 +27,8 @@ from datetime import date
 
 import pandas as pd
 
-from .history_store import HistoryStore
+from alphalens.data.store.history import HistoryStore
+
 from .metrics import rank_ic, turnover_pct
 from .weighting import (
     WeightingScheme,

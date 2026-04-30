@@ -35,9 +35,9 @@ from alphalens.archive.screeners.themed.early_stage_scorer import EARLY_STAGE_DE
 from alphalens.archive.screeners.themed.universe import flatten_universe
 from alphalens.backtest.engine import BacktestEngine
 from alphalens.backtest.factor_analysis import run_carhart_attribution
-from alphalens.backtest.factors import load_carhart_daily
-from alphalens.backtest.history_store import HistoryStore
 from alphalens.backtest.metrics import rank_ic_tstat, sharpe
+from alphalens.data.factors import load_carhart_daily
+from alphalens.data.store.history import HistoryStore
 
 LEAN_DATA = Path.home() / ".alphalens" / "lean" / "data"
 OUT_DIR = Path(__file__).resolve().parent.parent / "docs" / "backtest"

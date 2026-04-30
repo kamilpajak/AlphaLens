@@ -50,9 +50,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pandas as pd
 import yaml
 
-from alphalens.alt_data.sec_edgar_client import SecEdgarClient
-from alphalens.alt_data.ticker_cik_map import TickerCikMap
-from alphalens.alt_data.yfinance_cache import load_cached_histories
 from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
 from alphalens.archive.screeners.insider.scorer import InsiderScorer
 from alphalens.backtest.cost_model import RealisticCostModel
@@ -65,14 +62,17 @@ from alphalens.backtest.factor_analysis import (
     run_q4_attribution,
     run_regression,
 )
-from alphalens.backtest.factors import (
+from alphalens.backtest.metrics import sharpe, sharpe_autocorr_adjusted, turnover_pct
+from alphalens.backtest.regime import classify_regime
+from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient
+from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
+from alphalens.data.alt_data.yfinance_cache import load_cached_histories
+from alphalens.data.factors import (
     load_carhart_daily,
     load_ff5_umd_daily,
     load_q4_daily,
 )
-from alphalens.backtest.history_store import HistoryStore
-from alphalens.backtest.metrics import sharpe, sharpe_autocorr_adjusted, turnover_pct
-from alphalens.backtest.regime import classify_regime
+from alphalens.data.store.history import HistoryStore
 
 logger = logging.getLogger(__name__)
 

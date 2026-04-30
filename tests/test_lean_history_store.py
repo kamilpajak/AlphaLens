@@ -26,7 +26,7 @@ def _prime_dir(tmpdir: Path, tickers_to_bars: dict[str, list]) -> Path:
 def _store_with(tmpdir: Path, bars: dict[str, list]):
     """Build HistoryStore by priming a dir with zips and loading via lean CSV loader."""
     from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
-    from alphalens.backtest.history_store import HistoryStore
+    from alphalens.data.store.history import HistoryStore
 
     _prime_dir(tmpdir, bars)
     histories = load_lean_histories(tmpdir, list(bars.keys()))
@@ -53,13 +53,13 @@ class TestHistoryStoreConstruction(unittest.TestCase):
         self.assertEqual(len(store.full("AAPL")), 2)
 
     def test_empty_dict_has_no_tickers(self):
-        from alphalens.backtest.history_store import HistoryStore
+        from alphalens.data.store.history import HistoryStore
 
         store = HistoryStore({})
         self.assertEqual(store.tickers(), [])
 
     def test_full_raises_on_unknown(self):
-        from alphalens.backtest.history_store import HistoryStore
+        from alphalens.data.store.history import HistoryStore
 
         store = HistoryStore({})
         with self.assertRaises(KeyError):
@@ -99,7 +99,7 @@ class TestTruncateTo(unittest.TestCase):
         self.assertEqual(len(df), 2)
 
     def test_truncate_unknown_ticker_returns_empty(self):
-        from alphalens.backtest.history_store import HistoryStore
+        from alphalens.data.store.history import HistoryStore
 
         store = HistoryStore({})
         df = store.truncate_to("NOPE", date(2024, 4, 22))
@@ -138,7 +138,7 @@ class TestForwardReturn(unittest.TestCase):
         self.assertIsNone(store.forward_return("AAPL", date(2024, 4, 19), holding_period=3))
 
     def test_forward_return_none_for_unknown_ticker(self):
-        from alphalens.backtest.history_store import HistoryStore
+        from alphalens.data.store.history import HistoryStore
 
         store = HistoryStore({})
         self.assertIsNone(store.forward_return("NOPE", date(2024, 4, 19), holding_period=1))
@@ -183,7 +183,7 @@ class TestTradingDays(unittest.TestCase):
         self.assertEqual(days[-1].date(), date(2024, 4, 22))
 
     def test_benchmark_calendar_delegates(self):
-        from alphalens.backtest.history_store import HistoryStore
+        from alphalens.data.store.history import HistoryStore
 
         store = _store_with(
             self.dir,

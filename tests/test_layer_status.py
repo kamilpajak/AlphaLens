@@ -29,13 +29,14 @@ EVIDENCE_PREFIXES = ("N/A: ", "UNTESTED: ")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 LAYERS_WITH_STATUS = (
-    "alphalens.alt_data",
+    "alphalens.data.alt_data",
+    "alphalens.data.store",
     "alphalens.backtest",
     "alphalens.archive.events",
-    "alphalens.fundamentals",
+    "alphalens.data.fundamentals",
     "alphalens.archive.guru",
     "alphalens.literature_review",
-    "alphalens.macro",
+    "alphalens.data.macro",
     "alphalens.preregistration",
     "alphalens.archive.quiver_screener",
     "alphalens.regime_gate",

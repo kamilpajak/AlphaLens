@@ -24,7 +24,7 @@ _USER_AGENT = os.environ.get("SEC_EDGAR_USER_AGENT", "AlphaLens research@example
 @unittest.skipUnless(_ENABLED, "set ALPHALENS_INTEGRATION=1 to enable")
 class TestSecCompanyTickersEndpoint(unittest.TestCase):
     def test_endpoint_returns_large_ticker_universe(self):
-        from alphalens.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient
 
         client = SecEdgarClient(user_agent=_USER_AGENT)
 
@@ -39,7 +39,7 @@ class TestSecCompanyTickersEndpoint(unittest.TestCase):
 @unittest.skipUnless(_ENABLED, "set ALPHALENS_INTEGRATION=1 to enable")
 class TestEdgarSubmissionsApple(unittest.TestCase):
     def test_apple_submissions_contain_form_4(self):
-        from alphalens.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient
 
         client = SecEdgarClient(user_agent=_USER_AGENT)
 
@@ -53,7 +53,7 @@ class TestEdgarSubmissionsApple(unittest.TestCase):
 @unittest.skipUnless(_ENABLED, "set ALPHALENS_INTEGRATION=1 to enable")
 class TestIsharesAjaxEndpoint(unittest.TestCase):
     def test_iwm_fetch_returns_large_equity_universe(self):
-        from alphalens.alt_data.iwm_refresher import refresh_iwm_current
+        from alphalens.data.alt_data.iwm_refresher import refresh_iwm_current
 
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "iwm.yaml"
@@ -72,9 +72,9 @@ class TestFeaturesAsOfEndToEnd(unittest.TestCase):
         filers rarely cluster) so ``features_as_of`` may return None — but
         the pipeline must complete without errors.
         """
-        from alphalens.alt_data.sec_edgar_client import SecEdgarClient
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
         from alphalens.archive.screeners.insider.scorer import InsiderScorer
+        from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
         client = SecEdgarClient(user_agent=_USER_AGENT)
 

@@ -12,7 +12,7 @@ def _payload(entries_by_taxonomy: dict) -> dict:
 
 class TestParseCompanyFacts(unittest.TestCase):
     def test_happy_path_us_gaap(self):
-        from alphalens.alt_data.shares_outstanding import parse_company_facts
+        from alphalens.data.alt_data.shares_outstanding import parse_company_facts
 
         payload = _payload(
             {
@@ -48,7 +48,7 @@ class TestParseCompanyFacts(unittest.TestCase):
     def test_falls_back_to_dei_taxonomy(self):
         """Some filers report EntityCommonStockSharesOutstanding under dei,
         not us-gaap. Parser must try both."""
-        from alphalens.alt_data.shares_outstanding import parse_company_facts
+        from alphalens.data.alt_data.shares_outstanding import parse_company_facts
 
         payload = _payload(
             {
@@ -70,7 +70,7 @@ class TestParseCompanyFacts(unittest.TestCase):
         self.assertEqual(facts[0].shares, 5000)
 
     def test_us_gaap_preferred_over_dei_if_both_present(self):
-        from alphalens.alt_data.shares_outstanding import parse_company_facts
+        from alphalens.data.alt_data.shares_outstanding import parse_company_facts
 
         payload = _payload(
             {
@@ -100,7 +100,7 @@ class TestParseCompanyFacts(unittest.TestCase):
         self.assertEqual(facts[0].shares, 999)
 
     def test_missing_concept_returns_empty(self):
-        from alphalens.alt_data.shares_outstanding import parse_company_facts
+        from alphalens.data.alt_data.shares_outstanding import parse_company_facts
 
         self.assertEqual(
             parse_company_facts({"facts": {}}, cik="0000000001"),
@@ -108,12 +108,12 @@ class TestParseCompanyFacts(unittest.TestCase):
         )
 
     def test_empty_payload_returns_empty(self):
-        from alphalens.alt_data.shares_outstanding import parse_company_facts
+        from alphalens.data.alt_data.shares_outstanding import parse_company_facts
 
         self.assertEqual(parse_company_facts({}, cik="0000000001"), [])
 
     def test_malformed_entries_skipped(self):
-        from alphalens.alt_data.shares_outstanding import parse_company_facts
+        from alphalens.data.alt_data.shares_outstanding import parse_company_facts
 
         payload = _payload(
             {
@@ -159,7 +159,7 @@ class TestParseCompanyFacts(unittest.TestCase):
 
 class TestLatestSharesAsOf(unittest.TestCase):
     def _fact(self, shares: int, filed: str) -> object:
-        from alphalens.alt_data.shares_outstanding import SharesFact
+        from alphalens.data.alt_data.shares_outstanding import SharesFact
 
         return SharesFact(
             cik="0000000001",
@@ -171,7 +171,7 @@ class TestLatestSharesAsOf(unittest.TestCase):
         )
 
     def test_returns_latest_filed_before_asof(self):
-        from alphalens.alt_data.shares_outstanding import latest_shares_as_of
+        from alphalens.data.alt_data.shares_outstanding import latest_shares_as_of
 
         facts = [
             self._fact(100, "2024-05-01"),
@@ -182,35 +182,35 @@ class TestLatestSharesAsOf(unittest.TestCase):
         self.assertEqual(latest_shares_as_of(facts, date(2024, 9, 1)), 200)
 
     def test_exactly_on_filed_date_included(self):
-        from alphalens.alt_data.shares_outstanding import latest_shares_as_of
+        from alphalens.data.alt_data.shares_outstanding import latest_shares_as_of
 
         facts = [self._fact(100, "2024-05-01")]
 
         self.assertEqual(latest_shares_as_of(facts, date(2024, 5, 1)), 100)
 
     def test_filed_after_asof_excluded(self):
-        from alphalens.alt_data.shares_outstanding import latest_shares_as_of
+        from alphalens.data.alt_data.shares_outstanding import latest_shares_as_of
 
         facts = [self._fact(100, "2024-05-01"), self._fact(200, "2024-08-05")]
 
         self.assertEqual(latest_shares_as_of(facts, date(2024, 6, 1)), 100)
 
     def test_no_facts_before_asof_returns_none(self):
-        from alphalens.alt_data.shares_outstanding import latest_shares_as_of
+        from alphalens.data.alt_data.shares_outstanding import latest_shares_as_of
 
         facts = [self._fact(100, "2025-01-01")]
 
         self.assertIsNone(latest_shares_as_of(facts, date(2024, 5, 1)))
 
     def test_empty_list_returns_none(self):
-        from alphalens.alt_data.shares_outstanding import latest_shares_as_of
+        from alphalens.data.alt_data.shares_outstanding import latest_shares_as_of
 
         self.assertIsNone(latest_shares_as_of([], date(2024, 5, 1)))
 
 
 class TestEdgarClientCompanyFacts(unittest.TestCase):
     def test_hits_correct_url(self):
-        from alphalens.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient
 
         session = MagicMock()
         resp = MagicMock()

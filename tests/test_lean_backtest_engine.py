@@ -19,7 +19,7 @@ def _prime_store(tmpdir: Path, per_ticker_bars: dict[str, list]):
     """Load data into a HistoryStore from the given bar lists."""
     from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
     from alphalens.archive.screeners.lean.lean_csv_writer import LeanCsvWriter
-    from alphalens.backtest.history_store import HistoryStore
+    from alphalens.data.store.history import HistoryStore
 
     writer = LeanCsvWriter(tmpdir)
     for t, bars in per_ticker_bars.items():

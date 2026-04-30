@@ -36,8 +36,8 @@ from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_
 from alphalens.archive.screeners.themed.early_stage_scorer import EARLY_STAGE_DEFAULTS
 from alphalens.archive.screeners.themed.universe import flatten_universe
 from alphalens.backtest.engine import BacktestEngine
-from alphalens.backtest.history_store import HistoryStore
 from alphalens.backtest.metrics import sharpe
+from alphalens.data.store.history import HistoryStore
 
 LEAN_DATA = Path.home() / ".alphalens" / "lean" / "data"
 

@@ -2,7 +2,7 @@
 
 Ties M0 (ticker↔CIK) + M1 (EDGAR client) + M2a (XML parse) + M2b (filter)
 + M4 (cluster detection) into a single ``features_as_of(ticker, asof)``
-query mirroring ``alphalens.fundamentals.simfin_store.features_as_of``.
+query mirroring ``alphalens.data.store.simfin.features_as_of``.
 
 PIT discipline is enforced at the filings-index step: only filings whose
 ``filingDate ≤ asof`` are fetched and considered, so transactions that
@@ -23,11 +23,11 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from alphalens.alt_data.form4_filter import filter_eligible
-from alphalens.alt_data.form4_records import Form4ParseError, parse_form4_xml
-from alphalens.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
-from alphalens.alt_data.ticker_cik_map import TickerCikMap
 from alphalens.archive.screeners.insider.cluster import detect_cluster
+from alphalens.data.alt_data.form4_filter import filter_eligible
+from alphalens.data.alt_data.form4_records import Form4ParseError, parse_form4_xml
+from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
+from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
 logger = logging.getLogger(__name__)
 

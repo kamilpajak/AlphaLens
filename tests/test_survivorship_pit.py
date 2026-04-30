@@ -1,4 +1,4 @@
-"""Unit tests for `alphalens.backtest.survivorship_pit`.
+"""Unit tests for `alphalens.data.store.survivorship_pit`.
 
 Exercises the C1 cohort-split partition, the C2 selection-bias Fisher
 statistic (both elevated and null cases), the C3 wipeout repricing, and
@@ -16,8 +16,8 @@ from pathlib import Path
 import pandas as pd
 
 from alphalens.backtest.engine import BacktestReport, RebalanceSnapshot
-from alphalens.backtest.history_store import HistoryStore
-from alphalens.backtest.survivorship_pit import (
+from alphalens.data.store.history import HistoryStore
+from alphalens.data.store.survivorship_pit import (
     DelistingEvent,
     compute_selection_bias,
     evaluate_decision_gate,
@@ -239,7 +239,7 @@ class TestLoadDelistingEvents(unittest.TestCase):
 
 class TestDecisionGate(unittest.TestCase):
     def test_all_pass_returns_pass(self):
-        from alphalens.backtest.survivorship_pit import (
+        from alphalens.data.store.survivorship_pit import (
             CohortSplitResult,
             MidHoldingAuditResult,
             SelectionBiasResult,

@@ -22,8 +22,8 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-from alphalens.alt_data.ticker_cik_map import TickerCikMap
-from alphalens.fundamentals.edgar_companyfacts import EdgarCompanyfactsROEStore
+from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
+from alphalens.data.fundamentals.edgar_companyfacts import EdgarCompanyfactsROEStore
 
 # --- Synthetic-fixture helpers ----------------------------------------------
 
@@ -574,7 +574,9 @@ class EdgarROECacheBoundTests(unittest.TestCase):
         store, tickers = self._store_with_n_tickers(3)
         store._facts_cache_capacity = 2
 
-        with self.assertLogs("alphalens.fundamentals.edgar_companyfacts", level="WARNING") as cm:
+        with self.assertLogs(
+            "alphalens.data.fundamentals.edgar_companyfacts", level="WARNING"
+        ) as cm:
             for ticker in tickers:
                 store.roe_ttm(ticker, date(2024, 3, 1))
 

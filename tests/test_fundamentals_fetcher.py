@@ -61,7 +61,7 @@ INCOME_STATEMENT_PREPROFIT = {
 
 class TestExtractFeatures(unittest.TestCase):
     def test_extract_profitable_company_features(self):
-        from alphalens.fundamentals.fetcher import extract_features
+        from alphalens.data.fundamentals.fetcher import extract_features
 
         bundle = {
             "overview": OVERVIEW_FIXTURE,
@@ -101,7 +101,7 @@ class TestExtractFeatures(unittest.TestCase):
 
     def test_extract_preprofit_cash_burn_features(self):
         """INVZ-like pre-profit company: negative OCF streak, limited runway."""
-        from alphalens.fundamentals.fetcher import extract_features
+        from alphalens.data.fundamentals.fetcher import extract_features
 
         bundle = {
             "overview": {
@@ -128,7 +128,7 @@ class TestExtractFeatures(unittest.TestCase):
 
     def test_extract_handles_missing_overview_fields(self):
         """If AV returns the ticker but is missing PriceToSalesRatioTTM, don't crash."""
-        from alphalens.fundamentals.fetcher import extract_features
+        from alphalens.data.fundamentals.fetcher import extract_features
 
         bundle = {
             "overview": {"Symbol": "X"},
@@ -143,7 +143,7 @@ class TestExtractFeatures(unittest.TestCase):
 
     def test_extract_av_string_none_values(self):
         """AV often returns the string 'None' instead of null. Must be treated as missing."""
-        from alphalens.fundamentals.fetcher import extract_features
+        from alphalens.data.fundamentals.fetcher import extract_features
 
         bundle = {
             "overview": {
@@ -161,7 +161,7 @@ class TestExtractFeatures(unittest.TestCase):
 
     def test_consecutive_neg_ocf_breaks_on_positive(self):
         """Streak counts from most recent quarter backwards; a positive breaks it."""
-        from alphalens.fundamentals.fetcher import extract_features
+        from alphalens.data.fundamentals.fetcher import extract_features
 
         bundle = {
             "overview": {},
@@ -184,10 +184,10 @@ class TestExtractFeatures(unittest.TestCase):
 
 
 class TestFetchTickerBundle(unittest.TestCase):
-    @patch("alphalens.fundamentals.fetcher._av_income_statement")
-    @patch("alphalens.fundamentals.fetcher._av_cashflow")
-    @patch("alphalens.fundamentals.fetcher._av_balance_sheet")
-    @patch("alphalens.fundamentals.fetcher._av_overview")
+    @patch("alphalens.data.fundamentals.fetcher._av_income_statement")
+    @patch("alphalens.data.fundamentals.fetcher._av_cashflow")
+    @patch("alphalens.data.fundamentals.fetcher._av_balance_sheet")
+    @patch("alphalens.data.fundamentals.fetcher._av_overview")
     def test_fetch_bundle_calls_all_four_endpoints(
         self,
         mock_ov,
@@ -195,7 +195,7 @@ class TestFetchTickerBundle(unittest.TestCase):
         mock_cf,
         mock_is,
     ):
-        from alphalens.fundamentals.fetcher import fetch_ticker_bundle
+        from alphalens.data.fundamentals.fetcher import fetch_ticker_bundle
 
         mock_ov.return_value = OVERVIEW_FIXTURE
         mock_bs.return_value = {"quarterlyReports": []}
@@ -210,17 +210,17 @@ class TestFetchTickerBundle(unittest.TestCase):
         mock_is.assert_called_once_with("AAPL", curr_date="2024-10-15")
         self.assertEqual(bundle["overview"], OVERVIEW_FIXTURE)
 
-    @patch("alphalens.fundamentals.fetcher._av_overview")
+    @patch("alphalens.data.fundamentals.fetcher._av_overview")
     def test_fetch_bundle_tolerates_individual_endpoint_failure(self, mock_ov):
         """If one of four endpoints raises, bundle still contains {} for that
         key — we'd rather have partial data than crash the whole pipeline."""
-        from alphalens.fundamentals.fetcher import fetch_ticker_bundle
+        from alphalens.data.fundamentals.fetcher import fetch_ticker_bundle
 
         mock_ov.side_effect = RuntimeError("av timeout")
         with (
-            patch("alphalens.fundamentals.fetcher._av_balance_sheet", return_value={}),
-            patch("alphalens.fundamentals.fetcher._av_cashflow", return_value={}),
-            patch("alphalens.fundamentals.fetcher._av_income_statement", return_value={}),
+            patch("alphalens.data.fundamentals.fetcher._av_balance_sheet", return_value={}),
+            patch("alphalens.data.fundamentals.fetcher._av_cashflow", return_value={}),
+            patch("alphalens.data.fundamentals.fetcher._av_income_statement", return_value={}),
         ):
             bundle = fetch_ticker_bundle("X")
 

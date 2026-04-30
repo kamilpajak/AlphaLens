@@ -266,8 +266,8 @@ class TestCacheConfigFingerprint(unittest.TestCase):
     """
 
     def test_custom_config_does_not_reuse_default_cache(self):
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
         from alphalens.archive.screeners.insider.scorer import InsiderScorer, _ScorerConfig
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
         edgar = MagicMock()
         cik_map = TickerCikMap(_by_ticker={"AAPL": "0000320193"})
@@ -305,8 +305,8 @@ class TestCacheConfigFingerprint(unittest.TestCase):
         Accept them when current scorer uses default config."""
         import json
 
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
         from alphalens.archive.screeners.insider.scorer import InsiderScorer
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
         edgar = MagicMock()
         cik_map = TickerCikMap(_by_ticker={"AAPL": "0000320193"})
@@ -336,8 +336,8 @@ class TestCacheConfigFingerprint(unittest.TestCase):
     def test_legacy_cache_without_hash_rejected_by_custom_config(self):
         import json
 
-        from alphalens.alt_data.ticker_cik_map import TickerCikMap
         from alphalens.archive.screeners.insider.scorer import InsiderScorer, _ScorerConfig
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
         edgar = MagicMock()
         cik_map = TickerCikMap(_by_ticker={"AAPL": "0000320193"})

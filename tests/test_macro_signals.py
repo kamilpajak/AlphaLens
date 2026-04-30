@@ -11,7 +11,7 @@ def _daily(values: list[float], start: str = "2020-01-02") -> pd.Series:
 
 class TestYieldCurveSlope(unittest.TestCase):
     def test_slope_is_dgs10_minus_dgs2(self):
-        from alphalens.macro.signals import yield_curve_slope
+        from alphalens.data.macro.signals import yield_curve_slope
 
         dgs10 = _daily([3.0, 3.1, 3.2])
         dgs2 = _daily([2.0, 2.1, 2.2])
@@ -21,7 +21,7 @@ class TestYieldCurveSlope(unittest.TestCase):
         pd.testing.assert_series_equal(slope, _daily([1.0, 1.0, 1.0]), check_names=False)
 
     def test_slope_intersects_indexes(self):
-        from alphalens.macro.signals import yield_curve_slope
+        from alphalens.data.macro.signals import yield_curve_slope
 
         dgs10 = _daily([3.0, 3.1, 3.2, 3.3])
         # dgs2 missing first date
@@ -39,7 +39,7 @@ class TestYieldCurveSlope(unittest.TestCase):
 
 class TestVixDecile(unittest.TestCase):
     def test_percentile_rank_returns_in_unit_interval(self):
-        from alphalens.macro.signals import vix_decile
+        from alphalens.data.macro.signals import vix_decile
 
         # linear ramp so the last value is the highest → rank → 1.0
         vix = _daily(list(range(1, 261)))  # 260 days
@@ -55,7 +55,7 @@ class TestVixDecile(unittest.TestCase):
         self.assertAlmostEqual(decile.iloc[-1], 1.0, places=6)
 
     def test_small_lookback(self):
-        from alphalens.macro.signals import vix_decile
+        from alphalens.data.macro.signals import vix_decile
 
         vix = _daily([10.0, 20.0, 15.0, 25.0, 12.0])
         decile = vix_decile(vix, lookback=3)
@@ -71,7 +71,7 @@ class TestVixDecile(unittest.TestCase):
 
 class TestTrailingReturnSpread(unittest.TestCase):
     def test_basic_spread(self):
-        from alphalens.macro.signals import trailing_return_spread
+        from alphalens.data.macro.signals import trailing_return_spread
 
         # leader doubles, laggard flat → spread = 1.0 (100 pp)
         leader = _daily([100.0, 100.0, 100.0, 200.0])
@@ -85,7 +85,7 @@ class TestTrailingReturnSpread(unittest.TestCase):
         self.assertAlmostEqual(spread.iloc[3], 1.0, places=6)
 
     def test_negative_spread_when_laggard_leads(self):
-        from alphalens.macro.signals import trailing_return_spread
+        from alphalens.data.macro.signals import trailing_return_spread
 
         leader = _daily([100.0, 100.0, 100.0, 110.0])
         laggard = _daily([100.0, 100.0, 100.0, 120.0])
@@ -95,7 +95,7 @@ class TestTrailingReturnSpread(unittest.TestCase):
         self.assertAlmostEqual(spread.iloc[-1], 0.10 - 0.20, places=6)
 
     def test_zero_spread_when_identical(self):
-        from alphalens.macro.signals import trailing_return_spread
+        from alphalens.data.macro.signals import trailing_return_spread
 
         a = _daily([100.0, 101.0, 102.0, 103.0])
         spread = trailing_return_spread(a, a, lookback=3)
@@ -104,7 +104,7 @@ class TestTrailingReturnSpread(unittest.TestCase):
 
 class TestBuildSignalSet(unittest.TestCase):
     def test_bundles_all_signals_indexed_by_date(self):
-        from alphalens.macro.signals import SignalSet, build_signal_set
+        from alphalens.data.macro.signals import SignalSet, build_signal_set
 
         n = 260
         dgs10 = _daily([3.0] * n)
@@ -121,7 +121,7 @@ class TestBuildSignalSet(unittest.TestCase):
         self.assertTrue(signals.qqq_iwm_spread.dropna().notna().all())
 
     def test_get_on_date_returns_scalar_dict(self):
-        from alphalens.macro.signals import build_signal_set
+        from alphalens.data.macro.signals import build_signal_set
 
         n = 260
         dgs10 = _daily([3.5] * n)

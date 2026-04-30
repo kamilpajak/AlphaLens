@@ -1,4 +1,4 @@
-"""Tests for alphalens.backtest.factors — FF5 / UMD / Industry12 loaders."""
+"""Tests for alphalens.data.factors — FF5 / UMD / Industry12 loaders."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def _write_ind12(tmp: Path) -> Path:
 
 class TestLoadFF5Daily(unittest.TestCase):
     def test_returns_six_expected_columns(self):
-        from alphalens.backtest.factors import load_ff5_daily
+        from alphalens.data.factors import load_ff5_daily
 
         with TemporaryDirectory() as tmp:
             df = load_ff5_daily(path=_write_ff5(Path(tmp)))
@@ -81,7 +81,7 @@ class TestLoadFF5Daily(unittest.TestCase):
             self.assertEqual(len(df), 3)
 
     def test_values_converted_from_percent_to_decimal(self):
-        from alphalens.backtest.factors import load_ff5_daily
+        from alphalens.data.factors import load_ff5_daily
 
         with TemporaryDirectory() as tmp:
             df = load_ff5_daily(path=_write_ff5(Path(tmp)))
@@ -91,7 +91,7 @@ class TestLoadFF5Daily(unittest.TestCase):
             self.assertAlmostEqual(df.loc["2024-01-02", "HML"], -0.003, places=6)
 
     def test_date_range_filter(self):
-        from alphalens.backtest.factors import load_ff5_daily
+        from alphalens.data.factors import load_ff5_daily
 
         with TemporaryDirectory() as tmp:
             path = _write_ff5(Path(tmp))
@@ -101,13 +101,13 @@ class TestLoadFF5Daily(unittest.TestCase):
             self.assertEqual(len(df), 1)
 
     def test_missing_file_raises(self):
-        from alphalens.backtest.factors import load_ff5_daily
+        from alphalens.data.factors import load_ff5_daily
 
         with self.assertRaises(FileNotFoundError):
             load_ff5_daily(path=Path("/tmp/definitely_missing_ff5.csv"))
 
     def test_malformed_file_raises(self):
-        from alphalens.backtest.factors import load_ff5_daily
+        from alphalens.data.factors import load_ff5_daily
 
         with TemporaryDirectory() as tmp:
             bad = Path(tmp) / "bad.csv"
@@ -118,7 +118,7 @@ class TestLoadFF5Daily(unittest.TestCase):
 
 class TestLoadUMDDaily(unittest.TestCase):
     def test_returns_single_mom_column(self):
-        from alphalens.backtest.factors import load_umd_daily
+        from alphalens.data.factors import load_umd_daily
 
         with TemporaryDirectory() as tmp:
             df = load_umd_daily(path=_write_umd(Path(tmp)))
@@ -126,7 +126,7 @@ class TestLoadUMDDaily(unittest.TestCase):
             self.assertEqual(len(df), 3)
 
     def test_values_decimal(self):
-        from alphalens.backtest.factors import load_umd_daily
+        from alphalens.data.factors import load_umd_daily
 
         with TemporaryDirectory() as tmp:
             df = load_umd_daily(path=_write_umd(Path(tmp)))
@@ -136,7 +136,7 @@ class TestLoadUMDDaily(unittest.TestCase):
 
 class TestLoadIndustry12Daily(unittest.TestCase):
     def test_returns_12_industry_columns_value_weighted(self):
-        from alphalens.backtest.factors import load_industry12_daily
+        from alphalens.data.factors import load_industry12_daily
 
         with TemporaryDirectory() as tmp:
             df = load_industry12_daily(path=_write_ind12(Path(tmp)))
@@ -159,7 +159,7 @@ class TestLoadIndustry12Daily(unittest.TestCase):
     def test_stops_before_equal_weighted_section(self):
         # Fixture has 3 VW rows + 2 EW rows with distinct values (9.99 = 0.0999 decimal).
         # Loader must return exactly 3 VW rows, never pulling 9.99 in.
-        from alphalens.backtest.factors import load_industry12_daily
+        from alphalens.data.factors import load_industry12_daily
 
         with TemporaryDirectory() as tmp:
             df = load_industry12_daily(path=_write_ind12(Path(tmp)))
@@ -168,7 +168,7 @@ class TestLoadIndustry12Daily(unittest.TestCase):
             self.assertFalse((df == 0.0999).any().any())
 
     def test_values_decimal(self):
-        from alphalens.backtest.factors import load_industry12_daily
+        from alphalens.data.factors import load_industry12_daily
 
         with TemporaryDirectory() as tmp:
             df = load_industry12_daily(path=_write_ind12(Path(tmp)))
@@ -180,7 +180,7 @@ class TestLoadCarhartDaily(unittest.TestCase):
     """Convenience wrapper: FF5-subset (Mkt-RF, SMB, HML, RF) + UMD (Mom), inner-joined."""
 
     def test_returns_five_expected_columns(self):
-        from alphalens.backtest.factors import load_carhart_daily
+        from alphalens.data.factors import load_carhart_daily
 
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -192,7 +192,7 @@ class TestLoadCarhartDaily(unittest.TestCase):
             self.assertEqual(len(df), 3)
 
     def test_inner_join_drops_unmatched_dates(self):
-        from alphalens.backtest.factors import load_carhart_daily
+        from alphalens.data.factors import load_carhart_daily
 
         with TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -210,7 +210,7 @@ class TestRealFactorFiles(unittest.TestCase):
     """Integration: load actual CSVs from ~/.alphalens/factors/ if present."""
 
     def test_ff5_smoke(self):
-        from alphalens.backtest.factors import DEFAULT_FF5_PATH, load_ff5_daily
+        from alphalens.data.factors import DEFAULT_FF5_PATH, load_ff5_daily
 
         if not DEFAULT_FF5_PATH.exists():
             self.skipTest(f"FF5 file not at {DEFAULT_FF5_PATH}")
@@ -219,7 +219,7 @@ class TestRealFactorFiles(unittest.TestCase):
         self.assertEqual(list(df.columns), ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"])
 
     def test_umd_smoke(self):
-        from alphalens.backtest.factors import DEFAULT_UMD_PATH, load_umd_daily
+        from alphalens.data.factors import DEFAULT_UMD_PATH, load_umd_daily
 
         if not DEFAULT_UMD_PATH.exists():
             self.skipTest(f"UMD file not at {DEFAULT_UMD_PATH}")
@@ -228,7 +228,7 @@ class TestRealFactorFiles(unittest.TestCase):
         self.assertEqual(list(df.columns), ["Mom"])
 
     def test_industry12_smoke(self):
-        from alphalens.backtest.factors import (
+        from alphalens.data.factors import (
             DEFAULT_INDUSTRY12_PATH,
             load_industry12_daily,
         )
@@ -240,7 +240,7 @@ class TestRealFactorFiles(unittest.TestCase):
         self.assertEqual(len(df.columns), 12)
 
     def test_carhart_merged_smoke(self):
-        from alphalens.backtest.factors import load_carhart_daily
+        from alphalens.data.factors import load_carhart_daily
 
         try:
             df = load_carhart_daily(start=date(2024, 1, 1), end=date(2024, 12, 31))

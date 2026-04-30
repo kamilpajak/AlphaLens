@@ -9,7 +9,7 @@ from collections.abc import Mapping
 import pandas as pd
 from stockstats import wrap
 
-from alphalens.fundamentals.gate import fundamental_gate_score
+from alphalens.data.fundamentals.gate import fundamental_gate_score
 
 from .config import THEMED_DEFAULTS
 

@@ -37,7 +37,7 @@ class TestComputeForwardFeatures(unittest.TestCase):
     """_compute_forward_features must enter at NEXT trading day's close (PIT-safe)."""
 
     def _store(self):
-        from alphalens.backtest.history_store import HistoryStore
+        from alphalens.data.store.history import HistoryStore
 
         # Ticker: 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111
         # Bench:  200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200 (flat)
@@ -97,7 +97,7 @@ class TestComputeForwardFeatures(unittest.TestCase):
 
     def test_max_drawdown_captures_intraperiod_trough(self):
         """Feed a price series that dips then recovers — max_dd should be negative."""
-        from alphalens.backtest.history_store import HistoryStore
+        from alphalens.data.store.history import HistoryStore
         from alphalens_cli.commands.research import _compute_forward_features
 
         idx = pd.bdate_range(start="2024-01-02", periods=12)
@@ -141,7 +141,7 @@ class TestComputeForwardFeatures(unittest.TestCase):
 class TestAtPickTrailingReturn(unittest.TestCase):
     def test_returns_lookback_day_return_up_to_pick(self):
         """trailing_60d = (close[pick] - close[pick-60]) / close[pick-60]."""
-        from alphalens.backtest.history_store import HistoryStore
+        from alphalens.data.store.history import HistoryStore
         from alphalens_cli.commands.research import _at_pick_trailing_return
 
         df = _ramp_df("2023-01-02", 120, 100.0, 1.0)
@@ -155,7 +155,7 @@ class TestAtPickTrailingReturn(unittest.TestCase):
         self.assertAlmostEqual(r, (165.0 - 105.0) / 105.0, places=6)
 
     def test_returns_none_when_insufficient_history(self):
-        from alphalens.backtest.history_store import HistoryStore
+        from alphalens.data.store.history import HistoryStore
         from alphalens_cli.commands.research import _at_pick_trailing_return
 
         df = _ramp_df("2024-01-02", 30, 100.0, 1.0)
@@ -167,7 +167,7 @@ class TestAtPickTrailingReturn(unittest.TestCase):
         self.assertIsNone(r)
 
     def test_returns_none_on_unknown_ticker(self):
-        from alphalens.backtest.history_store import HistoryStore
+        from alphalens.data.store.history import HistoryStore
         from alphalens_cli.commands.research import _at_pick_trailing_return
 
         store = HistoryStore({"A": _ramp_df("2024-01-02", 120, 100.0, 1.0)})

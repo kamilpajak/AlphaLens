@@ -29,9 +29,9 @@ from alphalens.backtest.factor_analysis import (
     run_carhart_attribution,
     run_regression,
 )
-from alphalens.backtest.factors import load_carhart_daily, load_industry12_daily
-from alphalens.backtest.history_store import HistoryStore
 from alphalens.backtest.metrics import rank_ic_tstat, sharpe
+from alphalens.data.factors import load_carhart_daily, load_industry12_daily
+from alphalens.data.store.history import HistoryStore
 
 START = date(2021, 4, 19)
 END = date(2026, 4, 17)

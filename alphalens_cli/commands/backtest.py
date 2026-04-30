@@ -68,11 +68,11 @@ def _resolve_insider_scorer(
 ) -> tuple[Callable, dict[str, Any], list[str], list[str]]:
     import os
 
-    from alphalens.alt_data.russell_universe import load_iwm_current
-    from alphalens.alt_data.sec_edgar_client import SecEdgarClient
-    from alphalens.alt_data.ticker_cik_map import TickerCikMap
     from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
     from alphalens.archive.screeners.insider.scorer import InsiderScorer
+    from alphalens.data.alt_data.russell_universe import load_iwm_current
+    from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient
+    from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 
     iwm_path = Path("alphalens/alt_data/data/iwm_current.yaml")
     cik_map_path = Path("alphalens/alt_data/data/ticker_cik_map.yaml")
@@ -110,7 +110,7 @@ def _apply_fundamental_gate(
 ) -> None:
     """Pre-load fundamentals and wire them into scorer_config in place."""
     if source == "simfin":
-        from alphalens.fundamentals.simfin_store import SimFinFundamentalsStore
+        from alphalens.data.store.simfin import SimFinFundamentalsStore
 
         typer.echo(
             f"Preloading SimFin fundamentals (bulk CSV, 5y US quarterly, "
@@ -118,7 +118,7 @@ def _apply_fundamental_gate(
         )
         store = SimFinFundamentalsStore(with_prices=with_prices)
     elif source == "av":
-        from alphalens.fundamentals.backtest_store import HistoricalFundamentalsStore
+        from alphalens.data.store.fundamentals_pit import HistoricalFundamentalsStore
 
         typer.echo(f"Preloading Alpha Vantage fundamentals for {len(screener_tickers)} tickers…")
         store = HistoricalFundamentalsStore()
@@ -261,14 +261,14 @@ def backtest(
     from alphalens.backtest.cost_model import cost_sensitivity_table
     from alphalens.backtest.engine import BacktestEngine
     from alphalens.backtest.factor_analysis import run_carhart_attribution
-    from alphalens.backtest.factors import load_carhart_daily
-    from alphalens.backtest.history_store import HistoryStore
     from alphalens.backtest.regime import classify_regime, regime_breakdown
     from alphalens.backtest.report import (
         build_summary,
         rebalance_results_to_dataframe,
         write_markdown_report,
     )
+    from alphalens.data.factors import load_carhart_daily
+    from alphalens.data.store.history import HistoryStore
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)

@@ -100,8 +100,8 @@ def cost_validation(
         compile_report as cv_compile_report,
     )
     from alphalens.backtest.engine import BacktestEngine
-    from alphalens.backtest.history_store import HistoryStore
     from alphalens.backtest.metrics import sharpe
+    from alphalens.data.store.history import HistoryStore
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
@@ -343,9 +343,9 @@ def walk_forward(
     from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
     from alphalens.archive.screeners.themed.universe import flatten_universe
     from alphalens.backtest.engine import BacktestEngine
-    from alphalens.backtest.factors import load_carhart_daily
-    from alphalens.backtest.history_store import HistoryStore
     from alphalens.backtest.walk_forward import compile_report, run_walk_forward
+    from alphalens.data.factors import load_carhart_daily
+    from alphalens.data.store.history import HistoryStore
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
@@ -466,9 +466,9 @@ def survivorship_pit(
     from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
     from alphalens.archive.screeners.themed.universe import flatten_universe
     from alphalens.backtest.engine import BacktestEngine
-    from alphalens.backtest.factors import load_carhart_daily
-    from alphalens.backtest.history_store import HistoryStore
-    from alphalens.backtest.survivorship_pit import (
+    from alphalens.data.factors import load_carhart_daily
+    from alphalens.data.store.history import HistoryStore
+    from alphalens.data.store.survivorship_pit import (
         audit_mid_holding_wipeout,
         compile_report,
         compute_selection_bias,
@@ -563,7 +563,7 @@ def survivorship_pit(
 
         if "c2" in tests_set:
             typer.echo("\n[C2] selection bias…")
-            from alphalens.backtest.survivorship_pit import picks_from_report
+            from alphalens.data.store.survivorship_pit import picks_from_report
 
             picks_df = picks_from_report(baseline)
             bias_results = compute_selection_bias(
@@ -660,7 +660,7 @@ def validate_llm_filter(
         picks_from_backtest_report,
         rule_based_tractability_scorer,
     )
-    from alphalens.backtest.history_store import HistoryStore
+    from alphalens.data.store.history import HistoryStore
 
     start_date = date.fromisoformat(start)
     end_date = date.fromisoformat(end)
@@ -1293,8 +1293,8 @@ def historical_acceptance(
 
     from alphalens.archive.screeners.lean.config import DATA_DIR
     from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
-    from alphalens.backtest.history_store import HistoryStore
     from alphalens.core.runner import TradingAgentsRunner
+    from alphalens.data.store.history import HistoryStore
 
     try:
         from cli.main import save_report_to_disk as _save_ta_report

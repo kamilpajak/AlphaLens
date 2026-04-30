@@ -5,7 +5,7 @@ INCOME_STATEMENT) to the upstream TradingAgents wrapper, which already
 handles rate-limit detection + PIT `_filter_reports_by_date`.
 
 `extract_features` produces the canonical feature dict consumed by
-`alphalens.fundamentals.gate`:
+`alphalens.data.fundamentals.gate`:
   - cash_runway_months: cash / abs(quarterly OCF) × 3
   - ps_ratio: from OVERVIEW.PriceToSalesRatioTTM
   - net_income_ttm: sum of last 4 quarterly netIncome values

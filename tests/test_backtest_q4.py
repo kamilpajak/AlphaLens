@@ -16,7 +16,7 @@ DATE,R_F,R_MKT,R_ME,R_IA,R_ROE,R_EG
 
 class TestParseQ4Csv(unittest.TestCase):
     def test_parses_date_index_and_renames_columns(self):
-        from alphalens.backtest.factors import _parse_q4_csv
+        from alphalens.data.factors import _parse_q4_csv
 
         df = _parse_q4_csv(SAMPLE_Q4_CSV)
 
@@ -25,7 +25,7 @@ class TestParseQ4Csv(unittest.TestCase):
         self.assertEqual(df.index[0], pd.Timestamp("2020-01-02"))
 
     def test_percent_converted_to_decimal(self):
-        from alphalens.backtest.factors import _parse_q4_csv
+        from alphalens.data.factors import _parse_q4_csv
 
         df = _parse_q4_csv(SAMPLE_Q4_CSV)
 
@@ -35,7 +35,7 @@ class TestParseQ4Csv(unittest.TestCase):
 
     def test_r_eg_dropped(self):
         """R_EG is the q5 Expected-Growth factor, not part of Q4."""
-        from alphalens.backtest.factors import _parse_q4_csv
+        from alphalens.data.factors import _parse_q4_csv
 
         df = _parse_q4_csv(SAMPLE_Q4_CSV)
 
@@ -43,7 +43,7 @@ class TestParseQ4Csv(unittest.TestCase):
         self.assertNotIn("EG", df.columns)
 
     def test_missing_required_column_raises(self):
-        from alphalens.backtest.factors import _parse_q4_csv
+        from alphalens.data.factors import _parse_q4_csv
 
         bad_csv = "DATE,R_F,R_MKT\n20200102,0.005,0.1\n"
 
@@ -60,7 +60,7 @@ class TestLoadQ4Daily(unittest.TestCase):
         return "\n".join(rows) + "\n"
 
     def test_concatenates_cumulative_and_yearly_files(self):
-        from alphalens.backtest.factors import load_q4_daily
+        from alphalens.data.factors import load_q4_daily
 
         with tempfile.TemporaryDirectory() as td:
             cache = Path(td)
@@ -85,7 +85,7 @@ class TestLoadQ4Daily(unittest.TestCase):
         self.assertEqual(df.index.max().year, 2024)
 
     def test_cache_avoids_refetch(self):
-        from alphalens.backtest.factors import load_q4_daily
+        from alphalens.data.factors import load_q4_daily
 
         call_count = {"n": 0}
 
@@ -108,7 +108,7 @@ class TestLoadQ4Daily(unittest.TestCase):
         self.assertEqual(call_count["n"], first_n)
 
     def test_date_range_filter_applied(self):
-        from alphalens.backtest.factors import load_q4_daily
+        from alphalens.data.factors import load_q4_daily
 
         def fetch(url):
             for y in range(2019, 2025):
@@ -133,7 +133,7 @@ class TestLoadQ4Daily(unittest.TestCase):
         Loader must attempt up to current_year and skip 404s gracefully
         so it picks up new years as global-q.org publishes them.
         """
-        from alphalens.backtest.factors import load_q4_daily
+        from alphalens.data.factors import load_q4_daily
 
         # Simulate global-q.org publishing up to 2026 (current). 2027+ not yet.
         published = {2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026}
