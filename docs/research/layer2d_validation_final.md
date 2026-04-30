@@ -220,7 +220,7 @@ _TBD after results. Candidate bullet headings:_
 
 _Per design doc §8 gate logic + `decision_matrix.evaluate_exit_criteria`:_
 
-- **GO**: deploy capital to Layer 2d paper/live queue with insider candidates feeding Layer 3 analysis at priority=`insider=15` (TBD in `alphalens.registry.SOURCE_PRIORITY`).
+- **GO**: deploy capital to Layer 2d paper/live queue with insider candidates feeding Layer 3 analysis at priority=`insider=15` (TBD in `alphalens.core.registry.SOURCE_PRIORITY`).
 - **PAPER_TRACK**: log signals into Layer 3 queue for 6-12 mo without sizing — re-evaluate with live data.
 - **KILL**: archive Layer 2d alongside Layer 2b (`alphalens/screeners/insider/` retained for backtest-only use), disable `launchd/com.alphalens.watchdog.insider.plist` if it was loaded.
 

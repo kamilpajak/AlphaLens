@@ -49,8 +49,8 @@ class TestCollectStatus(unittest.TestCase):
         self.assertEqual(s["seen_events"]["total"], 0)
 
     def test_queue_breakdown_includes_pending_done_failed_and_latest(self):
-        from alphalens.candidates import Candidate
-        from alphalens.queue import CandidateQueue
+        from alphalens.core.candidates import Candidate
+        from alphalens.core.queue import CandidateQueue
         from alphalens.watchdog.status import collect_status
 
         q = CandidateQueue(self.queue_path, max_attempts=1)

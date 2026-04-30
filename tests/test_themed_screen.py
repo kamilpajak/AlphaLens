@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 class TestThemedPipelineToCandidates(unittest.TestCase):
     def test_to_candidates_maps_dataframe_rows_to_candidate_objects(self):
         from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
-        from alphalens.candidates import Candidate
+        from alphalens.core.candidates import Candidate
 
         df = pd.DataFrame(
             [
@@ -122,7 +122,7 @@ class TestThemedScreenCLIAnalyzeFlag(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
 
-        from alphalens.queue import CandidateQueue
+        from alphalens.core.queue import CandidateQueue
 
         with CandidateQueue(self.db) as q:
             pending = q.list_by_status("pending")
@@ -155,7 +155,7 @@ class TestThemedScreenCLIAnalyzeFlag(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
 
         if self.db.exists():
-            from alphalens.queue import CandidateQueue
+            from alphalens.core.queue import CandidateQueue
 
             with CandidateQueue(self.db) as q:
                 self.assertEqual(q.list_by_status("pending"), [])

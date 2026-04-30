@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from alphalens.candidates import Candidate
-from alphalens.queue import CandidateQueue
+from alphalens.core.candidates import Candidate
+from alphalens.core.queue import CandidateQueue
 
 from ...classifier import ClassifiedEvent
 from .base import AlertHandler
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class AutoTriggerEnqueueHandler(AlertHandler):
     """Detection-side handler: submits a `watchdog_sec` Candidate to the shared queue.
 
-    Does NOT run TradingAgents. The shared worker (`alphalens.worker.AnalysisWorker`)
+    Does NOT run TradingAgents. The shared worker (`alphalens.core.worker.AnalysisWorker`)
     drains the queue with its own budget and retry policy.
     """
 

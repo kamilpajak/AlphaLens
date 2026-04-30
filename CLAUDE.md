@@ -102,7 +102,7 @@ CLI komendy dla CLOSED layers istnieją jako research replay tooling — patrz `
 
 ## Configuration
 
-Base config: `TradingAgents/tradingagents/default_config.py` (upstream, OpenAI-centric). **Always wrap with `alphalens.config_gemini.build_gemini_config()`** — deep-copies DEFAULT_CONFIG i override'uje dla Gemini.
+Base config: `TradingAgents/tradingagents/default_config.py` (upstream, OpenAI-centric). **Always wrap with `alphalens.core.config_gemini.build_gemini_config()`** — deep-copies DEFAULT_CONFIG i override'uje dla Gemini.
 
 Key params: `llm_provider="google"`, `deep_think_llm` / `quick_think_llm`, `max_debate_rounds`, `backend_url=None` (must be None dla Google), `data_vendors`.
 

@@ -7,7 +7,7 @@ import datetime as dt
 import typer
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
-from alphalens.config_gemini import build_gemini_config
+from alphalens.core.config_gemini import build_gemini_config
 
 
 def analyze(

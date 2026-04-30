@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 class TestCandidate(unittest.TestCase):
     def test_candidate_is_frozen(self):
-        from alphalens.candidates import Candidate
+        from alphalens.core.candidates import Candidate
 
         c = Candidate(
             ticker="AAPL",
@@ -19,7 +19,7 @@ class TestCandidate(unittest.TestCase):
             c.ticker = "MSFT"  # type: ignore[misc]
 
     def test_from_screener_builds_stable_dedup_key(self):
-        from alphalens.candidates import Candidate
+        from alphalens.core.candidates import Candidate
 
         c1 = Candidate.from_screener(
             ticker="AAPL",
@@ -38,7 +38,7 @@ class TestCandidate(unittest.TestCase):
         self.assertEqual(c1.dedup_key, c2.dedup_key)
 
     def test_dedup_key_differs_for_different_source(self):
-        from alphalens.candidates import Candidate
+        from alphalens.core.candidates import Candidate
 
         c1 = Candidate.from_screener(
             ticker="AAPL",
@@ -57,7 +57,7 @@ class TestCandidate(unittest.TestCase):
         self.assertNotEqual(c1.dedup_key, c2.dedup_key)
 
     def test_dedup_key_differs_for_different_discriminator(self):
-        from alphalens.candidates import Candidate
+        from alphalens.core.candidates import Candidate
 
         c1 = Candidate.from_screener(
             ticker="AAPL",
@@ -76,7 +76,7 @@ class TestCandidate(unittest.TestCase):
         self.assertNotEqual(c1.dedup_key, c2.dedup_key)
 
     def test_detected_at_defaults_to_now_utc(self):
-        from alphalens.candidates import Candidate
+        from alphalens.core.candidates import Candidate
 
         c = Candidate.from_screener(
             ticker="AAPL", source="momentum", priority=10, payload={}, discriminator="d"
@@ -89,7 +89,7 @@ class TestCandidate(unittest.TestCase):
 
 class TestAnalysisResult(unittest.TestCase):
     def test_analysis_result_fields(self):
-        from alphalens.candidates import AnalysisResult
+        from alphalens.core.candidates import AnalysisResult
 
         r = AnalysisResult(
             candidate_id=7,

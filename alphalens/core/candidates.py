@@ -1,7 +1,7 @@
 """Shared domain model for screener → TradingAgents handoff.
 
 Every screener (watchdog SEC events, momentum, prescreener) produces `Candidate`
-instances. The unified `CandidateSink` (see `alphalens.queue.CandidateQueue`)
+instances. The unified `CandidateSink` (see `alphalens.core.queue.CandidateQueue`)
 consumes them; the worker drains the queue, invokes TradingAgents, and records
 an `AnalysisResult`.
 """

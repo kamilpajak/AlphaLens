@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from alphalens.queue import default_queue_path
+from alphalens.core.queue import default_queue_path
 
 
 def status() -> None:

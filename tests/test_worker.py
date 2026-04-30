@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 
 def _cand(ticker="AAPL", source="momentum", priority=10, payload=None, discriminator="D"):
-    from alphalens.candidates import Candidate
+    from alphalens.core.candidates import Candidate
 
     return Candidate.from_screener(
         ticker=ticker,
@@ -18,7 +18,7 @@ def _cand(ticker="AAPL", source="momentum", priority=10, payload=None, discrimin
 
 
 def _fake_result(candidate_id, ticker, source, rating="BUY"):
-    from alphalens.candidates import AnalysisResult
+    from alphalens.core.candidates import AnalysisResult
 
     return AnalysisResult(
         candidate_id=candidate_id,
@@ -42,8 +42,8 @@ class TestAnalysisWorker(unittest.TestCase):
         self.tmp.cleanup()
 
     def _make_worker(self, runner, notifier=None, budget_per_day=5):
-        from alphalens.queue import CandidateQueue
-        from alphalens.worker import AnalysisWorker
+        from alphalens.core.queue import CandidateQueue
+        from alphalens.core.worker import AnalysisWorker
 
         queue = CandidateQueue(self.db, max_attempts=3, base_retry_s=1)
         return AnalysisWorker(
@@ -60,7 +60,7 @@ class TestAnalysisWorker(unittest.TestCase):
         runner.run.assert_not_called()
 
     def test_process_one_calls_runner_and_marks_success(self):
-        from alphalens.queue import CandidateQueue
+        from alphalens.core.queue import CandidateQueue
 
         runner = MagicMock()
         notifier = MagicMock()
@@ -83,7 +83,7 @@ class TestAnalysisWorker(unittest.TestCase):
             self.assertEqual(done[0]["decision"], "OVERWEIGHT")
 
     def test_process_one_marks_failure_on_exception(self):
-        from alphalens.queue import CandidateQueue
+        from alphalens.core.queue import CandidateQueue
 
         runner = MagicMock()
         runner.run.side_effect = RuntimeError("LLM rate limit")
@@ -100,7 +100,7 @@ class TestAnalysisWorker(unittest.TestCase):
             self.assertIn("rate limit", pending[0]["error"])
 
     def test_process_one_moves_to_dead_after_max_attempts(self):
-        from alphalens.queue import CandidateQueue
+        from alphalens.core.queue import CandidateQueue
 
         runner = MagicMock()
         runner.run.side_effect = RuntimeError("boom")
@@ -123,7 +123,7 @@ class TestAnalysisWorker(unittest.TestCase):
             self.assertEqual(len(q.list_by_status("pending")), 0)
 
     def test_process_one_respects_daily_budget(self):
-        from alphalens.queue import CandidateQueue
+        from alphalens.core.queue import CandidateQueue
 
         runner = MagicMock()
         notifier = MagicMock()
@@ -156,7 +156,7 @@ class TestAnalysisWorker(unittest.TestCase):
         12 messages/hour until midnight. Success messages already intrinsically
         signal the budget state. Fix: log, don't notify.
         """
-        from alphalens.queue import CandidateQueue
+        from alphalens.core.queue import CandidateQueue
 
         runner = MagicMock()
         notifier = MagicMock()
@@ -175,7 +175,7 @@ class TestAnalysisWorker(unittest.TestCase):
 
         notifier.send_message.reset_mock()
 
-        with self.assertLogs("alphalens.worker", level="INFO") as captured:
+        with self.assertLogs("alphalens.core.worker", level="INFO") as captured:
             worker.process_one()
 
         notifier.send_message.assert_not_called()
@@ -185,7 +185,7 @@ class TestAnalysisWorker(unittest.TestCase):
         )
 
     def test_process_one_takes_higher_priority_first(self):
-        from alphalens.queue import CandidateQueue
+        from alphalens.core.queue import CandidateQueue
 
         runner = MagicMock()
         runner.run.side_effect = lambda c, candidate_id: _fake_result(

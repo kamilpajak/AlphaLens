@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
-from alphalens.candidates import Candidate
+from alphalens.core.candidates import Candidate
 from alphalens.screeners.prescreener.data_fetcher import BatchDataFetcher
 
 from .config import THEMED_DEFAULTS

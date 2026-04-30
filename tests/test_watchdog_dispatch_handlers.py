@@ -145,7 +145,7 @@ class TestAutoTriggerEnqueueHandler(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_handle_enqueues_classified_event(self):
-        from alphalens.queue import CandidateQueue
+        from alphalens.core.queue import CandidateQueue
         from alphalens.watchdog.dispatch.handlers.auto_trigger import (
             AutoTriggerEnqueueHandler,
         )

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 
 def _cand(source, payload, ticker="AAPL", priority=10):
-    from alphalens.candidates import Candidate
+    from alphalens.core.candidates import Candidate
 
     return Candidate.from_screener(
         ticker=ticker,
@@ -22,7 +22,7 @@ def _cand(source, payload, ticker="AAPL", priority=10):
 
 class TestTriggerContextFormatters(unittest.TestCase):
     def test_format_momentum_context(self):
-        from alphalens.runner import build_trigger_context
+        from alphalens.core.runner import build_trigger_context
 
         ctx = build_trigger_context(
             _cand("momentum", {"momentum_score": 0.85, "themes": ["AI", "MegaCap"]})
@@ -32,7 +32,7 @@ class TestTriggerContextFormatters(unittest.TestCase):
         self.assertIn("AI", ctx)
 
     def test_format_watchdog_sec_context(self):
-        from alphalens.runner import build_trigger_context
+        from alphalens.core.runner import build_trigger_context
 
         ctx = build_trigger_context(
             _cand(
@@ -45,7 +45,7 @@ class TestTriggerContextFormatters(unittest.TestCase):
         self.assertIn("0001-23", ctx)
 
     def test_format_prescreener_context(self):
-        from alphalens.runner import build_trigger_context
+        from alphalens.core.runner import build_trigger_context
 
         ctx = build_trigger_context(
             _cand(
@@ -58,7 +58,7 @@ class TestTriggerContextFormatters(unittest.TestCase):
         self.assertIn("3", ctx)
 
     def test_unknown_source_returns_empty_string(self):
-        from alphalens.runner import build_trigger_context
+        from alphalens.core.runner import build_trigger_context
 
         ctx = build_trigger_context(_cand("mystery", {}))
         self.assertEqual(ctx, "")
@@ -66,7 +66,7 @@ class TestTriggerContextFormatters(unittest.TestCase):
 
 class TestRunnerLogsContextBeforePropagate(unittest.TestCase):
     def test_runner_logs_trigger_context(self):
-        from alphalens.runner import TradingAgentsRunner
+        from alphalens.core.runner import TradingAgentsRunner
 
         graph = MagicMock()
         graph.propagate.return_value = ({}, "HOLD")
@@ -77,7 +77,7 @@ class TestRunnerLogsContextBeforePropagate(unittest.TestCase):
 
         candidate = _cand("momentum", {"momentum_score": 0.91, "themes": ["AI"]}, ticker="NVDA")
 
-        with self.assertLogs("alphalens.runner", level="INFO") as cm:
+        with self.assertLogs("alphalens.core.runner", level="INFO") as cm:
             runner.run(candidate, candidate_id=1)
 
         combined = "\n".join(cm.output)
