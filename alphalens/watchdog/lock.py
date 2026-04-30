@@ -17,7 +17,7 @@ import fcntl
 import logging
 import os
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -66,9 +66,7 @@ def worker_lock(lock_path: Path) -> Iterator[int]:
         logger.info("worker lock acquired: %s (pid=%d)", lock_path, pid)
         yield pid
     finally:
-        try:
+        with suppress(OSError):
             fcntl.flock(fd, fcntl.LOCK_UN)
-        except OSError:
-            pass
         os.close(fd)
         logger.info("worker lock released: %s", lock_path)

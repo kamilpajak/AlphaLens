@@ -48,7 +48,7 @@ def build_augmented_store() -> tuple[HistoryStore, list[str], list[str]]:
     curated = sorted(themes_map.keys())
     print(f"curated universe: {len(curated)} names")
 
-    main_histories = load_lean_histories(MAIN_DATA, curated + ["SPY", "IWM"])
+    main_histories = load_lean_histories(MAIN_DATA, [*curated, "SPY", "IWM"])
 
     manifest = json.loads((SURV_DIR / "fetched_manifest.json").read_text())
     delisted_tickers = [e["ticker"] for e in manifest["fetched"]]
@@ -134,8 +134,8 @@ def _max_dd(returns: pd.Series) -> float:
 def main() -> None:
     store, curated, delisted = build_augmented_store()
 
-    baseline_report, baseline_metrics, baseline_picks = run(store, curated, "baseline")
-    augmented_report, augmented_metrics, augmented_picks = run(
+    _baseline_report, baseline_metrics, _baseline_picks = run(store, curated, "baseline")
+    _augmented_report, augmented_metrics, augmented_picks = run(
         store, curated + delisted, "augmented"
     )
 

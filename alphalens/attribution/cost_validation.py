@@ -211,7 +211,7 @@ def classify_tier_as_of(
     # Percentile rank for each ticker: fraction of values <= this one
     ranks = pd.Series(values).rank(pct=True, method="average").to_numpy()
     result: dict[str, str] = {}
-    for ticker, rank_pct in zip(tickers_list, ranks):
+    for ticker, rank_pct in zip(tickers_list, ranks, strict=False):
         for tier in tiers:
             if tier.adv_percentile_low <= rank_pct <= tier.adv_percentile_high:
                 result[ticker] = tier.name
@@ -411,7 +411,7 @@ def apply_tiered_cost(
         )
 
     net = gross.copy().reset_index(drop=True)
-    for i, (top_n_list, ts) in enumerate(zip(daily_top_n_tickers, daily_dates)):
+    for i, (top_n_list, ts) in enumerate(zip(daily_top_n_tickers, daily_dates, strict=False)):
         tickers = list(top_n_list)
         n = len(tickers)
         if n == 0:

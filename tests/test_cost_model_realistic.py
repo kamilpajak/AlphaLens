@@ -161,7 +161,7 @@ class TestCalibrateK(unittest.TestCase):
             model.secondary_market_impact_bps(
                 trade_size=s, adv=a, annual_vol=v, horizon_days=horizon
             )
-            for s, a, v in zip(trade_sizes, advs, vols)
+            for s, a, v in zip(trade_sizes, advs, vols, strict=False)
         ]
 
         fitted = calibrate_k(
@@ -196,7 +196,7 @@ class TestCalibrateK(unittest.TestCase):
         vols = [0.3, 0.3, 0.3]
         obs = [
             model.secondary_market_impact_bps(trade_size=s, adv=a, annual_vol=v, horizon_days=21)
-            for s, a, v in zip(sizes, advs, vols)
+            for s, a, v in zip(sizes, advs, vols, strict=False)
         ]
 
         fitted = calibrate_k(

@@ -47,7 +47,7 @@ def main() -> None:
     print(f"Curated universe: {len(curated)} tickers")
 
     print("Loading Lean CSV histories…")
-    histories = load_lean_histories(DATA_DIR, curated + [BENCHMARK])
+    histories = load_lean_histories(DATA_DIR, [*curated, BENCHMARK])
     store = HistoryStore(histories)
     print(f"  loaded {len(store.tickers())} tickers")
 

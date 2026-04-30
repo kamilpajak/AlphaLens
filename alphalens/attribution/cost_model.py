@@ -200,7 +200,7 @@ def calibrate_k(
 
     xs: list[float] = []
     ys: list[float] = []
-    for y, size, adv, vol in zip(realized_impact_bps, trade_sizes, advs, annual_vols):
+    for y, size, adv, vol in zip(realized_impact_bps, trade_sizes, advs, annual_vols, strict=False):
         if adv <= 0 or size <= 0:
             continue
         x = math.sqrt(size / adv) * vol * math.sqrt(horizon_days / 252.0) * 10_000.0

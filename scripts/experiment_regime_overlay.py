@@ -85,7 +85,7 @@ def assess_overlay(
 
     cm = RealisticCostModel(adverse_selection_bps=5.0)
     drag_per = cm.primary_period_drag_bps(cost_half_spread_bps, avg_turnover) / 10_000.0
-    drag_ann = drag_per * rebalances_per_year
+    drag_per * rebalances_per_year
     # Conditional drag: only when in regime (turnover only happens those days)
     conditional_drag_per = drag_per * pct_in_regime
     conditional_drag_ann = conditional_drag_per * rebalances_per_year

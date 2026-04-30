@@ -237,7 +237,7 @@ class TestAggregateCarByItem(unittest.TestCase):
 
         summary = aggregate_car_by_item(records)
 
-        verdict_map = dict(zip(summary["item"], summary["verdict"]))
+        verdict_map = dict(zip(summary["item"], summary["verdict"], strict=False))
         self.assertEqual(verdict_map["strong"], "PROCEED")  # mean ~120 bps, tight std, high t
         self.assertEqual(verdict_map["weak"], "KILL")  # mean ~20 bps < 50 bps floor
         self.assertEqual(verdict_map["middle"], "GRAY")  # 60 bps: below 80 bps PROCEED floor
@@ -347,7 +347,7 @@ class TestRobustStatistics(unittest.TestCase):
 
         summary = aggregate_car_by_item(pd.concat([clean, noisy], ignore_index=True))
 
-        verdict = dict(zip(summary["item"], summary["verdict"]))
+        verdict = dict(zip(summary["item"], summary["verdict"], strict=False))
         # Clean signal gets PROCEED
         self.assertEqual(verdict["clean"], "PROCEED")
         # Noisy outlier-driven signal must NOT get PROCEED despite high mean

@@ -94,7 +94,7 @@ class TestFDR(unittest.TestCase):
         bonferroni = [min(1.0, p * len(pvals)) for p in pvals]
 
         # FDR p-values should be ≤ Bonferroni p-values (at least not larger)
-        for f, b in zip(adjusted, bonferroni):
+        for f, b in zip(adjusted, bonferroni, strict=False):
             self.assertLessEqual(f, b + 1e-9)
 
     def test_fdr_empty_list(self):

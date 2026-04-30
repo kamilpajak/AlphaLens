@@ -80,7 +80,7 @@ def main() -> None:
 
     print("Loading returns panel…")
     dates = pd.date_range(START, END, freq="B")
-    hist = load_lean_histories(DATA_DIR, tickers + ["SPY"])
+    hist = load_lean_histories(DATA_DIR, [*tickers, "SPY"])
     store = HistoryStore(hist)
     close_panel = pd.DataFrame(index=dates, columns=tickers, dtype=float)
     for t in tickers:

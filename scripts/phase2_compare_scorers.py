@@ -59,7 +59,7 @@ def _load_store_and_tickers() -> tuple[HistoryStore, list[str], dict[str, list[s
     universe = yaml.safe_load(UNIVERSE_PATH.read_text())
     themes_map = flatten_universe(universe)
     curated = sorted(themes_map.keys())
-    histories = load_lean_histories(LEAN_DATA, curated + ["SPY", "IWM"])
+    histories = load_lean_histories(LEAN_DATA, [*curated, "SPY", "IWM"])
     store = HistoryStore(histories)
     return store, curated, themes_map
 
@@ -343,8 +343,7 @@ def main() -> None:
     )
 
     # Experiment 6 — hybrid? (run if metrics are promising)
-    hybrid_run = None
-    mom_sharpe = run_mom.metrics.get("sharpe_gross", 0)
+    run_mom.metrics.get("sharpe_gross", 0)
     early_sharpe = run_early.metrics.get("sharpe_gross", 0)
     overlap_mean = overlap.mean()
     dist_diff = mom_feat["dist_from_52w_high_mean"] - early_feat["dist_from_52w_high_mean"]

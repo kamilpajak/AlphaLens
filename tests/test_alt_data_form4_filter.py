@@ -6,26 +6,26 @@ from decimal import Decimal
 def _record(**overrides):
     from alphalens.data.alt_data.form4_records import Form4Record
 
-    defaults = dict(
-        issuer_cik="0000320193",
-        ticker="AAPL",
-        accession_number="0000320193-25-000001",
-        filing_date=date(2025, 3, 17),
-        reporting_owner_cik="0001111111",
-        reporting_owner_name="Jane Doe",
-        is_director=False,
-        is_officer=True,
-        is_ten_percent_owner=False,
-        is_other=False,
-        officer_title="CEO",
-        transaction_date=date(2025, 3, 15),
-        transaction_code="P",
-        transaction_shares=Decimal("1000"),
-        transaction_price_per_share=Decimal("150.25"),
-        acquired_disposed="A",
-        is_amendment=False,
-        footnotes=(),
-    )
+    defaults = {
+        "issuer_cik": "0000320193",
+        "ticker": "AAPL",
+        "accession_number": "0000320193-25-000001",
+        "filing_date": date(2025, 3, 17),
+        "reporting_owner_cik": "0001111111",
+        "reporting_owner_name": "Jane Doe",
+        "is_director": False,
+        "is_officer": True,
+        "is_ten_percent_owner": False,
+        "is_other": False,
+        "officer_title": "CEO",
+        "transaction_date": date(2025, 3, 15),
+        "transaction_code": "P",
+        "transaction_shares": Decimal("1000"),
+        "transaction_price_per_share": Decimal("150.25"),
+        "acquired_disposed": "A",
+        "is_amendment": False,
+        "footnotes": (),
+    }
     defaults.update(overrides)
     return Form4Record(**defaults)
 

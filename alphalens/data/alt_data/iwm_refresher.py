@@ -82,7 +82,7 @@ def parse_ishares_csv(csv_text: str) -> list[str]:
             continue
         if not row or all(not cell.strip() for cell in row):
             continue
-        ticker = _extract_equity_ticker(dict(zip(header_cols, row)))
+        ticker = _extract_equity_ticker(dict(zip(header_cols, row, strict=False)))
         if ticker is None or ticker in seen:
             continue
         seen.add(ticker)

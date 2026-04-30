@@ -183,7 +183,7 @@ class TestScoringDesign(unittest.TestCase):
         df = insider_scorer_adapter(histories, {"_insider_store": store})
 
         # Sorted by score (= insider_count) descending: B(5), C(4), A(3).
-        scores = dict(zip(df["ticker"], df["score"]))
+        scores = dict(zip(df["ticker"], df["score"], strict=False))
         self.assertEqual(scores["B"], 5.0)
         self.assertEqual(scores["C"], 4.0)
         self.assertEqual(scores["A"], 3.0)

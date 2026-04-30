@@ -123,7 +123,7 @@ def main() -> None:
         print(f"  date range: {congress['date'].min().date()} → {congress['date'].max().date()}")
 
     print("\nLoading Lean CSV histories for returns…")
-    hist = load_lean_histories(DATA_DIR, tickers + ["SPY"])
+    hist = load_lean_histories(DATA_DIR, [*tickers, "SPY"])
     store = HistoryStore(hist)
 
     # Build daily close-to-close returns panel

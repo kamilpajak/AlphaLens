@@ -58,7 +58,7 @@ AI_WHITELIST_KEYWORDS = ["robot", "artificial intel", "machine learn", "autonom"
 AI_EXCLUDES = ["ishares", "etf", "fund"]
 
 
-def should_fetch(ticker: str, theme: str, name: str, confidence: str) -> bool:
+def should_fetch(ticker: str, theme: str, name: str, confidence: str) -> bool:  # noqa: PLR0911 — theme dispatch table has one early-return per theme branch
     n = name.lower()
     if theme == "biotech":
         # Accept high/medium SIC matches unconditionally, low only if name keyword
@@ -73,9 +73,7 @@ def should_fetch(ticker: str, theme: str, name: str, confidence: str) -> bool:
         if any(ex in n for ex in AI_EXCLUDES):
             return False
         return any(kw in n for kw in AI_WHITELIST_KEYWORDS) or confidence == "high"
-    if theme == "quantum":
-        return True
-    return False
+    return theme == "quantum"
 
 
 def delisted_or_end(iso: str | None) -> str:

@@ -136,7 +136,9 @@ class GuruScorer:
         except json.JSONDecodeError:
             match = re.search(r"\{[^{}]*\"conviction\"[^{}]*\}", content, re.DOTALL)
             if not match:
-                raise ScorerError(f"cannot parse conviction JSON from response: {content[:200]}")
+                raise ScorerError(
+                    f"cannot parse conviction JSON from response: {content[:200]}"
+                ) from None
             try:
                 parsed = json.loads(match.group(0))
             except json.JSONDecodeError as exc:

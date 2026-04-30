@@ -32,7 +32,7 @@ def _long_history(n: int, start_price: float, drift: float = 0.0):
     """Generate `n` trading-day-esque bars starting 2024-01-01, advancing by weekdays."""
     dates = pd.bdate_range(start="2024-01-01", periods=n)
     prices = start_price * np.exp(np.cumsum(np.full(n, drift)))
-    return [_mk_bar(d.strftime("%Y%m%d"), float(p)) for d, p in zip(dates, prices)]
+    return [_mk_bar(d.strftime("%Y%m%d"), float(p)) for d, p in zip(dates, prices, strict=False)]
 
 
 class TestBacktestEngineBasic(unittest.TestCase):
@@ -189,7 +189,10 @@ class TestBacktestEngineBasic(unittest.TestCase):
                 "A": _long_history(50, 100.0),
             },
         )
-        impossible_scorer = lambda h, c: pd.DataFrame([{"ticker": "A", "score": 1.0}])
+
+        def impossible_scorer(h, c):
+            return pd.DataFrame([{"ticker": "A", "score": 1.0}])
+
         impossible_scorer.MIN_BARS_REQUIRED = 1000  # impossible minimum
         engine = BacktestEngine(
             store,

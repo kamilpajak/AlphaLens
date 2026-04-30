@@ -155,7 +155,7 @@ def main() -> None:
 
     # Sanity check: known high-profile delistings
     print("\n=== Sanity check — known high-profile delistings ===")
-    for ticker, expected_name, expected_theme, note in KNOWN_DELISTINGS:
+    for ticker, _expected_name, expected_theme, note in KNOWN_DELISTINGS:
         df = CACHE_DIR / f"details_{ticker}.json"
         if df.exists():
             d = json.loads(df.read_text())

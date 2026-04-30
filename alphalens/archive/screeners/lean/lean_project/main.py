@@ -13,6 +13,7 @@ dependency-free so they can be unit-tested on the host identically.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -82,10 +83,8 @@ def _atomic_write_json(path: str, payload: dict) -> None:
             json.dump(payload, fh, indent=2, default=str)
         os.replace(tmp_path, target)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise
 
 

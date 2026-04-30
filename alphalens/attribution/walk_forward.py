@@ -441,7 +441,8 @@ def summarize_distribution(
     ic_ts = np.array([r.ic_tstat for r in results], dtype=float)
     turnovers = np.array([r.turnover for r in results], dtype=float)
 
-    fraction_gt = lambda arr, thr: float((arr > thr).mean()) if len(arr) else 0.0
+    def fraction_gt(arr, thr):
+        return float((arr > thr).mean()) if len(arr) else 0.0
 
     # Dark-half detection
     longest_neg, neg_start = _longest_negative_stretch([r.sharpe_gross for r in results])
