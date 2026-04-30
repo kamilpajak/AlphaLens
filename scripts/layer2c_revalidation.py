@@ -67,7 +67,7 @@ BENCHMARK = "SPY"
 
 REPORT_PATH = REPO_ROOT / "docs/backtest/layer2c_revalidation.md"
 WF_CSV_PATH = REPO_ROOT / "docs/backtest/layer2c_revalidation_walkforward.csv"
-DELISTED_YAML = REPO_ROOT / "alphalens/screeners/lean/lean_project/delisted_universe.yaml"
+DELISTED_YAML = REPO_ROOT / "alphalens/archive/screeners/lean/lean_project/delisted_universe.yaml"
 
 
 def run_phase(
@@ -377,7 +377,7 @@ def write_report(
     lines.append("Per ADR-0005 the layer remains `ARCHIVED` independently of this run's")
     lines.append("outcome — the project pivoted away from active alpha generation 2026-04-25.")
     lines.append("Companion file paths are linked from")
-    lines.append("`alphalens/screeners/lean/__init__.py::__closed_evidence__`.")
+    lines.append("`alphalens/archive/screeners/lean/__init__.py::__closed_evidence__`.")
     lines.append("")
 
     path.parent.mkdir(parents=True, exist_ok=True)

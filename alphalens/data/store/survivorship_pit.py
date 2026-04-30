@@ -150,7 +150,7 @@ def load_delisting_events(
     Either source can be missing — the caller is responsible for knowing
     what window is covered. The parquet is produced by
     `scripts/backfill_delisted_2021_2024.py`; the YAML ships with the
-    repo at `alphalens/screeners/lean/lean_project/delisted_universe.yaml`.
+    repo at `alphalens/archive/screeners/lean/lean_project/delisted_universe.yaml`.
 
     On collision (same ticker+date), parquet wins (carries the better reason).
     """

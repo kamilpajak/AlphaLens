@@ -22,8 +22,8 @@ insider_app = typer.Typer(
 )
 
 
-_DEFAULT_IWM_PATH = Path("alphalens/alt_data/data/iwm_current.yaml")
-_DEFAULT_CIK_MAP_PATH = Path("alphalens/alt_data/data/ticker_cik_map.yaml")
+_DEFAULT_IWM_PATH = Path("alphalens/data/alt_data/data/iwm_current.yaml")
+_DEFAULT_CIK_MAP_PATH = Path("alphalens/data/alt_data/data/ticker_cik_map.yaml")
 _DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "insider_form4"
 _DEFAULT_REPORT_DIR = Path.home() / ".alphalens" / "insider"
 

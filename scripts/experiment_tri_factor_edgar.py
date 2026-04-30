@@ -52,6 +52,7 @@ _COMPANYFACTS_DIR = Path.home() / ".alphalens" / "companyfacts"
 _TICKER_CIK_MAP_PATH = (
     Path(__file__).resolve().parent.parent
     / "alphalens"
+    / "data"
     / "alt_data"
     / "data"
     / "ticker_cik_map.yaml"

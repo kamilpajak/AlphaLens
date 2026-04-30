@@ -15,7 +15,7 @@ Universe: PIT R2000-like; ADV ≥ threshold; weekly stride; 5/15 bps cost
 stress. Same gate as `experiment_constrained_momentum.py`.
 
 Reads ``~/.alphalens/companyfacts/{CIK}.json`` (raw SEC bulk dump). Resolves
-ticker → CIK via ``alphalens/alt_data/data/ticker_cik_map.yaml``.
+ticker → CIK via ``alphalens/data/alt_data/data/ticker_cik_map.yaml``.
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ _COMPANYFACTS_DIR = Path.home() / ".alphalens" / "companyfacts"
 _TICKER_CIK_MAP_PATH = (
     Path(__file__).resolve().parent.parent
     / "alphalens"
+    / "data"
     / "alt_data"
     / "data"
     / "ticker_cik_map.yaml"

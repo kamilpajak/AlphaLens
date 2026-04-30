@@ -58,8 +58,8 @@ _COMPANYFACTS_DIR = _ROOT / "companyfacts"
 _PRICES_DIR = _ROOT / "prices"
 _SNAPSHOTS_DIR = _ROOT / "pit_universe"
 
-_DEFAULT_TICKER_CIK = Path("alphalens/alt_data/data/ticker_cik_map.yaml")
-_DEFAULT_IWM = Path("alphalens/alt_data/data/iwm_current.yaml")
+_DEFAULT_TICKER_CIK = Path("alphalens/data/alt_data/data/ticker_cik_map.yaml")
+_DEFAULT_IWM = Path("alphalens/data/alt_data/data/iwm_current.yaml")
 
 
 def _load_cached_facts(cik: str) -> list[SharesFact] | None:

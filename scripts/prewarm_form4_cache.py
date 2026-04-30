@@ -54,7 +54,7 @@ from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 logger = logging.getLogger(__name__)
 
 _PIT_DIR = Path.home() / ".alphalens" / "pit_universe"
-_CIK_MAP_PATH = Path("alphalens/alt_data/data/ticker_cik_map.yaml")
+_CIK_MAP_PATH = Path("alphalens/data/alt_data/data/ticker_cik_map.yaml")
 _CACHE_DIR = Path.home() / ".alphalens" / "insider_form4"
 
 

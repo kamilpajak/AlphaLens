@@ -3,7 +3,7 @@
 Operates downstream of any AlphaLens Scorer + BacktestEngine — takes the
 realized portfolio-returns Series and rescales it via a sizing rule that
 sees only past-and-current returns (no look-ahead). Sibling to
-``alphalens/regime_gate/``: gate modifies *selection*, overlay modifies
+``alphalens/gates/``: gate modifies *selection*, overlay modifies
 *size*.
 
 Concrete sizing rules live in their own modules. The package exports the
