@@ -20,7 +20,12 @@ import pandas as pd
 
 
 def _returns(values: list[float], start: str = "2020-01-06") -> pd.Series:
-    """Weekly business-day Series — one return per period (= one rebalance)."""
+    """Weekly Series — one return per period (= one rebalance).
+
+    `freq="W-MON"` anchors each period at calendar Monday (good enough for
+    test fixtures; a real backtest's portfolio_returns index would track
+    the engine's actual rebalance grid).
+    """
     idx = pd.date_range(start=start, periods=len(values), freq="W-MON")
     return pd.Series(values, index=idx, name="portfolio")
 
@@ -133,6 +138,52 @@ class VolTargetScalingTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             VolTargeter(target_vol=0.10, lookback=1, periods_per_year=52)
+
+    def test_nan_in_returns_yields_neutral_scale_not_propagation(self):
+        """A NaN entry in the returns history must not produce a NaN scale.
+
+        NaN propagation through `np.std` would silently corrupt every
+        downstream point that depends on the NaN-containing window. The
+        contract: if the realised-vol estimator can't produce a finite
+        positive number (e.g. because the window contains NaN), the
+        wrapper falls back to scale=1.0 (identity)."""
+        from alphalens.risk_overlay import VolTargeter, apply_vol_target
+
+        rets = _returns([0.01, -0.01, float("nan"), 0.01, -0.01, 0.05, -0.05, 0.05])
+        targeter = VolTargeter(target_vol=0.10, lookback=5, periods_per_year=52)
+
+        scaled = apply_vol_target(rets, targeter)
+
+        # Indices where input is finite: scaled output must also be finite.
+        # NaN scales would silently corrupt downstream cost/Sharpe math.
+        finite_input_mask = rets.notna()
+        finite_scaled = scaled[finite_input_mask]
+        self.assertTrue(
+            finite_scaled.notna().all(),
+            f"NaN propagated to scaled returns: {scaled.tolist()}",
+        )
+
+    def test_zero_realized_vol_logs_warning_not_silent_one(self):
+        """Distinguish "insufficient history" (scale=1.0 silently) from
+        "realized vol is exactly zero" (scale=1.0 with a warning) — the
+        latter is a degenerate state worth flagging in research logs."""
+        import logging
+
+        from alphalens.risk_overlay import VolTargeter, apply_vol_target
+
+        # Constant returns → realized std = 0 → degenerate.
+        rets = _returns([0.005] * 8)
+        targeter = VolTargeter(target_vol=0.10, lookback=5, periods_per_year=52)
+
+        with self.assertLogs("alphalens.risk_overlay.vol_target", level=logging.WARNING) as cm:
+            scaled = apply_vol_target(rets, targeter)
+
+        # All scales = 1.0 (fallback), no NaN propagation.
+        self.assertTrue(((scaled / rets).iloc[5:] == 1.0).all())
+        # And at least one warning logged for the zero-vol degenerate state.
+        self.assertTrue(
+            any("zero" in line.lower() or "degenerate" in line.lower() for line in cm.output)
+        )
 
 
 class RiskOverlayPackageStatusTest(unittest.TestCase):

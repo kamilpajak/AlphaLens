@@ -6,16 +6,25 @@ A ``max_leverage`` cap prevents the multiplier from blowing up when
 realized vol approaches zero.
 
 Causality contract: ``scale[t]`` is computed from ``returns[< t]`` only.
-This is enforced by ``_RollingStdEstimator.estimate``, which slices on
-``index < asof`` (strict) before aggregating. Tests guard the contract.
+``scale_series`` enforces this with ``returns.rolling(L).std().shift(1)``
+— the rolling window ending at ``t-1`` is the realised-vol estimate that
+sets ``scale[t]``. Tests guard the contract directly.
+
+Defensive fallbacks (all yield ``scale = 1.0`` = neutral identity scaling):
+  - insufficient history (warmup periods)
+  - NaN inside the rolling window (corrupt input)
+  - realised vol exactly zero (degenerate state — logged at WARNING)
 """
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Protocol, runtime_checkable
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -41,7 +50,10 @@ class _RollingStdEstimator:
         if len(history) < self.lookback:
             return None
         window = history.iloc[-self.lookback :]
-        return float(window.std(ddof=1) * math.sqrt(self.periods_per_year))
+        std = float(window.std(ddof=1) * math.sqrt(self.periods_per_year))
+        if math.isnan(std):
+            return None
+        return std
 
 
 class VolTargeter:
@@ -81,21 +93,61 @@ class VolTargeter:
         self._estimator = _RollingStdEstimator(lookback, periods_per_year)
 
     def scale_factor(self, returns: pd.Series, asof: pd.Timestamp) -> float:
+        """Compute one scale factor (single ``asof``) — convenience for
+        programmatic callers. Hot path is ``scale_series`` which is O(N)
+        via vectorised rolling. Both honour the same fallback contract."""
         rv = self._estimator.estimate(returns, asof)
-        if rv is None or rv <= 0:
+        if rv is None or math.isnan(rv) or rv <= 0:
+            if rv == 0.0:
+                logger.warning(
+                    "vol_target.scale_factor: realised vol is exactly zero at "
+                    "asof=%s — degenerate state, falling back to scale=1.0",
+                    asof,
+                )
             return 1.0
         raw = self.target_vol / rv
         return min(raw, self.max_leverage)
 
     def scale_series(self, returns: pd.Series) -> pd.Series:
-        """Per-period scale factors aligned to ``returns.index``."""
+        """Vectorised per-period scale factors aligned to ``returns.index``.
+
+        Computes ``rolling(lookback).std().shift(1)`` once and derives the
+        per-period multiplier from that, rather than re-slicing history at
+        every timestamp. Honours the same fallback contract as
+        ``scale_factor``: insufficient history, NaN windows, and zero
+        realised vol all yield 1.0; the zero-vol case logs a WARNING."""
         if returns.empty:
             return pd.Series([], dtype=float, index=returns.index, name="scale")
-        return pd.Series(
-            [self.scale_factor(returns, ts) for ts in returns.index],
-            index=returns.index,
-            name="scale",
-        )
+
+        L = self._estimator.lookback
+        ppy = self._estimator.periods_per_year
+        # Rolling std of the strategy's own returns; default min_periods=L
+        # yields NaN for the first L-1 points (warmup) and for any window
+        # that contains a NaN return (corrupt input).
+        rv_unshifted = returns.rolling(L).std(ddof=1) * math.sqrt(ppy)
+        # Strict less-than: scale[t] uses returns[<t], so shift the rolling
+        # estimate forward by one period.
+        rv = rv_unshifted.shift(1)
+
+        # Distinguish degenerate zero-vol from missing/insufficient history.
+        # NaN in rv covers (a) warmup, (b) NaN inside the window. Both
+        # collapse silently to scale=1.0 below. Zero-vol is a separate
+        # degenerate state worth logging.
+        zero_vol_mask = rv == 0.0
+        if zero_vol_mask.any():
+            logger.warning(
+                "vol_target.scale_series: realised vol is exactly zero at %d "
+                "timestamps — degenerate state, falling back to scale=1.0 "
+                "(not amplifying the zero-variance window)",
+                int(zero_vol_mask.sum()),
+            )
+
+        # Avoid div-by-zero by routing zero-vol through NaN, which is then
+        # filled by the final `fillna(1.0)`.
+        rv_safe = rv.where(rv > 0)
+        raw = self.target_vol / rv_safe
+        scaled = raw.clip(upper=self.max_leverage)
+        return scaled.fillna(1.0).rename("scale")
 
 
 def apply_vol_target(returns: pd.Series, targeter: VolTargeter) -> pd.Series:
