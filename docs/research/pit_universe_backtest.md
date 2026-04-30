@@ -123,7 +123,7 @@ Phase 2 OOS claim (α t=1.70) **half-inflated**:
 
 ## Artifacts
 
-- `alphalens/screeners/themed/universe_pit_95.yaml` — 95-ticker PIT universe
+- `alphalens/archive/screeners/themed/universe_pit_95.yaml` — 95-ticker PIT universe
 - `docs/backtest/pit95_early_stage_{5d,60d}.csv` — PIT-95 daily
 - `docs/backtest/pit95_bk_aug_early_stage_{5d,60d}.csv` — PIT-95 + bankruptcy daily
 - `/tmp/alphalens_issue18/phase3_pit_backtest.py` — PIT-95 compute

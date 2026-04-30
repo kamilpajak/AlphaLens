@@ -132,7 +132,7 @@
 2. Dla pre-2021 tickers (added in initial commit): check czy ticker IPO'd przed 2021 (SimFin SimFinId ma IPO date? Albo Polygon `/v3/reference/tickers/{ticker}?date=2021-04-19` aby zobaczyć czy existed)
 3. Build point-in-time universe: for each backtest date, use only tickers known/available na tę datę
 
-**Output:** `alphalens/screeners/themed/universe_pit.yaml` (with per-ticker `earliest_date` field)
+**Output:** `alphalens/archive/screeners/themed/universe_pit.yaml` (with per-ticker `earliest_date` field)
 
 ### 3B. Add delisted tickers per Phase 1A classification
 
@@ -282,7 +282,7 @@ Rozsmarowane na sesje (solo dev, bez SLA):
 - `docs/research/delisted_classification.md` (Phase 1A)
 - `docs/research/multiple_testing_audit_2026-04.md` (Phase 1B)
 - `docs/research/walk_forward_oos_validation.md` (Phase 2)
-- `alphalens/screeners/themed/universe_pit.yaml` (Phase 3)
+- `alphalens/archive/screeners/themed/universe_pit.yaml` (Phase 3)
 - `docs/research/pit_universe_backtest.md` (Phase 3)
 - `docs/research/liquidity_audit.md` (Phase 4A)
 - `docs/research/realistic_cost_backtest.md` (Phase 4B)

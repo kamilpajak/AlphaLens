@@ -13,7 +13,7 @@ Research lab infrastructure for retail active alpha experimentation — combines
 
 The project pivoted from "active alpha generation" to **research / learning infrastructure** after [9 paradigm failures](docs/research/paradigm_failures_postmortem.md) (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum, all phase-robust FAIL). Capital deployment based on the current strategies is **off the table** until a phase-robust PASS appears; the screener search itself stays open-ended under pre-registration discipline. The codebase remains as:
 
-- **Reusable research framework** — backtest engine, factor attribution, sanity checks, multiple-testing corrections, regime classifier, **time-series sizing overlays (`alphalens/risk_overlay/`, vol-targeting per Moreira-Muir 2017)**, cost models, weighting schemes; layer architecture in [ADR 0007](docs/adr/0007-layer-architecture.md)
+- **Reusable research framework** — backtest engine, factor attribution, sanity checks, multiple-testing corrections, regime classifier, **time-series sizing overlays (`alphalens/overlays/`, vol-targeting per Moreira-Muir 2017)**, cost models, weighting schemes; layer architecture in [ADR 0007](docs/adr/0007-layer-architecture.md)
 - **Production-grade data clients** — Polygon, FRED, SEC EDGAR
 - **LLM scoring infrastructure** — TradingAgents multi-agent + GuruScorer single-prompt
 - **Anti-pattern catalog** — every closed strategy ships a `__closed_reason__` marker plus a postmortem entry
@@ -35,16 +35,16 @@ Each layer/screener package declares its lifecycle in `__init__.py` as `__status
 |------|--------|-------|
 | `alphalens/watchdog/` | ACTIVE | Layer 1 — live in launchd (`detect` + `worker`) |
 | `alphalens/backtest/` | ACTIVE | Screener-agnostic harness, reused across all replay |
-| `alphalens/screeners/themed/` | CLOSED 2026-04-22 | Layer 2b — momentum overfit OOS, realistic execution cost ~100% ann eats signal |
-| `alphalens/screeners/lean/` | ARCHIVED 2026-04-19 | Layer 2c — Sharpe 0.25 net, FF3 α t-stat 0.14 |
-| `alphalens/screeners/insider/` | CLOSED 2026-04-24 | Layer 2d — Carhart t=2.14 IS → 0.68 OOS, classic overfit |
+| `alphalens/archive/screeners/themed/` | CLOSED 2026-04-22 | Layer 2b — momentum overfit OOS, realistic execution cost ~100% ann eats signal |
+| `alphalens/archive/screeners/lean/` | ARCHIVED 2026-04-19 | Layer 2c — Sharpe 0.25 net, FF3 α t-stat 0.14 |
+| `alphalens/archive/screeners/insider/` | CLOSED 2026-04-24 | Layer 2d — Carhart t=2.14 IS → 0.68 OOS, classic overfit |
 | `alphalens/screeners/prescreener/` | RESEARCH_ONLY | Layer 2a — unvalidated, manual ad-hoc only |
-| `alphalens/rotation/` | CLOSED | Layer 2e — failed IS+OOS sanity (R12 macro overlay) |
-| `alphalens/events/` | CLOSED | Layer 2f — 8-K event-driven screen failed |
-| `alphalens/guru/` | CLOSED | Layer 2g — LLM-researcher pilot failed |
-| `alphalens/macro/` | RESEARCH_ONLY | Reusable infra (FRED client, regime scorer) |
-| `alphalens/regime_gate/` | RESEARCH_ONLY | Layer 2 selection-gate wrapper (rescue attempt failed Phase 1 2026-04-29) |
-| `alphalens/risk_overlay/` | RESEARCH_ONLY | Layer 4 time-series sizing overlay (vol-targeting, Moreira-Muir 2017) |
+| `alphalens/archive/rotation/` | CLOSED | Layer 2e — failed IS+OOS sanity (R12 macro overlay) |
+| `alphalens/archive/events/` | CLOSED | Layer 2f — 8-K event-driven screen failed |
+| `alphalens/archive/guru/` | CLOSED | Layer 2g — LLM-researcher pilot failed |
+| `alphalens/data/macro/` | RESEARCH_ONLY | Reusable infra (FRED client, regime scorer) |
+| `alphalens/gates/` | RESEARCH_ONLY | Layer 2 selection-gate wrapper (rescue attempt failed Phase 1 2026-04-29) |
+| `alphalens/overlays/` | RESEARCH_ONLY | Layer 4 time-series sizing overlay (vol-targeting, Moreira-Muir 2017) |
 
 CLOSED-layer code is retained as a research framework + anti-pattern record (see [ADR 0005](docs/adr/0005-closed-layers-as-anti-pattern-catalog.md)).
 
@@ -173,11 +173,11 @@ Full architecture detail and key abstractions: [`CLAUDE.md`](CLAUDE.md). Mermaid
 
 ## Configuration
 
-**LLM**: `alphalens/config_gemini.py::build_gemini_config()` is the single source of truth. Override returned dict for non-Gemini providers.
+**LLM**: `alphalens/core/config_gemini.py::build_gemini_config()` is the single source of truth. Override returned dict for non-Gemini providers.
 
 **Data vendors**: `core_stock_apis` + `technical_indicators` use yfinance (free); `fundamental_data` + `news_data` use Alpha Vantage.
 
-**Themed universe** (Layer 2b — closed): `alphalens/screeners/themed/universe.yaml`. Quarterly refresh runbook: [`docs/runbook_layer2b_refresh.md`](docs/runbook_layer2b_refresh.md).
+**Themed universe** (Layer 2b — closed): `alphalens/archive/screeners/themed/universe.yaml`. Quarterly refresh runbook: [`docs/runbook_layer2b_refresh.md`](docs/runbook_layer2b_refresh.md).
 
 **Portfolio**: `~/.alphalens/watchdog/portfolio.yaml`.
 

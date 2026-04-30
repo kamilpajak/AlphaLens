@@ -23,14 +23,14 @@ Each gate is named, has a reusable implementation in this repo, and a documented
 ### 1. `carhart_4f_hac` — Carhart-4F regression with Newey-West HAC
 
 - **Measures:** Whether residual α survives once market, size, value, and momentum factors are stripped out.
-- **Implementation:** `alphalens/backtest/factor_analysis.py::run_carhart_attribution` returns `[CAPM, FF3, Carhart-4F]` `AlphaResult`s with HAC-adjusted t-stats. Lag = `int(4·(n/100)^(2/9))`.
+- **Implementation:** `alphalens/attribution/factor_analysis.py::run_carhart_attribution` returns `[CAPM, FF3, Carhart-4F]` `AlphaResult`s with HAC-adjusted t-stats. Lag = `int(4·(n/100)^(2/9))`.
 - **Acceptance:** OOS `alpha_tstat > 2.0` and `alpha_annualized > 0` (one-tailed positive). Both IS and OOS must be reported; degradation IS → OOS is a strong signal.
 - **Anti-pattern:** AP-1 (overfit alpha) — a layer whose IS t-stat collapses by ≥3× OOS belongs in this column.
 
 ### 2. `sanity_checks_4gate` — `alphalens.archive.rotation.sanity_checks` 4-gate
 
 - **Measures:** Whether a strategy with a passive overlay actually adds value vs holding the passive benchmark unmodified.
-- **Implementation:** `alphalens/rotation/sanity_checks.py` exposes four gates:
+- **Implementation:** `alphalens/archive/rotation/sanity_checks.py` exposes four gates:
   - `check_passive_correlation` — kills if strategy↔passive correlation ≥ 0.95
   - `check_rolling_sharpe_stability` — kills if worst 252d rolling Sharpe < 0.4
   - `check_per_regime_vs_passive` — kills if strategy underperforms passive in ≥2 of 3 regimes (bull/bear/flat)
@@ -41,7 +41,7 @@ Each gate is named, has a reusable implementation in this repo, and a documented
 ### 3. `walk_forward_oos` — Walk-forward 252-day windows, C1-C5 gates
 
 - **Measures:** Performance stability across rolling OOS windows; detects regime-specific gaming and momentum-crash exposure.
-- **Implementation:** `alphalens/backtest/walk_forward.py::run_walk_forward` builds 252-day test windows stepped 21 days, computes per-window metrics, and evaluates 5 decision gates:
+- **Implementation:** `alphalens/attribution/walk_forward.py::run_walk_forward` builds 252-day test windows stepped 21 days, computes per-window metrics, and evaluates 5 decision gates:
   - C1 Sharpe breadth: ≥ 70% of windows with Sharpe > 0.5
   - C2 Carhart α breadth: ≥ 50% of windows with α t > 1.5 HAC
   - C3 Block-return autocorr lag-1 < 0.5 (catches path-dependent gaming)
@@ -58,20 +58,20 @@ Each gate is named, has a reusable implementation in this repo, and a documented
 ### 5. `cost_drag` — Realistic per-trade cost simulation
 
 - **Measures:** What fraction of gross α survives realistic execution costs.
-- **Implementation:** `alphalens/backtest/cost_model.py::cost_sensitivity_table` reports Sharpe across gross / 75 bps / 100 bps / 150 bps annual drag profiles, scaled by realized turnover. For micro-cap or high-turnover strategies use `RealisticCostModel` with Almgren-Chriss impact (`k × sqrt(size/adv) × annual_vol × sqrt(horizon/252)`).
+- **Implementation:** `alphalens/attribution/cost_model.py::cost_sensitivity_table` reports Sharpe across gross / 75 bps / 100 bps / 150 bps annual drag profiles, scaled by realized turnover. For micro-cap or high-turnover strategies use `RealisticCostModel` with Almgren-Chriss impact (`k × sqrt(size/adv) × annual_vol × sqrt(horizon/252)`).
 - **Acceptance:** Net Sharpe (after moderate cost profile, turnover-scaled) remains > 0.5 and net α retains a meaningful fraction of gross α (rule of thumb: drag ratio < 50%).
 
 ### 6. `bootstrap_ci` — Moving-block bootstrap on annualized Carhart-4F α
 
 - **Measures:** Sampling uncertainty of the **residual α** (intercept after factor controls), without parametric distributional assumptions. CI is on annualized α, NOT on raw mean return — bootstrapping mean return answers a different question (raw profitability) than the headline α t-stat (factor-orthogonal edge).
-- **Canonical implementation:** `alphalens/backtest/factor_analysis.py::bootstrap_carhart_alpha_ci` — moving-block (Hall-Horowitz 1995, block = n^(1/3)), 10k iterations, OLS-fitted intercept per iteration, returned as `(ci_low_annualized, ci_high_annualized)`. Used by both `scripts/run_layer2d_backtest.py` and `scripts/layer2c_revalidation.py`.
-- **Variant for rotation strategies:** `alphalens/rotation/gates.py::gate_bootstrap_ci` operates on `OverlayBacktestResult.daily_returns_net` (raw mean return CI) — appropriate for overlay strategies where the gate-level question IS \"is the cumulative net return positive\". When in doubt about which to use, default to the Carhart-α version.
+- **Canonical implementation:** `alphalens/attribution/factor_analysis.py::bootstrap_carhart_alpha_ci` — moving-block (Hall-Horowitz 1995, block = n^(1/3)), 10k iterations, OLS-fitted intercept per iteration, returned as `(ci_low_annualized, ci_high_annualized)`. Used by both `scripts/run_layer2d_backtest.py` and `scripts/layer2c_revalidation.py`.
+- **Variant for rotation strategies:** `alphalens/archive/rotation/gates.py::gate_bootstrap_ci` operates on `OverlayBacktestResult.daily_returns_net` (raw mean return CI) — appropriate for overlay strategies where the gate-level question IS \"is the cumulative net return positive\". When in doubt about which to use, default to the Carhart-α version.
 - **Acceptance:** 95% CI lower bound > 0 (excludes zero). For strategies with structurally-negative-α (e.g., inverted-published-edge alt-data) the bound `upper_ci < 0` also counts as significant — but flips the verdict to *negative-alpha confirmed*, never to PASS.
 
 ### 7. `survivorship_pit` — Cohort split + delisting selection bias
 
 - **Measures:** Whether outperformance is driven by post-IPO cohort (backfit-to-hype) or by selecting names that subsequently delist (look-ahead).
-- **Implementation:** `alphalens/backtest/survivorship_pit.py`:
+- **Implementation:** `alphalens/data/store/survivorship_pit.py`:
   - C1 cohort split: `split_universe_by_ipo_cohort` + `run_cohort_backtests` — compares pre-existing vs post-IPO cohorts
   - C2 delisting bias: `compute_selection_bias` — Fisher exact on (picks delisting in window) vs (universe rate)
   - C3 wipeout audit: `audit_mid_holding_wipeout` — replay with mid-holding delistings as −100%

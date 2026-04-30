@@ -19,8 +19,8 @@ Two options:
    a lifecycle label, and treat the codebase as a learning artefact.
 
 Deleting would also delete the postmortem trail that lives in commits and
-adjacent test files. Reusable infrastructure (e.g. `alphalens/macro/` FRED
-client, `alphalens/rotation/sanity_checks.py`, screener-agnostic backtest
+adjacent test files. Reusable infrastructure (e.g. `alphalens/data/macro/` FRED
+client, `alphalens/archive/rotation/sanity_checks.py`, screener-agnostic backtest
 harness) is interleaved with paradigm-specific code in those packages.
 
 ## Decision

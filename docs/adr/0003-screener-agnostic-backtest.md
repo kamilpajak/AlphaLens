@@ -51,6 +51,6 @@ exemption is `backtest/historical_validation.py`, flagged RESEARCH-ONLY.
 ## References
 
 - `CLAUDE.md` — "Generic backtest harness" section
-- `alphalens/backtest/engine.py`, `alphalens/backtest/history_store.py`
-- `alphalens/screeners/themed/backtest_adapter.py` (reference adapter)
+- `alphalens/backtest/engine.py`, `alphalens/data/store/history.py`
+- `alphalens/archive/screeners/themed/backtest_adapter.py` (reference adapter)
 - `tests/test_module_dependencies.py` (the enforcement)

@@ -4,7 +4,7 @@ The refreshed YAML is compatible with :class:`alphalens.data.alt_data.ticker_cik
 so a production workflow is::
 
     client = SecEdgarClient(user_agent="AlphaLens research@example.com")
-    refresh_ticker_cik_map(client, Path("alphalens/alt_data/data/ticker_cik_map.yaml"))
+    refresh_ticker_cik_map(client, Path("alphalens/data/alt_data/data/ticker_cik_map.yaml"))
     TickerCikMap.load(path).lookup("AAPL")  # → "0000320193"
 
 SEC publishes the mapping at ``/files/company_tickers.json`` as a dict keyed

@@ -8,7 +8,7 @@
 
 `tri_factor_combo.md` (earlier 2026-04-29) reported OOS 2023-2026 Sharpe net 1.04 with α t=2.08 — first config in the entire investigation to clear nominal t > 2.0. The IS for that result was constrained to **2 years (2021-2022)** by SimFin's data floor of 2020-Q2. Per Perplexity peer review, "2-year IS is approximately 30-40% of academic minimum acceptable standard. The strategy should not be advanced to forward validation without IS extension."
 
-This session: build PIT-correct EDGAR companyfacts ROE store (deliverable 1, see `alphalens/fundamentals/edgar_companyfacts.py` + 13 tests + 82.8% R2000-PIT coverage @ 2015-01-31), re-run tri-factor on **8-year IS (2015-2022)** with EDGAR-backed ROE, then split IS into 4y halves for stability check.
+This session: build PIT-correct EDGAR companyfacts ROE store (deliverable 1, see `alphalens/data/fundamentals/edgar_companyfacts.py` + 13 tests + 82.8% R2000-PIT coverage @ 2015-01-31), re-run tri-factor on **8-year IS (2015-2022)** with EDGAR-backed ROE, then split IS into 4y halves for stability check.
 
 ## Results
 

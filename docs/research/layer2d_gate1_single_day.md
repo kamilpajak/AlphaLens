@@ -57,7 +57,7 @@ Per plan file §GATE 1 decision rules: YELLOW → "Phase 3b uses top_n=15-20 (no
 - `~/.alphalens/insider/daily_2026-04-22.md` — raw 16-cluster report
 - `~/.alphalens/insider/scan_2026-04-22.log` — INFO-level pipeline progress
 - `~/.alphalens/insider/scan_2026-04-22.crashed.log`, `.crash2.log` — pre-fix diagnostic crashes (timezone date, disclaimer ticker — both fixed)
-- `alphalens/alt_data/data/iwm_current.yaml` — 1930 cleaned tickers (1933 pre-fix, 3 garbage purged)
+- `alphalens/data/alt_data/data/iwm_current.yaml` — 1930 cleaned tickers (1933 pre-fix, 3 garbage purged)
 
 ## Bugs uncovered during live smoke (both fixed + committed)
 

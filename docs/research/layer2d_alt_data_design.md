@@ -160,15 +160,15 @@ R5: no empirical insider × SI interaction literature for small-cap. Disciplined
 ## 10. Implementation plan
 
 ### Phase 1 — Data pipeline (est. 1 session, ~4h)
-- Finnhub API client w `alphalens/alt_data/finnhub_client.py` with rate limiting
-- Form 4 parse + cluster detection w `alphalens/screeners/insider/`
+- Finnhub API client w `alphalens/data/alt_data/finnhub_client.py` with rate limiting
+- Form 4 parse + cluster detection w `alphalens/archive/screeners/insider/`
 - Russell 2000 universe snapshot loader
 - PIT filing-date filtering
 
 ### Phase 2 — Backtest harness integration (est. 1 session)
 - New scorer `insider_cluster_scorer` conforming do `alphalens.backtest.engine.Scorer` signature
-- Adapter w `alphalens/screeners/insider/backtest_adapter.py`
-- Realistic cost model w `alphalens/backtest/cost_model.py` (upgrade from flat bps — Layer 2b lesson)
+- Adapter w `alphalens/archive/screeners/insider/backtest_adapter.py`
+- Realistic cost model w `alphalens/attribution/cost_model.py` (upgrade from flat bps — Layer 2b lesson)
 
 ### Phase 3 — Single-shot validation (est. 1-2 sessions)
 - In-sample tune (70% window) — MINIMAL iteration, prefer defaults from §6
@@ -178,7 +178,7 @@ R5: no empirical insider × SI interaction literature for small-cap. Disciplined
 
 ### Phase 4 — Decision (est. 0.5 session)
 - Apply §8 exit criteria
-- If PASS: write production pipeline w `alphalens/screeners/insider/pipeline.py`, register w `alphalens.core.registry.SCREENERS["insider"]`, priority 12 (between watchdog=0 and themed=10)
+- If PASS: write production pipeline w `alphalens/archive/screeners/insider/pipeline.py`, register w `alphalens.core.registry.SCREENERS["insider"]`, priority 12 (between watchdog=0 and themed=10)
 - If FAIL: close, write post-mortem, return do pivot decision
 
 ## 11. What this doc is NOT
