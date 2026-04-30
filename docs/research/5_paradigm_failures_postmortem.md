@@ -5,7 +5,30 @@
 **Status:** Project pivoted from "active alpha generation" to "research/learning infrastructure" 2026-04-25; Path B refined 2026-04-30 — **screener search stays open-ended under pre-registration discipline** (per `feedback_keep_searching_screeners.md`). Path B is "methodology bundle + Layer 1 watchdog stay live," NOT closure of the search.
 **Audience:** Future-self when re-evaluating active strategies; potentially other retail quants who stumble into similar territory
 
-> **Filename note:** still `5_paradigm_failures_postmortem.md` for backlink stability (README, ADRs, CLAUDE.md, MEMORY all reference it). The count has grown to eight; the URL hasn't.
+> **Filename note:** still `5_paradigm_failures_postmortem.md` for backlink stability (README, ADRs, CLAUDE.md, MEMORY all reference it). The count has grown to ten; the URL hasn't. Renamed in a follow-up commit alongside cross-reference updates.
+
+## Contents
+
+- [Executive summary](#executive-summary)
+- [Detailed failure timeline](#detailed-failure-timeline) (failures 1-5)
+  - Layer 2b themed (failure 1) — 2026-04-22
+  - Layer 2d insider (failure 2) — 2026-04-24
+  - Layer 2e rotation (failure 3) — 2026-04-24
+  - Layer 2f events (failure 4) — 2026-04-25
+  - Layer 2g guru (failure 5) — 2026-04-25
+- [Common failure patterns 1-6](#common-failure-patterns-lessons-learned)
+- [Reusable infrastructure inventory](#reusable-infrastructure-inventory)
+- [Conditions for project re-activation](#conditions-for-project-re-activation)
+- [Methodology principles](#methodology-principles-apply-to-next-idea-whenever-it-appears)
+- [Continuation 2026-04-25 → 2026-04-30](#continuation--post-pivot-research-2026-04-25--2026-04-29)
+  - Failure 6 — Tri-factor (2026-04-29)
+  - Failure 7 — Mom+lowvol combo (2026-04-29 PM)
+  - Failure 8 — Regime-gate rescue (2026-04-29)
+  - [Common patterns from failures 6-8](#common-patterns-from-failures-6-8)
+  - Failure 9 — Quality+momentum (2026-04-30)
+  - Failure 10 — Vol-target overlay (2026-04-30)
+  - [Common patterns from failures 9-10](#common-patterns-from-failures-9-10)
+- [Path B refined (2026-04-30)](#path-b-refined-2026-04-30)
 
 ## Executive summary
 
