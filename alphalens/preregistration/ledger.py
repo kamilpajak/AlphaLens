@@ -97,7 +97,7 @@ class Ledger:
     def _load(self) -> None:
         if not self.path.exists():
             return
-        payload = json.loads(self.path.read_text())
+        payload = json.loads(self.path.read_text(encoding="utf-8"))
         for entry in payload.get("entries", []):
             reg = Registration.from_dict(entry)
             self._entries[reg.id] = reg
@@ -111,7 +111,8 @@ class Ledger:
         # never leaves a half-written ledger.json behind.
         tmp_path = self.path.with_suffix(".tmp.json")
         tmp_path.write_text(
-            json.dumps(payload, indent=2, sort_keys=False, ensure_ascii=False) + "\n"
+            json.dumps(payload, indent=2, sort_keys=False, ensure_ascii=False) + "\n",
+            encoding="utf-8",
         )
         tmp_path.replace(self.path)
 
