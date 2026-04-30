@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 import typer
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from alphalens.archive.guru.pilot_runner import SingleYearResult, run_single_year
 from alphalens.archive.guru.prompt import load_guru_prompt
@@ -26,6 +27,43 @@ guru_app = typer.Typer(
     help="Layer 2f: GuruAgent LLM-researcher concentrated value portfolio pilot.",
     no_args_is_help=True,
 )
+
+
+def _normalize_block_content(content):
+    """Join Gemini-3 list-of-blocks content into a plain string.
+
+    Mirrors the upstream TradingAgents `normalize_content` helper: keeps text
+    blocks, drops reasoning / metadata, returns the input unchanged for
+    plain-string responses.
+    """
+    if not isinstance(content, list):
+        return content
+    texts = [
+        item.get("text", "")
+        if isinstance(item, dict) and item.get("type") == "text"
+        else item
+        if isinstance(item, str)
+        else ""
+        for item in content
+    ]
+    return "\n".join(t for t in texts if t)
+
+
+class _NormalizedChat(ChatGoogleGenerativeAI):
+    """ChatGoogleGenerativeAI that flattens Gemini-3 list-of-blocks content.
+
+    The downstream GuruScorer reads `response.content` as a string. Gemini-3
+    models can return content as a list of typed blocks; we collapse to text
+    via `model_copy(update=...)` so we never mutate the AIMessage in place
+    (Pydantic validate_assignment safety).
+    """
+
+    def invoke(self, input, config=None, **kwargs):
+        response = super().invoke(input, config, **kwargs)
+        normalized = _normalize_block_content(response.content)
+        if normalized is response.content:
+            return response
+        return response.model_copy(update={"content": normalized})
 
 
 def _build_pilot_years(
@@ -191,31 +229,9 @@ def pilot(
 
     import os
 
-    from langchain_google_genai import ChatGoogleGenerativeAI
-
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise typer.BadParameter("GOOGLE_API_KEY not set in environment")
-
-    class _NormalizedChat(ChatGoogleGenerativeAI):
-        """Gemini 3 returns content as list-of-blocks; downstream expects str."""
-
-        def invoke(self, input, config=None, **kwargs):
-            response = super().invoke(input, config, **kwargs)
-            content = response.content
-            if isinstance(content, list):
-                texts = [
-                    item.get("text", "")
-                    if isinstance(item, dict) and item.get("type") == "text"
-                    else item
-                    if isinstance(item, str)
-                    else ""
-                    for item in content
-                ]
-                # model_copy keeps us off Pydantic's validate_assignment path even if
-                # langchain ever flips that flag on AIMessage in a future release.
-                return response.model_copy(update={"content": "\n".join(t for t in texts if t)})
-            return response
 
     llm_client = _NormalizedChat(
         model="gemini-3-pro-preview",
