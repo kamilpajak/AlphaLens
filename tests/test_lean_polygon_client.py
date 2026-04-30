@@ -12,7 +12,7 @@ def _response(status: int, body: dict | None = None, text: str = ""):
 
 class TestPolygonClientInit(unittest.TestCase):
     def test_rejects_empty_api_key(self):
-        from alphalens.screeners.lean.polygon_client import PolygonClient
+        from alphalens.archive.screeners.lean.polygon_client import PolygonClient
 
         with self.assertRaises(ValueError):
             PolygonClient(api_key="")
@@ -20,7 +20,7 @@ class TestPolygonClientInit(unittest.TestCase):
 
 class TestGroupedDaily(unittest.TestCase):
     def setUp(self):
-        from alphalens.screeners.lean.polygon_client import PolygonClient
+        from alphalens.archive.screeners.lean.polygon_client import PolygonClient
 
         self.session = MagicMock()
         self.sleep = MagicMock()
@@ -88,7 +88,7 @@ class TestGroupedDaily(unittest.TestCase):
         self.assertEqual(kwargs["params"]["apiKey"], "test")
 
     def test_raises_on_4xx(self):
-        from alphalens.screeners.lean.polygon_client import PolygonError
+        from alphalens.archive.screeners.lean.polygon_client import PolygonError
 
         self.session.get.return_value = _response(403, text="Forbidden")
 
@@ -109,7 +109,7 @@ class TestGroupedDaily(unittest.TestCase):
 
 class TestRateLimit(unittest.TestCase):
     def test_throttles_between_calls(self):
-        from alphalens.screeners.lean.polygon_client import PolygonClient
+        from alphalens.archive.screeners.lean.polygon_client import PolygonClient
 
         session = MagicMock()
         session.get.return_value = _response(200, {"results": []})
@@ -130,7 +130,7 @@ class TestRateLimit(unittest.TestCase):
 
 class TestTickerRange(unittest.TestCase):
     def setUp(self):
-        from alphalens.screeners.lean.polygon_client import PolygonClient
+        from alphalens.archive.screeners.lean.polygon_client import PolygonClient
 
         self.session = MagicMock()
         self.client = PolygonClient(
@@ -189,7 +189,7 @@ class TestTickerRange(unittest.TestCase):
 
 class TestPagination(unittest.TestCase):
     def setUp(self):
-        from alphalens.screeners.lean.polygon_client import PolygonClient
+        from alphalens.archive.screeners.lean.polygon_client import PolygonClient
 
         self.session = MagicMock()
         self.client = PolygonClient(

@@ -38,7 +38,7 @@ class TestInsiderScreenCommand(unittest.TestCase):
             else pd.DataFrame(columns=["ticker", "insider_count", "aggregate_dollar", "asof"])
         )
 
-        with patch("alphalens.screeners.insider.pipeline.InsiderPipeline") as mock_cls:
+        with patch("alphalens.archive.screeners.insider.pipeline.InsiderPipeline") as mock_cls:
             instance = MagicMock()
             instance.run.return_value = df
             instance.to_candidates.return_value = []
@@ -163,7 +163,7 @@ class TestInsiderScreenCommand(unittest.TestCase):
         self.assertIn("UPST", content)
 
     def test_top_n_passed_to_pipeline(self):
-        with patch("alphalens.screeners.insider.pipeline.InsiderPipeline") as mock_cls:
+        with patch("alphalens.archive.screeners.insider.pipeline.InsiderPipeline") as mock_cls:
             instance = MagicMock()
             instance.run.return_value = pd.DataFrame(
                 columns=["ticker", "insider_count", "aggregate_dollar", "asof"]

@@ -25,7 +25,7 @@ def _write_csv(tmp: Path, content: str = _SAMPLE_CSV) -> Path:
 
 class TestLoadFF3Daily(unittest.TestCase):
     def test_skips_preamble_and_footer(self):
-        from alphalens.screeners.lean.factors import load_ff3_daily
+        from alphalens.archive.screeners.lean.factors import load_ff3_daily
 
         with tempfile.TemporaryDirectory() as tmp:
             df = load_ff3_daily(path=_write_csv(Path(tmp)))
@@ -34,7 +34,7 @@ class TestLoadFF3Daily(unittest.TestCase):
         self.assertListEqual(list(df.columns), ["Mkt-RF", "SMB", "HML", "RF"])
 
     def test_values_converted_to_decimals(self):
-        from alphalens.screeners.lean.factors import load_ff3_daily
+        from alphalens.archive.screeners.lean.factors import load_ff3_daily
 
         with tempfile.TemporaryDirectory() as tmp:
             df = load_ff3_daily(path=_write_csv(Path(tmp)))
@@ -43,7 +43,7 @@ class TestLoadFF3Daily(unittest.TestCase):
         self.assertAlmostEqual(df.iloc[0]["RF"], 0.0002, places=6)
 
     def test_index_is_datetime(self):
-        from alphalens.screeners.lean.factors import load_ff3_daily
+        from alphalens.archive.screeners.lean.factors import load_ff3_daily
 
         with tempfile.TemporaryDirectory() as tmp:
             df = load_ff3_daily(path=_write_csv(Path(tmp)))
@@ -54,7 +54,7 @@ class TestLoadFF3Daily(unittest.TestCase):
         self.assertEqual(df.index[0].date(), date(2024, 1, 2))
 
     def test_start_end_filtering(self):
-        from alphalens.screeners.lean.factors import load_ff3_daily
+        from alphalens.archive.screeners.lean.factors import load_ff3_daily
 
         with tempfile.TemporaryDirectory() as tmp:
             df = load_ff3_daily(
@@ -68,13 +68,13 @@ class TestLoadFF3Daily(unittest.TestCase):
         self.assertEqual(df.index[-1].date(), date(2024, 1, 4))
 
     def test_missing_file_raises(self):
-        from alphalens.screeners.lean.factors import load_ff3_daily
+        from alphalens.archive.screeners.lean.factors import load_ff3_daily
 
         with self.assertRaises(FileNotFoundError):
             load_ff3_daily(path=Path("/tmp/definitely_nope_ff3.csv"))
 
     def test_missing_header_raises(self):
-        from alphalens.screeners.lean.factors import load_ff3_daily
+        from alphalens.archive.screeners.lean.factors import load_ff3_daily
 
         with tempfile.TemporaryDirectory() as tmp:
             bad = _write_csv(Path(tmp), "no header here\njust garbage\n")
@@ -83,8 +83,8 @@ class TestLoadFF3Daily(unittest.TestCase):
 
     def test_real_file_loads_if_present(self):
         """Smoke test against the actual Ken French download on this machine."""
-        from alphalens.screeners.lean.config import FF3_DAILY_PATH
-        from alphalens.screeners.lean.factors import load_ff3_daily
+        from alphalens.archive.screeners.lean.config import FF3_DAILY_PATH
+        from alphalens.archive.screeners.lean.factors import load_ff3_daily
 
         if not FF3_DAILY_PATH.exists():
             self.skipTest(f"FF3 CSV not present at {FF3_DAILY_PATH}")

@@ -1,4 +1,4 @@
-"""Tests for alphalens.quiver_screener.client schema-normalization layer."""
+"""Tests for alphalens.archive.quiver_screener.client schema-normalization layer."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ class TestNormalizeInsiders(unittest.TestCase):
     """
 
     def test_sec_form4_code_P_maps_to_buy(self):
-        from alphalens.quiver_screener.client import normalize_insiders
+        from alphalens.archive.quiver_screener.client import normalize_insiders
 
         raw = pd.DataFrame(
             {
@@ -30,7 +30,7 @@ class TestNormalizeInsiders(unittest.TestCase):
         self.assertEqual(out["transaction"].iloc[0], "A")
 
     def test_sec_form4_code_S_maps_to_sell(self):
-        from alphalens.quiver_screener.client import normalize_insiders
+        from alphalens.archive.quiver_screener.client import normalize_insiders
 
         raw = pd.DataFrame(
             {
@@ -46,7 +46,7 @@ class TestNormalizeInsiders(unittest.TestCase):
         self.assertEqual(out["transaction"].iloc[0], "D")
 
     def test_verbose_purchase_maps_to_buy(self):
-        from alphalens.quiver_screener.client import normalize_insiders
+        from alphalens.archive.quiver_screener.client import normalize_insiders
 
         raw = pd.DataFrame(
             {
@@ -62,7 +62,7 @@ class TestNormalizeInsiders(unittest.TestCase):
         self.assertEqual(out["transaction"].iloc[0], "A")
 
     def test_verbose_sale_maps_to_sell(self):
-        from alphalens.quiver_screener.client import normalize_insiders
+        from alphalens.archive.quiver_screener.client import normalize_insiders
 
         raw = pd.DataFrame(
             {
@@ -78,7 +78,7 @@ class TestNormalizeInsiders(unittest.TestCase):
         self.assertEqual(out["transaction"].iloc[0], "D")
 
     def test_acquired_maps_to_buy(self):
-        from alphalens.quiver_screener.client import normalize_insiders
+        from alphalens.archive.quiver_screener.client import normalize_insiders
 
         raw = pd.DataFrame(
             {
@@ -94,7 +94,7 @@ class TestNormalizeInsiders(unittest.TestCase):
         self.assertEqual(out["transaction"].iloc[0], "A")
 
     def test_code_A_maps_to_buy(self):
-        from alphalens.quiver_screener.client import normalize_insiders
+        from alphalens.archive.quiver_screener.client import normalize_insiders
 
         raw = pd.DataFrame(
             {
@@ -112,7 +112,7 @@ class TestNormalizeInsiders(unittest.TestCase):
     def test_unknown_code_defaults_to_sell(self):
         """Conservative default: unrecognised codes → 'D'. Misclassifying a buy
         as sell biases signal to zero, safer than the reverse."""
-        from alphalens.quiver_screener.client import normalize_insiders
+        from alphalens.archive.quiver_screener.client import normalize_insiders
 
         raw = pd.DataFrame(
             {
@@ -128,7 +128,7 @@ class TestNormalizeInsiders(unittest.TestCase):
         self.assertEqual(out["transaction"].iloc[0], "D")
 
     def test_value_equals_shares_times_price(self):
-        from alphalens.quiver_screener.client import normalize_insiders
+        from alphalens.archive.quiver_screener.client import normalize_insiders
 
         raw = pd.DataFrame(
             {
@@ -146,7 +146,7 @@ class TestNormalizeInsiders(unittest.TestCase):
 
 class TestNormalizeCongress(unittest.TestCase):
     def test_range_string_parsed_to_midpoint(self):
-        from alphalens.quiver_screener.client import normalize_congress
+        from alphalens.archive.quiver_screener.client import normalize_congress
 
         raw = pd.DataFrame(
             {
@@ -162,7 +162,7 @@ class TestNormalizeCongress(unittest.TestCase):
         self.assertAlmostEqual(out["amount_mid"].iloc[1], 75000.5, places=1)
 
     def test_partial_sale_canonicalised_to_sale(self):
-        from alphalens.quiver_screener.client import normalize_congress
+        from alphalens.archive.quiver_screener.client import normalize_congress
 
         raw = pd.DataFrame(
             {
@@ -177,7 +177,7 @@ class TestNormalizeCongress(unittest.TestCase):
         self.assertEqual(out["transaction"].iloc[0], "SALE")
 
     def test_empty_raw_returns_schema_with_no_rows(self):
-        from alphalens.quiver_screener.client import normalize_congress
+        from alphalens.archive.quiver_screener.client import normalize_congress
 
         out = normalize_congress(pd.DataFrame())
         self.assertEqual(

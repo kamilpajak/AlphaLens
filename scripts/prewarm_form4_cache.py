@@ -49,7 +49,7 @@ import yaml
 
 from alphalens.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
 from alphalens.alt_data.ticker_cik_map import TickerCikMap
-from alphalens.screeners.insider.scorer import InsiderScorer
+from alphalens.archive.screeners.insider.scorer import InsiderScorer
 
 logger = logging.getLogger(__name__)
 

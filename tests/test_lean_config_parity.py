@@ -41,12 +41,12 @@ class TestLeanConfigParity(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from alphalens.screeners.lean.config import LEAN_DEFAULTS
+        from alphalens.archive.screeners.lean.config import LEAN_DEFAULTS
 
         cls.host_config = LEAN_DEFAULTS
 
         repo_root = Path(__file__).resolve().parent.parent
-        docker_main = repo_root / "alphalens/screeners/lean/lean_project/main.py"
+        docker_main = repo_root / "alphalens/archive/screeners/lean/lean_project/main.py"
         cls.docker_config = _extract_dict_literal(docker_main, "SCORER_CONFIG")
 
     def test_shared_keys_have_identical_values(self):

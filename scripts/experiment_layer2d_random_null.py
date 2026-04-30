@@ -29,11 +29,11 @@ import pandas as pd
 import yaml
 
 from alphalens.alt_data.yfinance_cache import load_cached_histories
+from alphalens.archive.screeners.insider.parquet_scorer import ParquetInsiderScorer
 from alphalens.backtest.factor_analysis import run_carhart_attribution
 from alphalens.backtest.factors import load_carhart_daily
 from alphalens.backtest.history_store import HistoryStore
 from alphalens.backtest.metrics import sharpe
-from alphalens.screeners.insider.parquet_scorer import ParquetInsiderScorer
 
 logger = logging.getLogger(__name__)
 

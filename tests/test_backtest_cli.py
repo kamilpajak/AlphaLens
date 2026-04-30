@@ -138,19 +138,19 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
 
         with (
             patch(
-                "alphalens.screeners.themed.universe.load_universe",
+                "alphalens.archive.screeners.themed.universe.load_universe",
                 return_value={"ai": ["NVDA", "AMD"]},
             ),
             patch(
-                "alphalens.screeners.themed.universe.flatten_universe",
+                "alphalens.archive.screeners.themed.universe.flatten_universe",
                 return_value={"NVDA": ["ai"], "AMD": ["ai"]},
             ),
             patch(
-                "alphalens.screeners.themed.backtest_adapter.momentum_scorer_adapter",
+                "alphalens.archive.screeners.themed.backtest_adapter.momentum_scorer_adapter",
                 new=_fake_scorer,
             ),
             patch(
-                "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
+                "alphalens.archive.screeners.lean.lean_csv_loader.load_lean_histories",
                 return_value=self._histories_for(["NVDA", "AMD", "SPY"]),
             ),
         ):
@@ -197,19 +197,19 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
 
         with (
             patch(
-                "alphalens.screeners.themed.universe.load_universe",
+                "alphalens.archive.screeners.themed.universe.load_universe",
                 return_value={"ai": ["NVDA", "AMD"]},
             ),
             patch(
-                "alphalens.screeners.themed.universe.flatten_universe",
+                "alphalens.archive.screeners.themed.universe.flatten_universe",
                 return_value={"NVDA": ["ai"], "AMD": ["ai"]},
             ),
             patch(
-                "alphalens.screeners.themed.backtest_adapter.early_stage_scorer_adapter",
+                "alphalens.archive.screeners.themed.backtest_adapter.early_stage_scorer_adapter",
                 new=_fake_scorer,
             ),
             patch(
-                "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
+                "alphalens.archive.screeners.lean.lean_csv_loader.load_lean_histories",
                 return_value=self._histories_for(["NVDA", "AMD", "SPY"]),
             ),
         ):
@@ -240,15 +240,15 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
 
         with (
             patch(
-                "alphalens.screeners.lean.universe.all_tickers",
+                "alphalens.archive.screeners.lean.universe.all_tickers",
                 return_value=["NVDA", "AMD"],
             ),
             patch(
-                "alphalens.screeners.lean.lean_project.scorer.rank_universe",
+                "alphalens.archive.screeners.lean.lean_project.scorer.rank_universe",
                 new=_fake_scorer,
             ),
             patch(
-                "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
+                "alphalens.archive.screeners.lean.lean_csv_loader.load_lean_histories",
                 return_value=self._histories_for(["NVDA", "AMD", "SPY", "QQQ", "IWM"]),
             ),
         ):
@@ -290,27 +290,27 @@ class TestBacktestCLIEndToEnd(unittest.TestCase):
 
         with (
             patch(
-                "alphalens.screeners.themed.universe.load_universe",
+                "alphalens.archive.screeners.themed.universe.load_universe",
                 side_effect=_raise,
             ),
             patch(
-                "alphalens.screeners.themed.universe.flatten_universe",
+                "alphalens.archive.screeners.themed.universe.flatten_universe",
                 side_effect=_raise,
             ),
             patch(
-                "alphalens.screeners.themed.backtest_adapter.momentum_scorer_adapter",
+                "alphalens.archive.screeners.themed.backtest_adapter.momentum_scorer_adapter",
                 new=_fake_scorer,
             ),
             patch(
-                "alphalens.screeners.lean.universe.all_tickers",
+                "alphalens.archive.screeners.lean.universe.all_tickers",
                 return_value=["NVDA", "AMD"],
             ),
             patch(
-                "alphalens.screeners.lean.lean_project.scorer.rank_universe",
+                "alphalens.archive.screeners.lean.lean_project.scorer.rank_universe",
                 new=_fake_scorer,
             ),
             patch(
-                "alphalens.screeners.lean.lean_csv_loader.load_lean_histories",
+                "alphalens.archive.screeners.lean.lean_csv_loader.load_lean_histories",
                 return_value=self._histories_for(["NVDA", "AMD", "SPY", "QQQ", "IWM"]),
             ),
         ):

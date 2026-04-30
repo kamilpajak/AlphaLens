@@ -32,7 +32,7 @@ def _valid_payload():
 
 class TestFromDict(unittest.TestCase):
     def test_parses_valid_payload(self):
-        from alphalens.screeners.lean.schema import LeanOutput
+        from alphalens.archive.screeners.lean.schema import LeanOutput
 
         out = LeanOutput.from_dict(_valid_payload())
 
@@ -43,7 +43,7 @@ class TestFromDict(unittest.TestCase):
         self.assertTrue(out.rankings[0].breakout)
 
     def test_missing_top_level_raises(self):
-        from alphalens.screeners.lean.schema import LeanOutput
+        from alphalens.archive.screeners.lean.schema import LeanOutput
 
         payload = _valid_payload()
         del payload["rankings"]
@@ -51,7 +51,7 @@ class TestFromDict(unittest.TestCase):
             LeanOutput.from_dict(payload)
 
     def test_version_mismatch_raises(self):
-        from alphalens.screeners.lean.schema import LeanOutput
+        from alphalens.archive.screeners.lean.schema import LeanOutput
 
         payload = _valid_payload()
         payload["version"] = "0.9"
@@ -59,7 +59,7 @@ class TestFromDict(unittest.TestCase):
             LeanOutput.from_dict(payload)
 
     def test_missing_ranking_field_raises(self):
-        from alphalens.screeners.lean.schema import LeanOutput
+        from alphalens.archive.screeners.lean.schema import LeanOutput
 
         payload = _valid_payload()
         del payload["rankings"][0]["score"]
@@ -69,7 +69,7 @@ class TestFromDict(unittest.TestCase):
 
 class TestFromFile(unittest.TestCase):
     def test_loads_from_disk(self):
-        from alphalens.screeners.lean.schema import LeanOutput
+        from alphalens.archive.screeners.lean.schema import LeanOutput
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "out.json"
@@ -78,7 +78,7 @@ class TestFromFile(unittest.TestCase):
         self.assertEqual(out.rankings[0].ticker, "AAPL")
 
     def test_empty_rankings_ok(self):
-        from alphalens.screeners.lean.schema import LeanOutput
+        from alphalens.archive.screeners.lean.schema import LeanOutput
 
         payload = _valid_payload()
         payload["rankings"] = []

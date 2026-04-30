@@ -3,9 +3,9 @@ import unittest
 import numpy as np
 import pandas as pd
 
+from alphalens.archive.rotation.config import GateConfig
+from alphalens.archive.rotation.overlay_engine import OverlayBacktestResult, RebalanceEvent
 from alphalens.backtest.factor_analysis import AlphaResult
-from alphalens.rotation.config import GateConfig
-from alphalens.rotation.overlay_engine import OverlayBacktestResult, RebalanceEvent
 
 
 def _result(
@@ -48,7 +48,7 @@ def _benchmark_close(n: int = 1000, trend: float = 0.0003) -> pd.Series:
 
 class TestRegimeDecompGate(unittest.TestCase):
     def test_passes_when_alpha_positive_in_every_regime(self):
-        from alphalens.rotation.gates import gate_regime_decomp
+        from alphalens.archive.rotation.gates import gate_regime_decomp
 
         # Deterministic constant-positive series → every regime slice has mean > 0
         n = 1000
@@ -67,7 +67,7 @@ class TestRegimeDecompGate(unittest.TestCase):
         self.assertTrue(gate.passed)
 
     def test_fails_when_alpha_negative_in_some_regime(self):
-        from alphalens.rotation.gates import gate_regime_decomp
+        from alphalens.archive.rotation.gates import gate_regime_decomp
 
         # Strategy loses money (net mean < benchmark mean)
         result = _result(gross_mean=-0.0005, net_mean=-0.0005, bench_mean=0.0005, n=1000)
@@ -80,7 +80,7 @@ class TestRegimeDecompGate(unittest.TestCase):
 
 class TestBootstrapCIGate(unittest.TestCase):
     def test_passes_when_clearly_positive(self):
-        from alphalens.rotation.gates import gate_bootstrap_ci
+        from alphalens.archive.rotation.gates import gate_bootstrap_ci
 
         result = _result(gross_mean=0.002, net_mean=0.002, bench_mean=0.0, n=1000)
 
@@ -90,7 +90,7 @@ class TestBootstrapCIGate(unittest.TestCase):
         self.assertGreater(gate.value, 0.0)
 
     def test_fails_when_ci_includes_zero(self):
-        from alphalens.rotation.gates import gate_bootstrap_ci
+        from alphalens.archive.rotation.gates import gate_bootstrap_ci
 
         result = _result(gross_mean=0.0, net_mean=0.0, bench_mean=0.0, n=500)
 
@@ -101,7 +101,7 @@ class TestBootstrapCIGate(unittest.TestCase):
 
 class TestCostDragGate(unittest.TestCase):
     def test_passes_when_drag_below_threshold(self):
-        from alphalens.rotation.gates import gate_cost_drag
+        from alphalens.archive.rotation.gates import gate_cost_drag
 
         # gross annualised 252 × 0.0005 ≈ 12.6%; net 12.0% → drag ≈ 0.6 pp → 5% of gross
         result = _result(gross_mean=0.0005, net_mean=0.000475, n=1000)
@@ -111,7 +111,7 @@ class TestCostDragGate(unittest.TestCase):
         self.assertTrue(gate.passed)
 
     def test_fails_when_drag_exceeds_half_of_alpha(self):
-        from alphalens.rotation.gates import gate_cost_drag
+        from alphalens.archive.rotation.gates import gate_cost_drag
 
         # gross 0.001, net 0.0001 → drag ratio = 0.9
         result = _result(gross_mean=0.001, net_mean=0.0001, n=1000)
@@ -123,7 +123,7 @@ class TestCostDragGate(unittest.TestCase):
 
 class TestRollingSharpeGate(unittest.TestCase):
     def test_passes_when_all_windows_above_threshold(self):
-        from alphalens.rotation.gates import gate_rolling_sharpe
+        from alphalens.archive.rotation.gates import gate_rolling_sharpe
 
         # High persistent mean → rolling Sharpe high everywhere
         rng = np.random.default_rng(2)
@@ -141,7 +141,7 @@ class TestRollingSharpeGate(unittest.TestCase):
         self.assertTrue(gate.passed)
 
     def test_fails_when_any_window_below_threshold(self):
-        from alphalens.rotation.gates import gate_rolling_sharpe
+        from alphalens.archive.rotation.gates import gate_rolling_sharpe
 
         # Flip sign halfway → one rolling window will have negative Sharpe
         rng = np.random.default_rng(3)
@@ -162,7 +162,7 @@ class TestRollingSharpeGate(unittest.TestCase):
 
 class TestCarhartAlphaTGate(unittest.TestCase):
     def test_passes_when_t_above_oos_threshold(self):
-        from alphalens.rotation.gates import gate_carhart_alpha_t
+        from alphalens.archive.rotation.gates import gate_carhart_alpha_t
 
         carhart = AlphaResult(
             spec_name="Carhart-4F",
@@ -181,7 +181,7 @@ class TestCarhartAlphaTGate(unittest.TestCase):
         self.assertAlmostEqual(gate.value, 2.0)
 
     def test_fails_when_t_below_threshold(self):
-        from alphalens.rotation.gates import gate_carhart_alpha_t
+        from alphalens.archive.rotation.gates import gate_carhart_alpha_t
 
         carhart = AlphaResult(
             spec_name="Carhart-4F",
@@ -201,7 +201,7 @@ class TestCarhartAlphaTGate(unittest.TestCase):
 
 class TestBonferroniGate(unittest.TestCase):
     def test_passes_when_t_exceeds_bonferroni_critical(self):
-        from alphalens.rotation.gates import gate_bonferroni
+        from alphalens.archive.rotation.gates import gate_bonferroni
 
         carhart = AlphaResult(
             spec_name="Carhart-4F",
@@ -219,7 +219,7 @@ class TestBonferroniGate(unittest.TestCase):
         self.assertTrue(gate.passed)
 
     def test_fails_when_t_below_bonferroni_critical(self):
-        from alphalens.rotation.gates import gate_bonferroni
+        from alphalens.archive.rotation.gates import gate_bonferroni
 
         carhart = AlphaResult(
             spec_name="Carhart-4F",
@@ -239,7 +239,7 @@ class TestBonferroniGate(unittest.TestCase):
 
 class TestEvaluateAllGates(unittest.TestCase):
     def test_aggregator_returns_pass_false_if_any_gate_fails(self):
-        from alphalens.rotation.gates import GateReport, evaluate_all_gates
+        from alphalens.archive.rotation.gates import GateReport, evaluate_all_gates
 
         result = _result(gross_mean=0.0, net_mean=-0.001, bench_mean=0.0, n=600)
         bench_close = _benchmark_close(n=600, trend=0.0)

@@ -1,4 +1,4 @@
-"""Tests for alphalens.guru.financial_context — Polygon-backed builder."""
+"""Tests for alphalens.archive.guru.financial_context — Polygon-backed builder."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def _fake_polygon_client(overview: dict | None = None, financials: list | None =
 
 class TestBuildContext(unittest.TestCase):
     def test_context_includes_overview_and_latest_fy(self):
-        from alphalens.guru.financial_context import build_context
+        from alphalens.archive.guru.financial_context import build_context
 
         client = _fake_polygon_client()
         ctx = build_context(
@@ -81,7 +81,7 @@ class TestBuildContext(unittest.TestCase):
         self.assertEqual(ctx["income"]["latest_fy_period"], "2017-09-30")
 
     def test_context_includes_price_summary(self):
-        from alphalens.guru.financial_context import build_context
+        from alphalens.archive.guru.financial_context import build_context
 
         price = _fake_price_series()
         client = _fake_polygon_client()
@@ -98,7 +98,7 @@ class TestBuildContext(unittest.TestCase):
         self.assertAlmostEqual(ps["max_drawdown_12m"], 0.0, places=6)
 
     def test_context_includes_history(self):
-        from alphalens.guru.financial_context import build_context
+        from alphalens.archive.guru.financial_context import build_context
 
         client = _fake_polygon_client()
         ctx = build_context(
@@ -114,7 +114,7 @@ class TestBuildContext(unittest.TestCase):
         self.assertEqual(history[1]["period"], "2016-09-30")
 
     def test_returns_none_when_overview_missing(self):
-        from alphalens.guru.financial_context import build_context
+        from alphalens.archive.guru.financial_context import build_context
 
         client = _fake_polygon_client(overview={})
         ctx = build_context(
@@ -127,7 +127,7 @@ class TestBuildContext(unittest.TestCase):
         self.assertIsNone(ctx)
 
     def test_polygon_filter_invokes_with_asof(self):
-        from alphalens.guru.financial_context import build_context
+        from alphalens.archive.guru.financial_context import build_context
 
         client = _fake_polygon_client()
         build_context(
@@ -143,7 +143,7 @@ class TestBuildContext(unittest.TestCase):
         self.assertEqual(call.kwargs["asof"], pd.Timestamp("2018-01-01"))
 
     def test_context_to_prompt_renders_compact_text(self):
-        from alphalens.guru.financial_context import build_context, context_to_prompt
+        from alphalens.archive.guru.financial_context import build_context, context_to_prompt
 
         client = _fake_polygon_client()
         ctx = build_context(
@@ -209,7 +209,7 @@ class TestContextToPromptCharacterization(unittest.TestCase):
     """
 
     def test_full_context_renders_all_ratios_and_sections(self):
-        from alphalens.guru.financial_context import context_to_prompt
+        from alphalens.archive.guru.financial_context import context_to_prompt
 
         out = context_to_prompt(_full_prompt_context())
 
@@ -244,7 +244,7 @@ class TestContextToPromptCharacterization(unittest.TestCase):
         self.assertIn("Max drawdown: -11.35%", out)
 
     def test_missing_income_yields_na_ratios(self):
-        from alphalens.guru.financial_context import context_to_prompt
+        from alphalens.archive.guru.financial_context import context_to_prompt
 
         ctx = _full_prompt_context()
         ctx["income"] = {}
@@ -257,7 +257,7 @@ class TestContextToPromptCharacterization(unittest.TestCase):
         self.assertIn("Operating CF / Net Income: n/a", out)
 
     def test_negative_equity_suppresses_roe_and_de(self):
-        from alphalens.guru.financial_context import context_to_prompt
+        from alphalens.archive.guru.financial_context import context_to_prompt
 
         ctx = _full_prompt_context()
         ctx["balance"]["total_equity"] = -100_000_000
@@ -268,7 +268,7 @@ class TestContextToPromptCharacterization(unittest.TestCase):
         self.assertIn("Total equity: $-100,000,000", out)
 
     def test_zero_revenue_suppresses_margin_ratios(self):
-        from alphalens.guru.financial_context import context_to_prompt
+        from alphalens.archive.guru.financial_context import context_to_prompt
 
         ctx = _full_prompt_context()
         ctx["income"]["latest_fy_revenue"] = 0
@@ -278,7 +278,7 @@ class TestContextToPromptCharacterization(unittest.TestCase):
         self.assertIn("Operating margin: n/a", out)
 
     def test_negative_net_income_suppresses_cf_ratio(self):
-        from alphalens.guru.financial_context import context_to_prompt
+        from alphalens.archive.guru.financial_context import context_to_prompt
 
         ctx = _full_prompt_context()
         ctx["income"]["latest_fy_net_income"] = -10_000_000
@@ -287,7 +287,7 @@ class TestContextToPromptCharacterization(unittest.TestCase):
         self.assertIn("Operating CF / Net Income: n/a", out)
 
     def test_empty_history_omits_history_block(self):
-        from alphalens.guru.financial_context import context_to_prompt
+        from alphalens.archive.guru.financial_context import context_to_prompt
 
         ctx = _full_prompt_context()
         ctx["history"] = []
@@ -297,12 +297,12 @@ class TestContextToPromptCharacterization(unittest.TestCase):
         self.assertIn("Price summary", out)
 
     def test_none_context_returns_sentinel(self):
-        from alphalens.guru.financial_context import context_to_prompt
+        from alphalens.archive.guru.financial_context import context_to_prompt
 
         self.assertEqual(context_to_prompt(None), "NO DATA AVAILABLE")
 
     def test_missing_optional_metadata_renders_unknown(self):
-        from alphalens.guru.financial_context import context_to_prompt
+        from alphalens.archive.guru.financial_context import context_to_prompt
 
         ctx = _full_prompt_context()
         ctx["name"] = None

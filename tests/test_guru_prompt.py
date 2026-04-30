@@ -1,4 +1,4 @@
-"""Tests for alphalens.guru.prompt — Buffett-style prompt loader + SHA fingerprint."""
+"""Tests for alphalens.archive.guru.prompt — Buffett-style prompt loader + SHA fingerprint."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ Output JSON: {"conviction": <0-100>, "rationale": "<2-3 sentences>"}
 
 class TestGuruPromptLoader(unittest.TestCase):
     def test_loads_prompt_text_file(self):
-        from alphalens.guru.prompt import GuruPrompt, load_guru_prompt
+        from alphalens.archive.guru.prompt import GuruPrompt, load_guru_prompt
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "prompt.txt"
@@ -30,7 +30,7 @@ class TestGuruPromptLoader(unittest.TestCase):
 
             sha = "d" * 40
             completed = MagicMock(returncode=0, stdout=f"{sha}\n", stderr="")
-            with patch("alphalens.guru.prompt.subprocess.run", return_value=completed):
+            with patch("alphalens.archive.guru.prompt.subprocess.run", return_value=completed):
                 prompt = load_guru_prompt(path, allow_dirty=True)
 
         self.assertIsInstance(prompt, GuruPrompt)
@@ -40,7 +40,7 @@ class TestGuruPromptLoader(unittest.TestCase):
         self.assertEqual(prompt.path, str(path))
 
     def test_rejects_empty_prompt(self):
-        from alphalens.guru.prompt import GuruPromptError, load_guru_prompt
+        from alphalens.archive.guru.prompt import GuruPromptError, load_guru_prompt
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "empty.txt"
@@ -50,13 +50,13 @@ class TestGuruPromptLoader(unittest.TestCase):
                 load_guru_prompt(path, allow_dirty=True)
 
     def test_rejects_missing_file(self):
-        from alphalens.guru.prompt import GuruPromptError, load_guru_prompt
+        from alphalens.archive.guru.prompt import GuruPromptError, load_guru_prompt
 
         with self.assertRaises(GuruPromptError):
             load_guru_prompt(Path("/nonexistent/prompt.txt"), allow_dirty=True)
 
     def test_fingerprint_stable_across_loads(self):
-        from alphalens.guru.prompt import load_guru_prompt
+        from alphalens.archive.guru.prompt import load_guru_prompt
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "prompt.txt"
@@ -64,7 +64,7 @@ class TestGuruPromptLoader(unittest.TestCase):
 
             sha = "e" * 40
             completed = MagicMock(returncode=0, stdout=f"{sha}\n", stderr="")
-            with patch("alphalens.guru.prompt.subprocess.run", return_value=completed):
+            with patch("alphalens.archive.guru.prompt.subprocess.run", return_value=completed):
                 p1 = load_guru_prompt(path, allow_dirty=True)
                 p2 = load_guru_prompt(path, allow_dirty=True)
 

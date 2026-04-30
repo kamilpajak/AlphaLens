@@ -27,7 +27,7 @@ Each gate is named, has a reusable implementation in this repo, and a documented
 - **Acceptance:** OOS `alpha_tstat > 2.0` and `alpha_annualized > 0` (one-tailed positive). Both IS and OOS must be reported; degradation IS → OOS is a strong signal.
 - **Anti-pattern:** AP-1 (overfit alpha) — a layer whose IS t-stat collapses by ≥3× OOS belongs in this column.
 
-### 2. `sanity_checks_4gate` — `alphalens.rotation.sanity_checks` 4-gate
+### 2. `sanity_checks_4gate` — `alphalens.archive.rotation.sanity_checks` 4-gate
 
 - **Measures:** Whether a strategy with a passive overlay actually adds value vs holding the passive benchmark unmodified.
 - **Implementation:** `alphalens/rotation/sanity_checks.py` exposes four gates:

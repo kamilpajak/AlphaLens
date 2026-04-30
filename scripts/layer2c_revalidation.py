@@ -29,6 +29,14 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from alphalens.archive.screeners.lean.config import (  # noqa: E402
+    BENCHMARKS,
+    DATA_DIR,
+    LEAN_DEFAULTS,
+)
+from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
+from alphalens.archive.screeners.lean.lean_project.scorer import rank_universe  # noqa: E402
+from alphalens.archive.screeners.lean.universe import all_tickers  # noqa: E402
 from alphalens.backtest.cost_model import cost_sensitivity_table  # noqa: E402
 from alphalens.backtest.engine import BacktestEngine  # noqa: E402
 from alphalens.backtest.factor_analysis import (  # noqa: E402
@@ -48,10 +56,6 @@ from alphalens.backtest.survivorship_pit import (  # noqa: E402
     picks_from_report,
 )
 from alphalens.backtest.walk_forward import run_walk_forward  # noqa: E402
-from alphalens.screeners.lean.config import BENCHMARKS, DATA_DIR, LEAN_DEFAULTS  # noqa: E402
-from alphalens.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
-from alphalens.screeners.lean.lean_project.scorer import rank_universe  # noqa: E402
-from alphalens.screeners.lean.universe import all_tickers  # noqa: E402
 
 IS_START = date(2021, 4, 19)
 IS_END = date(2024, 4, 19)
@@ -273,7 +277,7 @@ def write_report(
     )
     lines.append("")
 
-    lines.append("## Gate 2: 4-gate sanity (`alphalens.rotation.sanity_checks`)")
+    lines.append("## Gate 2: 4-gate sanity (`alphalens.archive.rotation.sanity_checks`)")
     lines.append("")
     lines.append("**N/A** — Layer 2c is a rule-based ranking screener (lean technicals).")
     lines.append("It has no passive benchmark to overlay against, so")

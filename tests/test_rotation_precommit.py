@@ -15,7 +15,7 @@ gates: {rolling_sharpe_min: 0.30, carhart_oos_t_min: 1.50}
 
 class TestCountConfigCommits(unittest.TestCase):
     def test_counts_commits_touching_config_path(self):
-        from alphalens.rotation.precommit import count_config_commits
+        from alphalens.archive.rotation.precommit import count_config_commits
 
         # `git log --oneline configs/rotation.yaml` returns 3 lines
         completed = MagicMock(
@@ -24,7 +24,7 @@ class TestCountConfigCommits(unittest.TestCase):
             stderr="",
         )
         with patch(
-            "alphalens.rotation.precommit.subprocess.run", return_value=completed
+            "alphalens.archive.rotation.precommit.subprocess.run", return_value=completed
         ) as mock_run:
             n = count_config_commits(Path("configs/rotation.yaml"))
 
@@ -34,17 +34,17 @@ class TestCountConfigCommits(unittest.TestCase):
         self.assertIn("configs/rotation.yaml", args)
 
     def test_zero_commits_when_no_git_history(self):
-        from alphalens.rotation.precommit import count_config_commits
+        from alphalens.archive.rotation.precommit import count_config_commits
 
         completed = MagicMock(returncode=0, stdout="", stderr="")
-        with patch("alphalens.rotation.precommit.subprocess.run", return_value=completed):
+        with patch("alphalens.archive.rotation.precommit.subprocess.run", return_value=completed):
             self.assertEqual(count_config_commits(Path("configs/x.yaml")), 0)
 
 
 class TestRecordRun(unittest.TestCase):
     def test_appends_json_entry_to_runlog(self):
-        from alphalens.rotation.config import ConfigFingerprint
-        from alphalens.rotation.precommit import record_run
+        from alphalens.archive.rotation.config import ConfigFingerprint
+        from alphalens.archive.rotation.precommit import record_run
 
         with tempfile.TemporaryDirectory() as tmp:
             runlog = Path(tmp) / "runlog.jsonl"
@@ -88,11 +88,11 @@ class TestRecordRun(unittest.TestCase):
 
 class TestCheckOOSDiscipline(unittest.TestCase):
     def test_ok_when_no_config_commits_since_is_baseline(self):
-        from alphalens.rotation.precommit import check_oos_discipline
+        from alphalens.archive.rotation.precommit import check_oos_discipline
 
         # 1 commit total, matches IS baseline SHA → 0 changes since IS
         completed = MagicMock(returncode=0, stdout="abc 1\n", stderr="")
-        with patch("alphalens.rotation.precommit.subprocess.run", return_value=completed):
+        with patch("alphalens.archive.rotation.precommit.subprocess.run", return_value=completed):
             status = check_oos_discipline(
                 config_path=Path("cfg.yaml"),
                 is_baseline_sha="abc",
@@ -102,7 +102,7 @@ class TestCheckOOSDiscipline(unittest.TestCase):
         self.assertTrue(status.clean)
 
     def test_flags_when_config_changed_after_is(self):
-        from alphalens.rotation.precommit import check_oos_discipline
+        from alphalens.archive.rotation.precommit import check_oos_discipline
 
         # 3 commits; IS baseline at oldest (abc) → 2 commits since IS
         completed = MagicMock(
@@ -110,7 +110,7 @@ class TestCheckOOSDiscipline(unittest.TestCase):
             stdout="newest 3\nmid 2\nabc 1\n",
             stderr="",
         )
-        with patch("alphalens.rotation.precommit.subprocess.run", return_value=completed):
+        with patch("alphalens.archive.rotation.precommit.subprocess.run", return_value=completed):
             status = check_oos_discipline(
                 config_path=Path("cfg.yaml"),
                 is_baseline_sha="abc",
@@ -122,14 +122,14 @@ class TestCheckOOSDiscipline(unittest.TestCase):
 
     def test_true_n_tests_accumulates(self):
         """Bonferroni n_tests = commits_since_is + 2 (H1 + H2 baseline)."""
-        from alphalens.rotation.precommit import check_oos_discipline
+        from alphalens.archive.rotation.precommit import check_oos_discipline
 
         completed = MagicMock(
             returncode=0,
             stdout="d\nc\nb\nabc\n",
             stderr="",
         )
-        with patch("alphalens.rotation.precommit.subprocess.run", return_value=completed):
+        with patch("alphalens.archive.rotation.precommit.subprocess.run", return_value=completed):
             status = check_oos_discipline(
                 config_path=Path("cfg.yaml"),
                 is_baseline_sha="abc",

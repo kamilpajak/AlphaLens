@@ -74,7 +74,7 @@ class TestFeaturesAsOfEndToEnd(unittest.TestCase):
         """
         from alphalens.alt_data.sec_edgar_client import SecEdgarClient
         from alphalens.alt_data.ticker_cik_map import TickerCikMap
-        from alphalens.screeners.insider.scorer import InsiderScorer
+        from alphalens.archive.screeners.insider.scorer import InsiderScorer
 
         client = SecEdgarClient(user_agent=_USER_AGENT)
 

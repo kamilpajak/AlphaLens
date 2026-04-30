@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 try:
-    # Host-side: loaded as `alphalens.screeners.lean.lean_project.scorer` — relative import works.
+    # Host-side: loaded as `alphalens.archive.screeners.lean.lean_project.scorer` — relative import works.
     from . import features as feat
 except ImportError:
     # Inside Lean Docker: main.py imports scorer directly with /Project on sys.path,

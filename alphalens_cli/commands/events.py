@@ -15,7 +15,7 @@ import pandas as pd
 import typer
 
 from alphalens.alt_data.sec_edgar_client import SecEdgarClient
-from alphalens.events.eightk_screener import (
+from alphalens.archive.events.eightk_screener import (
     KILL_THRESHOLD_BPS,
     PROCEED_THRESHOLD_BPS,
     run_screen,

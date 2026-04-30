@@ -78,7 +78,7 @@ def _build_scorer(
     ticker_cik: dict[str, str] | None = None,
     cache_dir: Path | None = None,
 ):
-    from alphalens.screeners.insider.scorer import InsiderScorer
+    from alphalens.archive.screeners.insider.scorer import InsiderScorer
 
     edgar = MagicMock()
     edgar.fetch_submissions.return_value = submissions
@@ -267,7 +267,7 @@ class TestCacheConfigFingerprint(unittest.TestCase):
 
     def test_custom_config_does_not_reuse_default_cache(self):
         from alphalens.alt_data.ticker_cik_map import TickerCikMap
-        from alphalens.screeners.insider.scorer import InsiderScorer, _ScorerConfig
+        from alphalens.archive.screeners.insider.scorer import InsiderScorer, _ScorerConfig
 
         edgar = MagicMock()
         cik_map = TickerCikMap(_by_ticker={"AAPL": "0000320193"})
@@ -306,7 +306,7 @@ class TestCacheConfigFingerprint(unittest.TestCase):
         import json
 
         from alphalens.alt_data.ticker_cik_map import TickerCikMap
-        from alphalens.screeners.insider.scorer import InsiderScorer
+        from alphalens.archive.screeners.insider.scorer import InsiderScorer
 
         edgar = MagicMock()
         cik_map = TickerCikMap(_by_ticker={"AAPL": "0000320193"})
@@ -337,7 +337,7 @@ class TestCacheConfigFingerprint(unittest.TestCase):
         import json
 
         from alphalens.alt_data.ticker_cik_map import TickerCikMap
-        from alphalens.screeners.insider.scorer import InsiderScorer, _ScorerConfig
+        from alphalens.archive.screeners.insider.scorer import InsiderScorer, _ScorerConfig
 
         edgar = MagicMock()
         cik_map = TickerCikMap(_by_ticker={"AAPL": "0000320193"})

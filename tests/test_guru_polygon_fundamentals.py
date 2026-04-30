@@ -1,4 +1,4 @@
-"""Tests for alphalens.guru.polygon_fundamentals — Polygon-backed financials."""
+"""Tests for alphalens.archive.guru.polygon_fundamentals — Polygon-backed financials."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def _mock_response(status: int, body: dict) -> MagicMock:
 
 class TestFetchFinancials(unittest.TestCase):
     def test_fetches_annual_financials_filtered_by_asof(self):
-        from alphalens.guru.polygon_fundamentals import PolygonFundamentalsClient
+        from alphalens.archive.guru.polygon_fundamentals import PolygonFundamentalsClient
 
         session = MagicMock()
         session.get.return_value = _mock_response(200, _SAMPLE_RESPONSE)
@@ -81,7 +81,7 @@ class TestFetchFinancials(unittest.TestCase):
         self.assertIn("apiKey", params)
 
     def test_returns_empty_list_when_no_results(self):
-        from alphalens.guru.polygon_fundamentals import PolygonFundamentalsClient
+        from alphalens.archive.guru.polygon_fundamentals import PolygonFundamentalsClient
 
         session = MagicMock()
         session.get.return_value = _mock_response(200, {"results": []})
@@ -99,7 +99,7 @@ class TestFetchFinancials(unittest.TestCase):
         self.assertEqual(result, [])
 
     def test_handles_missing_financial_fields_gracefully(self):
-        from alphalens.guru.polygon_fundamentals import PolygonFundamentalsClient
+        from alphalens.archive.guru.polygon_fundamentals import PolygonFundamentalsClient
 
         partial = {
             "results": [
@@ -134,7 +134,7 @@ class TestFetchFinancials(unittest.TestCase):
 
     def test_get_overview_returns_company_metadata(self):
         """Polygon ticker_details endpoint provides sector/industry/etc."""
-        from alphalens.guru.polygon_fundamentals import PolygonFundamentalsClient
+        from alphalens.archive.guru.polygon_fundamentals import PolygonFundamentalsClient
 
         details_response = {
             "results": {

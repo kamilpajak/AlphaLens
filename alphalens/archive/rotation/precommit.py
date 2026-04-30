@@ -21,7 +21,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from alphalens.rotation.config import ConfigFingerprint
+from alphalens.archive.rotation.config import ConfigFingerprint
 
 
 def count_config_commits(path: Path) -> int:

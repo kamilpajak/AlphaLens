@@ -13,10 +13,10 @@ vs `early-stage`).
 
 from __future__ import annotations
 
-from alphalens.screeners.insider.pipeline import InsiderPipeline
-from alphalens.screeners.lean.pipeline import LeanScreenerPipeline
+from alphalens.archive.screeners.insider.pipeline import InsiderPipeline
+from alphalens.archive.screeners.lean.pipeline import LeanScreenerPipeline
+from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
 from alphalens.screeners.prescreener.integration import PrescreenerPipeline
-from alphalens.screeners.themed.pipeline import ThemedPipeline
 
 SCREENERS = {
     "themed": ThemedPipeline,

@@ -84,7 +84,7 @@ class TestRotationBacktest(unittest.TestCase):
                     return_value=(store, signals),
                 ),
                 patch(
-                    "alphalens.rotation.config.capture_git_sha",
+                    "alphalens.archive.rotation.config.capture_git_sha",
                     return_value="deadbeef" * 5,
                 ),
             ):
@@ -144,7 +144,7 @@ class TestRotationStatus(unittest.TestCase):
             cfg_path.write_text(_MINIMAL_CONFIG)
 
             with patch(
-                "alphalens.rotation.config.capture_git_sha",
+                "alphalens.archive.rotation.config.capture_git_sha",
                 return_value="b" * 40,
             ):
                 result = runner.invoke(app, ["rotation", "status", "--config", str(cfg_path)])
@@ -198,7 +198,7 @@ class TestRotationSanityCheck(unittest.TestCase):
 
     def test_sanity_check_exit_zero_when_all_gates_pass(self):
         """When we construct data where every gate passes, CLI returns 0."""
-        from alphalens.rotation.sanity_checks import (
+        from alphalens.archive.rotation.sanity_checks import (
             SanityCheckReport,
             SanityCheckResult,
         )

@@ -4,14 +4,14 @@ from unittest.mock import MagicMock, patch
 
 class TestCaptureGitSha(unittest.TestCase):
     def test_returns_40_char_hex_from_rev_parse(self):
-        from alphalens.rotation.config import capture_git_sha
+        from alphalens.archive.rotation.config import capture_git_sha
 
         sha = "a" * 40
         completed = MagicMock(returncode=0, stdout=f"{sha}\n", stderr="")
         porcelain = MagicMock(returncode=0, stdout="", stderr="")
 
         with patch(
-            "alphalens.rotation.config.subprocess.run",
+            "alphalens.archive.rotation.config.subprocess.run",
             side_effect=[porcelain, completed],
         ):
             result = capture_git_sha()
@@ -20,25 +20,27 @@ class TestCaptureGitSha(unittest.TestCase):
         self.assertEqual(len(result), 40)
 
     def test_raises_dirty_repo_error_when_porcelain_nonempty(self):
-        from alphalens.rotation.config import DirtyRepoError, capture_git_sha
+        from alphalens.archive.rotation.config import DirtyRepoError, capture_git_sha
 
         porcelain = MagicMock(
             returncode=0, stdout=" M configs/tactical_rotation_v1.yaml\n", stderr=""
         )
 
         with (
-            patch("alphalens.rotation.config.subprocess.run", return_value=porcelain),
+            patch("alphalens.archive.rotation.config.subprocess.run", return_value=porcelain),
             self.assertRaises(DirtyRepoError),
         ):
             capture_git_sha()
 
     def test_allow_dirty_bypasses_check(self):
-        from alphalens.rotation.config import capture_git_sha
+        from alphalens.archive.rotation.config import capture_git_sha
 
         sha = "b" * 40
         completed = MagicMock(returncode=0, stdout=f"{sha}\n", stderr="")
 
-        with patch("alphalens.rotation.config.subprocess.run", return_value=completed) as mock_run:
+        with patch(
+            "alphalens.archive.rotation.config.subprocess.run", return_value=completed
+        ) as mock_run:
             result = capture_git_sha(allow_dirty=True)
 
         self.assertEqual(result, sha)
@@ -86,7 +88,7 @@ class TestLoadConfig(unittest.TestCase):
     def test_loads_valid_yaml_into_rotation_config(self):
         import tempfile
 
-        from alphalens.rotation.config import RotationConfig, load_config
+        from alphalens.archive.rotation.config import RotationConfig, load_config
 
         with tempfile.TemporaryDirectory() as tmp:
             path = _write_config(tmp, _VALID_CONFIG)
@@ -103,7 +105,7 @@ class TestLoadConfig(unittest.TestCase):
     def test_rejects_core_weights_not_summing_to_one(self):
         import tempfile
 
-        from alphalens.rotation.config import ConfigError, load_config
+        from alphalens.archive.rotation.config import ConfigError, load_config
 
         bad = _VALID_CONFIG.replace("SPY: 0.60", "SPY: 0.50")
         with tempfile.TemporaryDirectory() as tmp:
@@ -114,7 +116,7 @@ class TestLoadConfig(unittest.TestCase):
     def test_rejects_more_than_five_rules(self):
         import tempfile
 
-        from alphalens.rotation.config import ConfigError, load_config
+        from alphalens.archive.rotation.config import ConfigError, load_config
 
         extra_rules = "\n".join(
             f"  - name: rule_{i}\n"
@@ -147,7 +149,7 @@ class TestLoadConfig(unittest.TestCase):
     def test_rejects_unknown_ticker_in_core(self):
         import tempfile
 
-        from alphalens.rotation.config import ConfigError, load_config
+        from alphalens.archive.rotation.config import ConfigError, load_config
 
         bad = _VALID_CONFIG.replace("SPY: 0.60", "MSFT: 0.60")
         with tempfile.TemporaryDirectory() as tmp:
@@ -158,7 +160,7 @@ class TestLoadConfig(unittest.TestCase):
     def test_rejects_rule_tilt_with_unknown_ticker(self):
         import tempfile
 
-        from alphalens.rotation.config import ConfigError, load_config
+        from alphalens.archive.rotation.config import ConfigError, load_config
 
         bad = _VALID_CONFIG.replace("QQQ: 0.05, SPY: -0.05", "TSLA: 0.05, SPY: -0.05")
         with tempfile.TemporaryDirectory() as tmp:
@@ -171,7 +173,7 @@ class TestConfigFingerprint(unittest.TestCase):
     def test_fingerprint_has_git_sha_and_content_sha(self):
         import tempfile
 
-        from alphalens.rotation.config import (
+        from alphalens.archive.rotation.config import (
             ConfigFingerprint,
             compute_fingerprint,
         )
@@ -180,7 +182,7 @@ class TestConfigFingerprint(unittest.TestCase):
             path = _write_config(tmp, _VALID_CONFIG)
             sha = "c" * 40
             completed = MagicMock(returncode=0, stdout=f"{sha}\n", stderr="")
-            with patch("alphalens.rotation.config.subprocess.run", return_value=completed):
+            with patch("alphalens.archive.rotation.config.subprocess.run", return_value=completed):
                 fp = compute_fingerprint(path, allow_dirty=True)
 
         self.assertIsInstance(fp, ConfigFingerprint)
@@ -191,13 +193,13 @@ class TestConfigFingerprint(unittest.TestCase):
     def test_fingerprint_content_sha_stable_across_calls(self):
         import tempfile
 
-        from alphalens.rotation.config import compute_fingerprint
+        from alphalens.archive.rotation.config import compute_fingerprint
 
         with tempfile.TemporaryDirectory() as tmp:
             path = _write_config(tmp, _VALID_CONFIG)
             sha = "d" * 40
             completed = MagicMock(returncode=0, stdout=f"{sha}\n", stderr="")
-            with patch("alphalens.rotation.config.subprocess.run", return_value=completed):
+            with patch("alphalens.archive.rotation.config.subprocess.run", return_value=completed):
                 fp1 = compute_fingerprint(path, allow_dirty=True)
                 fp2 = compute_fingerprint(path, allow_dirty=True)
 

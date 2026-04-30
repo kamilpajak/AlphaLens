@@ -28,7 +28,7 @@ with Newey-West HAC (lag = `int(4·(n/100)^(2/9))`).
 | IS  | +31.98% | +1.22 | 0.002 | FAIL |
 | OOS | -22.69% | -0.66 | 0.004 | FAIL |
 
-## Gate 2: 4-gate sanity (`alphalens.rotation.sanity_checks`)
+## Gate 2: 4-gate sanity (`alphalens.archive.rotation.sanity_checks`)
 
 **N/A** — Layer 2c is a rule-based ranking screener (lean technicals).
 It has no passive benchmark to overlay against, so

@@ -1,6 +1,6 @@
 import unittest
 
-from alphalens.rotation.config import Rule
+from alphalens.archive.rotation.config import Rule
 
 
 def _rule(name, signal, op, threshold, tilt):

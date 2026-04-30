@@ -1,6 +1,6 @@
 """Layer 2d live/ad-hoc pipeline: scan a universe, emit cluster candidates.
 
-Where the backtest adapter (:mod:`alphalens.screeners.insider.backtest_adapter`)
+Where the backtest adapter (:mod:`alphalens.archive.screeners.insider.backtest_adapter`)
 scores a universe supplied by the engine as OHLCV histories, this pipeline is
 the live counterpart invoked from the CLI and launchd. Universe comes from the
 injected loader (typically :func:`alphalens.alt_data.russell_universe.load_iwm_current`),
@@ -19,7 +19,7 @@ from typing import Protocol
 
 import pandas as pd
 
-from ...candidates import Candidate
+from alphalens.candidates import Candidate
 
 logger = logging.getLogger(__name__)
 

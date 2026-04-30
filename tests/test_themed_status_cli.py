@@ -22,7 +22,7 @@ class TestThemedStatusCLI(unittest.TestCase):
         from alphalens_cli.main import app
 
         with patch(
-            "alphalens.screeners.themed.history_store.default_history_path",
+            "alphalens.archive.screeners.themed.history_store.default_history_path",
             return_value=self.tmp_path,
         ):
             result = self.runner.invoke(app, ["themed", "status", "--days", "30"])
@@ -31,7 +31,7 @@ class TestThemedStatusCLI(unittest.TestCase):
         self.assertIn("No runs in history", result.stdout)
 
     def test_status_populated_store_renders_dashboard_sections(self):
-        from alphalens.screeners.themed.history_store import ThemedHistoryStore
+        from alphalens.archive.screeners.themed.history_store import ThemedHistoryStore
         from alphalens_cli.main import app
 
         store = ThemedHistoryStore(path=self.tmp_path)
@@ -56,7 +56,7 @@ class TestThemedStatusCLI(unittest.TestCase):
         )
 
         with patch(
-            "alphalens.screeners.themed.history_store.default_history_path",
+            "alphalens.archive.screeners.themed.history_store.default_history_path",
             return_value=self.tmp_path,
         ):
             result = self.runner.invoke(app, ["themed", "status", "--days", "30", "--top-n", "3"])

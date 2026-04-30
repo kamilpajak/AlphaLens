@@ -321,7 +321,7 @@ def picks_from_history_store(store, days: int = 60, top_n: int = 5) -> list[Pick
     # RESEARCH-ONLY: Layer 2b (themed) CLOSED 2026-04-22 (momentum overfit + cost
     # drag). Production history store is the only source of recorded picks for
     # historical-acceptance validation. Exempt from backtest/ ↔ screeners/ rule.
-    from alphalens.screeners.themed.history_store import ThemedHistoryStore  # late
+    from alphalens.archive.screeners.themed.history_store import ThemedHistoryStore  # late
 
     if not isinstance(store, ThemedHistoryStore):
         raise TypeError(f"expected ThemedHistoryStore, got {type(store)}")
@@ -336,9 +336,9 @@ def picks_from_history_store(store, days: int = 60, top_n: int = 5) -> list[Pick
     # FF3 alpha t=0.14 failure. The Lean CSV loader is the only readily-available
     # OHLCV source for backtest replay; imports are intentional and exempt from
     # the backtest/ ↔ screeners/ dependency rule. Do not extend.
+    from alphalens.archive.screeners.lean.config import DATA_DIR
+    from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
     from alphalens.backtest.history_store import HistoryStore
-    from alphalens.screeners.lean.config import DATA_DIR
-    from alphalens.screeners.lean.lean_csv_loader import load_lean_histories
 
     tickers = sorted(timeline["ticker"].unique())
     histories = load_lean_histories(DATA_DIR, tickers)

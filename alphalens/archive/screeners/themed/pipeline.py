@@ -11,8 +11,9 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
-from ...candidates import Candidate
-from ..prescreener.data_fetcher import BatchDataFetcher
+from alphalens.candidates import Candidate
+from alphalens.screeners.prescreener.data_fetcher import BatchDataFetcher
+
 from .config import THEMED_DEFAULTS
 from .guardrails import Guardrails
 from .momentum_scorer import MomentumScorer
@@ -52,8 +53,8 @@ class ThemedPipeline:
         # the soft gate is enabled. Cache handles the 90-day TTL so we do at
         # most ~113 API calls per quarter, not per daily run.
         if self.config.get("fundamental_gate_enabled", False):
-            from ...fundamentals.cache import FundamentalsCache
-            from ...fundamentals.fetcher import extract_features, fetch_ticker_bundle
+            from alphalens.fundamentals.cache import FundamentalsCache
+            from alphalens.fundamentals.fetcher import extract_features, fetch_ticker_bundle
 
             cache = FundamentalsCache()
             for ticker in tickers:

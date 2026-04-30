@@ -48,7 +48,7 @@ def _default_config(**overrides):
 
 class TestGuardrails(unittest.TestCase):
     def test_passes_when_price_and_volume_ok(self):
-        from alphalens.screeners.lean.lean_project.scorer import guardrails_pass
+        from alphalens.archive.screeners.lean.lean_project.scorer import guardrails_pass
 
         df = _history([50.0] * 30, [100_000] * 30)
         self.assertTrue(
@@ -56,19 +56,19 @@ class TestGuardrails(unittest.TestCase):
         )
 
     def test_rejects_below_min_price(self):
-        from alphalens.screeners.lean.lean_project.scorer import guardrails_pass
+        from alphalens.archive.screeners.lean.lean_project.scorer import guardrails_pass
 
         df = _history([2.0] * 30, [100_000] * 30)
         self.assertFalse(guardrails_pass(df, min_price=5, max_price=100, min_avg_dollar_volume=1))
 
     def test_rejects_above_max_price(self):
-        from alphalens.screeners.lean.lean_project.scorer import guardrails_pass
+        from alphalens.archive.screeners.lean.lean_project.scorer import guardrails_pass
 
         df = _history([500.0] * 30, [1000] * 30)
         self.assertFalse(guardrails_pass(df, min_price=5, max_price=100, min_avg_dollar_volume=1))
 
     def test_rejects_thin_liquidity(self):
-        from alphalens.screeners.lean.lean_project.scorer import guardrails_pass
+        from alphalens.archive.screeners.lean.lean_project.scorer import guardrails_pass
 
         df = _history([50.0] * 30, [100] * 30)  # $5k/day
         self.assertFalse(
@@ -76,7 +76,7 @@ class TestGuardrails(unittest.TestCase):
         )
 
     def test_rejects_short_history(self):
-        from alphalens.screeners.lean.lean_project.scorer import guardrails_pass
+        from alphalens.archive.screeners.lean.lean_project.scorer import guardrails_pass
 
         df = _history([50.0] * 5)
         self.assertFalse(guardrails_pass(df, min_price=5, max_price=100, min_avg_dollar_volume=1))
@@ -98,14 +98,14 @@ class TestRankUniverse(unittest.TestCase):
         return _history(close, [100_000] * 250)
 
     def test_empty_input_returns_empty_frame(self):
-        from alphalens.screeners.lean.lean_project.scorer import rank_universe
+        from alphalens.archive.screeners.lean.lean_project.scorer import rank_universe
 
         df = rank_universe({}, _default_config())
         self.assertTrue(df.empty)
         self.assertIn("rank", df.columns)
 
     def test_uptrend_ranks_above_downtrend(self):
-        from alphalens.screeners.lean.lean_project.scorer import rank_universe
+        from alphalens.archive.screeners.lean.lean_project.scorer import rank_universe
 
         histories = {
             "UP": self._strong_uptrend(),
@@ -119,7 +119,7 @@ class TestRankUniverse(unittest.TestCase):
         self.assertEqual(ranked.iloc[-1]["ticker"], "DOWN")
 
     def test_adds_monotonic_rank(self):
-        from alphalens.screeners.lean.lean_project.scorer import rank_universe
+        from alphalens.archive.screeners.lean.lean_project.scorer import rank_universe
 
         histories = {
             "A": self._strong_uptrend(),
@@ -130,7 +130,7 @@ class TestRankUniverse(unittest.TestCase):
         self.assertEqual(list(ranked["rank"]), [1, 2, 3])
 
     def test_guardrails_drop_names_before_scoring(self):
-        from alphalens.screeners.lean.lean_project.scorer import rank_universe
+        from alphalens.archive.screeners.lean.lean_project.scorer import rank_universe
 
         cfg = _default_config(min_avg_dollar_volume=10_000_000_000)  # impossible
         histories = {
@@ -140,7 +140,7 @@ class TestRankUniverse(unittest.TestCase):
         self.assertTrue(rank_universe(histories, cfg).empty)
 
     def test_score_in_sane_range(self):
-        from alphalens.screeners.lean.lean_project.scorer import rank_universe
+        from alphalens.archive.screeners.lean.lean_project.scorer import rank_universe
 
         histories = {
             "A": self._strong_uptrend(),
@@ -155,7 +155,7 @@ class TestRankUniverse(unittest.TestCase):
 
 class TestComputeMetrics(unittest.TestCase):
     def test_returns_known_values_for_clean_input(self):
-        from alphalens.screeners.lean.lean_project.scorer import compute_metrics
+        from alphalens.archive.screeners.lean.lean_project.scorer import compute_metrics
 
         close = list(np.linspace(10, 100, 250))
         volume = [100_000] * 249 + [300_000]

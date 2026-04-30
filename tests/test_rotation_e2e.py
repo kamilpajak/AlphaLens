@@ -16,14 +16,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from alphalens.archive.rotation.allocator import OverlayAllocator
+from alphalens.archive.rotation.config import load_config
+from alphalens.archive.rotation.gates import evaluate_all_gates
+from alphalens.archive.rotation.overlay_engine import OverlayBacktestEngine
 from alphalens.backtest.factor_analysis import AlphaResult
 from alphalens.backtest.history_store import HistoryStore
 from alphalens.macro.scorer import RuleBasedScorer
 from alphalens.macro.signals import build_signal_set
-from alphalens.rotation.allocator import OverlayAllocator
-from alphalens.rotation.config import load_config
-from alphalens.rotation.gates import evaluate_all_gates
-from alphalens.rotation.overlay_engine import OverlayBacktestEngine
 
 
 def _synthetic_ohlcv(n_bars: int, daily_mu: float, daily_vol: float, seed: int) -> pd.DataFrame:

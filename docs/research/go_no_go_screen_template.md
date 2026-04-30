@@ -62,7 +62,7 @@ kill_thresholds:
   ...
 ```
 
-Use `alphalens.rotation.precommit.ConfigFingerprint` to capture:
+Use `alphalens.archive.rotation.precommit.ConfigFingerprint` to capture:
 - `config_path`
 - `content_sha256` of the YAML
 - `git_sha` (must be clean repo)

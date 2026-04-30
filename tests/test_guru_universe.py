@@ -1,4 +1,4 @@
-"""Tests for alphalens.guru.universe — S&P 500 point-in-time membership loader."""
+"""Tests for alphalens.archive.guru.universe — S&P 500 point-in-time membership loader."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def _write_snapshot(tmpdir: Path, year: int, tickers: list[str]) -> Path:
 
 class TestLoadSp500Pit(unittest.TestCase):
     def test_loads_known_year_as_list_of_tickers(self):
-        from alphalens.guru.universe import load_sp500_pit
+        from alphalens.archive.guru.universe import load_sp500_pit
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -39,7 +39,7 @@ class TestLoadSp500Pit(unittest.TestCase):
         self.assertEqual(result[0], "T000")
 
     def test_rejects_unsupported_year(self):
-        from alphalens.guru.universe import UniverseError, load_sp500_pit
+        from alphalens.archive.guru.universe import UniverseError, load_sp500_pit
 
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(UniverseError):
             load_sp500_pit(year=1999, data_dir=Path(tmp))
@@ -48,7 +48,7 @@ class TestLoadSp500Pit(unittest.TestCase):
         """asof=2018-06-15 → loads 2018 snapshot (not 2020)."""
         import pandas as pd
 
-        from alphalens.guru.universe import load_sp500_pit_for_date
+        from alphalens.archive.guru.universe import load_sp500_pit_for_date
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -64,7 +64,7 @@ class TestLoadSp500Pit(unittest.TestCase):
             self.assertEqual(sorted(exact), ["C", "D"])
 
             # Date before any snapshot → UniverseError
-            from alphalens.guru.universe import UniverseError
+            from alphalens.archive.guru.universe import UniverseError
 
             with self.assertRaises(UniverseError):
                 load_sp500_pit_for_date(pd.Timestamp("2017-01-01"), data_dir=tmp_path)

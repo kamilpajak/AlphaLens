@@ -13,16 +13,16 @@ from pathlib import Path
 import pandas as pd
 import typer
 
-from alphalens.backtest.metrics import sharpe, sharpe_autocorr_adjusted
-from alphalens.macro.scorer import RuleBasedScorer
-from alphalens.rotation.allocator import OverlayAllocator
-from alphalens.rotation.config import compute_fingerprint, load_config
-from alphalens.rotation.data_loader import load_rotation_data
-from alphalens.rotation.overlay_engine import OverlayBacktestEngine
-from alphalens.rotation.sanity_checks import (
+from alphalens.archive.rotation.allocator import OverlayAllocator
+from alphalens.archive.rotation.config import compute_fingerprint, load_config
+from alphalens.archive.rotation.data_loader import load_rotation_data
+from alphalens.archive.rotation.overlay_engine import OverlayBacktestEngine
+from alphalens.archive.rotation.sanity_checks import (
     build_passive_benchmark,
     run_all_sanity_checks,
 )
+from alphalens.backtest.metrics import sharpe, sharpe_autocorr_adjusted
+from alphalens.macro.scorer import RuleBasedScorer
 
 rotation_app = typer.Typer(
     name="rotation",

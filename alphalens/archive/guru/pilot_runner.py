@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from alphalens.guru.llm_scorer import ConvictionResult
+from alphalens.archive.guru.llm_scorer import ConvictionResult
 
 logger = logging.getLogger(__name__)
 

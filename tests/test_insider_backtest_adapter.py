@@ -21,7 +21,7 @@ def _history(dates: list[str]) -> pd.DataFrame:
 
 class TestAdapterContract(unittest.TestCase):
     def test_returns_dataframe_with_expected_columns(self):
-        from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+        from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
 
         store = MagicMock()
         store.features_as_of.side_effect = lambda t, asof: {
@@ -54,7 +54,7 @@ class TestAdapterContract(unittest.TestCase):
         self.assertIn("aggregate_dollar", df.columns)
 
     def test_excludes_tickers_without_cluster(self):
-        from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+        from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
 
         store = MagicMock()
         store.features_as_of.side_effect = lambda t, asof: (
@@ -77,7 +77,7 @@ class TestAdapterContract(unittest.TestCase):
         self.assertEqual(list(df["ticker"]), ["AAPL"])
 
     def test_empty_histories_returns_empty_df_with_columns(self):
-        from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+        from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
 
         df = insider_scorer_adapter({}, {"_insider_store": MagicMock()})
 
@@ -86,7 +86,7 @@ class TestAdapterContract(unittest.TestCase):
         self.assertIn("score", df.columns)
 
     def test_no_cluster_anywhere_returns_empty_df(self):
-        from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+        from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
 
         store = MagicMock()
         store.features_as_of.return_value = None
@@ -103,7 +103,7 @@ class TestAdapterContract(unittest.TestCase):
 
     def test_missing_store_raises_keyerror(self):
         """Explicit failure when wiring is wrong — better than silently empty."""
-        from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+        from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
 
         with self.assertRaises(KeyError):
             insider_scorer_adapter(
@@ -114,7 +114,7 @@ class TestAdapterContract(unittest.TestCase):
 
 class TestAsofInference(unittest.TestCase):
     def test_uses_max_across_histories(self):
-        from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+        from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
 
         captured_asofs = []
 
@@ -135,7 +135,7 @@ class TestAsofInference(unittest.TestCase):
         self.assertTrue(all(a == date(2025, 3, 20) for a in captured_asofs))
 
     def test_no_valid_asof_returns_empty(self):
-        from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+        from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
 
         store = MagicMock()
         histories = {
@@ -150,7 +150,7 @@ class TestAsofInference(unittest.TestCase):
 
 class TestScoringDesign(unittest.TestCase):
     def test_score_equals_insider_count(self):
-        from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+        from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
 
         store = MagicMock()
         store.features_as_of.side_effect = lambda t, asof: {
@@ -191,7 +191,7 @@ class TestScoringDesign(unittest.TestCase):
 
 class TestMinBarsRequired(unittest.TestCase):
     def test_attribute_is_zero(self):
-        from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+        from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
 
         self.assertEqual(insider_scorer_adapter.MIN_BARS_REQUIRED, 0)
 
@@ -199,7 +199,7 @@ class TestMinBarsRequired(unittest.TestCase):
 class TestConfigPassthrough(unittest.TestCase):
     def test_benchmark_ticker_skipped(self):
         """If config declares a benchmark that appears in histories, skip it."""
-        from alphalens.screeners.insider.backtest_adapter import insider_scorer_adapter
+        from alphalens.archive.screeners.insider.backtest_adapter import insider_scorer_adapter
 
         store = MagicMock()
         store.features_as_of.side_effect = lambda t, asof: (

@@ -5,6 +5,6 @@
 # ARCHIVED 2026-04-20: Lean strategy failed 5-year rigorous validation
 # (Sharpe 0.25 net, FF3 α t-stat 0.14). The CLI command `alphalens watchdog
 # lean-screen` has been removed. To revive: restore a `lean screen` command
-# in `alphalens_cli/commands/` (e.g. wiring through `alphalens.screeners.lean.pipeline`)
+# in `alphalens_cli/commands/` (e.g. wiring through `alphalens.archive.screeners.lean.pipeline`)
 # and update this wrapper to invoke it.
 exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens lean screen --top-n 30 --analyze "$@"

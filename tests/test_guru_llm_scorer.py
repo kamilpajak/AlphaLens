@@ -1,4 +1,4 @@
-"""Tests for alphalens.guru.llm_scorer — structured JSON + cost tracking + cache."""
+"""Tests for alphalens.archive.guru.llm_scorer — structured JSON + cost tracking + cache."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
-from alphalens.guru.prompt import GuruPrompt
+from alphalens.archive.guru.prompt import GuruPrompt
 
 
 def _fake_prompt() -> GuruPrompt:
@@ -34,7 +34,7 @@ def _mock_llm_response(content: str, input_tokens: int = 1000, output_tokens: in
 
 class TestGuruScorer(unittest.TestCase):
     def test_returns_conviction_result_with_parsed_json(self):
-        from alphalens.guru.llm_scorer import GuruScorer
+        from alphalens.archive.guru.llm_scorer import GuruScorer
 
         llm = MagicMock()
         llm.invoke.return_value = _mock_llm_response(
@@ -55,7 +55,7 @@ class TestGuruScorer(unittest.TestCase):
         self.assertEqual(result.prompt_sha, "a" * 64)
 
     def test_parses_json_from_markdown_codeblock_if_wrapped(self):
-        from alphalens.guru.llm_scorer import GuruScorer
+        from alphalens.archive.guru.llm_scorer import GuruScorer
 
         llm = MagicMock()
         llm.invoke.return_value = _mock_llm_response(
@@ -69,7 +69,7 @@ class TestGuruScorer(unittest.TestCase):
         self.assertAlmostEqual(result.conviction, 45.0)
 
     def test_handles_malformed_json(self):
-        from alphalens.guru.llm_scorer import GuruScorer, ScorerError
+        from alphalens.archive.guru.llm_scorer import GuruScorer, ScorerError
 
         llm = MagicMock()
         llm.invoke.return_value = _mock_llm_response("I don't have enough info.")
@@ -80,7 +80,7 @@ class TestGuruScorer(unittest.TestCase):
                 scorer.score(ticker="X", asof=pd.Timestamp("2018-01-01"), context_text="")
 
     def test_clamps_conviction_to_0_100_range(self):
-        from alphalens.guru.llm_scorer import GuruScorer
+        from alphalens.archive.guru.llm_scorer import GuruScorer
 
         llm = MagicMock()
         llm.invoke.return_value = _mock_llm_response('{"conviction": 125, "rationale": "amazing"}')
@@ -92,7 +92,7 @@ class TestGuruScorer(unittest.TestCase):
         self.assertAlmostEqual(result.conviction, 100.0)
 
     def test_tracks_token_usage_and_cost(self):
-        from alphalens.guru.llm_scorer import GuruScorer
+        from alphalens.archive.guru.llm_scorer import GuruScorer
 
         llm = MagicMock()
         llm.invoke.return_value = _mock_llm_response(
@@ -118,7 +118,7 @@ class TestGuruScorer(unittest.TestCase):
         self.assertAlmostEqual(result.cost_usd, 0.00725, places=6)
 
     def test_disk_cache_avoids_duplicate_llm_calls(self):
-        from alphalens.guru.llm_scorer import GuruScorer
+        from alphalens.archive.guru.llm_scorer import GuruScorer
 
         llm = MagicMock()
         llm.invoke.return_value = _mock_llm_response('{"conviction": 60, "rationale": "ok"}')
@@ -133,7 +133,7 @@ class TestGuruScorer(unittest.TestCase):
         self.assertAlmostEqual(r1.conviction, r2.conviction)
 
     def test_cache_miss_for_different_prompt_sha(self):
-        from alphalens.guru.llm_scorer import GuruScorer
+        from alphalens.archive.guru.llm_scorer import GuruScorer
 
         llm = MagicMock()
         llm.invoke.return_value = _mock_llm_response('{"conviction": 60, "rationale": "ok"}')

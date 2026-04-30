@@ -1,4 +1,4 @@
-"""Tests for alphalens.guru.report — 4-year aggregator + kill evaluator."""
+"""Tests for alphalens.archive.guru.report — 4-year aggregator + kill evaluator."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import unittest
 
 import pandas as pd
 
-from alphalens.guru.llm_scorer import ConvictionResult
-from alphalens.guru.pilot_runner import SingleYearResult
+from alphalens.archive.guru.llm_scorer import ConvictionResult
+from alphalens.archive.guru.pilot_runner import SingleYearResult
 
 
 def _stub_year(year: int, port_return: float, bench_return: float) -> SingleYearResult:
@@ -38,7 +38,7 @@ def _stub_year(year: int, port_return: float, bench_return: float) -> SingleYear
 
 class TestPilotReportAggregation(unittest.TestCase):
     def test_aggregates_per_year_means(self):
-        from alphalens.guru.report import PilotReport
+        from alphalens.archive.guru.report import PilotReport
 
         years = [
             _stub_year(2018, 0.10, 0.05),  # +5pp outperf
@@ -54,7 +54,7 @@ class TestPilotReportAggregation(unittest.TestCase):
         self.assertAlmostEqual(report.total_cost_usd, 0.02, places=6)
 
     def test_correlation_to_benchmark(self):
-        from alphalens.guru.report import PilotReport
+        from alphalens.archive.guru.report import PilotReport
 
         years = [
             _stub_year(2018, 0.10, 0.05),
@@ -72,7 +72,7 @@ class TestPilotReportAggregation(unittest.TestCase):
 class TestKillEvaluation(unittest.TestCase):
     def test_proceed_when_all_thresholds_met(self):
         """Strong outperformance with LOW benchmark correlation → PROCEED."""
-        from alphalens.guru.report import PilotReport
+        from alphalens.archive.guru.report import PilotReport
 
         # Portfolio outperforms every year but amounts VARY → decorrelates from bench
         years = [
@@ -91,7 +91,7 @@ class TestKillEvaluation(unittest.TestCase):
         self.assertEqual(verdict.label, "PROCEED")
 
     def test_kill_when_mean_outperformance_below_200_bps(self):
-        from alphalens.guru.report import PilotReport
+        from alphalens.archive.guru.report import PilotReport
 
         years = [
             _stub_year(2018, 0.06, 0.05),  # +1pp
@@ -107,7 +107,7 @@ class TestKillEvaluation(unittest.TestCase):
         self.assertIn("mean_outperformance", verdict.failed_gates)
 
     def test_kill_when_any_year_underperforms_benchmark(self):
-        from alphalens.guru.report import PilotReport
+        from alphalens.archive.guru.report import PilotReport
 
         years = [
             _stub_year(2018, 0.15, 0.05),  # +10pp great
@@ -124,7 +124,7 @@ class TestKillEvaluation(unittest.TestCase):
 
     def test_gray_zone_when_mean_between_thresholds(self):
         """Mean outperformance 200-500 bps + uncorrelated → GRAY (not PROCEED, not KILL)."""
-        from alphalens.guru.report import PilotReport
+        from alphalens.archive.guru.report import PilotReport
 
         # Uncorrelated moderate outperformance
         years = [
@@ -148,7 +148,7 @@ class TestRelaxedMinYearTolerance(unittest.TestCase):
     Buffett 1999 (-9pp vs S&P) would have failed strict gate."""
 
     def test_proceed_with_relaxed_tolerance_when_underperformance_within_5pct(self):
-        from alphalens.guru.report import PilotReport
+        from alphalens.archive.guru.report import PilotReport
 
         # Underperforms by 3pp in 2020 (within -5% tolerance)
         years = [
@@ -168,7 +168,7 @@ class TestRelaxedMinYearTolerance(unittest.TestCase):
         self.assertNotEqual(verdict_relaxed.label, "KILL")
 
     def test_kill_when_underperformance_exceeds_tolerance(self):
-        from alphalens.guru.report import PilotReport
+        from alphalens.archive.guru.report import PilotReport
 
         # Underperforms by 8pp in 2020 (beyond -5% tolerance)
         years = [
@@ -186,7 +186,7 @@ class TestRelaxedMinYearTolerance(unittest.TestCase):
 
     def test_default_tolerance_is_zero_strict(self):
         """Backward compat — calling without arg keeps strict 'min > 0' gate."""
-        from alphalens.guru.report import PilotReport
+        from alphalens.archive.guru.report import PilotReport
 
         years = [
             _stub_year(2018, 0.18, 0.05),

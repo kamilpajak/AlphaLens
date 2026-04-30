@@ -1,4 +1,4 @@
-"""Tests for alphalens.quiver_screener.features.
+"""Tests for alphalens.archive.quiver_screener.features.
 
 Feature functions operate on a NORMALIZED DataFrame schema so tests don't couple
 to Quiver SDK response details. A separate normalizer (in client.py / fetch
@@ -47,7 +47,7 @@ def _insider_trades(rows: list[tuple]) -> pd.DataFrame:
 
 class TestCongressNetFlow(unittest.TestCase):
     def test_net_flow_is_buys_minus_sells_in_window(self):
-        from alphalens.quiver_screener.features import congress_net_flow
+        from alphalens.archive.quiver_screener.features import congress_net_flow
 
         trades = _congress_trades(
             [
@@ -60,7 +60,7 @@ class TestCongressNetFlow(unittest.TestCase):
         self.assertAlmostEqual(result, 300_000.0, places=2)  # 250k + 100k - 50k
 
     def test_net_flow_excludes_trades_outside_window(self):
-        from alphalens.quiver_screener.features import congress_net_flow
+        from alphalens.archive.quiver_screener.features import congress_net_flow
 
         trades = _congress_trades(
             [
@@ -79,7 +79,7 @@ class TestCongressNetFlow(unittest.TestCase):
         self.assertAlmostEqual(result, 100_000.0, places=2)
 
     def test_net_flow_ignores_other_tickers(self):
-        from alphalens.quiver_screener.features import congress_net_flow
+        from alphalens.archive.quiver_screener.features import congress_net_flow
 
         trades = _congress_trades(
             [
@@ -97,14 +97,14 @@ class TestCongressNetFlow(unittest.TestCase):
         self.assertAlmostEqual(result, 200_000.0, places=2)
 
     def test_net_flow_zero_when_no_trades(self):
-        from alphalens.quiver_screener.features import congress_net_flow
+        from alphalens.archive.quiver_screener.features import congress_net_flow
 
         trades = _congress_trades([])
         result = congress_net_flow(trades, "NVDA", pd.Timestamp("2024-01-31"), lookback_days=30)
         self.assertEqual(result, 0.0)
 
     def test_exchange_transaction_contributes_zero(self):
-        from alphalens.quiver_screener.features import congress_net_flow
+        from alphalens.archive.quiver_screener.features import congress_net_flow
 
         trades = _congress_trades(
             [
@@ -118,7 +118,7 @@ class TestCongressNetFlow(unittest.TestCase):
 
 class TestCongressUniqueMembers(unittest.TestCase):
     def test_counts_distinct_representatives(self):
-        from alphalens.quiver_screener.features import congress_unique_members
+        from alphalens.archive.quiver_screener.features import congress_unique_members
 
         trades = _congress_trades(
             [
@@ -133,7 +133,7 @@ class TestCongressUniqueMembers(unittest.TestCase):
         self.assertEqual(result, 3)
 
     def test_same_representative_twice_counts_once(self):
-        from alphalens.quiver_screener.features import congress_unique_members
+        from alphalens.archive.quiver_screener.features import congress_unique_members
 
         trades = _congress_trades(
             [
@@ -148,7 +148,7 @@ class TestCongressUniqueMembers(unittest.TestCase):
         self.assertEqual(result, 1)
 
     def test_zero_when_no_trades(self):
-        from alphalens.quiver_screener.features import congress_unique_members
+        from alphalens.archive.quiver_screener.features import congress_unique_members
 
         trades = _congress_trades([])
         result = congress_unique_members(
@@ -159,7 +159,7 @@ class TestCongressUniqueMembers(unittest.TestCase):
 
 class TestInsiderClusterFlag(unittest.TestCase):
     def test_true_when_3_plus_distinct_insider_buys_in_window(self):
-        from alphalens.quiver_screener.features import insider_cluster_flag
+        from alphalens.archive.quiver_screener.features import insider_cluster_flag
 
         trades = _insider_trades(
             [
@@ -178,7 +178,7 @@ class TestInsiderClusterFlag(unittest.TestCase):
         self.assertTrue(result)
 
     def test_false_when_only_2_distinct_insider_buys(self):
-        from alphalens.quiver_screener.features import insider_cluster_flag
+        from alphalens.archive.quiver_screener.features import insider_cluster_flag
 
         trades = _insider_trades(
             [
@@ -197,7 +197,7 @@ class TestInsiderClusterFlag(unittest.TestCase):
 
     def test_false_when_3_insiders_but_all_sells(self):
         """Cluster signal is BUY-specific. Three execs dumping is not a cluster buy."""
-        from alphalens.quiver_screener.features import insider_cluster_flag
+        from alphalens.archive.quiver_screener.features import insider_cluster_flag
 
         trades = _insider_trades(
             [
@@ -216,7 +216,7 @@ class TestInsiderClusterFlag(unittest.TestCase):
         self.assertFalse(result)
 
     def test_same_insider_multiple_buys_counts_as_one(self):
-        from alphalens.quiver_screener.features import insider_cluster_flag
+        from alphalens.archive.quiver_screener.features import insider_cluster_flag
 
         trades = _insider_trades(
             [
@@ -235,7 +235,7 @@ class TestInsiderClusterFlag(unittest.TestCase):
         self.assertFalse(result)  # 3 buys, but 1 distinct insider
 
     def test_honours_custom_min_insiders(self):
-        from alphalens.quiver_screener.features import insider_cluster_flag
+        from alphalens.archive.quiver_screener.features import insider_cluster_flag
 
         trades = _insider_trades(
             [
@@ -255,7 +255,7 @@ class TestInsiderClusterFlag(unittest.TestCase):
 
 class TestInsiderBuyRatio(unittest.TestCase):
     def test_ratio_is_buy_dollars_over_total_dollars_in_window(self):
-        from alphalens.quiver_screener.features import insider_buy_ratio
+        from alphalens.archive.quiver_screener.features import insider_buy_ratio
 
         trades = _insider_trades(
             [
@@ -267,7 +267,7 @@ class TestInsiderBuyRatio(unittest.TestCase):
         self.assertAlmostEqual(result, 500_000 / (500_000 + 250_000), places=6)
 
     def test_all_buys_returns_one(self):
-        from alphalens.quiver_screener.features import insider_buy_ratio
+        from alphalens.archive.quiver_screener.features import insider_buy_ratio
 
         trades = _insider_trades(
             [
@@ -279,7 +279,7 @@ class TestInsiderBuyRatio(unittest.TestCase):
         self.assertAlmostEqual(result, 1.0)
 
     def test_all_sells_returns_zero(self):
-        from alphalens.quiver_screener.features import insider_buy_ratio
+        from alphalens.archive.quiver_screener.features import insider_buy_ratio
 
         trades = _insider_trades(
             [
@@ -291,7 +291,7 @@ class TestInsiderBuyRatio(unittest.TestCase):
         self.assertAlmostEqual(result, 0.0)
 
     def test_no_trades_returns_nan(self):
-        from alphalens.quiver_screener.features import insider_buy_ratio
+        from alphalens.archive.quiver_screener.features import insider_buy_ratio
 
         trades = _insider_trades([])
         result = insider_buy_ratio(trades, "NVDA", pd.Timestamp("2024-01-31"), lookback_days=30)
@@ -300,7 +300,7 @@ class TestInsiderBuyRatio(unittest.TestCase):
 
 class TestInsiderNetFlow(unittest.TestCase):
     def test_buys_minus_sells_by_dollar_value(self):
-        from alphalens.quiver_screener.features import insider_net_flow
+        from alphalens.archive.quiver_screener.features import insider_net_flow
 
         trades = _insider_trades(
             [
@@ -312,7 +312,7 @@ class TestInsiderNetFlow(unittest.TestCase):
         self.assertAlmostEqual(result, 300_000.0, places=2)
 
     def test_zero_when_no_trades(self):
-        from alphalens.quiver_screener.features import insider_net_flow
+        from alphalens.archive.quiver_screener.features import insider_net_flow
 
         trades = _insider_trades([])
         result = insider_net_flow(trades, "NVDA", pd.Timestamp("2024-01-31"), lookback_days=30)
@@ -321,7 +321,7 @@ class TestInsiderNetFlow(unittest.TestCase):
 
 class TestInsiderFeaturePanel(unittest.TestCase):
     def test_builds_date_ticker_panel_with_net_flow(self):
-        from alphalens.quiver_screener.features import build_insider_feature_panel
+        from alphalens.archive.quiver_screener.features import build_insider_feature_panel
 
         trades = _insider_trades(
             [
@@ -348,7 +348,7 @@ class TestVectorizedPanelMatchesSlow(unittest.TestCase):
     """Parity: vectorized rolling-sum panel must reproduce per-cell scalar feature."""
 
     def test_congress_net_flow_panel_matches_per_cell(self):
-        from alphalens.quiver_screener.features import (
+        from alphalens.archive.quiver_screener.features import (
             build_congress_feature_panel,
             congress_net_flow,
         )
@@ -389,7 +389,7 @@ class TestVectorizedPanelMatchesSlow(unittest.TestCase):
                 )
 
     def test_insider_net_flow_panel_matches_per_cell(self):
-        from alphalens.quiver_screener.features import (
+        from alphalens.archive.quiver_screener.features import (
             build_insider_feature_panel,
             insider_net_flow,
         )
@@ -425,7 +425,7 @@ class TestVectorizedPanelMatchesSlow(unittest.TestCase):
                 )
 
     def test_empty_trades_returns_zero_panel(self):
-        from alphalens.quiver_screener.features import (
+        from alphalens.archive.quiver_screener.features import (
             build_congress_feature_panel,
             build_insider_feature_panel,
         )
@@ -459,7 +459,7 @@ class TestFeaturePanelBuilder(unittest.TestCase):
     """
 
     def test_builds_date_indexed_frame_with_ticker_columns(self):
-        from alphalens.quiver_screener.features import build_congress_feature_panel
+        from alphalens.archive.quiver_screener.features import build_congress_feature_panel
 
         trades = _congress_trades(
             [

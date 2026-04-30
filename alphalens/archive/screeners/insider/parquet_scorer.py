@@ -41,7 +41,7 @@ def _to_date(value: Any) -> date:
 
 
 class ParquetInsiderScorer:
-    """Drop-in for :class:`alphalens.screeners.insider.scorer.InsiderScorer`.
+    """Drop-in for :class:`alphalens.archive.screeners.insider.scorer.InsiderScorer`.
 
     Reads pre-computed cluster features from a hive-partitioned parquet
     dataset. Intended for backtest runs over a warmed cache; not for live

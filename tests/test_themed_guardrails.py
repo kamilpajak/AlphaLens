@@ -13,7 +13,7 @@ def _df(prices: list[float], volumes: list[float]) -> pd.DataFrame:
 
 class TestGuardrailCheckSingle(unittest.TestCase):
     def setUp(self):
-        from alphalens.screeners.themed.guardrails import Guardrails
+        from alphalens.archive.screeners.themed.guardrails import Guardrails
 
         self.g = Guardrails()
 
@@ -60,7 +60,7 @@ class TestGuardrailCheckSingle(unittest.TestCase):
 
     def test_rejects_recent_reverse_split(self):
         """actions DataFrame with split ratio < 1.0 in the lookback window -> reverse split."""
-        from alphalens.screeners.themed.guardrails import Guardrails
+        from alphalens.archive.screeners.themed.guardrails import Guardrails
 
         df = _df([10.0] * 60, [2_000_000] * 60)
         info = {"marketCap": 1_000_000_000, "averageVolume": 2_000_000}
@@ -76,7 +76,7 @@ class TestGuardrailCheckSingle(unittest.TestCase):
         self.assertIn("reverse_split", reason)
 
     def test_allows_forward_split(self):
-        from alphalens.screeners.themed.guardrails import Guardrails
+        from alphalens.archive.screeners.themed.guardrails import Guardrails
 
         df = _df([10.0] * 60, [2_000_000] * 60)
         info = {"marketCap": 1_000_000_000, "averageVolume": 2_000_000}
@@ -91,7 +91,7 @@ class TestGuardrailCheckSingle(unittest.TestCase):
 
     def test_allows_old_reverse_split(self):
         """Reverse split older than lookback is ignored."""
-        from alphalens.screeners.themed.guardrails import Guardrails
+        from alphalens.archive.screeners.themed.guardrails import Guardrails
 
         df = _df([10.0] * 60, [2_000_000] * 60)
         info = {"marketCap": 1_000_000_000, "averageVolume": 2_000_000}
@@ -107,7 +107,7 @@ class TestGuardrailCheckSingle(unittest.TestCase):
 
 class TestGuardrailsFilterBatch(unittest.TestCase):
     def test_returns_kept_and_rejected(self):
-        from alphalens.screeners.themed.guardrails import Guardrails
+        from alphalens.archive.screeners.themed.guardrails import Guardrails
 
         g = Guardrails()
         prices = {

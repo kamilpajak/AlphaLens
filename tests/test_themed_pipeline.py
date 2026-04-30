@@ -50,12 +50,12 @@ class TestPipelineRun(unittest.TestCase):
         }
 
     def _build_pipeline(self):
-        from alphalens.screeners.themed.pipeline import ThemedPipeline
+        from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
 
         return ThemedPipeline()
 
-    @patch("alphalens.screeners.themed.pipeline.BatchDataFetcher")
-    @patch("alphalens.screeners.themed.pipeline.load_universe")
+    @patch("alphalens.archive.screeners.themed.pipeline.BatchDataFetcher")
+    @patch("alphalens.archive.screeners.themed.pipeline.load_universe")
     def test_returns_top_n_ranked_by_momentum(self, mock_load, mock_fetcher_cls):
         mock_load.return_value = self.themes
         fetcher = mock_fetcher_cls.return_value
@@ -71,8 +71,8 @@ class TestPipelineRun(unittest.TestCase):
         scores = result["momentum_score"].tolist()
         self.assertEqual(scores, sorted(scores, reverse=True))
 
-    @patch("alphalens.screeners.themed.pipeline.BatchDataFetcher")
-    @patch("alphalens.screeners.themed.pipeline.load_universe")
+    @patch("alphalens.archive.screeners.themed.pipeline.BatchDataFetcher")
+    @patch("alphalens.archive.screeners.themed.pipeline.load_universe")
     def test_includes_theme_membership_in_output(self, mock_load, mock_fetcher_cls):
         mock_load.return_value = self.themes
         fetcher = mock_fetcher_cls.return_value
@@ -85,8 +85,8 @@ class TestPipelineRun(unittest.TestCase):
         if not qubt_row.empty:
             self.assertEqual(qubt_row["themes"].iloc[0], ["quantum"])
 
-    @patch("alphalens.screeners.themed.pipeline.BatchDataFetcher")
-    @patch("alphalens.screeners.themed.pipeline.load_universe")
+    @patch("alphalens.archive.screeners.themed.pipeline.BatchDataFetcher")
+    @patch("alphalens.archive.screeners.themed.pipeline.load_universe")
     def test_filters_out_guardrail_failures(self, mock_load, mock_fetcher_cls):
         mock_load.return_value = self.themes
         # BBAI fails guardrail (cap below $300M? Actually it's $500M, passes.
@@ -99,8 +99,8 @@ class TestPipelineRun(unittest.TestCase):
         result = self._build_pipeline().run(curr_date="2026-04-17", top_n=5)
         self.assertNotIn("BBAI", result["ticker"].tolist())
 
-    @patch("alphalens.screeners.themed.pipeline.BatchDataFetcher")
-    @patch("alphalens.screeners.themed.pipeline.load_universe")
+    @patch("alphalens.archive.screeners.themed.pipeline.BatchDataFetcher")
+    @patch("alphalens.archive.screeners.themed.pipeline.load_universe")
     def test_adds_benchmark_ticker_to_fetch_list(self, mock_load, mock_fetcher_cls):
         mock_load.return_value = self.themes
         fetcher = mock_fetcher_cls.return_value
@@ -114,8 +114,8 @@ class TestPipelineRun(unittest.TestCase):
         called_tickers = args[0] if args else kwargs.get("tickers", [])
         self.assertIn("SPY", called_tickers)
 
-    @patch("alphalens.screeners.themed.pipeline.BatchDataFetcher")
-    @patch("alphalens.screeners.themed.pipeline.load_universe")
+    @patch("alphalens.archive.screeners.themed.pipeline.BatchDataFetcher")
+    @patch("alphalens.archive.screeners.themed.pipeline.load_universe")
     def test_empty_universe_returns_empty_frame(self, mock_load, mock_fetcher_cls):
         mock_load.return_value = {}
         fetcher = mock_fetcher_cls.return_value
@@ -143,11 +143,11 @@ class TestPipelineScorerInjection(unittest.TestCase):
             "BBAI": {"marketCap": 500_000_000, "averageVolume": 2_000_000},
         }
 
-    @patch("alphalens.screeners.themed.pipeline.BatchDataFetcher")
-    @patch("alphalens.screeners.themed.pipeline.load_universe")
+    @patch("alphalens.archive.screeners.themed.pipeline.BatchDataFetcher")
+    @patch("alphalens.archive.screeners.themed.pipeline.load_universe")
     def test_default_uses_momentum_scorer(self, mock_load, mock_fetcher_cls):
-        from alphalens.screeners.themed.momentum_scorer import MomentumScorer
-        from alphalens.screeners.themed.pipeline import ThemedPipeline
+        from alphalens.archive.screeners.themed.momentum_scorer import MomentumScorer
+        from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
 
         mock_load.return_value = self.themes
         fetcher = mock_fetcher_cls.return_value
@@ -158,11 +158,11 @@ class TestPipelineScorerInjection(unittest.TestCase):
         self.assertIsInstance(pipeline.scorer, MomentumScorer)
         self.assertEqual(pipeline.source_name, "momentum")
 
-    @patch("alphalens.screeners.themed.pipeline.BatchDataFetcher")
-    @patch("alphalens.screeners.themed.pipeline.load_universe")
+    @patch("alphalens.archive.screeners.themed.pipeline.BatchDataFetcher")
+    @patch("alphalens.archive.screeners.themed.pipeline.load_universe")
     def test_early_stage_scorer_injection(self, mock_load, mock_fetcher_cls):
-        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
-        from alphalens.screeners.themed.pipeline import ThemedPipeline
+        from alphalens.archive.screeners.themed.early_stage_scorer import EarlyStageScorer
+        from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
 
         mock_load.return_value = self.themes
         fetcher = mock_fetcher_cls.return_value
@@ -173,12 +173,12 @@ class TestPipelineScorerInjection(unittest.TestCase):
         self.assertIsInstance(pipeline.scorer, EarlyStageScorer)
         self.assertEqual(pipeline.source_name, "early-stage")
 
-    @patch("alphalens.screeners.themed.pipeline.BatchDataFetcher")
-    @patch("alphalens.screeners.themed.pipeline.load_universe")
+    @patch("alphalens.archive.screeners.themed.pipeline.BatchDataFetcher")
+    @patch("alphalens.archive.screeners.themed.pipeline.load_universe")
     def test_early_stage_run_returns_score_column(self, mock_load, mock_fetcher_cls):
         """Regardless of scorer, output has canonical `momentum_score` column (backward compat)."""
-        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
-        from alphalens.screeners.themed.pipeline import ThemedPipeline
+        from alphalens.archive.screeners.themed.early_stage_scorer import EarlyStageScorer
+        from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
 
         mock_load.return_value = self.themes
         fetcher = mock_fetcher_cls.return_value
@@ -189,11 +189,11 @@ class TestPipelineScorerInjection(unittest.TestCase):
         result = pipeline.run(curr_date="2026-04-17", top_n=2)
         self.assertIn("momentum_score", result.columns)
 
-    @patch("alphalens.screeners.themed.pipeline.BatchDataFetcher")
-    @patch("alphalens.screeners.themed.pipeline.load_universe")
+    @patch("alphalens.archive.screeners.themed.pipeline.BatchDataFetcher")
+    @patch("alphalens.archive.screeners.themed.pipeline.load_universe")
     def test_candidates_carry_source_name(self, mock_load, mock_fetcher_cls):
-        from alphalens.screeners.themed.early_stage_scorer import EarlyStageScorer
-        from alphalens.screeners.themed.pipeline import ThemedPipeline
+        from alphalens.archive.screeners.themed.early_stage_scorer import EarlyStageScorer
+        from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
 
         mock_load.return_value = self.themes
         fetcher = mock_fetcher_cls.return_value

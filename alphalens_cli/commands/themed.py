@@ -37,16 +37,16 @@ def screen(
     """
     import pandas as pd
 
-    from alphalens.screeners.themed.pipeline import ThemedPipeline
-    from alphalens.screeners.themed.reporter import format_telegram_report
+    from alphalens.archive.screeners.themed.pipeline import ThemedPipeline
+    from alphalens.archive.screeners.themed.reporter import format_telegram_report
 
     curr_date = pd.Timestamp.today().strftime("%Y-%m-%d")
 
     if scorer == "momentum":
         pipeline = ThemedPipeline()
     elif scorer == "early-stage":
-        from alphalens.screeners.themed.config import THEMED_DEFAULTS
-        from alphalens.screeners.themed.early_stage_scorer import (
+        from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS
+        from alphalens.archive.screeners.themed.early_stage_scorer import (
             EARLY_STAGE_DEFAULTS,
             EarlyStageScorer,
         )
@@ -65,8 +65,8 @@ def screen(
     text = format_telegram_report(result, curr_date)
 
     try:
+        from alphalens.archive.screeners.themed.history_store import ThemedHistoryStore
         from alphalens.backtest.weighting import compute_position_weights
-        from alphalens.screeners.themed.history_store import ThemedHistoryStore
 
         weights_list = (
             compute_position_weights(len(result), "linear").tolist() if not result.empty else []
@@ -111,7 +111,7 @@ def status(
     hhi_alert: float = typer.Option(0.70, help="Alert when dominant theme weight > threshold"),
 ) -> None:
     """Layer 2b monitoring dashboard — rolling metrics from historic runs."""
-    from alphalens.screeners.themed.history_store import (
+    from alphalens.archive.screeners.themed.history_store import (
         ThemedHistoryStore,
         compute_staleness,
         compute_theme_hhi_by_day,

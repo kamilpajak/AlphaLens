@@ -9,7 +9,8 @@ from collections.abc import Mapping
 import pandas as pd
 from stockstats import wrap
 
-from ...fundamentals.gate import fundamental_gate_score
+from alphalens.fundamentals.gate import fundamental_gate_score
+
 from .config import THEMED_DEFAULTS
 
 logger = logging.getLogger(__name__)
