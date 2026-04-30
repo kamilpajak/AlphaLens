@@ -49,7 +49,7 @@ class _ScoreClassifier:
 
 class RegimeGatedScorerTests(unittest.TestCase):
     def test_returns_empty_on_off_day_for_binary_classifier(self):
-        from alphalens.regime_gate import regime_gated_scorer
+        from alphalens.gates import regime_gated_scorer
 
         gated = regime_gated_scorer(_fake_scorer, _BinaryClassifier())
         result = gated(
@@ -62,7 +62,7 @@ class RegimeGatedScorerTests(unittest.TestCase):
         self.assertIn("score", result.columns)
 
     def test_passes_through_on_on_day_for_binary_classifier(self):
-        from alphalens.regime_gate import regime_gated_scorer
+        from alphalens.gates import regime_gated_scorer
 
         gated = regime_gated_scorer(_fake_scorer, _BinaryClassifier())
         result = gated(
@@ -75,7 +75,7 @@ class RegimeGatedScorerTests(unittest.TestCase):
         self.assertEqual(list(result["score"]), [2, 1])
 
     def test_score_classifier_scales_underlying_scores(self):
-        from alphalens.regime_gate import regime_gated_scorer
+        from alphalens.gates import regime_gated_scorer
 
         gated = regime_gated_scorer(_fake_scorer, _ScoreClassifier())
         result = gated(
@@ -90,7 +90,7 @@ class RegimeGatedScorerTests(unittest.TestCase):
         """A score of 0 is logically OFF — caller can downstream-filter on
         non-zero score; we don't pre-filter the rows here. Locks the
         contract that 0 is a real rescaled value, not a special sentinel."""
-        from alphalens.regime_gate import regime_gated_scorer
+        from alphalens.gates import regime_gated_scorer
 
         class _ZeroClassifier:
             def score(self, asof: date) -> float:
@@ -108,7 +108,7 @@ class RegimeGatedScorerTests(unittest.TestCase):
     def test_classifier_score_clamped_to_unit_interval(self):
         """Defensive: classifier scores outside [0,1] would corrupt
         position-size budget. Wrapper clamps."""
-        from alphalens.regime_gate import regime_gated_scorer
+        from alphalens.gates import regime_gated_scorer
 
         class _OutOfRangeClassifier:
             def score(self, asof: date) -> float:
@@ -124,7 +124,7 @@ class RegimeGatedScorerTests(unittest.TestCase):
         self.assertEqual(list(result["score"]), [2.0, 1.0])
 
     def test_empty_histories_returns_empty(self):
-        from alphalens.regime_gate import regime_gated_scorer
+        from alphalens.gates import regime_gated_scorer
 
         gated = regime_gated_scorer(_fake_scorer, _BinaryClassifier())
         result = gated({}, {"benchmark": "SPY"})
@@ -135,7 +135,7 @@ class RegimeGatedScorerTests(unittest.TestCase):
         """Wrapper enforces the protocol: classifier must implement either
         ``is_on`` (binary) or ``score`` (graded). Ambiguity at construction
         time is louder than a silent no-op at runtime."""
-        from alphalens.regime_gate import regime_gated_scorer
+        from alphalens.gates import regime_gated_scorer
 
         class _BogusClassifier:
             pass
@@ -149,7 +149,7 @@ class RegimeGatePackageStatusTest(unittest.TestCase):
         """Wrapper is a reusable research utility — no concrete classifier
         ever shipped under it (the rescue use-case for mom+lowvol BASE
         failed Phase 1 diagnostic 2026-04-29). Mirrors `alphalens.data.macro/`."""
-        import alphalens.regime_gate as pkg
+        import alphalens.gates as pkg
 
         self.assertEqual(pkg.__status__, "RESEARCH_ONLY")
 

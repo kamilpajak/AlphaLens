@@ -3,7 +3,7 @@
 Layered architecture per ADR 0007 (5 layers):
     alphalens.watchdog       — Layer 1 SEC EDGAR event monitor (ACTIVE)
     alphalens.screeners      — Layer 2 selection (cross-sectional rank @ t)
-    alphalens.regime_gate    — Layer 2 selection-gate (RESEARCH_ONLY)
+    alphalens.gates    — Layer 2 selection-gate (RESEARCH_ONLY)
     alphalens.backtest       — Layer 3 strided rebalance engine
     alphalens.risk_overlay   — Layer 4 time-series sizing overlays (RESEARCH_ONLY)
     alphalens.backtest       — Layer 5 attribution (cost, factor, metrics, verdict)

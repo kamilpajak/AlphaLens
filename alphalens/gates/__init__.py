@@ -11,7 +11,7 @@ their own modules — this package supplies the wrapper + protocol only.
 
 from typing import Literal
 
-from alphalens.regime_gate.wrapper import (
+from alphalens.gates.wrapper import (
     RegimeClassifier,
     regime_gated_scorer,
 )
