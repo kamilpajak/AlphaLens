@@ -1,6 +1,6 @@
 """Tests for time-series position-sizing overlays on portfolio returns.
 
-`alphalens.risk_overlay` is a sibling layer to `alphalens.regime_gate`
+`alphalens.risk_overlay` is a sibling layer to `alphalens.gates`
 sitting downstream of the BacktestEngine: regime_gate modifies *which*
 tickers are selected; risk_overlay modifies *how much* total exposure
 the selected portfolio carries based on its own realized vol.
@@ -190,7 +190,7 @@ class RiskOverlayPackageStatusTest(unittest.TestCase):
     def test_package_declares_research_only_status(self):
         """No concrete sizing rule has earned ACTIVE status yet — first
         hypothesis (vol-target on mom+lowvol) is pre-registered for audit
-        2026-04-30. Package mirrors `alphalens.regime_gate` and `macro/`."""
+        2026-04-30. Package mirrors `alphalens.gates` and `macro/`."""
         import alphalens.risk_overlay as pkg
 
         self.assertEqual(pkg.__status__, "RESEARCH_ONLY")

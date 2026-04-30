@@ -288,7 +288,7 @@ The 2026-04-25 pivot did not stop strategy prospecting; it shifted it from "sear
 
 ### Failure 8 — Regime-gate rescue attempt, 2026-04-29
 
-**Setup:** screener-agnostic regime gate (`alphalens.regime_gate.regime_gated_scorer`) wrapping mom+lowvol BASE, with five pre-registered classifiers post-Perplexity revision: yield curve inversion (C1), VIX>20 (C2), NFCI>+1 (C3), HY OAS>400bp (C5), cross-sectional dispersion (C6). Bonferroni n=5 → |t|≈2.58. Hypothesis: 2017-2022 failure was a regime-conditional drawdown that a sensible gate could exclude.
+**Setup:** screener-agnostic regime gate (`alphalens.gates.regime_gated_scorer`) wrapping mom+lowvol BASE, with five pre-registered classifiers post-Perplexity revision: yield curve inversion (C1), VIX>20 (C2), NFCI>+1 (C3), HY OAS>400bp (C5), cross-sectional dispersion (C6). Bonferroni n=5 → |t|≈2.58. Hypothesis: 2017-2022 failure was a regime-conditional drawdown that a sensible gate could exclude.
 
 **Phase 1 coverage diagnostic** (1499 SPY trading days, IS 2017-2022) overruled the design before any backtest ran:
 

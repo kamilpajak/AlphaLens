@@ -37,7 +37,7 @@ def process() -> None:
     launchd-spawned workers and manual runs never execute in parallel —
     parallel workers hammer the Gemini 1M-tokens/min quota and deadlock.
     """
-    from alphalens.watchdog_lock import (
+    from alphalens.watchdog.lock import (
         WorkerLockBusy,
         default_worker_lock_path,
         worker_lock,
