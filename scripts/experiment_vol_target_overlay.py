@@ -40,8 +40,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 
+from alphalens.attribution.factor_analysis import run_regression
 from alphalens.backtest.engine import BacktestEngine
-from alphalens.backtest.factor_analysis import run_regression
 from alphalens.data.alt_data.yfinance_cache import load_cached_histories
 from alphalens.data.factors import load_carhart_daily
 from alphalens.data.store.history import HistoryStore

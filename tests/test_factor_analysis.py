@@ -1,4 +1,4 @@
-"""Tests for alphalens.backtest.factor_analysis — Carhart 4F + HAC + rolling + industry."""
+"""Tests for alphalens.attribution.factor_analysis — Carhart 4F + HAC + rolling + industry."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ class TestRunRegression(unittest.TestCase):
     """Core: run_regression(port_returns, factors, factor_columns, cov_type, spec_name)."""
 
     def test_capm_portfolio_near_zero_alpha_beta_one(self):
-        from alphalens.backtest.factor_analysis import run_regression
+        from alphalens.attribution.factor_analysis import run_regression
 
         ff = _synthetic_carhart(500, seed=1)
         rng = np.random.default_rng(2)
@@ -42,7 +42,7 @@ class TestRunRegression(unittest.TestCase):
         self.assertEqual(res.cov_type, "HAC")
 
     def test_carhart_detects_umd_beta_for_momentum_mimicking_portfolio(self):
-        from alphalens.backtest.factor_analysis import run_regression
+        from alphalens.attribution.factor_analysis import run_regression
 
         ff = _synthetic_carhart(500, seed=3)
         rng = np.random.default_rng(4)
@@ -61,7 +61,7 @@ class TestRunRegression(unittest.TestCase):
         self.assertLess(abs(res.alpha_daily), 0.0005)
 
     def test_detects_injected_alpha_with_significant_tstat(self):
-        from alphalens.backtest.factor_analysis import run_regression
+        from alphalens.attribution.factor_analysis import run_regression
 
         ff = _synthetic_carhart(800, seed=5)
         rng = np.random.default_rng(6)
@@ -75,7 +75,7 @@ class TestRunRegression(unittest.TestCase):
 
     def test_hac_tstat_lower_than_ols_for_autocorrelated_noise(self):
         """Autocorrelation trap: AR(1) errors inflate OLS t-stat; HAC must dampen it."""
-        from alphalens.backtest.factor_analysis import run_regression
+        from alphalens.attribution.factor_analysis import run_regression
 
         ff = _synthetic_carhart(1000, seed=7)
         rng = np.random.default_rng(8)
@@ -103,7 +103,7 @@ class TestRunRegression(unittest.TestCase):
         self.assertLess(abs(res_hac.alpha_tstat), abs(res_ols.alpha_tstat))
 
     def test_missing_factor_column_raises_with_name(self):
-        from alphalens.backtest.factor_analysis import run_regression
+        from alphalens.attribution.factor_analysis import run_regression
 
         ff = _synthetic_carhart(200, seed=9)
         port = ff["Mkt-RF"] + ff["RF"]
@@ -113,7 +113,7 @@ class TestRunRegression(unittest.TestCase):
         self.assertIn("QMJ", str(cm.exception))
 
     def test_missing_rf_column_raises(self):
-        from alphalens.backtest.factor_analysis import run_regression
+        from alphalens.attribution.factor_analysis import run_regression
 
         ff = _synthetic_carhart(200, seed=10).drop(columns=["RF"])
         port = pd.Series(np.random.default_rng(0).normal(0, 0.01, len(ff)), index=ff.index)
@@ -124,7 +124,7 @@ class TestRunRegression(unittest.TestCase):
 
     def test_subtract_rf_false_allows_missing_rf_column(self):
         """Long-short factor returns are already excess. Caller passes subtract_rf=False."""
-        from alphalens.backtest.factor_analysis import run_regression
+        from alphalens.attribution.factor_analysis import run_regression
 
         ff = _synthetic_carhart(500, seed=30).drop(columns=["RF"])
         rng = np.random.default_rng(31)
@@ -144,7 +144,7 @@ class TestRunRegression(unittest.TestCase):
             run_regression(ls_factor, ff, factor_columns=["Mkt-RF"], subtract_rf=True)
 
     def test_insufficient_overlap_raises(self):
-        from alphalens.backtest.factor_analysis import run_regression
+        from alphalens.attribution.factor_analysis import run_regression
 
         ff = _synthetic_carhart(10, seed=11)
         port = pd.Series(np.random.default_rng(0).normal(0, 0.01, 10), index=ff.index)
@@ -153,7 +153,7 @@ class TestRunRegression(unittest.TestCase):
             run_regression(port, ff, factor_columns=["Mkt-RF"])
 
     def test_betas_dict_has_one_entry_per_factor(self):
-        from alphalens.backtest.factor_analysis import run_regression
+        from alphalens.attribution.factor_analysis import run_regression
 
         ff = _synthetic_carhart(400, seed=12)
         port = ff["Mkt-RF"] + ff["RF"]
@@ -167,7 +167,7 @@ class TestCarhartAttribution(unittest.TestCase):
     where alpha survives or dies as factors are added."""
 
     def test_returns_three_specs_in_order(self):
-        from alphalens.backtest.factor_analysis import run_carhart_attribution
+        from alphalens.attribution.factor_analysis import run_carhart_attribution
 
         ff = _synthetic_carhart(500, seed=13)
         port = ff["Mkt-RF"] + ff["RF"] + 0.0005
@@ -177,7 +177,7 @@ class TestCarhartAttribution(unittest.TestCase):
         self.assertEqual([r.spec_name for r in results], ["CAPM", "FF3", "Carhart-4F"])
 
     def test_carhart_spec_includes_momentum_beta(self):
-        from alphalens.backtest.factor_analysis import run_carhart_attribution
+        from alphalens.attribution.factor_analysis import run_carhart_attribution
 
         ff = _synthetic_carhart(500, seed=14)
         port = ff["Mom"] + ff["RF"]
@@ -190,7 +190,7 @@ class TestCarhartAttribution(unittest.TestCase):
     def test_momentum_repackaging_kills_alpha_in_carhart_but_not_ff3(self):
         """Synthetic repackaged-momentum portfolio: alpha looks real under FF3
         (no UMD to absorb it) but vanishes under Carhart."""
-        from alphalens.backtest.factor_analysis import run_carhart_attribution
+        from alphalens.attribution.factor_analysis import run_carhart_attribution
 
         ff = _synthetic_carhart(1000, seed=15)
         rng = np.random.default_rng(16)
@@ -209,7 +209,7 @@ class TestCarhartAttribution(unittest.TestCase):
 
 class TestRollingRegression(unittest.TestCase):
     def test_returns_timeseries_of_betas_plus_alpha(self):
-        from alphalens.backtest.factor_analysis import run_rolling_regression
+        from alphalens.attribution.factor_analysis import run_rolling_regression
 
         ff = _synthetic_carhart(300, seed=17)
         port = ff["Mkt-RF"] + ff["RF"]
@@ -227,7 +227,7 @@ class TestRollingRegression(unittest.TestCase):
         self.assertEqual(valid, len(ff) - window + 1)
 
     def test_rolling_mkt_beta_close_to_one_for_mkt_mimicking_portfolio(self):
-        from alphalens.backtest.factor_analysis import run_rolling_regression
+        from alphalens.attribution.factor_analysis import run_rolling_regression
 
         ff = _synthetic_carhart(300, seed=18)
         rng = np.random.default_rng(19)
@@ -242,7 +242,7 @@ class TestIndustryControls(unittest.TestCase):
     def test_sector_tilt_alpha_shrinks_when_industry_added_as_regressor(self):
         """Portfolio = 1.0 * BusEq industry return + RF + noise.
         Carhart alone leaves residual 'alpha'; adding BusEq as regressor absorbs it."""
-        from alphalens.backtest.factor_analysis import run_regression
+        from alphalens.attribution.factor_analysis import run_regression
 
         rng = np.random.default_rng(20)
         n = 800
@@ -287,7 +287,7 @@ class TestCarhartPlusIndustryRobustness(unittest.TestCase):
     statsmodels OLS uses pinv → distributes loading along null space, shouldn't NaN."""
 
     def test_no_nan_betas_with_near_collinear_mkt_and_industries(self):
-        from alphalens.backtest.factor_analysis import run_regression
+        from alphalens.attribution.factor_analysis import run_regression
 
         rng = np.random.default_rng(42)
         n = 1000
@@ -346,7 +346,7 @@ class TestCarhartPlusIndustryRobustness(unittest.TestCase):
 
 class TestFormatSummary(unittest.TestCase):
     def test_format_contains_spec_alpha_and_all_betas(self):
-        from alphalens.backtest.factor_analysis import AlphaResult, format_alpha_summary
+        from alphalens.attribution.factor_analysis import AlphaResult, format_alpha_summary
 
         res = AlphaResult(
             spec_name="Carhart-4F",
@@ -367,7 +367,7 @@ class TestFormatSummary(unittest.TestCase):
         self.assertIn("HAC", text)
 
     def test_attribution_table_lists_each_spec_on_one_line(self):
-        from alphalens.backtest.factor_analysis import (
+        from alphalens.attribution.factor_analysis import (
             AlphaResult,
             format_attribution_table,
         )
@@ -405,7 +405,7 @@ class TestBootstrapCarhartAlphaCi(unittest.TestCase):
     """Moving-block bootstrap on Carhart-4F α intercept."""
 
     def test_zero_alpha_strategy_ci_brackets_zero(self):
-        from alphalens.backtest.factor_analysis import bootstrap_carhart_alpha_ci
+        from alphalens.attribution.factor_analysis import bootstrap_carhart_alpha_ci
 
         carhart = _synthetic_carhart(n=500, seed=1)
         rng = np.random.default_rng(2)
@@ -420,7 +420,7 @@ class TestBootstrapCarhartAlphaCi(unittest.TestCase):
         self.assertGreater(ci_high, 0)
 
     def test_strong_positive_alpha_ci_excludes_zero(self):
-        from alphalens.backtest.factor_analysis import bootstrap_carhart_alpha_ci
+        from alphalens.attribution.factor_analysis import bootstrap_carhart_alpha_ci
 
         n = 1000
         carhart = _synthetic_carhart(n=n, seed=3)
@@ -435,7 +435,7 @@ class TestBootstrapCarhartAlphaCi(unittest.TestCase):
         self.assertLess(ci_low, ci_high)
 
     def test_ci_returned_in_annualized_units(self):
-        from alphalens.backtest.factor_analysis import bootstrap_carhart_alpha_ci
+        from alphalens.attribution.factor_analysis import bootstrap_carhart_alpha_ci
 
         carhart = _synthetic_carhart(n=300, seed=5)
         returns = (carhart["Mkt-RF"] + carhart["RF"]).rename("port")
@@ -448,7 +448,7 @@ class TestBootstrapCarhartAlphaCi(unittest.TestCase):
         self.assertLess(abs(ci_high), 2.0)
 
     def test_too_few_observations_raises(self):
-        from alphalens.backtest.factor_analysis import bootstrap_carhart_alpha_ci
+        from alphalens.attribution.factor_analysis import bootstrap_carhart_alpha_ci
 
         carhart = _synthetic_carhart(n=40, seed=6)
         returns = (carhart["Mkt-RF"] + carhart["RF"]).rename("port")
@@ -457,7 +457,7 @@ class TestBootstrapCarhartAlphaCi(unittest.TestCase):
             bootstrap_carhart_alpha_ci(returns, carhart, iterations=100, seed=42)
 
     def test_confidence_level_widens_ci(self):
-        from alphalens.backtest.factor_analysis import bootstrap_carhart_alpha_ci
+        from alphalens.attribution.factor_analysis import bootstrap_carhart_alpha_ci
 
         carhart = _synthetic_carhart(n=400, seed=7)
         returns = (carhart["Mkt-RF"] + carhart["RF"]).rename("port")

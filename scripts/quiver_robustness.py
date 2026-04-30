@@ -25,7 +25,7 @@ from alphalens.archive.screeners.lean.config import DATA_DIR
 from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
 from alphalens.archive.screeners.themed.config import UNIVERSE_PATH
 from alphalens.archive.screeners.themed.universe import flatten_universe
-from alphalens.backtest.factor_analysis import (
+from alphalens.attribution.factor_analysis import (
     format_attribution_table,
     run_regression,
 )

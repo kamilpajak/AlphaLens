@@ -1,4 +1,4 @@
-"""Unit tests for `alphalens.backtest.walk_forward`.
+"""Unit tests for `alphalens.attribution.walk_forward`.
 
 All tests use in-memory synthetic `BacktestReport` / `RebalanceSnapshot` fixtures —
 no Polygon, no real BacktestEngine runs. Focuses on the ten critical
@@ -14,8 +14,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from alphalens.backtest.engine import BacktestReport, RebalanceSnapshot
-from alphalens.backtest.walk_forward import (
+from alphalens.attribution.walk_forward import (
     DistributionSummary,
     WindowResult,
     WindowSpec,
@@ -26,6 +25,7 @@ from alphalens.backtest.walk_forward import (
     slice_report_to_window,
     summarize_distribution,
 )
+from alphalens.backtest.engine import BacktestReport, RebalanceSnapshot
 
 
 def _daily(d: pd.Timestamp, ret: float, tickers: list[str] | None = None) -> RebalanceSnapshot:

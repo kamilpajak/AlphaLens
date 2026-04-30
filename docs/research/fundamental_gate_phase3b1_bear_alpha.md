@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-21
 **Script:** `/tmp/alphalens_issue15/phase3b1_bear_alpha.py`, `/tmp/alphalens_issue15/phase3b2_diff_alpha.py`
-**Setup:** Carhart-4F (Mkt-RF, SMB, HML, Mom) OLS with Newey-West HAC t-stats. Bear regime = 60d trailing SPY return ≤ −5% (per `alphalens.backtest.regime`). Bear sample: **132 days** z 944 total (60d-hold window).
+**Setup:** Carhart-4F (Mkt-RF, SMB, HML, Mom) OLS with Newey-West HAC t-stats. Bear regime = 60d trailing SPY return ≤ −5% (per `alphalens.attribution.regime`). Bear sample: **132 days** z 944 total (60d-hold window).
 
 ## TL;DR — Phase 3B wyniki UNIEWAŻNIONE
 

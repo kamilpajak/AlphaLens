@@ -2,7 +2,7 @@ import unittest
 
 
 def _alpha_result(spec_name: str, t: float, daily: float = 0.0003):
-    from alphalens.backtest.factor_analysis import AlphaResult
+    from alphalens.attribution.factor_analysis import AlphaResult
 
     return AlphaResult(
         spec_name=spec_name,
@@ -32,7 +32,7 @@ class TestDecisionMatrix(unittest.TestCase):
         }
 
     def test_all_gates_pass_yields_go(self):
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         report = evaluate_exit_criteria(**self._base_inputs())
 
@@ -41,7 +41,7 @@ class TestDecisionMatrix(unittest.TestCase):
 
     def test_carhart_far_below_bonferroni_yields_kill(self):
         """α_t < 1.5 is KILL zone per design doc §8."""
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         inputs = self._base_inputs()
         inputs["carhart"] = _alpha_result("Carhart-4F", t=1.0)  # below ambiguous floor
@@ -57,7 +57,7 @@ class TestDecisionMatrix(unittest.TestCase):
         not α_tstat — t-stat can drop just from SE inflation without the
         actual alpha coefficient shrinking.
         """
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         inputs = self._base_inputs()
         # Carhart baseline α_daily=0.0003. FF5+UMD at 40% of that → 60% attenuation.
@@ -73,7 +73,7 @@ class TestDecisionMatrix(unittest.TestCase):
         eat d.o.f.), the attenuation gate must PASS — it's measuring
         economic magnitude decay, not statistical power decay.
         """
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         inputs = self._base_inputs()
         # Carhart α_daily=0.0003, t=3.0. FF5+UMD same α but lower t (SE only).
@@ -87,7 +87,7 @@ class TestDecisionMatrix(unittest.TestCase):
         """If FF5+UMD α actually exceeds Carhart α, attenuation is
         negative (the factor model *increased* measured alpha). Gate
         should pass — there's no attenuation to worry about."""
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         inputs = self._base_inputs()
         inputs["ff5_umd"] = _alpha_result("FF5+UMD", t=2.5, daily=0.0003 * 1.2)
@@ -97,7 +97,7 @@ class TestDecisionMatrix(unittest.TestCase):
         self.assertNotIn("ff5_umd_attenuation", report.failing_gates)
 
     def test_negative_net_alpha_kill(self):
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         inputs = self._base_inputs()
         inputs["net_alpha_primary"] = -0.01
@@ -108,7 +108,7 @@ class TestDecisionMatrix(unittest.TestCase):
         self.assertIn("net_alpha_primary", report.failing_gates)
 
     def test_stress_k15_fails_kill(self):
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         inputs = self._base_inputs()
         inputs["net_alpha_stress_k15"] = -0.005  # breaks under stress
@@ -118,7 +118,7 @@ class TestDecisionMatrix(unittest.TestCase):
         self.assertIn("net_alpha_stress_k15", report.failing_gates)
 
     def test_sharpe_below_one_fails(self):
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         inputs = self._base_inputs()
         inputs["sharpe_net"] = 0.8
@@ -128,7 +128,7 @@ class TestDecisionMatrix(unittest.TestCase):
         self.assertIn("sharpe_net", report.failing_gates)
 
     def test_regime_collapse_flags(self):
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         inputs = self._base_inputs()
         inputs["regime_alpha_tstats"]["bear"] = 1.0  # below 1.5 threshold
@@ -138,7 +138,7 @@ class TestDecisionMatrix(unittest.TestCase):
         self.assertIn("regime_collapse_bear", report.failing_gates)
 
     def test_bootstrap_ci_includes_zero_flags(self):
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         inputs = self._base_inputs()
         inputs["bootstrap_95ci_excludes_zero"] = False
@@ -149,7 +149,7 @@ class TestDecisionMatrix(unittest.TestCase):
 
     def test_q4_missing_is_not_a_blocker(self):
         """Q4 is best-effort per plan; coverage gap 2025-2026 may leave it None."""
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         inputs = self._base_inputs()
         inputs["q4"] = None
@@ -161,7 +161,7 @@ class TestDecisionMatrix(unittest.TestCase):
 
     def test_ambiguous_zone_alpha_t_1p5_to_2p24(self):
         """Per design doc: OOS α_t ∈ [1.5, 2.24] → 6-12mo paper-track."""
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         inputs = self._base_inputs()
         inputs["carhart"] = _alpha_result("Carhart-4F", t=1.8)
@@ -173,7 +173,7 @@ class TestDecisionMatrix(unittest.TestCase):
 
 class TestReportContents(unittest.TestCase):
     def test_all_gates_listed_with_pass_fail(self):
-        from alphalens.backtest.decision_matrix import evaluate_exit_criteria
+        from alphalens.attribution.decision_matrix import evaluate_exit_criteria
 
         inputs = {
             "carhart": _alpha_result("Carhart-4F", t=3.0),

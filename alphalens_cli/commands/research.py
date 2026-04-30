@@ -87,7 +87,7 @@ def cost_validation(
     from alphalens.archive.screeners.themed.backtest_adapter import momentum_scorer_adapter
     from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
     from alphalens.archive.screeners.themed.universe import flatten_universe
-    from alphalens.backtest.cost_validation import (
+    from alphalens.attribution.cost_validation import (
         DEFAULT_TIERS,
         CostValidationReport,
         build_per_date_tiers,
@@ -96,7 +96,7 @@ def cost_validation(
         rolling_dollar_adv,
         run_scale_path,
     )
-    from alphalens.backtest.cost_validation import (
+    from alphalens.attribution.cost_validation import (
         compile_report as cv_compile_report,
     )
     from alphalens.backtest.engine import BacktestEngine
@@ -342,8 +342,8 @@ def walk_forward(
     from alphalens.archive.screeners.themed.backtest_adapter import momentum_scorer_adapter
     from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
     from alphalens.archive.screeners.themed.universe import flatten_universe
+    from alphalens.attribution.walk_forward import compile_report, run_walk_forward
     from alphalens.backtest.engine import BacktestEngine
-    from alphalens.backtest.walk_forward import compile_report, run_walk_forward
     from alphalens.data.factors import load_carhart_daily
     from alphalens.data.store.history import HistoryStore
 
@@ -902,7 +902,7 @@ def _classify_picks_by_regime(
     benchmark: str,
 ) -> pd.DataFrame:  # noqa: F821
     """Attach 'regime' column (bull/bear/flat) by mapping pick_date → benchmark regime."""
-    from alphalens.backtest.regime import classify_regime
+    from alphalens.attribution.regime import classify_regime
 
     bench_close = store.full(benchmark)["close"]
     regime_labels = classify_regime(bench_close)

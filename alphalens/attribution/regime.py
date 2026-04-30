@@ -72,7 +72,7 @@ def regime_breakdown(
     All four series must share aligned DatetimeIndex; the function takes the
     intersection before slicing.
     """
-    from .metrics import hit_rate, sharpe
+    from alphalens.backtest.metrics import hit_rate, sharpe
 
     # Align by intersection of all inputs.
     idx = (

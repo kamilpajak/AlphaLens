@@ -204,7 +204,7 @@ Next candidate (open): **Layer 3 rejection-prediction classifier** per Layer 2b 
 
 ## Decision matrix output
 
-_Full `DecisionReport` dump per `alphalens.backtest.decision_matrix.evaluate_exit_criteria`._
+_Full `DecisionReport` dump per `alphalens.attribution.decision_matrix.evaluate_exit_criteria`._
 
 ## Findings + lessons
 

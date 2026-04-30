@@ -37,18 +37,18 @@ from alphalens.archive.screeners.lean.config import (  # noqa: E402
 from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories  # noqa: E402
 from alphalens.archive.screeners.lean.lean_project.scorer import rank_universe  # noqa: E402
 from alphalens.archive.screeners.lean.universe import all_tickers  # noqa: E402
-from alphalens.backtest.cost_model import cost_sensitivity_table  # noqa: E402
-from alphalens.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens.backtest.factor_analysis import (  # noqa: E402
+from alphalens.attribution.cost_model import cost_sensitivity_table  # noqa: E402
+from alphalens.attribution.factor_analysis import (  # noqa: E402
     bootstrap_carhart_alpha_ci,
     run_carhart_attribution,
 )
+from alphalens.attribution.walk_forward import run_walk_forward  # noqa: E402
+from alphalens.backtest.engine import BacktestEngine  # noqa: E402
 from alphalens.backtest.metrics import sharpe  # noqa: E402
 from alphalens.backtest.multiple_testing import (  # noqa: E402
     apply_bonferroni,
     bonferroni_critical_tstat,
 )
-from alphalens.backtest.walk_forward import run_walk_forward  # noqa: E402
 from alphalens.data.factors import load_carhart_daily  # noqa: E402
 from alphalens.data.store.history import HistoryStore  # noqa: E402
 from alphalens.data.store.survivorship_pit import (  # noqa: E402
@@ -260,7 +260,7 @@ def write_report(
 
     lines.append("## Gate 1: Carhart-4F + HAC")
     lines.append("")
-    lines.append("Fitted via `alphalens.backtest.factor_analysis.run_carhart_attribution`")
+    lines.append("Fitted via `alphalens.attribution.factor_analysis.run_carhart_attribution`")
     lines.append("with Newey-West HAC (lag = `int(4·(n/100)^(2/9))`).")
     lines.append("")
     lines.append("| Phase | α annualized | t-stat (HAC) | R² | Verdict (|t|>2.0) |")
@@ -335,7 +335,7 @@ def write_report(
     lines.append("Moving-block bootstrap (Hall-Horowitz 1995, block = n^(1/3)) on the")
     lines.append("OLS-fitted Carhart-4F α intercept, 10k iterations. Canonical Gate 6")
     lines.append("statistic per `docs/research/kill_verdict_checklist.md` —")
-    lines.append("`alphalens.backtest.factor_analysis.bootstrap_carhart_alpha_ci`.")
+    lines.append("`alphalens.attribution.factor_analysis.bootstrap_carhart_alpha_ci`.")
     lines.append("")
     lines.append(f"- OOS 95% CI (annualized): **[{bs_lower * 100:+.2f}%, {bs_upper * 100:+.2f}%]**")
     lines.append(

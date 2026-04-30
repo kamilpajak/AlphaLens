@@ -135,7 +135,7 @@ def _apply_fundamental_gate(
 
 def _compute_diagnostics(result, regime_labels) -> tuple[list, dict, float]:
     """IC by decile + vol decomposition, only meaningful when retain_scored_frames=True."""
-    from alphalens.backtest.diagnostics import (
+    from alphalens.attribution.diagnostics import (
         format_vol_decomposition,
         ic_by_decile_from_scored_frames,
         tail_concentration_score,
@@ -258,15 +258,15 @@ def backtest(
 
     from alphalens.archive.screeners.lean.config import DATA_DIR
     from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
-    from alphalens.backtest.cost_model import cost_sensitivity_table
-    from alphalens.backtest.engine import BacktestEngine
-    from alphalens.backtest.factor_analysis import run_carhart_attribution
-    from alphalens.backtest.regime import classify_regime, regime_breakdown
-    from alphalens.backtest.report import (
+    from alphalens.attribution.cost_model import cost_sensitivity_table
+    from alphalens.attribution.factor_analysis import run_carhart_attribution
+    from alphalens.attribution.regime import classify_regime, regime_breakdown
+    from alphalens.attribution.report import (
         build_summary,
         rebalance_results_to_dataframe,
         write_markdown_report,
     )
+    from alphalens.backtest.engine import BacktestEngine
     from alphalens.data.factors import load_carhart_daily
     from alphalens.data.store.history import HistoryStore
 

@@ -41,13 +41,13 @@ import pandas as pd
 import yaml
 from scipy import stats
 
+from alphalens.attribution.factor_analysis import run_carhart_attribution
 from alphalens.backtest.engine import (
     BacktestEngine,
     BacktestReport,
     RebalanceSnapshot,
     Scorer,
 )
-from alphalens.backtest.factor_analysis import run_carhart_attribution
 from alphalens.backtest.metrics import rank_ic_tstat, sharpe
 from alphalens.backtest.weighting import weighted_return
 from alphalens.data.store.history import HistoryStore

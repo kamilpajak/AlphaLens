@@ -68,7 +68,7 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
-from alphalens.backtest.cost_model import CostModel
+from alphalens.attribution.cost_model import CostModel
 from alphalens.backtest.engine import BacktestReport
 from alphalens.backtest.metrics import sharpe
 from alphalens.backtest.weighting import compute_position_weights

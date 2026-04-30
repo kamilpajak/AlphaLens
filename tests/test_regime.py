@@ -6,7 +6,7 @@ import pandas as pd
 
 class TestClassifyRegime(unittest.TestCase):
     def test_bull_trend(self):
-        from alphalens.backtest.regime import classify_regime
+        from alphalens.attribution.regime import classify_regime
 
         # 70 days of steady +0.3%/day → trailing 60d return ~20% → bull
         closes = pd.Series(100 * np.exp(np.cumsum(np.full(70, 0.003))))
@@ -15,7 +15,7 @@ class TestClassifyRegime(unittest.TestCase):
         self.assertEqual(labels.iloc[-1], "bull")
 
     def test_bear_trend(self):
-        from alphalens.backtest.regime import classify_regime
+        from alphalens.attribution.regime import classify_regime
 
         closes = pd.Series(100 * np.exp(np.cumsum(np.full(70, -0.003))))
         closes.index = pd.date_range("2024-01-01", periods=70)
@@ -23,7 +23,7 @@ class TestClassifyRegime(unittest.TestCase):
         self.assertEqual(labels.iloc[-1], "bear")
 
     def test_flat_trend(self):
-        from alphalens.backtest.regime import classify_regime
+        from alphalens.attribution.regime import classify_regime
 
         closes = pd.Series([100.0] * 70)  # perfectly flat
         closes.index = pd.date_range("2024-01-01", periods=70)
@@ -31,13 +31,13 @@ class TestClassifyRegime(unittest.TestCase):
         self.assertEqual(labels.iloc[-1], "flat")
 
     def test_lookback_too_small_raises(self):
-        from alphalens.backtest.regime import classify_regime
+        from alphalens.attribution.regime import classify_regime
 
         with self.assertRaises(ValueError):
             classify_regime(pd.Series([100.0, 101.0]), lookback=1)
 
     def test_custom_thresholds(self):
-        from alphalens.backtest.regime import classify_regime
+        from alphalens.attribution.regime import classify_regime
 
         # +3% over 60d — normally "flat" with default 5% threshold;
         # lower threshold to 2% → should become "bull".
@@ -62,7 +62,7 @@ class TestRegimeBreakdown(unittest.TestCase):
         return port, ic, median, labels
 
     def test_each_regime_has_its_own_sharpe(self):
-        from alphalens.backtest.regime import regime_breakdown
+        from alphalens.attribution.regime import regime_breakdown
 
         regimes = ["bull"] * 100 + ["bear"] * 100 + ["flat"] * 100
         port, ic, median, labels = self._synthetic(regimes)
@@ -75,7 +75,7 @@ class TestRegimeBreakdown(unittest.TestCase):
         # Build more realistic distribution.
 
     def test_realistic_distributions(self):
-        from alphalens.backtest.regime import regime_breakdown
+        from alphalens.attribution.regime import regime_breakdown
 
         rng = np.random.default_rng(0)
         n = 100
@@ -109,7 +109,7 @@ class TestRegimeBreakdown(unittest.TestCase):
         self.assertEqual(result["bull"].days, n)
 
     def test_missing_regime_omitted(self):
-        from alphalens.backtest.regime import regime_breakdown
+        from alphalens.attribution.regime import regime_breakdown
 
         regimes = ["bull"] * 10  # no bear / flat days
         port, ic, median, labels = self._synthetic(regimes)

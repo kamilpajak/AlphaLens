@@ -23,9 +23,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from alphalens.backtest.engine import BacktestReport
 from alphalens.backtest.metrics import rank_ic
-
-from .engine import BacktestReport
 
 
 @dataclass(frozen=True)
@@ -178,7 +177,7 @@ def ic_at_horizon(
     what the report retains). For a fair full-universe measurement, run the
     backtest with instrumented snapshotting instead.
     """
-    from .metrics import rank_ic_tstat
+    from alphalens.backtest.metrics import rank_ic_tstat
 
     ic_values: list[float] = []
     for snap in report.rebalance_results:

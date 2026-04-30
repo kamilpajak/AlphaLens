@@ -228,7 +228,7 @@ def cost_sensitivity_table(
     Returns a DataFrame with one row per profile and columns (annualised):
         profile, drag_bps, sharpe, annual_return
     """
-    from .metrics import sharpe
+    from alphalens.backtest.metrics import sharpe
 
     gross = pd.Series(list(daily_returns), dtype=float)
     rows: list[dict] = []

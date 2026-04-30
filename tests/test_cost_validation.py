@@ -1,4 +1,4 @@
-"""Unit tests for `alphalens.backtest.cost_validation`.
+"""Unit tests for `alphalens.attribution.cost_validation`.
 
 All tests on synthetic in-memory fixtures — no Polygon, no real
 BacktestEngine runs. Covers the 12 critical behaviours in the plan,
@@ -14,7 +14,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from alphalens.backtest.cost_validation import (
+from alphalens.attribution.cost_validation import (
     DEFAULT_TIERS,
     ScalePathSummary,
     apply_tiered_cost,

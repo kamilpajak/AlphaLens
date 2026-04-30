@@ -23,12 +23,12 @@ from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
 from alphalens.archive.screeners.themed.backtest_adapter import momentum_scorer_adapter
 from alphalens.archive.screeners.themed.config import THEMED_DEFAULTS, UNIVERSE_PATH
 from alphalens.archive.screeners.themed.universe import flatten_universe
-from alphalens.backtest.engine import BacktestEngine
-from alphalens.backtest.factor_analysis import (
+from alphalens.attribution.factor_analysis import (
     format_attribution_table,
     run_carhart_attribution,
     run_regression,
 )
+from alphalens.backtest.engine import BacktestEngine
 from alphalens.backtest.metrics import rank_ic_tstat, sharpe
 from alphalens.data.factors import load_carhart_daily, load_industry12_daily
 from alphalens.data.store.history import HistoryStore

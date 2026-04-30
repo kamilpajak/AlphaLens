@@ -23,10 +23,10 @@ import pandas as pd
 
 from alphalens.archive.rotation.config import GateConfig
 from alphalens.archive.rotation.overlay_engine import OverlayBacktestResult
-from alphalens.backtest.factor_analysis import AlphaResult
+from alphalens.attribution.factor_analysis import AlphaResult
+from alphalens.attribution.regime import classify_regime
 from alphalens.backtest.metrics import sharpe
 from alphalens.backtest.multiple_testing import bonferroni_critical_tstat
-from alphalens.backtest.regime import classify_regime
 
 
 @dataclass(frozen=True)

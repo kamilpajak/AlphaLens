@@ -177,7 +177,7 @@ class TestQ4Attribution(unittest.TestCase):
         )
 
     def test_returns_q4_alpha_result(self):
-        from alphalens.backtest.factor_analysis import run_q4_attribution
+        from alphalens.attribution.factor_analysis import run_q4_attribution
 
         factors = self._synth_factors()
         rng = np.random.default_rng(17)
