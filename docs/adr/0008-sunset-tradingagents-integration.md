@@ -125,3 +125,11 @@ itself).
 `[tool.uv.sources]` entry, re-applying the Gemini 429 retry patch, and
 rewriting the runner/worker. The deletion is intentionally hard — partial
 shims would just defer the cost.
+
+## References
+
+- Supersedes: [ADR 0004 — TradingAgents as vendored git subtree](0004-tradingagents-as-subtree.md)
+- Layer architecture: [ADR 0007](0007-layer-architecture.md)
+- Closed-layer policy: [ADR 0005](0005-closed-layers-as-anti-pattern-catalog.md)
+- Per-layer kill rationale: [`docs/research/paradigm_failures_postmortem.md`](../research/paradigm_failures_postmortem.md)
+- Worker plist + closure entry: [`launchd/archived/README.md`](../../launchd/archived/README.md)

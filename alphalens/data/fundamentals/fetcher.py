@@ -62,10 +62,16 @@ def _make_av_request(function_name: str, symbol: str) -> dict:
     except json.JSONDecodeError:
         return {}
 
-    if isinstance(data, dict) and "Information" in data:
-        info = str(data["Information"]).lower()
-        if "rate limit" in info or "api key" in info:
-            logger.warning("Alpha Vantage rate-limited on %s/%s", function_name, symbol)
+    if isinstance(data, dict):
+        if "Information" in data:
+            info = str(data["Information"]).lower()
+            if "rate limit" in info or "api key" in info:
+                logger.warning("Alpha Vantage rate-limited on %s/%s", function_name, symbol)
+                return {}
+        if "Error Message" in data:
+            logger.warning(
+                "Alpha Vantage error on %s/%s: %s", function_name, symbol, data["Error Message"]
+            )
             return {}
 
     return data if isinstance(data, dict) else {}

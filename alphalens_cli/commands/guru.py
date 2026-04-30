@@ -212,7 +212,9 @@ def pilot(
                     else ""
                     for item in content
                 ]
-                response.content = "\n".join(t for t in texts if t)
+                # model_copy keeps us off Pydantic's validate_assignment path even if
+                # langchain ever flips that flag on AIMessage in a future release.
+                return response.model_copy(update={"content": "\n".join(t for t in texts if t)})
             return response
 
     llm_client = _NormalizedChat(
