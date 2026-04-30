@@ -12,7 +12,7 @@ protocol and the post-processor function.
 
 from typing import Literal
 
-from alphalens.risk_overlay.vol_target import (
+from alphalens.overlays.vol_target import (
     RealizedVolEstimator,
     VolTargeter,
     apply_vol_target,

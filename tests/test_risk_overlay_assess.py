@@ -1,4 +1,4 @@
-"""Tests for `alphalens.risk_overlay.assess`.
+"""Tests for `alphalens.overlays.assess`.
 
 `assess.py` is the headless equivalent of the per-script `assess_overlay`
 in `scripts/experiment_vol_target_overlay.py`: a pure function that takes
@@ -27,7 +27,7 @@ def _snapshots(seqs: list[list[str]]) -> list[list[str]]:
 
 class PerPeriodTurnoverTests(unittest.TestCase):
     def test_returns_zero_for_first_snapshot(self):
-        from alphalens.risk_overlay.assess import per_period_turnover
+        from alphalens.overlays.assess import per_period_turnover
 
         s = per_period_turnover(_snapshots([["A", "B", "C"]]))
 
@@ -36,7 +36,7 @@ class PerPeriodTurnoverTests(unittest.TestCase):
         self.assertEqual(s.iloc[0], 0.0)
 
     def test_single_swap_yields_proportional_turnover(self):
-        from alphalens.risk_overlay.assess import per_period_turnover
+        from alphalens.overlays.assess import per_period_turnover
 
         s = per_period_turnover(_snapshots([["A", "B", "C"], ["A", "B", "D"]]))
 
@@ -44,7 +44,7 @@ class PerPeriodTurnoverTests(unittest.TestCase):
         self.assertAlmostEqual(s.iloc[1], 1 / 3, places=10)  # one of three replaced
 
     def test_full_reshuffle_yields_one(self):
-        from alphalens.risk_overlay.assess import per_period_turnover
+        from alphalens.overlays.assess import per_period_turnover
 
         s = per_period_turnover(_snapshots([["A", "B", "C"], ["X", "Y", "Z"]]))
 
@@ -57,7 +57,7 @@ class DynamicCostDragTests(unittest.TestCase):
         |scale_t - scale_{t-1}| (leverage-side) in turnover units, then
         scaled by cost_bps. zen pushback: constant-drag shortcut would
         ignore the leverage-side."""
-        from alphalens.risk_overlay.assess import dynamic_cost_drag
+        from alphalens.overlays.assess import dynamic_cost_drag
 
         scales = pd.Series([1.0, 1.5, 0.5], index=pd.RangeIndex(3))
         base_turnover = pd.Series([0.10, 0.10, 0.10], index=pd.RangeIndex(3))
@@ -81,8 +81,8 @@ class ComputeOverlayStatsTests(unittest.TestCase):
         Sharpe-improvement vs ungated BASE. The returned dict MUST carry
         both Sharpes and the explicit improvement so the audit JSON has
         the canonical metric, not just the (distorted) overlay alpha-t."""
-        from alphalens.risk_overlay import VolTargeter
-        from alphalens.risk_overlay.assess import compute_overlay_stats
+        from alphalens.overlays import VolTargeter
+        from alphalens.overlays.assess import compute_overlay_stats
 
         # Synthetic 12-period weekly series: low-vol regime.
         raw = _portfolio([0.005, -0.005, 0.005, -0.005] * 3)
@@ -116,8 +116,8 @@ class ComputeOverlayStatsTests(unittest.TestCase):
         )
 
     def test_empty_returns_returns_n_zero(self):
-        from alphalens.risk_overlay import VolTargeter
-        from alphalens.risk_overlay.assess import compute_overlay_stats
+        from alphalens.overlays import VolTargeter
+        from alphalens.overlays.assess import compute_overlay_stats
 
         raw = pd.Series([], dtype=float, index=pd.DatetimeIndex([]), name="portfolio")
         targeter = VolTargeter(target_vol=0.10, lookback=4, periods_per_year=52)
