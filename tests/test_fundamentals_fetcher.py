@@ -227,6 +227,63 @@ class TestFetchTickerBundle(unittest.TestCase):
         self.assertEqual(bundle["overview"], {})
         self.assertEqual(bundle["balance_sheet"], {})
 
+    @patch("alphalens.data.fundamentals.fetcher._av_overview")
+    def test_fetch_bundle_propagates_rate_limit(self, mock_ov):
+        """Rate-limit must abort the batch (not degrade to null features)."""
+        from alphalens.data.fundamentals.fetcher import (
+            AlphaVantageRateLimitError,
+            fetch_ticker_bundle,
+        )
+
+        mock_ov.side_effect = AlphaVantageRateLimitError("daily quota exhausted")
+        with self.assertRaises(AlphaVantageRateLimitError):
+            fetch_ticker_bundle("X")
+
+
+class TestMakeAVRequest(unittest.TestCase):
+    def test_rate_limit_information_raises(self):
+        from alphalens.data.fundamentals.fetcher import (
+            AlphaVantageRateLimitError,
+            _make_av_request,
+        )
+
+        rate_limit_body = '{"Information": "Thank you for using Alpha Vantage! ...rate limit..."}'
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return rate_limit_body.encode()
+
+        with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "test"}):
+            with patch("alphalens.data.fundamentals.fetcher.urlopen", return_value=_Resp()):
+                with self.assertRaises(AlphaVantageRateLimitError):
+                    _make_av_request("OVERVIEW", "AAPL")
+
+    def test_error_message_returns_empty(self):
+        """Invalid ticker / malformed request → {} with warning, not exception."""
+        from alphalens.data.fundamentals.fetcher import _make_av_request
+
+        body = '{"Error Message": "Invalid API call. Please retry..."}'
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return body.encode()
+
+        with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "test"}):
+            with patch("alphalens.data.fundamentals.fetcher.urlopen", return_value=_Resp()):
+                self.assertEqual(_make_av_request("OVERVIEW", "BOGUS"), {})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,12 +19,21 @@ import logging
 import os
 from collections.abc import Mapping
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
 logger = logging.getLogger(__name__)
 
 _AV_BASE_URL = "https://www.alphavantage.co/query"
+
+
+class AlphaVantageRateLimitError(RuntimeError):
+    """Alpha Vantage signalled rate-limit / quota exhaustion.
+
+    Distinct from generic fetch failures so callers that want to abort a batch
+    rather than degrade to null features can branch on it.
+    """
 
 
 def _filter_reports_by_date(result: Any, curr_date: str | None) -> Any:
@@ -45,8 +54,10 @@ def _filter_reports_by_date(result: Any, curr_date: str | None) -> Any:
 def _make_av_request(function_name: str, symbol: str) -> dict:
     """Call the Alpha Vantage REST API and return parsed JSON.
 
-    Returns {} on rate-limit responses, network errors, or non-JSON payloads
-    so partial data still flows through to extract_features.
+    Returns {} on application-level errors (invalid ticker, malformed JSON).
+    Raises AlphaVantageRateLimitError on rate-limit / quota signals so the
+    caller can abort a batch instead of polluting it with null features.
+    Network errors propagate as urllib.error.URLError / HTTPError.
     """
     api_key = os.getenv("ALPHA_VANTAGE_API_KEY")
     if not api_key:
@@ -66,8 +77,9 @@ def _make_av_request(function_name: str, symbol: str) -> dict:
         if "Information" in data:
             info = str(data["Information"]).lower()
             if "rate limit" in info or "api key" in info:
-                logger.warning("Alpha Vantage rate-limited on %s/%s", function_name, symbol)
-                return {}
+                raise AlphaVantageRateLimitError(
+                    f"Alpha Vantage rate-limited on {function_name}/{symbol}: {data['Information']}"
+                )
         if "Error Message" in data:
             logger.warning(
                 "Alpha Vantage error on %s/%s: %s", function_name, symbol, data["Error Message"]
@@ -96,13 +108,20 @@ def _av_income_statement(ticker: str, curr_date: str | None = None) -> Mapping:
 def fetch_ticker_bundle(ticker: str, curr_date: str | None = None) -> dict:
     """Fetch all four AV endpoints for a ticker and bundle them.
 
-    Individual endpoint failures return {} so partial data still flows through
-    — extract_features defends against missing sections.
+    Individual application-level endpoint failures return {} so partial data
+    still flows through — extract_features defends against missing sections.
+    Rate-limit signals (AlphaVantageRateLimitError) propagate to the caller
+    so a batch can be aborted instead of polluted with null features.
     """
 
     def _safe(fn):
         try:
             return fn(ticker, curr_date=curr_date)
+        except AlphaVantageRateLimitError:
+            raise
+        except (HTTPError, URLError) as exc:
+            logger.warning("AV network error for %s: %s", ticker, exc)
+            return {}
         except Exception as exc:
             logger.warning("AV fetch failed for %s: %s", ticker, exc)
             return {}
