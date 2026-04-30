@@ -26,6 +26,13 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# Tolerance for "is realised vol effectively zero?" — covers exact zero
+# (constant returns) AND any FP-rounding residue from std on near-
+# constant data. Below this, target/rv would balloon to ~1e10+ and
+# clip to max_leverage anyway, but treating the regime as degenerate
+# (scale=1.0, log a WARNING) is cleaner than amplifying noise.
+_ZERO_VOL_TOL: float = 1e-12
+
 
 @runtime_checkable
 class RealizedVolEstimator(Protocol):
@@ -97,11 +104,14 @@ class VolTargeter:
         programmatic callers. Hot path is ``scale_series`` which is O(N)
         via vectorised rolling. Both honour the same fallback contract."""
         rv = self._estimator.estimate(returns, asof)
-        if rv is None or math.isnan(rv) or rv <= 0:
-            if rv == 0.0:
+        if rv is None or math.isnan(rv) or rv <= _ZERO_VOL_TOL:
+            if rv is not None and not math.isnan(rv) and abs(rv) <= _ZERO_VOL_TOL:
                 logger.warning(
-                    "vol_target.scale_factor: realised vol is exactly zero at "
-                    "asof=%s — degenerate state, falling back to scale=1.0",
+                    "vol_target.scale_factor: realised vol is effectively zero "
+                    "(|rv|=%s <= %s) at asof=%s — degenerate state, falling "
+                    "back to scale=1.0",
+                    rv,
+                    _ZERO_VOL_TOL,
                     asof,
                 )
             return 1.0
@@ -129,22 +139,25 @@ class VolTargeter:
         # estimate forward by one period.
         rv = rv_unshifted.shift(1)
 
-        # Distinguish degenerate zero-vol from missing/insufficient history.
-        # NaN in rv covers (a) warmup, (b) NaN inside the window. Both
-        # collapse silently to scale=1.0 below. Zero-vol is a separate
-        # degenerate state worth logging.
-        zero_vol_mask = rv == 0.0
+        # Distinguish degenerate near-zero vol from missing/insufficient
+        # history. NaN in rv covers (a) warmup, (b) NaN inside the window.
+        # Both collapse silently to scale=1.0 below. Near-zero vol (|rv|
+        # within FP tolerance of 0) is a separate degenerate state worth
+        # logging — `target/rv` would otherwise balloon to ~1e10+ and clip
+        # to max_leverage, masking the absent signal.
+        zero_vol_mask = rv.abs() <= _ZERO_VOL_TOL
         if zero_vol_mask.any():
             logger.warning(
-                "vol_target.scale_series: realised vol is exactly zero at %d "
-                "timestamps — degenerate state, falling back to scale=1.0 "
-                "(not amplifying the zero-variance window)",
+                "vol_target.scale_series: realised vol is effectively zero "
+                "(|rv| <= %s) at %d timestamps — degenerate state, falling "
+                "back to scale=1.0 (not amplifying the zero-variance window)",
+                _ZERO_VOL_TOL,
                 int(zero_vol_mask.sum()),
             )
 
-        # Avoid div-by-zero by routing zero-vol through NaN, which is then
-        # filled by the final `fillna(1.0)`.
-        rv_safe = rv.where(rv > 0)
+        # Avoid div-by-(near-)zero by routing degenerate-vol through NaN,
+        # which is then filled by the final `fillna(1.0)`.
+        rv_safe = rv.where(rv > _ZERO_VOL_TOL)
         raw = self.target_vol / rv_safe
         scaled = raw.clip(upper=self.max_leverage)
         return scaled.fillna(1.0).rename("scale")
