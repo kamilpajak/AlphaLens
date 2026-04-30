@@ -198,13 +198,16 @@ def slice_report_to_window(baseline: BacktestReport, window: WindowSpec) -> Back
 # Per-window metrics
 
 
-def _majority_regime_and_reversal(
-    benchmark_close: pd.Series, window: WindowSpec
-) -> tuple[str, bool]:
-    labels = classify_regime(benchmark_close)
+def _majority_regime_and_reversal(regime_labels: pd.Series, window: WindowSpec) -> tuple[str, bool]:
+    """Classify the window by majority regime and detect bull↔bear reversals.
+
+    Takes pre-computed `regime_labels` (a Series of regime strings indexed by
+    benchmark date) rather than the raw `benchmark_close`, so the caller can
+    hoist the O(N) `classify_regime(...)` call outside the per-window loop.
+    """
     start_ts = pd.Timestamp(window.test_start)
     end_ts = pd.Timestamp(window.test_end)
-    sliced = labels.loc[(labels.index >= start_ts) & (labels.index <= end_ts)]
+    sliced = regime_labels.loc[(regime_labels.index >= start_ts) & (regime_labels.index <= end_ts)]
     if sliced.empty:
         return "flat", False
     regime = str(sliced.mode().iloc[0])
@@ -223,7 +226,7 @@ def _majority_regime_and_reversal(
 def compute_window_metrics(
     sliced: BacktestReport,
     window: WindowSpec,
-    benchmark_close: pd.Series,
+    regime_labels: pd.Series,
     carhart: pd.DataFrame | None,
 ) -> WindowResult:
     """Compute all per-window metrics from a pre-sliced BacktestReport.
@@ -231,6 +234,10 @@ def compute_window_metrics(
     **Path-independence**: max_drawdown and cumulative_return are derived
     from a fresh cumprod starting at 1 for the slice's first day —
     independent of any pre-window equity curve.
+
+    `regime_labels` is the pre-computed `classify_regime(benchmark_close)`
+    output. The caller is responsible for computing it once per walk-forward
+    run rather than per window — see `run_walk_forward`.
     """
     returns = sliced.portfolio_returns
     ic = sliced.ic_series
@@ -238,7 +245,7 @@ def compute_window_metrics(
 
     if n_days == 0:
         # Degenerate window — return neutral values rather than raise.
-        regime, reversed_within = _majority_regime_and_reversal(benchmark_close, window)
+        regime, reversed_within = _majority_regime_and_reversal(regime_labels, window)
         return WindowResult(
             test_start=window.test_start,
             test_end=window.test_end,
@@ -289,7 +296,7 @@ def compute_window_metrics(
                 alpha_daily = None
                 alpha_tstat = None
 
-    regime, reversed_within = _majority_regime_and_reversal(benchmark_close, window)
+    regime, reversed_within = _majority_regime_and_reversal(regime_labels, window)
 
     return WindowResult(
         test_start=window.test_start,
@@ -385,10 +392,16 @@ def run_walk_forward(
     calendar = [snap.date for snap in baseline.rebalance_results]
     windows = generate_windows(calendar, window_days=window_days, step_days=step_days)
 
+    # Hoist the O(N) regime classification out of the per-window loop —
+    # classify_regime walks the full benchmark series, so calling it inside
+    # `compute_window_metrics` made the walk-forward grid O(N · W) instead of
+    # O(N + W). Pre-compute once and pass the labels into each window call.
+    regime_labels = classify_regime(benchmark_close)
+
     results: list[WindowResult] = []
     for window in windows:
         sliced = slice_report_to_window(baseline, window)
-        results.append(compute_window_metrics(sliced, window, benchmark_close, carhart))
+        results.append(compute_window_metrics(sliced, window, regime_labels, carhart))
 
     summary = summarize_distribution(results, baseline)
     verdict = evaluate_gate(summary)

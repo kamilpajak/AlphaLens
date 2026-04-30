@@ -14,6 +14,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from alphalens.attribution.regime import classify_regime
 from alphalens.attribution.walk_forward import (
     DistributionSummary,
     WindowResult,
@@ -117,8 +118,8 @@ class TestMaxDDPathIndependence(unittest.TestCase):
         )
         sliced_a = slice_report_to_window(rep_a, window)
         sliced_b = slice_report_to_window(rep_b, window)
-        metrics_a = compute_window_metrics(sliced_a, window, bench, None)
-        metrics_b = compute_window_metrics(sliced_b, window, bench, None)
+        metrics_a = compute_window_metrics(sliced_a, window, classify_regime(bench), None)
+        metrics_b = compute_window_metrics(sliced_b, window, classify_regime(bench), None)
 
         self.assertAlmostEqual(metrics_a.max_drawdown, metrics_b.max_drawdown, places=6)
         # Sanity: both should capture the -20% drop, independent of surrounding context
@@ -138,7 +139,7 @@ class TestComputeWindowMetrics(unittest.TestCase):
             start=baseline.rebalance_results[0].date.strftime("%Y-%m-%d"),
             periods=100,
         )
-        metrics = compute_window_metrics(sliced, window, bench, None)
+        metrics = compute_window_metrics(sliced, window, classify_regime(bench), None)
         self.assertEqual(metrics.n_days, 50)
         self.assertIsNone(metrics.carhart_alpha_tstat)
         # Moderate drag reduces Sharpe vs gross for positive-return series
@@ -164,7 +165,7 @@ class TestComputeWindowMetrics(unittest.TestCase):
             {"Mkt-RF": 0.0, "SMB": 0.0, "HML": 0.0, "Mom": 0.0, "RF": 0.0},
             index=idx,
         )
-        metrics = compute_window_metrics(sliced, window, bench, carhart)
+        metrics = compute_window_metrics(sliced, window, classify_regime(bench), carhart)
         self.assertIsNotNone(metrics.carhart_alpha_tstat)
 
 
