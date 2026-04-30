@@ -1,6 +1,6 @@
 """Tests for time-series position-sizing overlays on portfolio returns.
 
-`alphalens.risk_overlay` is a sibling layer to `alphalens.gates`
+`alphalens.overlays` is a sibling layer to `alphalens.gates`
 sitting downstream of the BacktestEngine: regime_gate modifies *which*
 tickers are selected; risk_overlay modifies *how much* total exposure
 the selected portfolio carries based on its own realized vol.
@@ -33,7 +33,7 @@ def _returns(values: list[float], start: str = "2020-01-06") -> pd.Series:
 class VolTargetScalingTests(unittest.TestCase):
     def test_apply_returns_input_when_history_insufficient(self):
         """First `lookback` periods cannot estimate vol — scale must be 1.0."""
-        from alphalens.risk_overlay import VolTargeter, apply_vol_target
+        from alphalens.overlays import VolTargeter, apply_vol_target
 
         rets = _returns([0.01, -0.01, 0.005, -0.005, 0.01])
         targeter = VolTargeter(target_vol=0.10, lookback=5, periods_per_year=52)
@@ -45,7 +45,7 @@ class VolTargetScalingTests(unittest.TestCase):
 
     def test_scale_factor_decreases_when_realized_vol_exceeds_target(self):
         """High-vol regime → scale < 1 (de-risk)."""
-        from alphalens.risk_overlay import VolTargeter, apply_vol_target
+        from alphalens.overlays import VolTargeter, apply_vol_target
 
         # ±5% weekly = ~36% annualized — well above 10% target.
         rets = _returns([0.05, -0.05, 0.05, -0.05, 0.05, -0.05, 0.05, -0.05, 0.05])
@@ -60,7 +60,7 @@ class VolTargetScalingTests(unittest.TestCase):
 
     def test_scale_factor_increases_when_realized_vol_below_target(self):
         """Low-vol regime → scale > 1 (lever up), capped at max_leverage."""
-        from alphalens.risk_overlay import VolTargeter, apply_vol_target
+        from alphalens.overlays import VolTargeter, apply_vol_target
 
         # ±0.2% weekly = ~1.4% annualized — well below 10% target.
         rets = _returns([0.002, -0.002, 0.002, -0.002, 0.002, -0.002, 0.002, -0.002, 0.002])
@@ -74,7 +74,7 @@ class VolTargetScalingTests(unittest.TestCase):
 
     def test_max_leverage_caps_scale(self):
         """Near-zero realized vol explodes the raw multiplier — cap clamps it."""
-        from alphalens.risk_overlay import VolTargeter, apply_vol_target
+        from alphalens.overlays import VolTargeter, apply_vol_target
 
         # Alternating 1bp returns — realized std → ~0.0001, so target/rv → ~10000.
         rets = _returns([0.0001, -0.0001] * 5)
@@ -89,7 +89,7 @@ class VolTargetScalingTests(unittest.TestCase):
     def test_no_lookahead_in_scale_factor(self):
         """scale[t] uses returns strictly before t — modifying returns[t]
         must not change scale[t]."""
-        from alphalens.risk_overlay import VolTargeter, apply_vol_target
+        from alphalens.overlays import VolTargeter, apply_vol_target
 
         base = _returns([0.01, -0.01, 0.01, -0.01, 0.01, 0.02, -0.02])
         perturbed = base.copy()
@@ -108,7 +108,7 @@ class VolTargetScalingTests(unittest.TestCase):
         self.assertAlmostEqual(ratio_base, ratio_perturbed, places=12)
 
     def test_empty_returns_returns_empty(self):
-        from alphalens.risk_overlay import VolTargeter, apply_vol_target
+        from alphalens.overlays import VolTargeter, apply_vol_target
 
         rets = pd.Series([], dtype=float, index=pd.DatetimeIndex([]), name="portfolio")
         targeter = VolTargeter(target_vol=0.10, lookback=5, periods_per_year=52)
@@ -118,7 +118,7 @@ class VolTargetScalingTests(unittest.TestCase):
         self.assertEqual(len(scaled), 0)
 
     def test_zero_or_negative_target_vol_raises(self):
-        from alphalens.risk_overlay import VolTargeter
+        from alphalens.overlays import VolTargeter
 
         with self.assertRaises(ValueError):
             VolTargeter(target_vol=0.0, lookback=5, periods_per_year=52)
@@ -126,7 +126,7 @@ class VolTargetScalingTests(unittest.TestCase):
             VolTargeter(target_vol=-0.05, lookback=5, periods_per_year=52)
 
     def test_non_positive_max_leverage_raises(self):
-        from alphalens.risk_overlay import VolTargeter
+        from alphalens.overlays import VolTargeter
 
         with self.assertRaises(ValueError):
             VolTargeter(target_vol=0.10, lookback=5, periods_per_year=52, max_leverage=0.0)
@@ -134,7 +134,7 @@ class VolTargetScalingTests(unittest.TestCase):
             VolTargeter(target_vol=0.10, lookback=5, periods_per_year=52, max_leverage=-0.5)
 
     def test_lookback_below_2_raises(self):
-        from alphalens.risk_overlay import VolTargeter
+        from alphalens.overlays import VolTargeter
 
         with self.assertRaises(ValueError):
             VolTargeter(target_vol=0.10, lookback=1, periods_per_year=52)
@@ -147,7 +147,7 @@ class VolTargetScalingTests(unittest.TestCase):
         contract: if the realised-vol estimator can't produce a finite
         positive number (e.g. because the window contains NaN), the
         wrapper falls back to scale=1.0 (identity)."""
-        from alphalens.risk_overlay import VolTargeter, apply_vol_target
+        from alphalens.overlays import VolTargeter, apply_vol_target
 
         rets = _returns([0.01, -0.01, float("nan"), 0.01, -0.01, 0.05, -0.05, 0.05])
         targeter = VolTargeter(target_vol=0.10, lookback=5, periods_per_year=52)
@@ -169,13 +169,13 @@ class VolTargetScalingTests(unittest.TestCase):
         latter is a degenerate state worth flagging in research logs."""
         import logging
 
-        from alphalens.risk_overlay import VolTargeter, apply_vol_target
+        from alphalens.overlays import VolTargeter, apply_vol_target
 
         # Constant returns → realized std = 0 → degenerate.
         rets = _returns([0.005] * 8)
         targeter = VolTargeter(target_vol=0.10, lookback=5, periods_per_year=52)
 
-        with self.assertLogs("alphalens.risk_overlay.vol_target", level=logging.WARNING) as cm:
+        with self.assertLogs("alphalens.overlays.vol_target", level=logging.WARNING) as cm:
             scaled = apply_vol_target(rets, targeter)
 
         # All scales = 1.0 (fallback), no NaN propagation.
@@ -191,7 +191,7 @@ class RiskOverlayPackageStatusTest(unittest.TestCase):
         """No concrete sizing rule has earned ACTIVE status yet — first
         hypothesis (vol-target on mom+lowvol) is pre-registered for audit
         2026-04-30. Package mirrors `alphalens.gates` and `macro/`."""
-        import alphalens.risk_overlay as pkg
+        import alphalens.overlays as pkg
 
         self.assertEqual(pkg.__status__, "RESEARCH_ONLY")
 

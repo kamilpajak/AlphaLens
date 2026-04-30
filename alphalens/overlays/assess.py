@@ -24,7 +24,7 @@ from collections.abc import Sequence
 import pandas as pd
 
 from alphalens.backtest.metrics import sharpe
-from alphalens.risk_overlay.vol_target import VolTargeter, apply_vol_target
+from alphalens.overlays.vol_target import VolTargeter, apply_vol_target
 
 # Headline keys exported from compute_overlay_stats. Locking this list
 # keeps the audit-JSON schema stable across overlay-script revisions.

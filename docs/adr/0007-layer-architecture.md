@@ -110,7 +110,7 @@ Adopt a **5-layer architecture** for AlphaLens active-alpha experimentation. Eac
 **Limitation — time-varying betas:**
 Risk overlays make the resulting portfolio's market beta time-varying. The OLS Carhart-4F regressions in `alphalens.attribution.factor_analysis` assume constant betas. For overlay-bearing strategies the reported α t-stat is therefore distorted. The convention (locked into the strategy validation playbook 2026-04-30):
 
-- **Primary success metric for overlay-bearing strategies:** Sharpe-net-improvement vs ungated BASE, multi-phase mean (robust to time-varying beta). Implemented in `alphalens.risk_overlay.assess.compute_overlay_stats` — see the `sharpe_improvement_net` key.
+- **Primary success metric for overlay-bearing strategies:** Sharpe-net-improvement vs ungated BASE, multi-phase mean (robust to time-varying beta). Implemented in `alphalens.overlays.assess.compute_overlay_stats` — see the `sharpe_improvement_net` key.
 - **Secondary metric:** Carhart-4F α t-stat (reported but flagged as upper-bound estimate).
 - A conditional-beta regressor is on the deferred list. **Tracked as a follow-up:** revisit if and when an overlay-bearing strategy passes the Sharpe-improvement gate phase-robustly; pre-tracking it would be premature given the only overlay tested so far (`vol_target_mom_lowvol_2026_04_30`) FAIL'd on the primary gate. Until then, OLS attribution is acceptable as a coarse upper-bound.
 

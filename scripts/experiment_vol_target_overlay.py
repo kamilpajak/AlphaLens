@@ -9,7 +9,7 @@ Design:
   scored exactly the same way (same z-mom − vol_weight × z-vol formulation
   at vol_weight=1.0). The overlay does not touch selection.
 - Engine produces ``report.portfolio_returns`` per the standard contract.
-- ``alphalens.risk_overlay.apply_vol_target`` rescales those returns by a
+- ``alphalens.overlays.apply_vol_target`` rescales those returns by a
   rolling-window realised-vol target (default: target=10% ann., lookback=5
   weekly periods ≈ 1 month, max_leverage=1.5). Causality: scale[t] uses
   returns[<t] only.
@@ -45,8 +45,8 @@ from alphalens.backtest.engine import BacktestEngine
 from alphalens.data.alt_data.yfinance_cache import load_cached_histories
 from alphalens.data.factors import load_carhart_daily
 from alphalens.data.store.history import HistoryStore
-from alphalens.risk_overlay import VolTargeter, apply_vol_target
-from alphalens.risk_overlay.assess import compute_overlay_stats
+from alphalens.overlays import VolTargeter, apply_vol_target
+from alphalens.overlays.assess import compute_overlay_stats
 from alphalens.screeners.momentum_lowvol import momentum_lowvol_adapter
 
 # Helpers (universe loader, benchmark series, prices dir) still live in
@@ -82,7 +82,7 @@ def assess_overlay(
     """Apply vol-target overlay + dynamic cost accounting + Carhart 4F.
 
     Delegates the canonical Sharpe-improvement computation to
-    `alphalens.risk_overlay.assess.compute_overlay_stats` (true
+    `alphalens.overlays.assess.compute_overlay_stats` (true
     per-period turnover from snapshots, plus side-by-side BASE Sharpe).
     Carhart-4F α t-stat is reported as an *upper-bound* indicator only —
     OLS assumes constant betas, but vol-scaling introduces time-varying
