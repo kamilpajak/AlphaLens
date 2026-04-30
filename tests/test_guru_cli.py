@@ -203,12 +203,11 @@ class TestGuruPilot(unittest.TestCase):
 
 class TestGuruImports(unittest.TestCase):
     def test_real_llm_client_import_path_is_valid(self):
-        """Regression: the CLI uses lowercase `tradingagents.llm_clients`,
-        not `TradingAgents.tradingagents.llm_clients`. Import must resolve."""
+        """Regression: guru pilot constructs ChatGoogleGenerativeAI directly."""
         import importlib
 
-        mod = importlib.import_module("tradingagents.llm_clients.google_client")
-        self.assertTrue(hasattr(mod, "GoogleClient"))
+        mod = importlib.import_module("langchain_google_genai")
+        self.assertTrue(hasattr(mod, "ChatGoogleGenerativeAI"))
 
 
 if __name__ == "__main__":

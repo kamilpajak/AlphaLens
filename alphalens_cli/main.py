@@ -1,21 +1,15 @@
 """AlphaLens CLI entry point.
 
 Top-level commands:
-    analyze TICKER      — one-shot Layer 3 deep analysis
     status              — global state (queue + digest + dedup)
     backtest            — screener-agnostic backtest harness
 
 Groups:
     watchdog/           — Layer 1 SEC EDGAR event detection
-    queue/              — Layer 3 ops (process worker + scorer-stats)
+    queue/              — scorer-stats viewer over the historical candidate queue
     themed/             — Layer 2b curated YAML universe scan + monitoring
     insider/            — Layer 2d Form 4 cluster-buy scan (live/ad-hoc)
     research/           — eksperymenty (LLM filter validation, ...)
-
-For the TradingAgents interactive menu use `.venv/bin/tradingagents`
-(upstream's console script, registered when TradingAgents is editable-
-installed — its `cli` package is separate from this `alphalens_cli`
-package to avoid namespace collision).
 """
 
 from __future__ import annotations
@@ -25,7 +19,6 @@ import logging
 import typer
 from dotenv import load_dotenv
 
-from alphalens_cli.commands.analyze import analyze
 from alphalens_cli.commands.backtest import backtest
 from alphalens_cli.commands.events import events_app
 from alphalens_cli.commands.guru import guru_app
@@ -72,7 +65,6 @@ app.add_typer(research_app, name="research")
 app.add_typer(rotation_app, name="rotation")
 app.add_typer(events_app, name="events")
 app.add_typer(guru_app, name="guru")
-app.command(name="analyze")(analyze)
 app.command(name="status")(status)
 app.command(name="backtest")(backtest)
 

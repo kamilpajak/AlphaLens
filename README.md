@@ -7,21 +7,21 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Research lab infrastructure for retail active alpha experimentation — combines real-time SEC EDGAR event detection, quantitative screening, and multi-agent LLM analysis built around [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents).
+Research lab infrastructure for retail active alpha experimentation — real-time SEC EDGAR event detection, quantitative screening, and a vectorized backtest engine for paradigm validation.
 
 ## Status (2026-04-25 →)
 
 The project pivoted from "active alpha generation" to **research / learning infrastructure** after [9 paradigm failures](docs/research/paradigm_failures_postmortem.md) (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum, all phase-robust FAIL). Capital deployment based on the current strategies is **off the table** until a phase-robust PASS appears; the screener search itself stays open-ended under pre-registration discipline. The codebase remains as:
 
 - **Reusable research framework** — backtest engine, factor attribution, sanity checks, multiple-testing corrections, regime classifier, **time-series sizing overlays (`alphalens/overlays/`, vol-targeting per Moreira-Muir 2017)**, cost models, weighting schemes; layer architecture in [ADR 0007](docs/adr/0007-layer-architecture.md)
-- **Production-grade data clients** — Polygon, FRED, SEC EDGAR
-- **LLM scoring infrastructure** — TradingAgents multi-agent + GuruScorer single-prompt
+- **Production-grade data clients** — Polygon, FRED, SEC EDGAR, Alpha Vantage fundamentals
+- **LLM scoring infrastructure** — GuruScorer single-prompt pilot (Layer 2f, RESEARCH_ONLY) using LangChain + Gemini directly
 - **Anti-pattern catalog** — every closed strategy ships a `__closed_reason__` marker plus a postmortem entry
 - **Spin-off OSS toolkit** — pre-registration ledger + multi-phase audit + Bonferroni helpers extracted as a standalone library: [`kamilpajak/phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting) (see [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md))
 
-**Live in launchd**: only Layer 1 SEC EDGAR watchdog (read-only event detection, daily Telegram digest, near-zero maintenance).
+**Live in launchd**: only Layer 1 SEC EDGAR watchdog (read-only event detection, daily Telegram digest, near-zero maintenance). The Layer 3 LLM runner that previously consumed the candidate queue was removed by [ADR 0008](docs/adr/0008-sunset-tradingagents-integration.md).
 
-> Architectural rationale: see [`docs/adr/`](docs/adr/) (7 ADRs).
+> Architectural rationale: see [`docs/adr/`](docs/adr/) (8 ADRs).
 > Per-layer postmortem: [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md).
 > Quick contributor guide: [`CLAUDE.md`](CLAUDE.md).
 
@@ -33,7 +33,7 @@ Each layer/screener package declares its lifecycle in `__init__.py` as `__status
 
 | Path | Status | Notes |
 |------|--------|-------|
-| `alphalens/watchdog/` | ACTIVE | Layer 1 — live in launchd (`detect` + `worker`) |
+| `alphalens/watchdog/` | ACTIVE | Layer 1 — `detect` live in launchd; `worker` archived per [ADR 0008](docs/adr/0008-sunset-tradingagents-integration.md) |
 | `alphalens/backtest/` | ACTIVE | Screener-agnostic harness, reused across all replay |
 | `alphalens/archive/screeners/themed/` | CLOSED 2026-04-22 | Layer 2b — momentum overfit OOS, realistic execution cost ~100% ann eats signal |
 | `alphalens/archive/screeners/lean/` | ARCHIVED 2026-04-19 | Layer 2c — Sharpe 0.25 net, FF3 α t-stat 0.14 |
@@ -64,7 +64,7 @@ CLOSED-layer code is retained as a research framework + anti-pattern record (see
 git clone git@github.com:kamilpajak/AlphaLens.git
 cd AlphaLens
 uv venv --python 3.13
-uv sync                      # installs alphalens + tradingagents editable
+uv sync
 ```
 
 Create `.env` at repo root:
@@ -86,13 +86,10 @@ watchlist: [NVDA, GOOGL]
 
 ### Running things
 
-Two console scripts are installed: `alphalens` (this project) and `tradingagents` (upstream's interactive menu).
-
 ```bash
-# Live workflows (Layer 1 + Layer 3)
-.venv/bin/alphalens watchdog run-once          # poll EDGAR, classify, dispatch
-.venv/bin/alphalens queue process              # drain unified queue → Layer 3
-.venv/bin/alphalens analyze TICKER             # ad-hoc Layer 3 deep analysis
+# Live workflows
+.venv/bin/alphalens watchdog run-once          # Layer 1: poll EDGAR, classify, dispatch
+.venv/bin/alphalens queue scorer-stats         # historical viewer over candidates.db
 .venv/bin/alphalens status                     # queue + digest + dedup
 
 # Backtest replay (closed scorers — research only, NOT for capital deploy)
@@ -133,12 +130,11 @@ done
 
 ```
 alphalens/                     ← my code (Python package)
-├── candidates.py              shared domain — Candidate, AnalysisResult, CandidateSink Protocol
-├── queue.py                   SQLite priority queue with dedup + retry + DLQ
-├── worker.py                  AnalysisWorker — drains queue, budget guard, notifier
-├── runner.py                  TradingAgentsRunner — only place constructing TradingAgentsGraph
-├── registry.py                SCREENERS dict — register a new screener in one line
-├── config_gemini.py           Gemini TradingAgentsGraph config
+├── core/
+│   ├── candidates.py          shared domain — Candidate, AnalysisResult, CandidateSink Protocol
+│   ├── queue.py               SQLite priority queue with dedup + retry + DLQ
+│   ├── registry.py            SCREENERS dict — register a new screener in one line
+│   └── scorer_stats.py        historical Layer 3 acceptance-rate viewer
 ├── watchdog/                  Layer 1: EDGAR detection + classifier + dispatch (ACTIVE)
 ├── backtest/                  Screener-agnostic backtest harness (ACTIVE)
 ├── alt_data/                  SEC EDGAR + Form 4 + Russell universe builder (RESEARCH_ONLY)
@@ -154,28 +150,26 @@ alphalens/                     ← my code (Python package)
     ├── insider/               Layer 2d Form 4 cluster-buy (CLOSED)
     └── lean/                  Layer 2c Russell rule-based (ARCHIVED)
 
-alphalens_cli/                 ← my CLI (separate package — no namespace clash with TradingAgents/cli/)
-
-TradingAgents/                 ← upstream vendored via git subtree --squash (see ADR 0004)
+alphalens_cli/                 ← my CLI (separate package)
 
 docs/
-├── adr/                       Architecture Decision Records (5 ADRs)
+├── adr/                       Architecture Decision Records (8 ADRs)
 ├── research/                  paradigm postmortem + per-strategy design + audit reports
 └── backtest/                  historical backtest run outputs
 
-launchd/                       macOS scheduled jobs (live: detect, worker; archived: themed, lean, insider)
-tests/                         unittest suite (1278 tests; 4 are architectural enforcement)
+launchd/                       macOS scheduled jobs (live: detect, literature; archived: worker, themed, lean, insider)
+tests/                         unittest suite (~1365 tests; several architectural enforcers)
 ```
 
-Full architecture detail and key abstractions: [`CLAUDE.md`](CLAUDE.md). Mermaid layer diagram: [`docs/architecture.mmd.txt`](docs/architecture.mmd.txt).
+Full architecture detail and key abstractions: [`CLAUDE.md`](CLAUDE.md). Layer separation rationale: [`ADR 0007`](docs/adr/0007-layer-architecture.md).
 
 ---
 
 ## Configuration
 
-**LLM**: `alphalens/core/config_gemini.py::build_gemini_config()` is the single source of truth. Override returned dict for non-Gemini providers.
+**LLM**: `alphalens_cli/commands/guru.py` constructs `langchain_google_genai.ChatGoogleGenerativeAI` directly for the Layer 2f GuruAgent pilot. There is no shared LLM config wrapper today.
 
-**Data vendors**: `core_stock_apis` + `technical_indicators` use yfinance (free); `fundamental_data` + `news_data` use Alpha Vantage.
+**Data vendors**: `yfinance` for prices and technical indicators; `alphalens/data/fundamentals/fetcher.py` calls Alpha Vantage REST directly (no third-party client).
 
 **Themed universe** (Layer 2b — closed): `alphalens/archive/screeners/themed/universe.yaml`. Quarterly refresh runbook: [`docs/runbook_layer2b_refresh.md`](docs/runbook_layer2b_refresh.md).
 
@@ -187,10 +181,10 @@ Full architecture detail and key abstractions: [`CLAUDE.md`](CLAUDE.md). Mermaid
 
 Lives outside the repo, survives git operations:
 
-- `~/.alphalens/candidates.db` — unified Layer 1 → Layer 3 queue
+- `~/.alphalens/candidates.db` — Layer 1 candidate queue (historical log; no live drain)
 - `~/.alphalens/watchdog/` — portfolio.yaml, EDGAR dedup, digest buffer, launchd logs
 - `~/.alphalens/lean/{data,results,logs}/` — Lean OHLCV cache (used by backtest replay)
-- `~/.tradingagents/{cache,logs}/` — upstream state (paths hardcoded upstream)
+- `~/.alphalens/guru_cache/` — guru pilot LLM response cache
 
 ---
 
@@ -200,7 +194,7 @@ Lives outside the repo, survives git operations:
 - **Testing**: unittest (not pytest) — `python -m unittest discover tests`
 - **Commits**: Conventional Commits (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …)
 - **Code language**: English in source code (`alphalens/`, `alphalens_cli/`, `tests/`); enforced by `tests/test_no_polish_chars.py`
-- **New components** go in `alphalens/<name>/` or `alphalens_cli/`, never in `TradingAgents/` (upstream territory) or at top level
+- **New components** go in `alphalens/<name>/` or `alphalens_cli/`, never at top level
 
 Four enforcement tests guard architectural invariants — they are not regular unit tests:
 
@@ -211,21 +205,12 @@ Four enforcement tests guard architectural invariants — they are not regular u
 
 ---
 
-## Upstream relationship
+## TradingAgents removal (2026-04-30)
 
-AlphaLens vendors [`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents) at `TradingAgents/` via `git subtree --squash`. Rationale: [ADR 0004](docs/adr/0004-tradingagents-as-subtree.md). Editable-installed so `import tradingagents.*` works transparently.
-
-```bash
-git subtree pull --prefix=TradingAgents \
-  https://github.com/TauricResearch/TradingAgents.git main --squash
-```
-
-After each sync, reapply the live patch (Gemini 429 retry in `TradingAgents/tradingagents/llm_clients/google_client.py`). Goal is to upstream it as a PR to keep the patch surface minimal.
-
-Upstream's own README: [`TradingAgents/README.md`](TradingAgents/README.md).
+AlphaLens previously vendored [`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents) as a `git subtree` at `TradingAgents/`. The integration was removed by [ADR 0008](docs/adr/0008-sunset-tradingagents-integration.md) — the worker that drained the candidate queue was dormant after 10/10 paradigm failures, the maintenance tax (custom Gemini 429 retry, deferred upstream PRs, transitive deps) no longer paid for itself, and any future use will happen from a separate clone. The original subtree decision lives on for history at [ADR 0004](docs/adr/0004-tradingagents-as-subtree.md) (status: Superseded).
 
 ---
 
 ## License
 
-Apache License 2.0 — inherited from upstream TradingAgents. AlphaLens additions are released under the same license.
+MIT.

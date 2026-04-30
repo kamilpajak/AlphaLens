@@ -1,14 +1,13 @@
 """Reference LLM scorer implementations for historical_validation.
 
-Two available implementations:
+Available implementations:
 
 1. `gemini_flash_tractability_scorer` — a single Gemini 2.5 Flash call,
    ~$0.01-0.03 per ticker. Asks the model whether a name is "analysis-tractable":
    coherent business model, reasonable size, not a zombie/fraud.
 
-2. `tradingagents_reduced_scorer` — a full TradingAgents run with
-   `selected_analysts=["market", "news"]`. ~$0.50-1 per ticker. Production-parity;
-   skips fundamentals (Alpha Vantage bottleneck) and social.
+2. `rule_and_gemini_hybrid_scorer` — deterministic rule first; Gemini only when
+   the rule returns 'uncertain'. Cheapest because most picks land on the rule.
 
 Both return an `LLMVerdict` matching the interface in `historical_validation.py`.
 
@@ -173,68 +172,6 @@ def gemini_flash_tractability_scorer(
         reasoning=str(parsed.get("reasoning", ""))[:280],
         latency_sec=latency,
         cost_usd=_GEMINI_FLASH_APPROX_COST_USD,
-    )
-
-
-def tradingagents_reduced_scorer(
-    ticker: str,
-    asof: date,
-    context: Mapping,
-    selected_analysts: tuple[str, ...] = ("market", "news"),
-) -> LLMVerdict:
-    """Run TradingAgentsGraph with a reduced analyst set.
-
-    Note: debate, risk management, and portfolio manager are HARDCODED in
-    setup.py — they cannot be disabled through `selected_analysts`. Real cost
-    is ~$0.50-1 per ticker on the Gemini paid tier, much more than a single
-    Flash tractability call.
-
-    Use this when you want a REALISTIC PRODUCTION EVAL (as if running Layer 3
-    on the pick).
-    """
-    from tradingagents.graph.trading_graph import TradingAgentsGraph
-
-    from alphalens.core.config_gemini import build_gemini_config
-
-    config = build_gemini_config()
-    graph = TradingAgentsGraph(
-        selected_analysts=list(selected_analysts),
-        debug=False,
-        config=config,
-    )
-
-    t0 = time.perf_counter()
-    try:
-        _final_state, decision = graph.propagate(ticker, asof.isoformat())
-    except Exception as exc:
-        return LLMVerdict(
-            verdict="uncertain",
-            confidence=0.0,
-            reasoning=f"TradingAgents error: {exc}",
-            latency_sec=time.perf_counter() - t0,
-            cost_usd=0.0,
-        )
-    latency = time.perf_counter() - t0
-
-    decision_upper = str(decision).upper()
-    if any(k in decision_upper for k in ("BUY", "OVERWEIGHT")):
-        v = "accept"
-    elif any(k in decision_upper for k in ("SELL", "UNDERWEIGHT")):
-        v = "reject"
-    else:
-        v = "uncertain"
-
-    # Rough cost estimate: ~10 LLM calls × ~1k tokens each × Gemini 2.5 Flash blended
-    cost_approx = (
-        10 * 1500 * (0.30 + 0.075) / 1_000_000
-    )  # ~$0.006 actually lol; for Pro model it's ~$0.50+
-
-    return LLMVerdict(
-        verdict=v,  # type: ignore[arg-type]
-        confidence=0.6,
-        reasoning=f"TradingAgents verdict={decision_upper[:80]}",
-        latency_sec=latency,
-        cost_usd=cost_approx,
     )
 
 

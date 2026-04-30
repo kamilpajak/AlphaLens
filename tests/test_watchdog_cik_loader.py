@@ -94,7 +94,7 @@ class TestCIKLoader(unittest.TestCase):
 
         self.assertIsNone(loader.get_cik("FAKE"))
 
-    def test_default_cache_path_is_in_tradingagents_home(self):
+    def test_default_cache_path_is_in_alphalens_home(self):
         from alphalens.watchdog.sources.cik_loader import default_cik_cache_path
 
         expected = Path.home() / ".alphalens" / "watchdog" / "company_tickers.json"

@@ -15,8 +15,9 @@ logger = logging.getLogger(__name__)
 class AutoTriggerEnqueueHandler(AlertHandler):
     """Detection-side handler: submits a `watchdog_sec` Candidate to the shared queue.
 
-    Does NOT run TradingAgents. The shared worker (`alphalens.core.worker.AnalysisWorker`)
-    drains the queue with its own budget and retry policy.
+    The queue is a historical log only — the Layer 3 worker that previously
+    drained it was removed per ADR 0008. New candidates accumulate for review
+    via `alphalens queue scorer-stats`.
     """
 
     SOURCE = "watchdog_sec"

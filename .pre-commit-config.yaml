@@ -20,11 +20,10 @@ repos:
     rev: v5.0.0
     hooks:
       - id: end-of-file-fixer
-        exclude: ^(reports/|TradingAgents/|\.alphalens/)
+        exclude: ^(reports/|\.alphalens/)
       - id: trailing-whitespace
-        exclude: ^(reports/|TradingAgents/)
+        exclude: ^reports/
       - id: check-yaml
-        exclude: ^TradingAgents/  # vendored upstream — don't enforce
       - id: check-toml
       - id: check-merge-conflict
       - id: check-case-conflict

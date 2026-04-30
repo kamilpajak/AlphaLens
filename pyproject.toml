@@ -11,7 +11,11 @@ requires-python = ">=3.13"
 dependencies = [
     "scipy>=1.17.1",
     "statsmodels>=0.14.6",
-    "tradingagents",
+    "langchain-google-genai>=4.2.2",
+    "typer>=0.21.1",
+    "yfinance>=0.2.63",
+    "stockstats>=0.6.5",
+    "python-dotenv>=1.0",
     "quiverquant",
     "simfin>=1.0.1",
     "pyarrow>=24.0.0",  # explicit: pandas parquet I/O (FRED cache, history snapshots)
@@ -31,15 +35,11 @@ dev = [
     "bandit>=1.9.4",
 ]
 
-[tool.uv.sources]
-tradingagents = { path = "./TradingAgents", editable = true }
-
 [tool.ruff]
 line-length = 100
 target-version = "py313"
 exclude = [
     ".venv",
-    "TradingAgents",  # Vendored upstream — don't lint their code
     "build",
     "dist",
     "*.egg-info",
@@ -111,7 +111,6 @@ docstring-code-format = true
 source = ["alphalens", "alphalens_cli"]
 omit = [
     "*/tests/*",
-    "*/TradingAgents/*",
 ]
 
 [tool.coverage.report]

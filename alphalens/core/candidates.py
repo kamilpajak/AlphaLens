@@ -1,9 +1,9 @@
-"""Shared domain model for screener → TradingAgents handoff.
+"""Shared domain model for the candidate queue.
 
 Every screener (watchdog SEC events, momentum, prescreener) produces `Candidate`
 instances. The unified `CandidateSink` (see `alphalens.core.queue.CandidateQueue`)
-consumes them; the worker drains the queue, invokes TradingAgents, and records
-an `AnalysisResult`.
+records them; `AnalysisResult` rows are kept as a historical viewer over past
+Layer 3 runs even though no live consumer drains the queue today.
 """
 
 from __future__ import annotations

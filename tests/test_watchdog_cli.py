@@ -15,12 +15,11 @@ class TestWatchdogCLI(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertIn("run-once", result.stdout)
 
-    def test_queue_group_exposes_process_and_scorer_stats(self):
+    def test_queue_group_exposes_scorer_stats(self):
         from alphalens_cli.commands.queue import queue_app
 
         result = self.runner.invoke(queue_app, ["--help"])
         self.assertEqual(result.exit_code, 0)
-        self.assertIn("process", result.stdout)
         self.assertIn("scorer-stats", result.stdout)
 
     @patch("alphalens_cli.commands.watchdog._build_watchdog")
@@ -34,18 +33,6 @@ class TestWatchdogCLI(unittest.TestCase):
         result = self.runner.invoke(watchdog_app, ["run-once"])
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
         fake_wd.run_once.assert_called_once()
-
-    @patch("alphalens_cli.commands.queue._build_worker")
-    def test_queue_process_invokes_worker(self, mock_build):
-        from alphalens_cli.commands.queue import queue_app
-
-        fake_worker = MagicMock()
-        fake_worker.process_all.return_value = 2
-        mock_build.return_value = fake_worker
-
-        result = self.runner.invoke(queue_app, ["process"])
-        self.assertEqual(result.exit_code, 0, msg=result.stdout)
-        fake_worker.process_all.assert_called_once()
 
 
 if __name__ == "__main__":

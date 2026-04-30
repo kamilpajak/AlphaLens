@@ -1,6 +1,6 @@
 # ADR 0004 — TradingAgents as vendored git subtree
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR 0008](0008-sunset-tradingagents-integration.md) (2026-04-30)
 - **Date:** 2025-08-10
 - **Supersedes:** —
 

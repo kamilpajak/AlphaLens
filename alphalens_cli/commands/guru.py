@@ -191,16 +191,35 @@ def pilot(
 
     import os
 
-    from tradingagents.llm_clients.google_client import GoogleClient
+    from langchain_google_genai import ChatGoogleGenerativeAI
 
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise typer.BadParameter("GOOGLE_API_KEY not set in environment")
-    llm_client = GoogleClient(
+
+    class _NormalizedChat(ChatGoogleGenerativeAI):
+        """Gemini 3 returns content as list-of-blocks; downstream expects str."""
+
+        def invoke(self, input, config=None, **kwargs):
+            response = super().invoke(input, config, **kwargs)
+            content = response.content
+            if isinstance(content, list):
+                texts = [
+                    item.get("text", "")
+                    if isinstance(item, dict) and item.get("type") == "text"
+                    else item
+                    if isinstance(item, str)
+                    else ""
+                    for item in content
+                ]
+                response.content = "\n".join(t for t in texts if t)
+            return response
+
+    llm_client = _NormalizedChat(
         model="gemini-3-pro-preview",
-        api_key=api_key,
+        google_api_key=api_key,
         thinking_level="low",  # fast + cheaper for screening
-    ).get_llm()
+    )
 
     cache_dir = Path.home() / ".alphalens" / "guru_cache"
 
