@@ -15,34 +15,32 @@ Pełny rozliczenie: `docs/research/paradigm_failures_postmortem.md` (10 paradigm
 
 Lifecycle status każdej warstwy żyje w jej `__init__.py` jako `__status__` constant (enforced przez `tests/test_layer_status.py`):
 
+Layout zorganizowany jako 11 top-level slotów (Phase 1-6 reorg 2026-04-30, ADR 0007):
+
 | Path | Status | Notatka |
 |------|--------|---------|
-| `alphalens/watchdog/` | ACTIVE | Layer 1 — live w launchd |
+| `alphalens/core/` | ACTIVE (namespace) | plumbing — candidates, queue, runner, worker, registry, scorer_stats, config_gemini |
+| `alphalens/watchdog/` | ACTIVE | Layer 1 — live w launchd; gains `lock.py` (was top-level `watchdog_lock.py`) |
 | `alphalens/literature_review/` | ACTIVE | Monthly + weekly Perplexity scan, live w launchd |
-| `alphalens/backtest/` | ACTIVE | screener-agnostic harness |
-| `alphalens/screeners/themed/` | CLOSED 2026-04-22 | Layer 2b — momentum overfit + cost eats signal |
-| `alphalens/screeners/lean/` | ARCHIVED 2026-04-19 | Layer 2c — Sharpe 0.25 net, FF3 α t=0.14 |
-| `alphalens/screeners/insider/` | CLOSED 2026-04-24 | Layer 2d — Carhart t=2.14 IS → 0.68 OOS |
-| `alphalens/screeners/momentum_lowvol/` | RESEARCH_ONLY | Layer 2 mom + low-vol adapter — strategy FAIL'd as failure 7 but scorer reused as BASE for Layer 4 vol-target overlay test |
 | `alphalens/screeners/prescreener/` | RESEARCH_ONLY | Layer 2a — unvalidated, manual ad-hoc |
-| `alphalens/rotation/` | CLOSED | Layer 2e — failed IS+OOS sanity |
-| `alphalens/events/` | CLOSED | Layer 2f — 8-K event screen failed |
-| `alphalens/guru/` | CLOSED | Layer 2g — LLM-researcher pilot failed |
-| `alphalens/macro/` | RESEARCH_ONLY | reusable infra, no standalone strategy |
-| `alphalens/regime_gate/` | RESEARCH_ONLY | Layer 2 selection-gate wrapper; rescue attempt failed Phase 1 diagnostic 2026-04-29 — wrapper retained dla future research |
-| `alphalens/risk_overlay/` | RESEARCH_ONLY | Layer 4 time-series sizing overlay (vol-targeting per Moreira-Muir 2017); first hypothesis `vol_target_mom_lowvol_2026_04_30` pre-registered 2026-04-30 |
-
-Core abstractions (zawsze ACTIVE, nie należą do żadnej layer): `candidates.py`, `queue.py`, `worker.py`, `runner.py`, `registry.py`, `config_gemini.py`.
+| `alphalens/screeners/momentum_lowvol/` | RESEARCH_ONLY | Layer 2 mom + low-vol adapter — strategy FAIL'd as failure 7 but scorer reused as BASE for Layer 4 vol-target overlay test |
+| `alphalens/gates/` | RESEARCH_ONLY | Layer 2 selection-gates (was `regime_gate/`); single occupant `wrapper.py` until concrete classifier added |
+| `alphalens/backtest/` | ACTIVE | Layer 3 engine — engine, walk-forward removed (moved to attribution), multi_phase, multiple_testing, weighting, theme_analysis, llm_scorers, historical_validation, metrics (engine-side primitives + Sharpe consumed downstream) |
+| `alphalens/overlays/` | RESEARCH_ONLY | Layer 4 risk-overlays (was `risk_overlay/`); single occupant `vol_target.py` |
+| `alphalens/attribution/` | ACTIVE | Layer 5 — cost_model, factor_analysis, regime, decision_matrix, diagnostics, report, walk_forward |
+| `alphalens/preregistration/` | ACTIVE | methodology bundle (mirror OSS `phase-robust-backtesting`) |
+| `alphalens/data/` | ACTIVE (namespace) | data infrastructure — `data/store/` (PIT SoT for as-of-t reads), `data/{alt_data,fundamentals,macro}/` (RESEARCH_ONLY clients), `data/factors.py` (Fama-French CSV loader) |
+| `alphalens/archive/` | namespace | ADR 0005 anti-pattern catalog: `rotation/, events/, guru/, quiver_screener/, screeners/{themed,lean,insider}/` |
 
 ## Layer architecture (active alpha experimentation)
 
 Five-layer separation per **ADR 0007** (`docs/adr/0007-layer-architecture.md`). Each layer has a single responsibility; failures attribute to one layer:
 
-1. **Screener** (Layer 2*: `alphalens/screeners/*`, `rotation/`, etc.) — cross-sectional rank @ time t → top-N tickers
-2. **Selection-gate** (`alphalens/regime_gate/`) — binary/graded gate on the Scorer (modifies *which* tickers deploy)
+1. **Screener** (Layer 2*: `alphalens/screeners/*`, archived ones in `alphalens/archive/`) — cross-sectional rank @ time t → top-N tickers
+2. **Selection-gate** (`alphalens/gates/`) — binary/graded gate on the Scorer (modifies *which* tickers deploy)
 3. **Backtest engine** (`alphalens/backtest/engine.py`) — runs scorer over strided rebalance calendar → `BacktestReport.portfolio_returns`
-4. **Risk overlay** (`alphalens/risk_overlay/`) — time-series sizing on portfolio realised vol (modifies *how much exposure*); first impl is vol-targeting per Moreira-Muir 2017
-5. **Attribution** (`alphalens/backtest/{cost_model, factor_analysis, metrics}`) — cost-drag, Carhart-4F, Sharpe, Bonferroni → ledger verdict
+4. **Risk overlay** (`alphalens/overlays/`) — time-series sizing on portfolio realised vol (modifies *how much exposure*); first impl is vol-targeting per Moreira-Muir 2017
+5. **Attribution** (`alphalens/attribution/{cost_model, factor_analysis, regime, ...}`) — cost-drag, Carhart-4F, Sharpe, Bonferroni → ledger verdict. Engine-side primitives (`rank_ic`, `turnover_pct`, `sharpe`) live in `alphalens/backtest/metrics.py` and are consumed downstream by attribution.
 
 Compound hypotheses combine layers (e.g. mom+lowvol screener × VIX>20 selection-gate × vol-target overlay), each combination paying its own Bonferroni cost. Rule of thumb: layer 2 modifies *which*; layer 4 modifies *how much*. **Time-varying-beta hazard:** overlay-bearing strategies use Sharpe-improvement (not Carhart α t-stat) as primary success metric — see ADR 0007.
 
@@ -83,7 +81,9 @@ CLI komendy dla CLOSED layers istnieją jako research replay tooling — patrz `
 
 **English-only w kodzie** — komentarze, docstrings, identifiery po angielsku. Math notation (α, ρ, ×, −) zostaje. Polish prose żyje w CLAUDE.md, MEMORY, rozmowach, commit messages, postmortemach. Enforcement: `tests/test_no_polish_chars.py`.
 
-**Dependency direction** — `alphalens.backtest.*` NIE importuje z `alphalens.screeners.*` (poza explicit exemption: `historical_validation.py`, RESEARCH-ONLY). Adaptery żyją przy screenerach. Enforcement: `tests/test_module_dependencies.py`.
+**Dependency direction** — dwa enforcement rules w `tests/test_module_dependencies.py`:
+- `alphalens.backtest.*` NIE importuje z `alphalens.screeners.*` (exemption: `historical_validation.py`).
+- `alphalens.backtest.*` NIE importuje z `alphalens.attribution.*` (Layer 3 → Layer 5 dependency direction; engine produces `BacktestReport`, attribution consumes — reverse direction would be a cycle).
 
 **Config parity** — `SCORER_CONFIG` w `lean_project/main.py` (Docker-inlined) musi matchować `LEAN_DEFAULTS` na shared keys. Enforcement: `tests/test_lean_config_parity.py`.
 
@@ -95,7 +95,7 @@ CLI komendy dla CLOSED layers istnieją jako research replay tooling — patrz `
 
 ## Where to find "why"
 
-- **Architectural decisions:** `docs/adr/` (5 ADRs: pivot, queue contract, screener-agnostic backtest, vendored upstream, closed-layer policy)
+- **Architectural decisions:** `docs/adr/` (7 ADRs: pivot, queue contract, screener-agnostic backtest, vendored upstream, closed-layer policy, OSS extraction, layer architecture)
 - **Why each layer was closed:** `docs/research/paradigm_failures_postmortem.md` + per-layer `__closed_reason__` w `__init__.py`
 - **Backtest reports archive:** `docs/backtest/`
 - **Per-strategy design + audit docs:** `docs/research/`
