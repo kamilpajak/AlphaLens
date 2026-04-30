@@ -39,6 +39,7 @@ LAYERS_WITH_STATUS = (
     "alphalens.preregistration",
     "alphalens.quiver_screener",
     "alphalens.regime_gate",
+    "alphalens.risk_overlay",
     "alphalens.rotation",
     "alphalens.screeners.insider",
     "alphalens.screeners.lean",

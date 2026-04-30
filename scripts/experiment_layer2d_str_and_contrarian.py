@@ -211,6 +211,7 @@ def run_one_backtest(
     top_n: int,
     holding: int,
     rebalance_stride: int,
+    phase_offset: int = 0,
 ) -> pd.Series:
     config = {"benchmark": benchmark}
     if insider_store is not None:
@@ -225,6 +226,7 @@ def run_one_backtest(
         screener_tickers=universe,
         weighting="linear",
         rebalance_stride=rebalance_stride,
+        phase_offset=phase_offset,
     )
     report = engine.run(start, end)
     rets = report.portfolio_returns
@@ -269,6 +271,12 @@ def main() -> int:
     ap.add_argument("--top-n", type=int, default=15)
     ap.add_argument("--holding", type=int, default=60)
     ap.add_argument("--rebalance-stride", type=int, default=5)
+    ap.add_argument(
+        "--phase-offset",
+        type=int,
+        default=0,
+        help="Phase offset for strided rebalance calendar; 0..rebalance_stride-1.",
+    )
     ap.add_argument("--benchmark", default="SPY")
     ap.add_argument("--bounce-weight", type=float, default=0.5)
     ap.add_argument("--out", type=Path, default=Path("docs/research/layer2d_str_and_contrarian.md"))
@@ -335,6 +343,7 @@ def main() -> int:
             args.top_n,
             args.holding,
             args.rebalance_stride,
+            args.phase_offset,
         )
         rets_pc = run_one_backtest(
             "pure_contrarian",
@@ -348,6 +357,7 @@ def main() -> int:
             args.top_n,
             args.holding,
             args.rebalance_stride,
+            args.phase_offset,
         )
         rets_cc = run_one_backtest(
             "cluster_contrarian",
@@ -361,6 +371,7 @@ def main() -> int:
             args.top_n,
             args.holding,
             args.rebalance_stride,
+            args.phase_offset,
         )
 
         rebalances_per_year = 252 / max(1, args.rebalance_stride)

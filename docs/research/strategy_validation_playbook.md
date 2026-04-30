@@ -129,6 +129,20 @@ Notes:
 - Background it (`run_in_background=True`) — 25-60 min for typical 8y IS.
 - Driver script's `_SCRIPTS` mapping (in `scripts/audit_multi_phase.py`) needs your strategy name added.
 
+## Step 4.5 — Optional: Risk overlay test (Layer 4)
+
+Only after Step 4 produces a phase-robust positive base or a base whose only failure mode is excessive drawdown / dispersion.
+
+If the multi-phase audit shows the screener has any phase-robust merit but unsatisfactory risk profile (e.g. dispersion > 30pp, deep drawdowns, Sharpe net < 0.5), test a Layer-4 sizing overlay before declaring final FAIL:
+
+- `alphalens/risk_overlay/vol_target.py` — Moreira-Muir 2017 vol-targeting (`VolTargeter`, `apply_vol_target`).
+- Wrap base experiment via `scripts/experiment_vol_target_overlay.py` (or analogous wrapper).
+- **Critical:** dynamic per-rebalance cost is required (`turnover_t = base_turnover · scale_t + |scale_t − scale_{t-1}|`). Constant-drag accounting inflates reported alpha.
+- Pre-register in a fresh signal class (e.g. `risk_management_overlay_<date>`) — avoids Bonferroni inflation in the screener's own class.
+- **Primary success metric: Sharpe-improvement vs ungated BASE**, NOT Carhart α t-stat. Vol-scaling makes betas time-varying and OLS attribution distorts α; Sharpe is robust. See ADR 0007 for the time-varying-beta limitation.
+
+Verdict-feed back into Step 5: the robust verdict for a Layer-4-augmented strategy is computed on *scaled* returns vs *unscaled* base, not vs benchmark in isolation.
+
 ## Step 5 — Robust verdict
 
 `scripts/audit_multi_phase.py` writes JSON + prints a verdict per config to stderr. Or compute manually from the JSON:

@@ -16,6 +16,6 @@ from alphalens.regime_gate.wrapper import (
     regime_gated_scorer,
 )
 
-__status__: Literal["ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"] = "ACTIVE"
+__status__: Literal["ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"] = "RESEARCH_ONLY"
 
 __all__ = ["RegimeClassifier", "regime_gated_scorer"]

@@ -186,6 +186,12 @@ def main() -> int:
     ap.add_argument("--top-n", type=int, default=15)
     ap.add_argument("--holding", type=int, default=60)
     ap.add_argument("--rebalance-stride", type=int, default=5)
+    ap.add_argument(
+        "--phase-offset",
+        type=int,
+        default=0,
+        help="Phase offset for strided rebalance calendar; 0..rebalance_stride-1.",
+    )
     ap.add_argument("--benchmark", default="SPY")
     ap.add_argument(
         "--adv-thresholds",
@@ -277,6 +283,7 @@ def main() -> int:
                 screener_tickers=universe,
                 weighting="linear",
                 rebalance_stride=args.rebalance_stride,
+                phase_offset=args.phase_offset,
             )
             report = engine.run(start, end)
             for cost_bps in args.cost_half_spreads:

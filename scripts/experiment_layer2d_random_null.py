@@ -62,6 +62,7 @@ def collect_candidate_frames(
     start: date,
     end: date,
     rebalance_stride: int,
+    phase_offset: int = 0,
 ) -> tuple[list[pd.Timestamp], list[np.ndarray], list[np.ndarray]]:
     """Pre-compute, per rebalance, (cluster-positive tickers, fwd_1d returns).
 
@@ -70,9 +71,12 @@ def collect_candidate_frames(
     fetch) happens once.
     """
     calendar = HistoryStore.benchmark_calendar(history_store, benchmark, start, end)
-    calendar = calendar[::rebalance_stride]
+    calendar = calendar[phase_offset::rebalance_stride]
     logger.info(
-        "benchmark calendar: %d rebalance days (stride=%d)", len(calendar), rebalance_stride
+        "benchmark calendar: %d rebalance days (stride=%d phase=%d)",
+        len(calendar),
+        rebalance_stride,
+        phase_offset,
     )
 
     rebal_dates: list[pd.Timestamp] = []
@@ -258,6 +262,12 @@ def main() -> int:
     ap.add_argument("--end", type=date.fromisoformat, required=True)
     ap.add_argument("--top-n", type=int, default=15)
     ap.add_argument("--rebalance-stride", type=int, default=5)
+    ap.add_argument(
+        "--phase-offset",
+        type=int,
+        default=0,
+        help="Phase offset for strided rebalance calendar; 0..rebalance_stride-1.",
+    )
     ap.add_argument("--n-trials", type=int, default=100)
     ap.add_argument("--benchmark", default="SPY")
     ap.add_argument("--label", default="IS_2011_2022")
@@ -266,7 +276,7 @@ def main() -> int:
         "--baseline-alpha",
         type=float,
         default=1.0353,
-        help="V0 baseline Carhart α (annualized, decimal). Default 103.53% from layer2d_variants.md.",
+        help="V0 baseline Carhart α (annualized, decimal). Default 103.53%% from layer2d_variants.md.",
     )
     ap.add_argument("--baseline-t", type=float, default=2.14)
     ap.add_argument("--baseline-sharpe", type=float, default=0.96)
@@ -296,6 +306,7 @@ def main() -> int:
         start=args.start,
         end=args.end,
         rebalance_stride=args.rebalance_stride,
+        phase_offset=args.phase_offset,
     )
     if not rebal_dates:
         logger.error("no rebalances with candidates")

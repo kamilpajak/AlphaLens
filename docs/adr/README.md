@@ -14,3 +14,5 @@ Format: lightweight MADR — Status, Context, Decision, Consequences, References
 - [ADR 0003 — Screener-agnostic backtest with pluggable Scorer](0003-screener-agnostic-backtest.md) — 2025-12-15 — why `BacktestEngine` takes a callable, not a class
 - [ADR 0004 — TradingAgents as vendored git subtree](0004-tradingagents-as-subtree.md) — 2025-08-10 — why upstream is in-repo, not a pip dep
 - [ADR 0005 — Closed layers retained as anti-pattern catalog](0005-closed-layers-as-anti-pattern-catalog.md) — 2026-04-25 — why failed paradigms are not deleted
+- [ADR 0006 — Phase-robust-backtesting OSS extraction](0006-phase-robust-backtesting-extraction.md) — 2026-04-29 — methodology bundle (preregistration ledger + multi-phase audit + Bonferroni helpers) lives standalone at `kamilpajak/phase-robust-backtesting` (MIT)
+- [ADR 0007 — Layer architecture](0007-layer-architecture.md) — 2026-04-30 — explicit 5-layer separation (screener → selection-gate → engine → risk-overlay → attribution) so failures attribute cleanly

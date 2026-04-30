@@ -76,12 +76,13 @@ def collect_prior_returns_per_rebalance(
     start: date,
     end: date,
     rebalance_stride: int,
+    phase_offset: int = 0,
 ) -> list[dict]:
     """For each rebalance, compute mean prior 5/20/60d returns of cluster-positive
     set and of non-cluster set. Returns one row per rebalance.
     """
     calendar = HistoryStore.benchmark_calendar(history_store, benchmark, start, end)
-    calendar = calendar[::rebalance_stride]
+    calendar = calendar[phase_offset::rebalance_stride]
 
     rows: list[dict] = []
     for ts in calendar:
@@ -163,6 +164,12 @@ def summarize_period(rows: list[dict], label: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rebalance-stride", type=int, default=5)
+    ap.add_argument(
+        "--phase-offset",
+        type=int,
+        default=0,
+        help="Phase offset for strided rebalance calendar; 0..rebalance_stride-1.",
+    )
     ap.add_argument("--benchmark", default="SPY")
     ap.add_argument("--out", type=Path, default=Path("docs/research/layer2d_prior_returns_3f.md"))
     args = ap.parse_args()
@@ -214,6 +221,7 @@ def main() -> int:
             start=start,
             end=end,
             rebalance_stride=args.rebalance_stride,
+            phase_offset=args.phase_offset,
         )
         sections.append(summarize_period(rows, label))
 

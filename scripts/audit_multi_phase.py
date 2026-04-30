@@ -44,6 +44,16 @@ from alphalens.backtest.multi_phase import robust_verdict, summarise_phase_resul
 _SCRIPTS = {
     "tri_factor": REPO / "scripts" / "experiment_tri_factor_edgar.py",
     "momentum_lowvol": REPO / "scripts" / "experiment_momentum_lowvol_combo.py",
+    "constrained_momentum": REPO / "scripts" / "experiment_constrained_momentum.py",
+    "constrained_contrarian": REPO / "scripts" / "experiment_constrained_contrarian.py",
+    "quality_momentum": REPO / "scripts" / "experiment_quality_momentum_combo.py",
+    "longshort_mom_lowvol": REPO / "scripts" / "experiment_longshort_mom_lowvol.py",
+    "regime_overlay": REPO / "scripts" / "experiment_regime_overlay.py",
+    "layer2d_prior_returns": REPO / "scripts" / "experiment_layer2d_prior_returns.py",
+    "layer2d_random_null": REPO / "scripts" / "experiment_layer2d_random_null.py",
+    "layer2d_str_and_contrarian": REPO / "scripts" / "experiment_layer2d_str_and_contrarian.py",
+    "layer2d_variants": REPO / "scripts" / "experiment_layer2d_variants.py",
+    "vol_target_overlay": REPO / "scripts" / "experiment_vol_target_overlay.py",
 }
 
 # Parses lines like:

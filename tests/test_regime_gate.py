@@ -145,10 +145,13 @@ class RegimeGatedScorerTests(unittest.TestCase):
 
 
 class RegimeGatePackageStatusTest(unittest.TestCase):
-    def test_package_declares_active_status(self):
+    def test_package_declares_research_only_status(self):
+        """Wrapper is a reusable research utility — no concrete classifier
+        ever shipped under it (the rescue use-case for mom+lowvol BASE
+        failed Phase 1 diagnostic 2026-04-29). Mirrors `alphalens.macro/`."""
         import alphalens.regime_gate as pkg
 
-        self.assertEqual(pkg.__status__, "ACTIVE")
+        self.assertEqual(pkg.__status__, "RESEARCH_ONLY")
 
 
 if __name__ == "__main__":
