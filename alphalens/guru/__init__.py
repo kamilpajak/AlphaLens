@@ -8,7 +8,7 @@ __closed_reason__ = "GuruAgent pilot failed validation (paradigm failure 5/5)"
 __closed_evidence__: dict[str, str] = {
     "carhart_4f_hac": "UNTESTED: paradigm hits AP-14 LLM ceiling; re-val needs $150-300 Gemini budget",
     "sanity_checks_4gate": "N/A: not rotation overlay",
-    "walk_forward_oos": "docs/research/5_paradigm_failures_postmortem.md",
+    "walk_forward_oos": "docs/research/paradigm_failures_postmortem.md",
     "multiple_testing_correction": "N/A: 4-year pre-committed regime test, no post-hoc correction",
     "cost_drag": "N/A: 1-year equal-weight hold, cost negligible",
     "bootstrap_ci": "UNTESTED: n=4 regime observations too small for bootstrap",

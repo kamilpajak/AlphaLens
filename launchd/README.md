@@ -61,7 +61,7 @@ launchctl start com.alphalens.watchdog.detect
 tail -f ~/.alphalens/watchdog/detect.log
 ```
 
-To revive an archived strategy (themed/lean/insider): copy its plist back from `archived/` and `launchctl load`. Verify the underlying validation gap was addressed first — see `docs/research/5_paradigm_failures_postmortem.md`.
+To revive an archived strategy (themed/lean/insider): copy its plist back from `archived/` and `launchctl load`. Verify the underlying validation gap was addressed first — see `docs/research/paradigm_failures_postmortem.md`.
 
 ## Stop / remove
 

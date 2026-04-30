@@ -117,6 +117,6 @@ Risk overlays make the resulting portfolio's market beta time-varying. The OLS C
 ## References
 
 - Phase 1 diagnostic that motivated explicit layer separation: `docs/research/regime_gate_phase1_diagnostic.md` (2026-04-29).
-- Postmortem of the 9 paradigm failures: `docs/research/5_paradigm_failures_postmortem.md` (latest title "Nine Paradigm Failures").
+- Postmortem of the 9 paradigm failures: `docs/research/paradigm_failures_postmortem.md` (latest title "Nine Paradigm Failures").
 - Risk overlay introduction: `alphalens/risk_overlay/__init__.py` + `vol_target.py`, tests `tests/test_risk_overlay.py`. Pre-registered hypothesis: `vol_target_mom_lowvol_2026_04_30` in fresh signal class `risk_management_overlay_2026_04_30`.
 - Methodology bundle (the OSS extraction of the discipline that surrounds these layers): https://github.com/kamilpajak/phase-robust-backtesting.

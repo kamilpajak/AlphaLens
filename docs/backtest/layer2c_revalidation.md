@@ -103,7 +103,7 @@ delisting-bias check only (Fisher exact on top-N picks vs universe).
 Cohort split (C1) and mid-holding wipeout audit (C3) skipped because
 Layer 2c is a rule-based screener and the additional 4 backtest runs
 yielded no new evidence vs the existing FF3 IS-only verdict per
-`docs/research/5_paradigm_failures_postmortem.md`.
+`docs/research/paradigm_failures_postmortem.md`.
 
 ### Delisting selection bias (Fisher exact)
 

@@ -11,7 +11,7 @@ __closed_reason__ = (
     "Failed IS sanity (2/4) + OOS sanity (3/4); OOS t=0.33 vs IS t=1.96. "
     "OverlayEngine, FREDClient, sanity_checks retained as reusable infra."
 )
-_POSTMORTEM = "docs/research/5_paradigm_failures_postmortem.md"
+_POSTMORTEM = "docs/research/paradigm_failures_postmortem.md"
 
 __closed_evidence__: dict[str, str] = {
     "carhart_4f_hac": _POSTMORTEM,

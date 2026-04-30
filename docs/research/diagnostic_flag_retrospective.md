@@ -38,7 +38,7 @@ universally against the four other CLOSED layers in the AlphaLens project.
    distinguishes "moderate signal too weak to detect" from "huge signal too good to be real".
 
 3. **Layer 2e and 2g failed via a different mechanism (high benchmark R², not low factor R²).**
-   These are already covered by the existing Pattern 2 in `5_paradigm_failures_postmortem.md`
+   These are already covered by the existing Pattern 2 in `paradigm_failures_postmortem.md`
    ("R² approaching 1.0 vs benchmark = signal dead"). The diagnostic flag complements rather
    than replaces this — they describe orthogonal failure modes:
 
@@ -69,7 +69,7 @@ When running an IS backtest, before scheduling OOS:
   chosen post-hoc to fit the 2b+2d evidence; they are not pre-registered. If applied to a
   layer with sample size << 600 weekly observations, the noise floor shifts and the
   threshold should be re-tuned. Pre-registration of these thresholds in
-  `5_paradigm_failures_postmortem.md` would strengthen the rule's authority.
+  `paradigm_failures_postmortem.md` would strengthen the rule's authority.
 
 - **"Diagnostic flag" is necessary-not-sufficient** for the artifact pattern. A layer can
   fire the flag and still genuinely have alpha (passing the random-null test). The flag's
@@ -83,6 +83,6 @@ When running an IS backtest, before scheduling OOS:
 
 ## Action items
 
-- Add this diagnostic to `docs/research/5_paradigm_failures_postmortem.md` §Methodological-lessons.
+- Add this diagnostic to `docs/research/paradigm_failures_postmortem.md` §Methodological-lessons.
 - Reference from `docs/research/kill_verdict_checklist.md` if that file documents future-layer
   validation gates.

@@ -11,7 +11,7 @@ Research lab infrastructure for retail active alpha experimentation — combines
 
 ## Status (2026-04-25 →)
 
-The project pivoted from "active alpha generation" to **research / learning infrastructure** after [9 paradigm failures](docs/research/5_paradigm_failures_postmortem.md) (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum, all phase-robust FAIL). Capital deployment based on the current strategies is **off the table** until a phase-robust PASS appears; the screener search itself stays open-ended under pre-registration discipline. The codebase remains as:
+The project pivoted from "active alpha generation" to **research / learning infrastructure** after [9 paradigm failures](docs/research/paradigm_failures_postmortem.md) (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum, all phase-robust FAIL). Capital deployment based on the current strategies is **off the table** until a phase-robust PASS appears; the screener search itself stays open-ended under pre-registration discipline. The codebase remains as:
 
 - **Reusable research framework** — backtest engine, factor attribution, sanity checks, multiple-testing corrections, regime classifier, **time-series sizing overlays (`alphalens/risk_overlay/`, vol-targeting per Moreira-Muir 2017)**, cost models, weighting schemes; layer architecture in [ADR 0007](docs/adr/0007-layer-architecture.md)
 - **Production-grade data clients** — Polygon, FRED, SEC EDGAR
@@ -22,7 +22,7 @@ The project pivoted from "active alpha generation" to **research / learning infr
 **Live in launchd**: only Layer 1 SEC EDGAR watchdog (read-only event detection, daily Telegram digest, near-zero maintenance).
 
 > Architectural rationale: see [`docs/adr/`](docs/adr/) (7 ADRs).
-> Per-layer postmortem: [`docs/research/5_paradigm_failures_postmortem.md`](docs/research/5_paradigm_failures_postmortem.md).
+> Per-layer postmortem: [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md).
 > Quick contributor guide: [`CLAUDE.md`](CLAUDE.md).
 
 ---

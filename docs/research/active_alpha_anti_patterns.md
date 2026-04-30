@@ -3,7 +3,7 @@
 **Author:** Solo retail quant, Polish tax resident on XTB
 **Last updated:** 2026-04-25
 **Status:** Living document; append new patterns as future research uncovers them
-**Companion to:** `docs/research/5_paradigm_failures_postmortem.md`
+**Companion to:** `docs/research/paradigm_failures_postmortem.md`
 
 ## Why this exists
 
@@ -324,7 +324,7 @@ Before committing infrastructure work to a strategy idea:
 
 ## Cross-reference
 
-- **Postmortem narrative:** `docs/research/5_paradigm_failures_postmortem.md`
+- **Postmortem narrative:** `docs/research/paradigm_failures_postmortem.md`
 - **Per-layer detailed audits:** `docs/research/layer2{b,d}_*.md`, `docs/research/multiple_testing_audit_2026-04.md`, `docs/research/pipeline_bias_repair_plan.md`, `docs/research/pit_universe_backtest.md`
 - **Reusable infrastructure:** `alphalens/backtest/{factor_analysis,multiple_testing,sharpe}.py`, `alphalens/rotation/{sanity_checks,precommit,config}.py`, `alphalens/per_ticker_cost.py`
 - **Methodology principles:** Postmortem §"Methodology principles" — applies to next idea

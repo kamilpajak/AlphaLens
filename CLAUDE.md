@@ -9,7 +9,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repo.
 **Live production:** Layer 1 SEC EDGAR watchdog (launchd `detect` + `worker`) + literature_review weekly+monthly Perplexity scan.
 **Wszystko inne:** CLOSED, ARCHIVED lub RESEARCH_ONLY — kod zostaje jako reusable framework + anti-pattern catalog. Methodology bundle (preregistration ledger + multi_phase + audit driver) extracted do `kamilpajak/phase-robust-backtesting` (MIT).
 
-Pełny rozliczenie: `docs/research/5_paradigm_failures_postmortem.md` (now 8 paradigm failures; filename retained dla backlink stability). Decyzje architektoniczne: `docs/adr/` (6 ADRs).
+Pełny rozliczenie: `docs/research/paradigm_failures_postmortem.md` (10 paradigm failures across 3 architectural layers). Decyzje architektoniczne: `docs/adr/` (7 ADRs).
 
 ## Layer status
 
@@ -96,7 +96,7 @@ CLI komendy dla CLOSED layers istnieją jako research replay tooling — patrz `
 ## Where to find "why"
 
 - **Architectural decisions:** `docs/adr/` (5 ADRs: pivot, queue contract, screener-agnostic backtest, vendored upstream, closed-layer policy)
-- **Why each layer was closed:** `docs/research/5_paradigm_failures_postmortem.md` + per-layer `__closed_reason__` w `__init__.py`
+- **Why each layer was closed:** `docs/research/paradigm_failures_postmortem.md` + per-layer `__closed_reason__` w `__init__.py`
 - **Backtest reports archive:** `docs/backtest/`
 - **Per-strategy design + audit docs:** `docs/research/`
 
@@ -125,7 +125,7 @@ Po sync reapply local patches (currently: Gemini 429 retry w `TradingAgents/trad
 - **Cost tracking placeholder**: `candidates.cost_usd` jest NULL — TradingAgents nie eksponuje token accounting. Duration + `model_used` populated.
 - **Prescreener (Layer 2a) unvalidated**: 45% fundamentals weight wymaga PIT historicals których Polygon Starter ($29/mo) nie dostarcza. Manual ad-hoc tylko, no performance guarantee.
 
-Issues dotyczące CLOSED warstw (Lean Docker setup, Layer 2d backtest workflow, themed gate Phase 2) → patrz `launchd/archived/README.md` + `docs/research/5_paradigm_failures_postmortem.md`.
+Issues dotyczące CLOSED warstw (Lean Docker setup, Layer 2d backtest workflow, themed gate Phase 2) → patrz `launchd/archived/README.md` + `docs/research/paradigm_failures_postmortem.md`.
 
 ## Environment
 

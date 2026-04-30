@@ -43,7 +43,7 @@ active-alpha generation product:
 - Lower cognitive load — no false sense that "the system is making money."
 - + Codebase stays valuable as a learning artefact and reference implementation.
 - + Future researchers (or future-self) inherit a kill-fast methodology and
-  the postmortem rigor (`docs/research/5_paradigm_failures_postmortem.md`).
+  the postmortem rigor (`docs/research/paradigm_failures_postmortem.md`).
 - − Some modules (`alphalens/screeners/{themed,lean,insider}`,
   `alphalens/{rotation,events,guru}`) carry "CLOSED" / "ARCHIVED" status that
   must be respected by future contributors.
@@ -55,5 +55,5 @@ active-alpha generation product:
 
 - `CLAUDE.md` — "Research lab posture (2026-04-25 →)" section
 - Memory: `project_research_infrastructure_pivot.md`
-- `docs/research/5_paradigm_failures_postmortem.md`
+- `docs/research/paradigm_failures_postmortem.md`
 - ADR 0005 (closed layers retention policy)

@@ -186,7 +186,7 @@ If one phase is materially negative or alpha is borderline:
 - Add `__status__ = "CLOSED"` + `__closed_date__` + `__closed_reason__` to the scorer's `__init__.py` (per `tests/test_layer_status.py`).
 - Populate `__closed_evidence__` with required gate paths (carhart_4f_hac, sanity_checks_4gate, walk_forward_oos, multiple_testing_correction, cost_drag, bootstrap_ci, survivorship_pit) — use `"N/A: <reason>"` or `"UNTESTED: <reason>"` for gates not run.
 - File the multi-phase audit JSON + synthesis MD in `docs/research/`.
-- Update `docs/research/5_paradigm_failures_postmortem.md` if the failure adds a new anti-pattern (don't duplicate established ones).
+- Update `docs/research/paradigm_failures_postmortem.md` if the failure adds a new anti-pattern (don't duplicate established ones).
 - Memory: short `project_<name>_failed.md` entry + MEMORY.md index update.
 
 ## Common gotchas (from today's session)

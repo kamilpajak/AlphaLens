@@ -19,7 +19,7 @@ __closed_reason__ = (
     "filter — signal inverted from published academic edge, evidence of "
     "extreme alt-data crowding (AP-9)."
 )
-_POSTMORTEM = "docs/research/5_paradigm_failures_postmortem.md"
+_POSTMORTEM = "docs/research/paradigm_failures_postmortem.md"
 
 __closed_evidence__: dict[str, str] = {
     "carhart_4f_hac": _POSTMORTEM,

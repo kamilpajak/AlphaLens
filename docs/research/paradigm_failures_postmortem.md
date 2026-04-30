@@ -5,8 +5,6 @@
 **Status:** Project pivoted from "active alpha generation" to "research/learning infrastructure" 2026-04-25; Path B refined 2026-04-30 — **screener search stays open-ended under pre-registration discipline** (per `feedback_keep_searching_screeners.md`). Path B is "methodology bundle + Layer 1 watchdog stay live," NOT closure of the search.
 **Audience:** Future-self when re-evaluating active strategies; potentially other retail quants who stumble into similar territory
 
-> **Filename note:** still `5_paradigm_failures_postmortem.md` for backlink stability (README, ADRs, CLAUDE.md, MEMORY all reference it). The count has grown to ten; the URL hasn't. Renamed in a follow-up commit alongside cross-reference updates.
-
 ## Contents
 
 - [Executive summary](#executive-summary)
