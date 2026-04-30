@@ -131,7 +131,7 @@ def _run_one_phase(
     """
     out_path = Path(f"/tmp/audit_multi_phase_{script.stem}_p{phase_offset}.md")
     cmd = [
-        ".venv/bin/python",
+        sys.executable,
         str(script),
         "--rebalance-stride",
         str(stride),
