@@ -45,8 +45,8 @@ from alphalens.backtest.engine import BacktestEngine
 from alphalens.backtest.factor_analysis import run_regression
 from alphalens.backtest.factors import load_carhart_daily
 from alphalens.backtest.history_store import HistoryStore
-from alphalens.backtest.metrics import sharpe, turnover_pct
 from alphalens.risk_overlay import VolTargeter, apply_vol_target
+from alphalens.risk_overlay.assess import compute_overlay_stats
 
 # Import the base scorer adapter from the mom+lowvol combo experiment so
 # both share *exactly* the same selection — the overlay is purely on top.
@@ -78,47 +78,68 @@ def assess_overlay(
     cost_half_spread_bps: float,
     bench_rets: pd.Series,
 ) -> dict:
-    """Apply vol-target overlay + dynamic cost accounting + Carhart 4F."""
+    """Apply vol-target overlay + dynamic cost accounting + Carhart 4F.
+
+    Delegates the canonical Sharpe-improvement computation to
+    `alphalens.risk_overlay.assess.compute_overlay_stats` (true
+    per-period turnover from snapshots, plus side-by-side BASE Sharpe).
+    Carhart-4F α t-stat is reported as an *upper-bound* indicator only —
+    OLS assumes constant betas, but vol-scaling introduces time-varying
+    betas (ADR 0007 limitation). Primary success metric is
+    ``sharpe_improvement_net``.
+    """
     raw_rets = report.portfolio_returns
     if raw_rets.empty:
         return {"n": 0}
 
-    rebalances_per_year = 252 / max(1, rebalance_stride)
-    base_turnover = float(turnover_pct(r.top_n_tickers for r in report.rebalance_results))
+    rebalances_per_year = max(1, int(round(252 / max(1, rebalance_stride))))
 
-    # Time-varying scale factors and gross-return series.
-    scales = vol_targeter.scale_series(raw_rets)
+    snapshots = [list(r.top_n_tickers) for r in report.rebalance_results]
+    overlay_stats = compute_overlay_stats(
+        raw_returns=raw_rets,
+        targeter=vol_targeter,
+        top_n_snapshots=snapshots,
+        cost_half_spread_bps=cost_half_spread_bps,
+        periods_per_year=rebalances_per_year,
+    )
+
+    # Carhart attribution kept for legacy comparability with prior
+    # screener experiments. Distorted under time-varying betas; treat as
+    # upper-bound, not the success gate.
     gross_scaled = apply_vol_target(raw_rets, vol_targeter)
-
-    # Dynamic per-rebalance cost (zen pushback): turnover from base rebalance
-    # scaled to position size, PLUS turnover from leverage adjustment itself.
-    scale_changes = scales.diff().abs().fillna(0.0)
-    turnover_t = base_turnover * scales + scale_changes
-    cost_per_rebal = turnover_t * (cost_half_spread_bps / 10_000.0)
-    net_scaled = gross_scaled - cost_per_rebal
-
-    sharpe_gross = sharpe(gross_scaled.tolist(), periods_per_year=int(rebalances_per_year))
-    sharpe_net = sharpe(net_scaled.tolist(), periods_per_year=int(rebalances_per_year))
-    drag_ann = float(cost_per_rebal.mean() * rebalances_per_year)
-
     res4 = run_regression(gross_scaled, factors[[*_CARHART_FACTORS, "RF"]], _CARHART_FACTORS)
+
+    # Excess-vs-benchmark (gross & net) is computed here because it
+    # depends on the benchmark series the script pulled. Net uses the
+    # canonical scaled-net series for parity with the audit JSON.
+    scales = vol_targeter.scale_series(raw_rets)
+    snapshots_idx = list(raw_rets.index)
+    base_turnover_series = pd.Series(
+        [
+            (
+                len(set(snapshots[i - 1]) - set(snapshots[i])) / max(len(snapshots[i - 1]), 1)
+                if i > 0 and i - 1 < len(snapshots) and i < len(snapshots)
+                else 0.0
+            )
+            for i in range(len(snapshots_idx))
+        ],
+        index=snapshots_idx,
+        name="base_turnover",
+    )
+    scale_changes = scales.diff().abs().fillna(0.0)
+    cost_per_rebal = (base_turnover_series * scales + scale_changes) * (
+        cost_half_spread_bps / 10_000.0
+    )
+    net_scaled = gross_scaled - cost_per_rebal
 
     excess_gross_ann = _excess_ann_from_per_rebal(gross_scaled, bench_rets)
     excess_net_ann = _excess_ann_from_per_rebal(net_scaled, bench_rets)
 
     return {
-        "n": len(raw_rets),
-        "base_turnover": base_turnover,
-        "mean_scale": float(scales.mean()),
-        "std_scale": float(scales.std(ddof=1)) if len(scales) > 1 else 0.0,
-        "min_scale": float(scales.min()),
-        "max_scale": float(scales.max()),
-        "sharpe_gross": sharpe_gross,
-        "sharpe_net": sharpe_net,
+        **overlay_stats,
         "alpha_gross_4f": float(res4.alpha_annualized),
         "t_4f": float(res4.alpha_tstat),
         "beta_mom": float(res4.betas.get("Mom", 0.0)),
-        "cost_drag_ann": drag_ann,
         "excess_gross_ann": excess_gross_ann,
         "excess_net_ann": excess_net_ann,
     }
@@ -271,7 +292,8 @@ def main() -> int:
                     logger.info(
                         "%s | ADV≥$%.0fM cost=%.0fbps | n=%d scale mean=%.2f (min=%.2f max=%.2f) | "
                         "Sh gross=%.2f net=%.2f | excess gross=%.1f%% net=%.1f%% | "
-                        "α 4F=%.1f%% t=%.2f β_MOM=%.2f",
+                        "α 4F=%.1f%% t=%.2f β_MOM=%.2f | "
+                        "BASE Sh net=%.2f → Δ Sh net=%+.2f",
                         label,
                         adv_min / 1e6,
                         cost_bps,
@@ -279,28 +301,31 @@ def main() -> int:
                         stats["mean_scale"],
                         stats["min_scale"],
                         stats["max_scale"],
-                        stats["sharpe_gross"],
-                        stats["sharpe_net"],
+                        stats["sharpe_scaled_gross"],
+                        stats["sharpe_scaled_net"],
                         stats["excess_gross_ann"] * 100,
                         stats["excess_net_ann"] * 100,
                         stats["alpha_gross_4f"] * 100,
                         stats["t_4f"],
                         stats["beta_mom"],
+                        stats["sharpe_unscaled_net"],
+                        stats["sharpe_improvement_net"],
                     )
 
     sections.append("## Results — gross / net (vol-targeted, dynamic cost)")
     sections.append("")
     sections.append(
         "| Period | ADV | cost | n | scale (mean / min / max) | Sharpe gross | Sharpe net | "
-        "excess gross | excess net | α 4F | t (4F) | β_MOM |"
+        "BASE Sh net | Δ Sh net | excess gross | excess net | α 4F | t (4F) | β_MOM |"
     )
-    sections.append("|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|")
+    sections.append("|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for r in all_rows:
         if r.get("n", 0) == 0:
             continue
         sections.append(
             "| {p} | ${a:.0f}M | {c:.0f}bp | {n} | {ms:.2f} / {mn:.2f} / {mx:.2f} | "
-            "{sg:.2f} | {sn:.2f} | {eg:+.1f}% | {en:+.1f}% | {ag:+.1f}% | {t:+.2f} | {bm:+.2f} |".format(
+            "{sg:.2f} | {sn:.2f} | {bsn:.2f} | {dsn:+.2f} | {eg:+.1f}% | {en:+.1f}% | "
+            "{ag:+.1f}% | {t:+.2f} | {bm:+.2f} |".format(
                 p=r["period"],
                 a=r["adv_min_m"],
                 c=r["cost_bps"],
@@ -308,8 +333,10 @@ def main() -> int:
                 ms=r["mean_scale"],
                 mn=r["min_scale"],
                 mx=r["max_scale"],
-                sg=r["sharpe_gross"],
-                sn=r["sharpe_net"],
+                sg=r["sharpe_scaled_gross"],
+                sn=r["sharpe_scaled_net"],
+                bsn=r["sharpe_unscaled_net"],
+                dsn=r["sharpe_improvement_net"],
                 eg=r["excess_gross_ann"] * 100,
                 en=r["excess_net_ann"] * 100,
                 ag=r["alpha_gross_4f"] * 100,
