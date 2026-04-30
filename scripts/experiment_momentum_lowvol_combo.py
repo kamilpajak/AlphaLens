@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 
@@ -39,6 +38,7 @@ from alphalens.backtest.factor_analysis import run_regression
 from alphalens.backtest.factors import load_carhart_daily
 from alphalens.backtest.history_store import HistoryStore
 from alphalens.backtest.metrics import sharpe, turnover_pct
+from alphalens.screeners.momentum_lowvol import momentum_lowvol_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -59,60 +59,6 @@ def load_pit_union(start: date, end: date) -> list[str]:
         for ticker in data.get("tickers", []):
             union.add(ticker)
     return sorted(union)
-
-
-def momentum_lowvol_adapter(
-    histories: Mapping[str, pd.DataFrame],
-    config: Mapping | None = None,
-) -> pd.DataFrame:
-    """Score = z(mom_12_1m) − vol_weight × z(vol_60d), filtered by ADV."""
-    config = dict(config or {})
-    benchmark = config.get("benchmark")
-    adv_min = float(config.get("_adv_min_usd", 0.0))
-    adv_window = int(config.get("_adv_window", 60))
-    vol_weight = float(config.get("_vol_weight", 1.0))
-    vol_window = int(config.get("_vol_window", 60))
-
-    rows: list[dict] = []
-    for ticker, df in histories.items():
-        if ticker == benchmark or df is None or len(df) < 253:
-            continue
-        closes = df["close"].to_numpy(dtype=float)
-        volumes = df["volume"].to_numpy(dtype=float)
-        if closes[-1] <= 0 or closes[-253] <= 0 or closes[-22] <= 0:
-            continue
-        # ADV filter
-        dollar_vol = closes[-adv_window:] * volumes[-adv_window:]
-        adv = float(np.median(dollar_vol[dollar_vol > 0])) if (dollar_vol > 0).any() else 0.0
-        if adv < adv_min:
-            continue
-        # 12-1m momentum
-        mom = closes[-22] / closes[-253] - 1.0
-        # 60d realized vol (annualized std of daily log returns)
-        rets = np.diff(np.log(closes[-vol_window - 1 :]))
-        if len(rets) < vol_window // 2 or np.any(~np.isfinite(rets)):
-            continue
-        vol = float(np.std(rets, ddof=1) * np.sqrt(252))
-        if not np.isfinite(vol) or vol <= 0:
-            continue
-        rows.append({"ticker": ticker, "mom": float(mom), "vol": vol})
-
-    if not rows:
-        return pd.DataFrame(columns=["ticker", "score"])
-
-    df = pd.DataFrame(rows)
-    for col in ("mom", "vol"):
-        std = df[col].std(ddof=0)
-        if std <= 0:
-            df[f"z_{col}"] = 0.0
-            continue
-        z = (df[col] - df[col].mean()) / std
-        df[f"z_{col}"] = z.clip(-3.0, 3.0)
-    df["score"] = df["z_mom"] - vol_weight * df["z_vol"]
-    return df.sort_values("score", ascending=False).reset_index(drop=True)
-
-
-momentum_lowvol_adapter.MIN_BARS_REQUIRED = 253
 
 
 def benchmark_returns(

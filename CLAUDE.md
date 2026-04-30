@@ -23,6 +23,7 @@ Lifecycle status każdej warstwy żyje w jej `__init__.py` jako `__status__` con
 | `alphalens/screeners/themed/` | CLOSED 2026-04-22 | Layer 2b — momentum overfit + cost eats signal |
 | `alphalens/screeners/lean/` | ARCHIVED 2026-04-19 | Layer 2c — Sharpe 0.25 net, FF3 α t=0.14 |
 | `alphalens/screeners/insider/` | CLOSED 2026-04-24 | Layer 2d — Carhart t=2.14 IS → 0.68 OOS |
+| `alphalens/screeners/momentum_lowvol/` | RESEARCH_ONLY | Layer 2 mom + low-vol adapter — strategy FAIL'd as failure 7 but scorer reused as BASE for Layer 4 vol-target overlay test |
 | `alphalens/screeners/prescreener/` | RESEARCH_ONLY | Layer 2a — unvalidated, manual ad-hoc |
 | `alphalens/rotation/` | CLOSED | Layer 2e — failed IS+OOS sanity |
 | `alphalens/events/` | CLOSED | Layer 2f — 8-K event screen failed |

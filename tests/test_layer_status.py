@@ -43,6 +43,7 @@ LAYERS_WITH_STATUS = (
     "alphalens.rotation",
     "alphalens.screeners.insider",
     "alphalens.screeners.lean",
+    "alphalens.screeners.momentum_lowvol",
     "alphalens.screeners.prescreener",
     "alphalens.screeners.themed",
     "alphalens.watchdog",

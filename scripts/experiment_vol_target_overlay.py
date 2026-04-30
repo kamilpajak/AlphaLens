@@ -47,14 +47,15 @@ from alphalens.backtest.factors import load_carhart_daily
 from alphalens.backtest.history_store import HistoryStore
 from alphalens.risk_overlay import VolTargeter, apply_vol_target
 from alphalens.risk_overlay.assess import compute_overlay_stats
+from alphalens.screeners.momentum_lowvol import momentum_lowvol_adapter
 
-# Import the base scorer adapter from the mom+lowvol combo experiment so
-# both share *exactly* the same selection — the overlay is purely on top.
+# Helpers (universe loader, benchmark series, prices dir) still live in
+# the BASE experiment script. The scorer itself is imported from the
+# package above so the two scripts no longer need to import each other.
 from scripts.experiment_momentum_lowvol_combo import (
     _PRICES_DIR,
     benchmark_returns,
     load_pit_union,
-    momentum_lowvol_adapter,
 )
 
 logger = logging.getLogger(__name__)
