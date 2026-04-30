@@ -14,7 +14,7 @@ dependencies = [
     "tradingagents",
     "quiverquant",
     "simfin>=1.0.1",
-    "pyarrow>=15.0",  # explicit: pandas parquet I/O (FRED cache, history snapshots)
+    "pyarrow>=24.0.0",  # explicit: pandas parquet I/O (FRED cache, history snapshots)
 ]
 
 [project.scripts]
