@@ -80,12 +80,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7" },
-    { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.4" },
+    { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.9.4" },
+    { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.13.5" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
-    { name = "pyarrow", specifier = ">=15.0" },
+    { name = "pyarrow", specifier = ">=24.0.0" },
     { name = "quiverquant" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.12" },
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "simfin", specifier = ">=1.0.1" },
     { name = "statsmodels", specifier = ">=0.14.6" },
