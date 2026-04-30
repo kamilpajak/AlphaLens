@@ -135,7 +135,7 @@ Only after Step 4 produces a phase-robust positive base or a base whose only fai
 
 If the multi-phase audit shows the screener has any phase-robust merit but unsatisfactory risk profile (e.g. dispersion > 30pp, deep drawdowns, Sharpe net < 0.5), test a Layer-4 sizing overlay before declaring final FAIL:
 
-- `alphalens/risk_overlay/vol_target.py` — Moreira-Muir 2017 vol-targeting (`VolTargeter`, `apply_vol_target`).
+- `alphalens/overlays/vol_target.py` — Moreira-Muir 2017 vol-targeting (`VolTargeter`, `apply_vol_target`).
 - Wrap base experiment via `scripts/experiment_vol_target_overlay.py` (or analogous wrapper).
 - **Critical:** dynamic per-rebalance cost is required (`turnover_t = base_turnover · scale_t + |scale_t − scale_{t-1}|`). Constant-drag accounting inflates reported alpha.
 - Pre-register in a fresh signal class (e.g. `risk_management_overlay_<date>`) — avoids Bonferroni inflation in the screener's own class.
@@ -206,7 +206,7 @@ Per `feedback_phase_aliasing_in_strided_backtests.md`:
 - `--phase-offset` CLI flag + 5 tests
 - `alphalens/backtest/multi_phase.py` (summarise + robust_verdict) + 2 tests
 - `scripts/audit_multi_phase.py` driver
-- `alphalens/fundamentals/edgar_companyfacts.py` — PIT TTM ROE store + 13 tests
+- `alphalens/data/fundamentals/edgar_companyfacts.py` — PIT TTM ROE store + 13 tests
 - `--lock-universe` flag in tri-factor + mom+lowvol scripts
 - `--is-start/--is-end/--oos-start/--oos-end` flags in same
 

@@ -106,7 +106,7 @@ Every pilot must produce, at minimum:
 - Random-scorer null hypothesis test (does your scorer beat shuffle?)
 
 **Sanity (4-gate framework):**
-- `passive_correlation` to relevant benchmark (must be <0.95) — `alphalens/rotation/sanity_checks.py::passive_correlation`
+- `passive_correlation` to relevant benchmark (must be <0.95) — `alphalens/archive/rotation/sanity_checks.py::passive_correlation`
 - `rolling_sharpe_stability` — min 252-day Sharpe across windows (must be >0.30)
 - `per_regime_vs_passive` — per-bucket marginal vs passive
 - `overlay_alpha` (for tilt strategies) — α net of passive exposure
@@ -317,11 +317,11 @@ Mean +82 bps, min-year -5.43%, correlation +0.97 vs SPY.
 
 **Overlay / tactical tilt:**
 - AP-2 design-stage check: tilt magnitude / benchmark daily volatility ratio. If <0.10, kill before any backtest.
-- 4-gate sanity from `alphalens/rotation/sanity_checks.py`
+- 4-gate sanity from `alphalens/archive/rotation/sanity_checks.py`
 
 **LLM-as-scorer:**
 - Multi-regime mandatory (2018/2020/2022/2024 minimum)
-- Prompt fingerprinting via `alphalens/guru/prompt.py`
+- Prompt fingerprinting via `alphalens/archive/guru/prompt.py`
 - Treat external LLM consultation about LLM-scorer as AP-11 violation — circular validation
 
 **Alt-data:**
@@ -331,24 +331,24 @@ Mean +82 bps, min-year -5.43%, correlation +0.97 vs SPY.
 ## Code references
 
 Pre-commit infrastructure (use these directly):
-- `alphalens/rotation/precommit.py::ConfigFingerprint` — path + content SHA-256 + git SHA
-- `alphalens/rotation/precommit.py::count_config_commits` — true `n_tests` from git log
-- `alphalens/rotation/precommit.py::check_oos_discipline` — validate clean run vs IS baseline
-- `alphalens/rotation/precommit.py::record_run` — append JSON line to audit log
+- `alphalens/archive/rotation/precommit.py::ConfigFingerprint` — path + content SHA-256 + git SHA
+- `alphalens/archive/rotation/precommit.py::count_config_commits` — true `n_tests` from git log
+- `alphalens/archive/rotation/precommit.py::check_oos_discipline` — validate clean run vs IS baseline
+- `alphalens/archive/rotation/precommit.py::record_run` — append JSON line to audit log
 
 Sanity check framework:
-- `alphalens/rotation/sanity_checks.py::passive_correlation`
-- `alphalens/rotation/sanity_checks.py::rolling_sharpe_stability`
-- `alphalens/rotation/sanity_checks.py::per_regime_vs_passive`
-- `alphalens/rotation/sanity_checks.py::overlay_alpha`
+- `alphalens/archive/rotation/sanity_checks.py::passive_correlation`
+- `alphalens/archive/rotation/sanity_checks.py::rolling_sharpe_stability`
+- `alphalens/archive/rotation/sanity_checks.py::per_regime_vs_passive`
+- `alphalens/archive/rotation/sanity_checks.py::overlay_alpha`
 
 Statistical infrastructure:
-- `alphalens/backtest/factor_analysis.py` — Carhart-4F, FF5+UMD, Q4 with Newey-West HAC
+- `alphalens/attribution/factor_analysis.py` — Carhart-4F, FF5+UMD, Q4 with Newey-West HAC
 - `alphalens/backtest/multiple_testing.py` — Bonferroni + BH-FDR
 - `alphalens/backtest/sharpe.py` — autocorr-adjusted Sharpe (Lo 2002)
 
 Prompt/config fingerprinting:
-- `alphalens/guru/prompt.py` — prompt SHA-256 for LLM-as-scorer
+- `alphalens/archive/guru/prompt.py` — prompt SHA-256 for LLM-as-scorer
 
 ## How this template evolves
 

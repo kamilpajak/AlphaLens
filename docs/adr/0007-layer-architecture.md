@@ -20,11 +20,11 @@ Mixing these concerns at the script level made failure attribution hard:
 Without explicit layer boundaries, every new hypothesis tends to re-mix all three concerns. The user explicitly flagged the risk of getting lost ("user pogubi sie w warstwach") when introducing the next concern (vol-targeting).
 
 The repo has already converged on layer-shaped abstractions in code:
-- `alphalens/screeners/*`, `alphalens/rotation/`, etc. — selection (Layer 2*)
-- `alphalens/regime_gate/` — selection-gating (RESEARCH_ONLY 2026-04-29)
+- `alphalens/screeners/*`, `alphalens/archive/rotation/`, etc. — selection (Layer 2*)
+- `alphalens/gates/` — selection-gating (RESEARCH_ONLY 2026-04-29)
 - `alphalens/backtest/engine.py` — execution & return-series
-- `alphalens/backtest/cost_model.py`, `factor_analysis.py` — attribution
-- `alphalens/risk_overlay/` (NEW 2026-04-30) — time-series sizing
+- `alphalens/attribution/cost_model.py`, `factor_analysis.py` — attribution
+- `alphalens/overlays/` (NEW 2026-04-30) — time-series sizing
 
 This ADR makes the implicit layering explicit.
 
@@ -42,7 +42,7 @@ Adopt a **5-layer architecture** for AlphaLens active-alpha experimentation. Eac
                              │  Scorer = Callable[[Mapping[str,DF], Mapping], DF]
                              ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 2. SELECTION-GATE              alphalens/regime_gate/           │
+│ 2. SELECTION-GATE              alphalens/gates/           │
 │    binary/graded gating @ time t                                │
 │    in:  Scorer + RegimeClassifier (`is_on(asof)` or `score`)    │
 │    out: wrapped Scorer (same signature; selection ON/OFF or     │
@@ -60,7 +60,7 @@ Adopt a **5-layer architecture** for AlphaLens active-alpha experimentation. Eac
                              │  pd.Series of portfolio returns
                              ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ 4. RISK OVERLAY                alphalens/risk_overlay/          │
+│ 4. RISK OVERLAY                alphalens/overlays/          │
 │    time-series sizing on portfolio returns                      │
 │    in:  portfolio-returns Series + sizing rule (e.g. vol-target)│
 │    out: scaled Series (same index, scaled values; scale[t]      │
@@ -118,5 +118,5 @@ Risk overlays make the resulting portfolio's market beta time-varying. The OLS C
 
 - Phase 1 diagnostic that motivated explicit layer separation: `docs/research/regime_gate_phase1_diagnostic.md` (2026-04-29).
 - Postmortem of the 9 paradigm failures: `docs/research/paradigm_failures_postmortem.md` (latest title "Nine Paradigm Failures").
-- Risk overlay introduction: `alphalens/risk_overlay/__init__.py` + `vol_target.py`, tests `tests/test_risk_overlay.py`. Pre-registered hypothesis: `vol_target_mom_lowvol_2026_04_30` in fresh signal class `risk_management_overlay_2026_04_30`.
+- Risk overlay introduction: `alphalens/overlays/__init__.py` + `vol_target.py`, tests `tests/test_risk_overlay.py`. Pre-registered hypothesis: `vol_target_mom_lowvol_2026_04_30` in fresh signal class `risk_management_overlay_2026_04_30`.
 - Methodology bundle (the OSS extraction of the discipline that surrounds these layers): https://github.com/kamilpajak/phase-robust-backtesting.

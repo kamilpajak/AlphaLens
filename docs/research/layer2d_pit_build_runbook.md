@@ -2,8 +2,8 @@
 
 **Prerequisites:**
 - Phase 2.5.1-2.5.3 shipped (XBRL client + yfinance cache + PIT builder).
-- `alphalens/alt_data/data/ticker_cik_map.yaml` seeded (Phase 2 P3).
-- `alphalens/alt_data/data/iwm_current.yaml` seeded (Phase 2 P4).
+- `alphalens/data/alt_data/data/ticker_cik_map.yaml` seeded (Phase 2 P3).
+- `alphalens/data/alt_data/data/iwm_current.yaml` seeded (Phase 2 P4).
 - `SEC_EDGAR_USER_AGENT` env var set.
 
 ## Full build (one-shot, ~6-7h wall clock)

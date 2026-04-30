@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-22
 **Window:** 2021-04-19 → 2026-04-17 (5y, 971 / 944 trading days)
-**Fix:** `alphalens/fundamentals/simfin_store.py::features_as_of` now filters by `Publish Date` (actual 10-Q/10-K filing) instead of Report Date (fiscal quarter end). Eliminates ~40-60 day look-ahead bias.
+**Fix:** `alphalens/data/store/simfin.py::features_as_of` now filters by `Publish Date` (actual 10-Q/10-K filing) instead of Report Date (fiscal quarter end). Eliminates ~40-60 day look-ahead bias.
 
 ## Headline: pre-fix vs post-fix
 
@@ -104,4 +104,4 @@ Cała waga bias audit'u spada na gated backtests (#14, #15, #17, teraz #18). Bas
 
 - 4 post-fix reports: `docs/backtest/postfix_gate_{momentum,early_stage}_{5d,60d}.md`
 - Ten raport: `docs/research/fundamental_gate_postfix_comparison.md`
-- Code fix: `alphalens/fundamentals/simfin_store.py::features_as_of` (commit TBD)
+- Code fix: `alphalens/data/store/simfin.py::features_as_of` (commit TBD)

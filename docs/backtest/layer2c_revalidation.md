@@ -125,4 +125,4 @@ gates so the kill verdict carries uniform pipeline backing.
 Per ADR-0005 the layer remains `ARCHIVED` independently of this run's
 outcome — the project pivoted away from active alpha generation 2026-04-25.
 Companion file paths are linked from
-`alphalens/screeners/lean/__init__.py::__closed_evidence__`.
+`alphalens/archive/screeners/lean/__init__.py::__closed_evidence__`.

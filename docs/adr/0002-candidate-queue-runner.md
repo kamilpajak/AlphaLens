@@ -55,5 +55,5 @@ the priority is per-source.
 ## References
 
 - `CLAUDE.md` — "Key abstractions" + "Layered pipeline" sections
-- `alphalens/candidates.py`, `alphalens/queue.py`, `alphalens/worker.py`,
-  `alphalens/runner.py`, `alphalens/registry.py`
+- `alphalens/core/candidates.py`, `alphalens/core/queue.py`, `alphalens/core/worker.py`,
+  `alphalens/core/runner.py`, `alphalens/core/registry.py`

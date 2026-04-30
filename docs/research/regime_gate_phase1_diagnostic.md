@@ -4,7 +4,7 @@
 
 **Window:** 2017-01-03 → 2022-12-30 (1499 SPY trading days). This is the IS period over which mom+lowvol BASE failed phase-robustly (mean αt = +0.49, excess −5.7%/y, 44.5pp dispersion — see `project_mom_lowvol_combo_failed_2026_04_29.md`).
 
-**Script:** `scripts/regime_gate_phase1_diagnostic.py`. Output dropped under `~/.alphalens/regime_gate/`.
+**Script:** `scripts/regime_gate_phase1_diagnostic.py`. Output dropped under `~/.alphalens/gates/`.
 
 ## Headline numbers
 

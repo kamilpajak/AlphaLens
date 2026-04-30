@@ -118,7 +118,7 @@ Option C: **Completely new paradigm** — drop thematic curated universe, pivot:
 - Research docs: `docs/research/fundamental_gate_*.md`, `pit_universe_backtest.md`, `multiple_testing_audit_2026-04.md`, `delisted_classification.md`, `walk_forward_oos_validation.md`, this file
 - Backtest CSVs: `docs/backtest/postfix_gate_*`, `pit95_*`, `compare_*`, `baseline_*_hold60`
 - Scripts: `/tmp/alphalens_issue15/phase*.py`, `/tmp/alphalens_issue18/phase*.py`
-- Code fix: `alphalens/fundamentals/simfin_store.py::features_as_of` (Publish Date filter)
+- Code fix: `alphalens/data/store/simfin.py::features_as_of` (Publish Date filter)
 - Issue threads: #14, #15, #17, #18 all closed
 
 ## Post-mortem sentence

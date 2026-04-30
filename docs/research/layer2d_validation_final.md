@@ -191,7 +191,7 @@ Per design doc §8 Bonferroni n=2: both splits must pass independently. OOS coll
 
 **KILL.** Archive Layer 2d screener:
 
-- `alphalens/screeners/insider/` **retain for backtest-only reference** (no registry removal — same pattern as Layer 2c lean).
+- `alphalens/archive/screeners/insider/` **retain for backtest-only reference** (no registry removal — same pattern as Layer 2c lean).
 - `launchd/com.alphalens.watchdog.insider.plist` — **never loaded** (we did not deploy; no systemd/launchctl action needed).
 - No Layer 3 queue integration. `SOURCE_PRIORITY["insider"]` was never registered; leave as-is.
 - Memory notes updated: `project_pivot_alt_data.md` marked CLOSED; Layer 2d appended to `project_archive_decisions.md`.
@@ -222,7 +222,7 @@ _Per design doc §8 gate logic + `decision_matrix.evaluate_exit_criteria`:_
 
 - **GO**: deploy capital to Layer 2d paper/live queue with insider candidates feeding Layer 3 analysis at priority=`insider=15` (TBD in `alphalens.core.registry.SOURCE_PRIORITY`).
 - **PAPER_TRACK**: log signals into Layer 3 queue for 6-12 mo without sizing — re-evaluate with live data.
-- **KILL**: archive Layer 2d alongside Layer 2b (`alphalens/screeners/insider/` retained for backtest-only use), disable `launchd/com.alphalens.watchdog.insider.plist` if it was loaded.
+- **KILL**: archive Layer 2d alongside Layer 2b (`alphalens/archive/screeners/insider/` retained for backtest-only use), disable `launchd/com.alphalens.watchdog.insider.plist` if it was loaded.
 
 ## Artifacts
 

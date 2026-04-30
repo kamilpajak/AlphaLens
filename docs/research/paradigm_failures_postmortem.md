@@ -178,30 +178,30 @@ These modules survive the project pivot and are usable for future research:
 
 ### Backtest harness
 - `alphalens/backtest/engine.py` — top-N selection
-- `alphalens/rotation/overlay_engine.py` — overlay/tilt strategies
-- `alphalens/backtest/factor_analysis.py` — Carhart-4F, FF5+UMD, Q4 attribution with Newey-West HAC
+- `alphalens/archive/rotation/overlay_engine.py` — overlay/tilt strategies
+- `alphalens/attribution/factor_analysis.py` — Carhart-4F, FF5+UMD, Q4 attribution with Newey-West HAC
 - `alphalens/backtest/multiple_testing.py` — Bonferroni + BH-FDR + t→p conversion
 - `alphalens/backtest/sharpe.py` — autocorr-adjusted Sharpe (Lo 2002)
 
 ### Sanity check framework (4 gates pattern)
-- `alphalens/rotation/sanity_checks.py` — passive_correlation, rolling_sharpe_stability, per_regime_vs_passive, overlay_alpha
+- `alphalens/archive/rotation/sanity_checks.py` — passive_correlation, rolling_sharpe_stability, per_regime_vs_passive, overlay_alpha
 - Reusable for ANY future strategy before commitment to OOS
 
 ### Pre-commit discipline
-- `alphalens/rotation/precommit.py` — config fingerprinting + git SHA tracking
-- `alphalens/rotation/config.py` — `ConfigFingerprint` pattern (file SHA-256 + git SHA)
-- `alphalens/guru/prompt.py` — prompt fingerprinting (same pattern, applied to LLM prompt files)
+- `alphalens/archive/rotation/precommit.py` — config fingerprinting + git SHA tracking
+- `alphalens/archive/rotation/config.py` — `ConfigFingerprint` pattern (file SHA-256 + git SHA)
+- `alphalens/archive/guru/prompt.py` — prompt fingerprinting (same pattern, applied to LLM prompt files)
 
 ### Data clients (production-grade, rate-limit-aware)
-- `alphalens/alt_data/sec_edgar_client.py` — SEC EDGAR submissions, Form 4, fundamentals
-- `alphalens/macro/fred_client.py` — FRED time series with disk cache
-- `alphalens/guru/polygon_fundamentals.py` — Polygon Stocks Starter PIT-correct financials (income/balance/cashflow)
-- `alphalens/screeners/lean/polygon_client.py` — Polygon market data (OHLCV, ticker reference)
+- `alphalens/data/alt_data/sec_edgar_client.py` — SEC EDGAR submissions, Form 4, fundamentals
+- `alphalens/data/macro/fred_client.py` — FRED time series with disk cache
+- `alphalens/archive/guru/polygon_fundamentals.py` — Polygon Stocks Starter PIT-correct financials (income/balance/cashflow)
+- `alphalens/archive/screeners/lean/polygon_client.py` — Polygon market data (OHLCV, ticker reference)
 
 ### LLM infrastructure
-- `alphalens/guru/llm_scorer.py` — disk-cached GuruScorer with structured JSON output, cost tracking
-- `alphalens/runner.py` — TradingAgentsRunner (per-stock multi-agent analysis)
-- `alphalens/config_gemini.py` — Gemini config builder
+- `alphalens/archive/guru/llm_scorer.py` — disk-cached GuruScorer with structured JSON output, cost tracking
+- `alphalens/core/runner.py` — TradingAgentsRunner (per-stock multi-agent analysis)
+- `alphalens/core/config_gemini.py` — Gemini config builder
 - TradingAgents framework (vendored) — multi-agent graph for deep per-stock analysis
 
 ### Live systems
@@ -370,7 +370,7 @@ The discipline that turned nine bad ideas into nine clean falsifications is the 
 
 ### Failure 10 — Vol-target overlay on mom+lowvol (Layer 4 introduction), 2026-04-30
 
-**Setup:** First test in a brand-new architectural layer (`alphalens/risk_overlay/`, ADR 0007). Vol-targeting per Moreira & Muir 2017, *Journal of Finance*: scale gross exposure by `target_vol / realized_vol_rolling`. Wraps the mom+lowvol BASE (failure 7) with target_vol=0.10 ann, lookback=5 weekly periods (~1 month, parity with M-M), max_leverage=1.5. Pre-registered as `vol_target_mom_lowvol_2026_04_30` in fresh signal class `risk_management_overlay_2026_04_30` (Bonferroni n=1, |t|≥1.96). **Dynamic per-rebalance cost** (zen review fix): `turnover_t = base_turnover · scale_t + |scale_t − scale_{t-1}|` — accounts for both position-size scaling AND the turnover cost of leverage adjustments themselves.
+**Setup:** First test in a brand-new architectural layer (`alphalens/overlays/`, ADR 0007). Vol-targeting per Moreira & Muir 2017, *Journal of Finance*: scale gross exposure by `target_vol / realized_vol_rolling`. Wraps the mom+lowvol BASE (failure 7) with target_vol=0.10 ann, lookback=5 weekly periods (~1 month, parity with M-M), max_leverage=1.5. Pre-registered as `vol_target_mom_lowvol_2026_04_30` in fresh signal class `risk_management_overlay_2026_04_30` (Bonferroni n=1, |t|≥1.96). **Dynamic per-rebalance cost** (zen review fix): `turnover_t = base_turnover · scale_t + |scale_t − scale_{t-1}|` — accounts for both position-size scaling AND the turnover cost of leverage adjustments themselves.
 
 Triggered by user question whether stop-loss / trailing limits could rescue the "least bad" screener. Pushed back with academic evidence (Kaminski-Lo 2014: stops on long-only momentum don't add value), proposed M-M vol-targeting as the academically supported variant, ran with full discipline.
 
@@ -397,7 +397,7 @@ Triggered by user question whether stop-loss / trailing limits could rescue the 
 
 **The architectural-layer attribution is clean.** Failure 10 isolates to Layer 4 (risk overlay). The screener (Layer 1) wasn't re-tested or perturbed. The selection-gate (Layer 2) wasn't involved. We know the overlay added no value on this BASE; we don't have to re-litigate the screener. That's exactly the attribution clarity the layer separation was meant to deliver.
 
-**Documented:** memory `project_vol_target_overlay_failed_2026_04_30.md`, audit JSON `docs/research/vol_target_overlay_multi_phase_audit.json`, driver `scripts/experiment_vol_target_overlay.py`, module `alphalens/risk_overlay/{vol_target,__init__}.py`, tests `tests/test_risk_overlay.py`, ADR `docs/adr/0007-layer-architecture.md`.
+**Documented:** memory `project_vol_target_overlay_failed_2026_04_30.md`, audit JSON `docs/research/vol_target_overlay_multi_phase_audit.json`, driver `scripts/experiment_vol_target_overlay.py`, module `alphalens/overlays/{vol_target,__init__}.py`, tests `tests/test_risk_overlay.py`, ADR `docs/adr/0007-layer-architecture.md`.
 
 ## Common patterns from failures 9-10
 

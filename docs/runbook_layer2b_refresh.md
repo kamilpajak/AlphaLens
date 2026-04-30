@@ -1,6 +1,6 @@
 # Layer 2b Theme Refresh Runbook
 
-Procedura kwartalnego przeglądu uniwersum Layer 2b (`alphalens/screeners/themed/universe.yaml`).
+Procedura kwartalnego przeglądu uniwersum Layer 2b (`alphalens/archive/screeners/themed/universe.yaml`).
 
 **Cadence**: Co kwartał (styczeń, kwiecień, lipiec, październik), najlepiej po earnings season żeby widzieć aktualne fundamentals.
 
@@ -91,7 +91,7 @@ alphalens backtest \
 ### 6. Commit + deployment (15 min)
 
 ```bash
-git add alphalens/screeners/themed/universe.yaml
+git add alphalens/archive/screeners/themed/universe.yaml
 git commit -m "refactor(themed): Q1 2026 universe refresh — add X, remove Y"
 ```
 
