@@ -347,7 +347,7 @@ def write_report(
     lines.append("Cohort split (C1) and mid-holding wipeout audit (C3) skipped because")
     lines.append("Layer 2c is a rule-based screener and the additional 4 backtest runs")
     lines.append("yielded no new evidence vs the existing FF3 IS-only verdict per")
-    lines.append("`docs/research/5_paradigm_failures_postmortem.md`.")
+    lines.append("`docs/research/paradigm_failures_postmortem.md`.")
     lines.append("")
     lines.append("### Delisting selection bias (Fisher exact)")
     lines.append("")

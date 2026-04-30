@@ -63,7 +63,7 @@ infra extraction) and would produce noise without value.
 
 - ADR 0001 (research-infrastructure pivot)
 - `tests/test_layer_status.py`, `tests/test_module_dependencies.py`
-- `docs/research/5_paradigm_failures_postmortem.md`
+- `docs/research/paradigm_failures_postmortem.md`
 - Memory: `project_archive_decisions.md`,
   `project_themed_screener_design.md`, `project_pivot_alt_data.md`,
   `project_tactical_rotation_closed.md`

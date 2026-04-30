@@ -1,6 +1,6 @@
 # Archived launchd jobs
 
-Pliki w tym katalogu to plisty strategii które były rozważane lub działały produkcyjnie, ale NIE są obecnie deployowane. Kod źródłowy w `alphalens/` pozostaje — infrastruktura jest reużywana — ale te konkretne joby NIE ładują się do launchd. Pełny postmortem każdej strategii: `docs/research/5_paradigm_failures_postmortem.md`.
+Pliki w tym katalogu to plisty strategii które były rozważane lub działały produkcyjnie, ale NIE są obecnie deployowane. Kod źródłowy w `alphalens/` pozostaje — infrastruktura jest reużywana — ale te konkretne joby NIE ładują się do launchd. Pełny postmortem każdej strategii: `docs/research/paradigm_failures_postmortem.md`.
 
 ## `com.alphalens.watchdog.themed.plist` (Layer 2b — themed momentum)
 

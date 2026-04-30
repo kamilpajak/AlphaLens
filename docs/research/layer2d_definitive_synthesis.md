@@ -192,7 +192,7 @@ rising vol).
 - Layer 2d: **CLOSED 2026-04-24**, all artifacts retained as anti-pattern
   reference.
 - Diagnostic flags upgraded; cataloging lessons in
-  `docs/research/5_paradigm_failures_postmortem.md` Pattern 1 (low Carhart
+  `docs/research/paradigm_failures_postmortem.md` Pattern 1 (low Carhart
   R² + high IS α + per-subperiod factor instability + horizon mismatch).
 - The unrestricted small-cap contrarian premium itself is RESEARCH_ONLY —
   not deployable as-is per cost/liquidity caveats above; would require a

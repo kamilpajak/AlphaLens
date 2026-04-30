@@ -5,7 +5,7 @@
 **Status:** Living template; refine after each new pilot
 **Companions:**
 - `docs/research/active_alpha_anti_patterns.md` — vulnerability checklist (AP-1..14)
-- `docs/research/5_paradigm_failures_postmortem.md` — narrative of what failed and why
+- `docs/research/paradigm_failures_postmortem.md` — narrative of what failed and why
 - `docs/research/kill_verdict_checklist.md` — 7-gate evidence template for KILL verdicts
 
 ## Purpose

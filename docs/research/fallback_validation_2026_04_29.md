@@ -66,7 +66,7 @@ The ROE addition (mom+lowvol → mom+lowvol+ROE) **amplifies** regime fragility:
 - Tri-factor regime range: half 1 +9.8% → half 2 -20.9% = 31pp swing at $5M (similar)
 - BUT at ADV $20M tri-factor swing is wider: +12.1% → -10.7% = 23pp; mom+lowvol: +7.7% → -5.8% = 13pp.
 
-So the small/mid-cap quality+momentum signal class is fundamentally regime-dependent at this scale. The 5/5 paradigm-failure pivot doc (`5_paradigm_failures_postmortem.md`) called this out for prior layers; this session adds **layer 6** (tri-factor) and **layer 7** (mom+lowvol) to the same pattern.
+So the small/mid-cap quality+momentum signal class is fundamentally regime-dependent at this scale. The 5/5 paradigm-failure pivot doc (`paradigm_failures_postmortem.md`) called this out for prior layers; this session adds **layer 6** (tri-factor) and **layer 7** (mom+lowvol) to the same pattern.
 
 ## Options forward
 

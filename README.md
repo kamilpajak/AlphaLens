@@ -11,9 +11,9 @@ Research lab infrastructure for retail active alpha experimentation — combines
 
 ## Status (2026-04-25 →)
 
-The project pivoted from "active alpha generation" to **research / learning infrastructure** after [5 paradigm failures](docs/research/5_paradigm_failures_postmortem.md) (Layer 2b/2c/2d/2e/2f/2g, all KILLed in OOS validation). Capital deployment based on the current strategies is **off the table**. The codebase remains as:
+The project pivoted from "active alpha generation" to **research / learning infrastructure** after [9 paradigm failures](docs/research/paradigm_failures_postmortem.md) (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum, all phase-robust FAIL). Capital deployment based on the current strategies is **off the table** until a phase-robust PASS appears; the screener search itself stays open-ended under pre-registration discipline. The codebase remains as:
 
-- **Reusable research framework** — backtest engine, factor attribution, sanity checks, multiple-testing corrections, regime classifier, cost models, weighting schemes
+- **Reusable research framework** — backtest engine, factor attribution, sanity checks, multiple-testing corrections, regime classifier, **time-series sizing overlays (`alphalens/risk_overlay/`, vol-targeting per Moreira-Muir 2017)**, cost models, weighting schemes; layer architecture in [ADR 0007](docs/adr/0007-layer-architecture.md)
 - **Production-grade data clients** — Polygon, FRED, SEC EDGAR
 - **LLM scoring infrastructure** — TradingAgents multi-agent + GuruScorer single-prompt
 - **Anti-pattern catalog** — every closed strategy ships a `__closed_reason__` marker plus a postmortem entry
@@ -21,8 +21,8 @@ The project pivoted from "active alpha generation" to **research / learning infr
 
 **Live in launchd**: only Layer 1 SEC EDGAR watchdog (read-only event detection, daily Telegram digest, near-zero maintenance).
 
-> Architectural rationale: see [`docs/adr/`](docs/adr/) (5 ADRs).
-> Per-layer postmortem: [`docs/research/5_paradigm_failures_postmortem.md`](docs/research/5_paradigm_failures_postmortem.md).
+> Architectural rationale: see [`docs/adr/`](docs/adr/) (7 ADRs).
+> Per-layer postmortem: [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md).
 > Quick contributor guide: [`CLAUDE.md`](CLAUDE.md).
 
 ---
@@ -43,6 +43,8 @@ Each layer/screener package declares its lifecycle in `__init__.py` as `__status
 | `alphalens/events/` | CLOSED | Layer 2f — 8-K event-driven screen failed |
 | `alphalens/guru/` | CLOSED | Layer 2g — LLM-researcher pilot failed |
 | `alphalens/macro/` | RESEARCH_ONLY | Reusable infra (FRED client, regime scorer) |
+| `alphalens/regime_gate/` | RESEARCH_ONLY | Layer 2 selection-gate wrapper (rescue attempt failed Phase 1 2026-04-29) |
+| `alphalens/risk_overlay/` | RESEARCH_ONLY | Layer 4 time-series sizing overlay (vol-targeting, Moreira-Muir 2017) |
 
 CLOSED-layer code is retained as a research framework + anti-pattern record (see [ADR 0005](docs/adr/0005-closed-layers-as-anti-pattern-catalog.md)).
 

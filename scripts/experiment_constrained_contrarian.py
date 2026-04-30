@@ -120,6 +120,7 @@ def run_one_backtest(
     top_n: int,
     holding: int,
     rebalance_stride: int,
+    phase_offset: int = 0,
 ):
     config = {
         "benchmark": benchmark,
@@ -136,6 +137,7 @@ def run_one_backtest(
         screener_tickers=universe,
         weighting="linear",
         rebalance_stride=rebalance_stride,
+        phase_offset=phase_offset,
     )
     return engine.run(start, end)
 
@@ -187,6 +189,13 @@ def main() -> int:
     ap.add_argument("--top-n", type=int, default=15)
     ap.add_argument("--holding", type=int, default=60)
     ap.add_argument("--rebalance-stride", type=int, default=5)
+    ap.add_argument(
+        "--phase-offset",
+        type=int,
+        default=0,
+        help="Phase offset for strided rebalance calendar; 0..rebalance_stride-1. "
+        "Required for honest multi-phase audit (see audit_multi_phase.py).",
+    )
     ap.add_argument("--bounce-weight", type=float, default=0.5)
     ap.add_argument("--benchmark", default="SPY")
     ap.add_argument(
@@ -255,6 +264,7 @@ def main() -> int:
                 top_n=args.top_n,
                 holding=args.holding,
                 rebalance_stride=args.rebalance_stride,
+                phase_offset=args.phase_offset,
             )
             for cost_bps in args.cost_half_spreads:
                 stats = assess(report, factors_5, args.rebalance_stride, cost_bps)

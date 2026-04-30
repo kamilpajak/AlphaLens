@@ -130,7 +130,7 @@ off-table; this is research/anti-pattern-cataloguing.
 ## Next-direction implication
 
 The "ranking-invariant overfit" pattern observed here generalises a methodological lesson worth
-flagging in `docs/research/5_paradigm_failures_postmortem.md`: when an IS alpha is large
+flagging in `docs/research/paradigm_failures_postmortem.md`: when an IS alpha is large
 (>50%/y) but factor R² is near zero (<0.01), variant rankings will mostly preserve the IS alpha
 and uniformly fail OOS. Future Layer 2 candidates should treat low-R² × high-α IS results as a
 diagnostic flag, not a finding.

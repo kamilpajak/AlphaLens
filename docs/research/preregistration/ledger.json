@@ -138,6 +138,93 @@
         "notes": "OOS net excess −47%/y to −89%/y across all ADV thresholds. IS+OOS classic framework; multi-phase not run. Backfilled 2026-04-29 retrospectively."
       },
       "notes": ""
+    },
+    {
+      "id": "quality_momentum_combo_2026_04_29",
+      "signal_class": "price_factor_search_2026_04_29",
+      "hypothesis": "z(mom_12_1m) + z(roe_ttm) generates phase-robust net positive OOS excess vs SPY with multi-phase mean alpha t >= 2.50 (Bonferroni n=4) on R2000-like PIT + EDGAR-fundamentals universe, ADV >= 5M, 5-15bp cost. Tests whether fundamental quality factor rescues mom from 2017-2022 structural drift hole that killed price-only mom+lowvol.",
+      "scorer_path": "scripts/experiment_quality_momentum_combo.py",
+      "params_frozen": {
+        "score": "z(mom_12_1m) + z(roe_ttm), where roe_ttm is PIT ROE from EDGAR companyfacts",
+        "top_n": 15,
+        "holding_signal_days": 60,
+        "rebalance_stride": 5,
+        "adv_thresholds_usd": [
+          5000000,
+          20000000
+        ],
+        "cost_half_spreads_bps": [
+          5,
+          15
+        ],
+        "universe": "AlphaLens R2000-like PIT (with EDGAR fundamentals coverage), no survivorship bias"
+      },
+      "periods": {
+        "is_start": "2015-01-01",
+        "is_end": "2022-12-31",
+        "oos_start": "2023-01-01",
+        "oos_end": "2026-04-22"
+      },
+      "success_criteria": {
+        "mode": "multi_phase",
+        "pass_rule": "Multi-phase audit per docs/research/strategy_validation_playbook.md Step 4-5: every-phase alpha t >= 1.5 AND mean alpha t >= Bonferroni threshold (n=4 -> ~2.50) AND every-phase excess net >= 0",
+        "min_alpha_t_pass": 1.5,
+        "min_alpha_t_mid": 1.0,
+        "rationale": "Asness-Frazzini-Pedersen QMJ 2019 + Carhart Mom; quality factor (ROE) adds orthogonal fundamental dimension to price-only mom+lowvol. Tests whether fundamentally-grounded screen rescues R2000 mom in 2017-2022 structural hole."
+      },
+      "registered_at": "2026-04-29",
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": 0.38,
+        "mean_excess_net": 0.103,
+        "audit_path": "docs/research/quality_momentum_multi_phase_audit.json",
+        "completed_at": "2026-04-30",
+        "notes": "OOS αt mean=+0.38 (±1.02, range -0.63 to +2.00), excess net mean=+10.3% (±69pp, range -55.6% to +112.2%). Massive phase-aliasing — phase 1 OOS would have shown spurious 'PASS' (αt=+2.00) as single-phase test, but mean is far below Bonferroni 2.50. IS even worse: mean αt=+0.58 (±0.69). Quality factor (ROE) screened out post-2022 mega-cap tech rally — same structural drag as Layer 2g Buffett-style. Class price_factor_search_2026_04_29 now 4/4 FAIL."
+      },
+      "notes": ""
+    },
+    {
+      "id": "vol_target_mom_lowvol_2026_04_30",
+      "signal_class": "risk_management_overlay_2026_04_30",
+      "hypothesis": "Vol-targeting overlay (target_vol=0.10 ann, lookback=5 weekly periods, max_leverage=1.5) applied to mom+lowvol BASE (failure 7) generates phase-robust improvement in Sharpe-net vs ungated BASE with multi-phase mean alpha t >= 1.96 (Bonferroni n=1 in fresh class). Tests Moreira-Muir 2017 hypothesis on R2000-PIT. Layer 4 risk overlay per ADR 0007.",
+      "scorer_path": "scripts/experiment_vol_target_overlay.py",
+      "params_frozen": {
+        "base_strategy": "mom_lowvol_combo (z(mom_12_1m) - vol_w * z(vol_60d), vol_w=1.0)",
+        "target_vol_annualized": 0.1,
+        "vol_lookback_periods": 5,
+        "vol_lookback_rationale": "5 weekly periods ~= 25 trading days ~= 1 month, parity with Moreira-Muir 2017 monthly mechanism (zen review: 26 weeks would be too smooth to react to regime shifts)",
+        "max_leverage": 1.5,
+        "top_n": 15,
+        "rebalance_stride": 5,
+        "adv_threshold_usd": 5000000,
+        "cost_half_spread_bps": 5,
+        "cost_model": "dynamic_per_rebalance: turnover_t = base_turnover * scale_t + |scale_t - scale_{t-1}|"
+      },
+      "periods": {
+        "is_start": "2011-01-01",
+        "is_end": "2022-12-31",
+        "oos_start": "2023-01-01",
+        "oos_end": "2026-04-22"
+      },
+      "success_criteria": {
+        "mode": "multi_phase",
+        "pass_rule": "Multi-phase audit per playbook Step 5: mean alpha t >= 1.96 AND mean scaled-Sharpe-net > mean unscaled-BASE-Sharpe-net (risk-adjusted improvement gate). Per zen review: absolute every-phase-excess-net gate dropped because vol-targeting is a risk-reduction mechanism — can drag absolute returns during low-vol bull runs while still improving Sharpe.",
+        "min_alpha_t_pass": 1.96,
+        "min_alpha_t_mid": 1.5,
+        "rationale": "Moreira-Muir 2017 (Journal of Finance) vol-managed portfolios. Tests whether time-series sizing rescues a phase-aliased base. Honest expectation is MID/FAIL given base has no phase-robust expectancy; mechanism is academically distinct enough to warrant n=1 fresh-class test. Known limitation per ADR 0007: vol-scaling makes betas time-varying; OLS Carhart-4F alpha is distorted, primary metric is Sharpe-improvement."
+      },
+      "registered_at": "2026-04-30",
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": 0.49,
+        "mean_excess_net": -0.07,
+        "audit_path": "docs/research/vol_target_overlay_multi_phase_audit.json",
+        "completed_at": "2026-04-30",
+        "notes": "OOS mean αt=+0.49 (same as BASE +0.49 — overlay added no alpha), excess net mean=-7.0% (±40.3pp). FAIL on |t|>=1.96 gate by wide margin. Critical methodological finding: vol-targeting is reactive (uses past realized vol), so it can lever UP just before a regime shift. Phase 3 OOS: BASE excess net was -43.8%; overlay -77.9% (overlay AMPLIFIED losses by levering into the drawdown). Phase 1 OOS: BASE had spurious αt=+2.00; overlay damped to +1.40 by de-leveraging the lucky phase. Net effect: overlay damps both wins and losses asymmetrically given the base's weak expectancy. Time-varying-beta hazard documented in ADR 0007 confirmed empirically. Class risk_management_overlay_2026_04_30 1/1 FAIL."
+      },
+      "notes": ""
     }
   ]
 }

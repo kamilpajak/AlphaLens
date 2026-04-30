@@ -5,7 +5,7 @@
 **Status:** Living standard; refine as new layers are closed
 **Companions:**
 - `docs/research/go_no_go_screen_template.md` — pre-pilot workflow (Phase 1-5, kill thresholds)
-- `docs/research/5_paradigm_failures_postmortem.md` — per-layer narrative of what failed
+- `docs/research/paradigm_failures_postmortem.md` — per-layer narrative of what failed
 - `docs/research/active_alpha_anti_patterns.md` — AP-1..14 vulnerability catalog
 
 ## Purpose

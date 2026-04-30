@@ -115,9 +115,10 @@ def run_longshort(
     adv_min: float,
     vol_weight: float,
     rebalance_stride: int,
+    phase_offset: int = 0,
 ) -> pd.DataFrame:
     calendar = HistoryStore.benchmark_calendar(history_store, benchmark, start, end)
-    calendar = calendar[::rebalance_stride]
+    calendar = calendar[phase_offset::rebalance_stride]
 
     rows: list[dict] = []
     for i, ts in enumerate(calendar):
@@ -246,6 +247,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--top-n", type=int, default=15)
     ap.add_argument("--rebalance-stride", type=int, default=5)
+    ap.add_argument(
+        "--phase-offset",
+        type=int,
+        default=0,
+        help="Phase offset for strided rebalance calendar; 0..rebalance_stride-1.",
+    )
     ap.add_argument("--vol-weight", type=float, default=1.0)
     ap.add_argument("--adv-min", type=float, default=5_000_000)
     ap.add_argument("--cost-bps", type=float, default=5.0)
@@ -299,6 +306,7 @@ def main() -> int:
             adv_min=args.adv_min,
             vol_weight=args.vol_weight,
             rebalance_stride=args.rebalance_stride,
+            phase_offset=args.phase_offset,
         )
         if df.empty:
             logger.warning("%s empty", label)

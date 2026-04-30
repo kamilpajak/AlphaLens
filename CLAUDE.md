@@ -4,12 +4,12 @@ Guidance for Claude Code (claude.ai/code) when working in this repo.
 
 ## Project status (2026-04-25 →)
 
-**AlphaLens** = research/learning infrastructure dla retail quant active alpha experimentation, **NIE** active alpha generation product. Po 5/5 paradigm failures (Layer 2b/2c/2d/2e/2f/2g) projekt został repositioned. Capital deployment based na current strategies jest off-table.
+**AlphaLens** = research/learning infrastructure dla retail quant active alpha experimentation. Po **10/10 paradigm failures phase-robust** (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum + vol-target overlay) projekt repositioned: methodology bundle (pre-reg + multi-phase + Bonferroni) jest durable artifact, Layer 1 watchdog + literature review zostają live. **Search dla coraz lepszych screenerów pozostaje open-ended** — każdy nowy test podnosi Bonferroni bar dla następnego (ledger discipline), ale "no further prospecting" NIE jest pozycją projektu. Layer architecture w ADR 0007 (5 warstw: screener → selection-gate → engine → risk-overlay → attribution) — kolejne hipotezy mogą operować na nowej warstwie. Capital deployment based na current strategies jest off-table dopóki phase-robust PASS się nie pojawi.
 
-**Live production:** Layer 1 SEC EDGAR watchdog (launchd `detect` + `worker`).
-**Wszystko inne:** CLOSED, ARCHIVED lub RESEARCH_ONLY — kod zostaje jako reusable framework + anti-pattern catalog.
+**Live production:** Layer 1 SEC EDGAR watchdog (launchd `detect` + `worker`) + literature_review weekly+monthly Perplexity scan.
+**Wszystko inne:** CLOSED, ARCHIVED lub RESEARCH_ONLY — kod zostaje jako reusable framework + anti-pattern catalog. Methodology bundle (preregistration ledger + multi_phase + audit driver) extracted do `kamilpajak/phase-robust-backtesting` (MIT).
 
-Pełny rozliczenie: `docs/research/5_paradigm_failures_postmortem.md`. Decyzje architektoniczne: `docs/adr/` (5 ADRs).
+Pełny rozliczenie: `docs/research/paradigm_failures_postmortem.md` (10 paradigm failures across 3 architectural layers). Decyzje architektoniczne: `docs/adr/` (7 ADRs).
 
 ## Layer status
 
@@ -23,13 +23,28 @@ Lifecycle status każdej warstwy żyje w jej `__init__.py` jako `__status__` con
 | `alphalens/screeners/themed/` | CLOSED 2026-04-22 | Layer 2b — momentum overfit + cost eats signal |
 | `alphalens/screeners/lean/` | ARCHIVED 2026-04-19 | Layer 2c — Sharpe 0.25 net, FF3 α t=0.14 |
 | `alphalens/screeners/insider/` | CLOSED 2026-04-24 | Layer 2d — Carhart t=2.14 IS → 0.68 OOS |
+| `alphalens/screeners/momentum_lowvol/` | RESEARCH_ONLY | Layer 2 mom + low-vol adapter — strategy FAIL'd as failure 7 but scorer reused as BASE for Layer 4 vol-target overlay test |
 | `alphalens/screeners/prescreener/` | RESEARCH_ONLY | Layer 2a — unvalidated, manual ad-hoc |
 | `alphalens/rotation/` | CLOSED | Layer 2e — failed IS+OOS sanity |
 | `alphalens/events/` | CLOSED | Layer 2f — 8-K event screen failed |
 | `alphalens/guru/` | CLOSED | Layer 2g — LLM-researcher pilot failed |
 | `alphalens/macro/` | RESEARCH_ONLY | reusable infra, no standalone strategy |
+| `alphalens/regime_gate/` | RESEARCH_ONLY | Layer 2 selection-gate wrapper; rescue attempt failed Phase 1 diagnostic 2026-04-29 — wrapper retained dla future research |
+| `alphalens/risk_overlay/` | RESEARCH_ONLY | Layer 4 time-series sizing overlay (vol-targeting per Moreira-Muir 2017); first hypothesis `vol_target_mom_lowvol_2026_04_30` pre-registered 2026-04-30 |
 
 Core abstractions (zawsze ACTIVE, nie należą do żadnej layer): `candidates.py`, `queue.py`, `worker.py`, `runner.py`, `registry.py`, `config_gemini.py`.
+
+## Layer architecture (active alpha experimentation)
+
+Five-layer separation per **ADR 0007** (`docs/adr/0007-layer-architecture.md`). Each layer has a single responsibility; failures attribute to one layer:
+
+1. **Screener** (Layer 2*: `alphalens/screeners/*`, `rotation/`, etc.) — cross-sectional rank @ time t → top-N tickers
+2. **Selection-gate** (`alphalens/regime_gate/`) — binary/graded gate on the Scorer (modifies *which* tickers deploy)
+3. **Backtest engine** (`alphalens/backtest/engine.py`) — runs scorer over strided rebalance calendar → `BacktestReport.portfolio_returns`
+4. **Risk overlay** (`alphalens/risk_overlay/`) — time-series sizing on portfolio realised vol (modifies *how much exposure*); first impl is vol-targeting per Moreira-Muir 2017
+5. **Attribution** (`alphalens/backtest/{cost_model, factor_analysis, metrics}`) — cost-drag, Carhart-4F, Sharpe, Bonferroni → ledger verdict
+
+Compound hypotheses combine layers (e.g. mom+lowvol screener × VIX>20 selection-gate × vol-target overlay), each combination paying its own Bonferroni cost. Rule of thumb: layer 2 modifies *which*; layer 4 modifies *how much*. **Time-varying-beta hazard:** overlay-bearing strategies use Sharpe-improvement (not Carhart α t-stat) as primary success metric — see ADR 0007.
 
 ## Commands
 
@@ -81,7 +96,7 @@ CLI komendy dla CLOSED layers istnieją jako research replay tooling — patrz `
 ## Where to find "why"
 
 - **Architectural decisions:** `docs/adr/` (5 ADRs: pivot, queue contract, screener-agnostic backtest, vendored upstream, closed-layer policy)
-- **Why each layer was closed:** `docs/research/5_paradigm_failures_postmortem.md` + per-layer `__closed_reason__` w `__init__.py`
+- **Why each layer was closed:** `docs/research/paradigm_failures_postmortem.md` + per-layer `__closed_reason__` w `__init__.py`
 - **Backtest reports archive:** `docs/backtest/`
 - **Per-strategy design + audit docs:** `docs/research/`
 
@@ -110,7 +125,7 @@ Po sync reapply local patches (currently: Gemini 429 retry w `TradingAgents/trad
 - **Cost tracking placeholder**: `candidates.cost_usd` jest NULL — TradingAgents nie eksponuje token accounting. Duration + `model_used` populated.
 - **Prescreener (Layer 2a) unvalidated**: 45% fundamentals weight wymaga PIT historicals których Polygon Starter ($29/mo) nie dostarcza. Manual ad-hoc tylko, no performance guarantee.
 
-Issues dotyczące CLOSED warstw (Lean Docker setup, Layer 2d backtest workflow, themed gate Phase 2) → patrz `launchd/archived/README.md` + `docs/research/5_paradigm_failures_postmortem.md`.
+Issues dotyczące CLOSED warstw (Lean Docker setup, Layer 2d backtest workflow, themed gate Phase 2) → patrz `launchd/archived/README.md` + `docs/research/paradigm_failures_postmortem.md`.
 
 ## Environment
 
