@@ -107,7 +107,7 @@ def compare(report, label: str):
 def main() -> None:
     universe = yaml.safe_load(UNIVERSE_PATH.read_text())
     curated = sorted(flatten_universe(universe).keys())
-    histories = load_lean_histories(LEAN_DATA, curated + ["SPY", "IWM"])
+    histories = load_lean_histories(LEAN_DATA, [*curated, "SPY", "IWM"])
     store = HistoryStore(histories)
     print(f"universe: {len(curated)} names")
 

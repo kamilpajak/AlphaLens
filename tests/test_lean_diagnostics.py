@@ -113,7 +113,7 @@ class TestVolDecomposition(unittest.TestCase):
                     universe_median_return=m,
                     ic=0.0,
                 )
-                for d, p, m in zip(idx, port.values, median.values)
+                for d, p, m in zip(idx, port.values, median.values, strict=False)
             ],
         )
 

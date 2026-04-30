@@ -67,7 +67,7 @@ def _build_pilot_years(
             f"[{year}] pre-sampled {len(sampled)} tickers; downloading prices for sample + SPY..."
         )
 
-        histories = price_loader(sampled + ["SPY"], year=year)
+        histories = price_loader([*sampled, "SPY"], year=year)
         store = HistoryStore(histories)
 
         def _ctx(*, ticker, asof, price_series):

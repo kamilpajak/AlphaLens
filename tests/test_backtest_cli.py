@@ -74,7 +74,7 @@ def _fake_scorer(histories, config):
 
     Matches the `Scorer` protocol: `(histories, config) -> DataFrame[ticker, score]`.
     """
-    tickers = [t for t in histories.keys() if t != config.get("benchmark", "SPY")]
+    tickers = [t for t in histories if t != config.get("benchmark", "SPY")]
     if not tickers:
         return pd.DataFrame(columns=["ticker", "score"])
     scores = np.linspace(1.0, 0.1, len(tickers))

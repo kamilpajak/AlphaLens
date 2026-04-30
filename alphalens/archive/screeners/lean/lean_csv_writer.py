@@ -33,10 +33,10 @@ class DailyBar:
 def format_bar(bar: DailyBar) -> str:
     return (
         f"{bar.date} 00:00,"
-        f"{int(round(bar.open * _PRICE_SCALE))},"
-        f"{int(round(bar.high * _PRICE_SCALE))},"
-        f"{int(round(bar.low * _PRICE_SCALE))},"
-        f"{int(round(bar.close * _PRICE_SCALE))},"
+        f"{round(bar.open * _PRICE_SCALE)},"
+        f"{round(bar.high * _PRICE_SCALE)},"
+        f"{round(bar.low * _PRICE_SCALE)},"
+        f"{round(bar.close * _PRICE_SCALE)},"
         f"{bar.volume}"
     )
 
@@ -45,7 +45,7 @@ def parse_bar(line: str) -> DailyBar:
     parts = line.strip().split(",")
     if len(parts) != 6:
         raise ValueError(f"Expected 6 fields, got {len(parts)}: {line!r}")
-    ts, o, h, l, c, v = parts
+    ts, o, h, l, c, v = parts  # noqa: E741 — OHLCV single-letter convention
     return DailyBar(
         date=ts.split(" ")[0],
         open=int(o) / _PRICE_SCALE,

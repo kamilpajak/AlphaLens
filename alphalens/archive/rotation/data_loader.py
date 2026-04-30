@@ -57,7 +57,9 @@ def load_rotation_data(
     vix = fred.fetch_series("VIXCLS")
 
     # Trim macro series to the backtest window
-    mask = lambda s: s.loc[(s.index >= start_ts) & (s.index <= end_ts)]
+    def mask(s):
+        return s.loc[(s.index >= start_ts) & (s.index <= end_ts)]
+
     signals = build_signal_set(
         dgs10=mask(dgs10),
         dgs2=mask(dgs2),

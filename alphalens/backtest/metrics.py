@@ -18,6 +18,7 @@ Split into two conceptual tiers (per Perplexity's 2025-2026 guidance):
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -228,7 +229,7 @@ def turnover_pct(rebalance_top_n_lists: Iterable[Iterable[str]]) -> float:
     if len(snapshots) < 2:
         return 0.0
     turnovers = []
-    for prev, nxt in zip(snapshots[:-1], snapshots[1:]):
+    for prev, nxt in itertools.pairwise(snapshots):
         size = max(len(prev), 1)
         exits = prev - nxt
         turnovers.append(len(exits) / size)

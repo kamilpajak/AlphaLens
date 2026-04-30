@@ -80,6 +80,7 @@ def decile_returns_panel(report: BacktestReport) -> pd.DataFrame:
             snap.top_n_tickers,
             snap.top_n_scores,
             snap.top_n_forward_returns,
+            strict=False,
         ):
             rows.append(
                 {
@@ -186,10 +187,10 @@ def ic_at_horizon(
             history_store.forward_return(t, snap.date.date(), horizon) for t in snap.top_n_tickers
         ]
         # Filter None
-        pairs = [(s, r) for s, r in zip(scores, fwd_rets) if r is not None]
+        pairs = [(s, r) for s, r in zip(scores, fwd_rets, strict=False) if r is not None]
         if len(pairs) < 3:
             continue
-        scores_v, rets_v = zip(*pairs)
+        scores_v, rets_v = zip(*pairs, strict=False)
         ic_values.append(rank_ic(scores_v, rets_v))
 
     if not ic_values:

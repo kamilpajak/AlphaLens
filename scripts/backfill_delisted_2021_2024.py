@@ -127,7 +127,7 @@ def _classify_reason(name: str, ticker: str) -> str:
     t = str(ticker or "").upper()
     if any(k in n for k in ("acquisition", "merger ", "spac", "business combination")):
         return "acquisition"
-    if t.endswith(("-W", "-WS", "-R", "-RT", "-U", "-UN")) or t.endswith((".W", ".U", ".R")):
+    if t.endswith(("-W", "-WS", "-R", "-RT", "-U", "-UN", ".W", ".U", ".R")):
         return "acquisition"  # SPAC warrant/right — follow their parent SPAC
     return "unknown"
 

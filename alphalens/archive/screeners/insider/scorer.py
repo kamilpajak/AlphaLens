@@ -192,7 +192,9 @@ def _iter_form4_filings(submissions: dict, *, asof: date, min_filing_date: date)
     primary_docs = recent.get("primaryDocument") or []
 
     out: list[dict] = []
-    for form, accession, fd_str, primary in zip(forms, accessions, filing_dates, primary_docs):
+    for form, accession, fd_str, primary in zip(
+        forms, accessions, filing_dates, primary_docs, strict=False
+    ):
         if form not in {"4", "4/A"}:
             continue
         try:

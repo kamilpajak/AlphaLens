@@ -69,9 +69,7 @@ def guardrails_pass(
     if math.isnan(last_close) or last_close < min_price or last_close > max_price:
         return False
     adv = feat.dollar_volume_average(history["close"], history["volume"], dollar_volume_window)
-    if math.isnan(adv) or adv < min_avg_dollar_volume:
-        return False
-    return True
+    return not (math.isnan(adv) or adv < min_avg_dollar_volume)
 
 
 def compute_metrics(ticker: str, history: pd.DataFrame, config: Mapping) -> TickerMetrics:

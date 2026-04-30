@@ -63,8 +63,8 @@ class TestScorerStats(unittest.TestCase):
 
         stats = compute_scorer_stats(db, since_days=30)
 
-        mom = [s for s in stats if s["source"] == "momentum"][0]
-        early = [s for s in stats if s["source"] == "early-stage"][0]
+        mom = next(s for s in stats if s["source"] == "momentum")
+        early = next(s for s in stats if s["source"] == "early-stage")
 
         self.assertEqual(mom["total"], 4)
         self.assertEqual(mom["buy_count"], 1)

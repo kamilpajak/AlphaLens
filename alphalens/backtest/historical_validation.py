@@ -294,7 +294,7 @@ def picks_from_backtest_report(report) -> list[PickRecord]:
     out: list[PickRecord] = []
     for r in report.rebalance_results:
         for rank_idx, (ticker, score, fwd) in enumerate(
-            zip(r.top_n_tickers, r.top_n_scores, r.top_n_forward_returns), start=1
+            zip(r.top_n_tickers, r.top_n_scores, r.top_n_forward_returns, strict=False), start=1
         ):
             if fwd is None or (isinstance(fwd, float) and np.isnan(fwd)):
                 continue

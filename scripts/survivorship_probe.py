@@ -111,23 +111,22 @@ def match_theme(sic: str | None, name: str) -> str | None:
         k in n for k in ("semicond", "silicon", "wafer", "litho", "photon", "microchip")
     ):
         return "semis"
-    if "services-computer" in sic or "prepackaged software" in sic:
-        if any(
-            k in n
-            for k in (
-                "a.i.",
-                "artificial",
-                "machine lear",
-                "quantum",
-                "robot",
-                "autonom",
-                "cogniti",
-                "neural",
-                "cloud",
-                "data center",
-            )
-        ):
-            return "ai"
+    if ("services-computer" in sic or "prepackaged software" in sic) and any(
+        k in n
+        for k in (
+            "a.i.",
+            "artificial",
+            "machine lear",
+            "quantum",
+            "robot",
+            "autonom",
+            "cogniti",
+            "neural",
+            "cloud",
+            "data center",
+        )
+    ):
+        return "ai"
     if any(k in n for k in ("quantum", "quantum comp")):
         return "quantum"
     return None

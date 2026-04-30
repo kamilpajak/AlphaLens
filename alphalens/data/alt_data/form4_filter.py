@@ -23,6 +23,4 @@ def filter_eligible(records: Iterable[Form4Record]) -> list[Form4Record]:
 def _is_eligible(r: Form4Record) -> bool:
     if r.transaction_code != "P":
         return False
-    if not (r.is_officer or r.is_director):
-        return False
-    return True
+    return r.is_officer or r.is_director

@@ -56,7 +56,7 @@ def _accumulate_theme_weights(
     """Build {theme → summed weight} + unclassified bucket. Multi-theme tickers split equally."""
     theme_sums: dict[str, float] = {}
     unclassified = 0.0
-    for ticker, weight in zip(tickers, weights):
+    for ticker, weight in zip(tickers, weights, strict=False):
         themes = themes_map.get(ticker, [])
         if not themes:
             unclassified += weight

@@ -194,7 +194,7 @@ class TestSummarizeDistribution(unittest.TestCase):
         # 25 windows with Sharpe evenly spaced 0.0 → 2.4
         sharpes = np.linspace(0.0, 2.4, 25)
         results = []
-        for i, s in enumerate(sharpes):
+        for _i, s in enumerate(sharpes):
             results.append(
                 WindowResult(
                     test_start=date(2022, 1, 1),

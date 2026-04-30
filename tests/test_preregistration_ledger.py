@@ -22,12 +22,12 @@ from pathlib import Path
 
 
 def _make_reg_kwargs(**overrides):
-    base = dict(
-        id="tri_factor_2026_04_29",
-        signal_class="fundamental_quality_x_momentum",
-        hypothesis="Tri-factor (ROE TTM + 6m momentum + earnings revisions) generates Carhart-4F α t≥1.5 phase-robust.",
-        scorer_path="scripts/experiment_tri_factor_edgar.py",
-        params_frozen={
+    base = {
+        "id": "tri_factor_2026_04_29",
+        "signal_class": "fundamental_quality_x_momentum",
+        "hypothesis": "Tri-factor (ROE TTM + 6m momentum + earnings revisions) generates Carhart-4F α t≥1.5 phase-robust.",
+        "scorer_path": "scripts/experiment_tri_factor_edgar.py",
+        "params_frozen": {
             "top_n": 5,
             "holding": 20,
             "rebalance_stride": 5,
@@ -35,19 +35,19 @@ def _make_reg_kwargs(**overrides):
             "adv_thresholds": [5_000_000],
             "cost_half_spreads": [5],
         },
-        periods={
+        "periods": {
             "is_start": "2015-01-01",
             "is_end": "2022-12-31",
             "oos_start": "2023-01-01",
             "oos_end": "2026-04-22",
         },
-        success_criteria={
+        "success_criteria": {
             "mode": "multi_phase",
             "min_alpha_t_pass": 1.5,
             "min_alpha_t_mid": 1.0,
         },
-        registered_at=date(2026, 4, 29),
-    )
+        "registered_at": date(2026, 4, 29),
+    }
     base.update(overrides)
     return base
 

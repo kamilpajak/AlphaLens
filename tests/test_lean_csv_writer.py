@@ -4,7 +4,7 @@ import zipfile
 from pathlib import Path
 
 
-def _mk_bar(date, o, h, l, c, v):
+def _mk_bar(date, o, h, l, c, v):  # noqa: E741 — OHLCV single-letter convention
     from alphalens.archive.screeners.lean.lean_csv_writer import DailyBar
 
     return DailyBar(date=date, open=o, high=h, low=l, close=c, volume=v)

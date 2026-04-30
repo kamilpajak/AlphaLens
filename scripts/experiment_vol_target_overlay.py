@@ -93,7 +93,7 @@ def assess_overlay(
     if raw_rets.empty:
         return {"n": 0}
 
-    rebalances_per_year = max(1, int(round(252 / max(1, rebalance_stride))))
+    rebalances_per_year = max(1, round(252 / max(1, rebalance_stride)))
 
     snapshots = [list(r.top_n_tickers) for r in report.rebalance_results]
     overlay_stats = compute_overlay_stats(
@@ -213,7 +213,7 @@ def main() -> int:
     histories = load_cached_histories([*full_universe, args.benchmark], _PRICES_DIR)
     history_store = HistoryStore(histories)
 
-    rebalances_per_year = max(1, int(round(252 / args.rebalance_stride)))
+    rebalances_per_year = max(1, round(252 / args.rebalance_stride))
 
     periods = [
         (f"IS {args.is_start.year}-{args.is_end.year}", args.is_start, args.is_end),

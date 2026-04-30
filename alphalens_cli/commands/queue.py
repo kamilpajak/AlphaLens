@@ -50,7 +50,7 @@ def process() -> None:
             typer.echo(f"processed={processed}")
     except WorkerLockBusy:
         typer.echo("another worker instance is running — skipping (see worker.lock for pid)")
-        raise typer.Exit(code=0)
+        raise typer.Exit(code=0) from None
 
 
 @queue_app.command(name="scorer-stats")

@@ -19,6 +19,7 @@ canonical key names.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Sequence
 
 import pandas as pd
@@ -55,7 +56,7 @@ def per_period_turnover(top_n_snapshots: Sequence[Sequence[str]]) -> pd.Series:
         return pd.Series([], dtype=float, name="turnover")
 
     out = [0.0]
-    for prev, nxt in zip(snapshots[:-1], snapshots[1:]):
+    for prev, nxt in itertools.pairwise(snapshots):
         size = max(len(prev), 1)
         exits = prev - nxt
         out.append(len(exits) / size)

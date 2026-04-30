@@ -25,6 +25,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import itertools
+
 import numpy as np
 import pandas as pd
 import yaml
@@ -168,7 +170,7 @@ def turnover(positions: list[list[str]]) -> float:
     if len(positions) < 2:
         return 0.0
     churns = []
-    for prev, curr in zip(positions[:-1], positions[1:]):
+    for prev, curr in itertools.pairwise(positions):
         prev_set, curr_set = set(prev), set(curr)
         churn = len(curr_set - prev_set) / max(1, len(curr_set))
         churns.append(churn)
@@ -189,7 +191,7 @@ def assess_period(
     idx = pd.DatetimeIndex(df["date"])
 
     long_series = pd.Series(df["long_ret"].to_numpy(), index=idx, name="long")
-    short_series = pd.Series(df["short_ret"].to_numpy(), index=idx, name="short")
+    pd.Series(df["short_ret"].to_numpy(), index=idx, name="short")
     ls_series = pd.Series(df["ls_ret"].to_numpy(), index=idx, name="ls")
 
     cm = RealisticCostModel(adverse_selection_bps=5.0)

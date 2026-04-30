@@ -103,7 +103,9 @@ class TestPicksTimeline(unittest.TestCase):
         store = ThemedHistoryStore(self.db)
         today = date.today()
         # Zapisz 3 kolejne runs
-        for i, run_date in enumerate([today - timedelta(days=2), today - timedelta(days=1), today]):
+        for _i, run_date in enumerate(
+            [today - timedelta(days=2), today - timedelta(days=1), today]
+        ):
             picks = _make_picks([(f"T{j}", ["q"], 1.0 - 0.1 * j) for j in range(3)])
             store.record_run(picks, {}, universe_size=10, run_date=run_date)
 

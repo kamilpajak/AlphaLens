@@ -134,7 +134,7 @@ def _norm(s: str | None) -> str:
     return (s or "").lower()
 
 
-def classify_theme(
+def classify_theme(  # noqa: PLR0911 — SIC-code dispatch table; one return per theme bucket is clearer than nested-if
     sic_code: str | None,
     sic_desc: str | None,
     name: str | None,
@@ -217,7 +217,7 @@ if __name__ == "__main__":
         ),  # false positive risk
         ("3679", "ELECTRONIC COMPONENTS, NEC", "Vishay Intertechnology", "semis", "high"),
     ]
-    for sic, desc, name, expected_theme, expected_conf in cases:
+    for sic, desc, name, expected_theme, _expected_conf in cases:
         m = classify_theme(sic, desc, name)
         status = "OK" if (m.theme == expected_theme) else "MISMATCH"
         print(f"  [{status}] {name:40s} sic={sic!r:8} → {m.theme!r:9} ({m.confidence}) {m.reason}")
