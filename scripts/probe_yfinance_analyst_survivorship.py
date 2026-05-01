@@ -26,6 +26,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import yaml
+import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
@@ -81,14 +82,13 @@ def _load_active_sample(n: int, random_state: int) -> list[str]:
 
 def _probe_ticker_events(ticker: str) -> tuple[int, str]:
     """Return (event_count, status). status in {ok, empty, error}."""
-    import yfinance as yf
-
     try:
         ud = yf.Ticker(ticker).upgrades_downgrades
         if ud is None or ud.empty:
             return 0, "empty"
         return len(ud), "ok"
     except Exception as exc:
+        logger.debug("yfinance probe failed for %s: %s", ticker, exc, exc_info=True)
         return 0, f"error: {type(exc).__name__}"
 
 

@@ -286,8 +286,8 @@ def _compute_mkt_cap_filter(
                 is_mega.loc[ridx] = True
 
     out = feature_frame.copy()
-    out["mkt_cap_at_asof"] = mkt_caps
-    out["_is_mega"] = is_mega.values
+    out["mkt_cap_at_asof"] = rows["mkt_cap_at_asof"]
+    out["_is_mega"] = is_mega
     return out
 
 
@@ -440,6 +440,7 @@ def _assess_long_only(
 
     turn_long = _turnover_per_rebal(long_lists)
 
+    # Pre-reg locked: 10bp half-spread + 5bp adverse = 15bp/leg → 30bps RT (single leg).
     cost_model = RealisticCostModel(adverse_selection_bps=5.0)
     drag_long_bps = cost_model.primary_period_drag_bps(cost_half_spread_bps, turn_long)
     # Long-only: single-leg drag (no short leg added). Half of v4's two-leg cost.
