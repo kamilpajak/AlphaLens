@@ -24,6 +24,8 @@ from pathlib import Path
 
 import typer
 
+_LEDGER_ROOT_HELP = "Override ledger directory."
+
 preregister_app = typer.Typer(
     name="preregister",
     help="Strategy pre-registration ledger (multiple-testing accountability).",
@@ -106,7 +108,7 @@ def add(
 @preregister_app.command(name="list")
 def list_cmd(
     signal_class: str = typer.Option("", "--signal-class", help="Filter by class."),
-    ledger_root: Path = typer.Option(None, "--ledger-root", help="Override ledger directory."),
+    ledger_root: Path = typer.Option(None, "--ledger-root", help=_LEDGER_ROOT_HELP),
 ) -> None:
     """List registrations (optionally filtered by signal class)."""
     from alphalens.preregistration.ledger import Ledger
@@ -126,7 +128,7 @@ def list_cmd(
 @preregister_app.command(name="show")
 def show(
     id: str = typer.Argument(..., help="Registration id to show."),
-    ledger_root: Path = typer.Option(None, "--ledger-root", help="Override ledger directory."),
+    ledger_root: Path = typer.Option(None, "--ledger-root", help=_LEDGER_ROOT_HELP),
 ) -> None:
     """Print full registration record as JSON."""
     from alphalens.preregistration.ledger import Ledger
@@ -150,7 +152,7 @@ def complete(
     audit_path: str = typer.Option(..., "--audit-path", help="Path to multi-phase audit JSON."),
     completed_at: str = typer.Option("", "--completed-at", help="ISO date; defaults to today."),
     notes: str = typer.Option("", "--notes", help="Optional free-text notes."),
-    ledger_root: Path = typer.Option(None, "--ledger-root", help="Override ledger directory."),
+    ledger_root: Path = typer.Option(None, "--ledger-root", help=_LEDGER_ROOT_HELP),
 ) -> None:
     """Record one-shot verdict for a previously registered hypothesis."""
     from alphalens.preregistration.ledger import Ledger
@@ -176,7 +178,7 @@ def complete(
 def threshold(
     signal_class: str = typer.Option(..., "--signal-class", help="Signal class to query."),
     alpha: float = typer.Option(0.05, "--alpha", help="Family-wise error rate."),
-    ledger_root: Path = typer.Option(None, "--ledger-root", help="Override ledger directory."),
+    ledger_root: Path = typer.Option(None, "--ledger-root", help=_LEDGER_ROOT_HELP),
 ) -> None:
     """Print Bonferroni-adjusted critical |t| for hypotheses currently in this class."""
     from alphalens.preregistration.ledger import Ledger

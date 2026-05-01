@@ -19,7 +19,7 @@ import logging
 import os
 from collections.abc import Mapping
 from typing import Any
-from urllib.error import HTTPError, URLError
+from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -119,7 +119,7 @@ def fetch_ticker_bundle(ticker: str, curr_date: str | None = None) -> dict:
             return fn(ticker, curr_date=curr_date)
         except AlphaVantageRateLimitError:
             raise
-        except (HTTPError, URLError) as exc:
+        except URLError as exc:
             logger.warning("AV network error for %s: %s", ticker, exc)
             return {}
         except Exception as exc:
