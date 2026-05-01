@@ -63,7 +63,7 @@ jobs:
 
       - name: SonarCloud scan
         if: github.event_name != 'schedule'
-        uses: SonarSource/sonarqube-scan-action@v6  # v4 deprecated 2026-Q1
+        uses: SonarSource/sonarqube-scan-action@v8  # v4 deprecated 2026-Q1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
