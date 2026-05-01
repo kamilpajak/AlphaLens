@@ -223,3 +223,6 @@ reports/
 
 # Claude Code local state
 .claude/
+
+# Pre-registration ledger CLI backups
+docs/research/preregistration/ledger.json.bak.*
