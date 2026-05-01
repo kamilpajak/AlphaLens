@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 0  # full history for SonarCloud blame + coverage
 
       - name: Set up Python via uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
           enable-cache: true
