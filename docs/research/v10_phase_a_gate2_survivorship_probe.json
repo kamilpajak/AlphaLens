@@ -1,0 +1,35 @@
+{
+  "phase": "A",
+  "gate": "2_survivorship_hard_block",
+  "n_delisted_sampled": 200,
+  "n_active_sampled": 200,
+  "delisted_event_count_mean": 0.16,
+  "active_event_count_mean": 63.145,
+  "delisted_nonempty_rate": 0.025,
+  "active_nonempty_rate": 0.985,
+  "delisted_status_dist": {
+    "empty": 195,
+    "ok": 5
+  },
+  "active_status_dist": {
+    "ok": 197,
+    "empty": 3
+  },
+  "ratio_delisted_to_active_event_rate": 0.0025338506611766566,
+  "z_stat_under_h0_ratio_eq_1": 620.6489888222541,
+  "p_value_one_sided_h1_ratio_lt_1": 0.0,
+  "fail_threshold_ratio_lt": 0.5,
+  "fail_threshold_z_gt": 2.0,
+  "verdict": "FAIL",
+  "next_action": "AUTO_PIVOT_TO_PATH_BETA",
+  "delisted_window": [
+    "2018-01-01",
+    "2024-04-30"
+  ],
+  "active_pit_window": [
+    "2023-01-01",
+    "2024-04-30"
+  ],
+  "rate_limit_sec": 0.3,
+  "random_state": 42
+}
