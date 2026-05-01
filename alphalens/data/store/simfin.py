@@ -218,7 +218,8 @@ def _consecutive_neg_ocf_from_frame(cf) -> int:
     return streak
 
 
-def _ps_ratio_pit(prices_by_ticker, inc, ticker: str, asof_ts) -> float | None:  # noqa: PLR0911 — PIT data lookup has 8 distinct missing-data paths, each warrants a None return
+# PIT data lookup has 8 distinct missing-data paths; each warrants a None return.
+def _ps_ratio_pit(prices_by_ticker, inc, ticker: str, asof_ts) -> float | None:  # noqa: PLR0911
     """PIT P/S = market_cap(close × shares_outstanding) / revenue_ttm.
 
     `prices_by_ticker` is a pre-split dict `{ticker: DataFrame[Close, Shares]}`

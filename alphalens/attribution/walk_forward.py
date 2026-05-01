@@ -428,6 +428,47 @@ def run_walk_forward(
     )
 
 
+def _quantile_or_zero(arr: np.ndarray, q: float) -> float:
+    return float(np.quantile(arr, q)) if len(arr) else 0.0
+
+
+def _fraction_gt(arr: np.ndarray, thr: float) -> float:
+    return float((arr > thr).mean()) if len(arr) else 0.0
+
+
+def _alpha_t_summary(alpha_ts: np.ndarray) -> dict[str, float | None]:
+    """Quantile + fraction summary for Carhart α t-stats.
+
+    Returns dict with keys ``alpha_t_{min,q25,median,q75,max}``,
+    ``fraction_alpha_t_gt_{1_5,2_0}``. All values are ``None`` when no
+    Carhart-aligned windows are available (small-window backtests where
+    factor regression underflows). Splitting this out drops cognitive
+    complexity in ``summarize_distribution`` below the SonarCloud
+    threshold."""
+    if len(alpha_ts) == 0:
+        return dict.fromkeys(
+            (
+                "alpha_t_min",
+                "alpha_t_q25",
+                "alpha_t_median",
+                "alpha_t_q75",
+                "alpha_t_max",
+                "fraction_alpha_t_gt_1_5",
+                "fraction_alpha_t_gt_2_0",
+            ),
+            None,
+        )
+    return {
+        "alpha_t_min": float(alpha_ts.min()),
+        "alpha_t_q25": _quantile_or_zero(alpha_ts, 0.25),
+        "alpha_t_median": _quantile_or_zero(alpha_ts, 0.5),
+        "alpha_t_q75": _quantile_or_zero(alpha_ts, 0.75),
+        "alpha_t_max": float(alpha_ts.max()),
+        "fraction_alpha_t_gt_1_5": _fraction_gt(alpha_ts, 1.5),
+        "fraction_alpha_t_gt_2_0": _fraction_gt(alpha_ts, 2.0),
+    }
+
+
 def summarize_distribution(
     results: Sequence[WindowResult], baseline: BacktestReport
 ) -> DistributionSummary:
@@ -437,12 +478,8 @@ def summarize_distribution(
     sharpes = np.array([r.sharpe_gross for r in results], dtype=float)
     alpha_ts_raw = [r.carhart_alpha_tstat for r in results]
     alpha_ts = np.array([t for t in alpha_ts_raw if t is not None], dtype=float)
-    has_alpha = len(alpha_ts) > 0
     ic_ts = np.array([r.ic_tstat for r in results], dtype=float)
     turnovers = np.array([r.turnover for r in results], dtype=float)
-
-    def fraction_gt(arr, thr):
-        return float((arr > thr).mean()) if len(arr) else 0.0
 
     # Dark-half detection
     longest_neg, neg_start = _longest_negative_stretch([r.sharpe_gross for r in results])
@@ -456,37 +493,36 @@ def summarize_distribution(
 
     # Momentum-crash coincidence: negative-Sharpe windows ∩ regime-reversing
     negative_windows = [r for r in results if r.sharpe_gross < 0]
-    crash_coincidence = 0.0
-    if negative_windows:
-        crash_coincidence = sum(1 for r in negative_windows if r.regime_reversed_within) / len(
-            negative_windows
-        )
+    crash_coincidence = (
+        sum(1 for r in negative_windows if r.regime_reversed_within) / len(negative_windows)
+        if negative_windows
+        else 0.0
+    )
 
-    def _q(arr, q):
-        return float(np.quantile(arr, q)) if len(arr) else 0.0
+    alpha = _alpha_t_summary(alpha_ts)
 
     return DistributionSummary(
         sharpe_min=float(sharpes.min()),
-        sharpe_q25=_q(sharpes, 0.25),
-        sharpe_median=_q(sharpes, 0.5),
-        sharpe_q75=_q(sharpes, 0.75),
+        sharpe_q25=_quantile_or_zero(sharpes, 0.25),
+        sharpe_median=_quantile_or_zero(sharpes, 0.5),
+        sharpe_q75=_quantile_or_zero(sharpes, 0.75),
         sharpe_max=float(sharpes.max()),
-        fraction_sharpe_gt_0_5=fraction_gt(sharpes, 0.5),
-        fraction_sharpe_gt_1_0=fraction_gt(sharpes, 1.0),
-        alpha_t_min=float(alpha_ts.min()) if has_alpha else None,
-        alpha_t_q25=_q(alpha_ts, 0.25) if has_alpha else None,
-        alpha_t_median=_q(alpha_ts, 0.5) if has_alpha else None,
-        alpha_t_q75=_q(alpha_ts, 0.75) if has_alpha else None,
-        alpha_t_max=float(alpha_ts.max()) if has_alpha else None,
-        fraction_alpha_t_gt_1_5=fraction_gt(alpha_ts, 1.5) if has_alpha else None,
-        fraction_alpha_t_gt_2_0=fraction_gt(alpha_ts, 2.0) if has_alpha else None,
-        ic_t_median=_q(ic_ts, 0.5),
-        fraction_ic_t_gt_1_5=fraction_gt(ic_ts, 1.5),
+        fraction_sharpe_gt_0_5=_fraction_gt(sharpes, 0.5),
+        fraction_sharpe_gt_1_0=_fraction_gt(sharpes, 1.0),
+        alpha_t_min=alpha["alpha_t_min"],
+        alpha_t_q25=alpha["alpha_t_q25"],
+        alpha_t_median=alpha["alpha_t_median"],
+        alpha_t_q75=alpha["alpha_t_q75"],
+        alpha_t_max=alpha["alpha_t_max"],
+        fraction_alpha_t_gt_1_5=alpha["fraction_alpha_t_gt_1_5"],
+        fraction_alpha_t_gt_2_0=alpha["fraction_alpha_t_gt_2_0"],
+        ic_t_median=_quantile_or_zero(ic_ts, 0.5),
+        fraction_ic_t_gt_1_5=_fraction_gt(ic_ts, 1.5),
         block_return_autocorr_lag1=autocorr,
         longest_negative_sharpe_stretch=longest_neg,
         dark_half_span=dark_half_span,
         max_turnover=float(turnovers.max()) if len(turnovers) else 0.0,
-        q95_turnover=_q(turnovers, 0.95),
+        q95_turnover=_quantile_or_zero(turnovers, 0.95),
         momentum_crash_coincidence=crash_coincidence,
     )
 
