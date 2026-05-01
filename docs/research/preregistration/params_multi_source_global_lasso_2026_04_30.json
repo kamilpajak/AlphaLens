@@ -1,0 +1,81 @@
+{
+  "params_frozen": {
+    "architecture": "single_global_lasso",
+    "rationale": "Tests whether v1's Stage 1 regime classifier added value or was overhead. v1's per-regime architecture saw 3 of 4 regimes (Q2/Q3/Q4) shrink to all-zero coefs — only Q1_calm fitted real signal. v2 keeps the same 21-feature whitelist + same target + same λ procedure, but fits ONE global Lasso on the entire train pool with no regime conditioning. Single architectural variable change → clean attribution.",
+    "stage1_regime_classifier": {
+      "type": "none",
+      "note": "v1's Stage 1 (VIX-quartile rolling-252d thresholds) explicitly removed. Regime info NOT exposed to model — no one-hot encoding, no regime feature. Pure ablation."
+    },
+    "stage2_conditional_alpha": {
+      "model_class": "Lasso",
+      "regularization": "L1 with α selected via 3-fold expanding-window nested CV on full train_pool with 60-day embargo (same procedure as v1, applied once instead of per-regime)",
+      "fit_strategy": "single global model fitted on entire train pool",
+      "max_lambda_grid_points": 25
+    },
+    "feature_whitelist_count": 21,
+    "feature_whitelist": [
+      "insider_log_count",
+      "insider_log_dollar",
+      "insider_cluster_window_days",
+      "vix_level",
+      "vix_change_20d",
+      "term_spread_10y_3m",
+      "ret_20d",
+      "ret_60d",
+      "ret_252d",
+      "vol_realized_20d",
+      "near_52w_high_distance",
+      "dollar_volume_z_20d",
+      "rolling_beta_mkt_252d",
+      "idiosyncratic_vol_residual_60d",
+      "rank_momentum_60d",
+      "rank_lowvol_20d",
+      "rank_dollar_volume_size",
+      "interaction_insider_x_vix_high",
+      "interaction_mom20_x_vol_regime",
+      "interaction_mom20_x_size_quintile",
+      "interaction_insider_x_mom20"
+    ],
+    "feature_pit_provenance": "Identical to v1 (multi_source_two_stage_2026_04_30) — features.py and target.py reused without modification. F4 fix + O2 invariant remain locked by tests/test_pit_insider_delisting_exclusion.py and tests/test_pit_universe_delisted_inclusion.py.",
+    "target_definition": {
+      "horizon": "5_trading_days_forward_return",
+      "construction": "raw excess return over RF (5d-forward close-to-close minus 5d-cumulative RF) — IDENTICAL to v1, reused via target.forward_excess_return",
+      "post_hoc_attribution": "Carhart-4F regression of realised portfolio returns on Mkt-RF/SMB/HML/MOM. NOT pre-residualized at target level (Gu-Kelly-Xiu 2024). Carhart factor cache vintage matches v1's run (2026-03-27 download, coverage through 2026-02-27) for apples-to-apples comparability."
+    },
+    "portfolio_construction": {
+      "ranking": "predicted forward excess return per (ticker, asof) from the global Lasso",
+      "top_n": 30,
+      "weighting": "equal",
+      "rebalance_stride": 5,
+      "holding_period": 5,
+      "universe": "AlphaLens PIT universe (yfinance + survivorship parquet), ADV ≥ $5M filter applied at scoring time"
+    },
+    "cost_model": {
+      "half_spread_bps": 10,
+      "applied_to": "every entry and exit (round-trip = 20 bps base + 5 bps adverse selection one-way → 30 bps total)"
+    },
+    "anti_overfit_constraints": {
+      "max_features": 21,
+      "lasso_l1_regularization": "forces feature sparsity",
+      "no_post_hoc_feature_addition": "any new feature requires a new pre-registration with its own Bonferroni denominator",
+      "no_post_hoc_feature_removal": "v1's zero-coef finding does NOT license dropping features in v2 — that would be HARKing on v1's holdout result"
+    },
+    "differences_from_v1": "ONLY Stage 1 architecture is removed. Features, target, λ procedure, embargo, top_n, weighting, rebalance cadence, cost model, universe — all identical. This is a single-variable architectural ablation."
+  },
+  "periods": {
+    "train_start": "2014-01-01",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30"
+  },
+  "success_criteria": {
+    "mode": "holdout_then_multi_phase",
+    "primary_metric": "Carhart-4F α t-stat on holdout 2024-04-30 → 2026-04-30 portfolio returns",
+    "bonferroni_threshold": "n=2 in class multi_source_two_stage_search_2026_04_30 → |t| ≥ 2.24",
+    "pass_rule": "Holdout Carhart-4F α t-stat ≥ 2.24 AND holdout Sharpe net ≥ 0.5 AND holdout α annualized ≥ 3% AND holdout MaxDD ≥ -35%",
+    "mid_rule": "α t-stat ≥ 1.5 AND Sharpe net ≥ 0.3 → MID; refine + re-pre-register before any deploy",
+    "fail_rule": "α t-stat < 1.5 OR Sharpe net < 0.3 → FAIL, log to ledger, document architecture verdict",
+    "phase_robustness_followup": "If holdout PASS or MID, run multi-phase audit (5 phase offsets) on 2014-2026 with same architecture; PASS only if every phase α t-stat ≥ 1.5 AND mean α t-stat ≥ 2.24. If holdout FAIL outright, skip Phase C (saves ~85min compute) and log FAIL directly.",
+    "comparison_to_v1": "v1 (regime-conditional) had mean phase αt=+0.65 (±0.91), excess net 0.0% (±4.9pp). v2 architecture verdict will be: BETTER (Stage 1 hurt v1) if v2 mean αt > 0.65; SAME (Stage 1 was noise) if within ±0.3 of v1; WORSE (Stage 1 helped) if v2 mean αt < 0.35. This comparison is descriptive, NOT a pre-reg gate — gate is the Bonferroni 2.24."
+  }
+}

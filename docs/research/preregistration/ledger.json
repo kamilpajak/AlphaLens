@@ -1,6 +1,569 @@
 {
   "entries": [
     {
+      "id": "alt_data_screener_v1_finra_blocked_2026_04_30",
+      "signal_class": "alt_data_screener_search_2026_04_30",
+      "hypothesis": "A 10-feature whitelist of retail-accessible alt-data signals (earnings SUE/PEAD/recency with exp(-recency/30) decay, FINRA daily short-volume change/rank/short-exempt, insider Form 4 anchors, realized downside-skew rank, EDGAR filing density) fitted via global Lasso L1 + 3-fold expanding-window CV-MSE generates positive Carhart-4F alpha on a 2024-04-30 to 2026-04-30 holdout, with HAC-adjusted t-stat at least 1.96 (Bonferroni n=1 fresh class), Lo-2002 Sharpe at least 0.5, alpha annualized at least 3 percent, MaxDD at least -35 percent, AND at least 1 nonzero Lasso coefficient (rules out v2-v3 zero-coef structural-artifact pattern).",
+      "scorer_path": "scripts/experiment_alt_data_lasso_20d_v1_BLOCKED.py",
+      "params_frozen": {
+        "class": "alt_data_screener_search_2026_04_30",
+        "class_rationale": "Fresh signal class after 3/3 FAIL in multi_source_two_stage_search_2026_04_30 (v1+v2+v3 all zero-coef under Lasso L1+CV-MSE). The decisive cross-experiment finding from v1-v3 is that the 21-feature whitelist (3 insider + 3 macro + 8 OHLCV + 3 ranks + 4 interactions) carries zero signal at the architectures and horizons tested. v4 pivots to a substantively different feature space: earnings event dynamics + short-flow + filing density, with all market-broadcast macro features dropped (cross-sectional incoherence). Substitution rate: only 2 of 21 v1-v3 features carry forward (insider_log_count, insider_log_dollar) as diagnostic anchors. Bonferroni resets to n=1 in-class.",
+        "class_bonferroni_caveat": "Adversarial review (Gemini 3 Pro + Perplexity Sonar Reasoning Pro) flagged that declaring v4 a 'fresh class' may be Bonferroni-evasive at the research-program level (same target, universe, holdout, architecture across all 4 'classes'). Project framework is class-conditional Bonferroni per memory notes feedback_keep_searching_screeners.md and feedback_literature_not_oracle.md, which the v4 ledger entry honors. Capital-deployment decision (separate from in-class PASS verdict) should apply program-level threshold |t|≥2.50 if v4 PASSes — documented here so the tension is not silently elided.",
+        "architecture": "single_global_lasso",
+        "architecture_rationale": "Identical to v2-v3 (proven correct; settled architectural variable). v2 confirmed two-stage regime conditioning didn't help vs single global Lasso. Architectural innovation is NOT v4's research bet — feature space is.",
+        "stage1_regime_classifier": {
+          "type": "none",
+          "note": "Same as v2-v3."
+        },
+        "stage2_conditional_alpha": {
+          "model_class": "Lasso",
+          "regularization": "L1 with alpha selected via 3-fold expanding-window nested CV on full train_pool with 60-day embargo (identical procedure to v2-v3)",
+          "fit_strategy": "single global model fitted on entire train pool",
+          "max_lambda_grid_points": 25
+        },
+        "feature_whitelist_count": 10,
+        "feature_whitelist": [
+          "earnings_sue_naive_4q_decayed",
+          "earnings_pead_5d_post_decayed",
+          "earnings_recency_days",
+          "short_volume_ratio_change_60d",
+          "rank_short_volume_ratio",
+          "short_exempt_ratio_20d",
+          "insider_log_count",
+          "insider_log_dollar",
+          "rank_realized_downside_skew_60d",
+          "filing_density_4q"
+        ],
+        "feature_construction": {
+          "earnings_sue_naive_4q_decayed": {
+            "source": "EDGAR companyfacts (already wired in alphalens/data/fundamentals/edgar_companyfacts.py + new sue.py)",
+            "raw_construction": "(current_eps - foster_naive_forecast) / sigma_residual_prior_8q. Foster-1977 naive forecast = lag_4_eps + average_drift over prior 8 quarters.",
+            "decay_multiplier": "exp(-earnings_recency_days / 30.0)",
+            "pit_contract": "filed <= asof gates current_eps. sigma_residual MUST use first-filed values for each historical quarter (NOT latest-restated). Implementation: 2D first-filed snapshot extraction in sue.py — for each historical period_end, the EPS value used is the earliest filing where filed <= that period's PIT cutoff.",
+            "literature": "Foster (1977); Bernard-Thomas (1989) PEAD; Chordia-Goyal-Sadka (2009) drift-window evidence."
+          },
+          "earnings_pead_5d_post_decayed": {
+            "source": "EDGAR companyfacts + alphalens/data/store/history.HistoryStore",
+            "raw_construction": "Cumulative ticker excess return over the 5 trading days strictly after most recent 10-Q/10-K filing date f, where f satisfies (f + 5_BD <= asof) AND (f > asof - 90d). If no such filing exists, value is 0.0.",
+            "decay_multiplier": "exp(-earnings_recency_days / 30.0)",
+            "pit_contract": "Truncation gate (f + 5_BD <= asof) eliminates forward-leak that initial audit draft contained (zen adversarial review Objection 2A).",
+            "literature": "Bernard-Thomas (1989) PEAD."
+          },
+          "earnings_recency_days": {
+            "source": "EDGAR companyfacts",
+            "raw_construction": "Trading days since most recent 10-Q/10-K filing where (filing_date + 5_BD <= asof). Capped at 90 (after which signal decays effectively to zero anyway).",
+            "decay_multiplier": "none (this IS the event-time variable)",
+            "pit_contract": "filed <= asof - 5_BD."
+          },
+          "short_volume_ratio_change_60d": {
+            "source": "FINRA Daily Short Sale Volume (new client at alphalens/data/finra/short_volume_client.py)",
+            "raw_construction": "(20-day MA of daily_short_volume / total_volume at asof) - (same 20-day MA computed 60 BD before asof).",
+            "decay_multiplier": "none",
+            "pit_contract": "FINRA file dated for trade-date T is published next BD morning; available_date = T + 1 BD gates asof reads.",
+            "literature_pedigree_gap": "Diether-Lee-Werner (2009) and canonical short-anomaly literature use bi-monthly open interest, not daily flow. Whether daily flow is itself a cross-sectional anomaly is NOT established in published literature. Deliberate novelty bet per project mission (feedback_literature_not_oracle.md). Failure mode is clean via the >=1 nonzero coef pre-reg gate."
+          },
+          "rank_short_volume_ratio": {
+            "source": "FINRA Daily Short Sale Volume",
+            "raw_construction": "Cross-sectional percentile rank of (20-day MA of daily_short_volume / total_volume) per asof slice.",
+            "decay_multiplier": "none",
+            "pit_contract": "same as short_volume_ratio_change_60d."
+          },
+          "short_exempt_ratio_20d": {
+            "source": "FINRA Daily Short Sale Volume",
+            "raw_construction": "20-day MA of (daily_short_exempt_volume / total_volume).",
+            "decay_multiplier": "none",
+            "pit_contract": "same as short_volume_ratio_change_60d. Short_exempt = short sales not subject to circuit-breaker uptick rule per Reg SHO Rule 201."
+          },
+          "insider_log_count": {
+            "source": "EDGAR Form 4 parquet (already wired in alphalens/data/alt_data/form4_records.py + ParquetInsiderScorer)",
+            "raw_construction": "log1p(insider buy cluster count over trailing 90 days). Verbatim from v1-v3.",
+            "decay_multiplier": "none",
+            "pit_contract": "F4 fix locked: filing-date gate (filed <= asof) AND delisting fire-sale exclusion (180d before delisting). Tests at tests/test_pit_insider_delisting_exclusion.py.",
+            "role": "Diagnostic anchor — same construction as v1-v3 (where it was zeroed by Lasso). Retained to test if v4's smaller feature count + fresh-class composition un-zeros it."
+          },
+          "insider_log_dollar": {
+            "source": "EDGAR Form 4 parquet (already wired)",
+            "raw_construction": "log1p(aggregate cluster dollar value over trailing 90 days). Verbatim from v1-v3.",
+            "decay_multiplier": "none",
+            "pit_contract": "same as insider_log_count.",
+            "role": "Second diagnostic anchor."
+          },
+          "rank_realized_downside_skew_60d": {
+            "source": "alphalens/data/store/history.HistoryStore (already wired)",
+            "raw_construction": "Cross-sectional descending percentile rank of (std(negative_daily_returns over 60d) / std(positive_daily_returns over 60d)) per asof slice. Larger raw value = more left-skew = higher rank.",
+            "decay_multiplier": "none",
+            "pit_contract": "Pure OHLCV, T+0 close-of-day asof reads.",
+            "literature_pedigree_gap": "Realized != implied skew empirically (Bollerslev-Todorov 2011 documents partial correlation only). The cross-sectional skew anomaly literature (Bali-Cakici-Whitelaw 2011 IVOL, Conrad-Dittmar-Ghysels 2013 ex-ante skewness) operates on option-IMPLIED skew. Substituting realized loses the theoretical anchor. Deliberate novelty bet per project mission."
+          },
+          "filing_density_4q": {
+            "source": "EDGAR companyfacts",
+            "raw_construction": "Count of 10-Q + 10-K + 8-K filings within trailing 252 BD with filed <= asof, capped at 30.",
+            "decay_multiplier": "none",
+            "pit_contract": "filed <= asof. No restatement leakage because the count is over events, not values."
+          }
+        },
+        "target_definition": {
+          "horizon": "20_trading_days_forward_return",
+          "construction": "raw excess return over RF (20d-forward close-to-close minus 20d-cumulative RF). Reuses target.forward_excess_return with holding_period=20.",
+          "post_hoc_attribution": "Carhart-4F regression of realised 20d-forward portfolio returns on 20d-aggregated Mkt-RF/SMB/HML/MOM. Daily factor returns summed (arithmetic) over the 20-day holding window matching each portfolio observation. NOT pre-residualized at target level.",
+          "horizon_rationale": "20d sits inside the documented PEAD drift window (Bernard-Thomas 1989; Chordia-Goyal-Sadka 2009 confirm 30-60d typical, with substantial drift visible at 20d). Decayed event features (SUE + PEAD with exp(-recency/30) multiplier) align with this horizon by converting event-static signals into daily-updating gradients. Per zen+perplexity adversarial review, retaining 20d is preferable to reverting to 5d (microstructure regime where v1 also FAILed) or extending to 60d (loses short-flow signal sensitivity)."
+        },
+        "portfolio_construction": {
+          "ranking": "predicted forward excess return per (ticker, asof) from the global Lasso (trained on 20d targets)",
+          "top_n": 30,
+          "weighting": "equal",
+          "rebalance_stride": 5,
+          "holding_period": 20,
+          "overlap_design": "Stride=5 with holding=20 means consecutive rebalance observations share 75% of the holding window (15 of 20 days). This is equivalent to running 4 weekly tranches each holding for 20d. The portfolio_returns series at stride-5 asof dates therefore exhibits MA(3) autocorrelation by construction; HAC standard errors with maxlags=5 correct for this. Identical to v3 design.",
+          "universe": "AlphaLens PIT universe (yfinance + survivorship parquet), ADV >= $5M filter applied at scoring time"
+        },
+        "cost_model": {
+          "half_spread_bps": 10,
+          "applied_to": "every entry and exit (round-trip = 20 bps base + 5 bps adverse selection one-way -> 30 bps total). Identical to v3."
+        },
+        "statistical_inference": {
+          "hac_maxlags": 5,
+          "hac_maxlags_rationale": "Identical to v3. Stride=5 with holding=20 produces overlapping returns where consecutive samples share 15/20 = 75% of the window. Theoretical structure MA(3) at lag k<=3 plus residual at lag 4. Setting maxlags=5 explicitly (one above MA-order) is conservative per Newey-West / Andrews lag-selection guidance.",
+          "sharpe_annualization": "Lo (2002) variance-ratio-adjusted Sharpe via existing alphalens.backtest.metrics.sharpe_autocorr_adjusted. Periods-per-year = 252/stride = 50.4."
+        },
+        "anti_overfit_constraints": {
+          "max_features": 10,
+          "lasso_l1_regularization": "forces feature sparsity; same procedure as v1-v3",
+          "no_post_hoc_feature_addition": "any new feature requires a new pre-registration with its own Bonferroni denominator",
+          "no_post_hoc_feature_removal": "v4 must run with the locked 10-feature whitelist; if Lasso zeros all coefs, the FAIL verdict stands and the result is logged",
+          "no_target_horizon_change": "20d horizon locked pre-Phase-B; cannot be changed mid-experiment",
+          "no_decay_lambda_tuning": "exp(-recency_days / 30.0) is locked; the 30.0 constant is NOT a tunable hyperparameter for v4. Future variants may re-pre-register with a different decay constant."
+        },
+        "differences_from_v3": "Substantively different feature whitelist (8 of 10 features are new vs v1-v3; only insider_log_count and insider_log_dollar carry forward as diagnostic anchors). All v1-v3 OHLCV / cross-sectional-rank-of-OHLCV / FRED-macro / FRED-macro-interaction features dropped. NEW infra: FINRA Daily Short Sale Volume client + Foster-SUE construction with first-filed PIT snapshots. Time-decay multipliers added for event-driven SUE + PEAD features. Architecture, target horizon, portfolio construction, cost model, statistical inference all UNCHANGED from v3.",
+        "adversarial_review_summary": "Stage 1 (zen / gemini-3-pro-preview, thinking_mode=high): 5 objections — accepted/fixed: PEAD look-ahead truncation (Obj 2), SUE first-filed PIT (Obj 3), raw+rank multicollinearity drop (Obj 4), time-decay multiplier on event features (Obj 1 secondary fix). Partially accepted: target horizon stays at 20d (Obj 1 main claim refuted by perplexity literature confirmation that PEAD drift window is 30-60d). Surfaced not-overridden: program-level Bonferroni concern (Obj 5) — see class_bonferroni_caveat above. Stage 2 (perplexity / sonar-reasoning-pro, search_context_size=high): confirmed Obj 2/3/4. Added 3 blind-spot findings — accepted: NFCI+UMCSENT cross-sectional incoherence (both dropped). Surfaced as deliberate novelty bets per project mission: FINRA daily flow lacks open-interest literature pedigree; realized downside skew lacks implied-skew literature pedigree. Perplexity bottom-line ('drop everything without literature pedigree, run minimalist 4-feature literature-only Lasso') REJECTED as misaligned with the project's experimentation mission documented in feedback_literature_not_oracle.md and feedback_keep_searching_screeners.md. Adversarial review documented in full at docs/research/v4_alt_data_pit_audit_2026_04_30.md."
+      },
+      "periods": {
+        "train_start": "2014-01-01",
+        "train_end": "2024-04-29",
+        "holdout_start": "2024-04-30",
+        "holdout_end": "2026-04-30"
+      },
+      "success_criteria": {
+        "mode": "holdout_then_multi_phase",
+        "primary_metric": "Carhart-4F alpha t-stat (HAC, maxlags=5) on holdout 2024-04-30 -> 2026-04-30 portfolio returns",
+        "bonferroni_threshold": "n=1 in fresh class alt_data_screener_search_2026_04_30 -> |t| >= 1.96",
+        "pass_rule": "Holdout Carhart-4F alpha t-stat >= 1.96 AND holdout Lo-adjusted Sharpe >= 0.5 AND holdout alpha annualized >= 3% AND holdout MaxDD >= -35% AND model has at least 1 nonzero coefficient (rules out v2-v3 zero-coef structural-artifact pattern)",
+        "mid_rule": "alpha t-stat >= 1.5 AND Sharpe >= 0.3 AND >=1 nonzero coef -> MID; refine + re-pre-register before any deploy",
+        "fail_rule": "alpha t-stat < 1.5 OR Sharpe < 0.3 OR all coefs zero -> FAIL, log to ledger, document v4 verdict",
+        "deployment_threshold_program_level": "Even on PASS, capital-deployment decision applies program-level Bonferroni n=4 across all 4 classes ever tested on this target+universe+holdout -> |t| >= 2.50. Below 2.50 = research-only verdict, not capital-deployable.",
+        "phase_robustness_followup": "If holdout PASS or MID, run multi-phase audit (5 phase offsets) on 2014-2026 with same architecture; PASS only if every phase alpha t-stat >= 1.5 AND mean alpha t-stat >= 1.96 (in-class) or >= 2.50 (program-level for deploy). If holdout FAIL outright, skip Phase C.",
+        "comparison_to_prior": "v1 mean phase alpha-t = +0.65; v2 = +0.55; v3 = +0.55. v4 in-class needs holdout alpha-t >= 1.96 (~3.5x prior). Honest expectation: with 2 anchor features that historically zero and 6 novelty bets without literature pedigree, FAIL/MID more likely than PASS. The PASS case would imply either (a) the time-decay reformulation surfaces signal that v1-v3 framing buried, OR (b) one of the FINRA-flow / downside-skew / filing-density novelty bets contains undiscovered cross-sectional signal."
+      },
+      "registered_at": "2026-04-30",
+      "status": "abandoned",
+      "outcome": null,
+      "notes": "INFRA_BLOCKED — Superseded by alt_data_screener_v2_2026_04_30. FINRA Daily Short Sale Volume infrastructure unavailable for 2014-2024 training window: cdn.finra.org returns 403 on programmatic access; FINRA Query API has only ~10mo trailing data with random gaps. Discovered 2026-04-30 during pre-Phase-A infra build, BEFORE any code ran or data observed. Group B reformulated using Polygon bi-monthly short-interest endpoint (literature-pedigreed Diether-Lee-Werner construct) with 2018-01-01 training start. v2 entry registered separately."
+    },
+    {
+      "id": "alt_data_screener_v2_2026_04_30",
+      "signal_class": "alt_data_screener_search_2026_04_30",
+      "hypothesis": "v2 supersession of v1 (FINRA infra blocked). 10-feature whitelist (earnings SUE/PEAD/recency with exp(-recency/30) decay, Polygon bi-monthly short-interest momentum/rank/days-to-cover, insider Form 4 anchors, realized downside-skew rank, EDGAR filing density) fitted via global Lasso L1 + 3-fold expanding-window CV-MSE generates positive Carhart-4F alpha on a 2024-04-30 to 2026-04-30 holdout, with HAC-adjusted t-stat at least 1.96 (Bonferroni n=1 fresh class), Lo-2002 Sharpe at least 0.5, alpha annualized at least 3 percent, MaxDD at least -35 percent, AND at least 1 nonzero Lasso coefficient. Training window 2018-01-01 to 2024-04-29 (truncated from v1 due to Polygon short-interest 2017-12-29 historical bound).",
+      "scorer_path": "scripts/experiment_alt_data_lasso_20d.py",
+      "params_frozen": {
+        "class": "alt_data_screener_search_2026_04_30",
+        "version": "v2",
+        "v1_supersession_reason": "v1 (alt_data_screener_v1_finra_blocked_2026_04_30) was registered with a 10-feature whitelist that included 3 features sourced from FINRA Daily Short Sale Volume. Pre-Phase-A infrastructure investigation (2026-04-30) discovered: (1) cdn.finra.org/equity/regsho/daily/CNMS*shvol*.txt returns HTTP 403 on programmatic access regardless of User-Agent / Referer headers; (2) FINRA Query API at api.finra.org/data/group/otcMarket/name/regShoDaily returns only the trailing ~10 months of data with random gaps, structurally unusable for backtesting; (3) FINRA's consolidated Daily Short Sale Volume archive itself only begins 2018-08-01 even if accessible. v2 reformulates Group B to use Polygon's /stocks/v1/short-interest endpoint, which IS available on the existing $29/mo Stocks Starter key with bi-monthly historical depth back to 2017-12-29 (verified 2026-04-30 against AAPL: 200 records, settlement_date 2017-12-29 → 2026-04-15). This is a STRICT UPGRADE on three dimensions: (a) literature pedigree restored — bi-monthly open interest is the canonical Diether-Lee-Werner (2009) anomaly construct that v1's daily-flow design lacked; (b) infra simpler — single REST endpoint vs custom CDN scraper; (c) PIT cleaner — settlement_date + 8 BD dissemination lag is documented vs flow-based PIT contract. Trade-off: training window truncates from 2014-01-01 → 2018-01-01 (loses 4 years of pre-short-interest history); Lasso CV power on 6.3y train slightly reduced but holdout n=99 unchanged.",
+        "class_rationale": "Fresh signal class after 3/3 FAIL in multi_source_two_stage_search_2026_04_30 (v1+v2+v3 all zero-coef under Lasso L1+CV-MSE). The decisive cross-experiment finding from prior class is that the 21-feature whitelist (3 insider + 3 macro + 8 OHLCV + 3 ranks + 4 interactions) carries zero signal at the architectures and horizons tested. v4 pivots to a substantively different feature space: earnings event dynamics + bi-monthly short interest + filing density. Substitution rate: only 2 of 21 prior-class features carry forward (insider_log_count, insider_log_dollar) as diagnostic anchors. Bonferroni resets to n=1 in-class.",
+        "class_bonferroni_caveat": "Adversarial review (Gemini 3 Pro + Perplexity Sonar Reasoning Pro) flagged that declaring v4 a 'fresh class' may be Bonferroni-evasive at the research-program level (same target, universe, holdout, architecture across all 4 'classes'). Project framework is class-conditional Bonferroni per memory notes feedback_keep_searching_screeners.md and feedback_literature_not_oracle.md, which the v4 ledger entry honors. Capital-deployment decision (separate from in-class PASS verdict) should apply program-level threshold |t|>=2.50 if v4 PASSes — documented here so the tension is not silently elided. v1->v2 supersession does NOT increment Bonferroni n: v1 never ran, no holdout was observed, no information leaked.",
+        "architecture": "single_global_lasso",
+        "architecture_rationale": "Identical to v2-v3 of the prior class (proven correct; settled architectural variable). Architectural innovation is NOT v4's research bet — feature space is.",
+        "stage1_regime_classifier": {
+          "type": "none",
+          "note": "Same as prior class v2-v3."
+        },
+        "stage2_conditional_alpha": {
+          "model_class": "Lasso",
+          "regularization": "L1 with alpha selected via 3-fold expanding-window nested CV on full train_pool with 60-day embargo (identical procedure to prior class v2-v3)",
+          "fit_strategy": "single global model fitted on entire train pool",
+          "max_lambda_grid_points": 25
+        },
+        "feature_whitelist_count": 10,
+        "feature_whitelist": [
+          "earnings_sue_naive_4q_decayed",
+          "earnings_pead_5d_post_decayed",
+          "earnings_recency_days",
+          "short_interest_pct_float_change_60d",
+          "rank_short_interest_pct_float",
+          "log1p_days_to_cover",
+          "insider_log_count",
+          "insider_log_dollar",
+          "rank_realized_downside_skew_60d",
+          "filing_density_4q"
+        ],
+        "feature_construction": {
+          "earnings_sue_naive_4q_decayed": {
+            "source": "EDGAR companyfacts (already wired in alphalens/data/fundamentals/edgar_companyfacts.py + new sue.py)",
+            "raw_construction": "(current_eps - foster_naive_forecast) / sigma_residual_prior_8q. Foster-1977 naive forecast = lag_4_eps + average_drift over prior 8 quarters.",
+            "decay_multiplier": "exp(-earnings_recency_days / 30.0)",
+            "pit_contract": "filed <= asof gates current_eps. sigma_residual MUST use first-filed values for each historical quarter (NOT latest-restated). Implementation: 2D first-filed snapshot extraction in sue.py — for each historical period_end, the EPS value used is the earliest filing where filed <= that period's PIT cutoff.",
+            "literature": "Foster (1977); Bernard-Thomas (1989) PEAD; Chordia-Goyal-Sadka (2009) drift-window evidence."
+          },
+          "earnings_pead_5d_post_decayed": {
+            "source": "EDGAR companyfacts + alphalens/data/store/history.HistoryStore",
+            "raw_construction": "Cumulative ticker excess return over the 5 trading days strictly after most recent 10-Q/10-K filing date f, where f satisfies (f + 5_BD <= asof) AND (f > asof - 90d). If no such filing exists, value is 0.0.",
+            "decay_multiplier": "exp(-earnings_recency_days / 30.0)",
+            "pit_contract": "Truncation gate (f + 5_BD <= asof) eliminates forward-leak that initial audit draft contained (zen adversarial review Objection 2A).",
+            "literature": "Bernard-Thomas (1989) PEAD."
+          },
+          "earnings_recency_days": {
+            "source": "EDGAR companyfacts",
+            "raw_construction": "Trading days since most recent 10-Q/10-K filing where (filing_date + 5_BD <= asof). Capped at 90 (after which signal decays effectively to zero anyway).",
+            "decay_multiplier": "none (this IS the event-time variable)",
+            "pit_contract": "filed <= asof - 5_BD."
+          },
+          "short_interest_pct_float_change_60d": {
+            "source": "Polygon /stocks/v1/short-interest endpoint (new client at alphalens/data/alt_data/polygon_short_interest.py). Bi-monthly cadence, ~24 settlements/year.",
+            "raw_construction": "(short_interest / shares_outstanding at most-recent settlement) - (short_interest / shares_outstanding at settlement >= 60 calendar days earlier). shares_outstanding looked up via existing alphalens/data/alt_data/shares_outstanding.py (PIT-correct). If insufficient settlement history (<60d), value is 0.0.",
+            "decay_multiplier": "none",
+            "pit_contract": "At asof t, use most recent settlement_date with (settlement_date + 8 trading days) <= t. The 8 BD lag matches FINRA short-interest dissemination calendar (FINRA Rule 4560: settlement on 15th and last business day, public dissemination 8 BD later).",
+            "literature": "Diether-Lee-Werner (2009) RFS — short-interest momentum cross-sectional anomaly. Boehmer-Jones-Zhang (2008) JF on informed shorting. Canonical literature pedigree restored vs v1 daily-flow proxy."
+          },
+          "rank_short_interest_pct_float": {
+            "source": "Polygon /stocks/v1/short-interest + shares_outstanding",
+            "raw_construction": "Cross-sectional percentile rank of (short_interest / shares_outstanding at most-recent dissemination-eligible settlement) per asof slice. Higher rank = more crowded short side.",
+            "decay_multiplier": "none",
+            "pit_contract": "same as short_interest_pct_float_change_60d.",
+            "literature": "Asquith-Pathak-Ritter (2005); Diether-Lee-Werner (2009)."
+          },
+          "log1p_days_to_cover": {
+            "source": "Polygon /stocks/v1/short-interest endpoint (provides days_to_cover field directly = short_interest / avg_daily_volume)",
+            "raw_construction": "log1p(days_to_cover at most-recent dissemination-eligible settlement). Captures crowding-vs-liquidity ratio that's distinct from level (short_interest_pct_float captures position size; days_to_cover captures unwind cost in days).",
+            "decay_multiplier": "none",
+            "pit_contract": "settlement_date + 8 BD <= asof. Polygon computes days_to_cover using the avg_daily_volume window FINRA reports (typically 20-day trailing through settlement).",
+            "literature": "Engelberg-Reed-Ringgenberg (2018) RFS on short-squeeze risk; days-to-cover is the canonical squeeze-risk metric."
+          },
+          "insider_log_count": {
+            "source": "EDGAR Form 4 parquet (already wired in alphalens/data/alt_data/form4_records.py + ParquetInsiderScorer)",
+            "raw_construction": "log1p(insider buy cluster count over trailing 90 days). Verbatim from prior-class v1-v3.",
+            "decay_multiplier": "none",
+            "pit_contract": "F4 fix locked: filing-date gate (filed <= asof) AND delisting fire-sale exclusion (180d before delisting). Tests at tests/test_pit_insider_delisting_exclusion.py.",
+            "role": "Diagnostic anchor — same construction as prior class (where it was zeroed by Lasso). Retained to test if v4's smaller feature count + fresh-class composition un-zeros it."
+          },
+          "insider_log_dollar": {
+            "source": "EDGAR Form 4 parquet (already wired)",
+            "raw_construction": "log1p(aggregate cluster dollar value over trailing 90 days). Verbatim from prior class.",
+            "decay_multiplier": "none",
+            "pit_contract": "same as insider_log_count.",
+            "role": "Second diagnostic anchor."
+          },
+          "rank_realized_downside_skew_60d": {
+            "source": "alphalens/data/store/history.HistoryStore (already wired)",
+            "raw_construction": "Cross-sectional descending percentile rank of (std(negative_daily_returns over 60d) / std(positive_daily_returns over 60d)) per asof slice. Larger raw value = more left-skew = higher rank.",
+            "decay_multiplier": "none",
+            "pit_contract": "Pure OHLCV, T+0 close-of-day asof reads.",
+            "literature_pedigree_gap": "Realized != implied skew empirically (Bollerslev-Todorov 2011 documents partial correlation only). The cross-sectional skew anomaly literature (Bali-Cakici-Whitelaw 2011 IVOL, Conrad-Dittmar-Ghysels 2013 ex-ante skewness) operates on option-IMPLIED skew. Substituting realized loses the theoretical anchor. Deliberate novelty bet per project mission (feedback_literature_not_oracle.md)."
+          },
+          "filing_density_4q": {
+            "source": "EDGAR companyfacts",
+            "raw_construction": "Count of 10-Q + 10-K + 8-K filings within trailing 252 BD with filed <= asof, capped at 30.",
+            "decay_multiplier": "none",
+            "pit_contract": "filed <= asof. No restatement leakage because the count is over events, not values."
+          }
+        },
+        "target_definition": {
+          "horizon": "20_trading_days_forward_return",
+          "construction": "raw excess return over RF (20d-forward close-to-close minus 20d-cumulative RF). Reuses target.forward_excess_return with holding_period=20.",
+          "post_hoc_attribution": "Carhart-4F regression of realised 20d-forward portfolio returns on 20d-aggregated Mkt-RF/SMB/HML/MOM. Daily factor returns summed (arithmetic) over the 20-day holding window matching each portfolio observation. NOT pre-residualized at target level.",
+          "horizon_rationale": "20d sits inside the documented PEAD drift window (Bernard-Thomas 1989; Chordia-Goyal-Sadka 2009 confirm 30-60d typical, with substantial drift visible at 20d). Decayed event features (SUE + PEAD with exp(-recency/30) multiplier) align with this horizon by converting event-static signals into daily-updating gradients."
+        },
+        "portfolio_construction": {
+          "ranking": "predicted forward excess return per (ticker, asof) from the global Lasso (trained on 20d targets)",
+          "top_n": 30,
+          "weighting": "equal",
+          "rebalance_stride": 5,
+          "holding_period": 20,
+          "overlap_design": "Stride=5 with holding=20: consecutive rebalance observations share 75% of holding window (15 of 20 days). MA(3) autocorrelation by construction; HAC standard errors with maxlags=5 correct for this. Identical to prior class v3 design.",
+          "universe": "AlphaLens PIT universe (yfinance + survivorship parquet), ADV >= $5M filter applied at scoring time"
+        },
+        "cost_model": {
+          "half_spread_bps": 10,
+          "applied_to": "every entry and exit (round-trip = 20 bps base + 5 bps adverse selection one-way -> 30 bps total). Identical to prior class v3."
+        },
+        "statistical_inference": {
+          "hac_maxlags": 5,
+          "hac_maxlags_rationale": "Identical to prior class v3. Stride=5 with holding=20 produces overlapping returns where consecutive samples share 15/20 = 75% of the window. Theoretical structure MA(3) at lag k<=3 plus residual at lag 4. Setting maxlags=5 explicitly (one above MA-order) is conservative per Newey-West / Andrews lag-selection guidance.",
+          "sharpe_annualization": "Lo (2002) variance-ratio-adjusted Sharpe via existing alphalens.backtest.metrics.sharpe_autocorr_adjusted. Periods-per-year = 252/stride = 50.4."
+        },
+        "anti_overfit_constraints": {
+          "max_features": 10,
+          "lasso_l1_regularization": "forces feature sparsity; same procedure as prior class v1-v3",
+          "no_post_hoc_feature_addition": "any new feature requires a new pre-registration with its own Bonferroni denominator",
+          "no_post_hoc_feature_removal": "v4 v2 must run with the locked 10-feature whitelist; if Lasso zeros all coefs, the FAIL verdict stands and the result is logged",
+          "no_target_horizon_change": "20d horizon locked pre-Phase-B; cannot be changed mid-experiment",
+          "no_decay_lambda_tuning": "exp(-recency_days / 30.0) is locked; the 30.0 constant is NOT a tunable hyperparameter for v4 v2. Future variants may re-pre-register with a different decay constant.",
+          "no_train_window_extension": "training window 2018-01-01 -> 2024-04-29 locked. Cannot extend backward via imputation or forward via post-Phase-B observation. v1-supersession is the LAST allowable design change before Phase B."
+        },
+        "differences_from_v1_finra_blocked": "Three Group B features replaced with Polygon bi-monthly short-interest derivations: (a) short_volume_ratio_change_60d -> short_interest_pct_float_change_60d; (b) rank_short_volume_ratio -> rank_short_interest_pct_float; (c) short_exempt_ratio_20d -> log1p_days_to_cover. Training start date moved from 2014-01-01 to 2018-01-01 to align with Polygon short-interest history (begins 2017-12-29). Holdout window unchanged. All other architectural parameters (target, stride, holding, cost, HAC, Sharpe, anti-overfit) unchanged from v1.",
+        "differences_from_prior_class_v3": "Substantively different feature whitelist (8 of 10 features new vs prior class; only insider_log_count and insider_log_dollar carry forward as diagnostic anchors). All prior-class OHLCV / cross-sectional-rank-of-OHLCV / FRED-macro / FRED-macro-interaction features dropped. NEW infra: Polygon short-interest client (~3-4h) + Foster-SUE construction with first-filed PIT snapshots (~6-8h) + alt_data feature joiner (~3-4h). Time-decay multipliers added for event-driven SUE + PEAD features. Architecture, target horizon, portfolio construction, cost model, statistical inference all UNCHANGED from prior class v3.",
+        "adversarial_review_summary": "Stage 1 (zen / gemini-3-pro-preview, thinking_mode=high): 5 objections — accepted/fixed: PEAD look-ahead truncation (Obj 2), SUE first-filed PIT (Obj 3), raw+rank multicollinearity drop (Obj 4), time-decay multiplier on event features (Obj 1 secondary fix). Partially accepted: target horizon stays at 20d (Obj 1 main claim refuted by perplexity literature confirmation that PEAD drift window is 30-60d). Surfaced not-overridden: program-level Bonferroni concern (Obj 5) — see class_bonferroni_caveat above. Stage 2 (perplexity / sonar-reasoning-pro, search_context_size=high): confirmed Obj 2/3/4. Added 3 blind-spot findings — accepted: NFCI+UMCSENT cross-sectional incoherence (both dropped). Surfaced as deliberate novelty bets per project mission: FINRA daily flow lacks open-interest literature pedigree (RESOLVED in v2 — bi-monthly open interest from Polygon DOES have full DLW/Asquith-Pathak-Ritter pedigree); realized downside skew lacks implied-skew literature pedigree (still novelty bet). Perplexity bottom-line ('drop everything without literature pedigree, run minimalist 4-feature literature-only Lasso') REJECTED as misaligned with project's experimentation mission documented in feedback_literature_not_oracle.md and feedback_keep_searching_screeners.md. Adversarial review documented in full at docs/research/v4_alt_data_pit_audit_2026_04_30.md. Stage 3 (perplexity_research / sonar-deep-research, reasoning_effort=high) on FINRA infra: identified Polygon/Massive bi-monthly short-interest endpoint as in-budget alternative; v2 supersession is the result."
+      },
+      "periods": {
+        "train_start": "2018-01-01",
+        "train_end": "2024-04-29",
+        "holdout_start": "2024-04-30",
+        "holdout_end": "2026-04-30",
+        "train_truncation_rationale": "Polygon short-interest historical depth begins 2017-12-29; v2 train start at 2018-01-01 is the earliest point at which all 10 features are PIT-correct. v1's 2014-01-01 start is no longer attainable given FINRA infra block."
+      },
+      "success_criteria": {
+        "mode": "holdout_then_multi_phase",
+        "primary_metric": "Carhart-4F alpha t-stat (HAC, maxlags=5) on holdout 2024-04-30 -> 2026-04-30 portfolio returns",
+        "bonferroni_threshold": "n=2 in class alt_data_screener_search_2026_04_30 (system counts v1 abandoned + v2 active) -> |t| >= 2.24 by canonical preregister threshold computation. Methodological note: v1 never observed holdout data and was abandoned for INFRA reasons before any code ran, so a strict-no-leakage perspective would argue n=1. Project ledger framework counts every registered hypothesis and v2 accepts the more conservative threshold.",
+        "pass_rule": "Holdout Carhart-4F alpha t-stat >= 2.24 AND holdout Lo-adjusted Sharpe >= 0.5 AND holdout alpha annualized >= 3% AND holdout MaxDD >= -35% AND model has at least 1 nonzero coefficient (rules out zero-coef structural-artifact pattern)",
+        "mid_rule": "alpha t-stat >= 1.5 AND Sharpe >= 0.3 AND >=1 nonzero coef -> MID; refine + re-pre-register before any deploy",
+        "fail_rule": "alpha t-stat < 1.5 OR Sharpe < 0.3 OR all coefs zero -> FAIL, log to ledger, document v4 v2 verdict",
+        "deployment_threshold_program_level": "Even on PASS, capital-deployment decision applies program-level Bonferroni n=4 across all 4 classes ever tested on this target+universe+holdout -> |t| >= 2.50. Below 2.50 = research-only verdict, not capital-deployable.",
+        "phase_robustness_followup": "If holdout PASS or MID, run multi-phase audit (5 phase offsets) on 2018-2026 with same architecture; PASS only if every phase alpha t-stat >= 1.5 AND mean alpha t-stat >= 2.24 (in-class) or >= 2.50 (program-level for deploy). If holdout FAIL outright, skip Phase C.",
+        "comparison_to_prior": "Prior class v1-v3 mean phase alpha-t = +0.65 / +0.55 / +0.55. v4 v2 in-class needs holdout alpha-t >= 2.24 (~3.5x prior). Honest expectation: with 2 anchor features that historically zero, 5 fresh-but-literature-pedigreed features (3 short-interest + SUE + PEAD), 1 OHLCV-derived novelty, 1 event-density novelty, FAIL/MID more likely than PASS. The PASS case would imply either (a) the time-decay reformulation surfaces signal that prior-class framing buried, OR (b) the literature-pedigreed short-interest features (which the prior class lacked entirely) carry meaningful cross-sectional signal that combines productively with earnings event dynamics."
+      },
+      "registered_at": "2026-04-30",
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": 0.05,
+        "mean_excess_net": 0.0732,
+        "audit_path": "docs/research/alt_data_screener_v2_audit.json",
+        "completed_at": "2026-05-01",
+        "notes": "Holdout outright FAIL: 0/10 nonzero coefs (explicit pre-reg gate), alpha_t=0.05 (HAC=5), MaxDD=-61.5%. Phase C skipped per pre-reg. The +0.78 Sharpe and +7.3% net excess are structural artifacts (Lasso predicts the mean). 4th experiment with 0-coef pattern. Next test in class needs |t|>=2.39 (n=3). Audit: docs/research/alt_data_screener_v2_audit.json."
+      },
+      "notes": ""
+    },
+    {
+      "id": "alt_data_screener_v3_2026_05_01",
+      "signal_class": "alt_data_screener_search_2026_04_30",
+      "hypothesis": "v3 same-class ablation of v4 v2 FAIL (0/10 coefs). Keep ALL identical (10 features, Lasso L1, 3-fold expanding CV-MSE, 60d embargo, 25-pt grid, train 2018-01-01 to 2024-04-29, holdout 2024-04-30 to 2026-04-30, stride=5, holding=20, top-30 long EW, 30bps cost, HAC=5, Lo-2002 Sharpe). ONE change: target rank-transformed per-asof (percentile_rank - 0.5) BEFORE fitting. Mathematically aligns Lasso inner solver with Spearman rank-IC. Tests hypothesis that target shape (heavy-tailed return) was bottleneck, not feature content. Bonferroni n=3 -> |t|>=2.39 PASS. NEW gates per zen+perplexity adversarial review: in-CV IR (mean fold rank-IC / std fold rank-IC) >= 1.0 AND holdout mean per-asof rank-IC > 0. If FAIL, evidence narrows search to model class (LightGBM).",
+      "scorer_path": "scripts/experiment_alt_data_lasso_rankic_20d.py",
+      "params_frozen": {
+        "class": "alt_data_screener_search_2026_04_30",
+        "version": "v3",
+        "v2_to_v3_diff_summary": "v2 (2026-04-30) FAIL with 0/10 nonzero coefs under Lasso L1 + CV-MSE on raw 20d-forward excess return target. v3 keeps EVERYTHING identical (same 10 features, same Lasso L1, same 3-fold expanding CV-MSE with 60d embargo, same 25-pt glmnet grid, same train/holdout periods, same stride/holding/cost/HAC=5/Lo-2002 Sharpe, same top-30 long EW selection rule) and changes ONE thing: the target is rank-transformed per-asof to (percentile_rank - 0.5) BEFORE fitting. This aligns the inner Lasso solver with the Spearman rank-IC objective (mathematically: minimizing MSE on rank-percentile target = maximizing Pearson correlation with rank = Spearman correlation). Original adversarial-review proposal (outer-loop CV-objective swap, argmax rank-IC instead of argmin MSE) was REJECTED after zen review flagged inner/outer mismatch — the Lasso coordinate-descent inner solver still minimizes MSE+L1 regardless of outer scoring, so coefs would still squash to zero. Target transformation resolves the mismatch by changing what MSE is computed against.",
+        "class_rationale": "Same-class ablation of alt_data_screener_search_2026_04_30. v1 abandoned (FINRA infra). v2 FAIL (raw-return target). v3 isolates target shape as the variable. Per project framework feedback_keep_searching_screeners.md, search remains open; class-conditional Bonferroni handles multiplicity.",
+        "class_bonferroni": "n=3 in class (v1 abandoned + v2 completed-FAIL + v3 active) -> canonical preregister threshold |t| >= 2.39. v3 accepts the conservative threshold per project framework.",
+        "harking_caveat": "Perplexity adversarial review flagged HARKing risk: 4 prior failures across 2 classes -> new objective design -> expected success is the pattern pre-registration is designed to prevent. Mitigations: (a) explicit pre-registration with falsification gates BEFORE running (this JSON); (b) class-conditional Bonferroni already conservative (n=3 -> 2.39 vs naive 1.96); (c) NEW falsification gates added: in-CV IR >= 1.0 AND holdout mean rank-IC > 0; (d) capital-deploy threshold remains program-level n=4+ -> |t| >= 2.50. The HARKing concern is acknowledged in the ledger and accepted as inherent to iterative research; v3 verdict will be honestly logged regardless of outcome.",
+        "architecture": "single_global_lasso",
+        "architecture_rationale": "Identical to v2-v3 of prior class and v4 v2 (settled architectural variable). Architecture is NOT v3's research bet — target transformation is.",
+        "stage1_regime_classifier": {
+          "type": "none",
+          "note": "Same as v4 v2."
+        },
+        "stage2_conditional_alpha": {
+          "model_class": "Lasso",
+          "regularization": "L1 with alpha selected via 3-fold expanding-window nested CV on full train pool with 60-day embargo (identical to v4 v2)",
+          "fit_strategy": "single global model fitted on entire train pool",
+          "max_lambda_grid_points": 25,
+          "cv_objective": "argmin mean fold MSE on rank-transformed target",
+          "cv_objective_alignment": "Minimizing MSE between Lasso predictions and per-asof rank-percentile target is equivalent (up to constant) to maximizing the Pearson correlation between predictions and ranks within asof, which is Spearman rank correlation. Inner solver and CV objective are aligned."
+        },
+        "feature_whitelist_count": 10,
+        "feature_whitelist": [
+          "earnings_sue_naive_4q_decayed",
+          "earnings_pead_5d_post_decayed",
+          "earnings_recency_days",
+          "short_interest_pct_float_change_60d",
+          "rank_short_interest_pct_float",
+          "log1p_days_to_cover",
+          "insider_log_count",
+          "insider_log_dollar",
+          "rank_realized_downside_skew_60d",
+          "filing_density_4q"
+        ],
+        "feature_construction_unchanged": "All 10 features computed identically to v4 v2 per docs/research/preregistration/params_alt_data_screener_v2_2026_04_30.json. No feature construction changes.",
+        "target_definition": {
+          "raw_target": "20-day forward excess return over RF (same as v4 v2)",
+          "transformation": "Per-asof percentile-rank centering: y_transformed[i] = (rankdata(y_raw[asof_slice], method='average') / n_asof) - 0.5",
+          "transformation_rationale": "Compresses heavy-tailed return distribution to bounded [-0.5, +0.5] target with mean 0 and std ~0.29. Lasso L1 + MSE on this target is mathematically equivalent to Spearman rank-IC maximization. Eliminates the tail-magnification penalty that drove v4 v2 to lambda_max.",
+          "asof_slice_minimum_size": 3,
+          "asof_slice_minimum_size_rationale": "Spearman rank correlation undefined for n<3; asof slices with fewer tickers (post-ADV filter) excluded from train pool.",
+          "post_hoc_attribution": "Carhart-4F regression of realised 20d-forward portfolio returns on 20d-aggregated Mkt-RF/SMB/HML/MOM. UNCHANGED: portfolio still trades real returns, just selected via rank-trained scorer.",
+          "horizon_unchanged": "20d-forward, same as v4 v2 and prior class v3."
+        },
+        "portfolio_construction": {
+          "ranking": "predicted score per (ticker, asof) from rank-trained Lasso. Score is in rank-target's units; ordering matters, magnitude does not.",
+          "top_n": 30,
+          "weighting": "equal",
+          "rebalance_stride": 5,
+          "holding_period": 20,
+          "overlap_design": "Stride=5 with holding=20: 75% overlap, MA(3) autocorrelation, HAC maxlags=5. Identical to v4 v2.",
+          "universe": "AlphaLens PIT universe (yfinance + survivorship parquet), ADV >= $5M filter applied at scoring time (identical to v4 v2)"
+        },
+        "cost_model": {
+          "half_spread_bps": 10,
+          "applied_to": "every entry and exit; round-trip 20 bps base + 5 bps adverse selection -> 30 bps total. Identical to v4 v2."
+        },
+        "statistical_inference": {
+          "hac_maxlags": 5,
+          "sharpe_annualization": "Lo (2002) variance-ratio-adjusted via alphalens.backtest.metrics.sharpe_autocorr_adjusted, periods_per_year=252/5=50.4. Identical to v4 v2."
+        },
+        "anti_overfit_constraints": {
+          "max_features": 10,
+          "lasso_l1_regularization": "forces feature sparsity",
+          "no_post_hoc_feature_addition": "any new feature requires a new pre-registration",
+          "no_post_hoc_feature_removal": "v3 must run with locked 10-feature whitelist",
+          "no_target_horizon_change": "20d horizon locked",
+          "no_decay_lambda_tuning": "exp(-recency/30) constant locked from v4 v2",
+          "no_train_window_extension": "training window 2018-01-01 -> 2024-04-29 locked from v4 v2",
+          "no_target_transform_tuning": "per-asof rank-percentile - 0.5 is the locked transform; no quantile-based variants (e.g. binary-decile) without new pre-registration"
+        },
+        "differences_from_v4_v2": "ONLY the target transform changes (raw 20d-forward excess return -> per-asof rank-percentile - 0.5). Architecture, features, periods, stride, holding, cost, HAC, Sharpe, selection rule all identical to v4 v2. Adds 2 new pass-rule gates (in-CV IR + holdout rank-IC) to address adversarial-review concerns about spurious in-fold IC overfit and HARKing.",
+        "adversarial_review_summary": "Stage 1 (zen / gemini-3-pro-preview, thinking_mode=high): identified inner/outer objective mismatch in original design (CV-objective swap with unchanged Lasso inner solver) - this 'fatal flaw' was ACCEPTED and the design pivoted to target transformation, which preserves convexity and aligns the inner+implicit-outer optimization. Zen also added: (a) IR gate to replace vacuous nonzero-coef gate under rank-objective; (b) explicit fillna(0) handling for constant-prediction asof slices; (c) Spearman over Kendall for O(n log n) compute. Stage 2 (perplexity / sonar-reasoning-pro, search_context_size=high): HARKing concern (4 failures -> new objective -> expected success); MITIGATION via explicit pre-registration in this JSON + class-conditional Bonferroni n=3 -> 2.39 + new IR/holdout-IC gates + program-level deploy threshold |t|>=2.50. Spurious-positive in-fold IC under noise concern -> ACCEPTED, IR gate addresses. Permutation null test -> DEFERRED to Phase C if Phase B clears initial gates. Full review log: docs/research/v5_rankic_lasso_design_2026_05_01.md."
+      },
+      "periods": {
+        "train_start": "2018-01-01",
+        "train_end": "2024-04-29",
+        "holdout_start": "2024-04-30",
+        "holdout_end": "2026-04-30",
+        "rationale": "Identical to v4 v2 (Polygon short-interest history begins 2017-12-29 -> 2018-01 train start; 2-year holdout for n=99 rebalances at stride=5)."
+      },
+      "success_criteria": {
+        "mode": "holdout_then_multi_phase",
+        "primary_metric": "Carhart-4F alpha t-stat (HAC, maxlags=5) on holdout 2024-04-30 -> 2026-04-30 portfolio returns",
+        "bonferroni_threshold": "n=3 in class alt_data_screener_search_2026_04_30 (v1 abandoned + v2 completed-FAIL + v3 active) -> |t| >= 2.39 by canonical preregister threshold computation.",
+        "pass_rule": "Holdout Carhart-4F alpha t-stat >= 2.39 AND Lo-adjusted Sharpe (net) >= 0.5 AND alpha annualized >= 3% AND MaxDD >= -35% AND >= 1 nonzero Lasso coefficient AND in-CV IR (mean fold rank-IC / std fold rank-IC) >= 1.0 AND holdout mean per-asof rank-IC > 0",
+        "mid_rule": "alpha t-stat >= 1.5 AND Sharpe (net) >= 0.3 AND >= 1 nonzero coef AND in-CV IR >= 0.5 AND holdout mean per-asof rank-IC > 0 -> MID; refine + re-pre-register before deploy",
+        "fail_rule": "anything that doesn't clear MID -> FAIL, log to ledger, document v3 verdict",
+        "new_gates_rationale": "in-CV IR gate addresses zen Objection 3: under rank-target argmax-equivalent, ANY non-trivial lambda beats lambda_max via random fold noise. IR gate (mean/std across folds) ensures the chosen lambda has CONSISTENT positive IC across folds, not one-fold lucky pick. Holdout-IC gate addresses perplexity HARKing concern: holdout period not used for lambda selection, so positive holdout rank-IC is true out-of-sample evidence.",
+        "deployment_threshold_program_level": "Even on PASS, capital-deployment requires program-level Bonferroni n=4+ across all classes ever tested on this target+universe+holdout -> |t| >= 2.50.",
+        "phase_robustness_followup": "If holdout PASS or MID, run multi-phase audit (5 phase offsets) on 2018-2026 with same architecture; PASS only if every phase alpha t-stat >= 1.5 AND mean alpha t-stat >= 2.39 (in-class) or >= 2.50 (program-level for deploy). If holdout FAIL outright, skip Phase C.",
+        "permutation_null_followup": "If Phase C PASS, optional: run permutation null test (shuffle ranks within each asof, refit 100 times, verify chosen-lambda holdout-IC > 95% CI of permuted distribution). Adds compute (100 refits x 25 lambdas) but provides non-parametric null distribution evidence beyond Carhart-4F.",
+        "comparison_to_prior": "Prior class v1-v3 mean phase alpha-t = +0.65 / +0.55 / +0.55 (all 0-coef). v4 v2 alpha-t = +0.05 (0-coef, MaxDD -61.5%). v3 in-class needs holdout alpha-t >= 2.39 — substantially higher bar than ALL prior. Honest expectation: if zen's diagnostic right (target shape was bottleneck), v3 may produce non-trivial coefs and modest positive alpha; whether t clears 2.39 is uncertain. MID more likely than PASS. If zen's diagnostic wrong (features are real bottleneck), v3 fails IR gate and/or holdout-IC gate, providing CLEAN diagnostic that next class should explore model class (LightGBM/XGBoost) rather than further objective tweaking."
+      },
+      "registered_at": "2026-05-01",
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": -4.32,
+        "mean_excess_net": -0.7614,
+        "audit_path": "docs/research/alt_data_screener_v3_audit.json",
+        "completed_at": "2026-05-01",
+        "notes": "FAIL on in-CV IR gate (0.338 < 0.50 MID) and significant NEGATIVE alpha t-stat (-4.32). However STRUCTURALLY DIFFERENT from prior 4 zero-coef FAILs: v3 produced 2/10 nonzero coefs (rank_short_interest_pct_float=-0.0063 + filing_density_4q=+0.0016, both DLW/literature-canonical signs) AND positive holdout mean rank-IC (+0.0260). Rank-target transform CONFIRMED as correct architecture. Failure mechanism: top-30 selection magnifies tail behavior; bulk rank-IC=+0.026 inverts under tail selection in 2024-2026 short-squeeze regime. Phase C skipped per pre-reg. Class 2/3 actual FAIL; next test |t|>=2.50. Defensible next options: A long/short decile spread (most informative), B LightGBM, C 5-fold CV. Findings: docs/research/alt_data_screener_v3_audit.json."
+      },
+      "notes": ""
+    },
+    {
+      "id": "alt_data_screener_v4_2026_05_01",
+      "signal_class": "alt_data_screener_search_2026_04_30",
+      "hypothesis": "v4 same-class continuation of v3 FAIL (αt=−4.32 with 2/10 nonzero coefs and +0.0260 holdout mean rank-IC). Keep ALL identical (10 features, Lasso L1 with target_transform='rank', 3-fold expanding CV-MSE, 60d embargo, 25-pt grid, train 2018-01-01 to 2024-04-29, holdout 2024-04-30 to 2026-04-30, stride=5, holding=20, 30bps cost per leg, HAC=5, Lo-2002 Sharpe). ONE change: selection rule = long top-decile EW MINUS short bottom-decile EW with ex-ante SI<=15% short-leg HTB filter. Tests hypothesis that v3's bulk +0.0260 rank-IC translates to L/S decile spread alpha when tail magnification (top-30) is replaced with bulk averaging (decile spread). Bonferroni n=4 -> |t|>=2.50. NEW gates retained from v3: in-CV IR >= 1.0 AND holdout mean per-asof rank-IC > 0. ADDED descriptive: |Mkt-RF beta| <= 0.20 sanity. EXPLICITLY DIAGNOSTIC ONLY: capital deploy off-table regardless of outcome (burnt-holdout HARKing acknowledged in adversarial review).",
+      "scorer_path": "scripts/experiment_alt_data_lasso_longshort_20d.py",
+      "params_frozen": {
+        "class": "alt_data_screener_search_2026_04_30",
+        "version": "v4",
+        "v3_to_v4_diff_summary": "v3 (rank-target Lasso) FAIL'd structurally informatively: 2/10 nonzero coefs (rank_short_interest_pct_float=-0.0063 DLW-canonical, filing_density_4q=+0.0016 literature-canonical), holdout mean per-asof Spearman rank-IC=+0.0260 (POSITIVE bulk signal), but top-30 selection inverted on holdout (alpha_t=-4.32) due to 2024-2026 short-squeeze regime crushing the lowest-SI + highest-filing-density quality bucket. v4 keeps EVERYTHING identical (same 10 features, same Lasso L1 with target_transform='rank', same 3-fold expanding CV-MSE with 60d embargo, same 25-pt grid, same train/holdout periods, same stride/holding/HAC=5/Lo-2002 Sharpe) and changes ONE thing: the selection rule becomes long top-decile EW MINUS short bottom-decile EW (market-neutral L/S spread) instead of top-30 long EW. Rationale: bulk +0.0260 rank-IC is a population-level statement about the WHOLE cross-section; decile spread (~10% of ~1033 names = ~103 per leg) averages over 20% of the cross-section per leg, capturing the bulk signal without magnifying the regime-flipping tail behavior of top-30.",
+        "class_rationale": "Same-class continuation of alt_data_screener_search_2026_04_30. v1 abandoned (FINRA infra). v2 FAIL (raw-return target, 0/10 coefs). v3 FAIL (rank-target, 2/10 coefs but top-30 tail-inverted). v4 isolates SELECTION RULE as the variable. Per project framework feedback_keep_searching_screeners.md, search remains open; class-conditional Bonferroni handles multiplicity.",
+        "class_bonferroni": "n=4 in class (v1 abandoned + v2 completed-FAIL + v3 completed-FAIL + v4 active) -> canonical preregister threshold |t| >= 2.50. v4 accepts the conservative threshold per project framework.",
+        "harking_caveat": "Adversarial review (zen + perplexity, 2026-05-01) flagged BURNT HOLDOUT as the dominant methodological risk. v3 already observed the 2024-04-30 -> 2026-04-30 holdout and surfaced the +0.0260 mean rank-IC. v4 is constructed against that specific observation. Pre-registration + n=4 Bonferroni mitigates but cannot fully cleanse this. Polygon SI history (starts 2017-12-29) leaves no genuinely fresh OOS window with current train/holdout split. EXPLICIT MITIGATION: v4 is DIAGNOSTIC ONLY. Capital deploy is OFF-TABLE regardless of outcome. PASS verdict triggers a v5 re-pre-registration on truly fresh data (post-2026-04-30 continuation as it accrues, OR different feature universe, OR different model class). FAIL or MID verdict informs next-class decision (option B LightGBM, option E feature expansion).",
+        "architecture": "single_global_lasso (target_transform='rank')",
+        "architecture_rationale": "Identical to v3 (settled architectural variable). Architecture is NOT v4's research bet — selection rule is.",
+        "stage1_regime_classifier": {
+          "type": "none",
+          "note": "Same as v3."
+        },
+        "stage2_conditional_alpha": {
+          "model_class": "Lasso",
+          "regularization": "L1 with alpha selected via 3-fold expanding-window nested CV on full train pool with 60-day embargo (identical to v3)",
+          "fit_strategy": "single global model fitted on entire train pool with target_transform='rank'",
+          "max_lambda_grid_points": 25,
+          "cv_objective": "argmin mean fold MSE on rank-transformed target (identical to v3)",
+          "cv_objective_alignment": "Minimizing MSE between Lasso predictions and per-asof rank-percentile target is equivalent (up to constant) to maximizing Pearson correlation between predictions and ranks within asof, which is Spearman rank correlation. Inner solver and CV objective are aligned."
+        },
+        "feature_whitelist_count": 10,
+        "feature_whitelist": [
+          "earnings_sue_naive_4q_decayed",
+          "earnings_pead_5d_post_decayed",
+          "earnings_recency_days",
+          "short_interest_pct_float_change_60d",
+          "rank_short_interest_pct_float",
+          "log1p_days_to_cover",
+          "insider_log_count",
+          "insider_log_dollar",
+          "rank_realized_downside_skew_60d",
+          "filing_density_4q"
+        ],
+        "feature_construction_unchanged": "All 10 features computed identically to v3 per docs/research/preregistration/params_alt_data_screener_v3_2026_05_01.json. No feature construction changes.",
+        "target_definition": {
+          "raw_target": "20-day forward excess return over RF (same as v3)",
+          "transformation": "Per-asof percentile-rank centering: y_transformed[i] = (rankdata(y_raw[asof_slice], method='average') / n_asof) - 0.5 (same as v3)",
+          "transformation_unchanged": "Rank-target transform settled as correct architecture per v3.",
+          "horizon_unchanged": "20d-forward, same as v3.",
+          "post_hoc_attribution": "Carhart-4F regression of realised 20d-forward L/S portfolio returns on 20d-aggregated Mkt-RF/SMB/HML/MOM. Mkt-RF beta is reported as a market-neutrality sanity check (descriptive, |β| <= 0.20 informative but does NOT gate verdict)."
+        },
+        "portfolio_construction": {
+          "ranking": "predicted score per (ticker, asof) from rank-trained Lasso (identical to v3)",
+          "selection_rule": "long_top_decile_EW_minus_short_bottom_decile_EW",
+          "long_eligibility": "post-ADV cross-section (>= $5M ADV at asof, identical to v3)",
+          "short_eligibility": "post-ADV cross-section AND short_interest_pct_float <= 0.15 at asof (zen-recommended HTB safeguard; per Drake-Rees-Swanson 2011 short-anomaly literature convention 10-15% boundary of conventionally short-able SI%; LOCKED at 15%)",
+          "decile_size_long": "floor(n_long_eligible / 10)",
+          "decile_size_short": "floor(n_short_eligible / 10)",
+          "long_weighting": "equal",
+          "short_weighting": "equal",
+          "rebalance_stride": 5,
+          "holding_period": 20,
+          "overlap_design": "Stride=5 with holding=20: 75% overlap, MA(3) autocorrelation, HAC maxlags=5. Identical to v3.",
+          "min_decile_size": 3,
+          "min_decile_size_rationale": "Asof slices where either long-eligible decile size < 3 OR short-eligible decile size < 3 are excluded from the holdout return series (decile statistics undefined).",
+          "universe": "AlphaLens PIT universe (yfinance + survivorship parquet)"
+        },
+        "cost_model": {
+          "half_spread_bps": 10,
+          "applied_to": "every entry and exit on EACH leg; round-trip 20 bps base + 5 bps adverse selection = 30 bps per leg per rebalance. L/S total = 2 legs * 30 bps = 60 bps per rebalance round-trip on doubled turnover.",
+          "borrow_fee_separate": "1.5% annualized on short-leg notional (mid-range Russell-2000 estimate per Geczy-Musto-Reed 2002 + IHS Markit 2020). Reported alongside primary cost, NOT subtracted from headline alpha (avoids double-counting against potential prime broker rebates that exceed expectations on filtered universe). Honest verdict notes the borrow-fee scenario."
+        },
+        "statistical_inference": {
+          "hac_maxlags": 5,
+          "sharpe_annualization": "Lo (2002) variance-ratio-adjusted via alphalens.backtest.metrics.sharpe_autocorr_adjusted, periods_per_year=252/5=50.4. Identical to v3.",
+          "carhart_regression": "Carhart-4F regression of L/S return series on 20d-aggregated Mkt-RF/SMB/HML/MOM. Alpha t-stat is the primary metric; Mkt-RF beta is the market-neutrality sanity check."
+        },
+        "anti_overfit_constraints": {
+          "max_features": 10,
+          "lasso_l1_regularization": "forces feature sparsity (target_transform='rank' settled from v3)",
+          "no_post_hoc_feature_addition": "any new feature requires a new pre-registration",
+          "no_post_hoc_feature_removal": "v4 must run with locked 10-feature whitelist",
+          "no_target_horizon_change": "20d horizon locked",
+          "no_target_transform_tuning": "rank-target transform locked from v3",
+          "no_decile_size_tuning": "decile (10%) is the locked cut; quintile (20%) and ventile (5%) variants would require new pre-registration",
+          "no_short_filter_tuning": "SI > 15% short-leg exclusion is the locked filter; alternative thresholds (10%, 20%) require new pre-registration",
+          "no_short_weighting_tuning": "equal-weight short leg is locked; inverse-volatility weighting would be a new pre-registration variable (would address zen Objection 1 separately)"
+        },
+        "differences_from_v3": "ONLY the selection rule changes (top-30 long EW -> long top-decile EW MINUS short bottom-decile EW with SI<=15% short-leg filter). Architecture, features, target transform, periods, stride, holding, cost basis, HAC, Sharpe all identical to v3. New cost mechanic: 2x per-leg drag for L/S round-trip; separate borrow-fee accounting at 1.5% annualized. New gate: market-neutrality |beta_mkt| <= 0.20 descriptive (does NOT gate verdict).",
+        "adversarial_review_summary": "Stage 1 (zen / gemini-3-pro-preview, thinking_mode=high, 2026-05-01): two flaws flagged FATAL and resolved. Flaw 1 — rank-to-return asymmetry trap: rank-target Lasso is blind to magnitudes; +0.0260 rank-IC can survive 1 meme +300% short squeeze in bottom decile (99/100 ordinals correct). L/S decile portfolio TRADES return tails the model ignored. ACKNOWLEDGED as inherent rank-IC -> spread translation risk; SI > 15% filter dampens worst HTB squeezers; FAIL of v4 under tail asymmetry is a clean diagnostic (next class: LightGBM with quantile loss). Flaw 2 — hard-to-borrow short leg: bottom decile = high-SI per Lasso coef, real Russell-2000 borrow on these spikes 20-100% annualized, not 1.5%. ADOPTED via SI > 15% ex-ante filter on short-eligible universe. Two zen recs NOT adopted (HARKing flexibility): inverse-vol weighting on short leg (would be NEW design var post-review; deferred to v5 if needed), smaller decile variants (HARKing flexibility). Stage 2 (perplexity / sonar-reasoning-pro, search_context_size=high, 2026-05-01): HARKing on burnt holdout (MODERATE-HIGH) MITIGATED via 'diagnostic only - capital deploy off-table' framing; Bonferroni n=4 inadequacy under shared-regime experiments NOT adopted (project framework canon); IC-to-alpha mapping pre-specification ACCEPTED (this JSON makes it explicit); modest rank-IC may not support decile economics ACKNOWLEDGED as failure mode; borrow cost under-estimation PARTIALLY addressed by SI filter; bootstrap decile-spread significance DEFERRED to Phase D if Phase B clears. Full review log: docs/research/v6_longshort_decile_design_2026_05_01.md."
+      },
+      "periods": {
+        "train_start": "2018-01-01",
+        "train_end": "2024-04-29",
+        "holdout_start": "2024-04-30",
+        "holdout_end": "2026-04-30",
+        "rationale": "Identical to v3 (Polygon short-interest history begins 2017-12-29 -> 2018-01 train start; 2-year holdout for n=99 rebalances at stride=5). NOTE: this is the SAME holdout window v2 and v3 already tested. Pre-reg explicitly acknowledges burnt-holdout HARKing risk; v4 is diagnostic only."
+      },
+      "success_criteria": {
+        "mode": "holdout_then_multi_phase",
+        "primary_metric": "Carhart-4F alpha t-stat (HAC, maxlags=5) on holdout 2024-04-30 -> 2026-04-30 L/S portfolio returns",
+        "bonferroni_threshold": "n=4 in class alt_data_screener_search_2026_04_30 (v1 abandoned + v2 completed-FAIL + v3 completed-FAIL + v4 active) -> |t| >= 2.50 by canonical preregister threshold computation.",
+        "pass_rule": "Holdout L/S Carhart-4F alpha t-stat >= 2.50 AND Lo-adjusted Sharpe (net) >= 0.5 AND alpha annualized >= 3% AND MaxDD >= -35% AND >= 1 nonzero Lasso coefficient AND in-CV IR (mean fold rank-IC / std fold rank-IC) >= 1.0 AND holdout mean per-asof rank-IC > 0",
+        "mid_rule": "alpha t-stat >= 1.5 AND Sharpe (net) >= 0.3 AND >= 1 nonzero coef AND in-CV IR >= 0.5 AND holdout mean per-asof rank-IC > 0 -> MID; refine + re-pre-register before deploy",
+        "fail_rule": "anything that doesn't clear MID -> FAIL, log to ledger, document v4 verdict",
+        "descriptive_gates": "|Mkt-RF beta from Carhart 4F| <= 0.20 (market-neutrality sanity); reported but does NOT determine verdict.",
+        "diagnostic_only_clause": "BURNT-HOLDOUT MITIGATION: v4 is DIAGNOSTIC ONLY. Capital deploy is OFF-TABLE regardless of holdout verdict. PASS verdict triggers v5 re-pre-registration on truly fresh data (post-2026-04-30 continuation OR different feature universe OR different model class). FAIL or MID verdict informs next-class decision (option B LightGBM, option E feature expansion).",
+        "phase_robustness_followup": "If holdout PASS or MID, run multi-phase audit (5 phase offsets) on 2018-2026 with same architecture; PASS only if every phase alpha t-stat >= 1.5 AND mean alpha t-stat >= 2.50 (in-class). If holdout FAIL outright, skip Phase C.",
+        "permutation_null_followup": "If Phase C PASS, optional Phase D: bootstrap decile-spread significance (resample returns within deciles preserving cross-sectional structure, test whether observed spread lies in tails of null distribution). Adds compute (1000 bootstrap iterations) but provides non-parametric significance evidence beyond Carhart-4F. Per perplexity rec [7] Timmermann bootstrap.",
+        "regime_stratification_postdoc": "DESCRIPTIVE post-hoc: report long-decile alpha, short-decile alpha, L/S spread separately for 2024-04-30 -> 2024-12-31 / 2025-01-01 -> 2025-12-31 / 2026-01-01 -> 2026-04-30 sub-periods. Per perplexity rec [4] regime-stratified analysis. NOT a verdict gate; informational.",
+        "comparison_to_prior": "Prior class v1-v3 mean phase alpha-t = +0.65 / +0.55 / +0.55 (multi_source class) and alt-data class v2=+0.05 / v3=-4.32. v4 in-class needs holdout L/S alpha-t >= 2.50 (Bonferroni n=4). Honest expectation per design memo: FAIL >> MID > PASS. Distribution: 35% FAIL middle-decile / 25% FAIL short-leg tail / 25% MID partial signal / 12% FAIL symmetric tail decay / 3% PASS bulk-signal-clean."
+      },
+      "registered_at": "2026-05-01",
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": -2.57,
+        "mean_excess_net": -1.4836,
+        "audit_path": "docs/research/alt_data_screener_v4_audit.json",
+        "completed_at": "2026-05-01",
+        "notes": "FAIL on in-CV IR gate (0.338 < 0.50 MID, identical to v3) AND significant NEGATIVE alpha t-stat (-2.57). Coefs identical to v3 (rank_SI=-0.0063, filing_density=+0.0016). Holdout mean rank-IC=+0.0260 (positive bulk, identical to v3). DIAGNOSTIC: zen Objection #1 (rank-to-return asymmetry trap) MATERIALIZED. Despite SI<=15% short-leg HTB filter, bottom-decile-by-score still squeezed: short leg returned +108.5%/y in 2024-2025 short-squeeze regime. Long leg modest +20.6%/y. L/S net Sharpe -1.41. Mkt-RF beta=-0.29 (failed |beta|<=0.20 descriptive). 2026 partial: L/S +52.3%/y (squeeze unwinding). Class 4/4 FAIL. Next test |t|>=2.58 (n=5). Bottleneck SETTLED: linear-Lasso + rank-target is rank-blind to magnitudes; selection rules of any tail aggressiveness (top-30 v3, top-decile L/S v4) get crushed by tail return events the model could not see. Next-class options: B LightGBM with quantile loss, E different feature space, G magnitude-aware loss."
+      },
+      "notes": ""
+    },
+    {
       "id": "mom_lowvol_combo_2026_04_29",
       "signal_class": "price_factor_search_2026_04_29",
       "hypothesis": "z(mom_12_1m) − vol_w·z(vol_60d) at vol_w=1.0 generates phase-robust net positive OOS excess vs SPY with multi-phase mean α t ≥ 2.39 (Bonferroni-corrected at n=3, α=0.05) on R2000-like PIT universe, ADV ≥ $5M, 5–15bp cost.",
@@ -42,6 +605,428 @@
         "audit_path": "docs/research/mom_lowvol_combo_multi_phase_audit.json",
         "completed_at": "2026-04-29",
         "notes": "Phase-robust FAIL. OOS 2023-2026 mean αt=+0.49 (±1.05, min=-0.53 max=+1.66), mean excess net -5.7%/y (±44.5pp dispersion). IS 2011-2022 mean αt=+0.67, mean excess net -1.1%/y. Majority of phases negative on excess net. Single-phase OOS Sharpe 0.55 from 2026-04-29 strategy search was phase-1 outlier; phases 2+3 produced αt=-0.39/-0.53 with excess net -33.9%/-67.0%. The 44.5pp OOS dispersion confirms phase-aliasing was the source of apparent alpha. Pre-registered Bonferroni gate t≥2.39 (n=3) FAR from cleared."
+      },
+      "notes": ""
+    },
+    {
+      "id": "multi_source_global_lasso_2026_04_30",
+      "signal_class": "multi_source_two_stage_search_2026_04_30",
+      "hypothesis": "Single global Lasso (no Stage 1 regime classifier) fitted on the same 21-feature whitelist + same 5d-forward excess-return target as v1 generates positive Carhart-4F alpha on 2024-04-30 to 2026-04-30 holdout, with Carhart-4F alpha t-stat at least 2.24 (Bonferroni n=2 in class multi_source_two_stage_search_2026_04_30, alpha=0.05), Sharpe at least 0.5, alpha annualized at least 3 percent, MaxDD at most 35 percent. Single-variable architectural ablation of v1: tests whether Stage 1 regime conditioning added value or was overhead.",
+      "scorer_path": "scripts/experiment_multi_source_global_lasso.py",
+      "params_frozen": {
+        "architecture": "single_global_lasso",
+        "rationale": "Tests whether v1's Stage 1 regime classifier added value or was overhead. v1's per-regime architecture saw 3 of 4 regimes (Q2/Q3/Q4) shrink to all-zero coefs — only Q1_calm fitted real signal. v2 keeps the same 21-feature whitelist + same target + same λ procedure, but fits ONE global Lasso on the entire train pool with no regime conditioning. Single architectural variable change → clean attribution.",
+        "stage1_regime_classifier": {
+          "type": "none",
+          "note": "v1's Stage 1 (VIX-quartile rolling-252d thresholds) explicitly removed. Regime info NOT exposed to model — no one-hot encoding, no regime feature. Pure ablation."
+        },
+        "stage2_conditional_alpha": {
+          "model_class": "Lasso",
+          "regularization": "L1 with α selected via 3-fold expanding-window nested CV on full train_pool with 60-day embargo (same procedure as v1, applied once instead of per-regime)",
+          "fit_strategy": "single global model fitted on entire train pool",
+          "max_lambda_grid_points": 25
+        },
+        "feature_whitelist_count": 21,
+        "feature_whitelist": [
+          "insider_log_count",
+          "insider_log_dollar",
+          "insider_cluster_window_days",
+          "vix_level",
+          "vix_change_20d",
+          "term_spread_10y_3m",
+          "ret_20d",
+          "ret_60d",
+          "ret_252d",
+          "vol_realized_20d",
+          "near_52w_high_distance",
+          "dollar_volume_z_20d",
+          "rolling_beta_mkt_252d",
+          "idiosyncratic_vol_residual_60d",
+          "rank_momentum_60d",
+          "rank_lowvol_20d",
+          "rank_dollar_volume_size",
+          "interaction_insider_x_vix_high",
+          "interaction_mom20_x_vol_regime",
+          "interaction_mom20_x_size_quintile",
+          "interaction_insider_x_mom20"
+        ],
+        "feature_pit_provenance": "Identical to v1 (multi_source_two_stage_2026_04_30) — features.py and target.py reused without modification. F4 fix + O2 invariant remain locked by tests/test_pit_insider_delisting_exclusion.py and tests/test_pit_universe_delisted_inclusion.py.",
+        "target_definition": {
+          "horizon": "5_trading_days_forward_return",
+          "construction": "raw excess return over RF (5d-forward close-to-close minus 5d-cumulative RF) — IDENTICAL to v1, reused via target.forward_excess_return",
+          "post_hoc_attribution": "Carhart-4F regression of realised portfolio returns on Mkt-RF/SMB/HML/MOM. NOT pre-residualized at target level (Gu-Kelly-Xiu 2024). Carhart factor cache vintage matches v1's run (2026-03-27 download, coverage through 2026-02-27) for apples-to-apples comparability."
+        },
+        "portfolio_construction": {
+          "ranking": "predicted forward excess return per (ticker, asof) from the global Lasso",
+          "top_n": 30,
+          "weighting": "equal",
+          "rebalance_stride": 5,
+          "holding_period": 5,
+          "universe": "AlphaLens PIT universe (yfinance + survivorship parquet), ADV ≥ $5M filter applied at scoring time"
+        },
+        "cost_model": {
+          "half_spread_bps": 10,
+          "applied_to": "every entry and exit (round-trip = 20 bps base + 5 bps adverse selection one-way → 30 bps total)"
+        },
+        "anti_overfit_constraints": {
+          "max_features": 21,
+          "lasso_l1_regularization": "forces feature sparsity",
+          "no_post_hoc_feature_addition": "any new feature requires a new pre-registration with its own Bonferroni denominator",
+          "no_post_hoc_feature_removal": "v1's zero-coef finding does NOT license dropping features in v2 — that would be HARKing on v1's holdout result"
+        },
+        "differences_from_v1": "ONLY Stage 1 architecture is removed. Features, target, λ procedure, embargo, top_n, weighting, rebalance cadence, cost model, universe — all identical. This is a single-variable architectural ablation."
+      },
+      "periods": {
+        "train_start": "2014-01-01",
+        "train_end": "2024-04-29",
+        "holdout_start": "2024-04-30",
+        "holdout_end": "2026-04-30"
+      },
+      "success_criteria": {
+        "mode": "holdout_then_multi_phase",
+        "primary_metric": "Carhart-4F α t-stat on holdout 2024-04-30 → 2026-04-30 portfolio returns",
+        "bonferroni_threshold": "n=2 in class multi_source_two_stage_search_2026_04_30 → |t| ≥ 2.24",
+        "pass_rule": "Holdout Carhart-4F α t-stat ≥ 2.24 AND holdout Sharpe net ≥ 0.5 AND holdout α annualized ≥ 3% AND holdout MaxDD ≥ -35%",
+        "mid_rule": "α t-stat ≥ 1.5 AND Sharpe net ≥ 0.3 → MID; refine + re-pre-register before any deploy",
+        "fail_rule": "α t-stat < 1.5 OR Sharpe net < 0.3 → FAIL, log to ledger, document architecture verdict",
+        "phase_robustness_followup": "If holdout PASS or MID, run multi-phase audit (5 phase offsets) on 2014-2026 with same architecture; PASS only if every phase α t-stat ≥ 1.5 AND mean α t-stat ≥ 2.24. If holdout FAIL outright, skip Phase C (saves ~85min compute) and log FAIL directly.",
+        "comparison_to_v1": "v1 (regime-conditional) had mean phase αt=+0.65 (±0.91), excess net 0.0% (±4.9pp). v2 architecture verdict will be: BETTER (Stage 1 hurt v1) if v2 mean αt > 0.65; SAME (Stage 1 was noise) if within ±0.3 of v1; WORSE (Stage 1 helped) if v2 mean αt < 0.35. This comparison is descriptive, NOT a pre-reg gate — gate is the Bonferroni 2.24."
+      },
+      "registered_at": "2026-04-30",
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": 0.55,
+        "mean_excess_net": -0.002,
+        "audit_path": "docs/research/multi_source_global_lasso_multi_phase_audit.json",
+        "completed_at": "2026-04-30",
+        "notes": "Holdout phase=0 looked PASS-by-headline (t=+2.03, Sh_net=+1.31) but global Lasso CV chose lambda zeroing ALL 21 coefs — apparent alpha was a structural artifact (alphabetically-first 30 ADV-liquid tickers, equal-weight tilt vs cap-weighted SPY). Multi-phase audit: mean alpha_t=+0.55 (±1.05, range -0.71..+2.03), mean excess_net=-0.2%/y (±5.6pp). Slightly WORSE than v1 (mean alpha_t=+0.65, excess net 0.0%, dispersion 4.9pp). Architecture variable isolated: removing Stage 1 marginally worse, NOT better. v1's edge came from Q1_calm partial conditioning surfacing a small Q1-specific signal that pooling kills. Globally, the 21-feature whitelist + 5d-forward target + Lasso L1 + CV-MSE has no deployment-grade signal regardless of architecture. 12th paradigm failure. Class multi_source_two_stage_search_2026_04_30 now 2/2 FAIL — next test needs |t|>=2.39 (Bonferroni n=3). Architecture variable now SETTLED — next ablation per zen+perplexity adversarial review = horizon (5d→20d) with overlapping 4-tranche to preserve power; v3 design = multi_source_global_lasso_20d_2026_04_30."
+      },
+      "notes": ""
+    },
+    {
+      "id": "multi_source_global_lasso_20d_2026_04_30",
+      "signal_class": "multi_source_two_stage_search_2026_04_30",
+      "hypothesis": "Single global Lasso (no Stage 1 regime classifier) fitted on the same 21-feature whitelist as v1+v2 but with 20-trading-day-forward excess-return target (vs 5d in v1/v2) generates positive Carhart-4F alpha on 2024-04-30 to 2026-04-30 holdout. Bonferroni n=3 in class multi_source_two_stage_search_2026_04_30, alpha=0.05 -> |t| >= 2.39. Stride=5 with overlapping 4-tranche portfolios preserves n=99 holdout obs; HAC maxlags=5 explicit corrects for MA(3-4) overlap autocorrelation; Lo-2002 variance-ratio-adjusted Sharpe annualization. Single-variable ablation FROM v2 (only target horizon changes 5d to 20d). Theoretical motivation: Jegadeesh-Titman / Asness QMJ / Frazzini-Pedersen anomalies operate on monthly+ horizons, 5d is microstructure-domain. Empirical motivation: v2 zero-coef finding implicates 5d SNR specifically.",
+      "scorer_path": "scripts/experiment_multi_source_global_lasso_20d.py",
+      "params_frozen": {
+        "architecture": "single_global_lasso",
+        "rationale": "v3 single-variable ablation FROM v2 (multi_source_global_lasso_2026_04_30). v2 confirmed v1's Stage 1 architecture didn't help (mean αt v1=+0.65 vs v2=+0.55, both phase-robust FAIL). v2's diagnostic: global Lasso CV chose λ that zeroed all 21 coefs at 5d horizon. v3 tests whether the same 21 features + same global Lasso architecture has signal at a longer 20d horizon. Theoretical motivation: most published cross-sectional anomalies (Jegadeesh-Titman momentum, Asness-Frazzini-Pedersen QMJ, Frazzini-Pedersen BAB) operate on monthly+ horizons; 5d is microstructure-domain. Empirical motivation: at 5d the SNR was below Lasso's L1 minimum CV-MSE; longer horizon has higher fundamental-signal-to-noise ratio.",
+        "stage1_regime_classifier": {
+          "type": "none",
+          "note": "Same as v2 — no regime conditioning. Pure ablation of horizon variable from v2."
+        },
+        "stage2_conditional_alpha": {
+          "model_class": "Lasso",
+          "regularization": "L1 with α selected via 3-fold expanding-window nested CV on full train_pool with 60-day embargo (identical procedure to v2)",
+          "fit_strategy": "single global model fitted on entire train pool",
+          "max_lambda_grid_points": 25
+        },
+        "feature_whitelist_count": 21,
+        "feature_whitelist": [
+          "insider_log_count",
+          "insider_log_dollar",
+          "insider_cluster_window_days",
+          "vix_level",
+          "vix_change_20d",
+          "term_spread_10y_3m",
+          "ret_20d",
+          "ret_60d",
+          "ret_252d",
+          "vol_realized_20d",
+          "near_52w_high_distance",
+          "dollar_volume_z_20d",
+          "rolling_beta_mkt_252d",
+          "idiosyncratic_vol_residual_60d",
+          "rank_momentum_60d",
+          "rank_lowvol_20d",
+          "rank_dollar_volume_size",
+          "interaction_insider_x_vix_high",
+          "interaction_mom20_x_vol_regime",
+          "interaction_mom20_x_size_quintile",
+          "interaction_insider_x_mom20"
+        ],
+        "feature_pit_provenance": "Identical to v1 + v2 — features.py reused without modification. F4 fix + O2 invariant remain locked by tests.",
+        "target_definition": {
+          "horizon": "20_trading_days_forward_return",
+          "construction": "raw excess return over RF (20d-forward close-to-close minus 20d-cumulative RF). Reuses target.forward_excess_return with holding_period=20.",
+          "post_hoc_attribution": "Carhart-4F regression of realised 20d-forward portfolio returns on 20d-aggregated Mkt-RF/SMB/HML/MOM. Daily factor returns are summed (arithmetic) over the 20-day holding window matching each portfolio observation. NOT pre-residualized at target level."
+        },
+        "portfolio_construction": {
+          "ranking": "predicted forward excess return per (ticker, asof) from the global Lasso (trained on 20d targets)",
+          "top_n": 30,
+          "weighting": "equal",
+          "rebalance_stride": 5,
+          "holding_period": 20,
+          "overlap_design": "Stride=5 with holding=20 means consecutive rebalance observations share 75% of the holding window (15 of 20 days). This is equivalent to running 4 weekly tranches each holding for 20d. The portfolio_returns series at stride-5 asof dates therefore exhibits MA(3) autocorrelation by construction; HAC standard errors with maxlags=5 correct for this.",
+          "universe": "AlphaLens PIT universe (yfinance + survivorship parquet), ADV ≥ $5M filter applied at scoring time"
+        },
+        "cost_model": {
+          "half_spread_bps": 10,
+          "applied_to": "every entry and exit (round-trip = 20 bps base + 5 bps adverse selection one-way → 30 bps total). Per-rebalance turnover scaled cost stays at the same per-rebalance bp level as v1/v2; total annualized cost drag is naturally lower because each tranche only contributes 1/4 of capital and turnover-per-tranche is similar to v2 (annual cost ≈ 25-30% of v2's ~3% drag → ~0.7-1%/y)."
+        },
+        "statistical_inference": {
+          "hac_maxlags": 5,
+          "hac_maxlags_rationale": "Per zen+perplexity adversarial review: stride=5 with holding=20 produces overlapping returns where consecutive samples share 15/20=75% of the window. Autocorrelation has theoretical structure of MA(3) at lag k≤3 (consecutive overlap) plus residual at lag 4 (touching, no overlap). Setting maxlags=5 explicitly (one above MA-order) is conservative per Newey-West / Andrews lag-selection guidance for overlapping-data inference. Default Newey-West formula `4*(T/100)^(2/9)` is tuned for daily data and would underestimate lag length here.",
+          "sharpe_annualization": "Lo (2002) variance-ratio-adjusted Sharpe via existing alphalens.backtest.metrics.sharpe_autocorr_adjusted, which corrects for the autocorrelation introduced by overlap. Periods-per-year = 252/stride = 50.4 (per-rebalance cadence)."
+        },
+        "anti_overfit_constraints": {
+          "max_features": 21,
+          "lasso_l1_regularization": "forces feature sparsity; same procedure as v1 + v2",
+          "no_post_hoc_feature_addition": "any new feature requires a new pre-registration with its own Bonferroni denominator",
+          "no_post_hoc_feature_removal": "v1/v2 zero-coef findings do NOT license dropping features"
+        },
+        "differences_from_v2": "ONLY target horizon changes (5d → 20d). All other variables identical: same 21 features, same global Lasso, same λ procedure, same embargo (60d), same stride=5, same top_n=30, same EW, same cost model, same universe, same Carhart attribution method. Adds explicit HAC maxlags=5 override + Lo-2002 Sharpe adjustment to handle the autocorrelation introduced by 20d holding × 5d stride."
+      },
+      "periods": {
+        "train_start": "2014-01-01",
+        "train_end": "2024-04-29",
+        "holdout_start": "2024-04-30",
+        "holdout_end": "2026-04-30"
+      },
+      "success_criteria": {
+        "mode": "holdout_then_multi_phase",
+        "primary_metric": "Carhart-4F α t-stat (HAC, maxlags=5) on holdout 2024-04-30 → 2026-04-30 portfolio returns",
+        "bonferroni_threshold": "n=3 in class multi_source_two_stage_search_2026_04_30 → |t| ≥ 2.39",
+        "pass_rule": "Holdout Carhart-4F α t-stat ≥ 2.39 AND holdout Lo-adjusted Sharpe ≥ 0.5 AND holdout α annualized ≥ 3% AND holdout MaxDD ≥ -35% AND model has at least 1 nonzero coefficient (rules out v2's zero-coef structural-artifact pattern)",
+        "mid_rule": "α t-stat ≥ 1.5 AND Sharpe ≥ 0.3 AND ≥1 nonzero coef → MID; refine + re-pre-register before any deploy",
+        "fail_rule": "α t-stat < 1.5 OR Sharpe < 0.3 OR all coefs zero → FAIL, log to ledger, document horizon verdict",
+        "phase_robustness_followup": "If holdout PASS or MID, run multi-phase audit (5 phase offsets) on 2014-2026 with same architecture; PASS only if every phase α t-stat ≥ 1.5 AND mean α t-stat ≥ 2.39. If holdout FAIL outright, skip Phase C.",
+        "comparison_to_prior": "v1 mean phase αt=+0.65, v2 mean phase αt=+0.55. v3 needs mean phase αt ≥ 2.39 to clear pre-reg gate. Even MID outcome would require mean ≥ 1.5, which is 2.7-3x prior. Honest expectation: this is an aggressive bar; FAIL/MID more likely than PASS, but the signal-to-noise improvement at 20d horizon may surprise."
+      },
+      "registered_at": "2026-04-30",
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": 1.32,
+        "mean_excess_net": 0.207,
+        "audit_path": "docs/research/multi_source_global_lasso_20d_phase_b.md",
+        "completed_at": "2026-04-30",
+        "notes": "Holdout phase=0 t=+1.32 with apparent excess_net=+20.7%/y AND Sh_net=0.98 looked superficially attractive — but global Lasso CV at 20d horizon AGAIN chose lambda zeroing all 21 coefs (model.coef_=0/21). Per pre-reg gate (1 nonzero coef minimum), and per v2 zero-coef diagnostic memo (feedback_zero_coef_lasso_diagnostic.md), this is a STRUCTURAL ARTIFACT — equal-weight 30 alphabetically-first ADV-liquid tickers vs cap-weighted SPY, NOT alpha from features. MaxDD=-62% on net cum confirms the underlying portfolio is low-quality. Phase C SKIPPED per pre-reg fail_rule (saved 85min compute). 13th paradigm failure. Class multi_source_two_stage_search_2026_04_30 now 3/3 FAIL — next test |t|>=2.50 (Bonferroni n=4). DECISIVE FINDING ACROSS v1+v2+v3: 21-feature whitelist + Lasso L1 + CV-MSE produces zero-coef solution at both 5d AND 20d horizons under both per-regime AND global architectures. Bottleneck is FEATURES (or possibly objective function), NOT architecture and NOT horizon. v4 must pivot to fresh signal class with different features (alt-data, news, fundamentals revisions, options-implied) — same-features ablations are exhausted."
+      },
+      "notes": ""
+    },
+    {
+      "id": "multi_source_two_stage_2026_04_30",
+      "signal_class": "multi_source_two_stage_search_2026_04_30",
+      "hypothesis": "Two-stage architecture (deterministic VIX-quartile regime classifier + per-regime L1-regularized Lasso on a 21-feature multi-source whitelist combining post-F4 insider cluster + daily macro + per-ticker technical + cross-sectional ranks + 4 pre-specified interactions) generates positive Carhart-4F alpha on 2024-04-30 to 2026-04-30 holdout, with Carhart-4F alpha t-stat at least 1.96 (Bonferroni n=1 in this signal class, alpha=0.05), Sharpe at least 0.5, alpha annualized at least 3 percent, MaxDD at most 35 percent.",
+      "scorer_path": "alphalens/screeners/multi_source_two_stage/scorer.py",
+      "params_frozen": {
+        "architecture": "two_stage",
+        "stage1_regime_classifier": {
+          "type": "deterministic_pre_specified",
+          "input": "VIXCLS daily level",
+          "rule": "VIX quartile assignment using rolling-252d quartiles fit on train period only",
+          "output": "regime ∈ {Q1_calm, Q2, Q3, Q4_stress}"
+        },
+        "stage2_conditional_alpha": {
+          "model_class": "Lasso",
+          "regularization": "L1 with α selected via 3-fold expanding-window nested CV on train_pool with 60-day embargo",
+          "fit_strategy": "one model per regime quartile (4 models total)",
+          "max_lambda_grid_points": 25
+        },
+        "feature_whitelist_count": 21,
+        "feature_whitelist": [
+          "insider_log_count",
+          "insider_log_dollar",
+          "insider_cluster_window_days",
+          "vix_level",
+          "vix_change_20d",
+          "term_spread_10y_3m",
+          "ret_20d",
+          "ret_60d",
+          "ret_252d",
+          "vol_realized_20d",
+          "near_52w_high_distance",
+          "dollar_volume_z_20d",
+          "rolling_beta_mkt_252d",
+          "idiosyncratic_vol_residual_60d",
+          "rank_momentum_60d",
+          "rank_lowvol_20d",
+          "rank_dollar_volume_size",
+          "interaction_insider_x_vix_high",
+          "interaction_mom20_x_vol_regime",
+          "interaction_mom20_x_size_quintile",
+          "interaction_insider_x_mom20"
+        ],
+        "feature_pit_provenance": {
+          "insider_*": "ParquetInsiderScorer with delisting_events loaded (F4 fix locked by tests/test_pit_insider_delisting_exclusion.py); 180d fire-sale exclusion",
+          "vix_*, term_spread_*": "FRED daily-only series (DGS10, DGS3MO, VIXCLS); PIT-clean per pit_audit_2026_04_30 M3+M4 PASS",
+          "ret_*, vol_*, near_52w_high_*, dollar_volume_*, rank_*": "per-ticker OHLCV via HistoryStore.truncate_to(asof); survivorship-correct per O2 invariant locked by tests/test_pit_universe_delisted_inclusion.py",
+          "rolling_beta_*, idiosyncratic_vol_*": "rolling 252d (resp 60d) regression of ticker excess return on Mkt-RF, window strictly < asof"
+        },
+        "target_definition": {
+          "horizon": "5_trading_days_forward_return",
+          "construction": "raw excess return over RF (5d-forward close-to-close minus 5d-cumulative RF)",
+          "post_hoc_attribution": "Carhart-4F regression of realised portfolio returns on Mkt-RF/SMB/HML/MOM (CONTEMPORANEOUS, standard academic Carhart 1997). NOT pre-residualized at target level (per Gu-Kelly-Xiu 2024 update; preserves information, post-hoc attribution separates discovery from factor-loading rediscovery)."
+        },
+        "portfolio_construction": {
+          "ranking": "predicted forward excess return per (ticker, asof) from the regime-conditional Lasso",
+          "top_n": 30,
+          "weighting": "equal",
+          "rebalance_stride": 5,
+          "holding_period": 5,
+          "universe": "AlphaLens PIT universe (yfinance + survivorship parquet), ADV ≥ $5M filter applied at scoring time"
+        },
+        "cost_model": {
+          "half_spread_bps": 10,
+          "applied_to": "every entry and exit (round-trip = 20 bps)"
+        },
+        "anti_overfit_constraints": {
+          "max_features": 21,
+          "feature_to_obs_budget": "Harvey-Liu-Zhu / Feng-Giglio-Xiu heuristic: N_features ≤ √(T × Sharpe_target) / 2; with T~10⁵ × cross-section, target Sharpe 0.4 → comfortably under 63",
+          "lasso_l1_regularization": "forces feature sparsity",
+          "no_post_hoc_feature_addition": "any new feature requires a new pre-registration with its own Bonferroni denominator"
+        }
+      },
+      "periods": {
+        "train_start": "2014-01-01",
+        "train_end": "2024-04-29",
+        "holdout_start": "2024-04-30",
+        "holdout_end": "2026-04-30"
+      },
+      "success_criteria": {
+        "mode": "holdout_then_multi_phase",
+        "primary_metric": "Carhart-4F α t-stat on holdout 2024-04-30 → 2026-04-30 portfolio returns",
+        "pass_rule": "Holdout Carhart-4F α t-stat ≥ Bonferroni threshold for class multi_source_two_stage_search_2026_04_30 (n=1 initially → |t| ≥ 1.96) AND holdout Sharpe ≥ 0.5 AND holdout α annualized ≥ 3% AND holdout MaxDD ≤ 35%",
+        "mid_rule": "α t-stat ≥ 1.5 AND Sharpe ≥ 0.3 → MID verdict; refine and re-pre-register before any deploy",
+        "fail_rule": "α t-stat < 1.5 OR Sharpe < 0.3 → FAIL, log to ledger, narrow search space for next experiment per feedback_keep_searching_screeners.md and feedback_literature_not_oracle.md",
+        "phase_robustness_followup": "If holdout PASSES, run multi-phase audit (5 phase offsets per multi_phase library) on the 2014-2026 full window with the same architecture; PASS only if every phase α t-stat ≥ 1.5 AND mean α t-stat ≥ Bonferroni threshold for then-current class count"
+      },
+      "registered_at": "2026-04-30",
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": 0.65,
+        "mean_excess_net": 0.0,
+        "audit_path": "docs/research/multi_source_two_stage_multi_phase_audit.json",
+        "completed_at": "2026-04-30",
+        "notes": "Holdout phase=0 PASS provisional (t=+2.01) but multi-phase audit FAIL: mean αt=+0.65 (±0.91, min=-0.29 max=+2.01), mean excess_net=0.0% (±4.9pp). Phase-robust gate every-phase t≥1.5 not cleared. Notably dispersion 4.9pp is order-of-magnitude tighter than prior failures (mom+lowvol 44.5pp, qual+mom 69pp, vol_target 40.3pp) — first stably-weak FAIL rather than lucky-single-phase. Diagnostic: 3 of 4 regime Lassos (Q2/Q3/Q4) shrunk to all-zero coefs, only Q1_calm fitted real signal. Edge concentrated in low-VIX bars; phase 1 had different regime mix → reversal. 11th paradigm failure. Class multi_source_two_stage_search_2026_04_30 1/1 FAIL."
+      },
+      "notes": ""
+    },
+    {
+      "id": "nonlinear_alt_data_v1_lightgbm_mse_2026_05_01",
+      "signal_class": "nonlinear_alt_data_search_2026_05_01",
+      "hypothesis": "v1 fresh-class pivot from CLOSED alt_data_screener class (4/4 FAIL on linear-Lasso). Tests model-class change linear-Lasso -> tree-boosting LightGBM with objective='regression' (MSE) on raw 20d-forward excess return target. Same 10 alt-data features and same v4 selection rule (long top-decile EW MINUS short bottom-decile EW with SI<=15% HTB filter). Hyperparameters locked: max_depth=5, min_child_samples=500, n_estimators tuned via early stopping on 3-fold expanding CV with 60d embargo. Fresh-class internal threshold |t|>=1.96 BUT v1 uses PROGRAM-LEVEL Bonferroni |t|>=2.74 (n=8 cumulative across all classes on 2024-04-30..2026-04-30 holdout) as the actionable PASS gate. v8 (quantile loss alpha=0.5) was REJECTED post adversarial review (zen FATAL: hessian=0 makes quantile trees tail-blind; perplexity: max_depth=3 over-regularizes for n/p=22200). DIAGNOSTIC ONLY: capital deploy off-table regardless of verdict. PASS at 2.74 triggers v2 on truly fresh data; FAIL informs Path beta (long-only) or Path gamma (new features).",
+      "scorer_path": "scripts/experiment_lightgbm_mse_longshort_20d.py",
+      "params_frozen": {
+        "class": "nonlinear_alt_data_search_2026_05_01",
+        "version": "v1",
+        "v1_design_provenance": "Pivot from CLOSED class alt_data_screener_search_2026_04_30 (4/4 FAIL on linear-Lasso). v8 design (LightGBM quantile loss alpha=0.5, max_depth=3, min_child_samples=2000, fresh-class threshold 1.96) was REJECTED after zen + perplexity adversarial review identified three flaws: (1) quantile loss in LightGBM hardcodes hessian=1.0 making trees tail-blind; (2) max_depth=3 + min_child_samples=2000 over-regularizes for 222k * 10 feature space (n/p=22200); (3) fresh-class threshold 1.96 dodges multiplicity since same 8 prior tests observed same holdout. v9 (this pre-reg) is the synthesis: MSE objective (real hessian, magnitude-aware), max_depth=5 / min_child_samples=500 (perplexity rec), program-level threshold |t|>=2.74 (n=8 across all classes on this holdout window).",
+        "class_rationale": "FRESH model class change (linear-Lasso -> tree boosting) on same feature space and selection rule. Fresh class is methodologically defensible because tree-based functional form is structurally distinct from linear. Burnt-holdout HARKing concern handled at threshold level (program-level 2.74 not fresh-class 1.96).",
+        "class_bonferroni": "In-class n=1 fresh -> internal threshold |t|>=1.96. PROGRAM-LEVEL across all classes on 2024-04-30..2026-04-30 holdout: multi_source_two_stage_search_2026_04_30 (3 tests, all FAIL) + alt_data_screener_search_2026_04_30 (4 tests, 4 FAIL, 1 abandoned) + this NEW class (1 active) = 8 cumulative tests -> Bonferroni |t|>=2.74. v1 USES PROGRAM-LEVEL 2.74 as PASS gate.",
+        "harking_caveat": "Same 2024-04-30 -> 2026-04-30 holdout has been observed 8 cumulative times across classes. Fresh-class framing is a model-class change ONLY (linear -> tree); features, target, train/holdout periods, selection rule, costs, attribution all identical to v4. Pre-reg explicitly acknowledges this: PASS at fresh-class 1.96 but below program-level 2.74 = 'in-class PASS, program-FAIL', treated as FAIL for actionability. Capital deploy is OFF-TABLE regardless of verdict; only PASS at 2.74 triggers v2-LGBM on truly fresh data (post-2026-04-30 continuation OR new feature universe).",
+        "model_choice": "LightGBM (sklearn API LGBMRegressor) with objective='regression' (MSE). MSE is magnitude-aware (gradient scales with residual; real hessian for boosting). Heavy-tail collapse risk that killed v2's Lasso-MSE on raw return mitigated by tree boosting's residual-modeling robustness + locked regularization (reg_alpha + reg_lambda + bagging).",
+        "model_rationale": "v8 considered objective='quantile' but zen flagged FATAL: quantile loss in LightGBM hardcodes second-derivative to 1.0, degrading tree split-gain calculations and producing 'sluggish, bulk-data splits.' MSE delivers real hessian + natural magnitude-awareness without quantile pathology.",
+        "feature_whitelist_count": 10,
+        "feature_whitelist": [
+          "earnings_sue_naive_4q_decayed",
+          "earnings_pead_5d_post_decayed",
+          "earnings_recency_days",
+          "short_interest_pct_float_change_60d",
+          "rank_short_interest_pct_float",
+          "log1p_days_to_cover",
+          "insider_log_count",
+          "insider_log_dollar",
+          "rank_realized_downside_skew_60d",
+          "filing_density_4q"
+        ],
+        "feature_construction_unchanged": "All 10 features computed identically to v3-v4 per docs/research/preregistration/params_alt_data_screener_v3_2026_05_01.json.",
+        "target_definition": {
+          "target": "20-day forward excess return over RF (raw, no rank transform)",
+          "rationale": "Tree boosting with MSE handles heavy tails via gradient + hessian + L1/L2/bagging regularization. Rank transform is unnecessary; would discard magnitude information that MSE objective is designed to use."
+        },
+        "hyperparameters": {
+          "objective": "regression",
+          "max_depth": 5,
+          "num_leaves": 32,
+          "min_child_samples": 500,
+          "learning_rate": 0.05,
+          "n_estimators_max": 500,
+          "n_estimators_tuned_via": "early stopping with patience=20 on fold-validation MSE in 3-fold CV",
+          "reg_alpha": 0.1,
+          "reg_lambda": 0.1,
+          "feature_fraction": 1.0,
+          "bagging_fraction": 0.8,
+          "bagging_freq": 1,
+          "random_state": 42,
+          "all_locked_except": "n_estimators (CV-tuned via early stopping; min HARKing surface)"
+        },
+        "cv_strategy": {
+          "method": "3-fold expanding-window with 60-day embargo (same machinery as v3-v4-v8)",
+          "objective_metric": "MSE on fold-validation set",
+          "n_estimators_search": "early stopping at patience=20",
+          "rationale": "Single tunable hyperparameter via early stopping minimizes HARKing flexibility. All other hyperparameters locked at conservative-but-not-over-regularized defaults addressing perplexity rec #3."
+        },
+        "portfolio_construction": {
+          "ranking": "predicted score per (ticker, asof) from MSE-trained LightGBM. Score is in raw-return units; ordering preserves magnitude information.",
+          "selection_rule": "long_top_decile_EW_minus_short_bottom_decile_EW (UNCHANGED from v4)",
+          "long_eligibility": "post-ADV cross-section (>= $5M ADV at asof, identical to v4)",
+          "short_eligibility": "post-ADV cross-section AND short_interest_pct_float <= 0.15 at asof (identical v4 HTB filter)",
+          "decile_size_long": "floor(n_long_eligible / 10)",
+          "decile_size_short": "floor(n_short_eligible / 10)",
+          "long_weighting": "equal",
+          "short_weighting": "equal",
+          "rebalance_stride": 5,
+          "holding_period": 20,
+          "min_decile_size": 3,
+          "universe": "AlphaLens PIT universe (yfinance + survivorship parquet)"
+        },
+        "cost_model": {
+          "half_spread_bps": 10,
+          "applied_to": "60 bps round-trip per rebalance (2 legs * 30 bps each); identical to v4",
+          "borrow_fee_separate": "1.5% annualized on short-leg notional reported alongside primary cost; not subtracted from headline alpha"
+        },
+        "statistical_inference": {
+          "hac_maxlags": 5,
+          "sharpe_annualization": "Lo (2002) variance-ratio-adjusted via alphalens.backtest.metrics.sharpe_autocorr_adjusted, periods_per_year=50.4",
+          "carhart_regression": "Carhart-4F regression of L/S return series on 20d-aggregated Mkt-RF/SMB/HML/MOM with subtract_rf=False (L/S spread is already a relative excess)"
+        },
+        "anti_overfit_constraints": {
+          "max_features": 10,
+          "no_post_hoc_feature_addition": "any new feature requires a new pre-registration",
+          "no_post_hoc_feature_removal": "v1 must run with locked 10-feature whitelist",
+          "no_target_horizon_change": "20d horizon locked",
+          "no_hyperparameter_grid_search_post_hoc": "all hyperparameters except n_estimators are locked; tuning others would be HARKing flexibility",
+          "no_decile_size_tuning": "decile (10%) is locked; no quintile/ventile variants without new pre-reg",
+          "no_short_filter_tuning": "SI > 15% short-leg exclusion is locked from v4"
+        },
+        "differences_from_v4": "TWO settled-as-different variables: (a) model class linear-Lasso -> tree-boosting LightGBM; (b) target raw (no rank transform). All other variables (features, periods, selection rule, costs, attribution, gates) identical to v4. Threshold raised from in-class 2.50 to program-level 2.74.",
+        "adversarial_review_summary": "v8 (LightGBM quantile alpha=0.5, max_depth=3, min_child_samples=2000, threshold 1.96) was reviewed by zen + perplexity 2026-05-01 and REJECTED. v9 (this pre-reg) directly addresses the three flaws identified: (1) quantile loss tail-blindness -> objective='regression' (MSE); (2) over-regularization -> max_depth=5 / min_child_samples=500; (3) fresh-class threshold dodge -> program-level 2.74 honest threshold. Full review chain: docs/research/v8_lightgbm_quantile_design_2026_05_01.md (rejected design) and docs/research/v9_lightgbm_mse_design_2026_05_01.md (synthesis design)."
+      },
+      "periods": {
+        "train_start": "2018-01-01",
+        "train_end": "2024-04-29",
+        "holdout_start": "2024-04-30",
+        "holdout_end": "2026-04-30",
+        "rationale": "Identical to v3-v4 (Polygon SI history begins 2017-12-29). Burnt holdout handled at threshold level (program-level 2.74) and via diagnostic-only framing."
+      },
+      "success_criteria": {
+        "mode": "holdout_only_program_level_threshold",
+        "primary_metric": "Carhart-4F alpha t-stat (HAC, maxlags=5) on holdout 2024-04-30 -> 2026-04-30 L/S portfolio returns",
+        "bonferroni_threshold_in_class": "n=1 fresh in nonlinear_alt_data_search_2026_05_01 -> in-class |t|>=1.96",
+        "bonferroni_threshold_program_level": "n=8 cumulative across multi_source_two_stage_search (3 tests) + alt_data_screener_search (4 tests) + nonlinear_alt_data_search (1 active) -> |t|>=2.74. v1 USES PROGRAM-LEVEL 2.74 AS PASS GATE.",
+        "pass_rule": "Holdout L/S Carhart-4F alpha t-stat >= 2.74 AND Lo-adjusted Sharpe (net) >= 0.5 AND alpha annualized >= 3% AND MaxDD >= -35% AND in-CV rank-IR >= 1.0 AND holdout mean per-asof rank-IC > 0",
+        "in_class_pass_program_fail": "1.96 <= alpha_t-stat < 2.74 -> reported as 'in-class PASS, program-FAIL', treated as FAIL for actionability; informational for next-class design",
+        "mid_rule": "alpha t-stat >= 1.5 AND Sharpe (net) >= 0.3 AND in-CV rank-IR >= 0.5 AND holdout mean per-asof rank-IC > 0 -> MID; refine + re-pre-register",
+        "fail_rule": "anything that doesn't clear MID -> FAIL, log to ledger",
+        "descriptive_gates": "|Mkt-RF beta from Carhart 4F| <= 0.20 (market-neutrality sanity); reported but does NOT determine verdict.",
+        "diagnostic_only_clause": "BURNT-HOLDOUT MITIGATION: v1 is DIAGNOSTIC ONLY. Capital deploy is OFF-TABLE regardless of holdout verdict. PASS at program-level 2.74 triggers v2-LGBM re-pre-registration on truly fresh data (post-2026-04-30 continuation OR analyst-revisions feature expansion in NEW class). FAIL informs next-class decision (Path beta long-only construct, OR Path gamma new features).",
+        "phase_robustness_followup": "If holdout PASS at 2.74, run multi-phase audit (5 phase offsets) on 2018-2026 with same architecture; PASS only if every phase alpha t-stat >= 1.5 AND mean alpha t-stat >= 2.74. If holdout FAIL outright, skip Phase C.",
+        "permutation_null_followup": "If Phase C PASS, optional Phase D bootstrap decile-spread significance (per perplexity rec [7] Timmermann bootstrap). Adds 1000 bootstrap iterations; non-parametric significance evidence.",
+        "regime_stratification_postdoc": "DESCRIPTIVE post-hoc: report long-decile alpha, short-decile alpha, L/S spread separately for 2024-04-30 -> 2024-12-31 / 2025-01-01 -> 2025-12-31 / 2026-01-01 -> 2026-04-30 sub-periods (same as v4).",
+        "comparison_to_prior": "Class state (4/4 FAIL on linear-Lasso): v1 alt_data class FINRA-blocked, v2 raw-MSE 0/10 coefs (alpha-t=+0.05), v3 rank-target top-30 (alpha-t=-4.32, 2/10 coefs, holdout rank-IC=+0.0260), v4 rank-target decile L/S (alpha-t=-2.57, same 2 coefs, short-leg squeezed). v9 tests model-class change linear -> tree with MSE on raw target. Honest expectation: FAIL >> MID > PASS. Run for diagnostic value (settles linear vs tree variable on this stack)."
+      },
+      "registered_at": "2026-05-01",
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": 0.7,
+        "mean_excess_net": -0.6656,
+        "audit_path": "docs/research/nonlinear_alt_data_v1_audit.json",
+        "completed_at": "2026-05-01",
+        "notes": "FAIL on holdout mean rank-IC <= 0 gate (got -0.0123, sign-FLIPPED from v4's +0.0260). Headline alpha t-stat=+0.70 (vs program-level threshold 2.74; nowhere near). Sharpe net=-0.21, MaxDD=-55.9%. CRITICAL DIAGNOSTIC: trees produced ANTI-signal vs linear's weak +signal. v3-v4 (Lasso): 2/10 coefs, +0.0260 holdout rank-IC, signal exists in bulk but tail-selection inverted. v9 (LightGBM MSE): 9/10 features used, in-CV IR=-0.22 NEGATIVE, holdout rank-IC=-0.0123 NEGATIVE. Fold dispersion catastrophic (best_iter [52, 1, 24]) — fold 2 found 1 useful iteration. Turnover jumped 3x vs v4 (long 35% vs 12%, short 48% vs 17%) -> cost drag 12.6% vs v4's 4.4%. Both legs returned ~+65%/y (model treats top/bottom decile symmetrically) -> L/S spread near-zero gross, sharply negative net. 2026 partial: L/S -155%/y catastrophic decay. Conclusion: TREES DON'T HELP this feature space, they make it WORSE. Combined with v2 (zero-coef raw+MSE), v3-v4 (rank+MSE weak +signal), v9 (raw+tree negative signal), strong evidence FEATURES ARE THE BOTTLENECK. Class 1/1 FAIL. Cumulative cross-class n=9 on this holdout, next |t|>=2.81. Path forward: gamma Option E (new features); beta long-only in alt_data class with v4 model is also defensible."
       },
       "notes": ""
     },
