@@ -1,0 +1,158 @@
+{
+  "params_frozen": {
+    "class": "alt_data_screener_search_2026_04_30",
+    "version": "v2",
+    "v1_supersession_reason": "v1 (alt_data_screener_v1_finra_blocked_2026_04_30) was registered with a 10-feature whitelist that included 3 features sourced from FINRA Daily Short Sale Volume. Pre-Phase-A infrastructure investigation (2026-04-30) discovered: (1) cdn.finra.org/equity/regsho/daily/CNMS*shvol*.txt returns HTTP 403 on programmatic access regardless of User-Agent / Referer headers; (2) FINRA Query API at api.finra.org/data/group/otcMarket/name/regShoDaily returns only the trailing ~10 months of data with random gaps, structurally unusable for backtesting; (3) FINRA's consolidated Daily Short Sale Volume archive itself only begins 2018-08-01 even if accessible. v2 reformulates Group B to use Polygon's /stocks/v1/short-interest endpoint, which IS available on the existing $29/mo Stocks Starter key with bi-monthly historical depth back to 2017-12-29 (verified 2026-04-30 against AAPL: 200 records, settlement_date 2017-12-29 → 2026-04-15). This is a STRICT UPGRADE on three dimensions: (a) literature pedigree restored — bi-monthly open interest is the canonical Diether-Lee-Werner (2009) anomaly construct that v1's daily-flow design lacked; (b) infra simpler — single REST endpoint vs custom CDN scraper; (c) PIT cleaner — settlement_date + 8 BD dissemination lag is documented vs flow-based PIT contract. Trade-off: training window truncates from 2014-01-01 → 2018-01-01 (loses 4 years of pre-short-interest history); Lasso CV power on 6.3y train slightly reduced but holdout n=99 unchanged.",
+    "class_rationale": "Fresh signal class after 3/3 FAIL in multi_source_two_stage_search_2026_04_30 (v1+v2+v3 all zero-coef under Lasso L1+CV-MSE). The decisive cross-experiment finding from prior class is that the 21-feature whitelist (3 insider + 3 macro + 8 OHLCV + 3 ranks + 4 interactions) carries zero signal at the architectures and horizons tested. v4 pivots to a substantively different feature space: earnings event dynamics + bi-monthly short interest + filing density. Substitution rate: only 2 of 21 prior-class features carry forward (insider_log_count, insider_log_dollar) as diagnostic anchors. Bonferroni resets to n=1 in-class.",
+    "class_bonferroni_caveat": "Adversarial review (Gemini 3 Pro + Perplexity Sonar Reasoning Pro) flagged that declaring v4 a 'fresh class' may be Bonferroni-evasive at the research-program level (same target, universe, holdout, architecture across all 4 'classes'). Project framework is class-conditional Bonferroni per memory notes feedback_keep_searching_screeners.md and feedback_literature_not_oracle.md, which the v4 ledger entry honors. Capital-deployment decision (separate from in-class PASS verdict) should apply program-level threshold |t|>=2.50 if v4 PASSes — documented here so the tension is not silently elided. v1->v2 supersession does NOT increment Bonferroni n: v1 never ran, no holdout was observed, no information leaked.",
+    "architecture": "single_global_lasso",
+    "architecture_rationale": "Identical to v2-v3 of the prior class (proven correct; settled architectural variable). Architectural innovation is NOT v4's research bet — feature space is.",
+    "stage1_regime_classifier": {
+      "type": "none",
+      "note": "Same as prior class v2-v3."
+    },
+    "stage2_conditional_alpha": {
+      "model_class": "Lasso",
+      "regularization": "L1 with alpha selected via 3-fold expanding-window nested CV on full train_pool with 60-day embargo (identical procedure to prior class v2-v3)",
+      "fit_strategy": "single global model fitted on entire train pool",
+      "max_lambda_grid_points": 25
+    },
+    "feature_whitelist_count": 10,
+    "feature_whitelist": [
+      "earnings_sue_naive_4q_decayed",
+      "earnings_pead_5d_post_decayed",
+      "earnings_recency_days",
+      "short_interest_pct_float_change_60d",
+      "rank_short_interest_pct_float",
+      "log1p_days_to_cover",
+      "insider_log_count",
+      "insider_log_dollar",
+      "rank_realized_downside_skew_60d",
+      "filing_density_4q"
+    ],
+    "feature_construction": {
+      "earnings_sue_naive_4q_decayed": {
+        "source": "EDGAR companyfacts (already wired in alphalens/data/fundamentals/edgar_companyfacts.py + new sue.py)",
+        "raw_construction": "(current_eps - foster_naive_forecast) / sigma_residual_prior_8q. Foster-1977 naive forecast = lag_4_eps + average_drift over prior 8 quarters.",
+        "decay_multiplier": "exp(-earnings_recency_days / 30.0)",
+        "pit_contract": "filed <= asof gates current_eps. sigma_residual MUST use first-filed values for each historical quarter (NOT latest-restated). Implementation: 2D first-filed snapshot extraction in sue.py — for each historical period_end, the EPS value used is the earliest filing where filed <= that period's PIT cutoff.",
+        "literature": "Foster (1977); Bernard-Thomas (1989) PEAD; Chordia-Goyal-Sadka (2009) drift-window evidence."
+      },
+      "earnings_pead_5d_post_decayed": {
+        "source": "EDGAR companyfacts + alphalens/data/store/history.HistoryStore",
+        "raw_construction": "Cumulative ticker excess return over the 5 trading days strictly after most recent 10-Q/10-K filing date f, where f satisfies (f + 5_BD <= asof) AND (f > asof - 90d). If no such filing exists, value is 0.0.",
+        "decay_multiplier": "exp(-earnings_recency_days / 30.0)",
+        "pit_contract": "Truncation gate (f + 5_BD <= asof) eliminates forward-leak that initial audit draft contained (zen adversarial review Objection 2A).",
+        "literature": "Bernard-Thomas (1989) PEAD."
+      },
+      "earnings_recency_days": {
+        "source": "EDGAR companyfacts",
+        "raw_construction": "Trading days since most recent 10-Q/10-K filing where (filing_date + 5_BD <= asof). Capped at 90 (after which signal decays effectively to zero anyway).",
+        "decay_multiplier": "none (this IS the event-time variable)",
+        "pit_contract": "filed <= asof - 5_BD."
+      },
+      "short_interest_pct_float_change_60d": {
+        "source": "Polygon /stocks/v1/short-interest endpoint (new client at alphalens/data/alt_data/polygon_short_interest.py). Bi-monthly cadence, ~24 settlements/year.",
+        "raw_construction": "(short_interest / shares_outstanding at most-recent settlement) - (short_interest / shares_outstanding at settlement >= 60 calendar days earlier). shares_outstanding looked up via existing alphalens/data/alt_data/shares_outstanding.py (PIT-correct). If insufficient settlement history (<60d), value is 0.0.",
+        "decay_multiplier": "none",
+        "pit_contract": "At asof t, use most recent settlement_date with (settlement_date + 8 trading days) <= t. The 8 BD lag matches FINRA short-interest dissemination calendar (FINRA Rule 4560: settlement on 15th and last business day, public dissemination 8 BD later).",
+        "literature": "Diether-Lee-Werner (2009) RFS — short-interest momentum cross-sectional anomaly. Boehmer-Jones-Zhang (2008) JF on informed shorting. Canonical literature pedigree restored vs v1 daily-flow proxy."
+      },
+      "rank_short_interest_pct_float": {
+        "source": "Polygon /stocks/v1/short-interest + shares_outstanding",
+        "raw_construction": "Cross-sectional percentile rank of (short_interest / shares_outstanding at most-recent dissemination-eligible settlement) per asof slice. Higher rank = more crowded short side.",
+        "decay_multiplier": "none",
+        "pit_contract": "same as short_interest_pct_float_change_60d.",
+        "literature": "Asquith-Pathak-Ritter (2005); Diether-Lee-Werner (2009)."
+      },
+      "log1p_days_to_cover": {
+        "source": "Polygon /stocks/v1/short-interest endpoint (provides days_to_cover field directly = short_interest / avg_daily_volume)",
+        "raw_construction": "log1p(days_to_cover at most-recent dissemination-eligible settlement). Captures crowding-vs-liquidity ratio that's distinct from level (short_interest_pct_float captures position size; days_to_cover captures unwind cost in days).",
+        "decay_multiplier": "none",
+        "pit_contract": "settlement_date + 8 BD <= asof. Polygon computes days_to_cover using the avg_daily_volume window FINRA reports (typically 20-day trailing through settlement).",
+        "literature": "Engelberg-Reed-Ringgenberg (2018) RFS on short-squeeze risk; days-to-cover is the canonical squeeze-risk metric."
+      },
+      "insider_log_count": {
+        "source": "EDGAR Form 4 parquet (already wired in alphalens/data/alt_data/form4_records.py + ParquetInsiderScorer)",
+        "raw_construction": "log1p(insider buy cluster count over trailing 90 days). Verbatim from prior-class v1-v3.",
+        "decay_multiplier": "none",
+        "pit_contract": "F4 fix locked: filing-date gate (filed <= asof) AND delisting fire-sale exclusion (180d before delisting). Tests at tests/test_pit_insider_delisting_exclusion.py.",
+        "role": "Diagnostic anchor — same construction as prior class (where it was zeroed by Lasso). Retained to test if v4's smaller feature count + fresh-class composition un-zeros it."
+      },
+      "insider_log_dollar": {
+        "source": "EDGAR Form 4 parquet (already wired)",
+        "raw_construction": "log1p(aggregate cluster dollar value over trailing 90 days). Verbatim from prior class.",
+        "decay_multiplier": "none",
+        "pit_contract": "same as insider_log_count.",
+        "role": "Second diagnostic anchor."
+      },
+      "rank_realized_downside_skew_60d": {
+        "source": "alphalens/data/store/history.HistoryStore (already wired)",
+        "raw_construction": "Cross-sectional descending percentile rank of (std(negative_daily_returns over 60d) / std(positive_daily_returns over 60d)) per asof slice. Larger raw value = more left-skew = higher rank.",
+        "decay_multiplier": "none",
+        "pit_contract": "Pure OHLCV, T+0 close-of-day asof reads.",
+        "literature_pedigree_gap": "Realized != implied skew empirically (Bollerslev-Todorov 2011 documents partial correlation only). The cross-sectional skew anomaly literature (Bali-Cakici-Whitelaw 2011 IVOL, Conrad-Dittmar-Ghysels 2013 ex-ante skewness) operates on option-IMPLIED skew. Substituting realized loses the theoretical anchor. Deliberate novelty bet per project mission (feedback_literature_not_oracle.md)."
+      },
+      "filing_density_4q": {
+        "source": "EDGAR companyfacts",
+        "raw_construction": "Count of 10-Q + 10-K + 8-K filings within trailing 252 BD with filed <= asof, capped at 30.",
+        "decay_multiplier": "none",
+        "pit_contract": "filed <= asof. No restatement leakage because the count is over events, not values."
+      }
+    },
+    "target_definition": {
+      "horizon": "20_trading_days_forward_return",
+      "construction": "raw excess return over RF (20d-forward close-to-close minus 20d-cumulative RF). Reuses target.forward_excess_return with holding_period=20.",
+      "post_hoc_attribution": "Carhart-4F regression of realised 20d-forward portfolio returns on 20d-aggregated Mkt-RF/SMB/HML/MOM. Daily factor returns summed (arithmetic) over the 20-day holding window matching each portfolio observation. NOT pre-residualized at target level.",
+      "horizon_rationale": "20d sits inside the documented PEAD drift window (Bernard-Thomas 1989; Chordia-Goyal-Sadka 2009 confirm 30-60d typical, with substantial drift visible at 20d). Decayed event features (SUE + PEAD with exp(-recency/30) multiplier) align with this horizon by converting event-static signals into daily-updating gradients."
+    },
+    "portfolio_construction": {
+      "ranking": "predicted forward excess return per (ticker, asof) from the global Lasso (trained on 20d targets)",
+      "top_n": 30,
+      "weighting": "equal",
+      "rebalance_stride": 5,
+      "holding_period": 20,
+      "overlap_design": "Stride=5 with holding=20: consecutive rebalance observations share 75% of holding window (15 of 20 days). MA(3) autocorrelation by construction; HAC standard errors with maxlags=5 correct for this. Identical to prior class v3 design.",
+      "universe": "AlphaLens PIT universe (yfinance + survivorship parquet), ADV >= $5M filter applied at scoring time"
+    },
+    "cost_model": {
+      "half_spread_bps": 10,
+      "applied_to": "every entry and exit (round-trip = 20 bps base + 5 bps adverse selection one-way -> 30 bps total). Identical to prior class v3."
+    },
+    "statistical_inference": {
+      "hac_maxlags": 5,
+      "hac_maxlags_rationale": "Identical to prior class v3. Stride=5 with holding=20 produces overlapping returns where consecutive samples share 15/20 = 75% of the window. Theoretical structure MA(3) at lag k<=3 plus residual at lag 4. Setting maxlags=5 explicitly (one above MA-order) is conservative per Newey-West / Andrews lag-selection guidance.",
+      "sharpe_annualization": "Lo (2002) variance-ratio-adjusted Sharpe via existing alphalens.backtest.metrics.sharpe_autocorr_adjusted. Periods-per-year = 252/stride = 50.4."
+    },
+    "anti_overfit_constraints": {
+      "max_features": 10,
+      "lasso_l1_regularization": "forces feature sparsity; same procedure as prior class v1-v3",
+      "no_post_hoc_feature_addition": "any new feature requires a new pre-registration with its own Bonferroni denominator",
+      "no_post_hoc_feature_removal": "v4 v2 must run with the locked 10-feature whitelist; if Lasso zeros all coefs, the FAIL verdict stands and the result is logged",
+      "no_target_horizon_change": "20d horizon locked pre-Phase-B; cannot be changed mid-experiment",
+      "no_decay_lambda_tuning": "exp(-recency_days / 30.0) is locked; the 30.0 constant is NOT a tunable hyperparameter for v4 v2. Future variants may re-pre-register with a different decay constant.",
+      "no_train_window_extension": "training window 2018-01-01 -> 2024-04-29 locked. Cannot extend backward via imputation or forward via post-Phase-B observation. v1-supersession is the LAST allowable design change before Phase B."
+    },
+    "differences_from_v1_finra_blocked": "Three Group B features replaced with Polygon bi-monthly short-interest derivations: (a) short_volume_ratio_change_60d -> short_interest_pct_float_change_60d; (b) rank_short_volume_ratio -> rank_short_interest_pct_float; (c) short_exempt_ratio_20d -> log1p_days_to_cover. Training start date moved from 2014-01-01 to 2018-01-01 to align with Polygon short-interest history (begins 2017-12-29). Holdout window unchanged. All other architectural parameters (target, stride, holding, cost, HAC, Sharpe, anti-overfit) unchanged from v1.",
+    "differences_from_prior_class_v3": "Substantively different feature whitelist (8 of 10 features new vs prior class; only insider_log_count and insider_log_dollar carry forward as diagnostic anchors). All prior-class OHLCV / cross-sectional-rank-of-OHLCV / FRED-macro / FRED-macro-interaction features dropped. NEW infra: Polygon short-interest client (~3-4h) + Foster-SUE construction with first-filed PIT snapshots (~6-8h) + alt_data feature joiner (~3-4h). Time-decay multipliers added for event-driven SUE + PEAD features. Architecture, target horizon, portfolio construction, cost model, statistical inference all UNCHANGED from prior class v3.",
+    "adversarial_review_summary": "Stage 1 (zen / gemini-3-pro-preview, thinking_mode=high): 5 objections — accepted/fixed: PEAD look-ahead truncation (Obj 2), SUE first-filed PIT (Obj 3), raw+rank multicollinearity drop (Obj 4), time-decay multiplier on event features (Obj 1 secondary fix). Partially accepted: target horizon stays at 20d (Obj 1 main claim refuted by perplexity literature confirmation that PEAD drift window is 30-60d). Surfaced not-overridden: program-level Bonferroni concern (Obj 5) — see class_bonferroni_caveat above. Stage 2 (perplexity / sonar-reasoning-pro, search_context_size=high): confirmed Obj 2/3/4. Added 3 blind-spot findings — accepted: NFCI+UMCSENT cross-sectional incoherence (both dropped). Surfaced as deliberate novelty bets per project mission: FINRA daily flow lacks open-interest literature pedigree (RESOLVED in v2 — bi-monthly open interest from Polygon DOES have full DLW/Asquith-Pathak-Ritter pedigree); realized downside skew lacks implied-skew literature pedigree (still novelty bet). Perplexity bottom-line ('drop everything without literature pedigree, run minimalist 4-feature literature-only Lasso') REJECTED as misaligned with project's experimentation mission documented in feedback_literature_not_oracle.md and feedback_keep_searching_screeners.md. Adversarial review documented in full at docs/research/v4_alt_data_pit_audit_2026_04_30.md. Stage 3 (perplexity_research / sonar-deep-research, reasoning_effort=high) on FINRA infra: identified Polygon/Massive bi-monthly short-interest endpoint as in-budget alternative; v2 supersession is the result."
+  },
+  "periods": {
+    "train_start": "2018-01-01",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "train_truncation_rationale": "Polygon short-interest historical depth begins 2017-12-29; v2 train start at 2018-01-01 is the earliest point at which all 10 features are PIT-correct. v1's 2014-01-01 start is no longer attainable given FINRA infra block."
+  },
+  "success_criteria": {
+    "mode": "holdout_then_multi_phase",
+    "primary_metric": "Carhart-4F alpha t-stat (HAC, maxlags=5) on holdout 2024-04-30 -> 2026-04-30 portfolio returns",
+    "bonferroni_threshold": "n=2 in class alt_data_screener_search_2026_04_30 (system counts v1 abandoned + v2 active) -> |t| >= 2.24 by canonical preregister threshold computation. Methodological note: v1 never observed holdout data and was abandoned for INFRA reasons before any code ran, so a strict-no-leakage perspective would argue n=1. Project ledger framework counts every registered hypothesis and v2 accepts the more conservative threshold.",
+    "pass_rule": "Holdout Carhart-4F alpha t-stat >= 2.24 AND holdout Lo-adjusted Sharpe >= 0.5 AND holdout alpha annualized >= 3% AND holdout MaxDD >= -35% AND model has at least 1 nonzero coefficient (rules out zero-coef structural-artifact pattern)",
+    "mid_rule": "alpha t-stat >= 1.5 AND Sharpe >= 0.3 AND >=1 nonzero coef -> MID; refine + re-pre-register before any deploy",
+    "fail_rule": "alpha t-stat < 1.5 OR Sharpe < 0.3 OR all coefs zero -> FAIL, log to ledger, document v4 v2 verdict",
+    "deployment_threshold_program_level": "Even on PASS, capital-deployment decision applies program-level Bonferroni n=4 across all 4 classes ever tested on this target+universe+holdout -> |t| >= 2.50. Below 2.50 = research-only verdict, not capital-deployable.",
+    "phase_robustness_followup": "If holdout PASS or MID, run multi-phase audit (5 phase offsets) on 2018-2026 with same architecture; PASS only if every phase alpha t-stat >= 1.5 AND mean alpha t-stat >= 2.24 (in-class) or >= 2.50 (program-level for deploy). If holdout FAIL outright, skip Phase C.",
+    "comparison_to_prior": "Prior class v1-v3 mean phase alpha-t = +0.65 / +0.55 / +0.55. v4 v2 in-class needs holdout alpha-t >= 2.24 (~3.5x prior). Honest expectation: with 2 anchor features that historically zero, 5 fresh-but-literature-pedigreed features (3 short-interest + SUE + PEAD), 1 OHLCV-derived novelty, 1 event-density novelty, FAIL/MID more likely than PASS. The PASS case would imply either (a) the time-decay reformulation surfaces signal that prior-class framing buried, OR (b) the literature-pedigreed short-interest features (which the prior class lacked entirely) carry meaningful cross-sectional signal that combines productively with earnings event dynamics."
+  }
+}

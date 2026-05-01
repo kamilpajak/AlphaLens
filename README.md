@@ -50,6 +50,16 @@ CLOSED-layer code is retained as a research framework + anti-pattern record (see
 
 ---
 
+## Concepts
+
+- **Ticker** — exchange symbol identifying a stock (e.g. `AAPL`, `NVDA`); the unit of selection in every screener.
+- **Asof** — a point-in-time anchor (a date) at which features are computed using only data observable on that date; PIT-correctness means no later-revised data leaks back.
+- **Lasso** — L1-regularized linear regression that automatically zeros uninformative feature coefficients; used in the alt-data screeners to fit ranking models on the 10-feature whitelist.
+- **Holdout** — the date range withheld from model fitting and used only for verdict (e.g. 2024-04-30 → 2026-04-30); a strategy is judged by its performance on this unseen slice. "Burnt holdout" means the same window has been observed across multiple experiments, inflating multiplicity.
+- **Rebalance** — the act of recomputing scores at an `asof` and updating portfolio holdings; in v3-v6 the rebalance stride is 5 trading days with a 20-day holding period, producing 75% overlap (4-tranche).
+
+---
+
 ## Quickstart
 
 ### Prerequisites

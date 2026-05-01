@@ -54,6 +54,7 @@ def run_regression(
     spec_name: str | None = None,
     periods_per_year: int = 252,
     subtract_rf: bool = True,
+    hac_maxlags: int | None = None,
 ) -> AlphaResult:
     """Run OLS of portfolio excess return on [intercept, *factor_columns].
 
@@ -62,6 +63,12 @@ def run_regression(
     subtract_rf: when True (default), y = port - RF. Set False when the input is
         already an excess return (e.g. a long-short factor) — then y = port
         directly and factors["RF"] is ignored for the LHS.
+    hac_maxlags: explicit override for the Newey-West lag count. ``None`` (default)
+        applies the formula ``int(4·(n/100)^(2/9))`` tuned for daily returns.
+        For overlapping returns (e.g. stride=5 with holding=20 → MA(3-4) by
+        construction), pass an explicit value at least equal to ``holding/stride``
+        to ensure HAC SEs aren't artificially compressed. Ignored when
+        ``cov_type != "HAC"``.
     """
     missing = [c for c in factor_columns if c not in factors.columns]
     if missing:
@@ -77,9 +84,10 @@ def run_regression(
     X = sm.add_constant(aligned[factor_columns])
 
     if cov_type == "HAC":
+        maxlags = int(hac_maxlags) if hac_maxlags is not None else _newey_west_maxlags(len(aligned))
         model = sm.OLS(y, X).fit(
             cov_type="HAC",
-            cov_kwds={"maxlags": _newey_west_maxlags(len(aligned))},
+            cov_kwds={"maxlags": maxlags},
         )
     elif cov_type == "nonrobust":
         model = sm.OLS(y, X).fit()

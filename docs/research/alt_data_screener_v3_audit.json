@@ -1,0 +1,85 @@
+{
+  "ledger_id": "alt_data_screener_v3_2026_05_01",
+  "signal_class": "alt_data_screener_search_2026_04_30",
+  "verdict": "FAIL",
+  "phase_b_only": true,
+  "phase_c_status": "SKIPPED per pre-reg phase_robustness_followup clause: 'If holdout FAIL outright, skip Phase C.'",
+  "structural_note": "v3 is the FIRST experiment across 5 in this class (multi_source_two_stage v1+v2+v3 + alt_data v2 + this v3) to produce non-zero Lasso coefficients. The rank-target transformation broke the zero-coef pattern, confirming zen's diagnostic that target-shape (heavy-tailed return distribution) was the bottleneck for the L1+MSE inner solver. However, the holdout outcome is informationally distinct from prior FAILs: signal IS present (positive holdout rank-IC) but inverts under top-N tail selection.",
+  "holdout_metrics": {
+    "n_rebalances": 94,
+    "mean_top_n": 30.0,
+    "turnover_per_rebal": 0.192,
+    "sharpe_gross_lo_adj": -0.40,
+    "sharpe_net_lo_adj": -0.47,
+    "sharpe_gross_naive": -0.52,
+    "alpha_gross_4f_ann": -3.7407,
+    "alpha_net_4f_ann": -3.7698,
+    "alpha_t_stat_hac5": -4.32,
+    "excess_vs_spy_gross_ann": -0.7323,
+    "excess_vs_spy_net_ann": -0.7614,
+    "max_drawdown_net_cum": -0.6397,
+    "cost_drag_ann": 0.0291,
+    "carhart_aggregated_n": 87,
+    "in_cv_ir": 0.338,
+    "holdout_mean_per_asof_rank_ic": 0.0260,
+    "holdout_n_asofs_with_ic": 94
+  },
+  "lasso_fit": {
+    "n_train": 221920,
+    "lambda_chosen": 0.00289,
+    "lambda_grid_index": 4,
+    "lambda_grid_size": 25,
+    "nonzero_coefs": 2,
+    "feature_count": 10,
+    "cv_mean_mse": 0.08333,
+    "nonzero_features": [
+      ["rank_short_interest_pct_float", -0.0063373337321881735],
+      ["filing_density_4q", 0.00160798110254709]
+    ],
+    "interpretation": "Lasso learned: high short-interest rank predicts LOW future return (Diether-Lee-Werner short-anomaly direction); high filing density predicts HIGH future return. Both signs match published literature on equity short interest and corporate-event activity premia."
+  },
+  "fail_reasons": [
+    "in-CV IR = 0.338 < 0.50 MID gate (zen+perplexity adversarial review concern about fold-instability under rank-objective)",
+    "alpha_t_stat = -4.32 (highly significant NEGATIVE, opposite of pass direction)",
+    "Sharpe net = -0.47 < 0.30 MID gate",
+    "MaxDD = -64.0% < -35% pass-rule",
+    "Top-N selection inverted holdout direction despite positive bulk rank-IC"
+  ],
+  "structural_findings": {
+    "rank_transform_broke_zero_coef_pattern": "First of 5 experiments on this universe to surface non-zero Lasso coefficients. Confirms zen's adversarial-review diagnostic that L1+MSE on heavy-tailed return targets drives lambda to maximum-penalty grid point. Rank-percentile target compresses to bounded [-0.5,+0.5] where modest cross-sectional ordering signal survives L1.",
+    "holdout_rank_ic_positive_but_top_n_inverted": "Holdout mean per-asof rank-IC = +0.0260 — bulk-of-distribution correlation between predictions and forward returns is positive. But top-30 by predicted score produced -76%/y excess net. Mechanism: top-30 selection magnifies tail behavior; the model's predicted-best stocks (low SI + high filings = quality/value-tilted) underperformed catastrophically in the AI-themed 2024-2026 bull market while the broader signal remained directionally correct.",
+    "regime_flip_hypothesis": "DLW (Diether-Lee-Werner 2009) short-anomaly evidence is from 1988-2002 + post-2008 samples. The 2024-2026 holdout includes the immediate post-zero-rate AI rally where high-short-interest names (e.g. AI-adjacent shorts) heavily outperformed via short squeeze. Train period 2018-2024 included normal-regime short-anomaly behavior; holdout inverted it. Ledger entry documents this as regime-shift evidence, not feature failure.",
+    "in_cv_ir_failure_separately": "IR = 0.338 means fold-to-fold rank-IC dispersion is high (one fold strongly positive, others weakly so). Even pre-holdout, the signal stability is below the IR=0.5 MID threshold per the pre-reg gate. This was correctly flagged by the new gate before the holdout fail compounded the verdict."
+  },
+  "what_v5_settles": "Target shape (raw-return vs rank-percentile) is now a SETTLED architectural variable in this universe. Rank-target IS the right transformation (broke zero-coef pattern + surfaced literature-canonical coef signs), but cross-sectional rank-IC at this universe is too low and too unstable across folds to support a top-30 long-only strategy.",
+  "what_v5_does_not_settle": "Whether different selection rules (e.g. long/short top-30/bottom-30, decile-spread portfolios) would have surfaced positive results given the bulk-of-distribution rank-IC=+0.026. v5's selection rule was held identical to v4 v2 to isolate the target-transform variable; selection-rule ablation is a future variant.",
+  "comparison_to_prior_class": {
+    "alt_data_screener_search_class_full_history": [
+      {"id": "alt_data_screener_v1_finra_blocked_2026_04_30", "verdict": "abandoned", "reason": "FINRA infra block"},
+      {"id": "alt_data_screener_v2_2026_04_30", "verdict": "FAIL", "alpha_t": 0.05, "nonzero_coefs": "0/10", "in_cv_ir": "n/a (no IR gate in v2)"},
+      {"id": "alt_data_screener_v3_2026_05_01", "verdict": "FAIL", "alpha_t": -4.32, "nonzero_coefs": "2/10", "in_cv_ir": 0.338, "holdout_rank_ic": 0.026}
+    ]
+  },
+  "class_status_after_v3": {
+    "n_completed": 2,
+    "n_failed": 2,
+    "n_passed": 0,
+    "n_abandoned": 1,
+    "next_test_bonferroni_threshold_n4": 2.50
+  },
+  "research_program_status": {
+    "total_paradigm_failures_across_classes": 12,
+    "this_was": "12th paradigm failure since 2026-04-25 strategic pivot (ordered: themed/fundamental/insider/rotation/tri-factor/mom+lowvol/quality+momentum/vol-target/multi_source v1/v2/v3/alt_data v2/alt_data v3)"
+  },
+  "defensible_next_class_options": {
+    "rationale": "v3 demonstrated rank-target IS architecturally correct + features carry weak ordinal signal (+0.026 rank-IC). Bottleneck is selection rule magnifying tail behavior, OR fold-instability indicating signal too weak for top-N strategies. Defensible next-class options:",
+    "options": [
+      {"id": "A_long_short_decile_spread", "description": "Same rank-target Lasso, BUT change selection rule from top-30-long to long-decile-minus-short-decile (or top-30-long minus bottom-30-short, market-neutral). Captures the bulk rank-IC instead of magnifying tail.", "expected_yield": "If rank-IC=+0.026 transfers to decile-spread, modest positive alpha possible. Decile-spread is less tail-sensitive."},
+      {"id": "B_lightgbm_rank_target", "description": "Switch to LightGBM with rank-percentile target. Trees capture interactions Lasso cannot. Risk: 222k rows × 10 features still needs careful regularization.", "expected_yield": "Higher capacity to fit; higher overfitting risk."},
+      {"id": "C_increase_n_folds", "description": "5-fold or walk-forward-with-rolling-window CV may stabilize IR. v3 used 3 folds and IR=0.338 was below 0.5 MID.", "expected_yield": "Better IR estimate may surface that v3's signal is stable enough; or definitively confirm instability."},
+      {"id": "D_purge_overlap_reduce_horizon", "description": "20d holding with 5d stride creates 75% overlap which inflates HAC variance. Reduce stride to non-overlapping (stride=20, holding=20) for cleaner inference. Cuts holdout n=99 to ~25, but each obs is independent.", "expected_yield": "Stronger statistical inference but underpowered."},
+      {"id": "E_more_features_richer_signal", "description": "v3 had 10 features; signal might be too thin. Add 5-10 more (e.g. analyst-revisions via Yahoo, options-IV-skew via Polygon if accessible, news sentiment via Polygon). Expensive (Polygon options tier or news endpoint).", "expected_yield": "If features were the constraint, more features may help. If selection-rule was the constraint, doesn't help."}
+    ],
+    "ranking_by_information_value": ["A (selection rule clean isolation, low cost)", "C (CV-stability isolation)", "B (model class)", "D (statistical inference cleanup)", "E (more features)"]
+  }
+}

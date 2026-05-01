@@ -1,0 +1,105 @@
+{
+  "params_frozen": {
+    "class": "alt_data_screener_search_2026_04_30",
+    "version": "v4",
+    "v3_to_v4_diff_summary": "v3 (rank-target Lasso) FAIL'd structurally informatively: 2/10 nonzero coefs (rank_short_interest_pct_float=-0.0063 DLW-canonical, filing_density_4q=+0.0016 literature-canonical), holdout mean per-asof Spearman rank-IC=+0.0260 (POSITIVE bulk signal), but top-30 selection inverted on holdout (alpha_t=-4.32) due to 2024-2026 short-squeeze regime crushing the lowest-SI + highest-filing-density quality bucket. v4 keeps EVERYTHING identical (same 10 features, same Lasso L1 with target_transform='rank', same 3-fold expanding CV-MSE with 60d embargo, same 25-pt grid, same train/holdout periods, same stride/holding/HAC=5/Lo-2002 Sharpe) and changes ONE thing: the selection rule becomes long top-decile EW MINUS short bottom-decile EW (market-neutral L/S spread) instead of top-30 long EW. Rationale: bulk +0.0260 rank-IC is a population-level statement about the WHOLE cross-section; decile spread (~10% of ~1033 names = ~103 per leg) averages over 20% of the cross-section per leg, capturing the bulk signal without magnifying the regime-flipping tail behavior of top-30.",
+    "class_rationale": "Same-class continuation of alt_data_screener_search_2026_04_30. v1 abandoned (FINRA infra). v2 FAIL (raw-return target, 0/10 coefs). v3 FAIL (rank-target, 2/10 coefs but top-30 tail-inverted). v4 isolates SELECTION RULE as the variable. Per project framework feedback_keep_searching_screeners.md, search remains open; class-conditional Bonferroni handles multiplicity.",
+    "class_bonferroni": "n=4 in class (v1 abandoned + v2 completed-FAIL + v3 completed-FAIL + v4 active) -> canonical preregister threshold |t| >= 2.50. v4 accepts the conservative threshold per project framework.",
+    "harking_caveat": "Adversarial review (zen + perplexity, 2026-05-01) flagged BURNT HOLDOUT as the dominant methodological risk. v3 already observed the 2024-04-30 -> 2026-04-30 holdout and surfaced the +0.0260 mean rank-IC. v4 is constructed against that specific observation. Pre-registration + n=4 Bonferroni mitigates but cannot fully cleanse this. Polygon SI history (starts 2017-12-29) leaves no genuinely fresh OOS window with current train/holdout split. EXPLICIT MITIGATION: v4 is DIAGNOSTIC ONLY. Capital deploy is OFF-TABLE regardless of outcome. PASS verdict triggers a v5 re-pre-registration on truly fresh data (post-2026-04-30 continuation as it accrues, OR different feature universe, OR different model class). FAIL or MID verdict informs next-class decision (option B LightGBM, option E feature expansion).",
+    "architecture": "single_global_lasso (target_transform='rank')",
+    "architecture_rationale": "Identical to v3 (settled architectural variable). Architecture is NOT v4's research bet — selection rule is.",
+    "stage1_regime_classifier": {
+      "type": "none",
+      "note": "Same as v3."
+    },
+    "stage2_conditional_alpha": {
+      "model_class": "Lasso",
+      "regularization": "L1 with alpha selected via 3-fold expanding-window nested CV on full train pool with 60-day embargo (identical to v3)",
+      "fit_strategy": "single global model fitted on entire train pool with target_transform='rank'",
+      "max_lambda_grid_points": 25,
+      "cv_objective": "argmin mean fold MSE on rank-transformed target (identical to v3)",
+      "cv_objective_alignment": "Minimizing MSE between Lasso predictions and per-asof rank-percentile target is equivalent (up to constant) to maximizing Pearson correlation between predictions and ranks within asof, which is Spearman rank correlation. Inner solver and CV objective are aligned."
+    },
+    "feature_whitelist_count": 10,
+    "feature_whitelist": [
+      "earnings_sue_naive_4q_decayed",
+      "earnings_pead_5d_post_decayed",
+      "earnings_recency_days",
+      "short_interest_pct_float_change_60d",
+      "rank_short_interest_pct_float",
+      "log1p_days_to_cover",
+      "insider_log_count",
+      "insider_log_dollar",
+      "rank_realized_downside_skew_60d",
+      "filing_density_4q"
+    ],
+    "feature_construction_unchanged": "All 10 features computed identically to v3 per docs/research/preregistration/params_alt_data_screener_v3_2026_05_01.json. No feature construction changes.",
+    "target_definition": {
+      "raw_target": "20-day forward excess return over RF (same as v3)",
+      "transformation": "Per-asof percentile-rank centering: y_transformed[i] = (rankdata(y_raw[asof_slice], method='average') / n_asof) - 0.5 (same as v3)",
+      "transformation_unchanged": "Rank-target transform settled as correct architecture per v3.",
+      "horizon_unchanged": "20d-forward, same as v3.",
+      "post_hoc_attribution": "Carhart-4F regression of realised 20d-forward L/S portfolio returns on 20d-aggregated Mkt-RF/SMB/HML/MOM. Mkt-RF beta is reported as a market-neutrality sanity check (descriptive, |β| <= 0.20 informative but does NOT gate verdict)."
+    },
+    "portfolio_construction": {
+      "ranking": "predicted score per (ticker, asof) from rank-trained Lasso (identical to v3)",
+      "selection_rule": "long_top_decile_EW_minus_short_bottom_decile_EW",
+      "long_eligibility": "post-ADV cross-section (>= $5M ADV at asof, identical to v3)",
+      "short_eligibility": "post-ADV cross-section AND short_interest_pct_float <= 0.15 at asof (zen-recommended HTB safeguard; per Drake-Rees-Swanson 2011 short-anomaly literature convention 10-15% boundary of conventionally short-able SI%; LOCKED at 15%)",
+      "decile_size_long": "floor(n_long_eligible / 10)",
+      "decile_size_short": "floor(n_short_eligible / 10)",
+      "long_weighting": "equal",
+      "short_weighting": "equal",
+      "rebalance_stride": 5,
+      "holding_period": 20,
+      "overlap_design": "Stride=5 with holding=20: 75% overlap, MA(3) autocorrelation, HAC maxlags=5. Identical to v3.",
+      "min_decile_size": 3,
+      "min_decile_size_rationale": "Asof slices where either long-eligible decile size < 3 OR short-eligible decile size < 3 are excluded from the holdout return series (decile statistics undefined).",
+      "universe": "AlphaLens PIT universe (yfinance + survivorship parquet)"
+    },
+    "cost_model": {
+      "half_spread_bps": 10,
+      "applied_to": "every entry and exit on EACH leg; round-trip 20 bps base + 5 bps adverse selection = 30 bps per leg per rebalance. L/S total = 2 legs * 30 bps = 60 bps per rebalance round-trip on doubled turnover.",
+      "borrow_fee_separate": "1.5% annualized on short-leg notional (mid-range Russell-2000 estimate per Geczy-Musto-Reed 2002 + IHS Markit 2020). Reported alongside primary cost, NOT subtracted from headline alpha (avoids double-counting against potential prime broker rebates that exceed expectations on filtered universe). Honest verdict notes the borrow-fee scenario."
+    },
+    "statistical_inference": {
+      "hac_maxlags": 5,
+      "sharpe_annualization": "Lo (2002) variance-ratio-adjusted via alphalens.backtest.metrics.sharpe_autocorr_adjusted, periods_per_year=252/5=50.4. Identical to v3.",
+      "carhart_regression": "Carhart-4F regression of L/S return series on 20d-aggregated Mkt-RF/SMB/HML/MOM. Alpha t-stat is the primary metric; Mkt-RF beta is the market-neutrality sanity check."
+    },
+    "anti_overfit_constraints": {
+      "max_features": 10,
+      "lasso_l1_regularization": "forces feature sparsity (target_transform='rank' settled from v3)",
+      "no_post_hoc_feature_addition": "any new feature requires a new pre-registration",
+      "no_post_hoc_feature_removal": "v4 must run with locked 10-feature whitelist",
+      "no_target_horizon_change": "20d horizon locked",
+      "no_target_transform_tuning": "rank-target transform locked from v3",
+      "no_decile_size_tuning": "decile (10%) is the locked cut; quintile (20%) and ventile (5%) variants would require new pre-registration",
+      "no_short_filter_tuning": "SI > 15% short-leg exclusion is the locked filter; alternative thresholds (10%, 20%) require new pre-registration",
+      "no_short_weighting_tuning": "equal-weight short leg is locked; inverse-volatility weighting would be a new pre-registration variable (would address zen Objection 1 separately)"
+    },
+    "differences_from_v3": "ONLY the selection rule changes (top-30 long EW -> long top-decile EW MINUS short bottom-decile EW with SI<=15% short-leg filter). Architecture, features, target transform, periods, stride, holding, cost basis, HAC, Sharpe all identical to v3. New cost mechanic: 2x per-leg drag for L/S round-trip; separate borrow-fee accounting at 1.5% annualized. New gate: market-neutrality |beta_mkt| <= 0.20 descriptive (does NOT gate verdict).",
+    "adversarial_review_summary": "Stage 1 (zen / gemini-3-pro-preview, thinking_mode=high, 2026-05-01): two flaws flagged FATAL and resolved. Flaw 1 — rank-to-return asymmetry trap: rank-target Lasso is blind to magnitudes; +0.0260 rank-IC can survive 1 meme +300% short squeeze in bottom decile (99/100 ordinals correct). L/S decile portfolio TRADES return tails the model ignored. ACKNOWLEDGED as inherent rank-IC -> spread translation risk; SI > 15% filter dampens worst HTB squeezers; FAIL of v4 under tail asymmetry is a clean diagnostic (next class: LightGBM with quantile loss). Flaw 2 — hard-to-borrow short leg: bottom decile = high-SI per Lasso coef, real Russell-2000 borrow on these spikes 20-100% annualized, not 1.5%. ADOPTED via SI > 15% ex-ante filter on short-eligible universe. Two zen recs NOT adopted (HARKing flexibility): inverse-vol weighting on short leg (would be NEW design var post-review; deferred to v5 if needed), smaller decile variants (HARKing flexibility). Stage 2 (perplexity / sonar-reasoning-pro, search_context_size=high, 2026-05-01): HARKing on burnt holdout (MODERATE-HIGH) MITIGATED via 'diagnostic only - capital deploy off-table' framing; Bonferroni n=4 inadequacy under shared-regime experiments NOT adopted (project framework canon); IC-to-alpha mapping pre-specification ACCEPTED (this JSON makes it explicit); modest rank-IC may not support decile economics ACKNOWLEDGED as failure mode; borrow cost under-estimation PARTIALLY addressed by SI filter; bootstrap decile-spread significance DEFERRED to Phase D if Phase B clears. Full review log: docs/research/v6_longshort_decile_design_2026_05_01.md."
+  },
+  "periods": {
+    "train_start": "2018-01-01",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rationale": "Identical to v3 (Polygon short-interest history begins 2017-12-29 -> 2018-01 train start; 2-year holdout for n=99 rebalances at stride=5). NOTE: this is the SAME holdout window v2 and v3 already tested. Pre-reg explicitly acknowledges burnt-holdout HARKing risk; v4 is diagnostic only."
+  },
+  "success_criteria": {
+    "mode": "holdout_then_multi_phase",
+    "primary_metric": "Carhart-4F alpha t-stat (HAC, maxlags=5) on holdout 2024-04-30 -> 2026-04-30 L/S portfolio returns",
+    "bonferroni_threshold": "n=4 in class alt_data_screener_search_2026_04_30 (v1 abandoned + v2 completed-FAIL + v3 completed-FAIL + v4 active) -> |t| >= 2.50 by canonical preregister threshold computation.",
+    "pass_rule": "Holdout L/S Carhart-4F alpha t-stat >= 2.50 AND Lo-adjusted Sharpe (net) >= 0.5 AND alpha annualized >= 3% AND MaxDD >= -35% AND >= 1 nonzero Lasso coefficient AND in-CV IR (mean fold rank-IC / std fold rank-IC) >= 1.0 AND holdout mean per-asof rank-IC > 0",
+    "mid_rule": "alpha t-stat >= 1.5 AND Sharpe (net) >= 0.3 AND >= 1 nonzero coef AND in-CV IR >= 0.5 AND holdout mean per-asof rank-IC > 0 -> MID; refine + re-pre-register before deploy",
+    "fail_rule": "anything that doesn't clear MID -> FAIL, log to ledger, document v4 verdict",
+    "descriptive_gates": "|Mkt-RF beta from Carhart 4F| <= 0.20 (market-neutrality sanity); reported but does NOT determine verdict.",
+    "diagnostic_only_clause": "BURNT-HOLDOUT MITIGATION: v4 is DIAGNOSTIC ONLY. Capital deploy is OFF-TABLE regardless of holdout verdict. PASS verdict triggers v5 re-pre-registration on truly fresh data (post-2026-04-30 continuation OR different feature universe OR different model class). FAIL or MID verdict informs next-class decision (option B LightGBM, option E feature expansion).",
+    "phase_robustness_followup": "If holdout PASS or MID, run multi-phase audit (5 phase offsets) on 2018-2026 with same architecture; PASS only if every phase alpha t-stat >= 1.5 AND mean alpha t-stat >= 2.50 (in-class). If holdout FAIL outright, skip Phase C.",
+    "permutation_null_followup": "If Phase C PASS, optional Phase D: bootstrap decile-spread significance (resample returns within deciles preserving cross-sectional structure, test whether observed spread lies in tails of null distribution). Adds compute (1000 bootstrap iterations) but provides non-parametric significance evidence beyond Carhart-4F. Per perplexity rec [7] Timmermann bootstrap.",
+    "regime_stratification_postdoc": "DESCRIPTIVE post-hoc: report long-decile alpha, short-decile alpha, L/S spread separately for 2024-04-30 -> 2024-12-31 / 2025-01-01 -> 2025-12-31 / 2026-01-01 -> 2026-04-30 sub-periods. Per perplexity rec [4] regime-stratified analysis. NOT a verdict gate; informational.",
+    "comparison_to_prior": "Prior class v1-v3 mean phase alpha-t = +0.65 / +0.55 / +0.55 (multi_source class) and alt-data class v2=+0.05 / v3=-4.32. v4 in-class needs holdout L/S alpha-t >= 2.50 (Bonferroni n=4). Honest expectation per design memo: FAIL >> MID > PASS. Distribution: 35% FAIL middle-decile / 25% FAIL short-leg tail / 25% MID partial signal / 12% FAIL symmetric tail decay / 3% PASS bulk-signal-clean."
+  }
+}

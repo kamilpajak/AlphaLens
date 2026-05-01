@@ -1,0 +1,89 @@
+{
+  "id": "alt_data_screener_v5_long_only_2026_05_01",
+  "class": "alt_data_screener_search_2026_04_30",
+  "verdict": "FAIL (log to ledger)",
+  "headline_metrics": {
+    "n": 94,
+    "sharpe_gross": -1.0570030841746296,
+    "sharpe_gross_naive": -1.3233460027320916,
+    "sharpe_net": -1.1103669541483692,
+    "alpha_gross_4f": -1.9268859190045395,
+    "t_4f": -3.20485087033642,
+    "alpha_net_4f": -1.9447940084503155,
+    "excess_vs_bench_ann": -0.3547138876017668,
+    "excess_vs_bench_net": -0.3726219770475428,
+    "max_drawdown": -0.6669757123781297,
+    "cost_drag_ann": 0.017908089445775995,
+    "turnover_per_rebal_long": 0.118439745011746,
+    "long_ann_return": 0.20568298545523428,
+    "bench_ann_return": 0.5603968730570014,
+    "decile_size_long_mean": 96.84042553191489,
+    "n_rebalances": 94,
+    "carhart_aggregated_n": 87,
+    "beta_mkt_carhart4f": -0.14480401762424838,
+    "beta_descriptive_ok": true,
+    "stretch_threshold_passed": false,
+    "in_cv_ir": 0.33847214668295444,
+    "holdout_mean_rank_ic": 0.02604698312265058,
+    "holdout_n_asofs_with_ic": 94
+  },
+  "regime_stratification": {
+    "2024_partial": {
+      "n_rebal": 34,
+      "excess_ann": -0.4590873478179095,
+      "long_ann": 0.2985283587385849,
+      "bench_ann": 0.7576157065564945
+    },
+    "2025_full": {
+      "n_rebal": 50,
+      "excess_ann": -0.5137407732425975,
+      "long_ann": 0.16197137325076175,
+      "bench_ann": 0.6757121464933593
+    },
+    "2026_partial": {
+      "n_rebal": 10,
+      "excess_ann": 0.7952903053372722,
+      "long_ann": 0.10856677731420465,
+      "bench_ann": -0.6867235280230676
+    }
+  },
+  "nonzero_coefs": [
+    {
+      "feature": "rank_short_interest_pct_float",
+      "coef": -0.0063373337321881735
+    },
+    {
+      "feature": "filing_density_4q",
+      "coef": 0.00160798110254709
+    }
+  ],
+  "fit": {
+    "n_train_obs": 221920,
+    "chosen_alpha": 0.002890449752728228,
+    "n_nonzero_coefs": 2,
+    "cv_mean_mse": 0.08332720044669521,
+    "feature_names": [
+      "earnings_sue_naive_4q_decayed",
+      "earnings_pead_5d_post_decayed",
+      "earnings_recency_days",
+      "short_interest_pct_float_change_60d",
+      "rank_short_interest_pct_float",
+      "log1p_days_to_cover",
+      "insider_log_count",
+      "insider_log_dollar",
+      "rank_realized_downside_skew_60d",
+      "filing_density_4q"
+    ]
+  },
+  "params": {
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rebalance_stride": 5,
+    "holding": 20,
+    "adv_min_usd": 5000000.0,
+    "cost_half_spread_bps": 10.0,
+    "phase_offset": 0,
+    "primary_threshold_t": 2.81,
+    "stretch_threshold_t": 3.2
+  }
+}

@@ -1,0 +1,166 @@
+{
+  "params_frozen": {
+    "class": "analyst_alt_data_search_2026_05_01",
+    "version": "v10",
+    "v10_design_provenance": "Pivot from CLOSED class alt_data_screener_search_2026_04_30 (4/4 FAIL on linear-Lasso) and CLOSED class nonlinear_alt_data_search_2026_05_01 (1/1 FAIL on LightGBM-MSE). v9 (LGBM) settled FEATURES-NOT-MODEL-CLASS as bottleneck via holdout rank-IC sign-flip diagnostic (-0.0123 vs v4's +0.0260). v10 hypothesis: structurally different feature class (analyst-event flow from yfinance upgrades_downgrades) surfaces signal that 10-feature alt-data joiner missed. Adversarial review (zen + perplexity, 2026-05-01 PM) on v10 design memo identified five fatal/severe flaws; spec was REVISED with five mitigations: (1) yfinance survivorship hard-block + auto-pivot to Path beta on FAIL (zen ***); (2) exponential 10d decay on Features 1+2 (zen ***); (3) VIF + cross-fold Lasso stability gate (perplexity ***); (4) stretch threshold |t|>=3.2 alongside primary 2.81 (perplexity ***); (5) action-mapping kept direction-only (perplexity post-RegFD argument).",
+    "class_rationale": "FRESH FEATURE class change (10 alt-data + 3 analyst-event from yfinance upgrades_downgrades, vs prior classes which used identical 10 alt-data only). Settled bottleneck variable per v9 verdict: model class is NOT bottleneck, features ARE. v10 swaps feature space ONLY; selection rule, model class (linear-Lasso), train/holdout windows all locked from v4.",
+    "class_bonferroni": "In-class n=1 fresh -> internal threshold |t|>=1.96. PROGRAM-LEVEL across all classes on 2024-04-30..2026-04-30 holdout: multi_source_two_stage_search (3 tests FAIL) + alt_data_screener_search (4 tests FAIL) + nonlinear_alt_data_search (1 test FAIL) + this NEW class (1 active) + Path beta auto-pivot reservation (1 contingent) = 10 cumulative tests -> Bonferroni |t|>=2.81. v10 USES PROGRAM-LEVEL 2.81 AS PRIMARY PASS GATE. Stretch threshold |t|>=3.2 applied as Romano-Wolf approximation (m~50 effective hypotheses incl preprocessing variants per perplexity Q6).",
+    "harking_caveat": "Same 2024-04-30 -> 2026-04-30 holdout has been observed 9 cumulative times across 3 classes. v10 fresh-class framing is feature-space change ONLY (10 -> 13 features); selection rule, model class, target, train/holdout periods, costs, attribution all identical to v4. Per perplexity Q6: implicit feature-selection over 9 prior fails inflates effective multiplicity beyond simple n=10 Bonferroni; user policy (feedback_no_passive_pivot.md) overrides perplexity rec to 'wait 6m for fresh holdout', so we proceed with stretch-threshold mitigation instead. Capital deploy OFF-TABLE regardless of verdict; only PASS at stretch 3.2 triggers v11 replication on truly fresh data (post-2026-04-30 continuation OR different feature universe).",
+    "adversarial_review_summary": "zen + perplexity reviewed v10 design memo 2026-05-01 PM. Synthesis in docs/research/v10_analyst_features_design_2026_05_01.md ('Adversarial synthesis' paragraph). Mitigations adopted: survivorship hard-block (zen ***), exp(-d/10) decay (zen ***), VIF + Lasso stability (perplexity ***), stretch threshold 3.2 (perplexity ***), direction-only Action mapping (perplexity ** KEEP). Rejected: 'wait 6m' (user policy override), 'pivot to beta directly' (user listed gamma first; implemented as objective auto-pivot trigger instead).",
+    "architecture": "single_global_lasso (target_transform='rank') WITH 13-feature joiner (10 alt-data + 3 analyst-event)",
+    "architecture_rationale": "Linear-Lasso UNCHANGED from v4 (settled NOT-bottleneck per v9 verdict). Target rank-transform UNCHANGED from v3 (settled correct architecture). Feature space is the ONLY architectural variable v10 changes.",
+    "stage1_regime_classifier": {
+      "type": "none",
+      "note": "Same as v3, v4."
+    },
+    "stage2_conditional_alpha": {
+      "model_class": "Lasso",
+      "regularization": "L1 with alpha selected via 3-fold expanding-window nested CV on full train pool with 60-day embargo (identical to v3, v4)",
+      "fit_strategy": "single global model fitted on entire train pool with target_transform='rank'",
+      "max_lambda_grid_points": 25,
+      "cv_objective": "argmin mean fold MSE on rank-transformed target (identical to v3, v4)"
+    },
+    "feature_whitelist_count": 13,
+    "feature_whitelist": [
+      "earnings_sue_naive_4q_decayed",
+      "earnings_pead_5d_post_decayed",
+      "earnings_recency_days",
+      "short_interest_pct_float_change_60d",
+      "rank_short_interest_pct_float",
+      "log1p_days_to_cover",
+      "insider_log_count",
+      "insider_log_dollar",
+      "rank_realized_downside_skew_60d",
+      "filing_density_4q",
+      "analyst_action_net_decay10_60d",
+      "analyst_target_revision_pct_decay10_60d",
+      "analyst_attention_log_60d"
+    ],
+    "feature_construction_unchanged": "First 10 features computed identically to v3, v4 per docs/research/preregistration/params_alt_data_screener_v3_2026_05_01.json. Three new analyst-event features defined in docs/research/v10_analyst_features_design_2026_05_01.md sections 'Feature 1', 'Feature 2', 'Feature 3'.",
+    "feature_construction_new": {
+      "data_source": "yfinance Ticker.upgrades_downgrades, indexed by GradeDate (timestamp).",
+      "pit_contract": "GradeDate <= asof - 1 BD (one business day dissemination embargo to avoid intraday look-ahead).",
+      "decay_tau_days": 10,
+      "decay_tau_rationale": "Womack 1996 / Stickel 1995 post-rating-change drift profile shows steepest decay 5-15d post-event; 10d half-life centered in this band. Distinct from existing alt_data 30d decay (quarterly fundamentals time-scale).",
+      "feature_1_name": "analyst_action_net_decay10_60d",
+      "feature_1_def": "Decay-weighted mean of action_score over 60d trailing events. action_score: 'up'->+1, 'down'->-1, 'init'/'main'/'reit'->0, unmappable string -> NaN propagation. Decay weight: exp(-(asof - GradeDate.date()) / 10). Range [-1, +1] when defined; NaN when zero events.",
+      "feature_2_name": "analyst_target_revision_pct_decay10_60d",
+      "feature_2_def": "Decay-weighted mean of (currentPriceTarget - priorPriceTarget) / priorPriceTarget over 60d events with priorPriceTarget > 0 (excluded initiation events with prior=0). Same exp(-d/10) weight. NaN when zero valid events.",
+      "feature_3_name": "analyst_attention_log_60d",
+      "feature_3_def": "log1p(count of events in 60d window). No decay (intensity proxy, not directional). Always >=0; NaN does not occur."
+    },
+    "target_definition": {
+      "raw_target": "20-day forward excess return over RF (same as v3, v4)",
+      "transformation": "Per-asof percentile-rank centering (same as v3, v4)",
+      "transformation_unchanged": "Rank-target transform settled per v3.",
+      "horizon_unchanged": "20d-forward, same as v3, v4.",
+      "post_hoc_attribution": "Carhart-4F regression of realised 20d-forward L/S returns on 20d-aggregated Mkt-RF/SMB/HML/MOM with subtract_rf=False."
+    },
+    "portfolio_construction": {
+      "ranking": "predicted score per (ticker, asof) from rank-trained Lasso on 13 features",
+      "selection_rule": "long_top_decile_EW_minus_short_bottom_decile_EW (UNCHANGED from v4)",
+      "long_eligibility": "post-ADV cross-section (>= $5M ADV at asof, identical to v4)",
+      "short_eligibility": "post-ADV cross-section AND short_interest_pct_float <= 0.15 at asof (UNCHANGED from v4 HTB filter)",
+      "decile_size_long": "floor(n_long_eligible / 10)",
+      "decile_size_short": "floor(n_short_eligible / 10)",
+      "long_weighting": "equal",
+      "short_weighting": "equal",
+      "rebalance_stride": 5,
+      "holding_period": 20,
+      "overlap_design": "Stride=5 with holding=20: 75% overlap, MA(3) autocorrelation, HAC maxlags=5. Identical to v3, v4.",
+      "min_decile_size": 3,
+      "universe": "AlphaLens PIT universe (yfinance + survivorship parquet)"
+    },
+    "cost_model": {
+      "half_spread_bps": 10,
+      "applied_to": "60 bps round-trip per rebalance (2 legs * 30 bps each); identical to v4",
+      "borrow_fee_separate": "1.5% annualized on short-leg notional; reported alongside primary cost; not subtracted from headline alpha"
+    },
+    "statistical_inference": {
+      "hac_maxlags": 5,
+      "sharpe_annualization": "Lo (2002) variance-ratio-adjusted via alphalens.backtest.metrics.sharpe_autocorr_adjusted, periods_per_year=50.4",
+      "carhart_regression": "Carhart-4F with subtract_rf=False (L/S spread is relative excess)"
+    },
+    "anti_overfit_constraints": {
+      "max_features": 13,
+      "no_post_hoc_feature_addition": "any further new feature requires a new pre-registration",
+      "no_post_hoc_feature_removal": "v10 must run with locked 13-feature whitelist",
+      "no_target_horizon_change": "20d horizon locked",
+      "no_decay_tau_tuning": "tau=10d locked; switching to 5d/20d/30d would be HARKing flexibility",
+      "no_action_mapping_change": "direction-only mapping ('up'/'down'/0/NaN) locked; magnitude/ordinal alternatives explicitly considered and rejected pre-run",
+      "no_decile_size_tuning": "decile (10%) locked",
+      "no_short_filter_tuning": "SI > 15% short-leg exclusion locked from v4",
+      "no_embargo_tuning": "T+1 BD embargo on GradeDate locked"
+    },
+    "differences_from_v4": "ONE settled-as-different variable: feature space (10 -> 13 with 3 analyst-event additions). All other variables (model class, target rank-transform, periods, selection rule, costs, attribution, gates) identical to v4. Threshold raised from in-class n=4 (|t|>=2.50) to program-level n=10 (|t|>=2.81), plus stretch n~50 (|t|>=3.2)."
+  },
+  "phase_a_gates": {
+    "gate_1_action_coverage": {
+      "trigger": "probe yfinance Action column unique values across 50-ticker stratified sample",
+      "fail_condition": "unmapped strings >5% -> expand action_to_score map and re-probe",
+      "block_phase_b": true
+    },
+    "gate_2_survivorship_hard_block": {
+      "trigger": "probe upgrades_downgrades availability for FULL set of pit_universe known-delisted tickers (delisted 2018-2026); compare event-frequency distribution against active-ticker matched-cap controls",
+      "fail_condition": "delisted_active_event_rate_ratio < 0.5 with z > 2 (under bootstrap)",
+      "fail_action": "AUTO-PIVOT to Path beta (long-only top-decile in alt_data_screener_search_2026_04_30 class, n=5 -> |t|>=2.58, ~1d effort); v10 ledger entry closed as ABORTED-PRE-PHASE-B with diagnostic note; Path beta gets new pre-reg artifact",
+      "rationale": "zen *** flagged this as fatal: yfinance is known to prune delisted-ticker event histories, introducing survivorship leak that invalidates Carhart alpha on holdout. Auto-pivot trigger is objective (no experimenter discretion) so swap is not post-hoc."
+    },
+    "gate_3_joiner_coverage": {
+      "trigger": "build 13-feature joiner against 60-asof x 200-ticker sample",
+      "fail_condition": "coverage < 70% (parity with v4 build)",
+      "block_phase_b": true
+    },
+    "gate_4_collinearity": {
+      "trigger": "compute pairwise rank-correlation matrix AND VIF for 13 features",
+      "sub_gate_4a": "max |rho| <= 0.7 AND max VIF <= 3 -> proceed",
+      "sub_gate_4b": "0.7 < max |rho| <= 0.85 OR 3 < max VIF <= 5 -> orthogonalize 3 analyst features against existing 10 via residualization, re-run",
+      "sub_gate_4c": "max |rho| > 0.85 OR max VIF > 5 -> ABORT (signal indistinguishable from existing features)",
+      "block_phase_b_on_4c": true
+    },
+    "gate_5_lasso_stability": {
+      "trigger": "fit Lasso CV on first half of train (2018-2021) vs second half (2021-2024) separately",
+      "fail_action_sign_flip": "if any analyst-feature coef sign-flips between halves -> spurious selection, ABORT",
+      "fail_action_magnitude": "if magnitude differs >50% -> flag unstable, document, proceed with caveat",
+      "block_phase_b_on_sign_flip": true
+    }
+  },
+  "periods": {
+    "train_start": "2018-01-01",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rationale": "Identical to v3, v4, v9 (Polygon SI history begins 2017-12-29; yfinance upgrades_downgrades depth covers same window for most tickers). Burnt holdout caveat: 9 prior tests observed this window; v10 mitigates via program-level threshold 2.81 + stretch 3.2 + diagnostic-only framing."
+  },
+  "success_criteria": {
+    "mode": "holdout_only_program_level_threshold_with_stretch",
+    "primary_metric": "Carhart-4F alpha t-stat (HAC, maxlags=5) on holdout L/S portfolio returns",
+    "bonferroni_threshold_in_class": "n=1 fresh -> in-class |t|>=1.96",
+    "bonferroni_threshold_program_level": "n=10 cumulative across all classes on this holdout -> |t|>=2.81. v10 USES PROGRAM-LEVEL 2.81 AS PRIMARY PASS GATE.",
+    "bonferroni_threshold_stretch_romano_wolf": "Romano-Wolf approximation under m~50 effective hypotheses (incl preprocessing variants per perplexity Q6) -> |t|>=3.2. Reported as STRETCH gate alongside primary.",
+    "pass_rule_primary": "Holdout L/S Carhart-4F alpha t-stat >= 2.81 AND Lo-adjusted Sharpe (net) >= 0.5 AND alpha annualized >= 3% AND MaxDD >= -40% AND in-CV mean rank-IR >= 0.5 AND >=1 of 3 analyst features has nonzero Lasso coef AND holdout mean per-asof rank-IC > 0",
+    "pass_rule_stretch": "primary PASS conditions AND alpha t-stat >= 3.2",
+    "verdict_classification": {
+      "robust_diagnostic_positive": "primary PASS + stretch PASS -> 'directional positive, robust to conservative multiplicity; replication required on fresh holdout 2026-11+ before any escalation'",
+      "directional_positive": "primary PASS + stretch FAIL -> 'directional positive consistent with primary gate but not robust to conservative multiplicity; informational only'",
+      "fail": "any primary gate FAIL -> standard FAIL ledger entry, increment program count to n=11"
+    },
+    "in_class_pass_program_fail": "1.96 <= alpha_t-stat < 2.81 -> reported as 'in-class PASS, program-FAIL', treated as FAIL for actionability; informational for next-class design",
+    "mid_rule": "alpha t-stat >= 1.5 AND Sharpe (net) >= 0.3 AND in-CV mean rank-IR >= 0.3 AND holdout mean per-asof rank-IC > 0 -> MID; refine + re-pre-register",
+    "fail_rule": "anything that doesn't clear MID -> FAIL, log to ledger",
+    "descriptive_gates": "|Mkt-RF beta from Carhart 4F| <= 0.20 (market-neutrality sanity); reported but does NOT determine verdict.",
+    "diagnostic_only_clause": "BURNT-HOLDOUT MITIGATION: v10 is DIAGNOSTIC ONLY. Capital deploy is OFF-TABLE regardless of holdout verdict. PASS at stretch 3.2 triggers v11 re-pre-registration on truly fresh data (post-2026-04-30 continuation as it accrues, OR different feature universe).",
+    "phase_robustness_followup": "If holdout PASS at primary 2.81, run multi-phase audit (5 phase offsets) on 2018-2026 with same architecture; PASS only if every phase alpha t-stat >= 1.5 AND mean alpha t-stat >= 2.81. If holdout FAIL outright, skip Phase C.",
+    "regime_stratification_postdoc": "DESCRIPTIVE post-hoc: report long-decile alpha, short-decile alpha, L/S spread separately for 2024-04-30 -> 2024-12-31 / 2025-01-01 -> 2025-12-31 / 2026-01-01 -> 2026-04-30 sub-periods (same as v4).",
+    "comparison_to_prior": "Program state (10 cumulative FAIL on 2024-2026 holdout): multi_source_two_stage_search 3/3 FAIL; alt_data_screener_search 4/4 FAIL (v3 pos rank-IC + neg alpha-t under top-30; v4 short-squeeze under decile L/S); nonlinear_alt_data_search 1/1 FAIL (rank-IC sign-flip diagnostic). v10 tests feature-space change: 10 alt-data -> 13 (10 alt-data + 3 analyst-event). Honest expectation: FAIL >> MID > PASS-primary >> PASS-stretch. Run for diagnostic value (settles features-bottleneck variable on this stack); if FAIL, settles 'analyst-event signal class is also exhausted on this holdout regime.'"
+  },
+  "path_beta_auto_pivot_reservation": {
+    "trigger": "Phase A gate 2 (survivorship hard-block) FAIL on full delisted-ticker probe",
+    "objective_condition": "delisted_active_event_rate_ratio < 0.5 with z > 2 under bootstrap",
+    "scope_if_triggered": "long-only top-decile in alt_data_screener_search_2026_04_30 class (NOT this analyst class)",
+    "in_class_n_if_triggered": 5,
+    "in_class_threshold_if_triggered": "|t|>=2.58",
+    "harking_flag_if_triggered": "explicit Kerr 1998 + Simmons et al. 2011 hypothesis-mining ack; Path beta long-only pivot was post-hoc designed against observed v4 long-leg performance (+20.6%/y); fresh-OOS replication mandatory regardless of any PASS verdict",
+    "rationale": "Pre-registering the auto-pivot trigger and threshold means swap is objective (no experimenter discretion at decision point). Without this pre-registration, deciding to pivot to Path beta after Phase A would itself be HARKing."
+  }
+}

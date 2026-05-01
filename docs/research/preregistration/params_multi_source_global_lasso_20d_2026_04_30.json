@@ -1,0 +1,87 @@
+{
+  "params_frozen": {
+    "architecture": "single_global_lasso",
+    "rationale": "v3 single-variable ablation FROM v2 (multi_source_global_lasso_2026_04_30). v2 confirmed v1's Stage 1 architecture didn't help (mean αt v1=+0.65 vs v2=+0.55, both phase-robust FAIL). v2's diagnostic: global Lasso CV chose λ that zeroed all 21 coefs at 5d horizon. v3 tests whether the same 21 features + same global Lasso architecture has signal at a longer 20d horizon. Theoretical motivation: most published cross-sectional anomalies (Jegadeesh-Titman momentum, Asness-Frazzini-Pedersen QMJ, Frazzini-Pedersen BAB) operate on monthly+ horizons; 5d is microstructure-domain. Empirical motivation: at 5d the SNR was below Lasso's L1 minimum CV-MSE; longer horizon has higher fundamental-signal-to-noise ratio.",
+    "stage1_regime_classifier": {
+      "type": "none",
+      "note": "Same as v2 — no regime conditioning. Pure ablation of horizon variable from v2."
+    },
+    "stage2_conditional_alpha": {
+      "model_class": "Lasso",
+      "regularization": "L1 with α selected via 3-fold expanding-window nested CV on full train_pool with 60-day embargo (identical procedure to v2)",
+      "fit_strategy": "single global model fitted on entire train pool",
+      "max_lambda_grid_points": 25
+    },
+    "feature_whitelist_count": 21,
+    "feature_whitelist": [
+      "insider_log_count",
+      "insider_log_dollar",
+      "insider_cluster_window_days",
+      "vix_level",
+      "vix_change_20d",
+      "term_spread_10y_3m",
+      "ret_20d",
+      "ret_60d",
+      "ret_252d",
+      "vol_realized_20d",
+      "near_52w_high_distance",
+      "dollar_volume_z_20d",
+      "rolling_beta_mkt_252d",
+      "idiosyncratic_vol_residual_60d",
+      "rank_momentum_60d",
+      "rank_lowvol_20d",
+      "rank_dollar_volume_size",
+      "interaction_insider_x_vix_high",
+      "interaction_mom20_x_vol_regime",
+      "interaction_mom20_x_size_quintile",
+      "interaction_insider_x_mom20"
+    ],
+    "feature_pit_provenance": "Identical to v1 + v2 — features.py reused without modification. F4 fix + O2 invariant remain locked by tests.",
+    "target_definition": {
+      "horizon": "20_trading_days_forward_return",
+      "construction": "raw excess return over RF (20d-forward close-to-close minus 20d-cumulative RF). Reuses target.forward_excess_return with holding_period=20.",
+      "post_hoc_attribution": "Carhart-4F regression of realised 20d-forward portfolio returns on 20d-aggregated Mkt-RF/SMB/HML/MOM. Daily factor returns are summed (arithmetic) over the 20-day holding window matching each portfolio observation. NOT pre-residualized at target level."
+    },
+    "portfolio_construction": {
+      "ranking": "predicted forward excess return per (ticker, asof) from the global Lasso (trained on 20d targets)",
+      "top_n": 30,
+      "weighting": "equal",
+      "rebalance_stride": 5,
+      "holding_period": 20,
+      "overlap_design": "Stride=5 with holding=20 means consecutive rebalance observations share 75% of the holding window (15 of 20 days). This is equivalent to running 4 weekly tranches each holding for 20d. The portfolio_returns series at stride-5 asof dates therefore exhibits MA(3) autocorrelation by construction; HAC standard errors with maxlags=5 correct for this.",
+      "universe": "AlphaLens PIT universe (yfinance + survivorship parquet), ADV ≥ $5M filter applied at scoring time"
+    },
+    "cost_model": {
+      "half_spread_bps": 10,
+      "applied_to": "every entry and exit (round-trip = 20 bps base + 5 bps adverse selection one-way → 30 bps total). Per-rebalance turnover scaled cost stays at the same per-rebalance bp level as v1/v2; total annualized cost drag is naturally lower because each tranche only contributes 1/4 of capital and turnover-per-tranche is similar to v2 (annual cost ≈ 25-30% of v2's ~3% drag → ~0.7-1%/y)."
+    },
+    "statistical_inference": {
+      "hac_maxlags": 5,
+      "hac_maxlags_rationale": "Per zen+perplexity adversarial review: stride=5 with holding=20 produces overlapping returns where consecutive samples share 15/20=75% of the window. Autocorrelation has theoretical structure of MA(3) at lag k≤3 (consecutive overlap) plus residual at lag 4 (touching, no overlap). Setting maxlags=5 explicitly (one above MA-order) is conservative per Newey-West / Andrews lag-selection guidance for overlapping-data inference. Default Newey-West formula `4*(T/100)^(2/9)` is tuned for daily data and would underestimate lag length here.",
+      "sharpe_annualization": "Lo (2002) variance-ratio-adjusted Sharpe via existing alphalens.backtest.metrics.sharpe_autocorr_adjusted, which corrects for the autocorrelation introduced by overlap. Periods-per-year = 252/stride = 50.4 (per-rebalance cadence)."
+    },
+    "anti_overfit_constraints": {
+      "max_features": 21,
+      "lasso_l1_regularization": "forces feature sparsity; same procedure as v1 + v2",
+      "no_post_hoc_feature_addition": "any new feature requires a new pre-registration with its own Bonferroni denominator",
+      "no_post_hoc_feature_removal": "v1/v2 zero-coef findings do NOT license dropping features"
+    },
+    "differences_from_v2": "ONLY target horizon changes (5d → 20d). All other variables identical: same 21 features, same global Lasso, same λ procedure, same embargo (60d), same stride=5, same top_n=30, same EW, same cost model, same universe, same Carhart attribution method. Adds explicit HAC maxlags=5 override + Lo-2002 Sharpe adjustment to handle the autocorrelation introduced by 20d holding × 5d stride."
+  },
+  "periods": {
+    "train_start": "2014-01-01",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30"
+  },
+  "success_criteria": {
+    "mode": "holdout_then_multi_phase",
+    "primary_metric": "Carhart-4F α t-stat (HAC, maxlags=5) on holdout 2024-04-30 → 2026-04-30 portfolio returns",
+    "bonferroni_threshold": "n=3 in class multi_source_two_stage_search_2026_04_30 → |t| ≥ 2.39",
+    "pass_rule": "Holdout Carhart-4F α t-stat ≥ 2.39 AND holdout Lo-adjusted Sharpe ≥ 0.5 AND holdout α annualized ≥ 3% AND holdout MaxDD ≥ -35% AND model has at least 1 nonzero coefficient (rules out v2's zero-coef structural-artifact pattern)",
+    "mid_rule": "α t-stat ≥ 1.5 AND Sharpe ≥ 0.3 AND ≥1 nonzero coef → MID; refine + re-pre-register before any deploy",
+    "fail_rule": "α t-stat < 1.5 OR Sharpe < 0.3 OR all coefs zero → FAIL, log to ledger, document horizon verdict",
+    "phase_robustness_followup": "If holdout PASS or MID, run multi-phase audit (5 phase offsets) on 2014-2026 with same architecture; PASS only if every phase α t-stat ≥ 1.5 AND mean α t-stat ≥ 2.39. If holdout FAIL outright, skip Phase C.",
+    "comparison_to_prior": "v1 mean phase αt=+0.65, v2 mean phase αt=+0.55. v3 needs mean phase αt ≥ 2.39 to clear pre-reg gate. Even MID outcome would require mean ≥ 1.5, which is 2.7-3x prior. Honest expectation: this is an aggressive bar; FAIL/MID more likely than PASS, but the signal-to-noise improvement at 20d horizon may surprise."
+  }
+}

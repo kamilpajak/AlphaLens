@@ -1,0 +1,131 @@
+{
+  "params_frozen": {
+    "class": "alt_data_screener_search_2026_04_30",
+    "version": "v6a_revised",
+    "v6a_revised_design_provenance": "Cache-enabled cheap experiment (post-v5 FAIL). Original v6a (mega-cap exclusion against SPY benchmark, top-50 fixed, Bonferroni n=12) was REJECTED by zen + perplexity adversarial review 2026-05-01 PM as mathematically self-defeating: SPY benchmark in 2024-2025 mega-cap rally vs non-mega-cap subset = structural -35% gap before any alpha test (zen ★★★). Five mitigations adopted in v6a-revised: (1) MDY benchmark (cap-matched, NOT SPY); (2) percentile-based universe filter (top-10% drop, exogenous to observed regime); (3) retrain Lasso on non-mega-cap train pool only (eliminates distribution mismatch perplexity ★★★); (4) threshold |t|≥3.5 (Romano-Wolf m≈50, NOT simple Bonferroni n=12); (5) EXPLORATORY framing — PASS requires fresh-OOS walk-forward 2026-05-01+ confirmation before any capital escalation.",
+    "class_rationale": "Reopens CLOSED 5/5 alt_data_screener_search_2026_04_30 class with 6th hypothesis. v1-v5 all FAIL on full universe with various selection rules (top-30 / decile L/S / long-only). v6a-revised tests: does retrained Lasso on non-mega-cap subset (top-10% mkt-cap excluded) generate alpha vs cap-matched benchmark MDY? Hypothesis is post-hoc relative to v5 sub-period diagnostic — frame as exploratory.",
+    "class_bonferroni": "In-class n=6 → naive |t|≥2.64. PROGRAM-LEVEL across all classes on burnt holdout: 11 prior + this v6a = n=12 → naive |t|≥2.85. Adversarial review (perplexity ★★★) flagged true effective m≈50 (incl preprocessing variants, model class iterations, selection rule variants) → Romano-Wolf adjustment → |t|≥3.5 PRIMARY. v6a-revised USES |t|≥3.5 NOT naive Bonferroni.",
+    "harking_caveat_explicit": "v6a-revised is post-hoc designed against v5's regime-stratification finding (long-leg matched +20.6%/y but SPY +60-70%/y crushed it via 2024-25 mega-cap rally). Per Kerr 1998 + Simmons et al. 2011 this is hypothesis-mining on burnt holdout. Five mitigations: exogenous percentile (NOT arbitrary count), Lasso retrain on subset (eliminates training-set contamination), MDY cap-matched benchmark (eliminates structural gap), Romano-Wolf threshold (m≈50), EXPLORATORY frame requiring fresh-OOS confirmation.",
+    "exploratory_frame": "v6a-revised treats all results as HYPOTHESIS GENERATION, not hypothesis testing. PASS verdict at |t|≥3.5 (or stretch 4.0) triggers MANDATORY prospective walk-forward replication on data accruing 2026-05-01+ at unadjusted p<0.05 before any escalation. Capital deploy OFF-TABLE on this burnt holdout regardless of any v6a-revised outcome.",
+    "adversarial_review_summary": "zen + perplexity 2026-05-01 PM reviewed original v6a (mega-cap exclusion top-50, SPY benchmark, Bonferroni n=12). zen ★★★: SPY benchmark + non-mega-cap subset = structural −35% gap, mathematically self-defeating. perplexity ★★★: HARKing irreducible, top-50 specification mining, cache reuse distribution mismatch, m≈50 underadjusted. Both REJECT original. Five mitigations adopted as listed in design memo.",
+    "architecture": "single_global_lasso (target_transform='rank') with retrained Lasso on non-mega-cap train pool",
+    "architecture_rationale": "Lasso class UNCHANGED from v3-v5. Target rank-transform UNCHANGED. ONE variable changes: training universe (full → non-mega-cap subset). Retrain eliminates 'cache reuse with distribution mismatch' confound (perplexity ★★★).",
+    "stage1_regime_classifier": {
+      "type": "none"
+    },
+    "stage2_conditional_alpha": {
+      "model_class": "Lasso",
+      "regularization": "L1 with alpha selected via 3-fold expanding-window nested CV on non-mega-cap train pool with 60-day embargo",
+      "fit_strategy": "single global model fitted on non-mega-cap subset of cached feature frame, target_transform='rank'",
+      "max_lambda_grid_points": 25,
+      "cv_objective": "argmin mean fold MSE on rank-transformed target",
+      "training_universe_filter": "drop rows where mkt_cap_at_asof in top-10% percentile per asof"
+    },
+    "feature_whitelist_count": 10,
+    "feature_whitelist": [
+      "earnings_sue_naive_4q_decayed",
+      "earnings_pead_5d_post_decayed",
+      "earnings_recency_days",
+      "short_interest_pct_float_change_60d",
+      "rank_short_interest_pct_float",
+      "log1p_days_to_cover",
+      "insider_log_count",
+      "insider_log_dollar",
+      "rank_realized_downside_skew_60d",
+      "filing_density_4q"
+    ],
+    "feature_construction_unchanged": "All 10 features identical to v3-v5. Cached parquet at ~/.alphalens/feature_cache/alt_data_features_de036dd57f581d40.parquet reused; only POST-cache filter (mkt-cap percentile) applied before Lasso fit.",
+    "mkt_cap_at_asof_computation": {
+      "definition": "shares_outstanding_at_asof × close_price_at_asof",
+      "shares_source": "SEC EDGAR companyfacts via latest_shares_as_of() (existing PIT-correct infra used in v4 SI%)",
+      "close_source": "HistoryStore close_as_of(ticker, asof, lookback=5) (existing PIT-correct infra)",
+      "missing_data_policy": "NaN mkt_cap → ticker RETAINED in long pool (absence-of-evidence ≠ evidence-of-absence)",
+      "filter_rule": "drop rows where mkt_cap_at_asof rank-percentile within asof < 0.10 (i.e., top 10%)"
+    },
+    "target_definition": {
+      "raw_target": "20-day forward excess return over RF (UNCHANGED)",
+      "transformation": "Per-asof percentile-rank centering (UNCHANGED)",
+      "horizon_unchanged": "20d-forward (UNCHANGED)",
+      "post_hoc_attribution": "Carhart-4F regression of (long_only_return − MDY_return) on Mkt-RF/SMB/HML/MOM with subtract_rf=False"
+    },
+    "portfolio_construction": {
+      "ranking": "predicted score per (ticker, asof) from rank-trained Lasso fitted on non-mega-cap train pool",
+      "selection_rule": "long_top_decile_EW_only (UNCHANGED from v5)",
+      "long_eligibility": "post-ADV cross-section AND mkt_cap_at_asof NOT in top-10% percentile at asof",
+      "decile_size_long": "floor(n_long_eligible / 10)",
+      "long_weighting": "equal",
+      "rebalance_stride": 5,
+      "holding_period": 20,
+      "min_decile_size": 3,
+      "benchmark_primary": "MDY (SPDR S&P MidCap 400 ETF, cap-matched mid-cap)",
+      "benchmark_secondary_descriptive": "SPY (continuity vs v5; NOT gating verdict)",
+      "universe": "AlphaLens PIT universe filtered post-ADV minus top-10% mkt-cap"
+    },
+    "cost_model": {
+      "half_spread_bps": 10,
+      "applied_to": "30 bps round-trip per rebalance (long leg only, UNCHANGED from v5)",
+      "borrow_fee_separate": "n/a (no short leg)"
+    },
+    "statistical_inference": {
+      "hac_maxlags": 5,
+      "sharpe_annualization": "Lo (2002) variance-ratio-adjusted, periods_per_year=50.4",
+      "carhart_regression": "Carhart-4F with subtract_rf=False on (long_only - MDY) excess return series"
+    },
+    "anti_overfit_constraints": {
+      "max_features": 10,
+      "no_post_hoc_universe_tuning": "top-10% percentile LOCKED. Tuning cutoff to observed result (e.g., switching to 5% or 15%) post-run = HARKing flexibility, forbidden.",
+      "no_post_hoc_benchmark_swap": "MDY locked as primary; SPY descriptive only.",
+      "no_post_hoc_threshold_relaxation": "|t|≥3.5 primary, |t|≥4.0 stretch — locked.",
+      "no_post_hoc_feature_addition": "10-feature whitelist locked.",
+      "no_post_hoc_lasso_hyperparameter_tuning": "λ chosen via CV; no manual override.",
+      "no_post_hoc_decile_size_tuning": "decile (10%) locked.",
+      "exploratory_only": "PASS verdict requires fresh-OOS walk-forward replication; no claim of confirmatory result possible from v6a-revised on burnt holdout alone."
+    },
+    "differences_from_v5": "TWO settled-as-different variables: (1) selection universe (full → drop top-10% mkt-cap); (2) Lasso retrained on subset train pool. Plus benchmark change (SPY → MDY) reflects fundamental methodological correction post-zen-review."
+  },
+  "phase_a_gates": {
+    "gate_1_mkt_cap_sanity": {
+      "trigger": "verify top-10% by mkt_cap_at_asof at recent holdout date includes expected mega-caps",
+      "expected": "AAPL/NVDA/MSFT/GOOGL/AMZN/META/TSLA/BRKB/JPM/WMT in top-50",
+      "fail_condition": "any of the 10 expected names NOT in top-50 → mkt_cap calc broken, ABORT"
+    },
+    "gate_2_subset_coverage": {
+      "trigger": "count holdout asofs with non-mega-cap pool ≥30 (decile ≥3)",
+      "fail_condition": "less than 90 of 94 holdout asofs meet threshold → ABORT (cross-section too sparse)"
+    },
+    "gate_3_lasso_refit_smoke": {
+      "trigger": "fit Lasso on filtered train pool (~199k rows), inspect chosen λ and nonzero coef count",
+      "fail_condition": "0 nonzero coefs (zero-coef structural artifact) → ABORT Phase B as guaranteed FAIL"
+    },
+    "gate_4_subset_rank_ic": {
+      "trigger": "compute holdout mean per-asof rank-IC restricted to non-mega-cap subset using REFITTED Lasso scores",
+      "fail_condition": "rank-IC ≤ 0 → ABORT Phase B as guaranteed FAIL (population-level signal absent in subset)",
+      "note": "perplexity Q4 warning: rank-IC > 0 doesn't guarantee α-t-stat passes; useful early-stop only on negative outcomes"
+    }
+  },
+  "periods": {
+    "train_start": "2018-01-01",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rationale": "Identical to v3-v5. Burnt holdout invariant. Polygon SI history starts 2017-12-29. Cache parquet exists for full universe; mkt-cap filter applied post-cache load."
+  },
+  "success_criteria": {
+    "mode": "exploratory_diagnostic_with_fresh_oos_confirmation_required",
+    "primary_metric": "Carhart-4F alpha t-stat (HAC=5) on (long_only_return - MDY_return) holdout series",
+    "bonferroni_threshold_naive_in_class": "n=6 → |t|≥2.64",
+    "bonferroni_threshold_naive_program_level": "n=12 → |t|≥2.85",
+    "bonferroni_threshold_romano_wolf_adjusted": "true effective m≈50 (incl preprocessing variants, model class iterations) → |t|≥3.5 PRIMARY",
+    "stretch_threshold": "|t|≥4.0",
+    "pass_rule_primary": "Holdout (long − MDY) Carhart-4F α t-stat ≥ 3.5 AND Lo-adjusted Sharpe (net) ≥ 0.5 AND α annualized ≥ 3% AND MaxDD ≥ -25% AND in-CV mean rank-IR ≥ 0.5 AND ≥1 Lasso nonzero coef AND holdout mean per-asof rank-IC > 0 (restricted to non-mega-cap subset)",
+    "pass_rule_stretch": "primary PASS conditions AND α t-stat ≥ 4.0",
+    "verdict_classification": {
+      "robust_exploratory_positive": "primary PASS + stretch PASS → 'directional positive on non-mega-cap subset, robust to conservative multiplicity; MUST replicate on prospective walk-forward 2026-05-01+ at p<0.05 unadjusted before any capital escalation'",
+      "directional_exploratory_positive": "primary PASS + stretch FAIL → 'directional positive consistent with primary gate but not robust to conservative multiplicity; informational only'",
+      "fail": "any primary gate FAIL → standard FAIL ledger entry, increment program count to n=13, next test |t|≥2.86 naive Bonferroni"
+    },
+    "capital_deploy_clause": "Capital deploy OFF-TABLE regardless of any verdict per burnt-holdout policy. Exploratory frame requires prospective walk-forward replication on data accruing post-2026-04-30 at unadjusted p<0.05 single-test before any escalation.",
+    "fail_rule": "anything not clearing primary → FAIL, log to ledger",
+    "regime_stratification_postdoc": "DESCRIPTIVE: report excess vs MDY for 2024-04-30 → 2024-12-31 / 2025 full / 2026-01-01 → 2026-04-30 sub-periods. Report (long − SPY) for v5 comparability."
+  }
+}

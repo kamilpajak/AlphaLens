@@ -1,0 +1,104 @@
+{
+  "params_frozen": {
+    "class": "alt_data_screener_search_2026_04_30",
+    "version": "v5",
+    "v5_design_provenance": "Path β auto-pivot from v10 (analyst_alt_data_v10_2026_05_01) Phase A gate 2 survivorship FAIL. v10 pre-registered the pivot trigger objectively (delisted/active event-rate ratio < 0.5 with z > 2 under bootstrap on yfinance upgrades_downgrades) so swap is not post-hoc. v5 reopens the alt_data_screener_search_2026_04_30 class with selection-rule variable change: drop short leg, keep long top-decile only.",
+    "class_rationale": "Continuation of CLOSED class alt_data_screener_search_2026_04_30 (4/4 prior FAIL). v4 FAIL'd on short leg (αt=−2.57 with short leg returning +108.5%/y in squeeze regime); long leg gained +20.6%/y across all sub-periods. v5 isolates SELECTION-ASYMMETRY variable: same features, same Lasso, same target, drop short leg.",
+    "class_bonferroni": "v1 abandoned + v2 FAIL + v3 FAIL + v4 FAIL + v5 active = n=5 in class -> in-class threshold |t|>=2.58. PROGRAM-LEVEL across all classes: same 9 prior + this v5 = n=10 -> |t|>=2.81. v5 USES PROGRAM-LEVEL 2.81 AS PRIMARY PASS GATE (CONSERVATIVE choice given HARKing flag).",
+    "harking_caveat_explicit": "Path β was post-hoc designed against observed v4 long-leg performance (+20.6%/y across 2024-04-30 -> 2026-04-30 sub-periods). Per Kerr 1998 + Simmons et al. 2011 this is classical hypothesis-mining. We pre-registered the auto-pivot trigger from v10 (objective survivorship gate) BEFORE seeing v10's verdict, so the SWITCH from γ to β is not post-hoc; but the design of β itself was motivated by observed v4 long-leg data. Capital deploy OFF-TABLE regardless of any PASS verdict; fresh-OOS replication on data not yet observed is mandatory before any escalation.",
+    "harking_mitigation": "Conservative threshold: use program-level |t|>=2.81 (n=10) NOT in-class 2.58 (n=5). This 'doubles down' on multiplicity penalty as compensation for explicit HARKing. Stretch threshold |t|>=3.2 (Romano-Wolf m~50) reported alongside.",
+    "architecture": "single_global_lasso (target_transform='rank') WITH 10-feature joiner (UNCHANGED from v3, v4)",
+    "architecture_rationale": "All architecture variables identical to v4. Only selection rule changes.",
+    "stage1_regime_classifier": {
+      "type": "none"
+    },
+    "stage2_conditional_alpha": {
+      "model_class": "Lasso",
+      "regularization": "L1 with alpha selected via 3-fold expanding-window nested CV on full train pool with 60-day embargo (UNCHANGED)",
+      "fit_strategy": "single global model fitted on entire train pool with target_transform='rank' (UNCHANGED)",
+      "max_lambda_grid_points": 25,
+      "cv_objective": "argmin mean fold MSE on rank-transformed target (UNCHANGED)"
+    },
+    "feature_whitelist_count": 10,
+    "feature_whitelist": [
+      "earnings_sue_naive_4q_decayed",
+      "earnings_pead_5d_post_decayed",
+      "earnings_recency_days",
+      "short_interest_pct_float_change_60d",
+      "rank_short_interest_pct_float",
+      "log1p_days_to_cover",
+      "insider_log_count",
+      "insider_log_dollar",
+      "rank_realized_downside_skew_60d",
+      "filing_density_4q"
+    ],
+    "feature_construction_unchanged": "All 10 features identical to v3, v4 per docs/research/preregistration/params_alt_data_screener_v3_2026_05_01.json. No analyst features (Path γ ABORTED on yfinance survivorship hard-block).",
+    "target_definition": {
+      "raw_target": "20-day forward excess return over RF (UNCHANGED)",
+      "transformation": "Per-asof percentile-rank centering (UNCHANGED)",
+      "horizon_unchanged": "20d-forward (UNCHANGED)",
+      "post_hoc_attribution": "Carhart-4F regression of realised 20d-forward LONG-ONLY portfolio excess returns over SPY benchmark on 20d-aggregated Mkt-RF/SMB/HML/MOM with subtract_rf=False."
+    },
+    "portfolio_construction": {
+      "ranking": "predicted score per (ticker, asof) from rank-trained Lasso on 10 features (UNCHANGED from v4 model)",
+      "selection_rule": "long_top_decile_EW_only (NO short leg)",
+      "long_eligibility": "post-ADV cross-section (>= $5M ADV at asof, UNCHANGED from v4)",
+      "decile_size_long": "floor(n_long_eligible / 10)",
+      "long_weighting": "equal",
+      "rebalance_stride": 5,
+      "holding_period": 20,
+      "overlap_design": "Stride=5 with holding=20: 75% overlap, MA(3) autocorrelation, HAC maxlags=5 (UNCHANGED)",
+      "min_decile_size": 3,
+      "benchmark": "SPY (excess long-only return over SPY enters Carhart regression as primary metric)",
+      "universe": "AlphaLens PIT universe (yfinance + survivorship parquet)"
+    },
+    "cost_model": {
+      "half_spread_bps": 10,
+      "applied_to": "30 bps round-trip per rebalance (long leg only, NO short leg, NO doubling)",
+      "borrow_fee_separate": "n/a (no short leg)",
+      "rationale": "Single-leg rebalance pays half the v4 cost. v4 was 60bps RT (2 legs); v5 is 30bps RT (1 leg)."
+    },
+    "statistical_inference": {
+      "hac_maxlags": 5,
+      "sharpe_annualization": "Lo (2002) variance-ratio-adjusted via alphalens.backtest.metrics.sharpe_autocorr_adjusted, periods_per_year=50.4",
+      "carhart_regression": "Carhart-4F regression of (long-only portfolio return − SPY return) on Mkt-RF/SMB/HML/MOM with subtract_rf=False. Mkt-RF beta tracked but |β| <= 0.5 only loosely informative (long-only is naturally market-exposed, expect β ≈ 0.7-1.0)."
+    },
+    "anti_overfit_constraints": {
+      "max_features": 10,
+      "no_post_hoc_feature_addition": "any new feature requires a new pre-registration",
+      "no_post_hoc_feature_removal": "v5 must run with locked 10-feature whitelist",
+      "no_target_horizon_change": "20d horizon locked",
+      "no_decile_size_tuning": "decile (10%) locked",
+      "no_short_leg_addition": "v5 is long-only; adding short leg post-hoc would re-introduce HARKing"
+    },
+    "differences_from_v4": "ONE settled-as-different variable: selection rule (decile L/S -> long top-decile only). All other variables (features, model class, target, periods, costs scale, attribution) identical to v4 modulo cost reduction (60bps -> 30bps). Threshold uses program-level n=10 (|t|>=2.81) not in-class n=5 (|t|>=2.58) per HARKing mitigation.",
+    "adversarial_review_summary": "Original Path β spec adversarially reviewed in v10 design memo (zen + perplexity, 2026-05-01 PM). zen ratings: ★★★ on yfinance survivorship for Path γ (which triggered this v5 pivot), ★★ on Path β HARKing flag (acknowledged). perplexity ratings: ★★★ on burnt-holdout multiplicity (mitigated via program-level threshold + diagnostic-only framing), ★★★ on long-only being HARKing-confounded (acknowledged + mitigated via 2.81 not 2.58 threshold)."
+  },
+  "periods": {
+    "train_start": "2018-01-01",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rationale": "Identical to v3, v4, v9, v10. Burnt holdout caveat: 10 prior tests observed this window; v5 mitigates via program-level threshold + stretch + diagnostic-only framing."
+  },
+  "success_criteria": {
+    "mode": "holdout_only_program_level_threshold_with_stretch",
+    "primary_metric": "Carhart-4F alpha t-stat (HAC, maxlags=5) on holdout (long_only_return - SPY_return) series",
+    "bonferroni_threshold_in_class": "n=5 in class -> in-class |t|>=2.58. v5 OVERRIDES with program-level 2.81 per HARKing mitigation.",
+    "bonferroni_threshold_program_level": "n=10 cumulative across all classes on this holdout -> |t|>=2.81. v5 USES PROGRAM-LEVEL 2.81 AS PRIMARY PASS GATE.",
+    "bonferroni_threshold_stretch_romano_wolf": "Romano-Wolf approximation under m~50 effective hypotheses -> |t|>=3.2. Reported as STRETCH gate.",
+    "pass_rule_primary": "Holdout long-only excess-vs-SPY Carhart-4F alpha t-stat >= 2.81 AND Lo-adjusted Sharpe (net) of (long_only - SPY) >= 0.5 AND alpha annualized >= 3% AND MaxDD on (long_only - SPY) >= -25% AND in-CV mean rank-IR >= 0.5 AND holdout mean per-asof rank-IC > 0",
+    "pass_rule_stretch": "primary PASS conditions AND alpha t-stat >= 3.2",
+    "verdict_classification": {
+      "robust_diagnostic_positive": "primary PASS + stretch PASS -> 'directional positive on long-only, robust to conservative multiplicity; replication required on fresh holdout 2026-11+ before any escalation'",
+      "directional_positive": "primary PASS + stretch FAIL -> 'directional positive consistent with primary gate but not robust to conservative multiplicity; informational only'",
+      "fail": "any primary gate FAIL -> standard FAIL ledger entry"
+    },
+    "in_class_pass_program_fail": "2.58 <= alpha_t-stat < 2.81 -> reported as 'in-class PASS, program-FAIL', treated as FAIL for actionability",
+    "mid_rule": "alpha t-stat >= 1.5 AND Sharpe (net) >= 0.3 AND in-CV rank-IR >= 0.3 AND holdout mean per-asof rank-IC > 0 -> MID; refine + re-pre-register",
+    "fail_rule": "anything that doesn't clear MID -> FAIL, log to ledger",
+    "diagnostic_only_clause": "BURNT-HOLDOUT MITIGATION: v5 is DIAGNOSTIC ONLY. Capital deploy is OFF-TABLE regardless of holdout verdict. PASS at stretch 3.2 triggers v6 re-pre-registration on truly fresh data.",
+    "phase_robustness_followup": "If holdout PASS at primary 2.81, run multi-phase audit (5 phase offsets) on 2018-2026 with same architecture; PASS only if every phase alpha t-stat >= 1.5 AND mean alpha t-stat >= 2.81. If holdout FAIL outright, skip Phase C.",
+    "regime_stratification_postdoc": "DESCRIPTIVE: report long-decile alpha vs SPY for 2024-04-30 -> 2024-12-31 / 2025-01-01 -> 2025-12-31 / 2026-01-01 -> 2026-04-30 sub-periods. Compare against v4's documented +20.6%/y long leg performance to test reproducibility."
+  }
+}

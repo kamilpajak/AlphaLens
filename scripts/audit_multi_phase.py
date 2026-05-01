@@ -54,6 +54,11 @@ _SCRIPTS = {
     "layer2d_str_and_contrarian": REPO / "scripts" / "experiment_layer2d_str_and_contrarian.py",
     "layer2d_variants": REPO / "scripts" / "experiment_layer2d_variants.py",
     "vol_target_overlay": REPO / "scripts" / "experiment_vol_target_overlay.py",
+    "multi_source_two_stage": REPO / "scripts" / "experiment_multi_source_two_stage.py",
+    "multi_source_global_lasso": REPO / "scripts" / "experiment_multi_source_global_lasso.py",
+    "multi_source_global_lasso_20d": REPO
+    / "scripts"
+    / "experiment_multi_source_global_lasso_20d.py",
 }
 
 # Parses lines like:

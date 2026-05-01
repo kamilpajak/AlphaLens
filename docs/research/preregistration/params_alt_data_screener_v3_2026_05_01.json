@@ -1,0 +1,96 @@
+{
+  "params_frozen": {
+    "class": "alt_data_screener_search_2026_04_30",
+    "version": "v3",
+    "v2_to_v3_diff_summary": "v2 (2026-04-30) FAIL with 0/10 nonzero coefs under Lasso L1 + CV-MSE on raw 20d-forward excess return target. v3 keeps EVERYTHING identical (same 10 features, same Lasso L1, same 3-fold expanding CV-MSE with 60d embargo, same 25-pt glmnet grid, same train/holdout periods, same stride/holding/cost/HAC=5/Lo-2002 Sharpe, same top-30 long EW selection rule) and changes ONE thing: the target is rank-transformed per-asof to (percentile_rank - 0.5) BEFORE fitting. This aligns the inner Lasso solver with the Spearman rank-IC objective (mathematically: minimizing MSE on rank-percentile target = maximizing Pearson correlation with rank = Spearman correlation). Original adversarial-review proposal (outer-loop CV-objective swap, argmax rank-IC instead of argmin MSE) was REJECTED after zen review flagged inner/outer mismatch — the Lasso coordinate-descent inner solver still minimizes MSE+L1 regardless of outer scoring, so coefs would still squash to zero. Target transformation resolves the mismatch by changing what MSE is computed against.",
+    "class_rationale": "Same-class ablation of alt_data_screener_search_2026_04_30. v1 abandoned (FINRA infra). v2 FAIL (raw-return target). v3 isolates target shape as the variable. Per project framework feedback_keep_searching_screeners.md, search remains open; class-conditional Bonferroni handles multiplicity.",
+    "class_bonferroni": "n=3 in class (v1 abandoned + v2 completed-FAIL + v3 active) -> canonical preregister threshold |t| >= 2.39. v3 accepts the conservative threshold per project framework.",
+    "harking_caveat": "Perplexity adversarial review flagged HARKing risk: 4 prior failures across 2 classes -> new objective design -> expected success is the pattern pre-registration is designed to prevent. Mitigations: (a) explicit pre-registration with falsification gates BEFORE running (this JSON); (b) class-conditional Bonferroni already conservative (n=3 -> 2.39 vs naive 1.96); (c) NEW falsification gates added: in-CV IR >= 1.0 AND holdout mean rank-IC > 0; (d) capital-deploy threshold remains program-level n=4+ -> |t| >= 2.50. The HARKing concern is acknowledged in the ledger and accepted as inherent to iterative research; v3 verdict will be honestly logged regardless of outcome.",
+    "architecture": "single_global_lasso",
+    "architecture_rationale": "Identical to v2-v3 of prior class and v4 v2 (settled architectural variable). Architecture is NOT v3's research bet — target transformation is.",
+    "stage1_regime_classifier": {
+      "type": "none",
+      "note": "Same as v4 v2."
+    },
+    "stage2_conditional_alpha": {
+      "model_class": "Lasso",
+      "regularization": "L1 with alpha selected via 3-fold expanding-window nested CV on full train pool with 60-day embargo (identical to v4 v2)",
+      "fit_strategy": "single global model fitted on entire train pool",
+      "max_lambda_grid_points": 25,
+      "cv_objective": "argmin mean fold MSE on rank-transformed target",
+      "cv_objective_alignment": "Minimizing MSE between Lasso predictions and per-asof rank-percentile target is equivalent (up to constant) to maximizing the Pearson correlation between predictions and ranks within asof, which is Spearman rank correlation. Inner solver and CV objective are aligned."
+    },
+    "feature_whitelist_count": 10,
+    "feature_whitelist": [
+      "earnings_sue_naive_4q_decayed",
+      "earnings_pead_5d_post_decayed",
+      "earnings_recency_days",
+      "short_interest_pct_float_change_60d",
+      "rank_short_interest_pct_float",
+      "log1p_days_to_cover",
+      "insider_log_count",
+      "insider_log_dollar",
+      "rank_realized_downside_skew_60d",
+      "filing_density_4q"
+    ],
+    "feature_construction_unchanged": "All 10 features computed identically to v4 v2 per docs/research/preregistration/params_alt_data_screener_v2_2026_04_30.json. No feature construction changes.",
+    "target_definition": {
+      "raw_target": "20-day forward excess return over RF (same as v4 v2)",
+      "transformation": "Per-asof percentile-rank centering: y_transformed[i] = (rankdata(y_raw[asof_slice], method='average') / n_asof) - 0.5",
+      "transformation_rationale": "Compresses heavy-tailed return distribution to bounded [-0.5, +0.5] target with mean 0 and std ~0.29. Lasso L1 + MSE on this target is mathematically equivalent to Spearman rank-IC maximization. Eliminates the tail-magnification penalty that drove v4 v2 to lambda_max.",
+      "asof_slice_minimum_size": 3,
+      "asof_slice_minimum_size_rationale": "Spearman rank correlation undefined for n<3; asof slices with fewer tickers (post-ADV filter) excluded from train pool.",
+      "post_hoc_attribution": "Carhart-4F regression of realised 20d-forward portfolio returns on 20d-aggregated Mkt-RF/SMB/HML/MOM. UNCHANGED: portfolio still trades real returns, just selected via rank-trained scorer.",
+      "horizon_unchanged": "20d-forward, same as v4 v2 and prior class v3."
+    },
+    "portfolio_construction": {
+      "ranking": "predicted score per (ticker, asof) from rank-trained Lasso. Score is in rank-target's units; ordering matters, magnitude does not.",
+      "top_n": 30,
+      "weighting": "equal",
+      "rebalance_stride": 5,
+      "holding_period": 20,
+      "overlap_design": "Stride=5 with holding=20: 75% overlap, MA(3) autocorrelation, HAC maxlags=5. Identical to v4 v2.",
+      "universe": "AlphaLens PIT universe (yfinance + survivorship parquet), ADV >= $5M filter applied at scoring time (identical to v4 v2)"
+    },
+    "cost_model": {
+      "half_spread_bps": 10,
+      "applied_to": "every entry and exit; round-trip 20 bps base + 5 bps adverse selection -> 30 bps total. Identical to v4 v2."
+    },
+    "statistical_inference": {
+      "hac_maxlags": 5,
+      "sharpe_annualization": "Lo (2002) variance-ratio-adjusted via alphalens.backtest.metrics.sharpe_autocorr_adjusted, periods_per_year=252/5=50.4. Identical to v4 v2."
+    },
+    "anti_overfit_constraints": {
+      "max_features": 10,
+      "lasso_l1_regularization": "forces feature sparsity",
+      "no_post_hoc_feature_addition": "any new feature requires a new pre-registration",
+      "no_post_hoc_feature_removal": "v3 must run with locked 10-feature whitelist",
+      "no_target_horizon_change": "20d horizon locked",
+      "no_decay_lambda_tuning": "exp(-recency/30) constant locked from v4 v2",
+      "no_train_window_extension": "training window 2018-01-01 -> 2024-04-29 locked from v4 v2",
+      "no_target_transform_tuning": "per-asof rank-percentile - 0.5 is the locked transform; no quantile-based variants (e.g. binary-decile) without new pre-registration"
+    },
+    "differences_from_v4_v2": "ONLY the target transform changes (raw 20d-forward excess return -> per-asof rank-percentile - 0.5). Architecture, features, periods, stride, holding, cost, HAC, Sharpe, selection rule all identical to v4 v2. Adds 2 new pass-rule gates (in-CV IR + holdout rank-IC) to address adversarial-review concerns about spurious in-fold IC overfit and HARKing.",
+    "adversarial_review_summary": "Stage 1 (zen / gemini-3-pro-preview, thinking_mode=high): identified inner/outer objective mismatch in original design (CV-objective swap with unchanged Lasso inner solver) - this 'fatal flaw' was ACCEPTED and the design pivoted to target transformation, which preserves convexity and aligns the inner+implicit-outer optimization. Zen also added: (a) IR gate to replace vacuous nonzero-coef gate under rank-objective; (b) explicit fillna(0) handling for constant-prediction asof slices; (c) Spearman over Kendall for O(n log n) compute. Stage 2 (perplexity / sonar-reasoning-pro, search_context_size=high): HARKing concern (4 failures -> new objective -> expected success); MITIGATION via explicit pre-registration in this JSON + class-conditional Bonferroni n=3 -> 2.39 + new IR/holdout-IC gates + program-level deploy threshold |t|>=2.50. Spurious-positive in-fold IC under noise concern -> ACCEPTED, IR gate addresses. Permutation null test -> DEFERRED to Phase C if Phase B clears initial gates. Full review log: docs/research/v5_rankic_lasso_design_2026_05_01.md."
+  },
+  "periods": {
+    "train_start": "2018-01-01",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rationale": "Identical to v4 v2 (Polygon short-interest history begins 2017-12-29 -> 2018-01 train start; 2-year holdout for n=99 rebalances at stride=5)."
+  },
+  "success_criteria": {
+    "mode": "holdout_then_multi_phase",
+    "primary_metric": "Carhart-4F alpha t-stat (HAC, maxlags=5) on holdout 2024-04-30 -> 2026-04-30 portfolio returns",
+    "bonferroni_threshold": "n=3 in class alt_data_screener_search_2026_04_30 (v1 abandoned + v2 completed-FAIL + v3 active) -> |t| >= 2.39 by canonical preregister threshold computation.",
+    "pass_rule": "Holdout Carhart-4F alpha t-stat >= 2.39 AND Lo-adjusted Sharpe (net) >= 0.5 AND alpha annualized >= 3% AND MaxDD >= -35% AND >= 1 nonzero Lasso coefficient AND in-CV IR (mean fold rank-IC / std fold rank-IC) >= 1.0 AND holdout mean per-asof rank-IC > 0",
+    "mid_rule": "alpha t-stat >= 1.5 AND Sharpe (net) >= 0.3 AND >= 1 nonzero coef AND in-CV IR >= 0.5 AND holdout mean per-asof rank-IC > 0 -> MID; refine + re-pre-register before deploy",
+    "fail_rule": "anything that doesn't clear MID -> FAIL, log to ledger, document v3 verdict",
+    "new_gates_rationale": "in-CV IR gate addresses zen Objection 3: under rank-target argmax-equivalent, ANY non-trivial lambda beats lambda_max via random fold noise. IR gate (mean/std across folds) ensures the chosen lambda has CONSISTENT positive IC across folds, not one-fold lucky pick. Holdout-IC gate addresses perplexity HARKing concern: holdout period not used for lambda selection, so positive holdout rank-IC is true out-of-sample evidence.",
+    "deployment_threshold_program_level": "Even on PASS, capital-deployment requires program-level Bonferroni n=4+ across all classes ever tested on this target+universe+holdout -> |t| >= 2.50.",
+    "phase_robustness_followup": "If holdout PASS or MID, run multi-phase audit (5 phase offsets) on 2018-2026 with same architecture; PASS only if every phase alpha t-stat >= 1.5 AND mean alpha t-stat >= 2.39 (in-class) or >= 2.50 (program-level for deploy). If holdout FAIL outright, skip Phase C.",
+    "permutation_null_followup": "If Phase C PASS, optional: run permutation null test (shuffle ranks within each asof, refit 100 times, verify chosen-lambda holdout-IC > 95% CI of permuted distribution). Adds compute (100 refits x 25 lambdas) but provides non-parametric null distribution evidence beyond Carhart-4F.",
+    "comparison_to_prior": "Prior class v1-v3 mean phase alpha-t = +0.65 / +0.55 / +0.55 (all 0-coef). v4 v2 alpha-t = +0.05 (0-coef, MaxDD -61.5%). v3 in-class needs holdout alpha-t >= 2.39 — substantially higher bar than ALL prior. Honest expectation: if zen's diagnostic right (target shape was bottleneck), v3 may produce non-trivial coefs and modest positive alpha; whether t clears 2.39 is uncertain. MID more likely than PASS. If zen's diagnostic wrong (features are real bottleneck), v3 fails IR gate and/or holdout-IC gate, providing CLEAN diagnostic that next class should explore model class (LightGBM/XGBoost) rather than further objective tweaking."
+  }
+}

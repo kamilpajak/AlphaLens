@@ -1,0 +1,120 @@
+{
+  "id": "nonlinear_alt_data_v1_lightgbm_mse_2026_05_01",
+  "class": "nonlinear_alt_data_search_2026_05_01",
+  "verdict": "FAIL (holdout mean rank-IC <= 0; got -0.0123)",
+  "headline_metrics": {
+    "n": 94,
+    "sharpe_gross": 0.04238329912543801,
+    "sharpe_gross_naive": 0.058293613089379595,
+    "sharpe_net": -0.21497883306372143,
+    "alpha_gross_4f": 1.1071737183020152,
+    "t_4f": 0.6963807193207742,
+    "alpha_net_4f": 0.9812089869972409,
+    "excess_vs_bench_ann": -0.5396525590402766,
+    "excess_vs_bench_net": -0.6656172903450509,
+    "max_drawdown": -0.5585650077728264,
+    "cost_drag_ann": 0.12596473130477423,
+    "borrow_fee_drag_ann": 0.015,
+    "alpha_net_after_borrow": 0.9662089869972409,
+    "turnover_per_rebal_long": 0.35429196422694026,
+    "turnover_per_rebal_short": 0.4788081105400851,
+    "turnover_per_rebal_total": 0.8331000747670254,
+    "long_ann_return": 0.6576604319810494,
+    "short_ann_return": 0.6369161179643251,
+    "decile_size_long_mean": 96.84042553191489,
+    "decile_size_short_mean": 83.46808510638297,
+    "n_rebalances": 94,
+    "carhart_aggregated_n": 87,
+    "beta_mkt_carhart4f": 0.1193981226140183,
+    "beta_neutrality_ok": true,
+    "in_cv_ir": -0.22153049942894643,
+    "holdout_mean_rank_ic": -0.012291018695220188,
+    "holdout_n_asofs_with_ic": 94
+  },
+  "regime_stratification": {
+    "2024_partial": {
+      "n_rebal": 34,
+      "ls_ann": 0.5801180722336647,
+      "long_ann": 1.1577794144522444,
+      "short_ann": 0.5776613422185796
+    },
+    "2025_full": {
+      "n_rebal": 50,
+      "ls_ann": -0.044976983382611996,
+      "long_ann": 0.8147102760690763,
+      "short_ann": 0.8596872594516883
+    },
+    "2026_partial": {
+      "n_rebal": 10,
+      "ls_ann": -1.552519976924191,
+      "long_ann": -1.8279933288611474,
+      "short_ann": -0.2754733519369569
+    }
+  },
+  "feature_importances": [
+    {
+      "feature": "earnings_sue_naive_4q_decayed",
+      "split_count": 72
+    },
+    {
+      "feature": "earnings_pead_5d_post_decayed",
+      "split_count": 83
+    },
+    {
+      "feature": "earnings_recency_days",
+      "split_count": 136
+    },
+    {
+      "feature": "short_interest_pct_float_change_60d",
+      "split_count": 86
+    },
+    {
+      "feature": "rank_short_interest_pct_float",
+      "split_count": 68
+    },
+    {
+      "feature": "log1p_days_to_cover",
+      "split_count": 110
+    },
+    {
+      "feature": "insider_log_dollar",
+      "split_count": 3
+    },
+    {
+      "feature": "rank_realized_downside_skew_60d",
+      "split_count": 55
+    },
+    {
+      "feature": "filing_density_4q",
+      "split_count": 25
+    }
+  ],
+  "fit": {
+    "n_train_obs": 221920,
+    "n_estimators_chosen": 26.0,
+    "n_nonzero_importance_feats": 9,
+    "cv_mean_mse": 0.028905635153516948,
+    "feature_names": [
+      "earnings_sue_naive_4q_decayed",
+      "earnings_pead_5d_post_decayed",
+      "earnings_recency_days",
+      "short_interest_pct_float_change_60d",
+      "rank_short_interest_pct_float",
+      "log1p_days_to_cover",
+      "insider_log_count",
+      "insider_log_dollar",
+      "rank_realized_downside_skew_60d",
+      "filing_density_4q"
+    ]
+  },
+  "params": {
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rebalance_stride": 5,
+    "holding": 20,
+    "adv_min_usd": 5000000.0,
+    "cost_half_spread_bps": 10.0,
+    "si_max_short": 0.15,
+    "phase_offset": 0
+  }
+}

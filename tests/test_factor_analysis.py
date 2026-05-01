@@ -122,6 +122,47 @@ class TestRunRegression(unittest.TestCase):
             run_regression(port, ff, factor_columns=["Mkt-RF"])
         self.assertIn("RF", str(cm.exception))
 
+    def test_hac_maxlags_explicit_override(self):
+        """Explicit hac_maxlags overrides the daily-tuned formula. For overlapping
+        returns (e.g. stride=5 + holding=20 → MA(3-4) by construction), the caller
+        must pass an explicit maxlags or HAC SEs are biased.
+        """
+        from alphalens.attribution.factor_analysis import run_regression
+
+        ff = _synthetic_carhart(500, seed=20)
+        rng = np.random.default_rng(21)
+        # Construct strongly autocorrelated noise — formula maxlags is too small.
+        eps = rng.normal(0, 0.001, len(ff))
+        noise = np.zeros(len(ff))
+        for i in range(len(ff)):
+            window = noise[max(0, i - 6) : i]
+            noise[i] = 0.85 * window.mean() + eps[i] if len(window) > 0 else eps[i]
+        port = ff["Mkt-RF"] + ff["RF"] + pd.Series(noise, index=ff.index)
+
+        res_default = run_regression(port, ff, factor_columns=["Mkt-RF"], cov_type="HAC")
+        res_lag10 = run_regression(
+            port, ff, factor_columns=["Mkt-RF"], cov_type="HAC", hac_maxlags=10
+        )
+
+        # Same point estimate, different t-stat (HAC SE differs with maxlags).
+        self.assertAlmostEqual(res_default.alpha_daily, res_lag10.alpha_daily, places=10)
+        self.assertNotAlmostEqual(res_default.alpha_tstat, res_lag10.alpha_tstat, places=4)
+
+    def test_hac_maxlags_ignored_for_nonrobust(self):
+        from alphalens.attribution.factor_analysis import run_regression
+
+        ff = _synthetic_carhart(200, seed=22)
+        port = ff["Mkt-RF"] + ff["RF"]
+        # Should not raise, even though hac_maxlags is set with cov_type=nonrobust.
+        res = run_regression(
+            port,
+            ff,
+            factor_columns=["Mkt-RF"],
+            cov_type="nonrobust",
+            hac_maxlags=5,
+        )
+        self.assertEqual(res.cov_type, "nonrobust")
+
     def test_subtract_rf_false_allows_missing_rf_column(self):
         """Long-short factor returns are already excess. Caller passes subtract_rf=False."""
         from alphalens.attribution.factor_analysis import run_regression

@@ -1,0 +1,60 @@
+{
+  "ledger_id": "alt_data_screener_v2_2026_04_30",
+  "signal_class": "alt_data_screener_search_2026_04_30",
+  "verdict": "FAIL",
+  "phase_b_only": true,
+  "phase_c_status": "SKIPPED per pre-reg phase_robustness_followup clause: 'If holdout FAIL outright, skip Phase C.'",
+  "holdout_metrics": {
+    "n_rebalances": 94,
+    "mean_top_n": 30.0,
+    "turnover_per_rebal": 0.138,
+    "sharpe_gross_lo_adj": 0.80,
+    "sharpe_net_lo_adj": 0.78,
+    "sharpe_gross_naive": 1.43,
+    "alpha_gross_4f_ann": 0.0779,
+    "alpha_net_4f_ann": 0.0570,
+    "alpha_t_stat_hac5": 0.05,
+    "excess_vs_spy_gross_ann": 0.0941,
+    "excess_vs_spy_net_ann": 0.0732,
+    "max_drawdown_net_cum": -0.6152,
+    "cost_drag_ann": 0.0209,
+    "carhart_aggregated_n": 87
+  },
+  "lasso_fit": {
+    "n_train": 221920,
+    "lambda_chosen": 0.004431,
+    "lambda_grid_index": 0,
+    "lambda_grid_size": 25,
+    "nonzero_coefs": 0,
+    "feature_count": 10,
+    "cv_mean_mse": 0.02908,
+    "nonzero_features": []
+  },
+  "fail_reasons": [
+    "0/10 nonzero coefficients — explicit pre-reg failure gate hit",
+    "alpha_t_stat = 0.05 << pass threshold 2.24",
+    "MaxDD = -61.5% << pass threshold -35%"
+  ],
+  "false_positive_caution": {
+    "note": "Lo-adj Sharpe 0.78 and excess vs SPY +7.3%/y NET are misleading. With 0/10 coefs, the Lasso predicts the mean (no cross-sectional signal). 'Top-30 by score' is essentially arbitrary among rows with tied predictions. The +0.78 Sharpe is structural noise from the bull regime 2024-2026 universe-average behavior, NOT alpha. The HAC alpha t-stat of 0.05 confirms zero signal once Carhart-4F factor exposure is removed."
+  },
+  "comparison_to_prior_class": {
+    "prior_class": "multi_source_two_stage_search_2026_04_30",
+    "prior_class_results": [
+      {"id": "multi_source_two_stage_2026_04_30", "verdict": "FAIL", "alpha_t": 0.65, "nonzero_coefs": "15/21 (Q1_calm only)"},
+      {"id": "multi_source_global_lasso_2026_04_30", "verdict": "FAIL", "alpha_t": 0.55, "nonzero_coefs": "0/21"},
+      {"id": "multi_source_global_lasso_20d_2026_04_30", "verdict": "FAIL", "alpha_t": 1.32, "nonzero_coefs": "0/21"}
+    ],
+    "v4_v2_finding": "Substituting 8 of 21 features with literature-pedigreed alt-data signals (Foster SUE, PEAD, Diether-Lee-Werner short interest, days-to-cover, filing density, downside skew rank, decay multipliers) did NOT change the Lasso L1 + CV-MSE outcome. 4 of 4 experiments across this target/universe/holdout produce zero-coef structural artifacts."
+  },
+  "class_status_after_v2": {
+    "n_completed": 1,
+    "n_failed": 1,
+    "n_passed": 0,
+    "next_test_bonferroni_threshold_n3": 2.39
+  },
+  "research_program_status": {
+    "total_paradigm_failures_across_classes": 14,
+    "this_was": "11th paradigm failure since 2026-04-25 strategic pivot (2026-04-29 mom_lowvol + tri-factor + 2026-04-30 quality_momentum + vol-target overlay + multi_source_two_stage v1+v2+v3 + alt_data v2)"
+  }
+}

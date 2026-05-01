@@ -1,0 +1,110 @@
+{
+  "params_frozen": {
+    "class": "nonlinear_alt_data_search_2026_05_01",
+    "version": "v1",
+    "v1_design_provenance": "Pivot from CLOSED class alt_data_screener_search_2026_04_30 (4/4 FAIL on linear-Lasso). v8 design (LightGBM quantile loss alpha=0.5, max_depth=3, min_child_samples=2000, fresh-class threshold 1.96) was REJECTED after zen + perplexity adversarial review identified three flaws: (1) quantile loss in LightGBM hardcodes hessian=1.0 making trees tail-blind; (2) max_depth=3 + min_child_samples=2000 over-regularizes for 222k * 10 feature space (n/p=22200); (3) fresh-class threshold 1.96 dodges multiplicity since same 8 prior tests observed same holdout. v9 (this pre-reg) is the synthesis: MSE objective (real hessian, magnitude-aware), max_depth=5 / min_child_samples=500 (perplexity rec), program-level threshold |t|>=2.74 (n=8 across all classes on this holdout window).",
+    "class_rationale": "FRESH model class change (linear-Lasso -> tree boosting) on same feature space and selection rule. Fresh class is methodologically defensible because tree-based functional form is structurally distinct from linear. Burnt-holdout HARKing concern handled at threshold level (program-level 2.74 not fresh-class 1.96).",
+    "class_bonferroni": "In-class n=1 fresh -> internal threshold |t|>=1.96. PROGRAM-LEVEL across all classes on 2024-04-30..2026-04-30 holdout: multi_source_two_stage_search_2026_04_30 (3 tests, all FAIL) + alt_data_screener_search_2026_04_30 (4 tests, 4 FAIL, 1 abandoned) + this NEW class (1 active) = 8 cumulative tests -> Bonferroni |t|>=2.74. v1 USES PROGRAM-LEVEL 2.74 as PASS gate.",
+    "harking_caveat": "Same 2024-04-30 -> 2026-04-30 holdout has been observed 8 cumulative times across classes. Fresh-class framing is a model-class change ONLY (linear -> tree); features, target, train/holdout periods, selection rule, costs, attribution all identical to v4. Pre-reg explicitly acknowledges this: PASS at fresh-class 1.96 but below program-level 2.74 = 'in-class PASS, program-FAIL', treated as FAIL for actionability. Capital deploy is OFF-TABLE regardless of verdict; only PASS at 2.74 triggers v2-LGBM on truly fresh data (post-2026-04-30 continuation OR new feature universe).",
+    "model_choice": "LightGBM (sklearn API LGBMRegressor) with objective='regression' (MSE). MSE is magnitude-aware (gradient scales with residual; real hessian for boosting). Heavy-tail collapse risk that killed v2's Lasso-MSE on raw return mitigated by tree boosting's residual-modeling robustness + locked regularization (reg_alpha + reg_lambda + bagging).",
+    "model_rationale": "v8 considered objective='quantile' but zen flagged FATAL: quantile loss in LightGBM hardcodes second-derivative to 1.0, degrading tree split-gain calculations and producing 'sluggish, bulk-data splits.' MSE delivers real hessian + natural magnitude-awareness without quantile pathology.",
+    "feature_whitelist_count": 10,
+    "feature_whitelist": [
+      "earnings_sue_naive_4q_decayed",
+      "earnings_pead_5d_post_decayed",
+      "earnings_recency_days",
+      "short_interest_pct_float_change_60d",
+      "rank_short_interest_pct_float",
+      "log1p_days_to_cover",
+      "insider_log_count",
+      "insider_log_dollar",
+      "rank_realized_downside_skew_60d",
+      "filing_density_4q"
+    ],
+    "feature_construction_unchanged": "All 10 features computed identically to v3-v4 per docs/research/preregistration/params_alt_data_screener_v3_2026_05_01.json.",
+    "target_definition": {
+      "target": "20-day forward excess return over RF (raw, no rank transform)",
+      "rationale": "Tree boosting with MSE handles heavy tails via gradient + hessian + L1/L2/bagging regularization. Rank transform is unnecessary; would discard magnitude information that MSE objective is designed to use."
+    },
+    "hyperparameters": {
+      "objective": "regression",
+      "max_depth": 5,
+      "num_leaves": 32,
+      "min_child_samples": 500,
+      "learning_rate": 0.05,
+      "n_estimators_max": 500,
+      "n_estimators_tuned_via": "early stopping with patience=20 on fold-validation MSE in 3-fold CV",
+      "reg_alpha": 0.1,
+      "reg_lambda": 0.1,
+      "feature_fraction": 1.0,
+      "bagging_fraction": 0.8,
+      "bagging_freq": 1,
+      "random_state": 42,
+      "all_locked_except": "n_estimators (CV-tuned via early stopping; min HARKing surface)"
+    },
+    "cv_strategy": {
+      "method": "3-fold expanding-window with 60-day embargo (same machinery as v3-v4-v8)",
+      "objective_metric": "MSE on fold-validation set",
+      "n_estimators_search": "early stopping at patience=20",
+      "rationale": "Single tunable hyperparameter via early stopping minimizes HARKing flexibility. All other hyperparameters locked at conservative-but-not-over-regularized defaults addressing perplexity rec #3."
+    },
+    "portfolio_construction": {
+      "ranking": "predicted score per (ticker, asof) from MSE-trained LightGBM. Score is in raw-return units; ordering preserves magnitude information.",
+      "selection_rule": "long_top_decile_EW_minus_short_bottom_decile_EW (UNCHANGED from v4)",
+      "long_eligibility": "post-ADV cross-section (>= $5M ADV at asof, identical to v4)",
+      "short_eligibility": "post-ADV cross-section AND short_interest_pct_float <= 0.15 at asof (identical v4 HTB filter)",
+      "decile_size_long": "floor(n_long_eligible / 10)",
+      "decile_size_short": "floor(n_short_eligible / 10)",
+      "long_weighting": "equal",
+      "short_weighting": "equal",
+      "rebalance_stride": 5,
+      "holding_period": 20,
+      "min_decile_size": 3,
+      "universe": "AlphaLens PIT universe (yfinance + survivorship parquet)"
+    },
+    "cost_model": {
+      "half_spread_bps": 10,
+      "applied_to": "60 bps round-trip per rebalance (2 legs * 30 bps each); identical to v4",
+      "borrow_fee_separate": "1.5% annualized on short-leg notional reported alongside primary cost; not subtracted from headline alpha"
+    },
+    "statistical_inference": {
+      "hac_maxlags": 5,
+      "sharpe_annualization": "Lo (2002) variance-ratio-adjusted via alphalens.backtest.metrics.sharpe_autocorr_adjusted, periods_per_year=50.4",
+      "carhart_regression": "Carhart-4F regression of L/S return series on 20d-aggregated Mkt-RF/SMB/HML/MOM with subtract_rf=False (L/S spread is already a relative excess)"
+    },
+    "anti_overfit_constraints": {
+      "max_features": 10,
+      "no_post_hoc_feature_addition": "any new feature requires a new pre-registration",
+      "no_post_hoc_feature_removal": "v1 must run with locked 10-feature whitelist",
+      "no_target_horizon_change": "20d horizon locked",
+      "no_hyperparameter_grid_search_post_hoc": "all hyperparameters except n_estimators are locked; tuning others would be HARKing flexibility",
+      "no_decile_size_tuning": "decile (10%) is locked; no quintile/ventile variants without new pre-reg",
+      "no_short_filter_tuning": "SI > 15% short-leg exclusion is locked from v4"
+    },
+    "differences_from_v4": "TWO settled-as-different variables: (a) model class linear-Lasso -> tree-boosting LightGBM; (b) target raw (no rank transform). All other variables (features, periods, selection rule, costs, attribution, gates) identical to v4. Threshold raised from in-class 2.50 to program-level 2.74.",
+    "adversarial_review_summary": "v8 (LightGBM quantile alpha=0.5, max_depth=3, min_child_samples=2000, threshold 1.96) was reviewed by zen + perplexity 2026-05-01 and REJECTED. v9 (this pre-reg) directly addresses the three flaws identified: (1) quantile loss tail-blindness -> objective='regression' (MSE); (2) over-regularization -> max_depth=5 / min_child_samples=500; (3) fresh-class threshold dodge -> program-level 2.74 honest threshold. Full review chain: docs/research/v8_lightgbm_quantile_design_2026_05_01.md (rejected design) and docs/research/v9_lightgbm_mse_design_2026_05_01.md (synthesis design)."
+  },
+  "periods": {
+    "train_start": "2018-01-01",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rationale": "Identical to v3-v4 (Polygon SI history begins 2017-12-29). Burnt holdout handled at threshold level (program-level 2.74) and via diagnostic-only framing."
+  },
+  "success_criteria": {
+    "mode": "holdout_only_program_level_threshold",
+    "primary_metric": "Carhart-4F alpha t-stat (HAC, maxlags=5) on holdout 2024-04-30 -> 2026-04-30 L/S portfolio returns",
+    "bonferroni_threshold_in_class": "n=1 fresh in nonlinear_alt_data_search_2026_05_01 -> in-class |t|>=1.96",
+    "bonferroni_threshold_program_level": "n=8 cumulative across multi_source_two_stage_search (3 tests) + alt_data_screener_search (4 tests) + nonlinear_alt_data_search (1 active) -> |t|>=2.74. v1 USES PROGRAM-LEVEL 2.74 AS PASS GATE.",
+    "pass_rule": "Holdout L/S Carhart-4F alpha t-stat >= 2.74 AND Lo-adjusted Sharpe (net) >= 0.5 AND alpha annualized >= 3% AND MaxDD >= -35% AND in-CV rank-IR >= 1.0 AND holdout mean per-asof rank-IC > 0",
+    "in_class_pass_program_fail": "1.96 <= alpha_t-stat < 2.74 -> reported as 'in-class PASS, program-FAIL', treated as FAIL for actionability; informational for next-class design",
+    "mid_rule": "alpha t-stat >= 1.5 AND Sharpe (net) >= 0.3 AND in-CV rank-IR >= 0.5 AND holdout mean per-asof rank-IC > 0 -> MID; refine + re-pre-register",
+    "fail_rule": "anything that doesn't clear MID -> FAIL, log to ledger",
+    "descriptive_gates": "|Mkt-RF beta from Carhart 4F| <= 0.20 (market-neutrality sanity); reported but does NOT determine verdict.",
+    "diagnostic_only_clause": "BURNT-HOLDOUT MITIGATION: v1 is DIAGNOSTIC ONLY. Capital deploy is OFF-TABLE regardless of holdout verdict. PASS at program-level 2.74 triggers v2-LGBM re-pre-registration on truly fresh data (post-2026-04-30 continuation OR analyst-revisions feature expansion in NEW class). FAIL informs next-class decision (Path beta long-only construct, OR Path gamma new features).",
+    "phase_robustness_followup": "If holdout PASS at 2.74, run multi-phase audit (5 phase offsets) on 2018-2026 with same architecture; PASS only if every phase alpha t-stat >= 1.5 AND mean alpha t-stat >= 2.74. If holdout FAIL outright, skip Phase C.",
+    "permutation_null_followup": "If Phase C PASS, optional Phase D bootstrap decile-spread significance (per perplexity rec [7] Timmermann bootstrap). Adds 1000 bootstrap iterations; non-parametric significance evidence.",
+    "regime_stratification_postdoc": "DESCRIPTIVE post-hoc: report long-decile alpha, short-decile alpha, L/S spread separately for 2024-04-30 -> 2024-12-31 / 2025-01-01 -> 2025-12-31 / 2026-01-01 -> 2026-04-30 sub-periods (same as v4).",
+    "comparison_to_prior": "Class state (4/4 FAIL on linear-Lasso): v1 alt_data class FINRA-blocked, v2 raw-MSE 0/10 coefs (alpha-t=+0.05), v3 rank-target top-30 (alpha-t=-4.32, 2/10 coefs, holdout rank-IC=+0.0260), v4 rank-target decile L/S (alpha-t=-2.57, same 2 coefs, short-leg squeezed). v9 tests model-class change linear -> tree with MSE on raw target. Honest expectation: FAIL >> MID > PASS. Run for diagnostic value (settles linear vs tree variable on this stack)."
+  }
+}

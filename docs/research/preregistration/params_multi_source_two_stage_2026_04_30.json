@@ -1,0 +1,84 @@
+{
+  "params_frozen": {
+    "architecture": "two_stage",
+    "stage1_regime_classifier": {
+      "type": "deterministic_pre_specified",
+      "input": "VIXCLS daily level",
+      "rule": "VIX quartile assignment using rolling-252d quartiles fit on train period only",
+      "output": "regime ∈ {Q1_calm, Q2, Q3, Q4_stress}"
+    },
+    "stage2_conditional_alpha": {
+      "model_class": "Lasso",
+      "regularization": "L1 with α selected via 3-fold expanding-window nested CV on train_pool with 60-day embargo",
+      "fit_strategy": "one model per regime quartile (4 models total)",
+      "max_lambda_grid_points": 25
+    },
+    "feature_whitelist_count": 21,
+    "feature_whitelist": [
+      "insider_log_count",
+      "insider_log_dollar",
+      "insider_cluster_window_days",
+      "vix_level",
+      "vix_change_20d",
+      "term_spread_10y_3m",
+      "ret_20d",
+      "ret_60d",
+      "ret_252d",
+      "vol_realized_20d",
+      "near_52w_high_distance",
+      "dollar_volume_z_20d",
+      "rolling_beta_mkt_252d",
+      "idiosyncratic_vol_residual_60d",
+      "rank_momentum_60d",
+      "rank_lowvol_20d",
+      "rank_dollar_volume_size",
+      "interaction_insider_x_vix_high",
+      "interaction_mom20_x_vol_regime",
+      "interaction_mom20_x_size_quintile",
+      "interaction_insider_x_mom20"
+    ],
+    "feature_pit_provenance": {
+      "insider_*": "ParquetInsiderScorer with delisting_events loaded (F4 fix locked by tests/test_pit_insider_delisting_exclusion.py); 180d fire-sale exclusion",
+      "vix_*, term_spread_*": "FRED daily-only series (DGS10, DGS3MO, VIXCLS); PIT-clean per pit_audit_2026_04_30 M3+M4 PASS",
+      "ret_*, vol_*, near_52w_high_*, dollar_volume_*, rank_*": "per-ticker OHLCV via HistoryStore.truncate_to(asof); survivorship-correct per O2 invariant locked by tests/test_pit_universe_delisted_inclusion.py",
+      "rolling_beta_*, idiosyncratic_vol_*": "rolling 252d (resp 60d) regression of ticker excess return on Mkt-RF, window strictly < asof"
+    },
+    "target_definition": {
+      "horizon": "5_trading_days_forward_return",
+      "construction": "raw excess return over RF (5d-forward close-to-close minus 5d-cumulative RF)",
+      "post_hoc_attribution": "Carhart-4F regression of realised portfolio returns on Mkt-RF/SMB/HML/MOM (CONTEMPORANEOUS, standard academic Carhart 1997). NOT pre-residualized at target level (per Gu-Kelly-Xiu 2024 update; preserves information, post-hoc attribution separates discovery from factor-loading rediscovery)."
+    },
+    "portfolio_construction": {
+      "ranking": "predicted forward excess return per (ticker, asof) from the regime-conditional Lasso",
+      "top_n": 30,
+      "weighting": "equal",
+      "rebalance_stride": 5,
+      "holding_period": 5,
+      "universe": "AlphaLens PIT universe (yfinance + survivorship parquet), ADV ≥ $5M filter applied at scoring time"
+    },
+    "cost_model": {
+      "half_spread_bps": 10,
+      "applied_to": "every entry and exit (round-trip = 20 bps)"
+    },
+    "anti_overfit_constraints": {
+      "max_features": 21,
+      "feature_to_obs_budget": "Harvey-Liu-Zhu / Feng-Giglio-Xiu heuristic: N_features ≤ √(T × Sharpe_target) / 2; with T~10⁵ × cross-section, target Sharpe 0.4 → comfortably under 63",
+      "lasso_l1_regularization": "forces feature sparsity",
+      "no_post_hoc_feature_addition": "any new feature requires a new pre-registration with its own Bonferroni denominator"
+    }
+  },
+  "periods": {
+    "train_start": "2014-01-01",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30"
+  },
+  "success_criteria": {
+    "mode": "holdout_then_multi_phase",
+    "primary_metric": "Carhart-4F α t-stat on holdout 2024-04-30 → 2026-04-30 portfolio returns",
+    "pass_rule": "Holdout Carhart-4F α t-stat ≥ Bonferroni threshold for class multi_source_two_stage_search_2026_04_30 (n=1 initially → |t| ≥ 1.96) AND holdout Sharpe ≥ 0.5 AND holdout α annualized ≥ 3% AND holdout MaxDD ≤ 35%",
+    "mid_rule": "α t-stat ≥ 1.5 AND Sharpe ≥ 0.3 → MID verdict; refine and re-pre-register before any deploy",
+    "fail_rule": "α t-stat < 1.5 OR Sharpe < 0.3 → FAIL, log to ledger, narrow search space for next experiment per feedback_keep_searching_screeners.md and feedback_literature_not_oracle.md",
+    "phase_robustness_followup": "If holdout PASSES, run multi-phase audit (5 phase offsets per multi_phase library) on the 2014-2026 full window with the same architecture; PASS only if every phase α t-stat ≥ 1.5 AND mean α t-stat ≥ Bonferroni threshold for then-current class count"
+  }
+}
