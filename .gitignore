@@ -226,3 +226,6 @@ reports/
 
 # Pre-registration ledger CLI backups
 docs/research/preregistration/ledger.json.bak.*
+
+# Playwright MCP cache (browser snapshots, console logs)
+.playwright-mcp/
