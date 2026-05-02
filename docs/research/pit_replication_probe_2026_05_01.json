@@ -1,0 +1,100 @@
+{
+  "ticker": "AAPL",
+  "test_start": "2023-01-16",
+  "test_end": "2023-12-15",
+  "stride_days": 30,
+  "lookback_days": 365,
+  "asof_count": 12,
+  "valid_pairs": 8,
+  "per_asof": [
+    {
+      "asof": "2023-01-16",
+      "history_window_size": 250,
+      "current_ivx30": 0.334504,
+      "empirical_ivp": 49.0,
+      "vendor_ivp": NaN
+    },
+    {
+      "asof": "2023-02-15",
+      "history_window_size": 251,
+      "current_ivx30": 0.260281,
+      "empirical_ivp": 7.171314741035856,
+      "vendor_ivp": 9.126983642578125
+    },
+    {
+      "asof": "2023-03-17",
+      "history_window_size": 251,
+      "current_ivx30": 0.294112,
+      "empirical_ivp": 24.701195219123505,
+      "vendor_ivp": 24.603174209594727
+    },
+    {
+      "asof": "2023-04-16",
+      "history_window_size": 250,
+      "current_ivx30": 0.26196,
+      "empirical_ivp": 8.200000000000001,
+      "vendor_ivp": NaN
+    },
+    {
+      "asof": "2023-05-16",
+      "history_window_size": 251,
+      "current_ivx30": 0.212951,
+      "empirical_ivp": 2.390438247011952,
+      "vendor_ivp": 1.9841259717941284
+    },
+    {
+      "asof": "2023-06-15",
+      "history_window_size": 251,
+      "current_ivx30": 0.175439,
+      "empirical_ivp": 0.0,
+      "vendor_ivp": 0.0
+    },
+    {
+      "asof": "2023-07-15",
+      "history_window_size": 251,
+      "current_ivx30": 0.222099,
+      "empirical_ivp": 14.541832669322709,
+      "vendor_ivp": NaN
+    },
+    {
+      "asof": "2023-08-14",
+      "history_window_size": 250,
+      "current_ivx30": 0.202345,
+      "empirical_ivp": 7.6000000000000005,
+      "vendor_ivp": 7.539681911468506
+    },
+    {
+      "asof": "2023-09-13",
+      "history_window_size": 251,
+      "current_ivx30": 0.215649,
+      "empirical_ivp": 19.9203187250996,
+      "vendor_ivp": 19.44444465637207
+    },
+    {
+      "asof": "2023-10-13",
+      "history_window_size": 251,
+      "current_ivx30": 0.267307,
+      "empirical_ivp": 51.79282868525896,
+      "vendor_ivp": 52.380950927734375
+    },
+    {
+      "asof": "2023-11-12",
+      "history_window_size": 250,
+      "current_ivx30": 0.173631,
+      "empirical_ivp": 0.2,
+      "vendor_ivp": NaN
+    },
+    {
+      "asof": "2023-12-12",
+      "history_window_size": 251,
+      "current_ivx30": 0.162447,
+      "empirical_ivp": 1.593625498007968,
+      "vendor_ivp": 1.5873010158538818
+    }
+  ],
+  "gate": {
+    "correlation": 0.9990207750548515,
+    "threshold": 0.95,
+    "verdict": "PASS"
+  }
+}

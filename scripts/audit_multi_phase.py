@@ -198,12 +198,19 @@ def main() -> int:
     for config_key, phase_rows in by_config.items():
         summary = summarise_phase_results(phase_rows)
         verdict = robust_verdict(phase_rows)
+        excess_values = [
+            r["excess_net_ann"] for r in phase_rows if r.get("excess_net_ann") is not None
+        ]
+        dispersion_pp = (
+            round((max(excess_values) - min(excess_values)) * 100, 2) if excess_values else None
+        )
         output["configs"].append(
             {
                 "config": config_key,
                 "n_phases": len(phase_rows),
                 "summary": summary,
                 "verdict": verdict,
+                "dispersion_pp": dispersion_pp,
                 "per_phase": [
                     {
                         "phase_offset": r["phase_offset"],

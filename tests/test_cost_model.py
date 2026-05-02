@@ -62,16 +62,20 @@ class TestApply(unittest.TestCase):
 
 
 class TestSensitivityTable(unittest.TestCase):
-    def test_returns_all_four_profiles(self):
+    def test_returns_all_profiles_sorted_by_drag(self):
         from alphalens.attribution.cost_model import cost_sensitivity_table
 
         rng = np.random.default_rng(0)
         returns = rng.normal(0.001, 0.01, 252)
         df = cost_sensitivity_table(returns)
 
-        self.assertEqual(len(df), 4)
+        # 5 profiles after adding "long_only_30bps" (v7 retail single-leg).
+        # Sorted ascending by drag_bps: gross(0), long_only_30bps(30),
+        # aggressive(75), moderate(100), conservative(150).
+        self.assertEqual(len(df), 5)
         self.assertListEqual(
-            list(df["profile"]), ["gross", "aggressive", "moderate", "conservative"]
+            list(df["profile"]),
+            ["gross", "long_only_30bps", "aggressive", "moderate", "conservative"],
         )
         # Sharpe should decrease as drag increases.
         self.assertTrue((df["sharpe"].diff().dropna() <= 0).all())

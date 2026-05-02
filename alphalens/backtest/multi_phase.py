@@ -71,13 +71,21 @@ def summarise_phase_results(
     return summary
 
 
-def robust_verdict(phase_results: Sequence[dict[str, Any]]) -> str:
+def robust_verdict(
+    phase_results: Sequence[dict[str, Any]],
+    dispersion_threshold_pp: float = 50.0,
+) -> str:
     """Decision-gate verdict that accounts for phase-dispersion.
 
     PASS  — every phase has alpha_t >= 1.5 AND excess_net_ann >= 0
             (this implies mean alpha_t >= 1.5 and mean excess >= 0).
     FAIL  — mean(alpha_t) < 1.0, OR mean excess non-positive, OR majority
-            of phases negative on either metric.
+            of phases negative on either metric, OR `excess_net_ann`
+            dispersion (max - min) reaches `dispersion_threshold_pp`
+            percentage points across phases (economic-fragility gate
+            absorbed from v7 pre-reg adversarial review 2026-05-01;
+            alpha_t already protected by Bonferroni, this gate guards
+            post-cost economic stability).
     MID   — anything between (mean ≥ 1.0 with positive excess but the gate
             is not uniformly cleared, signalling regime fragility).
 
@@ -106,6 +114,9 @@ def robust_verdict(phase_results: Sequence[dict[str, Any]]) -> str:
     mean_excess = sum(excess_values) / len(excess_values)
 
     if mean_t < 1.0 or mean_excess <= 0:
+        return "FAIL"
+    dispersion_pp = (max(excess_values) - min(excess_values)) * 100
+    if dispersion_pp >= dispersion_threshold_pp:
         return "FAIL"
     # Count materially-negative phases (alpha_t < 0 OR excess_net_ann < 0).
     # Pairing is now correct because both lists were drawn from `valid_phases`.

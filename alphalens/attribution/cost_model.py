@@ -20,13 +20,18 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
-CostProfile = Literal["aggressive", "moderate", "conservative", "gross"]
+CostProfile = Literal["aggressive", "moderate", "conservative", "gross", "long_only_30bps"]
 
 _PROFILE_BPS = {
     "aggressive": 75.0,
     "moderate": 100.0,
     "conservative": 150.0,
     "gross": 0.0,
+    # Canonical retail long-only single-leg cost (15bps half-spread + 5bps
+    # adverse selection × 2 = 30bps RT). Used by v7 options-implied pre-reg
+    # per docs/research/v7_options_implied_design_2026_05_01.md. For L/S
+    # diagnostic, caller applies this profile twice (once per leg).
+    "long_only_30bps": 30.0,
 }
 
 

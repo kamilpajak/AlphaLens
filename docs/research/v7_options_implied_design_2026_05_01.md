@@ -1,208 +1,175 @@
-# v7 design — options-implied features (DRAFT v2 — adversarial-review-revised)
+# v7 design — options-implied features (DRAFT v3 — smd-primary architecture, post-adversarial review)
 
-**Status:** DRAFT — pending probe v3 results + iVolatility support response (deadline 2026-05-08).
+**Status:** DRAFT — pre-reg NOT LOCKED. PIT integrity gate PASS (Pearson 0.9990, 2026-05-01). Remaining blocks: hypothesis direction commitment, feature-stack consolidation, long-short diagnostic, multiplicity reconciliation. Estimated unlock: 2026-05-02 after edits below land.
 
-**🚨 HARD ABORT TRIGGER (top-of-memo per zen):** Probe v3 strict retention (T1+T2) on optionable subset < 85% → unconditional FAIL of Phase A. Do not proceed to feature extraction. Pivot vendor (ThetaData $80 only viable alt; Polygon Options Developer DISQUALIFIED — 4y < 8y backtest target).
+**Class:** `options_implied_search_2026_05_xx` (NEW class). Cumulative pre-reg count after this lock = 14. Naive Bonferroni primary |αt|≥2.86; Romano-Wolf m=30 stretch |αt|≥3.27.
 
-**Symbology resolution status (2026-05-01 PM empirical):** Option 1 (persistent optionId) **INSUFFICIENT** for our feature stack. Empirical test: `/equities/eod/ivs?optionId=...` returns 400 Bad Request — surface and term-structure endpoints are equity-keyed, accept ticker only. Option 1 works for per-contract `single-stock-option-raw-iv` (verified for SIVB → 17 rows of IV/Greeks via optionId without Q-suffix re-mapping) but cannot bulk-extract surface or term structure. **Reduces to Option 2 (accept look-ahead, "mortal sin" per zen) or Option 3 (vendor switch).** Effectively: if iVolatility support delivers Master Symbology → proceed; else cancel iVolatility, blind-buy ThetaData $80 or stop v7.
+**Author:** Kamil. **Date:** 2026-05-01 PM (rev 3).
 
-**Class:** `options_implied_search_2026_05_xx` (NEW class). Program-level Bonferroni stays n=13 → naive |t|≥2.86 / Romano-Wolf m≈50 → |t|≥3.5.
+## Why v3 supersedes v2
 
-**Author:** Kamil. **Date:** 2026-05-01 PM.
+v2 was scoped to a 4-endpoint composite (`/ivx` + `/ivs` + `/hv` + `/stock-opts-by-param`) with cascading variant resolution and Q-suffix look-ahead concerns. Probe v5 (n=200, 99.5% T1 retention 2026-05-01 22:47) demonstrated `/equities/stock-market-data` (smd) returns 100+ pre-computed features per (ticker, asof) **with original ticker indexing preserved across delistings (T2=0)**. This single-call architecture moots the Q-suffix look-ahead concern — smd queries SIVB at 2023-03-08 directly without any post-bankruptcy re-keying.
 
-## Hypothesis
+PIT integrity replication probe (`scripts/probe_pit_replication.py`, AAPL, 12 asofs in 2023, 2026-05-01 23:27) confirmed vendor IVP uses strict backward-looking window: Pearson 0.9990 between empirically-recomputed IVP and vendor smd IVP across 8 valid pairs (4 NaN are weekend/holiday calendar artifacts; production code snaps to last trading day).
 
-**H₁ (revised per zen 2026-05-01):** Options-implied features (ATM IV percentile, 25Δ skew percentile, IV-vs-HV ratio percentile, term-structure slope percentile) — **NORMALIZED to 1y rolling rank per ticker** — provide cross-sectional signal for next-20d equity returns **AFTER controlling for standard equity factors** (1m reversal, 6m momentum, 30d realized vol). Specifically: high cross-sectional skew percentile predicts next-20d **mean reversion in distress** (the "survival premium" / overshoot-correction effect — long the most distressed expecting rebound).
+## Adversarial review (zen + perplexity, 2026-05-01)
 
-**Long-only economic intuition (explicit per zen)**: this is a **survival-premium / mean-reversion** hypothesis. Going long the highest-skew names is betting that crash-fear-pricing overshoots actual crash probability. NOT betting on trend continuation. The strategy would FAIL if 2024-2026 holdout had unusual cluster of confirmed defaults among the long-decile.
+Two showstoppers + five high-severity issues identified. PIT showstopper now resolved via the replication probe. Remaining blind spots addressed inline below; complete summary in `docs/research/v7_adversarial_review_2026_05_01.md` (TBD — to be created when v7 memo is locked).
 
-**H₀:** Options-implied features (normalized as percentiles) add no predictive power beyond equity factor baselines (1m reversal + 6m momentum + 30d HV), OR signal exists but is uneconomic after 30bps RT cost.
+## Hypothesis (DIRECTION-COMMITTED per zen + perplexity)
 
-**Bottleneck identified across alt_data class 6/6 FAIL + nonlinear 1/1 FAIL + analyst v10 ABORT**: features were the constraint, not architecture. Options-implied is a genuinely fresh feature class.
+**Literature prior:** Xing-Zhang-Zhao 2010, Bali-Hovakimian 2009, An-Ang-Bali-Cakici 2014 converge on **NEGATIVE** sign — high implied vol / high put-skew predicts NEGATIVE next-month equity returns (vol risk premium going wrong way for the buyer of insurance). Cremers-Weinbaum 2010 finds positive PCP-deviation predicts positive returns but on a different feature class.
 
-## Class context (multiple-testing discipline)
+**H₁ (commit):** Cross-sectional ranking of options-implied vol features (IVP, IVX30 level, IVX180−IVX30 term spread, IVX30/HV20 ratio) **predicts next-20d equity returns with NEGATIVE sign on the vol-level features**. Top decile = **lowest** Lasso-fitted return (i.e. highest IVP/IVX → expected to underperform). Long-only strategy = LONG **bottom** decile by Lasso score (low-IV names).
 
-Per `feedback_burnt_holdout_multiplicity.md`: pure model-class swap on identical data does NOT cleanse multiplicity. Options-implied IS a fresh feature space (different data source, different concept) → counts as new class but PROGRAM-level Bonferroni still applies.
+**H₀:** Options-implied features add no predictive power beyond equity factor controls (1m reversal, 6m momentum, 30d HV), OR signal exists but is uneconomic after 30bps RT cost.
 
-- Cumulative tests on 2024-04-30 → 2026-04-30 holdout: n=12 (alt_data 6/6, nonlinear 1/1, analyst ABORT counted, multi_source 3/3, multi-source-two-stage 1/1).
-- Next test naive Bonferroni: |t|≥2.86 (n=13).
-- **Romano-Wolf m=30 (revised down from 50 per perplexity 2026-05-01)**: primary |t|≥3.27. Justification: 8 of 12 prior tests share Lasso+alt_data architecture; their test statistics are correlated, so true "effective independent" hypothesis count is lower than total run count. m=30 reflects ~half of architectural reuse.
-- Per-class fresh threshold |t|≥1.96 is **NOT** valid per zen CR (multiplicity abuse).
+**Diagnostic flag (NOT auto-pass):** if Lasso fits POSITIVE coefficients on IVP/IVX in train, this contradicts the literature prior → Phase A diagnostic, document + investigate before Phase B. Do NOT pivot strategy direction post-hoc to chase the data.
 
-## Universe construction (CRITICAL)
+## Feature stack (REDUCED to 7 orthogonal features, was 9-13)
 
-Per zen CR 2026-05-01: probe must measure on objective optionable universe to avoid SPAC/no-options-small-cap contamination.
+zen+perplexity: throwing IVR + IVP + IVX30/60/90/180 + HVP + IVX30HV20 into Lasso = anti-pattern. All measure the same latent vol-level construct → Lasso arbitrarily zeroes most → false orthogonality in holdout.
 
-**Step 1 — Optionable filter** (offline, one-time):
-- Source: Polygon Starter `/v3/reference/options/contracts?underlying_ticker=X&as_of=Y`
-- For each candidate ticker, query as_of = trading_date - 30d. If results > 0 → optionable at that point.
-- Persisted in `~/.alphalens/survivorship/optionable_delisted_2018_2024.parquet` (built by `scripts/build_optionable_universe.py`).
-- Active-listed universe: TBD — likely Polygon Starter `/v3/reference/tickers?market=stocks&active=true&as_of=...` cross-referenced with chain-ref.
+**4 options features (orthogonal-by-construct):**
 
-**Step 2 — Liquidity filter** (per asof, REVISED per zen 2026-05-01 PM — earlier filters too restrictive, eject the death-spiral regime where signal lives):
-- Min ADV (20-day avg dollar volume) ≥ **$2M** (was $5M — too tight for distress regime)
-- Min underlying price ≥ **$1** (was $5 — captures Ch11 death-spiral, $2-$4 distress)
-- ~~Min market cap ≥ $300M~~ — DROPPED. Distress strategies want microcaps in death spiral.
-- Drop OTC pink sheets only (avoid hopelessly illiquid)
-- TBD: source for ADV PIT data — Polygon stock aggs available
+1. **IVP30** (1y rolling percentile of IVX30) — rank-based, robust to vol outliers (drop IVR per zen — same construct, less robust).
+2. **IVX30** (level) — captures absolute vol regime.
+3. **IVX180 − IVX30** (term-structure slope) — captures forward vol expectations.
+4. **IVX30 / HV20** (IV-vs-HV ratio) — captures vol risk premium magnitude.
 
-**Expected universe size**: ~2000-2500 names per asof (slightly larger than alt_data due to looser bounds).
+**3 equity controls (must include per Carhart prior):**
 
-## Symbology layer (KNOWN RISK — flagged by zen)
+5. **1m reversal** — `−1 × r_21d` from Polygon stock aggs.
+6. **6m momentum** — `r_[t-126, t-21]` skip-month per Jegadeesh-Titman.
+7. **30d realized vol** — annualized stdev log returns from Polygon aggs.
 
-Per zen CR: querying iVolatility's post-delisting ticker (SIVB→SIVBQ) introduces look-ahead bias because Q-suffix is assigned AT/AFTER bankruptcy. Using post-delisting ticker to query pre-delisting data uses information from the future.
+**Dropped from v2 stack:** IVR (redundant with IVP), IVX60/IVX90 (collinear with IVX30/180 via term structure), HVP (redundant with IVX30HV20), 25Δ skew (would require `/ivs` per-strike interpolation × 2000 tickers × 2000 dates — infeasible and breaks single-call smd architecture; defer to v8).
 
-**Mitigation options** (decision pending iVolatility support response on Master Symbology):
+**P/C OI ratio handling (deferred to v7.1):** smd's aggregate `openInterest_call` / `openInterest_put` includes LEAPS + deep OTM and dilutes short-term signal. For v7.0, **omit P/C ratios entirely** to keep stack minimal and orthogonal. v7.1 (post-PASS or post-FAIL diagnostic) can add via `/equities/eod/stock-opts-by-param` constrained to **20-45 DTE × delta [0.25, 0.75]** (probe v5 unblocked at retail).
 
-1. **Pure-symbol-as-of** (preferred if iVolatility support confirms): Use iVolatility's `/equities/option-series` with `optionId` (which iVolatility claims is persistent across corporate actions per their docs). Query optionId historically without ticker re-mapping.
+**Vendor BETA: omitted** (per zen — overengineering; equity controls 5-7 already provide market exposure adjustment via Carhart-style factors).
 
-2. **Acceptable look-ahead** (fallback): Document Q-suffix mapping as known limitation. Constraint: only use for retention/coverage measurement, NOT for production feature extraction at asof. For asof-t feature extraction, query iVolatility with the ticker AS KNOWN at asof-t.
+**ETL anomaly bounds (drop rows):**
+- IVX30 > 3.0 (300%) — calibrated against SIVB peak 245% in 2023 distress.
+- IVX30 < 0.05 — penny-stock / no-trading artifacts.
+- |IVX180 − IVX30| > 1.5 — extreme term-structure inversions (likely data errors).
+- IVX30/HV20 > 10 or < 0.1 — provisional, may need recalibration.
+- Stock price < $1 — penny territory, drop.
 
-3. **Vendor change** (if 1+2 unworkable): switch to ThetaData $80 or Polygon Options Developer $79. Both unverified for delisted retention but neither has Q-suffix problem.
+## Universe construction
 
-**Decision rule**: if iVolatility support cannot confirm option_series-on-date works without forward ticker re-mapping → de-prioritize iVolatility for v7 production despite high retention number.
+**Optionable filter (DYNAMIC, per zen — Polygon metadata flag has survivorship risk):**
+- For each (ticker, asof_t), check that smd's `optVol` > 0 OR `openInterest_call + openInterest_put` > 0 on `t-1`. If yes, ticker was actively-optionable at asof_t.
+- This replaces `Polygon /v3/reference/options/contracts?as_of=` which may have backfilled chain-ref data.
+- Already available in smd response; no extra API call.
 
-## Feature stack (REVISED v2 — adds equity controls + percentile normalization per zen)
+**Liquidity filter:**
+- Min ADV (20-day avg dollar volume) ≥ $2M
+- Min underlying price ≥ $1
+- Drop OTC pink sheets (smd `exchange` field)
+- Source ADV: Polygon stock aggs
 
-**Options features** (all converted to **1y rolling rank percentile per ticker** — raw IV cross-sectionally invalid: 60% IV biotech ≠ 60% IV utility):
+**Expected universe:** ~2000-2500 names per asof.
 
-1. **ATM IV 30d percentile** — `/equities/eod/ivx` `30d IV Mean`, then 1y rolling rank
-2. **25Δ skew 30d percentile** — `/equities/eod/ivs` interpolated to 25Δ put−call IV, then 1y rolling rank. *Empirical: AAPL has 28 contracts in delta [0.20, 0.30] neighborhood per asof — interpolation robust*. *Skew construction convention pending perplexity literature gap — likely 25Δ put IV − 25Δ call IV (most common); alternative Xing 2010 RNS = 25Δ put IV − ATM IV*. **Note:** cleaner endpoints `/ivs-by-delta`, `/ivs-parameterized` (with parabolic coefs a, b, c) are 403 tariff-blocked — only available via Historical PRO / Backtesting PRO plans. Must use raw `/ivs` per-strike + interpolate. **Performance optimization (verified via context7)**: use server-side `OTMFrom/OTMTo` + `periodFrom/periodTo` filters to query 25Δ neighborhood only (~5-10× smaller payload than full 338-record surface).
-3. **IV-vs-HV ratio percentile** — `/ivx` 30d IV Mean ÷ `/hv` 30d HV, then 1y rolling rank
-4. **Term-structure slope percentile** — `/ivx` 90d IV Mean ÷ 30d IV Mean, then 1y rolling rank
+**Delisting handling (locked):**
+- Forward-fill last trading price 5 trading days post-delisting (covers settlement / OTC residual).
+- After 5d: apply −50% return for "standard" delistings (acquisition, voluntary), −100% for "bankruptcy" (Ch11, FDIC receivership).
+- Reason classification: from existing `~/.alphalens/survivorship/delisted_2021_2026.parquet`.
+- Inclusion in cross-section is mandatory (excluding = re-introducing survivorship bias).
 
-**Equity controls** (Lasso must include alongside options features per zen — without these, model rediscovers momentum/vol):
+## Backtest design (UNCHANGED from v2)
 
-5. **1m reversal** — −1 × stock return last 21 trading days
-6. **6m momentum** — stock return [t-126, t-21] (skip last month per Jegadeesh-Titman convention)
-7. **30d realized volatility** — annualized stdev of log returns last 30 days
+- **Train:** 2018-04-30 → 2024-04-30 (6y)
+- **Holdout (BURNT):** 2024-04-30 → 2026-04-30 (2y)
+- **Rebalance:** 5d stride, 20d holding
+- **Selection (primary):** bottom decile EW long-only by Lasso-fitted score (committing to NEGATIVE-sign hypothesis).
+- **Cost:** 30bps RT (long-only)
+- **Benchmark:** MDY (mid-cap)
 
-**Lasso fit**: regress 20d forward return on all 7 features simultaneously. **Options features must survive penalization alongside equity controls** — only then is options-implied alpha demonstrated. If Lasso zero-coefs all options features but keeps equity controls → H₀ confirmed.
+**Secondary diagnostic (per perplexity, addresses long-only power loss):**
+- Same Lasso fit, same panel, but report **L/S decile spread (long bottom − short top)** alongside long-only.
+- **Not** the primary verdict (kept long-only for retail-realism + short-cost asymmetry); but if long-only FAILs and L/S PASSes, log as "constraint-driven power loss, not absence of alpha."
+- L/S diagnostic does NOT count as additional Bonferroni test (same Lasso, same null).
 
-**ETL anomaly bounds (drop rows)** (per zen blind spot 2, calibrated 2026-05-01 PM):
-- ATM IV > **3.0 (300%)** — calibrated DOWN from zen's initial 500% per empirical verification: SIVB max IV during halt week was 245%; 500% would be over-permissive. UNVERIFIED if any legitimate distress IV exceeds 300% — may need re-tuning.
-- |25Δ skew| > 2.0 — UNVERIFIED, accept zen's bound provisionally
-- IV-vs-HV ratio > 10 or < 0.1 — UNVERIFIED, accept zen's bound provisionally
-- Stock price < $1 — penny territory (post-filter check)
+## Multi-phase audit
 
-**VERIFICATION STATUS of zen+perplexity prescriptions (annotated 2026-05-01 PM)**:
-- ✅ Raw IV cross-sectional invalid → percentile normalization: VERIFIED (KO 16.9% / NVDA 44.2%, 2.6× variance across stable mega-caps)
-- ⚠️ Universe filter $5 ejects distress: PARTIAL — true for slow decline ($20→$4 falls through filter), false for halt events (SIVB pre-halt was $267, ejected only post-bankruptcy at $0.10). $1 floor still recommended.
-- ❌ IV > 500% bound: empirical max in distress sample was 245% — **calibrated to 300%**.
-- ✅ Polygon Developer 4y < 8y train: VERIFIED arithmetically.
-- ⏳ Equity controls (1m reversal, momentum, HV): UNVERIFIED — would require running Lasso. Adopted on academic-consensus basis (Carhart-4F).
-- ⏳ Romano-Wolf m=30 vs m=50: UNVERIFIED — methodological judgment, requires more research on effective independent test count.
+5 phases, disjoint train tranches, common holdout. Rejection if mean αt across phases <2.86 OR phase dispersion (range αt) >50pp. Per `feedback_phase_aliasing_in_strided_backtests.md`.
 
-**Rejected at current tier (BLOCKED 403)**:
-- ~~Put/Call OI ratio~~ — UNBLOCKED 2026-05-01 PM via `/equities/eod/stock-opts-by-param` (retail tier endpoint, requires dteFrom/dteTo/cp + delta/moneyness range)
-- ~~Put/Call volume ratio~~ — UNBLOCKED via same endpoint
-- ~~GEX~~ — UNBLOCKED via same endpoint (returns gamma, openinterest, underlying_price per contract)
+**Regime stratification (per perplexity):** in attribution, split holdout into VIX>20 vs VIX<20 sub-periods. If alpha lives only in high-VIX regime, document as "tail-risk premium, regime-dependent" rather than "systematic alpha."
 
-**EXPANDED feature stack (9 features total)** — original 6-options stack RESTORED:
+## Multiple-testing correction (zen + perplexity disagreed; locked here)
 
-8. **P/C OI ratio percentile** — sum openinterest by call_put from stock-opts-by-param @ 30d±15dte, then 1y rolling rank
-9. **P/C volume ratio percentile** — same, sum volume
-10. **GEX percentile** — sum(gamma × OI × underlying_price) per side (call positive, put negative dealer-positioning model), net, then 1y rolling rank
+- Naive Bonferroni primary: **|αt| ≥ 2.86** (n=14 pre-reg discipline).
+- Romano-Wolf stretch: **|αt| ≥ 3.27** (m=30, project-level FWER per zen).
+- **Do NOT** allow framing "PASS by m=14, FAIL by m=30" — both must be reported in the verdict; primary is naive, stretch is supplementary.
+- perplexity's m=14 argument is methodologically purer; zen's m=30 reflects project-search reality. Compromise: log both, decide via primary (naive).
 
-**Verified empirically 2026-05-01 PM** on SIVBQ pre-halt 2023-03-08:
-- P/C OI ratio: 2.151 (bearish positioning detected)
-- P/C vol ratio: 2.171
-- GEX net: −3359 (vol amplification regime)
-- These are exactly the v7 features we needed.
-
-**Architectural note**: 6-options + 3-equity-controls = 9-feature stack now feasible at retail tier. Reduction-then-restoration was driven by docs discovery via Playwright (context7 missed `stock-opts-by-param` accessibility). Same Q-suffix look-ahead bias risk persists — needs Master Symbology resolution from iVolatility support.
-
-## Backtest design
-
-- **Train**: 2018-04-30 → 2024-04-30 (6y)
-- **Holdout** (BURNT): 2024-04-30 → 2026-04-30 (2y) — same as alt_data class
-- **Rebalance**: 5d stride, 20d holding (matches alt_data convention)
-- **Cross-section**: top decile EW long-only (matches alt_data v5)
-- **Selection**: rank by Lasso-fitted 20d return with 4 features
-- **Cost**: 30bps RT (long-only)
-- **Benchmark**: MDY (mid-cap, per v6a learning — SPY mega-cap drift contaminated alt_data v5 verdict)
-
-## Multi-phase audit (5 phases, per `feedback_phase_aliasing_in_strided_backtests.md`)
-
-Each phase = Lasso fit on disjoint train tranche, evaluate on common holdout. Rejection if mean αt across phases <2.86 OR phase dispersion (range αt) >50pp.
-
-## Pre-registration JSON template (LOCK before run)
+## Pre-registration JSON (TEMPLATE — not yet locked)
 
 ```json
 {
   "class": "options_implied_search_2026_05_xx",
-  "version": "v7_atmiv_skew_ivhv_termslope",
-  "hypothesis": "options-implied features predict 20d returns cross-sectionally",
-  "test_program_count": 13,
-  "primary_threshold": "|αt| >= 2.86 (naive Bonferroni n=13) AND phase dispersion <50pp",
-  "stretch_threshold": "Romano-Wolf m=50 -> |αt| >= 3.5",
-  "data_provider": "iVolatility $399 trial",
-  "feature_stack": ["atm_iv_30d", "skew_25d_30d", "iv_hv_ratio_30d", "term_slope_30_90d"],
-  "universe": "Polygon-verified optionable + ADV>=$5M + price>=$5 + mcap>=$300M",
-  "symbology_strategy": "TBD pending iVolatility support response 2026-05-08",
+  "version": "v7_smd_primary_4options_3equity_neg_sign_committed",
+  "hypothesis": "options-implied vol features (IVP, IVX30, term-spread, IV-HV ratio) predict next-20d returns with NEGATIVE sign per Xing 2010 / Bali 2009",
+  "test_program_count": 14,
+  "primary_threshold": "|αt| >= 2.86 (naive Bonferroni n=14) AND phase dispersion <50pp",
+  "stretch_threshold": "Romano-Wolf m=30 -> |αt| >= 3.27",
+  "data_provider": "iVolatility $399 retail, /equities/stock-market-data primary",
+  "feature_stack": ["ivp30", "ivx30", "ivx180_minus_ivx30", "ivx30_over_hv20", "reversal_1m", "momentum_6m", "rv_30d"],
+  "selection_primary": "bottom decile EW long-only by Lasso-fitted score (NEGATIVE-sign hypothesis)",
+  "selection_diagnostic": "L/S decile spread (bottom long, top short) — power-loss check only",
+  "universe": "smd-derived dynamic optionable + ADV>=$2M + price>=$1, drop OTC pink",
+  "delisting_handling": "forward-fill 5d, then -50% standard / -100% bankruptcy",
   "train_window": "2018-04-30..2024-04-30",
   "holdout_window": "2024-04-30..2026-04-30 (BURNT)",
   "rebalance": "5d stride, 20d holding",
-  "selection": "top decile EW long-only by Lasso-fitted score",
   "cost_model": "30bps RT",
   "benchmark": "MDY",
   "phases": 5,
-  "phase_dispersion_max": 50,
+  "phase_dispersion_max_pp": 50,
+  "regime_stratification": "VIX>20 vs VIX<20 sub-periods reported in attribution",
   "auto_pivot_triggers": [
-    "Phase A coverage <85% optionable retention -> ABORT",
-    "Phase A symbology look-ahead unconfirmed -> ABORT pending support",
-    "Phase B mean rank-IC <0.005 -> ABORT pre-Phase C"
+    "PIT replication probe Pearson <0.95 -> ABORT (RESOLVED 2026-05-01: 0.9990 PASS)",
+    "Lasso zero-coefs all 4 options features in train -> FAIL (selection-mechanism artifact)",
+    "Phase dispersion >50pp -> FAIL",
+    "Lasso flips sign vs literature prior across phases -> diagnostic flag, no auto-pass"
   ]
 }
 ```
 
-## Adversarial review checklist (BEFORE running Phase B)
+## Adversarial review checklist (BEFORE locking pre-reg)
 
-- [ ] iVolatility retention probe v3 ≥ 85% on optionable subset (PENDING — pre-filter currently running)
-- [ ] iVolatility support response on Master Symbology reviewed
-- [ ] Symbology strategy chosen (option 1, 2, or 3 above)
-- [ ] zen + perplexity adversarial review of feature stack (per `feedback_adversarial_review_saves_compute.md`)
-- [ ] IV outlier handling in ETL (zen blind spot 2: drop rows where IV >5.0 or skew inverted/flat from wide NBBO during distress)
-- [ ] PIT integrity: confirm /equities/eod/ivx data is frozen-as-of, NOT retrospectively revised after corporate actions
-- [ ] Bonferroni n=13 threshold locked (NOT reset to in-class n=1 |t|≥1.96 — multiplicity abuse)
-- [ ] Phase-robust audit driver ready (5 phases, dispersion <50pp gate)
-- [ ] Cost model parity check (30bps RT applied correctly to long-only)
-
-## Decision matrix (vendor selection)
-
-| Path | Cost | Coverage | Symbology | Verdict deadline |
-|------|------|----------|-----------|------------------|
-| iVolatility $399 + Master Symbology | $399/mo | TBD probe v3 | If support delivers Master Symbology mapping (NOT optionId — empirically dead for /ivs/ivx) | 2026-05-08 |
-| ~~iVolatility $399 + accept look-ahead~~ | — | — | "Mortal sin in quant design" per zen — DROPPED | — |
-| ThetaData $80 (blind) | $80/mo | unverified | Unknown — needs separate probe | viable IF iVolatility fails |
-| ~~Polygon Options Developer $79~~ | — | — | Mathematically disqualified — 4y history < 8y backtest target | — |
-| **Cancel iVolatility, defer v7 to later cohort** | $0 | n/a | n/a | safest if all paths fail |
-
-## Open questions (to resolve before locking pre-reg)
-
-1. iVolatility support response on Master Symbology / persistent optionId behavior across corporate actions
-2. Probe v3 retention rate on optionable-filtered universe
-3. Confirmation that Polygon Options Developer $79 covers 2018-2024 train period (4y history may NOT reach back to 2018)
-4. ThetaData EOD trial availability (user reported NO trial; may have changed)
-5. ETL anomaly bounds (zen blind spot 2): IV cap at 500%, skew bounds, distress-period filtering
-
-## Adversarial reviewers consulted
-
-- zen (gemini-3-pro-preview) — vetted probe v2 design, found 2 bugs, then 3 more, prescribed strict T1+T2 gate, prescribed Polygon-verified optionable filter
-- perplexity Sonar Reasoning Pro — backed zen's verdict 100%, added "hard PIT violation" framing for BBBY/OSTK
-- Self exploratory testing — found 5/5 T4 are no-options small-caps/SPACs
+- [x] Probe v5 retention ≥85% on optionable subset — **99.5% PASS**
+- [x] PIT integrity replication probe Pearson ≥0.95 — **0.9990 PASS** (`docs/research/pit_replication_probe_2026_05_01.md`)
+- [x] zen + perplexity adversarial review of feature stack — **DONE 2026-05-01, findings absorbed into v3**
+- [x] Hypothesis direction committed ex-ante (Xing 2010 NEGATIVE prior) — **YES, locked**
+- [x] Lasso multicollinearity addressed via stack reduction (7 features, orthogonal-by-construct) — **YES**
+- [x] Universe filter dynamic (smd optVol/OI), not metadata — **YES, switched**
+- [x] Delisting handling pre-committed (5d forward-fill + −50/−100%) — **YES**
+- [x] Long-short secondary diagnostic implemented in backtest engine — **DONE 2026-05-02** (`BacktestEngine.bottom_n` parameter, `RebalanceSnapshot.bottom_n_*` fields, `BacktestReport.portfolio_returns_short` + `portfolio_returns_long_short` properties; 7 unit tests in `tests/test_backtest_engine_long_short.py`)
+- [x] Phase-robust audit driver re-verified for 5-phase config + dispersion gate — **DONE 2026-05-02** (`robust_verdict()` extended with `dispersion_threshold_pp=50.0` kwarg; 5 unit tests in `tests/test_multi_phase_aggregator.py`; `dispersion_pp` surfaced in `audit_multi_phase.py` JSON output; smoke on mom_lowvol IS dispersion 48.8pp confirms gate doesn't false-trip)
+- [x] Cost model parity check (30bps RT, long-only) — **DONE 2026-05-02** (`"long_only_30bps"` profile added to `_PROFILE_BPS`; 5 caller-composition unit tests in `tests/test_cost_model_v7_parity.py`)
+- [ ] Pre-reg JSON locked via `alphalens preregister add` — **READY** (all engineering blockers cleared; full suite 1560/1560 green; smoke audit_multi_phase.py mom_lowvol verifies no regression)
 
 ## Files
 
-- `scripts/probe_ivolatility_options_survivorship_v2.py` — probe v3 (with bug fixes and --optionable-only flag)
-- `scripts/build_optionable_universe.py` — Polygon pre-filter for optionable universe
-- `tests/test_probe_ivolatility_v2.py` — 21 unit tests (TDD)
+- `scripts/probe_ivolatility_options_survivorship_v2.py` — probe v5 retention probe (smd-primary architecture)
+- `scripts/probe_pit_replication.py` — PIT integrity replication gate (NEW 2026-05-01)
+- `tests/test_probe_pit_replication.py` — 25 unit tests (NEW 2026-05-01)
+- `tests/test_probe_ivolatility_v2.py` — 26 unit tests for retention probe
 - `docs/research/options_provider_evaluation_2026_05_01.md` — vendor evaluation memo
-- `docs/research/ivolatility_survivorship_probe_v2_2026_05_01.json` — probe artefacts (overwritten per run)
-- `~/.alphalens/survivorship/optionable_delisted_2018_2024.parquet` — Polygon-verified optionable pool
+- `docs/research/pit_replication_probe_2026_05_01.{json,md}` — PIT verdict artefacts (PASS)
+- `docs/research/ivolatility_survivorship_probe_v2_2026_05_01.json` — retention verdict (PASS)
+
+## Adversarial reviewers consulted (2026-05-01)
+
+- **zen (gemini-3-pro-preview, thinkdeep + thinking_mode=high)** — flagged PIT showstopper, prescribed rolling-replication test (executed, PASS); prescribed 4-feature orthogonal stack (adopted); prescribed dynamic optionable filter via OI/volume (adopted); prescribed delisting penalty mechanic (adopted).
+- **perplexity Sonar Reasoning Pro** — citation-backed: Xing 2010, Bali-Hovakimian 2009, An-Ang-Bali-Cakici 2014 converge on NEGATIVE sign (adopted as literature prior); long-only loses 30-50% power vs L/S benchmark in Quantpedia/Blitz et al. 2019 (added L/S diagnostic); m=14 vs m=30 reconciliation (logged both); regime-stratification recommendation (added to attribution).
 
 ## Status flags for next session
 
-- Probe v3 with --optionable-only: PENDING (pre-filter running, ETA ~23 min)
-- iVolatility support email: SENT 2026-05-01, awaiting response
-- Pre-reg JSON: NOT LOCKED — will lock after probe v3 + support response
+- PIT integrity gate: **PASS 0.9990** ✓
+- Retention gate: **PASS 99.5%** ✓
+- Adversarial review: **DONE** ✓
+- Pre-reg lock: **UNBLOCKED 2026-05-02** — all 3 engineering items landed via TDD (plan `/Users/jacoren/.claude/plans/gentle-yawning-otter.md`, zen-reviewed); ready for `alphalens preregister add`.
+- Decision deadline: 2026-05-08 (iVolatility trial expiry). Remaining work: lock pre-reg, build Phase A feature joiner (smd + Polygon aggs), run Phase B Lasso fit + 5-phase audit. ~5 days.

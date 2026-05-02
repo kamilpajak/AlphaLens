@@ -220,5 +220,84 @@ class MultiPhaseAggregatorTests(unittest.TestCase):
         self.assertEqual(robust_verdict(rows), "MID")
 
 
+class PhaseDispersionGateTests(unittest.TestCase):
+    """Blocker #2 of v7 pre-reg unblock plan (2026-05-01): dispersion gate
+    on `excess_net_ann` (after-cost economic reality). Threshold defaults to
+    50pp; once the spread between max and min excess across phases reaches
+    50pp the strategy is rejected as economically fragile regardless of
+    headline t-stat. Justification per zen 2026-05-01: alpha_t already
+    protected by Bonferroni/Romano-Wolf; dispersion guards the post-cost
+    annualised excess against single-phase concentration.
+    """
+
+    def test_dispersion_pass_below_50pp(self):
+        from alphalens.backtest.multi_phase import robust_verdict
+
+        # Range 0.06..0.105 = 4.5pp dispersion. All gates above PASS floor.
+        rows = [
+            {"alpha_t": 1.6, "excess_net_ann": 0.060},
+            {"alpha_t": 1.7, "excess_net_ann": 0.075},
+            {"alpha_t": 1.8, "excess_net_ann": 0.090},
+            {"alpha_t": 1.9, "excess_net_ann": 0.105},
+            {"alpha_t": 1.6, "excess_net_ann": 0.080},
+        ]
+        self.assertEqual(robust_verdict(rows), "PASS")
+
+    def test_dispersion_fail_above_50pp(self):
+        from alphalens.backtest.multi_phase import robust_verdict
+
+        # Range 0.02..0.55 = 53pp dispersion. All alpha_t healthy, all positive,
+        # but dispersion gate must trip. Load-bearing.
+        rows = [
+            {"alpha_t": 1.6, "excess_net_ann": 0.02},
+            {"alpha_t": 1.7, "excess_net_ann": 0.10},
+            {"alpha_t": 1.8, "excess_net_ann": 0.20},
+            {"alpha_t": 1.9, "excess_net_ann": 0.30},
+            {"alpha_t": 2.0, "excess_net_ann": 0.55},
+        ]
+        self.assertEqual(robust_verdict(rows), "FAIL")
+
+    def test_dispersion_boundary_below_threshold(self):
+        from alphalens.backtest.multi_phase import robust_verdict
+
+        # 0.499 dispersion (49.9pp) → PASS (strictly below 50pp threshold).
+        rows = [
+            {"alpha_t": 1.6, "excess_net_ann": 0.001},
+            {"alpha_t": 1.6, "excess_net_ann": 0.001},
+            {"alpha_t": 1.6, "excess_net_ann": 0.001},
+            {"alpha_t": 1.6, "excess_net_ann": 0.001},
+            {"alpha_t": 2.0, "excess_net_ann": 0.500},
+        ]
+        # Excess range = 0.500 - 0.001 = 0.499 = 49.9pp → just below gate
+        self.assertEqual(robust_verdict(rows), "PASS")
+
+    def test_dispersion_boundary_at_or_above_threshold(self):
+        from alphalens.backtest.multi_phase import robust_verdict
+
+        # 0.501 dispersion (50.1pp) → FAIL.
+        rows = [
+            {"alpha_t": 1.6, "excess_net_ann": 0.000},
+            {"alpha_t": 1.6, "excess_net_ann": 0.000},
+            {"alpha_t": 1.6, "excess_net_ann": 0.000},
+            {"alpha_t": 1.6, "excess_net_ann": 0.000},
+            {"alpha_t": 2.0, "excess_net_ann": 0.501},
+        ]
+        self.assertEqual(robust_verdict(rows), "FAIL")
+
+    def test_dispersion_custom_threshold_kwarg(self):
+        from alphalens.backtest.multi_phase import robust_verdict
+
+        # 35pp dispersion: PASS at default 50pp threshold, FAIL at custom 30pp.
+        rows = [
+            {"alpha_t": 1.6, "excess_net_ann": 0.05},
+            {"alpha_t": 1.7, "excess_net_ann": 0.15},
+            {"alpha_t": 1.8, "excess_net_ann": 0.25},
+            {"alpha_t": 1.9, "excess_net_ann": 0.35},
+            {"alpha_t": 2.0, "excess_net_ann": 0.40},
+        ]
+        self.assertEqual(robust_verdict(rows), "PASS")
+        self.assertEqual(robust_verdict(rows, dispersion_threshold_pp=30.0), "FAIL")
+
+
 if __name__ == "__main__":
     unittest.main()
