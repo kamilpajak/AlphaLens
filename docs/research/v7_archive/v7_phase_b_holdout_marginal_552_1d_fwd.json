@@ -1,0 +1,99 @@
+{
+  "version": "v7_phase_b_v1",
+  "date": "2026-05-02",
+  "verdict": "FAIL (\u03b1t=+0.53 < 2.86 naive Bonferroni)",
+  "config": {
+    "train_window": [
+      "2018-04-30",
+      "2024-04-30"
+    ],
+    "holdout_window": [
+      "2024-04-30",
+      "2026-04-30"
+    ],
+    "stride_days": 5,
+    "phase_offset": 0,
+    "holding_period_days": 20,
+    "decile_pct": 0.1,
+    "benchmark": "MDY",
+    "adv_min_usd": 2000000.0,
+    "cost_bps_rt": 30.0,
+    "winsorize_pct": 0.995,
+    "universe_size": 1626
+  },
+  "phase_a_gates": {
+    "coverage_pct": 1.0,
+    "coverage_pass": true,
+    "max_abs_corr": 0.6054824799163008,
+    "offending_pair": null,
+    "multicollinearity_pass": true
+  },
+  "lasso_fit": {
+    "feature_names": [
+      "ivp30",
+      "ivx30",
+      "ivx180_minus_ivx30",
+      "ivx30_over_hv20",
+      "reversal_1m",
+      "momentum_6m",
+      "rv_30d"
+    ],
+    "coefficients": [
+      0.0,
+      0.013621717937424043,
+      -0.0,
+      -0.004714287751597057,
+      0.0,
+      0.0,
+      0.0007540382984514109
+    ],
+    "intercept": 0.01405908879747099,
+    "chosen_alpha": 0.0014610118447243657,
+    "cv_mean_mse": 0.056551762454867316,
+    "n_train_obs": 77611,
+    "n_nonzero_coefs": 3,
+    "n_nonzero_options": 2
+  },
+  "primary_stats": {
+    "label": "LONG-only top decile",
+    "n": 100,
+    "sharpe_gross": 0.7755698295458524,
+    "sharpe_net": 0.7714048657678239,
+    "alpha_gross_4f": 0.5796018017294667,
+    "alpha_t_4f": 0.5251728660479297,
+    "alpha_net_4f": 0.5766018017294667,
+    "excess_vs_bench_ann_gross": 0.5854482941075684,
+    "excess_vs_bench_ann_net": 0.5824482941075684,
+    "max_drawdown_net": -0.3860572579468054,
+    "cost_drag_ann": 0.003
+  },
+  "ls_diagnostic_stats": {
+    "label": "L/S decile spread (diagnostic)",
+    "n": 100,
+    "sharpe_gross": 0.202814814035729,
+    "sharpe_net": 0.1948565750630309,
+    "alpha_gross_4f": -1.4320556888472415,
+    "alpha_t_4f": -0.9985236789670426,
+    "alpha_net_4f": -1.4380556888472416,
+    "excess_vs_bench_ann_gross": 0.1797190217970543,
+    "excess_vs_bench_ann_net": 0.17371902179705428,
+    "max_drawdown_net": -0.6074746621256976,
+    "cost_drag_ann": 0.006
+  },
+  "feat_cols_used": [
+    "ivp30",
+    "ivx30",
+    "ivx180_minus_ivx30",
+    "ivx30_over_hv20",
+    "reversal_1m",
+    "momentum_6m",
+    "rv_30d"
+  ],
+  "sign_alignment": {
+    "ivp30": "zero",
+    "ivx30": "flipped",
+    "ivx180_minus_ivx30": "zero",
+    "ivx30_over_hv20": "agrees",
+    "any_options_flipped": true
+  }
+}

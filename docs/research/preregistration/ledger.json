@@ -1667,8 +1667,15 @@
         "fail_rule": "anything not clearing primary → FAIL, log to ledger"
       },
       "registered_at": "2026-05-02",
-      "status": "registered",
-      "outcome": null,
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": 2.6,
+        "mean_excess_net": 0.881,
+        "audit_path": "docs/research/multi_phase_audit.json",
+        "completed_at": "2026-05-02",
+        "notes": "5-phase robust FAIL: mean αt=+2.60 < 2.86 program-level Bonferroni n=14; phase dispersion 67.2pp > 50pp gate on excess_net_ann; per-phase αt range [1.90, 3.20]; ivx30+ivp30 sign-flipped vs Xing 2010 prior across all 5 phases (auto_pivot diagnostic FIRED); L/S spread αt=-2.78 strongly negative — Xing prior replicates IN HOLDOUT 2024-2026 but Lasso-on-train (2018-2024) learned OPPOSITE direction = classic regime-shift overfitting; cache 1449 Tier 1 (87% PIT-active); multi-phase audit JSON docs/research/multi_phase_audit.json; verdict memo docs/research/v7_phase_b_verdict_2026_05_02.md."
+      },
       "notes": ""
     },
     {

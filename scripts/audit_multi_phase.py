@@ -59,6 +59,7 @@ _SCRIPTS = {
     "multi_source_global_lasso_20d": REPO
     / "scripts"
     / "experiment_multi_source_global_lasso_20d.py",
+    "v7_options_implied": REPO / "scripts" / "experiment_v7_options_implied.py",
 }
 
 # Parses lines like:

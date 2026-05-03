@@ -48,6 +48,7 @@ LAYERS_WITH_STATUS = (
     "alphalens.screeners.alt_data",
     "alphalens.screeners.momentum_lowvol",
     "alphalens.screeners.multi_source_two_stage",
+    "alphalens.screeners.options_implied",
     "alphalens.screeners.prescreener",
     "alphalens.archive.screeners.themed",
     "alphalens.watchdog",

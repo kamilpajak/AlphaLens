@@ -1,6 +1,18 @@
 # v7 design — options-implied features (DRAFT v3 — smd-primary architecture, post-adversarial review)
 
-**Status:** DRAFT — pre-reg NOT LOCKED. PIT integrity gate PASS (Pearson 0.9990, 2026-05-01). Remaining blocks: hypothesis direction commitment, feature-stack consolidation, long-short diagnostic, multiplicity reconciliation. Estimated unlock: 2026-05-02 after edits below land.
+**Status:** DRAFT v3.2 — pre-reg locked + 3 Phase-A empirical amendments documented 2026-05-02 (selection convention, target winsorization, sign-flip diagnostic). All 3 engineering blockers landed (commit e9c19f2). Phase A feature joiner + cache layer + target + Lasso + experiment driver landed (TDD, 1624/1624 tests green). Extended PIT probe PASS (aggregate 0.9991 across 3 active tickers; 2 distress UNTESTABLE due to vendor IVX archive limit). Phase A smoke on 30 mega-caps: coverage 100% PASS, multicollinearity (ivx30, rv_30d) corr=0.949 — smoke artifact; on 243 partial cache same gate at 0.617 PASS. Partial Phase B (243 tickers) showed Lasso fits with winsorization (CV-MSE 4.18→0.34, 12x improvement) but **sign-flip on ivx30 (+0.0017)** — pre-reg diagnostic flag fired. Full universe pull (~3000 tickers) running in background, ~13h ETA.
+
+## Phase A empirical amendments (2026-05-02)
+
+Three findings during partial smoke runs that motivated additive code (not pre-reg-locked params changes):
+
+1. **Selection convention (perplexity verdict)**: LONG TOP decile by Lasso prediction (= LOW-IV per Xing 2010 negative-coef fit). Original pre-reg "BOTTOM decile + scorer × -1" was self-contradictory; perplexity Sonar Deep Research confirmed canonical Frazzini-Pedersen / Quantpedia convention is LONG TOP. Wording fix, no Bonferroni cost. Implementation: scorer = +Lasso (no inversion).
+
+2. **Per-asof right-tail winsorization at 99.5%ile**: pre-reg `target_definition` allows "no rank-target unless empirically justified post-Phase-A". Empirical Phase A finding: raw 20d-forward returns produced CV-MSE ~4.0 (residual stdev 200% — extreme right-tail pump-and-dump outliers), causing Lasso CV to zero ALL coefs. Right-tail-only winsorization at 99.5%ile preserves the -1.0 bankruptcy floor mandated by `delisting_handling`, only bounds the right tail. CV-MSE drops to 0.34 (12x improvement). Default applied; opt-out via `--winsorize-pct 1.0`.
+
+3. **Sign-flip diagnostic**: pre-reg auto_pivot says "Lasso flips sign vs literature prior across phases → diagnostic flag, no auto-pass; document in verdict memo." Implemented as `lasso_sign_alignment(fit)` returning {feature: agrees|flipped|zero} per OPTIONS_FEATURES. Partial-cache run on 243 tickers showed `ivx30: flipped` (+0.0017) and `rv_30d: +0.0044` (also flipped from typical low-vol-anomaly prior). Diagnostic flag fired in logs; verdict reporting includes this. **CRITICAL**: even if full-cache run produces same flip + αt ≥ 2.86, do NOT pivot strategy direction post-hoc. Document the deviation in verdict memo and report FAIL or borderline-PASS-with-caveat.
+
+Files updated: `target.py:_winsorize_right_tail_per_asof`, `model.py:lasso_sign_alignment`, `scripts/experiment_v7_options_implied.py` (--winsorize-pct CLI + sign-alignment in JSON output).
 
 **Class:** `options_implied_search_2026_05_xx` (NEW class). Cumulative pre-reg count after this lock = 14. Naive Bonferroni primary |αt|≥2.86; Romano-Wolf m=30 stretch |αt|≥3.27.
 
@@ -20,7 +32,7 @@ Two showstoppers + five high-severity issues identified. PIT showstopper now res
 
 **Literature prior:** Xing-Zhang-Zhao 2010, Bali-Hovakimian 2009, An-Ang-Bali-Cakici 2014 converge on **NEGATIVE** sign — high implied vol / high put-skew predicts NEGATIVE next-month equity returns (vol risk premium going wrong way for the buyer of insurance). Cremers-Weinbaum 2010 finds positive PCP-deviation predicts positive returns but on a different feature class.
 
-**H₁ (commit):** Cross-sectional ranking of options-implied vol features (IVP, IVX30 level, IVX180−IVX30 term spread, IVX30/HV20 ratio) **predicts next-20d equity returns with NEGATIVE sign on the vol-level features**. Top decile = **lowest** Lasso-fitted return (i.e. highest IVP/IVX → expected to underperform). Long-only strategy = LONG **bottom** decile by Lasso score (low-IV names).
+**H₁ (commit):** Cross-sectional ranking of options-implied vol features (IVP, IVX30 level, IVX180−IVX30 term spread, IVX30/HV20 ratio) **predicts next-20d equity returns with NEGATIVE sign on the vol-level features**. Long-only strategy = LONG **TOP** decile by Lasso prediction (= LOW-IV names per Xing 2010), where Lasso's negative coefficient on IV features causes high-IV stocks to receive low predictions and low-IV stocks to receive high predictions. Convention per Frazzini-Pedersen Betting-Against-Beta / Asness-Frazzini-Pedersen QMJ / Quantpedia: sort ascending by prediction, decile 10 = top.
 
 **H₀:** Options-implied features add no predictive power beyond equity factor controls (1m reversal, 6m momentum, 30d HV), OR signal exists but is uneconomic after 30bps RT cost.
 
@@ -82,7 +94,7 @@ zen+perplexity: throwing IVR + IVP + IVX30/60/90/180 + HVP + IVX30HV20 into Lass
 - **Train:** 2018-04-30 → 2024-04-30 (6y)
 - **Holdout (BURNT):** 2024-04-30 → 2026-04-30 (2y)
 - **Rebalance:** 5d stride, 20d holding
-- **Selection (primary):** bottom decile EW long-only by Lasso-fitted score (committing to NEGATIVE-sign hypothesis).
+- **Selection (primary):** TOP decile EW long-only by Lasso prediction = LOW-IV names (committing to NEGATIVE-sign hypothesis; per Xing 2010 + canonical factor-research convention amended 2026-05-02 after perplexity-vetted clarification).
 - **Cost:** 30bps RT (long-only)
 - **Benchmark:** MDY (mid-cap)
 
@@ -149,7 +161,42 @@ zen+perplexity: throwing IVR + IVP + IVX30/60/90/180 + HVP + IVX30HV20 into Lass
 - [x] Long-short secondary diagnostic implemented in backtest engine — **DONE 2026-05-02** (`BacktestEngine.bottom_n` parameter, `RebalanceSnapshot.bottom_n_*` fields, `BacktestReport.portfolio_returns_short` + `portfolio_returns_long_short` properties; 7 unit tests in `tests/test_backtest_engine_long_short.py`)
 - [x] Phase-robust audit driver re-verified for 5-phase config + dispersion gate — **DONE 2026-05-02** (`robust_verdict()` extended with `dispersion_threshold_pp=50.0` kwarg; 5 unit tests in `tests/test_multi_phase_aggregator.py`; `dispersion_pp` surfaced in `audit_multi_phase.py` JSON output; smoke on mom_lowvol IS dispersion 48.8pp confirms gate doesn't false-trip)
 - [x] Cost model parity check (30bps RT, long-only) — **DONE 2026-05-02** (`"long_only_30bps"` profile added to `_PROFILE_BPS`; 5 caller-composition unit tests in `tests/test_cost_model_v7_parity.py`)
-- [ ] Pre-reg JSON locked via `alphalens preregister add` — **READY** (all engineering blockers cleared; full suite 1560/1560 green; smoke audit_multi_phase.py mom_lowvol verifies no regression)
+- [x] Pre-reg JSON locked via `alphalens preregister add` — **DONE 2026-05-02** (registered as `v7_smd_options_implied_2026_05_02` in signal class `options_implied_search_2026_05_02`; within-class threshold |t|≈1.96, program-level Bonferroni n=14 → |αt|≥2.86)
+- [x] Phase A feature joiner — **DONE 2026-05-02** (`alphalens/screeners/options_implied/features.py` + 25 tests; coverage gate ≥70%, multicol drop hierarchy 10 vol-cluster pairs)
+- [x] Smd cache layer — **DONE 2026-05-02** (`alphalens/data/alt_data/ivolatility_smd_cache.py` + 13 tests; range-mode pull, robust fetcher for vendor CSV bugs)
+- [x] Phase B target with delisting terminal returns — **DONE 2026-05-02** (`target.py:forward_raw_return` honours pre-reg `delisting_handling`: -50% standard / -100% bankruptcy; survivorship-correct, no silent drops)
+- [x] Phase B model: single global LassoCV — **DONE 2026-05-02** (`model.py:fit_global_lasso` + 14 tests; `all_options_zeroed` abort flag, `lasso_sign_alignment` for Xing-prior auto_pivot diagnostic)
+- [x] Experiment driver `scripts/experiment_v7_options_implied.py` — **DONE 2026-05-02** (full pipeline, audit-multi-phase compatible regex line, L/S diagnostic via top-decile minus bottom-decile)
+- [x] Wired into `scripts/audit_multi_phase.py` `_SCRIPTS["v7_options_implied"]` — **DONE 2026-05-02**
+- [x] Extended PIT probe (5 tickers incl SIVB/FRC) — **DONE 2026-05-02** (aggregate Pearson 0.9991 across 3 active tickers PASS; SIVB/FRC UNTESTABLE due to vendor IVX archive limit, caveat documented)
+- [▶] Full universe smd pull (~3000 tickers, Tier 1 PIT-active + Tier 2 optionable delisted) — **IN PROGRESS** (772/1626 Tier 1 = 47% at 13:30, ETA ~6.6h to full)
+- [▶] Phase B holdout reveal on full universe — **MARGINAL VERDICT FAIL αt=+0.53** at 552 Tier 1 (34% cache); ivx30 sign-flip persists across 3 sample sizes; full run pending ≥1500 cache
+- [ ] Multi-phase audit (5 phases) — **BLOCKED ON FULL PHASE B**
+
+## Bug fix landed 2026-05-02 (post-marginal run)
+
+**Bug**: experiment_v7 used `holding_period=20` for portfolio returns at 5d-stride, creating 15-day overlap between consecutive observations. HAC=5 cannot absorb 15-day overlap → Carhart α magnitude spuriously inflated to 1381%/y on 495-Tier-1 marginal run, with αt=+3.02 borderline-PASS verdict.
+
+**Fix**: changed `_portfolio_returns(... holding_period=1)` (matches multi_source_two_stage convention; pre-reg holding_period=20 is the TARGET horizon for Lasso fit, not portfolio return horizon). Also `_benchmark_holding_returns` set to 1d-forward.
+
+**Re-run on 552 Tier 1 cache (34% universe)**:
+- Verdict: **FAIL αt=+0.53** (vs buggy +3.02)
+- Carhart-4F α: +57.96%/y gross (vs buggy 1381%)
+- Sharpe net: 0.77
+- L/S diagnostic: αt=-1.00 (FAIL)
+- Sign-flip on `ivx30 = +0.0136` PERSISTS
+
+**Sign-flip on ivx30 — robust across 3 runs**:
+
+| Run | n_train | Tier 1 cache | ivx30 coef | αt (corrected) |
+|---|---|---|---|---|
+| 243 partial | 36,276 | 243 | +0.0017 | n/a (buggy) |
+| 495 marginal (buggy 20d) | 70,581 | 495 | +0.0149 | +3.02 (bug-inflated) |
+| 552 marginal (1d fixed) | 77,611 | 552 | +0.0136 | +0.53 |
+
+ivx30 coef consistently POSITIVE → Lasso says HIGH-IV stocks have HIGHER 20d returns in 2018-2024 train. Contradicts Xing 2010 / Bali-Hovakimian 2009 prior. Pre-reg auto_pivot says "do NOT pivot strategy direction post-hoc" — document deviation, report verdict on locked direction.
+
+Buggy run archived: `docs/research/v7_phase_b_holdout_marginal_495_BUGGY_20d_fwd.json`.
 
 ## Files
 

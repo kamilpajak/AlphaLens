@@ -1,0 +1,370 @@
+{
+  "version": "smoke_v1",
+  "date": "2026-05-02",
+  "verdict": "FAIL",
+  "config": {
+    "universe": [
+      "AAPL",
+      "MSFT",
+      "GOOGL",
+      "NVDA",
+      "AMZN",
+      "META",
+      "TSLA",
+      "JPM",
+      "BAC",
+      "V",
+      "MA",
+      "BRK.B",
+      "UNH",
+      "JNJ",
+      "PFE",
+      "MRK",
+      "LLY",
+      "ABBV",
+      "XOM",
+      "CVX",
+      "CAT",
+      "WMT",
+      "PG",
+      "KO",
+      "PEP",
+      "HD",
+      "COST",
+      "ORCL",
+      "ADBE",
+      "CRM",
+      "NFLX",
+      "AVGO",
+      "SIVB",
+      "FRC"
+    ],
+    "smoke_window": [
+      "2018-04-30",
+      "2026-04-30"
+    ],
+    "asof_window": [
+      "2024-07-01",
+      "2024-12-31"
+    ],
+    "stride_days": 5,
+    "coverage_min": 0.7,
+    "corr_max": 0.85
+  },
+  "cache_inventory": [
+    {
+      "ticker": "AAPL",
+      "rows": 3289,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.007905138339920948
+    },
+    {
+      "ticker": "MSFT",
+      "rows": 3289,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.007905138339920948
+    },
+    {
+      "ticker": "GOOGL",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "NVDA",
+      "rows": 3289,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.007905138339920948
+    },
+    {
+      "ticker": "AMZN",
+      "rows": 0,
+      "cached": false
+    },
+    {
+      "ticker": "META",
+      "rows": 2001,
+      "cached": true,
+      "first_date": "2021-06-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.01699150424787606
+    },
+    {
+      "ticker": "TSLA",
+      "rows": 3289,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.007905138339920948
+    },
+    {
+      "ticker": "JPM",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "BAC",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "V",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "MA",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "BRK.B",
+      "rows": 0,
+      "cached": false
+    },
+    {
+      "ticker": "UNH",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "JNJ",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "PFE",
+      "rows": 7299,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.5367858610768599
+    },
+    {
+      "ticker": "MRK",
+      "rows": 5762,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "LLY",
+      "rows": 4418,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.23472159348121321
+    },
+    {
+      "ticker": "ABBV",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "XOM",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "CVX",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "CAT",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "WMT",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "PG",
+      "rows": 0,
+      "cached": false
+    },
+    {
+      "ticker": "KO",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "PEP",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "HD",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "COST",
+      "rows": 6170,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.47115072933549434
+    },
+    {
+      "ticker": "ORCL",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "ADBE",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "CRM",
+      "rows": 2881,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "NFLX",
+      "rows": 2901,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0003447087211306446
+    },
+    {
+      "ticker": "AVGO",
+      "rows": 2901,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2026-04-30",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "SIVB",
+      "rows": 1793,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2023-03-27",
+      "ivx30_nan_pct": 0.0
+    },
+    {
+      "ticker": "FRC",
+      "rows": 1829,
+      "cached": true,
+      "first_date": "2018-04-30",
+      "last_date": "2023-05-02",
+      "ivx30_nan_pct": 0.0
+    }
+  ],
+  "frame_shape": [
+    810,
+    9
+  ],
+  "gates": {
+    "coverage_pct": 1.0,
+    "coverage_pass": true,
+    "max_abs_corr": 0.9491869244763045,
+    "offending_pair": [
+      "ivx30",
+      "rv_30d"
+    ],
+    "multicollinearity_pass": false
+  },
+  "feature_summary": {
+    "ivp30": {
+      "non_nan": 810,
+      "mean": 63.88251988442592,
+      "std": 28.578842779289328
+    },
+    "ivx30": {
+      "non_nan": 810,
+      "mean": 0.3202938042393438,
+      "std": 0.2644295137040643
+    },
+    "ivx180_minus_ivx30": {
+      "non_nan": 810,
+      "mean": -0.016990011992277926,
+      "std": 0.11400771028335173
+    },
+    "ivx30_over_hv20": {
+      "non_nan": 810,
+      "mean": 1.134269636920812,
+      "std": 0.41706900399001795
+    },
+    "reversal_1m": {
+      "non_nan": 810,
+      "mean": -0.001663926997278399,
+      "std": 0.15398412046557833
+    },
+    "momentum_6m": {
+      "non_nan": 810,
+      "mean": 0.10825889159450937,
+      "std": 0.1852403592017102
+    },
+    "rv_30d": {
+      "non_nan": 810,
+      "mean": 0.3506764617147608,
+      "std": 0.4592601251034354
+    }
+  }
+}
