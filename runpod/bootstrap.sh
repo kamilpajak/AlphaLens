@@ -43,7 +43,11 @@ echo ">>> Clone or fast-forward repo at ${REPO_DIR}"
 if [[ -d "${REPO_DIR}/.git" ]]; then
     git -C "${REPO_DIR}" fetch --quiet --all
     git -C "${REPO_DIR}" checkout --quiet "${BRANCH}"
-    git -C "${REPO_DIR}" pull --quiet --ff-only origin "${BRANCH}" || true
+    # Surface ff-only failures rather than silently running stale code.
+    # Force-push or branch reset on origin will land here; operator must
+    # then re-clone or hard-reset deliberately.
+    git -C "${REPO_DIR}" pull --quiet --ff-only origin "${BRANCH}" \
+        || echo "WARN: fast-forward failed; pod is running local checkout that diverges from origin/${BRANCH}." >&2
 else
     git clone --quiet --branch "${BRANCH}" "${ALPHALENS_REPO_URL}" "${REPO_DIR}"
 fi

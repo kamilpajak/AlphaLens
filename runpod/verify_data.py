@@ -20,7 +20,12 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-# (dataset_relpath, min_files, max_files_warning, sample_size, file_glob)
+# (dataset_relpath, min_files, max_files_warning, sample_size, file_glob).
+# Maintenance note: thresholds are deliberately wide-banded but still
+# constants — when a dataset refresh adds new sources or shifts the
+# parquet count past `max_files_warning`, update both bounds here.
+# False FAILs at this gate abort experiments before they start, which
+# is the desired safety bias.
 EXPECTED_DATASETS = [
     ("companyfacts_parquet", 2500, 4000, 5, "*.parquet"),
     ("ivolatility_smd", 100, 5000, 5, "*.parquet"),

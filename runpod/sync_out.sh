@@ -34,7 +34,7 @@ done
 # under runs/<run_id>/artifacts/).
 ART_SRC="${WORKSPACE}/runs/${RUN_ID}/artifacts"
 if [[ -d "${ART_SRC}" ]]; then
-    rsync -a "${ART_SRC}/" "${DEST}/artifacts/"
+    rsync -a --delete "${ART_SRC}/" "${DEST}/artifacts/"
     echo "    [ok] artifacts/ ($(du -sh "${ART_SRC}" | awk '{print $1}'))"
 fi
 

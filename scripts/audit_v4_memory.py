@@ -140,6 +140,16 @@ def main(argv: list[str] | None = None) -> int:
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end)
 
+    if len(args.ns) > 1:
+        print(
+            "WARN: --ns has > 1 element. resource.getrusage().ru_maxrss is "
+            "monotonic across the process lifetime, so the rss_peak reported "
+            "for runs after the first will INHERIT the prior peak (only "
+            "tracemalloc deltas are reset between Ns). For precisely-isolated "
+            "RSS measurements per N, invoke this script once per N.",
+            flush=True,
+        )
+
     tracemalloc.start(1)
     results = []
     try:

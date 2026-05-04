@@ -54,7 +54,11 @@ echo ">>> Command: ${CMD}"
 
 START_S=$(date +%s)
 set +e
-.venv/bin/python ${CMD} 2>&1 | tee "${RUN_DIR}/run.log"
+# `eval` is required to support multi-arg commands packed into a single
+# CMD string (e.g. `script.py --start 2024-04-30 --end 2026-04-30`).
+# Operator-controlled input only -- pod template never accepts CMD from
+# untrusted source.
+eval ".venv/bin/python ${CMD}" 2>&1 | tee "${RUN_DIR}/run.log"
 EXIT_CODE=${PIPESTATUS[0]}
 set -e
 END_S=$(date +%s)
@@ -71,10 +75,12 @@ if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
     fi
     MSG=$(printf "AlphaLens runpod\nrun: %s\nstatus: %s\nduration: %ds\ncommand: %s" \
                  "${RUN_ID}" "${STATUS}" "${DUR}" "${CMD}")
+    # --data-urlencode protects against `&` / `=` in CMD truncating the
+    # message; -d would form-encode and silently chop the payload.
     curl -s -X POST \
         "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-        -d chat_id="${TELEGRAM_CHAT_ID}" \
-        -d text="${MSG}" > /dev/null || echo "WARN: telegram notify failed"
+        --data-urlencode chat_id="${TELEGRAM_CHAT_ID}" \
+        --data-urlencode text="${MSG}" > /dev/null || echo "WARN: telegram notify failed"
 fi
 
 echo ">>> Next step (operator):  sync_out.sh    # persist to network volume"

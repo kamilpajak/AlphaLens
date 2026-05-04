@@ -44,7 +44,10 @@ for d in "${DATASETS[@]}"; do
         continue
     fi
     dst="${WORKSPACE_DATA}/${d}"
-    rsync -a --info=stats2 --human-readable "${src}/" "${dst}/" \
+    # --delete propagates removals from the network volume so a data
+    # refresh that retracts files (rare but possible on schema migrations)
+    # does not leave stale parquet on the pod's ephemeral disk.
+    rsync -a --delete --info=stats2 --human-readable "${src}/" "${dst}/" \
         | tail -8 \
         | sed "s/^/    [${d}] /"
 done

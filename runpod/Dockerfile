@@ -33,9 +33,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3.13-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# uv (Astral) — single static binary, no Python bootstrap.
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
-    && mv /root/.local/bin/uv /usr/local/bin/uv
+# uv (Astral) — single static binary, no Python bootstrap. UV_INSTALL_DIR
+# avoids relying on the installer's default ~/.local/bin path which is
+# not a stable contract.
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
 
 WORKDIR /workspace
 

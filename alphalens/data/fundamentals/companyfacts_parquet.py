@@ -20,7 +20,7 @@ Schema (long-format):
   period_end     date32
   val            float64
   accn           string
-  fy             int16    nullable
+  fy             int32    nullable (some SEC entries use synthetic frame codes >32767)
   fp             string   nullable (Q1/Q2/Q3/Q4/FY/H1/H2/CY)
   form           string   (10-K/10-Q/8-K/...)
   filed_date     date32
@@ -119,13 +119,15 @@ def companyfacts_json_to_parquet_table(facts: dict[str, Any]) -> pa.Table:
 
 
 # ---------------------------------------------------------------------------
-# Reader: per-CIK Arrow Table accessor with bounded LRU cache.
+# Reader: per-CIK Arrow Table accessor with bounded FIFO cache.
 #
 # Stores call ``get_cik_table(cik)`` once per CIK and filter the resulting
 # table in-memory via vectorized pyarrow.compute (no per-store JSON dict
 # materialization). The cache holds whole Arrow Tables -- compressed in
 # memory via dictionary-encoded string columns -- and FIFO-evicts the
-# oldest entries when capacity is hit.
+# oldest entries when capacity is hit. FIFO (rather than LRU) is fine for
+# the warm-pass-once access pattern of all current consumers; switch to
+# LRU only if a future caller revisits CIKs out of insertion order.
 
 
 def _evict_to_capacity(cache: dict, max_size: int) -> int:
@@ -145,13 +147,15 @@ class CompanyfactsParquetReader:
     JSON layout 1:1). Missing CIK files return ``None``; the negative result
     is cached so repeated lookups do not re-stat the filesystem.
 
-    Cache capacity defaults to 1500, which covers the full S&P 1500 PIT
-    universe with margin while keeping the in-memory footprint bounded
-    (Arrow Tables are dictionary-encoded; ~5 KB / CIK typical -> ~7-10 MB
-    total at full capacity).
+    Cache capacity defaults to 2500, which covers the full S&P 1500 PIT
+    universe AND Russell 2000 (~2000 CIKs) compound experiments with
+    margin while keeping the in-memory footprint bounded (Arrow Tables
+    are dictionary-encoded; ~5 KB / CIK typical -> ~10-15 MB total at
+    full capacity). Override the default upward only when a single
+    experiment touches > 2500 unique CIKs.
     """
 
-    def __init__(self, parquet_dir: Path, *, cache_capacity: int = 1500) -> None:
+    def __init__(self, parquet_dir: Path, *, cache_capacity: int = 2500) -> None:
         self._dir = Path(parquet_dir)
         self._cache: dict[str, pa.Table | None] = {}
         self._cache_capacity = cache_capacity
