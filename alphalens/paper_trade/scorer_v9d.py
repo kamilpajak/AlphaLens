@@ -385,7 +385,12 @@ def backfill_smd_history(
         if existing.empty or "tradeDate" not in existing.columns:
             counts["errors"] += 1
             continue
-        min_date = pd.to_datetime(existing["tradeDate"]).min().date()
+        min_date_ts = pd.to_datetime(existing["tradeDate"], errors="coerce").min()
+        if pd.isna(min_date_ts):
+            logger.warning("[%s] tradeDate column has no valid timestamps", ticker)
+            counts["errors"] += 1
+            continue
+        min_date = min_date_ts.date()
         if min_date <= target_start:
             counts["skipped_already_covered"] += 1
             continue
