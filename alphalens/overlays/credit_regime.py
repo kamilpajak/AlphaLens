@@ -85,9 +85,9 @@ class CreditRegimeOverlay:
     ):
         if lookback < 2:
             raise ValueError("lookback must be >= 2")
-        if not (low_z < high_z):
+        if low_z >= high_z:
             raise ValueError("low_z must be strictly less than high_z")
-        if not (0.0 <= min_exposure <= full_exposure):
+        if min_exposure < 0.0 or min_exposure > full_exposure:
             raise ValueError("0 <= min_exposure <= full_exposure")
         self._spread = spread_series
         self._lookback = lookback

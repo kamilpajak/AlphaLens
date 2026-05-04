@@ -170,12 +170,8 @@ def distress_credit_adapter(
     if n_exclude_top > 0:
         df = df.iloc[: n_total - n_exclude_top].reset_index(drop=True)
 
-    # Keep only bottom quintile by PD (lowest PDs = safest)
-    n_after_exclude = len(df)
-    n_keep = max(1, int(n_after_exclude * (quintile_pct / (1.0 - top_distress_pct))))
-    # Alternative: simpler rule — keep first 20% of ORIGINAL universe
-    # n_keep = max(1, int(n_total * quintile_pct))
-    # We use original-universe quintile so 20% of N goes long regardless of exclusion.
+    # Keep first 20% of ORIGINAL universe size (not 20% of post-exclusion size).
+    # Equal-weighting downstream means bottom quintile gets exactly 20% capital.
     n_keep = max(1, int(n_total * quintile_pct))
     df = df.iloc[:n_keep].reset_index(drop=True)
 
