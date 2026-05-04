@@ -60,6 +60,9 @@ _SCRIPTS = {
     / "scripts"
     / "experiment_multi_source_global_lasso_20d.py",
     "v7_options_implied": REPO / "scripts" / "experiment_v7_options_implied.py",
+    "v8_literature_direct": REPO / "scripts" / "experiment_v8_literature_direct.py",
+    "v9_sign_constrained": REPO / "scripts" / "experiment_v9_sign_constrained.py",
+    "v9_cross_sectional_residual": REPO / "scripts" / "experiment_v9_cross_sectional_residual.py",
 }
 
 # Parses lines like:

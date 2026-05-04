@@ -31,6 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 LAYERS_WITH_STATUS = (
     "alphalens.data.alt_data",
     "alphalens.data.store",
+    "alphalens.data.universes",
     "alphalens.backtest",
     "alphalens.archive.events",
     "alphalens.attribution",
@@ -46,6 +47,7 @@ LAYERS_WITH_STATUS = (
     "alphalens.archive.screeners.insider",
     "alphalens.archive.screeners.lean",
     "alphalens.screeners.alt_data",
+    "alphalens.screeners.event_drift",
     "alphalens.screeners.momentum_lowvol",
     "alphalens.screeners.multi_source_two_stage",
     "alphalens.screeners.options_implied",

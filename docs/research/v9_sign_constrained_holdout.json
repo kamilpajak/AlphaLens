@@ -1,0 +1,93 @@
+{
+  "version": "v9_sign_constrained_v1",
+  "date": "2026-05-03",
+  "verdict": "FAIL (\u03b1t=+1.28 < 3.13 program-Bonferroni n=17)",
+  "config": {
+    "train_window": [
+      "2018-04-30",
+      "2024-04-30"
+    ],
+    "holdout_window": [
+      "2024-04-30",
+      "2026-04-30"
+    ],
+    "stride_days": 5,
+    "phase_offset": 4,
+    "holding_period_days": 20,
+    "decile_pct": 0.1,
+    "benchmark": "MDY",
+    "adv_min_usd": 2000000.0,
+    "cost_bps_rt": 30.0,
+    "winsorize_pct": 0.995,
+    "universe_size": 1626
+  },
+  "phase_a_gates": {
+    "coverage_pct": 1.0,
+    "coverage_pass": true,
+    "max_abs_corr": 0.5922889274699163,
+    "offending_pair": null,
+    "multicollinearity_pass": true
+  },
+  "lasso_fit": {
+    "feature_names": [
+      "ivp30",
+      "ivx30",
+      "ivx180_minus_ivx30",
+      "ivx30_over_hv20",
+      "reversal_1m",
+      "momentum_6m",
+      "rv_30d"
+    ],
+    "coefficients": [
+      -0.0,
+      -0.0,
+      -0.003635119599600658,
+      -0.0005534408209141696,
+      0.0031754074023675792,
+      0.0,
+      0.011608254778321446
+    ],
+    "intercept": 0.017951593970858448,
+    "chosen_alpha": 0.0008576208935423159,
+    "cv_mean_mse": 0.07273031933575302,
+    "n_train_obs": 205857,
+    "n_nonzero_coefs": 4,
+    "n_nonzero_options": 2
+  },
+  "primary_stats": {
+    "label": "LONG-only top decile (sign-constrained Lasso)",
+    "n": 100,
+    "sharpe_gross": 1.0309318207683498,
+    "sharpe_net": 1.0301408608034146,
+    "alpha_gross_4f": 19.976249420644923,
+    "alpha_t_4f": 1.280654917667087,
+    "alpha_net_4f": 19.973249420644922,
+    "excess_vs_bench_ann_gross": 3.8077850262665396,
+    "excess_vs_bench_ann_net": 3.8047850262665395,
+    "max_drawdown_net": -0.1668780809779445,
+    "cost_drag_ann": 0.003
+  },
+  "ls_diagnostic_stats": {
+    "label": "L/S decile spread (diagnostic)",
+    "n": 100,
+    "sharpe_gross": 0.3612426211167814,
+    "sharpe_net": 0.35967968125484256,
+    "alpha_gross_4f": 6.997699715379337,
+    "alpha_t_4f": 0.4267690864986547,
+    "alpha_net_4f": 6.991699715379337,
+    "excess_vs_bench_ann_gross": 1.284386768351288,
+    "excess_vs_bench_ann_net": 1.278386768351288,
+    "max_drawdown_net": -0.9933920466831133,
+    "cost_drag_ann": 0.006
+  },
+  "feat_cols_used": [
+    "ivp30",
+    "ivx30",
+    "ivx180_minus_ivx30",
+    "ivx30_over_hv20",
+    "reversal_1m",
+    "momentum_6m",
+    "rv_30d"
+  ],
+  "coverage_pct": 1.0
+}

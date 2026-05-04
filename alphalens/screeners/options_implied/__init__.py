@@ -9,6 +9,9 @@ Pre-registered as `v7_smd_options_implied_2026_05_02`.
 
 from typing import Literal
 
+from alphalens.screeners.options_implied.cross_sectional_residual import (
+    score_cross_sectional_residual,
+)
 from alphalens.screeners.options_implied.features import (
     EQUITY_CONTROLS,
     ETL_ANOMALY_BOUNDS,
@@ -19,6 +22,7 @@ from alphalens.screeners.options_implied.features import (
     multicollinearity_drop_recommendation,
     validate_phase_a_gates,
 )
+from alphalens.screeners.options_implied.literature_direct import score_literature_direct
 from alphalens.screeners.options_implied.model import (
     LAMBDA_GRID_POINTS_DEFAULT,
     N_FOLDS_DEFAULT,
@@ -27,6 +31,7 @@ from alphalens.screeners.options_implied.model import (
     lasso_sign_alignment,
     predict_scores,
 )
+from alphalens.screeners.options_implied.sign_constrained import fit_sign_constrained_lasso
 from alphalens.screeners.options_implied.target import (
     DEFAULT_HOLDING,
     DelistingEventsIndex,
@@ -54,11 +59,14 @@ __all__ = [
     "build_feature_frame",
     "build_target_frame",
     "fit_global_lasso",
+    "fit_sign_constrained_lasso",
     "forward_raw_return",
     "lasso_sign_alignment",
     "load_delisting_events_index",
     "multicollinearity_drop_recommendation",
     "predict_scores",
+    "score_cross_sectional_residual",
+    "score_literature_direct",
     "split_train_holdout",
     "validate_phase_a_gates",
 ]
