@@ -28,17 +28,20 @@ populate the v4 v2 pre-registered feature `earnings_sue_naive_4q_decayed`.
 
 from __future__ import annotations
 
-import json
 import logging
 import statistics
 from collections.abc import Sequence
 from datetime import date
-from pathlib import Path
+
+import pyarrow as pa
 
 from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
+from alphalens.data.fundamentals.companyfacts_parquet import (
+    CompanyfactsParquetReader,
+    filter_concept,
+)
 from alphalens.data.fundamentals.edgar_companyfacts import (
     _Entry,
-    _evict_to_capacity,
     _pit_filter,
 )
 
@@ -134,39 +137,23 @@ def _compute_sue(eps_series: Sequence[float], *, residual_window: int = 4) -> fl
 
 
 class FosterSUEStore:
-    """PIT Foster-SUE store backed by SEC EDGAR companyfacts JSON.
+    """PIT Foster-SUE store backed by parquet companyfacts via reader injection.
 
-    Mirrors `EdgarCompanyfactsROEStore` layout: lazy load + bounded cache by CIK.
-
-    >>> store = FosterSUEStore(cf_dir, cik_map)
+    >>> reader = CompanyfactsParquetReader(parquet_dir)
+    >>> store = FosterSUEStore(reader, cik_map)
     >>> store.sue("AAPL", date(2024, 6, 30))  # ~ +1.2 if positive surprise
     """
 
     def __init__(
         self,
-        companyfacts_dir: Path,
+        reader: CompanyfactsParquetReader,
         ticker_cik_map: TickerCikMap,
         *,
         residual_window: int = 4,
-        cache_capacity: int = 3000,
     ):
-        self._dir = Path(companyfacts_dir)
+        self._reader = reader
         self._cik_map = ticker_cik_map
-        self._facts_cache: dict[str, dict | None] = {}
-        # Cap covers full PIT universe (~1620 tickers in 2018-2026) with margin
-        # to avoid eviction churn during multi-asof feature builds. Each entry
-        # is parsed companyfacts JSON (~1-5MB) so 3000 entries ≈ 9-15 GB
-        # worst-case but typical ~5 GB. Override per instance for tighter
-        # memory budgets.
-        self._facts_cache_capacity = cache_capacity
         self._residual_window = residual_window
-        # Pre-parsed EPS series cache (post-first-filed extraction). Avoids
-        # repeated re-extraction of the same EPS list from the same JSON across
-        # asofs. Keyed by (ticker, asof_iso) — eviction follows facts cache.
-        self._eps_series_cache: dict[tuple[str, str], list[float] | None] = {}
-        self._eps_series_cache_capacity = cache_capacity * 4
-
-    # ---- public API ----
 
     def sue(self, ticker: str, asof: date) -> float | None:
         """Foster SUE for the most recent first-filed quarter <= asof."""
@@ -178,99 +165,58 @@ class FosterSUEStore:
     def eps_series_first_filed(self, ticker: str, asof: date) -> list[float] | None:
         """Quarterly EPS series in chronological order using first-filed values.
 
-        Returns None when the ticker isn't mapped or the EPS concept is absent.
-        Empty list when no quarterly entries are visible at asof.
+        Returns None when the ticker isn't mapped or no EPS concept is present
+        in the parquet table. Empty list when no quarterly entries are visible
+        at asof.
         """
-        # Memoised on (ticker, asof) to avoid re-extracting the EPS series from
-        # the same JSON across many asof slices in a feature-build loop.
-        key = (ticker.upper(), asof.isoformat())
-        if key in self._eps_series_cache:
-            return self._eps_series_cache[key]
-
         cik = self._cik_map.lookup(ticker)
         if cik is None:
-            result: list[float] | None = None
-        else:
-            facts = self._load_facts(cik)
-            if facts is None:
-                result = None
-            else:
-                gaap = facts.get("facts", {}).get("us-gaap", {})
-                # Prefer EPS Basic (more universally tagged); fall back to Diluted.
-                eps_block = gaap.get(_EPS_BASIC) or gaap.get(_EPS_DILUTED)
-                if eps_block is None:
-                    result = None
-                else:
-                    units_block = eps_block.get("units", {})
-                    entries = _parse_eps_entries(units_block)
-                    if not entries:
-                        result = []
-                    else:
-                        visible = _pit_filter(entries, asof)
-                        quarterly = [e for e in visible if _is_quarterly(e)]
-                        first_filed = _first_filed_per_period_end(quarterly)
-                        ordered_ends = sorted(first_filed.keys())
-                        result = [first_filed[end].val for end in ordered_ends]
-
-        self._eps_series_cache[key] = result
-        _evict_to_capacity(self._eps_series_cache, self._eps_series_cache_capacity)
-        return result
-
-    # ---- internals ----
-
-    def _load_facts(self, cik: str) -> dict | None:
-        """`cik` is the zero-padded 10-digit string returned by TickerCikMap.lookup."""
-        if cik in self._facts_cache:
-            return self._facts_cache[cik]
-        path = self._dir / f"{cik}.json"
-        if not path.exists():
-            self._facts_cache[cik] = None
             return None
-        try:
-            facts = json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("Failed to load companyfacts for %s: %s", cik, exc)
-            self._facts_cache[cik] = None
+        table = self._reader.get_cik_table(cik)
+        if table is None:
             return None
-        self._facts_cache[cik] = facts
-        evicted = _evict_to_capacity(self._facts_cache, self._facts_cache_capacity)
-        if evicted:
-            logger.debug(
-                "Evicted %d facts entries (capacity %d)", evicted, self._facts_cache_capacity
-            )
-        return facts
+
+        # Prefer EPS Basic (more universally tagged); fall back to Diluted.
+        entries = _eps_entries_from_table(table, _EPS_BASIC)
+        if not entries:
+            entries = _eps_entries_from_table(table, _EPS_DILUTED)
+        if not entries:
+            return None
+
+        visible = _pit_filter(entries, asof)
+        quarterly = [e for e in visible if _is_quarterly(e)]
+        first_filed = _first_filed_per_period_end(quarterly)
+        ordered_ends = sorted(first_filed.keys())
+        return [first_filed[end].val for end in ordered_ends]
 
 
 # ---------------------------------------------------------------------------
-# Local parser helpers (EPS uses USD/shares, not USD)
+# Arrow Table -> _Entry adapter (preserves existing PIT helper contract).
 
 
-def _parse_eps_entries(units_block: dict) -> list[_Entry]:
-    """Parse EPS entries from units_block. Tries USD/shares first then USD."""
-    out: list[_Entry] = []
+def _eps_entries_from_table(table: pa.Table, concept: str) -> list[_Entry]:
+    """Convert filtered Arrow rows for one EPS concept into _Entry list.
+
+    Preference order on units mirrors the legacy JSON path (USD/shares before
+    USD); EPS Basic is rarely tagged in the alt USD form but defensive
+    fallback is preserved for symmetry with the previous parser.
+    """
     for unit_key in ("USD/shares", "USD"):
-        for raw in units_block.get(unit_key, []) or []:
-            end = raw.get("end")
-            filed = raw.get("filed")
-            if not end or not filed or "val" not in raw:
-                continue
-            try:
-                val = float(raw["val"])
-            except (TypeError, ValueError):
-                continue
-            out.append(
-                _Entry(
-                    end=end,
-                    val=val,
-                    filed=filed,
-                    form=raw.get("form", ""),
-                    fp=raw.get("fp"),
-                    start=raw.get("start"),
-                )
+        filtered = filter_concept(table, "us-gaap", concept, unit=unit_key)
+        if filtered.num_rows == 0:
+            continue
+        return [
+            _Entry(
+                end=row["period_end"].isoformat(),
+                val=float(row["val"]),
+                filed=row["filed_date"].isoformat(),
+                form=row["form"] or "",
+                fp=row["fp"],
+                start=row["period_start"].isoformat() if row["period_start"] is not None else None,
             )
-        if out:
-            return out
-    return out
+            for row in filtered.to_pylist()
+        ]
+    return []
 
 
 def _is_quarterly(entry: _Entry) -> bool:

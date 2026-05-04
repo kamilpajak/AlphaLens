@@ -1,0 +1,58 @@
+{
+  "params": {
+    "ns": [
+      200
+    ],
+    "start": "2024-04-30",
+    "end": "2026-04-30"
+  },
+  "runs": [
+    {
+      "n": 200,
+      "n_with_announcements": 198,
+      "n_total_announcements": 9646,
+      "n_sue_calls": 9646,
+      "snapshots": [
+        {
+          "label": "00_universe_loaded",
+          "tracemalloc_cur_mb": 0.08061885833740234,
+          "tracemalloc_peak_mb": 0.719456672668457,
+          "rss_peak_mb": 99.46875
+        },
+        {
+          "label": "01_setup_stores_1.2s",
+          "tracemalloc_cur_mb": 3.438028335571289,
+          "tracemalloc_peak_mb": 12.949126243591309,
+          "rss_peak_mb": 172.6875
+        },
+        {
+          "label": "02_ann_idx_9646anns_1.3s",
+          "tracemalloc_cur_mb": 5.594919204711914,
+          "tracemalloc_peak_mb": 12.949126243591309,
+          "rss_peak_mb": 880.125
+        },
+        {
+          "label": "03_warm_sue_accr_9646calls_169.1s",
+          "tracemalloc_cur_mb": 5.615776062011719,
+          "tracemalloc_peak_mb": 12.949126243591309,
+          "rss_peak_mb": 880.25
+        }
+      ]
+    }
+  ],
+  "summary": [
+    {
+      "n": 200,
+      "rss_delta_one_cache_mb": 707.4375,
+      "rss_delta_two_caches_mb": 0.125,
+      "two_to_one_ratio": 0.00017669405424507466,
+      "rss_final_mb": 880.25,
+      "py_heap_cur_mb": 5.615776062011719
+    }
+  ],
+  "extrapolation": {
+    "slope_mb_per_ticker": null,
+    "est_rss_final_mb_at_n_1500": null,
+    "est_rss_final_mb_at_n_1800": null
+  }
+}
