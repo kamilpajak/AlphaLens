@@ -2517,6 +2517,95 @@
       "notes": ""
     },
     {
+      "id": "v9d_long_only_paper_trade_2026_05_04",
+      "signal_class": "prospective_replication_2026_05_04",
+      "hypothesis": "v9D cross-sectional residual scorer (FROZEN), long-only top decile, 5d rebalance, MDY benchmark, prospective on data accruing post-2026-05-04, will exhibit Carhart-4F alpha-t >= 1.96 unadjusted single-test at both 26-week and 52-week checkpoints.",
+      "scorer_path": "alphalens/paper_trade/scorer_v9d.py",
+      "params_frozen": {
+        "class": "prospective_replication_2026_05_04",
+        "version": "v9d_long_only_paper_trade",
+        "design_provenance": "Direct response to v10 drawdown-control overlay FAIL (paradigm failure #11) and the cross-period diagnostic STABLE verdict (αt range 1.52, all sub-periods ≥+1.65) confirming v9D's +2.29 alpha-t is regime-uniform across the burnt 2024-04-30→2026-04-30 holdout. Burnt-holdout multiplicity is exhausted on this signal: 9 evaluations on the same window cannot break free of program-Bonferroni n=24. The only path to deploy-grade evidence is prospective replication on data accruing post-2026-04-30. This pre-reg locks v9D's specification AS-IS (no parameter retuning) and commits to weekly forward-walk paper-trading for ≥52 weeks before any capital deploy.",
+        "design_memo": "docs/research/v9d_paper_trade_design_2026_05_04.md",
+        "adversarial_review_summary": "Perplexity (sonar-reasoning-pro 2026-05-04, two rounds) ranked H+ paper-trade as #1 of 8 candidate paths because it is the ONLY path that bypasses the burnt-holdout multiplicity penalty and tests forward predictability rather than diagnosing the burnt finding. All other paths (B/C/D/E retrospective on burnt window, F international universe, G pre-2018 retrospective) either incur new Bonferroni cells without escaping multiplicity or face data-access constraints. Zen earlier flagged that any 'honest +2.29' might be selection effect from 4 prior tests — mitigation is freezing v9D as-spec'd (NOT averaging across v7-v9D) and letting prospective track record speak. The v9D L/S diagnostic was already FAIL'd (αt=−0.92), so no L/S construction path. The +2.29 finding survived 5-phase multi-phase audit with mean+2.29 (range [+1.86,+2.92]) — v10 confirmed base-replication via gate G4. Cross-period diagnostic 2026-05-04 confirmed STABLE verdict (αt range 1.52 across 4 calendar sub-periods, min +1.65 well above CONCENTRATED floor 0.5). Prior on regime-stability is HIGH; prior on +2.29 surviving forward replication is moderate-to-high.",
+        "base_scorer": {
+          "module": "alphalens.screeners.options_implied.cross_sectional_residual.score_cross_sectional_residual",
+          "extraction_path": "alphalens.paper_trade.scorer_v9d (extracted from scripts/experiment_v9_cross_sectional_residual.py to be reusable)",
+          "specification": "Per-asof OLS residual of −ivp30 against (reversal_1m, momentum_6m, rv_30d) cross-sectionally; long top-decile equal-weighted by residual",
+          "frozen_locked_at_design_time": true,
+          "modification_during_h_plus": "PROHIBITED — any drift in scorer spec invalidates the prospective test"
+        },
+        "data_provider": "iVolatility $399 retail tier (probe v5 99.5% T1) — same as v7/v8/v9D/v10",
+        "data_endpoint_primary": "/equities/stock-market-data (smd) — daily SMD pull for current PIT universe",
+        "rebalance_stride_days": 5,
+        "holding_period_days_target": 20,
+        "holding_period_days_portfolio_returns": 5,
+        "weighting": "equal",
+        "cost_profile": "long_only_30bps",
+        "cost_profile_rt_bps": 30,
+        "benchmark": "MDY",
+        "decile_pct": 0.1,
+        "adv_min_dollar_20d": 2000000.0,
+        "operational": {
+          "data_refresh_cron": "Sunday 17:00 local — pulls last 7d SMD for current PIT universe via launchd",
+          "scoring_cron": "Monday 06:00 local — computes residual, picks top decile, appends ledger entry, updates state.yaml",
+          "ledger_path": "~/.alphalens/paper_trade/v9d_ledger.parquet",
+          "state_path": "~/.alphalens/paper_trade/v9d_state.yaml",
+          "log_path": "~/.alphalens/watchdog/paper-trade-{refresh,score}.log"
+        }
+      },
+      "periods": {
+        "prospective_start": "2026-05-04",
+        "first_decision_checkpoint_26w": "~2026-11-04",
+        "second_decision_checkpoint_52w": "~2027-05-04",
+        "rationale": "First trading day of fresh data after burnt holdout 2024-04-30 → 2026-04-30. Weekly stride means 26 obs ≈ 6mo, 52 obs ≈ 12mo."
+      },
+      "success_criteria": {
+        "mode": "two_stage_gate",
+        "primary_metric": "Carhart-4F alpha t-stat (HAC=5) on weekly portfolio returns (long-only top decile) vs MDY benchmark, computed cumulatively from 2026-05-04 onwards",
+        "bonferroni_accounting": {
+          "intra_class_n": 1,
+          "intra_class_naive_t_threshold": 1.96,
+          "program_level_alpha_class_n": 24,
+          "program_level_increment_from_h_plus": 0,
+          "rationale": "Fresh post-burnt-holdout window means this is a NEW signal class with intra-class n=1 (this is the first prospective replication). Unadjusted single-test threshold |t|≥1.96 applies. Does NOT increment the program-level alpha-class counter because (a) prospective replication on fresh data is methodologically distinct from retrospective hypothesis testing, (b) even if it were counted, it's the first test in a NEW class so program n=25 → threshold ~3.10 — but unadjusted is the right test here per pre-reg discipline and standard prospective replication practice."
+        },
+        "checkpoint_gates": [
+          {
+            "checkpoint_id": "26w",
+            "trigger_n_obs": 26,
+            "estimated_date": "2026-11-04",
+            "rule": "Cumulative Carhart-4F αt ≥ 1.96 AND Sharpe net ≥ 0.30",
+            "pass_action": "continue tracking to 52w checkpoint",
+            "fail_action": "archive class as 'prospective_replication_failed_26w_2026_11_04', write postmortem, do NOT auto-pivot to refined design within the same session (anti-HARKing per feedback memo)",
+            "power_estimate": "If true αt=+2.29, expected SE on 26 weekly obs ≈ 0.96, expected observed t ≈ 2.39 → ~70% power at α=0.05. Marginal — passing 26w gate is informative but not definitive."
+          },
+          {
+            "checkpoint_id": "52w",
+            "trigger_n_obs": 52,
+            "estimated_date": "2027-05-04",
+            "rule": "Cumulative Carhart-4F αt ≥ 1.96 AND Sharpe net ≥ 0.30 AND no single sub-period αt < +0.5",
+            "pass_action": "ELIGIBLE for capital-deploy review (subject to user approval; deploy NOT automatic; further pre-reg required for sizing/risk-management)",
+            "fail_action": "archive class, write postmortem, options-implied class fully closed",
+            "power_estimate": "If true αt=+2.29, expected SE on 52 weekly obs ≈ 0.68, expected observed t ≈ 3.37 → ~95% power at α=0.05. Well-powered; strong evidence either direction."
+          }
+        ],
+        "kill_pre_full_run": [
+          "Data refresh skip rate >5% in any week (data quality issue, e.g. iVolatility API outage)",
+          "Ledger drift detected: |observed weekly return - reconstructed weekly return| > 1bp on any week (calculation bug)",
+          "PIT universe size <500 tickers in any week (universe collapse — would invalidate decile estimation)",
+          "Realized cost drag >40bps RT in any week (cost model breakdown — pre-reg cost is 30bps)"
+        ],
+        "abandonment_rule": "If at any time before the 26w checkpoint a kill condition fires for >2 consecutive weeks, abandon the class and write postmortem. Pre-reg kill conditions are operational integrity gates, NOT performance gates — performance verdict only at checkpoints.",
+        "no_stretch_tier": "Single 26w + 52w gate sequence. No exploratory tier; no early stopping for performance reasons.",
+        "regime_stratification_postdoc": "DESCRIPTIVE only: at 52w checkpoint, report cumulative αt split by VIX>20 vs VIX<20 sub-periods. Not a gate; informational only.",
+        "capital_deploy_clause": "Capital deploy OFF-TABLE until 52w gate PASS. PASS at 52w triggers a separate pre-reg cycle for sizing/risk-management before any real money. Earliest possible capital deploy: 2027-Q3 (with pre-reg, sizing approval, infrastructure setup)."
+      },
+      "registered_at": "2026-05-04",
+      "status": "registered",
+      "outcome": null,
+      "notes": ""
+    },
+    {
       "id": "vol_target_mom_lowvol_2026_04_30",
       "signal_class": "risk_management_overlay_2026_04_30",
       "hypothesis": "Vol-targeting overlay (target_vol=0.10 ann, lookback=5 weekly periods, max_leverage=1.5) applied to mom+lowvol BASE (failure 7) generates phase-robust improvement in Sharpe-net vs ungated BASE with multi-phase mean alpha t >= 1.96 (Bonferroni n=1 in fresh class). Tests Moreira-Muir 2017 hypothesis on R2000-PIT. Layer 4 risk overlay per ADR 0007.",

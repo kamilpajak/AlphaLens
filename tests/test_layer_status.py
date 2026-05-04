@@ -43,6 +43,7 @@ LAYERS_WITH_STATUS = (
     "alphalens.archive.quiver_screener",
     "alphalens.gates",
     "alphalens.overlays",
+    "alphalens.paper_trade",
     "alphalens.archive.rotation",
     "alphalens.archive.screeners.insider",
     "alphalens.archive.screeners.lean",

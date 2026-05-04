@@ -1,0 +1,4 @@
+#!/bin/bash
+# Monday 06:00 weekly — score v9D, append paper-trade ledger, update state.
+# Output: ~/.alphalens/watchdog/paper-trade-score.{log,err}
+exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens paper-trade score "$@"
