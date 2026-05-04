@@ -1,0 +1,119 @@
+{
+  "params_frozen": {
+    "class": "options_implied_search_2026_05_02",
+    "version": "v7_smd_primary_4options_3equity_neg_sign_committed",
+    "design_provenance": "Fresh feature class after 13-test FAIL streak on burnt 2024-04-30 → 2026-04-30 holdout (alt_data 6/6, nonlinear 1/1, analyst v10 ABORTED, multi_source 4/4, price_factor 4/4, risk_overlay 1/1; quality+momentum 1/1). Bottleneck identified across diagnostic series: features were the constraint, not architecture. Options-implied is genuinely new feature space, sourced from iVolatility $399 retail tier (probe v5 PASS 99.5% T1 retention, PIT replication probe PASS Pearson 0.9990).",
+    "design_memo": "docs/research/v7_options_implied_design_2026_05_01.md (DRAFT v3, 2026-05-01)",
+    "adversarial_review_summary": "zen + perplexity 2026-05-01: PIT integrity showstopper RESOLVED via rolling-replication probe (AAPL n=12 monthly asofs 2023, Pearson 0.9990 ≥ 0.95 gate). Hypothesis direction COMMITTED ex-ante per Xing-Zhang-Zhao 2010 / Bali-Hovakimian 2009 / An-Ang-Bali-Cakici 2014 NEGATIVE-sign convergence. Lasso multicollinearity addressed via stack reduction to 4 orthogonal-by-construct options features (drop IVR/IVX60/IVX90/HVP/skew). Long-only power loss vs L/S benchmark (Quantpedia, Blitz et al. 2019) mitigated by L/S decile-spread diagnostic alongside primary. m=30 vs m=14 reconciled — naive primary, Romano-Wolf stretch.",
+    "data_provider": "iVolatility $399 retail tier",
+    "data_endpoint_primary": "/equities/stock-market-data (smd) — single-call returns 100+ pre-computed features per (ticker, asof). Probe v5 99.5% T1 retention with original ticker indexing preserved across delistings (T2=0). Probe v5 file: scripts/probe_ivolatility_options_survivorship_v2.py.",
+    "pit_integrity_evidence": "scripts/probe_pit_replication.py + 25 unit tests in tests/test_probe_pit_replication.py. AAPL n=12 monthly asofs 2023, empirical IVP recomputed from raw IVX30 backward [t-365d, t) window matches vendor smd IVP within ~1 percentile point on 8/8 valid pairs (4 NaN are weekend/holiday calendar artifacts, production fix: snap-to-trading-day). Pearson 0.9990 ≥ 0.95 gate. Vendor smd uses strict backward-looking 1y rolling window. Verdict artefact: docs/research/pit_replication_probe_2026_05_01.md.",
+    "feature_stack_options": [
+      "IVP30 — 1y rolling percentile of IVX30 (rank-based, robust to vol outliers)",
+      "IVX30 — absolute 30d implied vol level",
+      "IVX180_minus_IVX30 — term-structure slope",
+      "IVX30_over_HV20 — vol-risk-premium (IV vs realized) ratio"
+    ],
+    "feature_stack_equity_controls": [
+      "reversal_1m — −1 × r_21d from Polygon stock aggs",
+      "momentum_6m — r_[t-126, t-21] skip-month per Jegadeesh-Titman",
+      "rv_30d — annualized stdev log returns last 30 days"
+    ],
+    "feature_stack_dropped_from_v2_draft": [
+      "IVR (redundant with IVP — same construct, less robust)",
+      "IVX60, IVX90 (collinear with IVX30 + term-spread)",
+      "HVP (redundant with IVX30/HV20 ratio)",
+      "25Δ skew (would require /ivs per-strike interpolation × 2000 tickers × 2000 dates — infeasible at retail tier; deferred to v8)",
+      "P/C OI ratio (smd aggregate includes LEAPS+OTM dilutes signal; deferred to v7.1 via stock-opts-by-param 20-45 DTE × delta [0.25, 0.75])",
+      "vendor BETA10D-180D (Carhart-style equity controls 1-3 already provide market exposure adjustment)"
+    ],
+    "etl_anomaly_bounds": {
+      "ivx30_max": 3.0,
+      "ivx30_min": 0.05,
+      "term_spread_abs_max": 1.5,
+      "iv_hv_ratio_max": 10.0,
+      "iv_hv_ratio_min": 0.1,
+      "stock_price_min": 1.0
+    },
+    "universe_construction": {
+      "optionable_filter": "DYNAMIC per zen — smd `optVol > 0 OR (openInterest_call + openInterest_put) > 0` on t-1. NOT Polygon /v3/reference/options/contracts as_of= metadata (survivorship-revision risk).",
+      "min_adv_dollar_20d": 2000000,
+      "min_underlying_price": 1.0,
+      "drop_otc_pink": true,
+      "expected_universe_size_per_asof": "~2000-2500 names"
+    },
+    "delisting_handling": {
+      "rule": "forward-fill last trading price 5 trading days post-delisting (settlement / OTC residual), then apply −50% return for standard delistings (acquisition, voluntary), −100% for bankruptcy (Ch11, FDIC receivership)",
+      "reason_classification_source": "~/.alphalens/survivorship/delisted_2021_2026.parquet",
+      "inclusion_in_cross_section": "MANDATORY (excluding = re-introducing survivorship bias)"
+    },
+    "model_class": "Lasso",
+    "model_regularization": "L1 with alpha selected via CV on train window only",
+    "fit_strategy": "single global model fitted on 7-feature stack (4 options + 3 equity controls) across train tranches",
+    "target_definition": {
+      "raw_target": "20-day forward equity return",
+      "transformation": "raw (no rank-target unless empirically justified post-Phase-A)",
+      "horizon": "20d-forward"
+    },
+    "selection_primary": "long-only TOP decile EW by Lasso-fitted score = LOW-IV names (NEGATIVE-sign hypothesis: high-IV/skew names underperform per Xing 2010, so under Lasso's negative-coef fit on vol features the highest Lasso predictions correspond to LOW-IV names — the names to GO LONG per Xing).",
+    "selection_diagnostic_secondary": "L/S decile spread (long top − short bottom by Lasso prediction) reported alongside primary. NOT primary verdict, NOT additional Bonferroni test. Power-loss diagnostic only — if L/S PASS but long-only FAIL, indicates constraint-driven power loss not absence of alpha. Convention per Frazzini-Pedersen BAB / Asness-Frazzini-Pedersen QMJ / Quantpedia: L/S = top-decile-return − bottom-decile-return.",
+    "selection_implementation": "BacktestEngine(top_n=N, bottom_n=N) with v7 scorer = +Lasso prediction directly (NO inversion). Engine top_n picks highest-Lasso = LOW-IV names = LONG leg of primary + L/S diagnostic. Engine bottom_n picks lowest-Lasso = HIGH-IV names = SHORT leg of L/S diagnostic only. Convention amended 2026-05-02 after perplexity research surfaced that the original `scorer × -1 + bottom decile` framing contradicted Xing 2010 long-low-IV prescription; canonical academic convention (Frazzini-Pedersen, Quantpedia) sorts ascending and longs the TOP decile of the prediction.",
+    "selection_amendment_note": "v3.1 amendment 2026-05-02: original v3 pre-reg said 'long bottom decile' + 'scorer × -1' which combined gave LONG HIGH-IV (opposite of Xing). The parenthetical '(low-IV names)' captured correct intent. Perplexity Sonar Deep Research confirmed canonical convention: LONG TOP decile by raw Lasso prediction. No additional Bonferroni cost — same null hypothesis (vol features predict 20d returns), same model (Lasso), same train/holdout windows, same target. Amendment is a wording fix, not a new test.",
+    "rebalance_stride_days": 5,
+    "holding_period_days": 20,
+    "weighting": "equal",
+    "cost_profile": "long_only_30bps",
+    "cost_profile_rt_bps": 30,
+    "cost_rationale": "30bps RT = 15bps half-spread + 5bps adverse selection × 2 (long-only single-leg). For L/S diagnostic caller applies CostModel.from_profile('long_only_30bps') separately to each leg (60bps total RT). Profile codified in alphalens/attribution/cost_model.py:_PROFILE_BPS, parity tests in tests/test_cost_model_v7_parity.py.",
+    "benchmark": "MDY (SPDR S&P MidCap 400 ETF, cap-matched mid-cap). Lesson from alt_data v5/v6a: SPY mega-cap rally explained ~58% of v5's catastrophic gap; MDY eliminates that confound for non-mega-cap-tilted strategies.",
+    "phase_audit": {
+      "n_phases": 5,
+      "stride_for_phases": 5,
+      "phase_offset_range": "0..4",
+      "audit_driver": "scripts/audit_multi_phase.py",
+      "dispersion_threshold_pp": 50.0,
+      "dispersion_metric": "excess_net_ann (after-cost economic reality, NOT alpha_t — alpha_t already protected by Bonferroni)"
+    }
+  },
+  "phase_a_gates": {
+    "feature_joiner_coverage_min_pct": 70,
+    "feature_joiner_coverage_metric": "non-NaN feature rows / (universe × asofs) on train window",
+    "holdout_sample_size_min_obs": 50000,
+    "holdout_sample_size_rationale": "Mirror multi_source_two_stage Phase A floor (~5k was minimum-viable; 50k is comfortable for 7-feature Lasso across 2y holdout × ~2000 tickers × stride-5 = ~200k expected).",
+    "multicollinearity_max_pairwise_abs_corr": 0.85,
+    "multicollinearity_action": "If any pair >0.85 → reduce to one feature (drop the more-derived one) BEFORE Phase B. Deviation from this triggers re-review.",
+    "pit_integrity_replication_already_passed": true,
+    "pit_integrity_artefact": "docs/research/pit_replication_probe_2026_05_01.md (Pearson 0.9990 PASS 2026-05-01)"
+  },
+  "periods": {
+    "train_start": "2018-04-30",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rationale": "Train 6y matches multi_source convention. Holdout BURNT (14 prior tests on this window). iVolatility smd has 2000+ history; Polygon stock aggs cover this range. Probe v5 verified retention across this period."
+  },
+  "success_criteria": {
+    "mode": "binary_pass_fail_with_stretch_flag",
+    "primary_metric": "Carhart-4F alpha t-stat (HAC=5) on (long-only-bottom-decile-return − MDY-return) holdout series",
+    "bonferroni_threshold_naive_program_level": "n=14 → |αt| ≥ 2.86 (PRIMARY)",
+    "bonferroni_threshold_romano_wolf_stretch": "m=30 → |αt| ≥ 3.27 (STRETCH FLAG, supplementary)",
+    "primary_pass_rule": "Holdout Carhart-4F αt ≥ 2.86 AND phase dispersion <50pp on excess_net_ann AND ≥1 Lasso nonzero coef on options features (NOT all zero — selection-mechanism artifact gate) AND in-CV mean rank-IR ≥ 0.5",
+    "stretch_pass_rule": "primary PASS conditions AND αt ≥ 3.27",
+    "verdict_classification": {
+      "robust_pass": "primary PASS + stretch PASS → 'PASS robust to conservative multiplicity; advance to fresh-OOS prospective replication 2026-05-02+'",
+      "primary_pass_only": "primary PASS + stretch FAIL → 'PASS borderline; flagged for prospective replication, capital deploy OFF-TABLE pending'",
+      "fail": "any primary gate FAIL → standard FAIL ledger entry, increment program count to n=15, next test |αt|≥2.95 naive Bonferroni"
+    },
+    "auto_pivot_triggers": [
+      "PIT replication probe Pearson <0.95 → ABORT (RESOLVED 2026-05-01: 0.9990 PASS)",
+      "Phase A feature coverage <70% → ABORT pre-Phase-B",
+      "Phase A multicollinearity max pairwise |corr| >0.85 → consolidate stack, document deviation",
+      "Phase B Lasso zero-coefs all 4 options features → FAIL (selection-mechanism artifact, mirrors v2 alt_data degenerate case)",
+      "Phase dispersion >50pp on excess_net_ann → FAIL",
+      "Lasso flips sign vs literature prior across phases → diagnostic flag, no auto-pass; document in verdict memo"
+    ],
+    "regime_stratification_postdoc": "DESCRIPTIVE: report holdout αt and excess vs MDY split by VIX>20 vs VIX<20 sub-periods. If alpha lives only in high-VIX regime, document as 'tail-risk premium, regime-dependent' rather than systematic alpha.",
+    "capital_deploy_clause": "Capital deploy OFF-TABLE on this burnt holdout regardless of any verdict per program-level burnt-holdout policy. PASS triggers prospective walk-forward replication on data accruing post-2026-04-30 at unadjusted p<0.05 single-test before any escalation.",
+    "fail_rule": "anything not clearing primary → FAIL, log to ledger"
+  }
+}

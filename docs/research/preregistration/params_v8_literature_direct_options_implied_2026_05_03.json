@@ -1,0 +1,92 @@
+{
+  "params_frozen": {
+    "class": "options_implied_search_2026_05_02",
+    "version": "v8_literature_direct_xing_2010_replication",
+    "design_provenance": "Built after v7 FAIL'd 5-phase multi-phase audit on 2026-05-02 (mean αt=+2.60 < 2.86 program-Bonferroni n=14, dispersion 67.2pp > 50pp gate, sign-flip on ivx30+ivp30 across all 5 phases, L/S spread αt=-2.78 confirming Xing 2010 prior IS empirically present in 2024-2026 holdout but train-fitted Lasso learned opposite). v8 removes the optimizer entirely — pure deterministic Xing replication.",
+    "design_memo": "docs/research/v8_literature_direct_design_2026_05_03.md",
+    "adversarial_review_summary": "Perplexity Sonar Reasoning Pro (2026-05-03) ranked 6 v8 redesign axes for HARKing-risk × statistical-power × Bonferroni-cost defensibility. Option E (literature-direct, no model fit) ranked #1: 'No model fitting = no overfitting surface. Pre-reg simply swaps Lasso for deterministic sort.' Verdict reasoning: dispersion likely persists at >60pp because dispersion is orthogonal to direction-correction; v8 may FAIL informatively on dispersion gate even if mean αt clears 2.95. Burnt-holdout policy held — same 2024-04-30 → 2026-04-30 window; window-shopping would be HARKing.",
+    "data_provider": "iVolatility $399 retail tier (probe v5 99.5% T1 retention)",
+    "data_endpoint_primary": "/equities/stock-market-data (smd) — same as v7",
+    "scoring_rule": "score(asof, ticker) = -features.loc[(asof, ticker), 'ivp30']. Higher score → lower 1y-rolling IV-percentile → LOW-IV name → LONG leg per Xing 2010 / Bali-Hovakimian 2009 NEGATIVE-sign prior. No fit, no Lasso, no equity controls in scorer.",
+    "scoring_implementation": "alphalens.screeners.options_implied.score_literature_direct (NEW v8 module, locked 2026-05-03). 30 LoC, 10 unit tests in tests/test_options_implied_literature_direct.py.",
+    "feature_used": "ivp30 (1y rolling percentile of IVX30, vendor-precomputed). PIT integrity verified in v7's pit_replication probe (Pearson 0.9990 vs empirical recompute, AAPL n=12 monthly asofs 2023).",
+    "features_NOT_used": [
+      "ivx30 (raw vol level — picking among 4 options features could be HARKing on v7's L/S diagnostic evidence)",
+      "ivx180_minus_ivx30 (term structure — same)",
+      "ivx30_over_hv20 (vol risk premium — same)",
+      "reversal_1m / momentum_6m / rv_30d (equity controls — model-free design has no need for them in scoring; their cross-sectional effects fall into HAC residual)"
+    ],
+    "feature_choice_rationale": "ivp30 is rank-based (cross-sectionally robust to vol-level outliers) and matches Xing 2010 / Bali 2009 specifications more closely than raw IV level. Locking ivp30 ex-ante by literature citation removes the choice-cardinality concern.",
+    "etl_anomaly_bounds": {
+      "stock_price_min": 1.0
+    },
+    "universe_construction": {
+      "optionable_filter": "Same as v7 — smd `optVol > 0 OR (oi_call + oi_put) > 0` on t-1.",
+      "min_adv_dollar_20d": 2000000,
+      "min_underlying_price": 1.0,
+      "drop_otc_pink": true,
+      "expected_universe_size_per_asof": "~2000-2500 names; dynamic per-asof"
+    },
+    "delisting_handling": {
+      "rule": "Same as v7 — −50% standard / −100% bankruptcy at terminal bar; mandatory inclusion in cross-section.",
+      "reason_classification_source": "~/.alphalens/survivorship/delisted_2021_2026.parquet"
+    },
+    "model_class": "NONE (deterministic sort)",
+    "fit_strategy": "NO FIT — direct Xing 2010 replication. v8 removes the optimizer that created v7's sign-flip surface.",
+    "selection_primary": "long-only TOP decile EW by score (= LOW-IV names = LONG per Xing). Selection convention identical to v7 amendment 2026-05-02 (LONG TOP decile by raw scorer).",
+    "selection_diagnostic_secondary": "L/S decile spread (top − bottom by score) reported alongside primary. NOT primary verdict, NOT additional Bonferroni test.",
+    "rebalance_stride_days": 5,
+    "holding_period_days": 1,
+    "holding_period_rationale": "1d-forward portfolio returns at 5d-stride yield zero overlap → clean Carhart HAC=5 with × 252 annualization. v7 found 20d-forward at 5d-stride created 15d overlap and spuriously inflated αt magnitude — fix carries forward.",
+    "weighting": "equal",
+    "cost_profile": "long_only_30bps",
+    "cost_profile_rt_bps": 30,
+    "cost_rationale": "Same as v7 — 30bps RT = 15bps half-spread + 5bps adverse selection × 2 (long-only single-leg).",
+    "benchmark": "MDY (SPDR S&P MidCap 400 ETF). Same as v7.",
+    "phase_audit": {
+      "n_phases": 5,
+      "stride_for_phases": 5,
+      "phase_offset_range": "0..4",
+      "audit_driver": "scripts/audit_multi_phase.py v8_literature_direct",
+      "dispersion_threshold_pp": 50.0,
+      "dispersion_metric": "excess_net_ann"
+    }
+  },
+  "phase_a_gates": {
+    "ivp30_coverage_min_pct": 70,
+    "ivp30_coverage_metric": "non-NaN ivp30 / total feature-frame rows on holdout asofs",
+    "pit_integrity_replication_already_passed": true,
+    "pit_integrity_artefact": "docs/research/pit_replication_probe_2026_05_01.md (Pearson 0.9990 PASS 2026-05-01)"
+  },
+  "periods": {
+    "train_start": "N/A — v8 has no train phase",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rationale": "Same burnt holdout as v7. Per perplexity verdict, shifting windows = window-shopping HARKing. Burnt-holdout escape is prospective replication post-2026-04-30 at unadjusted p<0.05, NOT a different historical window."
+  },
+  "secondary_post_hoc": {
+    "name": "sign_constrained_lasso",
+    "framing": "EXPLORATORY post-hoc sensitivity, NOT primary, NOT additional Bonferroni test",
+    "description": "v7's Lasso re-fit on same train window with non-positive constraint on options-feature coefficients (per Xing prior). Reports whether the 7-feature stack adds incremental Carhart-α beyond raw -ivp30 once sign-flip is mechanically prevented. No verdict computation enters from this — primary verdict is on -ivp30 sort alone. Per perplexity guidance: this is amendment-to-prior, not new-hypothesis.",
+    "deferred": true,
+    "defer_rationale": "v8 single-phase αt=+2.08 already FAILs program-Bonferroni n=15 (|t|≥2.95). Multi-phase audit pending. If both FAIL, sign-constrained Lasso is moot. If primary PASSes, secondary sensitivity becomes informative."
+  },
+  "success_criteria": {
+    "mode": "single_bar_pass_fail",
+    "primary_metric": "Carhart-4F alpha t-stat (HAC=5) on (long-only-top-decile-by-score − MDY-return) holdout series",
+    "bonferroni_threshold_naive_program_level": "n=15 → |αt| ≥ 2.95",
+    "primary_pass_rule": "Holdout single-phase αt ≥ 2.95 AND multi-phase mean(αt) ≥ 2.95 AND phase dispersion < 50pp on excess_net_ann AND ivp30 coverage ≥ 70%",
+    "fail_rule": "any primary gate misses → FAIL ledger entry, increment program count to n=16, next test |αt|≥3.04",
+    "verdict_classification": {
+      "robust_pass": "primary PASS → 'PASS robust to multiplicity; advance to fresh-OOS prospective replication 2026-05-03+'",
+      "fail": "any primary gate FAIL → standard FAIL ledger entry"
+    },
+    "auto_pivot_triggers": [
+      "ivp30 coverage <70% → ABORT pre-verdict",
+      "Phase dispersion >50pp on excess_net_ann → FAIL"
+    ],
+    "no_stretch_tier": "v7's Romano-Wolf stretch flag (m=30) is dropped in v8. Single PASS bar simplifies the verdict surface and reduces the choice-cardinality space. Bonferroni naive n=15 is the only threshold.",
+    "regime_stratification_postdoc": "DESCRIPTIVE: report holdout αt and excess vs MDY split by VIX>20 vs VIX<20 sub-periods. Not a gate.",
+    "capital_deploy_clause": "Capital deploy OFF-TABLE on this burnt holdout regardless of any verdict per program-level burnt-holdout policy. PASS triggers prospective walk-forward replication on data accruing post-2026-04-30 at unadjusted p<0.05 single-test before any escalation."
+  }
+}

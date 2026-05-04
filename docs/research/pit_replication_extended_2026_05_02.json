@@ -1,0 +1,517 @@
+{
+  "version": "v1_extended",
+  "date": "2026-05-02",
+  "gate": {
+    "aggregate_pearson": 0.9991162723122814,
+    "aggregate_threshold": 0.95,
+    "aggregate_pass": true,
+    "per_ticker_threshold": 0.85,
+    "per_ticker_pass": true,
+    "min_testable_tickers": 3,
+    "diversity_pass": true,
+    "n_testable": 3,
+    "n_untestable": 2,
+    "untestable_tickers": [
+      "SIVB",
+      "FRC"
+    ],
+    "no_errors": true,
+    "verdict": "PASS"
+  },
+  "ticker_count": 5,
+  "outcomes": [
+    {
+      "ticker": "AAPL",
+      "note": "mega-cap baseline (replicates v1 PIT probe Pearson 0.9990)",
+      "config": {
+        "test_start": "2023-01-16",
+        "test_end": "2023-12-15",
+        "stride_days": 30,
+        "lookback_days": 365
+      },
+      "pearson": 0.9990207750548515,
+      "per_pair_count": 8,
+      "status": "PASS",
+      "error": null,
+      "per_asof": [
+        {
+          "asof": "2023-01-16",
+          "history_window_size": 250,
+          "current_ivx30": 0.334504,
+          "empirical_ivp": 49.0,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-02-15",
+          "history_window_size": 251,
+          "current_ivx30": 0.260281,
+          "empirical_ivp": 7.171314741035856,
+          "vendor_ivp": 9.126983642578125
+        },
+        {
+          "asof": "2023-03-17",
+          "history_window_size": 251,
+          "current_ivx30": 0.294112,
+          "empirical_ivp": 24.701195219123505,
+          "vendor_ivp": 24.603174209594727
+        },
+        {
+          "asof": "2023-04-16",
+          "history_window_size": 250,
+          "current_ivx30": 0.26196,
+          "empirical_ivp": 8.200000000000001,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-05-16",
+          "history_window_size": 251,
+          "current_ivx30": 0.212951,
+          "empirical_ivp": 2.390438247011952,
+          "vendor_ivp": 1.9841259717941284
+        },
+        {
+          "asof": "2023-06-15",
+          "history_window_size": 251,
+          "current_ivx30": 0.175439,
+          "empirical_ivp": 0.0,
+          "vendor_ivp": 0.0
+        },
+        {
+          "asof": "2023-07-15",
+          "history_window_size": 251,
+          "current_ivx30": 0.222099,
+          "empirical_ivp": 14.541832669322709,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-08-14",
+          "history_window_size": 250,
+          "current_ivx30": 0.202345,
+          "empirical_ivp": 7.6000000000000005,
+          "vendor_ivp": 7.539681911468506
+        },
+        {
+          "asof": "2023-09-13",
+          "history_window_size": 251,
+          "current_ivx30": 0.215649,
+          "empirical_ivp": 19.9203187250996,
+          "vendor_ivp": 19.44444465637207
+        },
+        {
+          "asof": "2023-10-13",
+          "history_window_size": 251,
+          "current_ivx30": 0.267307,
+          "empirical_ivp": 51.79282868525896,
+          "vendor_ivp": 52.380950927734375
+        },
+        {
+          "asof": "2023-11-12",
+          "history_window_size": 250,
+          "current_ivx30": 0.173631,
+          "empirical_ivp": 0.2,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-12-12",
+          "history_window_size": 251,
+          "current_ivx30": 0.162447,
+          "empirical_ivp": 1.593625498007968,
+          "vendor_ivp": 1.5873010158538818
+        }
+      ]
+    },
+    {
+      "ticker": "SPY",
+      "note": "index proxy \u2014 should be most stable PIT case",
+      "config": {
+        "test_start": "2023-01-16",
+        "test_end": "2023-12-15",
+        "stride_days": 30,
+        "lookback_days": 365
+      },
+      "pearson": 0.9984335967551223,
+      "per_pair_count": 8,
+      "status": "PASS",
+      "error": null,
+      "per_asof": [
+        {
+          "asof": "2023-01-16",
+          "history_window_size": 250,
+          "current_ivx30": 0.169975,
+          "empirical_ivp": 3.8000000000000003,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-02-15",
+          "history_window_size": 251,
+          "current_ivx30": 0.171219,
+          "empirical_ivp": 5.577689243027888,
+          "vendor_ivp": 5.5555548667907715
+        },
+        {
+          "asof": "2023-03-17",
+          "history_window_size": 251,
+          "current_ivx30": 0.227345,
+          "empirical_ivp": 57.76892430278884,
+          "vendor_ivp": 58.33333206176758
+        },
+        {
+          "asof": "2023-04-16",
+          "history_window_size": 250,
+          "current_ivx30": 0.152531,
+          "empirical_ivp": 0.2,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-05-16",
+          "history_window_size": 251,
+          "current_ivx30": 0.157438,
+          "empirical_ivp": 7.171314741035856,
+          "vendor_ivp": 7.142857074737549
+        },
+        {
+          "asof": "2023-06-15",
+          "history_window_size": 251,
+          "current_ivx30": 0.118858,
+          "empirical_ivp": 2.390438247011952,
+          "vendor_ivp": 2.3809518814086914
+        },
+        {
+          "asof": "2023-07-15",
+          "history_window_size": 251,
+          "current_ivx30": 0.114406,
+          "empirical_ivp": 2.9880478087649402,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-08-14",
+          "history_window_size": 250,
+          "current_ivx30": 0.132031,
+          "empirical_ivp": 17.2,
+          "vendor_ivp": 17.063491821289062
+        },
+        {
+          "asof": "2023-09-13",
+          "history_window_size": 251,
+          "current_ivx30": 0.114923,
+          "empirical_ivp": 4.382470119521912,
+          "vendor_ivp": 7.936507225036621
+        },
+        {
+          "asof": "2023-10-13",
+          "history_window_size": 251,
+          "current_ivx30": 0.16452,
+          "empirical_ivp": 47.41035856573705,
+          "vendor_ivp": 47.61904525756836
+        },
+        {
+          "asof": "2023-11-12",
+          "history_window_size": 250,
+          "current_ivx30": 0.125542,
+          "empirical_ivp": 20.200000000000003,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-12-12",
+          "history_window_size": 251,
+          "current_ivx30": 0.10502,
+          "empirical_ivp": 0.0,
+          "vendor_ivp": 0.0
+        }
+      ]
+    },
+    {
+      "ticker": "TSLA",
+      "note": "high-vol normal stock \u2014 stresses vendor IVP percentile under wide swings",
+      "config": {
+        "test_start": "2023-01-16",
+        "test_end": "2023-12-15",
+        "stride_days": 30,
+        "lookback_days": 365
+      },
+      "pearson": 0.9997639253882864,
+      "per_pair_count": 8,
+      "status": "PASS",
+      "error": null,
+      "per_asof": [
+        {
+          "asof": "2023-01-16",
+          "history_window_size": 250,
+          "current_ivx30": 0.733851,
+          "empirical_ivp": 83.0,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-02-15",
+          "history_window_size": 251,
+          "current_ivx30": 0.716729,
+          "empirical_ivp": 76.89243027888446,
+          "vendor_ivp": 77.38095092773438
+        },
+        {
+          "asof": "2023-03-17",
+          "history_window_size": 251,
+          "current_ivx30": 0.621684,
+          "empirical_ivp": 40.23904382470119,
+          "vendor_ivp": 41.269840240478516
+        },
+        {
+          "asof": "2023-04-16",
+          "history_window_size": 250,
+          "current_ivx30": 0.591782,
+          "empirical_ivp": 25.8,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-05-16",
+          "history_window_size": 251,
+          "current_ivx30": 0.487968,
+          "empirical_ivp": 3.9840637450199203,
+          "vendor_ivp": 3.9682528972625732
+        },
+        {
+          "asof": "2023-06-15",
+          "history_window_size": 251,
+          "current_ivx30": 0.592128,
+          "empirical_ivp": 40.63745019920319,
+          "vendor_ivp": 40.07936477661133
+        },
+        {
+          "asof": "2023-07-15",
+          "history_window_size": 251,
+          "current_ivx30": 0.549299,
+          "empirical_ivp": 28.486055776892428,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-08-14",
+          "history_window_size": 250,
+          "current_ivx30": 0.430516,
+          "empirical_ivp": 1.6,
+          "vendor_ivp": 0.39682498574256897
+        },
+        {
+          "asof": "2023-09-13",
+          "history_window_size": 251,
+          "current_ivx30": 0.493474,
+          "empirical_ivp": 22.31075697211155,
+          "vendor_ivp": 22.22222137451172
+        },
+        {
+          "asof": "2023-10-13",
+          "history_window_size": 251,
+          "current_ivx30": 0.521375,
+          "empirical_ivp": 31.075697211155376,
+          "vendor_ivp": 30.95237922668457
+        },
+        {
+          "asof": "2023-11-12",
+          "history_window_size": 250,
+          "current_ivx30": 0.456945,
+          "empirical_ivp": 12.600000000000001,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-12-12",
+          "history_window_size": 251,
+          "current_ivx30": 0.435423,
+          "empirical_ivp": 4.780876494023904,
+          "vendor_ivp": 4.761903762817383
+        }
+      ]
+    },
+    {
+      "ticker": "SIVB",
+      "note": "bank distress (pre-halt window 2022-04 to 2023-02)",
+      "config": {
+        "test_start": "2022-04-01",
+        "test_end": "2023-02-15",
+        "stride_days": 30,
+        "lookback_days": 365
+      },
+      "pearson": NaN,
+      "per_pair_count": 0,
+      "status": "UNTESTABLE",
+      "error": null,
+      "per_asof": [
+        {
+          "asof": "2022-04-01",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 89.28571319580078
+        },
+        {
+          "asof": "2022-05-01",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2022-05-31",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 82.14286041259766
+        },
+        {
+          "asof": "2022-06-30",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 91.66666412353516
+        },
+        {
+          "asof": "2022-07-30",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2022-08-29",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 72.61904907226562
+        },
+        {
+          "asof": "2022-09-28",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 96.82539367675781
+        },
+        {
+          "asof": "2022-10-28",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 59.126983642578125
+        },
+        {
+          "asof": "2022-11-27",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2022-12-27",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 97.61904907226562
+        },
+        {
+          "asof": "2023-01-26",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 24.206348419189453
+        }
+      ]
+    },
+    {
+      "ticker": "FRC",
+      "note": "bank distress (pre-halt window 2022-05 to 2023-04)",
+      "config": {
+        "test_start": "2022-05-01",
+        "test_end": "2023-04-15",
+        "stride_days": 30,
+        "lookback_days": 365
+      },
+      "pearson": NaN,
+      "per_pair_count": 0,
+      "status": "UNTESTABLE",
+      "error": null,
+      "per_asof": [
+        {
+          "asof": "2022-05-01",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2022-05-31",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 77.38095092773438
+        },
+        {
+          "asof": "2022-06-30",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 86.5079345703125
+        },
+        {
+          "asof": "2022-07-30",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2022-08-29",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 49.20634841918945
+        },
+        {
+          "asof": "2022-09-28",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 84.12698364257812
+        },
+        {
+          "asof": "2022-10-28",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 55.9523811340332
+        },
+        {
+          "asof": "2022-11-27",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2022-12-27",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 90.0793685913086
+        },
+        {
+          "asof": "2023-01-26",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 12.301587104797363
+        },
+        {
+          "asof": "2023-02-25",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": NaN
+        },
+        {
+          "asof": "2023-03-27",
+          "history_window_size": 0,
+          "current_ivx30": NaN,
+          "empirical_ivp": NaN,
+          "vendor_ivp": 97.22222137451172
+        }
+      ]
+    }
+  ]
+}

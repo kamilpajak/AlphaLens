@@ -1,0 +1,49 @@
+{
+  "version": "v8_literature_direct_v1",
+  "date": "2026-05-03",
+  "verdict": "FAIL (\u03b1t=+1.99 < 2.95 program-Bonferroni n=15)",
+  "config": {
+    "holdout_window": [
+      "2024-04-30",
+      "2026-04-30"
+    ],
+    "stride_days": 5,
+    "phase_offset": 4,
+    "holding_period_days": 1,
+    "decile_pct": 0.1,
+    "benchmark": "MDY",
+    "adv_min_usd": 2000000.0,
+    "cost_bps_rt": 30.0,
+    "universe_size": 1626,
+    "scoring_feature": "ivp30 (negated)"
+  },
+  "coverage_pct": 1.0,
+  "n_features_rows": 107182,
+  "n_scored": 107182,
+  "primary_stats": {
+    "label": "LONG-only top decile by -ivp30",
+    "n": 100,
+    "sharpe_gross": 1.4675862107204776,
+    "sharpe_net": 1.467084147416459,
+    "alpha_gross_4f": 51.81773568369006,
+    "alpha_t_4f": 1.9862101679508393,
+    "alpha_net_4f": 51.81473568369006,
+    "excess_vs_bench_ann_gross": 8.666935176328247,
+    "excess_vs_bench_ann_net": 8.663935176328247,
+    "max_drawdown_net": -0.1101520287826936,
+    "cost_drag_ann": 0.003
+  },
+  "ls_diagnostic_stats": {
+    "label": "L/S decile spread (diagnostic)",
+    "n": 100,
+    "sharpe_gross": -0.1911847799877539,
+    "sharpe_net": -0.19181924755560947,
+    "alpha_gross_4f": 22.331984471912442,
+    "alpha_t_4f": 0.7892313256058524,
+    "alpha_net_4f": 22.32598447191244,
+    "excess_vs_bench_ann_gross": -1.9103808165597576,
+    "excess_vs_bench_ann_net": -1.9163808165597576,
+    "max_drawdown_net": -1.8790314195097695,
+    "cost_drag_ann": 0.006
+  }
+}

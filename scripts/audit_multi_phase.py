@@ -59,6 +59,10 @@ _SCRIPTS = {
     "multi_source_global_lasso_20d": REPO
     / "scripts"
     / "experiment_multi_source_global_lasso_20d.py",
+    "v7_options_implied": REPO / "scripts" / "experiment_v7_options_implied.py",
+    "v8_literature_direct": REPO / "scripts" / "experiment_v8_literature_direct.py",
+    "v9_sign_constrained": REPO / "scripts" / "experiment_v9_sign_constrained.py",
+    "v9_cross_sectional_residual": REPO / "scripts" / "experiment_v9_cross_sectional_residual.py",
 }
 
 # Parses lines like:
@@ -198,12 +202,19 @@ def main() -> int:
     for config_key, phase_rows in by_config.items():
         summary = summarise_phase_results(phase_rows)
         verdict = robust_verdict(phase_rows)
+        excess_values = [
+            r["excess_net_ann"] for r in phase_rows if r.get("excess_net_ann") is not None
+        ]
+        dispersion_pp = (
+            round((max(excess_values) - min(excess_values)) * 100, 2) if excess_values else None
+        )
         output["configs"].append(
             {
                 "config": config_key,
                 "n_phases": len(phase_rows),
                 "summary": summary,
                 "verdict": verdict,
+                "dispersion_pp": dispersion_pp,
                 "per_phase": [
                     {
                         "phase_offset": r["phase_offset"],

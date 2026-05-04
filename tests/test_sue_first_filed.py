@@ -18,7 +18,6 @@ entry with the literally earliest filed date), but visibility depends on asof.
 
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from datetime import date
@@ -209,18 +208,29 @@ class TestStorePITContract(unittest.TestCase):
     """End-to-end via the FosterSUEStore against fixture companyfacts JSON."""
 
     def _setup_store(self, tmp: Path, eps_records: list[dict]):
+        import pyarrow.parquet as pq
+
         from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.data.fundamentals.companyfacts_parquet import (
+            CompanyfactsParquetReader,
+            companyfacts_json_to_parquet_table,
+        )
         from alphalens.data.fundamentals.sue import FosterSUEStore
 
         cik = 320193
         cf = _make_companyfacts(eps_records)
         cf["cik"] = cik
-        (tmp / f"{cik:010d}.json").write_text(json.dumps(cf))
+
+        parquet_dir = tmp / "companyfacts_parquet"
+        parquet_dir.mkdir(parents=True, exist_ok=True)
+        table = companyfacts_json_to_parquet_table(cf)
+        pq.write_table(table, parquet_dir / f"{cik:010d}.parquet")
+
         cik_map_path = tmp / "cik_map.yaml"
         cik_map_path.write_text(f"AAPL: {cik}\n")
         cik_map = TickerCikMap.load(cik_map_path)
-        store = FosterSUEStore(companyfacts_dir=tmp, ticker_cik_map=cik_map)
-        return store
+        reader = CompanyfactsParquetReader(parquet_dir)
+        return FosterSUEStore(reader, cik_map)
 
     def test_store_returns_none_for_unknown_ticker(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -276,6 +286,59 @@ class TestStorePITContract(unittest.TestCase):
             self.assertAlmostEqual(series[10], originals_by_end[amend_end], places=6)
             # Sanity: 99.0 nowhere in the series.
             self.assertFalse(any(abs(v - 99.0) < 1.0 for v in series))
+
+
+class TestStoreOnRepresentativeFixtures(unittest.TestCase):
+    """Round-trip regression on the synthetic Apple / IPO fixtures."""
+
+    def setUp(self):
+        from tests.fixtures.companyfacts_fixtures import (
+            APPLE_CIK,
+            IPO_CIK,
+            write_all_fixtures_as_parquet,
+        )
+
+        self._tmp = tempfile.TemporaryDirectory()
+        tmp = Path(self._tmp.name)
+        self.parquet_dir = tmp / "companyfacts_parquet"
+        write_all_fixtures_as_parquet(self.parquet_dir)
+
+        cik_map_path = tmp / "cik_map.yaml"
+        cik_map_path.write_text(f"AAPL: {APPLE_CIK}\nIPO_CO: {IPO_CIK}\n")
+
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens.data.fundamentals.companyfacts_parquet import CompanyfactsParquetReader
+        from alphalens.data.fundamentals.sue import FosterSUEStore
+
+        self.cik_map = TickerCikMap.load(cik_map_path)
+        self.reader = CompanyfactsParquetReader(self.parquet_dir)
+        self.store = FosterSUEStore(self.reader, self.cik_map)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_apple_fixture_returns_eight_chronological_eps_values(self):
+        # Apple fixture has 8 normal quarters + 1 restatement; first-filed
+        # collapses the restatement, so the series must be 8 values long.
+        series = self.store.eps_series_first_filed("AAPL", date(2025, 1, 31))
+        self.assertEqual(len(series), 8)
+        # First-filed semantics on the restated 2023-04-01 entry: the series
+        # must contain the ORIGINAL value 1.55, not the restated 1.58.
+        self.assertIn(1.55, series)
+        self.assertNotIn(1.58, series)
+
+    def test_apple_fixture_eps_basic_preferred_over_diluted(self):
+        series = self.store.eps_series_first_filed("AAPL", date(2025, 1, 31))
+        # Apple Basic-only values include 1.27; Diluted-only values include
+        # 1.23. Basic preference must yield the Basic-only marker, never the
+        # Diluted-only marker.
+        self.assertIn(1.27, series)
+        self.assertNotIn(1.23, series)
+
+    def test_ipo_fixture_returns_none_due_to_insufficient_history(self):
+        # IPO fixture has only 2 EPS quarters; Foster SUE needs >= 8 + 4 + 1.
+        sue = self.store.sue("IPO_CO", date(2025, 1, 31))
+        self.assertIsNone(sue)
 
 
 if __name__ == "__main__":

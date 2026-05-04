@@ -53,6 +53,7 @@ from alphalens.data.alt_data.shares_outstanding import (
 from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
 from alphalens.data.alt_data.yfinance_cache import load_cached_histories
 from alphalens.data.factors import load_carhart_daily
+from alphalens.data.fundamentals.companyfacts_parquet import CompanyfactsParquetReader
 from alphalens.data.fundamentals.sue import FosterSUEStore
 from alphalens.data.store.history import HistoryStore
 from alphalens.data.store.survivorship_pit import load_delisting_events
@@ -636,7 +637,10 @@ def main() -> int:
 
     # v4 v2 stores
     cik_map = TickerCikMap.load(TICKER_CIK_MAP_PATH)
-    sue_store = FosterSUEStore(companyfacts_dir=COMPANYFACTS_DIR, ticker_cik_map=cik_map)
+    sue_store = FosterSUEStore(
+        CompanyfactsParquetReader(HOME / ".alphalens" / "companyfacts_parquet"),
+        cik_map,
+    )
     polygon_si = PolygonShortInterestClient.from_env(cache_dir=POLYGON_SI_CACHE)
     shares_lookup = _make_shares_lookup(COMPANYFACTS_DIR, cik_map)
     filings_lookup = _make_filings_lookup(COMPANYFACTS_DIR, cik_map)

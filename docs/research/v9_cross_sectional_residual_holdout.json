@@ -1,0 +1,48 @@
+{
+  "version": "v9_cross_sectional_residual_v1",
+  "date": "2026-05-03",
+  "verdict": "FAIL (\u03b1t=+2.92 < 3.2 program-Bonferroni n=18)",
+  "config": {
+    "holdout_window": [
+      "2024-04-30",
+      "2026-04-30"
+    ],
+    "stride_days": 5,
+    "phase_offset": 4,
+    "decile_pct": 0.1,
+    "benchmark": "MDY",
+    "adv_min_usd": 2000000.0,
+    "cost_bps_rt": 30.0,
+    "universe_size": 1626,
+    "scoring": "OLS residual: -ivp30 ~ reversal_1m + momentum_6m + rv_30d + intercept (per asof)"
+  },
+  "coverage_pct": 1.0,
+  "n_features_rows": 107182,
+  "n_scored": 107182,
+  "primary_stats": {
+    "label": "LONG-only top decile (cross-sectional residual scorer)",
+    "n": 100,
+    "sharpe_gross": 2.0312287227567007,
+    "sharpe_net": 2.029165427324663,
+    "alpha_gross_4f": 15.324253468907054,
+    "alpha_t_4f": 2.9166450250403,
+    "alpha_net_4f": 15.321253468907054,
+    "excess_vs_bench_ann_gross": 2.8509809935019117,
+    "excess_vs_bench_ann_net": 2.8479809935019116,
+    "max_drawdown_net": -0.06493179237001323,
+    "cost_drag_ann": 0.003
+  },
+  "ls_diagnostic_stats": {
+    "label": "L/S decile spread (diagnostic)",
+    "n": 100,
+    "sharpe_gross": -0.8729036008727591,
+    "sharpe_net": -0.8737665958240909,
+    "alpha_gross_4f": -6.740268589627606,
+    "alpha_t_4f": -0.9245523050573295,
+    "alpha_net_4f": -6.746268589627606,
+    "excess_vs_bench_ann_gross": -6.171284704504647,
+    "excess_vs_bench_ann_net": -6.177284704504647,
+    "max_drawdown_net": -2.448604064365671,
+    "cost_drag_ann": 0.006
+  }
+}

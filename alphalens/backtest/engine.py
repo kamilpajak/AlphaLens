@@ -57,6 +57,11 @@ class RebalanceSnapshot:
     ``ic`` uses the longer ``holding_period`` forward returns cross-sectionally
     as the signal-quality metric. Overlapping is fine there because IC is a
     cross-sectional measure per rebalance, not a time-series statistic.
+
+    ``bottom_n_*`` and ``portfolio_return_short`` are populated only when the
+    engine was constructed with ``bottom_n != None`` (v7 L/S diagnostic per
+    plan 2026-05-01). They are NOT phase-aggregated by the multi-phase audit
+    driver; the L/S diagnostic is a v7-only post-hoc artefact.
     """
 
     date: pd.Timestamp
@@ -68,6 +73,10 @@ class RebalanceSnapshot:
     portfolio_return_holding: float  # holding_period forward return of top-N (signal diagnostic)
     universe_median_return: float  # 1-day median across scored set
     ic: float  # Rank IC over holding_period horizon
+    bottom_n_tickers: list[str] | None = None
+    bottom_n_scores: list[float] | None = None
+    bottom_n_forward_returns: list[float] | None = None
+    portfolio_return_short: float | None = None  # 1-day forward return of bottom-N
 
 
 @dataclass
@@ -122,6 +131,34 @@ class BacktestReport:
     def turnover(self) -> float:
         return turnover_pct(r.top_n_tickers for r in self.rebalance_results)
 
+    @property
+    def portfolio_returns_short(self) -> pd.Series:
+        """1-day forward returns of bottom-N (short leg). Empty if engine ran
+        with ``bottom_n=None`` (long-only mode)."""
+        if not self.rebalance_results:
+            return pd.Series(dtype=float)
+        records = [
+            (r.date, r.portfolio_return_short)
+            for r in self.rebalance_results
+            if r.portfolio_return_short is not None
+        ]
+        if not records:
+            return pd.Series(dtype=float)
+        idx = [d for d, _ in records]
+        vals = [v for _, v in records]
+        return pd.Series(vals, index=pd.DatetimeIndex(idx), name="portfolio_short")
+
+    @property
+    def portfolio_returns_long_short(self) -> pd.Series:
+        """L/S decile spread = long top-N minus short bottom-N (1-day forward).
+        v7 diagnostic per plan 2026-05-01. Empty if engine ran long-only."""
+        short_series = self.portfolio_returns_short
+        if short_series.empty:
+            return pd.Series(dtype=float)
+        long_series = self.portfolio_returns
+        # Align on common index — both series come from same rebalance dates.
+        return (long_series - short_series).rename("portfolio_long_short")
+
 
 class BacktestEngine:
     """Backtest over a universe with configurable rebalance stride, using a
@@ -151,6 +188,7 @@ class BacktestEngine:
         weighting: WeightingScheme = "equal",
         rebalance_stride: int = 1,
         phase_offset: int = 0,
+        bottom_n: int | None = None,
     ):
         self.store = history_store
         self._scorer = scorer
@@ -177,6 +215,12 @@ class BacktestEngine:
                 f"({self.rebalance_stride}); got {phase_offset}"
             )
         self.phase_offset = int(phase_offset)
+        # Optional bottom-N selection for L/S diagnostic (v7 pre-reg plan
+        # 2026-05-01). When set, _build_rebalance_snapshot populates the
+        # bottom_n_* fields on RebalanceSnapshot; the multi-phase audit
+        # driver intentionally does NOT aggregate these — L/S is post-hoc
+        # diagnostic only.
+        self.bottom_n = int(bottom_n) if bottom_n is not None else None
         # Scorer's declared requirement is authoritative (it knows its own
         # indicator lookbacks). Class attr is only a fallback when the scorer
         # doesn't declare one.
@@ -269,7 +313,8 @@ class BacktestEngine:
     def _build_rebalance_snapshot(
         self, day: date, scored: pd.DataFrame, valid_holding: pd.DataFrame
     ) -> RebalanceSnapshot:
-        top_n = scored.sort_values("score", ascending=False).head(self.top_n)
+        sorted_desc = scored.sort_values("score", ascending=False)
+        top_n = sorted_desc.head(self.top_n)
         weights = compute_position_weights(len(top_n), self.weighting)
         portfolio_ret_1d = weighted_return(top_n["fwd_1d"].to_numpy(dtype=float), weights)
         portfolio_ret_holding = weighted_return(top_n["fwd_holding"].to_numpy(dtype=float), weights)
@@ -277,6 +322,25 @@ class BacktestEngine:
             float(scored["fwd_1d"].dropna().median()) if scored["fwd_1d"].notna().any() else 0.0
         )
         ic_value = rank_ic(valid_holding["score"].tolist(), valid_holding["fwd_holding"].tolist())
+
+        bottom_tickers: list[str] | None = None
+        bottom_scores: list[float] | None = None
+        bottom_fwd: list[float] | None = None
+        portfolio_ret_short: float | None = None
+        if self.bottom_n is not None:
+            # Tail of desc-sort gives bottom-N but in desc order. Re-sort ascending
+            # so callers see "most-short-leg-relevant first" — symmetric to top-N's
+            # "highest score first" mental model.
+            bottom = sorted_desc.tail(self.bottom_n).sort_values("score", ascending=True)
+            bottom_weights = compute_position_weights(len(bottom), self.weighting)
+            short_ret_1d = weighted_return(bottom["fwd_1d"].to_numpy(dtype=float), bottom_weights)
+            bottom_tickers = bottom["ticker"].tolist()
+            bottom_scores = [float(x) for x in bottom["score"].tolist()]
+            bottom_fwd = [
+                float(x) if not _is_nan(x) else float("nan") for x in bottom["fwd_holding"].tolist()
+            ]
+            portfolio_ret_short = short_ret_1d if not _is_nan(short_ret_1d) else 0.0
+
         return RebalanceSnapshot(
             date=pd.Timestamp(day),
             scored_count=len(valid_holding),
@@ -291,6 +355,10 @@ class BacktestEngine:
             ),
             universe_median_return=universe_median_ret_1d,
             ic=ic_value,
+            bottom_n_tickers=bottom_tickers,
+            bottom_n_scores=bottom_scores,
+            bottom_n_forward_returns=bottom_fwd,
+            portfolio_return_short=portfolio_ret_short,
         )
 
     def _simulate_rebalance(

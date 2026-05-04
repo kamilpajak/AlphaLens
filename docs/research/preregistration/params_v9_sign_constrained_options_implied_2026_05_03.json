@@ -1,0 +1,109 @@
+{
+  "params_frozen": {
+    "class": "options_implied_search_2026_05_02",
+    "version": "v9_sign_constrained_lasso_xing_enforced",
+    "design_provenance": "Built after v7 (Lasso, αt +2.60 mean, sign-flip ALL phases, FAIL) and v8 (model-free −ivp30, αt +2.18 mean, FAIL) on burnt 2024-04-30 → 2026-04-30 holdout. v7's L/S diagnostic αt = −3.25 (from final canonical run, 1626 universe) implied bottom-decile (LOW-IV per Xing) long-only αt ≈ +5.34 if direction had been correct. v9 thesis: combine v7's equity-control + IV/HV-ratio amplification with v8's mechanically-enforced Xing-direction by sign-constraining the 4 options-feature coefficients to ≤ 0 while leaving the 3 equity controls free-sign.",
+    "design_memo": "docs/research/v9_sign_constrained_design_2026_05_03.md",
+    "adversarial_review_summary": "Perplexity Sonar Reasoning Pro (2026-05-03) ranked v9 redesign axes by likelihood × HARKing risk × Bonferroni cost. Option A (sign-constrained Lasso) ranked #1 at ~25-35% chance of clearing |t|≥3.13. Option D (cross-sectional residualization) ranked #2 at ~20-30%, pre-committed as SECONDARY to be run only if A FAILs. Realistic ceiling per perplexity: ~+2.5-2.9 αt (underlying signal triangulated at ~+2.2 from v7+v8). Likely FAIL outcome documented as honest expectation. Burnt-holdout policy held — same window, prospective replication is the only escape.",
+    "data_provider": "iVolatility $399 retail tier (probe v5 99.5% T1)",
+    "data_endpoint_primary": "/equities/stock-market-data (smd) — same as v7/v8",
+    "model_class": "Sign-constrained Lasso (LassoCV with positive=True on augmented feature matrix)",
+    "model_construction": "Standardize ORIGINAL features → mean μ, std σ, X_std (n × 7). Build augmented matrix X_aug (n × 10): negated options (4 cols) + equity-positive (3 cols) + equity-negative (3 cols). Fit LassoCV(positive=True, eps=1e-6, n_alphas=25, cv=3). Map back to original-feature standardized space: coef_options = -β_aug[options_neg], coef_equity = β_aug[equity_pos] - β_aug[equity_neg]. Net: coef_options ≤ 0 mechanically, coef_equity free-sign.",
+    "model_implementation": "alphalens.screeners.options_implied.fit_sign_constrained_lasso (NEW, locked 2026-05-03). 100 LoC, 10 unit tests in tests/test_options_implied_sign_constrained.py.",
+    "feature_stack_options": [
+      "ivp30 — 1y rolling percentile of ivx30 (sign-constrained ≤ 0)",
+      "ivx30 — absolute 30d implied vol (sign-constrained ≤ 0)",
+      "ivx180_minus_ivx30 — term-structure slope (sign-constrained ≤ 0)",
+      "ivx30_over_hv20 — vol risk premium ratio (sign-constrained ≤ 0)"
+    ],
+    "feature_stack_equity_controls": [
+      "reversal_1m — −1 × r_21d (free-sign)",
+      "momentum_6m — r_[t-126, t-21] (free-sign)",
+      "rv_30d — annualized stdev log returns last 30 days (free-sign)"
+    ],
+    "etl_anomaly_bounds": {
+      "ivx30_max": 3.0,
+      "ivx30_min": 0.05,
+      "term_spread_abs_max": 1.5,
+      "iv_hv_ratio_max": 10.0,
+      "iv_hv_ratio_min": 0.1,
+      "stock_price_min": 1.0
+    },
+    "universe_construction": {
+      "optionable_filter": "smd `optVol > 0 OR (oi_call + oi_put) > 0` on t-1 (same as v7/v8)",
+      "min_adv_dollar_20d": 2000000,
+      "min_underlying_price": 1.0,
+      "drop_otc_pink": true,
+      "expected_universe_size_per_asof": "~2000-2500 names"
+    },
+    "delisting_handling": {
+      "rule": "−50% standard / −100% bankruptcy at terminal bar (same as v7/v8)",
+      "reason_classification_source": "~/.alphalens/survivorship/delisted_2021_2026.parquet",
+      "inclusion_in_cross_section": "MANDATORY"
+    },
+    "fit_strategy": "Single global sign-constrained Lasso fitted on 7-feature stack across train tranches 2018-04-30 → 2024-04-29",
+    "selection_primary": "long-only TOP decile EW by sign-constrained Lasso prediction. With coef_options ≤ 0, top-decile = LOW-IV names (Xing-correct), amplified by equity-control signal where present.",
+    "selection_diagnostic_secondary": "L/S decile spread (top − bottom) reported alongside primary. NOT primary verdict, NOT additional Bonferroni test.",
+    "rebalance_stride_days": 5,
+    "holding_period_days_target": 20,
+    "holding_period_days_portfolio_returns": 1,
+    "weighting": "equal",
+    "cost_profile": "long_only_30bps",
+    "cost_profile_rt_bps": 30,
+    "benchmark": "MDY",
+    "phase_audit": {
+      "n_phases": 5,
+      "stride_for_phases": 5,
+      "phase_offset_range": "0..4",
+      "audit_driver": "scripts/audit_multi_phase.py v9_sign_constrained",
+      "dispersion_threshold_pp": 50.0,
+      "dispersion_metric_legacy": "excess_net_ann (kept for descriptive comparison with v7+v8; KNOWN to be 1d-fwd × 50.4 magnification-prone)",
+      "dispersion_metric_primary": "alpha_t_range across 5 phases",
+      "alpha_t_range_threshold": 0.5,
+      "amendment_rationale": "v7+v8 audit revealed annualized excess-range gate (50pp) is mechanically inflated by 1d-fwd × 50.4 annualization. v9 pre-reg amends primary dispersion gate to per-rebal alpha_t-range ≤ 0.5 (which v7's 1.30 still FAILs and v8's 0.42 PASSes — gate is informative, not loosened). Both metrics reported in verdict; primary is alpha_t_range."
+    }
+  },
+  "phase_a_gates": {
+    "feature_joiner_coverage_min_pct": 70,
+    "multicollinearity_max_pairwise_abs_corr": 0.85,
+    "multicollinearity_action": "drop more-derived feature per pre-committed hierarchy (same as v7)",
+    "pit_integrity_replication_already_passed": true,
+    "pit_integrity_artefact": "docs/research/pit_replication_probe_2026_05_01.md (Pearson 0.9990)"
+  },
+  "periods": {
+    "train_start": "2018-04-30",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rationale": "Same train + burnt holdout as v7/v8. Window-shopping = HARKing per perplexity verdict."
+  },
+  "secondary_pre_committed": {
+    "name": "v9_cross_sectional_residual_options_implied_2026_05_03",
+    "framing": "PRE-COMMITTED SECONDARY, run ONLY IF primary (sign-constrained Lasso) FAILs",
+    "description": "Cross-sectional OLS within each asof: −ivp30 ~ reversal_1m + momentum_6m + rv_30d + intercept. Score = OLS residual (orthogonalized −ivp30 signal). Long top-decile EW by residual. Deterministic — no time-series fit, no parameter drift. Independent test from option A.",
+    "scorer_path_planned": "scripts/experiment_v9_cross_sectional_residual.py (to be created if A FAILs)",
+    "bonferroni_threshold": "n=18 → |t|≥3.20",
+    "alpha_t_range_gate": "≤ 0.5",
+    "execution_rule": "Pre-reg JSON encodes the conditional. A must complete and FAIL before D runs. NO mid-run inspection of A to decide on D."
+  },
+  "success_criteria": {
+    "mode": "single_bar_pass_fail",
+    "primary_metric": "Carhart-4F alpha t-stat (HAC=5) on (long-only-top-decile-by-sign-constrained-Lasso − MDY-return) holdout series",
+    "bonferroni_threshold_naive_program_level": "n=17 → |αt| ≥ 3.13 (one-up from v8 n=16, +1 amendment for sign constraint per perplexity guidance)",
+    "primary_pass_rule": "Holdout single-phase αt ≥ 3.13 AND multi-phase mean(αt) ≥ 3.13 AND alpha_t_range across 5 phases ≤ 0.5 AND ivp30 coverage ≥ 70% AND ≥1 nonzero coef on options features (selection-mechanism gate)",
+    "fail_rule": "any primary gate misses → run pre-committed SECONDARY (cross-sectional residualization) per pre-reg conditional, threshold tightens to n=18 |t|≥3.20",
+    "verdict_classification": {
+      "primary_pass": "PRIMARY (A) clears all gates → advance to prospective replication 2026-05-03+",
+      "primary_fail_secondary_pass": "SECONDARY (D) clears its tightened gates → exploratory PASS, advance to prospective replication; report A's failure mode as diagnostic context",
+      "both_fail": "options_implied class CLOSED on burnt holdout. Pivot to fresh class OR wait for prospective replication (existing v8_xing_frozen track)"
+    },
+    "auto_pivot_triggers": [
+      "ivp30 coverage <70% → ABORT pre-verdict",
+      "ALL 4 options coefs zeroed by sign-constrained fit → FAIL (selection-mechanism artifact, mirrors v2 alt_data degenerate case)",
+      "alpha_t_range >0.5 across phases → FAIL (regime fragility per amended gate)"
+    ],
+    "no_stretch_tier": "v7's Romano-Wolf stretch flag (m=30) dropped — single PASS bar, same as v8.",
+    "regime_stratification_postdoc": "DESCRIPTIVE: report holdout αt and excess vs MDY split by VIX>20 vs VIX<20 sub-periods. Not a gate.",
+    "capital_deploy_clause": "Capital deploy OFF-TABLE on this burnt holdout regardless of any verdict per program-level burnt-holdout policy. PASS triggers prospective walk-forward replication on data accruing post-2026-04-30 at unadjusted p<0.05 single-test before any escalation."
+  }
+}

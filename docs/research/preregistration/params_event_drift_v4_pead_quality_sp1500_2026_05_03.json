@@ -1,0 +1,83 @@
+{
+  "params_frozen": {
+    "design_provenance": "v4 in-class extension of event_drift_search_2026_05_03 after v3 (event_drift_v3_pead_quality_clean) ABANDONED 2026-05-03 at Phase 2 breadth audit on R2000-PIT (mean breadth 3.84/day vs gate >=10; retry sue_quartile+no-Day-1 9.80/day still <gate). Root cause: 71.9% Sloan accruals data attrition (7163 of 9967) on R2000 small-caps from sparse US-GAAP tagging (LongTermDebtCurrent, IncomeTaxesPayable, DepreciationAndAmortization). v3 postmortem (docs/research/event_drift_v3_breadth_audit_2026_05_03.md L121-125) explicitly identified S&P 1500 + Russell Top 1000 as pre-committed pivot universe for any future PEAD-class experiment. v4 executes that contingency with universe-only change; all other params unchanged from v3.",
+    "design_memo": "docs/research/event_drift_v4_design_2026_05_03.md",
+    "adversarial_review": "Perplexity Sonar Reasoning Pro (high effort, 2026-05-03): ranked v4 dense-universe PEAD #1 by ex-ante info-value-per-Bonferroni-cost vs alternatives (iVolatility v10 sunk-cost trap on 2026-05-08 deadline; alt-data v2 holdout Lasso-zero collapse predicted). Cited Mclean post-2021 PEAD decay ~40-50% in mid-cap; Engelberg-Sasseville-Williams 2021 baseline +2.0-2.5 alpha-t. Honest expected ceiling +1.8 mean alpha-t. Zen gemini-3-pro-preview (high thinking, 2026-05-03): AGREE v4 pivot grounded; AGREE rejection of GAAP-tag-cascading on R2000 (HARKing-on-data-engineering risk); DISSENT on universe (recommended S&P 600 small-cap-only, citing S&P 500 PEAD largely arbitraged away). User elected S&P 1500 over zen S&P 600 recommendation 2026-05-03 for safer breadth (~22/day expected vs ~8/day) accepting lower alpha-t ceiling. Contingency: if v4 produces breadth PASS but mid-strength signal (alpha-t 1.0-1.8), v5 candidate is S&P 600 isolated to validate dilution hypothesis.",
+    "sue_quintile": 5,
+    "sue_quantile_top_pct": 20,
+    "accrual_quantile_bottom_pct": 50,
+    "quantile_cohort_window_days": 90,
+    "accrual_definition": "Sloan_1996_total_accruals_over_avg_total_assets",
+    "accrual_formula": "(delta_AssetsCurrent - delta_CashAndCashEquivalentsAtCarryingValue) - (delta_LiabilitiesCurrent - delta_LongTermDebtCurrent - delta_IncomeTaxesPayable) - DepreciationAndAmortization, scaled by avg(Assets_t, Assets_{t-1})",
+    "accrual_direction": "BELOW_MEDIAN_=_LOWER_ratio_=_HIGHER_quality",
+    "accrual_pit_filter": "first_filed_per_period_end (mirrors FosterSUEStore semantics)",
+    "sue_source": "alphalens.data.fundamentals.sue.FosterSUEStore (Foster 1977 4Q + drift)",
+    "sue_pit_filter": "first_filed_per_period_end",
+    "holding_window_days": [2, 60],
+    "day1_sign_confirmation": true,
+    "day1_definition": "ret_d1 = close_{d1} / close_{d-1} - 1, gate keeps sign(ret_d1) == sign(SUE)",
+    "t0_after_hours_rule": "if 8K_2.02 filed_time >= 16:00 ET then announce_day := next_trading_day; entry = announce_day + 2 (regular open d+2). Eliminates intraday lookahead.",
+    "announcement_source_priority": [
+      "8-K Item 2.02 with exact filed datetime (preferred)",
+      "10-Q/10-K filed-date fallback (date-noise acknowledged)"
+    ],
+    "overlapping_window_policy": "single_active_window_per_ticker. New SUE while existing window active is dropped (NOT a new window). Hard-reset on natural expiry at d+60.",
+    "rebalance": "event_driven_post_announcement",
+    "weighting": "equal",
+    "universe": "sp1500_pit (S&P 500 + S&P 400 mid + S&P 600 small), ADV>=5M_USD over 60d, EX Financials (GICS 40) and Utilities (GICS 55). Optionable filter NOT required (event-driven fundamental signal, no options data dependency). CHANGED FROM v3: was edgar_companyfacts_covered (R2000-PIT 1612 small-caps).",
+    "universe_pit_source": "alphalens/data/universes/sp1500_pit.py (TO BE CREATED Phase 1; PIT membership SoT with S&P committee revision history)",
+    "adv_min_usd": 5000000,
+    "adv_window_days": 60,
+    "sector_exclusions_gics": [40, 55],
+    "sector_classification_source": "SIC code from companyfacts -> GICS mapping table",
+    "delisting_handling": "Standard -50% delisting / -100% bankruptcy at terminal bar (parity with v3, v7-v9). Open windows on delisted tickers terminate at delisting bar with realized return to that point + delisting markdown.",
+    "cost_profile": "long_only_30bps",
+    "cost_profile_rt_bps": 30,
+    "benchmark": "MDY (mid-cap proxy, parity with v3, v7-v9 to neutralize mega-cap drag)",
+    "phase_audit": {
+      "n_phases": 5,
+      "audit_driver": "scripts/audit_multi_phase.py event_drift_v4",
+      "dispersion_metric_primary": "alpha_t_range across 5 phases",
+      "alpha_t_range_threshold": 0.5,
+      "dispersion_metric_legacy": "excess_net_ann (descriptive only, magnification-prone)",
+      "dispersion_threshold_pp": 50.0
+    }
+  },
+  "periods": {
+    "train_start": "2018-01-01",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rationale": "Same burnt holdout as v3 + v7/v8/v9 (2024-04-30..2026-04-30). Window-shopping = HARKing. Burnt-holdout multiplicity escalation absorbed via threshold |t|>=3.50 (above naive Bonferroni n=20 of 3.34). Train extended back to 2018-01-01 to capture post-companyfacts-availability era. Identical period framing to v3 ensures universe is the only varying axis."
+  },
+  "success_criteria": {
+    "mode": "single_bar_pass_fail",
+    "primary_metric": "Carhart-4F alpha t-stat (HAC=5) on (long-only-PEAD-quality-portfolio - MDY-return) holdout series. 5-phase robust mean.",
+    "carhart4f_alpha_t_min": 3.5,
+    "phase_count": 5,
+    "phase_dispersion_max_pp": 50.0,
+    "alpha_t_range_threshold": 0.5,
+    "min_phase_alpha_t": 0.5,
+    "min_daily_portfolio_breadth": 10,
+    "min_daily_portfolio_breadth_p10": 5,
+    "min_total_holdout_observations": 200,
+    "primary_pass_rule": "Holdout multi-phase mean(alpha_t) >= 3.50 AND alpha_t_range across 5 phases <= 0.5 AND every-phase alpha_t >= 0.5 AND mean daily breadth >= 10 across all phases AND p10 daily breadth >= 5 AND Day-1-sign confirmation gate fires for >=40% of top-quintile candidates.",
+    "auto_pivot_triggers": [
+      "mean daily breadth < 10 in Phase 2 audit -> ABORT pre-holdout-run; ONE retry permitted (sue_quartile OR no-Day-1, single-axis); if still <10 close class",
+      "p10 daily breadth < 5 in Phase 2 audit -> same as mean<10 trigger",
+      "holdout single-phase alpha_t < 1.5 -> ABORT pre-multi-phase",
+      "Day-1 sign confirmation gate retains <30% candidates -> diagnostic regime-shift flag",
+      "any phase alpha_t < 0.5 -> FAIL (regime fragility)",
+      "alpha_t_range > 0.5 across 5 phases -> FAIL (phase aliasing)",
+      "breadth PASS + holdout alpha_t in [1.0, 1.8] -> register diagnostic 'PEAD lives, S&P 500 dilutes per zen prediction'; v5 candidate = repeat on S&P 600-only"
+    ],
+    "fail_classification": {
+      "fundamental_compression": "all phases consistently weak (max alpha_t < 1.5) -> PEAD compressed in dense-universe regime; class likely closes after this single test",
+      "phase_fragility": "high dispersion alpha_t_range > 0.5 -> base signal exists but unstable; consider revising trim or accruals def",
+      "breadth_collapse": "mean daily < 10 OR p10 < 5 -> retry once with sue_quartile OR no-Day-1 gate (single axis only); if still <10 close class (consistent with v3 closure mechanism applied to v4 universe pivot)",
+      "dilution_diagnostic": "breadth PASS + alpha_t in [1.0, 1.8] across phases with low dispersion -> S&P 500 dilution hypothesis confirmed; v5 = S&P 600 isolated"
+    },
+    "capital_deploy_clause": "Capital deploy OFF-TABLE on this burnt holdout regardless of verdict per program-level burnt-holdout policy. PASS triggers prospective walk-forward replication on data accruing post-2026-04-30 at unadjusted p<0.05 single-test before any escalation.",
+    "rationale": "Threshold |t|>=3.50 escalated above naive Bonferroni n=20 of 3.34 to absorb meta-multiplicity of 20-th-class reuse of the same 2024-04-30..2026-04-30 holdout with implicit cross-class learning from prior 19 fails. Universe-pivot in v4 was pre-committed in v3 postmortem (NOT post-hoc cherry-pick) so no additional cross-universe selection multiplicity is added. Honest hurdle for capital deployment given the dependent-tests context."
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "strategy": "v9_sign_constrained",
+  "rebalance_stride": 5,
+  "configs": [
+    {
+      "config": "HOLDOUT 2024-2026 | bench=MDY ADV\u2265$2M cost=30bps RT",
+      "n_phases": 5,
+      "summary": {
+        "sharpe_gross": {
+          "mean": 1.286,
+          "std": 0.5246236746468844,
+          "min": 0.79,
+          "max": 2.16,
+          "n": 5
+        },
+        "sharpe_net": {
+          "mean": 1.28,
+          "std": 0.5170589908318006,
+          "min": 0.79,
+          "max": 2.14,
+          "n": 5
+        },
+        "excess_gross_ann": {
+          "mean": 1.5536,
+          "std": 1.330862051453869,
+          "min": 0.519,
+          "max": 3.8080000000000003,
+          "n": 5
+        },
+        "excess_net_ann": {
+          "mean": 1.5506,
+          "std": 1.330862051453869,
+          "min": 0.516,
+          "max": 3.805,
+          "n": 5
+        },
+        "alpha_t": {
+          "mean": 1.7240000000000002,
+          "std": 0.7033704571561135,
+          "min": 1.24,
+          "max": 2.95,
+          "n": 5
+        }
+      },
+      "verdict": "FAIL",
+      "dispersion_pp": 328.9,
+      "per_phase": [
+        {
+          "phase_offset": 0,
+          "sharpe_gross": 0.79,
+          "sharpe_net": 0.79,
+          "excess_gross_ann": 1.217,
+          "excess_net_ann": 1.214,
+          "alpha_t": 1.24
+        },
+        {
+          "phase_offset": 1,
+          "sharpe_gross": 1.13,
+          "sharpe_net": 1.12,
+          "excess_gross_ann": 1.575,
+          "excess_net_ann": 1.5719999999999998,
+          "alpha_t": 1.58
+        },
+        {
+          "phase_offset": 2,
+          "sharpe_gross": 2.16,
+          "sharpe_net": 2.14,
+          "excess_gross_ann": 0.519,
+          "excess_net_ann": 0.516,
+          "alpha_t": 2.95
+        },
+        {
+          "phase_offset": 3,
+          "sharpe_gross": 1.32,
+          "sharpe_net": 1.32,
+          "excess_gross_ann": 0.649,
+          "excess_net_ann": 0.6459999999999999,
+          "alpha_t": 1.57
+        },
+        {
+          "phase_offset": 4,
+          "sharpe_gross": 1.03,
+          "sharpe_net": 1.03,
+          "excess_gross_ann": 3.8080000000000003,
+          "excess_net_ann": 3.805,
+          "alpha_t": 1.28
+        }
+      ]
+    }
+  ]
+}
