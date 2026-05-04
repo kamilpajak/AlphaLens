@@ -1999,8 +1999,15 @@
         "capital_deploy_clause": "Capital deploy OFF-TABLE on this burnt holdout regardless of any verdict per program-level burnt-holdout policy. PASS triggers prospective walk-forward Sharpe-improvement replication on data accruing post-2026-04-30 at p<0.05 single-test before any escalation."
       },
       "registered_at": "2026-05-04",
-      "status": "registered",
-      "outcome": null,
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": -1.929,
+        "mean_excess_net": -0.024,
+        "audit_path": "docs/research/v10_drawdown_overlay/multi_phase_verdict.json",
+        "completed_at": "2026-05-04",
+        "notes": "Pooled Sharpe-diff t=-1.93 (p=0.985), 95% CI=[-0.049,-0.001] excludes 0. Mean per-phase Δ Sharpe=-0.031, mean MDD ratio=0.87. G1/G2/G3 FAIL; G4 (mean base αt=+2.29 matches v9D exactly), G5 (weight∈[0,1]), G6 (Δ Sharpe range=0.055) all PASS. Overlay underperforms consistently across all 5 phases — clean FAIL not noise. mean-alpha-t field repurposed for pooled bootstrap t-stat; mean-excess-net for Sharpe diff per ADR 0007 overlay-class metric."
+      },
       "notes": ""
     },
     {
