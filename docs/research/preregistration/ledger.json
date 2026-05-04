@@ -1882,6 +1882,128 @@
       "notes": ""
     },
     {
+      "id": "v10_drawdown_overlay_on_v9D_options_2026_05_04",
+      "signal_class": "risk_management_overlay_2026_04_30",
+      "hypothesis": "De-lever-only step-function drawdown-control overlay (cap=1.0, floor=0.0, no leverage, no macro inputs) applied to FROZEN v9D options-implied cross-sectional-residual base scorer raises net Sharpe by >=0.30, truncates MaxDD by >=30%, with Ledoit-Wolf block-bootstrap Sharpe-diff t-stat >=2.5 at p<0.01, phase-robust across 5 strided audits.",
+      "scorer_path": "scripts/experiment_v10_drawdown_overlay.py",
+      "params_frozen": {
+        "class": "risk_management_overlay_2026_04_30",
+        "version": "v10_drawdown_control_on_v9D_options_base",
+        "design_provenance": "Second test in overlay-class (vol-target was #1 and FAILed by levering-into-drawdown on a no-alpha base). Built after options-implied class converged across 4 tests (v7 +2.60 sign-flip artifact, v8 +2.18 model-free, v9A +1.72 sign-constrained, v9D +2.29 cross-sectional residual) on a triangulated +2.2-2.3 honest Carhart αt sub-Bonferroni. v10 thesis: a properly-designed de-lever-only L4 overlay can convert a real-but-marginal αt signal into deploy-grade Sharpe-improvement per ADR 0007 (overlay-class strategies use Sharpe-improvement as primary success metric, NOT Carhart αt). Base scorer is FROZEN as the v9D cross-sectional residual specification (NOT averaged across v7-v9D; mitigates the 'best-of-4 selection effect' adversarial concern).",
+        "design_memo": "docs/research/v10_drawdown_overlay_design_2026_05_04.md",
+        "adversarial_review_summary": "Perplexity (sonar-reasoning-pro 2026-05-04) ranked candidate B (this design) #1 of 5 alternatives because (a) acceptance reframe per ADR 0007 doesn't burn alpha-class Bonferroni, (b) Kelly/CPPI/drawdown-control literature post-2020 supports overlay robustness, (c) directionality is asymmetric — PASS shifts deploy-readiness priors sharply, FAIL falsifies L4-on-this-base only. Zen (gemini-3-pro-preview, high thinking) seconded with three hardenings folded in: (1) DISCARD Jobson-Korkie inference (IID-normal broken by skew/kurt/autocorrelation of options-implied portfolios) → use Ledoit-Wolf-style block-bootstrap Sharpe-difference; (2) ADD MaxDD-reduction gate alongside Sharpe-improvement (overlay that smooths vol but doesn't truncate left tail is useless); (3) keep overlay COMPUTATIONALLY DUMB — pure realized-equity-curve drawdown trigger, no macro features, no predictive logic, no leverage. Zen also flagged 'honest +2.2' may be selection effect from 4 prior tests; mitigation = freeze v9D as-spec'd not as best-of-4, plus base-replication consistency gate.",
+        "base_scorer": {
+          "module": "alphalens.screeners.options_implied.cross_sectional_residual.score_cross_sectional_residual",
+          "specification": "Per-asof OLS residual of −ivp30 against (reversal_1m, momentum_6m, rv_30d) cross-sectionally; long top-decile equal-weighted by residual",
+          "frozen_reference_run": "scripts/experiment_v9_cross_sectional_residual.py default args, holdout 2024-04-30 → 2026-04-30, recorded αt=+2.29",
+          "frozen_locked_at_design_time": true,
+          "modification_during_v10": "PROHIBITED — any drift in base spec invalidates the overlay test"
+        },
+        "overlay_class": "DrawdownControlOverlay",
+        "overlay_module": "alphalens.overlays.drawdown_control",
+        "overlay_specification": {
+          "rule_type": "step-function on rolling-equity-curve drawdown from peak",
+          "drawdown_lookback_days_window": 21,
+          "weight_full_exposure_threshold_dd": 0.05,
+          "weight_half_exposure_band_dd": [
+            0.05,
+            0.1
+          ],
+          "weight_zero_exposure_threshold_dd": 0.1,
+          "weight_recovery_reset_pct_below_peak": 0.02,
+          "weight_step_function": {
+            "drawdown_le_5pct": 1.0,
+            "drawdown_5pct_to_10pct": 0.5,
+            "drawdown_ge_10pct": 0.0
+          },
+          "leverage_cap": 1.0,
+          "leverage_floor": 0.0,
+          "macro_features_used": [],
+          "predictive_features_used": [],
+          "execution_lag": "T+1 (scale[t] from returns[<t] only, shift(1) enforced — same causality contract as VolTargeter)",
+          "deviations_from_vol_target_v1": "(a) NO leverage permitted (cap=1.0 not 1.5), (b) trigger is realized-drawdown not realized-vol, (c) step function not continuous scaling, (d) recovery threshold prevents whip-saw"
+        },
+        "data_provider": "iVolatility $399 retail tier (probe v5 99.5% T1) — same as v7/v8/v9",
+        "data_endpoint_primary": "/equities/stock-market-data (smd)",
+        "rebalance_stride_days": 5,
+        "holding_period_days_target": 20,
+        "holding_period_days_portfolio_returns": 1,
+        "weighting": "equal",
+        "cost_profile": "long_only_30bps",
+        "cost_profile_rt_bps": 30,
+        "benchmark": "MDY",
+        "phase_audit": {
+          "n_phases": 5,
+          "stride_for_phases": 5,
+          "phase_offset_range": "0..4",
+          "audit_driver": "scripts/audit_multi_phase.py v10_drawdown_overlay",
+          "dispersion_metric_primary": "sharpe_improvement_range across 5 phases",
+          "sharpe_improvement_range_threshold": 0.5,
+          "rationale": "v10 success metric is Sharpe-improvement (not αt), so the dispersion gate uses Sharpe-improvement consistency across phases; loose 0.5 absolute Sharpe units mirrors v9's αt_range gate scale"
+        }
+      },
+      "periods": {
+        "train_start": "2018-04-30",
+        "train_end": "2024-04-29",
+        "holdout_start": "2024-04-30",
+        "holdout_end": "2026-04-30",
+        "rationale": "Same train + burnt holdout as v9D base (FROZEN). v10 cannot change the period without breaking the consistency gate."
+      },
+      "success_criteria": {
+        "mode": "multi_gate_pass_fail",
+        "primary_metric": "Sharpe-difference t-stat (Ledoit-Wolf block-bootstrap, block_size=21d, n_bootstrap=10000) on (overlay_net_returns − base_net_returns) holdout series, multi-phase pooled",
+        "bonferroni_accounting": {
+          "intra_class_n": 2,
+          "intra_class_naive_t_threshold": 2.24,
+          "program_level_alpha_class_n": 24,
+          "program_level_increment_from_v10": 0,
+          "rationale": "Overlay class uses Sharpe-improvement metric not Carhart αt, so does NOT increment the program-level alpha-class counter (n=24 unchanged). Within overlay class this is test #2 after vol-target. Naive Bonferroni at n=2 → |t|≥2.24, but escalated to t≥2.5 at p<0.01 given burnt-holdout context (zen recommendation)."
+        },
+        "all_gates_must_pass": [
+          {
+            "gate_id": "G1_sharpe_diff_significance",
+            "rule": "Sharpe-difference Ledoit-Wolf block-bootstrap t-stat ≥ 2.5 at p < 0.01"
+          },
+          {
+            "gate_id": "G2_sharpe_improvement_magnitude",
+            "rule": "Sharpe(overlay_net) − Sharpe(base_net) ≥ +0.30 absolute"
+          },
+          {
+            "gate_id": "G3_maxdd_reduction",
+            "rule": "MaxDD(overlay_net) ≤ 0.7 × MaxDD(base_net) — ≥30% relative left-tail truncation"
+          },
+          {
+            "gate_id": "G4_base_consistency",
+            "rule": "Base-scorer αt in v10 audit replicates v9D's +2.29 within ±0.5"
+          },
+          {
+            "gate_id": "G5_weight_bound_invariant",
+            "rule": "max(overlay weight series) ≤ 1.0 AND min(overlay weight series) ≥ 0.0 at every t"
+          },
+          {
+            "gate_id": "G6_phase_dispersion",
+            "rule": "max(sharpe_improvement_phase_i) − min(sharpe_improvement_phase_i) ≤ 0.5 across 5 phases"
+          }
+        ],
+        "verdict_classification": {
+          "all_six_pass": "PASS — first phase-robust deploy-candidate from project; advance to prospective replication 2026-05-04+. Methodology bundle gets a real example.",
+          "any_gate_fail": "FAIL — log to ledger, write postmortem (paradigm failure #11), update docs/research/paradigm_failures_postmortem.md. NO auto-pivot to v11 within same session (anti-HARKing per feedback memo)."
+        },
+        "kill_pre_full_run": [
+          "Phase 2 smoke: base in-sample αt < 1.0 → ABORT (base broken, fix before holdout)",
+          "Phase 2 smoke: overlay weight constant 1.0 across all t → ABORT (trigger never fires, design mis-specified)",
+          "G5 weight-bound violation in any phase → ABORT (hard bug, not a research outcome)"
+        ],
+        "no_stretch_tier": "Single multi-gate PASS bar. No exploratory tier; ALL six gates required.",
+        "regime_stratification_postdoc": "DESCRIPTIVE: report Sharpe-improvement split by VIX>20 vs VIX<20 sub-periods. Not a gate.",
+        "capital_deploy_clause": "Capital deploy OFF-TABLE on this burnt holdout regardless of any verdict per program-level burnt-holdout policy. PASS triggers prospective walk-forward Sharpe-improvement replication on data accruing post-2026-04-30 at p<0.05 single-test before any escalation."
+      },
+      "registered_at": "2026-05-04",
+      "status": "registered",
+      "outcome": null,
+      "notes": ""
+    },
+    {
       "id": "v7_smd_options_implied_2026_05_02",
       "signal_class": "options_implied_search_2026_05_02",
       "hypothesis": "Options-implied vol features (IVP30, IVX30, IVX180-IVX30 term spread, IVX30/HV20 ratio) plus equity controls (1m reversal, 6m momentum, 30d HV) predict next-20d equity returns with NEGATIVE sign per Xing 2010 / Bali-Hovakimian 2009 / An-Ang-Bali-Cakici 2014 — primary strategy = long-only bottom-decile by Lasso-fitted score (low-IV names), L/S decile spread reported as power-loss diagnostic",

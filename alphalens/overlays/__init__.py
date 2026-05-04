@@ -12,6 +12,11 @@ protocol and the post-processor function.
 
 from typing import Literal
 
+from alphalens.overlays.drawdown_control import (
+    DrawdownControlConfig,
+    DrawdownControlOverlay,
+    apply_drawdown_control,
+)
 from alphalens.overlays.vol_target import (
     RealizedVolEstimator,
     VolTargeter,
@@ -20,4 +25,11 @@ from alphalens.overlays.vol_target import (
 
 __status__: Literal["ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"] = "RESEARCH_ONLY"
 
-__all__ = ["RealizedVolEstimator", "VolTargeter", "apply_vol_target"]
+__all__ = [
+    "DrawdownControlConfig",
+    "DrawdownControlOverlay",
+    "RealizedVolEstimator",
+    "VolTargeter",
+    "apply_drawdown_control",
+    "apply_vol_target",
+]
