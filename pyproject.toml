@@ -22,6 +22,7 @@ dependencies = [
     "pyarrow>=24.0.0",  # explicit: pandas parquet I/O (FRED cache, history snapshots)
     "scikit-learn>=1.8.0",
     "lightgbm>=4.6.0",
+    "ivolatility>=1.9.3",
 ]
 
 [project.scripts]
