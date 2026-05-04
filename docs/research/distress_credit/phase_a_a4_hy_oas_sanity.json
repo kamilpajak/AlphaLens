@@ -1,0 +1,11 @@
+{
+  "check_name": "A4 HY OAS series sanity",
+  "n_obs": 786,
+  "date_range": [
+    "2023-05-02",
+    "2026-04-30"
+  ],
+  "max_consecutive_nan_business_days": 1,
+  "gate_max_nan_run_le_5_bd": true,
+  "ok": true
+}

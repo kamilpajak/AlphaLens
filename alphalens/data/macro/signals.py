@@ -37,6 +37,33 @@ def vix_decile(vix: pd.Series, *, lookback: int = 252) -> pd.Series:
     )
 
 
+def hy_oas_z_from_series(
+    spread: pd.Series, asof: pd.Timestamp, *, lookback: int = 252
+) -> float | None:
+    """Z-score of HY OAS spread at ``asof`` vs trailing ``lookback`` business-day window.
+
+    Strict-history: uses observations with ``date < asof`` only — never the
+    spread observed AT asof. Returns ``None`` when fewer than ``lookback``
+    prior observations are available, or when the rolling stdev is zero.
+
+    Caller fetches the FRED series (e.g. ``BAMLH0A0HYM2``) once via
+    ``FREDClient.fetch_series`` and passes it in. Pure function — no I/O.
+    """
+    history = spread.loc[spread.index < asof]
+    if len(history) < lookback:
+        return None
+    window = history.iloc[-lookback:]
+    mean = float(window.mean())
+    std = float(window.std(ddof=1))
+    if std <= 0:
+        return None
+    # "Current spread" used in the numerator is the latest observation strictly
+    # before asof — never the value at asof itself. This guarantees the gate
+    # uses end-of-prior-day information for the trading decision at asof.
+    current = float(window.iloc[-1])
+    return (current - mean) / std
+
+
 def trailing_return_spread(leader: pd.Series, laggard: pd.Series, *, lookback: int) -> pd.Series:
     """Trailing cumulative return of leader minus laggard over `lookback` bars.
 
