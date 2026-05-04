@@ -1,0 +1,10 @@
+{
+  "phase_a_gating_summary": {
+    "a4_basic_pass": true,
+    "a4_extended_pass": false,
+    "a4_extended_verdict": "DROP_LAYER_4",
+    "auto_pivot_to_pure_l2": true,
+    "registered_id": "distress_credit_v1_2026_05_04",
+    "registered_signal_class": "distress_credit_search_2026_05_04"
+  }
+}

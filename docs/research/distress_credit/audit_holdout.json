@@ -1,0 +1,44 @@
+{
+  "id": "distress_credit_v1_2026_05_04",
+  "audit_completed_at": "2026-05-04",
+  "design_version_post_phase_a_pivot": "pure_layer_2_long_only_safe_decile",
+  "phase_a_overlay_sanity_verdict": "FAIL_DROP_LAYER_4",
+  "phase_a_baa10y_pearson_full_train": 0.047,
+  "periods": {
+    "train_start": "2017-01-03",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30"
+  },
+  "phases": [
+    {"phase_offset": 0, "n": 23, "mean_top_n": 200.0, "turnover_pct": 15.2, "sharpe_gross": -1.21, "sharpe_net": -1.29, "excess_gross_pct": -162.7, "excess_net_pct": -163.1, "alpha_4f_pct": -83.1, "alpha_t_4f": -1.81},
+    {"phase_offset": 4, "n": 23, "mean_top_n": 200.0, "turnover_pct": 15.3, "sharpe_gross": 1.06, "sharpe_net": 0.98, "excess_gross_pct": 67.4, "excess_net_pct": 67.0, "alpha_4f_pct": 98.4, "alpha_t_4f": 2.27},
+    {"phase_offset": 8, "n": 23, "mean_top_n": 200.0, "turnover_pct": 15.0, "sharpe_gross": 0.07, "sharpe_net": -0.06, "excess_gross_pct": -34.0, "excess_net_pct": -34.4, "alpha_4f_pct": 10.5, "alpha_t_4f": 0.36},
+    {"phase_offset": 12, "n": 23, "mean_top_n": 200.0, "turnover_pct": 15.0, "sharpe_gross": 0.21, "sharpe_net": 0.13, "excess_gross_pct": -1.7, "excess_net_pct": -2.1, "alpha_4f_pct": -39.0, "alpha_t_4f": -0.44},
+    {"phase_offset": 16, "n": 23, "mean_top_n": 200.0, "turnover_pct": 15.5, "sharpe_gross": 0.34, "sharpe_net": 0.20, "excess_gross_pct": 22.9, "excess_net_pct": 22.5, "alpha_4f_pct": 30.8, "alpha_t_4f": 0.83}
+  ],
+  "summary": {
+    "mean_alpha_t_4f": 0.242,
+    "alpha_t_range": 4.08,
+    "min_phase_alpha_t": -1.81,
+    "max_phase_alpha_t": 2.27,
+    "mean_excess_net_decimal": -0.2202,
+    "mean_excess_net_range_pp": 230.1,
+    "phases_with_negative_alpha_t": 2
+  },
+  "gates": {
+    "primary_pass_alpha_t_ge_3_50": false,
+    "every_phase_alpha_t_ge_0": false,
+    "alpha_t_range_le_0_5": false,
+    "excess_net_ann_dispersion_le_50pp": false,
+    "mean_alpha_t_ge_1_5_for_mid": false
+  },
+  "verdict": "FAIL",
+  "verdict_reasons": [
+    "Phase 0 alpha_t = -1.81 < 0 (every-phase gate)",
+    "alpha_t range 4.08 >> 0.5 (dispersion gate)",
+    "Mean alpha_t = +0.24 < 1.5 (MID floor)",
+    "excess_net_ann range 230pp >> 50pp (legacy dispersion gate)"
+  ],
+  "diagnostic": "Massive phase-aliasing: same strategy gives -83% to +98% alpha_4f depending on which trading day of the month rebalance falls. Single-phase results are sample-of-one artifacts. Mean alpha_t marginally positive (+0.24) but indistinguishable from zero. Strategy has no robust signal in 2024-2026 holdout — consistent with pre-reg expectation post auto-pivot (5-8% pass-prob)."
+}

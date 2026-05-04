@@ -1,0 +1,29 @@
+{
+  "check_name": "A4-extended overlay sanity",
+  "is_pre_committed_gate": true,
+  "decision_rule": "Primary BAA10Y on TRAIN is authoritative due to HY OAS data unavailability for TRAIN window. If primary FAILs \u2192 DROP Layer 4 from PRIMARY hypothesis.",
+  "primary_baa10y": {
+    "ok": false,
+    "pearson_full_sample": 0.047270515680864995,
+    "spearman_full_sample": 0.048615016872890875,
+    "pearson_first_half": 0.11504421711491589,
+    "pearson_second_half": -0.0899951898662669,
+    "decade_window_sign_drift_abs": 0.20503940698118278,
+    "n_samples": 127,
+    "window_start": "2017-01-03",
+    "window_end": "2024-04-29",
+    "gate_pass_full_sample_correlation_le_minus_005": false,
+    "gate_pass_no_decade_sign_flip_gt_04": true,
+    "overall_pass": false
+  },
+  "secondary_hy_oas_partial": {
+    "ok": false,
+    "reason": "insufficient samples (0) \u2014 too few rebalances overlap with spread series",
+    "n_samples": 0
+  },
+  "primary_pass": false,
+  "secondary_pass": false,
+  "verdict": "DROP_LAYER_4",
+  "auto_pivot_to_pure_l2": true,
+  "data_substitution_caveat": "BAMLH0A0HYM2 (ICE BofA HY OAS) publicly available from 2023-05-02 only (copyright restriction). BAA10Y (Moody's BAA Yield - 10Y Treasury) used as credit-spread proxy on TRAIN. Both spreads measure credit stress; literature (Gilchrist-Zakrajsek 2012, Adrian-Crump-Moench 2013) confirms BAA10Y and HY OAS are highly correlated and have aligned direction-of-association with forward equity returns (negative correlation: wider spreads \u2192 weaker forward equity)."
+}

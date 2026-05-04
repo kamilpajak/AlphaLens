@@ -1,0 +1,135 @@
+{
+  "params_frozen": {
+    "class": "distress_credit_search_2026_05_04",
+    "version": "v1_merton_dd_x_hy_oas_overlay",
+    "design_provenance": "Designed 2026-05-04 after 17/17 completed pre-reg FAILs across 6 burnt classes (alt_data 6/6, options_implied 5/5, price_factor 4/4, multi_source 3/3, event_drift 2/2 BREADTH-FAIL, risk_overlay 1/1) plus 6 PROSPECTIVE/ABANDONED entries (n=23 in ledger). Cross-sectional attack surface on burnt 2024-04-30..2026-04-30 holdout empirically saturated. This experiment introduces a structurally novel attack surface: compound Layer 2 (Screener) x Layer 4 (Risk overlay) hypothesis per ADR 0007, using two feature spaces never touched in any prior experiment: us-gaap:Liabilities (leverage) via naive KMV Merton distance-to-default + ICE BofA US High Yield OAS macro regime gate.",
+    "design_memo": "docs/research/distress_credit_v1_design_2026_05_04.md",
+    "adversarial_review_summary": "Perplexity Sonar Reasoning Pro (high effort, 2026-05-04) identified 2 FATAL flaws + 5 mitigable concerns. FATAL #1: HY OAS exposure mapping can invert in post-shock recovery regimes (2008-09, 2020) where wider spreads coincide with rising equity. Mitigation: pre-commit Phase A auto-pivot (A4-extended) drops Layer 4 from PRIMARY if overlay sanity check fails on TRAIN. FATAL #2: distress quintile threshold + HY OAS gate boundaries z=+/-1 are hyperparameters; implicit grid search would inflate n. Mitigation: locked to literature values (quintile 20% Fama-French standard; z=+/-1 1-sigma standard per Frazzini-Pedersen 2014 BAB; min exposure floor 0.5 per Moreira-Muir 2017 vol-target convention). Mitigable concerns documented in memo: naive KMV adequacy (Bharath-Shumway 2008 rho~0.95; Phase A descriptive Kendall-tau check), SP1500 PIT survivorship (~100-300bps/y, asymmetric favoring safe names), Carhart-4F vs 6F (4F primary, 6F descriptive sensitivity), FRED revision risk (HY OAS rarely revised >5bps), 2024-2026 regime unfavorability (mid-cap rally + spread compression + mega-cap-tech surge structurally suppress hypothesis; pass-prob revised 15-20%->8-12% ex-ante).",
+    "layer_architecture": "Compound L2 x L4 per ADR 0007. L2 (Screener): Merton DD cross-sectional rank -> bottom quintile selection. L4 (Risk overlay): HY OAS z-score -> linear exposure interpolation [0.5, 1.0]. Compound hypothesis pays single Bonferroni (atomic experiment). Subsequent variants (e.g., L/S, different exposure floor) burn separate ledger entries.",
+    "merton_dd": {
+      "formula": "d2 = (ln(V/D) + (r - 0.5*sigma^2)*T) / (sigma*sqrt(T)); PD = N(-d2); score = -PD",
+      "V_definition": "equity_mcap + total_liabilities (naive KMV; sigma_V approx sigma_E documented limitation per Bharath-Shumway 2008)",
+      "D_source": "us-gaap:Liabilities (PIT filed_date <= asof, latest filed per period_end) from companyfacts parquet ~/.alphalens/companyfacts_parquet/",
+      "D_pit_filter": "alphalens.data.fundamentals.edgar_companyfacts._pit_filter (verified CORRECT per Q1 audit)",
+      "sigma_definition": "annualized 60d realized daily log-return vol (np.log(close/close_prev).std() * sqrt(252))",
+      "sigma_min_bars_required": 65,
+      "rf_source": "FRED DGS1 (1y T-bill rate, decimal)",
+      "T_horizon_years": 1.0,
+      "score_direction": "score = -PD; engine top_n picks lowest-PD names = safest"
+    },
+    "credit_regime_overlay": {
+      "data_series_id": "BAMLH0A0HYM2",
+      "data_series_name": "ICE BofA US High Yield Master OAS",
+      "data_cache_path": "~/.alphalens/macro/FRED_BAMLH0A0HYM2.parquet",
+      "z_score_lookback_days": 252,
+      "z_score_strict_history": "uses observations with date < asof only",
+      "z_score_warmup_handling": "if fewer than 252 observations -> exposure = 1.0 (neutral)",
+      "exposure_mapping": {
+        "z_le_neg_one": 1.00,
+        "z_at_zero": 0.75,
+        "z_ge_pos_one": 0.50,
+        "interp": "linear between -1 and +1; clip outside"
+      },
+      "literature_anchor": "Frazzini-Pedersen 2014 BAB regime gate convention (1-sigma threshold). Min exposure floor 0.5 per Moreira-Muir 2017 vol-target convention (relaxed floor; M-M can de-lever further with 1/sigma^2 capped).",
+      "cash_residual_invested_at": "FRED DGS3MO daily decimal / 252",
+      "application_layer": "OUTSIDE engine in experiment driver; does NOT modify scorer ranks. adjusted_returns(t) = exposure(t) * port_returns(t) + (1 - exposure(t)) * cash_rate(t)"
+    },
+    "universe_construction": {
+      "base_universe": "sp1500_pit (S&P 500 + S&P 400 mid + S&P 600 small)",
+      "loader": "alphalens.data.universes.sp1500_pit.load_sp1500_pit_for_date",
+      "survivorship_caveat_bps_per_y": "100-300 (asymmetric, favors safe names)",
+      "mega_cap_exclusion_n": 50,
+      "mega_cap_metric": "equity market cap at t (PIT shares * close[t])",
+      "distress_quintile_exclusion_pct": 20,
+      "distress_quintile_literature_anchor": "Fama-French quintile standard (1993) + Bali-Cakici-Whitelaw 2011 MAX-effect convention + Frazzini-Pedersen 2014 BAB long-leg convention",
+      "min_total_scored_per_asof": 100,
+      "min_bottom_quintile_breadth_per_asof": 20,
+      "min_underlying_price": 1.0,
+      "drop_otc_pink": true
+    },
+    "selection_primary": "long-only EQUAL-WEIGHT bottom-quintile by Merton PD (safest 20%). Adapter zeroes scores outside bottom quintile by PD; engine top_n=200 effectively unbounded relative to ~30-60 names in bottom quintile per asof.",
+    "selection_diagnostic_secondary": "NONE in this iteration. L/S variant would be a separate pre-reg entry.",
+    "rebalance_stride_days": 21,
+    "holding_period_days_target": 21,
+    "weighting": "equal",
+    "cost_profile": "long_only_10bps_round_trip",
+    "cost_half_spread_bps": 5,
+    "benchmark": "SPY-residualized via Carhart-4F (parity with prior pre-regs); MDY descriptive secondary",
+    "phase_audit": {
+      "n_phases": 5,
+      "stride_for_phases": 21,
+      "phase_offsets": [0, 4, 8, 12, 16],
+      "audit_driver": "scripts/audit_multi_phase.py distress_credit_v1",
+      "dispersion_metric_primary": "alpha_t_range across 5 phases",
+      "alpha_t_range_threshold": 0.5,
+      "dispersion_metric_legacy": "excess_net_ann (descriptive only, magnification-prone)",
+      "dispersion_threshold_pp": 50.0,
+      "phases_arg_added_to_audit_driver": "scripts/audit_multi_phase.py adds --phases '0,4,8,12,16' subset selection (default would be range(stride)=range(21))"
+    }
+  },
+  "phase_a_gates": {
+    "a1_feature_joiner_sanity_min_inputs_finite": 4,
+    "a2_coverage_audit_min_pct_per_month": 80,
+    "a3_pit_correctness_filed_date_le_asof": true,
+    "a4_hy_oas_no_nan_gaps_max_bd": 5,
+    "a4_extended_overlay_sanity_pre_commit": {
+      "metric": "correlation(spread_z_t, forward_21d_market_return_t+1:t+21) on TRAIN 2017-01..2024-04, rolling 60-month windows",
+      "pass_rule": "full-sample mean correlation <= -0.05 AND no decade-window sign-drift > 0.4",
+      "fail_action": "drop Layer 4 from PRIMARY; run pure-Layer-2 long-only safe-decile under same |t|>=3.50 threshold; Sharpe-improvement gate becomes descriptive-only (no overlay claim).",
+      "this_is_a_pre_committed_auto_pivot_NOT_post_hoc": true
+    },
+    "a5_universe_size_min_per_asof": 150,
+    "a6_ic_decay_horizon_days": [1, 5, 21, 63],
+    "a6_ic_decay_pass_rule": "rank-IC of -PD vs forward-21d returns is monotone non-zero",
+    "a6_extended_kendall_tau_naive_vs_iterative_kmv": {
+      "sample_size": 50,
+      "anchor_date": "TRAIN end (2024-04-29)",
+      "report_only_threshold_descriptive": 0.92
+    },
+    "a7_smoke_backtest_min_rebalances": 80,
+    "a8_breadth_gate_per_asof": {
+      "scored_count_min": 100,
+      "bottom_quintile_size_min": 20
+    }
+  },
+  "periods": {
+    "train_start": "2017-01-03",
+    "train_end": "2024-04-29",
+    "holdout_start": "2024-04-30",
+    "holdout_end": "2026-04-30",
+    "rationale": "Same burnt holdout as 23 prior entries (2024-04-30..2026-04-30). Window-shopping = HARKing per program policy. Burnt-holdout multiplicity escalation absorbed via threshold |t|>=3.50 (above naive program-level Bonferroni n=24 of 3.08; parity with event_drift_v4 escalation 3.34->3.50). TRAIN starts 2017-01 to capture post-companyfacts-availability era + 5y to amortize 60d vol estimation."
+  },
+  "success_criteria": {
+    "mode": "single_bar_pass_fail_with_mid_diagnostic",
+    "primary_metric": "Carhart-4F alpha t-stat (HAC=5) on (overlay-adjusted-portfolio-return - SPY-return) holdout series, 5-phase robust mean",
+    "primary_pass_threshold_alpha_t": 3.50,
+    "primary_fail_threshold_alpha_t": 1.5,
+    "secondary_metric": "Sharpe-improvement vs Carhart-4F-residualized SP1500 buy-hold baseline",
+    "secondary_pass_threshold": 0.50,
+    "secondary_fail_threshold": 0.30,
+    "phase_count": 5,
+    "phase_offsets": [0, 4, 8, 12, 16],
+    "alpha_t_range_threshold": 0.5,
+    "every_phase_alpha_t_min": 0.0,
+    "excess_net_ann_dispersion_threshold_pp": 50.0,
+    "bonferroni_n_in_class_at_registration": 1,
+    "bonferroni_n_program_level_at_registration": 24,
+    "bonferroni_naive_program_level_threshold": 3.08,
+    "bonferroni_escalated_threshold_used": 3.50,
+    "bonferroni_escalation_rationale": "Meta-multiplicity beyond naive Bonferroni (parity with event_drift_v4 3.34->3.50 precedent). Burnt holdout has been touched 23 times across 6 prior classes; cross-class implicit learning warrants escalation.",
+    "primary_pass_rule": "Holdout multi-phase mean(alpha_t) >= 3.50 AND every-phase alpha_t >= 0 AND alpha_t_range across 5 phases <= 0.5 AND Sharpe-improvement >= 0.50 over Carhart-4F-residualized SP1500 baseline AND excess_net_ann dispersion <= 50pp",
+    "primary_mid_rule": "1.5 <= mean(alpha_t) < 3.50, OR 0.30 <= Sharpe-improvement < 0.50, OR alpha_t_range > 0.5 (with mean >= 1.5), OR excess_net_ann dispersion > 50pp (with mean >= 1.5)",
+    "primary_fail_rule": "any phase alpha_t < 0, OR mean(alpha_t) < 1.5, OR Sharpe-improvement < 0.30",
+    "auto_pivot_triggers": [
+      "Phase A coverage A2 < 80% mean -> ABORT pre-holdout-run; investigate companyfacts liabilities tagging gaps; ONE retry permitted with relaxed coverage gate (70%) IF and only if cause is data-engineering not signal",
+      "Phase A breadth A8 fails (scored < 100 OR bottom-quintile < 20) -> ABORT pre-holdout-run; SP1500 PIT loader insufficient for required cross-section; class CLOSED with breadth-fail (no Bonferroni burn)",
+      "Phase A overlay sanity A4-extended FAILS -> drop Layer 4 from PRIMARY; run pure-Layer-2 long-only safe-decile under same |t|>=3.50 threshold (PRE-COMMITTED auto-pivot, NOT post-hoc)",
+      "Holdout single-phase alpha_t < -1.5 -> ABORT pre-multi-phase; flag deep-loss diagnostic",
+      "ALL 5 phases negative alpha_t -> FAIL (regime fragility, distress puzzle inverted)",
+      "Naive vs iterative KMV Kendall-tau < 0.85 -> flag in verdict memo; escalates from descriptive to limitation"
+    ],
+    "regime_stratification_postdoc": "DESCRIPTIVE: report holdout alpha_t and Sharpe split by HY OAS z-score regime (high>+0.5 vs mid-range vs low<-0.5). Documents whether overlay added value across regimes. NOT a gate.",
+    "carhart_6f_descriptive_sensitivity": "Report Carhart-4F + QMJ + BAB alpha t-stat as descriptive sensitivity. If 6F alpha_t drops by >1.0 below 4F alpha_t, flag in verdict as 'signal partially attributable to BAB/QMJ premia'. NOT a primary gate.",
+    "capital_deploy_clause": "Capital deploy OFF-TABLE on this burnt holdout regardless of verdict per program-level burnt-holdout policy. PASS triggers prospective walk-forward replication on data accruing post-2026-04-30 at unadjusted p<0.05 single-test before any escalation."
+  }
+}
