@@ -9,6 +9,8 @@
 #   ALPHALENS_BRANCH            - branch / SHA to check out (default: main)
 #   ALPHALENS_DEPLOY_KEY_PATH   - optional: path to SSH private key for SSH cloning
 #                                 (set to /workspace/secrets/deploy_key in pod template)
+#   ALPHALENS_DEPLOY_KEY        - optional: inline SSH private key contents
+#                                 (alternative to _PATH; runpod env-var friendly)
 #
 # Usage on the pod:
 #   bootstrap.sh
@@ -26,6 +28,17 @@ if [[ -z "${ALPHALENS_REPO_URL:-}" ]]; then
 fi
 
 # SSH deploy-key handling (optional): copy into ~/.ssh/ with strict perms.
+# Path-mounted secret takes precedence; inline env var (ALPHALENS_DEPLOY_KEY)
+# is the runpod-API-friendly fallback because runpod templates set via API
+# don't support file-mount secrets the way the web UI does.
+if [[ -n "${ALPHALENS_DEPLOY_KEY_PATH:-}" && ! -f "${ALPHALENS_DEPLOY_KEY_PATH}" && -n "${ALPHALENS_DEPLOY_KEY:-}" ]]; then
+    mkdir -p "$(dirname "${ALPHALENS_DEPLOY_KEY_PATH}")"
+    # %b interprets backslash escapes; required because runpod env vars store
+    # literal "\n" characters rather than real newlines, and openssl rejects
+    # one-line keys ("error in libcrypto").
+    printf '%b\n' "${ALPHALENS_DEPLOY_KEY}" > "${ALPHALENS_DEPLOY_KEY_PATH}"
+    chmod 600 "${ALPHALENS_DEPLOY_KEY_PATH}"
+fi
 if [[ -n "${ALPHALENS_DEPLOY_KEY_PATH:-}" && -f "${ALPHALENS_DEPLOY_KEY_PATH}" ]]; then
     mkdir -p ~/.ssh
     cp "${ALPHALENS_DEPLOY_KEY_PATH}" ~/.ssh/id_alphalens

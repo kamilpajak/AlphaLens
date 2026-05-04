@@ -1,16 +1,17 @@
 # AlphaLens runpod CPU-pod base image.
 #
-# Pinned: Ubuntu 22.04 LTS + Python 3.13 (build-from-deadsnakes) + uv +
-# rsync + git + jq + curl. No CUDA / GPU layers. Designed for runpod CPU
-# Pod tier (16 vCPU / 16-32 GB RAM tier sufficient post-parquet refactor;
-# audit_v4_memory.py extrapolates ~5.4 GB peak RSS at S&P 1500 universe).
+# FROM runpod/base — runpod's purpose-built image with sshd preconfigured to
+# read the PUBLIC_KEY env var into authorized_keys at startup, plus runpod
+# runtime hooks that handle network volume mounts and proxy SSH. Adding our
+# own deps (Python 3.13 from deadsnakes, uv, rsync, jq) on top.
 #
-# The image is intentionally minimal: code is git-cloned at pod start (not
-# baked in) so the pod always tracks the latest commit, and dependencies
-# are uv-synced from a frozen lockfile. Cold start: ~30s pull + ~30s uv
-# sync = ~1 min total.
+# We did NOT use plain ubuntu:22.04 because we'd need to reimplement sshd
+# bootstrap + PUBLIC_KEY injection, which runpod/base already solves.
+#
+# Cold start budget: ~30s pull (image is pre-cached on runpod machines) +
+# ~30s `uv sync --frozen` at first bootstrap.sh = ~1 min total.
 
-FROM ubuntu:22.04
+FROM runpod/base:1.0.2-ubuntu2204
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -20,12 +21,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common \
-        ca-certificates \
-        curl \
-        git \
+        gnupg \
         jq \
         rsync \
-        openssh-client \
     && add-apt-repository -y ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y --no-install-recommends \
         python3.13 \
@@ -37,8 +35,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # avoids relying on the installer's default ~/.local/bin path which is
 # not a stable contract.
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh
-
-WORKDIR /workspace
 
 # Mount points (created at container start; runpod attaches storage here):
 #   /network     — runpod network volume (persistent across pods)
@@ -57,6 +53,9 @@ RUN chmod +x /usr/local/bin/bootstrap.sh \
               /usr/local/bin/sync_out.sh \
               /usr/local/bin/run_experiment.sh
 
-# Default entrypoint just opens a shell -- the operator runs bootstrap +
-# run_experiment manually (see runpod/README.md). Keeps pod debuggable.
-CMD ["/bin/bash"]
+WORKDIR /workspace
+
+# CMD/ENTRYPOINT inherited from runpod/base: starts sshd, sets up
+# PUBLIC_KEY into /root/.ssh/authorized_keys, and tails /dev/null so the
+# container stays alive for SSH connections. Operator workflow:
+#   ssh root@<pod>   ->   bootstrap.sh && sync_in.sh && run_experiment.sh '<cmd>'
