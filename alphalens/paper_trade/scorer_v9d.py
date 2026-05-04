@@ -328,3 +328,96 @@ def incremental_refresh_smd(
             time.sleep(sleep_between)
 
     return counts
+
+
+def backfill_smd_history(
+    tickers: list[str],
+    *,
+    target_start: date,
+    cache_dir: Path | None = None,
+    fetcher: Callable[[str, date, date], pd.DataFrame | None] | None = None,
+    sleep_between: float = 0.2,
+) -> dict[str, int]:
+    """Prepend pre-existing-min-date rows to per-ticker SMD parquets.
+
+    Inverse of ``incremental_refresh_smd``. Reads each ticker's existing
+    parquet, finds the earliest ``tradeDate``, and fetches
+    ``[target_start, earliest)`` if ``earliest > target_start``. Vendor's
+    range-mode call returns whatever rows it has (empty-DataFrame for no
+    coverage). Combined frame is dedup'd by ``tradeDate`` and sorted.
+
+    Missing tickers (no parquet) are skipped — bulk seed must run first via
+    ``download_and_cache``. This function is for *historical extension* of
+    a working cache, not initial population.
+
+    Returns a counts dict: {"backfilled": N, "skipped_already_covered": N,
+    "skipped_no_coverage": N, "skipped_missing": N, "errors": N}.
+    """
+    cache_dir = cache_dir or DEFAULT_SMD_CACHE_DIR
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    if fetcher is None:
+        from alphalens.data.alt_data.ivolatility_smd_cache import (
+            _robust_smd_fetcher,
+        )
+
+        fetcher = _robust_smd_fetcher
+
+    counts = {
+        "backfilled": 0,
+        "skipped_already_covered": 0,
+        "skipped_no_coverage": 0,
+        "skipped_missing": 0,
+        "errors": 0,
+    }
+
+    for ticker in tickers:
+        path = cache_dir / f"{ticker.upper()}.parquet"
+        if not path.exists():
+            counts["skipped_missing"] += 1
+            continue
+        try:
+            existing = pd.read_parquet(path)
+        except Exception as exc:
+            logger.warning("[%s] parquet read failed: %s", ticker, exc)
+            counts["errors"] += 1
+            continue
+        if existing.empty or "tradeDate" not in existing.columns:
+            counts["errors"] += 1
+            continue
+        min_date = pd.to_datetime(existing["tradeDate"]).min().date()
+        if min_date <= target_start:
+            counts["skipped_already_covered"] += 1
+            continue
+        try:
+            from datetime import timedelta
+
+            new_end = min_date - timedelta(days=1)
+            new_df = fetcher(ticker, target_start, new_end)
+        except Exception as exc:
+            logger.warning("[%s] backfill fetch failed: %s", ticker, exc)
+            counts["errors"] += 1
+            continue
+        if new_df is None or (isinstance(new_df, pd.DataFrame) and new_df.empty):
+            counts["skipped_no_coverage"] += 1
+            continue
+        try:
+            from alphalens.data.alt_data.ivolatility_smd_cache import (
+                _coerce_mixed_object_columns,
+            )
+
+            new_df = _coerce_mixed_object_columns(new_df)
+            combined = pd.concat([new_df, existing], ignore_index=True)
+            combined = combined.drop_duplicates(subset=["tradeDate"], keep="last")
+            combined = combined.sort_values("tradeDate").reset_index(drop=True)
+            combined.to_parquet(path)
+            counts["backfilled"] += 1
+        except Exception as exc:
+            logger.warning("[%s] backfill write failed: %s", ticker, exc)
+            counts["errors"] += 1
+        if sleep_between > 0:
+            import time
+
+            time.sleep(sleep_between)
+
+    return counts
