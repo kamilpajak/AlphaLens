@@ -1,0 +1,88 @@
+{
+  "diagnostic_id": "v9d_cross_period_2026_05_04",
+  "data_source": "docs/research/v10_drawdown_overlay/holdout_p[0-4].json",
+  "n_pooled_obs": 501,
+  "full_window_stats": {
+    "n": 501,
+    "alpha_gross_4f": 33.69843089658974,
+    "alpha_t": 3.580560544024609,
+    "sharpe_net": 1.5134381955345706,
+    "max_drawdown": -0.337733244921074,
+    "mean_per_rebal_return": 0.1263919767842312,
+    "first_asof": "2024-04-30",
+    "last_asof": "2026-04-29"
+  },
+  "sub_periods": [
+    {
+      "n": 170,
+      "alpha_gross_4f": 54.81290419410062,
+      "alpha_t": 3.1694080476607094,
+      "sharpe_net": 2.711821510573933,
+      "max_drawdown": -0.07488815361835541,
+      "mean_per_rebal_return": 0.21929467925116355,
+      "first_asof": "2024-04-30",
+      "last_asof": "2024-12-31",
+      "label": "H2_2024",
+      "window": [
+        "2024-04-30",
+        "2024-12-31"
+      ]
+    },
+    {
+      "n": 122,
+      "alpha_gross_4f": 7.5968678354857,
+      "alpha_t": 1.6468222870500855,
+      "sharpe_net": 1.0855369296695712,
+      "max_drawdown": -0.21558266444746277,
+      "mean_per_rebal_return": 0.029721050894533915,
+      "first_asof": "2025-01-02",
+      "last_asof": "2025-06-30",
+      "label": "H1_2025",
+      "window": [
+        "2025-01-01",
+        "2025-06-30"
+      ]
+    },
+    {
+      "n": 128,
+      "alpha_gross_4f": 34.15773752673584,
+      "alpha_t": 1.845568775588341,
+      "sharpe_net": 1.1684999351903391,
+      "max_drawdown": -0.04177894422386661,
+      "mean_per_rebal_return": 0.15424480122938639,
+      "first_asof": "2025-07-01",
+      "last_asof": "2025-12-31",
+      "label": "H2_2025",
+      "window": [
+        "2025-07-01",
+        "2025-12-31"
+      ]
+    },
+    {
+      "n": 81,
+      "alpha_gross_4f": 16.37892366080469,
+      "alpha_t": 3.1560320742221784,
+      "sharpe_net": 2.608491488893706,
+      "max_drawdown": -0.3377332449210739,
+      "mean_per_rebal_return": 0.03299977937910427,
+      "first_asof": "2026-01-02",
+      "last_asof": "2026-04-29",
+      "label": "H1_2026",
+      "window": [
+        "2026-01-01",
+        "2026-04-30"
+      ]
+    }
+  ],
+  "alpha_t_range": 1.522585760610624,
+  "alpha_t_min": 1.6468222870500855,
+  "alpha_t_max": 3.1694080476607094,
+  "alpha_t_mean": 2.4544577961303284,
+  "decision_rule": {
+    "stable_range_threshold": 2.0,
+    "concentrated_floor_threshold": 0.5,
+    "mixed_floor_threshold": 1.0
+  },
+  "verdict": "STABLE",
+  "rationale": "\u03b1t range 1.52 \u2264 2.0 \u2192 uniform across sub-periods"
+}
