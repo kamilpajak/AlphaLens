@@ -1,0 +1,130 @@
+{
+  "verdict": "INCONCLUSIVE",
+  "reason": "\u03b1t=2.65 \u2208 [1.0, 2.85), bounds-lower-t=1.98",
+  "primary_U2": {
+    "universe": "U2",
+    "n_subperiods": 3,
+    "alpha_t_mean": 2.653137911774398,
+    "alpha_pct_mean": 8.25040483128549,
+    "alpha_pct_se_mean": 2.98466615185132,
+    "sharpe_net_mean": 1.40425402020763,
+    "alpha_t_within_subperiod_range_max": 1.759609849384205,
+    "alpha_t_subperiod_min": 1.8210652602879278,
+    "alpha_t_subperiod_max": 3.613179561128095,
+    "alpha_t_cross_subperiod_range": 1.792114300840167
+  },
+  "sensitivity_U1": {
+    "universe": "U1",
+    "n_subperiods": 3,
+    "alpha_t_mean": 1.0069295784579047,
+    "alpha_pct_mean": 0.11882721404842683,
+    "alpha_pct_se_mean": 0.0990632747449009,
+    "sharpe_net_mean": 0.5226333467717267,
+    "alpha_t_within_subperiod_range_max": 3.394168833407426,
+    "alpha_t_subperiod_min": -0.3326819810104202,
+    "alpha_t_subperiod_max": 2.0432155670495136,
+    "alpha_t_cross_subperiod_range": 2.3758975480599336
+  },
+  "romano_wolf_stratified_U2": {
+    "universe": "U2",
+    "n_strategies": 0,
+    "note": "RW skipped: stride-disjoint phase strategies not amenable to stratified-by-sub-period bootstrap; pre-reg fallback to naive Bonferroni |t|\u22652.85 binds the verdict"
+  },
+  "summary": [
+    {
+      "universe": "U1",
+      "sub_period": "GFC_recovery",
+      "n_phases": 5,
+      "alpha_t_mean": 1.3102551493346204,
+      "alpha_t_min": 0.7599484065479157,
+      "alpha_t_max": 1.604239562121556,
+      "alpha_t_range": 0.8442911555736402,
+      "sharpe_net_mean": 0.7049599481982488,
+      "alpha_pct_mean": 0.27719024974686163,
+      "alpha_pct_se_mean": 0.20763370788375785,
+      "n_obs_total": 1341
+    },
+    {
+      "universe": "U1",
+      "sub_period": "mid_cycle_eu_debt",
+      "n_phases": 5,
+      "alpha_t_mean": 2.0432155670495136,
+      "alpha_t_min": 0.41407934631126847,
+      "alpha_t_max": 3.8082481797186944,
+      "alpha_t_range": 3.394168833407426,
+      "sharpe_net_mean": 1.1270077259450342,
+      "alpha_pct_mean": 0.09042883418791398,
+      "alpha_pct_se_mean": 0.044364544545021395,
+      "n_obs_total": 1096
+    },
+    {
+      "universe": "U1",
+      "sub_period": "late_cycle_china_shock",
+      "n_phases": 5,
+      "alpha_t_mean": -0.3326819810104202,
+      "alpha_t_min": -1.4550861866126117,
+      "alpha_t_max": 1.2263362520106778,
+      "alpha_t_range": 2.681422438623289,
+      "sharpe_net_mean": -0.26406763382810305,
+      "alpha_pct_mean": -0.011137441789495082,
+      "alpha_pct_se_mean": 0.045191571805923446,
+      "n_obs_total": 1215
+    },
+    {
+      "universe": "U2",
+      "sub_period": "GFC_recovery",
+      "n_phases": 5,
+      "alpha_t_mean": 3.613179561128095,
+      "alpha_t_min": 3.1902944641952544,
+      "alpha_t_max": 3.923514850651942,
+      "alpha_t_range": 0.7332203864566877,
+      "sharpe_net_mean": 1.8130989845388832,
+      "alpha_pct_mean": 13.521799892728982,
+      "alpha_pct_se_mean": 3.729877954946115,
+      "n_obs_total": 1341
+    },
+    {
+      "universe": "U2",
+      "sub_period": "mid_cycle_eu_debt",
+      "n_phases": 5,
+      "alpha_t_mean": 2.5251689139071702,
+      "alpha_t_min": 1.8818509323590393,
+      "alpha_t_max": 2.962737651567223,
+      "alpha_t_range": 1.0808867192081837,
+      "sharpe_net_mean": 1.3813891970087524,
+      "alpha_pct_mean": 9.40998819153071,
+      "alpha_pct_se_mean": 3.889495360508272,
+      "n_obs_total": 1096
+    },
+    {
+      "universe": "U2",
+      "sub_period": "late_cycle_china_shock",
+      "n_phases": 5,
+      "alpha_t_mean": 1.8210652602879278,
+      "alpha_t_min": 0.9663171056424571,
+      "alpha_t_max": 2.725926955026662,
+      "alpha_t_range": 1.759609849384205,
+      "sharpe_net_mean": 1.0182738790752541,
+      "alpha_pct_mean": 1.819426409596775,
+      "alpha_pct_se_mean": 1.3346251400995721,
+      "n_obs_total": 1215
+    }
+  ],
+  "bounds_lower_t": 1.9830462170099947,
+  "bounds_upper_t": 2.3180920643921965,
+  "bias_range_pct": [
+    1.0,
+    2.0
+  ],
+  "thresholds": {
+    "PASS_ROBUST_alpha_t": 3.5,
+    "PASS_MARGINAL_alpha_t": 2.85,
+    "INCONCLUSIVE_lower": 1.0,
+    "alpha_t_range_stable": 1.5,
+    "alpha_t_range_regime": 2.5,
+    "reconstruction_dominant_gap": 3.0
+  },
+  "n_cells_loaded": 30,
+  "n_cells_missing": 0,
+  "missing_cells": []
+}
