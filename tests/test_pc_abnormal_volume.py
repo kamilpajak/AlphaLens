@@ -181,5 +181,21 @@ class TestModuleConstants(unittest.TestCase):
         self.assertEqual(MIN_ASOF_TICKERS, 50)
 
 
+class TestComputePcrEdgeCases(unittest.TestCase):
+    """Cover try/except + length-mismatch branches for SonarCloud coverage."""
+
+    def test_non_numeric_strings_return_nan(self):
+        # TypeError/ValueError path in compute_pcr (line 51-52)
+        self.assertTrue(math.isnan(compute_pcr("foo", 50.0)))
+        self.assertTrue(math.isnan(compute_pcr(50.0, "bar")))
+
+    def test_compute_abnormal_pcr_series_length_mismatch_raises(self):
+        # ValueError path in compute_abnormal_pcr_series (line 68)
+        a = pd.Series([1.0, 2.0, 3.0])
+        b = pd.Series([1.0, 2.0])
+        with self.assertRaises(ValueError):
+            compute_abnormal_pcr_series(a, b)
+
+
 if __name__ == "__main__":
     unittest.main()

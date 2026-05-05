@@ -146,5 +146,151 @@ class TestBuildFeatureFrame(unittest.TestCase):
         self.assertIn("rv_30d", df.columns)
 
 
+class TestEarlyReturnBranches(unittest.TestCase):
+    """Cover early-return branches in features.py for SonarCloud coverage."""
+
+    def test_filter_us_primary_no_exchange_column(self):
+        # Line 51: returns coerced copy when no exchange column
+        from alphalens.screeners.options_volume.features import _filter_us_primary
+
+        df = pd.DataFrame({"close": [1.0, 2.0], "tradeDate": ["2024-01-02", "2024-01-03"]})
+        out = _filter_us_primary(df)
+        self.assertEqual(len(out), 2)
+
+    def test_slice_pit_empty_history(self):
+        # Line 63-64: empty history returns as-is
+        from alphalens.screeners.options_volume.features import _slice_pit
+
+        df = pd.DataFrame()
+        out = _slice_pit(df, "2024-01-15")
+        self.assertTrue(out.empty)
+
+    def test_slice_pit_no_tradedate_column(self):
+        from alphalens.screeners.options_volume.features import _slice_pit
+
+        df = pd.DataFrame({"close": [1.0]})
+        out = _slice_pit(df, "2024-01-15")
+        self.assertEqual(len(out), 1)
+
+    def test_slice_pit_filters_close_nan(self):
+        from alphalens.screeners.options_volume.features import _slice_pit
+
+        df = pd.DataFrame(
+            {
+                "tradeDate": ["2024-01-03", "2024-01-02", "2024-01-04"],
+                "close": [100.0, np.nan, 102.0],
+            }
+        )
+        out = _slice_pit(df, "2024-01-15")
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out.iloc[0]["tradeDate"], "2024-01-03")
+
+    def test_compute_equity_controls_insufficient_history(self):
+        from alphalens.screeners.options_volume.features import _compute_equity_controls
+
+        df = pd.DataFrame({"close": [100.0] * 50})
+        self.assertIsNone(_compute_equity_controls(df))
+
+    def test_compute_equity_controls_non_finite_close(self):
+        from alphalens.screeners.options_volume.features import _compute_equity_controls
+
+        closes = [100.0] * 130
+        closes[-50] = np.inf
+        df = pd.DataFrame({"close": closes})
+        self.assertIsNone(_compute_equity_controls(df))
+
+    def test_compute_equity_controls_close_now_zero(self):
+        from alphalens.screeners.options_volume.features import _compute_equity_controls
+
+        closes = [100.0] * 130
+        closes[-1] = 0.0
+        df = pd.DataFrame({"close": closes})
+        self.assertIsNone(_compute_equity_controls(df))
+
+    def test_compute_equity_controls_close_21_zero(self):
+        from alphalens.screeners.options_volume.features import _compute_equity_controls
+
+        closes = [100.0] * 130
+        closes[-22] = 0.0
+        df = pd.DataFrame({"close": closes})
+        self.assertIsNone(_compute_equity_controls(df))
+
+    def test_compute_equity_controls_log_rets_non_finite(self):
+        from alphalens.screeners.options_volume.features import _compute_equity_controls
+
+        closes = [100.0] * 130
+        closes[-15] = 1e-300  # log of tiny becomes huge negative; check finite-fail path
+        # Actually a near-zero close still gives finite log; use a NaN injection instead
+        closes[-15] = float("nan")
+        df = pd.DataFrame({"close": closes})
+        # Returns None either via "not all finite" trailing-window check
+        self.assertIsNone(_compute_equity_controls(df))
+
+    def test_build_feature_frame_loader_returns_none(self):
+        df = build_feature_frame(
+            smd_loader=lambda _t: None,
+            universe=["UNKNOWN"],
+            asof_dates=["2010-09-01"],
+        )
+        self.assertEqual(len(df), 0)
+
+    def test_build_feature_frame_no_close_column_after_filter(self):
+        history = pd.DataFrame(
+            {
+                "exchange": ["NYSE"],
+                "tradeDate": ["2024-01-02"],
+            }
+        )
+        df = build_feature_frame(
+            smd_loader=lambda _t: history.copy(),
+            universe=["X"],
+            asof_dates=["2024-02-01"],
+        )
+        self.assertEqual(len(df), 0)
+
+    def test_build_feature_frame_no_optvol_columns(self):
+        history = _make_smd_history(n_days=200)
+        history = history.drop(columns=["optVolPut", "optVolCall"])
+        df = build_feature_frame(
+            smd_loader=lambda _t: history.copy(),
+            universe=["AAPL"],
+            asof_dates=["2010-09-01"],
+        )
+        self.assertEqual(len(df), 0)
+
+    def test_build_feature_frame_optionable_filter_fails(self):
+        history = _make_smd_history(n_days=200)
+        history["optVol"] = 0
+        history["openInterestCall"] = 0
+        history["openInterestPut"] = 0
+        df = build_feature_frame(
+            smd_loader=lambda _t: history.copy(),
+            universe=["AAPL"],
+            asof_dates=["2010-09-01"],
+        )
+        self.assertEqual(len(df), 0)
+
+    def test_build_feature_frame_adv_filter_fails(self):
+        history = _make_smd_history(n_days=200)
+        history["stockVolume"] = 1
+        df = build_feature_frame(
+            smd_loader=lambda _t: history.copy(),
+            universe=["AAPL"],
+            asof_dates=["2010-09-01"],
+            adv_min_dollar=1_000_000_000.0,
+        )
+        self.assertEqual(len(df), 0)
+
+    def test_build_feature_frame_close_below_min_price(self):
+        history = _make_smd_history(n_days=200, close_growth=1.0)
+        history["close"] = 0.5
+        df = build_feature_frame(
+            smd_loader=lambda _t: history.copy(),
+            universe=["AAPL"],
+            asof_dates=["2010-09-01"],
+        )
+        self.assertEqual(len(df), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
