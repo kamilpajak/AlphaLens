@@ -32,13 +32,17 @@ import statsmodels.api as sm
 @dataclass(frozen=True)
 class AlphaResult:
     spec_name: str  # e.g. "CAPM", "FF3", "Carhart-4F", "Carhart-4F + BusEq"
-    alpha_daily: float
-    alpha_annualized: float
+    alpha_daily: float  # Backwards-compat alias for alpha_per_period (always per-input-period).
+    alpha_annualized: float  # alpha_per_period * periods_per_year_assumption.
     alpha_tstat: float  # t-stat from cov_type (HAC by default)
     betas: dict[str, float]  # one entry per factor in regression
     r_squared: float
     n_observations: int
     cov_type: str  # "HAC" | "nonrobust"
+    # Tier 2.A 2026-05-05 — make annualization assumption explicit. Two new fields
+    # for callers/serialized JSONs to verify the math without inspecting code.
+    alpha_per_period: float = 0.0  # Same as alpha_daily but unambiguously named.
+    periods_per_year_assumption: int = 252  # The multiplier used for annualization.
 
 
 def _newey_west_maxlags(n: int) -> int:
@@ -104,6 +108,8 @@ def run_regression(
         r_squared=float(model.rsquared),
         n_observations=len(aligned),
         cov_type=cov_type,
+        alpha_per_period=alpha_daily,
+        periods_per_year_assumption=int(periods_per_year),
     )
 
 

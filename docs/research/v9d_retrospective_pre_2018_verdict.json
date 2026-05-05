@@ -1,0 +1,196 @@
+{
+  "verdict": "INCONCLUSIVE",
+  "verdict_reason": "\u03b1t=2.45 in [1.0, 2.5), bounds CI may straddle zero",
+  "coverage": {
+    "n_cells_present": 45,
+    "n_cells_expected": 45,
+    "missing": [],
+    "extra": []
+  },
+  "primary_U3": {
+    "universe": "U3",
+    "n_subperiods": 3,
+    "alpha_t_mean": 2.4476430751998532,
+    "alpha_pct_mean": 17.56128994351035,
+    "alpha_pct_se_mean": 6.657589111326575,
+    "sharpe_net_mean": 1.7968329360649322,
+    "alpha_t_range_within_subperiod_max": 2.201572645687528,
+    "alpha_t_subperiod_min": 2.0118848530605353,
+    "alpha_t_subperiod_max": 3.0553846015700104,
+    "alpha_t_range_across_subperiods": 1.043499748509475
+  },
+  "U2": {
+    "universe": "U2",
+    "n_subperiods": 3,
+    "alpha_t_mean": 2.6091890765401753,
+    "alpha_pct_mean": 30.547300234439238,
+    "alpha_pct_se_mean": 11.296177819812868,
+    "sharpe_net_mean": 2.151206317493056,
+    "alpha_t_range_within_subperiod_max": 1.4793409981617534,
+    "alpha_t_subperiod_min": 1.9161923598148551,
+    "alpha_t_subperiod_max": 3.0633967820600345,
+    "alpha_t_range_across_subperiods": 1.1472044222451794
+  },
+  "U1": {
+    "universe": "U1",
+    "n_subperiods": 3,
+    "alpha_t_mean": 3.819173157136903,
+    "alpha_pct_mean": 44.82448506896919,
+    "alpha_pct_se_mean": 14.932955057610798,
+    "sharpe_net_mean": 3.3479472814576963,
+    "alpha_t_range_within_subperiod_max": 1.2799276904337091,
+    "alpha_t_subperiod_min": 1.9683619798570704,
+    "alpha_t_subperiod_max": 6.175610489682094,
+    "alpha_t_range_across_subperiods": 4.207248509825023
+  },
+  "bounds_andrews_manski": {
+    "alpha_t_lower": 2.1472340282375835,
+    "alpha_t_upper": 2.2974385517187184,
+    "alpha_pct_lower": 15.56128994351035,
+    "alpha_pct_upper": 16.56128994351035,
+    "bias_lower_pct": 1.0,
+    "bias_upper_pct": 2.0
+  },
+  "romano_wolf": {
+    "universe": "U3",
+    "n_strategies": 0,
+    "note": "RW skipped: stride-disjoint phase strategies not amenable to stratified-by-sub-period bootstrap (see aggregator code for rationale); pre-reg permits naive Bonferroni fallback"
+  },
+  "stability_gates": {
+    "alpha_t_range_within_subperiod_max": 2.201572645687528,
+    "alpha_t_range_within_subperiod_threshold": 1.5,
+    "alpha_t_range_across_subperiods": 1.043499748509475,
+    "alpha_t_range_across_subperiods_threshold": 2.5,
+    "cross_universe_gap_U1_U3": 1.37153008193705,
+    "cross_universe_gap_threshold": 3.0
+  },
+  "decision_thresholds": {
+    "pass_robust_alpha_t": 3.5,
+    "pass_marginal_alpha_t": 2.5,
+    "inconclusive_lower_alpha_t": 1.0,
+    "fail_robust_alpha_t": 1.0,
+    "bias_range_pct": [
+      1.0,
+      2.0
+    ]
+  },
+  "per_universe_per_subperiod": [
+    {
+      "universe": "U1",
+      "sub_period": "GFC_recovery",
+      "n_phases_present": 5,
+      "alpha_t_mean": 6.175610489682094,
+      "alpha_t_min": 5.650761483093532,
+      "alpha_t_max": 6.930689173527242,
+      "alpha_t_range": 1.2799276904337091,
+      "sharpe_net_mean": 5.530495213461665,
+      "alpha_pct_mean": 2.4639869761030235,
+      "alpha_pct_se_mean": 0.3997681471177629,
+      "n_obs_total": 1341
+    },
+    {
+      "universe": "U1",
+      "sub_period": "mid_cycle_eu_debt",
+      "n_phases_present": 5,
+      "alpha_t_mean": 3.313547001871546,
+      "alpha_t_min": 3.1519096190165583,
+      "alpha_t_max": 3.45853131133546,
+      "alpha_t_range": 0.3066216923189016,
+      "sharpe_net_mean": 3.0891681993122795,
+      "alpha_pct_mean": 109.41047727733152,
+      "alpha_pct_se_mean": 33.09607129823918,
+      "n_obs_total": 1096
+    },
+    {
+      "universe": "U1",
+      "sub_period": "late_cycle_china_shock",
+      "n_phases_present": 5,
+      "alpha_t_mean": 1.9683619798570704,
+      "alpha_t_min": 1.7195500713118796,
+      "alpha_t_max": 2.2794558250256522,
+      "alpha_t_range": 0.5599057537137726,
+      "sharpe_net_mean": 1.4241784315991435,
+      "alpha_pct_mean": 22.59899095347303,
+      "alpha_pct_se_mean": 11.303025727475454,
+      "n_obs_total": 1215
+    },
+    {
+      "universe": "U2",
+      "sub_period": "GFC_recovery",
+      "n_phases_present": 5,
+      "alpha_t_mean": 2.847978087745636,
+      "alpha_t_min": 2.058656833800082,
+      "alpha_t_max": 3.5379978319618353,
+      "alpha_t_range": 1.4793409981617534,
+      "sharpe_net_mean": 1.8912593461442568,
+      "alpha_pct_mean": 7.425209230088913,
+      "alpha_pct_se_mean": 2.647215635935315,
+      "n_obs_total": 1341
+    },
+    {
+      "universe": "U2",
+      "sub_period": "mid_cycle_eu_debt",
+      "n_phases_present": 5,
+      "alpha_t_mean": 3.0633967820600345,
+      "alpha_t_min": 2.859507194584587,
+      "alpha_t_max": 3.3932228460828644,
+      "alpha_t_range": 0.5337156514982775,
+      "sharpe_net_mean": 3.0388891845521684,
+      "alpha_pct_mean": 65.0214672040648,
+      "alpha_pct_se_mean": 21.302947166743024,
+      "n_obs_total": 1096
+    },
+    {
+      "universe": "U2",
+      "sub_period": "late_cycle_china_shock",
+      "n_phases_present": 5,
+      "alpha_t_mean": 1.9161923598148551,
+      "alpha_t_min": 1.6488949765043517,
+      "alpha_t_max": 2.273404365970268,
+      "alpha_t_range": 0.6245093894659164,
+      "sharpe_net_mean": 1.5234704217827424,
+      "alpha_pct_mean": 19.195224269164004,
+      "alpha_pct_se_mean": 9.938370656760267,
+      "n_obs_total": 1215
+    },
+    {
+      "universe": "U3",
+      "sub_period": "GFC_recovery",
+      "n_phases_present": 5,
+      "alpha_t_mean": 2.0118848530605353,
+      "alpha_t_min": 1.1098635668626178,
+      "alpha_t_max": 3.3114362125501455,
+      "alpha_t_range": 2.201572645687528,
+      "sharpe_net_mean": 1.2155339452314409,
+      "alpha_pct_mean": 0.2452573754886548,
+      "alpha_pct_se_mean": 0.12137494748231467,
+      "n_obs_total": 1341
+    },
+    {
+      "universe": "U3",
+      "sub_period": "mid_cycle_eu_debt",
+      "n_phases_present": 5,
+      "alpha_t_mean": 3.0553846015700104,
+      "alpha_t_min": 2.3974460710897674,
+      "alpha_t_max": 3.738584403530725,
+      "alpha_t_range": 1.3411383324409578,
+      "sharpe_net_mean": 2.7655957561837488,
+      "alpha_pct_mean": 38.80956179634808,
+      "alpha_pct_se_mean": 14.071708999757817,
+      "n_obs_total": 1096
+    },
+    {
+      "universe": "U3",
+      "sub_period": "late_cycle_china_shock",
+      "n_phases_present": 5,
+      "alpha_t_mean": 2.2756597709690136,
+      "alpha_t_min": 1.4336143748474888,
+      "alpha_t_max": 2.623526611212055,
+      "alpha_t_range": 1.1899122363645664,
+      "sharpe_net_mean": 1.4093691067796068,
+      "alpha_pct_mean": 13.629050658694315,
+      "alpha_pct_se_mean": 5.779683386739594,
+      "n_obs_total": 1215
+    }
+  ]
+}

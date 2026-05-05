@@ -121,7 +121,12 @@ def list_cmd(
     for reg in entries:
         outcome = ""
         if reg.outcome:
-            outcome = f" → {reg.outcome['verdict']} (αt={reg.outcome['mean_alpha_t']:.2f})"
+            verdict = reg.outcome.get("verdict", "?")
+            alpha_t = reg.outcome.get("mean_alpha_t")
+            if alpha_t is None:
+                alpha_t = reg.outcome.get("primary_alpha_t_U3")
+            alpha_str = f"{alpha_t:.2f}" if isinstance(alpha_t, (int, float)) else "—"
+            outcome = f" → {verdict} (αt={alpha_str})"
         typer.echo(f"{reg.id}\t{reg.signal_class}\t{reg.status}{outcome}")
 
 

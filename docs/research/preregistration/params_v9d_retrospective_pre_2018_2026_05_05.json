@@ -1,0 +1,171 @@
+{
+  "params_frozen": {
+    "class": "retrospective_replication_pre_2018",
+    "version": "v9d_cross_sectional_residual_on_pre_2018_fresh_OOS",
+    "design_provenance": "Independent fresh-OOS replication of v9D cross-sectional residual scorer on a pre-2018 window the model has NEVER been evaluated against. Motivation: v9D recorded αt=+2.29 (5-phase mean) on burnt 2024-04-30 → 2026-04-30 holdout fails program-Bonferroni gate (|t|≥3.27 for n=18 alpha-class) but is the project's most replicated finding. Burnt-holdout retesting on 2018+ data is forbidden per multiplicity discipline. Pre-2018 is fresh OOS (cache extended to 2007 via ivolatility backfill 2026-05-04). Goal: confirm or falsify the +2.29 finding via independent test on a window with different vol regime (GFC, EU debt, China shock) closer to Xing 2010 in-sample (1996-2005).",
+    "design_memo": "docs/research/v9d_retrospective_pre_2018_design_2026_05_05.md (TBD)",
+    "adversarial_review_summary": "Local audit (2026-05-05) confirmed: (a) v9D scorer is GENUINELY parameter-free per-asof OLS — `score_cross_sectional_residual` has zero learnable parameters, no thresholds, equity controls = Xing 2010 lit-prior not in-sample-fitted; (b) existing PIT yaml universe is structurally survivor-biased — `pit_universe.py` self-documents 50-100 bps/y bias because `iwm_current.yaml` (today's IWM) seeds yfinance pulls; (c) iVol cache contains ~1470 delisted firms (48% of random sample dead-by-2026), enabling cleaner reconstruction; (d) delisting events coverage gap pre-2021 means mid-period delistings silently NaN-drop, biasing long-only top-decile upward. Perplexity research (sonar-deep-research, 2026-05-05) cited: (1) DFA mutual-fund survivorship 60 bps/y baseline → 120-150 bps/y for small/mid-cap long-only top-decile cross-sectional residual signal over 8-19y window; (2) Andrews-Manski bounds inference legitimizes 3-region decision rule under known bias range; (3) Romano-Wolf (n=25 family) is principled accumulation-aware multiplicity correction. Zen thinkdeep (gemini-3-pro-preview, 2026-05-05) contributed synthetic terminal return patch insight: silent NaN-drop on mid-period delistings biases long-only αt upward; inject -100% (Shumway 1997 NASDAQ default) when ticker last_tradeDate falls inside holding window. NBER w26370 (Chinco-Sammon-style) provides academically defensible methodology for reconstructing R2000 PIT membership using only public market cap data (target accuracy 85-90% per emerging-market study).",
+    "scorer_frozen": {
+      "module": "alphalens.screeners.options_implied.cross_sectional_residual.score_cross_sectional_residual",
+      "specification": "Per-asof OLS residual of −ivp30 against (reversal_1m, momentum_6m, rv_30d) cross-sectionally; long top-decile equal-weighted by residual",
+      "frozen_reference_run": "v9D recorded αt=+2.29 (5-phase mean, range [+1.86, +2.92]) on 2024-04-30 → 2026-04-30 holdout per docs/research/v10_drawdown_overlay/multi_phase_verdict.json",
+      "frozen_locked_at_design_time": true,
+      "modification_during_retrospective": "PROHIBITED — any drift in scorer spec invalidates the test"
+    },
+    "data_provider": "iVolatility $399 retail tier (probe v5 99.5% T1) — same as v7/v8/v9/v10; cache extended 2007-01-01 → 2026-04-30 per project_ivolatility_pre2018_backfill_2026_05_04",
+    "data_endpoint_primary": "/equities/stock-market-data (smd)",
+    "rebalance_stride_days": 5,
+    "holding_period_days_target": 20,
+    "holding_period_days_portfolio_returns": 1,
+    "weighting": "equal",
+    "decile_pct": 0.10,
+    "adv_min_dollar": 2000000.0,
+    "cost_profile": "long_only_30bps",
+    "cost_profile_rt_bps": 30,
+    "benchmark": "MDY",
+    "universe_sensitivity_variants": {
+      "U1_legacy_pit_yaml": {
+        "description": "Existing pit_universe yaml snapshots filtered by iwm_current.yaml seed. Worst-case max-survivor-bias baseline.",
+        "loader_module": "alphalens.paper_trade.scorer_v9d.pit_union",
+        "expected_bias": "200-400 bps/y (compounded over 10y window with GFC + M&A waves)"
+      },
+      "U2_ivol_cache_contents": {
+        "description": "All iVol cache parquets with valid SMD data on asof, ADV ≥ $2M filter applied. Includes ~1470 delisted firms, intermediate cleanliness.",
+        "loader_module": "alphalens.paper_trade.scorer_v9d.pit_union_from_ivol_cache (TBD Phase 2B)",
+        "expected_bias": "30-50 bps/y (cache populated post-2018 IWM-biased but includes delisted)"
+      },
+      "U3_nber_method_rebuild": {
+        "description": "Full reconstruction per NBER w26370 methodology: union of (Polygon delisted_tickers Starter limits + SEC EDGAR archived company.idx 2007-2018 + iVol cache + ticker_cik_map.yaml), apply Russell eligibility (cap≥$30M, price≥$1, free-float≥5%), mechanical rank by total market cap, $300M-$3B band. Validated against 6-8 historical IWM N-Q filings (target intersection ≥80%).",
+        "loader_module": "alphalens.paper_trade.scorer_v9d.pit_union_nber_rebuild (TBD Phase 2B)",
+        "expected_bias": "10-30 bps/y residual (per perplexity 85-90% accuracy estimate)"
+      },
+      "primary_for_verdict": "U3",
+      "sensitivity_for_diagnostic": ["U1", "U2"],
+      "empirical_bias_estimate": "U1_αt − U3_αt computed at verdict-time as descriptive sanity check"
+    },
+    "phase_audit": {
+      "n_phases": 5,
+      "stride_for_phases": 5,
+      "phase_offset_range": "0..4",
+      "audit_driver": "scripts/experiment_v9d_retrospective_pre_2018.py (TBD Phase 2E)",
+      "dispersion_metric_primary": "alpha_t_range across 5 phases × 3 sub-periods × 3 universes",
+      "alpha_t_range_threshold_stable": 1.5,
+      "alpha_t_range_threshold_concentrated": 2.5,
+      "rationale": "Same multi-phase pattern as v9D 2018-26 audit (5 phases stride-shifted) extended across 3 sub-periods × 3 universes. Total cells = 45."
+    },
+    "sub_periods_locked": [
+      {
+        "name": "GFC_recovery",
+        "start": "2008-04-30",
+        "end": "2011-12-31",
+        "rationale": "GFC + early recovery + Eurozone phase 1; Xing-era closest analog regime"
+      },
+      {
+        "name": "mid_cycle_eu_debt",
+        "start": "2012-01-01",
+        "end": "2014-12-31",
+        "rationale": "Low-vol bull + EU sovereign debt + taper tantrum; benign regime sanity check"
+      },
+      {
+        "name": "late_cycle_china_shock",
+        "start": "2015-01-01",
+        "end": "2018-04-29",
+        "rationale": "China 2015-16 shock + Brexit + 2018 vol spike; late-cycle stress regime"
+      }
+    ],
+    "terminal_return_policy": {
+      "rule": "When ticker held in holding window has last_tradeDate < holding_end and ticker is flagged as delisted (via Polygon, SEC EDGAR last-filing, or iVol cache cessation), inject return = -1.0 for that ticker over that window (Shumway 1997 NASDAQ default, conservative).",
+      "rationale": "Without patch, silent NaN-drop biases long-only top-decile αt upward by ignoring catastrophic delisting outcomes. Patch converts unknown bias into known conservative penalty.",
+      "sensitivity_alternative": "Re-run with -0.55 (Shumway NASDAQ-conditional median delisting return) on U3 only as descriptive check; not a primary gate."
+    }
+  },
+  "phase_0_gates": {
+    "frozen_scorer_integrity": {
+      "rule": "Hash of alphalens/screeners/options_implied/cross_sectional_residual.py must match v9D commit hash at retrospective run time",
+      "rationale": "Guards against silent scorer modification during Phase 1-2 work"
+    },
+    "universe_validation_anchor": {
+      "rule": "U3 reconstruction validated against ≥6 historical IWM Form N-Q filings (2008-Q1, 2010-Q3, 2012-Q2, 2014-Q4, 2016-Q3, 2018-Q1) with intersection rate ≥ 80% per perplexity-cited 85-90% benchmark",
+      "rationale": "Empirical anchor ensures U3 is genuinely PIT-reconstructed, not just renamed U1"
+    },
+    "no_data_peeking_clause": {
+      "rule": "Pre-reg locked PRIOR to any pre-2018 backtest run. ANY ad-hoc pre-2018 run before this lock invalidates pre-reg and forfeits the experiment.",
+      "rationale": "Discipline against retroactive specification search"
+    }
+  },
+  "periods": {
+    "retrospective_oos_start": "2008-04-30",
+    "retrospective_oos_end": "2018-04-29",
+    "rationale": "Fresh OOS — v9D scorer NEVER evaluated on this window. 10y span × 52 weeks ≈ 520 weekly obs (assuming non-empty universes). Pre-reg explicitly excludes 2007 due to iVol cache sparsity at 2007-01 boundary plus first-3-month coverage warmup."
+  },
+  "success_criteria": {
+    "mode": "multi_gate_pass_fail_with_inconclusive_zone",
+    "primary_metric": "Carhart 4-factor αt on long-only top-decile portfolio returns (decile minus benchmark MDY), pooled across 5 phases × 3 sub-periods on U3 universe with terminal-return patch active",
+    "bonferroni_accounting": {
+      "intra_class_n": 1,
+      "intra_class_naive_t_threshold": 1.96,
+      "program_level_alpha_class_n": 25,
+      "program_level_increment_from_retrospective": 1,
+      "rationale": "Per perplexity Romano-Wolf accumulation principle: methodology consistency (same researcher, same signal, same scorer) means new window inherits multiplicity. Total family n=25 (24 historical + 1 retrospective). Romano-Wolf step-down with empirical correlation (Politis-Romano stationary block bootstrap, B=10000, mean block length 4 weeks) yields adjusted critical value expected in [|t|≥2.10, |t|≥2.15] given partial correlation between holdout and retrospective windows. Final critical value computed at run time from empirical correlation matrix.",
+      "naive_bonferroni_fallback": "If Romano-Wolf bootstrap fails for any reason, fall back to naive Bonferroni |t|≥2.81 (= 0.05/25 two-sided)"
+    },
+    "bias_range_locked": {
+      "lower_bound_pct_per_year": 1.0,
+      "upper_bound_pct_per_year": 2.0,
+      "rationale": "DFA baseline 60 bps + small/mid-cap long-only top-decile multiplier (×2-2.5) per perplexity → 120-150 bps. Extended to 200 bps upper bound for residual reconstruction error (NBER methodology hits 85-90% accuracy, residual 10-15% mismatch contributes additional uncertainty per perplexity emerging-market study).",
+      "applied_in_inference": "Andrews-Manski bounds CI computed as [αt_observed_pct − 2.0%, αt_observed_pct − 1.0%] in annualized excess return terms; mapped to t-stat space via cells' empirical SE"
+    },
+    "all_gates_must_pass": [
+      {
+        "gate_id": "G1_primary_alpha_t_significance",
+        "rule": "Carhart 4F αt on U3 (primary universe) pooled across 5 phases × 3 sub-periods ≥ Romano-Wolf adjusted critical value (expected ≥+2.13)",
+        "tier": "primary"
+      },
+      {
+        "gate_id": "G2_bounds_exclude_zero",
+        "rule": "Andrews-Manski lower-bound of unbiased αt (= αt_observed_pct − 2.0%/y in annualized excess space, mapped to t-stat) ≥ 0",
+        "tier": "primary"
+      },
+      {
+        "gate_id": "G3_phase_dispersion_stable",
+        "rule": "max(αt) − min(αt) across 5 phases on U3 (within each sub-period) ≤ 1.5 per sub-period",
+        "tier": "primary"
+      },
+      {
+        "gate_id": "G4_sub_period_consistency",
+        "rule": "max(αt_sub_period) − min(αt_sub_period) ≤ 2.5 across 3 sub-periods on U3 (regime-stability check)",
+        "tier": "primary"
+      },
+      {
+        "gate_id": "G5_universe_sensitivity_consistency",
+        "rule": "U3 αt within 1.5 of U2 αt AND within 2.5 of U1 αt; large U1↔U3 gap (>3.0) flags reconstruction-bias dominates signal",
+        "tier": "primary"
+      },
+      {
+        "gate_id": "G6_terminal_return_robustness",
+        "rule": "Re-run on U3 with terminal_return = -0.55 (Shumway NASDAQ-conditional) yields αt within ±0.5 of -1.0 default. If gap >0.5, signal is dependent on terminal-return assumption — INCONCLUSIVE not PASS.",
+        "tier": "robustness"
+      }
+    ],
+    "verdict_classification": {
+      "all_six_pass_AND_alpha_t_above_3.5": "PASS_ROBUST — signal validated even after worst-case bias adjustment. v9D class options_implied gets first cross-window confirmation. Triggers prospective walk-forward replication on accruing post-2026-04-30 data; capital deploy decision can be re-evaluated at H+ checkpoint with reduced 6mo wait window (down from 12mo).",
+      "G1_pass_AND_G2_pass_AND_alpha_t_in_2.5_3.5": "PASS_MARGINAL — signal validated at adjusted threshold but not bias-robust at upper bound. Requires meta-analytic combination with 2018-26 estimate; capital deploy still off-table until 12mo paper-trade checkpoint.",
+      "G1_pass_AND_alpha_t_in_1.0_2.5": "INCONCLUSIVE — signal exists but bounds CI straddles 0. Class options_implied stays open but no upgrade in deploy-readiness.",
+      "G1_fail_AND_alpha_t_below_1.0": "FAIL_ROBUST — signal does not generalize to pre-2018 fresh OOS. v9D is regime-specific or burnt-holdout-selection-effect. Class options_implied effectively closed (paradigm failure #12 via methodology audit). Posterior tightens significantly: 'retail alpha exhausted in this signal class'.",
+      "G3_or_G4_FAIL_at_otherwise_PASS_alpha_t": "REGIME_DEPENDENT — phase or sub-period dispersion exceeds threshold despite mean αt passing. Signal is real but unstable; not deploy-grade.",
+      "G5_FAIL_with_U1_U3_gap_above_3.0": "RECONSTRUCTION_DOMINANT — survivorship bias swamps signal. Verdict on this experiment uninterpretable; result is methodology validation (U3 reconstruction working) not signal validation."
+    },
+    "kill_pre_full_run": [
+      "Phase 1E IWM N-Q intersection rate < 70% on any anchor → ABORT U3, fall back to U2 as primary",
+      "Phase 0 hash check fails on cross_sectional_residual.py → ABORT (scorer drifted)",
+      "Phase 2 smoke run: U3 universe size at any sub-period midpoint < 100 tickers → ABORT (reconstruction too sparse for cross-sectional regression with 4 features)"
+    ],
+    "no_stretch_tier": "Single multi-gate verdict tree. No exploratory tier. PASS_ROBUST or PASS_MARGINAL or INCONCLUSIVE or FAIL_ROBUST or REGIME_DEPENDENT or RECONSTRUCTION_DOMINANT — six exhaustive verdicts.",
+    "capital_deploy_clause": "Capital deploy remains OFF-TABLE on retrospective alone regardless of verdict. PASS_ROBUST shortens prospective replication wait from 12mo to 6mo; PASS_MARGINAL keeps 12mo; all other verdicts maintain status quo (paper-trade checkpoint ~2027-05-04)."
+  },
+  "registered_at": "2026-05-05",
+  "lock_hash_protocol": {
+    "method": "SHA256 of this JSON file content (excluding lock_hash field itself) computed and stored in ledger entry at registration. Any subsequent modification to params_frozen invalidates pre-reg.",
+    "hash_to_compute_at_phase_0_close": "TBD"
+  }
+}
