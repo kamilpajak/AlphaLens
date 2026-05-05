@@ -50,6 +50,7 @@ LAYERS_WITH_STATUS = (
     "alphalens.screeners.alt_data",
     "alphalens.screeners.distress_credit",
     "alphalens.screeners.event_drift",
+    "alphalens.screeners.insider_activity",
     "alphalens.screeners.momentum_lowvol",
     "alphalens.screeners.multi_source_two_stage",
     "alphalens.screeners.options_implied",

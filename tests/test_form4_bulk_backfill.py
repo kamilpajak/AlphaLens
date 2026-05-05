@@ -1,0 +1,260 @@
+"""SEC EDGAR bulk Form-4 backfill — TDD.
+
+Tests cover:
+  * Form-4 records writer — writes hive-partitioned parquet matching the
+    locked ``FORM4_SCHEMA_COLUMNS``.
+  * Resume-safe per-CIK manifest — skip CIKs already completed, persist
+    state across runs.
+  * Submissions JSON walker — iterate Form-4/4-A entries from SEC
+    submissions index payload.
+
+The full SEC walk requires 3-5 days wall on runpod and is not exercised in
+unit tests; mock-tested only here.
+"""
+
+from __future__ import annotations
+
+import tempfile
+import unittest
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
+
+import pandas as pd
+import pyarrow.dataset as ds
+
+from alphalens.data.alt_data.form4_bulk_backfill import (
+    BackfillManifest,
+    FilingMetadata,
+    iter_form4_filings,
+    write_records_to_parquet,
+)
+from alphalens.data.alt_data.form4_records import Form4Record
+
+
+def _mk_record(
+    *,
+    issuer_cik: str = "0000000001",
+    ticker: str = "TEST",
+    accession_number: str = "0000000001-00-000001",
+    filing_date: date = date(2022, 6, 1),
+    transaction_date: date = date(2022, 5, 15),
+    transaction_code: str = "P",
+    transaction_shares: float = 1000.0,
+    transaction_price_per_share: float | None = 50.0,
+    is_director: bool = False,
+    is_officer: bool = True,
+    is_ten_percent_owner: bool = False,
+    is_amendment: bool = False,
+) -> Form4Record:
+    return Form4Record(
+        issuer_cik=issuer_cik,
+        ticker=ticker,
+        accession_number=accession_number,
+        filing_date=filing_date,
+        reporting_owner_cik="0000000100",
+        reporting_owner_name="Doe, John",
+        is_director=is_director,
+        is_officer=is_officer,
+        is_ten_percent_owner=is_ten_percent_owner,
+        is_other=False,
+        officer_title="VP",
+        transaction_date=transaction_date,
+        transaction_code=transaction_code,
+        transaction_shares=Decimal(str(transaction_shares)),
+        transaction_price_per_share=(
+            None
+            if transaction_price_per_share is None
+            else Decimal(str(transaction_price_per_share))
+        ),
+        acquired_disposed="A",
+        is_amendment=is_amendment,
+        footnotes=tuple(),
+    )
+
+
+class TestWriteRecordsToParquet(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_writes_records_partitioned_by_transaction_year(self):
+        records = [
+            _mk_record(transaction_date=date(2020, 5, 1), accession_number="ACC-2020"),
+            _mk_record(transaction_date=date(2021, 6, 1), accession_number="ACC-2021"),
+            _mk_record(transaction_date=date(2021, 8, 1), accession_number="ACC-2021B"),
+        ]
+        write_records_to_parquet(records, parquet_root=self.root)
+
+        self.assertTrue((self.root / "transaction_year=2020").is_dir())
+        self.assertTrue((self.root / "transaction_year=2021").is_dir())
+
+        ds_2021 = ds.dataset(
+            str(self.root / "transaction_year=2021"),
+            partitioning=None,
+            format="parquet",
+        )
+        df = ds_2021.to_table().to_pandas()
+        self.assertEqual(len(df), 2)
+        self.assertEqual(set(df["accession_number"]), {"ACC-2021", "ACC-2021B"})
+
+    def test_schema_matches_locked_columns(self):
+        from alphalens.data.store.form4_pit import FORM4_SCHEMA_COLUMNS
+
+        records = [_mk_record(transaction_date=date(2022, 5, 1))]
+        write_records_to_parquet(records, parquet_root=self.root)
+
+        dataset = ds.dataset(
+            str(self.root / "transaction_year=2022"),
+            partitioning=None,
+            format="parquet",
+        )
+        df = dataset.to_table().to_pandas()
+        self.assertEqual(set(df.columns), set(FORM4_SCHEMA_COLUMNS))
+
+    def test_decimal_shares_and_prices_persist_as_floats(self):
+        records = [
+            _mk_record(
+                transaction_date=date(2022, 5, 1),
+                transaction_shares=12345.67,
+                transaction_price_per_share=42.123,
+            )
+        ]
+        write_records_to_parquet(records, parquet_root=self.root)
+        dataset = ds.dataset(
+            str(self.root / "transaction_year=2022"),
+            partitioning=None,
+            format="parquet",
+        )
+        df = dataset.to_table().to_pandas()
+        self.assertAlmostEqual(float(df.iloc[0]["transaction_shares"]), 12345.67)
+        self.assertAlmostEqual(float(df.iloc[0]["transaction_price_per_share"]), 42.123)
+
+    def test_null_price_persists_as_null(self):
+        records = [_mk_record(transaction_date=date(2022, 5, 1), transaction_price_per_share=None)]
+        write_records_to_parquet(records, parquet_root=self.root)
+        dataset = ds.dataset(
+            str(self.root / "transaction_year=2022"),
+            partitioning=None,
+            format="parquet",
+        )
+        df = dataset.to_table().to_pandas()
+        self.assertTrue(pd.isna(df.iloc[0]["transaction_price_per_share"]))
+
+    def test_empty_records_writes_nothing(self):
+        write_records_to_parquet([], parquet_root=self.root)
+        # No partition directory should be created when there's nothing to write.
+        self.assertFalse(any(self.root.iterdir()))
+
+    def test_appends_to_existing_partition_with_unique_filename(self):
+        # First batch creates part-0000.parquet.
+        write_records_to_parquet(
+            [_mk_record(transaction_date=date(2022, 5, 1), accession_number="A1")],
+            parquet_root=self.root,
+        )
+        # Second batch should create a NEW file in the same partition, not overwrite.
+        write_records_to_parquet(
+            [_mk_record(transaction_date=date(2022, 6, 1), accession_number="A2")],
+            parquet_root=self.root,
+        )
+        files = sorted((self.root / "transaction_year=2022").glob("*.parquet"))
+        self.assertEqual(len(files), 2)
+        dataset = ds.dataset(
+            str(self.root / "transaction_year=2022"),
+            partitioning=None,
+            format="parquet",
+        )
+        df = dataset.to_table().to_pandas()
+        self.assertEqual(set(df["accession_number"]), {"A1", "A2"})
+
+
+class TestBackfillManifest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "manifest.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_new_manifest_has_no_completed_ciks(self):
+        m = BackfillManifest.load_or_create(self.path)
+        self.assertFalse(m.is_complete("0000320193"))
+
+    def test_mark_complete_persists(self):
+        m1 = BackfillManifest.load_or_create(self.path)
+        m1.mark_complete("0000320193")
+        m1.save()
+
+        m2 = BackfillManifest.load_or_create(self.path)
+        self.assertTrue(m2.is_complete("0000320193"))
+        self.assertFalse(m2.is_complete("0000789019"))
+
+    def test_corrupted_manifest_starts_fresh_with_warning(self):
+        self.path.write_text("not valid json {{{")
+        m = BackfillManifest.load_or_create(self.path)
+        self.assertFalse(m.is_complete("0000320193"))
+
+
+class TestIterForm4Filings(unittest.TestCase):
+    """Walks a submissions JSON payload yielding Form-4/4-A FilingMetadata."""
+
+    def test_yields_form4_entries_only(self):
+        submissions = {
+            "filings": {
+                "recent": {
+                    "form": ["10-K", "4", "8-K", "4/A", "4"],
+                    "accessionNumber": ["A0", "A1", "A2", "A3", "A4"],
+                    "filingDate": [
+                        "2022-01-15",
+                        "2022-02-01",
+                        "2022-02-15",
+                        "2022-03-01",
+                        "2022-03-15",
+                    ],
+                    "primaryDocument": [
+                        "10k.htm",
+                        "f4_a1.xml",
+                        "8k.htm",
+                        "f4_a3.xml",
+                        "f4_a4.xml",
+                    ],
+                }
+            }
+        }
+        results = list(iter_form4_filings(submissions, cik="0000320193"))
+        accessions = [r.accession_number for r in results]
+        self.assertEqual(accessions, ["A1", "A3", "A4"])
+        forms = [r.form for r in results]
+        self.assertEqual(forms, ["4", "4/A", "4"])
+
+    def test_handles_missing_recent_block(self):
+        results = list(iter_form4_filings({"filings": {}}, cik="0000320193"))
+        self.assertEqual(results, [])
+
+    def test_returns_filing_metadata_with_filed_date(self):
+        submissions = {
+            "filings": {
+                "recent": {
+                    "form": ["4"],
+                    "accessionNumber": ["0000320193-22-000001"],
+                    "filingDate": ["2022-04-15"],
+                    "primaryDocument": ["wf-form4_doc.xml"],
+                }
+            }
+        }
+        results = list(iter_form4_filings(submissions, cik="0000320193"))
+        self.assertEqual(len(results), 1)
+        meta = results[0]
+        self.assertIsInstance(meta, FilingMetadata)
+        self.assertEqual(meta.cik, "0000320193")
+        self.assertEqual(meta.accession_number, "0000320193-22-000001")
+        self.assertEqual(meta.filing_date, date(2022, 4, 15))
+        self.assertEqual(meta.primary_document, "wf-form4_doc.xml")
+        self.assertEqual(meta.form, "4")
+
+
+if __name__ == "__main__":
+    unittest.main()
