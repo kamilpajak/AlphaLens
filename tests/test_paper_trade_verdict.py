@@ -15,6 +15,7 @@ import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 
 from alphalens.paper_trade.verdict import (
@@ -182,6 +183,89 @@ class ResultShapeTests(unittest.TestCase):
         result = evaluate_decision_rule(_make_ledger(26))
         self.assertIsInstance(result, DecisionRuleResult)
         self.assertIn(result.verdict, {"PASS_26W", "FAIL_26W"})
+
+
+class TestComputeRunningStatsIntegration(unittest.TestCase):
+    """Coverage of the un-mocked Carhart-regression path in compute_running_stats.
+
+    The class above mocks compute_running_stats to focus on decision-rule
+    logic; this class exercises the real implementation with synthetic
+    Carhart factors so the regression branches contribute to coverage.
+    """
+
+    def _make_ledger(self, n_weeks: int = 30) -> pd.DataFrame:
+        rng = np.random.default_rng(42)
+        asofs = pd.date_range("2024-01-05", periods=n_weeks, freq="W-FRI")
+        return pd.DataFrame(
+            {
+                "asof": [d.date() for d in asofs],
+                "realized_return_long_net": rng.normal(0.001, 0.01, n_weeks),
+                "benchmark_return_mdy": rng.normal(0.0005, 0.008, n_weeks),
+            }
+        )
+
+    def _patch_carhart(self):
+        def fake_load(start, end):
+            idx = pd.date_range(start, end, freq="B")
+            rng = np.random.default_rng(7)
+            return pd.DataFrame(
+                {
+                    "Mkt-RF": rng.normal(0.0004, 0.01, len(idx)),
+                    "SMB": rng.normal(0.0001, 0.006, len(idx)),
+                    "HML": rng.normal(0.0001, 0.005, len(idx)),
+                    "Mom": rng.normal(0.0002, 0.008, len(idx)),
+                    "RF": np.full(len(idx), 0.00002),
+                },
+                index=idx,
+            )
+
+        return patch("alphalens.paper_trade.verdict.load_carhart_daily", side_effect=fake_load)
+
+    def test_empty_ledger_returns_nans(self):
+        from alphalens.paper_trade.verdict import compute_running_stats
+
+        out = compute_running_stats(pd.DataFrame())
+        self.assertEqual(out["n_obs"], 0)
+        self.assertTrue(np.isnan(out["alpha_t"]))
+
+    def test_under_20_obs_returns_unreliable_note(self):
+        from alphalens.paper_trade.verdict import compute_running_stats
+
+        ledger = self._make_ledger(n_weeks=10)
+        with self._patch_carhart():
+            out = compute_running_stats(ledger)
+        self.assertEqual(out["n_obs"], 10)
+        self.assertIn("note", out)
+        self.assertIn("unreliable", out["note"])
+
+    def test_full_regression_path(self):
+        from alphalens.paper_trade.verdict import compute_running_stats
+
+        ledger = self._make_ledger(n_weeks=52)
+        with self._patch_carhart():
+            out = compute_running_stats(ledger)
+        self.assertEqual(out["n_obs"], 52)
+        self.assertTrue(np.isfinite(out["alpha_t"]))
+        self.assertTrue(np.isfinite(out["alpha_annualized"]))
+        self.assertTrue(np.isfinite(out["sharpe_net"]))
+
+    def test_per_sub_period_alpha_ts_real_path(self):
+        from alphalens.paper_trade.verdict import _per_sub_period_alpha_ts
+
+        ledger = self._make_ledger(n_weeks=52)
+        with self._patch_carhart():
+            ats = _per_sub_period_alpha_ts(ledger, length_weeks=13)
+        self.assertLessEqual(len(ats), 4)
+        for a in ats:
+            self.assertTrue(np.isfinite(a))
+
+    def test_per_sub_period_alpha_ts_short_ledger_returns_empty(self):
+        from alphalens.paper_trade.verdict import _per_sub_period_alpha_ts
+
+        ledger = self._make_ledger(n_weeks=5)
+        with self._patch_carhart():
+            ats = _per_sub_period_alpha_ts(ledger, length_weeks=13)
+        self.assertEqual(ats, [])
 
 
 if __name__ == "__main__":  # pragma: no cover
