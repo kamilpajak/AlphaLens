@@ -108,28 +108,45 @@ class DrawdownControlOverlay:
         in_drawdown_regime = False
         recovery_threshold = 1.0 - cfg.recovery_band_pct
         for t, dd in zip(drawdown.index, drawdown.to_numpy(), strict=False):
-            equity_t = equity.loc[t]
-            peak_t = peak.loc[t]
-            if in_drawdown_regime:
-                ratio = equity_t / peak_t if peak_t > 0 else 1.0
-                if ratio >= recovery_threshold:
-                    in_drawdown_regime = False
-            if not in_drawdown_regime and dd <= cfg.light_dd:
-                weights.loc[t] = 1.0
-                continue
-            in_drawdown_regime = True
-            if dd >= cfg.heavy_dd:
-                weights.loc[t] = 0.0
-            elif dd > cfg.light_dd:
-                weights.loc[t] = cfg.half_weight
-            else:
-                # Inside drawdown regime but currently above light_dd (recovering).
-                # Stay at half until the recovery threshold is hit.
-                weights.loc[t] = cfg.half_weight
+            weight, in_drawdown_regime = _weight_for_timestep(
+                dd=float(dd),
+                equity_t=float(equity.loc[t]),
+                peak_t=float(peak.loc[t]),
+                in_drawdown_regime=in_drawdown_regime,
+                recovery_threshold=recovery_threshold,
+                cfg=cfg,
+            )
+            weights.loc[t] = weight
 
         # Causality: scale[t] uses returns[<t], so shift the trigger forward.
         # First period has no prior history → scale=1.0 (identity).
         return weights.shift(1).fillna(1.0).rename("scale")
+
+
+def _weight_for_timestep(
+    *,
+    dd: float,
+    equity_t: float,
+    peak_t: float,
+    in_drawdown_regime: bool,
+    recovery_threshold: float,
+    cfg: DrawdownControlConfig,
+) -> tuple[float, bool]:
+    """Compute (weight, new_in_drawdown_regime) for a single timestep.
+
+    Extracted from ``DrawdownControlOverlay.scale_series`` to lower
+    cognitive complexity; behavior identical to the inline implementation.
+    """
+    if in_drawdown_regime:
+        ratio = equity_t / peak_t if peak_t > 0 else 1.0
+        if ratio >= recovery_threshold:
+            in_drawdown_regime = False
+    if not in_drawdown_regime and dd <= cfg.light_dd:
+        return 1.0, False
+    if dd >= cfg.heavy_dd:
+        return 0.0, True
+    # Either above light_dd or currently inside drawdown regime → half weight.
+    return cfg.half_weight, True
 
 
 def apply_drawdown_control(returns: pd.Series, overlay: DrawdownControlOverlay) -> pd.Series:

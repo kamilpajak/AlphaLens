@@ -190,9 +190,7 @@ def score(
             holding_period_days=holding_period_days,
             smd_loader=smd_loader,
         )
-        per_period_drag = (cost_bps_rt / 10_000.0) * (holding_period_days / 252.0) * 252.0 / 252.0
-        # Match the v9D experiment's drag convention:
-        # drag_per_period = annual_drag_bps / 10000 / (252 / stride)
+        # v9D drag convention: drag_per_period = annual_drag_bps / 10000 / (252 / stride)
         per_period_drag = cost_bps_rt / 10_000.0 / (252 / holding_period_days)
         realized_long_net = realized_long_gross - per_period_drag
         typer.echo(

@@ -157,36 +157,7 @@ def romano_wolf_step_down(
     # Replace any NaN bootstrap stats with 0 (degenerate columns)
     boot_tstats = np.nan_to_num(boot_tstats, nan=0.0, posinf=0.0, neginf=0.0)
     abs_boot = np.abs(boot_tstats)
-    abs_observed = np.abs(observed_tstats)
-    # Treat any NaN observed t-stat (degenerate column) as 0 — never rejectable.
-    abs_observed = np.nan_to_num(abs_observed, nan=0.0)
-
-    # Step-down: process strategies in descending order of |observed_t|
-    sort_order = np.argsort(-abs_observed)
-    adjusted_critical = np.full(n_strats, np.inf, dtype=np.float64)
-    rejected = np.zeros(n_strats, dtype=bool)
-    active_mask = np.ones(n_strats, dtype=bool)
-
-    halted = False
-    for s in sort_order:
-        if not bool(active_mask.any()):
-            break
-        # Max |t| over still-active hypotheses, per bootstrap replicate
-        max_dist = abs_boot[:, active_mask].max(axis=1)
-        c = float(np.quantile(max_dist, 1.0 - alpha))
-        adjusted_critical[s] = c
-        if halted:
-            # After step-down halts the active set is frozen; remaining
-            # strategies are reported with the same family-conditional
-            # critical value (they cannot be rejected since they have
-            # smaller |observed_t| than the one that just failed).
-            continue
-        if abs_observed[s] > c:
-            rejected[s] = True
-            active_mask[s] = False
-        else:
-            halted = True
-
+    rejected, adjusted_critical = _run_step_down(observed_tstats, abs_boot, alpha=alpha)
     return _build_result(
         observed_tstats=observed_tstats,
         adjusted_critical=adjusted_critical,
@@ -197,6 +168,44 @@ def romano_wolf_step_down(
         mean_block_length=mean_block_length,
         alpha=alpha,
     )
+
+
+def _run_step_down(
+    observed_tstats: np.ndarray,
+    abs_boot: np.ndarray,
+    *,
+    alpha: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Romano-Wolf step-down core: returns ``(rejected, adjusted_critical)``.
+
+    Shared by ``romano_wolf_step_down`` and ``romano_wolf_step_down_stratified``.
+    Processes strategies in descending order of |observed_t|; once a
+    hypothesis fails to reject, the remaining strategies are reported with
+    the same family-conditional critical value (they cannot be rejected
+    since they have smaller |observed_t|).
+    """
+    abs_observed = np.nan_to_num(np.abs(observed_tstats), nan=0.0)
+    n_strats = abs_observed.shape[0]
+    sort_order = np.argsort(-abs_observed)
+    adjusted_critical = np.full(n_strats, np.inf, dtype=np.float64)
+    rejected = np.zeros(n_strats, dtype=bool)
+    active_mask = np.ones(n_strats, dtype=bool)
+
+    halted = False
+    for s in sort_order:
+        if not bool(active_mask.any()):
+            break
+        max_dist = abs_boot[:, active_mask].max(axis=1)
+        c = float(np.quantile(max_dist, 1.0 - alpha))
+        adjusted_critical[s] = c
+        if halted:
+            continue
+        if abs_observed[s] > c:
+            rejected[s] = True
+            active_mask[s] = False
+        else:
+            halted = True
+    return rejected, adjusted_critical
 
 
 def _build_result(
@@ -301,29 +310,8 @@ def romano_wolf_step_down_stratified(
 
     boot_tstats = np.nan_to_num(boot_tstats, nan=0.0, posinf=0.0, neginf=0.0)
     abs_boot = np.abs(boot_tstats)
-    abs_observed = np.abs(observed_tstats)
-    abs_observed = np.nan_to_num(abs_observed, nan=0.0)
 
-    sort_order = np.argsort(-abs_observed)
-    adjusted_critical = np.full(n_strats, np.inf, dtype=np.float64)
-    rejected = np.zeros(n_strats, dtype=bool)
-    active_mask = np.ones(n_strats, dtype=bool)
-
-    halted = False
-    for s in sort_order:
-        if not bool(active_mask.any()):
-            break
-        max_dist = abs_boot[:, active_mask].max(axis=1)
-        c = float(np.quantile(max_dist, 1.0 - alpha))
-        adjusted_critical[s] = c
-        if halted:
-            continue
-        if abs_observed[s] > c:
-            rejected[s] = True
-            active_mask[s] = False
-        else:
-            halted = True
-
+    rejected, adjusted_critical = _run_step_down(observed_tstats, abs_boot, alpha=alpha)
     return _build_result(
         observed_tstats=observed_tstats,
         adjusted_critical=adjusted_critical,

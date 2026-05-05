@@ -17,17 +17,15 @@ Universe filters (mirroring v9D / options_implied):
 from __future__ import annotations
 
 import logging
-import math  # math.sqrt used downstream
 from collections.abc import Callable, Sequence
 
-import numpy as np
 import pandas as pd
 
 from alphalens.screeners.options_implied.features import (
-    US_PRIMARY_EXCHANGES,
     _check_adv,
     _check_optionable,
-    _coerce_numeric_columns,
+    _compute_equity_controls,
+    _filter_us_primary,
 )
 from alphalens.screeners.options_volume.pc_abnormal_volume import (
     compute_abnormal_pcr_series,
@@ -42,15 +40,7 @@ FEATURE_COLUMNS: tuple[str, ...] = (
     "rv_30d",
 )
 
-_MIN_TRAILING_TRADING_DAYS = 127  # 126 for momentum_6m + 1 for current
 _MIN_PRICE = 1.0
-
-
-def _filter_us_primary(history: pd.DataFrame) -> pd.DataFrame:
-    if "exchange" not in history.columns:
-        return _coerce_numeric_columns(history.copy())
-    mask = history["exchange"].astype(str).isin(US_PRIMARY_EXCHANGES)
-    return _coerce_numeric_columns(history.loc[mask].copy())
 
 
 def _slice_pit(history: pd.DataFrame, asof: str) -> pd.DataFrame:
@@ -69,38 +59,58 @@ def _slice_pit(history: pd.DataFrame, asof: str) -> pd.DataFrame:
     return sliced.sort_values("tradeDate").reset_index(drop=True)
 
 
-def _compute_equity_controls(sliced: pd.DataFrame) -> dict[str, float] | None:
-    """log_marketCap, reversal_1m, momentum_6m, rv_30d from the last close + marketCap."""
-    closes = sliced["close"].to_numpy(dtype=float)
-    n = len(closes)
-    if n < _MIN_TRAILING_TRADING_DAYS:
-        return None
-    if not np.all(np.isfinite(closes[-_MIN_TRAILING_TRADING_DAYS:])):
-        return None
-    if closes[-1] <= 0:
-        return None
+def _prepare_ticker_history(
+    history: pd.DataFrame | None,
+) -> pd.DataFrame | None:
+    """One-shot per-ticker preprocessing; returns None if the ticker is ineligible.
 
-    close_now = closes[-1]
-    close_21 = closes[-22]
-    close_126 = closes[-127]
-    if close_21 <= 0 or close_126 <= 0:
+    Filters to US-primary exchanges, drops NaN-close rows, sorts by tradeDate,
+    and pre-computes the abnormal-pcr series + tradeDate_ts column for fast
+    per-asof slicing. Returns the prepared DataFrame or None when any
+    structural prerequisite fails.
+    """
+    if history is None or history.empty:
         return None
-
-    reversal_1m = -((close_now / close_21) - 1.0)
-    momentum_6m = (close_21 / close_126) - 1.0
-
-    if n < 31:
+    history = _filter_us_primary(history)
+    if history.empty or "close" not in history.columns or "tradeDate" not in history.columns:
         return None
-    log_rets = np.diff(np.log(closes[-31:]))
-    if len(log_rets) < 30 or not np.all(np.isfinite(log_rets)):
+    history = history.loc[history["close"].notna()].copy()
+    if history.empty:
         return None
-    rv_30d = float(np.std(log_rets, ddof=1)) * math.sqrt(252.0)
+    history = history.sort_values("tradeDate").reset_index(drop=True)
+    if "optVolPut" not in history.columns or "optVolCall" not in history.columns:
+        return None
+    abnormal_pcr = compute_abnormal_pcr_series(history["optVolPut"], history["optVolCall"])
+    history["_abnormal_pcr"] = abnormal_pcr.to_numpy()
+    history["_tradeDate_ts"] = pd.to_datetime(history["tradeDate"])
+    return history
 
-    return {
-        "reversal_1m": reversal_1m,
-        "momentum_6m": momentum_6m,
-        "rv_30d": rv_30d,
-    }
+
+def _emit_row_for_asof(
+    history: pd.DataFrame,
+    asof_dt: pd.Timestamp,
+    *,
+    adv_min_dollar: float,
+) -> dict | None:
+    """Build the feature row for one (history, asof). Returns None on filter failure."""
+    sliced = history.loc[history["_tradeDate_ts"] <= asof_dt]
+    if sliced.empty or len(sliced) < 2:
+        return None
+    if not _check_optionable(sliced.iloc[-2]):
+        return None
+    if not _check_adv(sliced, min_dollar=adv_min_dollar):
+        return None
+    last_row = sliced.iloc[-1]
+    close_now = last_row.get("close")
+    if pd.isna(close_now) or close_now < _MIN_PRICE:
+        return None
+    abnormal_pcr_t = last_row["_abnormal_pcr"]
+    if pd.isna(abnormal_pcr_t):
+        return None
+    controls = _compute_equity_controls(sliced)
+    if controls is None:
+        return None
+    return {"abnormal_pcr": float(abnormal_pcr_t), **controls}
 
 
 def build_feature_frame(
@@ -122,59 +132,14 @@ def build_feature_frame(
 
     rows: list[dict] = []
     for ticker in universe:
-        history = smd_loader(ticker)
-        if history is None or history.empty:
+        prepared = _prepare_ticker_history(smd_loader(ticker))
+        if prepared is None:
             continue
-        history = _filter_us_primary(history)
-        if history.empty or "close" not in history.columns or "tradeDate" not in history.columns:
-            continue
-
-        # Trading-day rows (close non-NaN), sorted ascending.
-        history = history.loc[history["close"].notna()].copy()
-        if history.empty:
-            continue
-        history = history.sort_values("tradeDate").reset_index(drop=True)
-        if "optVolPut" not in history.columns or "optVolCall" not in history.columns:
-            continue
-
-        # PIT-correct abnormal-pcr series over the ticker's whole history.
-        abnormal_pcr = compute_abnormal_pcr_series(history["optVolPut"], history["optVolCall"])
-        history["_abnormal_pcr"] = abnormal_pcr.to_numpy()
-        history["_tradeDate_ts"] = pd.to_datetime(history["tradeDate"])
-
         for asof, asof_dt in zip(asof_strs, asof_ts, strict=True):
-            sliced = history.loc[history["_tradeDate_ts"] <= asof_dt]
-            if sliced.empty or len(sliced) < 2:
+            row = _emit_row_for_asof(prepared, asof_dt, adv_min_dollar=adv_min_dollar)
+            if row is None:
                 continue
-
-            prev_row = sliced.iloc[-2]
-            if not _check_optionable(prev_row):
-                continue
-
-            if not _check_adv(sliced, min_dollar=adv_min_dollar):
-                continue
-
-            last_row = sliced.iloc[-1]
-            close_now = last_row.get("close")
-            if pd.isna(close_now) or close_now < _MIN_PRICE:
-                continue
-
-            abnormal_pcr_t = last_row["_abnormal_pcr"]
-            if pd.isna(abnormal_pcr_t):
-                continue
-
-            controls = _compute_equity_controls(sliced)
-            if controls is None:
-                continue
-
-            rows.append(
-                {
-                    "asof": asof,
-                    "ticker": ticker.upper(),
-                    "abnormal_pcr": float(abnormal_pcr_t),
-                    **controls,
-                }
-            )
+            rows.append({"asof": asof, "ticker": ticker.upper(), **row})
 
     if not rows:
         return pd.DataFrame(columns=("asof", "ticker", *FEATURE_COLUMNS))

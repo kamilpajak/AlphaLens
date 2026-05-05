@@ -15,7 +15,7 @@ paper-trade verdict`` is the human-facing wrapper.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -60,7 +60,6 @@ def _classify_checkpoint(n_obs: int) -> str:
 def compute_running_stats(
     ledger: pd.DataFrame,
     *,
-    benchmark_col: str = "benchmark_return_mdy",
     return_col: str = "realized_return_long_net",
     periods_per_year: int = 52,
 ) -> dict:
@@ -168,11 +167,7 @@ def _per_sub_period_alpha_ts(
     return out
 
 
-def evaluate_decision_rule(
-    ledger: pd.DataFrame,
-    *,
-    today: date | None = None,
-) -> DecisionRuleResult:
+def evaluate_decision_rule(ledger: pd.DataFrame) -> DecisionRuleResult:
     """Apply the two-stage gate sequence to the current ledger state.
 
     Returns ``PENDING`` for any state before the first checkpoint or

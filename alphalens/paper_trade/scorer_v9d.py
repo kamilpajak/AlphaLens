@@ -279,55 +279,59 @@ def incremental_refresh_smd(
     counts = {"refreshed": 0, "skipped_uptodate": 0, "skipped_missing": 0, "errors": 0}
 
     for ticker in tickers:
-        path = cache_dir / f"{ticker.upper()}.parquet"
-        if not path.exists():
-            counts["skipped_missing"] += 1
-            continue
-        try:
-            existing = pd.read_parquet(path)
-        except Exception as exc:
-            logger.warning("[%s] parquet read failed: %s", ticker, exc)
-            counts["errors"] += 1
-            continue
-        if existing.empty or "tradeDate" not in existing.columns:
-            counts["errors"] += 1
-            continue
-        max_date_str = pd.to_datetime(existing["tradeDate"]).max().date()
-        if max_date_str >= target_end:
-            counts["skipped_uptodate"] += 1
-            continue
-        try:
-            from datetime import timedelta
-
-            new_start = max_date_str + timedelta(days=1)
-            new_df = fetcher(ticker, new_start, target_end)
-        except Exception as exc:
-            logger.warning("[%s] fetch failed: %s", ticker, exc)
-            counts["errors"] += 1
-            continue
-        if new_df is None or (isinstance(new_df, pd.DataFrame) and new_df.empty):
-            counts["skipped_uptodate"] += 1  # vendor reports no new rows
-            continue
-        try:
-            from alphalens.data.alt_data.ivolatility_smd_cache import (
-                _coerce_mixed_object_columns,
-            )
-
-            new_df = _coerce_mixed_object_columns(new_df)
-            combined = pd.concat([existing, new_df], ignore_index=True)
-            combined = combined.drop_duplicates(subset=["tradeDate"], keep="last")
-            combined = combined.sort_values("tradeDate").reset_index(drop=True)
-            combined.to_parquet(path)
-            counts["refreshed"] += 1
-        except Exception as exc:
-            logger.warning("[%s] write failed: %s", ticker, exc)
-            counts["errors"] += 1
+        outcome = _refresh_one_ticker(ticker, cache_dir, fetcher, target_end)
+        counts[outcome] = counts.get(outcome, 0) + 1
         if sleep_between > 0:
             import time
 
             time.sleep(sleep_between)
 
     return counts
+
+
+def _refresh_one_ticker(
+    ticker: str,
+    cache_dir: Path,
+    fetcher: Callable[[str, date, date], pd.DataFrame | None],
+    target_end: date,
+) -> str:
+    """Refresh one ticker's parquet; returns the counts-dict key for outcome."""
+    from datetime import timedelta
+
+    from alphalens.data.alt_data.ivolatility_smd_cache import (
+        _coerce_mixed_object_columns,
+    )
+
+    path = cache_dir / f"{ticker.upper()}.parquet"
+    if not path.exists():
+        return "skipped_missing"
+    try:
+        existing = pd.read_parquet(path)
+    except Exception as exc:
+        logger.warning("[%s] parquet read failed: %s", ticker, exc)
+        return "errors"
+    if existing.empty or "tradeDate" not in existing.columns:
+        return "errors"
+    max_date_str = pd.to_datetime(existing["tradeDate"]).max().date()
+    if max_date_str >= target_end:
+        return "skipped_uptodate"
+    try:
+        new_df = fetcher(ticker, max_date_str + timedelta(days=1), target_end)
+    except Exception as exc:
+        logger.warning("[%s] fetch failed: %s", ticker, exc)
+        return "errors"
+    if new_df is None or (isinstance(new_df, pd.DataFrame) and new_df.empty):
+        return "skipped_uptodate"
+    try:
+        new_df = _coerce_mixed_object_columns(new_df)
+        combined = pd.concat([existing, new_df], ignore_index=True)
+        combined = combined.drop_duplicates(subset=["tradeDate"], keep="last")
+        combined = combined.sort_values("tradeDate").reset_index(drop=True)
+        combined.to_parquet(path)
+        return "refreshed"
+    except Exception as exc:
+        logger.warning("[%s] write failed: %s", ticker, exc)
+        return "errors"
 
 
 def backfill_smd_history(
@@ -372,57 +376,60 @@ def backfill_smd_history(
     }
 
     for ticker in tickers:
-        path = cache_dir / f"{ticker.upper()}.parquet"
-        if not path.exists():
-            counts["skipped_missing"] += 1
-            continue
-        try:
-            existing = pd.read_parquet(path)
-        except Exception as exc:
-            logger.warning("[%s] parquet read failed: %s", ticker, exc)
-            counts["errors"] += 1
-            continue
-        if existing.empty or "tradeDate" not in existing.columns:
-            counts["errors"] += 1
-            continue
-        min_date_ts = pd.to_datetime(existing["tradeDate"], errors="coerce").min()
-        if pd.isna(min_date_ts):
-            logger.warning("[%s] tradeDate column has no valid timestamps", ticker)
-            counts["errors"] += 1
-            continue
-        min_date = min_date_ts.date()
-        if min_date <= target_start:
-            counts["skipped_already_covered"] += 1
-            continue
-        try:
-            from datetime import timedelta
-
-            new_end = min_date - timedelta(days=1)
-            new_df = fetcher(ticker, target_start, new_end)
-        except Exception as exc:
-            logger.warning("[%s] backfill fetch failed: %s", ticker, exc)
-            counts["errors"] += 1
-            continue
-        if new_df is None or (isinstance(new_df, pd.DataFrame) and new_df.empty):
-            counts["skipped_no_coverage"] += 1
-            continue
-        try:
-            from alphalens.data.alt_data.ivolatility_smd_cache import (
-                _coerce_mixed_object_columns,
-            )
-
-            new_df = _coerce_mixed_object_columns(new_df)
-            combined = pd.concat([new_df, existing], ignore_index=True)
-            combined = combined.drop_duplicates(subset=["tradeDate"], keep="last")
-            combined = combined.sort_values("tradeDate").reset_index(drop=True)
-            combined.to_parquet(path)
-            counts["backfilled"] += 1
-        except Exception as exc:
-            logger.warning("[%s] backfill write failed: %s", ticker, exc)
-            counts["errors"] += 1
+        outcome = _backfill_one_ticker(ticker, cache_dir, fetcher, target_start)
+        counts[outcome] = counts.get(outcome, 0) + 1
         if sleep_between > 0:
             import time
 
             time.sleep(sleep_between)
 
     return counts
+
+
+def _backfill_one_ticker(
+    ticker: str,
+    cache_dir: Path,
+    fetcher: Callable[[str, date, date], pd.DataFrame | None],
+    target_start: date,
+) -> str:
+    """Backfill one ticker's parquet; returns the counts-dict key for outcome."""
+    from datetime import timedelta
+
+    from alphalens.data.alt_data.ivolatility_smd_cache import (
+        _coerce_mixed_object_columns,
+    )
+
+    path = cache_dir / f"{ticker.upper()}.parquet"
+    if not path.exists():
+        return "skipped_missing"
+    try:
+        existing = pd.read_parquet(path)
+    except Exception as exc:
+        logger.warning("[%s] parquet read failed: %s", ticker, exc)
+        return "errors"
+    if existing.empty or "tradeDate" not in existing.columns:
+        return "errors"
+    min_date_ts = pd.to_datetime(existing["tradeDate"], errors="coerce").min()
+    if pd.isna(min_date_ts):
+        logger.warning("[%s] tradeDate column has no valid timestamps", ticker)
+        return "errors"
+    min_date = min_date_ts.date()
+    if min_date <= target_start:
+        return "skipped_already_covered"
+    try:
+        new_df = fetcher(ticker, target_start, min_date - timedelta(days=1))
+    except Exception as exc:
+        logger.warning("[%s] backfill fetch failed: %s", ticker, exc)
+        return "errors"
+    if new_df is None or (isinstance(new_df, pd.DataFrame) and new_df.empty):
+        return "skipped_no_coverage"
+    try:
+        new_df = _coerce_mixed_object_columns(new_df)
+        combined = pd.concat([new_df, existing], ignore_index=True)
+        combined = combined.drop_duplicates(subset=["tradeDate"], keep="last")
+        combined = combined.sort_values("tradeDate").reset_index(drop=True)
+        combined.to_parquet(path)
+        return "backfilled"
+    except Exception as exc:
+        logger.warning("[%s] backfill write failed: %s", ticker, exc)
+        return "errors"

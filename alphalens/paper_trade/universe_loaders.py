@@ -236,27 +236,54 @@ def pit_union_nber_rebuild(
     )
 
     asof_d = pd.Timestamp(asof).date() if not isinstance(asof, date) else asof
-    eligible: list[str] = []
-    for ticker in candidates:
-        cik = cik_map.lookup(ticker)
-        if cik is None:
-            if on_missing_shares == "include":
-                eligible.append(ticker)
-            continue
-        facts = _load_companyfacts(cik, companyfacts_dir)
-        shares = latest_shares_as_of(facts, asof_d) if facts else None
-        if shares is None:
-            if on_missing_shares == "include":
-                eligible.append(ticker)
-            continue
-        close = _load_smd_close(ticker, asof_d, smd_cache_dir)
-        if close is None or close <= 0.0:
-            continue
-        mcap = float(shares) * float(close)
-        if cap_min_usd <= mcap <= cap_max_usd:
-            eligible.append(ticker)
+    eligible: list[str] = [
+        ticker
+        for ticker in candidates
+        if _is_ticker_in_cap_band(
+            ticker,
+            asof_d=asof_d,
+            cik_map=cik_map,
+            companyfacts_dir=companyfacts_dir,
+            smd_cache_dir=smd_cache_dir,
+            cap_min_usd=cap_min_usd,
+            cap_max_usd=cap_max_usd,
+            on_missing_shares=on_missing_shares,
+        )
+    ]
     eligible_set = set(eligible) | set(extra_etfs)
     return sorted(eligible_set)
+
+
+def _is_ticker_in_cap_band(
+    ticker: str,
+    *,
+    asof_d: date,
+    cik_map: TickerCikMap,
+    companyfacts_dir: Path,
+    smd_cache_dir: Path,
+    cap_min_usd: float,
+    cap_max_usd: float,
+    on_missing_shares: str,
+) -> bool:
+    """Per-ticker cap-band eligibility check (extracted from
+    pit_union_nber_rebuild for cognitive complexity).
+
+    Returns True iff the ticker's market cap on ``asof_d`` falls in
+    [cap_min_usd, cap_max_usd], with ``on_missing_shares`` policy applied
+    when CIK or shares-outstanding cannot be resolved.
+    """
+    cik = cik_map.lookup(ticker)
+    if cik is None:
+        return on_missing_shares == "include"
+    facts = _load_companyfacts(cik, companyfacts_dir)
+    shares = latest_shares_as_of(facts, asof_d) if facts else None
+    if shares is None:
+        return on_missing_shares == "include"
+    close = _load_smd_close(ticker, asof_d, smd_cache_dir)
+    if close is None or close <= 0.0:
+        return False
+    mcap = float(shares) * float(close)
+    return cap_min_usd <= mcap <= cap_max_usd
 
 
 __all__ = [

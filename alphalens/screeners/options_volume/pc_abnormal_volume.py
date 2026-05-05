@@ -101,11 +101,11 @@ def score_pc_abnormal_residual(features: pd.DataFrame) -> pd.Series:
         y = group["abnormal_pcr"].to_numpy(dtype=float)
         X = group[list(EQUITY_CONTROLS_FOR_RESIDUAL)].to_numpy(dtype=float)
         ones = np.ones((X.shape[0], 1), dtype=float)
-        Xb = np.hstack([ones, X])
+        x_with_intercept = np.hstack([ones, X])
 
         # OLS via lstsq; rank-deficient asofs handled gracefully.
-        beta, *_ = np.linalg.lstsq(Xb, y, rcond=None)
-        residuals = y - Xb @ beta
+        beta, *_ = np.linalg.lstsq(x_with_intercept, y, rcond=None)
+        residuals = y - x_with_intercept @ beta
         # Negate so that abnormally-LOW pcr (= bullish call activity) ranks HIGH.
         out.loc[group.index] = -residuals
 
