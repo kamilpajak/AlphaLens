@@ -24,6 +24,42 @@ def _synthetic_carhart(n: int = 500, seed: int = 0) -> pd.DataFrame:
     )
 
 
+class TestRunRegressionPeriodsPerYear(unittest.TestCase):
+    """Tier 2.A: AlphaResult exposes alpha_per_period + periods_per_year_assumption.
+
+    Bug 1 + Tier 2.A coverage: makes the annualization math transparent.
+    Pre-2026-05-05 schema reported only `alpha_annualized = alpha_per_period * periods_per_year`
+    with default periods_per_year=252 — strided callers got 50× inflated αpct.
+    """
+
+    def test_default_periods_per_year_is_252(self):
+        from alphalens.attribution.factor_analysis import run_regression
+
+        ff = _synthetic_carhart(500, seed=11)
+        port = ff["Mkt-RF"] + ff["RF"]
+        res = run_regression(port, ff, factor_columns=["Mkt-RF"], spec_name="CAPM")
+        self.assertEqual(res.periods_per_year_assumption, 252)
+        self.assertAlmostEqual(res.alpha_per_period, res.alpha_daily, places=12)
+        self.assertAlmostEqual(res.alpha_annualized, res.alpha_daily * 252, places=10)
+
+    def test_explicit_periods_per_year_50_for_weekly_stride(self):
+        from alphalens.attribution.factor_analysis import run_regression
+
+        ff = _synthetic_carhart(500, seed=12)
+        port = ff["Mkt-RF"] + ff["RF"]
+        res = run_regression(
+            port,
+            ff,
+            factor_columns=["Mkt-RF"],
+            spec_name="CAPM",
+            periods_per_year=50,  # 252/5 ≈ 50 for weekly stride
+        )
+        self.assertEqual(res.periods_per_year_assumption, 50)
+        self.assertAlmostEqual(res.alpha_annualized, res.alpha_per_period * 50, places=10)
+        # alpha_per_period should equal the regression-day alpha regardless of annualization
+        self.assertAlmostEqual(res.alpha_per_period, res.alpha_daily, places=12)
+
+
 class TestRunRegression(unittest.TestCase):
     """Core: run_regression(port_returns, factors, factor_columns, cov_type, spec_name)."""
 

@@ -156,6 +156,52 @@ class TestPreregisterCLI(unittest.TestCase):
         self.assertEqual(entry["status"], "completed")
         self.assertEqual(entry["outcome"]["verdict"], "FAIL")
 
+    def test_list_handles_legacy_outcome_missing_mean_alpha_t(self):
+        """A historical entry (v9d_retrospective_pre_2018_2026_05_05) was completed
+        with a richer postmortem-style outcome dict that lacks the standard
+        ``mean_alpha_t`` key. CLI ``list`` must not raise KeyError on these.
+        It should fall back to ``primary_alpha_t_U3`` if present, else show '—'.
+        """
+        from alphalens_cli.main import app
+
+        self._add(id="legacy_entry", signal_class="legacy")
+        # Hand-edit ledger.json to inject legacy-format outcome
+        ledger_path = self.root / "ledger.json"
+        payload = json.loads(ledger_path.read_text())
+        payload["entries"][0]["status"] = "completed"
+        payload["entries"][0]["outcome"] = {
+            "verdict": "MID",
+            "primary_alpha_t_U3": 2.45,
+            # NB: no "mean_alpha_t" key
+        }
+        ledger_path.write_text(json.dumps(payload, indent=2))
+
+        result = self.runner.invoke(app, ["preregister", "list", "--ledger-root", str(self.root)])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        out = _strip(result.output)
+        self.assertIn("legacy_entry", out)
+        self.assertIn("MID", out)
+        self.assertIn("2.45", out)  # falls back to primary_alpha_t_U3
+
+    def test_list_handles_outcome_with_no_alpha_field_at_all(self):
+        """If outcome has neither mean_alpha_t nor primary_alpha_t_U3, show '—'."""
+        from alphalens_cli.main import app
+
+        self._add(id="no_alpha_entry", signal_class="legacy")
+        ledger_path = self.root / "ledger.json"
+        payload = json.loads(ledger_path.read_text())
+        payload["entries"][0]["status"] = "completed"
+        payload["entries"][0]["outcome"] = {"verdict": "FAIL"}  # no alpha key at all
+        ledger_path.write_text(json.dumps(payload, indent=2))
+
+        result = self.runner.invoke(app, ["preregister", "list", "--ledger-root", str(self.root)])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        out = _strip(result.output)
+        self.assertIn("no_alpha_entry", out)
+        self.assertIn("FAIL", out)
+
     def test_threshold_command_prints_critical_t(self):
         from alphalens_cli.main import app
 

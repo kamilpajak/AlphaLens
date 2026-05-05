@@ -1743,6 +1743,182 @@
       "notes": ""
     },
     {
+      "id": "pc_abnormal_volume_retrospective_pre_2018_2026_05_05",
+      "signal_class": "options_volume_search_2026_05_05",
+      "hypothesis": "Cross-sectional residual of abnormal log put-call volume ratio (Pan-Poteshman 2006-inspired proxy on aggregated daily data, residualized against log_marketCap + reversal_1m + momentum_6m + rv_30d) generates positive Carhart-4F alpha on pre-2018 fresh OOS (2008-04-30 to 2018-04-29) when applied via long-only top-decile equal-weighted on iVol cache U2 universe with 5d rebalance and 30bps RT cost. Verdict gates pooled across 5 phases x 3 sub-periods x 2 universes (30 cells): G1 alpha_t >= +2.85 program-Bonferroni n=26 binding, G2 Andrews-Manski lower bound (bias 1-2pp/y) >= 0, G3 phase dispersion <= 1.5, G4 sub-period dispersion <= 2.5, G5 |U1-U2| <= 3.0, G6 terminal-return robustness within 0.5. FAIL on U2 alone insufficient to close class - U3 NBER follow-up required if non-FAIL. Pre-reg sha256: 03ddf4b7906ed07049bbb74dcdd599afa29abda1e8c4f6551a1876c78e45e689",
+      "scorer_path": "scripts/experiment_pc_retrospective.py",
+      "params_frozen": {
+        "class": "options_volume_search_2026_05_05",
+        "version": "v11_pc_abnormal_volume_retrospective_pre_2018",
+        "slug": "pc_abnormal_volume_retrospective_pre_2018_2026_05_05",
+        "design_provenance": "Pan-Poteshman 2006 (RFS) INSPIRED proxy test using aggregated daily put-call volume on a pre-2018 fresh OOS window. NOT a literal replication: Pan-Poteshman used proprietary CBOE open-close transaction data with informed/uninformed flow decomposition, demonstrating 'only the nonpublic (informed) signal predicts returns; the public signal shows no predictability' (RFS 2006 abstract + Perplexity adversarial review 2026-05-05). We have only daily-aggregated optVolPut/optVolCall from iVol /smd, which conflates informed and uninformed flow plus mechanical-hedging volume from market makers. The pure-replica scorer would test the PUBLIC component which Pan-Poteshman themselves showed is non-predictive — guaranteed FAIL by their own results. To extract the predictive subset, the scorer residualizes the abnormal P/C ratio against equity controls (log_marketCap, reversal_1m, momentum_6m, rv_30d) cross-sectionally, mirroring v9D's residualization architecture. Discovery: cache audit 2026-05-05 (post v9D retrospective INCONCLUSIVE) verified that vendor /smd endpoint pre-aggregates these P/C fields — feature columns that v7/v8/v9A/v9D NEVER used (those used only IV-level features ivx30, ivp30, rv_30d). Cache backfill 2026-05-04 extended pre-2018 history for ~949 tickers with full P/C field coverage. Window 2008-2018 IS adjacent OOS to source literature (Pan-Poteshman 1990-2001) and PRE-DATES most post-2015 structural changes (zero-DTE 2019+, Robinhood retail flow 2015+, MM hedging automation). FAIL on 2008-2018 = clean kill (proxy didn't work even in favorable era). PASS = corroborates extractability of Pan-Poteshman-class signal from aggregated data via residualization. Same retrospective methodology bundle (pre-reg + multi-phase + Andrews-Manski bounds + Romano-Wolf) as v9d_retrospective_pre_2018_2026_05_05.",
+        "design_memo": "TBD — to be drafted after adversarial review (B1.1)",
+        "adversarial_review_summary": "DUAL-ROUND PRE-LOCK adversarial review 2026-05-05: (Round 1, before draft) Perplexity Sonar Reasoning Pro flagged cache-audit-driven discovery as exploratory contamination → program-level Bonferroni n=26 |t|≥2.85 BINDS regardless of class label; decay literature absent-but-plausible post-2015. (Round 2, after draft, zen gemini-3-pro-preview + Perplexity high-context): both converged on APPROVE-WITH-AMENDMENTS. Critical findings: (1) Pan-Poteshman 2006 explicitly demonstrated public-flow component is NON-PREDICTIVE; aggregated daily data captures public confounds (mechanical hedging, vol scaling, contemporaneous returns) — pure replica without residualization is GUARANTEED FAIL by Pan-Poteshman's own evidence, mechanical not signal-test. (2) Scorer must residualize abnormal P/C against (log_marketCap, reversal_1m, momentum_6m, rv_30d) controls to have any chance of extracting predictive subset (zen amendment, Perplexity-corroborated). (3) Universe U2 (cache-only) silently drops mid-period delistings, biasing put-volume signal — FAIL on U2 alone insufficient to close class; require U3 NBER follow-up if non-FAIL verdict. (4) 2008-09 GFC may saturate 60d-rolling cross-sectional ranking — Phase 0 saturation diagnostic added. (5) Frame honestly as 'Pan-Poteshman-inspired proxy test using aggregated daily data' NOT 'replication' (literature-honest given data limitations). Verdict: APPROVE pre-reg lock with these 5 amendments incorporated 2026-05-05.",
+        "scorer_frozen": {
+          "module": "alphalens.screeners.options_volume.pc_abnormal_volume.score_pc_abnormal_residual",
+          "specification": "Cross-sectional residual of abnormal P/C volume against equity controls. Per-asof: (1) compute pcr_t = log(optVolPut_t / max(optVolCall_t, 1)) per ticker; (2) compute abnormal_pcr_t = pcr_t - rolling_mean(pcr, window=60_trading_days, min_obs=30); (3) per asof, run cross-sectional OLS: abnormal_pcr_t ~ log_marketCap + reversal_1m + momentum_6m + rv_30d; (4) score = -residual (negate so highest-score = abnormally-LOW pcr = bullish call activity per Pan-Poteshman 2006). Architecture identical to v9D cross_sectional_residual.score_cross_sectional_residual, only feature swap (abnormal_pcr_t in place of -ivp30). Residualization is PRE-COMMITTED amendment per zen+Perplexity adversarial review 2026-05-05; without it the scorer would test only the public-flow component which Pan-Poteshman 2006 demonstrated lacks predictive power.",
+          "feature_construction": "Step 1: pcr_t = log(optVolPut_t / max(optVolCall_t, 1.0)). Sentinel: if optVolPut_t == 0 OR optVolCall_t == 0, set pcr_t = NaN (zero-volume tickers excluded). Step 2: abnormal_pcr_t = pcr_t - mean(pcr over t-60..t-1 trading days), requiring ≥30 non-NaN obs in window. Step 3: equity controls per asof: log_marketCap = log(marketCap), reversal_1m = -close_t/close_{t-21}+1, momentum_6m = close_{t-21}/close_{t-126}-1, rv_30d = std(log_returns over t-30..t-1)*sqrt(252). Step 4: cross-sectional OLS of abnormal_pcr_t on [log_marketCap, reversal_1m, momentum_6m, rv_30d] per asof, score = -residual. Min 50 tickers per asof for cross-sectional regression to be valid; below 50 → return NaN scores for that asof.",
+          "score_direction": "Long-only top decile by score (= -residual of abnormal_pcr_t). Equal weight. Equivalent to selecting tickers where actual put/call ratio is most-anomalously-LOW relative to size+momentum+vol controls, interpreted per Pan-Poteshman 2006 as abnormal informed call buying.",
+          "frozen_locked_at_design_time": true,
+          "modification_during_retrospective": "PROHIBITED — any drift in scorer spec invalidates the test"
+        },
+        "data_provider": "iVolatility $399 retail tier (probe v5 99.5% T1) — same as v7/v8/v9/v10/v9d_retrospective; cache 2007-01-01 → 2026-04-30 per project_ivolatility_pre2018_backfill_2026_05_04",
+        "data_endpoint_primary": "/equities/stock-market-data (smd)",
+        "feature_columns_used_from_cache": [
+          "optVolCall",
+          "optVolPut",
+          "tradeDate",
+          "close",
+          "marketCap",
+          "exchange"
+        ],
+        "rebalance_stride_days": 5,
+        "holding_period_days_target": 20,
+        "holding_period_days_portfolio_returns": 1,
+        "weighting": "equal",
+        "decile_pct": 0.1,
+        "adv_min_dollar": 2000000.0,
+        "cost_profile": "long_only_30bps",
+        "cost_profile_rt_bps": 30,
+        "benchmark": "MDY",
+        "universe_sensitivity_variants": {
+          "U2_ivol_cache_contents": {
+            "description": "All iVol cache parquets with valid SMD data on asof, ADV ≥ $2M filter applied. Includes ~1339 pre-2018 delisted firms backfilled 2026-05-04. Primary universe for verdict (v9d_retrospective experience: U2 simpler than U3 NBER reconstruction and adequate for fresh-feature-space test; U3 reconstruction overhead deferred unless v11 PASS triggers more rigorous follow-up).",
+            "loader_module": "scripts/experiment_pc_retrospective.py:load_universe_u2 (TBD Phase 2)",
+            "expected_bias": "30-50 bps/y (cache-driven, includes delisted)"
+          },
+          "U1_legacy_pit_yaml": {
+            "description": "Existing pit_universe yaml snapshots filtered by iwm_current.yaml seed. Worst-case max-survivor-bias baseline.",
+            "loader_module": "alphalens.paper_trade.scorer_v9d.pit_union",
+            "expected_bias": "200-400 bps/y"
+          },
+          "primary_for_verdict": "U2",
+          "sensitivity_for_diagnostic": [
+            "U1"
+          ],
+          "empirical_bias_estimate": "U1_αt − U2_αt computed at verdict-time as descriptive sanity check; if Δ > 3.0 αt → RECONSTRUCTION_DOMINANT verdict (signal is just survivor bias)"
+        },
+        "phase_audit": {
+          "n_phases": 5,
+          "stride_for_phases": 5,
+          "phase_offset_range": "0..4",
+          "audit_driver": "scripts/experiment_pc_retrospective.py (TBD Phase 2)",
+          "dispersion_metric_primary": "alpha_t_range across 5 phases × 3 sub-periods × 2 universes",
+          "alpha_t_range_threshold_stable": 1.5,
+          "alpha_t_range_threshold_concentrated": 2.5,
+          "rationale": "Mirror v9d_retrospective phase grid (5 phases × 3 sub-periods × U-variants). Total cells = 30 (5 × 3 × 2)."
+        },
+        "sub_periods_locked": [
+          {
+            "name": "GFC_recovery",
+            "start": "2008-04-30",
+            "end": "2011-12-31",
+            "rationale": "Same windows as v9d_retrospective for cross-experiment phase-comparison sanity; GFC + early recovery"
+          },
+          {
+            "name": "mid_cycle_eu_debt",
+            "start": "2012-01-01",
+            "end": "2014-12-31",
+            "rationale": "Low-vol bull + EU sovereign debt + taper tantrum"
+          },
+          {
+            "name": "late_cycle_china_shock",
+            "start": "2015-01-01",
+            "end": "2018-04-29",
+            "rationale": "China 2015-16 shock + Brexit + 2018 vol spike. NB: covers early Robinhood era (2015 launch) — if signal decays mid-period, expect αt drop in this sub-period vs GFC_recovery."
+          }
+        ],
+        "terminal_return_policy": {
+          "rule": "Same as v9d_retrospective: when ticker held in holding window has last_tradeDate < holding_end and ticker is flagged as delisted, inject return = -1.0 (Shumway 1997 NASDAQ default). Without patch, silent NaN-drop biases long-only top-decile αt upward.",
+          "rationale": "Without patch, silent NaN-drop biases long-only top-decile αt upward by ignoring catastrophic delisting outcomes",
+          "sensitivity_alternative": "Re-run with -0.55 (Shumway NASDAQ-conditional median) on U2 only as descriptive check; not a primary gate"
+        }
+      },
+      "periods": {
+        "retrospective_oos_start": "2008-04-30",
+        "retrospective_oos_end": "2018-04-29",
+        "rationale": "Fresh OOS — P/C-abnormal-volume scorer NEVER evaluated on this window (or any window in this project — feature space unused in v7/v8/v9/v10). 10y span × 52 weeks ≈ 520 weekly obs. Pre-reg explicitly excludes 2007 due to iVol cache sparsity at boundary plus first-3-month coverage warmup (matches v9d_retrospective convention)."
+      },
+      "success_criteria": {
+        "mode": "multi_gate_pass_fail_with_inconclusive_zone",
+        "primary_metric": "Carhart 4-factor αt on long-only top-decile portfolio returns (decile minus benchmark MDY), pooled across 5 phases × 3 sub-periods on U2 universe with terminal-return patch active",
+        "bonferroni_accounting": {
+          "intra_class_claim": "options_volume_search_2026_05_05 (FRESH sub-class — distinct feature columns from options_implied_search_2026_05_02; v7-v9 used IV-level features only)",
+          "intra_class_n_if_fresh": 1,
+          "intra_class_naive_t_threshold_if_fresh": 1.96,
+          "program_level_alpha_class_n_after_this": 26,
+          "program_level_naive_t_threshold": 2.85,
+          "binding_threshold_for_verdict": "PROGRAM-LEVEL — naive Bonferroni |t|≥2.85 (= 0.05/26 two-sided)",
+          "rationale": "Adversarial review (Perplexity 2026-05-05) judges cache-audit-driven discovery as exploratory contamination: 'Unless you can timestamp a pre-analysis plan saying check iVolatility for P/C aggregates before touching 2024-26, the discovery method contaminates the classification.' No such pre-cache-audit plan was registered. CONSERVATIVE position: program-level Bonferroni binds regardless of class label. Fresh-sub-class claim documented for taxonomy/future work but NOT used to relax verdict gate.",
+          "amendment_if_adversarial_review_overrides": "If B1.1 second-round adversarial review (zen+perplexity) judges intra-class n=1 reset legitimate AND argues retrospective-window unburnt-by-construction overrides cache-audit-discovery contamination, gates may relax to |t|≥1.96. Such amendment requires PRE-RUN written justification. Post-data-peek amendment is FORBIDDEN."
+        },
+        "bias_range_locked": {
+          "lower_bound_pct_per_year": 1.0,
+          "upper_bound_pct_per_year": 2.0,
+          "rationale": "Same range as v9d_retrospective (DFA 60bps + small/mid-cap multiplier per Perplexity → 120-150bps; extended to 200bps for residual reconstruction error). U2 universe reuses iVol cache (no NBER reconstruction here) so bias may run higher than v9d_retrospective U3; sensitivity check via U1 comparison.",
+          "applied_in_inference": "Andrews-Manski bounds CI computed as [αt_observed_pct − 2.0%, αt_observed_pct − 1.0%] in annualized excess return terms; mapped to t-stat space via cells' empirical SE"
+        },
+        "all_gates_must_pass": [
+          {
+            "gate_id": "G1_primary_alpha_t_significance",
+            "rule": "Carhart 4F αt on U2 (primary universe) pooled across 5 phases × 3 sub-periods ≥ +2.85 (program-level Bonferroni binding)",
+            "tier": "primary"
+          },
+          {
+            "gate_id": "G2_bounds_exclude_zero",
+            "rule": "Andrews-Manski lower-bound of unbiased αt (= αt_observed_pct − 2.0%/y in annualized excess space, mapped to t-stat) ≥ 0",
+            "tier": "primary"
+          },
+          {
+            "gate_id": "G3_phase_dispersion_stable",
+            "rule": "max(αt) − min(αt) across 5 phases on U2 (within each sub-period) ≤ 1.5 per sub-period",
+            "tier": "primary"
+          },
+          {
+            "gate_id": "G4_sub_period_consistency",
+            "rule": "max(αt_sub_period) − min(αt_sub_period) ≤ 2.5 across 3 sub-periods on U2 (regime-stability check). Pan-Poteshman decay hypothesis: late_cycle_china_shock αt < GFC_recovery αt by >1.0 = empirical decay signature.",
+            "tier": "primary"
+          },
+          {
+            "gate_id": "G5_universe_sensitivity_consistency",
+            "rule": "U2 αt within 2.5 of U1 αt; |U1−U2| > 3.0 flags reconstruction-bias dominates signal (RECONSTRUCTION_DOMINANT verdict)",
+            "tier": "primary"
+          },
+          {
+            "gate_id": "G6_terminal_return_robustness",
+            "rule": "Re-run on U2 with terminal_return = -0.55 (Shumway NASDAQ-conditional) yields αt within ±0.5 of -1.0 default. If gap >0.5, signal depends on terminal-return assumption — INCONCLUSIVE not PASS.",
+            "tier": "robustness"
+          }
+        ],
+        "verdict_classification": {
+          "G1_PASS_AND_alpha_t_above_3.5": "PASS_ROBUST — signal validated bias-robust + multiple-testing-adjusted. Strong Pan-Poteshman replication on adjacent OOS. Class options_volume opens for capital deployment consideration; triggers prospective walk-forward replication.",
+          "G1_PASS_AND_G2_PASS_AND_alpha_t_in_2.85_to_3.5": "PASS_MARGINAL — passes program-level Bonferroni at lower edge. Weak Pan-Poteshman replication; capital deploy still off-table until prospective replication.",
+          "G1_FAIL_AND_alpha_t_in_1.0_to_2.85": "INCONCLUSIVE — directional signal but below adjusted threshold. Class options_volume stays open for refinement (cross-sectional residual variant, OI-based vs vol-based dichotomy).",
+          "G1_FAIL_AND_alpha_t_below_1.0": "FAIL_ROBUST_TENTATIVE — signal does not extract on U2 cache-only universe. Class options_volume NOT yet closed: per zen 2026-05-05, U2 silently drops mid-period delistings precisely where put-volume signal should fire. Before declaring class closure, MUST run U3 NBER-reconstruction follow-up if budget permits. If U3 follow-up also FAIL → FAIL_ROBUST, class effectively closed. If U3 not feasible → INCONCLUSIVE_DATA_LIMITED, class kept open with caveat.",
+          "G3_or_G4_FAIL_at_otherwise_PASS_alpha_t": "REGIME_DEPENDENT — phase or sub-period dispersion exceeds threshold despite mean αt passing.",
+          "G5_FAIL_with_U1_U2_gap_above_3.0": "RECONSTRUCTION_DOMINANT — survivorship bias swamps signal; uninterpretable."
+        },
+        "kill_pre_full_run": [
+          "Phase 0 feature_coverage_anchor fails on any sub-period midpoint → ABORT (cache too sparse for cross-sectional regression)",
+          "Phase 0 scorer_implementation_locked_before_run hash mismatch → ABORT (spec drifted between pre-reg and implementation)",
+          "Phase 2 smoke run on a single asof yields < 50 ranked tickers → ABORT (decile_size < 5 = no cross-sectional power)"
+        ],
+        "no_stretch_tier": "Single multi-gate verdict tree. Six exhaustive verdicts (PASS_ROBUST | PASS_MARGINAL | INCONCLUSIVE | FAIL_ROBUST | REGIME_DEPENDENT | RECONSTRUCTION_DOMINANT). No exploratory tier.",
+        "capital_deploy_clause": "Capital deploy remains OFF-TABLE on retrospective alone regardless of verdict. PASS_ROBUST shortens prospective replication wait window; PASS_MARGINAL keeps full 12mo; all other verdicts maintain status quo (paper-trade checkpoint ~2027-05-04 for v9D class)."
+      },
+      "registered_at": "2026-05-05",
+      "status": "completed",
+      "outcome": {
+        "verdict": "MID",
+        "mean_alpha_t": 2.65,
+        "mean_excess_net": 0.05,
+        "audit_path": "docs/research/pc_abnormal_retrospective_pre_2018_verdict.json",
+        "completed_at": "2026-05-05",
+        "notes": "INCONCLUSIVE per pre-reg (zone alpha_t in [1.0, 2.85)); bounds CI [+2.52, +2.59] excludes 0; G3 phase dispersion FAIL (max within-sub range 1.76>1.5); G5 cross-universe gap 1.34<3.0 PASS; monotonic sub-period decay GFC>mid>late matches decay hypothesis. Post-amendment sha256 1debf1cc... (log_marketCap dropped pre-first-run). Class options_volume_search_2026_05_05 stays open."
+      },
+      "notes": ""
+    },
+    {
       "id": "pure_contrarian_2026_04_29",
       "signal_class": "price_factor_search_2026_04_29",
       "hypothesis": "60d-drawdown + 5d bounce contrarian, ADV+cost-stressed, generates positive OOS net 4F α on R2000-like PIT universe.",
@@ -2604,6 +2780,73 @@
       "status": "registered",
       "outcome": null,
       "notes": ""
+    },
+    {
+      "id": "v9d_retrospective_pre_2018_2026_05_05",
+      "signal_class": "retrospective_replication_pre_2018",
+      "hypothesis": "Independent fresh-OOS replication of v9D cross-sectional residual scorer (parameter-free per-asof OLS on -ivp30 vs equity controls) on 2008-04-30 → 2018-04-29 window the model has NEVER been evaluated against. Pre-2018 cache extended via ivolatility backfill 2026-05-04 (~949 tickers with pre-2018 history). Replication tests whether v9D recorded αt=+2.29 (5-phase mean on burnt 2024-04-30 → 2026-04-30 holdout) generalizes to a regime closer to Xing 2010 in-sample (1996-2005). Three universe variants (U1 legacy, U2 ivol-cache, U3 NBER-method rebuild) for survivorship-bias sensitivity. Three sub-periods (GFC, mid-cycle, late-cycle) for regime stability. 5 phases × 3 sub × 3 universes = 45 cells. Romano-Wolf (n=25 family) adjusted critical threshold expected |t|≥2.13. Andrews-Manski bounds inference with B ∈ [1.0%, 2.0%]/y bias range. Synthetic terminal return -1.0 (Shumway 1997) for mid-period delistings.",
+      "scorer_path": "alphalens/screeners/options_implied/cross_sectional_residual.py (frozen, hash check at run time)",
+      "params_frozen": "docs/research/preregistration/params_v9d_retrospective_pre_2018_2026_05_05.json (sha256: f43ac35785391fd3010efbc128d875fb0c982923df31a5ad7eed4d35f7548b58)",
+      "periods": {
+        "retrospective_oos_start": "2008-04-30",
+        "retrospective_oos_end": "2018-04-29",
+        "sub_periods": [
+          {
+            "name": "GFC_recovery",
+            "start": "2008-04-30",
+            "end": "2011-12-31"
+          },
+          {
+            "name": "mid_cycle_eu_debt",
+            "start": "2012-01-01",
+            "end": "2014-12-31"
+          },
+          {
+            "name": "late_cycle_china_shock",
+            "start": "2015-01-01",
+            "end": "2018-04-29"
+          }
+        ]
+      },
+      "success_criteria": {
+        "primary_metric": "Carhart 4F αt pooled across 5 phases × 3 sub-periods on U3 universe with terminal-return patch active",
+        "primary_threshold_type": "Romano-Wolf step-down with Politis-Romano stationary block bootstrap (B=10000, mean block 4 weeks)",
+        "expected_critical_t": "|t|>=2.13 (range 2.10-2.15)",
+        "naive_bonferroni_fallback": "|t|>=2.81",
+        "verdict_modes": [
+          "PASS_ROBUST",
+          "PASS_MARGINAL",
+          "INCONCLUSIVE",
+          "FAIL_ROBUST",
+          "REGIME_DEPENDENT",
+          "RECONSTRUCTION_DOMINANT"
+        ],
+        "bias_range_pct_per_year": [
+          1.0,
+          2.0
+        ],
+        "bonferroni_n": 25,
+        "bonferroni_increment_from_this_test": 1
+      },
+      "registered_at": "2026-05-05",
+      "status": "completed",
+      "outcome": {
+        "verdict": "INCONCLUSIVE",
+        "primary_alpha_t_U3": 2.45,
+        "bounds_alpha_t_lower": 2.39,
+        "bounds_alpha_t_upper": 2.42,
+        "bounds_lower_excludes_zero": true,
+        "cross_universe_gap_U1_U3": 1.37,
+        "cross_sub_period_alpha_t_range": 1.04,
+        "within_sub_period_alpha_t_range_max": 2.2,
+        "cells_completed": 45,
+        "reason": "alpha_t=+2.45 in [1.0, 2.5), missed PASS_MARGINAL by 0.05; lower-bound bias-adjusted CI excludes 0 (signal real but not deploy-threshold).",
+        "postmortem": "docs/research/v9d_retrospective_pre_2018_postmortem_2026_05_05.md",
+        "cross_window_consistency_note": "Pre-2018 αt=+2.45 vs 2024-26 holdout αt=+2.29; combined ~+2.37.",
+        "program_level_n_after": 25,
+        "next_test_naive_bonferroni_t": 2.81
+      },
+      "notes": "INCONCLUSIVE per pre-reg decision tree: αt below PASS_MARGINAL threshold (2.50) but lower-bound bias-adjusted CI excludes 0. Capital deploy stays off-table awaiting 12-month paper-trade checkpoint."
     },
     {
       "id": "vol_target_mom_lowvol_2026_04_30",

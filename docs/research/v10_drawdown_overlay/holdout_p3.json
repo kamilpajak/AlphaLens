@@ -36,9 +36,9 @@
     "n": 100,
     "sharpe_gross": 1.8749175528983564,
     "sharpe_net": 1.8736956067502712,
-    "alpha_gross_4f": 24.256136553291576,
+    "alpha_gross_4f": 4.851227310658315,
     "alpha_t_4f": 2.1785838541043576,
-    "alpha_net_4f": 24.253136553291576,
+    "alpha_net_4f": 4.850627310658315,
     "excess_vs_bench_ann_gross": 4.574003068749887,
     "excess_vs_bench_ann_net": 4.571003068749887,
     "max_drawdown_net": -0.1782837385780872,
@@ -49,9 +49,9 @@
     "n": 100,
     "sharpe_gross": 1.834742596349706,
     "sharpe_net": 1.8335204070229387,
-    "alpha_gross_4f": 23.81719456917249,
+    "alpha_gross_4f": 4.763438913834498,
     "alpha_t_4f": 2.1334866829408776,
-    "alpha_net_4f": 23.81419456917249,
+    "alpha_net_4f": 4.762838913834498,
     "excess_vs_bench_ann_gross": 4.474473278043404,
     "excess_vs_bench_ann_net": 4.471473278043404,
     "max_drawdown_net": -0.12478826626770541,
@@ -416,5 +416,8 @@
       0.004383024041741833,
       -0.016890427266417644
     ]
-  }
+  },
+  "migrated_alpha_at": "2026-05-05",
+  "migrated_stride_days": 5,
+  "migrated_n_alpha_fields_corrected": 4
 }

@@ -112,7 +112,10 @@ def compute_running_stats(
         }
 
     res = run_regression(
-        rets, carhart[["Mkt-RF", "SMB", "HML", "Mom", "RF"]], ["Mkt-RF", "SMB", "HML", "Mom"]
+        rets,
+        carhart[["Mkt-RF", "SMB", "HML", "Mom", "RF"]],
+        ["Mkt-RF", "SMB", "HML", "Mom"],
+        periods_per_year=periods_per_year,
     )
     return {
         "n_obs": n,
@@ -126,7 +129,10 @@ def compute_running_stats(
 
 
 def _per_sub_period_alpha_ts(
-    ledger: pd.DataFrame, *, length_weeks: int = SUB_PERIOD_LENGTH_WEEKS
+    ledger: pd.DataFrame,
+    *,
+    length_weeks: int = SUB_PERIOD_LENGTH_WEEKS,
+    periods_per_year: int = 52,
 ) -> list[float]:
     """Split ledger into ``length_weeks``-sized chunks and compute αt per chunk."""
     if ledger.empty or len(ledger) < length_weeks:
@@ -154,6 +160,7 @@ def _per_sub_period_alpha_ts(
                 chunk,
                 carhart[["Mkt-RF", "SMB", "HML", "Mom", "RF"]],
                 ["Mkt-RF", "SMB", "HML", "Mom"],
+                periods_per_year=periods_per_year,
             )
             out.append(float(res.alpha_tstat))
         except (ValueError, RuntimeError):
