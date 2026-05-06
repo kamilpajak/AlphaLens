@@ -229,9 +229,8 @@ def _compute_equity_controls(sliced: pd.DataFrame) -> dict[str, float] | None:
     reversal_1m = -((close_now / close_21) - 1.0)
     momentum_6m = (close_21 / close_126) - 1.0
 
-    # rv_30d: annualized stdev log-returns over last 30 trading days
-    if n < 31:
-        return None
+    # rv_30d: annualized stdev log-returns over last 30 trading days.
+    # n >= 127 already guaranteed above, so n >= 31 is guaranteed too.
     log_rets = np.diff(np.log(closes[-31:]))
     if len(log_rets) < 30 or not np.all(np.isfinite(log_rets)):
         return None

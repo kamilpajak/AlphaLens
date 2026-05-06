@@ -133,7 +133,9 @@ def romano_wolf_step_down(
         raise ValueError(f"mean_block_length must be > 0, got {mean_block_length}")
 
     if rng is None:
-        rng = np.random.default_rng()
+        rng = (
+            np.random.default_rng()
+        )  # NOSONAR — caller passes seeded rng for reproducibility; unseeded default is intentional
 
     observed_tstats = _compute_tstats(returns)
     observed_means = returns.mean(axis=0)
@@ -276,7 +278,9 @@ def romano_wolf_step_down_stratified(
         raise ValueError(f"mean_block_length must be > 0, got {mean_block_length}")
 
     if rng is None:
-        rng = np.random.default_rng()
+        rng = (
+            np.random.default_rng()
+        )  # NOSONAR — caller passes seeded rng for reproducibility; unseeded default is intentional
 
     pooled = np.vstack(returns_per_stratum)
     n_obs_total = pooled.shape[0]
