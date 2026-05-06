@@ -52,11 +52,60 @@ CLOSED-layer code is retained as a research framework + anti-pattern record (see
 
 ## Concepts
 
+### Basic terms
+
 - **Ticker** — exchange symbol identifying a stock (e.g. `AAPL`, `NVDA`); the unit of selection in every screener.
 - **Asof** — a point-in-time anchor (a date) at which features are computed using only data observable on that date; PIT-correctness means no later-revised data leaks back.
-- **Lasso** — L1-regularized linear regression that automatically zeros uninformative feature coefficients; used in the alt-data screeners to fit ranking models on the 10-feature whitelist.
-- **Holdout** — the date range withheld from model fitting and used only for verdict (e.g. 2024-04-30 → 2026-04-30); a strategy is judged by its performance on this unseen slice. "Burnt holdout" means the same window has been observed across multiple experiments, inflating multiplicity.
 - **Rebalance** — the act of recomputing scores at an `asof` and updating portfolio holdings; in v3-v6 the rebalance stride is 5 trading days with a 20-day holding period, producing 75% overlap (4-tranche).
+- **Holdout** — the date range withheld from model fitting and used only for verdict (e.g. 2024-04-30 → 2026-04-30); a strategy is judged by its performance on this unseen slice.
+
+### Statistics & multiple-testing
+
+- **αt (alpha t-stat)** — t-statistic of the Carhart-4F regression intercept; the primary success metric for screener strategies. A Bonferroni-adjusted threshold (typically `|αt| ≥ 2.86` at n=27 tests) is required for PASS.
+- **Bonferroni correction** — multiple-testing adjustment that raises the critical t-statistic when N hypotheses share a data window. The project tracks a program-level Bonferroni budget across all experiments in `docs/research/preregistration/ledger.jsonl`; each new test raises the bar for the next.
+- **Multi-phase audit** — running the same scorer at strided phase offsets (typically 5 phases, stride=21 days) on the same OOS window. PASS requires every phase to clear floor AND mean αt to clear the Bonferroni threshold. Catches strategies that depend on calendar luck.
+- **Phase-robust** — verdict tier where every phase αt ≥ 1.5 AND mean αt ≥ critical AND dispersion ≤ gate (50pp standard, 70pp R2000). The rare positive outcome.
+- **HAC / Newey-West** — heteroskedasticity-and-autocorrelation-consistent standard errors. `hac_maxlags` is locked to match the signal's serial-correlation horizon (e.g. 126 trading days for a 6-month signal).
+- **Romano-Wolf bootstrap** — block bootstrap producing simultaneous confidence bounds across phases. Block size must encompass the signal window or it underestimates serial correlation.
+- **Dispersion gate** — caps the allowed range of αt across phases. `mean ≥ 2.86` with `range > 50pp` flips PASS to INCONCLUSIVE — a "right average for the wrong reason" signature.
+- **HARKing** — Hypothesizing After Results Known. Building a hypothesis from observed data then "validating" it on the same data inflates type-I error. Mitigated by pre-registration with frozen params and a SHA256 hash before any holdout look.
+- **Burnt holdout** — same OOS window observed across multiple experiments. Each new fit on a burnt window adds to the program-level multiplicity count even if the model class differs (per `feedback_burnt_holdout_multiplicity.md`).
+- **Lasso** — L1-regularized linear regression that automatically zeros uninformative feature coefficients; used in alt-data screeners to fit ranking models on the 10-feature whitelist. A CV-zeroed Lasso (every coef = 0) is a red flag — see `feedback_zero_coef_lasso_diagnostic.md`.
+
+### Factor attribution
+
+- **Carhart-4F** — 4-factor regression: market excess return (Mkt-RF), size (SMB), value (HML), momentum (UMD). The default attribution model in `alphalens/attribution/factor_analysis.py`.
+- **Fama-French factors** — **Mkt-RF** (market minus risk-free), **SMB** (Small-Minus-Big size factor), **HML** (High-Minus-Low value factor); **UMD** (Up-Minus-Down momentum) is the Carhart extension.
+- **Residualization** — projecting the raw signal on a panel of equity controls (typically `reversal_1m`, `momentum_6m`, `rv_30d`) and using the OLS residual as the score. Strips out known cross-sectional drivers so the strategy isn't just a hidden factor bet.
+- **Sharpe-as-primary** — for overlay-bearing strategies (Layer 4) the primary success metric is Sharpe improvement, not αt — overlays mechanically modulate beta which biases αt downward (per ADR 0007 "time-varying-beta hazard").
+
+### Data discipline
+
+- **PIT (point-in-time)** — at every `asof`, features use only data that was observable on that date. Restated fundamentals, look-ahead universe membership, and forward-rolling indices all violate PIT. Enforced by `tests/test_pit_universe_loader.py` + `data/store/`.
+- **Survivorship bias** — using today's universe to backtest historical asofs gives a free pass on dead companies. The project uses Russell PIT yamls (`data/universes/r{1000,2000,3000}_pit/YYYY-MM.yaml`) keyed to the membership-as-of date.
+- **Fire-sale exclusion** — when a ticker is later delisted, drop returns in the 180 days before the delisting date (per `survivorship_pit.DelistingEvent`). Without this, distress signals get +100-300bps inflation from forced-liquidation moves they never could have ridden.
+- **First-filed semantics** — for fundamentals (Foster SUE, Sloan accruals), use the value as it was first reported, not as later restated. Restatement-tracking lives in `data/fundamentals/companyfacts_parquet.py`.
+
+### Architecture (5 layers per ADR 0007)
+
+- **Layer 1 — watchdog** — SEC EDGAR event detection + classifier + dispatch (`alphalens/watchdog/`). Production, runs in launchd.
+- **Layer 2 — screener** — cross-sectional rank @ asof → top-N tickers (`alphalens/screeners/*`). Selection-gates (`alphalens/gates/`) live here too as Layer 2b.
+- **Layer 3 — backtest engine** — runs the scorer over a strided rebalance calendar, returns `BacktestReport` (`alphalens/backtest/engine.py`). Screener-agnostic.
+- **Layer 4 — risk overlay** — time-series sizing on portfolio realised vol; modifies *how much exposure*, not *which tickers* (`alphalens/overlays/`). First impl: vol-targeting per Moreira-Muir 2017.
+- **Layer 5 — attribution** — cost-drag + Carhart-4F + Sharpe + Bonferroni → ledger verdict (`alphalens/attribution/`).
+- **Pre-registration ledger** — append-only `docs/research/preregistration/ledger.jsonl` recording every hypothesis with frozen params, SHA256 hash, hypothesis, gate definition, and final verdict. Forces honest accounting of the multiplicity budget.
+
+### Domain — SEC filings
+
+- **Form 4 / 4-A** — SEC filing reporting an insider's transaction in their company's stock; "/A" is an amendment of a prior filing. Filed by officers, directors, and 10% beneficial owners.
+- **Accession number** — unique SEC identifier per filing (e.g. `0001209191-22-000001`); used as the primary key in the parquet store.
+- **Cohen-Malloy classifier** — splits insider trades into **routine** (3 consecutive same-month years prior) vs **opportunistic** (everyone else with sufficient history) per JFE 2012 paper, p. 1786. Opportunistic-insider net buys generate +82bps/m abnormal returns in small/mid-caps.
+
+### Verdicts & operational gates
+
+- **Verdict tiers** — every screener experiment lands in one of: **PASS** (phase-robust, every phase clears floor + mean clears Bonferroni), **PASS_MARGINAL** (mean clears critical but dispersion or weakest phase below floor), **INCONCLUSIVE** (mean ∈ [floor, critical) — interesting but not significant), **FAIL** (mean < floor or every phase < 0).
+- **Phase A auto-pivot** — pre-flight checks run on TRAIN before burning multi-phase OOS compute. Failing breadth (`BREADTH-FAIL`: <30% asof-quarters with ≥50 scored tickers), density (`DENSITY-FAIL`: <2 events per ticker/quarter), or direction (`DIRECTION-FAIL`: TRAIN ρ(score, fwd_excess) ≤ -0.05 — sign-flipped) abandons the experiment with a one-shot Bonferroni cost instead of a 5-phase one.
+- **7-gate kill verdict** — every CLOSED layer ships a structured `__closed_evidence__` dict mapping 7 gates (Carhart-4F HAC, sanity_checks_4gate, walk_forward_oos, multiple_testing_correction, cost_drag, bootstrap_ci, survivorship_pit) to evidence paths. Schema in `docs/research/kill_verdict_checklist.md`, enforced by `tests/test_layer_status.py`.
 
 ---
 
