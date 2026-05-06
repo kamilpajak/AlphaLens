@@ -47,6 +47,26 @@ class FilingMetadata:
     form: str  # "4" or "4/A"
 
 
+def _strip_xsl_prefix(primary_document: str) -> str:
+    """Normalize SEC submissions JSON ``primaryDocument`` to raw XML path.
+
+    SEC's ``primaryDocument`` field for Form-4 typically points to the
+    XSL-rendered HTML view (e.g. ``xslF345X06/form4.xml``,
+    ``xslF345X05/wf-form4_doc.xml``). The raw XML — what our parser needs —
+    lives in the PARENT directory. Fetching the XSL path serves HTML and
+    every parse fails with "mismatched tag".
+
+    This function strips any leading directory whose name starts with
+    ``xsl`` (covers all observed SEC stylesheet folders), leaving the raw
+    XML basename. Documents without an XSL prefix (older filings, Form-4/A,
+    edge cases) are returned unchanged.
+    """
+    parts = primary_document.split("/")
+    if len(parts) > 1 and parts[0].startswith("xsl"):
+        return "/".join(parts[1:])
+    return primary_document
+
+
 def iter_form4_filings(submissions: dict, *, cik: str) -> Iterator[FilingMetadata]:
     """Yield :class:`FilingMetadata` for each Form-4/4-A in a submissions payload.
 
@@ -55,6 +75,9 @@ def iter_form4_filings(submissions: dict, *, cik: str) -> Iterator[FilingMetadat
     [...]}, "files": [...]}}``. Only the ``recent`` block is walked here;
     the ``files`` block (for filers with >1000 historical filings) requires
     additional fetches and is handled by the orchestrator.
+
+    ``primaryDocument`` is normalized via :func:`_strip_xsl_prefix` so the
+    yielded path resolves to raw XML, not the XSL-rendered HTML view.
     """
     recent = submissions.get("filings", {}).get("recent")
     if not recent:
@@ -79,7 +102,7 @@ def iter_form4_filings(submissions: dict, *, cik: str) -> Iterator[FilingMetadat
             cik=cik,
             accession_number=acc,
             filing_date=filing_date,
-            primary_document=pdoc,
+            primary_document=_strip_xsl_prefix(pdoc),
             form=form,
         )
 

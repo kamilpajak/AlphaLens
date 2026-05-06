@@ -234,6 +234,31 @@ class TestIterForm4Filings(unittest.TestCase):
         results = list(iter_form4_filings({"filings": {}}, cik="0000320193"))
         self.assertEqual(results, [])
 
+    def test_strips_xsl_prefix_from_primary_document(self):
+        # SEC's submissions JSON returns the XSL-rendered HTML path for
+        # primaryDocument (e.g. xslF345X06/form4.xml). The raw XML lives in
+        # the parent directory; the runner must fetch THAT path or the
+        # parser sees HTML and rejects every filing as malformed XML.
+        submissions = {
+            "filings": {
+                "recent": {
+                    "form": ["4", "4", "4"],
+                    "accessionNumber": ["A1", "A2", "A3"],
+                    "filingDate": ["2022-01-15", "2022-02-15", "2022-03-15"],
+                    "primaryDocument": [
+                        "xslF345X06/form4.xml",  # modern XSL prefix
+                        "xslF345X05/wf-form4_doc.xml",  # older XSL prefix
+                        "wf-form4_doc.xml",  # already raw, no prefix
+                    ],
+                }
+            }
+        }
+        results = list(iter_form4_filings(submissions, cik="0000320193"))
+        self.assertEqual(len(results), 3)
+        self.assertEqual(results[0].primary_document, "form4.xml")
+        self.assertEqual(results[1].primary_document, "wf-form4_doc.xml")
+        self.assertEqual(results[2].primary_document, "wf-form4_doc.xml")
+
     def test_returns_filing_metadata_with_filed_date(self):
         submissions = {
             "filings": {
