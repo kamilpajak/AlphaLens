@@ -18,6 +18,7 @@ import requests
 from alphalens.data.alt_data.sec_edgar_client import (
     SecEdgarClient,
     SecEdgarError,
+    _evict_to_capacity,
 )
 
 
@@ -291,6 +292,52 @@ class TestThrottle(unittest.TestCase):
             any(abs(s - 0.1) < 1e-6 for s in sleep.sleeps),
             f"expected ~0.1 s throttle sleep, got: {sleep.sleeps}",
         )
+
+
+class TestEvictToCapacity(unittest.TestCase):
+    """_evict_to_capacity FIFO eviction — mutation testing flagged its
+    boundary (``> max_size`` vs ``>= max_size``) as untested.
+
+    Contract: after the call, ``len(cache) <= max_size`` exactly.
+    """
+
+    def test_no_eviction_when_already_under_capacity(self):
+        cache = {"a": 1, "b": 2}
+        _evict_to_capacity(cache, max_size=5)
+        self.assertEqual(cache, {"a": 1, "b": 2})
+
+    def test_no_eviction_when_exactly_at_capacity(self):
+        # Boundary: cache size == max_size should NOT trigger eviction.
+        # Mutation `while len(cache) > max_size` -> `>= max_size` would
+        # over-evict here (drop 1 item that should be kept).
+        cache = {"a": 1, "b": 2, "c": 3}
+        _evict_to_capacity(cache, max_size=3)
+        self.assertEqual(len(cache), 3)
+        self.assertEqual(cache, {"a": 1, "b": 2, "c": 3})
+
+    def test_evicts_oldest_first_fifo(self):
+        # Insertion order: a, b, c, d (Python 3.7+ dict preserves it).
+        # Capacity 2 -> drop a, b; keep c, d.
+        cache = {"a": 1, "b": 2, "c": 3, "d": 4}
+        _evict_to_capacity(cache, max_size=2)
+        self.assertEqual(list(cache.keys()), ["c", "d"])
+
+    def test_evicts_down_to_zero_when_max_size_zero(self):
+        cache = {"a": 1, "b": 2}
+        _evict_to_capacity(cache, max_size=0)
+        self.assertEqual(cache, {})
+
+    def test_negative_max_size_clamped_to_zero(self):
+        # max_size = max(max_size, 0) — negatives treated as 0 (no
+        # crash, no negative-while-loop).
+        cache = {"a": 1, "b": 2}
+        _evict_to_capacity(cache, max_size=-5)
+        self.assertEqual(cache, {})
+
+    def test_empty_cache_no_op(self):
+        cache = {}
+        _evict_to_capacity(cache, max_size=10)
+        self.assertEqual(cache, {})
 
 
 if __name__ == "__main__":

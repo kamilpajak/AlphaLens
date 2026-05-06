@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 
 from scripts.split_cik_list import (
+    _load_cik_list,
     shard_cik_list,
     write_shards,
 )
@@ -100,6 +101,56 @@ class TestWriteShards(unittest.TestCase):
             self.assertFalse(out_dir.exists())
             write_shards([["A"]], output_dir=out_dir)
             self.assertTrue(out_dir.is_dir())
+
+
+class TestLoadCikList(unittest.TestCase):
+    """_load_cik_list parses one CIK per line; mutation testing flagged it
+    as untested. Empty lines and ``#``-prefixed comments must be skipped."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "ciks.txt"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_one_cik_per_line(self):
+        self.path.write_text("0000000001\n0000000002\n0000000003\n")
+        self.assertEqual(
+            _load_cik_list(self.path),
+            ["0000000001", "0000000002", "0000000003"],
+        )
+
+    def test_empty_lines_skipped(self):
+        # Boundary case from mutation testing: `if not line or ...` flipped
+        # to `if line or ...` would keep blanks.
+        self.path.write_text("0000000001\n\n0000000002\n\n\n0000000003\n")
+        self.assertEqual(
+            _load_cik_list(self.path),
+            ["0000000001", "0000000002", "0000000003"],
+        )
+
+    def test_comment_lines_skipped(self):
+        self.path.write_text("# header comment\n0000000001\n# inline comment\n0000000002\n")
+        self.assertEqual(
+            _load_cik_list(self.path),
+            ["0000000001", "0000000002"],
+        )
+
+    def test_whitespace_stripped_from_lines(self):
+        self.path.write_text("  0000000001  \n\t0000000002\t\n")
+        self.assertEqual(
+            _load_cik_list(self.path),
+            ["0000000001", "0000000002"],
+        )
+
+    def test_empty_file_returns_empty_list(self):
+        self.path.write_text("")
+        self.assertEqual(_load_cik_list(self.path), [])
+
+    def test_only_comments_returns_empty_list(self):
+        self.path.write_text("# only\n# comments\n#\n")
+        self.assertEqual(_load_cik_list(self.path), [])
 
 
 if __name__ == "__main__":
