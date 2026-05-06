@@ -11,15 +11,15 @@ Research lab infrastructure for retail active alpha experimentation — real-tim
 
 ## Status (2026-04-25 →)
 
-The project pivoted from "active alpha generation" to **research / learning infrastructure** after [9 paradigm failures](docs/research/paradigm_failures_postmortem.md) (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum, all phase-robust FAIL). Capital deployment based on the current strategies is **off the table** until a phase-robust PASS appears; the screener search itself stays open-ended under pre-registration discipline. The codebase remains as:
+The project pivoted from "active alpha generation" to **research / learning infrastructure** after [11 paradigm failures](docs/research/paradigm_failures_postmortem.md) (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum + vol-target overlay, all phase-robust FAIL). Capital deployment based on the current strategies is **off the table** until a phase-robust PASS appears; the screener search itself stays open-ended under pre-registration discipline. The codebase remains as:
 
 - **Reusable research framework** — backtest engine, factor attribution, sanity checks, multiple-testing corrections, regime classifier, **time-series sizing overlays (`alphalens/overlays/`, vol-targeting per Moreira-Muir 2017)**, cost models, weighting schemes; layer architecture in [ADR 0007](docs/adr/0007-layer-architecture.md)
 - **Production-grade data clients** — Polygon, FRED, SEC EDGAR, Alpha Vantage fundamentals
-- **LLM scoring infrastructure** — GuruScorer single-prompt pilot (Layer 2f, RESEARCH_ONLY) using LangChain + Gemini directly
+- **LLM scoring infrastructure** — GuruScorer single-prompt pilot (Layer 2g, ARCHIVED — `alphalens/archive/guru/`) using LangChain + Gemini directly; retained as anti-pattern reference
 - **Anti-pattern catalog** — every closed strategy ships a `__closed_reason__` marker plus a postmortem entry
 - **Spin-off OSS toolkit** — pre-registration ledger + multi-phase audit + Bonferroni helpers extracted as a standalone library: [`kamilpajak/phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting) (see [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md))
 
-**Live in launchd**: only Layer 1 SEC EDGAR watchdog (read-only event detection, daily Telegram digest, near-zero maintenance). The Layer 3 LLM runner that previously consumed the candidate queue was removed by [ADR 0008](docs/adr/0008-sunset-tradingagents-integration.md).
+**Live in launchd** (5 jobs): Layer 1 SEC EDGAR watchdog (`detect`, every 15 min) + literature review (`monthly` 1st @ 09:00, `weekly` Sun @ 18:00 — Perplexity scans) + paper trade (`refresh` Sun @ 17:00, `score` Mon @ 06:00). The Layer 3 LLM runner that previously consumed the candidate queue (`worker`) was archived by [ADR 0008](docs/adr/0008-sunset-tradingagents-integration.md).
 
 > Architectural rationale: see [`docs/adr/`](docs/adr/) (8 ADRs).
 > Per-layer postmortem: [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md).
@@ -31,20 +31,23 @@ The project pivoted from "active alpha generation" to **research / learning infr
 
 Each layer/screener package declares its lifecycle in `__init__.py` as `__status__ ∈ {ACTIVE, CLOSED, RESEARCH_ONLY, ARCHIVED}`, enforced by `tests/test_layer_status.py`.
 
+Layout organized as 11 top-level slots after the Phase 1-6 reorg (2026-04-30, [ADR 0007](docs/adr/0007-layer-architecture.md)):
+
 | Path | Status | Notes |
 |------|--------|-------|
-| `alphalens/watchdog/` | ACTIVE | Layer 1 — `detect` live in launchd; `worker` archived per [ADR 0008](docs/adr/0008-sunset-tradingagents-integration.md) |
-| `alphalens/backtest/` | ACTIVE | Screener-agnostic harness, reused across all replay |
-| `alphalens/archive/screeners/themed/` | CLOSED 2026-04-22 | Layer 2b — momentum overfit OOS, realistic execution cost ~100% ann eats signal |
-| `alphalens/archive/screeners/lean/` | ARCHIVED 2026-04-19 | Layer 2c — Sharpe 0.25 net, FF3 α t-stat 0.14 |
-| `alphalens/archive/screeners/insider/` | CLOSED 2026-04-24 | Layer 2d — Carhart t=2.14 IS → 0.68 OOS, classic overfit |
-| `alphalens/screeners/prescreener/` | RESEARCH_ONLY | Layer 2a — unvalidated, manual ad-hoc only |
-| `alphalens/archive/rotation/` | CLOSED | Layer 2e — failed IS+OOS sanity (R12 macro overlay) |
-| `alphalens/archive/events/` | CLOSED | Layer 2f — 8-K event-driven screen failed |
-| `alphalens/archive/guru/` | CLOSED | Layer 2g — LLM-researcher pilot failed |
-| `alphalens/data/macro/` | RESEARCH_ONLY | Reusable infra (FRED client, regime scorer) |
+| `alphalens/core/` | ACTIVE (namespace) | Plumbing — candidates, queue, registry, scorer_stats (Layer 3 runner/worker removed per [ADR 0008](docs/adr/0008-sunset-tradingagents-integration.md)) |
+| `alphalens/watchdog/` | ACTIVE | Layer 1 — `detect` live in launchd; `worker` archived per ADR 0008 |
+| `alphalens/literature_review/` | ACTIVE | Monthly + weekly Perplexity scan, live in launchd |
+| `alphalens/backtest/` | ACTIVE | Layer 3 engine — screener-agnostic; engine, multi_phase, multiple_testing, weighting, theme_analysis, llm_scorers, historical_validation, metrics |
+| `alphalens/attribution/` | ACTIVE | Layer 5 — cost_model, factor_analysis, regime, decision_matrix, diagnostics, report, walk_forward |
+| `alphalens/preregistration/` | ACTIVE | Methodology bundle (mirror of OSS [`phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting)) |
+| `alphalens/data/` | ACTIVE (namespace) | `data/store/` (PIT SoT readers), `data/{alt_data,fundamentals,macro}/` (clients, RESEARCH_ONLY), `data/factors.py` (Fama-French CSV loader) |
 | `alphalens/gates/` | RESEARCH_ONLY | Layer 2 selection-gate wrapper (rescue attempt failed Phase 1 2026-04-29) |
 | `alphalens/overlays/` | RESEARCH_ONLY | Layer 4 time-series sizing overlay (vol-targeting, Moreira-Muir 2017) |
+| `alphalens/screeners/prescreener/` | RESEARCH_ONLY | Layer 2a — S&P 500 composite, unvalidated, manual ad-hoc |
+| `alphalens/screeners/momentum_lowvol/` | RESEARCH_ONLY | Layer 2 mom + low-vol — failed standalone but scorer reused as base for Layer 4 vol-target overlay test |
+| `alphalens/screeners/*` (other 8) | RESEARCH_ONLY | Active research scorers — `alt_data`, `distress_credit`, `event_drift`, `insider_activity`, `multi_source_two_stage`, `options_implied`, `options_implied_frozen`, `options_volume`. Per-strategy design memos in `docs/research/` |
+| `alphalens/archive/` | namespace | [ADR 0005](docs/adr/0005-closed-layers-as-anti-pattern-catalog.md) anti-pattern catalog: `rotation/` (Layer 2e), `events/` (Layer 2f), `guru/` (Layer 2g), `quiver_screener/`, `screeners/{themed (Layer 2b), lean (Layer 2c), insider (Layer 2d)}/`. Each child declares `__closed_reason__` + a 7-gate `__closed_evidence__` map |
 
 CLOSED-layer code is retained as a research framework + anti-pattern record (see [ADR 0005](docs/adr/0005-closed-layers-as-anti-pattern-catalog.md)).
 
@@ -62,7 +65,7 @@ CLOSED-layer code is retained as a research framework + anti-pattern record (see
 ### Statistics & multiple-testing
 
 - **αt (alpha t-stat)** — t-statistic of the Carhart-4F regression intercept; the primary success metric for screener strategies. A Bonferroni-adjusted threshold (typically `|αt| ≥ 2.86` at n=27 tests) is required for PASS.
-- **Bonferroni correction** — multiple-testing adjustment that raises the critical t-statistic when N hypotheses share a data window. The project tracks a program-level Bonferroni budget across all experiments in `docs/research/preregistration/ledger.jsonl`; each new test raises the bar for the next.
+- **Bonferroni correction** — multiple-testing adjustment that raises the critical t-statistic when N hypotheses share a data window. The project tracks a program-level Bonferroni budget across all experiments in `docs/research/preregistration/ledger.json`; each new test raises the bar for the next.
 - **Multi-phase audit** — running the same scorer at strided phase offsets (typically 5 phases, stride=21 days) on the same OOS window. PASS requires every phase to clear floor AND mean αt to clear the Bonferroni threshold. Catches strategies that depend on calendar luck.
 - **Phase-robust** — verdict tier where every phase αt ≥ 1.5 AND mean αt ≥ critical AND dispersion ≤ gate (50pp standard, 70pp R2000). The rare positive outcome.
 - **HAC / Newey-West** — heteroskedasticity-and-autocorrelation-consistent standard errors. `hac_maxlags` is locked to match the signal's serial-correlation horizon (e.g. 126 trading days for a 6-month signal).
@@ -93,7 +96,7 @@ CLOSED-layer code is retained as a research framework + anti-pattern record (see
 - **Layer 3 — backtest engine** — runs the scorer over a strided rebalance calendar, returns `BacktestReport` (`alphalens/backtest/engine.py`). Screener-agnostic.
 - **Layer 4 — risk overlay** — time-series sizing on portfolio realised vol; modifies *how much exposure*, not *which tickers* (`alphalens/overlays/`). First impl: vol-targeting per Moreira-Muir 2017.
 - **Layer 5 — attribution** — cost-drag + Carhart-4F + Sharpe + Bonferroni → ledger verdict (`alphalens/attribution/`).
-- **Pre-registration ledger** — append-only `docs/research/preregistration/ledger.jsonl` recording every hypothesis with frozen params, SHA256 hash, hypothesis, gate definition, and final verdict. Forces honest accounting of the multiplicity budget.
+- **Pre-registration ledger** — append-only `docs/research/preregistration/ledger.json` recording every hypothesis with frozen params, SHA256 hash, hypothesis, gate definition, and final verdict. Forces honest accounting of the multiplicity budget.
 
 ### Domain — SEC filings
 
@@ -157,7 +160,7 @@ watchlist: [NVDA, GOOGL]
 .venv/bin/alphalens themed status --days 90    # historical themed monitoring
 .venv/bin/alphalens research validate-llm-filter --scorer rule
 
-# Tests (unittest, not pytest) — 1278 tests
+# Tests (unittest, not pytest) — 2218 tests
 .venv/bin/python -m unittest discover tests -v
 
 # Inspect the queue directly
@@ -167,19 +170,26 @@ sqlite3 ~/.alphalens/candidates.db \
 
 ### Scheduled jobs (launchd)
 
-Two live jobs in `launchd/`:
+Five live jobs in `launchd/`:
 
-| Job | Interval | Purpose |
+| Job | When | Purpose |
 |---|---|---|
 | `com.alphalens.watchdog.detect` | every 15 min | Layer 1 EDGAR poll → submit Candidates |
-| `com.alphalens.watchdog.worker` | every 5 min  | Drain `candidates.db` → Layer 3 |
+| `com.alphalens.literature-review.monthly` | 1st of month, 09:00 | Perplexity deep literature scan |
+| `com.alphalens.literature-review.weekly` | Sunday, 18:00 | Perplexity RSS scan |
+| `com.alphalens.paper-trade.refresh` | Sunday, 17:00 | Paper-trade portfolio refresh |
+| `com.alphalens.paper-trade.score` | Monday, 06:00 | Paper-trade scorer |
 
-Closed-strategy plists live in `launchd/archived/` with reactivation notes (themed, lean, insider). See [`launchd/README.md`](launchd/README.md).
+Archived plists live in `launchd/archived/` with reactivation notes (worker per ADR 0008, themed, lean, insider). See [`launchd/README.md`](launchd/README.md).
 
 ```bash
-cp launchd/com.alphalens.watchdog.*.plist ~/Library/LaunchAgents/
-for job in detect worker; do
-  launchctl load ~/Library/LaunchAgents/com.alphalens.watchdog.${job}.plist
+cp launchd/com.alphalens.*.plist ~/Library/LaunchAgents/
+for plist in com.alphalens.watchdog.detect \
+             com.alphalens.literature-review.monthly \
+             com.alphalens.literature-review.weekly \
+             com.alphalens.paper-trade.refresh \
+             com.alphalens.paper-trade.score; do
+  launchctl load ~/Library/LaunchAgents/${plist}.plist
 done
 ```
 
@@ -188,36 +198,48 @@ done
 ## Components
 
 ```
-alphalens/                     ← my code (Python package)
-├── core/
-│   ├── candidates.py          shared domain — Candidate, AnalysisResult, CandidateSink Protocol
-│   ├── queue.py               SQLite priority queue with dedup + retry + DLQ
-│   ├── registry.py            SCREENERS dict — register a new screener in one line
-│   └── scorer_stats.py        historical Layer 3 acceptance-rate viewer
-├── watchdog/                  Layer 1: EDGAR detection + classifier + dispatch (ACTIVE)
-├── backtest/                  Screener-agnostic backtest harness (ACTIVE)
-├── alt_data/                  SEC EDGAR + Form 4 + Russell universe builder (RESEARCH_ONLY)
-├── fundamentals/              Polygon-backed fundamentals + soft-gate logic (RESEARCH_ONLY)
-├── macro/                     FRED client + regime signals (RESEARCH_ONLY)
-├── quiver_screener/           Quiver Quantitative congressional-trades client (CLOSED)
-├── rotation/                  Layer 2e tactical sector rotation (CLOSED)
-├── events/                    Layer 2f 8-K event screener (CLOSED)
-├── guru/                      Layer 2g LLM-researcher (CLOSED)
-└── screeners/                 pipeline strategies
-    ├── themed/                Layer 2b themed momentum (CLOSED)
-    ├── prescreener/           Layer 2a S&P 500 composite (RESEARCH_ONLY)
-    ├── insider/               Layer 2d Form 4 cluster-buy (CLOSED)
-    └── lean/                  Layer 2c Russell rule-based (ARCHIVED)
+alphalens/                       ← Python package (Phase 1-6 reorg per ADR 0007)
+├── core/                        ACTIVE: candidates, SQLite queue, registry, scorer_stats
+├── watchdog/                    ACTIVE: Layer 1 EDGAR detect + classifier + dispatch
+├── literature_review/           ACTIVE: Perplexity monthly + weekly scans (live in launchd)
+├── backtest/                    ACTIVE: Layer 3 engine — engine.py, multi_phase, multiple_testing,
+│                                weighting, theme_analysis, llm_scorers, historical_validation, metrics
+├── attribution/                 ACTIVE: Layer 5 — cost_model, factor_analysis, regime,
+│                                decision_matrix, diagnostics, report, walk_forward
+├── preregistration/             ACTIVE: methodology bundle (mirror of OSS phase-robust-backtesting)
+├── data/                        ACTIVE namespace: data infrastructure
+│   ├── store/                   PIT SoT readers (form4_pit, fundamentals_pit, survivorship_pit, …)
+│   ├── alt_data/                SEC EDGAR + Form 4 + Russell universe builder (RESEARCH_ONLY clients)
+│   ├── fundamentals/            Polygon + Alpha Vantage + companyfacts parquet (RESEARCH_ONLY)
+│   ├── macro/                   FRED client + regime signals (RESEARCH_ONLY)
+│   ├── universes/               R{1000,2000,3000} PIT yamls + S&P PIT
+│   └── factors.py               Fama-French CSV loader
+├── gates/                       RESEARCH_ONLY: Layer 2 selection-gate wrapper
+├── overlays/                    RESEARCH_ONLY: Layer 4 vol-target overlay (Moreira-Muir 2017)
+├── paper_trade/                 ACTIVE: portfolio refresh + scorer for live paper-trading (in launchd)
+├── screeners/                   RESEARCH_ONLY: 9 active research scorers
+│   ├── prescreener/             Layer 2a — S&P 500 composite
+│   ├── momentum_lowvol/         Layer 2 — mom + low-vol (failed standalone, base for vol-target)
+│   ├── alt_data/, distress_credit/, event_drift/, insider_activity/,
+│   ├── multi_source_two_stage/, options_implied/, options_implied_frozen/, options_volume/
+└── archive/                     ADR 0005 anti-pattern catalog
+    ├── rotation/                Layer 2e tactical sector rotation (CLOSED)
+    ├── events/                  Layer 2f 8-K event screener (CLOSED)
+    ├── guru/                    Layer 2g LLM-researcher (CLOSED)
+    ├── quiver_screener/         Quiver congressional-trades client (CLOSED)
+    └── screeners/{themed,lean,insider}/  Layer 2b/2c/2d (CLOSED/ARCHIVED)
 
-alphalens_cli/                 ← my CLI (separate package)
+alphalens_cli/                   CLI entry points (separate package)
+
+launchd/                         macOS scheduled jobs (5 live; archived under launchd/archived/)
+deploy/systemd/                  Linux VPS unit + parallel-backfill recipe
 
 docs/
-├── adr/                       Architecture Decision Records (8 ADRs)
-├── research/                  paradigm postmortem + per-strategy design + audit reports
-└── backtest/                  historical backtest run outputs
+├── adr/                         Architecture Decision Records (8 ADRs)
+├── research/                    paradigm_failures_postmortem + per-strategy design + ledger
+└── backtest/                    historical backtest run outputs
 
-launchd/                       macOS scheduled jobs (live: detect, literature; archived: worker, themed, lean, insider)
-tests/                         unittest suite (~1365 tests; several architectural enforcers)
+tests/                           unittest suite (~2218 tests; 4 architectural enforcers)
 ```
 
 Full architecture detail and key abstractions: [`CLAUDE.md`](CLAUDE.md). Layer separation rationale: [`ADR 0007`](docs/adr/0007-layer-architecture.md).
@@ -226,7 +248,7 @@ Full architecture detail and key abstractions: [`CLAUDE.md`](CLAUDE.md). Layer s
 
 ## Configuration
 
-**LLM**: `alphalens_cli/commands/guru.py` constructs `langchain_google_genai.ChatGoogleGenerativeAI` directly for the Layer 2f GuruAgent pilot. There is no shared LLM config wrapper today.
+**LLM**: `alphalens_cli/commands/guru.py` constructs `langchain_google_genai.ChatGoogleGenerativeAI` directly for the Layer 2g GuruAgent pilot, now archived at `alphalens/archive/guru/` per ADR 0005. There is no shared LLM config wrapper today.
 
 **Data vendors**: `yfinance` for prices and technical indicators; `alphalens/data/fundamentals/fetcher.py` calls Alpha Vantage REST directly (no third-party client).
 
@@ -257,8 +279,8 @@ Lives outside the repo, survives git operations:
 
 Four enforcement tests guard architectural invariants — they are not regular unit tests:
 
-- `tests/test_layer_status.py` — every layer `__init__.py` declares `__status__`
-- `tests/test_module_dependencies.py` — `alphalens.backtest.*` ⇏ `alphalens.screeners.*`
+- `tests/test_layer_status.py` — every layer `__init__.py` declares `__status__` + 7-gate `__closed_evidence__` for CLOSED/ARCHIVED
+- `tests/test_module_dependencies.py` — two rules: `alphalens.backtest.*` ⇏ `alphalens.screeners.*` (engine stays screener-agnostic) AND `alphalens.backtest.*` ⇏ `alphalens.attribution.*` (Layer 3 → Layer 5 dependency direction; engine produces `BacktestReport`, attribution consumes)
 - `tests/test_lean_config_parity.py` — Docker `SCORER_CONFIG` ↔ host `LEAN_DEFAULTS`
 - `tests/test_no_polish_chars.py` — English-only in source
 
@@ -266,7 +288,7 @@ Four enforcement tests guard architectural invariants — they are not regular u
 
 ## TradingAgents removal (2026-04-30)
 
-AlphaLens previously vendored [`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents) as a `git subtree` at `TradingAgents/`. The integration was removed by [ADR 0008](docs/adr/0008-sunset-tradingagents-integration.md) — the worker that drained the candidate queue was dormant after 10/10 paradigm failures, the maintenance tax (custom Gemini 429 retry, deferred upstream PRs, transitive deps) no longer paid for itself, and any future use will happen from a separate clone. The original subtree decision lives on for history at [ADR 0004](docs/adr/0004-tradingagents-as-subtree.md) (status: Superseded).
+AlphaLens previously vendored [`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents) as a `git subtree` at `TradingAgents/`. The integration was removed by [ADR 0008](docs/adr/0008-sunset-tradingagents-integration.md) — the worker that drained the candidate queue was dormant after 11 paradigm failures, the maintenance tax (custom Gemini 429 retry, deferred upstream PRs, transitive deps) no longer paid for itself, and any future use will happen from a separate clone. The original subtree decision lives on for history at [ADR 0004](docs/adr/0004-tradingagents-as-subtree.md) (status: Superseded).
 
 ---
 
