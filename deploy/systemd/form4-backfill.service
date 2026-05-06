@@ -23,11 +23,20 @@ Type=simple
 WorkingDirectory=%h/AlphaLens
 
 # --- Edit these to match your environment ---
-Environment=ALPHALENS_VENV=%h/AlphaLens/.venv
+#
+# Systemd quirks worth knowing:
+#  * The ExecStart binary path is parsed BEFORE Environment= is applied,
+#    so `${VAR}/bin/python` in the first token is rejected with "Neither
+#    a valid executable name nor an absolute path". Use a specifier like
+#    %h (user home) instead — specifiers are expanded at parse time.
+#  * Multi-word values in `Environment=KEY=value` get split on whitespace
+#    into separate KEY=value pairs. Wrap the whole assignment in quotes:
+#    `Environment="KEY=value with spaces"`.
+#
 # SEC EDGAR Fair Access requires a contact: "Your Name your@email.com".
-# Wrong UA returns 403; left as a placeholder so misconfiguration fails fast
-# rather than running with someone else's contact.
-Environment=ALPHALENS_USER_AGENT=EDIT_ME_Your_Name your@email.com
+# Wrong UA returns 403; left as a placeholder so misconfiguration fails
+# fast rather than running with someone else's contact.
+Environment="ALPHALENS_USER_AGENT=EDIT_ME_Your_Name your@email.com"
 Environment=ALPHALENS_CIK_LIST=%h/AlphaLens/data/form4_cik_universe.txt
 Environment=ALPHALENS_PARQUET_ROOT=%h/.alphalens/form4_parquet
 Environment=ALPHALENS_MANIFEST=%h/.alphalens/form4_backfill_manifest.json
@@ -35,7 +44,7 @@ Environment=ALPHALENS_START_YEAR=2006
 Environment=ALPHALENS_END_YEAR=2026
 Environment=ALPHALENS_FLUSH_THRESHOLD=5000
 
-ExecStart=${ALPHALENS_VENV}/bin/python scripts/run_form4_backfill.py \
+ExecStart=%h/AlphaLens/.venv/bin/python scripts/run_form4_backfill.py \
     --user-agent "${ALPHALENS_USER_AGENT}" \
     --cik-list ${ALPHALENS_CIK_LIST} \
     --parquet-root ${ALPHALENS_PARQUET_ROOT} \
