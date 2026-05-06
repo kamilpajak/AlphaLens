@@ -29,6 +29,11 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from phase_robust_backtesting.multiple_testing import (  # noqa: E402
+    apply_bonferroni,
+    bonferroni_critical_tstat,
+)
+
 from alphalens.archive.screeners.lean.config import (  # noqa: E402
     BENCHMARKS,
     DATA_DIR,
@@ -45,10 +50,6 @@ from alphalens.attribution.factor_analysis import (  # noqa: E402
 from alphalens.attribution.walk_forward import run_walk_forward  # noqa: E402
 from alphalens.backtest.engine import BacktestEngine  # noqa: E402
 from alphalens.backtest.metrics import sharpe  # noqa: E402
-from alphalens.backtest.multiple_testing import (  # noqa: E402
-    apply_bonferroni,
-    bonferroni_critical_tstat,
-)
 from alphalens.data.factors import load_carhart_daily  # noqa: E402
 from alphalens.data.store.history import HistoryStore  # noqa: E402
 from alphalens.data.store.survivorship_pit import (  # noqa: E402

@@ -10,10 +10,11 @@ Closes Gap #1 of `docs/research/strategy_validation_playbook.md`. Use:
 
 Default ledger lives at ``docs/research/preregistration/ledger.json``.
 
-Imports of `alphalens.preregistration.ledger` are deliberately scoped
+Imports of `phase_robust_backtesting.ledger` are deliberately scoped
 inside command bodies — same lazy-import discipline as
 `alphalens_cli/commands/research.py` (Layer 1 watchdog cron must not pay
-the import cost on every invoke).
+the import cost on every invoke). The methodology bundle lives in the
+external `phase-robust-backtesting` dep (see ADR 0006).
 """
 
 from __future__ import annotations
@@ -76,7 +77,7 @@ def add(
     ),
 ) -> None:
     """Register a frozen hypothesis BEFORE running the multi-phase audit."""
-    from alphalens.preregistration.ledger import Ledger, Registration
+    from phase_robust_backtesting.ledger import Ledger, Registration
 
     payload = json.loads(params_file.read_text())
     reg_date = date.fromisoformat(registered_at) if registered_at else date.today()
@@ -111,7 +112,7 @@ def list_cmd(
     ledger_root: Path = typer.Option(None, "--ledger-root", help=_LEDGER_ROOT_HELP),
 ) -> None:
     """List registrations (optionally filtered by signal class)."""
-    from alphalens.preregistration.ledger import Ledger
+    from phase_robust_backtesting.ledger import Ledger
 
     ledger = Ledger(_resolve_root(ledger_root))
     entries = ledger.list(signal_class=signal_class or None)
@@ -136,7 +137,7 @@ def show(
     ledger_root: Path = typer.Option(None, "--ledger-root", help=_LEDGER_ROOT_HELP),
 ) -> None:
     """Print full registration record as JSON."""
-    from alphalens.preregistration.ledger import Ledger
+    from phase_robust_backtesting.ledger import Ledger
 
     ledger = Ledger(_resolve_root(ledger_root))
     try:
@@ -160,7 +161,7 @@ def complete(
     ledger_root: Path = typer.Option(None, "--ledger-root", help=_LEDGER_ROOT_HELP),
 ) -> None:
     """Record one-shot verdict for a previously registered hypothesis."""
-    from alphalens.preregistration.ledger import Ledger
+    from phase_robust_backtesting.ledger import Ledger
 
     ledger = Ledger(_resolve_root(ledger_root))
     completion_date = date.fromisoformat(completed_at) if completed_at else date.today()
@@ -186,7 +187,7 @@ def threshold(
     ledger_root: Path = typer.Option(None, "--ledger-root", help=_LEDGER_ROOT_HELP),
 ) -> None:
     """Print Bonferroni-adjusted critical |t| for hypotheses currently in this class."""
-    from alphalens.preregistration.ledger import Ledger
+    from phase_robust_backtesting.ledger import Ledger
 
     ledger = Ledger(_resolve_root(ledger_root))
     n = max(1, ledger.count_in_class(signal_class))

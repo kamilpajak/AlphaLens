@@ -28,8 +28,9 @@ Layout zorganizowany jako 11 top-level slotów (Phase 1-6 reorg 2026-04-30, ADR 
 | `alphalens/backtest/` | ACTIVE | Layer 3 engine — engine, walk-forward removed (moved to attribution), multi_phase, multiple_testing, weighting, theme_analysis, llm_scorers, historical_validation, metrics (engine-side primitives + Sharpe consumed downstream) |
 | `alphalens/overlays/` | RESEARCH_ONLY | Layer 4 risk-overlays (was `risk_overlay/`); single occupant `vol_target.py` |
 | `alphalens/attribution/` | ACTIVE | Layer 5 — cost_model, factor_analysis, regime, decision_matrix, diagnostics, report, walk_forward |
-| `alphalens/preregistration/` | ACTIVE | methodology bundle (mirror OSS `phase-robust-backtesting`) |
 | `alphalens/data/` | ACTIVE (namespace) | data infrastructure — `data/store/` (PIT SoT for as-of-t reads), `data/{alt_data,fundamentals,macro}/` (RESEARCH_ONLY clients), `data/factors.py` (Fama-French CSV loader) |
+
+**Methodology bundle** (preregistration ledger, multi_phase audit, multiple_testing thresholds, audit_multi_phase driver) is consumed via the external dep `phase-robust-backtesting>=0.2.0` — see [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md). Local copies were deleted on 2026-05-06; AlphaLens has no in-repo source for these. `scripts/audit_multi_phase.py` is a thin wrapper resolving the strategy-name dict to a file path before delegating to `phase_robust_backtesting.audit_multi_phase.run_audit`.
 | `alphalens/archive/` | namespace | ADR 0005 anti-pattern catalog: `rotation/, events/, guru/, quiver_screener/, screeners/{themed,lean,insider}/` |
 
 ## Layer architecture (active alpha experimentation)

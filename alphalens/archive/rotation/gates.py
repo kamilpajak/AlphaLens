@@ -20,13 +20,13 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from phase_robust_backtesting.multiple_testing import bonferroni_critical_tstat
 
 from alphalens.archive.rotation.config import GateConfig
 from alphalens.archive.rotation.overlay_engine import OverlayBacktestResult
 from alphalens.attribution.factor_analysis import AlphaResult
 from alphalens.attribution.regime import classify_regime
 from alphalens.backtest.metrics import sharpe
-from alphalens.backtest.multiple_testing import bonferroni_critical_tstat
 
 
 @dataclass(frozen=True)

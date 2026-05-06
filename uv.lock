@@ -11,6 +11,7 @@ dependencies = [
     { name = "langchain-google-genai" },
     { name = "lightgbm" },
     { name = "pandas" },
+    { name = "phase-robust-backtesting" },
     { name = "pyarrow" },
     { name = "python-dotenv" },
     { name = "quiverquant" },
@@ -39,6 +40,7 @@ requires-dist = [
     { name = "langchain-google-genai", specifier = ">=4.2.2" },
     { name = "lightgbm", specifier = ">=4.6.0" },
     { name = "pandas", specifier = ">=2.3.0" },
+    { name = "phase-robust-backtesting", git = "https://github.com/kamilpajak/phase-robust-backtesting.git?rev=v0.2.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
     { name = "pyarrow", specifier = ">=24.0.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
@@ -772,6 +774,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/21/04/8b1f0388389c0595ccf69fec8723983e598edb0303f6227a08bc5d8cd013/peewee-4.0.5.tar.gz", hash = "sha256:b43a21493f19f205a016cb4a9e29c7eca3500576d29447a89732022d193450ba", size = 721062, upload-time = "2026-04-23T21:17:29.419Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/d4/2cf83b5fb7fae8939ed596009465c6de0b8fafa70abd486ed9d192e457f7/peewee-4.0.5-py3-none-any.whl", hash = "sha256:05bf687660f04f925bcb7d744e5af826ca526322f2fad894bfa4f1d0f3bcaf50", size = 144479, upload-time = "2026-04-23T21:17:28.061Z" },
+]
+
+[[package]]
+name = "phase-robust-backtesting"
+version = "0.2.0"
+source = { git = "https://github.com/kamilpajak/phase-robust-backtesting.git?rev=v0.2.0#eee14afa37b47b1ac68ce94e11d09fa683540969" }
+dependencies = [
+    { name = "scipy" },
+    { name = "statsmodels" },
 ]
 
 [[package]]

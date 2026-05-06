@@ -40,7 +40,6 @@ Layout organized as 11 top-level slots after the Phase 1-6 reorg (2026-04-30, [A
 | `alphalens/literature_review/` | ACTIVE | Monthly + weekly Perplexity scan, live in launchd |
 | `alphalens/backtest/` | ACTIVE | Layer 3 engine — screener-agnostic; engine, multi_phase, multiple_testing, weighting, theme_analysis, llm_scorers, historical_validation, metrics |
 | `alphalens/attribution/` | ACTIVE | Layer 5 — cost_model, factor_analysis, regime, decision_matrix, diagnostics, report, walk_forward |
-| `alphalens/preregistration/` | ACTIVE | Methodology bundle (mirror of OSS [`phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting)) |
 | `alphalens/data/` | ACTIVE (namespace) | `data/store/` (PIT SoT readers), `data/{alt_data,fundamentals,macro}/` (clients, RESEARCH_ONLY), `data/factors.py` (Fama-French CSV loader) |
 | `alphalens/gates/` | RESEARCH_ONLY | Layer 2 selection-gate wrapper (rescue attempt failed Phase 1 2026-04-29) |
 | `alphalens/overlays/` | RESEARCH_ONLY | Layer 4 time-series sizing overlay (vol-targeting, Moreira-Muir 2017) |
@@ -50,6 +49,8 @@ Layout organized as 11 top-level slots after the Phase 1-6 reorg (2026-04-30, [A
 | `alphalens/archive/` | namespace | [ADR 0005](docs/adr/0005-closed-layers-as-anti-pattern-catalog.md) anti-pattern catalog: `rotation/` (Layer 2e), `events/` (Layer 2f), `guru/` (Layer 2g), `quiver_screener/`, `screeners/{themed (Layer 2b), lean (Layer 2c), insider (Layer 2d)}/`. Each child declares `__closed_reason__` + a 7-gate `__closed_evidence__` map |
 
 CLOSED-layer code is retained as a research framework + anti-pattern record (see [ADR 0005](docs/adr/0005-closed-layers-as-anti-pattern-catalog.md)).
+
+**External methodology dep**: preregistration ledger + multi-phase audit + Bonferroni helpers + audit driver live in [`kamilpajak/phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting) (MIT) and are consumed via `phase-robust-backtesting>=0.2.0` git dep — see [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md). Local mirror was deleted on 2026-05-06.
 
 ---
 
@@ -206,7 +207,6 @@ alphalens/                       ← Python package (Phase 1-6 reorg per ADR 000
 │                                weighting, theme_analysis, llm_scorers, historical_validation, metrics
 ├── attribution/                 ACTIVE: Layer 5 — cost_model, factor_analysis, regime,
 │                                decision_matrix, diagnostics, report, walk_forward
-├── preregistration/             ACTIVE: methodology bundle (mirror of OSS phase-robust-backtesting)
 ├── data/                        ACTIVE namespace: data infrastructure
 │   ├── store/                   PIT SoT readers (form4_pit, fundamentals_pit, survivorship_pit, …)
 │   ├── alt_data/                SEC EDGAR + Form 4 + Russell universe builder (RESEARCH_ONLY clients)
@@ -241,6 +241,8 @@ docs/
 
 tests/                           unittest suite (~2218 tests; 4 architectural enforcers)
 ```
+
+External methodology dep: [`phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting) — installed via git tag pin in `pyproject.toml`.
 
 Full architecture detail and key abstractions: [`CLAUDE.md`](CLAUDE.md). Layer separation rationale: [`ADR 0007`](docs/adr/0007-layer-architecture.md).
 
