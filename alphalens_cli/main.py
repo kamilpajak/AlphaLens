@@ -6,7 +6,6 @@ Top-level commands:
 
 Groups:
     watchdog/           — Layer 1 SEC EDGAR event detection
-    queue/              — scorer-stats viewer over the historical candidate queue
     themed/             — Layer 2b curated YAML universe scan + monitoring
     insider/            — Layer 2d Form 4 cluster-buy scan (live/ad-hoc)
     research/           — eksperymenty (LLM filter validation, ...)
@@ -20,13 +19,10 @@ import typer
 from dotenv import load_dotenv
 
 from alphalens_cli.commands.backtest import backtest
-from alphalens_cli.commands.events import events_app
-from alphalens_cli.commands.guru import guru_app
 from alphalens_cli.commands.insider import insider_app
 from alphalens_cli.commands.literature import literature_app
 from alphalens_cli.commands.paper_trade import paper_trade_app
 from alphalens_cli.commands.preregister import preregister_app
-from alphalens_cli.commands.queue import queue_app
 from alphalens_cli.commands.research import research_app
 from alphalens_cli.commands.rotation import rotation_app
 from alphalens_cli.commands.status import status
@@ -57,7 +53,6 @@ def _root_callback() -> None:
 
 
 app.add_typer(watchdog_app, name="watchdog")
-app.add_typer(queue_app, name="queue")
 app.add_typer(themed_app, name="themed")
 app.add_typer(insider_app, name="insider")
 app.add_typer(literature_app, name="literature")
@@ -65,8 +60,6 @@ app.add_typer(paper_trade_app, name="paper-trade")
 app.add_typer(preregister_app, name="preregister")
 app.add_typer(research_app, name="research")
 app.add_typer(rotation_app, name="rotation")
-app.add_typer(events_app, name="events")
-app.add_typer(guru_app, name="guru")
 app.command(name="status")(status)
 app.command(name="backtest")(backtest)
 

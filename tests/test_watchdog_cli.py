@@ -15,13 +15,6 @@ class TestWatchdogCLI(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertIn("run-once", result.stdout)
 
-    def test_queue_group_exposes_scorer_stats(self):
-        from alphalens_cli.commands.queue import queue_app
-
-        result = self.runner.invoke(queue_app, ["--help"])
-        self.assertEqual(result.exit_code, 0)
-        self.assertIn("scorer-stats", result.stdout)
-
     @patch("alphalens_cli.commands.watchdog._build_watchdog")
     def test_run_once_invokes_watchdog(self, mock_build):
         from alphalens_cli.commands.watchdog import watchdog_app

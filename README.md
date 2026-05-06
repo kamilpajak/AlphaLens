@@ -200,7 +200,7 @@ done
 
 ```
 alphalens/                       ← Python package (Phase 1-6 reorg per ADR 0007)
-├── core/                        ACTIVE: candidates, SQLite queue, registry, scorer_stats
+├── core/                        ACTIVE: candidates, SQLite queue, registry
 ├── watchdog/                    ACTIVE: Layer 1 EDGAR detect + classifier + dispatch
 ├── literature_review/           ACTIVE: Perplexity monthly + weekly scans (live in launchd)
 ├── backtest/                    ACTIVE: Layer 3 engine — engine.py, multi_phase, multiple_testing,

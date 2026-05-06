@@ -102,8 +102,9 @@ itself).
 - AlphaLens layer architecture (ADR 0007) is unambiguous — Layer 3 is now the
   vectorized backtest engine, full stop. The "TradingAgents-as-Layer-3" framing
   that lingered from ADR 0004 is gone.
-- The candidate queue + `queue scorer-stats` command remain as a historical
-  viewer over past Layer 3 runs already on disk.
+- The candidate queue (`~/.alphalens/candidates.db`) remains on disk as a
+  historical record of past Layer 1 detection events. No CLI viewer is
+  shipped — query directly with sqlite if needed.
 
 **Negative:**
 
