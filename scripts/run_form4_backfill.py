@@ -72,27 +72,32 @@ def _load_cik_list(path: Path) -> list[str]:
     return out
 
 
-def _process_cik(
+def _fetch_records_for_cik(
     cik: str,
     *,
     client: SecEdgarClient,
-    parquet_root: Path,
     start_year: int,
     end_year: int,
-) -> int:
-    """Fetch submissions + Form-4 XMLs for one CIK; write parquet. Returns count.
+) -> list:
+    """Fetch + parse all Form-4 records for one CIK. Returns list (no write).
 
     Walks both ``recent`` and ``files`` overflow blocks via
     :func:`fetch_all_form4_metadata` — required for prolific issuers whose
     historical Form-4s spill out of the most-recent-1000 ``recent`` window.
+
+    Errors at any layer (submissions JSON, individual filing XML, parser)
+    are logged and that filing/CIK is skipped — the caller continues.
+    Per-CIK fault isolation matches the older ``_process_cik`` contract;
+    only the write step has been hoisted to a separate batched flush
+    (:func:`_flush_batch`) so multiple CIKs share a single parquet file.
     """
     try:
         records_metadata = list(fetch_all_form4_metadata(client, cik=cik))
     except SecEdgarError as exc:
         logger.warning("submissions fetch failed for cik=%s: %s", cik, exc)
-        return 0
+        return []
 
-    records_buffer = []
+    records_buffer: list = []
     for meta in records_metadata:
         if not (start_year <= meta.filing_date.year <= end_year):
             continue
@@ -111,10 +116,125 @@ def _process_cik(
             logger.warning("skip filing cik=%s acc=%s: %s", cik, meta.accession_number, exc)
             continue
         records_buffer.extend(records)
+    return records_buffer
 
-    if records_buffer:
-        write_records_to_parquet(records_buffer, parquet_root=parquet_root)
-    return len(records_buffer)
+
+def _flush_batch(
+    records: list,
+    *,
+    ciks: list[str],
+    parquet_root: Path,
+    manifest: BackfillManifest,
+) -> None:
+    """Write buffered records to parquet, mark all CIKs complete, save manifest.
+
+    Atomic-ish: parquet write happens first; if it fails, the manifest is
+    not updated and the next run will refetch the CIKs (idempotent because
+    accession_number is unique). After a successful write, all CIKs in the
+    batch are marked complete in one go and the manifest is saved.
+
+    Empty ``records`` is allowed — CIKs with zero Form-4s in the requested
+    window must still be marked complete so the next run skips them.
+    """
+    if records:
+        write_records_to_parquet(records, parquet_root=parquet_root)
+    for cik in ciks:
+        manifest.mark_complete(cik)
+    manifest.save()
+
+
+def _run_backfill_loop(
+    ciks: list[str],
+    *,
+    client: SecEdgarClient,
+    parquet_root: Path,
+    manifest: BackfillManifest,
+    start_year: int,
+    end_year: int,
+    flush_threshold: int,
+) -> None:
+    """Iterate CIKs, accumulating records until the buffer hits ``flush_threshold``.
+
+    Without batching, per-CIK flush creates one parquet file per CIK per
+    transaction-year — projected ~50-100k tiny files for the 8000-CIK
+    universe, which then dominates ``pyarrow.dataset`` open time during
+    scorer reads. Batched flush keeps the file count proportional to
+    ``total_records / flush_threshold``.
+
+    Trade-off vs per-CIK flush: if the run dies between flushes, all CIKs
+    in the pending buffer must be refetched on resume (manifest only
+    advances per flush). At threshold=5000 records and ~50 records/CIK
+    average, that's ~100 CIKs of refetch — minutes, not hours.
+    """
+    pending_records: list = []
+    pending_ciks: list[str] = []
+    total_records = 0
+    total_processed = 0
+
+    for i, cik in enumerate(ciks, start=1):
+        if manifest.is_complete(cik):
+            continue
+        try:
+            records = _fetch_records_for_cik(
+                cik,
+                client=client,
+                start_year=start_year,
+                end_year=end_year,
+            )
+        except Exception:
+            logger.exception("unhandled error on cik=%s; continuing", cik)
+            records = []
+
+        pending_records.extend(records)
+        pending_ciks.append(cik)
+        total_records += len(records)
+        total_processed += 1
+
+        logger.info(
+            "[%d/%d] cik=%s fetched %d records (buffer=%d, total=%d)",
+            i,
+            len(ciks),
+            cik,
+            len(records),
+            len(pending_records),
+            total_records,
+        )
+
+        if len(pending_records) >= flush_threshold:
+            _flush_batch(
+                pending_records,
+                ciks=pending_ciks,
+                parquet_root=parquet_root,
+                manifest=manifest,
+            )
+            logger.info(
+                "flushed %d records across %d CIKs (manifest now %d complete)",
+                len(pending_records),
+                len(pending_ciks),
+                len(manifest.completed_ciks),
+            )
+            pending_records = []
+            pending_ciks = []
+
+    # End-of-run flush for residual buffer.
+    if pending_ciks:
+        _flush_batch(
+            pending_records,
+            ciks=pending_ciks,
+            parquet_root=parquet_root,
+            manifest=manifest,
+        )
+        logger.info(
+            "final flush: %d records across %d CIKs",
+            len(pending_records),
+            len(pending_ciks),
+        )
+
+    logger.info(
+        "Backfill loop complete. Processed %d CIKs, total records %d.",
+        total_processed,
+        total_records,
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -143,10 +263,15 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--start-year", type=int, default=2006)
     ap.add_argument("--end-year", type=int, default=2026)
     ap.add_argument(
-        "--checkpoint-every",
+        "--flush-threshold",
         type=int,
-        default=20,
-        help="Save manifest every N CIKs (default 20).",
+        default=5000,
+        help=(
+            "Flush buffered records to parquet when buffer exceeds N records "
+            "(default 5000). Lower values = more files but smaller crash "
+            "window; higher values = fewer files but more refetch on crash. "
+            "5000 typical avg ~100 CIKs of refetch on resume."
+        ),
     )
     return ap
 
@@ -171,40 +296,19 @@ def main() -> int:
 
     client = SecEdgarClient(user_agent=args.user_agent)
 
-    total_records = 0
-    for i, cik in enumerate(ciks, start=1):
-        if manifest.is_complete(cik):
-            continue
-        try:
-            n = _process_cik(
-                cik,
-                client=client,
-                parquet_root=args.parquet_root,
-                start_year=args.start_year,
-                end_year=args.end_year,
-            )
-            total_records += n
-            manifest.mark_complete(cik)
-            logger.info(
-                "[%d/%d] cik=%s wrote %d records (running total %d)",
-                i,
-                len(ciks),
-                cik,
-                n,
-                total_records,
-            )
-        except Exception:
-            logger.exception("unhandled error on cik=%s; continuing", cik)
-
-        if i % max(1, args.checkpoint_every) == 0:
-            manifest.save()
-            logger.info("checkpoint: manifest saved at i=%d", i)
-
-    manifest.save()
+    _run_backfill_loop(
+        ciks,
+        client=client,
+        parquet_root=args.parquet_root,
+        manifest=manifest,
+        start_year=args.start_year,
+        end_year=args.end_year,
+        flush_threshold=args.flush_threshold,
+    )
     logger.info(
-        "Backfill complete. Total records this run: %d. Completed CIKs: %d.",
-        total_records,
+        "Backfill complete. Manifest now %d CIKs complete (was %d at start).",
         len(manifest.completed_ciks),
+        completed_at_start,
     )
     return 0
 

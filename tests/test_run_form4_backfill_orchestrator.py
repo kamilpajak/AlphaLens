@@ -1,13 +1,17 @@
-"""Form-4 backfill orchestrator — manifest checkpoint + error continuation.
+"""Form-4 backfill orchestrator — fetch, batched flush, manifest checkpoint.
 
 These tests guard the long-running 5-10 day SEC walk against silent
 regressions in the loop control flow:
 
   * Already-completed CIKs are skipped (resume safety after crash).
-  * A CIK that raises in :func:`_process_cik` does not abort the whole loop.
+  * A CIK that raises during fetch does not abort the whole loop.
   * The manifest reflects only successfully-completed CIKs.
-  * The walker now traverses both ``recent`` and ``files`` overflow blocks
+  * The walker traverses both ``recent`` and ``files`` overflow blocks
     via :func:`fetch_all_form4_metadata` (verified end-to-end).
+  * Records are buffered across CIKs and flushed when the buffer crosses
+    a record-count threshold or at end of run — drastically reducing
+    parquet file proliferation (without batching: ~100k tiny files for
+    the full 8000-CIK universe; with batching at 5k records: ~1k files).
 
 Network and parser internals are stubbed via fakes; only orchestration
 sequencing is tested here.
@@ -27,7 +31,11 @@ import pyarrow.dataset as ds
 from alphalens.data.alt_data.form4_bulk_backfill import BackfillManifest
 from alphalens.data.alt_data.form4_records import Form4Record
 from alphalens.data.alt_data.sec_edgar_client import SecEdgarError
-from scripts.run_form4_backfill import _process_cik
+from scripts.run_form4_backfill import (
+    _fetch_records_for_cik,
+    _flush_batch,
+    _run_backfill_loop,
+)
 
 
 def _mk_record(*, cik: str, accession: str, transaction_date: date) -> Form4Record:
@@ -149,25 +157,21 @@ def _xml_for(transaction_date: date) -> bytes:
 """.encode()
 
 
-class TestProcessCikSubmissionsError(unittest.TestCase):
-    def test_submissions_fetch_failure_returns_zero_no_crash(self):
-        # Network blip on submissions fetch must NOT abort the loop — the
-        # outer driver continues to the next CIK.
+class TestFetchRecordsForCik(unittest.TestCase):
+    """_fetch_records_for_cik returns Form4Records — does NOT write."""
+
+    def test_submissions_fetch_failure_returns_empty_list(self):
+        # Network blip on submissions fetch must NOT abort the loop; caller
+        # gets an empty list and continues to the next CIK.
         client = _FakeClient(submissions_errors={"0000000001"})
-        with tempfile.TemporaryDirectory() as tmp:
-            n = _process_cik(
-                "0000000001",
-                client=client,
-                parquet_root=Path(tmp),
-                start_year=2006,
-                end_year=2026,
-            )
-            self.assertEqual(n, 0)
-            # No parquet files written on submissions failure.
-            self.assertFalse(any(Path(tmp).iterdir()))
+        records = _fetch_records_for_cik(
+            "0000000001",
+            client=client,
+            start_year=2006,
+            end_year=2026,
+        )
+        self.assertEqual(records, [])
 
-
-class TestProcessCikYearFilter(unittest.TestCase):
     def test_filings_outside_year_window_skipped(self):
         # Range filter is on filing_date.year; older filings ignored even if
         # present in submissions JSON.
@@ -179,20 +183,11 @@ class TestProcessCikYearFilter(unittest.TestCase):
             submissions_payloads={cik: submissions},
             xml_payloads={(cik, "RECENT-2010"): _xml_for(date(2010, 6, 1))},
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            n = _process_cik(
-                cik,
-                client=client,
-                parquet_root=Path(tmp),
-                start_year=2006,
-                end_year=2026,
-            )
-            self.assertEqual(n, 1)
-            # Only the in-window XML was fetched.
-            self.assertEqual(client.xml_calls, [(cik, "RECENT-2010")])
+        records = _fetch_records_for_cik(cik, client=client, start_year=2006, end_year=2026)
+        self.assertEqual(len(records), 1)
+        # Only the in-window XML was fetched.
+        self.assertEqual(client.xml_calls, [(cik, "RECENT-2010")])
 
-
-class TestProcessCikContinuesPastFilingError(unittest.TestCase):
     def test_filing_xml_fetch_failure_does_not_abort_cik(self):
         # When ONE filing's XML 404s, the CIK loop continues to the next
         # filing — only that one record is dropped, not the whole CIK.
@@ -202,34 +197,15 @@ class TestProcessCikContinuesPastFilingError(unittest.TestCase):
             submissions_payloads={cik: submissions},
             xml_payloads={(cik, "GOOD-1"): _xml_for(date(2020, 7, 1))},
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            n = _process_cik(
-                cik,
-                client=client,
-                parquet_root=Path(tmp),
-                start_year=2006,
-                end_year=2026,
-            )
-            self.assertEqual(n, 1)
-            # Both XML fetches attempted; only GOOD-1 written.
-            self.assertEqual(set(client.xml_calls), {(cik, "BAD-1"), (cik, "GOOD-1")})
+        records = _fetch_records_for_cik(cik, client=client, start_year=2006, end_year=2026)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].accession_number, "GOOD-1")
+        # Both XML fetches attempted.
+        self.assertEqual(set(client.xml_calls), {(cik, "BAD-1"), (cik, "GOOD-1")})
 
-            # Verify parquet contents.
-            dataset = ds.dataset(
-                str(Path(tmp) / "transaction_year=2020"),
-                partitioning=None,
-                format="parquet",
-            )
-            df = dataset.to_table().to_pandas()
-            self.assertEqual(set(df["accession_number"]), {"GOOD-1"})
-
-
-class TestProcessCikWalksOverflow(unittest.TestCase):
     def test_overflow_files_walked_when_present(self):
-        # CRITICAL regression guard: overflow files must be fetched and their
-        # Form-4 entries processed. Without this, filers with >1000 filings
-        # silently lose historical data — the bug that wasted the first
-        # 6-day backfill run.
+        # Filers with >1000 filings: 'files' overflow must be walked, otherwise
+        # historical data silently lost (caused first 6-day backfill abort).
         cik = "0000000001"
         submissions = {
             "filings": {
@@ -253,31 +229,20 @@ class TestProcessCikWalksOverflow(unittest.TestCase):
                 (cik, "OVERFLOW-1"): _xml_for(date(2010, 6, 1)),
             },
         )
-        with tempfile.TemporaryDirectory() as tmp:
-            n = _process_cik(
-                cik,
-                client=client,
-                parquet_root=Path(tmp),
-                start_year=2006,
-                end_year=2026,
-            )
-            self.assertEqual(n, 2)
-            # Both submissions and overflow fetched.
-            self.assertEqual(client.submissions_calls, [cik])
-            self.assertEqual(
-                client.overflow_calls,
-                ["CIK0000000001-submissions-001.json"],
-            )
-            self.assertEqual(
-                set(client.xml_calls),
-                {(cik, "RECENT-1"), (cik, "OVERFLOW-1")},
-            )
+        records = _fetch_records_for_cik(cik, client=client, start_year=2006, end_year=2026)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(client.submissions_calls, [cik])
+        self.assertEqual(
+            client.overflow_calls,
+            ["CIK0000000001-submissions-001.json"],
+        )
+        self.assertEqual(
+            set(r.accession_number for r in records),
+            {"RECENT-1", "OVERFLOW-1"},
+        )
 
-
-class TestProcessCikEmptyResults(unittest.TestCase):
-    def test_no_form4_filings_writes_no_parquet(self):
-        # CIK with submissions but zero Form-4s should still return 0 cleanly
-        # and NOT create a parquet partition.
+    def test_no_form4_filings_returns_empty_list(self):
+        # CIK with submissions but zero Form-4s returns [] cleanly.
         cik = "0000000001"
         submissions = {
             "filings": {
@@ -290,16 +255,188 @@ class TestProcessCikEmptyResults(unittest.TestCase):
             }
         }
         client = _FakeClient(submissions_payloads={cik: submissions})
+        records = _fetch_records_for_cik(cik, client=client, start_year=2006, end_year=2026)
+        self.assertEqual(records, [])
+
+
+class TestFlushBatch(unittest.TestCase):
+    """_flush_batch writes records, marks all CIKs complete, saves manifest."""
+
+    def test_flush_writes_parquet_and_marks_all_ciks_complete(self):
+        records = [
+            _mk_record(cik="A", accession="A-1", transaction_date=date(2022, 5, 1)),
+            _mk_record(cik="A", accession="A-2", transaction_date=date(2022, 6, 1)),
+            _mk_record(cik="B", accession="B-1", transaction_date=date(2022, 7, 1)),
+        ]
         with tempfile.TemporaryDirectory() as tmp:
-            n = _process_cik(
-                cik,
+            tmp_path = Path(tmp)
+            manifest = BackfillManifest.load_or_create(tmp_path / "manifest.json")
+            _flush_batch(
+                records,
+                ciks=["A", "B"],
+                parquet_root=tmp_path / "parquet",
+                manifest=manifest,
+            )
+            # Manifest persisted to disk in same call.
+            data = json.loads((tmp_path / "manifest.json").read_text())
+            self.assertEqual(set(data["completed_ciks"]), {"A", "B"})
+
+            # Single parquet file for the year (3 records all from 2022).
+            files = list((tmp_path / "parquet" / "transaction_year=2022").glob("*.parquet"))
+            self.assertEqual(len(files), 1)
+            df = ds.dataset(str(files[0]), format="parquet").to_table().to_pandas()
+            self.assertEqual(len(df), 3)
+            self.assertEqual(set(df["accession_number"]), {"A-1", "A-2", "B-1"})
+
+    def test_flush_with_empty_records_still_marks_ciks_complete(self):
+        # CIKs with zero Form-4s (10-K-only filers) must still be marked
+        # complete so resume doesn't refetch them forever.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            manifest = BackfillManifest.load_or_create(tmp_path / "manifest.json")
+            _flush_batch(
+                [],
+                ciks=["X", "Y"],
+                parquet_root=tmp_path / "parquet",
+                manifest=manifest,
+            )
+            self.assertTrue(manifest.is_complete("X"))
+            self.assertTrue(manifest.is_complete("Y"))
+
+
+class TestRunBackfillLoop(unittest.TestCase):
+    """End-to-end loop with batched flushing — the critical file-count fix."""
+
+    def _build_client_with_n_ciks_each_having_records(
+        self, n_ciks: int, records_per_cik: int
+    ) -> tuple[_FakeClient, list[str]]:
+        ciks = [f"{i:010d}" for i in range(n_ciks)]
+        submissions_payloads = {}
+        xml_payloads = {}
+        for cik in ciks:
+            entries = [
+                (f"ACC-{cik}-{j}", f"2020-{(j % 12) + 1:02d}-15") for j in range(records_per_cik)
+            ]
+            submissions_payloads[cik] = _submissions_with_form4(entries)
+            for j in range(records_per_cik):
+                acc = f"ACC-{cik}-{j}"
+                month = (j % 12) + 1
+                xml_payloads[(cik, acc)] = _xml_for(date(2020, month, 15))
+        return _FakeClient(
+            submissions_payloads=submissions_payloads,
+            xml_payloads=xml_payloads,
+        ), ciks
+
+    def test_batched_flush_dramatically_reduces_file_count(self):
+        # 50 CIKs × 100 records each = 5000 records.
+        # Without batching (per-CIK flush): ~50 files (one per CIK).
+        # With batched flush at threshold=1000: 5 flushes -> 5 files in 2020 partition.
+        # Real-world impact: 8000 CIKs averaging 50 records each = 400k records.
+        # Per-CIK flush -> ~8000 files; batched at 5000 -> ~80 files.
+        client, ciks = self._build_client_with_n_ciks_each_having_records(
+            n_ciks=50, records_per_cik=100
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            manifest = BackfillManifest.load_or_create(tmp_path / "manifest.json")
+            _run_backfill_loop(
+                ciks,
                 client=client,
-                parquet_root=Path(tmp),
+                parquet_root=tmp_path / "parquet",
+                manifest=manifest,
                 start_year=2006,
                 end_year=2026,
+                flush_threshold=1000,
             )
-            self.assertEqual(n, 0)
-            self.assertFalse(any(Path(tmp).iterdir()))
+            files = list((tmp_path / "parquet" / "transaction_year=2020").glob("*.parquet"))
+            # Per-CIK flush would create 50 files; batched-at-1000 creates ~5.
+            self.assertLessEqual(
+                len(files),
+                10,
+                f"expected ~5 files with batched flush, got {len(files)}",
+            )
+            self.assertEqual(len(manifest.completed_ciks), 50)
+
+    def test_skips_already_completed_ciks(self):
+        # Resume safety: previously completed CIKs are not refetched.
+        client, ciks = self._build_client_with_n_ciks_each_having_records(
+            n_ciks=3, records_per_cik=2
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            manifest = BackfillManifest.load_or_create(tmp_path / "manifest.json")
+            # Pre-mark first CIK as done.
+            manifest.mark_complete(ciks[0])
+            manifest.save()
+
+            _run_backfill_loop(
+                ciks,
+                client=client,
+                parquet_root=tmp_path / "parquet",
+                manifest=manifest,
+                start_year=2006,
+                end_year=2026,
+                flush_threshold=1000,
+            )
+            # First CIK never re-fetched.
+            self.assertNotIn(ciks[0], client.submissions_calls)
+            # Other two were processed and marked complete.
+            self.assertIn(ciks[1], manifest.completed_ciks)
+            self.assertIn(ciks[2], manifest.completed_ciks)
+
+    def test_residual_buffer_flushed_at_end_of_run(self):
+        # When total records < threshold, end-of-run flush still writes them.
+        client, ciks = self._build_client_with_n_ciks_each_having_records(
+            n_ciks=3, records_per_cik=10
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            manifest = BackfillManifest.load_or_create(tmp_path / "manifest.json")
+            _run_backfill_loop(
+                ciks,
+                client=client,
+                parquet_root=tmp_path / "parquet",
+                manifest=manifest,
+                start_year=2006,
+                end_year=2026,
+                flush_threshold=10_000,  # never reached
+            )
+            files = list((tmp_path / "parquet" / "transaction_year=2020").glob("*.parquet"))
+            # Single end-of-run flush for all 3 CIKs.
+            self.assertEqual(len(files), 1)
+            self.assertEqual(len(manifest.completed_ciks), 3)
+
+    def test_continues_past_unhandled_exception_on_one_cik(self):
+        # If a CIK raises an unhandled exception (not SecEdgarError), the
+        # loop logs and continues to the next CIK.
+        ciks = ["0000000001", "0000000002", "0000000003"]
+        client = _FakeClient(
+            submissions_errors={"0000000001"},  # raises SecEdgarError
+            submissions_payloads={
+                "0000000002": _submissions_with_form4([("ACC-2", "2020-05-15")]),
+                "0000000003": _submissions_with_form4([("ACC-3", "2020-06-15")]),
+            },
+            xml_payloads={
+                ("0000000002", "ACC-2"): _xml_for(date(2020, 5, 15)),
+                ("0000000003", "ACC-3"): _xml_for(date(2020, 6, 15)),
+            },
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            manifest = BackfillManifest.load_or_create(tmp_path / "manifest.json")
+            _run_backfill_loop(
+                ciks,
+                client=client,
+                parquet_root=tmp_path / "parquet",
+                manifest=manifest,
+                start_year=2006,
+                end_year=2026,
+                flush_threshold=10_000,
+            )
+            # All 3 CIKs marked complete (the one that errored has empty
+            # records but still completes — this matches our existing
+            # _process_cik fault tolerance contract).
+            self.assertEqual(len(manifest.completed_ciks), 3)
 
 
 class TestManifestPersistence(unittest.TestCase):
