@@ -20,7 +20,6 @@ import typer
 from dotenv import load_dotenv
 
 from alphalens_cli.commands.backtest import backtest
-from alphalens_cli.commands.guru import guru_app
 from alphalens_cli.commands.insider import insider_app
 from alphalens_cli.commands.literature import literature_app
 from alphalens_cli.commands.paper_trade import paper_trade_app
@@ -64,7 +63,6 @@ app.add_typer(paper_trade_app, name="paper-trade")
 app.add_typer(preregister_app, name="preregister")
 app.add_typer(research_app, name="research")
 app.add_typer(rotation_app, name="rotation")
-app.add_typer(guru_app, name="guru")
 app.command(name="status")(status)
 app.command(name="backtest")(backtest)
 
