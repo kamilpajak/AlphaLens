@@ -88,6 +88,40 @@ CLI komendy dla CLOSED layers istnieją jako research replay tooling — patrz `
 
 **New components** — zawsze w `alphalens/<name>/` lub `alphalens_cli/`, nigdy w top-level.
 
+## Workflow conventions
+
+**TDD always** — production code zawsze red→green→refactor, nawet 2-liniowe fixy (MultiIndex flatten, off-by-one). Nie ma "just one quick fix" — write test first.
+
+**Quality over speed** — nie downgrade'uj modeli/data sources żeby uniknąć rate limits. Czekać/cachować/throttlować, nie obniżać precyzji.
+
+**runpod = primary compute** — eksperymenty (audity, holdouts, smoke N>50) idą na runpod.io CPU pody. Local Mac zostaje na code editing + tiny sanity checks. OOM-class issues defaultowo "ship to runpod" zamiast laptop-fit refactor.
+
+**Proceed continuously between phases** — approved plan = green light dla wszystkich faz; chain N→N+1 bez per-phase confirmation. Stop tylko na blocker albo destructive action.
+
+**Cache iVolatility downloads** — persist raw API responses do `~/.alphalens/ivolatility_cache/` PRZED processingiem; nigdy re-fetch on retry/iteration ($399/mo metered).
+
+**gh CLI repo scope** — zawsze `--repo kamilpajak/AlphaLens` przy `gh pr comment/view/create`. Incident 2026-04-24: comment trafił na TauricResearch/TradingAgents#19 zamiast kamilpajak/AlphaLens#19.
+
+**No Keychain writes** — User control nad macOS Keychain jest sacred. Czytanie OK; nigdy delete/add bez explicit ask.
+
+**Audit design memos post-session** — po sesjach z multi-memo: scan `docs/research/v*_design_*.md` i update **Status:** żeby pasował do reality (DRAFT/LOCKED/REJECTED/SUPERSEDED) przed closing.
+
+**Polish primary, English for tech terms** — w prozie/rozmowach polski jako primary; angielski tylko dla nazw technicznych bez polskiego odpowiednika.
+
+## Research methodology
+
+**Adversarial review pre-compute** — przed jakimkolwiek runem >1h compute: zen + perplexity adversarial review zlocked design memo. Pipeline złapał FATAL flaws na 2 designach jednej sesji (v5 quantile-LP, v8 LGBM-quantile, v0 Cohen-Malloy 5y misread). Don't skip nawet na "obvious next" experiments.
+
+**Burnt-holdout multiplicity compounds** — pure model-class swap na identycznych features+holdout+selection NIE cleansuje multiplicity. Use program-level Bonferroni count gdy data inputs unchanged. "Fresh class" Bonferroni licznik tylko-intra-class jest statistical self-deception.
+
+**Literature ≠ oracle** — projekt eksploruje genuinely novel combinations (multi-source × PIT × interaction × live EDGAR @ retail scale); literature aggregate distributions to NIE są informative priors. Methodology bundle (pre-reg + multi-phase + Bonferroni) = observation protocol, nie gate.
+
+## Project doctrine
+
+**Keep searching screeners — never close the door** — discipline bounds the search, nie closure. Nie pisać "no further prospecting" / "abandon factors". Kolejne hipotezy mogą operować na nowej warstwie (ADR 0007), pre-reg ledger podnosi Bonferroni bar dla każdego nowego testu.
+
+**No passive pivot** — mimo 11 paradigm failures (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum + vol-target overlay), user odrzucił pivot do passive indexing. Active quant research trwa.
+
 ## Where to find "why"
 
 - **Architectural decisions:** `docs/adr/` (8 ADRs: pivot, queue contract, screener-agnostic backtest, ~~vendored upstream~~ *superseded*, closed-layer policy, OSS extraction, layer architecture, sunset TradingAgents)
