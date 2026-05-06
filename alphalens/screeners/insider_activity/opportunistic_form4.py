@@ -49,6 +49,45 @@ class _ClassifierCache(Protocol):
     def get(self, person_cik: str, classification_year: int) -> CohenMalloyLabel: ...
 
 
+def _is_nan_price(value: object) -> bool:
+    return value is None or (isinstance(value, float) and np.isnan(value))
+
+
+def _is_eligible_record(
+    row,
+    classifier_cache: _ClassifierCache,
+    classification_year: int,
+) -> bool:
+    """Filter chain: eligible transaction code + officer/director status +
+    Cohen-Malloy OPPORTUNISTIC label."""
+    if row.transaction_code not in ELIGIBLE_TRANSACTION_CODES:
+        return False
+    if not (row.is_officer or row.is_director):
+        return False
+    label = classifier_cache.get(row.reporting_owner_cik, classification_year)
+    return label is CohenMalloyLabel.OPPORTUNISTIC
+
+
+def _resolve_price(
+    row,
+    price_imputer: Callable[[date], float | None] | None,
+) -> float | None:
+    """Return record price, imputing from ``price_imputer`` if missing.
+
+    Returns ``None`` when price is missing AND no imputer is provided OR the
+    imputer returns NaN/None. Caller treats ``None`` as drop-record.
+    """
+    price = row.transaction_price_per_share
+    if not _is_nan_price(price):
+        return price
+    if price_imputer is None:
+        return None
+    imputed = price_imputer(row.transaction_date)
+    if _is_nan_price(imputed):
+        return None
+    return imputed
+
+
 def aggregate_opportunistic_signal(
     records: pd.DataFrame,
     *,
@@ -89,25 +128,11 @@ def aggregate_opportunistic_signal(
 
     total = 0.0
     for row in records.itertuples(index=False):
-        if row.transaction_code not in ELIGIBLE_TRANSACTION_CODES:
+        if not _is_eligible_record(row, classifier_cache, classification_year):
             continue
-        if not (row.is_officer or row.is_director):
+        price = _resolve_price(row, price_imputer)
+        if price is None:
             continue
-        # Note: 10% beneficial owners who are NOT also officer/director already
-        # filtered above. The remaining 10% owners are kept iff also officer/director.
-
-        label = classifier_cache.get(row.reporting_owner_cik, classification_year)
-        if label is not CohenMalloyLabel.OPPORTUNISTIC:
-            continue
-
-        price = row.transaction_price_per_share
-        if price is None or (isinstance(price, float) and np.isnan(price)):
-            if price_imputer is None:
-                continue
-            imputed = price_imputer(row.transaction_date)
-            if imputed is None or (isinstance(imputed, float) and np.isnan(imputed)):
-                continue
-            price = imputed
 
         usd = float(row.transaction_shares) * float(price)
         sign = 1.0 if row.transaction_code == "P" else -1.0
