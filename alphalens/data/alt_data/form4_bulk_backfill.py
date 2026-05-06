@@ -107,6 +107,37 @@ def iter_form4_filings(submissions: dict, *, cik: str) -> Iterator[FilingMetadat
         )
 
 
+def fetch_all_form4_metadata(client, cik: str) -> Iterator[FilingMetadata]:
+    """Yield :class:`FilingMetadata` for every Form-4/4-A across all submissions blocks.
+
+    SEC submissions JSON caps the ``recent`` block at 1000 entries across all
+    form types. For prolific issuers (any large-cap with thousands of insider
+    Form-4s over 22 years), older filings live in the ``files`` overflow
+    pointers (e.g. ``CIK0000320193-submissions-001.json``). Walking only
+    ``recent`` silently drops the bulk of historical Form-4 data — exactly
+    the data Cohen-Malloy needs for 5-year insider history.
+
+    Overflow JSONs share the same ``{filings: {recent: {...}}}`` shape as the
+    main file (verified against
+    https://data.sec.gov/submissions/CIK0000320193-submissions-001.json), so
+    :func:`iter_form4_filings` can reused on each.
+
+    The ``client`` parameter must implement ``fetch_submissions(cik)`` and
+    ``fetch_submissions_overflow(name)`` (typed loosely to allow test doubles).
+    """
+    submissions = client.fetch_submissions(cik)
+    yield from iter_form4_filings(submissions, cik=cik)
+
+    files = submissions.get("filings", {}).get("files") or []
+    for entry in files:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not name:
+            logger.warning("skipping malformed overflow entry for cik=%s: %r", cik, entry)
+            continue
+        overflow = client.fetch_submissions_overflow(name)
+        yield from iter_form4_filings(overflow, cik=cik)
+
+
 def write_records_to_parquet(records: Iterable[Form4Record], *, parquet_root: Path) -> None:
     """Write Form4Records to hive-partitioned parquet, partitioned by transaction_year.
 

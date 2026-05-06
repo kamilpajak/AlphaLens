@@ -40,7 +40,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from alphalens.data.alt_data.form4_bulk_backfill import (  # noqa: E402
     BackfillManifest,
-    iter_form4_filings,
+    fetch_all_form4_metadata,
     write_records_to_parquet,
 )
 from alphalens.data.alt_data.form4_records import (  # noqa: E402
@@ -80,15 +80,20 @@ def _process_cik(
     start_year: int,
     end_year: int,
 ) -> int:
-    """Fetch submissions + Form-4 XMLs for one CIK; write parquet. Returns count."""
+    """Fetch submissions + Form-4 XMLs for one CIK; write parquet. Returns count.
+
+    Walks both ``recent`` and ``files`` overflow blocks via
+    :func:`fetch_all_form4_metadata` — required for prolific issuers whose
+    historical Form-4s spill out of the most-recent-1000 ``recent`` window.
+    """
     try:
-        submissions = client.fetch_submissions(cik)
+        records_metadata = list(fetch_all_form4_metadata(client, cik=cik))
     except SecEdgarError as exc:
         logger.warning("submissions fetch failed for cik=%s: %s", cik, exc)
         return 0
 
     records_buffer = []
-    for meta in iter_form4_filings(submissions, cik=cik):
+    for meta in records_metadata:
         if not (start_year <= meta.filing_date.year <= end_year):
             continue
         try:

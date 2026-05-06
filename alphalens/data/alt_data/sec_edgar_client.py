@@ -77,6 +77,25 @@ class SecEdgarClient:
         self._submissions_cache[cik] = data
         return data
 
+    def fetch_submissions_overflow(self, name: str) -> dict[str, Any]:
+        """Fetch a submissions overflow file (>1000 filings → CIK*-submissions-NNN.json).
+
+        SEC paginates submissions index for prolific filers: the main
+        ``CIK{cik}.json`` holds the most recent 1000 filings, and the
+        ``filings.files`` array points to additional JSONs (e.g.
+        ``CIK0000320193-submissions-001.json``) that share the same
+        ``{filings: {recent: {...}}}`` shape. Cached identically to the main
+        index so a long-running backfill doesn't refetch.
+        """
+        cached = self._submissions_cache.get(name)
+        if cached is not None:
+            return cached
+        url = f"{_DATA_BASE}/submissions/{name}"
+        data = self._get_json(url)
+        _evict_to_capacity(self._submissions_cache, self._submissions_cache_capacity - 1)
+        self._submissions_cache[name] = data
+        return data
+
     def fetch_company_tickers(self) -> dict[str, Any]:
         """Fetch SEC's master ticker→CIK mapping (refreshed daily).
 
