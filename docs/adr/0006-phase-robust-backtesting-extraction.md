@@ -1,7 +1,8 @@
 # ADR 0006 — Phase-robust-backtesting extracted as standalone OSS toolkit
 
-- **Status:** Accepted
+- **Status:** Implemented (2026-05-06)
 - **Date:** 2026-04-29
+- **Implemented:** 2026-05-06 (OSS v0.2.0 + AlphaLens consumption)
 - **Supersedes:** —
 - **Issue:** [#39](https://github.com/kamilpajak/AlphaLens/issues/39) Phase 1
 
@@ -51,19 +52,36 @@ MIT-licensed, pip-installable, with its own minimal CI (ruff + unittest discover
   multiple-testing inflation, IS→OOS regime overfit, liquidity illusion) with
   concrete numbers from the AlphaLens postmortem.
 
-### Vendoring policy (back into AlphaLens)
+### Consumption policy (2026-05-06 update — supersedes vendoring)
 
-If future fixes flow back, use `git subtree pull`:
+**Status:** AlphaLens now consumes the methodology bundle as an external
+dependency, pinned to a git tag in `pyproject.toml`:
 
-```bash
-git subtree pull --prefix=alphalens/preregistration \
-  https://github.com/kamilpajak/phase-robust-backtesting.git main --squash
+```toml
+"phase-robust-backtesting @ git+https://github.com/kamilpajak/phase-robust-backtesting.git@v0.2.0",
 ```
 
-Note: AlphaLens currently keeps its own copies of the bundle (because the
-extraction happened from AlphaLens, not vice versa). If the OSS toolkit
-diverges in a way AlphaLens wants to inherit, pull the subtree at that point;
-otherwise the local copies stay authoritative for AlphaLens-specific use.
+Local copies of `alphalens/preregistration/`, `alphalens/backtest/multi_phase.py`,
+and `alphalens/backtest/multiple_testing.py` were deleted on 2026-05-06.
+`scripts/audit_multi_phase.py` is now a thin wrapper that resolves an
+AlphaLens-specific strategy-name dict to a path before delegating to
+`phase_robust_backtesting.audit_multi_phase.run_audit` in-process (no
+subprocess wrapping — preserves traceback fidelity and Ctrl+C signal
+propagation).
+
+**Forward-flow workflow** (replacing the earlier `git subtree pull` policy,
+which is now deprecated):
+
+1. Improvements to ledger / multi_phase / multiple_testing / audit_multi_phase
+   land first as PRs against `kamilpajak/phase-robust-backtesting`.
+2. OSS PR merges → maintainer cuts a new tag (e.g. `v0.3.0`).
+3. AlphaLens PR bumps the dep version in `pyproject.toml`, runs `uv sync`,
+   commits the updated `uv.lock`. CI runs `tests/test_methodology_integration.py`
+   to verify the API contract still holds.
+
+The previous `git subtree pull --prefix=alphalens/preregistration ...`
+recipe is **superseded** — do not use. Subtree vendoring would re-introduce
+the drift surface this consumption policy eliminates.
 
 ## Consequences
 
@@ -73,14 +91,19 @@ otherwise the local copies stay authoritative for AlphaLens-specific use.
   Phase 1.
 - **Positive.** The OSS repo's CI is minimal (no SonarCloud / bandit), so
   it's far cheaper to maintain than AlphaLens.
-- **Negative (mild).** Two copies of the same code now exist. AlphaLens's
-  `alphalens/preregistration/` and `alphalens/backtest/{multi_phase,
-  multiple_testing}.py` are NOT replaced by a `pip install` dependency; we
-  keep the in-repo copies because (a) AlphaLens is solo-research-only with
-  no need to chase upstream OSS releases, (b) the extraction is one-way for
-  Phase 1.
 - **Negative (mild).** Future commits that touch both repos require two PRs.
-  Acceptable cost for clean OSS surface.
+  Acceptable cost for clean OSS surface and zero drift surface (per the
+  2026-05-06 consumption-policy update above).
+
+### 2026-05-06 implementation note
+
+After 5 days of operating with the original "two-copy" arrangement, two
+real fixes (utf-8 ledger I/O, dispersion gate in `robust_verdict`) had
+accumulated locally without backporting. The drift surface motivated the
+shift to consuming the OSS bundle as an external dep — see the updated
+"Consumption policy" section above. OSS v0.2.0 includes the backported
+fixes plus a new `run_audit()` programmatic entry point that lets the
+AlphaLens wrapper delegate without spawning a subprocess.
 
 ## Alternatives considered
 

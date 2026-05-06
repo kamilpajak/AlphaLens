@@ -11,9 +11,11 @@ Layered architecture per ADR 0007 (5 layers):
 Cross-cutting:
     alphalens.core            — plumbing (queue, candidates, runner, registry, config)
     alphalens.data            — clients + parsers + PIT store (data/store/ = as-of-t SoT)
-    alphalens.preregistration — methodology bundle (mirror OSS phase-robust-backtesting)
     alphalens.literature_review — Perplexity periodic scan
 
-Closed strategies (10 paradigm failures) live under `alphalens.archive.*` per
+Methodology bundle (preregistration ledger + multi-phase audit + Bonferroni)
+is consumed via the external `phase-robust-backtesting` dep (ADR 0006).
+
+Closed strategies (11 paradigm failures) live under `alphalens.archive.*` per
 ADR 0005 (anti-pattern catalog). See `docs/research/paradigm_failures_postmortem.md`.
 """
