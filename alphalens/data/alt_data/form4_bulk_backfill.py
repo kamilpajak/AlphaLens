@@ -126,16 +126,32 @@ def fetch_all_form4_metadata(client, cik: str) -> Iterator[FilingMetadata]:
     ``fetch_submissions_overflow(name)`` (typed loosely to allow test doubles).
     """
     submissions = client.fetch_submissions(cik)
-    yield from iter_form4_filings(submissions, cik=cik)
+    seen_accessions: set[str] = set()
+
+    for meta in iter_form4_filings(submissions, cik=cik):
+        if meta.accession_number in seen_accessions:
+            continue
+        seen_accessions.add(meta.accession_number)
+        yield meta
 
     files = submissions.get("filings", {}).get("files") or []
+    n_overflow = sum(1 for e in files if isinstance(e, dict) and e.get("name"))
+    overflow_idx = 0
     for entry in files:
         name = entry.get("name") if isinstance(entry, dict) else None
         if not name:
             logger.warning("skipping malformed overflow entry for cik=%s: %r", cik, entry)
             continue
+        overflow_idx += 1
+        # Progress logging for big filers (5+ overflow JSONs cause 30s+ silent
+        # fetch periods otherwise — Berkshire, JPM, MS).
+        logger.info("fetching overflow %d/%d for cik=%s (%s)", overflow_idx, n_overflow, cik, name)
         overflow = client.fetch_submissions_overflow(name)
-        yield from iter_form4_filings(overflow, cik=cik)
+        for meta in iter_form4_filings(overflow, cik=cik):
+            if meta.accession_number in seen_accessions:
+                continue
+            seen_accessions.add(meta.accession_number)
+            yield meta
 
 
 def write_records_to_parquet(records: Iterable[Form4Record], *, parquet_root: Path) -> None:

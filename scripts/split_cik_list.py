@@ -66,13 +66,23 @@ def write_shards(shards: list[list[str]], *, output_dir: Path) -> list[Path]:
 
 
 def _load_cik_list(path: Path) -> list[str]:
-    """One CIK per line, lines starting with '#' are comments."""
+    """One CIK per line, 10-digit zero-padded; lines starting with '#' are comments.
+
+    Mirrors :func:`scripts.run_form4_backfill._load_cik_list` semantics —
+    must produce the same shard contents that the runner expects, so SEC
+    submissions URLs (CIK{cik}.json) resolve correctly.
+    """
     out: list[str] = []
     for raw in path.read_text().splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        out.append(line)
+        try:
+            cik_int = int(line)
+        except ValueError:
+            logger.warning("skipping non-numeric CIK line: %r", line)
+            continue
+        out.append(f"{cik_int:010d}")
     return out
 
 

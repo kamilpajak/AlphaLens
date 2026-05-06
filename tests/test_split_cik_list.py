@@ -121,6 +121,25 @@ class TestLoadCikList(unittest.TestCase):
             ["0000000001", "0000000002", "0000000003"],
         )
 
+    def test_unpadded_ciks_are_zero_padded_to_10_digits(self):
+        # SEC submissions URLs require 10-digit zero-padded CIKs. Input
+        # files often have unpadded ints (e.g. "320193" from spreadsheets).
+        # Both run_form4_backfill._load_cik_list and the split version
+        # MUST pad consistently so shard files match what the runner
+        # produces from the same source.
+        self.path.write_text("320193\n789019\n1\n")
+        self.assertEqual(
+            _load_cik_list(self.path),
+            ["0000320193", "0000789019", "0000000001"],
+        )
+
+    def test_non_numeric_lines_skipped_with_warning(self):
+        self.path.write_text("0000000001\nNOT_A_CIK\n0000000002\n")
+        self.assertEqual(
+            _load_cik_list(self.path),
+            ["0000000001", "0000000002"],
+        )
+
     def test_empty_lines_skipped(self):
         # Boundary case from mutation testing: `if not line or ...` flipped
         # to `if line or ...` would keep blanks.

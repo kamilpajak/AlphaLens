@@ -507,6 +507,40 @@ class TestFetchAllForm4Metadata(unittest.TestCase):
         results = list(fetch_all_form4_metadata(client, cik="0000320193"))
         self.assertEqual([r.accession_number for r in results], ["R1", "OF1"])
 
+    def test_dedups_accession_across_recent_and_overflow(self):
+        # SEC pagination boundary edge: same accession_number can appear in
+        # both 'recent' and an overflow JSON (e.g. mid-update refresh).
+        # fetch_all_form4_metadata must yield each accession at most once
+        # to avoid duplicate XML fetches and duplicate parquet rows.
+        submissions = {
+            "filings": {
+                "recent": {
+                    "form": ["4", "4"],
+                    "accessionNumber": ["A-RECENT", "A-DUPE"],
+                    "filingDate": ["2024-01-15", "2023-12-15"],
+                    "primaryDocument": ["form4.xml", "form4.xml"],
+                },
+                "files": [{"name": "CIK0000320193-submissions-001.json"}],
+            }
+        }
+        overflow_payloads = {
+            "CIK0000320193-submissions-001.json": {
+                "filings": {
+                    "recent": {
+                        "form": ["4", "4"],
+                        "accessionNumber": ["A-DUPE", "A-OLD"],
+                        "filingDate": ["2023-12-15", "2018-06-01"],
+                        "primaryDocument": ["form4.xml", "form4.xml"],
+                    }
+                }
+            }
+        }
+        client = _FakeClient(submissions, overflow_payloads)
+        results = list(fetch_all_form4_metadata(client, cik="0000320193"))
+        accessions = [r.accession_number for r in results]
+        # A-DUPE appears once, not twice.
+        self.assertEqual(accessions, ["A-RECENT", "A-DUPE", "A-OLD"])
+
     def test_overflow_xsl_prefix_stripped(self):
         # XSL stripping must apply to overflow entries too.
         submissions = {

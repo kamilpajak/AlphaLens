@@ -111,6 +111,30 @@ class TestCompactPartition(unittest.TestCase):
         compact_partition(partition)  # no raise
         self.assertEqual(list(partition.iterdir()), [])
 
+    def test_dedups_records_when_partial_flush_replayed(self):
+        # Crash semantics: _flush_batch writes parquet files first, then
+        # marks CIKs complete in manifest. If the run dies between those
+        # two steps, the manifest is unchanged and the same CIKs get
+        # re-fetched on resume — producing a SECOND parquet file with
+        # duplicate accession_numbers (filenames don't collide thanks to
+        # timestamp+hex suffix). compact_partition must dedup so the
+        # final compacted.parquet doesn't double-count trades.
+        rec = _mk_record(transaction_date=date(2022, 5, 1), accession="DUPE")
+        write_records_to_parquet([rec], parquet_root=self.root)
+        write_records_to_parquet([rec], parquet_root=self.root)  # replayed
+
+        partition = self.root / "transaction_year=2022"
+        self.assertEqual(len(list(partition.glob("*.parquet"))), 2)
+
+        compact_partition(partition)
+
+        files = list(partition.glob("*.parquet"))
+        self.assertEqual(len(files), 1)
+        df = ds.dataset(str(files[0]), format="parquet").to_table().to_pandas()
+        # Single row, not two — the duplicate has been collapsed.
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]["accession_number"], "DUPE")
+
     def test_handles_partition_with_compacted_plus_new_parts(self):
         # After an initial compaction, a resumed backfill can land new
         # part-*.parquet files. A re-compaction must merge them with the

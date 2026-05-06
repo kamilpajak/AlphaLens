@@ -29,6 +29,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+import pyarrow as pa  # noqa: E402
 import pyarrow.dataset as ds  # noqa: E402
 import pyarrow.parquet as pq  # noqa: E402
 
@@ -58,6 +59,17 @@ def compact_partition(partition_dir: Path) -> None:
         partitioning=None,
         format="parquet",
     ).to_table()
+
+    # Dedup: _flush_batch writes parquet before marking CIKs complete in
+    # the manifest. If the run dies in between, the next resume re-fetches
+    # the in-buffer CIKs and writes a SECOND parquet file with duplicate
+    # rows (timestamp+hex suffix prevents filename collision). Collapse
+    # them here so the compacted dataset is the unique-row truth.
+    n_before = table.num_rows
+    df = table.to_pandas().drop_duplicates()
+    if len(df) < n_before:
+        logger.info("compact %s: deduped %d -> %d rows", partition_dir, n_before, len(df))
+    table = pa.Table.from_pandas(df, schema=table.schema, preserve_index=False)
 
     # Write to a temp file, then atomically rename. If the rename succeeds,
     # only then delete the originals — guards against half-finished merges

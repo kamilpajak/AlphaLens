@@ -24,12 +24,16 @@ WorkingDirectory=%h/AlphaLens
 
 # --- Edit these to match your environment ---
 Environment=ALPHALENS_VENV=%h/AlphaLens/.venv
-Environment=ALPHALENS_USER_AGENT=Kamil Pajak pajakkamil@gmail.com
+# SEC EDGAR Fair Access requires a contact: "Your Name your@email.com".
+# Wrong UA returns 403; left as a placeholder so misconfiguration fails fast
+# rather than running with someone else's contact.
+Environment=ALPHALENS_USER_AGENT=EDIT_ME_Your_Name your@email.com
 Environment=ALPHALENS_CIK_LIST=%h/AlphaLens/data/form4_cik_universe.txt
 Environment=ALPHALENS_PARQUET_ROOT=%h/.alphalens/form4_parquet
 Environment=ALPHALENS_MANIFEST=%h/.alphalens/form4_backfill_manifest.json
 Environment=ALPHALENS_START_YEAR=2006
 Environment=ALPHALENS_END_YEAR=2026
+Environment=ALPHALENS_FLUSH_THRESHOLD=5000
 
 ExecStart=${ALPHALENS_VENV}/bin/python scripts/run_form4_backfill.py \
     --user-agent "${ALPHALENS_USER_AGENT}" \
@@ -37,7 +41,8 @@ ExecStart=${ALPHALENS_VENV}/bin/python scripts/run_form4_backfill.py \
     --parquet-root ${ALPHALENS_PARQUET_ROOT} \
     --manifest ${ALPHALENS_MANIFEST} \
     --start-year ${ALPHALENS_START_YEAR} \
-    --end-year ${ALPHALENS_END_YEAR}
+    --end-year ${ALPHALENS_END_YEAR} \
+    --flush-threshold ${ALPHALENS_FLUSH_THRESHOLD}
 
 # Backfill is resume-safe via the JSON manifest, so a crash + restart is cheap.
 # Restart on any non-zero exit (network blip, OOM kill, transient SEC 5xx).
