@@ -19,7 +19,7 @@ Layout zorganizowany jako 11 top-level slotów (Phase 1-6 reorg 2026-04-30, ADR 
 
 | Path | Status | Notatka |
 |------|--------|---------|
-| `alphalens/core/` | ACTIVE (namespace) | plumbing — candidates, queue, registry, scorer_stats (Layer 3 runner/worker removed per ADR 0008) |
+| `alphalens/core/` | ACTIVE (namespace) | plumbing — candidates, queue, registry (Layer 3 runner/worker removed per ADR 0008) |
 | `alphalens/watchdog/` | ACTIVE | Layer 1 — `detect` live w launchd, `worker` archived per ADR 0008 |
 | `alphalens/literature_review/` | ACTIVE | Monthly + weekly Perplexity scan, live w launchd |
 | `alphalens/screeners/prescreener/` | RESEARCH_ONLY | Layer 2a — unvalidated, manual ad-hoc |
@@ -132,7 +132,7 @@ CLI komendy dla CLOSED layers istnieją jako research replay tooling — patrz `
 
 ## TradingAgents removal (2026-04-30)
 
-Vendored TradingAgents subtree + Layer 3 LLM runner removed per [ADR 0008](docs/adr/0008-sunset-tradingagents-integration.md). Worker (`com.alphalens.watchdog.worker.plist`) archived. Layer 1 watchdog still detects EDGAR events and writes to `~/.alphalens/candidates.db`, but no consumer drains the queue today — `queue scorer-stats` remains as a historical viewer. If TA is needed in the future, clone it into a separate working directory and run it manually.
+Vendored TradingAgents subtree + Layer 3 LLM runner removed per [ADR 0008](docs/adr/0008-sunset-tradingagents-integration.md). Worker (`com.alphalens.watchdog.worker.plist`) archived. Layer 1 watchdog still detects EDGAR events and writes to `~/.alphalens/candidates.db`, but no consumer drains the queue today; ad-hoc inspection is via direct SQL against the sqlite file. If TA is needed in the future, clone it into a separate working directory and run it manually.
 
 ## Known issues (LIVE)
 

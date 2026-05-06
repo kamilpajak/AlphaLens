@@ -4,7 +4,6 @@ Contents:
 - candidates  — `Candidate` dataclass + `AnalysisResult` (screener -> queue contract)
 - queue       — SQLite-backed unified queue (`~/.alphalens/candidates.db`)
 - registry    — source-priority registry
-- scorer_stats — historical scorer summary helpers (viewer over completed runs)
 
 Nothing here is layer-specific. Layers import from `alphalens.core.*`; nothing
 in core imports back from a layer.

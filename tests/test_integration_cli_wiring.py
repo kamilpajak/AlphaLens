@@ -15,12 +15,11 @@ OUR_PACKAGE_PREFIX = "alphalens"
 
 class TestTyperAppRegistration(unittest.TestCase):
     def test_each_group_is_typer(self):
-        from alphalens_cli.commands.queue import queue_app
         from alphalens_cli.commands.research import research_app
         from alphalens_cli.commands.themed import themed_app
         from alphalens_cli.commands.watchdog import watchdog_app
 
-        for app in (watchdog_app, queue_app, themed_app, research_app):
+        for app in (watchdog_app, themed_app, research_app):
             self.assertIsInstance(app, typer.Typer)
 
     def test_watchdog_commands(self):
@@ -28,12 +27,6 @@ class TestTyperAppRegistration(unittest.TestCase):
 
         names = {cmd.name for cmd in watchdog_app.registered_commands}
         self.assertEqual(names, {"run-once"})
-
-    def test_queue_commands(self):
-        from alphalens_cli.commands.queue import queue_app
-
-        names = {cmd.name for cmd in queue_app.registered_commands}
-        self.assertEqual(names, {"scorer-stats"})
 
     def test_themed_commands(self):
         from alphalens_cli.commands.themed import themed_app

@@ -16,8 +16,8 @@ class AutoTriggerEnqueueHandler(AlertHandler):
     """Detection-side handler: submits a `watchdog_sec` Candidate to the shared queue.
 
     The queue is a historical log only — the Layer 3 worker that previously
-    drained it was removed per ADR 0008. New candidates accumulate for review
-    via `alphalens queue scorer-stats`.
+    drained it was removed per ADR 0008. New candidates accumulate on disk
+    in `~/.alphalens/candidates.db`; ad-hoc inspection is via direct SQL.
     """
 
     SOURCE = "watchdog_sec"
