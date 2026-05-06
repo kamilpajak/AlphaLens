@@ -33,9 +33,11 @@ def day1_sign_confirmed(*, sue: float, day1_return: float | None) -> bool:
         return False
     if not math.isfinite(day1_return):
         return False
-    if day1_return == 0.0:
+    # Exact-zero checks are intentional semantics ("ambiguous reaction" /
+    # "no surprise"), not equality on computed values. Float-eq is correct here.
+    if day1_return == 0.0:  # NOSONAR
         return False
-    if sue == 0.0:
+    if sue == 0.0:  # NOSONAR
         return False
     return (sue > 0.0) == (day1_return > 0.0)
 

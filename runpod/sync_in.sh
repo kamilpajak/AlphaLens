@@ -34,6 +34,7 @@ DATASETS=(
     pit_universe
     survivorship
     ticker_cik_map
+    form4_parquet
 )
 
 echo ">>> rsync ${NETWORK_DIR} -> ${WORKSPACE_DATA}"

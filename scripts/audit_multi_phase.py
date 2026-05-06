@@ -63,6 +63,7 @@ _SCRIPTS = {
     "v8_literature_direct": REPO / "scripts" / "experiment_v8_literature_direct.py",
     "v9_sign_constrained": REPO / "scripts" / "experiment_v9_sign_constrained.py",
     "v9_cross_sectional_residual": REPO / "scripts" / "experiment_v9_cross_sectional_residual.py",
+    "insider_form4_opportunistic": REPO / "scripts" / "experiment_insider_form4_opportunistic.py",
 }
 
 # Parses lines like:

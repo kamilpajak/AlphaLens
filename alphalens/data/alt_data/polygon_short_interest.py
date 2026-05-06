@@ -188,7 +188,6 @@ class PolygonShortInterestClient:
         df = self.fetch_ticker(ticker)
         if df.empty:
             return None
-        asof_ts = pd.Timestamp(asof)
         # Eligible == settlement + 8 BD <= asof
         # Cheap approximation: filter index <= asof - 8 BD upper-bound
         eligible_mask = np.array(
