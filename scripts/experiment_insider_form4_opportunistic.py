@@ -35,12 +35,22 @@ load_dotenv(REPO_ROOT / ".env")
 
 from alphalens.attribution.cost_model import RealisticCostModel  # noqa: E402
 from alphalens.attribution.factor_analysis import run_regression  # noqa: E402
+from alphalens.backtest.engine import BacktestEngine  # noqa: E402
 from alphalens.backtest.metrics import sharpe, turnover_pct  # noqa: E402
+from alphalens.data.alt_data.pit_universe_loader import (  # noqa: E402
+    load_universe_union,
+)
+from alphalens.data.alt_data.ticker_cik_map import TickerCikMap  # noqa: E402
+from alphalens.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
+from alphalens.data.factors import load_carhart_daily  # noqa: E402
 from alphalens.data.store.form4_pit import (  # noqa: E402
     PARTITION_KEY,
     Form4PITStore,
 )
 from alphalens.data.store.history import HistoryStore  # noqa: E402
+from alphalens.screeners.distress_credit.features import (  # noqa: E402
+    make_production_stores,
+)
 from alphalens.screeners.insider_activity.cohen_malloy_classifier import (  # noqa: E402
     CohenMalloyLabel,
     classify_from_transaction_dates,
@@ -291,6 +301,16 @@ def main() -> int:
 
     _check_backfill_exists(args.parquet_root)
 
+    if args.universe_mode == "R3000":
+        sys.stderr.write(
+            "ERROR: R3000 mode requires separately-built PIT yaml snapshots "
+            "(wider mcap band $50M-$1T). Current ~/.alphalens/pit_universe/ "
+            "yamls are R2000-band only. Build R3000 yamls via "
+            "scripts/build_pit_universe.py with --cap-min/--cap-max overrides "
+            "before running R3000 diagnostic.\n"
+        )
+        return 4
+
     logger.info(
         "experiment insider_form4_opportunistic | universe=%s | %s..%s | phase_offset=%d",
         args.universe_mode,
@@ -299,16 +319,145 @@ def main() -> int:
         args.phase_offset,
     )
 
-    # NOTE: full integration with R2000 PIT universe loader, ticker→CIK
-    # resolver, and shares_store happens after backfill completes. This
-    # scaffold exits non-zero so audit_multi_phase orchestrator does not
-    # silently parse zero rows on incomplete setup.
-    sys.stderr.write(
-        "ERROR: experiment scaffold present but R2000 PIT universe "
-        "integration pending. Wire up after SEC EDGAR backfill completes; "
-        "see docs/research/insider_form4_opportunistic_runpod_handoff.md\n"
+    # 1. PIT universe union over the study window (R2000 from yaml snapshots).
+    #    The yamls were pre-built by scripts/build_pit_universe.py to enforce
+    #    the $300M-$3B mcap band per Cohen-Malloy size-quintile localization.
+    universe = load_universe_union(args.is_start, args.is_end)
+    if not universe:
+        sys.stderr.write(
+            "ERROR: load_universe_union returned empty list for "
+            f"{args.is_start}..{args.is_end}. PIT yaml snapshots missing at "
+            "~/.alphalens/pit_universe/.\n"
+        )
+        return 5
+    logger.info("PIT universe union: %d unique tickers across window", len(universe))
+
+    # 2. OHLCV histories for full union + benchmark (cached from yfinance).
+    histories = load_cached_histories([*universe, args.benchmark], _PRICES_DIR)
+    if args.benchmark not in histories or histories[args.benchmark].empty:
+        sys.stderr.write(f"ERROR: benchmark {args.benchmark} OHLCV missing from {_PRICES_DIR}.\n")
+        return 6
+    history_store = HistoryStore(histories)
+
+    # 3. Production stores: shares (for mcap) + ticker_cik_map (for Form-4 lookup).
+    _liab_store, share_store = make_production_stores()
+    tcm_path = REPO_ROOT / "alphalens" / "data" / "alt_data" / "data" / "ticker_cik_map.yaml"
+    cik_resolver = TickerCikMap.load(tcm_path)
+
+    # 4. Form-4 PIT store + Cohen-Malloy classifier cache.
+    form4_store = Form4PITStore(
+        parquet_root=args.parquet_root,
+        ticker_cik_resolver=cik_resolver,
+        delisting_events=None,  # TODO: wire DelistingEvent loader once available
     )
-    return 3
+    classifier_cache = ClassifierCache(form4_store)
+
+    # 5. Scorer adapter — per-rebalance feature build + residualization.
+    scorer = _OpportunisticForm4Scorer(
+        form4_store=form4_store,
+        classifier_cache=classifier_cache,
+        shares_store=share_store,
+    )
+
+    # 6. Backtest engine — monthly stride 21d, top-decile equal-weight long-only.
+    engine = BacktestEngine(
+        history_store=history_store,
+        scorer=scorer,
+        scorer_config={},
+        holding_period=args.holding,
+        top_n=args.top_n,
+        benchmark=args.benchmark,
+        screener_tickers=universe,
+        weighting="equal",
+        rebalance_stride=args.rebalance_stride,
+        phase_offset=args.phase_offset,
+    )
+    logger.info(
+        "Engine: stride=%d holding=%d top_n=%d phase_offset=%d benchmark=%s",
+        args.rebalance_stride,
+        args.holding,
+        args.top_n,
+        args.phase_offset,
+        args.benchmark,
+    )
+    report = engine.run(args.is_start, args.is_end)
+
+    # 7. Carhart factors + benchmark + assess.
+    carhart = load_carhart_daily(start=args.is_start, end=args.is_end)
+    bench_rets = benchmark_returns(history_store, args.benchmark, args.is_start, args.is_end)
+
+    period_label = f"OOS {args.is_start.year}-{args.is_end.year}"
+    sections: list[str] = [
+        f"# insider_form4_opportunistic_2026_05_05 — {period_label}",
+        "",
+        "Long-only top-decile equal-weighted Form-4 opportunistic-insider scorer",
+        "(Cohen-Malloy 2012, residualized vs equity controls).",
+        f"Universe: {args.universe_mode} PIT, {len(universe)} ticker union over window.",
+        f"Rebalance stride: {args.rebalance_stride}d, holding: {args.holding}d.",
+        f"Phase offset: {args.phase_offset}",
+        "",
+    ]
+
+    all_rows: list[dict] = []
+    for cost_bps in args.cost_half_spreads:
+        stats = assess(report, carhart, args.rebalance_stride, cost_bps, bench_rets)
+        stats["period"] = period_label
+        stats["cost_bps"] = cost_bps
+        all_rows.append(stats)
+        if stats.get("n", 0) > 0:
+            # Canonical line for audit_multi_phase regex parser
+            logger.info(
+                "%s | cost=%.0fbps | n=%d topN=%.1f turn=%.1f%% | "
+                "Sh gross=%.2f net=%.2f | excess gross=%.1f%% net=%.1f%% | "
+                "α 4F=%.1f%% t=%.2f",
+                period_label,
+                cost_bps,
+                stats["n"],
+                stats["mean_top_n"],
+                stats["turnover_per_rebal"] * 100,
+                stats["sharpe_gross"],
+                stats["sharpe_net"],
+                stats["excess_vs_bench_ann"] * 100,
+                stats["excess_vs_bench_net"] * 100,
+                stats["alpha_gross_4f"] * 100,
+                stats["t_4f"],
+            )
+
+    sections.append("## Results")
+    sections.append("")
+    sections.append(
+        "| Period | cost | n | mean topN | turn | Sharpe gross | Sharpe net | "
+        "excess gross | excess net | α 4F | t (4F) | β_SMB | β_HML | β_MOM |"
+    )
+    sections.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for r in all_rows:
+        if r.get("n", 0) == 0:
+            continue
+        sections.append(
+            "| {p} | {cb:.0f}bp | {n} | {tn:.1f} | {tr:.1f}% | "
+            "{sg:.2f} | {sn:.2f} | {eg:+.1f}% | {en:+.1f}% | {a4:+.1f}% | "
+            "{t4:+.2f} | {bsmb:+.2f} | {bhml:+.2f} | {bmom:+.2f} |".format(
+                p=r["period"],
+                cb=r["cost_bps"],
+                n=r["n"],
+                tn=r["mean_top_n"],
+                tr=r["turnover_per_rebal"] * 100,
+                sg=r["sharpe_gross"],
+                sn=r["sharpe_net"],
+                eg=r["excess_vs_bench_ann"] * 100,
+                en=r["excess_vs_bench_net"] * 100,
+                a4=r["alpha_gross_4f"] * 100,
+                t4=r["t_4f"],
+                bsmb=r["beta_smb"],
+                bhml=r["beta_hml"],
+                bmom=r["beta_mom"],
+            )
+        )
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text("\n".join(sections) + "\n", encoding="utf-8")
+    logger.info("Wrote %s", args.out)
+    return 0
 
 
 if __name__ == "__main__":
