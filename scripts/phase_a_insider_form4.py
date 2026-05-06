@@ -36,9 +36,18 @@ sys.path.insert(0, str(REPO_ROOT))
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
+from alphalens.data.alt_data.pit_universe_loader import (  # noqa: E402
+    load_pit_universe_for_asof,
+    load_universe_union,
+)
+from alphalens.data.alt_data.ticker_cik_map import TickerCikMap  # noqa: E402
+from alphalens.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
 from alphalens.data.store.form4_pit import (  # noqa: E402
     PARTITION_KEY,
     Form4PITStore,
+)
+from alphalens.screeners.distress_credit.features import (  # noqa: E402
+    make_production_stores,
 )
 from alphalens.screeners.insider_activity.cohen_malloy_classifier import (  # noqa: E402
     CohenMalloyLabel,
@@ -187,6 +196,27 @@ def _build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _forward_excess_return(
+    history: pd.DataFrame,
+    bench_history: pd.DataFrame,
+    asof: pd.Timestamp,
+    horizon_days: int = 21,
+) -> float | None:
+    """21-trading-day forward excess return: ticker minus benchmark."""
+    end = asof + pd.Timedelta(days=int(horizon_days * 1.5))  # calendar slack
+    tkr_window = history[(history.index > asof) & (history.index <= end)]
+    bch_window = bench_history[(bench_history.index > asof) & (bench_history.index <= end)]
+    if len(tkr_window) < horizon_days or len(bch_window) < horizon_days:
+        return None
+    px_t0 = float(history[history.index <= asof].iloc[-1]["close"])
+    bx_t0 = float(bench_history[bench_history.index <= asof].iloc[-1]["close"])
+    if px_t0 <= 0 or bx_t0 <= 0:
+        return None
+    px_tn = float(tkr_window.iloc[horizon_days - 1]["close"])
+    bx_tn = float(bch_window.iloc[horizon_days - 1]["close"])
+    return (px_tn / px_t0 - 1.0) - (bx_tn / bx_t0 - 1.0)
+
+
 def main() -> int:
     args = _build_parser().parse_args()
     logging.basicConfig(
@@ -196,38 +226,187 @@ def main() -> int:
 
     _check_backfill_exists(args.parquet_root)
 
+    if args.universe_mode != "R2000":
+        sys.stderr.write(
+            f"ERROR: phase_a primary only supports R2000 (got {args.universe_mode}).\n"
+        )
+        return 4
+
     logger.info("Phase A check on TRAIN %s → %s", args.train_start, args.train_end)
     logger.info("Universe mode: %s", args.universe_mode)
     logger.info("Parquet root: %s", args.parquet_root)
 
-    # NOTE: Full implementation requires R2000 PIT universe loader integration
-    # and OHLCV histories for forward-return computation. The orchestrator
-    # script wires those in after backfill completes. This scaffold exits
-    # with a clear "needs full integration" message until then.
+    # Lazy imports — keep startup fast for --help.
+    from alphalens.screeners.insider_activity.opportunistic_form4 import (
+        aggregate_opportunistic_signal,
+        score_opportunistic_form4,
+    )
+    from alphalens.screeners.options_implied.features import _compute_equity_controls
 
-    # Placeholder result with all gates "untested" — to be replaced with
-    # real evaluation once Form-4 backfill + universe loaders are wired.
+    # 1. PIT universe union over TRAIN window.
+    universe = load_universe_union(args.train_start, args.train_end)
+    if not universe:
+        sys.stderr.write(
+            f"ERROR: PIT universe yaml snapshots missing for {args.train_start}..{args.train_end}\n"
+        )
+        return 5
+    logger.info("Universe union: %d tickers", len(universe))
+
+    # 2. OHLCV histories (cached).
+    histories = load_cached_histories([*universe, "IWM"], _PRICES_DIR)
+    if "IWM" not in histories or histories["IWM"].empty:
+        sys.stderr.write("ERROR: benchmark IWM OHLCV missing\n")
+        return 6
+
+    # 3. Stores.
+    _liab, share_store = make_production_stores()
+    tcm_path = REPO_ROOT / "alphalens" / "data" / "alt_data" / "data" / "ticker_cik_map.yaml"
+    cik_resolver = TickerCikMap.load(tcm_path)
+    form4_store = Form4PITStore(
+        parquet_root=args.parquet_root,
+        ticker_cik_resolver=cik_resolver,
+    )
+    cache = ClassifierCache(form4_store)
+
+    # 4. Quarter-end calendar.
+    quarter_ends = pd.date_range(start=args.train_start, end=args.train_end, freq="QE")
+    logger.info("Evaluating %d quarter-ends", len(quarter_ends))
+
+    # 5. For each quarter-end: compute opportunistic-txn counts (A0),
+    #    scored-ticker counts (A1), and (score, fwd_21d_excess) pairs (A2).
+    counts_per_quarter: list[dict[str, int]] = []
+    scored_counts: list[int] = []
+    score_fwd_pairs: list[tuple[float, float]] = []
+    bench_history = histories["IWM"]
+
+    for qe in quarter_ends:
+        qe_date = qe.date()
+        pit_universe = load_pit_universe_for_asof(qe_date)
+        if not pit_universe:
+            continue
+
+        # A0: density per quarter (90d lookback).
+        counts: dict[str, int] = {}
+        for ticker in pit_universe:
+            if ticker not in histories:
+                continue
+            records = form4_store.records_as_of(ticker, asof=qe_date, lookback_days=90)
+            if records.empty:
+                counts[ticker] = 0
+                continue
+            n = 0
+            for row in records.itertuples(index=False):
+                if row.transaction_code not in {"P", "S"}:
+                    continue
+                if not (row.is_officer or row.is_director):
+                    continue
+                if (
+                    cache.get(row.reporting_owner_cik, qe_date.year)
+                    is CohenMalloyLabel.OPPORTUNISTIC
+                ):
+                    n += 1
+            counts[ticker] = n
+        counts_per_quarter.append(counts)
+
+        # A1 + A2: build feature frame, score, collect pairs.
+        rows: list[dict] = []
+        for ticker in pit_universe:
+            if ticker not in histories:
+                continue
+            history = histories[ticker]
+            sliced = history[history.index <= qe]
+            if sliced.empty:
+                continue
+            controls = _compute_equity_controls(sliced)
+            if controls is None:
+                continue
+            close = float(sliced.iloc[-1]["close"])
+            if close <= 0:
+                continue
+            shares = share_store.get(ticker, qe)
+            if not shares:
+                continue
+            mcap = close * shares
+            if mcap <= 0:
+                continue
+            records = form4_store.records_as_of(ticker, asof=qe_date, lookback_days=180)
+            net_oppor_usd = aggregate_opportunistic_signal(
+                records, asof=qe_date, classifier_cache=cache
+            )
+            rows.append(
+                {
+                    "asof": qe_date,
+                    "ticker": ticker,
+                    "signal_raw": net_oppor_usd / mcap,
+                    **controls,
+                }
+            )
+
+        if not rows:
+            scored_counts.append(0)
+            continue
+
+        feat = pd.DataFrame(rows)
+        feat["score"] = score_opportunistic_form4(feat)
+        scored = feat.dropna(subset=["score"])
+        scored_counts.append(len(scored))
+
+        # A2: forward 21d excess return per scored ticker.
+        for _, r in scored.iterrows():
+            history = histories[r["ticker"]]
+            fwd = _forward_excess_return(history, bench_history, qe, horizon_days=21)
+            if fwd is None or not np.isfinite(fwd):
+                continue
+            score_fwd_pairs.append((float(r["score"]), fwd))
+
+    # 6. Compute three gate verdicts.
+    a0 = _check_density(counts_per_quarter)
+    a1 = _check_breadth(scored_counts)
+
+    if score_fwd_pairs:
+        s_arr = pd.Series([p[0] for p in score_fwd_pairs])
+        f_arr = pd.Series([p[1] for p in score_fwd_pairs])
+        rho = float(s_arr.corr(f_arr, method="spearman"))
+        a2 = _check_direction(rho)
+        a2["n_pairs"] = len(score_fwd_pairs)
+    else:
+        a2 = {
+            "gate_id": "A2_direction",
+            "spearman_rho_score_vs_fwd_21d_excess": None,
+            "threshold": -0.05,
+            "passed": False,
+            "n_pairs": 0,
+        }
+
+    all_passed = a0["passed"] and a1["passed"] and a2["passed"]
+
     result = {
         "experiment": "insider_form4_opportunistic_2026_05_05",
-        "phase_a_status": "scaffold_only",
+        "phase_a_status": "evaluated",
         "train_start": args.train_start.isoformat(),
         "train_end": args.train_end.isoformat(),
         "universe_mode": args.universe_mode,
-        "gates": [
-            {"gate_id": "A0_density", "passed": None, "reason": "needs backfill"},
-            {"gate_id": "A1_breadth", "passed": None, "reason": "needs backfill"},
-            {"gate_id": "A2_direction", "passed": None, "reason": "needs backfill"},
-        ],
-        "note": (
-            "Scaffold only — full integration with R2000 PIT universe + "
-            "Form-4 backfill required. Run after SEC EDGAR backfill completes."
-        ),
+        "n_quarters": len(quarter_ends),
+        "gates": [a0, a1, a2],
+        "all_gates_passed": bool(all_passed),
+        "verdict": "PROCEED" if all_passed else "ABANDON",
     }
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2))
-    logger.info("Wrote scaffold result to %s", args.out)
-    return 0
+
+    logger.info(
+        "Phase A: A0_density passed=%s (median=%.2f); A1_breadth passed=%s "
+        "(frac=%.2f); A2_direction passed=%s (rho=%s); verdict=%s",
+        a0["passed"],
+        a0.get("median_opportunistic_count_per_active_ticker_per_quarter", 0.0),
+        a1["passed"],
+        a1.get("frac_quarters_with_at_least_50_scored_tickers", 0.0),
+        a2["passed"],
+        a2.get("spearman_rho_score_vs_fwd_21d_excess"),
+        result["verdict"],
+    )
+    return 0 if all_passed else 7
 
 
 if __name__ == "__main__":
