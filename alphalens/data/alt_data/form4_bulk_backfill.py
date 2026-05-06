@@ -116,7 +116,15 @@ def write_records_to_parquet(records: Iterable[Form4Record], *, parquet_root: Pa
     float representation.
     """
     rows: list[dict] = []
+    dropped_future_dates = 0
     for r in records:
+        # SEC Form-4 must be filed within 2 business days of the transaction.
+        # transaction_date > filed_date is dirty data (typo or future vesting
+        # date entered by mistake) and would create phantom partitions like
+        # transaction_year=2031. Drop pre-write.
+        if r.transaction_date > r.filing_date:
+            dropped_future_dates += 1
+            continue
         rows.append(
             {
                 "issuer_cik": r.issuer_cik,
@@ -139,6 +147,11 @@ def write_records_to_parquet(records: Iterable[Form4Record], *, parquet_root: Pa
                 "acquired_disposed": r.acquired_disposed,
                 "is_amendment": r.is_amendment,
             }
+        )
+    if dropped_future_dates:
+        logger.warning(
+            "dropped %d record(s) with transaction_date > filed_date (dirty data)",
+            dropped_future_dates,
         )
     if not rows:
         return

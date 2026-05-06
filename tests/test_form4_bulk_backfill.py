@@ -149,6 +149,48 @@ class TestWriteRecordsToParquet(unittest.TestCase):
         # No partition directory should be created when there's nothing to write.
         self.assertFalse(any(self.root.iterdir()))
 
+    def test_drops_records_with_transaction_date_after_filing_date(self):
+        # SEC Form-4 must be filed within 2 business days of the transaction —
+        # transaction_date > filed_date is dirty data (typo, future-vesting
+        # forecast). Observed in production: cik=0000025232 filed 2013-02-01
+        # with transaction_date=2031-01-31, creating a phantom partition
+        # transaction_year=2031. Drop these records pre-write and warn.
+        records = [
+            _mk_record(  # clean
+                accession_number="GOOD",
+                filing_date=date(2022, 6, 1),
+                transaction_date=date(2022, 5, 15),
+            ),
+            _mk_record(  # transaction_date == filing_date is OK
+                accession_number="EDGE",
+                filing_date=date(2022, 6, 1),
+                transaction_date=date(2022, 6, 1),
+            ),
+            _mk_record(  # dirty: 9-year future date
+                accession_number="DIRTY",
+                filing_date=date(2022, 6, 1),
+                transaction_date=date(2031, 1, 31),
+            ),
+        ]
+        with self.assertLogs("alphalens.data.alt_data.form4_bulk_backfill", level="WARNING") as cm:
+            write_records_to_parquet(records, parquet_root=self.root)
+        self.assertTrue(
+            any("transaction_date > filed_date" in msg for msg in cm.output),
+            f"expected warning about future-dated records, got: {cm.output}",
+        )
+
+        # No phantom 2031 partition — only 2022 should exist.
+        partitions = sorted(p.name for p in self.root.iterdir() if p.is_dir())
+        self.assertEqual(partitions, ["transaction_year=2022"])
+
+        dataset = ds.dataset(
+            str(self.root / "transaction_year=2022"),
+            partitioning=None,
+            format="parquet",
+        )
+        df = dataset.to_table().to_pandas()
+        self.assertEqual(set(df["accession_number"]), {"GOOD", "EDGE"})
+
     def test_appends_to_existing_partition_with_unique_filename(self):
         # First batch creates part-0000.parquet.
         write_records_to_parquet(
