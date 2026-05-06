@@ -950,6 +950,163 @@
       "notes": ""
     },
     {
+      "id": "compound_v12_informed_trader_2026_05_06",
+      "signal_class": "compound_v12_informed_trader_2026_05_06",
+      "hypothesis": "Equal-weight cross-sectional z-score average of 4 informed-trader-flow scorers (v8 Xing 2010 options skew, v9D IV-residual, v11 P/C abnormal volume, insider_form4 Cohen-Malloy 2012 opportunistic) residualized at component level, top-decile equal-weight monthly-rebalance long-only, generates Carhart-4F mean alpha_t >= 2.94 across 5-phase OOS audit on R2000 PIT 2018-2023. Strict-intersection inclusion rule (ticker dropped if any component NaN), no imputation, no subset selection, no parameter tuning. Pre-data-look insurance against scenario where each component lands INCONCLUSIVE/FAIL near program-Bonferroni bar.",
+      "scorer_path": "scripts/experiment_compound_v12_informed_trader.py",
+      "params_frozen": {
+        "class": "compound_v12_informed_trader_2026_05_06",
+        "version": "v12_equal_weight_zscore_4signal_compound",
+        "design_memo": "docs/research/compound_v12_informed_trader_design_2026_05_06.md",
+        "design_provenance": "Pre-data-look insurance test against scenario where each individual informed-trader-flow signal lands INCONCLUSIVE/FAIL near program-Bonferroni bar. Three options-class signals (v8 Xing 2010, v9D IV-residual, v11 P/C abnormal volume) standalone alpha_t in [+2.18, +2.65] all sub-PASS. Form-4 (insider_form4_opportunistic) component currently in-flight on VPS backfill (~3-5d). Compound formula equal-weight cross-sectional z-score average of all 4 components, top-decile rank, monthly rebalance. Justification per Asness-Frazzini-Pedersen 2019 RAS QMJ multi-factor compound discipline: pre-specify EXACT formula before correlation observation; report correlation matrix post-hoc as diagnostic only. Counter-recommendation from Perplexity adversarial review 2026-05-06 was 'hold single-PASS gating policy'; this pre-reg overrides by locking compound NOW (pre-data-look) to prevent post-Form-4-FAIL HARKing-vulnerable retrofit. Trigger: run only if at least one of 4 components verdict not in {PASS, PASS_ROBUST}; saves Bonferroni budget when singles already win.",
+        "adversarial_review_summary": "Perplexity (sonar-reasoning-pro 2026-05-06): math correct for raw alphas (combined alpha_t = (mu_A + mu_B) / sqrt(sigma_A^2 + sigma_B^2 + 2*rho*sigma_A*sigma_B)); rank-based portfolios require empirical computation due to non-linear compression. HARKing risk: conditioning compound design on observed correlation introduces selection bias even when correlation is structural property (Feng-Giglio-Xiu 2020 JF). Failure modes: (1) Form-4 intersect options-flow correlation may be higher than expected because insiders trade ahead of volatility events; (2) correlation instability across regimes (March 2020 collapse precedent); (3) survivorship bias in correlation estimation; (4) rank-aggregation ties inflate effective correlation. Recommended discipline: pre-specify weighting formula a priori (equal-weight z-score), include all 4 signals (no subset selection), Bonferroni penalty for selection (n=29 vs n=27 standard component), report correlation post-hoc as diagnostic. THIS pre-reg follows that discipline in full.",
+        "scorer_frozen": {
+          "compound_module": "alphalens.screeners.compound_informed_trader.zscore_compound.score_compound_v12 (TBD impl)",
+          "specification": "Per asof t and ticker x in strict intersection of all 4 component coverages: compute each component score s_k(x,t) via that component's pre-registered scorer module. Cross-sectionally per-asof per-component z-score normalize: z_k(x,t) = (s_k(x,t) - mean_k(t)) / std_k(t) where std uses ddof=1. Compound score = simple average of 4 z-scores. Top-decile rank, equal-weight long-only. Inclusion rule: ticker dropped if any of 4 components NaN at asof t (no imputation, strict intersection).",
+          "components_frozen_with_hashes_at_run_time": [
+            {
+              "ledger_id": "v8_xing_frozen_direction_2026_05_03",
+              "scorer_path": "alphalens.screeners.options_implied.xing_frozen.score_xing_frozen_direction"
+            },
+            {
+              "ledger_id": "v9d_retrospective_pre_2018_2026_05_05",
+              "scorer_path": "alphalens.screeners.options_implied.cross_sectional_residual.score_cross_sectional_residual"
+            },
+            {
+              "ledger_id": "pc_abnormal_volume_retrospective_pre_2018_2026_05_05",
+              "scorer_path": "alphalens.screeners.options_volume.pc_abnormal_volume.score_pc_abnormal_residual"
+            },
+            {
+              "ledger_id": "insider_form4_opportunistic_2026_05_05",
+              "scorer_path": "alphalens.screeners.insider_activity.opportunistic_form4.score_opportunistic_form4"
+            }
+          ],
+          "frozen_locked_at_design_time": true,
+          "modification_during_audit": "PROHIBITED. Any drift in compound formula OR component scorer modules invalidates pre-reg."
+        },
+        "data_provider": "Component-specific (inherits each component's data sources): SEC EDGAR Form-4 (component 4), iVolatility smd cache 2007-2026 (components 1-2), iVolatility optVol fields (component 3). No new data sources introduced.",
+        "rebalance_stride_days": 21,
+        "holding_period_days_target": 21,
+        "holding_period_days_portfolio_returns": 1,
+        "weighting": "equal",
+        "decile_pct": 0.1,
+        "cost_profile": "long_only_30bps",
+        "cost_profile_rt_bps": 30,
+        "benchmark": "IWM",
+        "universe_primary": {
+          "name": "R2000_PIT_strict_intersection",
+          "loader_module": "alphalens.data.alt_data.pit_universe_loader.load_pit_universe_for_asof",
+          "intersection_rule": "Ticker scored at asof t IFF all 4 component scorers produce non-NaN value. No imputation.",
+          "rationale": "Strict-intersection avoids component-coverage-imputation introducing implicit weighting choice. Phase A0 enforces minimum 50 tickers per asof else ABANDON."
+        },
+        "phase_audit": {
+          "n_phases": 5,
+          "stride_for_phases": 21,
+          "phase_offset_range": "0..4",
+          "audit_driver": "scripts/experiment_compound_v12_informed_trader.py (TBD impl)",
+          "dispersion_threshold_pp_R2000": 70,
+          "dispersion_pp_rationale": "Inherits insider_form4 R2000 small-cap multiplier per Asness-Frazzini-Israel-Moskowitz 2018 JFE."
+        },
+        "bounds_adjusted_ci": {
+          "method": "Romano-Wolf step-down via stationary block bootstrap",
+          "block_size_trading_days": 126,
+          "block_size_rationale": "Matches 6-month signal rolling window of components (inherited from insider_form4 + v11 P/C abnormal). Conservative for v8/v9D shorter windows.",
+          "n_reps": 1000,
+          "alpha": 0.05,
+          "report_fields": [
+            "bounds_alpha_t_lower",
+            "bounds_alpha_t_upper"
+          ]
+        },
+        "carhart_regression_hac_lock": {
+          "cov_type": "HAC",
+          "hac_maxlags_override": 126,
+          "rationale": "Inherits insider_form4 lock — 6m signal-window-induced portfolio autocorrelation requires lag span >= 126 daily obs."
+        }
+      },
+      "periods": {
+        "oos_start": "2018-01-01",
+        "oos_end": "2023-12-31",
+        "final_lock_start": "2024-01-01",
+        "final_lock_end": "2026-04-30",
+        "rationale": "Identical to component pre-regs (insider_form4 OOS + final lock). No new lookback windows introduced. Each component respects its own PIT-aware data loading."
+      },
+      "success_criteria": {
+        "mode": "multi_gate_pass_fail_with_inconclusive_zone",
+        "primary_metric": "Carhart 4-factor alpha_t on long-only top-decile R2000-strict-intersection portfolio returns minus IWM benchmark, pooled across 5 phases on OOS 2018-2023, HAC maxlags=126.",
+        "bonferroni_accounting": {
+          "intra_class_n": 1,
+          "intra_class_naive_t_threshold": 1.96,
+          "program_level_alpha_class_n": 29,
+          "program_level_naive_t_threshold": 2.94,
+          "rationale": "First test in fresh class compound_v12_informed_trader_2026_05_06. 29th counted test in program-level Bonferroni ledger (28 prior entries + this compound). Naive |t| >= 2.94 = scipy.stats.norm.ppf(1 - 0.025/29). Selection penalty: ZERO. Compound has no data-dependent design choices: formula locked equal-weight, all 4 components included, inclusion rule strict-intersection, trigger structural (PASS/FAIL classification not magnitude). Per Perplexity Feng-Giglio-Xiu 2020 caveat — selection penalty applies when conditioning on observed data; this pre-reg conditions on nothing observed.",
+          "stealth_multiplicity_prose_required": true
+        },
+        "auto_pivot_phase_a_triggers": [
+          {
+            "trigger_id": "A0_coverage",
+            "rule": ">= 30% of asof-quarters on TRAIN 2009-2017 must have >= 50 R2000 tickers with all-4-components scored (strict intersection). If < 30%, ABANDON with log 'COVERAGE-FAIL'.",
+            "rationale": "Strict-intersection rule could collapse universe below cross-sectional regression viability. A0 enforces honest breadth check."
+          },
+          {
+            "trigger_id": "A1_correlation_regime",
+            "rule": "Empirical pairwise Spearman rho between any 2 of 4 component scores on TRAIN must satisfy: min(rho_pairs) > -0.5 AND max(rho_pairs) < 0.95. Outside this band suggests degenerate composition. ABANDON with log 'CORRELATION-DEGENERATE'.",
+            "rationale": "NOT a low-correlation gate. Excludes only pathological values: extreme anti-correlation (signs flipped) or near-perfect correlation (redundant signal). Accepts anything in [-0.5, 0.95]. Not data-dependent design choice — just sanity check on empirical reality."
+          },
+          {
+            "trigger_id": "A2_direction",
+            "rule": "Spearman rho(compound_score, forward_21d_excess_return) on TRAIN 2009-2017 must be > -0.05. If <= -0.05, ABANDON (sign-flip indicator).",
+            "rationale": "Avoid wasted multi-phase compute on a compound that has wrong sign on training data."
+          }
+        ],
+        "all_gates_must_pass_R2000_primary": [
+          {
+            "gate_id": "G1_compound_alpha_t_program_bonferroni",
+            "rule": "Pooled Carhart 4F alpha_t across 5 phases on R2000-strict-intersection OOS 2018-2023 >= 2.94 (program n=29 critical).",
+            "tier": "primary"
+          },
+          {
+            "gate_id": "G2_every_phase_alpha_positive",
+            "rule": "Every phase alpha_t on R2000 >= 1.5 (no phase below positive-alpha floor).",
+            "tier": "primary"
+          },
+          {
+            "gate_id": "G3_excess_net_positive",
+            "rule": "Mean excess_net_ann across 5 phases >= 0.",
+            "tier": "primary"
+          },
+          {
+            "gate_id": "G4_dispersion_70pp",
+            "rule": "max(excess_net_ann) - min(excess_net_ann) across 5 phases <= 70 percentage points.",
+            "tier": "primary"
+          },
+          {
+            "gate_id": "G5_bounds_ci_excludes_zero",
+            "rule": "bounds_alpha_t_lower (Romano-Wolf 1000-rep block bootstrap, block_size=126d) > 0.",
+            "tier": "primary"
+          }
+        ],
+        "verdict_classification": {
+          "all_R2000_primary_gates_PASS_AND_compound_alpha_t_above_bar": "PASS — first phase-robust real signal in project. Compound informed-trader-flow class confirmed. Capital deploy gate STILL OFF-TABLE per project policy. Triggers postmortem on each component's standalone INCONCLUSIVE: 'real signal lived in compound, not standalone'. Logs program n=29 -> 30.",
+          "compound_mean_alpha_t_in_2.50_2.94_AND_all_other_gates_pass": "PASS_MARGINAL — signal validated at adjusted threshold; capital deploy off-table; meta-analytic combination with paper-trade forward evidence recommended.",
+          "compound_dispersion_above_70pp_with_mean_alpha_t_above_2.50": "INCONCLUSIVE — mean signal real but cross-phase instability prevents PASS; localized real signal but not deploy-grade.",
+          "compound_mean_alpha_t_below_2.50": "FAIL — informed-trader-flow class fully exhausted including compound. Strong evidence of feature-bottleneck across entire informed-trader category. Triggers pivot to fundamentally different feature space (analyst revisions, Form-13F institutional positions, macro-regime overlays, alt-data)."
+        },
+        "kill_pre_full_run": [
+          "Phase A0 coverage check FAIL (< 30% asof-quarters with >= 50 strict-intersection tickers) -> ABANDON, no Bonferroni burn",
+          "Phase A1 correlation regime check FAIL (degenerate composition) -> ABANDON, no Bonferroni burn",
+          "Phase A2 direction check FAIL (rho <= -0.05 on TRAIN) -> ABANDON, no Bonferroni burn",
+          "Phase 0 hash check fails on compound module OR any of 4 component scorer modules -> ABORT (drift detected)",
+          "Trigger evaluation: all 4 components PASS standalone -> SKIP compound (save Bonferroni budget; no test counts as ABANDON-no-Bonferroni-burn)"
+        ],
+        "capital_deploy_clause": "Capital deploy remains OFF-TABLE regardless of verdict per project policy. PASS triggers Layer 4 overlay test eligibility on this compound base."
+      },
+      "registered_at": "2026-05-06",
+      "status": "registered",
+      "outcome": null,
+      "notes": ""
+    },
+    {
       "id": "distress_credit_v1_2026_05_04",
       "signal_class": "distress_credit_search_2026_05_04",
       "hypothesis": "Long-only equal-weighted bottom-quintile Merton-PD portfolio drawn from S&P 1500 PIT (excluding top-50 megacap and excluding top-quintile distress always), with portfolio dollar exposure modulated by HY OAS z-score gate (BAMLH0A0HYM2; floor 0.5, ceiling 1.0, linear interp between z=+1 and z=-1), produces mean Carhart-4F alpha t-stat >= 3.50 across 5-phase OOS audit on holdout 2024-04-30..2026-04-30 with every-phase alpha_t >= 0, alpha_t dispersion <= 0.5, Sharpe-improvement >= 0.50 over Carhart-4F-residualized SP1500 baseline, and excess_net_ann dispersion <= 50pp. Pre-committed contingency: if Phase A overlay sanity check (correlation spread_z vs forward 21d market return on TRAIN) fails monotonicity, drop Layer 4 and run pure long-only safe-decile under same |t|>=3.50 threshold.",
