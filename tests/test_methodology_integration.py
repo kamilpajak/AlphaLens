@@ -21,6 +21,7 @@ between pinning a stale OSS version or updating AlphaLens callers.
 
 from __future__ import annotations
 
+import inspect
 import tempfile
 import unittest
 from datetime import date
@@ -44,7 +45,14 @@ class TestLedgerContract(unittest.TestCase):
                 registered_at=date(2026, 5, 6),
             )
             ledger.add(reg)
+            # In-memory roundtrip — same object reachable via get().
             self.assertEqual(ledger.get(reg.id).id, reg.id)
+            # Disk roundtrip — instantiating a fresh Ledger forces JSON
+            # deserialisation. Catches future OSS releases that change
+            # the on-disk format in a way AlphaLens-side existing
+            # ledger.json (~30 entries) couldn't load.
+            ledger_reloaded = Ledger(root=Path(tmp))
+            self.assertEqual(ledger_reloaded.get(reg.id).id, reg.id)
 
 
 class TestMultiPhaseContract(unittest.TestCase):
@@ -92,14 +100,33 @@ class TestMultipleTestingContract(unittest.TestCase):
 
 
 class TestAuditMultiPhaseContract(unittest.TestCase):
-    def test_run_audit_callable_with_expected_kwargs(self):
-        # AlphaLens scripts/audit_multi_phase.py wrapper depends on this
-        # signature: run_audit(script, forwarded_args, *, rebalance_stride, out)
+    def test_run_audit_callable(self):
         from phase_robust_backtesting.audit_multi_phase import run_audit
 
         self.assertTrue(callable(run_audit))
-        # We don't actually invoke it (would spawn experiment subprocesses).
-        # Just verifying the symbol exists.
+
+    def test_run_audit_signature_keyword_only_kwargs(self):
+        # AlphaLens scripts/audit_multi_phase.py wrapper passes
+        # rebalance_stride= and out= as kwargs. If a future OSS release
+        # makes them positional, the wrapper still works at the source
+        # level (kwargs-as-positional is compatible) but LOSING the
+        # keyword-only marker would weaken our forward compat — surface
+        # any change here at AlphaLens CI time.
+        from phase_robust_backtesting.audit_multi_phase import run_audit
+
+        sig = inspect.signature(run_audit)
+        self.assertIn("rebalance_stride", sig.parameters)
+        self.assertIn("out", sig.parameters)
+        self.assertEqual(
+            sig.parameters["rebalance_stride"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+            "run_audit.rebalance_stride should remain keyword-only",
+        )
+        self.assertEqual(
+            sig.parameters["out"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+            "run_audit.out should remain keyword-only",
+        )
 
 
 if __name__ == "__main__":

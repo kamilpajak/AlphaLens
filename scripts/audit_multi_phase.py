@@ -72,7 +72,9 @@ def main() -> int:
     ap.add_argument(
         "--out",
         type=Path,
-        default=Path("docs/research/multi_phase_audit.json"),
+        # Anchored to REPO so the audit lands in the canonical research
+        # directory regardless of cwd at invocation time.
+        default=REPO / "docs/research/multi_phase_audit.json",
     )
     args, forwarded = ap.parse_known_args()
     return run_audit(

@@ -23,7 +23,7 @@ dependencies = [
     "scikit-learn>=1.8.0",
     "lightgbm>=4.6.0",
     "ivolatility>=1.9.3",
-    "phase-robust-backtesting @ git+https://github.com/kamilpajak/phase-robust-backtesting.git@v0.2.0",
+    "phase-robust-backtesting @ git+https://github.com/kamilpajak/phase-robust-backtesting.git@v0.2.1",
 ]
 
 [project.scripts]
