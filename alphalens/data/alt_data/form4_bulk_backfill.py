@@ -107,6 +107,53 @@ def iter_form4_filings(submissions: dict, *, cik: str) -> Iterator[FilingMetadat
         )
 
 
+def fetch_all_form4_metadata(client, cik: str) -> Iterator[FilingMetadata]:
+    """Yield :class:`FilingMetadata` for every Form-4/4-A across all submissions blocks.
+
+    SEC submissions JSON caps the ``recent`` block at 1000 entries across all
+    form types. For prolific issuers (any large-cap with thousands of insider
+    Form-4s over 22 years), older filings live in the ``files`` overflow
+    pointers (e.g. ``CIK0000320193-submissions-001.json``). Walking only
+    ``recent`` silently drops the bulk of historical Form-4 data — exactly
+    the data Cohen-Malloy needs for 5-year insider history.
+
+    Overflow JSONs share the same ``{filings: {recent: {...}}}`` shape as the
+    main file (verified against
+    https://data.sec.gov/submissions/CIK0000320193-submissions-001.json), so
+    :func:`iter_form4_filings` can reused on each.
+
+    The ``client`` parameter must implement ``fetch_submissions(cik)`` and
+    ``fetch_submissions_overflow(name)`` (typed loosely to allow test doubles).
+    """
+    submissions = client.fetch_submissions(cik)
+    seen_accessions: set[str] = set()
+
+    for meta in iter_form4_filings(submissions, cik=cik):
+        if meta.accession_number in seen_accessions:
+            continue
+        seen_accessions.add(meta.accession_number)
+        yield meta
+
+    files = submissions.get("filings", {}).get("files") or []
+    n_overflow = sum(1 for e in files if isinstance(e, dict) and e.get("name"))
+    overflow_idx = 0
+    for entry in files:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not name:
+            logger.warning("skipping malformed overflow entry for cik=%s: %r", cik, entry)
+            continue
+        overflow_idx += 1
+        # Progress logging for big filers (5+ overflow JSONs cause 30s+ silent
+        # fetch periods otherwise — Berkshire, JPM, MS).
+        logger.info("fetching overflow %d/%d for cik=%s (%s)", overflow_idx, n_overflow, cik, name)
+        overflow = client.fetch_submissions_overflow(name)
+        for meta in iter_form4_filings(overflow, cik=cik):
+            if meta.accession_number in seen_accessions:
+                continue
+            seen_accessions.add(meta.accession_number)
+            yield meta
+
+
 def write_records_to_parquet(records: Iterable[Form4Record], *, parquet_root: Path) -> None:
     """Write Form4Records to hive-partitioned parquet, partitioned by transaction_year.
 
@@ -116,7 +163,15 @@ def write_records_to_parquet(records: Iterable[Form4Record], *, parquet_root: Pa
     float representation.
     """
     rows: list[dict] = []
+    dropped_future_dates = 0
     for r in records:
+        # SEC Form-4 must be filed within 2 business days of the transaction.
+        # transaction_date > filed_date is dirty data (typo or future vesting
+        # date entered by mistake) and would create phantom partitions like
+        # transaction_year=2031. Drop pre-write.
+        if r.transaction_date > r.filing_date:
+            dropped_future_dates += 1
+            continue
         rows.append(
             {
                 "issuer_cik": r.issuer_cik,
@@ -139,6 +194,11 @@ def write_records_to_parquet(records: Iterable[Form4Record], *, parquet_root: Pa
                 "acquired_disposed": r.acquired_disposed,
                 "is_amendment": r.is_amendment,
             }
+        )
+    if dropped_future_dates:
+        logger.warning(
+            "dropped %d record(s) with transaction_date > filed_date (dirty data)",
+            dropped_future_dates,
         )
     if not rows:
         return

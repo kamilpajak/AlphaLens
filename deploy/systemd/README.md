@@ -1,0 +1,116 @@
+# systemd-user units (VPS deployment)
+
+User-scoped service definitions for AlphaLens long-running tasks on Linux VPS
+hosts where launchd is unavailable.
+
+## form4-backfill.service
+
+SEC EDGAR Form-4 bulk backfill (`scripts/run_form4_backfill.py`). Wall-time on
+a small VPS: ~5-10 days for the full 2006-2026 R3000 universe (~8000 CIKs,
+limited by SEC's 10 req/s rate cap). Resume-safe via the JSON manifest at
+`~/.alphalens/form4_backfill_manifest.json`, so a crash + restart skips
+already-processed CIKs and resumes from where it left off.
+
+### Install
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/form4-backfill.service ~/.config/systemd/user/
+
+# Edit Environment= lines in the unit file to match your VPS paths and contact.
+systemctl --user daemon-reload
+systemctl --user enable --now form4-backfill.service
+
+# One-time: allow the unit to keep running after logout.
+sudo loginctl enable-linger "$USER"
+```
+
+### Inspect
+
+```bash
+systemctl --user status form4-backfill.service
+journalctl --user -u form4-backfill.service -f       # live tail
+journalctl --user -u form4-backfill.service --since "1 hour ago"
+```
+
+### Stop / restart
+
+```bash
+systemctl --user stop form4-backfill.service
+systemctl --user restart form4-backfill.service
+```
+
+### Parallel backfill across multiple machines
+
+SEC's polite-rate cap (10 req/s) is enforced **per source IP**, not per
+User-Agent. With multiple machines on distinct IPs, the backfill can be
+sharded so each machine fetches a non-overlapping slice in parallel. A
+5-machine fan-out cuts wall-time from ~7 days to ~1.5 days.
+
+**Step 1 — split the CIK universe (run once on any machine):**
+
+```bash
+.venv/bin/python scripts/split_cik_list.py \
+    data/form4_cik_universe.txt \
+    --num-shards 5 \
+    --output-dir data/shards/
+# Produces ciks_shard_{1..5}_of_5.txt
+```
+
+The split is round-robin so each shard contains a representative mix of
+small and large filers — no machine ends up stuck on a long tail of
+prolific issuers.
+
+**Step 2 — copy the appropriate shard to each machine, then run:**
+
+```bash
+# On machine N (with its own IP):
+scripts/run_form4_backfill.py \
+    --user-agent "Your Name your@email.com" \
+    --cik-list data/shards/ciks_shard_N_of_5.txt \
+    --parquet-root ~/.alphalens/form4_parquet \
+    --manifest ~/.alphalens/form4_backfill_manifest.json \
+    --start-year 2006 --end-year 2026
+```
+
+Each machine has its own manifest covering only its slice; no
+cross-machine synchronization is needed.
+
+**Step 3 — merge the parquet outputs into a central tree:**
+
+Once every machine has finished its shard, rsync each machine's
+\`~/.alphalens/form4_parquet/\` into one central \`form4_parquet_merged/\`
+tree. Parquet filenames carry a timestamp + random hex suffix so there
+are no collisions between machines.
+
+```bash
+# On the central machine:
+mkdir -p ~/.alphalens/form4_parquet_merged
+
+for host in machine1 machine2 machine3 machine4 machine5; do
+    rsync -av --info=progress2 \
+        "$host:.alphalens/form4_parquet/" \
+        ~/.alphalens/form4_parquet_merged/
+done
+```
+
+**Step 4 — compact the merged tree:**
+
+```bash
+.venv/bin/python scripts/compact_form4_parquet.py \
+    --parquet-root ~/.alphalens/form4_parquet_merged
+# Produces ~/.alphalens/form4_parquet_merged/transaction_year=YYYY/compacted.parquet
+# (one file per year — replaces all part-*.parquet from every machine)
+```
+
+The compactor is idempotent and atomic: writes to \`.tmp\` then renames,
+deletes originals only on success. Safe to re-run.
+
+### Why this exists
+
+The earlier deployment ran the script inside `screen` with
+`bash -c "... ; exec bash"`. That setup has no auto-recovery — a reboot,
+OOM kill, or `pkill` aborts a multi-day run with no restart. systemd's
+`Restart=on-failure` + `RestartSec=60` automates recovery while
+`StartLimitBurst=5` prevents tight crash loops if the underlying problem
+is persistent (bad credentials, exhausted disk, SEC ban).

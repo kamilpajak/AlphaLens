@@ -26,6 +26,7 @@ import pyarrow.dataset as ds
 from alphalens.data.alt_data.form4_bulk_backfill import (
     BackfillManifest,
     FilingMetadata,
+    fetch_all_form4_metadata,
     iter_form4_filings,
     write_records_to_parquet,
 )
@@ -148,6 +149,48 @@ class TestWriteRecordsToParquet(unittest.TestCase):
         write_records_to_parquet([], parquet_root=self.root)
         # No partition directory should be created when there's nothing to write.
         self.assertFalse(any(self.root.iterdir()))
+
+    def test_drops_records_with_transaction_date_after_filing_date(self):
+        # SEC Form-4 must be filed within 2 business days of the transaction —
+        # transaction_date > filed_date is dirty data (typo, future-vesting
+        # forecast). Observed in production: cik=0000025232 filed 2013-02-01
+        # with transaction_date=2031-01-31, creating a phantom partition
+        # transaction_year=2031. Drop these records pre-write and warn.
+        records = [
+            _mk_record(  # clean
+                accession_number="GOOD",
+                filing_date=date(2022, 6, 1),
+                transaction_date=date(2022, 5, 15),
+            ),
+            _mk_record(  # transaction_date == filing_date is OK
+                accession_number="EDGE",
+                filing_date=date(2022, 6, 1),
+                transaction_date=date(2022, 6, 1),
+            ),
+            _mk_record(  # dirty: 9-year future date
+                accession_number="DIRTY",
+                filing_date=date(2022, 6, 1),
+                transaction_date=date(2031, 1, 31),
+            ),
+        ]
+        with self.assertLogs("alphalens.data.alt_data.form4_bulk_backfill", level="WARNING") as cm:
+            write_records_to_parquet(records, parquet_root=self.root)
+        self.assertTrue(
+            any("transaction_date > filed_date" in msg for msg in cm.output),
+            f"expected warning about future-dated records, got: {cm.output}",
+        )
+
+        # No phantom 2031 partition — only 2022 should exist.
+        partitions = sorted(p.name for p in self.root.iterdir() if p.is_dir())
+        self.assertEqual(partitions, ["transaction_year=2022"])
+
+        dataset = ds.dataset(
+            str(self.root / "transaction_year=2022"),
+            partitioning=None,
+            format="parquet",
+        )
+        df = dataset.to_table().to_pandas()
+        self.assertEqual(set(df["accession_number"]), {"GOOD", "EDGE"})
 
     def test_appends_to_existing_partition_with_unique_filename(self):
         # First batch creates part-0000.parquet.
@@ -279,6 +322,254 @@ class TestIterForm4Filings(unittest.TestCase):
         self.assertEqual(meta.filing_date, date(2022, 4, 15))
         self.assertEqual(meta.primary_document, "wf-form4_doc.xml")
         self.assertEqual(meta.form, "4")
+
+
+class _FakeClient:
+    """Test double for SecEdgarClient covering submissions + overflow fetches."""
+
+    def __init__(
+        self,
+        submissions: dict,
+        overflow_payloads: dict[str, dict] | None = None,
+    ):
+        self._submissions = submissions
+        self._overflow = overflow_payloads or {}
+        self.overflow_calls: list[str] = []
+
+    def fetch_submissions(self, cik: str) -> dict:
+        return self._submissions
+
+    def fetch_submissions_overflow(self, name: str) -> dict:
+        self.overflow_calls.append(name)
+        if name not in self._overflow:
+            raise KeyError(f"unexpected overflow fetch: {name}")
+        return self._overflow[name]
+
+
+class TestFetchAllForm4Metadata(unittest.TestCase):
+    """fetch_all_form4_metadata walks both 'recent' and 'files' overflow blocks.
+
+    SEC submissions JSON caps 'recent' at 1000 entries across all form types.
+    For prolific issuers (AAPL, MSFT, GE, JPM with thousands of insider Form-4s
+    over 22 years) the overflow lives in 'files' pointers like
+    CIK0000320193-submissions-001.json. Overflow JSONs share the same
+    {filings: {recent: {...}}} shape as the main file (verified against
+    https://data.sec.gov/submissions/CIK0000320193-submissions-001.json).
+
+    Without walking 'files', historical Form-4 data prior to the most recent
+    1000 filings is silently lost — exactly the data Cohen-Malloy needs.
+    """
+
+    def test_yields_form4_from_recent_only_when_no_overflow(self):
+        submissions = {
+            "filings": {
+                "recent": {
+                    "form": ["4", "4"],
+                    "accessionNumber": ["R1", "R2"],
+                    "filingDate": ["2022-01-15", "2022-02-15"],
+                    "primaryDocument": ["form4.xml", "form4.xml"],
+                },
+                "files": [],
+            }
+        }
+        client = _FakeClient(submissions)
+        results = list(fetch_all_form4_metadata(client, cik="0000320193"))
+        self.assertEqual([r.accession_number for r in results], ["R1", "R2"])
+        self.assertEqual(client.overflow_calls, [])
+
+    def test_walks_overflow_files_and_concatenates_results(self):
+        submissions = {
+            "filings": {
+                "recent": {
+                    "form": ["4"],
+                    "accessionNumber": ["RECENT-1"],
+                    "filingDate": ["2024-01-15"],
+                    "primaryDocument": ["form4.xml"],
+                },
+                "files": [
+                    {
+                        "name": "CIK0000320193-submissions-001.json",
+                        "filingCount": 2,
+                        "filingFrom": "2018-01-01",
+                        "filingTo": "2019-06-15",
+                    },
+                    {
+                        "name": "CIK0000320193-submissions-002.json",
+                        "filingCount": 1,
+                        "filingFrom": "2010-01-01",
+                        "filingTo": "2017-12-31",
+                    },
+                ],
+            }
+        }
+        overflow_payloads = {
+            "CIK0000320193-submissions-001.json": {
+                "filings": {
+                    "recent": {
+                        "form": ["4", "10-K", "4"],  # only Form-4s yielded
+                        "accessionNumber": ["OF1-A", "OF1-B", "OF1-C"],
+                        "filingDate": ["2018-05-01", "2018-06-01", "2019-01-01"],
+                        "primaryDocument": [
+                            "form4.xml",
+                            "10k.htm",
+                            "form4.xml",
+                        ],
+                    }
+                }
+            },
+            "CIK0000320193-submissions-002.json": {
+                "filings": {
+                    "recent": {
+                        "form": ["4"],
+                        "accessionNumber": ["OF2-A"],
+                        "filingDate": ["2012-08-15"],
+                        "primaryDocument": ["form4.xml"],
+                    }
+                }
+            },
+        }
+        client = _FakeClient(submissions, overflow_payloads)
+        results = list(fetch_all_form4_metadata(client, cik="0000320193"))
+        accessions = [r.accession_number for r in results]
+        self.assertEqual(accessions, ["RECENT-1", "OF1-A", "OF1-C", "OF2-A"])
+        self.assertEqual(
+            client.overflow_calls,
+            [
+                "CIK0000320193-submissions-001.json",
+                "CIK0000320193-submissions-002.json",
+            ],
+        )
+
+    def test_handles_null_files_block(self):
+        # Some SEC payloads (e.g. completed older filers) return files=null.
+        submissions = {
+            "filings": {
+                "recent": {
+                    "form": ["4"],
+                    "accessionNumber": ["R1"],
+                    "filingDate": ["2022-01-15"],
+                    "primaryDocument": ["form4.xml"],
+                },
+                "files": None,
+            }
+        }
+        client = _FakeClient(submissions)
+        results = list(fetch_all_form4_metadata(client, cik="0000320193"))
+        self.assertEqual([r.accession_number for r in results], ["R1"])
+        self.assertEqual(client.overflow_calls, [])
+
+    def test_handles_missing_files_key(self):
+        submissions = {
+            "filings": {
+                "recent": {
+                    "form": ["4"],
+                    "accessionNumber": ["R1"],
+                    "filingDate": ["2022-01-15"],
+                    "primaryDocument": ["form4.xml"],
+                },
+            }
+        }
+        client = _FakeClient(submissions)
+        results = list(fetch_all_form4_metadata(client, cik="0000320193"))
+        self.assertEqual([r.accession_number for r in results], ["R1"])
+        self.assertEqual(client.overflow_calls, [])
+
+    def test_skips_overflow_entry_with_missing_name(self):
+        # Defensive: malformed files entry without 'name' is logged + skipped,
+        # not crash-causing.
+        submissions = {
+            "filings": {
+                "recent": {
+                    "form": ["4"],
+                    "accessionNumber": ["R1"],
+                    "filingDate": ["2022-01-15"],
+                    "primaryDocument": ["form4.xml"],
+                },
+                "files": [
+                    {"filingCount": 100},  # no 'name'
+                    {"name": "CIK0000320193-submissions-001.json"},
+                ],
+            }
+        }
+        overflow_payloads = {
+            "CIK0000320193-submissions-001.json": {
+                "filings": {
+                    "recent": {
+                        "form": ["4"],
+                        "accessionNumber": ["OF1"],
+                        "filingDate": ["2018-05-01"],
+                        "primaryDocument": ["form4.xml"],
+                    }
+                }
+            },
+        }
+        client = _FakeClient(submissions, overflow_payloads)
+        results = list(fetch_all_form4_metadata(client, cik="0000320193"))
+        self.assertEqual([r.accession_number for r in results], ["R1", "OF1"])
+
+    def test_dedups_accession_across_recent_and_overflow(self):
+        # SEC pagination boundary edge: same accession_number can appear in
+        # both 'recent' and an overflow JSON (e.g. mid-update refresh).
+        # fetch_all_form4_metadata must yield each accession at most once
+        # to avoid duplicate XML fetches and duplicate parquet rows.
+        submissions = {
+            "filings": {
+                "recent": {
+                    "form": ["4", "4"],
+                    "accessionNumber": ["A-RECENT", "A-DUPE"],
+                    "filingDate": ["2024-01-15", "2023-12-15"],
+                    "primaryDocument": ["form4.xml", "form4.xml"],
+                },
+                "files": [{"name": "CIK0000320193-submissions-001.json"}],
+            }
+        }
+        overflow_payloads = {
+            "CIK0000320193-submissions-001.json": {
+                "filings": {
+                    "recent": {
+                        "form": ["4", "4"],
+                        "accessionNumber": ["A-DUPE", "A-OLD"],
+                        "filingDate": ["2023-12-15", "2018-06-01"],
+                        "primaryDocument": ["form4.xml", "form4.xml"],
+                    }
+                }
+            }
+        }
+        client = _FakeClient(submissions, overflow_payloads)
+        results = list(fetch_all_form4_metadata(client, cik="0000320193"))
+        accessions = [r.accession_number for r in results]
+        # A-DUPE appears once, not twice.
+        self.assertEqual(accessions, ["A-RECENT", "A-DUPE", "A-OLD"])
+
+    def test_overflow_xsl_prefix_stripped(self):
+        # XSL stripping must apply to overflow entries too.
+        submissions = {
+            "filings": {
+                "recent": {
+                    "form": [],
+                    "accessionNumber": [],
+                    "filingDate": [],
+                    "primaryDocument": [],
+                },
+                "files": [{"name": "CIK0000320193-submissions-001.json"}],
+            }
+        }
+        overflow_payloads = {
+            "CIK0000320193-submissions-001.json": {
+                "filings": {
+                    "recent": {
+                        "form": ["4"],
+                        "accessionNumber": ["OF1"],
+                        "filingDate": ["2010-05-01"],
+                        "primaryDocument": ["xslF345X02/form4.xml"],
+                    }
+                }
+            },
+        }
+        client = _FakeClient(submissions, overflow_payloads)
+        results = list(fetch_all_form4_metadata(client, cik="0000320193"))
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].primary_document, "form4.xml")
 
 
 if __name__ == "__main__":

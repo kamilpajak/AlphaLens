@@ -124,3 +124,40 @@ exclude_lines = [
     "raise NotImplementedError",
     "if TYPE_CHECKING:",
 ]
+
+[tool.mutmut]
+# Transient — ad-hoc mutation testing of form4 backfill modules. Not part
+# of CI; remove when no longer needed.
+#
+# Known limitation: mutmut 3.x uses multiprocessing.Pool, which segfaults
+# on macOS + Python 3.13 with native libs (EXC_BAD_ACCESS). Workaround:
+# downgrade to mutmut 2.x (`uv pip install "mutmut<3"`) which spawns
+# subprocesses sequentially. Run with explicit unittest runner:
+#
+#   uv pip install "mutmut<3"
+#   .venv/bin/mutmut run \
+#     --paths-to-mutate "scripts/split_cik_list.py,alphalens/data/alt_data/sec_edgar_client.py" \
+#     --runner ".venv/bin/python -m unittest tests.test_split_cik_list tests.test_sec_edgar_client" \
+#     --tests-dir tests/
+#
+# Last run (2026-05-06): 91 killed / 84 survived / 1 timeout / 1 suspicious
+# = 51% kill rate. Survivors are mostly low-value: error message strings,
+# main() CLI plumbing, module-level URL/REPO_ROOT constants, __init__
+# defaults. Targeted gaps closed: _load_cik_list parsing, _evict_to_capacity
+# boundary.
+#
+# To mutate pyarrow-touching modules (form4_bulk_backfill,
+# run_form4_backfill, compact_form4_parquet), run on Linux VPS — fork-safe
+# there.
+paths_to_mutate = [
+    "scripts/split_cik_list.py",
+    "alphalens/data/alt_data/sec_edgar_client.py",
+]
+also_copy = [
+    "alphalens/",
+    "scripts/",
+]
+tests_dir = [
+    "tests/test_split_cik_list.py",
+    "tests/test_sec_edgar_client.py",
+]
