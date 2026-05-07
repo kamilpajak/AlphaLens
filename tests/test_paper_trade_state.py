@@ -12,9 +12,13 @@ from alphalens.paper_trade.state import PaperTradeState, default_state_path
 
 class DefaultPathTests(unittest.TestCase):
     def test_default_path_under_alphalens_home(self):
-        p = default_state_path()
+        p = default_state_path("v9d")
         self.assertEqual(p.name, "v9d_state.yaml")
         self.assertIn(".alphalens", str(p))
+
+    def test_default_path_unknown_strategy_raises(self):
+        with self.assertRaises(KeyError):
+            default_state_path("nonexistent")
 
 
 class LoadSaveRoundTripTests(unittest.TestCase):

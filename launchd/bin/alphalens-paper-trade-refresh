@@ -1,4 +1,4 @@
 #!/bin/bash
 # Sunday 17:00 weekly — pull last 7d iVolatility SMD for current PIT universe.
 # Output: ~/.alphalens/watchdog/paper-trade-refresh.{log,err}
-exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens paper-trade refresh-data "$@"
+exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens paper-trade refresh-data --strategy v9d "$@"

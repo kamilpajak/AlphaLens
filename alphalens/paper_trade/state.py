@@ -17,9 +17,12 @@ from pathlib import Path
 
 import yaml
 
+from alphalens.paper_trade.registry import default_paper_trade_dir, get_strategy
 
-def default_state_path() -> Path:
-    return Path.home() / ".alphalens" / "paper_trade" / "v9d_state.yaml"
+
+def default_state_path(strategy_id: str) -> Path:
+    """Strategy-aware state path. Caller must specify which strategy's state."""
+    return default_paper_trade_dir() / get_strategy(strategy_id).state_filename
 
 
 @dataclass
@@ -41,8 +44,8 @@ class PaperTradeState:
     rebalance_n: int = 0
 
     @classmethod
-    def load(cls, path: Path | str | None = None) -> PaperTradeState:
-        path = Path(path) if path else default_state_path()
+    def load(cls, path: Path | str) -> PaperTradeState:
+        path = Path(path)
         if not path.exists():
             return cls()
         data = yaml.safe_load(path.read_text()) or {}
@@ -61,8 +64,8 @@ class PaperTradeState:
             rebalance_n=int(data.get("rebalance_n") or 0),
         )
 
-    def save(self, path: Path | str | None = None) -> None:
-        path = Path(path) if path else default_state_path()
+    def save(self, path: Path | str) -> None:
+        path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "held": list(self.held),

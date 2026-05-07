@@ -38,8 +38,12 @@ def _make_entry(asof: date, n: int, **overrides):
 
 class DefaultPathTests(unittest.TestCase):
     def test_default_path(self):
-        p = default_ledger_path()
+        p = default_ledger_path("v9d")
         self.assertEqual(p.name, "v9d_ledger.parquet")
+
+    def test_default_path_unknown_strategy_raises(self):
+        with self.assertRaises(KeyError):
+            default_ledger_path("nonexistent")
 
 
 class LoadLedgerTests(unittest.TestCase):
