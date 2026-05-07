@@ -1,4 +1,4 @@
-"""CLI smoke tests for `alphalens rotation ...`."""
+"""CLI smoke tests for `alphalens archive rotation ...`."""
 
 from __future__ import annotations
 
@@ -91,6 +91,7 @@ class TestRotationBacktest(unittest.TestCase):
                 result = runner.invoke(
                     app,
                     [
+                        "archive",
                         "rotation",
                         "backtest",
                         "--config",
@@ -125,7 +126,9 @@ class TestRotationRun(unittest.TestCase):
                 "alphalens_cli.commands.rotation.load_rotation_data",
                 return_value=(store, signals),
             ):
-                result = runner.invoke(app, ["rotation", "run", "--config", str(cfg_path)])
+                result = runner.invoke(
+                    app, ["archive", "rotation", "run", "--config", str(cfg_path)]
+                )
 
         self.assertEqual(result.exit_code, 0, msg=f"stdout: {result.stdout}")
         # Signal slope is 1.5 (> 1.0) → yield_steep fires → QQQ +0.05, SPY -0.05
@@ -147,7 +150,9 @@ class TestRotationStatus(unittest.TestCase):
                 "alphalens.archive.rotation.config.capture_git_sha",
                 return_value="b" * 40,
             ):
-                result = runner.invoke(app, ["rotation", "status", "--config", str(cfg_path)])
+                result = runner.invoke(
+                    app, ["archive", "rotation", "status", "--config", str(cfg_path)]
+                )
 
         self.assertEqual(result.exit_code, 0, msg=f"stdout: {result.stdout}")
         self.assertIn("bbbbbbbb", result.stdout)  # git SHA fragment
@@ -171,6 +176,7 @@ class TestRotationSanityCheck(unittest.TestCase):
                 result = runner.invoke(
                     app,
                     [
+                        "archive",
                         "rotation",
                         "sanity-check",
                         "--config",
@@ -234,6 +240,7 @@ class TestRotationSanityCheck(unittest.TestCase):
                 result = runner.invoke(
                     app,
                     [
+                        "archive",
                         "rotation",
                         "sanity-check",
                         "--config",

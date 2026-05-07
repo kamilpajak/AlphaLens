@@ -1,4 +1,4 @@
-"""`alphalens themed` — Layer 2b curated YAML universe scan + monitoring."""
+"""`alphalens archive themed` — Layer 2b curated YAML universe scan + monitoring (replay-only)."""
 
 from __future__ import annotations
 
@@ -121,7 +121,9 @@ def status(
     store = ThemedHistoryStore()
     runs = store.recent_runs(days=days)
     if not runs:
-        typer.echo("No runs in history. Run `alphalens themed screen` to start collecting data.")
+        typer.echo(
+            "No runs in history. Run `alphalens archive themed screen` to start collecting data."
+        )
         raise typer.Exit(0)
 
     timeline = store.picks_timeline(days=days)

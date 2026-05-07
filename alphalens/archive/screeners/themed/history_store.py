@@ -1,7 +1,7 @@
 """History of Layer 2b daily runs — SQLite store for the monitoring dashboard.
 
 Every `themed screen` run is recorded here (run metadata + picks). The dashboard
-(`alphalens themed status`) reads from this store and computes rolling metrics:
+(`alphalens archive themed status`) reads from this store and computes rolling metrics:
 - Theme HHI trend (detect single-theme drift)
 - Top-N persistence (which names sit in top-5 for > X days)
 - Turnover (day-over-day flow of names)

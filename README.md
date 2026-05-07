@@ -158,7 +158,7 @@ watchlist: [NVDA, GOOGL]
 # Backtest replay (closed scorers — research only, NOT for capital deploy)
 .venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose
 .venv/bin/alphalens backtest --scorer lean
-.venv/bin/alphalens themed status --days 90    # historical themed monitoring
+.venv/bin/alphalens archive themed status --days 90    # historical themed monitoring
 .venv/bin/alphalens research validate-llm-filter --scorer rule
 
 # Tests (unittest, not pytest) — 2218 tests
