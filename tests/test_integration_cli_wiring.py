@@ -52,7 +52,7 @@ class TestTyperAppRegistration(unittest.TestCase):
         from alphalens_cli.main import app
 
         names = {cmd.name for cmd in app.registered_commands}
-        self.assertEqual(names, {"status", "backtest"})
+        self.assertEqual(names, {"status", "backtest", "audit"})
 
 
 class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):

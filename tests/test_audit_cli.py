@@ -1,18 +1,21 @@
-"""Tests for the AlphaLens-side `scripts/audit_multi_phase.py` wrapper.
+"""Tests for the AlphaLens-side `alphalens audit` CLI command.
 
-The wrapper only adds name → path resolution before delegating to
+The command only adds name → path resolution before delegating to
 :func:`phase_robust_backtesting.audit_multi_phase.run_audit`. The
 parsing/grouping/aggregation logic now lives in the external dep and
 is tested there. AlphaLens-specific concern: every entry in the
-``_SCRIPTS`` dict must point to a real script in ``scripts/``, and
-the OSS ``run_audit`` symbol must remain importable.
+``_SCRIPTS`` dict must point to a real script in ``scripts/``, the
+OSS ``run_audit`` symbol must remain importable, and the CLI command
+must surface a helpful error on unknown strategy names.
 """
 
 from __future__ import annotations
 
 import unittest
 
-from scripts.audit_multi_phase import _SCRIPTS
+from typer.testing import CliRunner
+
+from alphalens_cli.commands.audit import _SCRIPTS
 
 
 class TestScriptsDictIntegrity(unittest.TestCase):
@@ -48,6 +51,27 @@ class TestRunAuditDelegation(unittest.TestCase):
         from phase_robust_backtesting.audit_multi_phase import run_audit
 
         self.assertTrue(callable(run_audit))
+
+
+class TestAuditCliSurface(unittest.TestCase):
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def test_help_exits_zero(self):
+        from alphalens_cli.main import app
+
+        result = self.runner.invoke(app, ["audit", "--help"])
+        self.assertEqual(result.exit_code, 0, msg=result.stdout)
+        self.assertIn("Multi-phase audit", result.stdout)
+
+    def test_unknown_strategy_lists_choices(self):
+        from alphalens_cli.main import app
+
+        result = self.runner.invoke(app, ["audit", "definitely_not_a_strategy"])
+        self.assertEqual(result.exit_code, 2)
+        # Error message must surface the full strategy list so the caller
+        # can self-correct without grepping the source.
+        self.assertIn("v9_cross_sectional_residual", result.stderr or result.output)
 
 
 if __name__ == "__main__":

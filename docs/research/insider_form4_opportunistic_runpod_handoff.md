@@ -174,7 +174,7 @@ filter at scorer time (form4_filter ensures officer/director only).
    appropriate R2000 PIT loader.
 4. Run multi-phase audit on R2000 primary:
    ```bash
-   .venv/bin/python scripts/audit_multi_phase.py insider_form4_opportunistic \
+   .venv/bin/alphalens audit insider_form4_opportunistic \
        --rebalance-stride 21 \
        --is-start 2018-01-01 --is-end 2023-12-31 \
        --universe-mode R2000 \

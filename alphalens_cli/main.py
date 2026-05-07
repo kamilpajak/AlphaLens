@@ -18,6 +18,7 @@ import logging
 import typer
 from dotenv import load_dotenv
 
+from alphalens_cli.commands.audit import audit_command
 from alphalens_cli.commands.backtest import backtest
 from alphalens_cli.commands.insider import insider_app
 from alphalens_cli.commands.literature import literature_app
@@ -62,6 +63,11 @@ app.add_typer(research_app, name="research")
 app.add_typer(rotation_app, name="rotation")
 app.command(name="status")(status)
 app.command(name="backtest")(backtest)
+app.command(
+    name="audit",
+    help="Multi-phase audit — pre-reg + Bonferroni accountability.",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)(audit_command)
 
 
 if __name__ == "__main__":

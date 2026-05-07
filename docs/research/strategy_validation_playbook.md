@@ -11,7 +11,7 @@ This is the **canonical pipeline for any future strategy candidate** in AlphaLen
 1. Define scorer adapter            ───►  experiment_<name>.py
 2. Smoke run                        ───►  6m IS + 6m OOS, single ADV/cost
 3. Full IS + OOS run                ───►  domyslny --phase-offset 0
-4. Multi-phase audit (KEY GATE)     ───►  scripts/audit_multi_phase.py
+4. Multi-phase audit (KEY GATE)     ───►  alphalens audit &lt;name&gt; ...
 5. Read robust_verdict (PASS/MID/FAIL) — compare αt vs Bonferroni threshold
 6. PASS → forward-walk + alphalens preregister complete --verdict PASS
    MID  → regime-conditional sizing + complete --verdict MID
@@ -112,7 +112,7 @@ This is the **point estimate** at phase 0. **Do not draw verdicts from this alon
 ## Step 4 — Multi-phase audit (THE GATE)
 
 ```bash
-.venv/bin/python scripts/audit_multi_phase.py <name> \
+.venv/bin/alphalens audit <name> \
     --is-start 2015-01-01 --is-end 2022-12-31 \
     --oos-start 2023-01-01 --oos-end 2026-04-22 \
     --adv-thresholds 5000000 \
@@ -127,7 +127,7 @@ Notes:
 - **`--lock-universe` mandatory** for halves stability checks. Otherwise per-period universes diverge.
 - Strip the parameter sweep down to a **single representative config** for the audit. Phase × roe_w × ADV × cost is too many combinations; pick the best from step 3 and audit just that. Multi-phase amplifies compute 5×, do not also amplify across configs.
 - Background it (`run_in_background=True`) — 25-60 min for typical 8y IS.
-- Driver script's `_SCRIPTS` mapping (in `scripts/audit_multi_phase.py`) needs your strategy name added.
+- Driver's `_SCRIPTS` mapping (in `alphalens_cli/commands/audit.py`) needs your strategy name added.
 
 ## Step 4.5 — Optional: Risk overlay test (Layer 4)
 
@@ -145,7 +145,7 @@ Verdict-feed back into Step 5: the robust verdict for a Layer-4-augmented strate
 
 ## Step 5 — Robust verdict
 
-`scripts/audit_multi_phase.py` writes JSON + prints a verdict per config to stderr. Or compute manually from the JSON:
+`alphalens audit` writes JSON + prints a verdict per config to stderr. Or compute manually from the JSON:
 
 ```python
 from alphalens.backtest.multi_phase import robust_verdict
@@ -205,7 +205,7 @@ Per `feedback_phase_aliasing_in_strided_backtests.md`:
 - `BacktestEngine(phase_offset=0..stride-1)` + 6 tests
 - `--phase-offset` CLI flag + 5 tests
 - `alphalens/backtest/multi_phase.py` (summarise + robust_verdict) + 2 tests
-- `scripts/audit_multi_phase.py` driver
+- `alphalens audit` driver (alphalens_cli/commands/audit.py)
 - `alphalens/data/fundamentals/edgar_companyfacts.py` — PIT TTM ROE store + 13 tests
 - `--lock-universe` flag in tri-factor + mom+lowvol scripts
 - `--is-start/--is-end/--oos-start/--oos-end` flags in same
