@@ -152,8 +152,23 @@ watchlist: [NVDA, GOOGL]
 ```bash
 # Live workflows
 .venv/bin/alphalens watchdog run-once          # Layer 1: poll EDGAR, classify, dispatch
-.venv/bin/alphalens queue scorer-stats         # historical viewer over candidates.db
 .venv/bin/alphalens status                     # queue + digest + dedup
+.venv/bin/alphalens literature monthly         # ad-hoc Perplexity deep scan (~1h)
+.venv/bin/alphalens literature weekly          # ad-hoc weekly RSS scan (~15min)
+
+# Paper-trade prospective replication (--strategy required)
+.venv/bin/alphalens paper-trade refresh-data --strategy v9d   # pull latest iVolatility SMD
+.venv/bin/alphalens paper-trade score --strategy v9d          # weekly score + ledger append
+.venv/bin/alphalens paper-trade verdict --strategy v9d        # decision-rule verdict
+
+# Pre-registration ledger (Bonferroni accountability)
+.venv/bin/alphalens preregister add ...                       # before any new experiment
+.venv/bin/alphalens preregister threshold                     # current Bonferroni critical |t|
+.venv/bin/alphalens preregister complete <id> --verdict ...   # post-experiment
+
+# Multi-phase audit (canonical research gate)
+.venv/bin/alphalens audit insider_form4_opportunistic \
+    --is-start 2018-01-01 --is-end 2023-12-31 --rebalance-stride 21
 
 # Backtest replay (closed scorers — research only, NOT for capital deploy)
 .venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose
@@ -161,10 +176,10 @@ watchlist: [NVDA, GOOGL]
 .venv/bin/alphalens archive themed status --days 90    # historical themed monitoring
 .venv/bin/alphalens research validate-llm-filter --scorer rule
 
-# Tests (unittest, not pytest) — 2218 tests
+# Tests (unittest, not pytest) — 2187 tests
 .venv/bin/python -m unittest discover tests -v
 
-# Inspect the queue directly
+# Inspect the queue directly (no CLI viewer ships — Layer 3 worker archived per ADR 0008)
 sqlite3 ~/.alphalens/candidates.db \
   "SELECT id, ticker, source, priority, status, decision FROM candidates ORDER BY id DESC LIMIT 20;"
 ```
@@ -239,7 +254,7 @@ docs/
 ├── research/                    paradigm_failures_postmortem + per-strategy design + ledger
 └── backtest/                    historical backtest run outputs
 
-tests/                           unittest suite (~2218 tests; 4 architectural enforcers)
+tests/                           unittest suite (~2187 tests; 4 architectural enforcers)
 ```
 
 External methodology dep: [`phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting) — installed via git tag pin in `pyproject.toml`.
