@@ -63,7 +63,9 @@ dependency, pinned to a git tag in `pyproject.toml`:
 
 Local copies of `alphalens/preregistration/`, `alphalens/backtest/multi_phase.py`,
 and `alphalens/backtest/multiple_testing.py` were deleted on 2026-05-06.
-`scripts/audit_multi_phase.py` is now a thin wrapper that resolves an
+`scripts/audit_multi_phase.py` was deleted on 2026-05-07 and replaced by
+the first-class CLI command `alphalens audit <strategy>` (implementation
+at `alphalens_cli/commands/audit.py`). The command resolves an
 AlphaLens-specific strategy-name dict to a path before delegating to
 `phase_robust_backtesting.audit_multi_phase.run_audit` in-process (no
 subprocess wrapping — preserves traceback fidelity and Ctrl+C signal

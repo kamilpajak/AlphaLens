@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from alphalens.paper_trade.registry import default_paper_trade_dir, get_strategy
+
 LEDGER_COLUMNS: tuple[str, ...] = (
     "asof",
     "rebalance_n",
@@ -41,8 +43,9 @@ class LedgerError(Exception):
     """Append-only invariant violation or schema mismatch."""
 
 
-def default_ledger_path() -> Path:
-    return Path.home() / ".alphalens" / "paper_trade" / "v9d_ledger.parquet"
+def default_ledger_path(strategy_id: str) -> Path:
+    """Strategy-aware ledger path. Caller must specify which strategy's ledger."""
+    return default_paper_trade_dir() / get_strategy(strategy_id).ledger_filename
 
 
 @dataclass
@@ -76,8 +79,8 @@ class LedgerEntry:
         return d
 
 
-def load_ledger(path: Path | str | None = None) -> pd.DataFrame:
-    path = Path(path) if path else default_ledger_path()
+def load_ledger(path: Path | str) -> pd.DataFrame:
+    path = Path(path)
     if not path.exists():
         return pd.DataFrame(columns=list(LEDGER_COLUMNS)).astype(
             {
@@ -98,9 +101,9 @@ def load_ledger(path: Path | str | None = None) -> pd.DataFrame:
     return df
 
 
-def append_ledger_entry(entry: LedgerEntry, path: Path | str | None = None) -> pd.DataFrame:
+def append_ledger_entry(entry: LedgerEntry, path: Path | str) -> pd.DataFrame:
     """Append one entry; enforce asof-uniqueness; return the resulting frame."""
-    path = Path(path) if path else default_ledger_path()
+    path = Path(path)
     existing = load_ledger(path)
 
     asof_iso = entry.asof.isoformat()

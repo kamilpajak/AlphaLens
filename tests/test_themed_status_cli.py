@@ -1,4 +1,4 @@
-"""Smoke tests for `alphalens themed status` covering empty + populated DB paths."""
+"""Smoke tests for `alphalens archive themed status` covering empty + populated DB paths."""
 
 import tempfile
 import unittest
@@ -25,7 +25,7 @@ class TestThemedStatusCLI(unittest.TestCase):
             "alphalens.archive.screeners.themed.history_store.default_history_path",
             return_value=self.tmp_path,
         ):
-            result = self.runner.invoke(app, ["themed", "status", "--days", "30"])
+            result = self.runner.invoke(app, ["archive", "themed", "status", "--days", "30"])
 
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
         self.assertIn("No runs in history", result.stdout)
@@ -59,7 +59,9 @@ class TestThemedStatusCLI(unittest.TestCase):
             "alphalens.archive.screeners.themed.history_store.default_history_path",
             return_value=self.tmp_path,
         ):
-            result = self.runner.invoke(app, ["themed", "status", "--days", "30", "--top-n", "3"])
+            result = self.runner.invoke(
+                app, ["archive", "themed", "status", "--days", "30", "--top-n", "3"]
+            )
 
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
         self.assertIn("Layer 2b Monitoring", result.stdout)

@@ -7,7 +7,7 @@ Pre-registered as `multi_source_two_stage_2026_04_30` per
 - Phase B: per-regime Lasso with nested expanding-window CV (`model.py`),
   5d-forward excess-return target (`target.py`),
   experiment script (`scripts/experiment_multi_source_two_stage.py`).
-- Phase C: multi-phase audit via `scripts/audit_multi_phase.py`.
+- Phase C: multi-phase audit via `alphalens audit multi_source_two_stage`.
 """
 
 from typing import Literal

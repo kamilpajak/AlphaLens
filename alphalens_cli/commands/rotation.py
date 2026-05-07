@@ -1,4 +1,4 @@
-"""`alphalens rotation` — Tactical Sector Rotation (Layer 2e).
+"""`alphalens archive rotation` — Tactical Sector Rotation (Layer 2e, replay-only).
 
 Subcommands:
   backtest — run IS/OOS backtest on committed config, write markdown report

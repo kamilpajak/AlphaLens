@@ -27,23 +27,37 @@ from alphalens.paper_trade.ledger import (
     default_ledger_path,
     load_ledger,
 )
+from alphalens.paper_trade.registry import (
+    REGISTRY,
+    Strategy,
+    default_paper_trade_dir,
+    get_strategy,
+    resolve_callable,
+)
 from alphalens.paper_trade.state import PaperTradeState, default_state_path
 from alphalens.paper_trade.verdict import (
     DecisionRuleResult,
     compute_running_stats,
+    default_verdict_path,
     evaluate_decision_rule,
 )
 
 __status__: Literal["ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"] = "ACTIVE"
 
 __all__ = [
+    "REGISTRY",
     "DecisionRuleResult",
     "LedgerEntry",
     "PaperTradeState",
+    "Strategy",
     "append_ledger_entry",
     "compute_running_stats",
     "default_ledger_path",
+    "default_paper_trade_dir",
     "default_state_path",
+    "default_verdict_path",
     "evaluate_decision_rule",
+    "get_strategy",
     "load_ledger",
+    "resolve_callable",
 ]

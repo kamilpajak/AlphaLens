@@ -4,7 +4,7 @@ Pre-registered as `v7_smd_options_implied_2026_05_02`.
 - Phase A: feature joiner + sanity gates (`features.py`).
 - Phase B: global Lasso fit + holdout reveal (TBD: `model.py`, `target.py`,
   `scripts/experiment_v7_options_implied.py`).
-- Phase C: multi-phase audit via `scripts/audit_multi_phase.py`.
+- Phase C: multi-phase audit via `alphalens audit v7_options_implied`.
 """
 
 from typing import Literal

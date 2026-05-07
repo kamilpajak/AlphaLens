@@ -15,11 +15,11 @@ OUR_PACKAGE_PREFIX = "alphalens"
 
 class TestTyperAppRegistration(unittest.TestCase):
     def test_each_group_is_typer(self):
+        from alphalens_cli.commands.archive import archive_app
         from alphalens_cli.commands.research import research_app
-        from alphalens_cli.commands.themed import themed_app
         from alphalens_cli.commands.watchdog import watchdog_app
 
-        for app in (watchdog_app, themed_app, research_app):
+        for app in (watchdog_app, archive_app, research_app):
             self.assertIsInstance(app, typer.Typer)
 
     def test_watchdog_commands(self):
@@ -27,6 +27,14 @@ class TestTyperAppRegistration(unittest.TestCase):
 
         names = {cmd.name for cmd in watchdog_app.registered_commands}
         self.assertEqual(names, {"run-once"})
+
+    def test_archive_groups_dispatch_themed_insider_rotation(self):
+        # ARCHIVED layer replay (per ADR 0005) lives under `alphalens archive`.
+        # Verify the aggregator wires all three dispatched sub-apps.
+        from alphalens_cli.commands.archive import archive_app
+
+        groups = {grp.name for grp in archive_app.registered_groups}
+        self.assertEqual(groups, {"themed", "insider", "rotation"})
 
     def test_themed_commands(self):
         from alphalens_cli.commands.themed import themed_app
@@ -52,7 +60,7 @@ class TestTyperAppRegistration(unittest.TestCase):
         from alphalens_cli.main import app
 
         names = {cmd.name for cmd in app.registered_commands}
-        self.assertEqual(names, {"status", "backtest"})
+        self.assertEqual(names, {"status", "backtest", "audit"})
 
 
 class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):

@@ -23,6 +23,7 @@ import pandas as pd
 from alphalens.attribution.factor_analysis import run_regression
 from alphalens.backtest.metrics import max_drawdown, sharpe
 from alphalens.data.factors import load_carhart_daily
+from alphalens.paper_trade.registry import default_paper_trade_dir, get_strategy
 
 CHECKPOINT_26W_N_OBS = 26
 CHECKPOINT_52W_N_OBS = 52
@@ -245,5 +246,6 @@ def _verdict_for_checkpoint(
     )
 
 
-def default_verdict_path() -> Path:
-    return Path.home() / ".alphalens" / "paper_trade" / "v9d_verdict.md"
+def default_verdict_path(strategy_id: str) -> Path:
+    """Strategy-aware verdict markdown path."""
+    return default_paper_trade_dir() / get_strategy(strategy_id).verdict_filename

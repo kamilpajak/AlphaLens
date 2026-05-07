@@ -106,7 +106,7 @@ class TestAuditMultiPhaseContract(unittest.TestCase):
         self.assertTrue(callable(run_audit))
 
     def test_run_audit_signature_keyword_only_kwargs(self):
-        # AlphaLens scripts/audit_multi_phase.py wrapper passes
+        # AlphaLens audit CLI (alphalens_cli/commands/audit.py) passes
         # rebalance_stride= and out= as kwargs. If a future OSS release
         # makes them positional, the wrapper still works at the source
         # level (kwargs-as-positional is compatible) but LOSING the

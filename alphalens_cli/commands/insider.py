@@ -1,4 +1,4 @@
-"""`alphalens insider` — Layer 2d Form 4 cluster-buy scan.
+"""`alphalens archive insider` — Layer 2d Form 4 cluster-buy scan (replay-only).
 
 Requires local data files seeded from ``ticker_cik_refresher`` (P3) and
 ``iwm_refresher`` (P4). If absent, prints a helpful bootstrap hint.

@@ -5,7 +5,7 @@ Procedura kwartalnego przeglądu uniwersum Layer 2b (`alphalens/archive/screener
 **Cadence**: Co kwartał (styczeń, kwiecień, lipiec, październik), najlepiej po earnings season żeby widzieć aktualne fundamentals.
 
 **Narzędzia**:
-- `alphalens themed status --days 90` — ostatnie 3 miesiące produkcji
+- `alphalens archive themed status --days 90` — ostatnie 3 miesiące produkcji
 - Backtest engine (`alphalens backtest`) — walidacja na 5-letnim oknie
 - Theme validation script `/tmp/theme_validation.py` (wzorcowy — kopiuj do daty refresh'u)
 
@@ -16,7 +16,7 @@ Procedura kwartalnego przeglądu uniwersum Layer 2b (`alphalens/archive/screener
 ### 1. Pre-refresh audit (30 min)
 
 ```bash
-alphalens themed status --days 90
+alphalens archive themed status --days 90
 ```
 
 Zapisz metryki do journala:
