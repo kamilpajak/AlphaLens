@@ -15,6 +15,7 @@ What we cover here is the **CLI dispatch layer**:
 
 from __future__ import annotations
 
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,17 @@ from unittest.mock import patch
 
 import pandas as pd
 from typer.testing import CliRunner
+
+# Strip ANSI escape sequences from typer/click output before substring
+# assertions. Rich-mode renders option names with color codes interleaved
+# (e.g. ``--strategy`` becomes ``\x1b[36m-\x1b[0m\x1b[36m-strategy\x1b[0m``),
+# which breaks naive ``assertIn("--strategy", out)``. Local terminals
+# may not exhibit this depending on TERM / NO_COLOR; CI does.
+_ANSI = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
+def _plain(s: str) -> str:
+    return _ANSI.sub("", s)
 
 
 class TestVerdictCommand(unittest.TestCase):
@@ -35,7 +47,7 @@ class TestVerdictCommand(unittest.TestCase):
 
         result = self.runner.invoke(paper_trade_app, ["verdict"])
         self.assertEqual(result.exit_code, 2)
-        self.assertIn("--strategy", result.output + (result.stderr or ""))
+        self.assertIn("--strategy", _plain(result.output + (result.stderr or "")))
 
     def test_unknown_strategy_raises(self):
         from alphalens_cli.commands.paper_trade import paper_trade_app
@@ -357,7 +369,7 @@ class TestScoreCommand(unittest.TestCase):
             result = self.runner.invoke(paper_trade_app, ["score", "--strategy", "v9d"])
 
         self.assertEqual(result.exit_code, 1)
-        self.assertIn("could not resolve", result.output + (result.stderr or ""))
+        self.assertIn("could not resolve", _plain(result.output + (result.stderr or "")))
 
 
 class TestRefreshDataCommandDispatchOnly(unittest.TestCase):
@@ -378,7 +390,7 @@ class TestRefreshDataCommandDispatchOnly(unittest.TestCase):
         with patch.dict("os.environ", {"IVOLATILITY_API_KEY": ""}, clear=False):
             result = self.runner.invoke(paper_trade_app, ["refresh-data", "--strategy", "v9d"])
         self.assertEqual(result.exit_code, 1)
-        self.assertIn("IVOLATILITY_API_KEY", result.output + (result.stderr or ""))
+        self.assertIn("IVOLATILITY_API_KEY", _plain(result.output + (result.stderr or "")))
 
 
 if __name__ == "__main__":

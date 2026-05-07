@@ -11,11 +11,20 @@ must surface a helpful error on unknown strategy names.
 
 from __future__ import annotations
 
+import re
 import unittest
 
 from typer.testing import CliRunner
 
 from alphalens_cli.commands.audit import _SCRIPTS
+
+# Strip ANSI escape sequences from rich-formatted typer output so
+# substring assertions are not broken by interleaved color codes.
+_ANSI = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
+def _plain(s: str) -> str:
+    return _ANSI.sub("", s)
 
 
 class TestScriptsDictIntegrity(unittest.TestCase):
@@ -62,7 +71,7 @@ class TestAuditCliSurface(unittest.TestCase):
 
         result = self.runner.invoke(app, ["audit", "--help"])
         self.assertEqual(result.exit_code, 0, msg=result.stdout)
-        self.assertIn("Multi-phase audit", result.stdout)
+        self.assertIn("Multi-phase audit", _plain(result.stdout))
 
     def test_unknown_strategy_lists_choices(self):
         from alphalens_cli.main import app
@@ -71,7 +80,7 @@ class TestAuditCliSurface(unittest.TestCase):
         self.assertEqual(result.exit_code, 2)
         # Error message must surface the full strategy list so the caller
         # can self-correct without grepping the source.
-        self.assertIn("v9_cross_sectional_residual", result.stderr or result.output)
+        self.assertIn("v9_cross_sectional_residual", _plain(result.stderr or result.output))
 
 
 if __name__ == "__main__":
