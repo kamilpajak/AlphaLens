@@ -1,0 +1,33 @@
+{
+  "experiment": "insider_form4_opportunistic_2026_05_05",
+  "phase_a_status": "evaluated",
+  "train_start": "2009-01-01",
+  "train_end": "2017-12-31",
+  "universe_mode": "R2000",
+  "n_quarters": 36,
+  "gates": [
+    {
+      "gate_id": "A0_density",
+      "median_opportunistic_count_per_active_ticker_per_quarter": 2.0,
+      "threshold": 2.0,
+      "passed": true,
+      "n_quarters_evaluated": 30
+    },
+    {
+      "gate_id": "A1_breadth",
+      "frac_quarters_with_at_least_50_scored_tickers": 0.8571428571428571,
+      "threshold": 0.3,
+      "passed": true,
+      "n_quarters_evaluated": 35
+    },
+    {
+      "gate_id": "A2_direction",
+      "spearman_rho_score_vs_fwd_21d_excess": 0.011551889276731089,
+      "threshold": -0.05,
+      "passed": true,
+      "n_pairs": 10174
+    }
+  ],
+  "all_gates_passed": true,
+  "verdict": "PROCEED"
+}
