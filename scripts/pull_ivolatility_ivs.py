@@ -52,6 +52,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "ivolatility_ivs"
 IVS_ENDPOINT = "/equities/eod/ivs"
 
+# A real IVS parquet has at minimum: parquet magic (8B) + footer
+# (~200B) + a row group with column chunks for the 10-col schema. The
+# smallest viable file is well above 1KB; anything below is either a
+# zero-byte truncate, a partial flush, or a non-parquet artefact.
+DEFAULT_MIN_PARQUET_BYTES = 1024
+
 # Schema produced by /equities/eod/ivs (verified empirically 2026-05-07).
 EXPECTED_COLUMNS = (
     "record_no",
@@ -170,6 +176,55 @@ def pull_ivs_universe(
     return counts
 
 
+def validate_cache(
+    cache_dir: Path,
+    *,
+    min_size_bytes: int = DEFAULT_MIN_PARQUET_BYTES,
+) -> dict[str, int]:
+    """Sweep ``cache_dir`` for *.parquet files; delete any that are
+    zero-byte, sub-threshold, or unreadable by pyarrow.
+
+    Resume safety: ``_existing_covers`` checks ``dmin/dmax`` of the
+    parquet's ``date`` column, which can be tricked by a SIGKILL or
+    disk-full crash that leaves a half-written but pyarrow-readable
+    file. Running this before a resume guarantees the next pull
+    re-fetches anything that is structurally broken.
+
+    Returns count dict with keys ``ok``, ``deleted_zero``,
+    ``deleted_too_small``, ``deleted_corrupt``.
+    """
+    counts = {"ok": 0, "deleted_zero": 0, "deleted_too_small": 0, "deleted_corrupt": 0}
+    if not cache_dir.is_dir():
+        return counts
+
+    for path in sorted(cache_dir.glob("*.parquet")):
+        size = path.stat().st_size
+        if size == 0:
+            logger.info("validate_cache: deleting zero-byte file %s", path.name)
+            path.unlink()
+            counts["deleted_zero"] += 1
+            continue
+        if size < min_size_bytes:
+            logger.info(
+                "validate_cache: deleting %s (%d bytes < %d threshold)",
+                path.name,
+                size,
+                min_size_bytes,
+            )
+            path.unlink()
+            counts["deleted_too_small"] += 1
+            continue
+        try:
+            pd.read_parquet(path, columns=["date"])
+        except Exception as exc:
+            logger.info("validate_cache: deleting unreadable parquet %s: %s", path.name, exc)
+            path.unlink()
+            counts["deleted_corrupt"] += 1
+            continue
+        counts["ok"] += 1
+    return counts
+
+
 def _load_tickers(path: Path) -> list[str]:
     """Read one ticker per line, skip blanks/comments."""
     out: list[str] = []
@@ -193,12 +248,24 @@ def main(argv: list[str] | None = None) -> int:
         default=0.2,
         help="Seconds between ticker calls (matches retail rate limit).",
     )
+    ap.add_argument(
+        "--validate-cache",
+        action="store_true",
+        help="Before pulling, sweep cache_dir for zero-byte / sub-1KB / "
+        "unreadable parquet files and delete them. Use on resume after "
+        "a hard crash so idempotent skip cannot be tricked by a "
+        "half-written file.",
+    )
     args = ap.parse_args(argv)
 
     api_key = os.environ.get("IVOLATILITY_API_KEY", "")
     if not api_key:
         logger.error("IVOLATILITY_API_KEY not set in environment")
         return 1
+
+    if args.validate_cache:
+        validate_counts = validate_cache(args.cache_dir)
+        logger.info("validate_cache pre-pull sweep: %s", validate_counts)
 
     tickers = _load_tickers(args.tickers_file)
     logger.info(

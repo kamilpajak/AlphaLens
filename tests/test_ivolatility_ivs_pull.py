@@ -217,5 +217,106 @@ class TestBatchDriver(unittest.TestCase):
         )
 
 
+class TestValidateCache(unittest.TestCase):
+    """Pre-resume cleanup — delete corrupt/suspect parquet files so the
+    main loop's idempotent skip cannot be tricked by a half-written file
+    (SIGKILL / disk-full mid-write produces these)."""
+
+    def test_zero_byte_file_is_deleted(self):
+        from scripts.pull_ivolatility_ivs import validate_cache
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            (cache_dir / "ZEROBYTE.parquet").write_bytes(b"")
+
+            counts = validate_cache(cache_dir)
+
+            self.assertEqual(counts["deleted_zero"], 1)
+            self.assertFalse((cache_dir / "ZEROBYTE.parquet").exists())
+
+    def test_subthreshold_size_is_deleted(self):
+        from scripts.pull_ivolatility_ivs import validate_cache
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            # 100 bytes — well under the 1KB default threshold; smaller
+            # than any plausible parquet file (parquet has ~200B footer
+            # alone, plus magic bytes, schema, and at least one row group).
+            (cache_dir / "TINY.parquet").write_bytes(b"x" * 100)
+
+            counts = validate_cache(cache_dir)
+
+            self.assertEqual(counts["deleted_too_small"], 1)
+            self.assertFalse((cache_dir / "TINY.parquet").exists())
+
+    def test_corrupt_parquet_is_deleted(self):
+        from scripts.pull_ivolatility_ivs import validate_cache
+
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            # Above size threshold but not a valid parquet — pyarrow
+            # raises on open. Mimics SIGKILL mid-write where the file
+            # passes size check but body is incomplete.
+            (cache_dir / "CORRUPT.parquet").write_bytes(b"\x00" * 4096)
+
+            counts = validate_cache(cache_dir)
+
+            self.assertEqual(counts["deleted_corrupt"], 1)
+            self.assertFalse((cache_dir / "CORRUPT.parquet").exists())
+
+    def test_valid_parquet_retained(self):
+        from scripts.pull_ivolatility_ivs import validate_cache
+
+        rows = [
+            _ivs_row("2024-01-02", 30, 184.25, 0, "C", 0.205, 0.52),
+            _ivs_row("2024-01-02", 30, 184.25, 0, "P", 0.192, -0.48),
+        ] * 200
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            pd.DataFrame(rows).to_parquet(cache_dir / "GOOD.parquet")
+
+            counts = validate_cache(cache_dir)
+
+            self.assertEqual(counts["ok"], 1)
+            self.assertEqual(counts["deleted_zero"], 0)
+            self.assertEqual(counts["deleted_too_small"], 0)
+            self.assertEqual(counts["deleted_corrupt"], 0)
+            self.assertTrue((cache_dir / "GOOD.parquet").exists())
+
+    def test_mixed_directory_returns_full_counts(self):
+        from scripts.pull_ivolatility_ivs import validate_cache
+
+        rows = [_ivs_row("2024-01-02", 30, 184.25, 0, "C", 0.205, 0.52)] * 200
+        with tempfile.TemporaryDirectory() as td:
+            cache_dir = Path(td)
+            pd.DataFrame(rows).to_parquet(cache_dir / "GOOD.parquet")
+            (cache_dir / "ZERO.parquet").write_bytes(b"")
+            (cache_dir / "TINY.parquet").write_bytes(b"x" * 100)
+            (cache_dir / "CORRUPT.parquet").write_bytes(b"\x00" * 4096)
+
+            counts = validate_cache(cache_dir)
+
+            self.assertEqual(
+                counts,
+                {
+                    "ok": 1,
+                    "deleted_zero": 1,
+                    "deleted_too_small": 1,
+                    "deleted_corrupt": 1,
+                },
+            )
+
+    def test_missing_cache_dir_returns_zero_counts(self):
+        from scripts.pull_ivolatility_ivs import validate_cache
+
+        with tempfile.TemporaryDirectory() as td:
+            counts = validate_cache(Path(td) / "does-not-exist")
+
+        self.assertEqual(
+            counts,
+            {"ok": 0, "deleted_zero": 0, "deleted_too_small": 0, "deleted_corrupt": 0},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
