@@ -54,6 +54,8 @@ from alphalens.screeners.insider_activity.cohen_malloy_classifier import (  # no
     classify_from_transaction_dates,
 )
 
+_PRICES_DIR = Path.home() / ".alphalens" / "prices"
+
 logger = logging.getLogger(__name__)
 
 
