@@ -1608,7 +1608,21 @@
         "capital_deploy_clause": "Capital deploy remains OFF-TABLE regardless of verdict per project policy. PASS triggers Layer 4 overlay test eligibility on this base. Other verdicts maintain status quo (paper-trade observation only)."
       },
       "registered_at": "2026-05-05",
-      "status": "registered",
+      "status": "phase_a_passed",
+      "phase_a_result": {
+        "verdict": "PROCEED",
+        "executed_at": "2026-05-08",
+        "universe_mode": "R2000",
+        "train_window": "2009-01-01 to 2017-12-31",
+        "all_gates_passed": true,
+        "A0_density_median_per_active_ticker_per_quarter": 2.0,
+        "A1_breadth_frac_quarters_with_at_least_50_scored_tickers": 0.857,
+        "A2_direction_spearman_rho_score_vs_fwd_21d_excess": 0.0116,
+        "n_pairs_in_A2": 10174,
+        "canonical_json": "docs/research/insider_form4_opportunistic_phase_a_2026_05_08.json",
+        "scorer_numerical_guards_pr": "https://github.com/kamilpajak/AlphaLens/pull/83",
+        "notes": "Phase A run on merged Form-4 dataset (PR #80). Surfaced 78 RuntimeWarning per run from numpy SVD edge cases on certain real-world designs. Empirically validated across 4 fix iterations (raise floor 4->15, rcond=1e-10, cond skip, isfinite mask, errstate suppress) that warnings do NOT change output: Spearman rho identical to 16 digits. Final fix is a layered defensive guard with local warnings.catch_warnings suppress (PR #83). Phase B audit queued for separate session per pre-reg discipline (no execution today)."
+      },
       "outcome": null,
       "notes": ""
     },
