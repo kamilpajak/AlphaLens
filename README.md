@@ -11,7 +11,11 @@ Research lab infrastructure for retail active alpha experimentation — real-tim
 
 ## Status (2026-04-25 →)
 
-The project pivoted from "active alpha generation" to **research / learning infrastructure** after [11 paradigm failures](docs/research/paradigm_failures_postmortem.md) (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum + vol-target overlay, all phase-robust FAIL). Capital deployment based on the current strategies is **off the table** until a phase-robust PASS appears; the screener search itself stays open-ended under pre-registration discipline. The codebase remains as:
+The project pivoted from "active alpha generation" to **research / learning infrastructure** after [11 paradigm failures](docs/research/paradigm_failures_postmortem.md) (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum + vol-target overlay, all phase-robust FAIL) plus 2 INCONCLUSIVE retrospectives. The screener search stays open-ended under pre-registration discipline.
+
+2026-05-09: the pipeline admitted its first phase-robust positive — **[PASS_MARGINAL on Cohen-Malloy opportunistic Form-4](docs/research/insider_form4_opportunistic_phase_b_postmortem_2026_05_09.md)** — replicated across two independent OOS windows (2018-2023 and 2024-2026) with consistent αt and a growing economic edge on the more recent window. Capital deployment remains **off the table** — PASS_MARGINAL is not a full PASS — but this base unlocks eligibility for advanced portfolio overlay testing (vol-targeting, drawdown control).
+
+The codebase remains as:
 
 - **Reusable research framework** — backtest engine, factor attribution, sanity checks, multiple-testing corrections, regime classifier, **time-series sizing overlays (`alphalens/overlays/`, vol-targeting per Moreira-Muir 2017)**, cost models, weighting schemes; layer architecture in [ADR 0007](docs/adr/0007-layer-architecture.md)
 - **Production-grade data clients** — Polygon, FRED, SEC EDGAR, Alpha Vantage fundamentals
