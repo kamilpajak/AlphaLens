@@ -1,7 +1,6 @@
-"""Phase B audit orchestrator for insider_form4_opportunistic_2026_05_05.
+"""5-phase parallel audit orchestrator for insider_form4_opportunistic.
 
-Pre-reg ledger entry: ``insider_form4_opportunistic_2026_05_05`` (Phase A
-``status=phase_a_passed`` per ``docs/research/insider_form4_opportunistic_phase_a_2026_05_08.json``).
+Pre-reg ledger entry: ``insider_form4_opportunistic_2026_05_08_v2``.
 
 Reads the same scorer + classifier modules locked in pre-reg (no drift —
 only orchestrates 5 phase-offset subprocess invocations of
@@ -9,22 +8,31 @@ only orchestrates 5 phase-offset subprocess invocations of
 
 Differences from the OSS ``run_audit`` driver:
 - runs the 5 phases in parallel (Mac M2 has 10 cores, plenty of headroom)
-- collects per-phase ``portfolio_returns`` parquets (via ``--dump-returns``)
+- collects per-phase daily continuous-holding return parquets (via
+  ``--dump-returns``) for downstream block-bootstrap
 - applies the 5 R2000 primary gates G1-G5 from the pre-reg lock,
   including G5 stationary block-bootstrap CI on the pooled mean alpha_t.
 
-Outputs:
-- ``docs/research/insider_form4_opportunistic_phase_b_<DATE>.json`` — canonical
+Outputs (default suffix = ``phase_b_<DATE>``; override with ``--out-suffix``):
+- ``docs/research/insider_form4_opportunistic_<suffix>.json`` — canonical
   verdict (signed by gates, per-phase metrics, bootstrap CI)
-- ``docs/research/insider_form4_opportunistic_phase_b_<DATE>.md`` — human report
+- ``docs/research/insider_form4_opportunistic_<suffix>.md`` — human report
 
-Run::
+Run (Phase B 2018-2023, default)::
 
     .venv/bin/python scripts/run_insider_form4_phase_b.py
+
+Run (final lock 2024-2026)::
+
+    .venv/bin/python scripts/run_insider_form4_phase_b.py \\
+        --is-start 2024-01-01 --is-end 2026-03-31 \\
+        --artifact-root ~/.alphalens/audit/insider_form4_opportunistic_final_lock \\
+        --out-suffix final_lock_2024_2026
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import math
@@ -34,6 +42,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -49,7 +58,7 @@ from alphalens.data.factors import load_carhart_daily  # noqa: E402
 logger = logging.getLogger(__name__)
 
 EXPERIMENT_SCRIPT = REPO / "scripts" / "experiment_insider_form4_opportunistic.py"
-ARTIFACT_ROOT = Path.home() / ".alphalens" / "audit" / "insider_form4_opportunistic_phase_b"
+DEFAULT_ARTIFACT_ROOT = Path.home() / ".alphalens" / "audit" / "insider_form4_opportunistic_phase_b"
 N_PHASES = 5
 REBALANCE_STRIDE_DAYS = 21
 HAC_MAXLAGS = 126
@@ -58,8 +67,8 @@ N_BOOTSTRAP = 1000
 ALPHA_LEVEL = 0.05
 RNG_SEED = 20260508  # reproducibility — Phase B execution date
 
-IS_START = date(2018, 1, 1)
-IS_END = date(2023, 12, 31)
+DEFAULT_IS_START = date(2018, 1, 1)
+DEFAULT_IS_END = date(2023, 12, 31)
 
 # Pre-reg gate thresholds (R2000 primary)
 G1_BONFERRONI_T = 3.1237  # naive |t| at program-level n=28 (v2 ledger lock)
@@ -77,14 +86,21 @@ _RESULT_LINE = re.compile(
 # Strip statsmodels HAC warning that says "alpha must be in [0..1]" (different alpha).
 
 
-def _phase_command(phase_offset: int, returns_parquet: Path, report_md: Path) -> list[str]:
+def _phase_command(
+    phase_offset: int,
+    returns_parquet: Path,
+    report_md: Path,
+    *,
+    is_start: date,
+    is_end: date,
+) -> list[str]:
     return [
         sys.executable,
         str(EXPERIMENT_SCRIPT),
         "--is-start",
-        IS_START.isoformat(),
+        is_start.isoformat(),
         "--is-end",
-        IS_END.isoformat(),
+        is_end.isoformat(),
         "--rebalance-stride",
         str(REBALANCE_STRIDE_DAYS),
         "--phase-offset",
@@ -96,16 +112,22 @@ def _phase_command(phase_offset: int, returns_parquet: Path, report_md: Path) ->
     ]
 
 
-def _run_one_phase(phase_offset: int) -> dict:
+def _run_one_phase(
+    phase_offset: int,
+    *,
+    artifact_root: Path,
+    is_start: date,
+    is_end: date,
+) -> dict:
     """Spawn experiment script subprocess for given phase. Capture stderr.
 
     Returns a dict with: phase_offset, returncode, stderr_tail, parsed metrics
     (sharpe_gross, sharpe_net, excess_gross_ann, excess_net_ann, alpha_t),
     and returns_parquet path.
     """
-    returns_parquet = ARTIFACT_ROOT / f"phase_{phase_offset}_returns.parquet"
-    report_md = ARTIFACT_ROOT / f"phase_{phase_offset}_report.md"
-    cmd = _phase_command(phase_offset, returns_parquet, report_md)
+    returns_parquet = artifact_root / f"phase_{phase_offset}_returns.parquet"
+    report_md = artifact_root / f"phase_{phase_offset}_report.md"
+    cmd = _phase_command(phase_offset, returns_parquet, report_md, is_start=is_start, is_end=is_end)
     logger.info("phase %d: launching subprocess", phase_offset)
     t0 = time.monotonic()
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -292,25 +314,69 @@ def _classify_verdict(gates: dict) -> tuple[str, str]:
     return "INCONCLUSIVE", "boundary case — see per-gate detail"
 
 
-def main() -> int:
+def _build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument(
+        "--is-start",
+        type=date.fromisoformat,
+        default=DEFAULT_IS_START,
+        help=f"Audit window start (YYYY-MM-DD). Default: {DEFAULT_IS_START.isoformat()}.",
+    )
+    ap.add_argument(
+        "--is-end",
+        type=date.fromisoformat,
+        default=DEFAULT_IS_END,
+        help=f"Audit window end (YYYY-MM-DD). Default: {DEFAULT_IS_END.isoformat()}.",
+    )
+    ap.add_argument(
+        "--artifact-root",
+        type=Path,
+        default=DEFAULT_ARTIFACT_ROOT,
+        help=(
+            "Directory for per-phase returns parquet + report md. "
+            f"Default: {DEFAULT_ARTIFACT_ROOT}."
+        ),
+    )
+    ap.add_argument(
+        "--out-suffix",
+        type=str,
+        default=None,
+        help=(
+            "Suffix for canonical JSON+MD output filenames "
+            "(insider_form4_opportunistic_<suffix>.{json,md}). "
+            "Default: phase_b_<today>."
+        ),
+    )
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    ARTIFACT_ROOT.mkdir(parents=True, exist_ok=True)
+    args.artifact_root.mkdir(parents=True, exist_ok=True)
 
     logger.info(
-        "Phase B audit | window=%s..%s | n_phases=%d | stride=%d | parallel",
-        IS_START,
-        IS_END,
+        "audit | window=%s..%s | n_phases=%d | stride=%d | parallel | artifact_root=%s",
+        args.is_start,
+        args.is_end,
         N_PHASES,
         REBALANCE_STRIDE_DAYS,
+        args.artifact_root,
     )
 
+    run_phase = partial(
+        _run_one_phase,
+        artifact_root=args.artifact_root,
+        is_start=args.is_start,
+        is_end=args.is_end,
+    )
     t_total = time.monotonic()
     phase_results: list[dict] = []
     with ThreadPoolExecutor(max_workers=N_PHASES) as pool:
-        futures = {pool.submit(_run_one_phase, p): p for p in range(N_PHASES)}
+        futures = {pool.submit(run_phase, p): p for p in range(N_PHASES)}
         for fut in as_completed(futures):
             res = fut.result()
             phase_results.append(res)
@@ -324,6 +390,8 @@ def main() -> int:
 
     phase_results.sort(key=lambda r: r["phase_offset"])
 
+    suffix = args.out_suffix or f"phase_b_{date.today()}"
+
     # Validate all phases produced parsed metrics
     failed = [r for r in phase_results if r["parsed"] is None]
     if failed:
@@ -331,14 +399,13 @@ def main() -> int:
         for r in failed:
             logger.error("phase %d stderr tail:\n%s", r["phase_offset"], r["stderr_tail"])
         # Still write what we have for postmortem
-        out_json = (
-            REPO / f"docs/research/insider_form4_opportunistic_phase_b_FAILED_{date.today()}.json"
-        )
+        out_json = REPO / f"docs/research/insider_form4_opportunistic_{suffix}_FAILED.json"
         out_json.write_text(
             json.dumps(
                 {
                     "experiment": "insider_form4_opportunistic_2026_05_05",
-                    "phase_b_status": "EXECUTION_FAIL",
+                    "audit_status": "EXECUTION_FAIL",
+                    "is_window": [args.is_start.isoformat(), args.is_end.isoformat()],
                     "failed_phases": [r["phase_offset"] for r in failed],
                     "phase_results": phase_results,
                 },
@@ -411,14 +478,15 @@ def main() -> int:
 
     verdict, reason = _classify_verdict(gates)
 
-    out_json = REPO / f"docs/research/insider_form4_opportunistic_phase_b_{date.today()}.json"
-    out_md = REPO / f"docs/research/insider_form4_opportunistic_phase_b_{date.today()}.md"
+    out_json = REPO / f"docs/research/insider_form4_opportunistic_{suffix}.json"
+    out_md = REPO / f"docs/research/insider_form4_opportunistic_{suffix}.md"
 
     payload = {
         "experiment": "insider_form4_opportunistic_2026_05_05",
-        "phase_b_status": "evaluated",
+        "audit_status": "evaluated",
+        "out_suffix": suffix,
         "executed_at": date.today().isoformat(),
-        "is_window": [IS_START.isoformat(), IS_END.isoformat()],
+        "is_window": [args.is_start.isoformat(), args.is_end.isoformat()],
         "universe_mode": "R2000",
         "n_phases": N_PHASES,
         "rebalance_stride_days": REBALANCE_STRIDE_DAYS,
@@ -430,7 +498,7 @@ def main() -> int:
         "bootstrap": bootstrap,
         "wall_total_seconds": round(time.monotonic() - t_total, 1),
         "wall_phases_max_seconds": max(r["wall_seconds"] for r in phase_results),
-        "preregistration_ledger_id": "insider_form4_opportunistic_2026_05_05",
+        "preregistration_ledger_id": "insider_form4_opportunistic_2026_05_08_v2",
         "preregistration_ledger_path": "docs/research/preregistration/ledger.json",
         "phase_a_canonical_json": "docs/research/insider_form4_opportunistic_phase_a_2026_05_08.json",
     }
@@ -446,8 +514,9 @@ def main() -> int:
 
 def _format_markdown_report(p: dict) -> str:
     g = p["gates"]
+    title_label = p.get("out_suffix", "audit")
     lines = [
-        "# insider_form4_opportunistic_2026_05_05 — Phase B verdict",
+        f"# insider_form4_opportunistic — {title_label} verdict",
         "",
         f"**Verdict:** `{p['verdict']}` — {p['verdict_reason']}",
         "",

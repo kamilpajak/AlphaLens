@@ -1,0 +1,116 @@
+{
+  "experiment": "insider_form4_opportunistic_2026_05_05",
+  "audit_status": "evaluated",
+  "out_suffix": "final_lock_2024_2026",
+  "executed_at": "2026-05-09",
+  "is_window": [
+    "2024-01-01",
+    "2026-03-31"
+  ],
+  "universe_mode": "R2000",
+  "n_phases": 5,
+  "rebalance_stride_days": 21,
+  "hac_maxlags": 126,
+  "verdict": "PASS_MARGINAL",
+  "verdict_reason": "\u03b1t=2.69 in [2.50, 3.1237); other gates pass",
+  "gates": {
+    "G1_pooled_alpha_t_mean": 2.692,
+    "G1_threshold": 3.1237,
+    "G1_passed": false,
+    "G2_per_phase_alpha_ts": [
+      2.92,
+      2.98,
+      2.39,
+      2.57,
+      2.6
+    ],
+    "G2_floor": 1.5,
+    "G2_every_phase_floor_passed": true,
+    "G3_excess_net_mean": 0.24359999999999998,
+    "G3_floor": 0.0,
+    "G3_excess_net_mean_passed": true,
+    "G4_dispersion_pp": 6.999999999999998,
+    "G4_threshold_pp": 70.0,
+    "G4_dispersion_passed": true,
+    "G5_bounds_alpha_t_lower": 1.3706634332623593,
+    "G5_bounds_alpha_t_upper": 5.1807224856018115,
+    "G5_bounds_alpha_t_lower_passed": true
+  },
+  "per_phase": [
+    {
+      "phase_offset": 0,
+      "sharpe_gross": 1.2,
+      "sharpe_net": 1.14,
+      "excess_gross_ann": 0.223,
+      "excess_net_ann": 0.209,
+      "alpha_t": 2.92,
+      "alpha_pct": 28.2,
+      "raw_line": "2026-05-09 13:16:56,491 INFO __main__: OOS 2024-2026 | cost=5bps | n=562 topN=200.0 turn=62.2% | Sh gross=1.20 net=1.14 | excess gross=22.3% net=20.9% | \u03b1 4F=28.2% t=2.92",
+      "wall_seconds": 12046.442451042123
+    },
+    {
+      "phase_offset": 1,
+      "sharpe_gross": 1.39,
+      "sharpe_net": 1.34,
+      "excess_gross_ann": 0.267,
+      "excess_net_ann": 0.252,
+      "alpha_t": 2.98,
+      "alpha_pct": 31.7,
+      "raw_line": "2026-05-09 13:16:20,381 INFO __main__: OOS 2024-2026 | cost=5bps | n=561 topN=200.0 turn=62.5% | Sh gross=1.39 net=1.34 | excess gross=26.7% net=25.2% | \u03b1 4F=31.7% t=2.98",
+      "wall_seconds": 12010.58519870881
+    },
+    {
+      "phase_offset": 2,
+      "sharpe_gross": 1.34,
+      "sharpe_net": 1.29,
+      "excess_gross_ann": 0.25,
+      "excess_net_ann": 0.23399999999999999,
+      "alpha_t": 2.39,
+      "alpha_pct": 29.3,
+      "raw_line": "2026-05-09 13:17:10,696 INFO __main__: OOS 2024-2026 | cost=5bps | n=560 topN=200.0 turn=63.8% | Sh gross=1.34 net=1.29 | excess gross=25.0% net=23.4% | \u03b1 4F=29.3% t=2.39",
+      "wall_seconds": 12060.431666959077
+    },
+    {
+      "phase_offset": 3,
+      "sharpe_gross": 1.43,
+      "sharpe_net": 1.38,
+      "excess_gross_ann": 0.294,
+      "excess_net_ann": 0.27899999999999997,
+      "alpha_t": 2.57,
+      "alpha_pct": 32.1,
+      "raw_line": "2026-05-09 13:17:37,715 INFO __main__: OOS 2024-2026 | cost=5bps | n=559 topN=200.0 turn=63.7% | Sh gross=1.43 net=1.38 | excess gross=29.4% net=27.9% | \u03b1 4F=32.1% t=2.57",
+      "wall_seconds": 12087.042589290999
+    },
+    {
+      "phase_offset": 4,
+      "sharpe_gross": 1.29,
+      "sharpe_net": 1.24,
+      "excess_gross_ann": 0.26,
+      "excess_net_ann": 0.244,
+      "alpha_t": 2.6,
+      "alpha_pct": 28.7,
+      "raw_line": "2026-05-09 13:17:28,906 INFO __main__: OOS 2024-2026 | cost=5bps | n=558 topN=200.0 turn=63.3% | Sh gross=1.29 net=1.24 | excess gross=26.0% net=24.4% | \u03b1 4F=28.7% t=2.60",
+      "wall_seconds": 12078.130795625038
+    }
+  ],
+  "bootstrap": {
+    "alpha_t_observed_mean": 2.6821196112237113,
+    "alpha_t_per_phase_observed": [
+      2.8825262287698123,
+      2.9600884756997683,
+      2.383539748285221,
+      2.5862369324348453,
+      2.5982066709289096
+    ],
+    "bounds_alpha_t_lower": 1.3706634332623593,
+    "bounds_alpha_t_upper": 5.1807224856018115,
+    "n_reps_used": 1000,
+    "block_size_trading_days": 126,
+    "bootstrap_resampling": "synchronous_across_phases"
+  },
+  "wall_total_seconds": 12098.7,
+  "wall_phases_max_seconds": 12087.042589290999,
+  "preregistration_ledger_id": "insider_form4_opportunistic_2026_05_08_v2",
+  "preregistration_ledger_path": "docs/research/preregistration/ledger.json",
+  "phase_a_canonical_json": "docs/research/insider_form4_opportunistic_phase_a_2026_05_08.json"
+}

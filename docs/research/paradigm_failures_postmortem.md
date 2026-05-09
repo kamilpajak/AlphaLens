@@ -1,8 +1,9 @@
-# Ten Paradigm Failures — AlphaLens Active Alpha Postmortem
+# Eleven Paradigm Failures — AlphaLens Active Alpha Postmortem (2026-04-18 → 2026-05-09)
 
 **Author:** Solo retail quant, Polish tax resident on XTB
-**Period covered:** 2026-04-18 → 2026-04-30 (13 days, 10 strategies across 3 architectural layers; original 5 + post-pivot continuation)
-**Status:** Project pivoted from "active alpha generation" to "research/learning infrastructure" 2026-04-25; Path B refined 2026-04-30 — **screener search stays open-ended under pre-registration discipline** (per `feedback_keep_searching_screeners.md`). Path B is "methodology bundle + Layer 1 watchdog stay live," NOT closure of the search.
+**Period covered:** 2026-04-18 → 2026-05-09 (22 days, 11 strategies + 2 INCONCLUSIVE retrospectives across 4 architectural layers; original 5 failures + post-pivot continuation through 2026-04-30 + further continuation 2026-05-04 → 2026-05-09)
+**Status:** Project remains positioned as research / learning infrastructure (pivoted 2026-04-25). Capital deployment OFF-TABLE per project policy. Path B refined 2026-04-30 — **screener search stays open-ended under pre-registration discipline** (per `feedback_keep_searching_screeners.md`). Path B is "methodology bundle + Layer 1 watchdog stay live," NOT closure of the search.
+**Note:** This document is a **failure ledger**. The pipeline did eventually admit one phase-robust positive (PASS_MARGINAL on Cohen-Malloy opportunistic Form-4, 2026-05-09) — that result has its own dedicated postmortem at [`insider_form4_opportunistic_phase_b_postmortem_2026_05_09.md`](insider_form4_opportunistic_phase_b_postmortem_2026_05_09.md) and is summarised briefly in the Continuation 2026-05-04 → 2026-05-09 section below.
 **Audience:** Future-self when re-evaluating active strategies; potentially other retail quants who stumble into similar territory
 
 ## Contents
@@ -416,3 +417,146 @@ Vol-targeting using realized-vol estimates from `returns[<t]` is structurally re
 This is well-known in vol-targeting critique literature for daily/weekly grain on individual securities. Moreira-Muir 2017's positive result was monthly aggregate-market with slow-vol-clustering autocorrelation — a structurally different regime. The result does not generalize to small-cap weekly factor portfolios.
 
 **Lesson:** future risk-overlay candidates should be tested against base strategies whose drawdowns lag vol shifts (predictable vol-cluster regimes), not strategies whose drawdowns and vol spikes are concurrent (event-driven small-cap regimes).
+
+## Continuation 2026-05-04 → 2026-05-09
+
+Post-Path-B-refinement search continued under the same pre-registration
+discipline. Six days, one further failure (Failure 11), two INCONCLUSIVE
+retrospectives (which validated the methodology bundle's strict gating
+without admitting a deployable signal), and finally one PASS_MARGINAL —
+the project's first phase-robust positive, summarised at the end with
+a pointer to its dedicated postmortem.
+
+### Failure 11 — distress_credit v1, 2026-05-04
+
+Distress-credit screener using KMV-style distance-to-default + companyfacts
+liabilities feature. Pre-registered as `distress_credit_v1_2026_05_04` (single-class).
+
+Phase A coverage gates (companyfacts liabilities completeness across SP1500
+PIT) auto-pivoted to the relaxed-coverage variant per pre-reg
+`auto_pivot_triggers`. The relaxed variant then reached the holdout 5-phase
+audit and FAIL'd the 4-gate matrix: holdout multi-phase mean αt below the
+escalated 3.50 threshold, with at least one phase αt < 0 contributing to
+the FAIL classification.
+
+**Layer attribution:** Layer 1 screener (distance-to-default + liabilities
+feature). Mechanism not validated on burnt SP1500 holdout. Class 1/1 closed.
+
+**Documented:** memory `project_distress_credit_v1_FAIL_2026_05_04.md`,
+design memo `docs/research/distress_credit_v1_design_2026_05_04.md`,
+verdict `docs/research/distress_credit/phase_a_verdict_2026_05_04.md`,
+ledger entry `distress_credit_v1_2026_05_04`.
+
+### INCONCLUSIVE — v9D retrospective pre-2018, 2026-05-05
+
+Retrospective replication of v9D options-implied-volatility scorer on
+2009-2017 (pre-2018 OOS, fresh data unseen by prior options screeners).
+Pooled αt = +2.45 across 3 sub-periods × 5 phases. Bonferroni n=27 naive
+threshold |t|≥2.86; result fell short. Bounds-Andrews-Manski |t|_lower
+= +2.15 (excludes 0).
+
+**Verdict: INCONCLUSIVE.** The options_implied class (v7 / v8 / v9 / v9D)
+triangulated to a ~+2.2-2.45 αt ceiling that fails to clear the strict
+Bonferroni bar but consistently excludes zero. Saved as a feedback signal
+on the upper bound of the class rather than a deployable strategy.
+
+**Documented:** memory `project_v9d_retrospective_pre_2018_INCONCLUSIVE_2026_05_05.md`,
+verdict JSON `docs/research/v9d_retrospective_pre_2018_verdict.json`,
+postmortem `docs/research/v9d_retrospective_pre_2018_postmortem_2026_05_05.md`.
+
+### INCONCLUSIVE — pc_abnormal_volume retrospective pre-2018, 2026-05-05
+
+Retrospective replication of put/call abnormal-volume scorer on the same
+2009-2017 fresh-data window. Pooled αt = +2.65 across 3 sub-periods × 5
+phases. Bounds-Andrews-Manski |t|_lower = +1.98.
+
+**Verdict: INCONCLUSIVE.** αt fell in the [1.0, 2.85) ambiguous zone
+with a positive bounds-lower CI. Project response: paper-trade
+activated for 12-month forward observation rather than capital deploy.
+Validated the methodology bundle's "INCONCLUSIVE → forward observation,
+not deploy" handling.
+
+**Documented:** memory `project_pc_abnormal_retrospective_INCONCLUSIVE_2026_05_05.md`,
+verdict JSON `docs/research/pc_abnormal_retrospective_pre_2018_verdict.json`.
+
+### PASS_MARGINAL — insider_form4_opportunistic v2, 2026-05-09
+
+Cohen-Malloy-Pomorski 2012 opportunistic-insider Form-4 net-buy magnitude
+on R2000 PIT 2018-2023. Pooled αt = +2.71 across 5 phase offsets.
+
+The v1 ledger entry (`insider_form4_opportunistic_2026_05_05`) aborted
+mid-flight 2026-05-08 — 38 minutes into a 5-phase parallel run a
+mid-flight zen+agent code review caught a units mismatch between the
+pre-reg `hac_maxlags=126` (intended for daily n~1500 obs per the
+rationale text) and the experiment script feeding rebalance-cadence
+(~72 obs) returns to `run_regression`. statsmodels HAC silently
+inflates t-stats ~3x when `maxlags > n_obs` because the Bartlett kernel
+weights `1 - j/(L+1)` stay near 1 for all valid lags `j < n`. v1 was
+closed `execution_aborted_units_mismatch`; v2 (`insider_form4_opportunistic_2026_05_08_v2`)
+re-spec'd with daily-cadence regression input + synchronous-across-phases
+block bootstrap.
+
+**Verdict: PASS_MARGINAL.** Pooled αt = +2.71 missed the Bonferroni n=28
+threshold |t|≥3.12 by ~0.4σ, but G2-G5 cleared with extraordinary margin
+(per-phase αt range 0.45, excess_net dispersion 1.3pp vs 70pp gate,
+block-bootstrap CI [+1.54, +4.20] strongly excludes zero). Capital
+deploy stays OFF-TABLE per pre-reg clause; Layer 4 overlay test
+eligibility unlocked.
+
+**Final lock 2024-2026 confirmation (also 2026-05-09):** the same scorer
+re-evaluated on a fresh independent OOS window (2024-01-01 → 2026-03-31,
+per zen-endorsed truncation from pre-reg literal 2026-04-30 due to PIT
+universe coverage) returned PASS_MARGINAL with pooled αt=+2.69 (nearly
+identical to OOS 2018-2023's +2.71) and STRONGER economic edge: excess_net
++24.4%/y and Sharpe net 1.14-1.38 per phase (vs Phase B's +17.7%/y and
+0.82-0.89). Both windows miss G1 strict Bonferroni by similar margin
+(~0.4σ); both clear G2-G5 with margin. Cohen-Malloy mechanism appears
+genuinely robust on R2000 PIT post-publication, with no decay observed
+on fresher data.
+
+**Documented in detail at the dedicated postmortem
+[`insider_form4_opportunistic_phase_b_postmortem_2026_05_09.md`](insider_form4_opportunistic_phase_b_postmortem_2026_05_09.md)
+(includes final lock 2024-2026 section).**
+Memory `project_insider_form4_opportunistic_locked_2026_05_05.md`.
+Methodology lessons saved as feedback memories
+`feedback_hac_maxlags_units_silent_inflation.md` +
+`feedback_synchronous_block_bootstrap_pooled_phases.md`.
+
+### Pattern 13: Strict gating + pre-registration function as designed — aggressively rejecting noise while permitting statistically distinct / orthogonal signals
+
+The 11 failures + 2 INCONCLUSIVES validate the pipeline's noise-rejection
+design. Bonferroni n=27→28 naive thresholds (|t|≥2.86→3.12), the every-
+phase αt floor (≥1.5), the excess_net dispersion gate (≤70pp), and the
+block-bootstrap CI gates were all enforced literally. None was waived
+to "let through" a marginal candidate. Failures 1-10 hit the
+Bonferroni bar, Failure 8 (regime-gate rescue) was falsified by
+coverage diagnostics before any backtest ran, Failure 11 (distress-
+credit) FAIL'd the multi-phase escalated threshold, and the two
+INCONCLUSIVE retrospectives correctly placed v9D + pc_abnormal in
+"forward-observation only" rather than "deploy."
+
+The first phase-robust positive (Cohen-Malloy opportunistic Form-4)
+passed 4 of 5 gates with extraordinary margin: per-phase αt range
+0.45 across 5 offsets, excess_net dispersion 1.3pp against a 70pp
+gate (54x undershoot), and a block-bootstrap CI [+1.54, +4.20] that
+firmly excludes zero. Only the strict Bonferroni G1 was missed by
+~0.4σ, classifying it as PASS_MARGINAL rather than full PASS. The
+pipeline didn't reward endurance — it admitted a signal whose
+orthogonality (informed-trader flow class) survives multi-phase
+scrutiny under the same gates that killed every prior candidate.
+
+The mechanism behind the positive matters as much as the result:
+informed-trader flow is on a different feature axis (insider
+transactions, EDGAR-detected) from the technical / regime / overlay
+classes that produced the 11 failures. The first positive showing up
+in this class is exactly the orthogonality-permits-signal claim that
+strict gating is supposed to be selective for.
+
+**Methodology lessons captured live, NOT post-hoc:** the v1 → v2
+re-spec on insider_form4_opportunistic was caught by mid-flight zen +
+agent code review. The HAC-units bug would have produced a falsely
+inflated αt that might have been classified PASS rather than
+PASS_MARGINAL — instead it was caught before any results landed in
+the canonical record. **Adversarial review pre-compute remains the
+load-bearing rule** for protecting headline numbers from silent
+statsmodels behavior.
