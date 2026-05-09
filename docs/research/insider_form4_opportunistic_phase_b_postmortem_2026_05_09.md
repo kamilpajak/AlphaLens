@@ -162,14 +162,118 @@ genuinely-novel positive result.
 
 ## Next steps
 
-1. ✅ Close v2 ledger entry with PASS_MARGINAL outcome (done in this session).
-2. ✅ Write this postmortem (done).
-3. Update memory file `project_insider_form4_opportunistic_locked_2026_05_05.md`
-   to reflect PASS_MARGINAL verdict.
-4. Optionally update CLAUDE.md to reference this as the first phase-robust
-   positive in the project status block.
+1. ✅ Close v2 ledger entry with PASS_MARGINAL outcome (done in PR #84).
+2. ✅ Write this postmortem (done in PR #84).
+3. ✅ Update memory file `project_insider_form4_opportunistic_locked_2026_05_05.md`
+   to reflect PASS_MARGINAL verdict (done in PR #84).
+4. ✅ Update CLAUDE.md to reference this as the first phase-robust
+   positive in the project status block (done in PR #84).
 5. Defer: Layer 4 overlay test design memo (next session, fresh head).
-6. Defer: 2024-2026 final lock (next session, fresh-head pre-reg discipline).
+6. ✅ 2024-2026 final lock — completed 2026-05-09 with PASS_MARGINAL
+   verdict; full result in `final_lock_result` sub-block of v2 ledger
+   `outcome` and in the dedicated section below.
+
+## Final lock 2024-2026 — completed 2026-05-09
+
+### Headline (R2000 PIT, OOS 2024-01-01 → 2026-03-31, 5 phases × ~562 daily obs)
+
+| Gate | Value | Threshold | Pass |
+|---|---:|---:|---|
+| G1 pooled mean αt (Carhart 4F, HAC=126) | **+2.692** | ≥ 3.1237 (Bonferroni n=28) | ❌ |
+| G2 every-phase αt floor | min=+2.39, max=+2.98 | every ≥ 1.5 | ✅ |
+| G3 excess_net mean | **+24.36%/y** | ≥ 0% | ✅ |
+| G4 dispersion (excess_net max-min) | **7.0pp** | ≤ 70pp | ✅ |
+| G5 block-bootstrap αt lower bound | **+1.371** | > 0 | ✅ |
+
+Per-phase observed αt: +2.92, +2.98, +2.39, +2.57, +2.60
+Per-phase Sharpe net: +1.14, +1.34, +1.29, +1.38, +1.24
+Per-phase excess_net: +20.9%, +25.2%, +23.4%, +27.9%, +24.4%
+
+Block-bootstrap (1000 reps × stationary block size 126 trading days,
+synchronous-across-phases): 2.5%/97.5% bounds on pooled mean αt =
+**[+1.37, +5.18]**.
+
+### Window truncation acknowledgement
+
+Pre-reg literal final_lock window was 2024-01-01 → 2026-04-30. The
+audit ran on 2024-01-01 → **2026-03-31** because PIT universe
+snapshots cover only through `~/.alphalens/pit_universe/2026-03.yaml`
+— no April 2026 snapshot exists yet. Truncating to March 2026 end
+preserves PIT integrity rather than forward-filling the stale March
+universe across April 2026 trading days. Decision endorsed by zen
+(gemini-3-pro) review 2026-05-09 morning before audit launch:
+> "PIT integrity is a harder constraint than adhering strictly to a
+> pre-registered calendar date when data is genuinely missing.
+> Forward-filling stale universe is universally indefensible."
+
+Truncation affects ~21 trading days = ~3.5% of the nominal sample.
+Documented in `outcome.final_lock_result.window_truncation_reason`
+in v2 ledger entry.
+
+### Combined narrative (OOS 2018-2023 + final_lock 2024-2026)
+
+Per zen review 2026-05-09 morning, **NO mechanical post-hoc combined-
+verdict rule**. Pre-reg `verdict_classification` was scoped to the
+single OOS 2018-2023 window; final_lock is an independent confirmation
+phase. Both report PASS_MARGINAL under the same gate matrix.
+
+| Metric | OOS 2018-2023 (Phase B) | Final lock 2024-2026 |
+|---|---:|---:|
+| Pooled αt | +2.71 | +2.69 |
+| Per-phase αt range | [2.48, 2.93] | [2.39, 2.98] |
+| Excess net mean | +17.7%/y | **+24.4%/y** |
+| Dispersion | 1.3pp | 7.0pp |
+| Sharpe net per phase | 0.82-0.89 | **1.14-1.38** |
+| Bootstrap CI (lower, upper) | (+1.54, +4.20) | (+1.37, +5.18) |
+| Daily obs per phase | ~1500 | ~562 |
+| Wall (5-phase parallel) | 5h45m | 3h21m |
+
+**Narrative read** (no mechanical override):
+
+- Both windows independently report the same verdict (PASS_MARGINAL)
+  under identical gate thresholds. αt agrees to within 0.02 across
+  windows (+2.71 vs +2.69) — one of the tightest replications observed
+  across the project's audit history.
+- The economic edge GREW on the more recent window: excess_net
+  +24.4%/y (vs +17.7%) and Sharpe 1.14-1.38 (vs 0.82-0.89). This is
+  the opposite of the "alpha decays after publication" pattern most
+  literature would predict for a 2012-published mechanism (Cohen-
+  Malloy-Pomorski, JFE p. 1786).
+- Block-bootstrap CI lower-bound is slightly tighter on final_lock
+  (+1.37 vs +1.54) — expected given the smaller daily sample (562 vs
+  1500). Both firmly exclude zero.
+- Phase stability holds in both windows: G2 floor (every phase αt ≥
+  1.5) is cleared with min phase αt ≥ 2.39 in both. G4 dispersion
+  cleared with margin (1.3pp / 7.0pp vs 70pp gate).
+- Both windows miss the strict Bonferroni n=28 G1 threshold by
+  similar amount (~0.4σ). The shortfall is not a window-specific
+  artifact — it appears to be the actual αt magnitude of this signal.
+
+### Implications
+
+**Capital deploy:** STILL OFF-TABLE per pre-reg `capital_deploy_clause`
++ project policy. PASS_MARGINAL across both windows is consistent
+evidence but not sufficient to override the policy gate that requires
+full PASS (G1 cleared at strict Bonferroni).
+
+**Layer 4 overlay test eligibility:** UNLOCKED on this base across
+BOTH windows. A future Layer 4 overlay test (vol-target, drawdown
+control) on Cohen-Malloy opportunistic Form-4 has empirically the
+strongest base in the project.
+
+**Forward paper-trade observation:** Recommended (analogous to v9D
+and pc_abnormal_volume paper-trade activations after their
+INCONCLUSIVE retrospectives). Forward observation on data accruing
+post-2026-03-31 would be the next confirmation phase — but is a NEW
+ledger entry, not part of this v2.
+
+### What changes in `paradigm_failures_postmortem.md`
+
+The "Continuation 2026-05-04 → 2026-05-09" section's
+`PASS_MARGINAL — insider_form4_opportunistic v2` subsection covers
+Phase B (2018-2023) only. A one-line note will be added there
+referencing this final-lock confirmation result; the full detail
+stays in this postmortem.
 
 ## References
 

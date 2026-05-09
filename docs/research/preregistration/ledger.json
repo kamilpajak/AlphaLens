@@ -3499,9 +3499,54 @@
         "canonical_json": "docs/research/insider_form4_opportunistic_phase_b_2026-05-09.json",
         "canonical_md": "docs/research/insider_form4_opportunistic_phase_b_2026-05-09.md",
         "first_phase_robust_positive_signal": true,
-        "note": "First positive phase-robust result in project history (after 11 paradigm failures + 2 INCONCLUSIVE retrospectives). G1 strict Bonferroni threshold missed by 0.4 sigma but G2-G5 all clear with extraordinary stability (per-phase \u03b1t range 2.48-2.93, excess_net dispersion 1.3pp). Block-bootstrap CI [+1.54, +4.20] strongly excludes zero. Per pre-reg verdict_classification meta-analytic combination with prior INCONCLUSIVEs (v9D, pc_abnormal) recommended in postmortem."
+        "note": "First positive phase-robust result in project history (after 11 paradigm failures + 2 INCONCLUSIVE retrospectives). G1 strict Bonferroni threshold missed by 0.4 sigma but G2-G5 all clear with extraordinary stability (per-phase \u03b1t range 2.48-2.93, excess_net dispersion 1.3pp). Block-bootstrap CI [+1.54, +4.20] strongly excludes zero. Per pre-reg verdict_classification meta-analytic combination with prior INCONCLUSIVEs (v9D, pc_abnormal) recommended in postmortem.",
+        "final_lock_result": {
+          "verdict": "PASS_MARGINAL",
+          "verdict_reason": "\u03b1t=2.69 in [2.50, 3.1237); other gates pass",
+          "evaluated_at": "2026-05-09",
+          "is_window_executed": [
+            "2024-01-01",
+            "2026-03-31"
+          ],
+          "is_window_pre_reg_literal": [
+            "2024-01-01",
+            "2026-04-30"
+          ],
+          "window_truncation_reason": "Upstream PIT universe unavailability \u2014 ~/.alphalens/pit_universe/ snapshots cover through 2026-03.yaml only. Truncating end to 2026-03-31 preserves PIT integrity rather than forward-filling stale March universe across April 2026 trading days. Decision endorsed by zen (gemini-3-pro) review 2026-05-09. Affects ~21 trading days = ~3.5% of nominal sample.",
+          "pooled_alpha_t_mean": 2.692,
+          "per_phase_alpha_ts": [
+            2.92,
+            2.98,
+            2.39,
+            2.57,
+            2.6
+          ],
+          "every_phase_floor_passed": true,
+          "excess_net_mean_ann": 0.24359999999999998,
+          "dispersion_pp": 6.999999999999998,
+          "bounds_alpha_t_lower": 1.3706634332623593,
+          "bounds_alpha_t_upper": 5.1807224856018115,
+          "bootstrap_n_reps": 1000,
+          "bootstrap_resampling": "synchronous_across_phases",
+          "gate_summary": {
+            "G1_pooled_alpha_t": {
+              "value": 2.692,
+              "threshold": 3.1237,
+              "passed": false
+            },
+            "G2_every_phase_floor": true,
+            "G3_excess_net_mean": true,
+            "G4_dispersion": true,
+            "G5_bounds_lower": true
+          },
+          "wall_total_seconds": 12098.7,
+          "wall_phase_max_seconds": 12087.042589290999,
+          "canonical_json": "docs/research/insider_form4_opportunistic_final_lock_2024_2026.json",
+          "canonical_md": "docs/research/insider_form4_opportunistic_final_lock_2024_2026.md",
+          "comparison_to_oos_2018_2023": "Pooled \u03b1t nearly identical (+2.69 vs +2.71). Both PASS_MARGINAL \u2014 both miss strict Bonferroni n=28 |t|\u22653.12 by ~0.4\u03c3 but clear G2-G5 with margin. Final lock ECONOMIC edge stronger: excess_net +24.4%/y (vs +17.7%) and Sharpe net 1.14-1.38 per phase (vs 0.82-0.89). Cohen-Malloy mechanism appears genuinely robust on R2000 PIT post-publication; no decay observed on fresher 2024-2026 OOS. Per zen review 2026-05-09: combined verdict narrative only (no post-hoc mechanical rule); both windows independently classified PASS_MARGINAL under same pre-reg gates."
+        }
       },
-      "notes": "PASS_MARGINAL 2026-05-09. First phase-robust positive signal in project. Capital deploy still OFF-TABLE per project policy + pre-reg clause. Layer 4 overlay tests now eligible on this base. See outcome block + canonical_json + canonical_md."
+      "notes": "PASS_MARGINAL on both OOS 2018-2023 (Phase B 2026-05-09 morning) AND final lock 2024-2026 (this session). \u03b1t nearly identical (+2.71 / +2.69), final lock has stronger economic edge (excess_net +24.4%/y vs +17.7%). Capital deploy still OFF-TABLE per project policy. Layer 4 overlay tests now eligible on this base across both windows."
     }
   ]
 }
