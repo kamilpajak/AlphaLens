@@ -35,6 +35,9 @@ load_dotenv(REPO_ROOT / ".env")
 
 from alphalens.attribution.cost_model import RealisticCostModel  # noqa: E402
 from alphalens.attribution.factor_analysis import run_regression  # noqa: E402
+from alphalens.backtest.daily_continuous_returns import (  # noqa: E402
+    daily_continuous_returns,
+)
 from alphalens.backtest.engine import BacktestEngine  # noqa: E402
 from alphalens.backtest.metrics import sharpe, turnover_pct  # noqa: E402
 from alphalens.data.alt_data.pit_universe_loader import (  # noqa: E402
@@ -209,44 +212,65 @@ class _OpportunisticForm4Scorer:
         return features[["ticker", "score"]].dropna(subset=["score"])
 
 
-def assess(report, factors, rebalance_stride, cost_bps, bench_rets) -> dict:
-    rets = report.portfolio_returns
-    if rets.empty:
-        return {"n": 0}
-    rebalances_per_year = 252 / max(1, rebalance_stride)
-    sharpe_gross = sharpe(rets.tolist(), periods_per_year=int(rebalances_per_year))
-    avg_turnover = turnover_pct(r.top_n_tickers for r in report.rebalance_results)
+def assess(
+    report,
+    factors,
+    rebalance_stride,
+    cost_bps,
+    bench_rets_daily,
+    *,
+    history_store,
+    benchmark,
+    end_date,
+) -> dict:
+    """Daily-cadence Carhart attribution per pre-reg lock v2 (2026-05-08).
 
+    Pre-reg ledger ``insider_form4_opportunistic_2026_05_08_v2`` mandates
+    a daily continuous-holding return series (~1500 obs over 6yr OOS) so
+    that ``hac_maxlags=126`` (trading days) sits in the correct sample
+    unit for the Newey-West kernel. v1 fed rebalance-cadence (~72 obs)
+    here, which silently inflated t-stats ~3x — see v1 ledger ``outcome``.
+    """
+    rets_daily = daily_continuous_returns(
+        report.rebalance_results,
+        history_store,
+        calendar_ticker=benchmark,
+        end_date=end_date,
+    )
+    if rets_daily.empty:
+        return {"n": 0}
+
+    avg_turnover = turnover_pct(r.top_n_tickers for r in report.rebalance_results)
+    rebalances_per_year = 252 / max(1, rebalance_stride)
     cost_model = RealisticCostModel(adverse_selection_bps=5.0)
     drag_per_rebal_bps = cost_model.primary_period_drag_bps(cost_bps, avg_turnover)
     drag_ann = drag_per_rebal_bps * rebalances_per_year / 10_000.0
-    drag_per_rebal = drag_per_rebal_bps / 10_000.0
-    rets_net = rets - drag_per_rebal
-    sharpe_net = sharpe(rets_net.tolist(), periods_per_year=int(rebalances_per_year))
+    drag_per_day = drag_ann / 252.0
+    rets_net_daily = rets_daily - drag_per_day
+
+    sharpe_gross = sharpe(rets_daily.tolist(), periods_per_year=252)
+    sharpe_net = sharpe(rets_net_daily.tolist(), periods_per_year=252)
 
     # HAC override per pre-reg lock — 6m signal window dictates 126-day max lag
+    # at DAILY cadence (~1500 obs).
     res4 = run_regression(
-        rets,
+        rets_daily,
         factors[[*_CARHART_FACTORS, "RF"]],
         _CARHART_FACTORS,
         hac_maxlags=_HAC_MAXLAGS_LOCK,
-        periods_per_year=int(rebalances_per_year),
+        periods_per_year=252,
     )
 
-    bench_aligned = bench_rets.reindex(rets.index).dropna()
-    excess_per_rebal = (rets.reindex(bench_aligned.index) - bench_aligned).mean()
-    excess_ann = (
-        float(excess_per_rebal * rebalances_per_year)
-        if not np.isnan(excess_per_rebal)
-        else float("nan")
-    )
+    bench_aligned = bench_rets_daily.reindex(rets_daily.index).dropna()
+    excess_per_day = (rets_daily.reindex(bench_aligned.index) - bench_aligned).mean()
+    excess_ann = float(excess_per_day * 252) if not np.isnan(excess_per_day) else float("nan")
 
     mean_top_n = float(
         sum(len(r.top_n_tickers) for r in report.rebalance_results)
         / max(1, len(report.rebalance_results))
     )
     return {
-        "n": len(rets),
+        "n": len(rets_daily),
         "mean_top_n": mean_top_n,
         "turnover_per_rebal": avg_turnover,
         "sharpe_gross": sharpe_gross,
@@ -260,6 +284,7 @@ def assess(report, factors, rebalance_stride, cost_bps, bench_rets) -> dict:
         "alpha_net_4f": float(res4.alpha_annualized) - drag_ann,
         "excess_vs_bench_ann": excess_ann,
         "excess_vs_bench_net": excess_ann - drag_ann,
+        "rets_daily": rets_daily,
     }
 
 
@@ -288,6 +313,13 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["R2000", "R3000"],
         default="R2000",
         help="R2000 PIT primary (per pre-reg) or R3000 diagnostic.",
+    )
+    ap.add_argument(
+        "--dump-returns",
+        type=Path,
+        default=None,
+        help="Optional parquet path; when set, writes report.portfolio_returns "
+        "for downstream block-bootstrap (Phase B G5 Romano-Wolf). No-op if unset.",
     )
     return ap
 
@@ -400,7 +432,16 @@ def main() -> int:
 
     all_rows: list[dict] = []
     for cost_bps in args.cost_half_spreads:
-        stats = assess(report, carhart, args.rebalance_stride, cost_bps, bench_rets)
+        stats = assess(
+            report,
+            carhart,
+            args.rebalance_stride,
+            cost_bps,
+            bench_rets,
+            history_store=history_store,
+            benchmark=args.benchmark,
+            end_date=args.is_end,
+        )
         stats["period"] = period_label
         stats["cost_bps"] = cost_bps
         all_rows.append(stats)
@@ -457,6 +498,25 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text("\n".join(sections) + "\n", encoding="utf-8")
     logger.info("Wrote %s", args.out)
+
+    if args.dump_returns is not None:
+        # v2 ledger lock: dump DAILY continuous-holding returns (not the
+        # rebalance-cadence series) so the orchestrator's block-bootstrap
+        # operates in the correct unit (block_size=126 trading days).
+        rets_daily = next(
+            (r["rets_daily"] for r in all_rows if "rets_daily" in r),
+            None,
+        )
+        if rets_daily is None or rets_daily.empty:
+            logger.warning("No daily returns to dump (assess returned n=0)")
+        else:
+            args.dump_returns.parent.mkdir(parents=True, exist_ok=True)
+            rets_daily.rename("portfolio_daily").to_frame().to_parquet(args.dump_returns)
+            logger.info(
+                "Dumped %d daily portfolio return obs to %s",
+                len(rets_daily),
+                args.dump_returns,
+            )
     return 0
 
 

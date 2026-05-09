@@ -2,14 +2,14 @@
 
 Guidance for Claude Code (claude.ai/code) when working in this repo.
 
-## Project status (2026-04-25 →)
+## Project status (2026-04-25 → 2026-05-09)
 
-**AlphaLens** = research/learning infrastructure dla retail quant active alpha experimentation. Po **10/10 paradigm failures phase-robust** (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum + vol-target overlay) projekt repositioned: methodology bundle (pre-reg + multi-phase + Bonferroni) jest durable artifact, Layer 1 watchdog + literature review zostają live. **Search dla coraz lepszych screenerów pozostaje open-ended** — każdy nowy test podnosi Bonferroni bar dla następnego (ledger discipline), ale "no further prospecting" NIE jest pozycją projektu. Layer architecture w ADR 0007 (5 warstw: screener → selection-gate → engine → risk-overlay → attribution) — kolejne hipotezy mogą operować na nowej warstwie. Capital deployment based na current strategies jest off-table dopóki phase-robust PASS się nie pojawi.
+**AlphaLens** = research/learning infrastructure dla retail quant active alpha experimentation. Po **11 paradigm failures phase-robust** (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum + vol-target overlay), **2 INCONCLUSIVE retrospectives** (v9D, pc_abnormal_volume), oraz **1 PASS_MARGINAL 2026-05-09** (`insider_form4_opportunistic_2026_05_08_v2`, αt=+2.71 z extraordinary phase-stability — patrz `docs/research/insider_form4_opportunistic_phase_b_postmortem_2026_05_09.md`). Methodology bundle (pre-reg + multi-phase + Bonferroni) jest durable artifact, Layer 1 watchdog + literature review zostają live. **Search dla coraz lepszych screenerów pozostaje open-ended** — każdy nowy test podnosi Bonferroni bar dla następnego (ledger discipline), ale "no further prospecting" NIE jest pozycją projektu. Layer architecture w ADR 0007 (5 warstw: screener → selection-gate → engine → risk-overlay → attribution) — kolejne hipotezy mogą operować na nowej warstwie. **Capital deployment off-table:** PASS_MARGINAL nie unlockuje deployment per pre-reg `capital_deploy_clause`; tylko full PASS by to zrobił. PASS_MARGINAL unlockuje Layer 4 overlay test eligibility na tym base + paper-trade observation.
 
 **Live production:** Layer 1 SEC EDGAR watchdog (launchd `detect` only — `worker` archived per ADR 0008) + literature_review weekly+monthly Perplexity scan.
 **Wszystko inne:** CLOSED, ARCHIVED lub RESEARCH_ONLY — kod zostaje jako reusable framework + anti-pattern catalog. Methodology bundle (preregistration ledger + multi_phase + audit driver) extracted do `kamilpajak/phase-robust-backtesting` (MIT). TradingAgents subtree usunięty 2026-04-30 (ADR 0008).
 
-Pełny rozliczenie: `docs/research/paradigm_failures_postmortem.md` (10 paradigm failures across 3 architectural layers). Decyzje architektoniczne: `docs/adr/` (8 ADRs).
+Pełny rozliczenie: `docs/research/paradigm_failures_postmortem.md` (paradigm failures across 3 architectural layers) + `docs/research/insider_form4_opportunistic_phase_b_postmortem_2026_05_09.md` (PASS_MARGINAL). Decyzje architektoniczne: `docs/adr/` (8 ADRs).
 
 ## Layer status
 
