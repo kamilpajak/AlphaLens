@@ -3547,6 +3547,69 @@
         }
       },
       "notes": "PASS_MARGINAL on both OOS 2018-2023 (Phase B 2026-05-09 morning) AND final lock 2024-2026 (this session). \u03b1t nearly identical (+2.71 / +2.69), final lock has stronger economic edge (excess_net +24.4%/y vs +17.7%). Capital deploy still OFF-TABLE per project policy. Layer 4 overlay tests now eligible on this base across both windows."
+    },
+    {
+      "id": "insider_form4_opportunistic_paper_trade_2026_05_09",
+      "signal_class": "insider_form4_opportunistic_2026_05_05",
+      "hypothesis": "v2 Cohen-Malloy opportunistic Form-4 scorer (FROZEN), long-only top decile (top_n=200) on R2000 PIT, monthly rebalance (stride=21d), IWM benchmark, prospective on data accruing post-2026-05-09, will exhibit Carhart-4F alpha-t >= 1.96 unadjusted single-test at both 26-week and 52-week checkpoints (cumulative from prospective_start). Single-test threshold (NOT Bonferroni-adjusted) per pre-reg discipline that paper-trade is a FORWARD CONFIRMATION test, not a new hypothesis class.",
+      "scorer_path": "scripts/experiment_insider_form4_opportunistic.py",
+      "registered_at": "2026-05-09",
+      "status": "registered",
+      "params_frozen": {
+        "class": "prospective_replication_2026_05_09",
+        "version": "insider_form4_opportunistic_paper_trade_v2",
+        "design_provenance": "Direct response to PASS_MARGINAL on both OOS 2018-2023 (Phase B 2026-05-09 morning) AND final lock 2024-2026 (Phase B afternoon). Both windows independently classified PASS_MARGINAL under same pre-reg gates (insider_form4_opportunistic_2026_05_08_v2): pooled \u03b1t +2.71 / +2.69 (matched to 0.02), G2-G5 stability gates clear with margin, strict Bonferroni n=28 G1 missed by ~0.4\u03c3. Capital deploy stays OFF-TABLE per project policy (PASS_MARGINAL != full PASS). The natural next-step under project precedent (v9D + pc_abnormal both got paper-trade after INCONCLUSIVE) is forward observation: lock the v2 scorer AS-IS and track real-time predictability on data accruing post-final-lock-end.",
+        "design_memo_pointer": "docs/research/insider_form4_opportunistic_phase_b_postmortem_2026_05_09.md (Final lock 2024-2026 section + Implications subsection)",
+        "adversarial_review_summary": "No new adversarial review for the paper-trade decision itself \u2014 paper-trade is the SAME scorer + classifier already validated by zen + perplexity in v2 pre-reg (insider_form4_opportunistic_2026_05_08_v2). Forward observation introduces no new design degrees of freedom; no new pre-reg risks to litigate. Decision to activate paper-trade rather than deploy capital endorsed by zen review 2026-05-09 (continuation_id 16d74137 \u2014 combined verdict prose-only, NO mechanical override of the off-table policy).",
+        "base_scorer": {
+          "module": "alphalens.screeners.insider_activity.opportunistic_form4.score_opportunistic_form4",
+          "classifier_module": "alphalens.screeners.insider_activity.cohen_malloy_classifier.classify_from_transaction_dates",
+          "specification": "Per-asof OLS residual of (net_oppor_usd_t / equity_mcap_t) against (reversal_1m, momentum_6m, rv_30d) cross-sectionally. net_oppor_usd_t = sum over opportunistic insiders (per Cohen-Malloy 2012 routine vs opportunistic classifier with 3y rolling window) of (buy_usd - sell_usd) on (P, S) coded transactions by officers/directors over rolling 6m window [t-6m, t]. Score = +residual; long top-decile equal-weighted.",
+          "frozen_locked_at_design_time": true,
+          "modification_during_paper_trade": "PROHIBITED \u2014 any drift in scorer or classifier spec invalidates the prospective test."
+        },
+        "data_provider": "SEC EDGAR Form-4 XML via the existing daily watchdog detect job + cross-shard merge protocol (PR #80 baseline; rolled forward by Layer 1 watchdog already live in launchd). Form-4 partitions at ~/.alphalens/form4_parquet/ updated incrementally.",
+        "data_endpoint_primary": "alphalens/data/store/form4_pit.py:Form4PITStore.records_as_of",
+        "rebalance_stride_days": 21,
+        "holding_period_days_target": 21,
+        "weighting": "equal",
+        "decile_pct": 0.1,
+        "top_n": 200,
+        "cost_profile": "long_only_30bps",
+        "cost_profile_rt_bps": 30,
+        "benchmark": "IWM",
+        "universe": {
+          "name": "R2000_PIT",
+          "loader_module": "alphalens.data.alt_data.pit_universe_loader.load_universe_union",
+          "rationale": "Same R2000 PIT universe as v2 audit (mcap band $300M-$3B per Cohen-Malloy size-quintile localization). Universe rolls forward as new monthly snapshots are added under ~/.alphalens/pit_universe/."
+        },
+        "operational": {
+          "deployment_status": "DEFERRED \u2014 pre-reg locks the protocol; cron infrastructure not yet built.",
+          "next_session_todo": "Build launchd cron analogous to v9d_paper_trade: monthly score job (1st trading day of month, ~06:00 local) computes scorer + picks top-decile + appends ledger entry + updates state yaml. Form-4 partitions are already refreshed by existing watchdog detect job (no new refresh job needed). Until cron is built, monthly scoring is manual via `.venv/bin/python scripts/experiment_insider_form4_opportunistic.py --is-start <prev-rebal> --is-end <today> --rebalance-stride 21 --phase-offset 0 --dump-returns ~/.alphalens/paper_trade/insider_form4_<YYYY-MM>.parquet`.",
+          "ledger_path_target": "~/.alphalens/paper_trade/insider_form4_ledger.parquet",
+          "state_path_target": "~/.alphalens/paper_trade/insider_form4_state.yaml"
+        }
+      },
+      "periods": {
+        "prospective_start": "2026-05-09",
+        "first_decision_checkpoint_26w": "~2026-11-07",
+        "second_decision_checkpoint_52w": "~2027-05-08",
+        "rationale": "First trading day after final lock data window end (2026-03-31) plus 5 weeks settling \u2014 earliest practical start. Monthly stride means 26 weeks \u2248 6 monthly rebalance dates, 52 weeks \u2248 12 monthly rebalance dates."
+      },
+      "success_criteria": {
+        "mode": "single_test_no_bonferroni",
+        "primary_metric": "Carhart-4F alpha t-stat (HAC=126 trading days, daily continuous-holding portfolio returns) on long-only top decile R2000 vs IWM benchmark, computed cumulatively from 2026-05-09 onwards. Same regression spec as v2 audit.",
+        "primary_pass_threshold_alpha_t_26w": 1.96,
+        "primary_pass_threshold_alpha_t_52w": 1.96,
+        "rationale": "Single-test threshold (NOT Bonferroni-adjusted) per pre-reg discipline that paper-trade is a FORWARD CONFIRMATION of the locked v2 hypothesis, not a new test family. Bonferroni-adjusted threshold (|t|>=3.12 for n=28) is RETROSPECTIVE multiplicity protection against the search; prospective confirmation tests use single-test threshold per Romano-Wolf / Holm convention. Note that PASS at 1.96 here is necessary but NOT sufficient for capital deploy \u2014 project policy requires FULL PASS on retrospective audit (G1 cleared at strict Bonferroni) which neither OOS 2018-2023 nor final lock 2024-2026 achieved (~0.4\u03c3 short on both).",
+        "secondary_metric": "Sharpe net per phase (reasonably-aligned with v2 retrospective range [0.82, 1.38] across both OOS windows). Reported descriptively, NOT a gate.",
+        "kill_pre_full_run": [
+          "Deep loss event (cumulative \u03b1t < -2.0 at any monthly checkpoint) -> halt paper-trade with FAIL classification (paradigm replication failure)."
+        ],
+        "capital_deploy_clause": "Capital deploy STAYS OFF-TABLE per project policy regardless of paper-trade verdict. Project policy requires FULL PASS on retrospective audit before any capital deploy; v2 returned PASS_MARGINAL on both windows. Paper-trade PASS would strengthen the case for a future re-audit on a wider data window with a higher Bonferroni threshold cleared, but the policy gate is unchanged."
+      },
+      "outcome": null,
+      "notes": "Forward observation period activated 2026-05-09 in same session that completed Phase B + final lock for v2 (insider_form4_opportunistic_2026_05_08_v2). Operational cron deferred \u2014 locked the protocol but not yet deployed. See params_frozen.operational.next_session_todo for build instructions."
     }
   ]
 }
