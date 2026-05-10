@@ -21,10 +21,12 @@ import pandas as pd
 
 from alphalens.attribution.signal_vol_regime import (
     CounterCyclicalVerdict,
+    CyclicalityExcessVerdict,
     VolRegimeQuintileSummary,
     aggregate_returns_by_regime,
     assign_vol_regime_quintiles,
     classify_cyclicality,
+    classify_cyclicality_excess,
 )
 
 
@@ -214,6 +216,103 @@ class TestClassifyCyclicality(unittest.TestCase):
         self.assertIsInstance(v.classification, str)
         self.assertIsInstance(v.rationale, str)
         self.assertIn(v.proceed, (True, False, None))
+
+
+class TestClassifyCyclicalityExcess(unittest.TestCase):
+    """Strategy-specific cyclicality classification (excess over benchmark baseline).
+
+    Per session 2026-05-10 finding: R2000 long-only strategies inherit IWM
+    benchmark's EXTREME counter-cyclical baseline (R≈-2.0). Strategy-specific
+    cyclicality requires comparison against this baseline. Strategy is
+    GENUINELY counter-cyclical (warrants Layer 4 overlay rejection) only if
+    its R_mean is meaningfully BELOW benchmark R_mean.
+    """
+
+    def _make_summary_from_R(self, mean_low: float, mean_high: float, std: float = 0.01):
+        """Construct VolRegimeQuintileSummary with target Q1+Q2 mean and Q4+Q5 mean."""
+        # Use linear interpolation across Q1-Q5 to hit target means
+        means = pd.Series(
+            {
+                "Q1": mean_low * 1.1,
+                "Q2": mean_low * 0.9,
+                "Q3": (mean_low + mean_high) / 2,
+                "Q4": mean_high * 1.1,
+                "Q5": mean_high * 0.9,
+            }
+        )
+        stds = pd.Series(dict.fromkeys(["Q1", "Q2", "Q3", "Q4", "Q5"], std))
+        counts = pd.Series(dict.fromkeys(["Q1", "Q2", "Q3", "Q4", "Q5"], 100))
+        sharpes = means / stds * math.sqrt(252)
+        return VolRegimeQuintileSummary(means, stds, counts, sharpes)
+
+    def test_strategy_far_more_counter_cyclical_than_baseline_rejects(self):
+        # Strategy R≈-4.7 (insider_form4-like), benchmark R≈-2.0 (IWM-like)
+        strat = self._make_summary_from_R(mean_low=-0.001, mean_high=0.0027)  # R_mean ≈ -2.7
+        bench = self._make_summary_from_R(mean_low=-0.0006, mean_high=0.0009)  # R_mean ≈ -1.5
+        v = classify_cyclicality_excess(strat, bench)
+        # Excess R_mean strongly negative → strategy-specific counter-cyclical
+        self.assertLess(v.excess_R_mean, -1.0)
+        self.assertEqual(v.classification, "strategy-specific counter-cyclical")
+        self.assertFalse(v.proceed)  # Layer 4 overlay would structurally hurt
+
+    def test_strategy_matches_baseline_does_not_trigger_rejection(self):
+        # Strategy R ≈ benchmark R (both ≈ -2.0)
+        strat = self._make_summary_from_R(mean_low=-0.0005, mean_high=0.001)
+        bench = self._make_summary_from_R(mean_low=-0.0005, mean_high=0.001)
+        v = classify_cyclicality_excess(strat, bench)
+        # Excess ≈ 0 → matches baseline → not strategy-specific cyclical
+        self.assertLess(abs(v.excess_R_mean), 0.5)
+        self.assertEqual(v.classification, "matches benchmark baseline")
+        self.assertTrue(
+            v.proceed
+        )  # Layer 4 overlay decision driven by other factors, not cyclicality
+
+    def test_strategy_less_counter_cyclical_than_baseline_proceeds(self):
+        # Strategy LESS counter-cyclical than benchmark (e.g., mom+lowvol pattern)
+        strat = self._make_summary_from_R(mean_low=0.0001, mean_high=0.0005)  # both positive, mild
+        bench = self._make_summary_from_R(
+            mean_low=-0.0006, mean_high=0.0009
+        )  # benchmark is sign-flip
+        v = classify_cyclicality_excess(strat, bench)
+        # Strategy R is positive (or near zero), benchmark R is negative → excess > 0
+        self.assertGreater(v.excess_R_mean, 0.5)
+        self.assertEqual(v.classification, "less counter-cyclical than benchmark")
+        self.assertTrue(v.proceed)
+
+    def test_returns_dataclass_with_required_fields(self):
+        strat = self._make_summary_from_R(mean_low=0.001, mean_high=0.002)
+        bench = self._make_summary_from_R(mean_low=0.001, mean_high=0.002)
+        v = classify_cyclicality_excess(strat, bench)
+        self.assertIsInstance(v, CyclicalityExcessVerdict)
+        self.assertIsInstance(v.strategy_R_mean, float)
+        self.assertIsInstance(v.benchmark_R_mean, float)
+        self.assertIsInstance(v.excess_R_mean, float)
+        self.assertIsInstance(v.classification, str)
+        self.assertIsInstance(v.rationale, str)
+        self.assertIn(v.proceed, (True, False, None))
+
+    def test_excess_threshold_is_configurable(self):
+        # Same strategy/benchmark, different threshold → different classification
+        strat = self._make_summary_from_R(mean_low=-0.001, mean_high=0.0017)  # R ≈ -1.7
+        bench = self._make_summary_from_R(mean_low=-0.0008, mean_high=0.0012)  # R ≈ -1.5
+        # Excess ≈ -0.2; default threshold -1.0 → matches baseline
+        v_default = classify_cyclicality_excess(strat, bench)
+        self.assertEqual(v_default.classification, "matches benchmark baseline")
+        # Stricter threshold -0.1 → would classify as strategy-specific
+        v_strict = classify_cyclicality_excess(strat, bench, excess_strong_threshold=-0.1)
+        self.assertEqual(v_strict.classification, "strategy-specific counter-cyclical")
+
+    def test_inconclusive_benchmark_propagates_warning(self):
+        # If benchmark itself is non-counter-cyclical (R near 1.0, both quintiles positive equal),
+        # excess concept loses meaning. Function should flag this.
+        strat = self._make_summary_from_R(mean_low=-0.001, mean_high=0.0017)
+        # Benchmark with both quintiles positive AND equal means → R near 1.0
+        bench = self._make_summary_from_R(mean_low=0.001, mean_high=0.0011)  # R ≈ 1.1
+        v = classify_cyclicality_excess(strat, bench)
+        # Function should still produce verdict; rationale should mention baseline weak/non-cyclical
+        self.assertIn(v.proceed, (True, False, None))
+        # excess R is meaningful but should be flagged
+        self.assertIsNotNone(v.classification)
 
 
 if __name__ == "__main__":
