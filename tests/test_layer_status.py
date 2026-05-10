@@ -47,6 +47,7 @@ LAYERS_WITH_STATUS = (
     "alphalens.archive.screeners.insider",
     "alphalens.archive.screeners.lean",
     "alphalens.screeners.alt_data",
+    "alphalens.screeners.compound_insider_pc",
     "alphalens.screeners.distress_credit",
     "alphalens.screeners.event_drift",
     "alphalens.screeners.insider_activity",

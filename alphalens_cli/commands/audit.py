@@ -59,6 +59,7 @@ _SCRIPTS: dict[str, Path] = {
     "v9_sign_constrained": REPO / "scripts" / "experiment_v9_sign_constrained.py",
     "v9_cross_sectional_residual": REPO / "scripts" / "experiment_v9_cross_sectional_residual.py",
     "insider_form4_opportunistic": REPO / "scripts" / "experiment_insider_form4_opportunistic.py",
+    "insider_pc_compound": REPO / "scripts" / "experiment_insider_pc_compound.py",
 }
 
 
