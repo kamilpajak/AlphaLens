@@ -67,6 +67,25 @@ class CounterCyclicalVerdict:
     rationale: str  # why this verdict
 
 
+@dataclass(frozen=True)
+class CyclicalityExcessVerdict:
+    """Strategy-specific cyclicality classification (excess over benchmark baseline).
+
+    Per session 2026-05-10 finding: R2000 long-only strategies inherit IWM
+    benchmark's EXTREME counter-cyclical baseline (R≈-2.0 measured 2018-2023
+    using IWM 60d realized vol as exogenous regime variable). Strategy is
+    GENUINELY counter-cyclical (warrants Layer 4 overlay rejection) only
+    when its R_mean is meaningfully BELOW benchmark baseline.
+    """
+
+    strategy_R_mean: float
+    benchmark_R_mean: float
+    excess_R_mean: float  # strategy - benchmark (negative = MORE counter-cyclical than benchmark)
+    classification: str
+    proceed: bool | None  # False = Layer 4 overlay would structurally hurt
+    rationale: str
+
+
 # ---------------------------------------------------------------------------
 # Quintile assignment
 # ---------------------------------------------------------------------------
@@ -293,3 +312,154 @@ def classify_cyclicality(
         f"first-order signal alignment. Register vanilla M-M overlay test to confirm."
     )
     return CounterCyclicalVerdict(R_mean, R_sharpe, sign, classification, proceed, rationale)
+
+
+# ---------------------------------------------------------------------------
+# Strategy-specific cyclicality (excess over benchmark baseline)
+# ---------------------------------------------------------------------------
+
+
+# Default: strategy R must be ≤ 1.0 below benchmark R to count as strategy-specific
+_DEFAULT_EXCESS_STRONG_THRESHOLD = -1.0
+# Default: |excess| < 0.5 counts as "matches benchmark baseline"
+_DEFAULT_EXCESS_MATCH_TOLERANCE = 0.5
+
+
+def _compute_R_mean(summary: VolRegimeQuintileSummary) -> float:
+    means = summary.quintile_means
+    low = float((means["Q1"] + means["Q2"]) / 2.0)
+    high = float((means["Q4"] + means["Q5"]) / 2.0)
+    return _safe_ratio(high, low)
+
+
+def classify_cyclicality_excess(
+    strategy_summary: VolRegimeQuintileSummary,
+    benchmark_summary: VolRegimeQuintileSummary,
+    *,
+    excess_strong_threshold: float = _DEFAULT_EXCESS_STRONG_THRESHOLD,
+    excess_match_tolerance: float = _DEFAULT_EXCESS_MATCH_TOLERANCE,
+) -> CyclicalityExcessVerdict:
+    """Classify strategy cyclicality EXCESS over benchmark baseline.
+
+    Both summaries must be computed on the SAME vol regime quintiles
+    (typically derived from the benchmark's own vol series, e.g. IWM 60d
+    realized vol).
+
+    Decision tree:
+    - excess_R_mean ≤ excess_strong_threshold (default -1.0):
+      strategy R is meaningfully below benchmark R → strategy-specific
+      counter-cyclical → Layer 4 pro-cyclical overlay would structurally
+      hurt → proceed=False
+    - |excess_R_mean| < excess_match_tolerance (default 0.5):
+      matches benchmark baseline → universe-mechanical cyclicality, NOT
+      strategy-specific → proceed=True (overlay decision driven by other
+      factors)
+    - excess_R_mean ≥ excess_match_tolerance: strategy is LESS counter-
+      cyclical than benchmark (or even calm-period concentrated relative
+      to baseline) → proceed=True
+    - In-between: weakly strategy-specific → proceed=True with caveat
+    """
+    strat_R = _compute_R_mean(strategy_summary)
+    bench_R = _compute_R_mean(benchmark_summary)
+
+    # If either is non-finite (divide-by-zero or NaN), excess is meaningless
+    if not (math.isfinite(strat_R) and math.isfinite(bench_R)):
+        return CyclicalityExcessVerdict(
+            strategy_R_mean=strat_R,
+            benchmark_R_mean=bench_R,
+            excess_R_mean=float("nan"),
+            classification="INCONCLUSIVE (R undefined)",
+            proceed=None,
+            rationale=(
+                f"strategy_R={strat_R}, benchmark_R={bench_R}. One or both R "
+                f"undefined (likely zero-denominator or NaN). Excess concept "
+                f"requires both R to be finite."
+            ),
+        )
+
+    # Short-circuit if benchmark itself is not counter-cyclical (R >= 0).
+    # Per zen 2026-05-10 code review: simple subtraction strat - bench reverses
+    # semantic meaning when R is positive (higher R = more counter-cyclical
+    # for positive R; lower R = more counter-cyclical for negative R). Excess
+    # concept is only well-defined against a counter-cyclical baseline.
+    if bench_R >= 0:
+        return CyclicalityExcessVerdict(
+            strategy_R_mean=strat_R,
+            benchmark_R_mean=bench_R,
+            excess_R_mean=float("nan"),
+            classification="INCONCLUSIVE (benchmark R ≥ 0)",
+            proceed=None,
+            rationale=(
+                f"strategy_R={strat_R:.2f}, benchmark_R={bench_R:.2f}. Benchmark "
+                f"baseline does not show counter-cyclical sign-flip pattern "
+                f"(R ≥ 0). Excess classification is designed specifically to isolate "
+                f"strategy edge from a mechanical counter-cyclical baseline. "
+                f"Use absolute classify_cyclicality() instead."
+            ),
+        )
+
+    excess = strat_R - bench_R
+    benchmark_weak_warning = ""
+
+    if excess <= excess_strong_threshold:
+        return CyclicalityExcessVerdict(
+            strategy_R_mean=strat_R,
+            benchmark_R_mean=bench_R,
+            excess_R_mean=excess,
+            classification="strategy-specific counter-cyclical",
+            proceed=False,
+            rationale=(
+                f"strategy R_mean={strat_R:.2f}, benchmark R_mean={bench_R:.2f}, "
+                f"excess={excess:.2f} ≤ {excess_strong_threshold:.1f}. Strategy is "
+                f"meaningfully MORE counter-cyclical than benchmark baseline; pro-"
+                f"cyclical Layer 4 overlays would structurally de-lever exactly when "
+                f"strategy generates its excess alpha.{benchmark_weak_warning}"
+            ),
+        )
+
+    if abs(excess) < excess_match_tolerance:
+        return CyclicalityExcessVerdict(
+            strategy_R_mean=strat_R,
+            benchmark_R_mean=bench_R,
+            excess_R_mean=excess,
+            classification="matches benchmark baseline",
+            proceed=True,
+            rationale=(
+                f"strategy R_mean={strat_R:.2f}, benchmark R_mean={bench_R:.2f}, "
+                f"excess={excess:.2f} (|·| < {excess_match_tolerance:.1f}). Strategy "
+                f"cyclicality matches universe baseline (likely mechanical artifact "
+                f"of vol-regime methodology, not strategy-specific). Layer 4 overlay "
+                f"decision should be driven by other factors (signal-mechanism "
+                f"alignment, etc.), not cyclicality alone.{benchmark_weak_warning}"
+            ),
+        )
+
+    if excess >= excess_match_tolerance:
+        return CyclicalityExcessVerdict(
+            strategy_R_mean=strat_R,
+            benchmark_R_mean=bench_R,
+            excess_R_mean=excess,
+            classification="less counter-cyclical than benchmark",
+            proceed=True,
+            rationale=(
+                f"strategy R_mean={strat_R:.2f}, benchmark R_mean={bench_R:.2f}, "
+                f"excess={excess:+.2f} ≥ {excess_match_tolerance:.1f}. Strategy is "
+                f"LESS counter-cyclical than universe baseline; Layer 4 overlays "
+                f"unlikely to hurt strategy structurally.{benchmark_weak_warning}"
+            ),
+        )
+
+    # In-between: excess in (-strong, -match_tol) — weakly strategy-specific
+    return CyclicalityExcessVerdict(
+        strategy_R_mean=strat_R,
+        benchmark_R_mean=bench_R,
+        excess_R_mean=excess,
+        classification="weakly strategy-specific counter-cyclical",
+        proceed=True,
+        rationale=(
+            f"strategy R_mean={strat_R:.2f}, benchmark R_mean={bench_R:.2f}, "
+            f"excess={excess:.2f} ∈ ({excess_strong_threshold}, {-excess_match_tolerance}). "
+            f"Weak strategy-specific counter-cyclical; Layer 4 overlay impact "
+            f"likely modest, not structurally fatal.{benchmark_weak_warning}"
+        ),
+    )
