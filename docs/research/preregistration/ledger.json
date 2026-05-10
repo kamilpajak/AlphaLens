@@ -3610,6 +3610,125 @@
       },
       "outcome": null,
       "notes": "Forward observation period activated 2026-05-09 in same session that completed Phase B + final lock for v2 (insider_form4_opportunistic_2026_05_08_v2). Operational cron deferred \u2014 locked the protocol but not yet deployed. See params_frozen.operational.next_session_todo for build instructions."
+    },
+    {
+      "id": "insider_pc_compound_2026_05_10",
+      "signal_class": "insider_pc_compound_2026_05_10",
+      "hypothesis": "Equal-weight cross-sectional z-score average of two pre-registered orthogonal-class informed-trader signals \u2014 insider_form4_opportunistic (Cohen-Malloy 2012 Form-4) and pc_abnormal_volume (Pan-Poteshman 2006 P/C residualized) \u2014 generates Carhart-4F mean alpha_t >= 2.974 across 5-phase OOS audit on R2000 PIT 2018-2023 with joint-PASS confirmation on 2024-2026 final lock. Strict-intersection inclusion rule, no imputation, no subset selection, no parameter tuning. Pre-screen-validated cross-sectional orthogonality (mean rho = -0.000035 on IS 2014-2017 across 48 monthly asofs).",
+      "scorer_path": "scripts/experiment_insider_pc_compound.py",
+      "params_frozen": {
+        "class": "insider_pc_compound_2026_05_10",
+        "version": "v1_equal_weight_zscore_2signal_compound",
+        "design_memo": "docs/research/insider_pc_compound_design_2026_05_10.md",
+        "design_provenance": "Single-test compound on R2000 PIT, building on insider_form4_opportunistic_2026_05_08_v2 PASS_MARGINAL on both 2018-2023 OOS (alpha_t=+2.71) and 2024-2026 final lock (alpha_t=+2.69), and pc_abnormal_volume_retrospective_pre_2018_2026_05_05 INCONCLUSIVE/MID (alpha_t=+2.65). 2-way compound chosen over 4-way compound_v12 (blocked on v8 Xing) for clean orthogonal-class pair (EDGAR fundamental + iVolatility technical). Pre-screen #1 verified mean cross-sectional Spearman rho = -0.000035 across 48 monthly IS asofs; pre-screen #3 verified strict-intersection coverage 100% asofs >= 50 tickers (mean 154); pre-screen #2 verified P/C is also EXTREME counter-cyclical (matching insider_form4 pattern, see design memo section 7 risk #1).",
+        "adversarial_review_summary": "Zen (gemini-3-pro 2026-05-10): AMEND with +6 Bonferroni penalty for implicit C(4,2) selection from 4 candidate compounds (n=29 -> 34, threshold |t|>=2.974). Approved 2-way structure (avoids options-class redundancy), equal-weight (alpha_t diff 2.71 vs 2.65 = noise), joint-PASS rule (rigorous). Z4 flagged moderately serious cyclicality risk on portfolio returns; pre-screen #2 confirmed P/C is also counter-cyclical (verbatim verdict in design memo section 3.5). Perplexity (sonar-reasoning-pro 2026-05-10): AMEND with 3 mandatory pre-reg gates: (A3) factor contribution decomposition >50% per component; (A4) portfolio return correlation diagnostic |corr|<0.40; min combined OOS alpha_t floor 2.5. P-INDEPENDENCE: cross-sectional rho approximately 0 does NOT guarantee portfolio return independence (Blitz-Hanauer 2013); risk verified empirically by pre-screen #2 P/C extreme counter-cyclicality. All amendments folded into Phase A triggers section 5.3.",
+        "scorer_frozen": {
+          "components": [
+            "alphalens.screeners.insider_activity.opportunistic_form4.score_opportunistic_form4",
+            "alphalens.screeners.options_volume.pc_abnormal_volume.score_pc_abnormal_residual"
+          ],
+          "fusion_formula": "compound(x,t) = (z_form4(x,t) + z_pcabnormal(x,t)) / 2",
+          "zscore_normalization": "per-asof, per-component, cross-sectional, ddof=1",
+          "inclusion_rule": "strict-intersection (both components non-NaN at asof t)",
+          "no_residualization_after_fusion": true
+        },
+        "data_provider": "form4_parquet_2026-05-08 + ivolatility_smd cache",
+        "rebalance_stride_days": 21,
+        "holding_period_days_target": 21,
+        "holding_period_days_portfolio_returns": 21,
+        "weighting": "equal_weight",
+        "decile_pct": 0.1,
+        "cost_profile": "RealisticCostModel",
+        "cost_profile_rt_bps": "standard (insider_form4 v2 cost lock)",
+        "benchmark": "IWM",
+        "universe_primary": "R2000_PIT",
+        "phase_audit": {
+          "n_phases": 5,
+          "phase_offset_stride_days": 4,
+          "rationale": "5-phase audit per insider_form4 v2 + compound_v12 precedent"
+        },
+        "bounds_adjusted_ci": {
+          "method": "stationary_block_bootstrap_synchronous_across_phases",
+          "block_size_trading_days": 126,
+          "n_bootstrap": 1000,
+          "rationale": "Mirrors insider_form4 v2 zen amendment (synchronous-across-phases; block_size=126 matches 6m signal window of components)"
+        },
+        "carhart_regression_hac_lock": {
+          "hac_maxlags_trading_days": 126,
+          "input_cadence": "daily_continuous_returns",
+          "rationale": "Matches 6m signal-window of components; daily-cadence input avoids statsmodels HAC silent inflation per memory feedback_hac_maxlags_units_silent_inflation.md"
+        },
+        "pre_screens_executed": {
+          "ps1_signal_independence": {
+            "method": "alphalens.attribution.signal_independence.pairwise_rank_ic_correlation",
+            "window": "2014-01-01 .. 2017-12-31 (IS-only per zen 2026-05-10 HARKing fix)",
+            "result_mean_rho": -3.5e-05,
+            "result_t_stat": -0.003,
+            "n_asofs": 48,
+            "verdict": "orthogonal (PROCEED)"
+          },
+          "ps2_pc_cyclicality": {
+            "method": "alphalens.attribution.signal_vol_regime.classify_cyclicality",
+            "window": "2014-01-01 .. 2017-12-31 (IS-only)",
+            "result_classification": "EXTREME counter-cyclical",
+            "result_R_mean": -4.49,
+            "result_R_sharpe": -2.342,
+            "implication": "compound is doubly counter-cyclical (both components fire alpha in high-vol Q4-Q5); portfolio returns expected to be positively correlated time-series even with cross-sectional rho approx 0 (per perplexity P-INDEPENDENCE)",
+            "verdict": "informational only (compound is Layer 1 fusion, NOT overlay); A4 portfolio-correlation diagnostic added per perplexity"
+          },
+          "ps3_coverage_breadth": {
+            "method": "strict-intersection ticker count per asof",
+            "window": "2014-01-01 .. 2017-12-31 (IS)",
+            "result_n_asofs_above_floor_50": "48 of 48 (100%)",
+            "result_intersection_count_describe": {
+              "mean": 154,
+              "std": 24,
+              "min": 123,
+              "max": 214
+            },
+            "verdict": "PROCEED (well above 30% threshold)"
+          }
+        }
+      },
+      "periods": {
+        "oos_start": "2018-01-01",
+        "oos_end": "2023-12-31",
+        "final_lock_start": "2024-01-01",
+        "final_lock_end": "2026-03-31",
+        "rationale": "OOS matches insider_form4 v2 + pc_abnormal pre-regs. Final lock truncated to 2026-03-31 (from 2026-04-30 nominal) per insider_form4 v2 PIT-availability precedent. Joint-PASS rule: both windows must clear gates section 5.1 independently."
+      },
+      "success_criteria": {
+        "mode": "5_phase_oos_carhart_4f_mean_alpha_with_joint_window_pass",
+        "primary_metric": "carhart_4f_alpha_t_mean_across_5_phases",
+        "bonferroni_accounting": {
+          "program_level_n_naive": 29,
+          "selection_penalty_zen_z5": 5,
+          "effective_n": 34,
+          "critical_t_one_sided_alpha_05": 2.974,
+          "formula": "scipy.stats.norm.ppf(1 - 0.05/34)",
+          "rationale_zen_z5_verbatim": "Yes, a selection penalty is strictly required; evaluating combinations of 4 distinct candidates to select this specific 2-way pair implicitly consumed C(4,2) = 6 degrees of freedom, meaning your Bonferroni n must increment by 6 (to 34), not 1."
+        },
+        "auto_pivot_phase_a_triggers": {
+          "A0_coverage": "ABANDON if <30% of asof-quarters have >=50 R2000 strict-intersection tickers",
+          "A1_correlation_regime": "ABANDON if mean cross-sectional Spearman rho on Phase A IS data not in [-0.5, 0.5]",
+          "A2_direction": "ABANDON if Spearman rho(compound_score, forward_21d_excess) on TRAIN < -0.05 (sign-flip)",
+          "A3_factor_contribution": "perplexity P-LIT: monthly per-component contribution; if one component contributes <50% in BOTH windows, ABANDON compound and file solo",
+          "A4_portfolio_correlation_diagnostic": "perplexity P-INDEPENDENCE: rolling 12-month portfolio return correlation between insider_form4 standalone and pc_abnormal standalone on audit window; INFORMATIONAL only (not kill); document publicly if |corr|>=0.40"
+        },
+        "all_gates_must_pass_R2000_primary": true,
+        "verdict_classification": {
+          "PASS": "every-phase alpha_t >= 1.5 AND mean alpha_t >= 2.974 AND mean excess_net_ann >= 0 AND dispersion <= 70pp on BOTH windows",
+          "PASS_MARGINAL": "mean alpha_t in [2.50, 2.974) AND every phase alpha_t >= 0 AND dispersion <= 70pp on BOTH windows",
+          "INCONCLUSIVE": "mean alpha_t in [2.50, 2.974) AND >=1 phase alpha_t < 0; OR (dispersion > 70pp AND mean >= 2.50); OR PASS_MARGINAL on only ONE window",
+          "FAIL": "mean alpha_t < 2.50 OR mean excess_net_ann < 0 OR (dispersion > 70pp AND mean < 2.50) on either window"
+        },
+        "kill_pre_full_run": "Any A0/A1/A2/A3 trigger -> ABANDON, no Bonferroni spent, write COVERAGE-FAIL or CORRELATION-DEGENERATE memo",
+        "capital_deploy_clause": "PASS unlocks paper-trade extension to compound variant; full deploy still requires standalone PASS on each component (currently PASS_MARGINAL + INCONCLUSIVE) per project policy"
+      },
+      "registered_at": "2026-05-10",
+      "status": "registered",
+      "outcome": {},
+      "notes": "First 2-way compound test in project. Differs from compound_v12_informed_trader_2026_05_06 (4-way, blocked on v8 Xing standalone verdict). Bonferroni penalty +6 over naive +1 reflects zen Z5 strict selection-penalty enforcement. Both pre-reg pre-screens (#1 independence, #2 cyclicality, #3 breadth) executed BEFORE this registration on IS 2014-2017 window per zen HARKing-fix directive; OOS 2018-2023 + 2024-2026 final lock remain unburnt. Implementation deliverables (scorer module, experiment driver) deferred to next session per session 2026-05-10 plan; this registration is the 'design + pre-reg locked' artifact."
     }
   ]
 }
