@@ -286,6 +286,9 @@ class _CompoundInsiderPcScorer:
     compound only if BOTH components produce a finite score for that asof.
     """
 
+    # Class-level default; covers __new__-bypass paths in unit tests.
+    _pc_panel: pd.Series | None = None
+
     def __init__(
         self,
         *,
@@ -304,8 +307,85 @@ class _CompoundInsiderPcScorer:
             shares_store=shares_store,
         )
         self._smd_loader = smd_loader
+        # Pre-built P/C panel populated by prebuild_pc_panel(); when present,
+        # __call__ does an O(1) lookup instead of rebuilding per rebalance.
+        self._pc_panel: pd.Series | None = None
 
-    def __call__(self, histories, config=None) -> pd.DataFrame:
+    def prebuild_pc_panel(
+        self,
+        universe: list[str],
+        asof_dates: list[date],
+        history_store: HistoryStore,
+    ) -> None:
+        """Pre-build P/C feature frame + scores for all rebalance asofs.
+
+        `build_feature_frame` already supports multi-asof input efficiently
+        (`_prepare_ticker_history` is called ONCE per ticker, computing the
+        rolling abnormal_pcr series; the inner loop only slices per asof).
+        Per-rebalance invocation discards this amortization — recomputing
+        the rolling series ~85 times per ticker in a 6yr window. Pre-building
+        once cuts that to 1x.
+
+        Numerical equivalence requires post-filtering rows to match the
+        engine's per-asof universe: BacktestEngine._build_histories
+        (engine.py:295-301) drops tickers where
+        `len(truncate_to(ticker, day)) < MIN_BARS_REQUIRED` (default 220).
+        Without that filter, the prebuild includes "phantom" rows for
+        recent-IPO tickers (when their iVolatility SMD covers the asof but
+        yfinance OHLCV history is too short). Even a single phantom in the
+        per-asof OLS shifts coefficients → residuals shift for ALL scored
+        tickers at that asof.
+
+        MUST be called BEFORE BacktestEngine.run with `asof_dates` matching
+        the engine's rebalance schedule (see HistoryStore.benchmark_calendar
+        + [phase_offset::stride] slicing in alphalens/backtest/engine.py:230).
+        """
+        from alphalens.backtest.engine import BacktestEngine as _Engine
+
+        asof_strs = [pd.Timestamp(d).strftime("%Y-%m-%d") for d in asof_dates]
+        pc_features = build_feature_frame(
+            smd_loader=self._smd_loader,
+            universe=universe,
+            asof_dates=asof_strs,
+        )
+        if pc_features.empty:
+            self._pc_panel = pd.Series(dtype=float, name="score")
+            return
+
+        # Mirror engine's per-asof history filter so OLS input matches the
+        # per-rebalance fallback exactly (pre-reg-blessed fixtures stay
+        # byte-equivalent). Default min_bars is engine.MIN_BARS_REQUIRED=220
+        # unless the scorer declares its own.
+        min_bars = getattr(self, "MIN_BARS_REQUIRED", _Engine.MIN_BARS_REQUIRED)
+        allowed_pairs: set[tuple[str, str]] = set()
+        for asof_d, asof_str in zip(asof_dates, asof_strs, strict=True):
+            for ticker in universe:
+                if len(history_store.truncate_to(ticker, asof_d)) >= min_bars:
+                    allowed_pairs.add((asof_str, ticker.upper()))
+        keep_mask = pd.Series(
+            [
+                (row.asof, row.ticker) in allowed_pairs
+                for row in pc_features.itertuples(index=False)
+            ],
+            index=pc_features.index,
+        )
+        pc_features = pc_features.loc[keep_mask]
+        if pc_features.empty:
+            self._pc_panel = pd.Series(dtype=float, name="score")
+            return
+
+        pc_features = pc_features.assign(score=score_pc_abnormal_residual(pc_features)).dropna(
+            subset=["score"]
+        )
+        # Normalize asof to date for stable lookup keys.
+        pc_features["asof"] = pd.to_datetime(pc_features["asof"]).dt.date
+        self._pc_panel = pc_features.set_index(["asof", "ticker"])["score"].sort_index()
+
+    def __call__(self, histories, config=None) -> pd.DataFrame:  # noqa: PLR0911
+        # Eight defensive early-returns: missing asof, empty form4, panel
+        # miss, empty pc_features, empty pc_df, empty pc_series, empty
+        # compound, normal path. Refactoring to a single return obscures
+        # which branch handled which empty case; left as-is.
         cfg = dict(config or {})
         asof = cfg.get("asof")
         if asof is None:
@@ -323,23 +403,33 @@ class _CompoundInsiderPcScorer:
         if form4_df.empty:
             return pd.DataFrame(columns=["ticker", "score"])
 
-        # 2) P/C scores: build feature frame for the same asof + universe.
-        universe = list(histories.keys())
-        pc_features = build_feature_frame(
-            smd_loader=self._smd_loader,
-            universe=universe,
-            asof_dates=[asof_date.strftime("%Y-%m-%d")],
-        )
-        if pc_features.empty:
-            return pd.DataFrame(columns=["ticker", "score"])
-        pc_features = pc_features.assign(score=score_pc_abnormal_residual(pc_features))
-        pc_df = pc_features[["ticker", "score"]].dropna(subset=["score"])
-        if pc_df.empty:
+        # 2) P/C scores: lookup pre-built panel if present, else fall back to
+        #    per-asof build for ad-hoc invocations (e.g. precheck script).
+        if self._pc_panel is not None:
+            try:
+                pc_series = self._pc_panel.loc[asof_date].astype(float)
+            except KeyError:
+                return pd.DataFrame(columns=["ticker", "score"])
+        else:
+            universe = list(histories.keys())
+            pc_features = build_feature_frame(
+                smd_loader=self._smd_loader,
+                universe=universe,
+                asof_dates=[asof_date.strftime("%Y-%m-%d")],
+            )
+            if pc_features.empty:
+                return pd.DataFrame(columns=["ticker", "score"])
+            pc_features = pc_features.assign(score=score_pc_abnormal_residual(pc_features))
+            pc_df = pc_features[["ticker", "score"]].dropna(subset=["score"])
+            if pc_df.empty:
+                return pd.DataFrame(columns=["ticker", "score"])
+            pc_series = pc_df.set_index("ticker")["score"].astype(float)
+
+        if pc_series.empty:
             return pd.DataFrame(columns=["ticker", "score"])
 
         # 3) Strict-intersection equal-weight z-score average.
         f4_series = form4_df.set_index("ticker")["score"].astype(float)
-        pc_series = pc_df.set_index("ticker")["score"].astype(float)
         compound = compound_score_from_components(f4_series, pc_series)
         if compound.empty:
             return pd.DataFrame(columns=["ticker", "score"])
@@ -655,6 +745,19 @@ def main() -> int:
         classifier_cache=classifier_cache,
         shares_store=share_store,
         smd_loader=_smd_loader,
+    )
+
+    # Pre-build P/C feature panel for all rebalance asofs. Mirror engine's
+    # exact rebalance calendar (engine.py:230-236) so panel keys align with
+    # what the engine will actually request during run().
+    trading_calendar = HistoryStore.benchmark_calendar(
+        history_store, args.benchmark, args.is_start, args.is_end
+    )
+    sliced_calendar = trading_calendar[args.phase_offset :: args.rebalance_stride]
+    rebalance_dates = [ts.date() if hasattr(ts, "date") else ts for ts in sliced_calendar]
+    logger.info("Pre-building P/C panel for %d rebalance asofs", len(rebalance_dates))
+    scorer.prebuild_pc_panel(
+        universe=universe, asof_dates=rebalance_dates, history_store=history_store
     )
 
     engine = BacktestEngine(
