@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Refactor C from the audit-perf optimization plan: run insider_pc_compound
 # OOS (2018-2023, primary verdict) and final-lock (2024-2026, confirmation)
-# concurrently in two tmux sessions on the same 8 vCPU pod. Each session
-# gets ALPHALENS_WORKERS=4 so the two pools share 8 vCPU exactly without
-# oversubscription (verified picklable + OMP/PyArrow thread caps in
-# experiment_insider_pc_compound.py).
+# concurrently in two tmux sessions on the same 8 vCPU pod.
+#
+# 2026-05-10: empirical pod smoke showed ProcessPoolExecutor over Form-4
+# tickers is COUNTERPRODUCTIVE on RunPod's MooseFS network volume — 8
+# workers reading parquet partitions simultaneously contend on
+# FUSE/network rather than parallelizing on CPU. ALPHALENS_WORKERS=1
+# (serial path; same byte-equivalent code via _score_one_ticker) is
+# faster on pod despite Mac local SSD showing 35% gain with workers=8.
+# See feedback_runpod_moosefs_process_pool_antipattern.md.
 #
 # Pre-reg windows are LOCKED per docs/research/insider_pc_compound_design_2026_05_10.md:
 #   OOS:        --is-start 2018-01-01 --is-end 2023-12-31
@@ -36,14 +41,14 @@ FL_OUT=/workspace/AlphaLens/docs/research/insider_pc_compound_audit_finallock.js
 # via `tmux capture-pane`. Cleaner than `sleep 86400` (which leaks a hung
 # process and dies after 24h regardless of audit duration).
 tmux new-session -d -s audit-oos \
-    "ALPHALENS_WORKERS=4 .venv/bin/alphalens audit insider_pc_compound \
+    "ALPHALENS_WORKERS=1 .venv/bin/alphalens audit insider_pc_compound \
      --rebalance-stride 5 --is-start 2018-01-01 --is-end 2023-12-31 \
      --out ${OOS_OUT} 2>&1 | tee /workspace/oos_audit.log; \
      echo AUDIT_OOS_DONE=\$? >> /workspace/oos_audit.log" \; \
     set-option -t audit-oos remain-on-exit on
 
 tmux new-session -d -s audit-fl \
-    "ALPHALENS_WORKERS=4 .venv/bin/alphalens audit insider_pc_compound \
+    "ALPHALENS_WORKERS=1 .venv/bin/alphalens audit insider_pc_compound \
      --rebalance-stride 5 --is-start 2024-01-01 --is-end 2026-03-31 \
      --out ${FL_OUT} 2>&1 | tee /workspace/fl_audit.log; \
      echo AUDIT_FL_DONE=\$? >> /workspace/fl_audit.log" \; \
