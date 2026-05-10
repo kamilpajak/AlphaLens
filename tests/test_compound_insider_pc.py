@@ -137,5 +137,68 @@ class TestCompoundScore(unittest.TestCase):
         np.testing.assert_allclose(out.sort_index().to_numpy(), z_pc / 2.0, atol=1e-12)
 
 
+class TestCompoundInsiderPcScorerContract(unittest.TestCase):
+    """Contract test for the BacktestEngine adapter wrapper.
+
+    Exercises the composition glue (DataFrame -> Series -> compound -> DataFrame)
+    without spinning up real Form-4 / iVolatility stores. Locks the public
+    output contract: a DataFrame with exactly the columns ['ticker', 'score']
+    and no NaN scores. Catches future drift in shape conversion that the
+    smoke run alone might miss.
+    """
+
+    def test_call_returns_strict_intersection_with_required_columns(self):
+        from unittest.mock import patch
+
+        import scripts.experiment_insider_pc_compound as mod
+
+        scorer = mod._CompoundInsiderPcScorer.__new__(mod._CompoundInsiderPcScorer)
+
+        # Form-4 inner: tickers {A, B, C} score range
+        scorer._form4_inner = lambda histories, cfg: pd.DataFrame(
+            {"ticker": ["A", "B", "C"], "score": [1.0, 2.0, 3.0]}
+        )
+        scorer._smd_loader = lambda t: None  # bypassed by the build_feature_frame patch
+
+        pc_features_stub = pd.DataFrame(
+            {
+                "asof": ["2020-01-21", "2020-01-21"],
+                "ticker": ["B", "C"],
+                "abnormal_pcr": [0.1, 0.2],
+                "reversal_1m": [0.0, 0.0],
+                "momentum_6m": [0.0, 0.0],
+                "rv_30d": [0.01, 0.01],
+            }
+        )
+        pc_scores_stub = pd.Series([0.5, -0.5], index=pc_features_stub.index, name="score")
+
+        histories = {
+            "A": pd.DataFrame({"close": [10.0]}, index=[pd.Timestamp("2020-01-21")]),
+        }
+
+        with (
+            patch.object(mod, "build_feature_frame", return_value=pc_features_stub),
+            patch.object(mod, "score_pc_abnormal_residual", return_value=pc_scores_stub),
+        ):
+            out = scorer(histories, config={"asof": pd.Timestamp("2020-01-21")})
+
+        # Strict intersection of {A,B,C} (Form-4) ∩ {B,C} (P/C) = {B, C}
+        self.assertIsInstance(out, pd.DataFrame)
+        self.assertEqual(list(out.columns), ["ticker", "score"])
+        self.assertEqual(set(out["ticker"]), {"B", "C"})
+        self.assertFalse(out["score"].isna().any())
+
+    def test_call_returns_empty_frame_when_form4_empty(self):
+        import scripts.experiment_insider_pc_compound as mod
+
+        scorer = mod._CompoundInsiderPcScorer.__new__(mod._CompoundInsiderPcScorer)
+        scorer._form4_inner = lambda histories, cfg: pd.DataFrame(columns=["ticker", "score"])
+        scorer._smd_loader = lambda t: None
+
+        out = scorer({"A": pd.DataFrame()}, config={"asof": pd.Timestamp("2020-01-21")})
+        self.assertEqual(list(out.columns), ["ticker", "score"])
+        self.assertTrue(out.empty)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -310,12 +310,16 @@ class _CompoundInsiderPcScorer:
         asof = cfg.get("asof")
         if asof is None:
             asof = _infer_asof_from_histories(histories)
+            if asof is not None:
+                # Inject so the inner Form-4 adapter does not repeat the same
+                # O(N-tickers) fallback loop independently.
+                cfg["asof"] = asof
         if asof is None:
             return pd.DataFrame(columns=["ticker", "score"])
         asof_date = asof.date() if hasattr(asof, "date") else asof
 
         # 1) Form-4 scores via the duplicated adapter.
-        form4_df = self._form4_inner(histories, config)
+        form4_df = self._form4_inner(histories, cfg)
         if form4_df.empty:
             return pd.DataFrame(columns=["ticker", "score"])
 
@@ -339,7 +343,9 @@ class _CompoundInsiderPcScorer:
         compound = compound_score_from_components(f4_series, pc_series)
         if compound.empty:
             return pd.DataFrame(columns=["ticker", "score"])
-        return compound.reset_index().rename(columns={"index": "ticker"})
+        # compound's index inherits name 'ticker' from set_index above, so
+        # reset_index emits ['ticker', 'score'] directly.
+        return compound.reset_index()
 
 
 def _monthly_asofs(start: date, end: date, *, day_of_month: int = 21) -> list[pd.Timestamp]:
