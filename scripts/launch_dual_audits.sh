@@ -31,17 +31,23 @@ export PATH="/root/.local/bin:$PATH"
 OOS_OUT=/workspace/AlphaLens/docs/research/insider_pc_compound_audit_oos.json
 FL_OUT=/workspace/AlphaLens/docs/research/insider_pc_compound_audit_finallock.json
 
+# `remain-on-exit on` keeps the pane visible after the command exits so
+# the scrollback (audit progress + AUDIT_*_DONE marker) stays inspectable
+# via `tmux capture-pane`. Cleaner than `sleep 86400` (which leaks a hung
+# process and dies after 24h regardless of audit duration).
 tmux new-session -d -s audit-oos \
     "ALPHALENS_WORKERS=4 .venv/bin/alphalens audit insider_pc_compound \
      --rebalance-stride 5 --is-start 2018-01-01 --is-end 2023-12-31 \
      --out ${OOS_OUT} 2>&1 | tee /workspace/oos_audit.log; \
-     echo AUDIT_OOS_DONE=\$? >> /workspace/oos_audit.log; sleep 86400"
+     echo AUDIT_OOS_DONE=\$? >> /workspace/oos_audit.log" \; \
+    set-option -t audit-oos remain-on-exit on
 
 tmux new-session -d -s audit-fl \
     "ALPHALENS_WORKERS=4 .venv/bin/alphalens audit insider_pc_compound \
      --rebalance-stride 5 --is-start 2024-01-01 --is-end 2026-03-31 \
      --out ${FL_OUT} 2>&1 | tee /workspace/fl_audit.log; \
-     echo AUDIT_FL_DONE=\$? >> /workspace/fl_audit.log; sleep 86400"
+     echo AUDIT_FL_DONE=\$? >> /workspace/fl_audit.log" \; \
+    set-option -t audit-fl remain-on-exit on
 
 echo "Both audit sessions launched in tmux:"
 tmux ls

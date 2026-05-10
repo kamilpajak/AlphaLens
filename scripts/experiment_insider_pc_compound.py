@@ -195,12 +195,12 @@ def _init_worker(parquet_root: Path, ticker_cik_resolver) -> None:
     """One-time worker-process setup: thread caps + store + cache."""
     global _worker_store, _worker_cache  # noqa: PLW0603
     os.environ["OMP_NUM_THREADS"] = "1"
-    try:
-        import pyarrow as pa
+    # PyArrow is a hard dep (Form4PITStore.records_as_of uses pyarrow.dataset),
+    # so import unconditionally; an ImportError here means the environment
+    # is broken and the worker would fail anyway on first records_as_of call.
+    import pyarrow as pa
 
-        pa.set_cpu_count(1)
-    except ImportError:
-        pass
+    pa.set_cpu_count(1)
     _worker_store = Form4PITStore(
         parquet_root=parquet_root,
         ticker_cik_resolver=ticker_cik_resolver,
@@ -314,27 +314,20 @@ class _OpportunisticForm4Scorer:
         if not args_list:
             return pd.DataFrame(columns=["ticker", "score"])
 
-        # Dispatch heavy work — pool if configured, otherwise serial in parent.
+        # Dispatch heavy work — pool if configured, otherwise serial via the
+        # SAME _score_one_ticker function (per zen review 2026-05-10: serial
+        # path duplicating worker logic risks silent drift if either is
+        # changed independently). For the serial branch we populate the
+        # module-level worker globals from this scorer's parent state so
+        # _score_one_ticker behaves identically.
         self._ensure_executor()
         if self._executor is not None:
             rows = list(self._executor.map(_score_one_ticker, args_list, chunksize=50))
         else:
-            rows = []
-            for args in args_list:
-                ticker, asof_date_arg, mcap_arg, controls_arg = args
-                records = self._store.records_as_of(ticker, asof=asof_date_arg, lookback_days=180)
-                net_oppor_usd = aggregate_opportunistic_signal(
-                    records, asof=asof_date_arg, classifier_cache=self._cache
-                )
-                signal_raw = float(net_oppor_usd) / float(mcap_arg)
-                rows.append(
-                    {
-                        "asof": asof_date_arg,
-                        "ticker": ticker,
-                        "signal_raw": signal_raw,
-                        **controls_arg,
-                    }
-                )
+            global _worker_store, _worker_cache  # noqa: PLW0603
+            _worker_store = self._store
+            _worker_cache = self._cache
+            rows = [_score_one_ticker(args) for args in args_list]
 
         if not rows:
             return pd.DataFrame(columns=["ticker", "score"])
@@ -876,9 +869,12 @@ def main() -> int:
         args.phase_offset,
         args.benchmark,
     )
-    report = engine.run(args.is_start, args.is_end)
-    # Release Form-4 worker pool — engine.run is done dispatching scorer calls.
-    scorer.shutdown()
+    try:
+        report = engine.run(args.is_start, args.is_end)
+    finally:
+        # Always release Form-4 worker pool — even on engine.run() exception
+        # — so worker processes don't leak as zombies (zen review 2026-05-10).
+        scorer.shutdown()
 
     carhart = load_carhart_daily(start=args.is_start, end=args.is_end)
     bench_rets = benchmark_returns(history_store, args.benchmark, args.is_start, args.is_end)
