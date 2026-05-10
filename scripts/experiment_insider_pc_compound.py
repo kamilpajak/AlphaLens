@@ -37,7 +37,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from datetime import date
 from pathlib import Path
 
@@ -173,8 +175,66 @@ def _close_at(history: pd.DataFrame, asof: pd.Timestamp) -> float | None:
     return float(sliced["close"].iloc[-1])
 
 
+# -------------------------------------------------------------------------
+# Process-pool plumbing for the Form-4 scorer (Refactor B from the perf
+# optimization plan). Each worker process runs `_init_worker` ONCE on
+# startup to build its own Form4PITStore + ClassifierCache, then
+# `_score_one_ticker` reuses those globals for every dispatched ticker.
+# - OMP_NUM_THREADS=1 + pyarrow.set_cpu_count(1) prevents BLAS / PyArrow
+#   thread-pool oversubscription (8 workers × 8 implicit threads = 64).
+# - ClassifierCache survives across all rebalances within a worker,
+#   since the executor is persistent across engine.run.
+# Per zen review 2026-05-10.
+# -------------------------------------------------------------------------
+
+_worker_store: Form4PITStore | None = None
+_worker_cache: ClassifierCache | None = None
+
+
+def _init_worker(parquet_root: Path, ticker_cik_resolver) -> None:
+    """One-time worker-process setup: thread caps + store + cache."""
+    global _worker_store, _worker_cache  # noqa: PLW0603
+    os.environ["OMP_NUM_THREADS"] = "1"
+    try:
+        import pyarrow as pa
+
+        pa.set_cpu_count(1)
+    except ImportError:
+        pass
+    _worker_store = Form4PITStore(
+        parquet_root=parquet_root,
+        ticker_cik_resolver=ticker_cik_resolver,
+        delisting_events=None,
+    )
+    _worker_cache = ClassifierCache(_worker_store)
+
+
+def _score_one_ticker(args_tuple: tuple) -> dict:
+    """Worker payload — globals already initialized via _init_worker."""
+    ticker, asof_date, mcap, controls = args_tuple
+    records = _worker_store.records_as_of(ticker, asof=asof_date, lookback_days=180)
+    net_oppor_usd = aggregate_opportunistic_signal(
+        records, asof=asof_date, classifier_cache=_worker_cache
+    )
+    signal_raw = float(net_oppor_usd) / float(mcap)
+    return {
+        "asof": asof_date,
+        "ticker": ticker,
+        "signal_raw": signal_raw,
+        **controls,
+    }
+
+
 class _OpportunisticForm4Scorer:
-    """BacktestEngine adapter — for each rebalance asof, build features and score."""
+    """BacktestEngine adapter — for each rebalance asof, build features and score.
+
+    Heavy parts (Form-4 records_as_of + classifier cache lookups) are dispatched
+    to a persistent ProcessPoolExecutor (lazily created on first __call__,
+    torn down via shutdown()). Parent-side work — equity controls, close,
+    shares-store-backed PIT mcap — stays in the main process to keep
+    shares_store off the pickle path AND preserve PIT correctness over the
+    audit window. Set ALPHALENS_WORKERS=1 for serial execution (no pool).
+    """
 
     def __init__(
         self,
@@ -188,6 +248,29 @@ class _OpportunisticForm4Scorer:
         self._cache = classifier_cache
         self._shares = shares_store
         self._mcap_lookup = mcap_lookup or {}
+        self._executor: ProcessPoolExecutor | None = None
+        # Pickle-friendly snapshots for worker-pool initargs:
+        self._parquet_root = form4_store._root
+        self._cik_resolver = form4_store._resolver
+
+    def _ensure_executor(self) -> None:
+        """Lazy persistent pool. Survives across all rebalances within a phase."""
+        if self._executor is not None:
+            return
+        n_workers = int(os.environ.get("ALPHALENS_WORKERS", "8"))
+        if n_workers <= 1:
+            return  # serial mode — no pool created
+        self._executor = ProcessPoolExecutor(
+            max_workers=n_workers,
+            initializer=_init_worker,
+            initargs=(self._parquet_root, self._cik_resolver),
+        )
+
+    def shutdown(self) -> None:
+        """Release worker processes. Call after engine.run completes."""
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
 
     def __call__(self, histories, config=None) -> pd.DataFrame:
         cfg = dict(config or {})
@@ -206,43 +289,52 @@ class _OpportunisticForm4Scorer:
         asof_date = asof.date() if hasattr(asof, "date") else asof
         asof_ts = pd.Timestamp(asof_date)
 
-        rows: list[dict] = []
+        # Parent-side prep — PIT-correct mcap (zen review 2026-05-10:
+        # static main()-precomputed mcap dict would violate PIT correctness
+        # because mcaps drift over the 6yr audit window).
+        args_list: list[tuple] = []
         for ticker, history in histories.items():
             if history is None or history.empty:
                 continue
             sliced = history[history.index <= asof_ts]
             if sliced.empty:
                 continue
-
             controls = _compute_equity_controls(sliced)
             if controls is None:
                 continue
-
             close = _close_at(sliced, asof_ts)
             if close is None or close <= 0:
                 continue
-
-            shares = None
-            if self._shares is not None:
-                shares = self._shares.get(ticker, asof_ts)
+            shares = self._shares.get(ticker, asof_ts) if self._shares is not None else None
             mcap = (close * shares) if shares else self._mcap_lookup.get(ticker)
             if not mcap or mcap <= 0:
                 continue
+            args_list.append((ticker, asof_date, float(mcap), controls))
 
-            records = self._store.records_as_of(ticker, asof=asof_date, lookback_days=180)
-            net_oppor_usd = aggregate_opportunistic_signal(
-                records, asof=asof_date, classifier_cache=self._cache
-            )
-            signal_raw = float(net_oppor_usd) / float(mcap)
+        if not args_list:
+            return pd.DataFrame(columns=["ticker", "score"])
 
-            rows.append(
-                {
-                    "asof": asof_date,
-                    "ticker": ticker,
-                    "signal_raw": signal_raw,
-                    **controls,
-                }
-            )
+        # Dispatch heavy work — pool if configured, otherwise serial in parent.
+        self._ensure_executor()
+        if self._executor is not None:
+            rows = list(self._executor.map(_score_one_ticker, args_list, chunksize=50))
+        else:
+            rows = []
+            for args in args_list:
+                ticker, asof_date_arg, mcap_arg, controls_arg = args
+                records = self._store.records_as_of(ticker, asof=asof_date_arg, lookback_days=180)
+                net_oppor_usd = aggregate_opportunistic_signal(
+                    records, asof=asof_date_arg, classifier_cache=self._cache
+                )
+                signal_raw = float(net_oppor_usd) / float(mcap_arg)
+                rows.append(
+                    {
+                        "asof": asof_date_arg,
+                        "ticker": ticker,
+                        "signal_raw": signal_raw,
+                        **controls_arg,
+                    }
+                )
 
         if not rows:
             return pd.DataFrame(columns=["ticker", "score"])
@@ -436,6 +528,10 @@ class _CompoundInsiderPcScorer:
         # compound's index inherits name 'ticker' from set_index above, so
         # reset_index emits ['ticker', 'score'] directly.
         return compound.reset_index()
+
+    def shutdown(self) -> None:
+        """Release Form-4 worker pool. Call after engine.run completes."""
+        self._form4_inner.shutdown()
 
 
 def _monthly_asofs(start: date, end: date, *, day_of_month: int = 21) -> list[pd.Timestamp]:
@@ -781,6 +877,8 @@ def main() -> int:
         args.benchmark,
     )
     report = engine.run(args.is_start, args.is_end)
+    # Release Form-4 worker pool — engine.run is done dispatching scorer calls.
+    scorer.shutdown()
 
     carhart = load_carhart_daily(start=args.is_start, end=args.is_end)
     bench_rets = benchmark_returns(history_store, args.benchmark, args.is_start, args.is_end)
