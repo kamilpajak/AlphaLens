@@ -302,17 +302,18 @@ class TestClassifyCyclicalityExcess(unittest.TestCase):
         v_strict = classify_cyclicality_excess(strat, bench, excess_strong_threshold=-0.1)
         self.assertEqual(v_strict.classification, "strategy-specific counter-cyclical")
 
-    def test_inconclusive_benchmark_propagates_warning(self):
-        # If benchmark itself is non-counter-cyclical (R near 1.0, both quintiles positive equal),
-        # excess concept loses meaning. Function should flag this.
+    def test_inconclusive_when_benchmark_not_counter_cyclical(self):
+        # If benchmark R ≥ 0 (not counter-cyclical), excess concept is mathematically
+        # invalid (subtraction reverses semantic meaning across sign boundary).
+        # Per zen 2026-05-10 review: short-circuit to INCONCLUSIVE with proceed=None.
         strat = self._make_summary_from_R(mean_low=-0.001, mean_high=0.0017)
-        # Benchmark with both quintiles positive AND equal means → R near 1.0
-        bench = self._make_summary_from_R(mean_low=0.001, mean_high=0.0011)  # R ≈ 1.1
+        # Benchmark with both quintiles positive AND equal means → R ≈ 1.1
+        bench = self._make_summary_from_R(mean_low=0.001, mean_high=0.0011)
         v = classify_cyclicality_excess(strat, bench)
-        # Function should still produce verdict; rationale should mention baseline weak/non-cyclical
-        self.assertIn(v.proceed, (True, False, None))
-        # excess R is meaningful but should be flagged
-        self.assertIsNotNone(v.classification)
+        # Hard-fail to INCONCLUSIVE — no fall-through to standard branches
+        self.assertIsNone(v.proceed)
+        self.assertTrue(v.classification.startswith("INCONCLUSIVE"))
+        self.assertTrue(math.isnan(v.excess_R_mean))
 
 
 if __name__ == "__main__":

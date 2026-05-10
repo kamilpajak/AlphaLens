@@ -134,7 +134,10 @@ def top_decile_portfolio_daily_returns(
             continue
 
         next_asof = sorted_asofs[i + 1] if i + 1 < len(sorted_asofs) else None
-        end_idx = next_asof if next_asof is not None else asof + pd.Timedelta(days=tail_days)
+        # tail_days is in TRADING days (default 21 = ~monthly stride). Use BDay
+        # offset, NOT calendar days, to avoid systematic under-sampling of the
+        # final period (per zen 2026-05-10 code review).
+        end_idx = next_asof if next_asof is not None else asof + pd.offsets.BDay(tail_days)
 
         held_returns = pd.DataFrame({t: daily_returns_per_ticker[t] for t in held_tickers})
         period_mask = (held_returns.index > asof) & (held_returns.index <= end_idx)

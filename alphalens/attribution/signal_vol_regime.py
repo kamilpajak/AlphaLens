@@ -377,16 +377,29 @@ def classify_cyclicality_excess(
             ),
         )
 
-    excess = strat_R - bench_R
-
-    # Warn if benchmark itself is non-counter-cyclical (R near or above 1.0)
-    benchmark_weak_warning = ""
-    if bench_R > 0:
-        benchmark_weak_warning = (
-            f" Note: benchmark R_mean={bench_R:.2f} > 0; benchmark itself does "
-            f"not show counter-cyclical sign-flip pattern. Excess interpretation "
-            f"weaker than when benchmark is genuinely counter-cyclical."
+    # Short-circuit if benchmark itself is not counter-cyclical (R >= 0).
+    # Per zen 2026-05-10 code review: simple subtraction strat - bench reverses
+    # semantic meaning when R is positive (higher R = more counter-cyclical
+    # for positive R; lower R = more counter-cyclical for negative R). Excess
+    # concept is only well-defined against a counter-cyclical baseline.
+    if bench_R >= 0:
+        return CyclicalityExcessVerdict(
+            strategy_R_mean=strat_R,
+            benchmark_R_mean=bench_R,
+            excess_R_mean=float("nan"),
+            classification="INCONCLUSIVE (benchmark R ≥ 0)",
+            proceed=None,
+            rationale=(
+                f"strategy_R={strat_R:.2f}, benchmark_R={bench_R:.2f}. Benchmark "
+                f"baseline does not show counter-cyclical sign-flip pattern "
+                f"(R ≥ 0). Excess classification is designed specifically to isolate "
+                f"strategy edge from a mechanical counter-cyclical baseline. "
+                f"Use absolute classify_cyclicality() instead."
+            ),
         )
+
+    excess = strat_R - bench_R
+    benchmark_weak_warning = ""
 
     if excess <= excess_strong_threshold:
         return CyclicalityExcessVerdict(
