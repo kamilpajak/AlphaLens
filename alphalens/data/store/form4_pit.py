@@ -119,15 +119,29 @@ class Form4PITStore:
 
         lookback_start = asof - timedelta(days=int(lookback_days))
         years = self._year_range(lookback_start.year, asof.year)
-        df = self._load_partitions(years)
-        if df.empty:
-            return df
 
-        return df.loc[
-            (df["issuer_cik"] == issuer_cik)
-            & (df["filed_date"] <= asof)
-            & (df["transaction_date"] >= lookback_start)
-        ].reset_index(drop=True)
+        # Filter-before-concat: applying the boolean mask per yearly frame
+        # before stitching them together avoids materialising a multi-year
+        # full concat (~232k rows × 1800 calls/phase = ~417M row-allocs of
+        # churn). `.loc[mask]` returns a fresh frame, so cache integrity
+        # is preserved without `copy=True` on the concat.
+        per_year_filtered = []
+        for y in years:
+            df = self._load_one_year(int(y))
+            if df is None or df.empty:
+                continue
+            mask = (
+                (df["issuer_cik"] == issuer_cik)
+                & (df["filed_date"] <= asof)
+                & (df["transaction_date"] >= lookback_start)
+            )
+            sub = df.loc[mask]
+            if not sub.empty:
+                per_year_filtered.append(sub)
+
+        if not per_year_filtered:
+            return self._empty_frame()
+        return pd.concat(per_year_filtered, ignore_index=True).reset_index(drop=True)
 
     def records_for_person(
         self,
@@ -141,18 +155,26 @@ class Form4PITStore:
         Cohen-Malloy classifier per paper p. 1786.
         """
         years = list(range(classification_year - 3, classification_year))
-        df = self._load_partitions(years)
-        if df.empty:
-            return df
-
-        # transaction_date.year must lie within window — partition column already
-        # narrows but post-filter for safety against edge-of-partition records.
         years_set = set(years)
-        df = df.loc[
-            (df["reporting_owner_cik"] == person_cik)
-            & (df["transaction_date"].apply(lambda d: d.year in years_set))
-        ].reset_index(drop=True)
-        return df
+
+        # Filter-before-concat: see records_as_of for rationale. Applying
+        # the per-year mask first keeps allocations proportional to the
+        # subject-person's activity, not the cross-section's.
+        per_year_filtered = []
+        for y in years:
+            df = self._load_one_year(int(y))
+            if df is None or df.empty:
+                continue
+            mask = (df["reporting_owner_cik"] == person_cik) & (
+                df["transaction_date"].apply(lambda d: d.year in years_set)
+            )
+            sub = df.loc[mask]
+            if not sub.empty:
+                per_year_filtered.append(sub)
+
+        if not per_year_filtered:
+            return self._empty_frame()
+        return pd.concat(per_year_filtered, ignore_index=True).reset_index(drop=True)
 
     def _is_delisting_within_window(self, ticker: str, asof: date) -> bool:
         if self._delisting_exclusion_days <= 0:
@@ -162,21 +184,6 @@ class Form4PITStore:
 
     def _year_range(self, start_year: int, end_year: int) -> list[int]:
         return list(range(start_year, end_year + 1))
-
-    def _load_partitions(self, years: Iterable[int]) -> pd.DataFrame:
-        frames = []
-        for y in years:
-            df = self._load_one_year(int(y))
-            if df is None or df.empty:
-                continue
-            frames.append(df)
-        if not frames:
-            return self._empty_frame()
-        # Defensive copy: the cache holds the canonical normalised frames;
-        # never hand the cached object to callers, since they may mutate
-        # (downstream filtering, .loc assignment, etc.) and poison
-        # subsequent cache hits.
-        return pd.concat(frames, ignore_index=True, copy=True)
 
     def _load_one_year(self, year: int) -> pd.DataFrame | None:
         """Return the normalised parquet partition for ``year`` (or None).
@@ -203,8 +210,9 @@ class Form4PITStore:
             if col in df.columns:
                 df[col] = df[col].apply(_to_date)
 
+        # OrderedDict insertion already places the key at the MRU end,
+        # so no explicit move_to_end is needed here.
         self._partition_cache[year] = df
-        self._partition_cache.move_to_end(year)
         while len(self._partition_cache) > self._partition_cache_size:
             self._partition_cache.popitem(last=False)
         return df

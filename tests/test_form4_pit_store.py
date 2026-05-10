@@ -444,6 +444,54 @@ class TestForm4PITStorePartitionCache(unittest.TestCase):
         # post-cache. Either way, second must not see "POISONED".
         self.assertNotIn("POISONED", set(second["ticker"]))
 
+    def test_cache_evicts_least_recently_used_year(self):
+        # Cap=2; touch 2021, 2022, hit 2021 (promotes to MRU), then load 2023
+        # → 2022 must be evicted (LRU), not 2021.
+        store = Form4PITStore(
+            parquet_root=self.root,
+            ticker_cik_resolver=self.resolver,
+            partition_cache_size=2,
+        )
+        store.records_as_of("AAPL", asof=date(2021, 6, 15), lookback_days=10)
+        store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=10)
+        store.records_as_of("AAPL", asof=date(2021, 6, 15), lookback_days=10)  # promote 2021
+        store.records_as_of("AAPL", asof=date(2023, 6, 15), lookback_days=10)  # evict 2022
+
+        with mock.patch(
+            "alphalens.data.store.form4_pit.ds.dataset",
+            wraps=__import__("pyarrow.dataset", fromlist=["dataset"]).dataset,
+        ) as spy:
+            store.records_as_of("AAPL", asof=date(2021, 6, 15), lookback_days=10)
+            self.assertEqual(spy.call_count, 0, "2021 should still be cached (MRU)")
+            store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=10)
+            self.assertEqual(spy.call_count, 1, "2022 should have been evicted as LRU")
+
+    def test_missing_partition_directory_is_not_cached(self):
+        # Year 2019 has no partition dir; querying it must return empty
+        # without inserting None into the cache (so a later-written
+        # partition becomes visible without store reconstruction).
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        result = store.records_as_of("AAPL", asof=date(2019, 6, 15), lookback_days=10)
+        self.assertEqual(len(result), 0)
+        self.assertNotIn(2019, store._partition_cache)
+
+    def test_partition_cache_size_zero_disables_cache(self):
+        # With cap=0 every load is evicted immediately after insertion;
+        # subsequent calls re-read parquet. Defines the disabled-cache
+        # contract for callers who want the legacy path back.
+        store = Form4PITStore(
+            parquet_root=self.root,
+            ticker_cik_resolver=self.resolver,
+            partition_cache_size=0,
+        )
+        with mock.patch(
+            "alphalens.data.store.form4_pit.ds.dataset",
+            wraps=__import__("pyarrow.dataset", fromlist=["dataset"]).dataset,
+        ) as spy:
+            store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=10)
+            store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=10)
+        self.assertEqual(spy.call_count, 2, "cache_size=0 must read parquet on every call")
+
     def test_records_for_person_also_caches_partitions(self):
         # records_for_person and records_as_of share the same partition pool;
         # one call should warm partitions for the other.
