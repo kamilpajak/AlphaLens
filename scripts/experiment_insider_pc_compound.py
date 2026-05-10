@@ -24,8 +24,13 @@ artifacts and risks silent breakage if either is later refactored.
 Pre-screen reproducibility guard: by default, re-runs the IS-window 2014-2017
 signal-independence check before the audit window. The IS dates are HARDCODED
 in this script (NOT inherited from --is-start / --is-end) to prevent the
-guard from accidentally consuming the audit holdout. Pass --skip-precheck on
-runpod where the IS pre-screen has already cleared.
+guard from accidentally consuming the audit holdout.
+
+The guard auto-skips when --phase-offset != 0 because the multi-phase audit
+orchestrator runs one subprocess per phase, and the IS panel inputs are
+identical across phases — running the ~30min check 20+ times adds no
+information. Phase 0 still fires the guard. Pass --skip-precheck to suppress
+even on phase 0 (use on runpod when the guard has already cleared locally).
 """
 
 from __future__ import annotations
@@ -597,7 +602,14 @@ def main() -> int:
     )
     classifier_cache = ClassifierCache(form4_store)
 
-    if not args.skip_precheck:
+    # Phase 0 in a multi-phase audit runs the precheck once; phases 1+ skip
+    # it because phase_robust_backtesting spawns one subprocess per phase
+    # and re-running the ~30min IS panel build 20+ times burns ~10h with no
+    # additional information (data inputs are identical across phases).
+    # Standalone invocations default to phase_offset=0, so the guard still
+    # fires for ad-hoc runs unless --skip-precheck is set.
+    skip_precheck_effective = args.skip_precheck or args.phase_offset != 0
+    if not skip_precheck_effective:
         # Reproducibility guard runs on the FULL universe over the hardcoded
         # IS window 2014-2017 — independent of --is-start / --is-end.
         precheck_universe = load_universe_union(_PRECHECK_IS_START, _PRECHECK_IS_END)
@@ -624,6 +636,11 @@ def main() -> int:
                 "investigate before consuming the audit holdout.\n"
             )
             return 8
+    elif args.phase_offset != 0:
+        logger.info(
+            "phase_offset=%d != 0; skipping precheck (already ran on phase 0)",
+            args.phase_offset,
+        )
     else:
         logger.info("--skip-precheck set; not re-running IS reproducibility guard")
 
