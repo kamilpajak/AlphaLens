@@ -113,6 +113,13 @@ CLI komendy dla CLOSED layers istnieją jako research replay tooling — patrz `
 
 **Adversarial review pre-compute** — przed jakimkolwiek runem >1h compute: zen + perplexity adversarial review zlocked design memo. Pipeline złapał FATAL flaws na 2 designach jednej sesji (v5 quantile-LP, v8 LGBM-quantile, v0 Cohen-Malloy 5y misread). Don't skip nawet na "obvious next" experiments.
 
+**Layer 4 overlay design pre-screen (mandatory)** — przed briefing reviewers na ANY Layer 4 overlay test (vol-target, drawdown-control, CPPI, time-stop, etc.):
+1. **Pre-screen cyclicality** — call `alphalens.attribution.signal_vol_regime.classify_cyclicality()` on the base portfolio's daily returns vs exogenous benchmark vol (e.g. IWM 60d realized). If verdict.proceed is False (counter-cyclical signal), write REJECTED memo without registering — pro-cyclical overlays structurally de-lever exactly when counter-cyclical signals generate alpha. Bonferroni unspent.
+2. **Cross-check factual base claims** — any MaxDD/Sharpe/return statistic in the brief MUST be verified against dumped artifacts (`~/.alphalens/audit/<strategy>/phase_*_returns.parquet`) via `alphalens.backtest.metrics.max_drawdown` + independent inline computation. Do NOT pass numbers from memory or postmortem prose — they may be hallucinations or stale.
+3. **Quote pre-screen verdict verbatim w memo §4 (Hypothesis section)** — auditable artifact that the screen ran. Test enforcement: `tests/test_overlay_design_compliance.py`.
+
+Empirical justification: PR #88 (2026-05-10, `insider_form4_overlay_REJECTED_2026_05_10.md`) caught both failure modes mid-flight — false MaxDD prior + counter-cyclical mechanism — burning 4 review passes that pre-screen would have prevented. Per `feedback_signal_overlay_cyclicality_screen.md` memory.
+
 **Burnt-holdout multiplicity compounds** — pure model-class swap na identycznych features+holdout+selection NIE cleansuje multiplicity. Use program-level Bonferroni count gdy data inputs unchanged. "Fresh class" Bonferroni licznik tylko-intra-class jest statistical self-deception.
 
 **Literature ≠ oracle** — projekt eksploruje genuinely novel combinations (multi-source × PIT × interaction × live EDGAR @ retail scale); literature aggregate distributions to NIE są informative priors. Methodology bundle (pre-reg + multi-phase + Bonferroni) = observation protocol, nie gate.
