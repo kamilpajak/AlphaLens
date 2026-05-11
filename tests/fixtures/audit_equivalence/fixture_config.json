@@ -1,0 +1,11 @@
+{
+  "benchmark": "IWM",
+  "cost_bps": 5.0,
+  "holding": 21,
+  "is_end": "2019-06-30",
+  "is_start": "2019-01-01",
+  "phase_offset": 0,
+  "rebalance_stride": 21,
+  "top_n": 200,
+  "universe_size_cap": 300
+}

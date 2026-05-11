@@ -192,6 +192,8 @@ program-Bonferroni n=34 |t|≥2.974.
 
 6. **Bonferroni inflation post-hoc** — if unforeseen new tests are added between this pre-reg and compound execution, n grows. Per Romano-Wolf step-down, critical |t| could rise beyond 2.974. **Mitigation**: lock n=34 at registration; if more tests added before compound runs, recompute critical |t| at run time and report both.
 
+7. **HAC small-sample bias on the final-lock window** (added 2026-05-11 per zen CR of PR #92). `hac_maxlags = 126` daily obs (~6 mo) is locked from `insider_form4_opportunistic_2026_05_08_v2` for cross-experiment comparability. On the OOS window 2018-2023 (~1512 daily obs), L/T = 8.3% — comfortably within Newey-West (1987) + Andrews (1991) asymptotic comfort. On the **final-lock window 2024-2026 (~567 daily obs), L/T = 22.2%**, which exceeds the Andrews-Monahan small-sample rule of thumb (L/T < 0.20) and risks **unstable HAC covariance estimates and inflated t-stats**. **Mitigation**: per pre-reg §5.4, final-lock primary inference is the Romano-Wolf block-bootstrap CI (`bounds_alpha_t_lower/upper`), not the HAC t-stat. The HAC t-stat is reported for cross-experiment comparability with insider_form4 v2 but is not the decision-bearing metric on the final-lock window. Audit report MUST surface both the HAC t-stat AND the Romano-Wolf bounds and flag the L/T ratio in the verdict section.
+
 ## 8. Implementation sequence
 
 1. ✅ Pre-screens #1, #2, #3 executed on IS 2014-2017 (TDD-verified; results in §3.5)

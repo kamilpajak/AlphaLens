@@ -37,7 +37,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from datetime import date
 from pathlib import Path
 
@@ -173,8 +175,66 @@ def _close_at(history: pd.DataFrame, asof: pd.Timestamp) -> float | None:
     return float(sliced["close"].iloc[-1])
 
 
+# -------------------------------------------------------------------------
+# Process-pool plumbing for the Form-4 scorer (Refactor B from the perf
+# optimization plan). Each worker process runs `_init_worker` ONCE on
+# startup to build its own Form4PITStore + ClassifierCache, then
+# `_score_one_ticker` reuses those globals for every dispatched ticker.
+# - OMP_NUM_THREADS=1 + pyarrow.set_cpu_count(1) prevents BLAS / PyArrow
+#   thread-pool oversubscription (8 workers × 8 implicit threads = 64).
+# - ClassifierCache survives across all rebalances within a worker,
+#   since the executor is persistent across engine.run.
+# Per zen review 2026-05-10.
+# -------------------------------------------------------------------------
+
+_worker_store: Form4PITStore | None = None
+_worker_cache: ClassifierCache | None = None
+
+
+def _init_worker(parquet_root: Path, ticker_cik_resolver) -> None:
+    """One-time worker-process setup: thread caps + store + cache."""
+    global _worker_store, _worker_cache  # noqa: PLW0603
+    os.environ["OMP_NUM_THREADS"] = "1"
+    # PyArrow is a hard dep (Form4PITStore.records_as_of uses pyarrow.dataset),
+    # so import unconditionally; an ImportError here means the environment
+    # is broken and the worker would fail anyway on first records_as_of call.
+    import pyarrow as pa
+
+    pa.set_cpu_count(1)
+    _worker_store = Form4PITStore(
+        parquet_root=parquet_root,
+        ticker_cik_resolver=ticker_cik_resolver,
+        delisting_events=None,
+    )
+    _worker_cache = ClassifierCache(_worker_store)
+
+
+def _score_one_ticker(args_tuple: tuple) -> dict:
+    """Worker payload — globals already initialized via _init_worker."""
+    ticker, asof_date, mcap, controls = args_tuple
+    records = _worker_store.records_as_of(ticker, asof=asof_date, lookback_days=180)
+    net_oppor_usd = aggregate_opportunistic_signal(
+        records, asof=asof_date, classifier_cache=_worker_cache
+    )
+    signal_raw = float(net_oppor_usd) / float(mcap)
+    return {
+        "asof": asof_date,
+        "ticker": ticker,
+        "signal_raw": signal_raw,
+        **controls,
+    }
+
+
 class _OpportunisticForm4Scorer:
-    """BacktestEngine adapter — for each rebalance asof, build features and score."""
+    """BacktestEngine adapter — for each rebalance asof, build features and score.
+
+    Heavy parts (Form-4 records_as_of + classifier cache lookups) are dispatched
+    to a persistent ProcessPoolExecutor (lazily created on first __call__,
+    torn down via shutdown()). Parent-side work — equity controls, close,
+    shares-store-backed PIT mcap — stays in the main process to keep
+    shares_store off the pickle path AND preserve PIT correctness over the
+    audit window. Set ALPHALENS_WORKERS=1 for serial execution (no pool).
+    """
 
     def __init__(
         self,
@@ -188,6 +248,29 @@ class _OpportunisticForm4Scorer:
         self._cache = classifier_cache
         self._shares = shares_store
         self._mcap_lookup = mcap_lookup or {}
+        self._executor: ProcessPoolExecutor | None = None
+        # Pickle-friendly snapshots for worker-pool initargs:
+        self._parquet_root = form4_store.parquet_root
+        self._cik_resolver = form4_store.ticker_cik_resolver
+
+    def _ensure_executor(self) -> None:
+        """Lazy persistent pool. Survives across all rebalances within a phase."""
+        if self._executor is not None:
+            return
+        n_workers = int(os.environ.get("ALPHALENS_WORKERS", "8"))
+        if n_workers <= 1:
+            return  # serial mode — no pool created
+        self._executor = ProcessPoolExecutor(
+            max_workers=n_workers,
+            initializer=_init_worker,
+            initargs=(self._parquet_root, self._cik_resolver),
+        )
+
+    def shutdown(self) -> None:
+        """Release worker processes. Call after engine.run completes."""
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
 
     def __call__(self, histories, config=None) -> pd.DataFrame:
         cfg = dict(config or {})
@@ -206,43 +289,45 @@ class _OpportunisticForm4Scorer:
         asof_date = asof.date() if hasattr(asof, "date") else asof
         asof_ts = pd.Timestamp(asof_date)
 
-        rows: list[dict] = []
+        # Parent-side prep — PIT-correct mcap (zen review 2026-05-10:
+        # static main()-precomputed mcap dict would violate PIT correctness
+        # because mcaps drift over the 6yr audit window).
+        args_list: list[tuple] = []
         for ticker, history in histories.items():
             if history is None or history.empty:
                 continue
             sliced = history[history.index <= asof_ts]
             if sliced.empty:
                 continue
-
             controls = _compute_equity_controls(sliced)
             if controls is None:
                 continue
-
             close = _close_at(sliced, asof_ts)
             if close is None or close <= 0:
                 continue
-
-            shares = None
-            if self._shares is not None:
-                shares = self._shares.get(ticker, asof_ts)
+            shares = self._shares.get(ticker, asof_ts) if self._shares is not None else None
             mcap = (close * shares) if shares else self._mcap_lookup.get(ticker)
             if not mcap or mcap <= 0:
                 continue
+            args_list.append((ticker, asof_date, float(mcap), controls))
 
-            records = self._store.records_as_of(ticker, asof=asof_date, lookback_days=180)
-            net_oppor_usd = aggregate_opportunistic_signal(
-                records, asof=asof_date, classifier_cache=self._cache
-            )
-            signal_raw = float(net_oppor_usd) / float(mcap)
+        if not args_list:
+            return pd.DataFrame(columns=["ticker", "score"])
 
-            rows.append(
-                {
-                    "asof": asof_date,
-                    "ticker": ticker,
-                    "signal_raw": signal_raw,
-                    **controls,
-                }
-            )
+        # Dispatch heavy work — pool if configured, otherwise serial via the
+        # SAME _score_one_ticker function (per zen review 2026-05-10: serial
+        # path duplicating worker logic risks silent drift if either is
+        # changed independently). For the serial branch we populate the
+        # module-level worker globals from this scorer's parent state so
+        # _score_one_ticker behaves identically.
+        self._ensure_executor()
+        if self._executor is not None:
+            rows = list(self._executor.map(_score_one_ticker, args_list, chunksize=50))
+        else:
+            global _worker_store, _worker_cache  # noqa: PLW0603
+            _worker_store = self._store
+            _worker_cache = self._cache
+            rows = [_score_one_ticker(args) for args in args_list]
 
         if not rows:
             return pd.DataFrame(columns=["ticker", "score"])
@@ -286,6 +371,9 @@ class _CompoundInsiderPcScorer:
     compound only if BOTH components produce a finite score for that asof.
     """
 
+    # Class-level default; covers __new__-bypass paths in unit tests.
+    _pc_panel: pd.Series | None = None
+
     def __init__(
         self,
         *,
@@ -304,8 +392,85 @@ class _CompoundInsiderPcScorer:
             shares_store=shares_store,
         )
         self._smd_loader = smd_loader
+        # Pre-built P/C panel populated by prebuild_pc_panel(); when present,
+        # __call__ does an O(1) lookup instead of rebuilding per rebalance.
+        self._pc_panel: pd.Series | None = None
 
-    def __call__(self, histories, config=None) -> pd.DataFrame:
+    def prebuild_pc_panel(
+        self,
+        universe: list[str],
+        asof_dates: list[date],
+        history_store: HistoryStore,
+    ) -> None:
+        """Pre-build P/C feature frame + scores for all rebalance asofs.
+
+        `build_feature_frame` already supports multi-asof input efficiently
+        (`_prepare_ticker_history` is called ONCE per ticker, computing the
+        rolling abnormal_pcr series; the inner loop only slices per asof).
+        Per-rebalance invocation discards this amortization — recomputing
+        the rolling series ~85 times per ticker in a 6yr window. Pre-building
+        once cuts that to 1x.
+
+        Numerical equivalence requires post-filtering rows to match the
+        engine's per-asof universe: BacktestEngine._build_histories
+        (engine.py:295-301) drops tickers where
+        `len(truncate_to(ticker, day)) < MIN_BARS_REQUIRED` (default 220).
+        Without that filter, the prebuild includes "phantom" rows for
+        recent-IPO tickers (when their iVolatility SMD covers the asof but
+        yfinance OHLCV history is too short). Even a single phantom in the
+        per-asof OLS shifts coefficients → residuals shift for ALL scored
+        tickers at that asof.
+
+        MUST be called BEFORE BacktestEngine.run with `asof_dates` matching
+        the engine's rebalance schedule (see HistoryStore.benchmark_calendar
+        + [phase_offset::stride] slicing in alphalens/backtest/engine.py:230).
+        """
+        from alphalens.backtest.engine import BacktestEngine as _Engine
+
+        asof_strs = [pd.Timestamp(d).strftime("%Y-%m-%d") for d in asof_dates]
+        pc_features = build_feature_frame(
+            smd_loader=self._smd_loader,
+            universe=universe,
+            asof_dates=asof_strs,
+        )
+        if pc_features.empty:
+            self._pc_panel = pd.Series(dtype=float, name="score")
+            return
+
+        # Mirror engine's per-asof history filter so OLS input matches the
+        # per-rebalance fallback exactly (pre-reg-blessed fixtures stay
+        # byte-equivalent). Default min_bars is engine.MIN_BARS_REQUIRED=220
+        # unless the scorer declares its own.
+        min_bars = getattr(self, "MIN_BARS_REQUIRED", _Engine.MIN_BARS_REQUIRED)
+        allowed_pairs: set[tuple[str, str]] = set()
+        for asof_d, asof_str in zip(asof_dates, asof_strs, strict=True):
+            for ticker in universe:
+                if len(history_store.truncate_to(ticker, asof_d)) >= min_bars:
+                    allowed_pairs.add((asof_str, ticker.upper()))
+        keep_mask = pd.Series(
+            [
+                (row.asof, row.ticker) in allowed_pairs
+                for row in pc_features.itertuples(index=False)
+            ],
+            index=pc_features.index,
+        )
+        pc_features = pc_features.loc[keep_mask]
+        if pc_features.empty:
+            self._pc_panel = pd.Series(dtype=float, name="score")
+            return
+
+        pc_features = pc_features.assign(score=score_pc_abnormal_residual(pc_features)).dropna(
+            subset=["score"]
+        )
+        # Normalize asof to date for stable lookup keys.
+        pc_features["asof"] = pd.to_datetime(pc_features["asof"]).dt.date
+        self._pc_panel = pc_features.set_index(["asof", "ticker"])["score"].sort_index()
+
+    def __call__(self, histories, config=None) -> pd.DataFrame:  # noqa: PLR0911
+        # Eight defensive early-returns: missing asof, empty form4, panel
+        # miss, empty pc_features, empty pc_df, empty pc_series, empty
+        # compound, normal path. Refactoring to a single return obscures
+        # which branch handled which empty case; left as-is.
         cfg = dict(config or {})
         asof = cfg.get("asof")
         if asof is None:
@@ -323,29 +488,43 @@ class _CompoundInsiderPcScorer:
         if form4_df.empty:
             return pd.DataFrame(columns=["ticker", "score"])
 
-        # 2) P/C scores: build feature frame for the same asof + universe.
-        universe = list(histories.keys())
-        pc_features = build_feature_frame(
-            smd_loader=self._smd_loader,
-            universe=universe,
-            asof_dates=[asof_date.strftime("%Y-%m-%d")],
-        )
-        if pc_features.empty:
-            return pd.DataFrame(columns=["ticker", "score"])
-        pc_features = pc_features.assign(score=score_pc_abnormal_residual(pc_features))
-        pc_df = pc_features[["ticker", "score"]].dropna(subset=["score"])
-        if pc_df.empty:
+        # 2) P/C scores: lookup pre-built panel if present, else fall back to
+        #    per-asof build for ad-hoc invocations (e.g. precheck script).
+        if self._pc_panel is not None:
+            try:
+                pc_series = self._pc_panel.loc[asof_date].astype(float)
+            except KeyError:
+                return pd.DataFrame(columns=["ticker", "score"])
+        else:
+            universe = list(histories.keys())
+            pc_features = build_feature_frame(
+                smd_loader=self._smd_loader,
+                universe=universe,
+                asof_dates=[asof_date.strftime("%Y-%m-%d")],
+            )
+            if pc_features.empty:
+                return pd.DataFrame(columns=["ticker", "score"])
+            pc_features = pc_features.assign(score=score_pc_abnormal_residual(pc_features))
+            pc_df = pc_features[["ticker", "score"]].dropna(subset=["score"])
+            if pc_df.empty:
+                return pd.DataFrame(columns=["ticker", "score"])
+            pc_series = pc_df.set_index("ticker")["score"].astype(float)
+
+        if pc_series.empty:
             return pd.DataFrame(columns=["ticker", "score"])
 
         # 3) Strict-intersection equal-weight z-score average.
         f4_series = form4_df.set_index("ticker")["score"].astype(float)
-        pc_series = pc_df.set_index("ticker")["score"].astype(float)
         compound = compound_score_from_components(f4_series, pc_series)
         if compound.empty:
             return pd.DataFrame(columns=["ticker", "score"])
         # compound's index inherits name 'ticker' from set_index above, so
         # reset_index emits ['ticker', 'score'] directly.
         return compound.reset_index()
+
+    def shutdown(self) -> None:
+        """Release Form-4 worker pool. Call after engine.run completes."""
+        self._form4_inner.shutdown()
 
 
 def _monthly_asofs(start: date, end: date, *, day_of_month: int = 21) -> list[pd.Timestamp]:
@@ -657,6 +836,19 @@ def main() -> int:
         smd_loader=_smd_loader,
     )
 
+    # Pre-build P/C feature panel for all rebalance asofs. Mirror engine's
+    # exact rebalance calendar (engine.py:230-236) so panel keys align with
+    # what the engine will actually request during run().
+    trading_calendar = HistoryStore.benchmark_calendar(
+        history_store, args.benchmark, args.is_start, args.is_end
+    )
+    sliced_calendar = trading_calendar[args.phase_offset :: args.rebalance_stride]
+    rebalance_dates = [ts.date() if hasattr(ts, "date") else ts for ts in sliced_calendar]
+    logger.info("Pre-building P/C panel for %d rebalance asofs", len(rebalance_dates))
+    scorer.prebuild_pc_panel(
+        universe=universe, asof_dates=rebalance_dates, history_store=history_store
+    )
+
     engine = BacktestEngine(
         history_store=history_store,
         scorer=scorer,
@@ -677,7 +869,12 @@ def main() -> int:
         args.phase_offset,
         args.benchmark,
     )
-    report = engine.run(args.is_start, args.is_end)
+    try:
+        report = engine.run(args.is_start, args.is_end)
+    finally:
+        # Always release Form-4 worker pool — even on engine.run() exception
+        # — so worker processes don't leak as zombies (zen review 2026-05-10).
+        scorer.shutdown()
 
     carhart = load_carhart_daily(start=args.is_start, end=args.is_end)
     bench_rets = benchmark_returns(history_store, args.benchmark, args.is_start, args.is_end)
