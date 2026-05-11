@@ -19,6 +19,7 @@ must produce parquet files matching exactly these columns.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Iterable
 from datetime import date, timedelta
 from pathlib import Path
@@ -28,6 +29,11 @@ import pandas as pd
 import pyarrow.dataset as ds
 
 from alphalens.data.store.survivorship_pit import DelistingEvent
+
+# Default LRU capacity. 32 covers the largest realistic working set:
+# a 6yr lookback × 5 audit phases × concurrent OOS+final-lock ≈ 18 unique
+# years. Override via Form4PITStore(..., partition_cache_size=N).
+DEFAULT_PARTITION_CACHE_SIZE: int = 32
 
 # Locked schema. Order matters for parquet writer parity tests.
 FORM4_SCHEMA_COLUMNS: tuple[str, ...] = (
@@ -66,6 +72,7 @@ class Form4PITStore:
         delisting_events: Iterable[DelistingEvent] | None = None,
         delisting_exclusion_days: int = DEFAULT_DELISTING_EXCLUSION_DAYS,
         ticker_cik_resolver: _CikResolver | None = None,
+        partition_cache_size: int = DEFAULT_PARTITION_CACHE_SIZE,
     ):
         self._root = Path(parquet_root)
         self._resolver = ticker_cik_resolver
@@ -76,6 +83,15 @@ class Form4PITStore:
             for ev in delisting_events:
                 delisting_by_ticker.setdefault(ev.ticker.upper(), []).append(ev.delisted_date)
         self._delisting_by_ticker = delisting_by_ticker
+
+        # Per-year partition cache. On RunPod's MooseFS network volume,
+        # `records_as_of` was observed reloading the same year partition
+        # ~1800x per audit phase (~38 GB rchar). Cache makes each year a
+        # one-shot parquet read for the lifetime of the store instance.
+        # Per-process: workers don't share state, which is fine — the
+        # backtest engine is single-threaded per ticker batch.
+        self._partition_cache_size = int(partition_cache_size)
+        self._partition_cache: OrderedDict[int, pd.DataFrame] = OrderedDict()
 
     @property
     def parquet_root(self) -> Path:
@@ -111,15 +127,29 @@ class Form4PITStore:
 
         lookback_start = asof - timedelta(days=int(lookback_days))
         years = self._year_range(lookback_start.year, asof.year)
-        df = self._load_partitions(years)
-        if df.empty:
-            return df
 
-        return df.loc[
-            (df["issuer_cik"] == issuer_cik)
-            & (df["filed_date"] <= asof)
-            & (df["transaction_date"] >= lookback_start)
-        ].reset_index(drop=True)
+        # Filter-before-concat: applying the boolean mask per yearly frame
+        # before stitching them together avoids materialising a multi-year
+        # full concat (~232k rows × 1800 calls/phase = ~417M row-allocs of
+        # churn). `.loc[mask]` returns a fresh frame, so cache integrity
+        # is preserved without `copy=True` on the concat.
+        per_year_filtered = []
+        for y in years:
+            df = self._load_one_year(int(y))
+            if df is None or df.empty:
+                continue
+            mask = (
+                (df["issuer_cik"] == issuer_cik)
+                & (df["filed_date"] <= asof)
+                & (df["transaction_date"] >= lookback_start)
+            )
+            sub = df.loc[mask]
+            if not sub.empty:
+                per_year_filtered.append(sub)
+
+        if not per_year_filtered:
+            return self._empty_frame()
+        return pd.concat(per_year_filtered, ignore_index=True).reset_index(drop=True)
 
     def records_for_person(
         self,
@@ -133,18 +163,26 @@ class Form4PITStore:
         Cohen-Malloy classifier per paper p. 1786.
         """
         years = list(range(classification_year - 3, classification_year))
-        df = self._load_partitions(years)
-        if df.empty:
-            return df
-
-        # transaction_date.year must lie within window — partition column already
-        # narrows but post-filter for safety against edge-of-partition records.
         years_set = set(years)
-        df = df.loc[
-            (df["reporting_owner_cik"] == person_cik)
-            & (df["transaction_date"].apply(lambda d: d.year in years_set))
-        ].reset_index(drop=True)
-        return df
+
+        # Filter-before-concat: see records_as_of for rationale. Applying
+        # the per-year mask first keeps allocations proportional to the
+        # subject-person's activity, not the cross-section's.
+        per_year_filtered = []
+        for y in years:
+            df = self._load_one_year(int(y))
+            if df is None or df.empty:
+                continue
+            mask = (df["reporting_owner_cik"] == person_cik) & (
+                df["transaction_date"].apply(lambda d: d.year in years_set)
+            )
+            sub = df.loc[mask]
+            if not sub.empty:
+                per_year_filtered.append(sub)
+
+        if not per_year_filtered:
+            return self._empty_frame()
+        return pd.concat(per_year_filtered, ignore_index=True).reset_index(drop=True)
 
     def _is_delisting_within_window(self, ticker: str, asof: date) -> bool:
         if self._delisting_exclusion_days <= 0:
@@ -155,28 +193,36 @@ class Form4PITStore:
     def _year_range(self, start_year: int, end_year: int) -> list[int]:
         return list(range(start_year, end_year + 1))
 
-    def _load_partitions(self, years: Iterable[int]) -> pd.DataFrame:
-        existing_dirs = [
-            self._root / f"{PARTITION_KEY}={y}"
-            for y in years
-            if (self._root / f"{PARTITION_KEY}={y}").is_dir()
-        ]
-        if not existing_dirs:
-            return self._empty_frame()
-        # Read each partition independently and concat — pyarrow handles hive
-        # partition columns automatically but raises on missing dirs.
-        frames = []
-        for d in existing_dirs:
-            dataset = ds.dataset(str(d), partitioning=None, format="parquet")
-            table = dataset.to_table(columns=list(FORM4_SCHEMA_COLUMNS))
-            frames.append(table.to_pandas())
-        if not frames:
-            return self._empty_frame()
-        df = pd.concat(frames, ignore_index=True)
-        # Normalise date columns (parquet may surface as Timestamp).
+    def _load_one_year(self, year: int) -> pd.DataFrame | None:
+        """Return the normalised parquet partition for ``year`` (or None).
+
+        Each year is parquet-loaded at most once per store instance.
+        Returns None for years whose partition directory does not exist;
+        these are NOT cached so a later partition write becomes visible.
+        """
+        cached = self._partition_cache.get(year)
+        if cached is not None:
+            self._partition_cache.move_to_end(year)
+            return cached
+
+        part_dir = self._root / f"{PARTITION_KEY}={year}"
+        if not part_dir.is_dir():
+            return None
+
+        dataset = ds.dataset(str(part_dir), partitioning=None, format="parquet")
+        table = dataset.to_table(columns=list(FORM4_SCHEMA_COLUMNS))
+        df = table.to_pandas()
+        # Normalise date columns once at cache fill (parquet may surface
+        # them as pd.Timestamp); cache hits then skip the per-row apply.
         for col in ("filed_date", "transaction_date"):
             if col in df.columns:
                 df[col] = df[col].apply(_to_date)
+
+        # OrderedDict insertion already places the key at the MRU end,
+        # so no explicit move_to_end is needed here.
+        self._partition_cache[year] = df
+        while len(self._partition_cache) > self._partition_cache_size:
+            self._partition_cache.popitem(last=False)
         return df
 
     @staticmethod

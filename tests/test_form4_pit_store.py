@@ -16,6 +16,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 import pyarrow as pa
@@ -323,6 +324,210 @@ class TestForm4PITStoreRecordsForPerson(unittest.TestCase):
         store = Form4PITStore(parquet_root=self.root)
         result = store.records_for_person(person_cik="0000001000", classification_year=2023)
         self.assertEqual(len(result), 0)
+
+
+class TestForm4PITStorePartitionCache(unittest.TestCase):
+    """Per-year partition cache: each year partition must be parquet-loaded
+    at most once across repeated queries, eliminating MooseFS re-reads on
+    pod (~1800 redundant year-loads per phase observed empirically).
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.resolver = _StaticCikResolver({"AAPL": "0000320193", "MSFT": "0000789019"})
+
+        _write_partition(
+            self.root,
+            2021,
+            [
+                _record(
+                    issuer_cik="0000320193",
+                    ticker="AAPL",
+                    accession_number="A-2021",
+                    filed_date=date(2021, 6, 1),
+                    transaction_date=date(2021, 5, 15),
+                ),
+            ],
+        )
+        _write_partition(
+            self.root,
+            2022,
+            [
+                _record(
+                    issuer_cik="0000320193",
+                    ticker="AAPL",
+                    accession_number="A-2022",
+                    filed_date=date(2022, 6, 1),
+                    transaction_date=date(2022, 5, 15),
+                ),
+            ],
+        )
+        _write_partition(
+            self.root,
+            2023,
+            [
+                _record(
+                    issuer_cik="0000320193",
+                    ticker="AAPL",
+                    accession_number="A-2023",
+                    filed_date=date(2023, 6, 1),
+                    transaction_date=date(2023, 5, 15),
+                ),
+            ],
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_repeated_call_with_same_years_does_not_reread_parquet(self):
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        with mock.patch(
+            "alphalens.data.store.form4_pit.ds.dataset",
+            wraps=__import__("pyarrow.dataset", fromlist=["dataset"]).dataset,
+        ) as spy:
+            store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=30)
+            calls_after_first = spy.call_count
+            store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=30)
+            calls_after_second = spy.call_count
+
+        self.assertEqual(calls_after_first, 1, "first call should read 2022 partition once")
+        self.assertEqual(
+            calls_after_second,
+            calls_after_first,
+            "second call with same years must hit cache, not re-read parquet",
+        )
+
+    def test_overlapping_year_ranges_reuse_cached_partitions(self):
+        # asof=2022-06-15 lookback 180 → years [2021, 2022]
+        # asof=2022-12-15 lookback 180 → year [2022]
+        # asof=2023-06-15 lookback 180 → years [2022, 2023]
+        # Total unique years across 3 calls: {2021, 2022, 2023} → 3 reads.
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        with mock.patch(
+            "alphalens.data.store.form4_pit.ds.dataset",
+            wraps=__import__("pyarrow.dataset", fromlist=["dataset"]).dataset,
+        ) as spy:
+            store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=180)
+            store.records_as_of("AAPL", asof=date(2022, 12, 15), lookback_days=180)
+            store.records_as_of("AAPL", asof=date(2023, 6, 15), lookback_days=180)
+
+        self.assertEqual(
+            spy.call_count,
+            3,
+            "expected 3 unique year-partition reads across 3 overlapping queries",
+        )
+
+    def test_cache_returns_byte_equivalent_dataframe(self):
+        # Cached and uncached returns must be column-, dtype-, and value-equal.
+        store_a = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        store_b = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+
+        # Warm store_a's cache, then re-query.
+        store_a.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=30)
+        first = store_a.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=30)
+        # store_b is fresh — no cache yet.
+        fresh = store_b.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=30)
+
+        pd.testing.assert_frame_equal(first.reset_index(drop=True), fresh.reset_index(drop=True))
+
+    def test_cache_does_not_leak_mutations_across_calls(self):
+        # If cache returns the same underlying frame each hit, an upstream
+        # mutation would poison subsequent reads. Defensive: the cache layer
+        # must not let caller mutations propagate to the next hit.
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        first = store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=30)
+        first.loc[:, "ticker"] = "POISONED"  # mutate caller's view
+
+        second = store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=30)
+        # Either the cache returned a fresh copy, or _load_partitions copied
+        # post-cache. Either way, second must not see "POISONED".
+        self.assertNotIn("POISONED", set(second["ticker"]))
+
+    def test_cache_evicts_least_recently_used_year(self):
+        # Cap=2; touch 2021, 2022, hit 2021 (promotes to MRU), then load 2023
+        # → 2022 must be evicted (LRU), not 2021.
+        store = Form4PITStore(
+            parquet_root=self.root,
+            ticker_cik_resolver=self.resolver,
+            partition_cache_size=2,
+        )
+        store.records_as_of("AAPL", asof=date(2021, 6, 15), lookback_days=10)
+        store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=10)
+        store.records_as_of("AAPL", asof=date(2021, 6, 15), lookback_days=10)  # promote 2021
+        store.records_as_of("AAPL", asof=date(2023, 6, 15), lookback_days=10)  # evict 2022
+
+        with mock.patch(
+            "alphalens.data.store.form4_pit.ds.dataset",
+            wraps=__import__("pyarrow.dataset", fromlist=["dataset"]).dataset,
+        ) as spy:
+            store.records_as_of("AAPL", asof=date(2021, 6, 15), lookback_days=10)
+            self.assertEqual(spy.call_count, 0, "2021 should still be cached (MRU)")
+            store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=10)
+            self.assertEqual(spy.call_count, 1, "2022 should have been evicted as LRU")
+
+    def test_missing_partition_directory_is_not_cached(self):
+        # Year 2019 has no partition dir; querying it must return empty
+        # without inserting None into the cache (so a later-written
+        # partition becomes visible without store reconstruction).
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        result = store.records_as_of("AAPL", asof=date(2019, 6, 15), lookback_days=10)
+        self.assertEqual(len(result), 0)
+        self.assertNotIn(2019, store._partition_cache)
+
+    def test_partition_cache_size_zero_disables_cache(self):
+        # With cap=0 every load is evicted immediately after insertion;
+        # subsequent calls re-read parquet. Defines the disabled-cache
+        # contract for callers who want the legacy path back.
+        store = Form4PITStore(
+            parquet_root=self.root,
+            ticker_cik_resolver=self.resolver,
+            partition_cache_size=0,
+        )
+        with mock.patch(
+            "alphalens.data.store.form4_pit.ds.dataset",
+            wraps=__import__("pyarrow.dataset", fromlist=["dataset"]).dataset,
+        ) as spy:
+            store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=10)
+            store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=10)
+        self.assertEqual(spy.call_count, 2, "cache_size=0 must read parquet on every call")
+
+    def test_records_for_person_also_caches_partitions(self):
+        # records_for_person and records_as_of share the same partition pool;
+        # one call should warm partitions for the other.
+        _write_partition(
+            self.root,
+            2020,
+            [
+                _record(
+                    issuer_cik="0000320193",
+                    ticker="AAPL",
+                    accession_number="P-2020",
+                    reporting_owner_cik="0000001000",
+                    filed_date=date(2020, 5, 5),
+                    transaction_date=date(2020, 5, 1),
+                ),
+            ],
+        )
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        with mock.patch(
+            "alphalens.data.store.form4_pit.ds.dataset",
+            wraps=__import__("pyarrow.dataset", fromlist=["dataset"]).dataset,
+        ) as spy:
+            # First: records_for_person classification_year=2023 → years [2020, 2021, 2022]
+            store.records_for_person(person_cik="0000001000", classification_year=2023)
+            first_count = spy.call_count
+            # Second: records_as_of asof=2022-06-15 lookback 180 → years [2021, 2022]
+            # Both years already cached.
+            store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=180)
+            second_count = spy.call_count
+
+        self.assertEqual(first_count, 3, "records_for_person cold-loads 3 years")
+        self.assertEqual(
+            second_count,
+            first_count,
+            "records_as_of must reuse partitions warmed by records_for_person",
+        )
 
 
 class TestForm4PITStoreSchema(unittest.TestCase):
