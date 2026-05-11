@@ -785,6 +785,23 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    # Pre-reg memo §3.1 + §4 lock rebalance stride at 21d (monthly). The
+    # CLI accepts --rebalance-stride for testing /smoke pathways, but the
+    # locked value must not be overridden at audit time. The generic
+    # `alphalens audit` driver passed `--rebalance-stride 5` (intended as
+    # "5 phases") which the experiment script silently accepted as 5-day
+    # cadence, deviating from memo before this guard. Discovery cost: ~27
+    # min wasted pod compute (2026-05-11 audit re-launch postmortem).
+    if args.rebalance_stride != _REBALANCE_STRIDE_LOCK:
+        sys.stderr.write(
+            f"PRE-REG VIOLATION: --rebalance-stride={args.rebalance_stride} "
+            f"overrides locked memo §3.1 value {_REBALANCE_STRIDE_LOCK}. "
+            "Use scripts/run_insider_pc_compound_audit.py for multi-phase "
+            "audits (N_PHASES separate from rebalance_stride) or remove "
+            "the override to use the locked 21d monthly cadence.\n"
+        )
+        return 9
+
     _check_backfill_exists(args.parquet_root)
     _verify_component_hashes()
 
