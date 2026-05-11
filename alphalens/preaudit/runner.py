@@ -14,8 +14,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 import time
-import uuid
 from pathlib import Path
 
 from alphalens.preaudit.profiles import (
@@ -26,9 +26,11 @@ from alphalens.preaudit.profiles import (
 )
 from alphalens_cli.commands.audit import _SCRIPTS
 
-# Smoke wall budget. cap=300 over 1 quarter typically runs in 90s on
-# local SSD; allow 5x headroom for cold parquet on MooseFS.
-DEFAULT_SMOKE_TIMEOUT_S: int = 300
+# Smoke wall budget. cap=300 over 1 quarter typically runs in ~50-90s
+# on local SSD; allow ~7-10x headroom for cold parquet on MooseFS where
+# a 3x cold-start slowdown is realistic before the OS page-cache warms.
+# Exceeding 600s indicates a broken environment, not a slow one.
+DEFAULT_SMOKE_TIMEOUT_S: int = 600
 
 # stderr tail length attached to FAIL results — enough context for
 # diagnostic without flooding the caller's terminal.
@@ -68,11 +70,15 @@ def run_smoke(
 
     script_path = _SCRIPTS[strategy]
     python = python_executable or sys.executable
-    # /tmp is intentional: uuid-suffixed filename + finally-cleanup
-    # below mean no path collision and no leftover artefact. Per zen
-    # 2026-05-11 review: hard-coded ephemeral location prevents smoke
-    # from clobbering a concurrent audit's docs/research/*.json output.
-    ephemeral_out = Path(f"/tmp/preaudit_smoke_{uuid.uuid4().hex}.json")  # NOSONAR S5443
+    # `tempfile.mkstemp` creates a file with mode 0600 in the system temp
+    # dir — secure-by-default and Python-idiomatic. Closing the fd
+    # immediately is fine: the experiment subprocess opens the path by
+    # name. Cleanup happens in `finally` below. The unique path prevents
+    # any chance of clobbering a concurrent audit's docs/research/*.json
+    # output (zen 2026-05-11 review).
+    fd, _ephemeral_path = tempfile.mkstemp(prefix="preaudit_smoke_", suffix=".json")
+    os.close(fd)
+    ephemeral_out = Path(_ephemeral_path)
 
     is_start, is_end = profile.smoke_window
     argv: list[str] = [
@@ -114,6 +120,24 @@ def run_smoke(
 
         duration = time.monotonic() - start
         if proc.returncode == 0:
+            # Validate the experiment actually wrote its artifact. An
+            # exit-0 run that produced an empty or missing output file
+            # would silently pass smoke and only fail at audit
+            # aggregation time (zen 2026-05-11 HIGH catch).
+            if not ephemeral_out.exists() or ephemeral_out.stat().st_size == 0:
+                return SmokeResult(
+                    status=SmokeStatus.FAIL,
+                    exit_code=0,
+                    duration_s=duration,
+                    detail=(
+                        f"experiment exited 0 but did not write a non-empty "
+                        f"output to {ephemeral_out}. Likely a silently-caught "
+                        f"exception in the experiment script's main() — "
+                        f"check stdout/stderr tails:\n"
+                        f"stdout (tail):\n{(proc.stdout or '')[-_STDERR_TAIL_CHARS:]}\n"
+                        f"stderr (tail):\n{(proc.stderr or '')[-_STDERR_TAIL_CHARS:]}"
+                    ),
+                )
             return SmokeResult(
                 status=SmokeStatus.PASS,
                 exit_code=0,

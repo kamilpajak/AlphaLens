@@ -140,7 +140,14 @@ INSIDER_PC_COMPOUND_PROFILE = SmokeProfile(
             # discriminates "pod has ZERO post-2018 data" (today's bug,
             # 0%) from "healthy mixed-vintage local env" (~40%) without
             # false-failing on the latter.
+            #
+            # Per zen 2026-05-11 review: sample_size=50 (not 10) sharpens
+            # the binomial discrimination — at 20% degraded actual rate,
+            # P(≥15 successes in 50 with p=0.2) ≈ 4%, vs ~32% at n=10.
+            # Cost: ~50 small parquet column reads (~5 s wall), trivial
+            # vs. the 600 s smoke budget.
             min_pass_ratio=0.3,
+            sample_size=50,
         ),
         DataDep(
             name="prices",
@@ -167,6 +174,43 @@ INSIDER_PC_COMPOUND_PROFILE = SmokeProfile(
 SMOKE_PROFILES: dict[str, SmokeProfile] = {
     INSIDER_PC_COMPOUND_PROFILE.strategy: INSIDER_PC_COMPOUND_PROFILE,
 }
+
+
+# Strategies in :data:`alphalens_cli.commands.audit._SCRIPTS` that
+# DELIBERATELY do not require a SmokeProfile. Two reasons to allowlist:
+# (1) the strategy is RESEARCH_ONLY / archived and won't be re-audited
+# anytime soon, OR (2) its experiment script doesn't yet accept the
+# generic smoke args (`--is-start`, `--is-end`, `--universe-size-cap`,
+# `--out`). Add a profile + remove from this set when the strategy is
+# scheduled for an audit.
+SMOKE_PROFILE_EXEMPT: frozenset[str] = frozenset(
+    {
+        # Closed Layer 2 / RESEARCH_ONLY strategies — see paradigm_failures
+        # postmortem. Listed here so the inverse drift test passes; if any
+        # of these get re-opened for audit, drop from the set and add a
+        # SmokeProfile.
+        "tri_factor",
+        "momentum_lowvol",
+        "constrained_momentum",
+        "constrained_contrarian",
+        "quality_momentum",
+        "longshort_mom_lowvol",
+        "regime_overlay",
+        "layer2d_prior_returns",
+        "layer2d_random_null",
+        "layer2d_str_and_contrarian",
+        "layer2d_variants",
+        "vol_target_overlay",
+        "multi_source_two_stage",
+        "multi_source_global_lasso",
+        "multi_source_global_lasso_20d",
+        "v7_options_implied",
+        "v8_literature_direct",
+        "v9_sign_constrained",
+        "v9_cross_sectional_residual",
+        "insider_form4_opportunistic",  # has its own dedicated launcher
+    }
+)
 
 
 # -------------------------------------------------------------------------

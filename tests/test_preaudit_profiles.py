@@ -18,6 +18,7 @@ from datetime import date
 
 from alphalens.preaudit.profiles import (
     INSIDER_PC_COMPOUND_PROFILE,
+    SMOKE_PROFILE_EXEMPT,
     SMOKE_PROFILES,
     SmokeProfile,
 )
@@ -43,6 +44,31 @@ class TestSmokeProfileRegistry(unittest.TestCase):
                 profile.strategy,
                 f"dict key {key!r} != profile.strategy {profile.strategy!r}",
             )
+
+    def test_every_audit_script_has_profile_or_is_exempt(self):
+        """Inverse drift guard (zen 2026-05-11): when a new strategy
+        lands in `audit._SCRIPTS`, this test fails until either a
+        `SmokeProfile` is added OR the strategy is explicitly listed in
+        `SMOKE_PROFILE_EXEMPT`. Forces the decision at PR review time,
+        not at audit-launch time.
+        """
+        unregistered = set(_SCRIPTS) - set(SMOKE_PROFILES) - SMOKE_PROFILE_EXEMPT
+        self.assertEqual(
+            unregistered,
+            set(),
+            f"strategies in _SCRIPTS without a SmokeProfile and not in "
+            f"SMOKE_PROFILE_EXEMPT: {sorted(unregistered)}. "
+            f"Add a SmokeProfile to SMOKE_PROFILES, or document the "
+            f"exemption in SMOKE_PROFILE_EXEMPT in alphalens/preaudit/profiles.py.",
+        )
+
+    def test_no_overlap_between_profiles_and_exempt(self):
+        overlap = set(SMOKE_PROFILES) & SMOKE_PROFILE_EXEMPT
+        self.assertEqual(
+            overlap,
+            set(),
+            f"strategies both registered and exempt (contradictory): {sorted(overlap)}",
+        )
 
 
 class TestInsiderPcCompoundProfileLock(unittest.TestCase):

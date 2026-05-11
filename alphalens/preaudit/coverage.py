@@ -12,6 +12,7 @@ them against synthetic fixture dirs without touching real data.
 
 from __future__ import annotations
 
+import logging
 import random
 import re
 from datetime import date
@@ -192,19 +193,33 @@ def _peek_dates(parquet_path: Path, date_col: str) -> pd.Series | None:
     the whole file and using the DatetimeIndex when the data has no
     explicit date column (OHLCV layout: dates live on the index).
     Returns None if neither path yields dates.
+
+    Per zen 2026-05-11 review: catch only the narrow class of
+    "column not found / schema mismatch" errors silently. Any other
+    failure (corrupt parquet, OS-level error, permissions) is logged
+    at debug so it doesn't silently masquerade as a coverage gap.
     """
+    log = logging.getLogger(__name__)
+
+    try:
+        from pyarrow.lib import ArrowInvalid
+    except ImportError:  # pragma: no cover - pyarrow is a hard repo dep
+        ArrowInvalid = Exception  # type: ignore[assignment,misc]
+    schema_mismatch = (KeyError, ValueError, ArrowInvalid)
+
     try:
         df = pd.read_parquet(parquet_path, columns=[date_col])
         if date_col in df.columns:
             return pd.to_datetime(df[date_col])
-    except (KeyError, ValueError):
-        pass
-    except Exception:
-        pass
+    except schema_mismatch:
+        pass  # expected when date_col is the parquet's index, not a data column
+    except Exception as exc:
+        log.debug("preaudit: column-filtered read of %s failed: %s", parquet_path, exc)
 
     try:
         df = pd.read_parquet(parquet_path)
-    except Exception:
+    except Exception as exc:
+        log.debug("preaudit: full read of %s failed: %s", parquet_path, exc)
         return None
     if isinstance(df.index, pd.DatetimeIndex):
         return pd.Series(df.index)

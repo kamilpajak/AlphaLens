@@ -31,6 +31,26 @@ def _completed(returncode: int, stderr: str = "", stdout: str = "") -> subproces
     )
 
 
+def _completed_writing_file(returncode: int, content: str = '{"smoke": "synth"}', stderr: str = ""):
+    """subprocess.run side_effect that writes synthetic content to --out.
+
+    Models a real experiment subprocess that successfully wrote its
+    output artifact. Required for happy-path tests after the
+    "exit=0 + non-empty output" validation gate (zen 2026-05-11 HIGH).
+    """
+
+    def _se(argv, *args, **kwargs):
+        from pathlib import Path
+
+        out_path = Path(argv[argv.index("--out") + 1])
+        out_path.write_text(content)
+        return subprocess.CompletedProcess(
+            args=argv, returncode=returncode, stdout="", stderr=stderr
+        )
+
+    return _se
+
+
 class TestRunSmokeUnknownStrategy(unittest.TestCase):
     def test_unknown_strategy_returns_unknown_status(self):
         result = run_smoke("__not_a_real_strategy__")
@@ -75,12 +95,15 @@ class TestRunSmokeInvocation(unittest.TestCase):
             self.assertIn(arg, argv, f"missing {arg!r} in {argv}")
 
     def test_subprocess_argv_injects_ephemeral_out_path(self):
-        """CRITICAL: --out path MUST be /tmp/preaudit_smoke_<uuid>.<ext>.
+        """CRITICAL: --out path MUST be an ephemeral tempfile.
 
         Without this, smoke could silently overwrite a concurrent audit's
-        output JSON. The path must be unique per invocation (uuid'd) and
-        under /tmp so it's reaped by the OS.
+        output JSON. ``tempfile.mkstemp`` guarantees a unique path inside
+        the system temp dir, with mode 0600.
         """
+        import os
+        import tempfile
+
         with mock.patch(
             "alphalens.preaudit.runner.subprocess.run", return_value=_completed(0)
         ) as m:
@@ -88,14 +111,21 @@ class TestRunSmokeInvocation(unittest.TestCase):
         argv = m.call_args.args[0]
         self.assertIn("--out", argv)
         out_path = argv[argv.index("--out") + 1]
-        self.assertTrue(out_path.startswith("/tmp/preaudit_smoke_"), out_path)
-        # Must NOT collide with any docs/research/* path that a real audit
-        # might write to.
+        self.assertTrue(
+            os.path.basename(out_path).startswith("preaudit_smoke_"),
+            f"unexpected ephemeral filename: {out_path}",
+        )
+        self.assertTrue(out_path.endswith(".json"), out_path)
+        # Must live inside the OS temp dir (cross-platform), not in repo.
+        self.assertTrue(
+            out_path.startswith(tempfile.gettempdir()),
+            f"ephemeral path {out_path} outside system temp {tempfile.gettempdir()}",
+        )
         self.assertNotIn("docs/research", out_path)
         self.assertNotIn("/workspace/AlphaLens/docs", out_path)
 
     def test_two_invocations_get_distinct_out_paths(self):
-        """uuid-suffixed paths must not collide across parallel smokes."""
+        """tempfile.mkstemp guarantees distinct paths across parallel smokes."""
         seen: list[str] = []
         with mock.patch(
             "alphalens.preaudit.runner.subprocess.run", return_value=_completed(0)
@@ -112,11 +142,24 @@ class TestRunSmokeInvocation(unittest.TestCase):
 
 
 class TestRunSmokeOutcome(unittest.TestCase):
-    def test_zero_exit_returns_pass(self):
-        with mock.patch("alphalens.preaudit.runner.subprocess.run", return_value=_completed(0)):
+    def test_zero_exit_with_nonempty_output_returns_pass(self):
+        with mock.patch(
+            "alphalens.preaudit.runner.subprocess.run",
+            side_effect=_completed_writing_file(0),
+        ):
             result = run_smoke("insider_pc_compound")
         self.assertEqual(result.status, SmokeStatus.PASS)
         self.assertEqual(result.exit_code, 0)
+
+    def test_zero_exit_with_empty_output_returns_fail(self):
+        """Zen 2026-05-11 HIGH catch: an experiment that exits 0 but
+        silently writes nothing should NOT pass smoke. mkstemp seeds
+        an empty file; subprocess mock leaves it untouched."""
+        with mock.patch("alphalens.preaudit.runner.subprocess.run", return_value=_completed(0)):
+            result = run_smoke("insider_pc_compound")
+        self.assertEqual(result.status, SmokeStatus.FAIL)
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("did not write", result.detail)
 
     def test_nonzero_exit_returns_fail_with_stderr_tail(self):
         stderr = "traceback line 1\nProcessError: data missing"
@@ -206,7 +249,8 @@ class TestRunSmokeStrategyWithoutHashGuard(unittest.TestCase):
 
     def test_runner_calls_subprocess_when_profile_provided_explicitly(self):
         with mock.patch(
-            "alphalens.preaudit.runner.subprocess.run", return_value=_completed(0)
+            "alphalens.preaudit.runner.subprocess.run",
+            side_effect=_completed_writing_file(0),
         ) as m:
             result = run_smoke("tri_factor", profile=self.dummy_profile)
         self.assertEqual(result.status, SmokeStatus.PASS)
