@@ -16,8 +16,20 @@
 #   Final-lock: --is-start 2024-01-01 --is-end 2026-03-31
 #
 # rebalance_stride 5 = 5 phase offsets per window (memo Section 5.1).
-# Phase 0 of each window fires the IS 2014-2017 precheck guard (~30 min);
-# phases 1-4 auto-skip (experiment_insider_pc_compound.py:_run_precheck logic).
+# Phase 0 of each window WOULD fire the IS 2014-2017 precheck guard, but
+# we pass --skip-precheck here because the RunPod /workspace volume only
+# carries 2018+ iVolatility SMD coverage (pre-2018 cache lives on the
+# local Mac, ~22 GB, not synced to pod). Running the guard on the pod
+# yields a FALSE-FAIL on environmental grounds rather than a real
+# signal-corrosion signal. Pre-screens are already TDD-verified locally
+# per design memo Section 3.5 (ρ=-0.000035, mean coverage 154 of R2000
+# at IS 2014-2017, EXTREME counter-cyclical P/C). The component-hash
+# guard inside experiment_insider_pc_compound.py provides the
+# defense-in-depth: if either component scorer module drifted from its
+# locked SHA256, every phase fails loudly. This is exactly the pattern
+# the script's own docstring endorses: *"Pass --skip-precheck to
+# suppress even on phase 0 (use on runpod when the guard has already
+# cleared locally)."*
 #
 # Monitoring (every few hours):
 #   tmux ls
@@ -46,14 +58,14 @@ FL_OUT=/workspace/AlphaLens/docs/research/insider_pc_compound_audit_finallock.js
 tmux new-session -d -s audit-oos \
     "set -o pipefail; ALPHALENS_WORKERS=1 .venv/bin/alphalens audit insider_pc_compound \
      --rebalance-stride 5 --is-start 2018-01-01 --is-end 2023-12-31 \
-     --out ${OOS_OUT} 2>&1 | tee /workspace/oos_audit.log; \
+     --out ${OOS_OUT} --skip-precheck 2>&1 | tee /workspace/oos_audit.log; \
      echo AUDIT_OOS_DONE=\$? >> /workspace/oos_audit.log" \; \
     set-option -t audit-oos remain-on-exit on
 
 tmux new-session -d -s audit-fl \
     "set -o pipefail; ALPHALENS_WORKERS=1 .venv/bin/alphalens audit insider_pc_compound \
      --rebalance-stride 5 --is-start 2024-01-01 --is-end 2026-03-31 \
-     --out ${FL_OUT} 2>&1 | tee /workspace/fl_audit.log; \
+     --out ${FL_OUT} --skip-precheck 2>&1 | tee /workspace/fl_audit.log; \
      echo AUDIT_FL_DONE=\$? >> /workspace/fl_audit.log" \; \
     set-option -t audit-fl remain-on-exit on
 
