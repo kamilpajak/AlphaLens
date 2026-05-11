@@ -57,6 +57,12 @@ echo ">>> pre-audit smoke gate"
 # environmental-data-missing failure class.
 
 ORCHESTRATOR=/workspace/AlphaLens/scripts/run_insider_pc_compound_audit.py
+# Per-window artifact roots — CRITICAL: without distinct paths, the OOS
+# and FL orchestrator instances would both write per-phase outputs to
+# ~/.alphalens/audit/insider_pc_compound/phase_{0..4}_{returns.parquet,report.md},
+# stomping on each other (2026-05-11 launch-4 incident).
+ARTIFACT_ROOT_OOS=/root/.alphalens/audit/insider_pc_compound/oos
+ARTIFACT_ROOT_FL=/root/.alphalens/audit/insider_pc_compound/finallock
 
 # `remain-on-exit on` keeps the pane visible after the command exits so
 # the scrollback (audit progress + AUDIT_*_DONE marker) stays inspectable.
@@ -66,6 +72,7 @@ ORCHESTRATOR=/workspace/AlphaLens/scripts/run_insider_pc_compound_audit.py
 tmux new-session -d -s audit-oos \
     "set -o pipefail; ALPHALENS_WORKERS=1 .venv/bin/python ${ORCHESTRATOR} \
      --is-start 2018-01-01 --is-end 2023-12-31 \
+     --artifact-root ${ARTIFACT_ROOT_OOS} \
      --out-suffix oos_$(date +%Y-%m-%d) --skip-precheck 2>&1 \
      | tee /workspace/oos_audit.log; \
      echo AUDIT_OOS_DONE=\$? >> /workspace/oos_audit.log" \; \
@@ -74,6 +81,7 @@ tmux new-session -d -s audit-oos \
 tmux new-session -d -s audit-fl \
     "set -o pipefail; ALPHALENS_WORKERS=1 .venv/bin/python ${ORCHESTRATOR} \
      --is-start 2024-01-01 --is-end 2026-03-31 \
+     --artifact-root ${ARTIFACT_ROOT_FL} \
      --out-suffix finallock_$(date +%Y-%m-%d) --skip-precheck 2>&1 \
      | tee /workspace/fl_audit.log; \
      echo AUDIT_FL_DONE=\$? >> /workspace/fl_audit.log" \; \

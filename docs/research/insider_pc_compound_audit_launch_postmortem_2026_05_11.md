@@ -291,6 +291,60 @@ robustness" is now PASS_MARGINAL instead of INCONCLUSIVE. Test
 `tests/test_run_insider_pc_compound_audit.py::test_high_mean_weak_phase_yields_pass_marginal_not_inconclusive`
 locks this interpretation.
 
+## Addendum 2026-05-11 (~12:53 UTC) — fourth launch ABORTED at 24s, artifact-root collision
+
+PR #98 (custom orchestrator) merged and PR #99 (preaudit prices threshold
+tune) merged unblocked the relaunch. Preaudit gate passed 5/5; both tmux
+sessions launched successfully and spawned 10 subprocess phases
+(5 phases × 2 windows). Process inspection at 24s elapsed:
+
+```
+1318 ... run_insider_pc_compound_audit.py --is-start 2018-01-01 ... --skip-precheck
+1321 ... run_insider_pc_compound_audit.py --is-start 2024-01-01 ... --skip-precheck
+1368 ... experiment_insider_pc_compound.py ... --rebalance-stride 21 --phase-offset 0
+         --out /root/.alphalens/audit/insider_pc_compound/phase_0_report.md
+         --dump-returns /root/.alphalens/audit/insider_pc_compound/phase_0_returns.parquet
+1413 ... experiment_insider_pc_compound.py ... --rebalance-stride 21 --phase-offset 0
+         --out /root/.alphalens/audit/insider_pc_compound/phase_0_report.md
+         --dump-returns /root/.alphalens/audit/insider_pc_compound/phase_0_returns.parquet
+```
+
+OOS phase 0 and Final-Lock phase 0 are writing to the **same** parquet
+paths (`phase_{0..4}_returns.parquet`, `phase_{0..4}_report.md`).
+Concurrent writes → corruption → meaningless bootstrap input → invalid
+verdict.
+
+### Root cause
+
+Orchestrator's `DEFAULT_ARTIFACT_ROOT = ~/.alphalens/audit/insider_pc_compound`
+is single-namespaced; both window invocations resolve `phase_N_*` to the
+same files inside it. The form4 sibling launcher only ran ONE window
+(OOS), so this collision never manifested there.
+
+### Fix shipped (PR #100)
+
+`scripts/launch_dual_audits.sh` now passes distinct `--artifact-root`
+arguments per tmux session:
+
+```bash
+ARTIFACT_ROOT_OOS=/root/.alphalens/audit/insider_pc_compound/oos
+ARTIFACT_ROOT_FL=/root/.alphalens/audit/insider_pc_compound/finallock
+
+tmux new-session -d -s audit-oos \
+    "... ${ORCHESTRATOR} ... --artifact-root ${ARTIFACT_ROOT_OOS} ..."
+
+tmux new-session -d -s audit-fl \
+    "... ${ORCHESTRATOR} ... --artifact-root ${ARTIFACT_ROOT_FL} ..."
+```
+
+Subprocess argv now writes to distinct paths per window; no collision.
+
+### Compute cost of the fourth abort
+
+- 24 seconds of orchestrator startup + 10 subprocess setup costs
+- $0.29/h × 24/3600 ≈ **$0.002 wasted** (negligible)
+- Cumulative across 4 launches today: still ~$0.65
+
 ### HAC L/T ratio reporting (memo §7 risk #7 mandate)
 
 The orchestrator's JSON output now includes `gates.hac_lt_ratio` (HAC
