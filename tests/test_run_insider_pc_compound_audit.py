@@ -248,6 +248,71 @@ class TestVerdictMatrix(unittest.TestCase):
         )
         self.assertEqual(verdict, "FAIL")
 
+    def test_high_mean_weak_phase_yields_pass_marginal_not_inconclusive(self):
+        """Zen 2026-05-11 HIGH catch — memo gap.
+
+        (mean ≥ 2.974, every-phase ≥ 0 but NOT every-phase ≥ 1.5,
+        dispersion + excess_net OK): memo §5.1 PASS_MARGINAL row
+        strictly bounds mean ∈ [2.50, 2.974), so this case is
+        unclassified by the literal matrix. Operationally it should
+        not be penalised below PASS_MARGINAL — the signal is stronger
+        than the PASS_MARGINAL band requires, only the strict per-phase
+        floor for PASS is missed. _classify_verdict therefore widens
+        PASS_MARGINAL's lower-bound-only check (PASS is checked first,
+        so anything reaching this branch has already failed PASS).
+        Tracked as memo amendment in postmortem 2026-05-11.
+        """
+        verdict, _ = orch._classify_verdict(
+            self._gates(
+                mean_t=3.0,
+                every_phase_pass_15=False,  # e.g. one phase at αt=1.0
+                every_phase_ge_0=True,
+                excess_net_ge_0=True,
+                dispersion_pp=20.0,
+            )
+        )
+        self.assertEqual(verdict, "PASS_MARGINAL")
+
+
+class TestBootstrapEmitsHacLtRatio(unittest.TestCase):
+    """Memo §7 risk #7: audit output MUST surface HAC L/T ratio so
+    downstream consumers can flag undersized windows. Zen 2026-05-11
+    MEDIUM catch — synth-validate via direct construction (no subprocess).
+    """
+
+    def test_bootstrap_dict_includes_hac_lt_ratio_and_n_obs(self):
+        # Synthesize 5 phases × 200 days of returns, factors aligned.
+        import numpy as np
+        import pandas as pd
+
+        rng = np.random.default_rng(42)
+        idx = pd.date_range("2024-01-01", periods=200, freq="B")
+        per_phase_rets = [pd.Series(rng.normal(0, 0.01, size=200), index=idx) for _ in range(5)]
+        factors = pd.DataFrame(
+            {
+                "Mkt-RF": rng.normal(0, 0.01, size=200),
+                "SMB": rng.normal(0, 0.005, size=200),
+                "HML": rng.normal(0, 0.005, size=200),
+                "Mom": rng.normal(0, 0.005, size=200),
+                "RF": np.zeros(200),
+            },
+            index=idx,
+        )
+        # Tiny rep count to keep test fast; semantics not affected.
+        out = orch._synchronous_bootstrap_pooled_alpha_t(
+            per_phase_rets,
+            factors,
+            n_reps=10,
+            block_size_trading_days=50,
+            hac_maxlags=60,
+        )
+        self.assertIn("hac_lt_ratio", out)
+        self.assertIn("n_obs_used", out)
+        self.assertIn("hac_maxlags", out)
+        self.assertEqual(out["n_obs_used"], 200)
+        self.assertEqual(out["hac_maxlags"], 60)
+        self.assertAlmostEqual(out["hac_lt_ratio"], 60 / 200, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

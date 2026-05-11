@@ -264,3 +264,40 @@ complementary.
   `tests/test_compound_audit_pre_reg_lock.py`) should be paired with
   **effective-value tests** that exercise `main()` end-to-end and
   assert the CLI cannot drift the locked value past the guard.
+
+### Memo §5.1 verdict-matrix amendment (zen CR finding on PR #98)
+
+The PASS_MARGINAL row in memo §5.1 specifies `mean αt ∈ [2.50, 2.974)`.
+That bracket strictly excludes mean ≥ 2.974, which leaves the case
+`(mean ≥ 2.974, every-phase ≥ 0, NOT every-phase ≥ 1.5, dispersion ≤ 70pp,
+excess_net ≥ 0)` unclassified by the literal matrix — the PASS row
+requires every phase ≥ 1.5, the PASS_MARGINAL row excludes mean ≥
+2.974, and the FAIL / INCONCLUSIVE rows don't apply either.
+
+Operationally, a stronger mean αt with one weak phase is at least as
+good as a PASS_MARGINAL result; classifying it as INCONCLUSIVE (the
+catch-all in the original implementation) would penalise a stronger
+signal more harshly than a weaker one. `_classify_verdict` in the
+custom orchestrator therefore widens PASS_MARGINAL's lower-bound-only
+check: `mean ≥ 2.50 AND every-phase ≥ 0` returns PASS_MARGINAL after
+the PASS branch has been exhausted. Since PASS is evaluated first,
+this never claims PASS_MARGINAL for a result that qualifies for full
+PASS.
+
+Treat this as a memo §5.1 clarification rather than a deviation. The
+verdict ladder intent (PASS > PASS_MARGINAL > INCONCLUSIVE > FAIL)
+is preserved; the only change is that "stronger mean αt with weak phase
+robustness" is now PASS_MARGINAL instead of INCONCLUSIVE. Test
+`tests/test_run_insider_pc_compound_audit.py::test_high_mean_weak_phase_yields_pass_marginal_not_inconclusive`
+locks this interpretation.
+
+### HAC L/T ratio reporting (memo §7 risk #7 mandate)
+
+The orchestrator's JSON output now includes `gates.hac_lt_ratio` (HAC
+maxlags / bootstrap n_obs) plus a boolean `hac_lt_warning` flag when
+the ratio exceeds the Andrews-Monahan small-sample rule of thumb
+(L/T > 0.20). On the final-lock window (~567 obs), the ratio is
+~22% → warning fires → downstream consumers know to rely on the
+Romano-Wolf bounds (`bounds_alpha_t_lower/upper`) rather than the raw
+HAC t-stat for primary inference, exactly as memo §7 risk #7
+designates.

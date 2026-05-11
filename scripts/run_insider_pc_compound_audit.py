@@ -271,6 +271,9 @@ def _synchronous_bootstrap_pooled_alpha_t(
         "bounds_alpha_t_lower": float(np.quantile(arr, alpha_level / 2)),
         "bounds_alpha_t_upper": float(np.quantile(arr, 1 - alpha_level / 2)),
         "n_reps_used": len(arr),
+        "n_obs_used": n_obs,
+        "hac_maxlags": hac_maxlags,
+        "hac_lt_ratio": hac_maxlags / n_obs if n_obs > 0 else float("nan"),
         "block_size_trading_days": block_size_trading_days,
         "bootstrap_resampling": "synchronous_across_phases",
     }
@@ -326,23 +329,30 @@ def _classify_verdict(gates: dict) -> tuple[str, str]:
             "instability",
         )
 
-    # In-band PASS_MARGINAL vs INCONCLUSIVE based on per-phase floor:
-    if 2.50 <= mean_t < G1_BONFERRONI_T:
-        if g2_ge_0:
-            return (
-                "PASS_MARGINAL",
-                f"mean αt={mean_t:.2f} ∈ [2.50, {G1_BONFERRONI_T}); every "
-                f"phase ≥ 0; dispersion passed",
-            )
+    # PASS_MARGINAL vs INCONCLUSIVE based on per-phase floor.
+    #
+    # Memo §5.1 wording for PASS_MARGINAL specifies mean ∈ [2.50, 2.974).
+    # Strictly, that excludes (mean ≥ 2.974 AND NOT every-phase ≥ 1.5)
+    # — a case where PASS fails on the strict per-phase floor but the
+    # mean signal is even stronger than the PASS_MARGINAL band requires.
+    # Zen CR (PR #98, 2026-05-11) flagged this as a memo gap: penalising
+    # a stronger mean with INCONCLUSIVE is operationally backwards.
+    # Resolution: PASS_MARGINAL is the "PASS-without-strict-phase-floor"
+    # label; widened lower-bound-only here (PASS is checked first so we
+    # never claim PASS_MARGINAL for a full-PASS-eligible result).
+    # Postmortem 2026-05-11 amendment §addendum notes the memo-vs-code
+    # delta for auditable record.
+    if g2_ge_0:
         return (
-            "INCONCLUSIVE",
-            f"mean αt={mean_t:.2f} ∈ [2.50, {G1_BONFERRONI_T}) but ≥1 phase "
-            "αt < 0 — phase-robustness compromised",
+            "PASS_MARGINAL",
+            f"mean αt={mean_t:.2f} ≥ 2.50; every phase ≥ 0; dispersion "
+            f"passed. (PASS not reached: strict per-phase floor "
+            f"{G2_PASS_PER_PHASE_FLOOR} not cleared by all phases.)",
         )
-
-    # Shouldn't reach here given the matrix is exhaustive over the
-    # mean/dispersion/excess_net axes; defensive fallthrough.
-    return ("INCONCLUSIVE", "boundary case — see per-gate detail")
+    return (
+        "INCONCLUSIVE",
+        f"mean αt={mean_t:.2f} ≥ 2.50 but ≥1 phase αt < 0 — phase-robustness compromised",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -481,6 +491,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     bootstrap = _synchronous_bootstrap_pooled_alpha_t(per_phase_rets, factors)
 
+    # HAC L/T ratio warning (memo §7 risk #7 mandate). Andrews-Monahan
+    # rule of thumb: L/T > 0.20 puts Newey-West in the small-sample
+    # regime where HAC t-stats become unstable / inflation-prone. On the
+    # final-lock window (~567 obs) this fires at L/T ≈ 22%; memo
+    # designates Romano-Wolf bounds as primary inference there.
+    hac_lt_ratio = bootstrap["hac_lt_ratio"]
+    if hac_lt_ratio > 0.20:
+        logger.warning(
+            "HAC L/T ratio %.1f%% > 20%% small-sample threshold "
+            "(maxlags=%d / n_obs=%d). Per memo §7 risk #7: rely on "
+            "Romano-Wolf bounds (bounds_alpha_t_lower/upper) for "
+            "primary inference, not raw HAC t-stat.",
+            hac_lt_ratio * 100,
+            bootstrap["hac_maxlags"],
+            bootstrap["n_obs_used"],
+        )
+
     gates = {
         "G1_pooled_alpha_t_mean": pooled_alpha_t_mean,
         "G1_bonferroni_threshold": G1_BONFERRONI_T,
@@ -492,6 +519,12 @@ def main(argv: list[str] | None = None) -> int:
         "G4_dispersion_pp_floor": G4_DISPERSION_PP,
         "G5_bounds_alpha_t_lower": bootstrap["bounds_alpha_t_lower"],
         "G5_bounds_alpha_t_upper": bootstrap["bounds_alpha_t_upper"],
+        # Memo §7 risk #7 mandate: surface the L/T ratio in the verdict
+        # output for any downstream consumer applying the matrix.
+        "hac_lt_ratio": hac_lt_ratio,
+        "hac_lt_warning": hac_lt_ratio > 0.20,
+        "hac_n_obs": bootstrap["n_obs_used"],
+        "hac_maxlags": bootstrap["hac_maxlags"],
     }
 
     verdict, reason = _classify_verdict(gates)
