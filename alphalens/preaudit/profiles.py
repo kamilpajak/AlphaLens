@@ -157,6 +157,14 @@ INSIDER_PC_COMPOUND_PROFILE = SmokeProfile(
             # OHLCV parquets store dates on the DatetimeIndex; coverage's
             # _peek_dates falls back to the index when the named column
             # is absent. Pattern stays "date" sentinel; falls through.
+            # Empirical pod observation 2026-05-11: random sample of R2000
+            # prices hits ~60% spanning any single quarter — recent IPOs
+            # (e.g. ARLO 2018-08, AHCO 2018-05, CTVA 2019-05) account for
+            # the gap. PIT universe filters these out at scoring time, so
+            # the check correctly catches "env missing all data" (0% case)
+            # while tolerating routine IPO sprinkling. Default 0.7 was
+            # too strict for the empirical R2000 universe shape.
+            min_pass_ratio=0.5,
         ),
         DataDep(
             name="factors",
