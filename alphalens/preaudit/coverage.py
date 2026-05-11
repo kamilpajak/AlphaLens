@@ -124,7 +124,11 @@ def _check_flat_parquet(dep: DataDep, dep_dir: Path) -> CoverageCheck:
         return CoverageCheck(dep=dep, status=CoverageStatus.PASS)
 
     n = min(dep.sample_size, len(files))
-    sample = random.sample(files, n)
+    # random.sample is used for spot-checking data coverage, not for
+    # any cryptographic / security purpose. Tests pin random.seed(0)
+    # for reproducibility, so `secrets`/`SystemRandom` would actively
+    # defeat the determinism requirement.
+    sample = random.sample(files, n)  # NOSONAR S2245
     date_col = dep.pattern or "date"
 
     short_history, unreadable = _classify_flat_parquet_sample(
