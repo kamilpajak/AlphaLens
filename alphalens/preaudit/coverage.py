@@ -105,7 +105,7 @@ def _check_parquet_partition(dep: DataDep, dep_dir: Path) -> CoverageCheck:
 
 
 def _check_flat_parquet(dep: DataDep, dep_dir: Path) -> CoverageCheck:
-    """Sample N parquet files; ALL must span the window's date column.
+    """Sample N parquet files; require ``min_pass_ratio`` to span window.
 
     Single-ticker peek (e.g. AAPL only) false-passes when most of the
     universe has shorter history — this caused today's launch bug.
@@ -127,23 +127,15 @@ def _check_flat_parquet(dep: DataDep, dep_dir: Path) -> CoverageCheck:
     sample = random.sample(files, n)
     date_col = dep.pattern or "date"
 
-    min_required = pd.Timestamp(dep.min_date)
-    max_required = pd.Timestamp(dep.max_date)
-
-    short_history: list[str] = []
-    for f in sample:
-        col = _peek_dates(f, date_col)
-        if col is None:
-            return CoverageCheck(
-                dep=dep,
-                status=CoverageStatus.FAIL_GAP,
-                detail=f"cannot find date column {date_col!r} or DatetimeIndex in {f.name}",
-            )
-        if len(col) == 0:
-            short_history.append(f.name)
-            continue
-        if col.min() > min_required or col.max() < max_required:
-            short_history.append(f"{f.name} [{col.min().date()}..{col.max().date()}]")
+    short_history, unreadable = _classify_flat_parquet_sample(
+        sample, date_col, dep.min_date, dep.max_date
+    )
+    if unreadable is not None:
+        return CoverageCheck(
+            dep=dep,
+            status=CoverageStatus.FAIL_GAP,
+            detail=f"cannot find date column {date_col!r} or DatetimeIndex in {unreadable}",
+        )
 
     n_pass = n - len(short_history)
     pass_ratio = n_pass / n if n > 0 else 0.0
@@ -161,6 +153,32 @@ def _check_flat_parquet(dep: DataDep, dep_dir: Path) -> CoverageCheck:
             ),
         )
     return CoverageCheck(dep=dep, status=CoverageStatus.PASS)
+
+
+def _classify_flat_parquet_sample(
+    sample: list[Path],
+    date_col: str,
+    min_date: date,
+    max_date: date,
+) -> tuple[list[str], str | None]:
+    """Walk the sampled files; return (short_history, unreadable_filename).
+
+    Extracted from :func:`_check_flat_parquet` to keep cognitive complexity
+    of the dispatch function below the SonarCloud threshold.
+    """
+    min_required = pd.Timestamp(min_date)
+    max_required = pd.Timestamp(max_date)
+    short_history: list[str] = []
+    for f in sample:
+        col = _peek_dates(f, date_col)
+        if col is None:
+            return short_history, f.name
+        if len(col) == 0:
+            short_history.append(f.name)
+            continue
+        if col.min() > min_required or col.max() < max_required:
+            short_history.append(f"{f.name} [{col.min().date()}..{col.max().date()}]")
+    return short_history, None
 
 
 def _peek_dates(parquet_path: Path, date_col: str) -> pd.Series | None:

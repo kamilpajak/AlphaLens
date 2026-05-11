@@ -68,7 +68,11 @@ def run_smoke(
 
     script_path = _SCRIPTS[strategy]
     python = python_executable or sys.executable
-    ephemeral_out = Path(f"/tmp/preaudit_smoke_{uuid.uuid4().hex}.json")
+    # /tmp is intentional: uuid-suffixed filename + finally-cleanup
+    # below mean no path collision and no leftover artefact. Per zen
+    # 2026-05-11 review: hard-coded ephemeral location prevents smoke
+    # from clobbering a concurrent audit's docs/research/*.json output.
+    ephemeral_out = Path(f"/tmp/preaudit_smoke_{uuid.uuid4().hex}.json")  # NOSONAR S5443
 
     is_start, is_end = profile.smoke_window
     argv: list[str] = [
