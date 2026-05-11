@@ -1,6 +1,6 @@
 # Postmortem — insider_pc_compound full audit launch 2026-05-11
 
-**Status:** RESOLVED (audit running on re-launch; `alphalens preaudit` framework deployed to prevent recurrence).
+**Status:** RESOLVED after THREE launch attempts (1st = pre-screen data, 2nd = stride-mismatch + missing bootstrap, 3rd = custom orchestrator). Audit re-launched on the strategy-specific orchestrator `scripts/run_insider_pc_compound_audit.py`. Two independent prevention layers landed: `alphalens preaudit` framework (PR #97) + experiment-script hard-lock on `--rebalance-stride 21` (PR #98).
 
 ## Timeline
 
@@ -138,3 +138,166 @@ reads; coverage alone catches today's failure class.)
    sync from local Mac → pod network volume would enable
    pre-2018 retrospective audits without `--skip-precheck`. Not
    blocking today's audit; revisit when a pre-2018 strategy lands.
+
+---
+
+## Addendum 2026-05-11 (~10:30 UTC) — second launch ABORTED at 2h, methodology bug
+
+### What happened
+
+The 08:37 re-launch (with `--skip-precheck` patch from PR #96) ran for
+~2 hours of phase 0 before a process-tree inspection revealed the
+subprocesses were running with a **5-day rebalance cadence** instead
+of the memo §3.1 / §4 locked **21-day monthly**:
+
+```
+.venv/bin/python scripts/experiment_insider_pc_compound.py \
+    --rebalance-stride 5 --phase-offset 0 \
+    --is-start 2018-01-01 --is-end 2023-12-31 --skip-precheck
+```
+
+`trading_calendar[0::5]` produced ~302 rebalances per phase over the
+6-year OOS window — **4.2x the locked 72 monthly rebalances**.
+
+### Root cause
+
+The generic `alphalens audit` CLI driver
+(`phase_robust_backtesting.audit_multi_phase.run_audit`) conflates two
+semantically distinct concepts:
+
+```python
+def run_audit(..., rebalance_stride=5):
+    for phase in range(rebalance_stride):                  # ← number of phases
+        cmd = ["--rebalance-stride", str(rebalance_stride), # ← day-step (SAME arg!)
+               "--phase-offset", str(phase)]
+```
+
+The launcher's intent (`--rebalance-stride 5` = "5 phase offsets")
+was correct as written; the driver's semantics (`rebalance_stride` =
+"day step") quietly differed. With `_REBALANCE_STRIDE_LOCK = 21` as
+the experiment script's default but `argparse` allowing CLI override,
+the locked value silently lost to the override.
+
+Zen 2026-05-11 review surfaced a SECOND deviation: **the generic
+driver does not perform memo §5.4's synchronous-across-phases
+block-bootstrap** (1000 reps × block_size=126 trading days for
+`bounds_alpha_t_lower/upper`). It only summarises per-phase stderr.
+Even with the stride fixed, the resulting audit JSON would have been
+non-compliant with §5.4 — Romano-Wolf bounds simply absent.
+
+The `insider_form4_opportunistic` PASS_MARGINAL audit (2026-05-05)
+did NOT use the generic driver — it used a strategy-specific custom
+script `scripts/run_insider_form4_phase_b.py` that separates `N_PHASES`
+from `REBALANCE_STRIDE_DAYS` and runs the synchronous block-bootstrap
+inline. This precedent was the right pattern; the compound launch
+should have mirrored it from the start.
+
+### Compute cost of the second abort
+
+- 2h ~ 4 min phase setup + 1h56m on phase 0 prebuild + scoring
+- Both OOS and final-lock subprocesses pinned ~99% CPU
+- $0.29/h × 2h ≈ **$0.58 wasted compute**
+- Cumulative across the day (3 launches): ~$0.65
+
+### Structural fix shipped (PR #98)
+
+Three changes, all defensive:
+
+1. **`scripts/run_insider_pc_compound_audit.py`** — strategy-specific
+   custom orchestrator, byte-for-byte mirror of the form4 launcher
+   except the verdict matrix follows memo §5.1's compound-specific
+   per-phase floors:
+   - PASS: every phase αt ≥ 1.5 AND mean αt ≥ 2.974
+   - PASS_MARGINAL: every phase αt ≥ 0 AND mean αt ∈ [2.50, 2.974)
+   - INCONCLUSIVE: in-band mean with ≥1 phase αt < 0; or dispersion > 70pp
+   - FAIL: mean αt < 2.50 OR mean excess_net_ann < 0
+
+   `N_PHASES = 5` and `REBALANCE_STRIDE_DAYS = 21` are TOP-LEVEL
+   constants; the subprocess argv hardcodes `--rebalance-stride 21`
+   so a future caller cannot reintroduce the mismatch.
+
+2. **Experiment-script hard-lock** in `experiment_insider_pc_compound.py
+   main()`:
+   ```python
+   if args.rebalance_stride != _REBALANCE_STRIDE_LOCK:
+       sys.stderr.write("PRE-REG VIOLATION: ...")
+       return 9
+   ```
+   `--rebalance-stride 5` now exits with code 9 before any compute,
+   plus a `PRE-REG VIOLATION` stderr message. Smoke run continues to
+   work (preaudit profile already passes `--rebalance-stride 21`).
+
+3. **`scripts/launch_dual_audits.sh`** rewritten to invoke the custom
+   orchestrator directly via `python <path>` instead of routing through
+   `alphalens audit`. Removes the driver-semantics dependency entirely.
+
+### Tests added
+
+- `tests/test_compound_audit_pre_reg_lock.py::TestEffectiveRebalanceStrideHardLock`
+  — 4 tests: stride=5 fails, stride=42 fails, default (21) passes,
+  explicit 21 passes. Uses subprocess to invoke `main()` with synthetic
+  argv.
+- `tests/test_run_insider_pc_compound_audit.py` — 18 tests on the
+  orchestrator: cmdline locks stride=21 across phases, constants match
+  memo, verdict matrix covers all rows of memo §5.1 (incl. boundary
+  cases at 2.974 and 2.50).
+
+### What the framework did NOT catch (gap closed)
+
+The `alphalens preaudit` framework shipped earlier the same day (PR
+#97) was deliberately scoped to environment + coverage failures, NOT
+methodology drift inside the experiment script's CLI. The stride
+mismatch was a code-level deviation from memo, not a data/env
+failure. The new hard-lock + custom orchestrator closes the methodology
+drift class; preaudit closes the data/env class. The two layers are
+complementary.
+
+### Operational discipline going forward
+
+- Strategies destined for pre-reg audit MUST have a strategy-specific
+  orchestrator that hardcodes the locked rebalance stride and emits
+  the synchronous block-bootstrap output. The generic `alphalens
+  audit` CLI is appropriate only for exploratory single-window
+  sweeps where neither the stride nor the bootstrap method is
+  pre-registered.
+- Constant-lock tests (`_REBALANCE_STRIDE_LOCK == 21` in
+  `tests/test_compound_audit_pre_reg_lock.py`) should be paired with
+  **effective-value tests** that exercise `main()` end-to-end and
+  assert the CLI cannot drift the locked value past the guard.
+
+### Memo §5.1 verdict-matrix amendment (zen CR finding on PR #98)
+
+The PASS_MARGINAL row in memo §5.1 specifies `mean αt ∈ [2.50, 2.974)`.
+That bracket strictly excludes mean ≥ 2.974, which leaves the case
+`(mean ≥ 2.974, every-phase ≥ 0, NOT every-phase ≥ 1.5, dispersion ≤ 70pp,
+excess_net ≥ 0)` unclassified by the literal matrix — the PASS row
+requires every phase ≥ 1.5, the PASS_MARGINAL row excludes mean ≥
+2.974, and the FAIL / INCONCLUSIVE rows don't apply either.
+
+Operationally, a stronger mean αt with one weak phase is at least as
+good as a PASS_MARGINAL result; classifying it as INCONCLUSIVE (the
+catch-all in the original implementation) would penalise a stronger
+signal more harshly than a weaker one. `_classify_verdict` in the
+custom orchestrator therefore widens PASS_MARGINAL's lower-bound-only
+check: `mean ≥ 2.50 AND every-phase ≥ 0` returns PASS_MARGINAL after
+the PASS branch has been exhausted. Since PASS is evaluated first,
+this never claims PASS_MARGINAL for a result that qualifies for full
+PASS.
+
+Treat this as a memo §5.1 clarification rather than a deviation. The
+verdict ladder intent (PASS > PASS_MARGINAL > INCONCLUSIVE > FAIL)
+is preserved; the only change is that "stronger mean αt with weak phase
+robustness" is now PASS_MARGINAL instead of INCONCLUSIVE. Test
+`tests/test_run_insider_pc_compound_audit.py::test_high_mean_weak_phase_yields_pass_marginal_not_inconclusive`
+locks this interpretation.
+
+### HAC L/T ratio reporting (memo §7 risk #7 mandate)
+
+The orchestrator's JSON output now includes `gates.hac_lt_ratio` (HAC
+maxlags / bootstrap n_obs) plus a boolean `hac_lt_warning` flag when
+the ratio exceeds the Andrews-Monahan small-sample rule of thumb
+(L/T > 0.20). On the final-lock window (~567 obs), the ratio is
+~22% → warning fires → downstream consumers know to rely on the
+Romano-Wolf bounds (`bounds_alpha_t_lower/upper`) rather than the raw
+HAC t-stat for primary inference, exactly as memo §7 risk #7
+designates.
