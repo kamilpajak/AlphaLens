@@ -77,6 +77,14 @@ class Form4PITStore:
                 delisting_by_ticker.setdefault(ev.ticker.upper(), []).append(ev.delisted_date)
         self._delisting_by_ticker = delisting_by_ticker
 
+    @property
+    def parquet_root(self) -> Path:
+        return self._root
+
+    @property
+    def ticker_cik_resolver(self) -> _CikResolver | None:
+        return self._resolver
+
     def records_as_of(
         self,
         ticker: str,

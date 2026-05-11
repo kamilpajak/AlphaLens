@@ -242,13 +242,28 @@ def _run_baseline_pipeline() -> tuple[pd.DataFrame, pd.Series, dict[str, float]]
 
 
 def _regenerate_fixtures() -> None:
-    """Bless the current pipeline output as the new golden master."""
+    """Bless the current pipeline output as the new golden master.
+
+    The golden master MUST be blessed from the per-rebalance fallback path,
+    not the optimised prebuild path — otherwise the test becomes refactor-
+    vs-refactor and silently approves any drift the refactor introduces.
+    We enforce the flag here so a maintainer cannot forget to set the env
+    var when calling --regenerate-fixtures.
+    """
+    import os as _os
+
+    _os.environ["ALPHALENS_TEST_DISABLE_PREBUILD"] = "1"
+
     if not _has_required_data():
         sys.stderr.write("ERROR: required data missing under ~/.alphalens/. Cannot regenerate.\n")
         sys.exit(2)
     _FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("Running baseline pipeline (this may take ~2 min)...", flush=True)
+    print(
+        "Running baseline pipeline with ALPHALENS_TEST_DISABLE_PREBUILD=1 "
+        "(per-rebalance fallback path; ~2 min)...",
+        flush=True,
+    )
     scores, returns, metrics = _run_baseline_pipeline()
 
     scores.to_parquet(_FIXTURE_DIR / "compound_scores_per_asof.parquet")

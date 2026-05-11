@@ -40,15 +40,18 @@ FL_OUT=/workspace/AlphaLens/docs/research/insider_pc_compound_audit_finallock.js
 # the scrollback (audit progress + AUDIT_*_DONE marker) stays inspectable
 # via `tmux capture-pane`. Cleaner than `sleep 86400` (which leaks a hung
 # process and dies after 24h regardless of audit duration).
+# `set -o pipefail` is critical: without it `cmd | tee` returns tee's exit
+# code (always 0), so AUDIT_*_DONE would falsely report success even if the
+# audit crashed mid-run — silently producing a half-failed verdict artifact.
 tmux new-session -d -s audit-oos \
-    "ALPHALENS_WORKERS=1 .venv/bin/alphalens audit insider_pc_compound \
+    "set -o pipefail; ALPHALENS_WORKERS=1 .venv/bin/alphalens audit insider_pc_compound \
      --rebalance-stride 5 --is-start 2018-01-01 --is-end 2023-12-31 \
      --out ${OOS_OUT} 2>&1 | tee /workspace/oos_audit.log; \
      echo AUDIT_OOS_DONE=\$? >> /workspace/oos_audit.log" \; \
     set-option -t audit-oos remain-on-exit on
 
 tmux new-session -d -s audit-fl \
-    "ALPHALENS_WORKERS=1 .venv/bin/alphalens audit insider_pc_compound \
+    "set -o pipefail; ALPHALENS_WORKERS=1 .venv/bin/alphalens audit insider_pc_compound \
      --rebalance-stride 5 --is-start 2024-01-01 --is-end 2026-03-31 \
      --out ${FL_OUT} 2>&1 | tee /workspace/fl_audit.log; \
      echo AUDIT_FL_DONE=\$? >> /workspace/fl_audit.log" \; \

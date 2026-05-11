@@ -250,8 +250,8 @@ class _OpportunisticForm4Scorer:
         self._mcap_lookup = mcap_lookup or {}
         self._executor: ProcessPoolExecutor | None = None
         # Pickle-friendly snapshots for worker-pool initargs:
-        self._parquet_root = form4_store._root
-        self._cik_resolver = form4_store._resolver
+        self._parquet_root = form4_store.parquet_root
+        self._cik_resolver = form4_store.ticker_cik_resolver
 
     def _ensure_executor(self) -> None:
         """Lazy persistent pool. Survives across all rebalances within a phase."""
