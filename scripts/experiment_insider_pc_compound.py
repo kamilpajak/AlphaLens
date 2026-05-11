@@ -109,6 +109,48 @@ _BONFERRONI_THRESHOLD = 2.974
 _PRECHECK_IS_START = date(2014, 1, 1)
 _PRECHECK_IS_END = date(2017, 12, 31)
 
+# Pre-reg memo §7 risk #4 mitigation: SHA256-lock the two component scorer
+# modules that mathematically define the compound's per-asof score. If
+# either drifts during the audit (~30h pod compute), the result is no
+# longer the pre-registered test and must not be used as a verdict. The
+# guard fires at every run-time invocation (cheap; ~ms per file). Update
+# these hashes ONLY in coordination with a design-memo amendment + a new
+# pre-reg class registration in the ledger.
+_COMPONENT_LOCKED_HASHES: dict[str, str] = {
+    "alphalens/screeners/insider_activity/opportunistic_form4.py": (
+        "59ee0cd59f51f5d842b510a1e5533c36f6237abd4618948f4b3a384e03b3d932"
+    ),
+    "alphalens/screeners/options_volume/pc_abnormal_volume.py": (
+        "d53ab6af4c3842208ea17a291f16de60efece43c89afeb952001864793c0e7d1"
+    ),
+}
+
+
+def _verify_component_hashes() -> None:
+    """Raise RuntimeError if either locked component module drifted.
+
+    Pre-reg memo `insider_pc_compound_design_2026_05_10.md` §7 risk #4:
+    *"Phase 0 hash check on both component scorer modules at compound
+    run time."* Drift = silent verdict invalidation.
+    """
+    import hashlib
+
+    for rel_path, expected_hash in _COMPONENT_LOCKED_HASHES.items():
+        file_path = REPO_ROOT / rel_path
+        if not file_path.is_file():
+            raise RuntimeError(f"PRE-REG GUARD: locked component module missing at {file_path}")
+        actual_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
+        if actual_hash != expected_hash:
+            raise RuntimeError(
+                f"PRE-REG VIOLATION: {rel_path} drifted from its locked SHA256.\n"
+                f"  expected: {expected_hash}\n"
+                f"  actual:   {actual_hash}\n"
+                "The compound audit verdict is mathematically defined by these "
+                "two scorer modules. Restore them to locked state OR amend the "
+                "design memo + increment program-level Bonferroni n in the "
+                "ledger BEFORE proceeding."
+            )
+
 
 # -------------------------------------------------------------------------
 # Form-4 adapter classes — DUPLICATED verbatim from
@@ -744,6 +786,7 @@ def main() -> int:
     )
 
     _check_backfill_exists(args.parquet_root)
+    _verify_component_hashes()
 
     if args.universe_mode == "R3000":
         sys.stderr.write(
