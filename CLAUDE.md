@@ -109,6 +109,8 @@ CLI komendy dla CLOSED layers istnieją jako research replay tooling — patrz `
 
 **Polish primary, English for tech terms** — w prozie/rozmowach polski jako primary; angielski tylko dla nazw technicznych bez polskiego odpowiednika.
 
+**Pre-audit smoke before any audit > 1h compute** — `alphalens preaudit <strategy>` runs (1) per-DataDep coverage check against `~/.alphalens/` and (2) tiny end-to-end smoke subprocess (cap=300, 1-quarter window, ephemeral `--out`). Catches: missing data, coverage gap, hash drift, CLI passthrough breakage, end-to-end pipeline failure. Does NOT catch: OOM-at-scale, MooseFS I/O contention under N workers, time-varying signal corrosion. Driven by 2026-05-11 incident — full audit FAILED at phase 0 because pod `/workspace` had post-2018-only iVol SMD coverage; `_run_precheck` correctly classified as pre-screen FAIL but burned ~27 min before the operator noticed. `scripts/launch_dual_audits.sh` now prepends `alphalens preaudit insider_pc_compound --skip-smoke` as a fail-fast gate. New strategy onboarding requires adding a `SmokeProfile` to `alphalens/preaudit/profiles.py::SMOKE_PROFILES` (enforced by `tests/test_preaudit_profiles.py`). Full postmortem: `docs/research/insider_pc_compound_audit_launch_postmortem_2026_05_11.md`.
+
 ## Research methodology
 
 **Adversarial review pre-compute** — przed jakimkolwiek runem >1h compute: zen + perplexity adversarial review zlocked design memo. Pipeline złapał FATAL flaws na 2 designach jednej sesji (v5 quantile-LP, v8 LGBM-quantile, v0 Cohen-Malloy 5y misread). Don't skip nawet na "obvious next" experiments.

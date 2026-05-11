@@ -26,6 +26,7 @@ from alphalens_cli.commands.audit import audit_command
 from alphalens_cli.commands.backtest import backtest
 from alphalens_cli.commands.literature import literature_app
 from alphalens_cli.commands.paper_trade import paper_trade_app
+from alphalens_cli.commands.preaudit import preaudit_command
 from alphalens_cli.commands.preregister import preregister_app
 from alphalens_cli.commands.research import research_app
 from alphalens_cli.commands.status import status
@@ -67,6 +68,10 @@ app.command(
     help="Multi-phase audit — pre-reg + Bonferroni accountability.",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )(audit_command)
+app.command(
+    name="preaudit",
+    help="Fail-fast env check (coverage + smoke) before a long audit.",
+)(preaudit_command)
 
 
 if __name__ == "__main__":

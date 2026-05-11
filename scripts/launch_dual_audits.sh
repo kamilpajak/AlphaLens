@@ -48,6 +48,19 @@ export PATH="/root/.local/bin:$PATH"
 OOS_OUT=/workspace/AlphaLens/docs/research/insider_pc_compound_audit_oos.json
 FL_OUT=/workspace/AlphaLens/docs/research/insider_pc_compound_audit_finallock.json
 
+# Pre-audit smoke gate (PR #95+ framework): coverage check on the
+# strategy's data deps + tiny end-to-end smoke phase, ~2 min wall.
+# Aborts BEFORE tmux launch if the runpod environment is missing data
+# or the pipeline is broken — would catch today's 2026-05-11 false-
+# launch (post-2018-only iVol SMD on pod, precheck wanted 2014-2017).
+echo ">>> pre-audit smoke gate"
+.venv/bin/alphalens preaudit insider_pc_compound --skip-smoke \
+    || { echo "PRE-AUDIT COVERAGE FAILED — aborting before tmux launch" >&2; exit 1; }
+# Smoke subprocess is skipped here because the smoke fixture window
+# (2019-Q1) overlaps with the OOS audit window and would briefly
+# contend on MooseFS reads. Coverage check alone catches the
+# environmental-data-missing failure class observed today.
+
 # `remain-on-exit on` keeps the pane visible after the command exits so
 # the scrollback (audit progress + AUDIT_*_DONE marker) stays inspectable
 # via `tmux capture-pane`. Cleaner than `sleep 86400` (which leaks a hung
