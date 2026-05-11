@@ -124,7 +124,13 @@ bootstrap.sh
 # 4. Sync working set to ephemeral pod disk
 sync_in.sh
 
-# 5. Run an experiment (any AlphaLens script + args, in quotes)
+# 5. Pre-audit smoke gate — fail-fast environment + pipeline check
+#    (~2 min wall). Catches missing data, coverage gaps, hash drift,
+#    CLI passthrough breakage. Mandatory before any audit > 1h
+#    compute per CLAUDE.md. See postmortem 2026-05-11.
+.venv/bin/alphalens preaudit insider_pc_compound  # or your strategy
+
+# 6. Run an experiment (any AlphaLens script + args, in quotes)
 run_experiment.sh "scripts/experiment_event_drift_v4.py \
                    --mode breadth-audit \
                    --start 2024-04-30 --end 2026-04-30 \
