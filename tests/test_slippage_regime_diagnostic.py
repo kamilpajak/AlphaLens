@@ -328,6 +328,72 @@ class TestRunOneSlippageCombo(unittest.TestCase):
         self.assertGreater(beta2["total_drag_decimal"], beta0["total_drag_decimal"])
         self.assertGreater(beta0["alpha_annualized_net"], beta2["alpha_annualized_net"])
 
+    def test_sigma_median_threading_changes_drag(self):
+        """Per pre-reg memo §5, σ_median should be a joint full-sample value
+        threaded through from the orchestrator. Passing a DIFFERENT sigma_median
+        must materially shift the drag (otherwise it's never used)."""
+        from alphalens.diagnostics.slippage_regime import run_one_slippage_combo
+
+        n = 300
+        factors = self._make_factors(n)
+        daily_idx = factors.index
+        rng = np.random.default_rng(23)
+        gross = pd.Series(0.0008 + rng.normal(0, 0.005, n), index=daily_idx)
+        # Linear vol from 0.10 to 0.50; per-phase median = 0.30.
+        vol = pd.Series(np.linspace(0.10, 0.50, n), index=daily_idx)
+        turnover_daily = pd.Series(np.full(n, 0.30), index=daily_idx)
+
+        default_median = run_one_slippage_combo(
+            gross_daily=gross,
+            turnover_daily=turnover_daily,
+            vol_series=vol,
+            factors=factors,
+            half_spread_bps=50.0,
+            beta=2.0,
+            hac_maxlags=126,
+        )
+        # Pass an explicit LOWER sigma_median → larger excess_fraction for
+        # every above-median date → more drag → lower α_net.
+        lower_sigma = run_one_slippage_combo(
+            gross_daily=gross,
+            turnover_daily=turnover_daily,
+            vol_series=vol,
+            factors=factors,
+            half_spread_bps=50.0,
+            beta=2.0,
+            sigma_median=0.15,  # half the per-phase median
+            hac_maxlags=126,
+        )
+        self.assertGreater(
+            lower_sigma["total_drag_decimal"],
+            default_median["total_drag_decimal"],
+        )
+        # β=0 must be invariant to sigma_median (multiplier = 1 regardless).
+        beta0_default = run_one_slippage_combo(
+            gross_daily=gross,
+            turnover_daily=turnover_daily,
+            vol_series=vol,
+            factors=factors,
+            half_spread_bps=50.0,
+            beta=0.0,
+            hac_maxlags=126,
+        )
+        beta0_low_sigma = run_one_slippage_combo(
+            gross_daily=gross,
+            turnover_daily=turnover_daily,
+            vol_series=vol,
+            factors=factors,
+            half_spread_bps=50.0,
+            beta=0.0,
+            sigma_median=0.15,
+            hac_maxlags=126,
+        )
+        self.assertAlmostEqual(
+            beta0_default["total_drag_decimal"],
+            beta0_low_sigma["total_drag_decimal"],
+            places=9,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

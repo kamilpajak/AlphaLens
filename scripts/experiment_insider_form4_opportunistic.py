@@ -303,11 +303,17 @@ def derive_turnover_path(returns_path: Path) -> Path:
 
     Slippage stress diagnostic 2026-05-12: per-phase turnover persistence
     rides on the existing ``--dump-returns`` plumbing. If the returns path
-    stem contains ``returns``, replace that token with ``turnover``;
-    otherwise append ``_turnover`` to the stem.
+    stem contains ``returns``, replace the LAST occurrence with ``turnover``;
+    otherwise append ``_turnover`` to the stem. Replacing only the last
+    occurrence is intentional — a path like ``returns_returns.parquet``
+    would otherwise become ``turnover_turnover.parquet`` (writing to an
+    unintended location).
     """
     stem = returns_path.stem
-    new_stem = stem.replace("returns", "turnover") if "returns" in stem else f"{stem}_turnover"
+    if "returns" in stem:
+        new_stem = "turnover".join(stem.rsplit("returns", 1))
+    else:
+        new_stem = f"{stem}_turnover"
     return returns_path.with_name(f"{new_stem}{returns_path.suffix}")
 
 

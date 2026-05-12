@@ -134,6 +134,7 @@ def _run_grid_for_window(
                     factors=factors,
                     half_spread_bps=hs,
                     beta=beta,
+                    sigma_median=sigma_median,
                     adverse_selection_bps=ADVERSE_SELECTION_BPS,
                     hac_maxlags=HAC_MAXLAGS,
                     periods_per_year=PERIODS_PER_YEAR,

@@ -184,17 +184,31 @@ def run_one_slippage_combo(
     factors: pd.DataFrame,
     half_spread_bps: float,
     beta: float,
+    sigma_median: float | None = None,
     adverse_selection_bps: float = 5.0,
     hac_maxlags: int = _DEFAULT_HAC_MAXLAGS,
     periods_per_year: int = _DEFAULT_PERIODS_PER_YEAR,
 ) -> dict:
     """Run a single ``(half_spread, beta)`` stress combo on one phase.
 
-    Returns a dict with: alpha_t_net, alpha_annualized_net, sharpe_net,
-    total_drag_decimal, drag_mean_q1, drag_mean_q5, R_excess_post_drag.
+    Returns a dict with: half_spread_bps, beta, alpha_t_net,
+    alpha_annualized_net, sharpe_net, total_drag_decimal, drag_mean_q1,
+    drag_mean_q5, n_observations. (Post-drag cyclicality is computed
+    separately by :func:`run_post_drag_cyclicality`.)
+
+    ``sigma_median`` should be pre-computed ONCE on the full joint test
+    window per pre-reg memo §5 and threaded through from the orchestrator;
+    falls back to the per-phase vol median when omitted (useful for
+    isolated calls in tests, but VIOLATES pre-reg §5 if used in production
+    diagnostic runs).
     """
     vol_aligned = vol_series.reindex(gross_daily.index)
-    effective_hs = compute_effective_half_spread(vol_aligned, base_bps=half_spread_bps, beta=beta)
+    effective_hs = compute_effective_half_spread(
+        vol_aligned,
+        base_bps=half_spread_bps,
+        beta=beta,
+        sigma_median=sigma_median,
+    )
     drag_result = apply_regime_drag(
         gross_daily,
         effective_hs,
@@ -270,6 +284,7 @@ def run_full_grid(
     factors: pd.DataFrame,
     half_spread_grid: Sequence[float],
     beta_grid: Sequence[float],
+    sigma_median: float | None = None,
     holding_days: int = 21,
     adverse_selection_bps: float = 5.0,
     hac_maxlags: int = _DEFAULT_HAC_MAXLAGS,
@@ -280,6 +295,9 @@ def run_full_grid(
     Returns a long-format DataFrame with one row per
     ``(half_spread_bps, beta, phase_offset)`` combination plus a pooled
     summary across phases (computed by the caller).
+
+    ``sigma_median`` is threaded through to each combo call per pre-reg
+    memo §5 (full-sample joint window median, computed once by caller).
     """
     if len(gross_per_phase) != len(turnover_per_phase):
         raise ValueError(
@@ -306,6 +324,7 @@ def run_full_grid(
                     factors=factors,
                     half_spread_bps=float(hs),
                     beta=float(beta),
+                    sigma_median=sigma_median,
                     adverse_selection_bps=adverse_selection_bps,
                     hac_maxlags=hac_maxlags,
                 )

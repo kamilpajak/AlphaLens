@@ -132,6 +132,28 @@ class TestDeriveTurnoverPath(unittest.TestCase):
         p = Path("/var/runs/abc/phase_0_returns.parquet")
         self.assertEqual(derive_turnover_path(p).parent, Path("/var/runs/abc"))
 
+    def test_replaces_last_occurrence_only(self):
+        """Pathological case: 'returns' substring appears multiple times in
+        the path. The fix replaces only the LAST occurrence in the stem
+        (and only in the stem — never in the parent directory) — otherwise
+        the dumped turnover lands at an unintended path that won't be found
+        by downstream readers.
+        """
+        from scripts.experiment_insider_form4_opportunistic import derive_turnover_path
+
+        # Parent directory contains 'returns'; must be preserved verbatim.
+        p = Path("/tmp/returns_audit/phase_0_returns.parquet")
+        self.assertEqual(
+            derive_turnover_path(p),
+            Path("/tmp/returns_audit/phase_0_turnover.parquet"),
+        )
+        # Stem contains 'returns' twice; only the last occurrence is replaced.
+        p2 = Path("/tmp/runs/my_returns_analysis_returns.parquet")
+        self.assertEqual(
+            derive_turnover_path(p2),
+            Path("/tmp/runs/my_returns_analysis_turnover.parquet"),
+        )
+
 
 class TestAssessReturnsPerRebalanceTurnoverSeries(unittest.TestCase):
     """`assess()` must surface a per-rebalance turnover DataFrame in its return

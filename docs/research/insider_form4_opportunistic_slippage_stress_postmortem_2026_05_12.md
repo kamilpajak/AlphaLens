@@ -126,7 +126,7 @@ Empirical smoke on real data, post-results inspection:
    decreasing as H bps rises (2.41 → 1.90 → 1.27 → 0.65 → 0.05 → −1.11 →
    −2.21 → −7.61). ✅ PASS.
 7. **β-monotonicity at constant H**: at H=50bps OOS, αt_net falls
-   1.27 → 1.11 → 0.93 → 0.71 as β goes 0 → 1 → 2 → 3. ✅ PASS — drag
+   1.27 → 1.09 → 0.88 → 0.64 as β goes 0 → 1 → 2 → 3. ✅ PASS — drag
    strictly increases with β.
 8. **Deterministic re-run gate**: orchestrator-emitted αt = 2.71 OOS,
    2.69 FL — identical to locked phase B 2026-05-09 + final-lock
@@ -146,6 +146,22 @@ genuine drop in net alpha AND correctly-revealed sampling uncertainty
 from autocorrelated drag (R2000 spread mean reversion). The scalar method
 overcounts significance by treating cost as exogenous-constant.
 
+**Pre-merge code review fix (σ_median scope, zen-flagged HIGH)**: initial
+diagnostic implementation (before zen CR) did not thread `sigma_median`
+through `run_one_slippage_combo` — the function fell back to computing
+median on the per-phase reindexed vol slice instead of using the joint
+full-sample value per pre-reg §5. Fixed in pre-merge commit: `sigma_median`
+added to combo signature, threaded through from orchestrator. Impact on
+results: β=0 columns UNCHANGED (multiplier=1 regardless of σ_median); β>0
+columns shifted by ≤0.10 t-units (OOS phase-local median ≈ joint, so small
+change; FL phase-local median was LOWER than joint, so FL β>0 αt slightly
+higher with fix). G3 OOS shifted from +0.93 → +0.88 (still FAIL ≥1.5); G3
+FL shifted +1.76 → +1.77 (still PASS). **Verdict FAIL unchanged**. The
+post-drag cyclicality calculation path was already correct (explicitly
+passed `sigma_median` to `compute_effective_half_spread`), so cyclicality
+table numbers are unaffected. Tables in §5.4 reflect the corrected
+implementation.
+
 ## 5. Headline results
 
 ### 5.1 Gate verdicts (pooled across 5 phases per window, full_sample subsample)
@@ -154,7 +170,7 @@ overcounts significance by treating cost as exogenous-constant.
 |---|---|---|---|---|---|---|
 | G1 | 50bps, β=0 | **+1.27** | **+1.95** | ≥ 2.0 | ❌ | ❌ (just below) |
 | G2 | 100bps, β=0 | **+0.05** | **+1.27** | ≥ 1.5 | ❌ | ❌ |
-| G3 | 50bps, β=2 | **+0.93** | **+1.76** | ≥ 1.5 | ❌ | ✅ |
+| G3 | 50bps, β=2 | **+0.88** | **+1.77** | ≥ 1.5 | ❌ | ✅ |
 | KILL | 50bps, β=0 | +1.27 | +1.95 | ≥ 1.0 | not-breached | not-breached |
 
 **Strict pre-reg classification**: REALIZABLE fails (not all gates pass);
@@ -182,27 +198,27 @@ OOS 2018-2023:
 
 | half_spread bps | β=0 | β=1 | β=2 | β=3 |
 |---|---|---|---|---|
-| 5 | +2.41 | +2.40 | +2.39 | +2.39 |
-| 25 | +1.90 | +1.84 | +1.78 | +1.71 |
-| 50 | **+1.27** | +1.11 | **+0.93** | +0.71 |
-| 75 | +0.65 | +0.35 | −0.03 | −0.46 |
-| 100 | **+0.05** | −0.44 | −1.05 | −1.70 |
-| 150 | −1.11 | −2.08 | −3.15 | −3.91 |
-| 200 | −2.21 | −3.73 | −5.00 | −5.30 |
-| 500 | −7.61 | −10.70 | −8.60 | −6.68 |
+| 5 | +2.41 | +2.40 | +2.39 | +2.38 |
+| 25 | +1.90 | +1.83 | +1.76 | +1.69 |
+| 50 | **+1.27** | +1.09 | **+0.88** | +0.64 |
+| 75 | +0.65 | +0.32 | −0.10 | −0.58 |
+| 100 | **+0.05** | −0.49 | −1.15 | −1.86 |
+| 150 | −1.11 | −2.16 | −3.28 | −4.04 |
+| 200 | −2.21 | −3.82 | −5.12 | −5.35 |
+| 500 | −7.61 | −10.66 | −8.44 | −6.58 |
 
 FL 2024-2026:
 
 | half_spread bps | β=0 | β=1 | β=2 | β=3 |
 |---|---|---|---|---|
 | 5 | +2.56 | +2.55 | +2.54 | +2.53 |
-| 25 | +2.29 | +2.24 | +2.19 | +2.14 |
-| 50 | **+1.95** | +1.85 | **+1.76** | +1.67 |
-| 75 | +1.61 | +1.47 | +1.34 | +1.21 |
-| 100 | **+1.27** | +1.10 | +0.93 | +0.77 |
-| 150 | +0.60 | +0.36 | +0.15 | −0.05 |
-| 200 | −0.07 | −0.34 | −0.57 | −0.78 |
-| 500 | −3.79 | −3.79 | −3.68 | −3.55 |
+| 25 | +2.29 | +2.24 | +2.19 | +2.15 |
+| 50 | **+1.95** | +1.86 | **+1.77** | +1.68 |
+| 75 | +1.61 | +1.48 | +1.36 | +1.23 |
+| 100 | **+1.27** | +1.11 | +0.95 | +0.80 |
+| 150 | +0.60 | +0.38 | +0.18 | −0.01 |
+| 200 | −0.07 | −0.32 | −0.54 | −0.73 |
+| 500 | −3.79 | −3.75 | −3.63 | −3.49 |
 
 Sanity: strict monotonicity in both H (vertical) and β (horizontal) on
 both windows — consistent with cost mechanics. No bugs surfaced. The
@@ -261,7 +277,7 @@ irrelevant to your alpha publication thesis. Different use case."*
 post-decimalization half-spread, β=0 uniform) violated on **both** OOS
 (αt_net=+1.27, gap −0.73) and FL (αt_net=+1.95, gap −0.05) windows. G2
 violated on both (OOS +0.05, FL +1.27, threshold ≥ 1.5). G3 violated on
-OOS (+0.93, threshold ≥ 1.5), passes barely on FL (+1.76). Strict KILL
+OOS (+0.88, threshold ≥ 1.5), passes barely on FL (+1.77). Strict KILL
 gate (αt < 1.0 at H=50bps/β=0 either window) not breached: OOS αt=1.27,
 FL αt=1.95.
 
