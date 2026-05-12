@@ -39,8 +39,11 @@ from alphalens.attribution.signal_vol_regime import (  # noqa: E402
     assign_vol_regime_quintiles,
     classify_cyclicality_excess,
 )
+from alphalens.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
 from alphalens.data.factors import load_carhart_daily  # noqa: E402
 from alphalens.data.store.history import HistoryStore  # noqa: E402
+
+_PRICES_DIR = Path.home() / ".alphalens" / "prices"
 from alphalens.diagnostics.slippage_regime import (  # noqa: E402
     broadcast_turnover_to_daily,
     run_one_slippage_combo,
@@ -268,7 +271,8 @@ def main() -> int:
     joint_start = min(all_starts) - pd.Timedelta(days=SIGMA_ROLLING_WINDOW + 5)
     joint_end = max(all_ends)
 
-    history_store = HistoryStore()
+    histories = load_cached_histories(["IWM"], _PRICES_DIR)
+    history_store = HistoryStore(histories)
     iwm_daily = _load_iwm_daily(history_store, joint_start, joint_end)
     vol_series = _compute_iwm_60d_vol(iwm_daily).dropna()
     sigma_median = float(vol_series.median())

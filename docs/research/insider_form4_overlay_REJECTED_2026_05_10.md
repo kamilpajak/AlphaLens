@@ -196,3 +196,24 @@ Three implications for the project's overlay class:
 - Compound experiment design: insider × iVolatility, or insider × P/C abnormal volume (memory `project_compound_experiments_roadmap.md`).
 - Anti-cyclical overlay design (asymmetric to v10/Failure 10; would need fresh adversarial review pass).
 - Long-horizon paper-trade observation continues per `insider_form4_opportunistic_paper_trade_2026_05_09` (26w checkpoint ~2026-11-07, 52w ~2027-05-08).
+
+## Epilogue 2026-05-12 — Counter-cyclical mechanism is a cost-mirage artifact
+
+**Slippage stress diagnostic** (`docs/research/insider_form4_opportunistic_slippage_stress_postmortem_2026_05_12.md`) on the same `insider_form4_opportunistic` v2 base finds that the EXTREME counter-cyclical mechanism that grounded the overlay REJECTION above is itself a **pre-cost artifact**. Under regime-amplified bid-ask spread cost (β=2 in Chordia-Roll-Subrahmanyam 2001 / Naes-Skjeltorp-Odegaard 2011 form: `half_spread(t) = base × (1 + β × max(0, (σ_60d − σ_median)/σ_median))`), the OOS 2018-2023 post-drag cyclicality collapses across all 5 phases:
+
+| Phase | R_excess_pre_drag | R_excess_post_drag | Δ |
+|---:|---:|---:|---:|
+| 0 | −2.12 | −0.36 | **+1.75** |
+| 1 | −2.44 | −0.54 | **+1.89** |
+| 2 | −2.47 | −0.41 | **+2.05** |
+| 3 | −2.88 | −0.55 | **+2.33** |
+| 4 | −2.95 | −0.53 | **+2.42** |
+| **mean** | **−2.57** | **−0.48** | **+2.09** |
+
+Classification flips from "strategy-specific counter-cyclical" → "matches benchmark baseline" / "weakly strategy-specific" on all phases. **The Q5 +68.85%/y annualized return that justified the overlay rejection was driven by gross-of-cost arrival-price crossing during panic regimes when R2000 spreads blow out (Lesmond/Schill/Zhou 2004 + Hasbrouck 2009 + Corwin-Schultz 2012 anchors put R2000 half-spreads at 200–300 bps right-tail during 2008/2020 stress).**
+
+**Consequence**: this DOES NOT reopen Layer 4 overlay class. The base strategy's G1 realization gate (αt_net ≥ 2.0 at H=50bps R2000 median half-spread) FAILED on both OOS (αt=+1.27) and final-lock (αt=+1.95) windows — there is no post-cost edge to overlay. Layer 4 reopening is moot.
+
+**Permanent institutional memory** (warning for future researchers): R2000 long-only signals with EXTREME counter-cyclical Q5 concentration must be screened with regime-conditional cost models BEFORE Layer 4 overlay analysis. The pre-cost `classify_cyclicality_excess` reading is unreliable when applied to strategies that fire on panic-regime trades. Add to overlay design protocol (CLAUDE.md §"Layer 4 overlay design pre-screen (mandatory)"): the cyclicality screen must be run on **net-of-cost** returns under at least β=2 amplification, not gross.
+
+**Side effect, perplexity-preserved**: the post-cost cyclicality improvement (Δ +2.09 mean) does mean the strategy becomes LESS tail-risky under market stress on a net basis. That's a valid CRISIS HEDGING use case — but irrelevant to alpha publication. Different research lane.
