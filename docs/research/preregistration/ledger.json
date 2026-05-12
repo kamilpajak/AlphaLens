@@ -3931,8 +3931,69 @@
         "capital_deploy_clause": "OFF-TABLE for this test. PASS unlocks Layer 4 overlay eligibility evaluation (vol-target test, cyclicality pre-screen mandatory). PASS_MARGINAL -> 12mo paper-trade only. Compound extensions (banks separately via residual income #14, composite g_realized-g_implied #14b) reserved as conditional next paradigms."
       },
       "registered_at": "2026-05-12",
-      "status": "registered",
-      "outcome": null,
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "verdict_reason": "JOINT FAIL: every window in {IS, OOS, FL} FAIL independently on G1+G2 (\u03b1t mean 1.25/1.34/0.96, all below 2.5 floor and 3.5 project threshold). Every phase positive (G3 PASS in every window) \u2014 signal is real but modest. G4 cost-stress structurally identical to G1 in this orchestrator (scalar drag implementation; t-stat invariant to cost level) \u2014 flagged in postmortem \u00a74 but verdict unchanged on G1+G2.",
+        "mean_alpha_t": 1.183,
+        "mean_excess_net_ann": 0.0587,
+        "audit_path": "docs/research/ev_fcff_yield_audit_2026-05-12.json",
+        "audit_orchestrator_log": "docs/research/ev_fcff_yield_audit_2026-05-12.log",
+        "completed_at": "2026-05-13",
+        "notes": "FCF-yield in disguise (Perplexity 2026-05-12 framing) vindicated \u2014 modest positive premium consistent with literature but below project Bonferroni 3.5 bar. Module status -> CLOSED per ADR 0005. Class fundamental_value_dcf_2026_05_12 remains OPEN per project doctrine (feedback_never_close_the_door).",
+        "windows_evaluated": {
+          "IS": {
+            "is_window": [
+              "2016-08-31",
+              "2019-08-31"
+            ],
+            "verdict": "FAIL",
+            "alpha_t_mean": 1.25,
+            "alpha_t_range": [
+              0.97,
+              1.48
+            ],
+            "excess_net_ann": 0.012,
+            "wall_seconds": 191
+          },
+          "OOS": {
+            "is_window": [
+              "2019-08-31",
+              "2022-08-31"
+            ],
+            "verdict": "FAIL",
+            "alpha_t_mean": 1.344,
+            "alpha_t_range": [
+              1.24,
+              1.42
+            ],
+            "excess_net_ann": 0.124,
+            "wall_seconds": 209
+          },
+          "FL": {
+            "is_window": [
+              "2022-08-31",
+              "2025-08-31"
+            ],
+            "verdict": "FAIL",
+            "alpha_t_mean": 0.958,
+            "alpha_t_range": [
+              0.88,
+              1.08
+            ],
+            "excess_net_ann": 0.04,
+            "wall_seconds": 240
+          }
+        },
+        "pod_compute": {
+          "machine_id": "8bajydd2e7i8",
+          "instance": "cpu3g-8-32",
+          "datacenter": "EU-RO-1",
+          "wall_seconds_total": 641,
+          "spend_usd": 0.33
+        },
+        "postmortem": "docs/research/ev_fcff_yield_audit_verdict_2026_05_12.md"
+      },
       "notes": "First test in fundamental_value_dcf class on R2000 ex-financials. Data source SimFin Start tier ($25/mo paid 2026-05-12). Pre-reg follows project methodology bundle (phase-robust-backtesting). Design memo locked 2026-05-12 post adversarial review (zen + perplexity). Scorer implementation + preaudit smoke + full audit deferred to subsequent sessions per session 2026-05-12 plan. Honest framing: this is FCF-yield value factor (not 'growth mispricing discovery') per Perplexity framing fix. Cyclicality pre-screen NOT mandatory at this layer (Layer 2 screener, not Layer 4 overlay); will be measured at audit time for future #14 conditional overlay design."
     }
   ]
