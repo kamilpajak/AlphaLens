@@ -3726,8 +3726,109 @@
         "capital_deploy_clause": "PASS unlocks paper-trade extension to compound variant; full deploy still requires standalone PASS on each component (currently PASS_MARGINAL + INCONCLUSIVE) per project policy"
       },
       "registered_at": "2026-05-10",
-      "status": "registered",
-      "outcome": {},
+      "status": "audited",
+      "outcome": {
+        "verdict": "FAIL",
+        "verdict_reason": "JOINT FAIL: both windows fail independently per memo \u00a75.1. OOS 2018-2023: G1 trip \u2014 mean \u03b1t=-0.034 < 2.50 floor. FL 2024-2026: G3 trip \u2014 mean excess_net_ann=-0.28% < 0 (and G1 \u03b1t=+0.674 also below 2.50). Memo \u00a77 #5 pre-predicted this failure mode (Blume-Easley 2018 selection-bias amplification on luck-marginal signals) and \u00a77 #1 (time-domain portfolio-return correlation despite cross-sectional \u03c1\u22480 due to both bases EXTREME counter-cyclical). Mitigation per memo \u00a77 #5: 'file each component separately and archive the compound design as a research artifact' \u2014 engaged.",
+        "evaluated_at": "2026-05-11",
+        "audit_code_sha": "a688cc724b26e3da5e08d6ab9f72f30f6fb0a350",
+        "audit_pod": "amkcom4kgkml0n (cpu5m-8-64, $0.52/h, EU-RO-1, ~2h16m wall)",
+        "windows_evaluated": {
+          "OOS": {
+            "is_window": [
+              "2018-01-01",
+              "2023-12-31"
+            ],
+            "verdict": "FAIL",
+            "verdict_reason": "mean \u03b1t=-0.03 < 2.50 \u2014 compound mechanism does not survive fresh OOS at the verdict floor",
+            "pooled_alpha_t_mean": -0.03399999999999999,
+            "per_phase_alpha_ts": [
+              0.36,
+              0.46,
+              -0.52,
+              0.34,
+              -0.81
+            ],
+            "excess_net_mean_ann": 0.03679999999999999,
+            "dispersion_pp": 3.0000000000000004,
+            "bounds_alpha_t_lower": -2.1787216299875043,
+            "bounds_alpha_t_upper": 1.4674333795140149,
+            "hac_lt_ratio": 0.09552691432903715,
+            "hac_n_obs": 1319,
+            "gate_summary": {
+              "G1_pooled_alpha_t": {
+                "value": -0.03399999999999999,
+                "threshold": 2.974,
+                "passed": false
+              },
+              "G2_every_phase_floor_1.5": false,
+              "G2_every_phase_ge_0": false,
+              "G3_excess_net_mean_ge_0": true,
+              "G4_dispersion_le_70pp": true,
+              "G5_bounds_lower_excludes_zero": false
+            },
+            "canonical_json": "docs/research/insider_pc_compound_oos_2026-05-11.json",
+            "wall_total_seconds": 8158.65758510679
+          },
+          "FL": {
+            "is_window": [
+              "2024-01-01",
+              "2026-03-31"
+            ],
+            "verdict": "FAIL",
+            "verdict_reason": "mean excess_net_ann < 0 (gate G3 failed); mean \u03b1t=0.67",
+            "pooled_alpha_t_mean": 0.674,
+            "per_phase_alpha_ts": [
+              0.81,
+              0.2,
+              0.53,
+              0.85,
+              0.98
+            ],
+            "excess_net_mean_ann": -0.0028,
+            "dispersion_pp": 3.8,
+            "bounds_alpha_t_lower": -1.3982234883546407,
+            "bounds_alpha_t_upper": 3.8008568447440276,
+            "hac_lt_ratio": 0.22580645161290322,
+            "hac_lt_warning": true,
+            "hac_n_obs": 558,
+            "primary_inference_per_memo_7_7": "Romano-Wolf bounds (CI straddles 0)",
+            "gate_summary": {
+              "G1_pooled_alpha_t": {
+                "value": 0.674,
+                "threshold": 2.974,
+                "passed": false
+              },
+              "G2_every_phase_floor_1.5": false,
+              "G2_every_phase_ge_0": true,
+              "G3_excess_net_mean_ge_0": false,
+              "G4_dispersion_le_70pp": true,
+              "G5_bounds_lower_excludes_zero": false
+            },
+            "canonical_json": "docs/research/insider_pc_compound_finallock_2026-05-11.json",
+            "wall_total_seconds": 5669.2196160033345
+          }
+        },
+        "capital_deploy_status": "OFF-TABLE (would have stayed off regardless per project policy; explicit JOINT FAIL cements it)",
+        "program_bonferroni_count_after": "n stays at 34 \u2014 failed test still counts; future related tests pay this multiplicity",
+        "verification": {
+          "arithmetic_recompute_matches": true,
+          "phase_wall_consistency_stddev_pct_of_mean": {
+            "OOS": 0.8,
+            "FL": 1.5
+          },
+          "code_identity_compound_unchanged_since_memo_lock": "ebf87f2 (2026-05-10, memo lock date)",
+          "components_sha256_guard_passed_at_audit": true,
+          "memo_7_5_pre_predicted_failure_mode": true,
+          "external_validation_by_zen_2026_05_12": "Sign-off: 'finalize-able verdict; system worked exactly as designed to catch a compelling narrative that did not survive out-of-sample'"
+        },
+        "postmortem": "docs/research/insider_pc_compound_audit_postmortem_2026_05_12_verdict.md",
+        "module_status_change": "alphalens/screeners/compound_insider_pc/__status__ \u2192 CLOSED per ADR 0005",
+        "components_disposition_per_memo_7_5_mitigation": {
+          "insider_form4_opportunistic_2026_05_08_v2": "PASS_MARGINAL on both windows, paper-trade active",
+          "pc_abnormal_volume_retrospective_pre_2018_2026_05_05": "INCONCLUSIVE on retrospective, paper-trade active"
+        }
+      },
       "notes": "First 2-way compound test in project. Differs from compound_v12_informed_trader_2026_05_06 (4-way, blocked on v8 Xing standalone verdict). Bonferroni penalty +6 over naive +1 reflects zen Z5 strict selection-penalty enforcement. Both pre-reg pre-screens (#1 independence, #2 cyclicality, #3 breadth) executed BEFORE this registration on IS 2014-2017 window per zen HARKing-fix directive; OOS 2018-2023 + 2024-2026 final lock remain unburnt. Implementation deliverables (scorer module, experiment driver) deferred to next session per session 2026-05-10 plan; this registration is the 'design + pre-reg locked' artifact."
     }
   ]
