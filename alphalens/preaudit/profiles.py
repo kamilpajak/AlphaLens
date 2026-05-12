@@ -179,8 +179,58 @@ INSIDER_PC_COMPOUND_PROFILE = SmokeProfile(
 )
 
 
+EV_FCFF_YIELD_PROFILE = SmokeProfile(
+    strategy="ev_fcff_yield",
+    # 6-month window during which SimFin paid tier has full data (2016-08+
+    # earliest, by 2019 well-populated). Quarterly stride 63 fits ~2 rebalances
+    # in this window, enough to exercise the rebalance + scoring path without
+    # blowing budget.
+    smoke_window=(date(2019, 1, 1), date(2019, 6, 30)),
+    extra_args=(
+        "--skip-precheck",
+        "--universe-size-cap",
+        "200",
+        "--phase-offset",
+        "0",
+        "--rebalance-stride",
+        "63",
+        "--holding",
+        "63",
+        "--cost-half-spreads",
+        "5.0",
+    ),
+    data_deps=(
+        # SimFin bulk cache — single directory with CSV blobs; no native
+        # date partitioning, so existence check is the only available signal.
+        # Per-file freshness is enforced by SimFin SDK's own refresh logic
+        # (refresh_days_total / refresh_days_shareprices) when the audit runs.
+        DataDep(
+            name="simfin_cache",
+            check_type=CheckType.EXISTS_NONEMPTY,
+        ),
+        # yfinance R2000 + IWM prices, R2000 sample tickers must span the
+        # smoke window. 0.5 pass ratio mirrors insider_pc_compound — recent
+        # IPOs / delisted in the random sample account for the gap.
+        DataDep(
+            name="prices",
+            check_type=CheckType.FLAT_PARQUET,
+            min_date=date(2019, 1, 1),
+            max_date=date(2019, 6, 30),
+            min_pass_ratio=0.5,
+        ),
+        # Carhart factor daily file.
+        DataDep(
+            name="factors",
+            check_type=CheckType.EXISTS_NONEMPTY,
+        ),
+    ),
+    has_component_hash_guard=False,
+)
+
+
 SMOKE_PROFILES: dict[str, SmokeProfile] = {
     INSIDER_PC_COMPOUND_PROFILE.strategy: INSIDER_PC_COMPOUND_PROFILE,
+    EV_FCFF_YIELD_PROFILE.strategy: EV_FCFF_YIELD_PROFILE,
 }
 
 

@@ -3836,6 +3836,104 @@
         }
       },
       "notes": "First 2-way compound test in project. Differs from compound_v12_informed_trader_2026_05_06 (4-way, blocked on v8 Xing standalone verdict). Bonferroni penalty +6 over naive +1 reflects zen Z5 strict selection-penalty enforcement. Both pre-reg pre-screens (#1 independence, #2 cyclicality, #3 breadth) executed BEFORE this registration on IS 2014-2017 window per zen HARKing-fix directive; OOS 2018-2023 + 2024-2026 final lock remain unburnt. Implementation deliverables (scorer module, experiment driver) deferred to next session per session 2026-05-10 plan; this registration is the 'design + pre-reg locked' artifact."
+    },
+    {
+      "id": "ev_fcff_yield_2026_05_12_v1",
+      "signal_class": "fundamental_value_dcf_2026_05_12",
+      "hypothesis": "Ranking R2000 active ex-financials companies by EV/FCFF yield (Enterprise Value / Unlevered Free Cash Flow, TTM, point-in-time at filing date) and going long top-decile equal-weight rebalanced quarterly produces net-of-cost Carhart-4F alpha_t >= 3.5 (project-wide conservative threshold; Bonferroni-class n=1 would require only |t|>=1.96) across IS 2016-08-31..2019-08-31 / OOS 2019-08-31..2022-08-31 / FL 2022-08-31..2025-08-31, with positive alpha_t each phase individually and net alpha_t >= 2.0 at half-spread stress = 15bps.",
+      "scorer_path": "alphalens/screeners/ev_fcff_yield/scorer.py",
+      "params_frozen": {
+        "class": "fundamental_value_dcf_2026_05_12",
+        "version": "v1_evfcff_yield_quarterly_topdecile_longonly",
+        "design_memo": "docs/research/ev_fcff_yield_v1_design_2026_05_12.md",
+        "design_provenance": "First test in fundamental_value_dcf class. New data source: SimFin Start tier (paid 2026-05-12, $25/mo, 10y depth from 2016, PIT via PUBLISH_DATE column). Universe: R2000 ex-financials per Option D decision 2026-05-12 (banks/insurance have structurally different P&L; Fama-French, Asness QMJ, Damodaran ch.21 precedent). Honest framing per Perplexity 2026-05-12 adversarial finding: reverse-Gordon with fixed WACC and no forward-looking input is monotonic transformation of FCF/EV at constant r -> this IS a value factor of the FCF-yield family, not 'growth mispricing discovery'. Reframed accordingly throughout memo and pre-reg.",
+        "adversarial_review_summary": "Zen (gemini-3-pro-preview 2026-05-12, continuation 2be4227c-ac8a-4b50-9cab-a5d276669580): REPLACE fixed-WACC P/FCF (equity) with EV/FCFF (unlevered) to neutralize leverage bias without per-firm beta noise; REPLACE hard FCF<0 drop with Sales*5y-median-FCF-margin imputation to mitigate ~30% R2000 quality-bias attrition; REPLACE monthly rebalance with quarterly (filing-aligned, cost-drag defense); KEEP long-only top-decile, KEEP single-stage Gordon (multi-stage adds free parameters with no cross-sectional discriminative gain). Perplexity (sonar-reasoning-pro 2026-05-12): CRITICAL framing fix - without IBES forward data, g_implied collapses to monotonic transformation of FCF/EV -> rebrand as FCF-yield honest (NOT growth-mispricing); KEEP long-only on R2000 (Israel-Moskowitz 2014 retail-realism, expect 40-60% alpha drag vs L/S equivalent); KEEP FCF<0 pre-screen drop (with quality-bias audit caveat). Both reviewers converged on quarterly rebalance + EV/FCFF + imputation. Memo v2 spec reflects synthesis.",
+        "scorer_frozen": {
+          "valuation_metric": "ev_fcff_yield",
+          "ev_formula": "Price*SharesOutstanding + LongTermDebt + ShortTermDebt - Cash",
+          "fcff_formula": "OCF_TTM + InterestExpense_TTM*(1-tau) - Capex_TTM",
+          "capex_sign_convention": "flip sign of SimFin 'Change in Fixed Assets & Intangibles' so capex is positive",
+          "tau_source": "SimFin us-income-annual latest IncomeTax/PretaxIncome, clamped to [0, 0.35]",
+          "discount_rate": "fixed r = rf_10y_UST + 0.06; UNUSED in ranking (EV/FCFF rank invariant to r)",
+          "imputation": "if FCFF_TTM <= 0: FCFF_imputed = Sales_TTM * median(quarterly_FCF_margin, 20Q rolling). Drop only if imputed also <= 0.",
+          "winsorize_pct": [
+            0.01,
+            0.99
+          ],
+          "ranking": "cross-sectional z-score of FCFF_yield per rebalance asof, after winsorization"
+        },
+        "data_provider": "SimFin Start tier (bulk CSV download via simfin>=1.0.1 Python SDK)",
+        "data_pit_key": "PUBLISH_DATE <= asof_t - 1 day",
+        "stale_filter": "drop ticker at rebalance if latest 10-Q PUBLISH_DATE > 100 days before asof_t",
+        "universe_primary": "R2000_active ex-financials (intersection of IWM snapshot and SimFin us-income-annual; excludes us-income-banks-annual, us-income-insurance-annual, and unbanked Financial Services in us-companies)",
+        "rebalance_cadence": "quarterly_last_trading_day_feb_may_aug_nov",
+        "weighting": "equal_weight_within_decile",
+        "decile_pct": 0.1,
+        "direction": "long_only",
+        "sector_neutralization": false,
+        "cost_profile": "alphalens.attribution.cost_model R2000 conservative defaults",
+        "cost_stress_grid_half_spread_bps": [
+          0,
+          5,
+          10,
+          15,
+          25
+        ],
+        "benchmark": "IWM",
+        "phase_audit": {
+          "n_phases": 3,
+          "phase_layout": "non-overlapping_3y_segments",
+          "phases": {
+            "IS": [
+              "2016-08-31",
+              "2019-08-31"
+            ],
+            "OOS": [
+              "2019-08-31",
+              "2022-08-31"
+            ],
+            "FL": [
+              "2022-08-31",
+              "2025-08-31"
+            ]
+          },
+          "post_fl_holdout_observational": [
+            "2025-08-31",
+            "2026-04-30"
+          ]
+        }
+      },
+      "periods": {
+        "is_start": "2016-08-31",
+        "is_end": "2019-08-31",
+        "oos_start": "2019-08-31",
+        "oos_end": "2022-08-31",
+        "final_lock_start": "2022-08-31",
+        "final_lock_end": "2025-08-31",
+        "rationale": "Earliest SimFin REPORT_DATE = 2016-07-31 per simfin_coverage_check_2026_05_12.md Step 6. 2016-08-31 IS start provides 1-month buffer for first quarterly rebalance. Three non-overlapping 3y segments. Joint-PASS rule: gates section 5.1 must hold in IS AND OOS AND FL."
+      },
+      "success_criteria": {
+        "mode": "3_phase_carhart_4f_with_cost_stress_gate",
+        "primary_metric": "carhart_4f_alpha_t_net_of_cost",
+        "bonferroni_accounting": {
+          "class_internal_n": 1,
+          "class_internal_critical_t_one_sided_alpha_05": 1.96,
+          "formula_class_internal": "scipy.stats.norm.ppf(1 - 0.05/1)",
+          "project_imposed_conservative_threshold": 3.5,
+          "rationale": "Class-internal Bonferroni n=1 (first test in fundamental_value_dcf class). Project doctrine per CLAUDE.md and feedback_zero_coef_lasso_diagnostic.md: fresh class with truly new data input (SimFin, never used in prior tests) legitimately resets the class-internal counter. Conservative additional 3.5 project threshold reflects researcher-wide overlapping-universe repeated peeking risk; pre-registered above formal class-internal requirement."
+        },
+        "verdict_classification": {
+          "PASS": "Net Carhart-4F alpha_t >= 3.5 on full sample AND mean alpha_t across (IS, OOS, FL) >= 2.5 AND alpha_t > 0 in each phase individually AND alpha_t >= 2.0 at half-spread = 15bps cost stress",
+          "PASS_MARGINAL": "alpha_t in [2.5, 3.5) on full sample AND positive each phase AND alpha_t >= 2.0 at 15bps stress",
+          "FAIL": "any of the four gates violated"
+        },
+        "g1_knockout_early_stop": "If net alpha_t at baseline cost is < 2.0 in IS or OOS phase, FAIL without proceeding to FL phase (early-stop pattern from feedback_slippage_stress_diagnostic_pattern_2026_05_12.md)",
+        "capital_deploy_clause": "OFF-TABLE for this test. PASS unlocks Layer 4 overlay eligibility evaluation (vol-target test, cyclicality pre-screen mandatory). PASS_MARGINAL -> 12mo paper-trade only. Compound extensions (banks separately via residual income #14, composite g_realized-g_implied #14b) reserved as conditional next paradigms."
+      },
+      "registered_at": "2026-05-12",
+      "status": "registered",
+      "outcome": null,
+      "notes": "First test in fundamental_value_dcf class on R2000 ex-financials. Data source SimFin Start tier ($25/mo paid 2026-05-12). Pre-reg follows project methodology bundle (phase-robust-backtesting). Design memo locked 2026-05-12 post adversarial review (zen + perplexity). Scorer implementation + preaudit smoke + full audit deferred to subsequent sessions per session 2026-05-12 plan. Honest framing: this is FCF-yield value factor (not 'growth mispricing discovery') per Perplexity framing fix. Cyclicality pre-screen NOT mandatory at this layer (Layer 2 screener, not Layer 4 overlay); will be measured at audit time for future #14 conditional overlay design."
     }
   ]
 }
