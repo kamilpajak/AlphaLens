@@ -236,6 +236,59 @@ def turnover_pct(rebalance_top_n_lists: Iterable[Iterable[str]]) -> float:
     return float(np.mean(turnovers)) if turnovers else 0.0
 
 
+def per_rebalance_turnover(
+    rebalance_top_n_lists: Iterable[Iterable[str]],
+    dates: Iterable[pd.Timestamp] | None = None,
+) -> pd.DataFrame:
+    """Per-rebalance turnover, n_tickers, and round-trip notional proxy.
+
+    Schema: ``[turnover, n_tickers, traded_value_proxy]`` indexed by `dates`
+    (DatetimeIndex) or RangeIndex if dates is None. The first row has
+    ``turnover=NaN`` (no prior basket to diff against).
+
+    Counterpart to scalar :func:`turnover_pct` — preserves per-rebalance
+    structure required by regime-conditional cost models (slippage stress
+    diagnostic 2026-05-12 needs Q5-panic turnover clusters intact, not
+    smeared by forward-fill from a scalar).
+
+    ``traded_value_proxy`` = ``2 × turnover`` (round-trip notional fraction;
+    equal-weight book sells exit names and buys entry names, both legs at
+    full position size).
+    """
+    baskets = [list(s) for s in rebalance_top_n_lists]
+    n_obs = len(baskets)
+
+    cols = ("turnover", "n_tickers", "traded_value_proxy")
+    if n_obs == 0:
+        idx = pd.DatetimeIndex([]) if dates is None else pd.DatetimeIndex(list(dates))
+        return pd.DataFrame({c: pd.Series(dtype=float) for c in cols}, index=idx)
+
+    snapshots = [frozenset(b) for b in baskets]
+    turnovers: list[float] = [float("nan")]
+    for prev, nxt in itertools.pairwise(snapshots):
+        size = max(len(prev), 1)
+        turnovers.append(len(prev - nxt) / size)
+
+    n_tickers = [len(b) for b in baskets]
+    proxy = [t * 2.0 if not (t != t) else float("nan") for t in turnovers]  # NaN-safe
+
+    if dates is None:
+        index: pd.Index = pd.RangeIndex(n_obs)
+    else:
+        index = pd.DatetimeIndex(list(dates), name="rebalance_date")
+        if len(index) != n_obs:
+            raise ValueError(f"dates length {len(index)} does not match baskets length {n_obs}")
+
+    return pd.DataFrame(
+        {
+            "turnover": turnovers,
+            "n_tickers": n_tickers,
+            "traded_value_proxy": proxy,
+        },
+        index=index,
+    )
+
+
 def max_drawdown(cumulative_returns: Sequence[float]) -> float:
     """Largest peak-to-trough fractional loss in a cumulative-return series.
 

@@ -39,7 +39,11 @@ from alphalens.backtest.daily_continuous_returns import (  # noqa: E402
     daily_continuous_returns,
 )
 from alphalens.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens.backtest.metrics import sharpe, turnover_pct  # noqa: E402
+from alphalens.backtest.metrics import (  # noqa: E402
+    per_rebalance_turnover,
+    sharpe,
+    turnover_pct,
+)
 from alphalens.data.alt_data.pit_universe_loader import (  # noqa: E402
     load_universe_union,
 )
@@ -269,6 +273,11 @@ def assess(
         sum(len(r.top_n_tickers) for r in report.rebalance_results)
         / max(1, len(report.rebalance_results))
     )
+    turnover_series = per_rebalance_turnover(
+        (r.top_n_tickers for r in report.rebalance_results),
+        dates=[r.date for r in report.rebalance_results],
+    )
+
     return {
         "n": len(rets_daily),
         "mean_top_n": mean_top_n,
@@ -285,7 +294,38 @@ def assess(
         "excess_vs_bench_ann": excess_ann,
         "excess_vs_bench_net": excess_ann - drag_ann,
         "rets_daily": rets_daily,
+        "turnover_series": turnover_series,
     }
+
+
+def derive_turnover_path(returns_path: Path) -> Path:
+    """Derive co-located turnover parquet path from a returns parquet path.
+
+    Slippage stress diagnostic 2026-05-12: per-phase turnover persistence
+    rides on the existing ``--dump-returns`` plumbing. If the returns path
+    stem contains ``returns``, replace the LAST occurrence with ``turnover``;
+    otherwise append ``_turnover`` to the stem. Replacing only the last
+    occurrence is intentional — a path like ``returns_returns.parquet``
+    would otherwise become ``turnover_turnover.parquet`` (writing to an
+    unintended location).
+    """
+    stem = returns_path.stem
+    if "returns" in stem:
+        new_stem = "turnover".join(stem.rsplit("returns", 1))
+    else:
+        new_stem = f"{stem}_turnover"
+    return returns_path.with_name(f"{new_stem}{returns_path.suffix}")
+
+
+def dump_turnover_parquet(turnover_df: pd.DataFrame, returns_path: Path) -> Path:
+    """Write per-rebalance turnover parquet alongside returns parquet.
+
+    Returns the path written. Creates parents if needed.
+    """
+    out_path = derive_turnover_path(returns_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    turnover_df.to_parquet(out_path)
+    return out_path
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -517,6 +557,24 @@ def main() -> int:
                 len(rets_daily),
                 args.dump_returns,
             )
+
+            # Slippage stress diagnostic 2026-05-12: co-locate per-rebalance
+            # turnover parquet so the diagnostic can apply regime-conditional
+            # cost shocks without smearing Q5-panic turnover clusters via
+            # forward-fill from a scalar.
+            turnover_df = next(
+                (r["turnover_series"] for r in all_rows if "turnover_series" in r),
+                None,
+            )
+            if turnover_df is None or turnover_df.empty:
+                logger.warning("No per-rebalance turnover series to dump")
+            else:
+                turnover_path = dump_turnover_parquet(turnover_df, args.dump_returns)
+                logger.info(
+                    "Dumped %d per-rebalance turnover rows to %s",
+                    len(turnover_df),
+                    turnover_path,
+                )
     return 0
 
 

@@ -35,6 +35,7 @@ LAYERS_WITH_STATUS = (
     "alphalens.backtest",
     "alphalens.archive.events",
     "alphalens.attribution",
+    "alphalens.diagnostics",
     "alphalens.data.fundamentals",
     "alphalens.archive.guru",
     "alphalens.literature_review",
