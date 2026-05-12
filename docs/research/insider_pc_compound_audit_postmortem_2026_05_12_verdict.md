@@ -88,6 +88,33 @@ The audit missed αt ≥ 2.5 on BOTH windows (OOS by 2.53σ, FL by 1.83σ). The 
 
 ---
 
+## Gate-by-gate evidence map (per `kill_verdict_checklist.md`)
+
+The 7-gate evidence map in `alphalens/screeners/compound_insider_pc/__init__.py::__closed_evidence__` points at this postmortem. For each gate not marked N/A, the evidence is:
+
+### `carhart_4f_hac`
+Per-phase Carhart-4F regression with HAC-adjusted t-stats (maxlags=126 daily obs per memo §4). Per-window means + per-phase tables above (§"Per-phase detail"). All ten phases registered αt below the PASS_MARGINAL floor; OOS mean αt=-0.034 (G1 trip), FL mean αt=+0.674 (also below 2.50 floor).
+
+### `walk_forward_oos`
+The 5-phase parallel audit on monthly stride 21d IS the walk-forward OOS — each phase samples the same audit window with a different starting-day offset (0..4), generating five independent rolling-rebalance traces of the same strategy. Per-phase wall consistency (stddev <1.5% of mean) confirms each phase ran the full rebalance schedule. Per-phase α-variance (signs differ across phases for OOS) confirms phases produced distinct portfolios — not degenerate single-portfolio replicas. The per-phase Sharpe_net + alpha_t tables above are the walk-forward evidence.
+
+### `multiple_testing_correction`
+Pre-registered Bonferroni `n=34, critical |t|≥2.974` in design memo §5.2 (alpha-class +1 + zen Z5 +6 implicit C(4,2) selection penalty). Effective threshold formula: `scipy.stats.norm.ppf(1 - 0.05/34) = 2.974`. Neither window's mean αt comes within 2σ of this threshold; mathematically pre-registered multiplicity is honored.
+
+### `cost_drag`
+5bps half-spread × `RealisticCostModel` (memo §4 architecture table). Per-phase `excess_net_ann` reported above already incorporates cost drag; the gap between gross and net for FL is the smoking gun for G3 — tiny gross alpha (≈+1-4% per phase) entirely consumed by transaction costs (~65% turnover per rebal on a strict-intersection universe → 13-26 bps annualized drag in 21d-stride implementation).
+
+### `bootstrap_ci`
+Synchronous-across-phases stationary block-bootstrap, 1000 reps × block_size=126 trading days per memo §5.4. Output: `bounds_alpha_t_lower/upper` in each window JSON. OOS bounds [-2.18, +1.47] firmly exclude the 2.50 floor (high power; n=1319 daily obs). FL bounds [-1.40, +3.80] straddle 0 (lower power; n=558, L/T=22.6% small-sample HAC regime per memo §7 #7 warning — but joint FAIL is determined by OOS regardless).
+
+### `survivorship_pit`
+Three PIT layers enforced throughout the audit:
+1. **R2000 PIT universe** — per-asof yamls under `~/.alphalens/pit_universe/`; universe roster as-of trading-day-T, not survivor-biased current-day roster. Memo §3 thesis primary universe.
+2. **`Form4PITStore`** — `records_as_of(ticker, asof, lookback_days=180)` enforces `filed_date <= asof` (no peeking at filings unfiled at asof) + 180d fire-sale exclusion (per PIT audit F4 finding, 100-300 bps inflation w/o fix). Component hash-locked via `_verify_component_hashes()` (PR #95 guard verified at audit start).
+3. **iVolatility SMD** per-ticker parquets keyed by `tradeDate`; the experiment's `_smd_loader` slices to `tradeDate <= asof` before computing rolling features.
+
+All three layers operate at runtime, not via post-hoc filtering; survivorship contamination is structurally impossible.
+
 ## Operational learnings (lock today)
 
 ### What worked

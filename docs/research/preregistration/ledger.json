@@ -3730,6 +3730,12 @@
       "outcome": {
         "verdict": "FAIL",
         "verdict_reason": "JOINT FAIL: both windows fail independently per memo \u00a75.1. OOS 2018-2023: G1 trip \u2014 mean \u03b1t=-0.034 < 2.50 floor. FL 2024-2026: G3 trip \u2014 mean excess_net_ann=-0.28% < 0 (and G1 \u03b1t=+0.674 also below 2.50). Memo \u00a77 #5 pre-predicted this failure mode (Blume-Easley 2018 selection-bias amplification on luck-marginal signals) and \u00a77 #1 (time-domain portfolio-return correlation despite cross-sectional \u03c1\u22480 due to both bases EXTREME counter-cyclical). Mitigation per memo \u00a77 #5: 'file each component separately and archive the compound design as a research artifact' \u2014 engaged.",
+        "mean_alpha_t": -0.03399999999999999,
+        "mean_excess_net": 0.03679999999999999,
+        "audit_path": "docs/research/insider_pc_compound_oos_2026-05-11.json",
+        "audit_path_final_lock": "docs/research/insider_pc_compound_finallock_2026-05-11.json",
+        "completed_at": "2026-05-11",
+        "notes": "JOINT FAIL: both windows fail independently. OOS \u03b1t=-0.034 (G1 trip), FL excess_net=-0.28% (G3 trip). Memo \u00a77 #5 mitigation engaged \u2014 components remain registered separately. Compound design archived as research artifact; module __status__=CLOSED per ADR 0005. Full per-window detail in windows_evaluated dict; mechanism + verification in postmortem.",
         "evaluated_at": "2026-05-11",
         "audit_code_sha": "a688cc724b26e3da5e08d6ab9f72f30f6fb0a350",
         "audit_pod": "amkcom4kgkml0n (cpu5m-8-64, $0.52/h, EU-RO-1, ~2h16m wall)",
