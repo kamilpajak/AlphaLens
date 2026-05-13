@@ -32,12 +32,25 @@ class TestRunRegressionPeriodsPerYear(unittest.TestCase):
     with default periods_per_year=252 — strided callers got 50× inflated αpct.
     """
 
-    def test_default_periods_per_year_is_252(self):
+    def test_periods_per_year_is_required(self):
+        """Issue #67: removed the default to prevent 27 strided callers from
+        silently getting 5× wrong annualization. Omission must raise TypeError."""
         from alphalens.attribution.factor_analysis import run_regression
 
         ff = _synthetic_carhart(500, seed=11)
         port = ff["Mkt-RF"] + ff["RF"]
-        res = run_regression(port, ff, factor_columns=["Mkt-RF"], spec_name="CAPM")
+        with self.assertRaises(TypeError) as cm:
+            run_regression(port, ff, factor_columns=["Mkt-RF"], spec_name="CAPM")
+        self.assertIn("periods_per_year", str(cm.exception))
+
+    def test_explicit_periods_per_year_252_for_daily(self):
+        from alphalens.attribution.factor_analysis import run_regression
+
+        ff = _synthetic_carhart(500, seed=11)
+        port = ff["Mkt-RF"] + ff["RF"]
+        res = run_regression(
+            port, ff, factor_columns=["Mkt-RF"], spec_name="CAPM", periods_per_year=252
+        )
         self.assertEqual(res.periods_per_year_assumption, 252)
         self.assertAlmostEqual(res.alpha_per_period, res.alpha_daily, places=12)
         self.assertAlmostEqual(res.alpha_annualized, res.alpha_daily * 252, places=10)
@@ -61,7 +74,7 @@ class TestRunRegressionPeriodsPerYear(unittest.TestCase):
 
 
 class TestRunRegression(unittest.TestCase):
-    """Core: run_regression(port_returns, factors, factor_columns, cov_type, spec_name)."""
+    """Core: run_regression(port_returns, factors, factor_columns, cov_type, spec_name, periods_per_year=252)."""
 
     def test_capm_portfolio_near_zero_alpha_beta_one(self):
         from alphalens.attribution.factor_analysis import run_regression
@@ -70,7 +83,9 @@ class TestRunRegression(unittest.TestCase):
         rng = np.random.default_rng(2)
         port = ff["Mkt-RF"] + ff["RF"] + rng.normal(0, 0.001, len(ff))
 
-        res = run_regression(port, ff, factor_columns=["Mkt-RF"], spec_name="CAPM")
+        res = run_regression(
+            port, ff, factor_columns=["Mkt-RF"], spec_name="CAPM", periods_per_year=252
+        )
 
         self.assertLess(abs(res.alpha_daily), 0.0005)
         self.assertAlmostEqual(res.betas["Mkt-RF"], 1.0, delta=0.15)
@@ -90,6 +105,7 @@ class TestRunRegression(unittest.TestCase):
             ff,
             factor_columns=["Mkt-RF", "SMB", "HML", "Mom"],
             spec_name="Carhart-4F",
+            periods_per_year=252,
         )
 
         self.assertAlmostEqual(res.betas["Mom"], 1.0, delta=0.15)
@@ -104,7 +120,9 @@ class TestRunRegression(unittest.TestCase):
         # +10 bps/day pure alpha on top of market beta
         port = ff["Mkt-RF"] + ff["RF"] + 0.0010 + rng.normal(0, 0.002, len(ff))
 
-        res = run_regression(port, ff, factor_columns=["Mkt-RF"], spec_name="CAPM")
+        res = run_regression(
+            port, ff, factor_columns=["Mkt-RF"], spec_name="CAPM", periods_per_year=252
+        )
 
         self.assertGreater(res.alpha_daily, 0.0005)
         self.assertGreater(res.alpha_tstat, 2.0)
@@ -130,9 +148,15 @@ class TestRunRegression(unittest.TestCase):
             factor_columns=["Mkt-RF"],
             cov_type="nonrobust",
             spec_name="CAPM-OLS",
+            periods_per_year=252,
         )
         res_hac = run_regression(
-            port, ff, factor_columns=["Mkt-RF"], cov_type="HAC", spec_name="CAPM-HAC"
+            port,
+            ff,
+            factor_columns=["Mkt-RF"],
+            cov_type="HAC",
+            spec_name="CAPM-HAC",
+            periods_per_year=252,
         )
 
         self.assertAlmostEqual(res_ols.alpha_daily, res_hac.alpha_daily, places=10)
@@ -145,7 +169,7 @@ class TestRunRegression(unittest.TestCase):
         port = ff["Mkt-RF"] + ff["RF"]
 
         with self.assertRaises(ValueError) as cm:
-            run_regression(port, ff, factor_columns=["Mkt-RF", "QMJ"])
+            run_regression(port, ff, factor_columns=["Mkt-RF", "QMJ"], periods_per_year=252)
         self.assertIn("QMJ", str(cm.exception))
 
     def test_missing_rf_column_raises(self):
@@ -155,7 +179,7 @@ class TestRunRegression(unittest.TestCase):
         port = pd.Series(np.random.default_rng(0).normal(0, 0.01, len(ff)), index=ff.index)
 
         with self.assertRaises(ValueError) as cm:
-            run_regression(port, ff, factor_columns=["Mkt-RF"])
+            run_regression(port, ff, factor_columns=["Mkt-RF"], periods_per_year=252)
         self.assertIn("RF", str(cm.exception))
 
     def test_hac_maxlags_explicit_override(self):
@@ -175,9 +199,16 @@ class TestRunRegression(unittest.TestCase):
             noise[i] = 0.85 * window.mean() + eps[i] if len(window) > 0 else eps[i]
         port = ff["Mkt-RF"] + ff["RF"] + pd.Series(noise, index=ff.index)
 
-        res_default = run_regression(port, ff, factor_columns=["Mkt-RF"], cov_type="HAC")
+        res_default = run_regression(
+            port, ff, factor_columns=["Mkt-RF"], cov_type="HAC", periods_per_year=252
+        )
         res_lag10 = run_regression(
-            port, ff, factor_columns=["Mkt-RF"], cov_type="HAC", hac_maxlags=10
+            port,
+            ff,
+            factor_columns=["Mkt-RF"],
+            cov_type="HAC",
+            hac_maxlags=10,
+            periods_per_year=252,
         )
 
         # Same point estimate, different t-stat (HAC SE differs with maxlags).
@@ -196,6 +227,7 @@ class TestRunRegression(unittest.TestCase):
             factor_columns=["Mkt-RF"],
             cov_type="nonrobust",
             hac_maxlags=5,
+            periods_per_year=252,
         )
         self.assertEqual(res.cov_type, "nonrobust")
 
@@ -214,11 +246,14 @@ class TestRunRegression(unittest.TestCase):
             factor_columns=["Mkt-RF", "SMB", "HML"],
             spec_name="L/S factor",
             subtract_rf=False,
+            periods_per_year=252,
         )
         self.assertGreater(res.alpha_daily, 0.0002)
         # Sanity: requesting subtract_rf=True without RF still raises
         with self.assertRaises(ValueError):
-            run_regression(ls_factor, ff, factor_columns=["Mkt-RF"], subtract_rf=True)
+            run_regression(
+                ls_factor, ff, factor_columns=["Mkt-RF"], subtract_rf=True, periods_per_year=252
+            )
 
     def test_insufficient_overlap_raises(self):
         from alphalens.attribution.factor_analysis import run_regression
@@ -227,7 +262,7 @@ class TestRunRegression(unittest.TestCase):
         port = pd.Series(np.random.default_rng(0).normal(0, 0.01, 10), index=ff.index)
 
         with self.assertRaises(ValueError):
-            run_regression(port, ff, factor_columns=["Mkt-RF"])
+            run_regression(port, ff, factor_columns=["Mkt-RF"], periods_per_year=252)
 
     def test_betas_dict_has_one_entry_per_factor(self):
         from alphalens.attribution.factor_analysis import run_regression
@@ -235,7 +270,9 @@ class TestRunRegression(unittest.TestCase):
         ff = _synthetic_carhart(400, seed=12)
         port = ff["Mkt-RF"] + ff["RF"]
 
-        res = run_regression(port, ff, factor_columns=["Mkt-RF", "SMB", "HML", "Mom"])
+        res = run_regression(
+            port, ff, factor_columns=["Mkt-RF", "SMB", "HML", "Mom"], periods_per_year=252
+        )
         self.assertEqual(set(res.betas.keys()), {"Mkt-RF", "SMB", "HML", "Mom"})
 
 
@@ -346,12 +383,14 @@ class TestIndustryControls(unittest.TestCase):
             factors,
             factor_columns=["Mkt-RF", "SMB", "HML", "Mom"],
             spec_name="Carhart-4F",
+            periods_per_year=252,
         )
         with_industry = run_regression(
             port,
             factors,
             factor_columns=["Mkt-RF", "SMB", "HML", "Mom", "BusEq"],
             spec_name="Carhart-4F + BusEq",
+            periods_per_year=252,
         )
 
         self.assertLess(abs(with_industry.alpha_daily), abs(carhart_only.alpha_daily))
@@ -412,6 +451,7 @@ class TestCarhartPlusIndustryRobustness(unittest.TestCase):
             factors,
             factor_columns=carhart_cols + industry_names,
             spec_name="Carhart-4F + 12 Industries",
+            periods_per_year=252,
         )
 
         self.assertTrue(np.isfinite(res.alpha_daily))
