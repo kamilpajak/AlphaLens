@@ -86,3 +86,9 @@ For migration script `migrate_fix_alpha_annualized.py`:
 **Tier 1 sweep (this plan, recommended)** — also fix the 25+ historical drivers in single batch (1-line change per driver). Migration script (Tier 2.C) cannot fix in-script bug — only the live computation. So while migration handles cell JSON outputs, the next time someone re-runs a historical driver, bug returns. Defensive: fix code + migrate JSONs.
 
 **Tier 2 (deferred)** — full `run_regression` API refactor (make `periods_per_year` required) — separate plan.
+
+## 2026-05-13 amendment — Tier 2 landed
+
+Issue #67 closed via PR (kwarg made required + keyword-only). Production-package callers and 1 active script (`scripts/v9d_cross_period_diagnostic.py`) migrated in the same PR. Internal wrappers (`run_carhart_attribution`, `run_ff5_umd_attribution`, `run_q4_attribution`) now hardcode `periods_per_year=252` since they're daily-by-design. Test suite migrated (`tests/test_factor_analysis.py` — 19 calls updated, `test_default_periods_per_year_is_252` renamed to `test_periods_per_year_is_required` asserting TypeError on omission).
+
+~30 archived call sites in closed/FAIL'd paradigm drivers (`scripts/experiment_*.py`, `scripts/quiver_*.py`, `scripts/revalidate_*.py`, `alphalens/archive/rotation/sanity_checks.py`) remain unfixed per ADR 0005 closed-layer policy — they'd raise TypeError if invoked, but the test suite stays green because they aren't exercised. Acceptable tech debt as anti-pattern catalog.

@@ -83,7 +83,14 @@ def _per_period_stats(
     per-rebalance (stride=5 ≈ weekly) — same convention as v9D + v10."""
     if len(rets) < 20:
         return {"n": len(rets), "alpha_t": float("nan"), "note": "too few obs"}
-    res = run_regression(rets, carhart[[*CARHART_COLS, "RF"]], CARHART_COLS)
+    # periods_per_year passes through from the function param (default 52 for
+    # weekly stride) so alpha_annualized matches the input cadence. Issue #67.
+    res = run_regression(
+        rets,
+        carhart[[*CARHART_COLS, "RF"]],
+        CARHART_COLS,
+        periods_per_year=periods_per_year,
+    )
     sh = sharpe(rets.tolist(), periods_per_year=periods_per_year)
     cum = (1 + rets.fillna(0)).cumprod()
     mdd = float(max_drawdown(cum.tolist()))
