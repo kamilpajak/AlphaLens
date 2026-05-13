@@ -343,9 +343,24 @@ def main(argv: list[str] | None = None) -> int:
     lines.append("## Bonferroni accounting")
     lines.append("")
     lines.append("- Program-level n=26, naive Bonferroni |t|≥2.85 (binding per pre-reg)")
-    lines.append(
-        "- Romano-Wolf adjusted critical not computed (panel collapses on disjoint sub-period dates per v9d_retrospective experience)"
-    )
+    rw = rw_result
+    if "max_adjusted_critical" in rw:
+        lines.append(
+            f"- Romano-Wolf per-strategy critical (issue #66): max |t|={rw['max_observed_t']:.2f} "
+            f"vs adjusted={rw['max_adjusted_critical']:.2f}, "
+            f"{rw['n_rejected']}/{rw['n_strategies']} rejected (B={rw['n_bootstrap']}, "
+            f"mean_block={rw['mean_block_length']})"
+        )
+        lines.append(
+            "- Note: per-strategy independent block bootstrap on raw `long_net` "
+            "(not Carhart-4F residuals). Independence destroys cross-strategy "
+            "correlation; critical is closer to Bonferroni than the pre-reg's "
+            "`~2.13` aspirational estimate. Heavy-tail data (single-cell outliers) "
+            "may further inflate the bootstrap critical via t-pivot instability — "
+            "the αt-vs-PASS_MARGINAL gate remains the binding pre-reg criterion."
+        )
+    else:
+        lines.append(f"- Romano-Wolf adjusted critical not computed: {rw.get('note', '')}")
     lines.append("")
     lines.append("## Coverage")
     lines.append("")

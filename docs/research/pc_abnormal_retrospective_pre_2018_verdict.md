@@ -27,7 +27,8 @@
 ## Bonferroni accounting
 
 - Program-level n=26, naive Bonferroni |t|≥2.85 (binding per pre-reg)
-- Romano-Wolf adjusted critical not computed (panel collapses on disjoint sub-period dates per v9d_retrospective experience)
+- Romano-Wolf per-strategy critical (issue #66): max |t|=4.47 vs adjusted=20.42, 0/15 rejected (B=10000, mean_block=4.0)
+- Note: per-strategy independent block bootstrap on raw `long_net` (not Carhart-4F residuals). Independence destroys cross-strategy correlation; critical is closer to Bonferroni than the pre-reg's `~2.13` aspirational estimate. Heavy-tail data (single-cell outliers) may further inflate the bootstrap critical via t-pivot instability — the αt-vs-PASS_MARGINAL gate remains the binding pre-reg criterion.
 
 ## Coverage
 

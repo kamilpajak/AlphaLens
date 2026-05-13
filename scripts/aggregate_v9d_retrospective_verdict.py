@@ -467,6 +467,14 @@ def render_postmortem_md(payload: dict) -> str:
         lines.append(f"- Adjusted critical |t|: {rw['max_adjusted_critical']:.2f}")
         lines.append(f"- Strategies rejected: {rw['n_rejected']} / {rw['n_strategies']}")
         lines.append(f"- Bootstrap B={rw['n_bootstrap']}, mean_block={rw['mean_block_length']}")
+        lines.append(
+            "- Note: per-strategy independent block bootstrap (issue #66) operates on "
+            "raw `long_net` returns, not Carhart-4F residuals. Per-strategy "
+            "independence destroys cross-strategy correlation that would tighten "
+            "the family-max critical, so this critical is closer to Bonferroni than "
+            "the pre-reg's `~2.13` aspirational estimate. The αt-vs-PASS_MARGINAL "
+            "gate remains the binding pre-reg criterion."
+        )
     else:
         lines.append(f"- {rw.get('note', 'no result')}")
     lines.append("")
