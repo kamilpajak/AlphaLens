@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 from datetime import date
@@ -353,10 +354,17 @@ def main() -> int:
             )
 
     # Pre-reg gate evaluation (against baseline cost row, conventionally 5bps).
+    # `math.isclose` rather than `==` so a future caller passing a computed
+    # cost grid (linspace/arange) still matches the canonical 5/15 bps rows.
+    # Issue #105 L2.
     baseline = next(
-        (r for r in all_rows if r["cost_bps"] == 5.0), all_rows[0] if all_rows else None
+        (r for r in all_rows if math.isclose(r["cost_bps"], 5.0, abs_tol=1e-5)),
+        all_rows[0] if all_rows else None,
     )
-    stress_15bps = next((r for r in all_rows if r["cost_bps"] == 15.0), None)
+    stress_15bps = next(
+        (r for r in all_rows if math.isclose(r["cost_bps"], 15.0, abs_tol=1e-5)),
+        None,
+    )
     gate_summary: dict = {}
     if baseline and baseline.get("n", 0) > 0:
         net_t = baseline["t_4f"]
