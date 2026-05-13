@@ -105,6 +105,7 @@ _RESULT_LINE = re.compile(
     r"Sh gross=(?P<sg>[-\d.]+) net=(?P<sn>[-\d.]+) \| "
     r"excess gross=(?P<eg>[-\d.]+)% net=(?P<en>[-\d.]+)% \| "
     r"α 4F=(?P<a>[-\d.]+)% t=(?P<t>[-\d.]+)"
+    r"(?: \| α-net 4F=(?P<an>[-\d.]+)% t-net=(?P<tn>[-\d.]+))?"
 )
 
 
@@ -209,13 +210,22 @@ def _run_one_phase(
 
 
 def _parse_per_cost_rows(log_text: str) -> dict[float, dict[str, float]]:
-    """Parse all `cost=Nbps | ... α 4F=...% t=...` lines from one phase log."""
+    """Parse all `cost=Nbps | ... α 4F=...% t=...` lines from one phase log.
+
+    `alpha_t_net` comes from the optional `α-net 4F=...% t-net=...` tokens
+    appended by the experiment script (issue #105 H1). When the tokens are
+    absent (legacy logs from pre-H1 builds) fall back to `alpha_t` so the
+    parser stays backwards-compatible — the G4 gate will then degrade to the
+    pre-fix behaviour for those legacy rows.
+    """
     rows: dict[float, dict[str, float]] = {}
     for line in log_text.splitlines():
         m = _RESULT_LINE.search(line)
         if not m:
             continue
         cost = float(m.group("cost"))
+        tn = m.group("tn")
+        an = m.group("an")
         rows[cost] = {
             "sharpe_gross": float(m.group("sg")),
             "sharpe_net": float(m.group("sn")),
@@ -223,6 +233,8 @@ def _parse_per_cost_rows(log_text: str) -> dict[float, dict[str, float]]:
             "excess_net_ann": float(m.group("en")) / 100.0,
             "alpha_ann": float(m.group("a")) / 100.0,
             "alpha_t": float(m.group("t")),
+            "alpha_net_ann": float(an) / 100.0 if an is not None else float(m.group("a")) / 100.0,
+            "alpha_t_net": float(tn) if tn is not None else float(m.group("t")),
             "raw_line": line.strip(),
         }
     return rows
@@ -236,6 +248,7 @@ def _aggregate_per_phase(phase_results: list[dict], *, cost: float) -> dict | No
     if not rows:
         return None
     alpha_ts = [r["alpha_t"] for r in rows]
+    alpha_t_nets = [r["alpha_t_net"] for r in rows]
     excess_nets = [r["excess_net_ann"] for r in rows]
     sharpe_nets = [r["sharpe_net"] for r in rows]
 
@@ -252,9 +265,11 @@ def _aggregate_per_phase(phase_results: list[dict], *, cost: float) -> dict | No
     return {
         "n_phases": len(rows),
         "alpha_t": _stats(alpha_ts),
+        "alpha_t_net": _stats(alpha_t_nets),
         "excess_net_ann": _stats(excess_nets),
         "sharpe_net": _stats(sharpe_nets),
         "per_phase_alpha_t": alpha_ts,
+        "per_phase_alpha_t_net": alpha_t_nets,
         "per_phase_excess_net_ann": excess_nets,
     }
 
@@ -269,7 +284,11 @@ def _evaluate_window_gates(window_block: dict) -> dict:
     alpha_ts = baseline["per_phase_alpha_t"]
     mean_alpha_t = baseline["alpha_t"]["mean"]
     min_alpha_t = baseline["alpha_t"]["min"]
-    stress_mean_t = stress["alpha_t"]["mean"]
+    # G4 reads net-regression t (alpha_t_net) per issue #105 H1. Before the
+    # fix, _RESULT_LINE only captured gross t and G4 was a no-op duplicate
+    # of G1. With the optional net tokens parsed (or fallback to gross for
+    # legacy logs) G4 is now a genuine cost-stress gate.
+    stress_mean_t = stress["alpha_t_net"]["mean"]
 
     gates["G1_full_sample_alpha_t"] = {
         "value": mean_alpha_t,
