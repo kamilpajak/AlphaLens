@@ -40,7 +40,7 @@ requires-dist = [
     { name = "langchain-google-genai", specifier = ">=4.2.2" },
     { name = "lightgbm", specifier = ">=4.6.0" },
     { name = "pandas", specifier = ">=2.3.0" },
-    { name = "phase-robust-backtesting", git = "https://github.com/kamilpajak/phase-robust-backtesting.git?rev=v0.2.1" },
+    { name = "phase-robust-backtesting", git = "https://github.com/kamilpajak/phase-robust-backtesting.git?rev=v0.2.2" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
     { name = "pyarrow", specifier = ">=24.0.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
@@ -778,8 +778,8 @@ wheels = [
 
 [[package]]
 name = "phase-robust-backtesting"
-version = "0.2.1"
-source = { git = "https://github.com/kamilpajak/phase-robust-backtesting.git?rev=v0.2.1#59a5aefeaaad1189ac9f980b3240325285ac756a" }
+version = "0.2.2"
+source = { git = "https://github.com/kamilpajak/phase-robust-backtesting.git?rev=v0.2.2#ea134de829431b169d89ac5740dd25a30755bb5c" }
 dependencies = [
     { name = "scipy" },
     { name = "statsmodels" },
