@@ -2,7 +2,7 @@
 
 Primary interface:
 
-    run_regression(portfolio_returns, factors, factor_columns, cov_type="HAC")
+    run_regression(portfolio_returns, factors, factor_columns, periods_per_year=252)
         Single OLS, (portfolio − RF) on [intercept, *factors]. Default t-stats are
         Newey-West HAC (lag = int(4·(n/100)^(2/9))), which dampens false-positive
         significance caused by autocorrelated daily errors.
@@ -54,15 +54,22 @@ def run_regression(
     portfolio_returns: pd.Series,
     factors: pd.DataFrame,
     factor_columns: list[str],
+    *,
+    periods_per_year: int,
     cov_type: str = "HAC",
     spec_name: str | None = None,
-    periods_per_year: int = 252,
     subtract_rf: bool = True,
     hac_maxlags: int | None = None,
 ) -> AlphaResult:
     """Run OLS of portfolio excess return on [intercept, *factor_columns].
 
     factors: DataFrame containing at least the requested columns + "RF" (decimals).
+    periods_per_year: REQUIRED keyword. Annualization multiplier matching the
+        input cadence — 252 for daily, 52 for weekly, 12 for monthly, 4 for
+        quarterly. Previously defaulted to 252; the default was removed
+        (issue #67) because 27 of 40 historical call sites passed strided
+        returns and silently got 5× wrong annualization. The new contract
+        forces explicit intent at every call site.
     cov_type: "HAC" (Newey-West, default) or "nonrobust" (plain OLS).
     subtract_rf: when True (default), y = port - RF. Set False when the input is
         already an excess return (e.g. a long-short factor) — then y = port
@@ -127,7 +134,13 @@ def run_carhart_attribution(
         ("Carhart-4F", ["Mkt-RF", "SMB", "HML", "Mom"]),
     ]
     return [
-        run_regression(portfolio_returns, carhart_factors, cols, spec_name=name)
+        run_regression(
+            portfolio_returns,
+            carhart_factors,
+            cols,
+            periods_per_year=252,
+            spec_name=name,
+        )
         for name, cols in specs
     ]
 
@@ -200,6 +213,7 @@ def run_ff5_umd_attribution(
         portfolio_returns,
         ff5_umd_factors,
         ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom"],
+        periods_per_year=252,
         spec_name="FF5+UMD",
     )
 
@@ -221,6 +235,7 @@ def run_q4_attribution(
         portfolio_returns,
         q4_factors,
         ["Mkt-RF", "ME", "IA", "ROE"],
+        periods_per_year=252,
         spec_name="Q4",
     )
 
