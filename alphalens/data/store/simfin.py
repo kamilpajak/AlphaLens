@@ -36,6 +36,23 @@ _COL_NET_INCOME = "Net Income"
 _COL_REVENUE = "Revenue"
 _COL_CLOSE = "Close"
 _COL_SHARES = "Shares Outstanding"
+# Additional columns used by ev_fcff_features_as_of()
+_COL_CAPEX_RAW = "Change in Fixed Assets & Intangibles"  # signed negative when capex positive
+_COL_INTEREST = "Interest Expense, Net"
+_COL_PRETAX = "Pretax Income (Loss)"
+_COL_LT_DEBT = "Long Term Debt"
+_COL_ST_DEBT = "Short Term Debt"
+_COL_PUBLISH_DATE = "Publish Date"
+
+# Effective tax rate floor/ceiling per ev_fcff_yield design memo §3
+_TAX_RATE_FLOOR = 0.0
+_TAX_RATE_CEILING = 0.35
+# Minimum quarters required to compute a 5y FCF margin median — too few
+# observations leaves the imputation dominated by noise. 8 quarters = 2 years
+# of history is the published minimum-data threshold for cross-sectional
+# fundamental quality factors (Asness QMJ 2018 footnote 9).
+_MIN_QTRS_FCF_MARGIN_MEDIAN = 8
+_LOOKBACK_QTRS_FCF_MARGIN = 20  # 5 years of quarters
 
 
 def _default_cache_dir() -> Path:
@@ -177,6 +194,100 @@ class SimFinFundamentalsStore:
         }
         return features
 
+    def ev_fcff_features_as_of(self, ticker: str, asof: date) -> dict | None:
+        """PIT snapshot for ``alphalens.screeners.ev_fcff_yield.scorer``.
+
+        Returns the 11-field dict consumed by ``score_ev_fcff_yield``:
+
+        - ``ocf_ttm``, ``capex_ttm`` (positive-signed), ``interest_expense_ttm``,
+          ``tax_rate`` (clamped to [0, 0.35]), ``revenue_ttm``
+        - ``fcf_margin_5y_median`` (rolling 20-quarter median of
+          ``(OCF − Capex) / Revenue``, or ``None`` if < 8 quarters available)
+        - ``price``, ``shares_outstanding``
+        - ``long_term_debt``, ``short_term_debt``, ``cash_and_equivalents``
+
+        Returns ``None`` if the ticker is unknown, has no fundamentals
+        published on/before ``asof``, or lacks price data (when the store
+        was constructed with ``with_prices=True`` — otherwise ``price`` /
+        ``shares_outstanding`` are ``None`` and the scorer will drop).
+        """
+        up = ticker.upper()
+        if self._balance is None or self._cashflow is None or self._income is None:
+            return None
+        asof_ts = pd.Timestamp(asof)
+
+        def _slice(df: pd.DataFrame | None) -> pd.DataFrame | None:
+            if df is None or up not in df.index.get_level_values("Ticker"):
+                return None
+            try:
+                sub = df.loc[up]
+            except KeyError:
+                return None
+            publish = pd.to_datetime(sub[_COL_PUBLISH_DATE])
+            mask = publish <= asof_ts
+            filtered = sub[mask].sort_index()
+            return filtered if not filtered.empty else None
+
+        bs = _slice(self._balance)
+        cf = _slice(self._cashflow)
+        inc = _slice(self._income)
+        if bs is None or cf is None or inc is None:
+            return None
+
+        # TTM = sum of last 4 quarterly values (sorted by Report Date ascending).
+        ocf_ttm = _ttm_sum(cf, _COL_OCF)
+        capex_raw_ttm = _ttm_sum(cf, _COL_CAPEX_RAW)
+        # SimFin signs Change in Fixed Assets & Intangibles negative when the
+        # firm INVESTS in fixed assets — i.e. capex is reported as negative.
+        # Flip the sign so capex_ttm is positive for an investing firm.
+        capex_ttm = -capex_raw_ttm if capex_raw_ttm is not None else None
+        interest_ttm = _ttm_sum(inc, _COL_INTEREST)
+        revenue_ttm = _ttm_sum(inc, _COL_REVENUE)
+
+        # Effective tax rate from latest available quarterly Pretax / NetIncome.
+        # Formula: τ = 1 − NetIncome / Pretax, clamped to [0, 0.35].
+        pretax_latest = _latest_value(inc, _COL_PRETAX)
+        ni_latest = _latest_value(inc, _COL_NET_INCOME)
+        tax_rate = _effective_tax_rate(pretax_latest, ni_latest)
+
+        ltd_latest = _latest_value(bs, _COL_LT_DEBT)
+        std_latest = _latest_value(bs, _COL_ST_DEBT)
+        cash_latest = _latest_value(bs, _COL_CASH)
+
+        # 5y rolling FCF margin median (last 20 quarters), used for imputation
+        # when current FCFF is non-positive (per design memo §4).
+        fcf_margin_5y = _fcf_margin_median(cf, inc)
+
+        # Latest price + shares from prices_by_ticker (None if with_prices=False).
+        price: float | None = None
+        shares: float | None = None
+        if self._prices_by_ticker is not None:
+            ticker_prices = self._prices_by_ticker.get(up)
+            if ticker_prices is not None and not ticker_prices.empty:
+                idx = ticker_prices.index.searchsorted(asof_ts, side="right") - 1
+                if idx >= 0:
+                    row = ticker_prices.iloc[idx]
+                    raw_close = row.get(_COL_CLOSE)
+                    raw_shares = row.get(_COL_SHARES)
+                    if raw_close is not None and not math.isnan(raw_close):
+                        price = float(raw_close)
+                    if raw_shares is not None and not math.isnan(raw_shares):
+                        shares = float(raw_shares)
+
+        return {
+            "ocf_ttm": ocf_ttm,
+            "capex_ttm": capex_ttm,
+            "interest_expense_ttm": interest_ttm,
+            "tax_rate": tax_rate,
+            "revenue_ttm": revenue_ttm,
+            "fcf_margin_5y_median": fcf_margin_5y,
+            "price": price,
+            "shares_outstanding": shares,
+            "long_term_debt": ltd_latest,
+            "short_term_debt": std_latest,
+            "cash_and_equivalents": cash_latest,
+        }
+
 
 # ---- Helpers (pure functions, tested separately) ----------------------------
 
@@ -252,3 +363,80 @@ def _ps_ratio_pit(prices_by_ticker, inc, ticker: str, asof_ts) -> float | None: 
     if rev_ttm <= 0:
         return None
     return market_cap / rev_ttm
+
+
+# ---- Helpers for ev_fcff_features_as_of() ----------------------------------
+
+
+def _ttm_sum(df: pd.DataFrame | None, column: str) -> float | None:
+    """Sum the last 4 quarterly values of ``column`` in a per-ticker frame.
+
+    Returns ``None`` when df is empty, the column is absent, or fewer than 4
+    non-NaN observations are available — TTM requires exactly 4 trailing
+    quarters for proper annualization.
+    """
+    if df is None or df.empty or column not in df.columns:
+        return None
+    last4 = df[column].tail(4).dropna()
+    if len(last4) < 4:
+        return None
+    return float(last4.sum())
+
+
+def _latest_value(df: pd.DataFrame | None, column: str) -> float | None:
+    """Most recent non-NaN value in ``column`` of a per-ticker frame."""
+    if df is None or df.empty or column not in df.columns:
+        return None
+    series = df[column].dropna()
+    if series.empty:
+        return None
+    return float(series.iloc[-1])
+
+
+def _effective_tax_rate(pretax: float | None, net_income: float | None) -> float:
+    """``1 − NI / Pretax`` clamped to ``[_TAX_RATE_FLOOR, _TAX_RATE_CEILING]``.
+
+    Returns ``_TAX_RATE_CEILING`` floor of 0.21 (federal US corporate rate
+    2018+) when pretax is non-positive or net income exceeds pretax (negative
+    effective tax, which can happen with NOL carryforwards but breaks the
+    formula). The 0.21 default is the most conservative non-zero rate for
+    unlevered FCF computation — overstates tax shield slightly vs zero-tax
+    which would give too much capex addback.
+    """
+    if pretax is None or net_income is None:
+        return 0.21
+    if pretax <= 0 or net_income > pretax:
+        return 0.21
+    raw = 1.0 - net_income / pretax
+    if not math.isfinite(raw):
+        return 0.21
+    return max(_TAX_RATE_FLOOR, min(_TAX_RATE_CEILING, raw))
+
+
+def _fcf_margin_median(cf: pd.DataFrame | None, inc: pd.DataFrame | None) -> float | None:
+    """Rolling 20-quarter median of ``(OCF − Capex) / Revenue``.
+
+    Returns ``None`` if fewer than ``_MIN_QTRS_FCF_MARGIN_MEDIAN`` non-NaN
+    margins can be computed. The denominator (Revenue) must be positive to
+    contribute to the margin sample — zero/negative-revenue quarters are
+    skipped, not zeroed.
+    """
+    if cf is None or inc is None or cf.empty or inc.empty:
+        return None
+    # Join on Report Date to avoid sign / scale mismatch from independent slices.
+    ocf = cf[_COL_OCF] if _COL_OCF in cf.columns else None
+    capex_raw = cf[_COL_CAPEX_RAW] if _COL_CAPEX_RAW in cf.columns else None
+    revenue = inc[_COL_REVENUE] if _COL_REVENUE in inc.columns else None
+    if ocf is None or capex_raw is None or revenue is None:
+        return None
+    joined = pd.concat({"ocf": ocf, "capex_raw": capex_raw, "revenue": revenue}, axis=1).dropna()
+    if joined.empty:
+        return None
+    # Quarterly FCF = OCF + capex_raw (raw is negative for invest direction).
+    fcf_quarterly = joined["ocf"] + joined["capex_raw"]
+    margin = fcf_quarterly / joined["revenue"]
+    margin = margin[joined["revenue"] > 0]
+    margin = margin.tail(_LOOKBACK_QTRS_FCF_MARGIN).dropna()
+    if len(margin) < _MIN_QTRS_FCF_MARGIN_MEDIAN:
+        return None
+    return float(margin.median())
