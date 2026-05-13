@@ -125,3 +125,33 @@ AlphaLens wrapper delegate without spawning a subprocess.
 - New repo: <https://github.com/kamilpajak/phase-robust-backtesting>
 - Anti-pattern catalog: <https://github.com/kamilpajak/phase-robust-backtesting/blob/main/docs/anti_patterns.md>
 - Closed-layer policy: [ADR 0005](0005-closed-layers-as-anti-pattern-catalog.md)
+
+## Amendment 2026-05-13 — `Registration.extras` (PRB v0.2.2)
+
+PRB v0.2.2 adds a `Registration.extras: dict[str, Any]` field and a
+`Ledger.complete(outcome_extras=...)` kwarg ([phase-robust-backtesting#1](https://github.com/kamilpajak/phase-robust-backtesting/pull/1)).
+The hook addresses [AlphaLens#105 H3](https://github.com/kamilpajak/AlphaLens/issues/105):
+two ledger entries had drifted to carry top-level `phase_a_result` forensic
+data outside the v0.2.1 closed schema, breaking `Ledger._load()` on the next
+reload. The fix preserves PRB's methodology-agnostic posture (no AlphaLens-
+specific fields landed in the dataclass) while letting paradigm orchestrators
+attach structured forensics — phase-A pre-screen results, pod compute logs,
+postmortem links, `windows_evaluated` — through the API.
+
+Resolution order on read: declared fields first, then unknown top-level keys
+route into `extras`. On write: `to_dict()` flattens `extras` back to
+top-level so the on-disk JSON shape stays identical to pre-v0.2.2 entries
+(zero git-diff churn on round-trip).
+
+AlphaLens consumer wiring:
+- `alphalens preregister complete --extras-json <path>` accepts paradigm-
+  specific forensic JSON merged into the outcome dict.
+- Paradigm orchestrators (template: `scripts/run_ev_fcff_yield_audit.py`)
+  pass `outcome_extras=` through the API rather than patching `ledger.json`
+  manually post-hoc.
+
+Same-PR ledger cleanup forced canonical statuses on 3 drift-entries
+(`audited`, `completed_pass_marginal`, `execution_aborted_units_mismatch`
+→ `completed`/`abandoned`); rich values preserved under `status_extended`
+top-level key (auto-routed into `extras` via PRB v0.2.2). Also renamed the
+ev_fcff_yield outcome's `mean_excess_net_ann` → canonical `mean_excess_net`.

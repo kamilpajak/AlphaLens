@@ -55,6 +55,84 @@ class TestLedgerContract(unittest.TestCase):
             self.assertEqual(ledger_reloaded.get(reg.id).id, reg.id)
 
 
+class TestLedgerLiveLoadable(unittest.TestCase):
+    """Issue #105 H3 regression-lock: the live ledger.json must load without
+    TypeError. Pre-PRB-v0.2.2 two entries (insider_form4_opportunistic_*)
+    carried top-level `phase_a_result` keys outside the Registration schema
+    and broke `Ledger._load()` on the next reload.
+    """
+
+    LIVE_LEDGER_ROOT = Path(__file__).resolve().parent.parent / "docs/research/preregistration"
+
+    def test_live_ledger_loads_without_error(self):
+        from phase_robust_backtesting.ledger import Ledger
+
+        ledger = Ledger(root=self.LIVE_LEDGER_ROOT)
+        # Sanity: at least one entry exists. The exact count drifts as new
+        # paradigms register; the load itself is the assertion under test.
+        self.assertGreater(len(ledger.list()), 10)
+
+    def test_live_ledger_phase_a_result_routed_to_extras(self):
+        from phase_robust_backtesting.ledger import Ledger
+
+        ledger = Ledger(root=self.LIVE_LEDGER_ROOT)
+        # Both insider_form4_opportunistic entries carry `phase_a_result`
+        # forensics at top level. v0.2.2 auto-routes them into `extras`.
+        for known_id in (
+            "insider_form4_opportunistic_2026_05_05",
+            "insider_form4_opportunistic_2026_05_08_v2",
+        ):
+            reg = ledger.get(known_id)
+            self.assertIn(
+                "phase_a_result",
+                reg.extras,
+                f"{known_id} should carry phase_a_result in reg.extras after PRB v0.2.2",
+            )
+
+    def test_live_ledger_outcomes_use_canonical_metric_keys(self):
+        """Forward-compat guard: every completed entry must report
+        `mean_excess_net` (canonical) NOT `mean_excess_net_ann` (legacy alias
+        that briefly existed in the ev_fcff_yield_2026_05_12_v1 outcome,
+        rewritten as part of this PR)."""
+        from phase_robust_backtesting.ledger import Ledger
+
+        ledger = Ledger(root=self.LIVE_LEDGER_ROOT)
+        offenders: list[str] = []
+        for reg in ledger.list():
+            if reg.outcome is None:
+                continue
+            if "mean_excess_net_ann" in reg.outcome and "mean_excess_net" not in reg.outcome:
+                offenders.append(reg.id)
+        self.assertEqual(
+            offenders,
+            [],
+            "Entries below use the non-canonical mean_excess_net_ann key; "
+            "rename to mean_excess_net to keep the outcome schema honest.",
+        )
+
+
+class TestLedgerExtrasContract(unittest.TestCase):
+    """v0.2.2 hooks AlphaLens depends on for paradigm-#14+ orchestrators."""
+
+    def test_registration_has_extras_field(self):
+        import dataclasses
+
+        from phase_robust_backtesting.ledger import Registration
+
+        names = {f.name for f in dataclasses.fields(Registration)}
+        self.assertIn("extras", names)
+
+    def test_ledger_complete_accepts_outcome_extras_kwarg(self):
+        from phase_robust_backtesting.ledger import Ledger
+
+        sig = inspect.signature(Ledger.complete)
+        self.assertIn("outcome_extras", sig.parameters)
+        self.assertEqual(
+            sig.parameters["outcome_extras"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+
+
 class TestMultiPhaseContract(unittest.TestCase):
     def test_robust_verdict_accepts_dispersion_threshold_kwarg(self):
         # AlphaLens depends on dispersion_threshold_pp added in OSS v0.2.0

@@ -1608,7 +1608,7 @@
         "capital_deploy_clause": "Capital deploy remains OFF-TABLE regardless of verdict per project policy. PASS triggers Layer 4 overlay test eligibility on this base. Other verdicts maintain status quo (paper-trade observation only)."
       },
       "registered_at": "2026-05-05",
-      "status": "execution_aborted_units_mismatch",
+      "status": "abandoned",
       "phase_a_result": {
         "verdict": "PROCEED",
         "executed_at": "2026-05-08",
@@ -1640,7 +1640,8 @@
         ],
         "no_dumped_returns": "No phase produced returns parquet \u2014 assess() never reached completion before kill."
       },
-      "notes": "Aborted 2026-05-08 due to hac_maxlags units mismatch. See outcome block. Successor ledger entry: insider_form4_opportunistic_2026_05_08_v2."
+      "notes": "Aborted 2026-05-08 due to hac_maxlags units mismatch. See outcome block. Successor ledger entry: insider_form4_opportunistic_2026_05_08_v2.",
+      "status_extended": "execution_aborted_units_mismatch"
     },
     {
       "id": "mom_lowvol_combo_2026_04_29",
@@ -3440,7 +3441,7 @@
         "capital_deploy_clause": "Capital deploy remains OFF-TABLE regardless of verdict per project policy. PASS triggers Layer 4 overlay test eligibility on this base. Other verdicts maintain status quo (paper-trade observation only)."
       },
       "registered_at": "2026-05-08",
-      "status": "completed_pass_marginal",
+      "status": "completed",
       "phase_a_result": {
         "verdict": "PROCEED",
         "executed_at": "2026-05-08",
@@ -3546,7 +3547,8 @@
           "comparison_to_oos_2018_2023": "Pooled \u03b1t nearly identical (+2.69 vs +2.71). Both PASS_MARGINAL \u2014 both miss strict Bonferroni n=28 |t|\u22653.12 by ~0.4\u03c3 but clear G2-G5 with margin. Final lock ECONOMIC edge stronger: excess_net +24.4%/y (vs +17.7%) and Sharpe net 1.14-1.38 per phase (vs 0.82-0.89). Cohen-Malloy mechanism appears genuinely robust on R2000 PIT post-publication; no decay observed on fresher 2024-2026 OOS. Per zen review 2026-05-09: combined verdict narrative only (no post-hoc mechanical rule); both windows independently classified PASS_MARGINAL under same pre-reg gates."
         }
       },
-      "notes": "PASS_MARGINAL on both OOS 2018-2023 (Phase B 2026-05-09 morning) AND final lock 2024-2026 (this session). \u03b1t nearly identical (+2.71 / +2.69), final lock has stronger economic edge (excess_net +24.4%/y vs +17.7%). Capital deploy still OFF-TABLE per project policy. Layer 4 overlay tests now eligible on this base across both windows."
+      "notes": "PASS_MARGINAL on both OOS 2018-2023 (Phase B 2026-05-09 morning) AND final lock 2024-2026 (this session). \u03b1t nearly identical (+2.71 / +2.69), final lock has stronger economic edge (excess_net +24.4%/y vs +17.7%). Capital deploy still OFF-TABLE per project policy. Layer 4 overlay tests now eligible on this base across both windows.",
+      "status_extended": "completed_pass_marginal"
     },
     {
       "id": "insider_form4_opportunistic_paper_trade_2026_05_09",
@@ -3726,7 +3728,7 @@
         "capital_deploy_clause": "PASS unlocks paper-trade extension to compound variant; full deploy still requires standalone PASS on each component (currently PASS_MARGINAL + INCONCLUSIVE) per project policy"
       },
       "registered_at": "2026-05-10",
-      "status": "audited",
+      "status": "completed",
       "outcome": {
         "verdict": "FAIL",
         "verdict_reason": "JOINT FAIL: both windows fail independently per memo \u00a75.1. OOS 2018-2023: G1 trip \u2014 mean \u03b1t=-0.034 < 2.50 floor. FL 2024-2026: G3 trip \u2014 mean excess_net_ann=-0.28% < 0 (and G1 \u03b1t=+0.674 also below 2.50). Memo \u00a77 #5 pre-predicted this failure mode (Blume-Easley 2018 selection-bias amplification on luck-marginal signals) and \u00a77 #1 (time-domain portfolio-return correlation despite cross-sectional \u03c1\u22480 due to both bases EXTREME counter-cyclical). Mitigation per memo \u00a77 #5: 'file each component separately and archive the compound design as a research artifact' \u2014 engaged.",
@@ -3835,7 +3837,8 @@
           "pc_abnormal_volume_retrospective_pre_2018_2026_05_05": "INCONCLUSIVE on retrospective, paper-trade active"
         }
       },
-      "notes": "First 2-way compound test in project. Differs from compound_v12_informed_trader_2026_05_06 (4-way, blocked on v8 Xing standalone verdict). Bonferroni penalty +6 over naive +1 reflects zen Z5 strict selection-penalty enforcement. Both pre-reg pre-screens (#1 independence, #2 cyclicality, #3 breadth) executed BEFORE this registration on IS 2014-2017 window per zen HARKing-fix directive; OOS 2018-2023 + 2024-2026 final lock remain unburnt. Implementation deliverables (scorer module, experiment driver) deferred to next session per session 2026-05-10 plan; this registration is the 'design + pre-reg locked' artifact."
+      "notes": "First 2-way compound test in project. Differs from compound_v12_informed_trader_2026_05_06 (4-way, blocked on v8 Xing standalone verdict). Bonferroni penalty +6 over naive +1 reflects zen Z5 strict selection-penalty enforcement. Both pre-reg pre-screens (#1 independence, #2 cyclicality, #3 breadth) executed BEFORE this registration on IS 2014-2017 window per zen HARKing-fix directive; OOS 2018-2023 + 2024-2026 final lock remain unburnt. Implementation deliverables (scorer module, experiment driver) deferred to next session per session 2026-05-10 plan; this registration is the 'design + pre-reg locked' artifact.",
+      "status_extended": "audited"
     },
     {
       "id": "ev_fcff_yield_2026_05_12_v1",
@@ -3936,7 +3939,6 @@
         "verdict": "FAIL",
         "verdict_reason": "JOINT FAIL: every window in {IS, OOS, FL} FAIL independently on G1+G2 (\u03b1t mean 1.25/1.34/0.96, all below 2.5 floor and 3.5 project threshold). Every phase positive (G3 PASS in every window) \u2014 signal is real but modest. G4 cost-stress structurally identical to G1 in this orchestrator (scalar drag implementation; t-stat invariant to cost level) \u2014 flagged in postmortem \u00a74 but verdict unchanged on G1+G2.",
         "mean_alpha_t": 1.183,
-        "mean_excess_net_ann": 0.0587,
         "audit_path": "docs/research/ev_fcff_yield_audit_2026-05-12.json",
         "audit_orchestrator_log": "docs/research/ev_fcff_yield_audit_2026-05-12.log",
         "completed_at": "2026-05-13",
@@ -3992,7 +3994,8 @@
           "wall_seconds_total": 641,
           "spend_usd": 0.33
         },
-        "postmortem": "docs/research/ev_fcff_yield_audit_verdict_2026_05_12.md"
+        "postmortem": "docs/research/ev_fcff_yield_audit_verdict_2026_05_12.md",
+        "mean_excess_net": 0.0587
       },
       "notes": "First test in fundamental_value_dcf class on R2000 ex-financials. Data source SimFin Start tier ($25/mo paid 2026-05-12). Pre-reg follows project methodology bundle (phase-robust-backtesting). Design memo locked 2026-05-12 post adversarial review (zen + perplexity). Scorer implementation + preaudit smoke + full audit deferred to subsequent sessions per session 2026-05-12 plan. Honest framing: this is FCF-yield value factor (not 'growth mispricing discovery') per Perplexity framing fix. Cyclicality pre-screen NOT mandatory at this layer (Layer 2 screener, not Layer 4 overlay); will be measured at audit time for future #14 conditional overlay design."
     }

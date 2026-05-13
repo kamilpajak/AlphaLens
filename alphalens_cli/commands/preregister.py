@@ -158,6 +158,18 @@ def complete(
     audit_path: str = typer.Option(..., "--audit-path", help="Path to multi-phase audit JSON."),
     completed_at: str = typer.Option("", "--completed-at", help="ISO date; defaults to today."),
     notes: str = typer.Option("", "--notes", help="Optional free-text notes."),
+    extras_json: Path = typer.Option(
+        None,
+        "--extras-json",
+        help=(
+            "Optional JSON file with paradigm-specific forensic data merged "
+            "into the outcome dict (windows_evaluated, pod_compute, "
+            "audit_orchestrator_log, postmortem, verdict_reason, etc.). "
+            "Canonical metric kwargs always win on key collision."
+        ),
+        exists=True,
+        readable=True,
+    ),
     ledger_root: Path = typer.Option(None, "--ledger-root", help=_LEDGER_ROOT_HELP),
 ) -> None:
     """Record one-shot verdict for a previously registered hypothesis."""
@@ -165,6 +177,7 @@ def complete(
 
     ledger = Ledger(_resolve_root(ledger_root))
     completion_date = date.fromisoformat(completed_at) if completed_at else date.today()
+    outcome_extras = json.loads(extras_json.read_text()) if extras_json else None
     try:
         ledger.complete(
             id,
@@ -174,6 +187,7 @@ def complete(
             audit_path=audit_path,
             completed_at=completion_date,
             notes=notes,
+            outcome_extras=outcome_extras,
         )
     except (KeyError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
