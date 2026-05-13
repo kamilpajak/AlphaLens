@@ -58,9 +58,12 @@ if [[ -d "${REPO_DIR}/.git" ]]; then
     git -C "${REPO_DIR}" checkout --quiet "${BRANCH}"
     # Surface ff-only failures rather than silently running stale code.
     # Force-push or branch reset on origin will land here; operator must
-    # then re-clone or hard-reset deliberately.
-    git -C "${REPO_DIR}" pull --quiet --ff-only origin "${BRANCH}" \
-        || echo "WARN: fast-forward failed; pod is running local checkout that diverges from origin/${BRANCH}." >&2
+    # then re-clone or hard-reset deliberately. Hard-fail so multi-hour
+    # experiments don't run against the wrong commit. Issue #105 M3.
+    git -C "${REPO_DIR}" pull --quiet --ff-only origin "${BRANCH}" || {
+        echo "ERROR: fast-forward failed; pod is running stale code that diverges from origin/${BRANCH}. Operator must re-clone or hard-reset deliberately." >&2
+        exit 1
+    }
 else
     git clone --quiet --branch "${BRANCH}" "${ALPHALENS_REPO_URL}" "${REPO_DIR}"
 fi

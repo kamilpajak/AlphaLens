@@ -13,6 +13,7 @@ post-merge run against an older experiment-script log is not a hard fail.
 
 from __future__ import annotations
 
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -54,6 +55,36 @@ class TestResultLineRegex(unittest.TestCase):
         self.assertAlmostEqual(r["alpha_t_net"], 2.71)
         self.assertAlmostEqual(r["alpha_ann"], 0.083)
         self.assertAlmostEqual(r["alpha_net_ann"], 0.083)
+
+    def test_captures_nan_t_stat(self):
+        """Degenerate regression with t=nan must match the regex so the
+        phase is classified as a failure (NaN propagates through mean
+        → gate FAIL), not silently dropped (which would shrink the
+        denominator and bias the aggregate t-stat upward). Issue #105 L1.
+        """
+        line = (
+            "INFO __main__: cost=5bps | n=10 topN=148.3 turn=12.4% | "
+            "Sh gross=1.42 net=1.40 | excess gross=4.2% net=4.0% | "
+            "α 4F=8.3% t=nan | α-net 4F=6.5% t-net=nan"
+        )
+        rows = orch._parse_per_cost_rows(line)
+        self.assertIn(5.0, rows)
+        self.assertTrue(math.isnan(rows[5.0]["alpha_t"]))
+        self.assertTrue(math.isnan(rows[5.0]["alpha_t_net"]))
+
+    def test_captures_inf_t_stat(self):
+        """Zero-residual edge: t=inf must also match — should still be
+        classified as a failure when aggregated (mean propagates inf and
+        threshold comparison would PASS, so detect via separate guard if
+        ever observed in practice). Captures the parse path only here."""
+        line = (
+            "INFO __main__: cost=5bps | n=10 topN=148.3 turn=12.4% | "
+            "Sh gross=1.42 net=1.40 | excess gross=4.2% net=4.0% | "
+            "α 4F=8.3% t=inf"
+        )
+        rows = orch._parse_per_cost_rows(line)
+        self.assertIn(5.0, rows)
+        self.assertTrue(math.isinf(rows[5.0]["alpha_t"]))
 
 
 class TestAggregateAndGateMatrix(unittest.TestCase):
@@ -124,6 +155,23 @@ class TestAggregateAndGateMatrix(unittest.TestCase):
         verdict = orch._evaluate_window_gates(window_block)
         self.assertFalse(verdict["gates"]["G4_cost_stress_15bps_mean_alpha_t"]["passed"])
         self.assertAlmostEqual(verdict["gates"]["G4_cost_stress_15bps_mean_alpha_t"]["value"], 1.5)
+
+    def test_g1_fails_when_a_phase_is_nan(self):
+        """One NaN-t phase among five must propagate through statistics.mean
+        and flip G1 to FAIL — pre-L1, the NaN line failed the regex entirely
+        and the phase was dropped, inflating the 4-phase mean. Issue #105 L1.
+        """
+        phases = self._phase_results(
+            baseline_ts=[3.6, 3.7, float("nan"), 3.65, 3.5],
+            stress_ts=[3.5] * 5,
+            stress_t_nets=[2.3] * 5,
+        )
+        window_block = {
+            "baseline_cost_5bps": orch._aggregate_per_phase(phases, cost=5.0),
+            "stress_cost_15bps": orch._aggregate_per_phase(phases, cost=15.0),
+        }
+        verdict = orch._evaluate_window_gates(window_block)
+        self.assertFalse(verdict["gates"]["G1_full_sample_alpha_t"]["passed"])
 
     def test_g4_passes_when_net_exceeds_threshold(self):
         phases = self._phase_results(

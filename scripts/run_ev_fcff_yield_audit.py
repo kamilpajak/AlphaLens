@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import statistics
@@ -104,8 +105,12 @@ _RESULT_LINE = re.compile(
     r"cost=(?P<cost>[\d.]+)bps \| .*?"
     r"Sh gross=(?P<sg>[-\d.]+) net=(?P<sn>[-\d.]+) \| "
     r"excess gross=(?P<eg>[-\d.]+)% net=(?P<en>[-\d.]+)% \| "
-    r"α 4F=(?P<a>[-\d.]+)% t=(?P<t>[-\d.]+)"
-    r"(?: \| α-net 4F=(?P<an>[-\d.]+)% t-net=(?P<tn>[-\d.]+))?"
+    # t-stat can be `nan` / `inf` for degenerate Carhart regressions
+    # (zero residual variance, singular factor matrix). Without this branch
+    # the whole phase line silently failed the regex → phase dropped from
+    # aggregation → mean t-stat biased upward. Issue #105 L1.
+    r"α 4F=(?P<a>[-\d.]+)% t=(?P<t>[-\d.]+|nan|inf)"
+    r"(?: \| α-net 4F=(?P<an>[-\d.]+)% t-net=(?P<tn>[-\d.]+|nan|inf))?"
 )
 
 
@@ -255,6 +260,15 @@ def _aggregate_per_phase(phase_results: list[dict], *, cost: float) -> dict | No
     def _stats(values: list[float]) -> dict[str, float]:
         if len(values) == 1:
             return {"mean": values[0], "std": 0.0, "min": values[0], "max": values[0]}
+        # Python 3.12+ `statistics.pstdev` raises ValueError on nan/inf
+        # input (defensive). For our gate semantics we want a NaN phase to
+        # surface as a failed window (mean=nan → `nan >= threshold` → False),
+        # not crash the orchestrator. Short-circuit to all-NaN stats so
+        # `_evaluate_window_gates` propagates the failure cleanly. Issue
+        # #105 L1.
+        if any(not math.isfinite(v) for v in values):
+            nan = float("nan")
+            return {"mean": nan, "std": nan, "min": nan, "max": nan}
         return {
             "mean": statistics.mean(values),
             "std": statistics.pstdev(values),
