@@ -32,6 +32,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from alphalens.backtest.bounds_inference import andrews_manski_bounds
+from alphalens.backtest.romano_wolf import romano_wolf_step_down_per_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -181,34 +182,6 @@ def classify(
     )
 
 
-def collect_pooled_returns_per_subperiod(
-    cells: dict[tuple[str, str, int], dict], universe: str
-) -> dict[str, pd.DataFrame]:
-    """Per-sub-period DataFrames of phase-strategy returns.
-
-    Mirrors aggregate_v9d_retrospective_verdict.collect_pooled_returns_per_subperiod
-    for stratified Romano-Wolf bootstrap (Bug 2 fix per zen review 2026-05-05)."""
-    out: dict[str, pd.DataFrame] = {}
-    for s in SUB_PERIODS:
-        panels = []
-        for p in PHASES:
-            cell = cells.get((universe, s, p))
-            if cell is None:
-                continue
-            rfp = cell.get("raw_returns_for_pooling", {})
-            asof = rfp.get("asof", [])
-            long_net = rfp.get("long_net", [])
-            if not asof or not long_net or len(asof) != len(long_net):
-                continue
-            panels.append(pd.DataFrame({f"p{p}": long_net}, index=pd.to_datetime(asof)))
-        if not panels:
-            continue
-        sub = pd.concat(panels, axis=1).sort_index().dropna(axis=0, how="any")
-        if not sub.empty:
-            out[s] = sub
-    return out
-
-
 def romano_wolf_critical_stratified(
     cells: dict[tuple[str, str, int], dict],
     universe: str = "U2",
@@ -217,27 +190,49 @@ def romano_wolf_critical_stratified(
     mean_block_length: float = 4.0,
     seed: int = 42,
 ) -> dict:
-    """Skipped-by-design: stratified RW does not apply to stride-disjoint phases.
+    """Per-strategy block-bootstrap RW critical across all (sub-period × phase)
+    cells for ``universe`` (issue #66).
 
-    Each (sub-period, phase) cell has its own asof calendar (5d stride-shifted
-    so phases within a sub-period sample disjoint trading days). Concat-by-index
-    + dropna-any collapses the panel to 0 rows. Concat-by-index without dropna
-    yields a 95%-NaN panel that breaks the bootstrap.
-
-    The proper approach is per-strategy independent block bootstrap (each
-    strategy's own time-series gets its own block resample, joint t-stat
-    distribution aggregated across strategies). Implementation is deferred —
-    pre-reg explicitly permits naive Bonferroni fallback (|t|≥2.85 program-level)
-    which is the binding gate for this experiment regardless of RW critical.
+    Name retained as ``_stratified`` for JSON-payload-key stability with prior
+    skipped-sentinel runs; the implementation is now per-strategy independent
+    block bootstrap (matches v9D aggregator).
     """
+    returns_per_strategy: list[np.ndarray] = []
+    for s, p in product(SUB_PERIODS, PHASES):
+        cell = cells.get((universe, s, p))
+        if cell is None:
+            continue
+        rfp = cell.get("raw_returns_for_pooling", {})
+        long_net = rfp.get("long_net", [])
+        if not long_net:
+            continue
+        returns_per_strategy.append(np.asarray(long_net, dtype=np.float64))
+
+    if not returns_per_strategy:
+        return {"universe": universe, "n_strategies": 0, "note": "no cells available"}
+
+    rng = np.random.default_rng(seed)
+    result = romano_wolf_step_down_per_strategy(
+        returns_per_strategy,
+        alpha=0.05,
+        mean_block_length=mean_block_length,
+        n_bootstrap=n_bootstrap,
+        rng=rng,
+    )
     return {
         "universe": universe,
-        "n_strategies": 0,
-        "note": (
-            "RW skipped: stride-disjoint phase strategies not amenable to "
-            "stratified-by-sub-period bootstrap; pre-reg fallback to naive "
-            "Bonferroni |t|≥2.85 binds the verdict"
+        "n_strategies": result.n_strategies,
+        "n_obs": result.n_obs,
+        "n_bootstrap": result.n_bootstrap,
+        "mean_block_length": result.mean_block_length,
+        "max_observed_t": float(np.abs(result.observed_tstats).max()),
+        "max_adjusted_critical": float(
+            result.adjusted_critical[~np.isinf(result.adjusted_critical)].max()
+            if (~np.isinf(result.adjusted_critical)).any()
+            else float("inf")
         ),
+        "n_rejected": int(result.rejected.sum()),
+        "note": "per-strategy block bootstrap (issue #66)",
     }
 
 
