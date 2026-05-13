@@ -187,5 +187,60 @@ class TestAggregateAndGateMatrix(unittest.TestCase):
         self.assertTrue(verdict["gates"]["G4_cost_stress_15bps_mean_alpha_t"]["passed"])
 
 
+class TestOverallVerdict(unittest.TestCase):
+    """Joint-PASS rule per memo §8: every window in {IS, OOS, FL} must
+    individually clear the gate matrix. Mixed PASS/PASS_MARGINAL collapses
+    to PASS_MARGINAL; any FAIL collapses to FAIL. Issue #105 M1.
+    """
+
+    @staticmethod
+    def _w(name: str, verdict: str) -> dict:
+        return {"window_name": name, "verdict": verdict}
+
+    def test_all_pass_collapses_to_pass(self):
+        blocks = [self._w(n, "PASS") for n in ("IS", "OOS", "FL")]
+        out = orch._overall_verdict(blocks)
+        self.assertEqual(out["overall_verdict"], "PASS")
+        self.assertEqual(out["per_window_verdicts"], {"IS": "PASS", "OOS": "PASS", "FL": "PASS"})
+        self.assertIn("rule", out)
+
+    def test_all_pass_marginal_collapses_to_pass_marginal(self):
+        blocks = [self._w(n, "PASS_MARGINAL") for n in ("IS", "OOS", "FL")]
+        self.assertEqual(orch._overall_verdict(blocks)["overall_verdict"], "PASS_MARGINAL")
+
+    def test_mixed_pass_and_pass_marginal_collapses_to_pass_marginal(self):
+        blocks = [
+            self._w("IS", "PASS"),
+            self._w("OOS", "PASS_MARGINAL"),
+            self._w("FL", "PASS"),
+        ]
+        self.assertEqual(orch._overall_verdict(blocks)["overall_verdict"], "PASS_MARGINAL")
+
+    def test_any_fail_window_collapses_to_fail(self):
+        blocks = [
+            self._w("IS", "PASS"),
+            self._w("OOS", "PASS"),
+            self._w("FL", "FAIL"),
+        ]
+        self.assertEqual(orch._overall_verdict(blocks)["overall_verdict"], "FAIL")
+
+    def test_all_fail_collapses_to_fail(self):
+        blocks = [self._w(n, "FAIL") for n in ("IS", "OOS", "FL")]
+        out = orch._overall_verdict(blocks)
+        self.assertEqual(out["overall_verdict"], "FAIL")
+        self.assertEqual(out["per_window_verdicts"], {"IS": "FAIL", "OOS": "FAIL", "FL": "FAIL"})
+
+    def test_unknown_verdict_token_treated_as_fail(self):
+        """A future verdict value outside {PASS, PASS_MARGINAL, FAIL} (e.g.
+        an upstream API drift) must NOT silently collapse to PASS. The
+        current implementation falls through to FAIL — lock that contract."""
+        blocks = [
+            self._w("IS", "PASS"),
+            self._w("OOS", "UNKNOWN_VERDICT"),
+            self._w("FL", "PASS"),
+        ]
+        self.assertEqual(orch._overall_verdict(blocks)["overall_verdict"], "FAIL")
+
+
 if __name__ == "__main__":
     unittest.main()
