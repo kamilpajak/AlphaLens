@@ -3235,7 +3235,21 @@
       },
       "registered_at": "2026-05-13",
       "status": "registered",
-      "outcome": null,
+      "outcome": {
+        "av_pit_validation_status": "PASS_5_5",
+        "av_pit_validation_artifact": "~/.alphalens/av_cache/pit_validation_2026_05_13.json",
+        "av_pit_validation_date": "2026-05-13",
+        "av_pit_validation_method": "perplexity_search URL surface + Playwright direct verbatim extraction (autonomous per operator instruction 2026-05-13)",
+        "av_pit_validation_summary": {
+          "pass_count": 5,
+          "total_count": 5,
+          "max_delta_cents": 0.03,
+          "max_delta_pct": 0.8,
+          "av_consensus_likely_source": "Thomson Reuters / IBES (brokerage-weighted mean), not Zacks",
+          "av_uses_adjusted_eps_not_gaap": true,
+          "av_applies_retroactive_split_adjustment": true
+        }
+      },
       "notes": "Paradigm test #14 — re-registered post-class-identity correction. Class event_drift_search_2026_05_03 n=3 (event_drift_v3_pead_quality_clean abandoned, event_drift_v4_pead_quality_sp1500 abandoned, this entry). v1 of THIS paradigm REJECTED pre-audit on adversarial review (pre-announcement timing flaws); v2 LOCKED post-review with canonical post-announcement timing + price-scaled surprise + NW HAC + invested-days regression. Plan-level zen review 2026-05-13 verdict APPROVE-WITH-CHANGES, all changes applied. Audit launch pending AV PIT validation gate + preaudit smoke + PEADScorer unit-test with explicit post-market index-alignment assertions + cost-model audit for forced-deleveraging-churn handling."
     },
     {
