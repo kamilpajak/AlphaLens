@@ -326,9 +326,104 @@ def romano_wolf_step_down_stratified(
     )
 
 
+def romano_wolf_step_down_per_strategy(
+    returns_per_strategy: list[np.ndarray],
+    *,
+    alpha: float = 0.05,
+    mean_block_length: float = 4.0,
+    n_bootstrap: int = 10000,
+    rng: np.random.Generator | None = None,
+) -> RomanoWolfResult:
+    """Step-down FWER control over strategies with independent calendars.
+
+    Each element of ``returns_per_strategy`` is a 1-D array of a single
+    strategy's per-rebalance returns; lengths may differ across strategies
+    and calendars need not align. Each strategy's bootstrap is run
+    independently with its own stationary block resample (preserving its
+    own serial correlation); the (n_bootstrap, n_strats) bootstrap-t matrix
+    is then assembled column-by-column for step-down on the family-max.
+
+    Use this primitive when ``romano_wolf_step_down_stratified`` does not
+    fit because phases within a stratum sample stride-shifted disjoint
+    asof calendars (concat-by-index collapses to empty or near-empty).
+    The trade-off: cross-strategy correlation is destroyed by per-strategy
+    independence, so the family-max critical is closer to Bonferroni than
+    the stratified variant would yield with shared-calendar correlation.
+
+    The ``RomanoWolfResult.n_obs`` field carries ``max(len)`` of the
+    per-strategy lengths (longest individual timeline) — not the sum,
+    which would inflate by ~n_strategies and mislead readers about the
+    effective time-series length.
+    """
+    if not returns_per_strategy:
+        raise ValueError("returns_per_strategy must contain at least one strategy")
+    for s, arr in enumerate(returns_per_strategy):
+        if arr.ndim != 1:
+            raise ValueError(f"returns_per_strategy[{s}] must be 1-D, got shape {arr.shape}")
+        if arr.shape[0] == 0:
+            raise ValueError(f"returns_per_strategy[{s}] must be non-empty")
+    if not (0.0 < alpha < 1.0):
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+    if n_bootstrap <= 0:
+        raise ValueError(f"n_bootstrap must be > 0, got {n_bootstrap}")
+    if mean_block_length <= 0:
+        raise ValueError(f"mean_block_length must be > 0, got {mean_block_length}")
+
+    # Caller passes seeded rng for reproducibility; unseeded default is intentional.
+    if rng is None:
+        rng = np.random.default_rng()  # NOSONAR
+
+    n_strats = len(returns_per_strategy)
+    n_obs_max = max(arr.shape[0] for arr in returns_per_strategy)
+
+    observed_tstats = np.empty(n_strats, dtype=np.float64)
+    observed_means = np.empty(n_strats, dtype=np.float64)
+    for s, arr in enumerate(returns_per_strategy):
+        n_s = arr.shape[0]
+        mean_s = arr.mean()
+        std_s = arr.std(ddof=1)
+        observed_means[s] = mean_s
+        if not np.isfinite(std_s) or std_s <= 0:
+            observed_tstats[s] = np.nan
+        else:
+            observed_tstats[s] = mean_s / (std_s / math.sqrt(n_s))
+
+    # Per-strategy independent bootstrap. Centered: subtract each strategy's
+    # observed mean (own H_0: μ_s = 0).
+    boot_tstats = np.empty((n_bootstrap, n_strats), dtype=np.float64)
+    for s, arr in enumerate(returns_per_strategy):
+        n_s = arr.shape[0]
+        idx = stationary_bootstrap_indices(
+            n_obs=n_s,
+            mean_block_length=mean_block_length,
+            n_bootstrap=n_bootstrap,
+            rng=rng,
+        )
+        samples = arr[idx]  # (n_bootstrap, n_s)
+        boot_means = samples.mean(axis=1)
+        boot_stds = samples.std(axis=1, ddof=1)
+        boot_stds = np.where(boot_stds <= 0, np.nan, boot_stds)
+        boot_tstats[:, s] = (boot_means - observed_means[s]) / (boot_stds / math.sqrt(n_s))
+
+    boot_tstats = np.nan_to_num(boot_tstats, nan=0.0, posinf=0.0, neginf=0.0)
+    abs_boot = np.abs(boot_tstats)
+    rejected, adjusted_critical = _run_step_down(observed_tstats, abs_boot, alpha=alpha)
+    return _build_result(
+        observed_tstats=observed_tstats,
+        adjusted_critical=adjusted_critical,
+        rejected=rejected,
+        n_obs=n_obs_max,
+        n_strats=n_strats,
+        n_bootstrap=n_bootstrap,
+        mean_block_length=mean_block_length,
+        alpha=alpha,
+    )
+
+
 __all__ = [
     "RomanoWolfResult",
     "romano_wolf_step_down",
+    "romano_wolf_step_down_per_strategy",
     "romano_wolf_step_down_stratified",
     "stationary_bootstrap_indices",
 ]
