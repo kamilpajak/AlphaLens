@@ -21,7 +21,11 @@ _Reason: αt=2.45 in [1.0, 2.5), bounds CI may straddle zero_
 - Lower-bound excludes 0: YES
 
 ## Romano-Wolf step-down (n=15 family, U3 cells)
-- RW skipped: stride-disjoint phase strategies not amenable to stratified-by-sub-period bootstrap (see aggregator code for rationale); pre-reg permits naive Bonferroni fallback
+- Max observed |t|: 8.40
+- Adjusted critical |t|: 6.18
+- Strategies rejected: 1 / 15
+- Bootstrap B=10000, mean_block=4.0
+- Note: per-strategy independent block bootstrap (issue #66) operates on raw `long_net` returns, not Carhart-4F residuals. Per-strategy independence destroys cross-strategy correlation that would tighten the family-max critical, so this critical is closer to Bonferroni than the pre-reg's `~2.13` aspirational estimate. The αt-vs-PASS_MARGINAL gate remains the binding pre-reg criterion.
 
 ## Cross-universe sanity
 - |U1 αt − U3 αt|: 1.37 (reconstruction-dominant threshold: 3.0)

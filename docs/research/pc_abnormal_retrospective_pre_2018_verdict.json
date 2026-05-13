@@ -27,8 +27,14 @@
   },
   "romano_wolf_stratified_U2": {
     "universe": "U2",
-    "n_strategies": 0,
-    "note": "RW skipped: stride-disjoint phase strategies not amenable to stratified-by-sub-period bootstrap; pre-reg fallback to naive Bonferroni |t|\u22652.85 binds the verdict"
+    "n_strategies": 15,
+    "n_obs": 269,
+    "n_bootstrap": 10000,
+    "mean_block_length": 4.0,
+    "max_observed_t": 4.467417871902044,
+    "max_adjusted_critical": 20.419257775866992,
+    "n_rejected": 0,
+    "note": "per-strategy block bootstrap (issue #66)"
   },
   "summary": [
     {

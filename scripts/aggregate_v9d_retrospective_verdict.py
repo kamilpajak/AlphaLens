@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from alphalens.backtest.bounds_inference import andrews_manski_bounds
 from alphalens.backtest.romano_wolf import (
-    romano_wolf_step_down_stratified,
+    romano_wolf_step_down_per_strategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -143,51 +143,11 @@ def per_universe_per_subperiod_summary(
     return pd.DataFrame(rows)
 
 
-def collect_pooled_returns_per_subperiod(
-    cells: dict[tuple[str, str, int], dict], universe: str
-) -> dict[str, pd.DataFrame]:
-    """Group raw long_net returns into per-sub-period panels for stratified RW.
-
-    Bug 2 fix per zen review 2026-05-05: previously collected returns into a
-    single outer-joined panel that was then ``dropna(how="any")``-ed,
-    collapsing to 0 rows because cells from disjoint sub-periods have
-    non-overlapping asof dates. The correct approach is per-sub-period
-    independent block bootstrap (no seam crossings).
-
-    Returns ``{sub_period_name: DataFrame[asof × phase]}`` with phases as
-    columns and asof rows. Each sub-period DataFrame has dense rows because
-    its 5 phases are calendar-overlapping within the sub-period. Missing
-    sub-periods are absent from the dict.
-    """
-    out: dict[str, pd.DataFrame] = {}
-    for s in SUB_PERIODS:
-        panels = []
-        for p in PHASES:
-            cell = cells.get((universe, s, p))
-            if cell is None:
-                continue
-            rfp = cell.get("raw_returns_for_pooling", {})
-            asof = rfp.get("asof", [])
-            long_net = rfp.get("long_net", [])
-            if not asof or not long_net or len(asof) != len(long_net):
-                continue
-            col_name = f"p{p}"
-            panels.append(pd.DataFrame({col_name: long_net}, index=pd.to_datetime(asof)))
-        if not panels:
-            continue
-        # Within a sub-period the phases share calendar window; outer-join +
-        # dropna keeps only timestamps where all phases have data (typical
-        # case: all 5 dense).
-        sub_panel = pd.concat(panels, axis=1).sort_index().dropna(axis=0, how="any")
-        if not sub_panel.empty:
-            out[s] = sub_panel
-    return out
-
-
 def collect_pooled_returns(cells: dict[tuple[str, str, int], dict], universe: str) -> pd.DataFrame:
     """Legacy outer-joined panel (preserved for backwards-compat with tests).
 
-    Use ``collect_pooled_returns_per_subperiod`` for the stratified RW path.
+    Per-strategy RW (issue #66) consumes raw ``long_net`` arrays directly
+    via ``romano_wolf_critical``; no panel construction needed.
     """
     panels = []
     for s, p in product(SUB_PERIODS, PHASES):
@@ -245,59 +205,31 @@ def romano_wolf_critical(
     mean_block_length: float = 4.0,
     seed: int = 42,
 ) -> dict:
-    """Skipped-by-design: stratified RW does not apply to stride-disjoint phases.
+    """Per-strategy block-bootstrap RW critical across all (sub-period × phase)
+    cells for ``universe``.
 
-    Bug 2 fix attempt 2026-05-05: tried stratified-by-sub-period bootstrap,
-    but each (sub-period, phase) cell has its own 5d-stride-shifted asof
-    calendar — phases within a sub-period sample disjoint trading days, so
-    concat-by-index collapses to either empty (with dropna-any) or 95%-NaN
-    (without). Proper implementation requires per-strategy independent block
-    bootstrap — deferred to follow-up plan. Pre-reg permits naive Bonferroni
-    fallback (|t|≥2.81 for n=25), which binds the verdict regardless.
+    Each cell's ``long_net`` return series is one strategy; per-strategy
+    independent stationary block bootstrap (issue #66) handles the
+    stride-shifted disjoint asof calendars that ruled out the unstratified
+    and stratified-by-sub-period variants.
     """
-    return {
-        "universe": universe,
-        "n_strategies": 0,
-        "note": (
-            "RW skipped: stride-disjoint phase strategies not amenable to "
-            "stratified-by-sub-period bootstrap (see aggregator code for "
-            "rationale); pre-reg permits naive Bonferroni fallback"
-        ),
-    }
+    returns_per_strategy: list[np.ndarray] = []
+    for s, p in product(SUB_PERIODS, PHASES):
+        cell = cells.get((universe, s, p))
+        if cell is None:
+            continue
+        rfp = cell.get("raw_returns_for_pooling", {})
+        long_net = rfp.get("long_net", [])
+        if not long_net:
+            continue
+        returns_per_strategy.append(np.asarray(long_net, dtype=np.float64))
 
+    if not returns_per_strategy:
+        return {"universe": universe, "n_strategies": 0, "note": "no cells available"}
 
-def _romano_wolf_legacy_unused(
-    cells: dict[tuple[str, str, int], dict],
-    universe: str = "U3",
-    *,
-    n_bootstrap: int = 10000,
-    mean_block_length: float = 4.0,
-    seed: int = 42,
-) -> dict:
-    """Preserved for reference — original stratified attempt, broken on
-    stride-disjoint phase strategies (see ``romano_wolf_critical`` docstring).
-    """
-    per_sub = collect_pooled_returns_per_subperiod(cells, universe)
-    if not per_sub:
-        return {
-            "universe": universe,
-            "n_strategies": 0,
-            "note": "no per-sub-period panels available",
-        }
-    common_cols = set(next(iter(per_sub.values())).columns)
-    for df in per_sub.values():
-        common_cols &= set(df.columns)
-    if not common_cols:
-        return {
-            "universe": universe,
-            "n_strategies": 0,
-            "note": "no phases common to all sub-periods",
-        }
-    cols = sorted(common_cols)
-    strata = [per_sub[s][cols].to_numpy() for s in SUB_PERIODS if s in per_sub]
     rng = np.random.default_rng(seed)
-    result = romano_wolf_step_down_stratified(
-        strata,
+    result = romano_wolf_step_down_per_strategy(
+        returns_per_strategy,
         alpha=0.05,
         mean_block_length=mean_block_length,
         n_bootstrap=n_bootstrap,
@@ -316,6 +248,7 @@ def _romano_wolf_legacy_unused(
             else float("inf")
         ),
         "n_rejected": int(result.rejected.sum()),
+        "note": "per-strategy block bootstrap (issue #66)",
     }
 
 
@@ -534,6 +467,14 @@ def render_postmortem_md(payload: dict) -> str:
         lines.append(f"- Adjusted critical |t|: {rw['max_adjusted_critical']:.2f}")
         lines.append(f"- Strategies rejected: {rw['n_rejected']} / {rw['n_strategies']}")
         lines.append(f"- Bootstrap B={rw['n_bootstrap']}, mean_block={rw['mean_block_length']}")
+        lines.append(
+            "- Note: per-strategy independent block bootstrap (issue #66) operates on "
+            "raw `long_net` returns, not Carhart-4F residuals. Per-strategy "
+            "independence destroys cross-strategy correlation that would tighten "
+            "the family-max critical, so this critical is closer to Bonferroni than "
+            "the pre-reg's `~2.13` aspirational estimate. The αt-vs-PASS_MARGINAL "
+            "gate remains the binding pre-reg criterion."
+        )
     else:
         lines.append(f"- {rw.get('note', 'no result')}")
     lines.append("")
