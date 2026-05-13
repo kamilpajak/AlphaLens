@@ -133,6 +133,17 @@ def assess(
         hac_maxlags=_HAC_MAXLAGS_LOCK,
         periods_per_year=252,
     )
+    # H1 (issue #105): second regression on net daily so the t-stat is
+    # actually sensitive to cost_bps. Pre-fix the scalar α_gross − drag_ann
+    # post-hoc adjustment left t_4f cost-invariant, making G4 cost-stress a
+    # structural no-op duplicate of G1. G4 must consume t_net_4f.
+    res4_net = run_regression(
+        rets_net_daily,
+        factors[[*_CARHART_FACTORS, "RF"]],
+        _CARHART_FACTORS,
+        hac_maxlags=_HAC_MAXLAGS_LOCK,
+        periods_per_year=252,
+    )
 
     bench_aligned = bench_rets_daily.reindex(rets_daily.index).dropna()
     excess_per_day = (rets_daily.reindex(bench_aligned.index) - bench_aligned).mean()
@@ -142,20 +153,20 @@ def assess(
         sum(len(r.top_n_tickers) for r in report.rebalance_results)
         / max(1, len(report.rebalance_results))
     )
-    alpha_gross = float(res4.alpha_annualized)
     return {
         "n": len(rets_daily),
         "mean_top_n": mean_top_n,
         "turnover_per_rebal": avg_turnover,
         "sharpe_gross": sharpe_gross,
         "sharpe_net": sharpe_net,
-        "alpha_gross_4f": alpha_gross,
+        "alpha_gross_4f": float(res4.alpha_annualized),
         "t_4f": float(res4.alpha_tstat),
         "beta_smb": float(res4.betas.get("SMB", 0.0)),
         "beta_hml": float(res4.betas.get("HML", 0.0)),
         "beta_mom": float(res4.betas.get("Mom", 0.0)),
         "cost_drag_ann": drag_ann,
-        "alpha_net_4f": alpha_gross - drag_ann,
+        "alpha_net_4f": float(res4_net.alpha_annualized),
+        "t_net_4f": float(res4_net.alpha_tstat),
         "excess_vs_bench_ann": excess_ann,
         "excess_vs_bench_net": excess_ann - drag_ann,
     }
@@ -326,7 +337,7 @@ def main() -> int:
             logger.info(
                 "cost=%.0fbps | n=%d topN=%.1f turn=%.1f%% | "
                 "Sh gross=%.2f net=%.2f | excess gross=%.1f%% net=%.1f%% | "
-                "α 4F=%.1f%% t=%.2f",
+                "α 4F=%.1f%% t=%.2f | α-net 4F=%.1f%% t-net=%.2f",
                 cost_bps,
                 stats["n"],
                 stats["mean_top_n"],
@@ -337,6 +348,8 @@ def main() -> int:
                 stats["excess_vs_bench_net"] * 100,
                 stats["alpha_gross_4f"] * 100,
                 stats["t_4f"],
+                stats["alpha_net_4f"] * 100,
+                stats["t_net_4f"],
             )
 
     # Pre-reg gate evaluation (against baseline cost row, conventionally 5bps).
@@ -354,10 +367,12 @@ def main() -> int:
             "passed_project": net_t >= _BONFERRONI_PROJECT_THRESHOLD,
         }
     if stress_15bps and stress_15bps.get("n", 0) > 0:
+        # G4 reads t_net_4f (regression on net daily) — t_4f (gross) is
+        # cost-invariant by construction and would duplicate G1. Issue #105 H1.
         gate_summary["G4_alpha_t_at_15bps"] = {
-            "value": stress_15bps["t_4f"],
+            "value": stress_15bps["t_net_4f"],
             "threshold": 2.0,
-            "passed": stress_15bps["t_4f"] >= 2.0,
+            "passed": stress_15bps["t_net_4f"] >= 2.0,
         }
 
     payload = {

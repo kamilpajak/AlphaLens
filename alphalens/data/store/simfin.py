@@ -10,9 +10,11 @@ Interface mirrors `HistoricalFundamentalsStore.features_as_of(ticker, date)`
 so the adapter is swap-in.
 
 Requires SIMFIN_API_KEY env var (free account from simfin.com). The `simfin`
-Python package caches downloaded CSVs under the configured data directory
-(default `~/.alphalens/simfin_cache/`), so only the first run pays the
-~20-30 MB download cost.
+Python package caches downloaded CSVs under the configured data directory.
+Resolution order: explicit `cache_dir=` kwarg > `SIMFIN_DATA_DIR` env var >
+default `~/.alphalens/simfin_cache/`. The env var hook is used by the audit
+orchestrator to redirect subprocesses to pod-local NVMe when running on
+runpod (avoids MooseFS network-FS contention).
 """
 
 from __future__ import annotations
@@ -77,7 +79,11 @@ class SimFinFundamentalsStore:
         CSV cached locally). Default False — gate uses only runway / OCF /
         net_income components, which cover 54% of Layer 3 rejection reasons.
         """
-        self.cache_dir = cache_dir or _default_cache_dir()
+        if cache_dir is not None:
+            self.cache_dir = cache_dir
+        else:
+            env_dir = os.environ.get("SIMFIN_DATA_DIR")
+            self.cache_dir = Path(env_dir) if env_dir else _default_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.api_key = api_key or os.environ.get("SIMFIN_API_KEY")
         if not self.api_key:
