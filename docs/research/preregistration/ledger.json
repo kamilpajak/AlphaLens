@@ -1592,6 +1592,74 @@
       "notes": "abandoned: Phase 2 breadth audit FAIL on burnt holdout 2024-04-30..2026-04-30 (run on runpod RTX A4500 / EU-RO-1 2026-05-04, post-parquet refactor). Primary (SUE_top20 x accruals_bot50 x Day-1 sign): mean=6.97, p10=2.0 (gates >=10 / >=5). Pre-reg-sanctioned retry (--no-day1): mean=15.19 (PASS >=10), p10=4.0 (FAIL <5). Both attempts FAIL the AND gate. Funnel: 1505 SP1500 PIT -> 1482 with announcements (98.5% coverage, vs v3 R2000 partial) -> 1487 windows after filters (skipped 472 no-SUE, 7815 no-accruals = 11% accruals attrition; far below v3 R2000 71.9%) -> 1350 single-active-window -> 664 after Day-1 confirm. Root cause vs v3: NOT coverage gap (SP1500 large-mid-cap accruals coverage adequate), but FUNNEL RESTRICTIVENESS at portfolio-cardinality level. p10=4 means 10% of Fridays carry <=4 names -> portfolio noise risk. Class event_drift_search_2026_05_03 closes 2/2 ABANDONED. No Bonferroni budget burned (no holdout run, breadth Phase 2 GO/NO-GO triggered abort). Diagnostic: docs/research/event_drift_v4_breadth_audit_2026_05_03.md. Run artifacts: /network/results/{20260504-121525-ae80ed3, 20260504-122716-ae80ed3} on runpod volume xymjkwj580."
     },
     {
+      "id": "idiosyncratic_momentum_2026_05_14_v1",
+      "signal_class": "price_factor_search_2026_04_29",
+      "hypothesis": "Within US large-cap equities (S&P 1500 PIT union), ranking stocks cross-sectionally by idiosyncratic momentum (cumulative residual return t-12 to t-2 from 36-month rolling FF3 regression, standardised by σ_36) and going long top-decile equal-weight, rebalanced monthly with 1-month hold, generates net-of-cost Carhart-4F α t-stat ≥ 3.5 (project doctrine) on the 2010-2024 sample, with positive α t-stat in each IS/OOS/FL phase, NW HAC SE at maxlags=21.",
+      "scorer_path": "scripts/experiment_idiosyncratic_momentum.py",
+      "params_frozen": {
+        "universe": "sp1500_pit_union",
+        "residualization": "FF3_rolling_36mo",
+        "formation_window_months": [
+          -12,
+          -2
+        ],
+        "standardisation": "cumsum_residual_div_sigma_36",
+        "portfolio": "top_decile_long_only_equal_weight",
+        "rebalance_stride_trading_days": 21,
+        "hold_trading_days": 21,
+        "eligibility_close_floor": 5.0,
+        "cost_grid_bps": [
+          0.0,
+          5.0,
+          10.0,
+          15.0,
+          25.0
+        ],
+        "regression": "carhart_4f_nw_hac",
+        "hac_maxlags": 21,
+        "class_bonferroni_caveat": "Registered in existing price_factor_search_2026_04_29 class (n=4→5, strict |t|=2.57 at α=0.05); project doctrine 3.5 binds. Class includes 4 prior FAIL paradigms: pure_momentum, pure_contrarian, mom_lowvol_combo, quality_momentum_combo. Honest registration per burnt-holdout multiplicity doctrine — model-class swap on identical features/holdout/selection.",
+        "bab_confound_mitigation": "Per zen adversarial review 2026-05-14 (continuation 24c057f6-d077-4d3c-96d3-fcef84bed3bb): memo §5.1 mandates post-hoc diagnostics — realized β_market + FF5+UMD attenuation check + Sharpe-vs-raw-momentum. Material-finding flag if β_market < 0.8 OR FF5+UMD α attenuation > 30%.",
+        "turnover_logging_mandate": "Per zen 2026-05-14: log mean_monthly_turnover per cost arm; material-finding flag if > 80% (hyper-turnover cost drag will dominate at 15bps stress)."
+      },
+      "periods": {
+        "is_start": "2010-01-01",
+        "is_end": "2017-12-31",
+        "oos_start": "2018-01-01",
+        "oos_end": "2021-12-31",
+        "fl_start": "2022-01-01",
+        "fl_end": "2024-12-31"
+      },
+      "success_criteria": {
+        "gate_1_full_sample_net_alpha_t": {
+          "threshold": 3.5,
+          "regression": "carhart_4f_nw_hac"
+        },
+        "gate_2_phase_mean_alpha_t": {
+          "threshold": 2.5
+        },
+        "gate_3_per_phase_alpha_t_positive": {
+          "threshold": 0.0,
+          "applies_to": [
+            "IS",
+            "OOS",
+            "FL"
+          ]
+        },
+        "gate_4_cost_stress_15bps_net_alpha_t": {
+          "threshold": 2.0
+        },
+        "PASS_MARGINAL_band": [
+          2.5,
+          3.5
+        ],
+        "capital_deploy_clause": "Full PASS unlocks capital deployment per project doctrine, gated on: (1) mandatory slippage stress diagnostic per feedback_slippage_stress_diagnostic_pattern_2026_05_12; (2) excess-cyclicality screen vs SPY/IWM; (3) 6-12mo paper-trade observation. PASS_MARGINAL triggers paper-trade only, no capital deploy."
+      },
+      "registered_at": "2026-05-14",
+      "status": "registered",
+      "outcome": null,
+      "notes": "Paradigm #15. Honest prior 10-15% probability of achieving doctrine 3.5 t-stat (post zen review). Most likely outcome: αt mean 1.5-2.5, vindicated mechanism below Bonferroni bar (matches ev_fcff_yield #13 pattern). Material findings expected regardless of verdict."
+    },
+    {
       "phase_a_result": {
         "verdict": "PROCEED",
         "executed_at": "2026-05-08",
