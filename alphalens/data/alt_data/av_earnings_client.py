@@ -38,10 +38,13 @@ _REQUIRED_QUARTERLY_FIELDS = (
     "reportedDate",
     "reportedEPS",
     "estimatedEPS",
-    # reportTime drives PEAD entry_offset (pre/post-market). Without it, the
-    # backtest engine can't decide whether to enter at close(t) or close(t+1).
-    "reportTime",
 )
+# reportTime is consumed by PEAD entry_offset (pre/post-market) but is NOT
+# in the strict schema gate above: AV historical data legitimately lacks
+# reportTime for pre-2010 filings, and rejecting an entire ticker payload
+# because a single 2003 quarter is missing the field would drop otherwise-
+# valid IS-period data. Consumers (PEAD scorer) must default missing
+# reportTime to post-market (conservative: entry at close(t)+1 not close(t)).
 
 FetcherFn = Callable[[str], dict]
 SleepFn = Callable[[float], None]
@@ -199,6 +202,18 @@ def fetch_earnings_batch(
             )
         except AVSchemaError as exc:
             logger.warning("AV schema error for %s: %s", ticker, exc)
+            statuses[ticker] = "failed"
+            continue
+        except urllib.error.HTTPError as exc:
+            # Permanent auth/access errors (401/403/404) must fail-fast — a
+            # bad API key would otherwise silently mark all 510 tickers as
+            # "failed". 429 is rate-limit, which is already handled inside
+            # fetch_earnings via AVRateLimitError; an HTTP-level 429 here
+            # means the per-ticker retry was exhausted, so abort the batch.
+            if 400 <= exc.code < 500:
+                logger.error("Permanent HTTP %s for %s: %s", exc.code, ticker, exc)
+                raise
+            logger.warning("HTTP %s for %s: %s", exc.code, ticker, exc)
             statuses[ticker] = "failed"
             continue
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:

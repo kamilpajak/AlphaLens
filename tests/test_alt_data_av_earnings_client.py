@@ -195,32 +195,40 @@ class TestSchemaValidation(unittest.TestCase):
             with self.assertRaises(AVSchemaError):
                 fetch_earnings("AAPL", Path(td), fetcher=fetcher)
 
-    def test_entry_missing_reportTime_rejected(self):
-        """reportTime drives PEAD entry_offset (pre/post-market). Missing it
-        passes basic validation but KeyErrors deep in the engine; reject
-        upfront."""
-        from alphalens.data.alt_data.av_earnings_client import (
-            AVSchemaError,
-            fetch_earnings,
-        )
+    def test_entry_missing_reportTime_is_tolerated(self):
+        """reportTime drives PEAD entry_offset (pre/post-market) but AV
+        historical data pre-2010 legitimately lacks it. Rejecting the entire
+        ticker payload because a single old quarter is missing reportTime
+        would drop otherwise-valid IS-window data. Downstream PEAD scorer
+        must default missing reportTime to post-market on a per-event basis."""
+        from alphalens.data.alt_data.av_earnings_client import fetch_earnings
 
-        bad = {
+        legacy = {
             "symbol": "AAPL",
             "quarterlyEarnings": [
-                # Has all 4 EPS fields but missing reportTime.
+                # Modern entry: has reportTime.
                 {
                     "fiscalDateEnding": "2024-09-30",
                     "reportedDate": "2024-10-31",
                     "reportedEPS": "1.64",
                     "estimatedEPS": "1.60",
-                }
+                    "reportTime": "post-market",
+                },
+                # Legacy entry: missing reportTime (pre-2010 historical).
+                {
+                    "fiscalDateEnding": "2003-09-30",
+                    "reportedDate": "2003-10-31",
+                    "reportedEPS": "0.05",
+                    "estimatedEPS": "0.04",
+                },
             ],
         }
-        fetcher = MagicMock(return_value=bad)
+        fetcher = MagicMock(return_value=legacy)
 
         with tempfile.TemporaryDirectory() as td:
-            with self.assertRaises(AVSchemaError):
-                fetch_earnings("AAPL", Path(td), fetcher=fetcher)
+            result = fetch_earnings("AAPL", Path(td), fetcher=fetcher)
+            self.assertEqual(result["symbol"], "AAPL")
+            self.assertEqual(len(result["quarterlyEarnings"]), 2)
 
     def test_cached_invalid_payload_re_validates(self):
         """If a previously-written cache file is malformed (e.g. partial write
@@ -373,6 +381,40 @@ class TestBatchThrottling(unittest.TestCase):
             self.assertEqual(statuses["ALSO_GOOD"], "fetched")
             self.assertTrue((cache / "earnings_GOOD.json").exists())
             self.assertTrue((cache / "earnings_ALSO_GOOD.json").exists())
+
+    def test_batch_fails_fast_on_http_auth_error(self):
+        """HTTP 401/403 indicates a permanent auth failure (e.g. revoked API
+        key). The batch must abort rather than silently mark all 510 tickers
+        as 'failed', which would consume an entire daily quota window."""
+        import urllib.error
+
+        from alphalens.data.alt_data.av_earnings_client import fetch_earnings_batch
+
+        def fetcher(ticker: str) -> dict:
+            if ticker == "MSFT":
+                raise urllib.error.HTTPError(
+                    url="https://www.alphavantage.co/query",
+                    code=403,
+                    msg="Forbidden",
+                    hdrs={},  # type: ignore[arg-type]
+                    fp=None,
+                )
+            return _good_payload(ticker)
+
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            with self.assertRaises(urllib.error.HTTPError):
+                fetch_earnings_batch(
+                    ["AAPL", "MSFT", "GOOGL"],
+                    cache,
+                    fetcher=fetcher,
+                    throttle_seconds=0,
+                    sleep_fn=lambda s: None,
+                )
+
+            # AAPL fetched before MSFT raised; GOOGL never reached.
+            self.assertTrue((cache / "earnings_AAPL.json").exists())
+            self.assertFalse((cache / "earnings_GOOGL.json").exists())
 
 
 class TestAtomicCacheWrite(unittest.TestCase):
