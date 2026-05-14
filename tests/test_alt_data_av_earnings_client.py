@@ -185,6 +185,34 @@ class TestSchemaValidation(unittest.TestCase):
                     "fiscalDateEnding": "2024-09-30",
                     "reportedDate": "2024-10-31",
                     "estimatedEPS": "1.60",
+                    "reportTime": "post-market",
+                }
+            ],
+        }
+        fetcher = MagicMock(return_value=bad)
+
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(AVSchemaError):
+                fetch_earnings("AAPL", Path(td), fetcher=fetcher)
+
+    def test_entry_missing_reportTime_rejected(self):
+        """reportTime drives PEAD entry_offset (pre/post-market). Missing it
+        passes basic validation but KeyErrors deep in the engine; reject
+        upfront."""
+        from alphalens.data.alt_data.av_earnings_client import (
+            AVSchemaError,
+            fetch_earnings,
+        )
+
+        bad = {
+            "symbol": "AAPL",
+            "quarterlyEarnings": [
+                # Has all 4 EPS fields but missing reportTime.
+                {
+                    "fiscalDateEnding": "2024-09-30",
+                    "reportedDate": "2024-10-31",
+                    "reportedEPS": "1.64",
+                    "estimatedEPS": "1.60",
                 }
             ],
         }
@@ -316,6 +344,53 @@ class TestBatchThrottling(unittest.TestCase):
             self.assertTrue((cache / "earnings_AAPL.json").exists())
             self.assertFalse((cache / "earnings_MSFT.json").exists())
             self.assertFalse((cache / "earnings_GOOGL.json").exists())
+
+    def test_batch_continues_on_network_error(self):
+        """A single transient URLError mid-batch must NOT abort the run —
+        a 3-week overnight 510-ticker backfill cannot be derailed by a
+        single Comcast blip. Status='failed', continue to next ticker."""
+        import urllib.error
+
+        from alphalens.data.alt_data.av_earnings_client import fetch_earnings_batch
+
+        def fetcher(ticker: str) -> dict:
+            if ticker == "FLAKY":
+                raise urllib.error.URLError("Connection reset by peer")
+            return _good_payload(ticker)
+
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            statuses = fetch_earnings_batch(
+                ["GOOD", "FLAKY", "ALSO_GOOD"],
+                cache,
+                fetcher=fetcher,
+                throttle_seconds=0,
+                sleep_fn=lambda s: None,
+            )
+
+            self.assertEqual(statuses["GOOD"], "fetched")
+            self.assertEqual(statuses["FLAKY"], "failed")
+            self.assertEqual(statuses["ALSO_GOOD"], "fetched")
+            self.assertTrue((cache / "earnings_GOOD.json").exists())
+            self.assertTrue((cache / "earnings_ALSO_GOOD.json").exists())
+
+
+class TestAtomicCacheWrite(unittest.TestCase):
+    def test_no_tmp_file_left_after_successful_write(self):
+        """tmp+rename pattern must clean up the .tmp file on success so a
+        directory listing of the cache shows only canonical earnings_*.json
+        entries."""
+        from alphalens.data.alt_data.av_earnings_client import fetch_earnings
+
+        fetcher = MagicMock(return_value=_good_payload("AAPL"))
+
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            fetch_earnings("AAPL", cache, fetcher=fetcher)
+            names = [p.name for p in cache.iterdir()]
+
+            self.assertEqual(names, ["earnings_AAPL.json"])
+            self.assertFalse(any(n.endswith(".tmp") for n in names))
 
 
 class TestLoadEarnings(unittest.TestCase):

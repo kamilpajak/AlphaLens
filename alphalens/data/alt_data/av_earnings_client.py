@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import time
+import urllib.error
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlencode
@@ -32,7 +33,15 @@ from urllib.request import urlopen
 logger = logging.getLogger(__name__)
 
 _AV_BASE_URL = "https://www.alphavantage.co/query"
-_REQUIRED_QUARTERLY_FIELDS = ("fiscalDateEnding", "reportedDate", "reportedEPS", "estimatedEPS")
+_REQUIRED_QUARTERLY_FIELDS = (
+    "fiscalDateEnding",
+    "reportedDate",
+    "reportedEPS",
+    "estimatedEPS",
+    # reportTime drives PEAD entry_offset (pre/post-market). Without it, the
+    # backtest engine can't decide whether to enter at close(t) or close(t+1).
+    "reportTime",
+)
 
 FetcherFn = Callable[[str], dict]
 SleepFn = Callable[[float], None]
@@ -144,7 +153,12 @@ def fetch_earnings(
         payload = fetch(ticker.upper())  # propagates if it fails again
 
     _validate_payload(payload)
-    path.write_text(json.dumps(payload))
+    # Atomic write: a SIGKILL or OOM mid-write would otherwise leave a
+    # partial-JSON file at `path`. tmp + rename guarantees `path` always
+    # holds either the prior valid payload or the new complete one.
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload))
+    tmp_path.replace(path)
     return payload
 
 
@@ -185,6 +199,13 @@ def fetch_earnings_batch(
             )
         except AVSchemaError as exc:
             logger.warning("AV schema error for %s: %s", ticker, exc)
+            statuses[ticker] = "failed"
+            continue
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            # Transient network blips during a 3-week overnight batch must not
+            # abort the run. Mark failed and continue; operator can re-run to
+            # retry the failed subset.
+            logger.warning("Network error for %s: %s", ticker, exc)
             statuses[ticker] = "failed"
             continue
         # AVRateLimitError after retry: propagate, preserving partial progress.

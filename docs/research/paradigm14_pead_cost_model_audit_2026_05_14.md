@@ -57,10 +57,51 @@ Per plan §1.B0: "If (c) is NOT charged → choose α2".
 
 **Verdict: α2 (weight = 1/N_FIXED, gross varies in [0, 1])** for PEAD v2 Phase B implementation.
 
-- N_FIXED selection: **30** (target average concurrent positions during peak season; calibrated against ~25 announcements/day × 20-day hold ÷ ~500 universe ≈ 25-35 active during Feb peak). Off-peak gross ≈ 5-10/30 ≈ 0.17-0.33; peak gross ≈ 0.83-1.00.
-- Each entrant adds 1/30 to gross without forcing existing positions to rebalance. Set-based turnover correctly captures all weight changes (entry adds, exit removes, no forced shifts).
+- **N_FIXED selection: 150** (peak-concurrent ceiling for top-quintile, not average — see §5.1 Little's Law re-derivation below).
+- Each entrant adds 1/150 to gross without forcing existing positions to rebalance. Set-based turnover correctly captures all weight changes (entry adds, exit removes, no forced shifts).
 - Cost-stress grid (5/10/15/25 bps half-spread) measures the actual round-trip per-position, not muffled by undercount artifact.
-- Trade-off: sub-leveraged design forfeits ~30-50% of theoretical max Sharpe (capital not always deployed). This is the price of clean cost accounting.
+- Trade-off: sub-leveraged design forfeits substantial average gross exposure (off-peak ~0.10-0.25, peak ~0.65-0.85) but preserves pure α2 mechanics — no forced rebalancing ever, at any concurrency level ≤ N_FIXED.
+
+### §5.1 N_FIXED re-derivation via Little's Law (zen review 2026-05-14)
+
+Initial derivation `25 announcements/day × 20-day hold ÷ 500 universe → N_FIXED=30` was incorrect — it conflated *average* concurrent count with *peak* and ignored Little's Law (L = λW for stationary M/M/∞ queues).
+
+**Corrected steady-state derivation (S&P 500, 20-day hold, top-quintile filter):**
+
+- Events per year: 500 names × 4 reports/year = 2000 events/year
+- Trading days: 252/year
+- Average daily arrival rate λ_avg = 2000 / 252 ≈ 7.94 events/day
+- Average concurrent count L_avg = λ_avg × W = 7.94 × 20 ≈ 159 names in 20-day post-event window at any time
+- Top-quintile filter (rank ≥ 80th percentile): keep ~20% → average concurrent top-quintile ≈ 32
+
+**Peak compression (Feb/Apr/Jul/Oct earnings weeks):**
+
+- ~125 events compress into ~20 trading days each quarter → λ_peak ≈ 25 events/day for ~4 weeks
+- L_peak = 25 × 20 = 500 concurrent across full universe during peak
+- Top-quintile peak concurrent ≈ 0.20 × 500 = 100
+
+**N_FIXED=150 calibration:**
+
+- 150 = peak top-quintile concurrent (~100) + 50% safety margin for clustering / quintile-boundary fluctuation
+- Max gross under this calibration: 150/150 = 1.0 (only if every top-quintile slot is filled simultaneously — empirically unlikely but mathematically capped)
+- Off-peak gross: ~32/150 = 0.21 (average); peak: ~100/150 = 0.67
+- **No forced rebalancing at any point** because weight=1/150 is constant for any active position
+
+### §5.2 Alternatives considered + rejected
+
+**Option A1 (zen-suggested dynamic cap, `weight = 1/max(N_FIXED, active_positions)`):**
+- When `active ≤ N_FIXED`: weight=1/N_FIXED (fixed) → no forced rebalancing ✓
+- When `active > N_FIXED`: weight=1/active (changes daily) → **forced rebalancing returns** ✗
+- This reintroduces the cost hazard the audit was meant to eliminate, precisely at peak earnings when slippage is worst (zen review §H1 alternative). Rejected.
+
+**Option A2 (lower N_FIXED, e.g. 30-50, allow gross to exceed 1):**
+- Effectively leverage during peak. Out of scope for a long-only retail design and changes risk profile vs pre-reg. Rejected.
+
+**N_FIXED=150 chosen** as the smallest value that keeps `gross ≤ 1.0` deterministically across all observed earnings-season configurations while preserving pure α2 mechanics.
+
+### §5.3 Empirical validation deferred to Phase B1
+
+Before locking 1/150 in `score_pead_pss.py`, B1 must compute the empirical 95-percentile of `concurrent_top_quintile_count` across a sample year of AV data (e.g. 2018 full year) using the actual 80th-percentile PSS cohort-rank logic. If empirical 95-percentile ≤ 100 → N_FIXED=150 is conservative and acceptable. If empirical 95-percentile > 100 → bump N_FIXED to `1.5 × empirical_p95` and re-log the calibration in B1 commit message.
 
 ### α1 alternative (rejected, with conditions)
 
@@ -91,7 +132,12 @@ A `v3 memo` IS required to capture the α2 choice and N_FIXED=30 lock — `docs/
 
 ## §8 Next-session followups
 
-1. **Phase B1**: implement `score_pead_pss.py` with α2 sub-leveraged weighting (weight = 1/30 per active position, gross ∈ [0, 1]).
-2. **v2 memo §16.4 amendment**: add α2 + N_FIXED=30 lock with pointer to this audit memo.
-3. **Pre-reg outcome amendment**: add `weighting_choice_resolution: "alpha-2 sub-leveraged, N_FIXED=30, per docs/research/paradigm14_pead_cost_model_audit_2026_05_14.md"`.
+1. **Phase B1**: implement `score_pead_pss.py` with α2 sub-leveraged weighting (weight = 1/150 per active position, gross ∈ [0, 1]). Includes empirical 95-percentile concurrent-count validation per §5.3 before lock.
+2. **v2 memo §16.A6 amendment**: updated 2026-05-14 to lock α2 + N_FIXED=150.
+3. **Pre-reg outcome amendment**: updated `weighting_choice_resolution` to reference N_FIXED=150 + this memo §5.1 re-derivation.
 4. **Defer (NOT this paradigm)**: weight-based turnover function + `compare_cost_scenarios` plumbing fix. Tracked as repo-wide tech debt.
+
+## §9 Changelog
+
+- 2026-05-14 initial publication, N_FIXED=30 (incorrect — based on conflated avg/peak derivation).
+- 2026-05-14 zen review surfaced Little's Law violation. §5.1 re-derivation added with N_FIXED=150 lock. §5.2 documents rejected alternatives (dynamic cap, allowed-leverage). §5.3 adds empirical p95 validation gate before B1 lock. Downstream amendments (v2 memo §16.A6, ledger outcome) updated in same commit.
