@@ -144,6 +144,42 @@ class TestRcloneSync(unittest.TestCase):
             self.assertEqual(cmd[2], str(cache))
             self.assertEqual(cmd[3], "nextcloud:alphalens/av_cache")
 
+    def test_rclone_bin_override_forwarded_to_subprocess(self) -> None:
+        """systemd user services run on a restricted PATH; operators may need
+        to pass an absolute rclone path via --rclone-bin to avoid
+        FileNotFoundError. Verify the override reaches subprocess.run."""
+        with tempfile.TemporaryDirectory() as tmp:
+            data_root = Path(tmp) / "data"
+            _write_sp500_snapshot(
+                data_root / "sp500_pit" / "2024.yaml",
+                as_of="2024-01-01",
+                tickers=["AAPL"],
+            )
+            cache = Path(tmp) / "cache"
+
+            mod = _import_script()
+            with (
+                patch.object(mod, "fetch_earnings_batch") as fetch_mock,
+                patch.object(mod, "subprocess") as subproc_mock,
+            ):
+                fetch_mock.return_value = {"AAPL": "fetched"}
+                mod.main(
+                    [
+                        "--cache-dir",
+                        str(cache),
+                        "--data-root",
+                        str(data_root),
+                        "--throttle-seconds",
+                        "0",
+                        "--rclone-remote",
+                        "nextcloud:alphalens/av_cache",
+                        "--rclone-bin",
+                        "/usr/local/bin/rclone",
+                    ]
+                )
+            cmd = subproc_mock.run.call_args.args[0]
+            self.assertEqual(cmd[0], "/usr/local/bin/rclone")
+
     def test_rclone_not_invoked_when_remote_unset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             data_root = Path(tmp) / "data"

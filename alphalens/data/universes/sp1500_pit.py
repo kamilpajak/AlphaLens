@@ -109,13 +109,23 @@ def _load_pit_union(data_dir: Path) -> list[str]:
 
 
 def load_sp500_pit_union(data_dir: Path | None = None) -> list[str]:
-    """Sorted union of every ticker appearing in any sp500_pit snapshot."""
+    """Sorted union of every ticker appearing in any sp500_pit snapshot.
+
+    Returns ~503 tickers given current survivorship-biased fallback snapshots
+    (2018/2020/2022/2024 all share current S&P 500 membership). A true PIT
+    backfill at AV free-tier 25/day quota completes in ~21 calendar days.
+    """
     directory = Path(data_dir) if data_dir else DEFAULT_DATA_ROOT / "sp500_pit"
     return _load_pit_union(directory)
 
 
 def load_sp1500_pit_union(data_root: Path | None = None) -> list[str]:
-    """Sorted union across S&P 500 + 400 + 600 snapshot directories."""
+    """Sorted union across S&P 500 + 400 + 600 snapshot directories.
+
+    Returns ~2000 tickers (S&P 1500). At AV free-tier 25/day quota, a full
+    EARNINGS backfill against this universe takes ~80 calendar days — usable
+    for future paradigms operating beyond the large-cap window, but slow.
+    """
     root = Path(data_root) if data_root else DEFAULT_DATA_ROOT
     return sorted(
         set(_load_pit_union(root / "sp500_pit"))

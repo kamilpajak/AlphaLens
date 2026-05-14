@@ -150,6 +150,15 @@ journalctl --user -u av-earnings-backfill.service -f
 journalctl --user -u av-earnings-backfill.service --since "yesterday"
 ```
 
+### Optional rclone sync — systemd PATH caveat
+
+If a future operator extends `ExecStart` with `--rclone-remote nextcloud:alphalens/av_cache`,
+note that systemd-user services run with a restricted `$PATH` (typically
+`/usr/local/bin:/usr/bin`). If `rclone` is installed elsewhere (e.g.
+`/usr/local/bin/rclone` on Debian, `~/.local/bin/rclone` on a pip-installed
+copy), pass an absolute path via `--rclone-bin /full/path/to/rclone` in the
+`ExecStart` line to avoid `FileNotFoundError` at fire time.
+
 ### Why oneshot + timer (not long-running daemon)
 
 The free-tier quota is the binding constraint, not compute. Holding a
