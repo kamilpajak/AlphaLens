@@ -85,3 +85,50 @@ def load_sp1500_pit_for_date(asof: pd.Timestamp, *, data_root: Path | None = Non
     sp400 = load_sp400_pit_for_date(asof, data_dir=root / "sp400_pit")
     sp600 = load_sp600_pit_for_date(asof, data_dir=root / "sp600_pit")
     return sorted(set(sp500) | set(sp400) | set(sp600))
+
+
+def _load_pit_union(data_dir: Path) -> list[str]:
+    """Sorted, uppercased union of tickers across all snapshots in `data_dir`.
+
+    Unlike the `_for_date` loaders, this does NOT pick a single snapshot — it
+    accumulates every ticker that has appeared in any year's membership.
+    Useful for bulk-prefetch jobs (e.g. AV EARNINGS backfill) where the
+    operational goal is "cache every name that any historical PEAD window
+    would touch".
+    """
+    if not data_dir.exists() or not data_dir.is_dir():
+        raise UniverseError(f"Universe data directory does not exist: {data_dir}")
+    tickers: set[str] = set()
+    for path in sorted(data_dir.glob("*.yaml")):
+        data = yaml.safe_load(path.read_text()) or {}
+        if not data.get("as_of"):
+            continue
+        for t in data.get("tickers") or []:
+            tickers.add(str(t).upper())
+    return sorted(tickers)
+
+
+def load_sp500_pit_union(data_dir: Path | None = None) -> list[str]:
+    """Sorted union of every ticker appearing in any sp500_pit snapshot.
+
+    Returns ~503 tickers given current survivorship-biased fallback snapshots
+    (2018/2020/2022/2024 all share current S&P 500 membership). A true PIT
+    backfill at AV free-tier 25/day quota completes in ~21 calendar days.
+    """
+    directory = Path(data_dir) if data_dir else DEFAULT_DATA_ROOT / "sp500_pit"
+    return _load_pit_union(directory)
+
+
+def load_sp1500_pit_union(data_root: Path | None = None) -> list[str]:
+    """Sorted union across S&P 500 + 400 + 600 snapshot directories.
+
+    Returns ~2000 tickers (S&P 1500). At AV free-tier 25/day quota, a full
+    EARNINGS backfill against this universe takes ~80 calendar days — usable
+    for future paradigms operating beyond the large-cap window, but slow.
+    """
+    root = Path(data_root) if data_root else DEFAULT_DATA_ROOT
+    return sorted(
+        set(_load_pit_union(root / "sp500_pit"))
+        | set(_load_pit_union(root / "sp400_pit"))
+        | set(_load_pit_union(root / "sp600_pit"))
+    )

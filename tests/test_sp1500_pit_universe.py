@@ -14,8 +14,10 @@ from alphalens.data.universes.sp1500_pit import (
     UniverseError,
     load_sp400_pit_for_date,
     load_sp500_pit_for_date,
+    load_sp500_pit_union,
     load_sp600_pit_for_date,
     load_sp1500_pit_for_date,
+    load_sp1500_pit_union,
 )
 
 
@@ -154,6 +156,58 @@ class TestLoadSp1500ForDate(unittest.TestCase):
         # actual content depends on real snapshots which Phase 1c populates.
         with contextlib.suppress(UniverseError):
             load_sp1500_pit_for_date(pd.Timestamp("2024-06-30"))
+
+
+class TestLoadSp500Union(unittest.TestCase):
+    """`load_sp500_pit_union` accumulates tickers across ALL snapshots — no asof
+    cut. Drives the AV EARNINGS bulk-prefetch backfill so that any ticker that
+    has appeared in S&P 500 within the snapshot range is cached upfront."""
+
+    def test_unions_tickers_across_multiple_snapshots(self) -> None:
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp) / "sp500_pit"
+            _write_snapshot(base / "2018.yaml", as_of="2018-01-01", tickers=["AAPL", "GE"])
+            _write_snapshot(base / "2020.yaml", as_of="2020-01-01", tickers=["AAPL", "MSFT"])
+            _write_snapshot(base / "2024.yaml", as_of="2024-01-01", tickers=["AAPL", "NVDA"])
+
+            tickers = load_sp500_pit_union(data_dir=base)
+            self.assertEqual(tickers, ["AAPL", "GE", "MSFT", "NVDA"])
+
+    def test_skips_yaml_without_as_of(self) -> None:
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp) / "sp500_pit"
+            base.mkdir(parents=True, exist_ok=True)
+            (base / "bad.yaml").write_text(yaml.safe_dump({"tickers": ["X"]}, sort_keys=False))
+            _write_snapshot(base / "2024.yaml", as_of="2024-01-01", tickers=["A"])
+
+            tickers = load_sp500_pit_union(data_dir=base)
+            self.assertEqual(tickers, ["A"])
+
+    def test_uppercases_tickers(self) -> None:
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp) / "sp500_pit"
+            _write_snapshot(base / "2024.yaml", as_of="2024-01-01", tickers=["aapl", "msft"])
+            self.assertEqual(load_sp500_pit_union(data_dir=base), ["AAPL", "MSFT"])
+
+    def test_raises_when_directory_missing(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self.assertRaises(UniverseError):
+                load_sp500_pit_union(data_dir=Path(tmp) / "nope")
+
+
+class TestLoadSp1500Union(unittest.TestCase):
+    def test_unions_across_three_indices_and_snapshot_years(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write_snapshot(root / "sp500_pit" / "2018.yaml", as_of="2018-01-01", tickers=["AAPL"])
+            _write_snapshot(root / "sp500_pit" / "2024.yaml", as_of="2024-01-01", tickers=["NVDA"])
+            _write_snapshot(root / "sp400_pit" / "2024.yaml", as_of="2024-01-01", tickers=["TPL"])
+            _write_snapshot(root / "sp600_pit" / "2024.yaml", as_of="2024-01-01", tickers=["INSW"])
+
+            self.assertEqual(
+                load_sp1500_pit_union(data_root=root),
+                ["AAPL", "INSW", "NVDA", "TPL"],
+            )
 
 
 class TestRealRepoSnapshotsLoad(unittest.TestCase):

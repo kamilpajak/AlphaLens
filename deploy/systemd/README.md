@@ -114,3 +114,56 @@ OOM kill, or `pkill` aborts a multi-day run with no restart. systemd's
 `Restart=on-failure` + `RestartSec=60` automates recovery while
 `StartLimitBurst=5` prevents tight crash loops if the underlying problem
 is persistent (bad credentials, exhausted disk, SEC ban).
+
+## av-earnings-backfill.service + av-earnings-backfill.timer
+
+Alpha Vantage `EARNINGS` daily backfill (`scripts/av_earnings_daily_backfill.py`).
+Unlike the Form-4 daemon, this is a **oneshot** triggered by a daily timer:
+each fire consumes up to the AV free-tier 25-call/day quota then exits. Full
+S&P 500 union backfill (~503 names) takes ~21 calendar days. Cache lives at
+`~/.alphalens/av_cache/earnings_<T>.json` and is general-purpose (any future
+paradigm reading AV EARNINGS hits the same store).
+
+### Install
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/av-earnings-backfill.service ~/.config/systemd/user/
+cp deploy/systemd/av-earnings-backfill.timer   ~/.config/systemd/user/
+
+# Create .env at AlphaLens repo root with the API key:
+#   echo 'ALPHA_VANTAGE_API_KEY=...' > ~/AlphaLens/.env && chmod 600 ~/AlphaLens/.env
+
+systemctl --user daemon-reload
+systemctl --user enable --now av-earnings-backfill.timer
+
+# Optional: trigger an immediate fire to validate the unit works.
+systemctl --user start av-earnings-backfill.service
+```
+
+### Inspect
+
+```bash
+systemctl --user list-timers --all              # see next-fire / last-fire
+systemctl --user status av-earnings-backfill.timer
+journalctl --user -u av-earnings-backfill.service -f
+journalctl --user -u av-earnings-backfill.service --since "yesterday"
+```
+
+### Optional rclone sync — systemd PATH caveat
+
+If a future operator extends `ExecStart` with `--rclone-remote nextcloud:alphalens/av_cache`,
+note that systemd-user services run with a restricted `$PATH` (typically
+`/usr/local/bin:/usr/bin`). If `rclone` is installed elsewhere (e.g.
+`/usr/local/bin/rclone` on Debian, `~/.local/bin/rclone` on a pip-installed
+copy), pass an absolute path via `--rclone-bin /full/path/to/rclone` in the
+`ExecStart` line to avoid `FileNotFoundError` at fire time.
+
+### Why oneshot + timer (not long-running daemon)
+
+The free-tier quota is the binding constraint, not compute. Holding a
+process resident 23h+ just to wake up for 30s of API calls wastes
+resources and complicates restart semantics. The timer pattern fires
+the script daily, picks up only uncached tickers, exits cleanly on
+`AVRateLimitError` (return code 0 — expected steady-state), and lets
+systemd handle persistence across reboots via `Persistent=true`.
