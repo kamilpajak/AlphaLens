@@ -1655,8 +1655,59 @@
         "capital_deploy_clause": "Full PASS unlocks capital deployment per project doctrine, gated on: (1) mandatory slippage stress diagnostic per feedback_slippage_stress_diagnostic_pattern_2026_05_12; (2) excess-cyclicality screen vs SPY/IWM; (3) 6-12mo paper-trade observation. PASS_MARGINAL triggers paper-trade only, no capital deploy."
       },
       "registered_at": "2026-05-14",
-      "status": "registered",
-      "outcome": null,
+      "status": "completed",
+      "outcome": {
+        "verdict": "FAIL",
+        "verdict_reason": "JOINT FAIL: every window in {IS, OOS, FL} FAIL independently on G1+G2 (alpha_t mean 0.02 / 0.71 / 1.58, all below 2.5 floor and 3.5 project threshold). G3 PASS in OOS+FL (positive every phase) but FAIL in IS (min phase alpha_t = -0.04). G4 cost-stress FAIL all 3 windows (net alpha_t @ 15bps = -0.67 / 0.24 / 0.91, below 2.0 threshold). Memo section 9 honest prior (10-15% PASS probability; most likely outcome alpha_t mean 1.5-2.5 below Bonferroni bar) approximately matched in OOS+FL but IS surprisingly null.",
+        "windows_evaluated": {
+          "IS": {
+            "verdict": "FAIL",
+            "alpha_t_mean": 0.018,
+            "alpha_t_range": [
+              -0.04,
+              0.12
+            ],
+            "alpha_t_net_15bps_mean": -0.668,
+            "n_phases": 5,
+            "wall_seconds": 465
+          },
+          "OOS": {
+            "verdict": "FAIL",
+            "alpha_t_mean": 0.712,
+            "alpha_t_range": [
+              0.41,
+              0.96
+            ],
+            "alpha_t_net_15bps_mean": 0.238,
+            "n_phases": 5,
+            "wall_seconds": 567
+          },
+          "FL": {
+            "verdict": "FAIL",
+            "alpha_t_mean": 1.584,
+            "alpha_t_range": [
+              1.29,
+              1.84
+            ],
+            "alpha_t_net_15bps_mean": 0.908,
+            "n_phases": 5,
+            "wall_seconds": 792
+          }
+        },
+        "audit_path": "docs/research/idiosyncratic_momentum_audit_2026-05-14.json",
+        "verdict_memo": "docs/research/idiosyncratic_momentum_audit_verdict_2026_05_14.md",
+        "completed_at": "2026-05-14",
+        "wall_minutes_total": 30.4,
+        "pod": "community-cloud cpu EU-RO-1, ~$0.04",
+        "material_findings": [
+          "BAB confound NOT triggered (beta_market 0.97-1.17, well above flag threshold 0.8) - Blitz 1/sigma standardisation did NOT inject low-vol tilt on S&P 1500",
+          "Hyper-turnover NOT triggered (mean monthly turnover 18.9-35.9%, far below feared 60-80% range)",
+          "FL window strongest (alpha_t 1.58), opposite to memo section 9 anticipated 2023-2024 momentum crisis penalty",
+          "IS effective sample ~5.4y of registered 8y (MIN_BARS_REQUIRED=900 warm-up truncation; design consequence)",
+          "OOS FF5+UMD attenuation ~32% borderline material (memo section 5.1.2 threshold 30%) - RMW/CMA absorb ~1/3 of OOS Carhart alpha"
+        ],
+        "notes": "Pattern matches paradigm-13 ev_fcff_yield FAIL: real signal exists, vindicated by signs and class precedents, but below conservative project Bonferroni bar. Class price_factor_search_2026_04_29 remains OPEN (n=5 after this entry); module CLOSED per ADR 0005."
+      },
       "notes": "Paradigm #15. Honest prior 10-15% probability of achieving doctrine 3.5 t-stat (post zen review). Most likely outcome: αt mean 1.5-2.5, vindicated mechanism below Bonferroni bar (matches ev_fcff_yield #13 pattern). Material findings expected regardless of verdict."
     },
     {

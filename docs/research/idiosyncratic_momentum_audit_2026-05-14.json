@@ -1,0 +1,752 @@
+{
+  "strategy": "idiosyncratic_momentum",
+  "ledger_id": "idiosyncratic_momentum_2026_05_14_v1",
+  "signal_class": "price_factor_search_2026_04_29",
+  "design_memo": "docs/research/idiosyncratic_momentum_v1_design_2026_05_14.md",
+  "orchestrator_invoked_at": "2026-05-14T17:57:52",
+  "orchestrator_total_wall_seconds": 1824.012808509171,
+  "locked_constants": {
+    "n_phases": 5,
+    "rebalance_stride_days": 21,
+    "holding_days": 21,
+    "cost_baseline_bps": 5.0,
+    "cost_g4_stress_bps": 15.0
+  },
+  "windows": [
+    {
+      "window_name": "IS",
+      "is_start": "2010-01-01",
+      "is_end": "2017-12-31",
+      "n_phases": 5,
+      "wall_seconds": 464.74333591759205,
+      "baseline_cost_5bps": {
+        "n_phases": 5,
+        "alpha_t": {
+          "mean": 0.018,
+          "std": 0.057410800377629294,
+          "min": -0.04,
+          "max": 0.12
+        },
+        "alpha_t_net": {
+          "mean": -0.326,
+          "std": 0.056071383075504744,
+          "min": -0.39,
+          "max": -0.23
+        },
+        "sharpe_net": {
+          "mean": 1.0,
+          "std": 0.017888543819998333,
+          "min": 0.98,
+          "max": 1.03
+        },
+        "per_phase_alpha_t": [
+          -0.02,
+          0.12,
+          -0.04,
+          -0.01,
+          0.04
+        ],
+        "per_phase_alpha_t_net": [
+          -0.36,
+          -0.23,
+          -0.39,
+          -0.35,
+          -0.3
+        ]
+      },
+      "stress_cost_15bps": {
+        "n_phases": 5,
+        "alpha_t": {
+          "mean": 0.018,
+          "std": 0.057410800377629294,
+          "min": -0.04,
+          "max": 0.12
+        },
+        "alpha_t_net": {
+          "mean": -0.6679999999999999,
+          "std": 0.055281099844341014,
+          "min": -0.73,
+          "max": -0.58
+        },
+        "sharpe_net": {
+          "mean": 0.97,
+          "std": 0.017888543819998333,
+          "min": 0.95,
+          "max": 1.0
+        },
+        "per_phase_alpha_t": [
+          -0.02,
+          0.12,
+          -0.04,
+          -0.01,
+          0.04
+        ],
+        "per_phase_alpha_t_net": [
+          -0.71,
+          -0.58,
+          -0.73,
+          -0.69,
+          -0.63
+        ]
+      },
+      "phase_results": [
+        {
+          "window": "IS",
+          "phase_offset": 0,
+          "returncode": 0,
+          "wall_seconds": 464.25585900247097,
+          "log_path": "/workspace/audit_logs/IS_p0.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/IS_p0_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 1.06,
+              "sharpe_net": 1.03,
+              "alpha_ann": -0.0,
+              "alpha_t": -0.02,
+              "alpha_net_ann": -0.005,
+              "alpha_t_net": -0.36,
+              "raw_line": "2026-05-14 17:35:07,423 INFO __main__: cost=5bps | n=1361 topN=200.0 turn=18.9% | Sh gross=1.06 net=1.03 | \u03b2_mkt=1.12 | \u03b1 4F=-0.0% t=-0.02 | \u03b1-net 4F=-0.5% t-net=-0.36 | \u03b1 FF5+UMD=-0.3% atten=-1491%"
+            },
+            "15.0": {
+              "sharpe_gross": 1.06,
+              "sharpe_net": 1.0,
+              "alpha_ann": -0.0,
+              "alpha_t": -0.02,
+              "alpha_net_ann": -0.009000000000000001,
+              "alpha_t_net": -0.71,
+              "raw_line": "2026-05-14 17:35:11,890 INFO __main__: cost=15bps | n=1361 topN=200.0 turn=18.9% | Sh gross=1.06 net=1.00 | \u03b2_mkt=1.12 | \u03b1 4F=-0.0% t=-0.02 | \u03b1-net 4F=-0.9% t-net=-0.71 | \u03b1 FF5+UMD=-0.3% atten=-1491%"
+            }
+          }
+        },
+        {
+          "window": "IS",
+          "phase_offset": 1,
+          "returncode": 0,
+          "wall_seconds": 462.9245587363839,
+          "log_path": "/workspace/audit_logs/IS_p1.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/IS_p1_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 1.04,
+              "sharpe_net": 1.01,
+              "alpha_ann": 0.002,
+              "alpha_t": 0.12,
+              "alpha_net_ann": -0.003,
+              "alpha_t_net": -0.23,
+              "raw_line": "2026-05-14 17:35:05,920 INFO __main__: cost=5bps | n=1360 topN=200.0 turn=18.9% | Sh gross=1.04 net=1.01 | \u03b2_mkt=1.11 | \u03b1 4F=0.2% t=0.12 | \u03b1-net 4F=-0.3% t-net=-0.23 | \u03b1 FF5+UMD=-0.1% atten=187%"
+            },
+            "15.0": {
+              "sharpe_gross": 1.04,
+              "sharpe_net": 0.98,
+              "alpha_ann": 0.002,
+              "alpha_t": 0.12,
+              "alpha_net_ann": -0.008,
+              "alpha_t_net": -0.58,
+              "raw_line": "2026-05-14 17:35:10,473 INFO __main__: cost=15bps | n=1360 topN=200.0 turn=18.9% | Sh gross=1.04 net=0.98 | \u03b2_mkt=1.11 | \u03b1 4F=0.2% t=0.12 | \u03b1-net 4F=-0.8% t-net=-0.58 | \u03b1 FF5+UMD=-0.1% atten=187%"
+            }
+          }
+        },
+        {
+          "window": "IS",
+          "phase_offset": 2,
+          "returncode": 0,
+          "wall_seconds": 464.6429931744933,
+          "log_path": "/workspace/audit_logs/IS_p2.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/IS_p2_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 1.02,
+              "sharpe_net": 0.99,
+              "alpha_ann": -0.001,
+              "alpha_t": -0.04,
+              "alpha_net_ann": -0.005,
+              "alpha_t_net": -0.39,
+              "raw_line": "2026-05-14 17:35:08,590 INFO __main__: cost=5bps | n=1359 topN=200.0 turn=18.9% | Sh gross=1.02 net=0.99 | \u03b2_mkt=1.11 | \u03b1 4F=-0.1% t=-0.04 | \u03b1-net 4F=-0.5% t-net=-0.39 | \u03b1 FF5+UMD=-0.4% atten=-493%"
+            },
+            "15.0": {
+              "sharpe_gross": 1.02,
+              "sharpe_net": 0.96,
+              "alpha_ann": -0.001,
+              "alpha_t": -0.04,
+              "alpha_net_ann": -0.01,
+              "alpha_t_net": -0.73,
+              "raw_line": "2026-05-14 17:35:12,628 INFO __main__: cost=15bps | n=1359 topN=200.0 turn=18.9% | Sh gross=1.02 net=0.96 | \u03b2_mkt=1.11 | \u03b1 4F=-0.1% t=-0.04 | \u03b1-net 4F=-1.0% t-net=-0.73 | \u03b1 FF5+UMD=-0.4% atten=-493%"
+            }
+          }
+        },
+        {
+          "window": "IS",
+          "phase_offset": 3,
+          "returncode": 0,
+          "wall_seconds": 464.73614997416735,
+          "log_path": "/workspace/audit_logs/IS_p3.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/IS_p3_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 1.01,
+              "sharpe_net": 0.98,
+              "alpha_ann": -0.0,
+              "alpha_t": -0.01,
+              "alpha_net_ann": -0.005,
+              "alpha_t_net": -0.35,
+              "raw_line": "2026-05-14 17:35:08,996 INFO __main__: cost=5bps | n=1358 topN=200.0 turn=19.0% | Sh gross=1.01 net=0.98 | \u03b2_mkt=1.11 | \u03b1 4F=-0.0% t=-0.01 | \u03b1-net 4F=-0.5% t-net=-0.35 | \u03b1 FF5+UMD=-0.3% atten=-2197%"
+            },
+            "15.0": {
+              "sharpe_gross": 1.01,
+              "sharpe_net": 0.95,
+              "alpha_ann": -0.0,
+              "alpha_t": -0.01,
+              "alpha_net_ann": -0.009000000000000001,
+              "alpha_t_net": -0.69,
+              "raw_line": "2026-05-14 17:35:12,754 INFO __main__: cost=15bps | n=1358 topN=200.0 turn=19.0% | Sh gross=1.01 net=0.95 | \u03b2_mkt=1.11 | \u03b1 4F=-0.0% t=-0.01 | \u03b1-net 4F=-0.9% t-net=-0.69 | \u03b1 FF5+UMD=-0.3% atten=-2197%"
+            }
+          }
+        },
+        {
+          "window": "IS",
+          "phase_offset": 4,
+          "returncode": 0,
+          "wall_seconds": 464.34119206666946,
+          "log_path": "/workspace/audit_logs/IS_p4.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/IS_p4_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 1.01,
+              "sharpe_net": 0.99,
+              "alpha_ann": 0.001,
+              "alpha_t": 0.04,
+              "alpha_net_ann": -0.004,
+              "alpha_t_net": -0.3,
+              "raw_line": "2026-05-14 17:35:07,547 INFO __main__: cost=5bps | n=1357 topN=200.0 turn=18.9% | Sh gross=1.01 net=0.99 | \u03b2_mkt=1.11 | \u03b1 4F=0.1% t=0.04 | \u03b1-net 4F=-0.4% t-net=-0.30 | \u03b1 FF5+UMD=-0.2% atten=506%"
+            },
+            "15.0": {
+              "sharpe_gross": 1.01,
+              "sharpe_net": 0.96,
+              "alpha_ann": 0.001,
+              "alpha_t": 0.04,
+              "alpha_net_ann": -0.009000000000000001,
+              "alpha_t_net": -0.63,
+              "raw_line": "2026-05-14 17:35:11,964 INFO __main__: cost=15bps | n=1357 topN=200.0 turn=18.9% | Sh gross=1.01 net=0.96 | \u03b2_mkt=1.11 | \u03b1 4F=0.1% t=0.04 | \u03b1-net 4F=-0.9% t-net=-0.63 | \u03b1 FF5+UMD=-0.2% atten=506%"
+            }
+          }
+        }
+      ],
+      "verdict": "FAIL",
+      "gates": {
+        "G1_full_sample_alpha_t": {
+          "value": 0.018,
+          "threshold": 3.5,
+          "passed": false
+        },
+        "G2_mean_per_phase_alpha_t": {
+          "value": 0.018,
+          "threshold": 2.5,
+          "passed": false
+        },
+        "G3_positive_each_phase": {
+          "min_phase_alpha_t": -0.04,
+          "threshold": 0.0,
+          "passed": false
+        },
+        "G4_cost_stress_15bps_mean_alpha_t": {
+          "value": -0.6679999999999999,
+          "threshold": 2.0,
+          "passed": false
+        }
+      }
+    },
+    {
+      "window_name": "OOS",
+      "is_start": "2018-01-01",
+      "is_end": "2021-12-31",
+      "n_phases": 5,
+      "wall_seconds": 567.3018932119012,
+      "baseline_cost_5bps": {
+        "n_phases": 5,
+        "alpha_t": {
+          "mean": 0.712,
+          "std": 0.19394844675841053,
+          "min": 0.41,
+          "max": 0.96
+        },
+        "alpha_t_net": {
+          "mean": 0.474,
+          "std": 0.19293522228976231,
+          "min": 0.17,
+          "max": 0.72
+        },
+        "sharpe_net": {
+          "mean": 0.61,
+          "std": 0.020000000000000018,
+          "min": 0.58,
+          "max": 0.64
+        },
+        "per_phase_alpha_t": [
+          0.96,
+          0.71,
+          0.87,
+          0.61,
+          0.41
+        ],
+        "per_phase_alpha_t_net": [
+          0.72,
+          0.47,
+          0.63,
+          0.38,
+          0.17
+        ]
+      },
+      "stress_cost_15bps": {
+        "n_phases": 5,
+        "alpha_t": {
+          "mean": 0.712,
+          "std": 0.19394844675841053,
+          "min": 0.41,
+          "max": 0.96
+        },
+        "alpha_t_net": {
+          "mean": 0.238,
+          "std": 0.19456618411224497,
+          "min": -0.07,
+          "max": 0.49
+        },
+        "sharpe_net": {
+          "mean": 0.584,
+          "std": 0.021540659228538,
+          "min": 0.55,
+          "max": 0.61
+        },
+        "per_phase_alpha_t": [
+          0.96,
+          0.71,
+          0.87,
+          0.61,
+          0.41
+        ],
+        "per_phase_alpha_t_net": [
+          0.49,
+          0.23,
+          0.39,
+          0.15,
+          -0.07
+        ]
+      },
+      "phase_results": [
+        {
+          "window": "OOS",
+          "phase_offset": 0,
+          "returncode": 0,
+          "wall_seconds": 566.2031241580844,
+          "log_path": "/workspace/audit_logs/OOS_p0.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/OOS_p0_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 0.66,
+              "sharpe_net": 0.64,
+              "alpha_ann": 0.026000000000000002,
+              "alpha_t": 0.96,
+              "alpha_net_ann": 0.019,
+              "alpha_t_net": 0.72,
+              "raw_line": "2026-05-14 17:44:34,816 INFO __main__: cost=5bps | n=1007 topN=200.0 turn=26.6% | Sh gross=0.66 net=0.64 | \u03b2_mkt=1.16 | \u03b1 4F=2.6% t=0.96 | \u03b1-net 4F=1.9% t-net=0.72 | \u03b1 FF5+UMD=2.0% atten=24%"
+            },
+            "15.0": {
+              "sharpe_gross": 0.66,
+              "sharpe_net": 0.61,
+              "alpha_ann": 0.026000000000000002,
+              "alpha_t": 0.96,
+              "alpha_net_ann": 0.013000000000000001,
+              "alpha_t_net": 0.49,
+              "raw_line": "2026-05-14 17:44:38,581 INFO __main__: cost=15bps | n=1007 topN=200.0 turn=26.6% | Sh gross=0.66 net=0.61 | \u03b2_mkt=1.16 | \u03b1 4F=2.6% t=0.96 | \u03b1-net 4F=1.3% t-net=0.49 | \u03b1 FF5+UMD=2.0% atten=24%"
+            }
+          }
+        },
+        {
+          "window": "OOS",
+          "phase_offset": 1,
+          "returncode": 0,
+          "wall_seconds": 567.294873252511,
+          "log_path": "/workspace/audit_logs/OOS_p1.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/OOS_p1_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 0.63,
+              "sharpe_net": 0.61,
+              "alpha_ann": 0.019,
+              "alpha_t": 0.71,
+              "alpha_net_ann": 0.012,
+              "alpha_t_net": 0.47,
+              "raw_line": "2026-05-14 17:44:38,871 INFO __main__: cost=5bps | n=1006 topN=200.0 turn=26.6% | Sh gross=0.63 net=0.61 | \u03b2_mkt=1.16 | \u03b1 4F=1.9% t=0.71 | \u03b1-net 4F=1.2% t-net=0.47 | \u03b1 FF5+UMD=1.3% atten=31%"
+            },
+            "15.0": {
+              "sharpe_gross": 0.63,
+              "sharpe_net": 0.59,
+              "alpha_ann": 0.019,
+              "alpha_t": 0.71,
+              "alpha_net_ann": 0.006,
+              "alpha_t_net": 0.23,
+              "raw_line": "2026-05-14 17:44:40,074 INFO __main__: cost=15bps | n=1006 topN=200.0 turn=26.6% | Sh gross=0.63 net=0.59 | \u03b2_mkt=1.16 | \u03b1 4F=1.9% t=0.71 | \u03b1-net 4F=0.6% t-net=0.23 | \u03b1 FF5+UMD=1.3% atten=31%"
+            }
+          }
+        },
+        {
+          "window": "OOS",
+          "phase_offset": 2,
+          "returncode": 0,
+          "wall_seconds": 565.7156200557947,
+          "log_path": "/workspace/audit_logs/OOS_p2.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/OOS_p2_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 0.64,
+              "sharpe_net": 0.62,
+              "alpha_ann": 0.023,
+              "alpha_t": 0.87,
+              "alpha_net_ann": 0.017,
+              "alpha_t_net": 0.63,
+              "raw_line": "2026-05-14 17:44:34,286 INFO __main__: cost=5bps | n=1005 topN=200.0 turn=26.5% | Sh gross=0.64 net=0.62 | \u03b2_mkt=1.17 | \u03b1 4F=2.3% t=0.87 | \u03b1-net 4F=1.7% t-net=0.63 | \u03b1 FF5+UMD=1.7% atten=26%"
+            },
+            "15.0": {
+              "sharpe_gross": 0.64,
+              "sharpe_net": 0.6,
+              "alpha_ann": 0.023,
+              "alpha_t": 0.87,
+              "alpha_net_ann": 0.01,
+              "alpha_t_net": 0.39,
+              "raw_line": "2026-05-14 17:44:37,934 INFO __main__: cost=15bps | n=1005 topN=200.0 turn=26.5% | Sh gross=0.64 net=0.60 | \u03b2_mkt=1.17 | \u03b1 4F=2.3% t=0.87 | \u03b1-net 4F=1.0% t-net=0.39 | \u03b1 FF5+UMD=1.7% atten=26%"
+            }
+          }
+        },
+        {
+          "window": "OOS",
+          "phase_offset": 3,
+          "returncode": 0,
+          "wall_seconds": 566.312164567411,
+          "log_path": "/workspace/audit_logs/OOS_p3.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/OOS_p3_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 0.62,
+              "sharpe_net": 0.6,
+              "alpha_ann": 0.017,
+              "alpha_t": 0.61,
+              "alpha_net_ann": 0.01,
+              "alpha_t_net": 0.38,
+              "raw_line": "2026-05-14 17:44:34,833 INFO __main__: cost=5bps | n=1004 topN=200.0 turn=26.5% | Sh gross=0.62 net=0.60 | \u03b2_mkt=1.16 | \u03b1 4F=1.7% t=0.61 | \u03b1-net 4F=1.0% t-net=0.38 | \u03b1 FF5+UMD=1.2% atten=31%"
+            },
+            "15.0": {
+              "sharpe_gross": 0.62,
+              "sharpe_net": 0.57,
+              "alpha_ann": 0.017,
+              "alpha_t": 0.61,
+              "alpha_net_ann": 0.004,
+              "alpha_t_net": 0.15,
+              "raw_line": "2026-05-14 17:44:38,739 INFO __main__: cost=15bps | n=1004 topN=200.0 turn=26.5% | Sh gross=0.62 net=0.57 | \u03b2_mkt=1.16 | \u03b1 4F=1.7% t=0.61 | \u03b1-net 4F=0.4% t-net=0.15 | \u03b1 FF5+UMD=1.2% atten=31%"
+            }
+          }
+        },
+        {
+          "window": "OOS",
+          "phase_offset": 4,
+          "returncode": 0,
+          "wall_seconds": 566.3249366208911,
+          "log_path": "/workspace/audit_logs/OOS_p4.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/OOS_p4_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 0.6,
+              "sharpe_net": 0.58,
+              "alpha_ann": 0.011000000000000001,
+              "alpha_t": 0.41,
+              "alpha_net_ann": 0.005,
+              "alpha_t_net": 0.17,
+              "raw_line": "2026-05-14 17:44:34,987 INFO __main__: cost=5bps | n=1003 topN=200.0 turn=26.6% | Sh gross=0.60 net=0.58 | \u03b2_mkt=1.16 | \u03b1 4F=1.1% t=0.41 | \u03b1-net 4F=0.5% t-net=0.17 | \u03b1 FF5+UMD=0.6% atten=48%"
+            },
+            "15.0": {
+              "sharpe_gross": 0.6,
+              "sharpe_net": 0.55,
+              "alpha_ann": 0.011000000000000001,
+              "alpha_t": 0.41,
+              "alpha_net_ann": -0.002,
+              "alpha_t_net": -0.07,
+              "raw_line": "2026-05-14 17:44:38,801 INFO __main__: cost=15bps | n=1003 topN=200.0 turn=26.6% | Sh gross=0.60 net=0.55 | \u03b2_mkt=1.16 | \u03b1 4F=1.1% t=0.41 | \u03b1-net 4F=-0.2% t-net=-0.07 | \u03b1 FF5+UMD=0.6% atten=48%"
+            }
+          }
+        }
+      ],
+      "verdict": "FAIL",
+      "gates": {
+        "G1_full_sample_alpha_t": {
+          "value": 0.712,
+          "threshold": 3.5,
+          "passed": false
+        },
+        "G2_mean_per_phase_alpha_t": {
+          "value": 0.712,
+          "threshold": 2.5,
+          "passed": false
+        },
+        "G3_positive_each_phase": {
+          "min_phase_alpha_t": 0.41,
+          "threshold": 0.0,
+          "passed": true
+        },
+        "G4_cost_stress_15bps_mean_alpha_t": {
+          "value": 0.238,
+          "threshold": 2.0,
+          "passed": false
+        }
+      }
+    },
+    {
+      "window_name": "FL",
+      "is_start": "2022-01-01",
+      "is_end": "2024-12-31",
+      "n_phases": 5,
+      "wall_seconds": 791.9664227366447,
+      "baseline_cost_5bps": {
+        "n_phases": 5,
+        "alpha_t": {
+          "mean": 1.584,
+          "std": 0.180288657435791,
+          "min": 1.29,
+          "max": 1.84
+        },
+        "alpha_t_net": {
+          "mean": 1.246,
+          "std": 0.18575252353602092,
+          "min": 0.94,
+          "max": 1.51
+        },
+        "sharpe_net": {
+          "mean": 0.606,
+          "std": 0.03773592452822642,
+          "min": 0.55,
+          "max": 0.66
+        },
+        "per_phase_alpha_t": [
+          1.29,
+          1.52,
+          1.61,
+          1.66,
+          1.84
+        ],
+        "per_phase_alpha_t_net": [
+          0.94,
+          1.19,
+          1.27,
+          1.32,
+          1.51
+        ]
+      },
+      "stress_cost_15bps": {
+        "n_phases": 5,
+        "alpha_t": {
+          "mean": 1.584,
+          "std": 0.180288657435791,
+          "min": 1.29,
+          "max": 1.84
+        },
+        "alpha_t_net": {
+          "mean": 0.908,
+          "std": 0.19270703152713448,
+          "min": 0.59,
+          "max": 1.18
+        },
+        "sharpe_net": {
+          "mean": 0.564,
+          "std": 0.039293765408776986,
+          "min": 0.51,
+          "max": 0.62
+        },
+        "per_phase_alpha_t": [
+          1.29,
+          1.52,
+          1.61,
+          1.66,
+          1.84
+        ],
+        "per_phase_alpha_t_net": [
+          0.59,
+          0.85,
+          0.93,
+          0.99,
+          1.18
+        ]
+      },
+      "phase_results": [
+        {
+          "window": "FL",
+          "phase_offset": 0,
+          "returncode": 0,
+          "wall_seconds": 791.9543064236641,
+          "log_path": "/workspace/audit_logs/FL_p0.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/FL_p0_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 0.59,
+              "sharpe_net": 0.55,
+              "alpha_ann": 0.032,
+              "alpha_t": 1.29,
+              "alpha_net_ann": 0.023,
+              "alpha_t_net": 0.94,
+              "raw_line": "2026-05-14 17:57:49,573 INFO __main__: cost=5bps | n=752 topN=200.0 turn=35.9% | Sh gross=0.59 net=0.55 | \u03b2_mkt=0.97 | \u03b1 4F=3.2% t=1.29 | \u03b1-net 4F=2.3% t-net=0.94 | \u03b1 FF5+UMD=3.4% atten=-7%"
+            },
+            "15.0": {
+              "sharpe_gross": 0.59,
+              "sharpe_net": 0.51,
+              "alpha_ann": 0.032,
+              "alpha_t": 1.29,
+              "alpha_net_ann": 0.013999999999999999,
+              "alpha_t_net": 0.59,
+              "raw_line": "2026-05-14 17:57:51,991 INFO __main__: cost=15bps | n=752 topN=200.0 turn=35.9% | Sh gross=0.59 net=0.51 | \u03b2_mkt=0.97 | \u03b1 4F=3.2% t=1.29 | \u03b1-net 4F=1.4% t-net=0.59 | \u03b1 FF5+UMD=3.4% atten=-7%"
+            }
+          }
+        },
+        {
+          "window": "FL",
+          "phase_offset": 1,
+          "returncode": 0,
+          "wall_seconds": 791.3394344970584,
+          "log_path": "/workspace/audit_logs/FL_p1.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/FL_p1_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 0.62,
+              "sharpe_net": 0.58,
+              "alpha_ann": 0.039,
+              "alpha_t": 1.52,
+              "alpha_net_ann": 0.03,
+              "alpha_t_net": 1.19,
+              "raw_line": "2026-05-14 17:57:47,250 INFO __main__: cost=5bps | n=751 topN=200.0 turn=35.9% | Sh gross=0.62 net=0.58 | \u03b2_mkt=0.97 | \u03b1 4F=3.9% t=1.52 | \u03b1-net 4F=3.0% t-net=1.19 | \u03b1 FF5+UMD=4.1% atten=-4%"
+            },
+            "15.0": {
+              "sharpe_gross": 0.62,
+              "sharpe_net": 0.53,
+              "alpha_ann": 0.039,
+              "alpha_t": 1.52,
+              "alpha_net_ann": 0.022000000000000002,
+              "alpha_t_net": 0.85,
+              "raw_line": "2026-05-14 17:57:51,099 INFO __main__: cost=15bps | n=751 topN=200.0 turn=35.9% | Sh gross=0.62 net=0.53 | \u03b2_mkt=0.97 | \u03b1 4F=3.9% t=1.52 | \u03b1-net 4F=2.2% t-net=0.85 | \u03b1 FF5+UMD=4.1% atten=-4%"
+            }
+          }
+        },
+        {
+          "window": "FL",
+          "phase_offset": 2,
+          "returncode": 0,
+          "wall_seconds": 790.9094381332397,
+          "log_path": "/workspace/audit_logs/FL_p2.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/FL_p2_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 0.67,
+              "sharpe_net": 0.62,
+              "alpha_ann": 0.040999999999999995,
+              "alpha_t": 1.61,
+              "alpha_net_ann": 0.032,
+              "alpha_t_net": 1.27,
+              "raw_line": "2026-05-14 17:57:46,893 INFO __main__: cost=5bps | n=750 topN=200.0 turn=35.9% | Sh gross=0.67 net=0.62 | \u03b2_mkt=0.97 | \u03b1 4F=4.1% t=1.61 | \u03b1-net 4F=3.2% t-net=1.27 | \u03b1 FF5+UMD=4.3% atten=-4%"
+            },
+            "15.0": {
+              "sharpe_gross": 0.67,
+              "sharpe_net": 0.58,
+              "alpha_ann": 0.040999999999999995,
+              "alpha_t": 1.61,
+              "alpha_net_ann": 0.024,
+              "alpha_t_net": 0.93,
+              "raw_line": "2026-05-14 17:57:50,414 INFO __main__: cost=15bps | n=750 topN=200.0 turn=35.9% | Sh gross=0.67 net=0.58 | \u03b2_mkt=0.97 | \u03b1 4F=4.1% t=1.61 | \u03b1-net 4F=2.4% t-net=0.93 | \u03b1 FF5+UMD=4.3% atten=-4%"
+            }
+          }
+        },
+        {
+          "window": "FL",
+          "phase_offset": 3,
+          "returncode": 0,
+          "wall_seconds": 791.0853807553649,
+          "log_path": "/workspace/audit_logs/FL_p3.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/FL_p3_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 0.66,
+              "sharpe_net": 0.62,
+              "alpha_ann": 0.042,
+              "alpha_t": 1.66,
+              "alpha_net_ann": 0.034,
+              "alpha_t_net": 1.32,
+              "raw_line": "2026-05-14 17:57:47,264 INFO __main__: cost=5bps | n=749 topN=200.0 turn=35.8% | Sh gross=0.66 net=0.62 | \u03b2_mkt=0.97 | \u03b1 4F=4.2% t=1.66 | \u03b1-net 4F=3.4% t-net=1.32 | \u03b1 FF5+UMD=4.4% atten=-4%"
+            },
+            "15.0": {
+              "sharpe_gross": 0.66,
+              "sharpe_net": 0.58,
+              "alpha_ann": 0.042,
+              "alpha_t": 1.66,
+              "alpha_net_ann": 0.025,
+              "alpha_t_net": 0.99,
+              "raw_line": "2026-05-14 17:57:50,777 INFO __main__: cost=15bps | n=749 topN=200.0 turn=35.8% | Sh gross=0.66 net=0.58 | \u03b2_mkt=0.97 | \u03b1 4F=4.2% t=1.66 | \u03b1-net 4F=2.5% t-net=0.99 | \u03b1 FF5+UMD=4.4% atten=-4%"
+            }
+          }
+        },
+        {
+          "window": "FL",
+          "phase_offset": 4,
+          "returncode": 0,
+          "wall_seconds": 791.9316235482693,
+          "log_path": "/workspace/audit_logs/FL_p4.log",
+          "out_path": "/root/.alphalens/audit/idiosyncratic_momentum/FL_p4_report.json",
+          "per_cost": {
+            "5.0": {
+              "sharpe_gross": 0.7,
+              "sharpe_net": 0.66,
+              "alpha_ann": 0.048,
+              "alpha_t": 1.84,
+              "alpha_net_ann": 0.039,
+              "alpha_t_net": 1.51,
+              "raw_line": "2026-05-14 17:57:48,903 INFO __main__: cost=5bps | n=748 topN=200.0 turn=35.9% | Sh gross=0.70 net=0.66 | \u03b2_mkt=0.97 | \u03b1 4F=4.8% t=1.84 | \u03b1-net 4F=3.9% t-net=1.51 | \u03b1 FF5+UMD=5.0% atten=-4%"
+            },
+            "15.0": {
+              "sharpe_gross": 0.7,
+              "sharpe_net": 0.62,
+              "alpha_ann": 0.048,
+              "alpha_t": 1.84,
+              "alpha_net_ann": 0.031,
+              "alpha_t_net": 1.18,
+              "raw_line": "2026-05-14 17:57:51,968 INFO __main__: cost=15bps | n=748 topN=200.0 turn=35.9% | Sh gross=0.70 net=0.62 | \u03b2_mkt=0.97 | \u03b1 4F=4.8% t=1.84 | \u03b1-net 4F=3.1% t-net=1.18 | \u03b1 FF5+UMD=5.0% atten=-4%"
+            }
+          }
+        }
+      ],
+      "verdict": "FAIL",
+      "gates": {
+        "G1_full_sample_alpha_t": {
+          "value": 1.584,
+          "threshold": 3.5,
+          "passed": false
+        },
+        "G2_mean_per_phase_alpha_t": {
+          "value": 1.584,
+          "threshold": 2.5,
+          "passed": false
+        },
+        "G3_positive_each_phase": {
+          "min_phase_alpha_t": 1.29,
+          "threshold": 0.0,
+          "passed": true
+        },
+        "G4_cost_stress_15bps_mean_alpha_t": {
+          "value": 0.908,
+          "threshold": 2.0,
+          "passed": false
+        }
+      }
+    }
+  ],
+  "overall": {
+    "overall_verdict": "FAIL",
+    "per_window_verdicts": {
+      "IS": "FAIL",
+      "OOS": "FAIL",
+      "FL": "FAIL"
+    },
+    "rule": "joint PASS: every window in {IS, OOS, FL} must individually clear memo section 8 gates"
+  }
+}
