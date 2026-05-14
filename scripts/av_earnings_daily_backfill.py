@@ -1,4 +1,4 @@
-"""Daily AV EARNINGS backfill — VPS cron job.
+"""Daily AV EARNINGS backfill — VPS systemd-user oneshot.
 
 Walks the S&P 500 PIT union (or sp1500 if requested) and prefetches one AV
 EARNINGS payload per ticker into ``~/.alphalens/av_cache/earnings_<T>.json``.
@@ -13,19 +13,18 @@ reboots — re-running picks up only uncached tickers.
 
 Designed to be general-purpose: any future paradigm that needs AV EARNINGS
 data reads from the same cache. The cache lives under ``~/.alphalens/`` so
-it survives ``git`` operations and can be Nextcloud-synced (optionally via
-``--rclone-remote``) to a workstation for local development.
+it survives ``git`` operations.
 
-Usage (VPS cron, daily 00:05 UTC = ~5 min after AV quota reset)::
+Deployment lives in ``deploy/systemd/av-earnings-backfill.{service,timer}``
+(see ``deploy/systemd/README.md``). The systemd timer fires daily at 00:05
+UTC (5 min after AV's quota window resets) and the service is a oneshot;
+``Persistent=true`` on the timer catches missed runs after VPS reboots.
+Logs land in journald via ``journalctl --user -u av-earnings-backfill``.
 
-    5 0 * * * cd /home/op/AlphaLens && \
-        .venv/bin/python -m scripts.av_earnings_daily_backfill \
-            --universe sp500_union \
-            --rclone-remote nextcloud:alphalens/av_cache \
-            >> /var/log/av_backfill.log 2>&1
-
-The ``--rclone-remote`` is optional; omit for VPS-only caching, add when
-sync to a workstation is needed for downstream consumption.
+The ``--rclone-remote`` option is OFF by default; the VPS-side cache is
+the source of truth and is consumed in-place by downstream tooling on the
+same host. Enable rclone push if a cross-machine sync becomes needed
+(e.g. workstation development without SSH tunnel into the cache).
 """
 
 from __future__ import annotations
