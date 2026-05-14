@@ -27,6 +27,19 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
+from alphalens.screeners._common import rank_zscore, winsorize
+
+__all__ = [
+    "compute_ev",
+    "compute_fcff",
+    "compute_fcff_yield",
+    "effective_fcff",
+    "impute_fcff",
+    "rank_zscore",
+    "score_ev_fcff_yield",
+    "winsorize",
+]
+
 # Imputation is allowed only when both inputs are finite and the
 # 5y FCF margin median is positive. Negative imputed FCFF → drop ticker.
 _TAX_RATE_FLOOR = 0.0
@@ -146,48 +159,6 @@ def compute_fcff_yield(
     if not np.isfinite(ev) or ev <= 0:
         return None
     return fcff_effective / ev
-
-
-def winsorize(
-    series: pd.Series,
-    *,
-    lower_pct: float = 0.01,
-    upper_pct: float = 0.99,
-) -> pd.Series:
-    """Cap values at the [lower_pct, upper_pct] percentile range.
-
-    ``NaN`` values are preserved unchanged. Empty input returns empty.
-    """
-    if series.empty:
-        return series
-    valid = series.dropna()
-    if valid.empty:
-        return series
-    lo = float(valid.quantile(lower_pct))
-    hi = float(valid.quantile(upper_pct))
-    return series.clip(lower=lo, upper=hi)
-
-
-def rank_zscore(series: pd.Series) -> pd.Series:
-    """Cross-sectional z-score after winsorization.
-
-    Returns a Series aligned with the input index. ``NaN`` rows in the
-    input remain ``NaN`` in the output. Population standard deviation
-    (``ddof=0``) is used — same convention as the existing AlphaLens
-    cross-sectional scorers (see ``score_pc_abnormal_residual``).
-
-    Empty or constant input → all-NaN output (no information to rank).
-    """
-    if series.empty:
-        return series
-    valid = series.dropna()
-    if valid.empty:
-        return pd.Series(np.nan, index=series.index)
-    mean = float(valid.mean())
-    std = float(valid.std(ddof=0))
-    if not np.isfinite(std) or std == 0:
-        return pd.Series(np.nan, index=series.index)
-    return (series - mean) / std
 
 
 def score_ev_fcff_yield(
