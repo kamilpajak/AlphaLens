@@ -671,6 +671,8 @@ class TestFitCarhart4FInvestedOnly(unittest.TestCase):
         widening the SE in response to the AR(1) autocorrelation in errors
         (not silently disabled).
         """
+        import warnings
+
         import statsmodels.api as sm
 
         from alphalens.attribution.factor_analysis import fit_carhart_4f_invested_only
@@ -701,23 +703,33 @@ class TestFitCarhart4FInvestedOnly(unittest.TestCase):
         y = alpha_true + shock
         port = pd.Series(y, index=idx)
 
-        res = fit_carhart_4f_invested_only(port, carhart, maxlags=20)
+        # Suppress statsmodels HAC sandwich numerical-stability warnings
+        # (known v0.15 divide-by-zero/overflow in the lag-product sums on
+        # AR(1) synthetic input — same warnings appear in existing
+        # test_factor_analysis tests). Functionally harmless.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            res = fit_carhart_4f_invested_only(port, carhart, maxlags=20)
 
-        # (1) Direct sm.OLS reference call with the same maxlags must produce
-        # the identical intercept t-stat — exact equality (no FP drift) since
-        # the helper just wraps the same statsmodels code path.
-        X_ref = sm.add_constant(carhart[["Mkt-RF", "SMB", "HML", "Mom"]])
-        ref_hac = sm.OLS(port, X_ref).fit(cov_type="HAC", cov_kwds={"maxlags": 20})
+            # (1) Direct sm.OLS reference call with the same maxlags must
+            # produce the identical intercept t-stat — exact equality (no
+            # FP drift) since the helper just wraps the same statsmodels
+            # code path.
+            X_ref = sm.add_constant(carhart[["Mkt-RF", "SMB", "HML", "Mom"]])
+            ref_hac = sm.OLS(port, X_ref).fit(cov_type="HAC", cov_kwds={"maxlags": 20})
+            ref_ols = sm.OLS(port, X_ref).fit()
+
         self.assertAlmostEqual(res.alpha_tstat, float(ref_hac.tvalues["const"]), places=10)
 
         # (2) HAC SE > OLS SE on positively-autocorrelated errors — the
         # whole point of using HAC. AR(1) with ρ=0.5 has theoretical
         # long-run variance (1+ρ)/(1-ρ) = 3× the contemporaneous variance,
-        # so we expect HAC SE meaningfully above OLS SE.
-        ref_ols = sm.OLS(port, X_ref).fit()
+        # so HAC SE should be ~√3 ≈ 1.73× OLS SE at infinite n. Finite-sample
+        # Bartlett kernel attenuates; 1.4× is the empirically-observed
+        # floor on n=600 with ρ=0.5 (typical run gives ~1.45-1.65×).
         hac_se = float(ref_hac.bse["const"])
         ols_se = float(ref_ols.bse["const"])
-        self.assertGreater(hac_se, 1.2 * ols_se)
+        self.assertGreater(hac_se, 1.4 * ols_se)
 
     def test_factors_reindexed_on_invested_subset(self) -> None:
         """Factors must be aligned on the post-mask invested index — passing
@@ -743,6 +755,92 @@ class TestFitCarhart4FInvestedOnly(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             fit_carhart_4f_invested_only(port, carhart)
+
+    def test_invested_mask_marks_uninvested_days(self) -> None:
+        """invested_mask=False selects uninvested days even when daily_returns
+        carries 0.0 on those days (the B2 adapter contract). Safer than
+        relying on NaN-marking which is silently broken when the caller
+        passes a zero-filled series."""
+        from alphalens.attribution.factor_analysis import fit_carhart_4f_invested_only
+
+        carhart = _synthetic_carhart(500, seed=13)
+        # Build a port that has 0.0 on the first 60% of days (matching how
+        # B2's portfolio_returns_from_weights returns zero on uninvested
+        # days) — no NaN markers anywhere.
+        invested_alpha_daily = 0.0005
+        port = (carhart["Mkt-RF"] + carhart["RF"]).copy() + invested_alpha_daily
+        n_uninvested = int(0.6 * len(port))
+        port.iloc[:n_uninvested] = 0.0
+        mask = pd.Series(False, index=port.index)
+        mask.iloc[n_uninvested:] = True
+        expected_n = int(mask.sum())
+
+        result = fit_carhart_4f_invested_only(port, carhart, invested_mask=mask)
+        self.assertEqual(result.n_observations, expected_n)
+        # α should be recoverable from the invested-only subset (≈5bps),
+        # NOT compressed by the zero-filled uninvested rows that would
+        # otherwise drag it toward zero.
+        self.assertAlmostEqual(result.alpha_daily, invested_alpha_daily, places=4)
+
+    def test_invested_mask_differs_from_zero_filled_default(self) -> None:
+        """Direct comparison: same series passed (a) with mask, (b) without
+        mask. The masked α recovers ~5bps; the un-masked α is compressed
+        toward zero by the included zero-return days. Locks the contract
+        that the mask is the correct API for B2-style return series.
+
+        Uses a pure-alpha port (zero factor exposure) so the intercept
+        must average over all observations — the OLS factor betas cannot
+        absorb the zero-day structural difference.
+        """
+        from alphalens.attribution.factor_analysis import fit_carhart_4f_invested_only
+
+        carhart = _synthetic_carhart(500, seed=17)
+        invested_alpha_daily = 0.0005
+        # Pure-alpha port: invested days = α + RF; uninvested = 0. After
+        # subtract_rf inside the regression, invested becomes α and uninvested
+        # becomes -RF ≈ 0. With no factor exposure, β≈0 and intercept must
+        # take the literal sample mean.
+        port = pd.Series(carhart["RF"].to_numpy() + invested_alpha_daily, index=carhart.index)
+        n_uninvested = int(0.6 * len(port))
+        port.iloc[:n_uninvested] = 0.0
+        mask = pd.Series(False, index=port.index)
+        mask.iloc[n_uninvested:] = True
+
+        masked = fit_carhart_4f_invested_only(port, carhart, invested_mask=mask)
+        unmasked = fit_carhart_4f_invested_only(port, carhart)  # 0.0 days included
+        # Masked α ≈ true α; unmasked α is compressed toward 0 by the
+        # zero-filled rows that the helper cannot distinguish from
+        # real-but-zero invested-day returns.
+        self.assertAlmostEqual(masked.alpha_daily, invested_alpha_daily, places=4)
+        self.assertLess(unmasked.alpha_daily, masked.alpha_daily * 0.6)
+
+    def test_zero_invested_days_raises_specific_error(self) -> None:
+        """All-False mask → specific 'zero invested days' message
+        distinguishes operator errors from the generic <20-obs error of
+        run_regression."""
+        from alphalens.attribution.factor_analysis import fit_carhart_4f_invested_only
+
+        carhart = _synthetic_carhart(500, seed=19)
+        port = (carhart["Mkt-RF"] + carhart["RF"]).copy()
+        mask = pd.Series(False, index=port.index)  # nothing invested
+
+        with self.assertRaises(ValueError) as cm:
+            fit_carhart_4f_invested_only(port, carhart, invested_mask=mask)
+        self.assertIn("zero invested days", str(cm.exception))
+
+    def test_periods_per_year_override(self) -> None:
+        """periods_per_year is exposed as a kwarg for strategies with
+        non-daily rebalance cadence — e.g. weekly rotation."""
+        from alphalens.attribution.factor_analysis import fit_carhart_4f_invested_only
+
+        carhart = _synthetic_carhart(500, seed=23)
+        port = (carhart["Mkt-RF"] + carhart["RF"]).copy() + 0.0005
+
+        daily = fit_carhart_4f_invested_only(port, carhart)
+        weekly = fit_carhart_4f_invested_only(port, carhart, periods_per_year=52)
+        self.assertEqual(daily.periods_per_year_assumption, 252)
+        self.assertEqual(weekly.periods_per_year_assumption, 52)
+        self.assertAlmostEqual(weekly.alpha_annualized, weekly.alpha_per_period * 52, places=12)
 
 
 if __name__ == "__main__":

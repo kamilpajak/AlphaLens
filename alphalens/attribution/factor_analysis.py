@@ -201,15 +201,27 @@ def fit_carhart_4f_invested_only(
     daily_returns: pd.Series,
     factors: pd.DataFrame,
     *,
+    invested_mask: pd.Series | None = None,
     maxlags: int = 20,
+    periods_per_year: int = 252,
 ) -> AlphaResult:
     """Carhart-4F regression on invested-days-only daily returns (paradigm-14
     PEAD v2 attribution helper).
 
-    Drops NaN days from ``daily_returns`` BEFORE the fit (caller marks
-    uninvested days as NaN) and reindexes ``factors`` on the surviving
-    invested-day index, so HAC sees only realised P&L observations rather
-    than mechanical zero-return uninvested days.
+    Two ways to mark uninvested days:
+
+      1. **Explicit mask (PREFERRED)** — pass ``invested_mask`` as a boolean
+         Series aligned to ``daily_returns.index``. True = invested. This
+         is the safe contract because the B2 adapter
+         ``portfolio_returns_from_weights`` returns ``0.0`` (not ``NaN``)
+         on uninvested days; passing the raw series without a mask would
+         silently include those zero-return days and bias α toward zero.
+      2. **NaN-marked input** — when ``invested_mask is None``, the helper
+         falls back to ``daily_returns.dropna()``. Use this only when the
+         caller has already replaced uninvested days with ``NaN`` upstream.
+
+    Factors are reindexed on the surviving invested-day index so HAC sees
+    only realised-P&L observations.
 
     ``maxlags`` defaults to 20 — half the 20-day PEAD hold per ledger entry
     ``pead_v5_pss_2026_05_13`` (see
@@ -223,13 +235,22 @@ def fit_carhart_4f_invested_only(
     ``RF``. Returns an ``AlphaResult`` matching ``run_carhart_attribution``'s
     Carhart-4F entry but with the invested-only sample.
     """
-    invested = daily_returns.dropna()
+    if invested_mask is not None:
+        invested = daily_returns.loc[invested_mask.astype(bool)].dropna()
+    else:
+        invested = daily_returns.dropna()
+    if len(invested) == 0:
+        raise ValueError(
+            "fit_carhart_4f_invested_only: zero invested days — pass an "
+            "invested_mask with at least one True entry, or mark uninvested "
+            "days as NaN"
+        )
     aligned_factors = factors.reindex(invested.index)
     return run_regression(
         invested,
         aligned_factors,
         ["Mkt-RF", "SMB", "HML", "Mom"],
-        periods_per_year=252,
+        periods_per_year=periods_per_year,
         spec_name="Carhart-4F (invested-only)",
         hac_maxlags=maxlags,
     )
