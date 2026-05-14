@@ -283,10 +283,56 @@ PEAD_PSS_V2_PROFILE = SmokeProfile(
 )
 
 
+IDIOSYNCRATIC_MOMENTUM_PROFILE = SmokeProfile(
+    strategy="idiosyncratic_momentum_2026_05_14_v1",
+    # 6-month 2020-Q1-Q2 smoke window: 36-month residualisation + 12-month
+    # formation lookback need ~4y warm-up. Anchoring the smoke at 2020-Q1
+    # lets ~50% of the S&P 1500 PIT union have eligible history by start
+    # (yfinance min_date=2016-01-01 with min_pass_ratio=0.4 — recent IPOs
+    # account for the gap, consistent with ev_fcff_yield's 0.5 pattern).
+    smoke_window=(date(2020, 1, 1), date(2020, 6, 30)),
+    extra_args=(
+        "--skip-precheck",
+        "--universe-size-cap",
+        "200",
+        "--phase-offset",
+        "0",
+        "--rebalance-stride",
+        "21",
+        "--holding",
+        "21",
+        "--cost-half-spreads",
+        "5.0",
+    ),
+    data_deps=(
+        # yfinance OHLCV — S&P 1500 sample tickers must span the smoke
+        # window with a 4y warm-up buffer for the 36-month residualisation
+        # plus 12-month formation lookback.
+        DataDep(
+            name="prices",
+            check_type=CheckType.FLAT_PARQUET,
+            min_date=date(2016, 1, 1),  # 4y warm-up for 36-month residualisation
+            max_date=date(2020, 6, 30),
+            min_pass_ratio=0.4,
+        ),
+        # Carhart factor daily file + FF5 + UMD all live under the same dir.
+        DataDep(
+            name="factors",
+            check_type=CheckType.EXISTS_NONEMPTY,
+        ),
+        # S&P 1500 PIT snapshots ship in-repo under
+        # alphalens/data/universes/sp{500,400,600}_pit/ — load_sp1500_pit_union
+        # picks them up directly, no ~/.alphalens dep registered here.
+    ),
+    has_component_hash_guard=False,
+)
+
+
 SMOKE_PROFILES: dict[str, SmokeProfile] = {
     INSIDER_PC_COMPOUND_PROFILE.strategy: INSIDER_PC_COMPOUND_PROFILE,
     EV_FCFF_YIELD_PROFILE.strategy: EV_FCFF_YIELD_PROFILE,
     PEAD_PSS_V2_PROFILE.strategy: PEAD_PSS_V2_PROFILE,
+    IDIOSYNCRATIC_MOMENTUM_PROFILE.strategy: IDIOSYNCRATIC_MOMENTUM_PROFILE,
 }
 
 
