@@ -218,6 +218,66 @@ class TestDailyWeightsSparse(unittest.TestCase):
         self.assertEqual(weights.loc[date(2020, 6, 18), "A"], 0.0)
 
 
+class TestAlpha2ContractEnforcement(unittest.TestCase):
+    """α2 sub-leverage contract: weight per ticker per day NEVER exceeds
+    1/n_fixed. Concurrent same-ticker events (rare: 10-Q/A restatement
+    within hold window) must clip rather than double-lever."""
+
+    def test_concurrent_same_ticker_events_clipped_to_one_over_n_fixed(self) -> None:
+        from alphalens.screeners.event_drift.pead_pss_scorer import build_daily_weights
+
+        calendar = _trading_days(date(2020, 6, 1), date(2020, 8, 31))
+        # Two events for ticker A — same fiscal period via 10-Q/A restatement
+        # 5 trading days apart. Active windows overlap on days idx+6..idx+10.
+        events = [
+            _event("A", date(2020, 6, 10), report_time="pre-market"),  # window (06-10, 07-08]
+            _event("A", date(2020, 6, 17), report_time="pre-market"),  # window (06-17, 07-15]
+        ]
+        weights = build_daily_weights(events=events, calendar=calendar, n_fixed=150, hold_days=20)
+
+        # Overlap days (06-18..07-08): MUST still be 1/150, not 2/150.
+        for d_str in ("2020-06-18", "2020-06-25", "2020-07-08"):
+            d = date.fromisoformat(d_str)
+            self.assertAlmostEqual(
+                weights.loc[d, "A"],
+                1 / 150,
+                msg=f"day {d_str} overlapping both events must clip to 1/150, "
+                "α2 contract forbids doubling on concurrent same-ticker signals.",
+            )
+        # The hold-window extends to the union: still active on 07-15 (end of
+        # second event's window).
+        self.assertAlmostEqual(weights.loc[date(2020, 7, 15), "A"], 1 / 150)
+        # And cleanly drops on 07-16 (day after second exit).
+        self.assertEqual(weights.loc[date(2020, 7, 16), "A"], 0.0)
+
+
+class TestPortfolioReturnsWarnings(unittest.TestCase):
+    def test_warns_on_missing_ticker_in_returns(self) -> None:
+        """A weighted ticker missing from returns silently fills with 0 →
+        could mask data-coverage bugs. Verify warning fires."""
+
+        from alphalens.screeners.event_drift.pead_pss_scorer import (
+            portfolio_returns_from_weights,
+        )
+
+        calendar = _trading_days(date(2020, 6, 1), date(2020, 6, 10))
+        weights = pd.DataFrame(
+            {"A": [1 / 150] * len(calendar), "B": [1 / 150] * len(calendar)},
+            index=calendar,
+        )
+        # returns only has A, not B — simulates offline price feed for B.
+        returns = pd.DataFrame({"A": [0.01] * len(calendar)}, index=calendar)
+
+        with self.assertLogs(
+            "alphalens.screeners.event_drift.pead_pss_scorer", level="WARNING"
+        ) as ctx:
+            port = portfolio_returns_from_weights(weights, returns)
+
+        self.assertTrue(any("B" in msg for msg in ctx.output))
+        # P&L correctly comes from A only.
+        self.assertAlmostEqual(port.iloc[0], 1 / 150 * 0.01)
+
+
 class TestDummyMatrixEndToEnd(unittest.TestCase):
     """B3: 3-stock × 60 trading days dummy matrix end-to-end."""
 

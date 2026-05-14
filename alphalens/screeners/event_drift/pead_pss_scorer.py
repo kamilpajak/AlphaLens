@@ -29,12 +29,16 @@ supply trading dates spanning the backtest window.
 
 from __future__ import annotations
 
+import bisect
+import logging
 from collections.abc import Iterable
 from datetime import date
 
 import pandas as pd
 
 from alphalens.screeners.event_drift.av_earnings_ingestion import AVEarningsAnnouncement
+
+logger = logging.getLogger(__name__)
 
 
 def compute_entry_day(event: AVEarningsAnnouncement, calendar: list[date]) -> date:
@@ -50,15 +54,16 @@ def compute_entry_day(event: AVEarningsAnnouncement, calendar: list[date]) -> da
     Raises ``ValueError`` if no eligible trading day exists in calendar.
     """
     rd = event.reported_date
+    # bisect on a pre-sorted calendar — O(log n) per event. The pre-market
+    # case is "first d >= rd" → bisect_left. Post-market is "first d > rd"
+    # → bisect_right.
     if event.report_time == "pre-market":
-        for d in calendar:
-            if d >= rd:
-                return d
+        idx = bisect.bisect_left(calendar, rd)
     else:  # post-market
-        for d in calendar:
-            if d > rd:
-                return d
-    raise ValueError(f"No trading day in calendar after {rd} for {event.report_time} entry")
+        idx = bisect.bisect_right(calendar, rd)
+    if idx >= len(calendar):
+        raise ValueError(f"No trading day in calendar after {rd} for {event.report_time} entry")
+    return calendar[idx]
 
 
 def compute_exit_day(*, entry_day: date, calendar: list[date], hold_days: int) -> date:
@@ -120,10 +125,18 @@ def build_daily_weights(
         exit_d = compute_exit_day(entry_day=entry, calendar=calendar, hold_days=hold_days)
         entry_idx = calendar.index(entry)
         exit_idx = calendar.index(exit_d)
-        # Active days: strict-left open, closed right → (entry_idx, exit_idx]
-        for d in calendar[entry_idx + 1 : exit_idx + 1]:
-            df.loc[d, event.ticker] += weight
-    return df
+        # Active days: strict-left open, closed right → (entry_idx, exit_idx].
+        # Vectorise the slice assignment to avoid per-cell pandas overhead.
+        active_dates = calendar[entry_idx + 1 : exit_idx + 1]
+        df.loc[active_dates, event.ticker] += weight
+
+    # Enforce α2 sub-leverage contract: weight per ticker per day must NEVER
+    # exceed 1/n_fixed. Concurrent same-ticker events (rare: 10-Q/A restatement
+    # within 20-day hold, or merger event) accumulate via += above; clipping
+    # caps the doubling while extending the hold window to the union. This
+    # is the conservative interpretation — two positive signals on the same
+    # ticker do not justify 2× leverage under sub-leveraged α2.
+    return df.clip(upper=weight)
 
 
 def portfolio_returns_from_weights(
@@ -135,6 +148,19 @@ def portfolio_returns_from_weights(
     ``portfolio_return[t] = sum_i weights[t, i] * returns[t, i]``. Mismatched
     columns are right-aligned (missing tickers default to zero contribution
     rather than NaN). Both inputs must share the same trading-day index.
+
+    Logs a WARNING if any weighted ticker is missing from ``returns`` — a
+    silent zero-fill would otherwise mask data-coverage bugs (e.g. an
+    active position whose price feed is offline appears to contribute
+    nothing to P&L, NOT the intended "drop the position" behaviour).
     """
+    missing = [t for t in weights.columns if t not in returns.columns]
+    if missing:
+        logger.warning(
+            "portfolio_returns_from_weights: %d weighted ticker(s) missing "
+            "from returns — silently filled with 0. Tickers: %s",
+            len(missing),
+            sorted(missing),
+        )
     aligned_returns = returns.reindex(columns=weights.columns).fillna(0.0)
     return (weights * aligned_returns).sum(axis=1)
