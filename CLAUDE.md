@@ -151,6 +151,8 @@ Vendored TradingAgents subtree + Layer 3 LLM runner removed per [ADR 0008](docs/
 
 - **Prescreener (Layer 2a) unvalidated**: 45% fundamentals weight wymaga PIT historicals których Polygon Starter ($29/mo) nie dostarcza. Manual ad-hoc tylko, no performance guarantee.
 
+- **OSS phase-robust-backtesting `run_audit` G4 cost-stress no-op bug** (paradigm #13 material finding, ev_fcff_yield postmortem 2026-05-13): `_RESULT_LINE` regex w `phase_robust_backtesting/audit_multi_phase.py` captures **only gross t-stat** (`α 4F=...% t=...`), brak optional `α-net 4F=...% t-net=...` group. Gates G4 computed via OSS `run_audit` are structural no-op duplicate G1 (gross αt is cost-invariant by construction). **Mitigation pattern**: paradigm-specific orchestrator scripts (per `scripts/run_ev_fcff_yield_audit.py`) implement the corrected regex with optional `tn` group. **For paradigm #14 PEAD v2 and #15 idiosyncratic momentum** at Phase E audit launch: write paradigm-specific orchestrator following ev_fcff_yield pattern, do NOT rely on `alphalens audit <strategy>` → OSS `run_audit` direct path for G4 gate evaluation. **Long-term fix**: upstream PR to `kamilpajak/phase-robust-backtesting` extending regex + propagating `alpha_t_net` through aggregation + gate computation.
+
 Issues dotyczące CLOSED warstw (Lean Docker setup, Layer 2d backtest workflow, themed gate Phase 2) → patrz `launchd/archived/README.md` + `docs/research/paradigm_failures_postmortem.md`.
 
 ## VPS backfills (always-on, `jacoren@`)
