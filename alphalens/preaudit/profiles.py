@@ -228,9 +228,65 @@ EV_FCFF_YIELD_PROFILE = SmokeProfile(
 )
 
 
+PEAD_PSS_V2_PROFILE = SmokeProfile(
+    strategy="pead_pss_v2_2026_05_13",
+    # 1-quarter 2018-Q1 smoke window: aligns with A3-validated anchor events
+    # (AAPL/JPM/UNH/CAT/RSG) and falls inside the IS phase of pre-reg
+    # pead_v5_pss_2026_05_13. cap=200 keeps wall < 5 min on the AV cache once
+    # the VPS systemd backfill (av-earnings-backfill.timer) has populated
+    # ~/.alphalens/av_cache/ via rclone sync or rsync from the VPS.
+    smoke_window=(date(2018, 1, 1), date(2018, 3, 31)),
+    extra_args=(
+        "--skip-precheck",
+        "--universe-size-cap",
+        "200",
+        "--phase-offset",
+        "0",
+        "--rebalance-stride",
+        "1",
+        "--cost-half-spreads",
+        "5.0",
+    ),
+    data_deps=(
+        # AV EARNINGS cache (per-ticker JSON written by
+        # alphalens.data.alt_data.av_earnings_client.fetch_earnings_batch +
+        # scripts/av_earnings_daily_backfill.py). No date-partitioning on
+        # disk; the existence check matches the SimFin cache pattern from
+        # EV_FCFF_YIELD_PROFILE. Per-ticker freshness implicit in the
+        # cache directory structure once populated.
+        DataDep(
+            name="av_cache",
+            check_type=CheckType.EXISTS_NONEMPTY,
+        ),
+        # yfinance OHLCV (used for close(t-1) PSS denominator + daily
+        # portfolio-return panel). 0.5 pass ratio matches the empirical
+        # S&P 500 / R2000 sample IPO-sprinkling pattern.
+        DataDep(
+            name="prices",
+            check_type=CheckType.FLAT_PARQUET,
+            min_date=date(2017, 12, 1),  # cohort lookback buffer
+            max_date=date(2018, 3, 31),
+            min_pass_ratio=0.5,
+        ),
+        # Carhart factor daily file (FF5 + UMD).
+        DataDep(
+            name="factors",
+            check_type=CheckType.EXISTS_NONEMPTY,
+        ),
+        # S&P 500 PIT snapshots used by load_sp500_pit_union ship in-repo
+        # under alphalens/data/universes/sp500_pit/, NOT under ~/.alphalens,
+        # so no DataDep is registered here. The repo presence is implicit;
+        # an empty-snapshots path would surface at script-load time as an
+        # empty universe (return code 3).
+    ),
+    has_component_hash_guard=False,
+)
+
+
 SMOKE_PROFILES: dict[str, SmokeProfile] = {
     INSIDER_PC_COMPOUND_PROFILE.strategy: INSIDER_PC_COMPOUND_PROFILE,
     EV_FCFF_YIELD_PROFILE.strategy: EV_FCFF_YIELD_PROFILE,
+    PEAD_PSS_V2_PROFILE.strategy: PEAD_PSS_V2_PROFILE,
 }
 
 
