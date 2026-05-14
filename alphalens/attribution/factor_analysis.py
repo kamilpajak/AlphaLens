@@ -197,6 +197,44 @@ def bootstrap_carhart_alpha_ci(
     return float(ci_low_daily * 252), float(ci_high_daily * 252)
 
 
+def fit_carhart_4f_invested_only(
+    daily_returns: pd.Series,
+    factors: pd.DataFrame,
+    *,
+    maxlags: int = 20,
+) -> AlphaResult:
+    """Carhart-4F regression on invested-days-only daily returns (paradigm-14
+    PEAD v2 attribution helper).
+
+    Drops NaN days from ``daily_returns`` BEFORE the fit (caller marks
+    uninvested days as NaN) and reindexes ``factors`` on the surviving
+    invested-day index, so HAC sees only realised P&L observations rather
+    than mechanical zero-return uninvested days.
+
+    ``maxlags`` defaults to 20 — half the 20-day PEAD hold per ledger entry
+    ``pead_v5_pss_2026_05_13`` (see
+    ``docs/research/paradigm14_pead_v2_design_2026_05_13.md`` §6 + execution
+    plan §1.C1). HAC operates in invested-days observation units, NOT
+    calendar days; when invested fraction < 1 this is slightly conservative
+    (real-time lag-20 window spans >20 calendar days), accepted per plan
+    §2 risk register.
+
+    ``factors`` must contain columns ``Mkt-RF``, ``SMB``, ``HML``, ``Mom``,
+    ``RF``. Returns an ``AlphaResult`` matching ``run_carhart_attribution``'s
+    Carhart-4F entry but with the invested-only sample.
+    """
+    invested = daily_returns.dropna()
+    aligned_factors = factors.reindex(invested.index)
+    return run_regression(
+        invested,
+        aligned_factors,
+        ["Mkt-RF", "SMB", "HML", "Mom"],
+        periods_per_year=252,
+        spec_name="Carhart-4F (invested-only)",
+        hac_maxlags=maxlags,
+    )
+
+
 def run_ff5_umd_attribution(
     portfolio_returns: pd.Series,
     ff5_umd_factors: pd.DataFrame,

@@ -591,5 +591,159 @@ class TestBootstrapCarhartAlphaCi(unittest.TestCase):
         self.assertGreaterEqual(high_99, high_95)
 
 
+class TestFitCarhart4FInvestedOnly(unittest.TestCase):
+    """Paradigm-14 PEAD v2 Phase C: invested-days-only Carhart-4F with NW HAC.
+
+    Contract per plan §1.C1: caller marks uninvested days as NaN in
+    ``daily_returns``; helper drops them, reindexes factors on the surviving
+    invested index, and fits Carhart-4F with HAC SE at the caller-chosen lag
+    count (default maxlags=20, half the 20-day PEAD hold).
+    """
+
+    def test_nan_days_excluded(self) -> None:
+        """NaN days in daily_returns must NOT enter the regression — n_observations
+        equals count of non-NaN days, and a zero-return uninvested day does not
+        get treated as a real observation that drags the alpha toward zero."""
+        from alphalens.attribution.factor_analysis import fit_carhart_4f_invested_only
+
+        carhart = _synthetic_carhart(500, seed=7)
+        # Build a port return that captures a clean +5bps/day alpha when
+        # invested. Mask 60% of days as NaN (uninvested).
+        invested_alpha_daily = 0.0005
+        port = (carhart["Mkt-RF"] + carhart["RF"]).copy() + invested_alpha_daily
+        port.iloc[: int(0.6 * len(port))] = np.nan
+        expected_n = int(port.notna().sum())
+
+        result = fit_carhart_4f_invested_only(port, carhart)
+        self.assertEqual(result.n_observations, expected_n)
+        # Sanity: invested-days regression must recover the injected α (≈5bps).
+        self.assertAlmostEqual(result.alpha_daily, invested_alpha_daily, places=4)
+
+    def test_hac_maxlags_passed_to_statsmodels(self) -> None:
+        """Default maxlags=20 must take a different HAC path than maxlags=1
+        on positively-autocorrelated errors → different t-stats. Locks the
+        plumbing of the ``maxlags`` kwarg through ``run_regression`` to the
+        statsmodels HAC ``cov_kwds``."""
+        from alphalens.attribution.factor_analysis import fit_carhart_4f_invested_only
+
+        rng = np.random.default_rng(123)
+        n = 800
+        idx = pd.date_range("2020-01-01", periods=n, freq="B")
+        # Build factors first.
+        carhart = pd.DataFrame(
+            {
+                "Mkt-RF": rng.normal(0.0004, 0.01, n),
+                "SMB": rng.normal(0.0001, 0.006, n),
+                "HML": rng.normal(0.0001, 0.005, n),
+                "Mom": rng.normal(0.0002, 0.008, n),
+                "RF": np.full(n, 0.00002),
+            },
+            index=idx,
+        )
+        # AR(1) shock with ρ=0.6 added to portfolio — positively autocorrelated
+        # residual that HAC SHOULD inflate SE for.
+        shock = np.zeros(n)
+        rho = 0.6
+        eps = rng.normal(0.0, 0.005, n)
+        for i in range(1, n):
+            shock[i] = rho * shock[i - 1] + eps[i]
+        port = pd.Series(carhart["Mkt-RF"].to_numpy() + carhart["RF"].to_numpy() + shock, index=idx)
+
+        res_lag20 = fit_carhart_4f_invested_only(port, carhart, maxlags=20)
+        res_lag1 = fit_carhart_4f_invested_only(port, carhart, maxlags=1)
+        # alpha point estimate is identical (same OLS); only SE/t-stat differ.
+        self.assertAlmostEqual(res_lag20.alpha_daily, res_lag1.alpha_daily, places=12)
+        self.assertNotAlmostEqual(res_lag20.alpha_tstat, res_lag1.alpha_tstat, places=3)
+        # Positively-autocorr errors → longer lag widens HAC SE → |t| shrinks.
+        self.assertLess(abs(res_lag20.alpha_tstat), abs(res_lag1.alpha_tstat))
+        # Both report HAC cov_type.
+        self.assertEqual(res_lag20.cov_type, "HAC")
+        self.assertEqual(res_lag1.cov_type, "HAC")
+
+    def test_alpha_tstat_matches_manual_computation_on_known_AR1_series(self) -> None:
+        """Sanity-check NW HAC on a known positively-autocorrelated series.
+
+        Two assertions: (1) HAC t-stat from the helper exactly matches a
+        direct ``sm.OLS(...).fit(cov_type='HAC', cov_kwds={'maxlags': 20})``
+        call — locks the maxlags plumbing through ``run_regression`` to
+        statsmodels. (2) HAC SE is materially larger than the plain-OLS
+        SE on the same fit — verifies the Bartlett kernel is actually
+        widening the SE in response to the AR(1) autocorrelation in errors
+        (not silently disabled).
+        """
+        import statsmodels.api as sm
+
+        from alphalens.attribution.factor_analysis import fit_carhart_4f_invested_only
+
+        rng = np.random.default_rng(2026)
+        n = 600
+        idx = pd.date_range("2020-01-01", periods=n, freq="B")
+        # Independent zero-mean factors — uncorrelated with port (which is
+        # pure AR(1) + drift). Realistic daily-factor scale keeps the design
+        # well-conditioned; the OLS fit absorbs no port variance because the
+        # factors are random-walk-independent of port by construction.
+        carhart = pd.DataFrame(
+            {
+                "Mkt-RF": rng.normal(0.0, 0.01, n),
+                "SMB": rng.normal(0.0, 0.006, n),
+                "HML": rng.normal(0.0, 0.005, n),
+                "Mom": rng.normal(0.0, 0.008, n),
+                "RF": np.zeros(n),
+            },
+            index=idx,
+        )
+        alpha_true = 0.0005
+        shock = np.zeros(n)
+        rho = 0.5
+        eps = rng.normal(0.0, 0.01, n)
+        for i in range(1, n):
+            shock[i] = rho * shock[i - 1] + eps[i]
+        y = alpha_true + shock
+        port = pd.Series(y, index=idx)
+
+        res = fit_carhart_4f_invested_only(port, carhart, maxlags=20)
+
+        # (1) Direct sm.OLS reference call with the same maxlags must produce
+        # the identical intercept t-stat — exact equality (no FP drift) since
+        # the helper just wraps the same statsmodels code path.
+        X_ref = sm.add_constant(carhart[["Mkt-RF", "SMB", "HML", "Mom"]])
+        ref_hac = sm.OLS(port, X_ref).fit(cov_type="HAC", cov_kwds={"maxlags": 20})
+        self.assertAlmostEqual(res.alpha_tstat, float(ref_hac.tvalues["const"]), places=10)
+
+        # (2) HAC SE > OLS SE on positively-autocorrelated errors — the
+        # whole point of using HAC. AR(1) with ρ=0.5 has theoretical
+        # long-run variance (1+ρ)/(1-ρ) = 3× the contemporaneous variance,
+        # so we expect HAC SE meaningfully above OLS SE.
+        ref_ols = sm.OLS(port, X_ref).fit()
+        hac_se = float(ref_hac.bse["const"])
+        ols_se = float(ref_ols.bse["const"])
+        self.assertGreater(hac_se, 1.2 * ols_se)
+
+    def test_factors_reindexed_on_invested_subset(self) -> None:
+        """Factors must be aligned on the post-mask invested index — passing
+        a factor frame with extra dates does NOT bleed those dates into the
+        regression (regression sees only invested-day factor rows)."""
+        from alphalens.attribution.factor_analysis import fit_carhart_4f_invested_only
+
+        carhart = _synthetic_carhart(500, seed=9)
+        port = (carhart["Mkt-RF"] + carhart["RF"]).copy() + 0.0005
+        port.iloc[100:200] = np.nan  # mid-series gap of 100 days
+        invested_n = int(port.notna().sum())
+
+        result = fit_carhart_4f_invested_only(port, carhart)
+        self.assertEqual(result.n_observations, invested_n)
+
+    def test_too_few_invested_days_raises(self) -> None:
+        """<20 invested days → ValueError (matches run_regression's contract)."""
+        from alphalens.attribution.factor_analysis import fit_carhart_4f_invested_only
+
+        carhart = _synthetic_carhart(500, seed=11)
+        port = (carhart["Mkt-RF"] + carhart["RF"]).copy() + 0.0005
+        port.iloc[15:] = np.nan  # only 15 invested days
+
+        with self.assertRaises(ValueError):
+            fit_carhart_4f_invested_only(port, carhart)
+
+
 if __name__ == "__main__":
     unittest.main()
