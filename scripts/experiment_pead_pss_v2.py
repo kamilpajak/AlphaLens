@@ -131,17 +131,22 @@ def _gather_qualifying_events(
     # 2) For each unique reported_date in the IS entry window, compute
     # cross-sectional percentile rank within the 45d trailing cohort
     # ending on that date.
+    #
+    # Cohort boundary matches B1 ``score_pead_pss.pss_rank`` contract:
+    # half-open-left, closed-right ``(asof - cohort_window_days, asof]``.
+    # The strict-left boundary keeps the same-asof event at the upper edge
+    # included while excluding the boundary-day from cohort_window_days
+    # back, matching B1's ``_latest_event_in_cohort`` filter.
     entry_window = (pd.Timestamp(is_start), pd.Timestamp(is_end))
     df = pd.DataFrame(enriched)
     df["reported_date"] = df["event"].apply(lambda e: pd.Timestamp(e.reported_date))
 
     qualifying: list[AVEarningsAnnouncement] = []
-    for asof, day_group in df.groupby("reported_date"):
+    for asof, _ in df.groupby("reported_date"):
         if asof < entry_window[0] or asof > entry_window[1]:
             continue
-        # Cohort: events with reported_date in [asof - 45d, asof].
-        cohort_start = asof - pd.Timedelta(days=_COHORT_WINDOW_DAYS_LOCK)
-        cohort = df[(df["reported_date"] >= cohort_start) & (df["reported_date"] <= asof)]
+        cohort_lower_exclusive = asof - pd.Timedelta(days=_COHORT_WINDOW_DAYS_LOCK)
+        cohort = df[(df["reported_date"] > cohort_lower_exclusive) & (df["reported_date"] <= asof)]
         if len(cohort) < 2:
             continue  # singleton cohort → percentile rank ill-defined
         # Per-ticker keep latest reported_date inside cohort (B1 contract:
@@ -151,8 +156,11 @@ def _gather_qualifying_events(
             .groupby(cohort["event"].apply(lambda e: e.ticker))
             .tail(1)
         )
-        ranks = cohort["pss"].rank(method="average") / len(cohort) * 100.0
-        cohort = cohort.assign(percentile_rank=ranks.to_numpy())
+        # Idiomatic match to B1: ``rank(pct=True) * 100``. Equivalent to
+        # ``rank() / len(cohort) * 100`` when no NaN in pss, but explicit.
+        cohort = cohort.assign(
+            percentile_rank=cohort["pss"].rank(pct=True, method="average") * 100.0
+        )
         # Top-quintile WHOSE reported_date == asof (newly-announced today).
         top_today = cohort[
             (cohort["percentile_rank"] >= _TOP_QUINTILE_THRESHOLD)
@@ -335,11 +343,20 @@ def main() -> int:
         )
         return 5
 
-    factors = load_carhart_daily(start=args.is_start, end=args.is_end)
+    # Extend factor window past ``is_end`` by ~1.5× hold_days (calendar) so
+    # B2.build_daily_weights can complete the hold window for events whose
+    # ``reported_date`` falls near ``is_end``. Without this buffer the
+    # ``compute_exit_day`` call inside build_daily_weights raises
+    # ``ValueError("entry_day + hold_days extends past calendar")`` and the
+    # scaffold crashes. The post-``is_end`` returns are computed but will
+    # not enter the regression because we restrict the invested mask to
+    # ``[is_start, is_end]`` at the assess() boundary.
+    calendar_end = args.is_end + pd.Timedelta(days=int(_HOLDING_LOCK * 1.5))
+    factors = load_carhart_daily(start=args.is_start, end=calendar_end.date())
     if factors.empty:
         sys.stderr.write("ERROR: empty Carhart factor frame for the window.\n")
         return 6
-    calendar = _ensure_business_calendar(factors, start=args.is_start, end=args.is_end)
+    calendar = _ensure_business_calendar(factors, start=args.is_start, end=calendar_end.date())
 
     weights = build_daily_weights(
         events=qualifying,
@@ -347,6 +364,10 @@ def main() -> int:
         n_fixed=_N_FIXED_LOCK,
         hold_days=_HOLDING_LOCK,
     )
+    # Restrict regression input to the canonical IS window — post-is_end
+    # rows in ``weights`` exist only to satisfy B2's calendar contract.
+    is_end_ts = pd.Timestamp(args.is_end)
+    weights = weights.loc[weights.index <= is_end_ts]
     daily_panel = _daily_returns_panel(weights.columns, histories, calendar)
 
     all_rows: list[dict] = []
@@ -370,26 +391,31 @@ def main() -> int:
                 stats["t_net_4f"],
             )
 
-    # Pre-reg gate evaluation against baseline cost row (5bps).
-    baseline = next(
+    # Per-window diagnostics — informational only. Pre-reg gates (1)-(3)
+    # (full-sample net αt ≥ 3.5, phase-mean net αt ≥ 2.5, per-phase positive)
+    # are MULTI-PHASE and computed by audit_multi_phase.run_audit across
+    # IS/OOS/FL invocations of this script — they cannot be answered from a
+    # single-window run. Gate (4) cost-stress IS single-window applicable
+    # because it evaluates this phase's net αt at the 15bps stress arm.
+    # Gate (5) AV PIT validation is logged in the ledger pre-audit.
+    baseline_5bps = next(
         (r for r in all_rows if abs(r["cost_bps"] - 5.0) < 1e-5),
         all_rows[0] if all_rows else None,
     )
     stress_15bps = next((r for r in all_rows if abs(r["cost_bps"] - 15.0) < 1e-5), None)
-    gate_summary: dict = {}
-    if baseline and baseline.get("n", 0) > 0:
-        net_t = baseline["t_4f"]
-        gate_summary["G1_alpha_t_baseline"] = {
-            "value": net_t,
-            "class_internal_threshold": _BONFERRONI_CRITICAL_T_CLASS_INTERNAL,
-            "project_threshold": _BONFERRONI_PROJECT_THRESHOLD,
-            "passed_project": net_t >= _BONFERRONI_PROJECT_THRESHOLD,
-        }
+    window_diagnostics: dict = {}
+    if baseline_5bps and baseline_5bps.get("n", 0) > 0:
+        window_diagnostics["window_alpha_t_net_5bps"] = float(baseline_5bps["t_net_4f"])
+        window_diagnostics["window_alpha_t_gross"] = float(baseline_5bps["t_4f"])
     if stress_15bps and stress_15bps.get("n", 0) > 0:
-        gate_summary["G4_alpha_t_at_15bps"] = {
-            "value": stress_15bps["t_net_4f"],
-            "threshold": 2.0,
-            "passed": stress_15bps["t_net_4f"] >= 2.0,
+        # Memo §8 gate (4): net αt at 15bps half-spread MUST remain ≥ 2.0
+        # in EACH of IS and OOS phases (knockout). Single-window scaffold
+        # emits this value; orchestrator enforces the knockout across
+        # phases.
+        window_diagnostics["window_g4_alpha_t_net_15bps"] = {
+            "value": float(stress_15bps["t_net_4f"]),
+            "memo_gate_4_threshold": 2.0,
+            "this_window_meets_threshold": stress_15bps["t_net_4f"] >= 2.0,
         }
 
     payload = {
@@ -407,7 +433,7 @@ def main() -> int:
         "n_fixed": _N_FIXED_LOCK,
         "cohort_window_days": _COHORT_WINDOW_DAYS_LOCK,
         "cost_grid_results": all_rows,
-        "gate_summary": gate_summary,
+        "window_diagnostics": window_diagnostics,
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
