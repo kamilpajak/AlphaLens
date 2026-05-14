@@ -130,11 +130,13 @@ Empirical justification: PR #88 (2026-05-10) caught false MaxDD prior + strong (
 
 **Literature ≠ oracle** — projekt eksploruje genuinely novel combinations (multi-source × PIT × interaction × live EDGAR @ retail scale); literature aggregate distributions to NIE są informative priors. Methodology bundle (pre-reg + multi-phase + Bonferroni) = observation protocol, nie gate.
 
+**True PIT universe mandatory dla paradigmów >100 tickers (2026-05-14)** — Plan C survivorship retrospective REJECTED post zen adversarial review jako procrastination-disguised-as-rigor (continuation `7e79f785`); zamiast tego adoptujemy Perplexity-cited 20-40 bps/y snapshot-bias prior jako default. Każdy paradigm z universe > 100 tickers MUSI używać true PIT panel od pre-reg day-one: intersected snapshot rosters z `data/universes/sp{500,400,600}_pit/` × delisted-ticker augmentation z `~/.alphalens/survivorship/{delisted_2007_2018,delisted_2021_2026}.parquet`. Implementation contract: nowa funkcja `load_sp1500_pit_for_date_augmented(asof, include_delisted=True)` w `alphalens/data/universes/sp1500_pit.py` (do zaimplementowania razem z paradigm #16). NIE rerun'ujemy completed paradigmów (1-15) retrospectively — verdicts stand. Survivorship-snapshot prior stosujemy do priorów PRZED nowymi audytami: typowy retail long-only αt subtract ~0.3 t-stat z reported, gdy universe to current-snapshot fallback. Decyzja: `docs/research/plan_C_survivorship_retrospective_2026_05_14.md` rejection block.
+
 ## Project doctrine
 
 **Keep searching screeners — never close the door** — discipline bounds the search, nie closure. Nie pisać "no further prospecting" / "abandon factors". Kolejne hipotezy mogą operować na nowej warstwie (ADR 0007), pre-reg ledger podnosi Bonferroni bar dla każdego nowego testu.
 
-**No passive pivot** — mimo 11 paradigm failures (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum + vol-target overlay), user odrzucił pivot do passive indexing. Active quant research trwa.
+**No passive pivot** — mimo 14 paradigm failures (Layer 2b/2c/2d/2e/2f/2g + tri-factor + mom+lowvol_combo + regime-gate rescue + quality+momentum + vol-target overlay + insider_pc_compound + ev_fcff_yield + idiosyncratic_momentum), user odrzucił pivot do passive indexing. Active quant research trwa.
 
 ## Where to find "why"
 
