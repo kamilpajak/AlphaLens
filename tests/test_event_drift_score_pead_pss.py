@@ -210,6 +210,52 @@ class TestScoreDataFrameShape(unittest.TestCase):
         self.assertIn("ticker", df.columns)
         self.assertIn("percentile_rank", df.columns)
 
+    def test_ticker_with_zero_events_omitted_from_output(self) -> None:
+        """Tickers whose earnings_loader returns [] (no AV cache, no events
+        in window, or new IPO) must be silently omitted rather than emit
+        a row with NaN PSS — downstream B2 thresholding would misread NaN."""
+        from alphalens.screeners.event_drift.score_pead_pss import pss_rank
+
+        events = {
+            "EMPTY": [],  # no events at all
+            "OK": [_event("OK", date(2020, 6, 11), rep=1.20, est=1.00)],
+        }
+        closes = {("OK", date(2020, 6, 10)): 100.0}
+        df = pss_rank(
+            asof=date(2020, 6, 20),
+            universe=["EMPTY", "OK"],
+            earnings_loader=lambda t: events[t],
+            close_lookup=lambda t, d: closes.get((t, d)),
+        )
+        self.assertEqual(list(df["ticker"]), ["OK"])
+
+    def test_percentile_rank_ties_get_equal_mid_rank(self) -> None:
+        """pandas `rank(method='average')` gives identical PSS values the
+        average of their tied positions. Locks the tie-handling contract."""
+        from alphalens.screeners.event_drift.score_pead_pss import pss_rank
+
+        # Three tickers, identical PSS → all should rank at the midpoint
+        # (positions 1, 2, 3 averaged = 2; percentile = 2/3 * 100 = 66.67).
+        events = {
+            "A": [_event("A", date(2020, 6, 10), rep=1.10, est=1.00)],
+            "B": [_event("B", date(2020, 6, 11), rep=1.10, est=1.00)],
+            "C": [_event("C", date(2020, 6, 12), rep=1.10, est=1.00)],
+        }
+        closes = {
+            ("A", date(2020, 6, 9)): 100.0,
+            ("B", date(2020, 6, 10)): 100.0,
+            ("C", date(2020, 6, 11)): 100.0,
+        }
+        df = pss_rank(
+            asof=date(2020, 6, 20),
+            universe=["A", "B", "C"],
+            earnings_loader=lambda t: events[t],
+            close_lookup=lambda t, d: closes.get((t, d)),
+        )
+        ranks = df["percentile_rank"].tolist()
+        self.assertEqual(len(set(ranks)), 1)  # all identical
+        self.assertAlmostEqual(ranks[0], 200.0 / 3.0)  # ~66.67
+
     def test_multiple_events_per_ticker_picks_latest_in_cohort(self) -> None:
         """If a ticker has 2 events in cohort (rare), pick the most recent."""
         from alphalens.screeners.event_drift.score_pead_pss import pss_rank

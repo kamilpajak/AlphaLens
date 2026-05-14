@@ -38,6 +38,12 @@ import pandas as pd
 from alphalens.screeners.event_drift.av_earnings_ingestion import AVEarningsAnnouncement
 
 EarningsLoader = Callable[[str], list[AVEarningsAnnouncement]]
+# ``CloseLookup(ticker, target_date) -> float | None`` MUST implement
+# "last trading day on or before target_date" semantics. Callers MUST NOT
+# return None for weekends/holidays — that would silently drop every
+# Monday announcement when the scorer queries ``reported_date - 1
+# calendar day`` for the PSS denominator. Returning None is reserved
+# for genuinely missing price data (delisted ticker, pre-IPO date).
 CloseLookup = Callable[[str, date], float | None]
 
 # Per-paradigm-14 pre-reg `pead_v5_pss_2026_05_13.params_frozen.eligibility_filters`.
@@ -55,8 +61,13 @@ def _latest_event_in_cohort(
 ) -> AVEarningsAnnouncement | None:
     """Pick the most recent event with ``reported_date`` in the cohort window.
 
-    Returns None if no event qualifies. Iterates rather than relying on input
-    sort order so a misbehaving loader cannot break PIT semantics.
+    Returns None if no event qualifies. Tracks the latest match explicitly
+    rather than trusting input sort order — a misbehaving loader cannot
+    break PIT semantics. O(n) per call; for full-audit scale (~500 tickers
+    × ~3000 asofs × ~100 events/ticker) the comparison count is ~1.5e8,
+    still well under audit wall-time budget. If profiling later shows this
+    as a bottleneck, B2 can pre-sort each ticker's events once and switch
+    to reverse-scan early-return here.
     """
     latest: AVEarningsAnnouncement | None = None
     for e in events:
@@ -115,11 +126,11 @@ def pss_rank(
         )
 
     if not rows:
+        # Explicit column-to-dtype mapping (vs substring-match heuristic) so
+        # downstream type checks survive future column renames/additions.
+        empty_dtypes = {"pss": float, "percentile_rank": float}
         return pd.DataFrame(
-            {
-                c: pd.Series(dtype=float if "pss" in c or "rank" in c else "object")
-                for c in _OUTPUT_COLUMNS
-            }
+            {c: pd.Series(dtype=empty_dtypes.get(c, "object")) for c in _OUTPUT_COLUMNS}
         )
 
     df = pd.DataFrame(rows, columns=list(_OUTPUT_COLUMNS))

@@ -32,6 +32,9 @@ from typing import Literal
 
 ReportTime = Literal["pre-market", "post-market"]
 
+# 1 quarter buffer before pre-reg IS phase start at 2018-01-01
+# (pead_v5_pss_2026_05_13.periods.is_start). If the IS phase window is ever
+# amended, this default must be re-derived to maintain the warm-up buffer.
 _DEFAULT_MIN_REPORTED_DATE = date(2017, 6, 1)
 _ABS_ESTIMATED_EPS_FLOOR = 0.10
 
