@@ -18,6 +18,7 @@ from datetime import date
 
 from alphalens.preaudit.profiles import (
     INSIDER_PC_COMPOUND_PROFILE,
+    PEAD_PSS_V2_PROFILE,
     SMOKE_PROFILE_EXEMPT,
     SMOKE_PROFILES,
     SmokeProfile,
@@ -112,6 +113,54 @@ class TestInsiderPcCompoundProfileLock(unittest.TestCase):
         self.assertIn("form4_parquet", names)
         self.assertIn("ivolatility_smd", names)
         self.assertIn("prices", names)
+
+
+class TestPeadPssV2ProfileLock(unittest.TestCase):
+    """Lock the smoke profile for paradigm-14 PEAD v2 against silent edit.
+
+    Pre-reg ledger: pead_v5_pss_2026_05_13 under event_drift_search_2026_05_03.
+    """
+
+    profile: SmokeProfile = PEAD_PSS_V2_PROFILE
+
+    def test_strategy_name(self):
+        self.assertEqual(self.profile.strategy, "pead_pss_v2_2026_05_13")
+
+    def test_smoke_window_is_2018_q1(self):
+        # A3-validated anchor events (AAPL/JPM/UNH/CAT/RSG) all fall in
+        # 2018-Q1; the smoke window aligns with the IS-phase warm window.
+        self.assertEqual(self.profile.smoke_window, (date(2018, 1, 1), date(2018, 3, 31)))
+
+    def test_extra_args_include_skip_precheck(self):
+        self.assertIn("--skip-precheck", self.profile.extra_args)
+
+    def test_extra_args_include_universe_size_cap(self):
+        args = list(self.profile.extra_args)
+        self.assertIn("--universe-size-cap", args)
+        idx = args.index("--universe-size-cap")
+        cap = int(args[idx + 1])
+        # cap=200 keeps wall < 5 min on warm AV cache.
+        self.assertGreaterEqual(cap, 100)
+
+    def test_extra_args_include_daily_rebalance_stride(self):
+        # PEAD is daily-rebalance by construction (B2 contract); stride=1
+        # is the documented orchestrator-compat value.
+        args = list(self.profile.extra_args)
+        self.assertIn("--rebalance-stride", args)
+        idx = args.index("--rebalance-stride")
+        self.assertEqual(int(args[idx + 1]), 1)
+
+    def test_data_deps_include_av_cache_and_prices_and_factors(self):
+        names = {d.name for d in self.profile.data_deps}
+        # AV EARNINGS cache (per-ticker JSON), yfinance OHLCV, FF5+UMD factors.
+        self.assertIn("av_cache", names)
+        self.assertIn("prices", names)
+        self.assertIn("factors", names)
+
+    def test_has_component_hash_guard_false(self):
+        # PEAD scaffold has no component-hash invariants (single scorer,
+        # no compound-source mismatch surface like insider_pc_compound).
+        self.assertFalse(self.profile.has_component_hash_guard)
 
 
 class TestHashGuardClaimsAreHonest(unittest.TestCase):
