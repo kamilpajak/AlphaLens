@@ -211,7 +211,7 @@ def fetch_earnings_batch(
             # fetch_earnings via AVRateLimitError; an HTTP-level 429 here
             # means the per-ticker retry was exhausted, so abort the batch.
             if 400 <= exc.code < 500:
-                logger.error("Permanent HTTP %s for %s: %s", exc.code, ticker, exc)
+                logger.exception("Permanent HTTP %s for %s", exc.code, ticker)
                 raise
             logger.warning("HTTP %s for %s: %s", exc.code, ticker, exc)
             statuses[ticker] = "failed"
