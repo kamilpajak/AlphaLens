@@ -3248,7 +3248,11 @@
           "av_consensus_likely_source": "Thomson Reuters / IBES (brokerage-weighted mean), not Zacks",
           "av_uses_adjusted_eps_not_gaap": true,
           "av_applies_retroactive_split_adjustment": true
-        }
+        },
+        "weighting_choice_resolution": "alpha-2 sub-leveraged, N_FIXED=30, per docs/research/paradigm14_pead_cost_model_audit_2026_05_14.md",
+        "weighting_choice_resolution_date": "2026-05-14",
+        "weighting_choice_rationale": "B0 cost-model audit found set-based turnover undercounts forced-rebalancing churn 2x on gross=1 daily-rebal during peak earnings. alpha-2 (weight=1/30 per active, gross variable [0,1]) is mechanically compatible with existing set-based cost wiring. alpha-1 alternative deferred (~2 sessions engineering + multi-day regression risk).",
+        "weighting_choice_bonferroni_impact": "none; alpha-1/alpha-2 was explicit weighting_decision_pending in v2 memo and params_frozen, this is the audit-driven resolution the pre-reg anticipated"
       },
       "notes": "Paradigm test #14 — re-registered post-class-identity correction. Class event_drift_search_2026_05_03 n=3 (event_drift_v3_pead_quality_clean abandoned, event_drift_v4_pead_quality_sp1500 abandoned, this entry). v1 of THIS paradigm REJECTED pre-audit on adversarial review (pre-announcement timing flaws); v2 LOCKED post-review with canonical post-announcement timing + price-scaled surprise + NW HAC + invested-days regression. Plan-level zen review 2026-05-13 verdict APPROVE-WITH-CHANGES, all changes applied. Audit launch pending AV PIT validation gate + preaudit smoke + PEADScorer unit-test with explicit post-market index-alignment assertions + cost-model audit for forced-deleveraging-churn handling."
     },
