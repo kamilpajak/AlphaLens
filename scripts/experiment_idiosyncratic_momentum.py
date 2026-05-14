@@ -84,7 +84,7 @@ class _RawMonthlyMomentumScorer:
     standardised by σ_36 and NOT residualised.
     """
 
-    MIN_BARS_REQUIRED = 800
+    MIN_BARS_REQUIRED = 900  # match IM scorer post-zen H1 follow-up
 
     def __init__(
         self,

@@ -37,11 +37,23 @@ def monthly_returns_from_daily(close: pd.Series) -> pd.Series:
     """Resample daily close-price Series to month-end simple returns.
 
     Drops the first month (whose pct_change is NaN). Empty / single-month
-    inputs return an empty Series.
+    inputs return an empty Series. CRITICAL: the trailing month is excluded
+    when the input series ends before that month's last business day, so
+    rebalance-time partial-month observations never contaminate the
+    regression input — Blitz canonical residualisation requires full-month
+    returns regressed against full-month FF3 factors.
     """
     if close is None or close.empty:
         return pd.Series(dtype=float)
     monthly_close = close.resample("ME").last().dropna()
+    # Drop the trailing month if the input ends before its business-month-end.
+    # `pd.offsets.BMonthEnd()` is the inclusive last business day of the month;
+    # if last_obs < BMonthEnd(last_obs) then the month is incomplete.
+    if not monthly_close.empty:
+        last_obs = close.index[-1]
+        last_business_day_of_month = last_obs + pd.offsets.BMonthEnd(0)
+        if last_obs < last_business_day_of_month:
+            monthly_close = monthly_close.iloc[:-1]
     if len(monthly_close) < 2:
         return pd.Series(dtype=float)
     return monthly_close.pct_change().dropna()

@@ -58,6 +58,36 @@ class TestMonthlyReturnsFromDaily(unittest.TestCase):
         out = sc.monthly_returns_from_daily(pd.Series([100.0], index=idx))
         self.assertTrue(out.empty)
 
+    def test_partial_trailing_month_dropped(self):
+        # H1 regression test (zen review 2026-05-14): a daily series that ends
+        # mid-month must NOT emit a partial-month return. Pre-fix, this would
+        # bucket the partial Feb close at the 2020-02-29 timestamp and emit a
+        # bogus 5-day "monthly" return.
+        daily_idx = pd.bdate_range("2019-12-02", "2020-02-05")  # ends mid-Feb
+        close = pd.Series(
+            np.linspace(100.0, 110.0, len(daily_idx)),
+            index=daily_idx,
+        )
+        out = sc.monthly_returns_from_daily(close)
+        # Expected: 1 entry only — Jan 2020 monthly return (Dec full → Jan full).
+        # The partial Feb (only 4 business days observed) must be dropped.
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out.index[-1].month, 1)
+        self.assertEqual(out.index[-1].year, 2020)
+
+    def test_full_trailing_month_kept(self):
+        # Inverse of H1: if the series ends on the business-month-end, the
+        # final month is complete and should be retained.
+        daily_idx = pd.bdate_range("2019-12-02", "2020-01-31")  # Jan 2020 BMonthEnd
+        close = pd.Series(
+            np.linspace(100.0, 110.0, len(daily_idx)),
+            index=daily_idx,
+        )
+        out = sc.monthly_returns_from_daily(close)
+        # Expected: 1 entry — full Jan 2020 monthly return.
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out.index[-1].month, 1)
+
 
 class TestFitOlsResiduals(unittest.TestCase):
     def test_perfect_fit_yields_zero_residuals(self):

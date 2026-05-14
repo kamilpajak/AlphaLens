@@ -43,10 +43,12 @@ class IdiosyncraticMomentumScorer:
     is called.
     """
 
-    # 36 months × ~21 trading days = ~756 bars. Round up to 800 to allow
-    # for holidays + half-day shortened sessions across the residualisation
-    # window. The engine will skip tickers with fewer bars.
-    MIN_BARS_REQUIRED = 800
+    # 36 months × ~21 trading days = ~756 bars. Bumped to 900 (~6 months
+    # safety buffer over the 756-bar minimum) after zen review 2026-05-14
+    # H1 follow-up — the prior 800 leaves only ~1 month buffer which can
+    # silently drop tickers when Thanksgiving/Christmas holiday clusters
+    # consume the cushion. Engine skips tickers with fewer bars.
+    MIN_BARS_REQUIRED = 900
 
     def __init__(
         self,
@@ -129,6 +131,14 @@ def ff3_monthly_from_carhart_daily(carhart_daily: pd.DataFrame) -> pd.DataFrame:
     Compounds daily simple returns into monthly: ``(1 + r_d).prod() - 1`` for
     each of ``Mkt-RF``, ``SMB``, ``HML``. RF is reported as the same daily
     rate from FF; compounding it the same way gives the correct monthly RF.
+
+    Note on convention: for ``Mkt-RF`` (and other long-short factor
+    returns), ``(1 + r_d).prod() - 1`` yields compounded daily excess,
+    which differs algebraically from ``Mkt_monthly - RF_monthly``. The
+    difference is sub-bps/year on monthly windows and is the standard
+    convention used in academic factor literature when daily series are
+    aggregated up. Residualisation is unaffected because the same
+    convention is used on both sides of the regression.
     """
     required = {"Mkt-RF", "SMB", "HML", "RF"}
     missing = required - set(carhart_daily.columns)
