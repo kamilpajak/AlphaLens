@@ -149,6 +149,27 @@ Vendored TradingAgents subtree + Layer 3 LLM runner removed per [ADR 0008](docs/
 
 Issues dotyczące CLOSED warstw (Lean Docker setup, Layer 2d backtest workflow, themed gate Phase 2) → patrz `launchd/archived/README.md` + `docs/research/paradigm_failures_postmortem.md`.
 
+## VPS backfills (always-on, `jacoren@`)
+
+Long-running data acquisition jobs that don't fit on the laptop run on the dedicated Linux VPS at `/home/jacoren/AlphaLens`. systemd-user units are versioned in `deploy/systemd/` and survive logout via `loginctl enable-linger jacoren`. Inspect via `journalctl --user -u <unit>` on the VPS.
+
+| Unit | Pattern | Script | Output cache | Wall-time | Status |
+|------|---------|--------|--------------|-----------|--------|
+| `form4-backfill.service` | long-running daemon (`Type=simple` + `Restart=on-failure`) | `scripts/run_form4_backfill.py` | `~/.alphalens/form4_parquet/` | ~5-10 days (SEC 10 req/s) | DONE 2026-05-08 (37MB final, 2.66M rows) |
+| `av-earnings-backfill.{service,timer}` | daily oneshot (`Type=oneshot` + `OnCalendar=*-*-* 00:05 UTC` + `Persistent=true`) | `scripts/av_earnings_daily_backfill.py` | `~/.alphalens/av_cache/earnings_<T>.json` | ~21 days (AV free-tier 25/day) | LIVE (paradigm-14 PEAD v2 backfill) |
+
+**Why these run on VPS, not Mac:**
+- Mac sleeps / restarts → multi-day jobs lose state; VPS is always-on.
+- VPS is on residential ISP with different IP than Mac (SEC 10 req/s is per-IP).
+- AV daily quota resets at 00:00 UTC regardless of timezone; cron-trigger at 00:05 UTC catches the window cleanly.
+
+**Cache durability + sync:**
+- All caches live under `~/.alphalens/<area>/` on VPS (general-purpose, not paradigm-specific).
+- Nextcloud sync between VPS and Mac is opt-in per script (`--rclone-remote` arg). Currently OFF for both backfills — VPS cache is the source of truth for downstream consumers running on VPS.
+- For cross-machine consumption (Mac-side B1 dev, audits), use `rsync -av jacoren@vps:.alphalens/<area>/ ~/.alphalens/<area>/` or enable rclone sync in the systemd unit.
+
+Operator deployment recipe lives in `deploy/systemd/README.md`.
+
 ## Environment
 
 - API keys w `.env` (GOOGLE_API_KEY, ALPHA_VANTAGE_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, POLYGON_API_KEY, PERPLEXITY_API_KEY)
@@ -159,3 +180,5 @@ Issues dotyczące CLOSED warstw (Lean Docker setup, Layer 2d backtest workflow, 
   - `~/.alphalens/watchdog/` — portfolio.yaml, EDGAR dedup, digest, launchd logs
   - `~/.alphalens/lean/{data,results,logs}/` — Lean OHLCV cache (also used by backtest replay)
   - `~/.alphalens/guru_cache/` — guru pilot LLM response cache
+  - `~/.alphalens/form4_parquet/` — VPS Form-4 backfill output (hive-partitioned, see `## VPS backfills`)
+  - `~/.alphalens/av_cache/` — VPS AV EARNINGS daily backfill output (per-ticker JSON, see `## VPS backfills`)
