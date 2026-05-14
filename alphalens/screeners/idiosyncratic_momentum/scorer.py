@@ -27,6 +27,17 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
+from alphalens.screeners._common import rank_zscore, winsorize
+
+__all__ = [
+    "compute_idio_momentum",
+    "compute_residuals_window",
+    "monthly_returns_from_daily",
+    "rank_zscore",
+    "score_idiosyncratic_momentum",
+    "winsorize",
+]
+
 _DEFAULT_REGRESSION_WINDOW = 36
 _DEFAULT_FORMATION_LOOKBACK = 12
 _DEFAULT_SKIP = 2
@@ -157,43 +168,6 @@ def compute_idio_momentum(
     if not np.isfinite(sigma) or sigma < 1e-12:
         return None
     return float(formation.sum() / sigma)
-
-
-def winsorize(
-    series: pd.Series,
-    *,
-    lower_pct: float = 0.01,
-    upper_pct: float = 0.99,
-) -> pd.Series:
-    """Cap values at the [lower_pct, upper_pct] percentile range.
-
-    ``NaN`` values are preserved unchanged. Empty input returns empty.
-    """
-    if series.empty:
-        return series
-    valid = series.dropna()
-    if valid.empty:
-        return series
-    lo = float(valid.quantile(lower_pct))
-    hi = float(valid.quantile(upper_pct))
-    return series.clip(lower=lo, upper=hi)
-
-
-def rank_zscore(series: pd.Series) -> pd.Series:
-    """Cross-sectional z-score (population std-dev, ``ddof=0``).
-
-    ``NaN`` rows propagate. Empty / constant input → all-NaN output.
-    """
-    if series.empty:
-        return series
-    valid = series.dropna()
-    if valid.empty:
-        return pd.Series(np.nan, index=series.index)
-    mean = float(valid.mean())
-    std = float(valid.std(ddof=0))
-    if not np.isfinite(std) or std == 0:
-        return pd.Series(np.nan, index=series.index)
-    return (series - mean) / std
 
 
 def score_idiosyncratic_momentum(
