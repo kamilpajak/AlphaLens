@@ -45,6 +45,11 @@ def _http_get_json(
 
     GDELT returns 200 OK with an empty body when soft-rate-limited; this is
     indistinguishable from a network glitch except by the empty body itself.
+
+    Caveat: an empty body could in theory also mean ``0 articles matched``,
+    in which case the retries are wasted wall time before ``_safe_call`` drops
+    the bucket. In practice GDELT v2 returns ``{"articles": []}`` for zero
+    matches, so an empty body has only been observed under rate-limiting.
     """
     last_err: Exception | None = None
     for attempt in range(max_attempts):

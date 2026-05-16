@@ -97,7 +97,7 @@ def transform(events: Iterable[Event]) -> pd.DataFrame:
                 "body": "",
                 "url": ev.url,
                 "keywords": keywords,
-                "extra": json.dumps(extra, ensure_ascii=False),
+                "extra": json.dumps(extra, ensure_ascii=False, default=str),
             }
         )
 

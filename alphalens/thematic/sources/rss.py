@@ -64,13 +64,19 @@ def transform(
     *,
     feed_name: str,
     domain: str,
+    fallback_date: dt.date | None = None,
 ) -> pd.DataFrame:
+    fallback_ts = (
+        pd.Timestamp(fallback_date, tz="UTC")
+        if fallback_date is not None
+        else pd.Timestamp.now(tz="UTC")
+    )
     rows: list[dict] = []
     for e in entries:
         url = getattr(e, "link", None)
         if not url:
             continue
-        ts = _entry_timestamp(e) or pd.Timestamp.now(tz="UTC")
+        ts = _entry_timestamp(e) or fallback_ts
         extra = {
             "feed_name": feed_name,
             "domain": domain,
@@ -96,10 +102,22 @@ def transform(
     return df
 
 
-def fetch_feed(*, name: str, url: str, domain: str) -> pd.DataFrame:
+def fetch_feed(
+    *,
+    name: str,
+    url: str,
+    domain: str,
+    fallback_date: dt.date | None = None,
+) -> pd.DataFrame:
     parsed = _parse_feed(url)
+    if getattr(parsed, "bozo", 0):
+        logger.warning(
+            "RSS feed %s marked malformed by feedparser: %s",
+            name,
+            getattr(parsed, "bozo_exception", "no exception detail"),
+        )
     entries = list(getattr(parsed, "entries", []) or [])
-    return transform(entries, feed_name=name, domain=domain)
+    return transform(entries, feed_name=name, domain=domain, fallback_date=fallback_date)
 
 
 def fetch_daily_news(
@@ -120,9 +138,14 @@ def fetch_daily_news(
     frames: list[pd.DataFrame] = []
     for feed in feeds_list:
         try:
-            df = fetch_feed(name=feed["name"], url=feed["url"], domain=feed["domain"])
+            df = fetch_feed(
+                name=feed["name"],
+                url=feed["url"],
+                domain=feed["domain"],
+                fallback_date=date,
+            )
         except Exception as exc:
-            logger.warning("RSS feed %s failed: %s", feed.get("name"), exc)
+            logger.warning("RSS feed %s failed: %s", feed.get("name"), exc, exc_info=True)
             continue
         frames.append(df)
 

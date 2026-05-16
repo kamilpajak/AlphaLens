@@ -102,9 +102,28 @@ class TestPolygonNewsFetch(unittest.TestCase):
             )
 
         self.assertIn("api.polygon.io/v2/reference/news", captured["url"])
-        self.assertIn("published_utc.gte=2026-05-15", captured["url"])
+        # Full ISO datetime — date-only was a UTC-midnight ambiguity risk
+        self.assertIn("published_utc.gte=2026-05-15T00%3A00%3A00Z", captured["url"])
+        self.assertIn("published_utc.lt=2026-05-16T00%3A00%3A00Z", captured["url"])
         self.assertIn("apiKey=testkey", captured["url"])
         self.assertEqual(len(items), 3)
+
+    def test_fetch_news_range_preserves_intra_day_time_component(self):
+        captured = {}
+
+        def fake_call(url, **kwargs):
+            captured["url"] = url
+            return SAMPLE_API_RESPONSE
+
+        with patch.object(polygon_news, "_http_get_json", side_effect=fake_call):
+            polygon_news.fetch_news_range(
+                api_key="testkey",
+                start=dt.datetime(2026, 5, 15, 14, 30, 0, tzinfo=dt.UTC),
+                end=dt.datetime(2026, 5, 15, 18, 45, 0, tzinfo=dt.UTC),
+            )
+
+        self.assertIn("published_utc.gte=2026-05-15T14%3A30%3A00Z", captured["url"])
+        self.assertIn("published_utc.lt=2026-05-15T18%3A45%3A00Z", captured["url"])
 
     def test_fetch_news_range_handles_pagination(self):
         page1 = {

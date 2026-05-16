@@ -48,8 +48,19 @@ def _safe_call(name: str, fn, **kwargs) -> pd.DataFrame:
     try:
         return fn(**kwargs)
     except Exception as exc:
-        logger.warning("thematic ingest source %s failed: %s", name, exc)
+        logger.warning("thematic ingest source %s failed: %s", name, exc, exc_info=True)
         return empty_news_frame()
+
+
+def _canonical_url(url: str) -> str:
+    """Drop query string + fragment + trailing slash so cross-source dedup matches.
+
+    Tracking params (``?utm_source=...``, ``?ref=feed``) on syndicated articles
+    routinely differ between Polygon, GDELT and RSS feeds, defeating exact-URL
+    dedup. Canonicalising lets the same article collapse to one row.
+    """
+    base = url.split("#", 1)[0].split("?", 1)[0]
+    return base.rstrip("/")
 
 
 def ingest_daily(
@@ -77,10 +88,11 @@ def ingest_daily(
     else:
         merged = pd.concat(frames, ignore_index=True)
         merged["_source_rank"] = merged["source"].map(_SOURCE_PRIORITY).fillna(99).astype(int)
+        merged["_url_canon"] = merged["url"].map(_canonical_url)
         merged = (
-            merged.sort_values(["url", "_source_rank"])
-            .drop_duplicates(subset=["url"], keep="first")
-            .drop(columns=["_source_rank"])
+            merged.sort_values(["_url_canon", "_source_rank"])
+            .drop_duplicates(subset=["_url_canon"], keep="first")
+            .drop(columns=["_source_rank", "_url_canon"])
             .sort_values("timestamp", ascending=False)
             .head(max_items)
             .reset_index(drop=True)

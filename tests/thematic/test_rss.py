@@ -75,6 +75,14 @@ class TestRssTransform(unittest.TestCase):
         self.assertEqual(len(df), 0)
         self.assertEqual(list(df.columns), NEWS_COLUMNS)
 
+    def test_fallback_timestamp_is_deterministic_when_target_date_given(self):
+        no_date = SimpleNamespace(id="x", title="dateless", link="https://x.com/dateless")
+        anchor = dt.date(2026, 5, 15)
+        df1 = rss.transform([no_date], feed_name="wired", domain="wired.com", fallback_date=anchor)
+        df2 = rss.transform([no_date], feed_name="wired", domain="wired.com", fallback_date=anchor)
+        self.assertEqual(df1.iloc[0]["timestamp"], df2.iloc[0]["timestamp"])
+        self.assertEqual(df1.iloc[0]["timestamp"].date(), anchor)
+
 
 class TestRssFetch(unittest.TestCase):
     def test_fetch_feed_uses_feedparser_and_returns_frame(self):

@@ -51,8 +51,8 @@ def fetch_news_range(
     if start.tzinfo is None or end.tzinfo is None:
         raise ValueError("start/end must be timezone-aware")
     params = {
-        "published_utc.gte": start.date().isoformat(),
-        "published_utc.lt": end.date().isoformat(),
+        "published_utc.gte": start.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "published_utc.lt": end.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "order": "asc",
         "sort": "published_utc",
         "limit": page_limit,
@@ -95,7 +95,6 @@ def transform(raw_items: Iterable[dict], *, universe: Iterable[str]) -> pd.DataF
             "author": item.get("author"),
             "image_url": item.get("image_url"),
             "insights": item.get("insights") or [],
-            "off_universe_tickers": [t for t in raw_tickers if t not in universe_set],
         }
         rows.append(
             {

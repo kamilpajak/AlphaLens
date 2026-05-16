@@ -103,6 +103,37 @@ class TestNewsIngestOrchestration(unittest.TestCase):
             # Polygon wins (richer schema, ticker-tagged)
             self.assertEqual(df.iloc[0]["source"], "polygon")
 
+    def test_dedupes_across_sources_after_stripping_tracking_params(self):
+        # Same article, but Polygon URL has utm_source and RSS doesn't.
+        # Raw-URL dedup would let both through; canonical-URL dedup collapses them.
+        polygon_row = _row(
+            "p1",
+            "polygon",
+            "2026-05-15T10:00:00Z",
+            ["NVDA"],
+            "Same article",
+        )
+        polygon_row["url"] = "https://example.com/article?utm_source=polygon&ref=feed"
+        rss_row = _row("r1", "rss", "2026-05-15T10:30:00Z", [], "Same article")
+        rss_row["url"] = "https://example.com/article"
+        empty_df = news_ingest.empty_news_frame()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(news_ingest, "_fetch_polygon", return_value=_frame([polygon_row])),
+                patch.object(news_ingest, "_fetch_gdelt", return_value=empty_df),
+                patch.object(news_ingest, "_fetch_rss", return_value=_frame([rss_row])),
+                patch.object(news_ingest, "_fetch_edgar", return_value=empty_df),
+            ):
+                df = news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                )
+
+            self.assertEqual(len(df), 1)
+            # Polygon wins (richer schema) — its URL is preserved, tracking params and all
+            self.assertEqual(df.iloc[0]["source"], "polygon")
+
     def test_writes_unified_parquet_and_reuses_cache(self):
         polygon_df = _frame([_row("p1", "polygon", "2026-05-15T10:00:00Z", ["NVDA"], "Piece")])
         empty_df = news_ingest.empty_news_frame()
