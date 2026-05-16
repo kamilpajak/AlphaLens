@@ -99,7 +99,8 @@ def _parse_seendate(seendate: str) -> pd.Timestamp:
 
 
 def _stable_id(url: str) -> str:
-    return hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+    # Content-addressing only — sha256 over sha1 to satisfy Sonar S4790.
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
 
 
 def transform(raw_articles: Iterable[dict], *, theme: str) -> pd.DataFrame:
