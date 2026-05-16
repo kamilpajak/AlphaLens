@@ -39,30 +39,45 @@ def _http_get_json(url: str, *, timeout: float = 20.0) -> dict:
 
 def fetch_recent_news(
     *,
-    ticker: str,
+    ticker: str | None,
     asof: dt.date,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     api_key: str,
     limit: int = DEFAULT_LIMIT,
+    max_pages: int = 10,
 ) -> list[dict]:
-    """Issue one Polygon news API call for ``ticker`` over ``[asof - lookback, asof]``."""
+    """Fetch Polygon news over ``[asof - lookback, asof]``, with pagination.
+
+    Passing ``ticker=None`` retrieves the unfiltered firehose for the window —
+    the orchestrator uses this single window-wide fetch to cover every
+    candidate locally, avoiding the per-ticker 5-req/min Starter ceiling.
+    """
     start = asof - dt.timedelta(days=lookback_days)
-    params = {
-        "ticker": ticker,
-        "published_utc.gte": start.strftime("%Y-%m-%dT%H:%M:%SZ")
-        .replace(f"{start.year}", start.isoformat().split("T")[0])
-        .split("T")[0],
-        "published_utc.lt": (asof + dt.timedelta(days=1)).isoformat(),
+    end_excl = asof + dt.timedelta(days=1)
+    params: dict[str, object] = {
+        "published_utc.gte": start.isoformat(),
+        "published_utc.lt": end_excl.isoformat(),
         "order": "desc",
         "sort": "published_utc",
         "limit": limit,
         "apiKey": api_key,
     }
-    # rebuild params cleanly without the weird strftime trick
-    params["published_utc.gte"] = start.isoformat()
+    if ticker:
+        params["ticker"] = ticker
     url = f"{ENDPOINT}?{urllib.parse.urlencode(params)}"
-    data = _http_get_json(url)
-    return list(data.get("results") or [])
+
+    items: list[dict] = []
+    pages = 0
+    while url and pages < max_pages:
+        data = _http_get_json(url)
+        items.extend(data.get("results") or [])
+        nxt = data.get("next_url")
+        if not nxt:
+            break
+        sep = "&" if "?" in nxt else "?"
+        url = f"{nxt}{sep}apiKey={api_key}"
+        pages += 1
+    return items
 
 
 def _to_dataframe(items: list[dict]) -> pd.DataFrame:
@@ -116,6 +131,61 @@ def fetch_recent_news_cached(
     return df
 
 
+def fetch_window_universe(
+    *,
+    asof: dt.date,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    api_key: str,
+    cache_dir: Path = DEFAULT_CACHE_DIR,
+    force: bool = False,
+) -> pd.DataFrame:
+    """One unfiltered Polygon fetch over the lookback window, cached per ``asof``.
+
+    Used by the orchestrator to amortise the cost of per-ticker press
+    verification: one paginated fetch covers every candidate. Cache is
+    independent from the per-ticker ``fetch_recent_news_cached`` cache.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f"_universe_{asof.isoformat()}.parquet"
+    if cache_path.exists() and not force:
+        return pd.read_parquet(cache_path)
+    items = fetch_recent_news(ticker=None, asof=asof, lookback_days=lookback_days, api_key=api_key)
+    df = _to_dataframe(items)
+    df.to_parquet(cache_path, index=False)
+    return df
+
+
+def has_theme_in_press_frame(
+    *,
+    ticker: str,
+    keywords: Iterable[str],
+    press_df: pd.DataFrame,
+) -> bool:
+    """In-memory verification gate over a pre-fetched window DataFrame."""
+    if press_df.empty:
+        return False
+    kw_lower = [k.lower() for k in keywords if k]
+    if not kw_lower:
+        return False
+    mask_ticker = press_df["tickers"].apply(
+        lambda x: ticker.upper() in (list(x) if x is not None else [])
+    )
+    rows = press_df[mask_ticker]
+    if rows.empty:
+        return False
+    haystack = (
+        rows["title"].fillna("").astype(str).str.lower()
+        + " | "
+        + rows["description"].fillna("").astype(str).str.lower()
+        + " | "
+        + rows["keywords"].apply(lambda x: " ".join(x) if x is not None else "").str.lower()
+    )
+    for kw in kw_lower:
+        if haystack.str.contains(kw, regex=False).any():
+            return True
+    return False
+
+
 def has_theme_in_recent_press(
     *,
     ticker: str,
@@ -162,5 +232,7 @@ __all__ = [
     "DEFAULT_CACHE_DIR",
     "fetch_recent_news",
     "fetch_recent_news_cached",
+    "fetch_window_universe",
+    "has_theme_in_press_frame",
     "has_theme_in_recent_press",
 ]

@@ -133,7 +133,7 @@ def extract(
 
 @thematic_app.command("map-themes")
 def map_themes_cmd(
-    date: str = typer.Option(None, "--date", help="UTC date in YYYY-MM-DD (default: today)."),
+    date: str = typer.Option(None, "--date", help="UTC date in YYYY-MM-DD (default: yesterday)."),
     events_dir: Path = typer.Option(
         gemini_flash.DEFAULT_EVENTS_DIR,
         "--events-dir",
@@ -170,7 +170,13 @@ def map_themes_cmd(
     ),
 ) -> None:
     """Roll up novel themes from Phase B → Gemini 3 Pro maps to candidates → verify."""
-    target = dt.date.fromisoformat(date) if date else dt.datetime.now(dt.UTC).date()
+    # Default to yesterday so a same-day cron after Phase B extract sees a
+    # fully-extracted day, matching `ingest` and `extract` defaults.
+    target = (
+        dt.date.fromisoformat(date)
+        if date
+        else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    )
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise typer.BadParameter("GOOGLE_API_KEY missing from environment.")

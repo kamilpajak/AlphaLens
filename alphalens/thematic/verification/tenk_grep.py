@@ -14,23 +14,30 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import urllib.request
 from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
 
+from bs4 import BeautifulSoup
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_tenk"
-SEC_USER_AGENT = "AlphaLens-thematic pajakkamil@gmail.com"
+DEFAULT_USER_AGENT = "AlphaLens-thematic pajakkamil@gmail.com"
+USER_AGENT_ENV = "THEMATIC_USER_AGENT"
 
-_HTML_TAG = re.compile(r"<[^>]+>")
 _WHITESPACE = re.compile(r"\s+")
 
 
+def _user_agent() -> str:
+    return os.environ.get(USER_AGENT_ENV) or DEFAULT_USER_AGENT
+
+
 def _http_get(url: str, *, accept: str = "*/*", timeout: float = 30.0) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": SEC_USER_AGENT, "Accept": accept})
+    req = urllib.request.Request(url, headers={"User-Agent": _user_agent(), "Accept": accept})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
@@ -67,9 +74,15 @@ def _fetch_filing_html(cik: str, accession: str, primary_doc: str) -> str:
 
 
 def extract_text(html: str) -> str:
-    """Strip HTML to plain text, collapsing whitespace."""
-    no_tags = _HTML_TAG.sub(" ", html)
-    return _WHITESPACE.sub(" ", no_tags).strip()
+    """Strip HTML to plain text. Removes ``<script>``/``<style>`` content
+    entirely (regex tag-strip would leave their inner JS/CSS in the haystack)
+    then collapses whitespace.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    text = soup.get_text(separator=" ")
+    return _WHITESPACE.sub(" ", text).strip()
 
 
 def grep_keywords(text: str, keywords: Iterable[str]) -> list[str]:

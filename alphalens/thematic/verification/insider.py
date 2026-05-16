@@ -39,15 +39,10 @@ class _MemoizedClassifier:
         self._labels: dict[tuple[str, int], CohenMalloyLabel] = {}
         if history.empty:
             return
-        for (cik, year), grp in history.groupby(
-            ["reporting_owner_cik", history["transaction_date"].apply(lambda d: d.year)]
-        ):
-            self._labels[(cik, year)] = CohenMalloyLabel.UNCLASSIFIED  # placeholder
-        # Build classification for each (insider, year-needed)
-        years = history["transaction_date"].apply(lambda d: d.year)
+        years = sorted({d.year for d in history["transaction_date"]})
         for cik, grp in history.groupby("reporting_owner_cik"):
             dates = list(grp["transaction_date"])
-            for year in sorted(set(years)):
+            for year in years:
                 self._labels[(cik, year)] = classify_from_transaction_dates(
                     dates, classification_year=year
                 )
@@ -56,27 +51,84 @@ class _MemoizedClassifier:
         return self._labels.get((person_cik, year), CohenMalloyLabel.UNCLASSIFIED)
 
 
-def _load_form4_for_ticker(ticker: str, *, form4_root: Path = DEFAULT_FORM4_ROOT) -> pd.DataFrame:
-    """Scan the hive-partitioned form4_parquet for one ticker's rows.
+def _classification_years(asof: dt.date, *, lookback_classification_years: int = 3) -> set[int]:
+    """Years Cohen-Malloy needs visible to classify trades at ``asof``."""
+    return {asof.year - i for i in range(lookback_classification_years + 1)}
 
-    The dataset is partitioned by ``transaction_year=YYYY``. We read all
-    partitions and filter; for production scale this should add a year-range
-    pushdown filter via ``pyarrow.dataset``, but for ~hundreds of candidate
-    tickers per day the full-scan cost is acceptable.
+
+def _load_form4_partitions(
+    *,
+    form4_root: Path,
+    years: set[int],
+    ticker: str | None = None,
+    insider_ciks: set[str] | None = None,
+) -> pd.DataFrame:
+    """Read only the partitions in ``years``; optionally narrow by ticker / insider.
+
+    The hive layout is ``transaction_year=YYYY/compacted.parquet``; pruning to
+    the classification window avoids scanning 30+ years of history just to
+    decide one 4-year question.
     """
-    if not form4_root.exists():
+    if not form4_root.exists() or not years:
         return pd.DataFrame()
     frames: list[pd.DataFrame] = []
-    for part in sorted(form4_root.glob("transaction_year=*/compacted.parquet")):
+    for year in sorted(years):
+        part = form4_root / f"transaction_year={year}" / "compacted.parquet"
+        if not part.exists():
+            continue
         df = pd.read_parquet(part)
         if df.empty:
             continue
-        df = df[df["ticker"] == ticker.upper()]
+        if ticker is not None:
+            df = df[df["ticker"] == ticker.upper()]
+        if insider_ciks is not None:
+            df = df[df["reporting_owner_cik"].isin(insider_ciks)]
         if not df.empty:
             frames.append(df)
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
+
+
+def _load_form4_for_ticker(
+    ticker: str,
+    *,
+    form4_root: Path = DEFAULT_FORM4_ROOT,
+    years: set[int] | None = None,
+) -> pd.DataFrame:
+    """Ticker-restricted Form-4 slice.
+
+    NOTE — this slice is suitable only for identifying ACTIVE insiders or for
+    aggregating the final ticker-specific signal. Cohen-Malloy classification
+    MUST run over the insider's full cross-ticker history; for that, call
+    :func:`_load_form4_for_insiders`.
+    """
+    if years is None:
+        # Backward-compatible callers: scan everything (legacy slow path).
+        if not form4_root.exists():
+            return pd.DataFrame()
+        frames: list[pd.DataFrame] = []
+        for part in sorted(form4_root.glob("transaction_year=*/compacted.parquet")):
+            df = pd.read_parquet(part)
+            if df.empty:
+                continue
+            df = df[df["ticker"] == ticker.upper()]
+            if not df.empty:
+                frames.append(df)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+    return _load_form4_partitions(form4_root=form4_root, years=years, ticker=ticker)
+
+
+def _load_form4_for_insiders(
+    insider_ciks: set[str],
+    *,
+    form4_root: Path = DEFAULT_FORM4_ROOT,
+    years: set[int],
+) -> pd.DataFrame:
+    """Cross-ticker history for ``insider_ciks`` restricted to ``years``."""
+    return _load_form4_partitions(form4_root=form4_root, years=years, insider_ciks=insider_ciks)
 
 
 def filter_records(
@@ -106,20 +158,40 @@ def has_opportunistic_buy(
     usd_threshold: float = DEFAULT_USD_THRESHOLD,
     form4_root: Path = DEFAULT_FORM4_ROOT,
 ) -> bool:
-    """Layer 3 verification gate: net opportunistic insider buy over threshold?"""
+    """Layer 3 verification gate: net opportunistic insider buy over threshold?
+
+    Two-step Form-4 load so Cohen-Malloy sees each insider's FULL cross-ticker
+    history. A March-every-year trader is ROUTINE regardless of WHICH ticker
+    they touch; a ticker-restricted view would mislabel them as opportunistic
+    on whichever ticker first breaks the pattern. Active insiders are
+    identified from the ticker's recent window; their full history is then
+    loaded across all tickers for classification, but signal aggregation
+    still runs only over the ticker-of-interest's recent trades.
+    """
+    years = _classification_years(asof)
     try:
-        history = _load_form4_for_ticker(ticker, form4_root=form4_root)
+        ticker_history = _load_form4_for_ticker(ticker, form4_root=form4_root, years=years)
     except Exception as exc:
         logger.warning("form4 load failed for %s: %s", ticker, exc)
         return False
-    if history.empty:
+    if ticker_history.empty:
         return False
 
-    classifier_cache = _MemoizedClassifier(history)
-    recent = filter_records(history, ticker=ticker, asof=asof, lookback_days=lookback_days)
+    recent = filter_records(ticker_history, ticker=ticker, asof=asof, lookback_days=lookback_days)
     if recent.empty:
         return False
 
+    active_insiders = set(recent["reporting_owner_cik"].dropna().astype(str))
+    try:
+        full_history = _load_form4_for_insiders(active_insiders, form4_root=form4_root, years=years)
+    except Exception as exc:
+        logger.warning("form4 cross-ticker load failed for %s: %s", ticker, exc)
+        return False
+    if full_history.empty:
+        # Degrade gracefully — at least classify on the visible trades.
+        full_history = ticker_history
+
+    classifier_cache = _MemoizedClassifier(full_history)
     net_usd = aggregate_opportunistic_signal(recent, asof=asof, classifier_cache=classifier_cache)
     return net_usd >= usd_threshold
 

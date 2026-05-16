@@ -158,5 +158,104 @@ class TestVerificationGate(unittest.TestCase):
                 )
 
 
+class TestWindowUniverseFetch(unittest.TestCase):
+    def test_fetch_window_universe_caches_one_unfiltered_pull(self):
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            calls = []
+
+            def fake_call(url, **kwargs):
+                calls.append(url)
+                return SAMPLE_POLYGON_RESPONSE
+
+            with patch.object(recent_press, "_http_get_json", side_effect=fake_call):
+                df = recent_press.fetch_window_universe(
+                    asof=dt.date(2026, 5, 15),
+                    lookback_days=30,
+                    api_key="testkey",
+                    cache_dir=cache_dir,
+                )
+            self.assertEqual(len(calls), 1)
+            self.assertNotIn("ticker=", calls[0])
+            self.assertEqual(len(df), 2)
+            cache_file = cache_dir / "_universe_2026-05-15.parquet"
+            self.assertTrue(cache_file.exists())
+
+    def test_fetch_recent_news_handles_pagination(self):
+        page1 = {**SAMPLE_POLYGON_RESPONSE, "next_url": "https://x.com?cursor=a"}
+        page2 = {**SAMPLE_POLYGON_RESPONSE, "next_url": None}
+        seen = []
+
+        def fake_call(url, **kwargs):
+            seen.append(url)
+            return page1 if len(seen) == 1 else page2
+
+        with patch.object(recent_press, "_http_get_json", side_effect=fake_call):
+            items = recent_press.fetch_recent_news(
+                ticker=None,
+                asof=dt.date(2026, 5, 15),
+                lookback_days=30,
+                api_key="testkey",
+            )
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(len(items), 4)
+
+
+class TestHasThemeInPressFrame(unittest.TestCase):
+    def test_matches_per_ticker_in_pre_fetched_frame(self):
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                {
+                    "id": "1",
+                    "published_utc": "2026-05-10T14:30:00Z",
+                    "title": "Beam quantum partnership",
+                    "description": "",
+                    "url": "u1",
+                    "tickers": ["BEEM"],
+                    "keywords": ["quantum"],
+                    "publisher": "x",
+                },
+                {
+                    "id": "2",
+                    "published_utc": "2026-05-11T00:00:00Z",
+                    "title": "NVDA earnings",
+                    "description": "",
+                    "url": "u2",
+                    "tickers": ["NVDA"],
+                    "keywords": ["earnings"],
+                    "publisher": "y",
+                },
+            ]
+        )
+        self.assertTrue(
+            recent_press.has_theme_in_press_frame(ticker="BEEM", keywords=["quantum"], press_df=df)
+        )
+        self.assertFalse(
+            recent_press.has_theme_in_press_frame(ticker="NVDA", keywords=["quantum"], press_df=df)
+        )
+
+    def test_empty_frame_returns_false(self):
+        import pandas as pd
+
+        df = pd.DataFrame(
+            columns=[
+                "id",
+                "published_utc",
+                "title",
+                "description",
+                "url",
+                "tickers",
+                "keywords",
+                "publisher",
+            ]
+        )
+        self.assertFalse(
+            recent_press.has_theme_in_press_frame(ticker="BEEM", keywords=["quantum"], press_df=df)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

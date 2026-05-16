@@ -56,7 +56,10 @@ class TestHasOpportunisticBuy(unittest.TestCase):
                 _record("ins1", dt.date(2026, 5, 1), "P", 1000, 50, "BEEM"),
             ]
         )
-        with patch.object(insider_v, "_load_form4_for_ticker", return_value=history):
+        with (
+            patch.object(insider_v, "_load_form4_for_ticker", return_value=history),
+            patch.object(insider_v, "_load_form4_for_insiders", return_value=history),
+        ):
             result = insider_v.has_opportunistic_buy(
                 ticker="BEEM",
                 asof=dt.date(2026, 5, 15),
@@ -74,7 +77,10 @@ class TestHasOpportunisticBuy(unittest.TestCase):
                 _record("ins1", dt.date(2026, 5, 1), "P", 10, 50, "BEEM"),  # only $500
             ]
         )
-        with patch.object(insider_v, "_load_form4_for_ticker", return_value=history):
+        with (
+            patch.object(insider_v, "_load_form4_for_ticker", return_value=history),
+            patch.object(insider_v, "_load_form4_for_insiders", return_value=history),
+        ):
             result = insider_v.has_opportunistic_buy(
                 ticker="BEEM",
                 asof=dt.date(2026, 5, 15),
@@ -103,7 +109,10 @@ class TestHasOpportunisticBuy(unittest.TestCase):
                 _record("ins1", dt.date(2026, 5, 1), "S", 1000, 50, "BEEM"),  # sale
             ]
         )
-        with patch.object(insider_v, "_load_form4_for_ticker", return_value=history):
+        with (
+            patch.object(insider_v, "_load_form4_for_ticker", return_value=history),
+            patch.object(insider_v, "_load_form4_for_insiders", return_value=history),
+        ):
             self.assertFalse(
                 insider_v.has_opportunistic_buy(
                     ticker="BEEM",
@@ -123,12 +132,48 @@ class TestHasOpportunisticBuy(unittest.TestCase):
                 _record("routine", dt.date(2026, 5, 1), "P", 1000, 50, "BEEM"),  # huge buy
             ]
         )
-        with patch.object(insider_v, "_load_form4_for_ticker", return_value=history):
+        with (
+            patch.object(insider_v, "_load_form4_for_ticker", return_value=history),
+            patch.object(insider_v, "_load_form4_for_insiders", return_value=history),
+        ):
             # Wait — March is the routine month, but a May trade IS still opportunistic for
             # this insider IF we lock classification to year start. Per Cohen-Malloy paper,
             # classification IS at start of year — so the routine insider's classification
             # for 2026 is ROUTINE (from history), and routine insiders are EXCLUDED
             # entirely from the signal regardless of trade month.
+            self.assertFalse(
+                insider_v.has_opportunistic_buy(
+                    ticker="BEEM",
+                    asof=dt.date(2026, 5, 15),
+                    lookback_days=30,
+                    usd_threshold=10_000,
+                )
+            )
+
+    def test_cross_ticker_routine_trader_classified_routine(self):
+        # Insider trades March across DIFFERENT tickers each year -> routine,
+        # but on BEEM alone they have only one trade (May 2026). Previously
+        # this would mislabel them as opportunistic; with cross-ticker loading
+        # they classify ROUTINE and contribute zero to the signal.
+        ticker_history = pd.DataFrame(
+            [
+                _record("multi", dt.date(2026, 5, 1), "P", 1000, 50, "BEEM"),
+            ]
+        )
+        full_history = pd.DataFrame(
+            [
+                # 3y of March trades across various tickers
+                _record("multi", dt.date(2023, 3, 5), "P", 10, 1, "AAPL"),
+                _record("multi", dt.date(2024, 3, 6), "P", 10, 1, "MSFT"),
+                _record("multi", dt.date(2025, 3, 7), "P", 10, 1, "GOOG"),
+                # ticker history also visible in full set
+                _record("multi", dt.date(2026, 5, 1), "P", 1000, 50, "BEEM"),
+            ]
+        )
+        with (
+            patch.object(insider_v, "_load_form4_for_ticker", return_value=ticker_history),
+            patch.object(insider_v, "_load_form4_for_insiders", return_value=full_history),
+        ):
             self.assertFalse(
                 insider_v.has_opportunistic_buy(
                     ticker="BEEM",

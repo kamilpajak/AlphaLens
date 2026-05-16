@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
 import re
 import urllib.parse
 import urllib.request
@@ -34,13 +35,19 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_etf_holdings"
 THEME_ETFS_PATH = Path(__file__).parent.parent / "config" / "theme_etfs.yaml"
-SEC_USER_AGENT = "AlphaLens-thematic pajakkamil@gmail.com"
+DEFAULT_USER_AGENT = "AlphaLens-thematic pajakkamil@gmail.com"
+USER_AGENT_ENV = "THEMATIC_USER_AGENT"
 SEC_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
 DEFAULT_MAX_AGE_DAYS = 100  # NPORT-P files quarterly; refresh every ~14 weeks
+SERIES_DISAMBIG_MAX_FETCHES = 5  # cap N+1 EDGAR primary_doc.xml lookups per search
+
+
+def _user_agent() -> str:
+    return os.environ.get(USER_AGENT_ENV) or DEFAULT_USER_AGENT
 
 
 def _http_get(url: str, *, accept: str = "*/*", timeout: float = 20.0) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": SEC_USER_AGENT, "Accept": accept})
+    req = urllib.request.Request(url, headers={"User-Agent": _user_agent(), "Accept": accept})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
@@ -153,7 +160,11 @@ def find_latest_filing(*, series_name: str) -> dict | None:
     """
     raw = _search_nport_p(series_name)
     target = series_name.lower()
-    for hit in raw.get("hits", {}).get("hits", []):
+    # Cap per-search primary_doc.xml fetches — N+1 disambiguation lookups
+    # against EDGAR scale poorly on busy trusts (Tidal Trust II files 30+
+    # series per quarter); 5 hits is plenty since `_search_nport_p` already
+    # ranks by date.
+    for hit in (raw.get("hits", {}).get("hits", []))[:SERIES_DISAMBIG_MAX_FETCHES]:
         src = hit.get("_source", {}) or {}
         ciks = src.get("ciks") or []
         if not ciks:
@@ -275,7 +286,10 @@ def is_in_thematic_etf(
         if (df["ticker"].str.upper() == ticker_upper).any():
             return True
         if name_query:
-            mask = df["name"].fillna("").str.lower().str.contains(name_query)
+            # Word-boundary match — "sun" must not match "sunrun" / "sunoco" /
+            # "sunset", but it should still match "Sun Microsystems Inc".
+            pattern = rf"\b{re.escape(name_query)}\b"
+            mask = df["name"].fillna("").str.lower().str.contains(pattern, regex=True, na=False)
             if mask.any():
                 return True
     return False
