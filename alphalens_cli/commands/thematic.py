@@ -75,7 +75,12 @@ def extract(
         "--events-dir",
         help="Extracted-events parquet root.",
     ),
-    model: str = typer.Option(gemini_flash.DEFAULT_MODEL, "--model", help="Gemini model id."),
+    model: str = typer.Option(
+        gemini_flash.DEFAULT_MODEL,
+        "--model",
+        envvar="GEMINI_MODEL",
+        help="Gemini model id (env GEMINI_MODEL as default; --model overrides).",
+    ),
     window_days: int = typer.Option(
         themes_mod.DEFAULT_WINDOW_DAYS,
         "--window-days",
@@ -102,7 +107,7 @@ def extract(
         news_dir=news_dir,
         events_dir=events_dir,
         api_key=api_key,
-        model=os.environ.get("GEMINI_MODEL", model),
+        model=model,
     )
     typer.echo(f"Extracted {len(events)} events for {target.isoformat()}")
     if len(events) > 0:

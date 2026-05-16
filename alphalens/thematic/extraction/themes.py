@@ -94,14 +94,12 @@ def roll_up(
         latest_seen=("_event_date", "max"),
     )
     grouped["count_baseline"] = (grouped["count_window"] - grouped["count_recent"]).clip(lower=0)
+    # ``clip(lower=1)`` absorbs the zero-baseline edge case natively:
+    # count_recent / max(count_baseline, 1) * scale == count_recent * scale
+    # when count_baseline == 0, so no separate new-themes branch is required.
     grouped["novelty_score"] = (
         grouped["count_recent"] / grouped["count_baseline"].clip(lower=1)
     ) * scale
-    # Themes with zero baseline AND non-zero recent get cap of novelty=window-days-as-multiplier
-    new_themes_mask = (grouped["count_baseline"] == 0) & (grouped["count_recent"] > 0)
-    grouped.loc[new_themes_mask, "novelty_score"] = (
-        grouped.loc[new_themes_mask, "count_recent"] * scale
-    )
 
     return (
         grouped[_OUTPUT_COLUMNS]
