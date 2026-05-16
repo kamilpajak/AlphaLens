@@ -1,4 +1,4 @@
-"""`alphalens thematic` — thematic event-driven tool (Phase A: ingest; Phase B: extract)."""
+"""`alphalens thematic` — thematic event-driven tool (Phase A ingest, B extract, C map)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import typer
 from alphalens.thematic import news_ingest
 from alphalens.thematic.extraction import gemini_flash
 from alphalens.thematic.extraction import themes as themes_mod
+from alphalens.thematic.mapping import gemini_mapper, orchestrator
 
 thematic_app = typer.Typer(
     name="thematic",
@@ -128,3 +129,84 @@ def extract(
             )
     else:
         typer.echo("  no themes above novelty threshold yet (expected on first runs)")
+
+
+@thematic_app.command("map-themes")
+def map_themes_cmd(
+    date: str = typer.Option(None, "--date", help="UTC date in YYYY-MM-DD (default: today)."),
+    events_dir: Path = typer.Option(
+        gemini_flash.DEFAULT_EVENTS_DIR,
+        "--events-dir",
+        help="Phase B extracted-events parquet root.",
+    ),
+    output_dir: Path = typer.Option(
+        orchestrator.DEFAULT_OUTPUT_DIR,
+        "--output-dir",
+        help="Phase C candidate-output parquet root.",
+    ),
+    window_days: int = typer.Option(
+        themes_mod.DEFAULT_WINDOW_DAYS, "--window-days", help="Theme rollup lookback."
+    ),
+    novelty_threshold: float = typer.Option(
+        themes_mod.DEFAULT_NOVELTY_THRESHOLD,
+        "--novelty-threshold",
+        help="Recent/baseline ratio for theme to be picked up by Layer 3.",
+    ),
+    max_themes: int = typer.Option(
+        10,
+        "--max-themes",
+        help="Cap on novel themes mapped per run (Gemini 3 Pro spend control).",
+    ),
+    model: str = typer.Option(
+        gemini_mapper.DEFAULT_MODEL,
+        "--model",
+        envvar="GEMINI_PRO_MODEL",
+        help="Gemini 3 Pro model id.",
+    ),
+    keep_unverified: bool = typer.Option(
+        False,
+        "--keep-unverified",
+        help="Include candidates that failed all 4 verification gates (audit/debug).",
+    ),
+) -> None:
+    """Roll up novel themes from Phase B → Gemini 3 Pro maps to candidates → verify."""
+    target = dt.date.fromisoformat(date) if date else dt.datetime.now(dt.UTC).date()
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        raise typer.BadParameter("GOOGLE_API_KEY missing from environment.")
+    polygon_key = os.environ.get("POLYGON_API_KEY", "")
+
+    rollup = themes_mod.roll_up(asof=target, events_dir=events_dir, window_days=window_days)
+    novel = themes_mod.flag_novel(rollup, threshold=novelty_threshold)
+    novel = novel.head(max_themes)
+    if len(novel) == 0:
+        typer.echo(
+            f"No novel themes above {novelty_threshold:.1f} in {window_days}d window — "
+            f"nothing to map."
+        )
+        return
+
+    typer.echo(f"Mapping {len(novel)} novel themes via Gemini 3 Pro ({model})...")
+    themes = list(novel["theme"])
+
+    df = orchestrator.map_themes(
+        themes=themes,
+        asof=target,
+        api_key=api_key,
+        polygon_api_key=polygon_key,
+        output_dir=output_dir,
+        keep_unverified=keep_unverified,
+    )
+    out_path = output_dir / f"{target.isoformat()}.parquet"
+    typer.echo(f"Wrote {len(df)} candidate rows → {out_path}")
+    if len(df) > 0:
+        typer.echo("")
+        typer.echo(f"{'theme':28s} {'ticker':8s} {'gates':30s} {'conf':4s}  rationale")
+        typer.echo("-" * 100)
+        for _, row in df.head(25).iterrows():
+            gates = ",".join(row["gates_passed"]) or "(none)"
+            typer.echo(
+                f"{row['theme'][:27]:28s} {row['ticker']:8s} "
+                f"{gates:30s} {row['gemini_confidence']:.2f}  "
+                f"{row['rationale'][:50]}"
+            )
