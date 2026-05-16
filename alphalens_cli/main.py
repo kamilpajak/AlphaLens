@@ -30,6 +30,7 @@ from alphalens_cli.commands.preaudit import preaudit_command
 from alphalens_cli.commands.preregister import preregister_app
 from alphalens_cli.commands.research import research_app
 from alphalens_cli.commands.status import status
+from alphalens_cli.commands.thematic import thematic_app
 from alphalens_cli.commands.watchdog import watchdog_app
 
 load_dotenv()
@@ -61,6 +62,7 @@ app.add_typer(paper_trade_app, name="paper-trade")
 app.add_typer(preregister_app, name="preregister")
 app.add_typer(research_app, name="research")
 app.add_typer(archive_app, name="archive")
+app.add_typer(thematic_app, name="thematic")
 app.command(name="status")(status)
 app.command(name="backtest")(backtest)
 app.command(

@@ -1,0 +1,36 @@
+version: 1
+description: |
+  RSS feeds polled daily by the thematic news ingester. Selected for tech /
+  finance / sector breadth. Each feed contributes ~5-50 items/day; total
+  budget ~500 items/day pre-filter.
+
+  Quality filter: feed must be from a reputable publisher AND publish full
+  article URLs (not just RSS-only landing pages). Items lacking text body are
+  dropped at transform time.
+
+  Refresh whenever feeds rot (HTTP 404, empty response 3 consecutive days).
+feeds:
+  - name: ft_technology
+    url: https://www.ft.com/technology?format=rss
+    domain: ft.com
+  - name: arstechnica
+    url: https://feeds.arstechnica.com/arstechnica/index
+    domain: arstechnica.com
+  - name: techcrunch
+    url: https://techcrunch.com/feed/
+    domain: techcrunch.com
+  - name: theverge
+    url: https://www.theverge.com/rss/index.xml
+    domain: theverge.com
+  - name: wired
+    url: https://www.wired.com/feed/rss
+    domain: wired.com
+  - name: mit_tech_review
+    url: https://www.technologyreview.com/feed/
+    domain: technologyreview.com
+  - name: seeking_alpha_market
+    url: https://seekingalpha.com/market_currents.xml
+    domain: seekingalpha.com
+  - name: marketwatch_top
+    url: https://feeds.content.dowjones.io/public/rss/mw_topstories
+    domain: marketwatch.com

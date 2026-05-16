@@ -59,6 +59,7 @@ LAYERS_WITH_STATUS = (
     "alphalens.screeners.options_volume",
     "alphalens.screeners.prescreener",
     "alphalens.archive.screeners.themed",
+    "alphalens.thematic",
     "alphalens.watchdog",
 )
 

@@ -1,0 +1,19 @@
+version: 1
+description: |
+  Thematic query buckets for GDELT 2.0 DOC API. One query per bucket per day.
+  Designed for ~5-10 buckets total to stay well under GDELT rate limits
+  (~1 req/5s, soft hourly cap). Each query mixes a theme keyword set with a
+  short list of anchor mega-cap names to keep recall high but precision tight.
+
+  Refresh whenever the broader theme scope changes (memo §14 lock 1).
+
+themes:
+  ai_quantum: '("CUDA" OR "quantum computing" OR "AI accelerator" OR "neural processor") AND (NVIDIA OR IBM OR Alphabet OR Microsoft OR IonQ)'
+  ai_software: '("foundation model" OR "LLM" OR "AI agent" OR "generative AI") AND (Microsoft OR OpenAI OR Alphabet OR Meta OR Anthropic)'
+  semiconductors: '(foundry OR "wafer" OR "lithography" OR "chip manufacturing") AND (TSMC OR ASML OR "Applied Materials" OR Intel OR Micron)'
+  biotech: '(mRNA OR "FDA approval" OR "phase 3 trial" OR "gene therapy") AND (Moderna OR Regeneron OR Vertex OR "Eli Lilly" OR Pfizer)'
+  energy_clean: '("clean energy" OR "solar panel" OR "battery storage" OR hydrogen) AND (Tesla OR Enphase OR "First Solar" OR NextEra)'
+  energy_oil: '("oil production" OR "LNG" OR "refining capacity" OR OPEC) AND (ExxonMobil OR Chevron OR ConocoPhillips OR Schlumberger)'
+  defense_geopolitics: '("defense contract" OR Pentagon OR NATO OR "military aid" OR sanctions) AND (Lockheed OR Raytheon OR Northrop OR Boeing)'
+  materials_metals: '("rare earth" OR copper OR lithium OR "industrial metals") AND (Freeport OR Albemarle OR Newmont OR Nucor)'
+  med_devices_health: '("medical device" OR "FDA clearance" OR "surgical robot") AND (Stryker OR "Intuitive Surgical" OR Medtronic OR "Boston Scientific")'

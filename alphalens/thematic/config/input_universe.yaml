@@ -1,0 +1,166 @@
+version: 1
+description: |
+  News-source universe for thematic event-driven tool. These are MEGA-CAP names
+  whose announcements ripple to second-order beneficiaries. NOT the output
+  candidate universe (output is $500M-$10B small/mid caps surfaced by LLM
+  reasoning + verification gates — those are NOT pre-listed).
+
+  Refresh cadence: quarterly. Compare against:
+  - S&P 100 components: https://en.wikipedia.org/wiki/S%26P_100
+  - Add sector leaders by market cap > $100B OR strong theme association
+    even at smaller cap (e.g. IONQ for quantum).
+  Last refresh: 2026-05-16
+  Total: ~130 tickers
+sp100:
+  - AAPL
+  - ABBV
+  - ABT
+  - ACN
+  - ADBE
+  - AIG
+  - ALL
+  - AMD
+  - AMGN
+  - AMT
+  - AMZN
+  - AVGO
+  - AXP
+  - BA
+  - BAC
+  - BK
+  - BKNG
+  - BLK
+  - BMY
+  - BRK.B
+  - C
+  - CAT
+  - CHTR
+  - CL
+  - CMCSA
+  - COF
+  - COP
+  - COST
+  - CRM
+  - CSCO
+  - CVS
+  - CVX
+  - DE
+  - DHR
+  - DIS
+  - DUK
+  - EMR
+  - F
+  - FDX
+  - GD
+  - GE
+  - GILD
+  - GM
+  - GOOG
+  - GOOGL
+  - GS
+  - HD
+  - HON
+  - IBM
+  - INTC
+  - INTU
+  - ISRG
+  - JNJ
+  - JPM
+  - KHC
+  - KO
+  - LIN
+  - LLY
+  - LMT
+  - LOW
+  - MA
+  - MCD
+  - MDLZ
+  - MDT
+  - MET
+  - META
+  - MMM
+  - MO
+  - MRK
+  - MS
+  - MSFT
+  - NEE
+  - NFLX
+  - NKE
+  - NOW
+  - NVDA
+  - ORCL
+  - PEP
+  - PFE
+  - PG
+  - PLTR
+  - PM
+  - PYPL
+  - QCOM
+  - RTX
+  - SBUX
+  - SCHW
+  - SO
+  - SPG
+  - T
+  - TGT
+  - TMO
+  - TMUS
+  - TSLA
+  - TXN
+  - UBER
+  - UNH
+  - UNP
+  - UPS
+  - USB
+  - V
+  - VZ
+  - WFC
+  - WMT
+  - XOM
+
+sector_leaders:
+  ai_semi:
+    - ARM     # ARM Holdings — CPU/GPU IP
+    - ASML    # lithography monopoly
+    - TSM     # foundry leader
+    - SMCI    # AI server integrator
+    - MRVL    # custom silicon
+    - MU      # memory/HBM
+    - ANET    # networking
+    - KLAC    # process control
+    - LRCX    # etch / deposition
+    - AMAT    # wafer fab equipment
+  cloud_saas:
+    - CRWD    # security
+    - SNOW    # data warehouse
+    - DDOG    # observability
+    - PANW    # security platform
+    - ZS      # zero-trust
+    - NET     # edge/CDN
+    - WDAY    # HCM/finance SaaS
+  quantum_emerging:
+    - IONQ    # trapped-ion quantum
+    - RGTI    # superconducting quantum
+    - QBTS    # D-Wave annealing
+    - QUBT    # photonic quantum (small cap, listed as theme driver, NOT output candidate)
+  biotech_pharma:
+    - REGN    # antibody
+    - VRTX    # cystic fibrosis / mRNA
+    - MRNA    # mRNA platform
+    - BIIB    # neuroscience
+    - ILMN    # sequencing
+  clean_energy:
+    - ENPH    # microinverters
+    - FSLR    # thin-film solar
+    - SEDG    # power electronics
+  defense_geopolitics:
+    - NOC     # Northrop
+    - GD      # already in S&P 100 — duplicate ok, dedup in code
+  materials:
+    - FCX    # copper
+    - NEM    # gold
+    - ALB    # lithium
+    - NUE    # steel
+  med_devices:
+    - BSX    # cardiovascular devices
+    - SYK    # ortho/medsurg
