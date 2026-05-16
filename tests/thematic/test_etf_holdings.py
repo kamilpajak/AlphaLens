@@ -316,5 +316,58 @@ class TestConfig(unittest.TestCase):
             self.assertIn("series_name", entry)
 
 
+class TestFetchHoldingsEmptyAndAux(unittest.TestCase):
+    def test_fetch_holdings_returns_empty_when_no_filing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(etf_holdings, "find_latest_filing", return_value=None):
+                df = etf_holdings.fetch_holdings(
+                    etf="UNKN", series_name="No Such Fund", cache_dir=Path(tmpdir)
+                )
+            self.assertTrue(df.empty)
+
+    def test_user_agent_env_override(self):
+        import os
+
+        os.environ["THEMATIC_USER_AGENT"] = "Override foo@bar"
+        try:
+            self.assertEqual(etf_holdings._user_agent(), "Override foo@bar")
+        finally:
+            del os.environ["THEMATIC_USER_AGENT"]
+        self.assertEqual(etf_holdings._user_agent(), etf_holdings.DEFAULT_USER_AGENT)
+
+    def test_is_in_thematic_etf_word_boundary_avoids_overmatch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            import pandas as pd
+
+            df = pd.DataFrame(
+                [
+                    {
+                        "name": "Sunrun Inc",
+                        "cusip": "x",
+                        "ticker": "RUN",
+                        "pct_val": 1.0,
+                        "asset_cat": "EC",
+                    },
+                ]
+            )
+            df.to_parquet(cache_dir / "ICLN_2025-08-31.parquet", index=False)
+
+            with patch.object(
+                etf_holdings,
+                "load_theme_etf_config",
+                return_value={"clean_energy": [{"etf": "ICLN", "series_name": "iShares"}]},
+            ):
+                # "SUN" name match should NOT match "Sunrun" thanks to word boundary
+                self.assertFalse(
+                    etf_holdings.is_in_thematic_etf(
+                        ticker="SUN",
+                        themes=["clean_energy"],
+                        ticker_to_name={"SUN": "sun"},
+                        cache_dir=cache_dir,
+                    )
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

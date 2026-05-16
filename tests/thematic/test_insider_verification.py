@@ -195,5 +195,111 @@ class TestHasOpportunisticBuy(unittest.TestCase):
             )
 
 
+class TestLoadFormFourPartitions(unittest.TestCase):
+    def _seed(self, root, year: int, rows: list[dict]):
+        part = root / f"transaction_year={year}"
+        part.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows).to_parquet(part / "compacted.parquet", index=False)
+
+    def test_load_form4_partitions_year_filter(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._seed(root, 2022, [_record("ins", dt.date(2022, 6, 1), "P", 10, 1, "BEEM")])
+            self._seed(root, 2026, [_record("ins", dt.date(2026, 6, 1), "P", 10, 1, "BEEM")])
+
+            df = insider_v._load_form4_partitions(form4_root=root, years={2026})
+            self.assertEqual(len(df), 1)
+            self.assertEqual(df.iloc[0]["transaction_date"].year, 2026)
+
+    def test_load_form4_partitions_ticker_filter(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._seed(
+                root,
+                2026,
+                [
+                    _record("a", dt.date(2026, 1, 1), "P", 10, 1, "BEEM"),
+                    _record("a", dt.date(2026, 2, 1), "P", 10, 1, "OTHER"),
+                ],
+            )
+            df = insider_v._load_form4_partitions(form4_root=root, years={2026}, ticker="BEEM")
+            self.assertEqual(len(df), 1)
+
+    def test_load_form4_partitions_insider_filter(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._seed(
+                root,
+                2026,
+                [
+                    _record("alice", dt.date(2026, 1, 1), "P", 10, 1, "BEEM"),
+                    _record("bob", dt.date(2026, 2, 1), "P", 10, 1, "BEEM"),
+                ],
+            )
+            df = insider_v._load_form4_partitions(
+                form4_root=root, years={2026}, insider_ciks={"alice"}
+            )
+            self.assertEqual(len(df), 1)
+            self.assertEqual(df.iloc[0]["reporting_owner_cik"], "alice")
+
+    def test_load_form4_partitions_missing_root(self):
+        from pathlib import Path
+
+        df = insider_v._load_form4_partitions(form4_root=Path("/nonexistent/path"), years={2026})
+        self.assertTrue(df.empty)
+
+    def test_load_form4_partitions_empty_years(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            df = insider_v._load_form4_partitions(form4_root=Path(tmpdir), years=set())
+            self.assertTrue(df.empty)
+
+    def test_classification_years_includes_lookback(self):
+        self.assertEqual(
+            insider_v._classification_years(dt.date(2026, 5, 15)),
+            {2023, 2024, 2025, 2026},
+        )
+
+    def test_load_form4_for_ticker_with_year_filter_uses_partitions(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._seed(
+                root,
+                2026,
+                [_record("a", dt.date(2026, 6, 1), "P", 10, 1, "BEEM")],
+            )
+            df = insider_v._load_form4_for_ticker("BEEM", form4_root=root, years={2026})
+            self.assertEqual(len(df), 1)
+
+    def test_load_form4_for_ticker_legacy_full_scan(self):
+        # When years=None, falls back to old glob-all behaviour
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            self._seed(
+                root,
+                2024,
+                [_record("a", dt.date(2024, 1, 1), "P", 10, 1, "BEEM")],
+            )
+            df = insider_v._load_form4_for_ticker("BEEM", form4_root=root)
+            self.assertEqual(len(df), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

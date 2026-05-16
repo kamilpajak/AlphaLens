@@ -204,5 +204,88 @@ class TestMapThemes(unittest.TestCase):
             self.assertEqual(len(df), 0)
 
 
+class TestGateWrappers(unittest.TestCase):
+    def test_gate_etf_delegates(self):
+        with patch.object(orchestrator.etf_holdings, "is_in_thematic_etf", return_value=True):
+            self.assertTrue(
+                orchestrator._gate_etf(ticker="NVDA", themes=["q"], asof=dt.date(2026, 5, 15))
+            )
+
+    def test_gate_tenk_delegates(self):
+        with patch.object(orchestrator.tenk_grep, "has_theme_keywords_in_10k", return_value=False):
+            self.assertFalse(
+                orchestrator._gate_tenk(
+                    ticker="NVDA", theme_keywords=["q"], asof=dt.date(2026, 5, 15)
+                )
+            )
+
+    def test_gate_press_uses_frame_when_provided(self):
+        import pandas as pd
+
+        with patch.object(orchestrator.recent_press, "has_theme_in_press_frame", return_value=True):
+            self.assertTrue(
+                orchestrator._gate_press(
+                    ticker="NVDA",
+                    theme_keywords=["q"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="k",
+                    press_df=pd.DataFrame(),
+                )
+            )
+
+    def test_gate_press_falls_back_when_no_frame(self):
+        with patch.object(
+            orchestrator.recent_press, "has_theme_in_recent_press", return_value=True
+        ):
+            self.assertTrue(
+                orchestrator._gate_press(
+                    ticker="NVDA",
+                    theme_keywords=["q"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="k",
+                )
+            )
+
+    def test_gate_insider_delegates(self):
+        with patch.object(orchestrator.insider, "has_opportunistic_buy", return_value=False):
+            self.assertFalse(orchestrator._gate_insider(ticker="NVDA", asof=dt.date(2026, 5, 15)))
+
+    def test_theme_keywords_expands_snake_case(self):
+        kws = orchestrator._theme_keywords("quantum_computing")
+        self.assertIn("quantum_computing", kws)
+        self.assertIn("quantum computing", kws)
+
+
+class TestMapThemesWritesGatesPassedStr(unittest.TestCase):
+    def test_gates_passed_str_column_present(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=[{"ticker": "QBTS", "rationale": "x", "confidence": 0.9}],
+                ),
+                patch.object(orchestrator, "_gate_etf", return_value=True),
+                patch.object(orchestrator, "_gate_tenk", return_value=False),
+                patch.object(orchestrator, "_gate_press", return_value=True),
+                patch.object(orchestrator, "_gate_insider", return_value=False),
+                patch.object(
+                    orchestrator.recent_press,
+                    "fetch_window_universe",
+                    return_value=__import__("pandas").DataFrame(),
+                ),
+            ):
+                df = orchestrator.map_themes(
+                    themes=["quantum"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    polygon_api_key="px",
+                    output_dir=cache_dir,
+                )
+            self.assertIn("gates_passed_str", df.columns)
+            self.assertEqual(df.iloc[0]["gates_passed_str"], "etf,press")
+
+
 if __name__ == "__main__":
     unittest.main()

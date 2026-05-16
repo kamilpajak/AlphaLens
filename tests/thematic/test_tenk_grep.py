@@ -158,5 +158,31 @@ class TestVerificationGate(unittest.TestCase):
                 )
 
 
+class TestExtractTextScriptStripping(unittest.TestCase):
+    def test_strips_script_and_style_inner_content(self):
+        html = """
+        <html><head>
+        <style>.s { color: quantum_red; }</style>
+        <script>var x = "biotech_secret";</script>
+        </head><body>
+        <p>Real text about <b>quantum computing</b>.</p>
+        </body></html>
+        """
+        text = tenk_grep.extract_text(html)
+        self.assertNotIn("quantum_red", text)
+        self.assertNotIn("biotech_secret", text)
+        self.assertIn("quantum computing", text)
+
+    def test_user_agent_env_override(self):
+        import os
+
+        os.environ["THEMATIC_USER_AGENT"] = "TestAgent override@test"
+        try:
+            self.assertEqual(tenk_grep._user_agent(), "TestAgent override@test")
+        finally:
+            del os.environ["THEMATIC_USER_AGENT"]
+        self.assertEqual(tenk_grep._user_agent(), tenk_grep.DEFAULT_USER_AGENT)
+
+
 if __name__ == "__main__":
     unittest.main()
