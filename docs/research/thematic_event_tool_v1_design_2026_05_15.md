@@ -1,7 +1,7 @@
 # Thematic Event-Driven Decision-Support Tool — Design Memo v1
 
-**Date:** 2026-05-15
-**Status:** **DRAFT** (pre-lock, pre-adversarial-review)
+**Date:** 2026-05-15 (locked 2026-05-16)
+**Status:** **LOCKED** — 7 user decisions resolved §14; Phase A engineering authorized
 **Parallel track:** AlphaLens dodaje DRUGĄ równoległą ścieżkę obok kontynuowanej factor-paradigm-search. Paradigm #14 PEAD v2 audit nadal in-flight, paper-trade observations (v9D, pc_abnormal) continue, Layer 1 watchdog live, methodology bundle MIT-licensed durable. Ten tool jest **thematic event-driven discretionary decision-support** — research/operational tool augmentujący user's existing WhatsApp investing group workflow. NIE jest paradigm test pod project doctrine 3.5; nie zastępuje factor research. Both tracks operate independently.
 
 ---
@@ -508,3 +508,34 @@ from alphalens.screeners._common import winsorize, rank_zscore
 - ⏸ Provisional v9D/pc_abnormal (paper-trade observation) — defer until ~2027-05
 
 **No outstanding engineering tasks before user answers 7 decyzji.** Wait for user input then proceed.
+
+---
+
+## §14. User decisions LOCKED (2026-05-16)
+
+| # | Decision | Lock |
+|---|---|---|
+| 1 | Theme domain whitelist | **BROAD**: AI/tech + energy + biotech + materials + healthcare + geopolitics. Sub-themes auto-discovered by Gemini Flash; no hard whitelist enforced. |
+| 2 | Look-back validation anchor | **Single case post-MVP**: NVIDIA CUDA-Q announcement (April 2025) → QUBT ripple 1-7d later. Tool must surface QUBT in correct window for validation pass. Expand to multi-case later. |
+| 3 | WhatsApp group size + dynamics | **9 members**. Brief format = **thesis only**. No "open questions for group" section. No coordinated voting tracked by tool. |
+| 4 | Cadence | **Daily short list** of 5-10 candidates surfaced to user. User cherry-picks subset to share with group. |
+| 5 | Ship-to-group | **Manual only** — tool never auto-shares. User reviews every output before forwarding. |
+| 6 | Friend's role | **Adversarial check** (na razie). Tool output benchmarked against friend's picks; tool's value = catches friend missed OR rejects friend's bad picks. No collaboration mode yet. |
+| 7 | LLM budget | **$30-40/mo Gemini ceiling**. Free tier expected to cover ~90%+; paid = burst capacity reserve. Telegram already configured per `.env`. |
+
+### Derived implications
+
+- **Q1 broad scope** → ETF universe for Layer 3 verification expands: QTUM/ARKQ/BOTZ/CIBR (AI/quantum) + ICLN/PBW/QCLN (clean energy) + IBB/XBI (biotech) + LIT/REMX (materials) + IHI/IHF (healthcare devices/services) + ITA/PPA (defense/geopolitics). Bootstrap ~15 thematic ETFs in Phase C.
+- **Q2 single anchor** → look-back validation is lightweight post-MVP gate, not blocker. Run NVDA→QUBT replay AFTER Phase G complete; if tool would have surfaced QUBT in 1-7d window after CUDA-Q press release → Phase H paper-trade begins. If miss → diagnose Layer 2/3 prompts before paper-trade.
+- **Q3 9 members + thesis-only** → §5 Layer-5 report template drops "Bear case" 3-reason section to single-paragraph bear summary. Confidence score retained. Bear case still mandatory but compressed. Saves Gemini 3 Pro tokens ~30%.
+- **Q4 daily short** → cadence shifts §5 brief schema: 5-10 candidates/day, weekly batch derived as roll-up. Daily Telegram digest at 07:00 local (post-overnight Gemini batch).
+- **Q5 manual** → no auto-share code path in Phase G. Telegram digest goes ONLY to user's personal chat (`TELEGRAM_CHAT_ID` from `.env`), never to group chat ID.
+- **Q6 adversarial check** → feedback ledger §6 schema adds `friend_concurrent_pick` boolean column tracking whether friend independently surfaced same ticker in same window. Comparison metrics: precision/recall/disagreement-direction.
+- **Q7 budget** → Layer 2 Gemini Flash batch capped at 200 items/day (was 300) to fit free-tier safely; spillover queued to next day. Layer 3/5 Gemini 3 Pro capped at $30/mo hard ceiling; if approaching, downgrade marginal-confidence (conf=3) candidates to Flash argumentation.
+
+### Status after lock
+
+- Phase A engineering authorized.
+- No mandatory zen+Perplexity "be brutal" review (per `feedback_adversarial_reviewer_bias_2026_05_16.md`; reviewer good for technical critique post-engineering, BAD for go/no-go on uncertain projects).
+- Optional balanced zen review on §1-7 architecture available but not blocking.
+- Phase A first action: inventory existing Polygon news / SEC EDGAR / RSS infrastructure → identify reuse vs net-new before writing code.
