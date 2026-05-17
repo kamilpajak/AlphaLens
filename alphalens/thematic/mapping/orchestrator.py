@@ -218,9 +218,12 @@ def map_themes(
         except ImportError:
             logger.warning("google-genai SDK missing; mapper will lazy-init per call")
 
-    # Pre-fetch one window-wide press frame for all candidates; falls back to
-    # an empty frame on failure (gate then fails closed per-ticker).
-    press_df = pd.DataFrame()
+    # Pre-fetch one window-wide press frame for all candidates. On fetch
+    # failure leave ``press_df`` as ``None`` so ``_gate_press`` falls back to
+    # the per-ticker tri-state path — leaving an empty DataFrame here would
+    # mask the outage as a definite "no" via ``has_theme_in_press_frame`` for
+    # every candidate.
+    press_df: pd.DataFrame | None = None
     if polygon_key:
         try:
             press_df = recent_press.fetch_window_universe(asof=asof, api_key=polygon_key)

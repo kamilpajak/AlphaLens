@@ -340,6 +340,54 @@ class TestMapThemes(unittest.TestCase):
             self.assertIn("market_cap", df.columns)
             self.assertEqual(df.iloc[0]["market_cap"], 1_780_000_000)
 
+    def test_map_themes_press_window_failure_marks_press_unknown(self):
+        # When fetch_window_universe raises (Polygon rate limit / network),
+        # orchestrator must propagate None to _gate_press so the per-ticker
+        # fallback runs (also tri-state). If left as empty DataFrame, the
+        # frame variant returns False for every candidate — silently
+        # converting an unknown into a false-negative for ALL candidates
+        # affected by one batch outage.
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=[{"ticker": "QBTS", "rationale": "x", "confidence": 0.9}],
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value={"QBTS": 1_000_000_000},
+                ),
+                patch.object(
+                    orchestrator.recent_press,
+                    "fetch_window_universe",
+                    side_effect=RuntimeError("polygon down"),
+                ),
+                # Per-ticker fallback also fails -> tri-state None
+                patch.object(
+                    orchestrator.recent_press,
+                    "has_theme_in_recent_press",
+                    return_value=None,
+                ),
+                patch.object(orchestrator, "_gate_etf", return_value=False),
+                patch.object(orchestrator, "_gate_tenk", return_value=False),
+                patch.object(orchestrator, "_gate_insider", return_value=False),
+            ):
+                df = orchestrator.map_themes(
+                    themes=["quantum"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    polygon_api_key="px",
+                    output_dir=cache_dir,
+                    keep_unverified=True,
+                )
+            self.assertEqual(len(df), 1)
+            self.assertIn("press", df.iloc[0]["gates_unknown"])
+            self.assertNotIn("press", df.iloc[0]["gates_failed"])
+
     def test_map_themes_empty_when_no_proposals(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.object(orchestrator.gemini_mapper, "propose_candidates", return_value=[]):
