@@ -20,6 +20,8 @@ import enum
 import logging
 from typing import Any
 
+import json_repair
+
 from alphalens.thematic.argumentation.prompts import build_flash_prompt, build_pro_prompt
 from alphalens.thematic.argumentation.schema import BRIEF_RESPONSE_SCHEMA
 from alphalens.thematic.extraction.schema import parse_extraction
@@ -166,14 +168,57 @@ def generate_brief(
     raw = getattr(response, "text", "") or ""
     parsed = parse_extraction(raw)
     if parsed is None:
-        logger.warning("brief response unparseable for %s: %r", facts.get("ticker"), raw[:200])
-        return None, BriefErrorKind.MALFORMED_JSON
+        # finish_reason=STOP + parse failed → try json-repair (per
+        # Perplexity 2026-05-17 §1.2). The model finished generating but
+        # the JSON has small structural errors (missing comma, trailing
+        # bracket, etc); json_repair often salvages exactly the kind of
+        # output the schema expects. We do NOT apply repair to TRUNCATED
+        # responses — those short-circuit upstream so the retry wrapper
+        # can drive a fresh attempt with more tokens.
+        parsed = _try_json_repair(raw, ticker=facts.get("ticker"))
+        if parsed is None:
+            logger.warning("brief response unparseable for %s: %r", facts.get("ticker"), raw[:200])
+            return None, BriefErrorKind.MALFORMED_JSON
 
     # Defensive: ensure all 5 expected keys present; missing key → string "".
     for key in BRIEF_RESPONSE_SCHEMA["required"]:
         parsed.setdefault(key, "")
     parsed["model_used"] = model
     return parsed, BriefErrorKind.NONE
+
+
+def _try_json_repair(raw: str, *, ticker: str | None = None) -> dict | None:
+    """Attempt to salvage a malformed JSON brief via json-repair.
+
+    Returns the parsed dict on success, None otherwise. Logs at INFO
+    level when repair succeeds so the operator can monitor how often
+    repair is needed (frequent repair = upstream prompt or schema
+    issue worth investigating).
+
+    Treats empty / content-less dicts as failure (zen review 2026-05-17
+    M1): ``json_repair.loads('{ unparseable garbage')`` returns ``{}``,
+    which is structurally a dict but has no substantive content; counting
+    it as a "successful repair" would pollute the Pro/Flash counters and
+    mislead the BriefErrorKind classifier. Require at least one schema-
+    required key with non-empty string text to count as recovery.
+    """
+    try:
+        repaired = json_repair.loads(raw)
+    except Exception as exc:
+        logger.debug("json_repair failed for %s: %s", ticker, exc)
+        return None
+    if not isinstance(repaired, dict):
+        logger.debug("json_repair for %s returned non-dict: %r", ticker, type(repaired))
+        return None
+    has_substantive_field = any(
+        isinstance(repaired.get(k), str) and repaired[k].strip()
+        for k in BRIEF_RESPONSE_SCHEMA["required"]
+    )
+    if not has_substantive_field:
+        logger.debug("json_repair for %s returned empty/contentless dict", ticker)
+        return None
+    logger.info("json_repair recovered brief for %s (%d keys)", ticker, len(repaired))
+    return repaired
 
 
 def generate_brief_with_retry(

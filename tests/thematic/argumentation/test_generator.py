@@ -253,6 +253,122 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
         self.assertIsNone(brief)
         self.assertEqual(mock_call.call_count, 2)
 
+
+class TestJsonRepairFallback(unittest.TestCase):
+    """Per Perplexity 2026-05-17 §1.2: on STOP + parse-fail, attempt
+    ``json_repair`` to salvage well-formed-ish responses before giving up."""
+
+    def test_repair_recovers_missing_closing_brace(self):
+        # finish_reason=STOP, but JSON missing closing brace and trailing
+        # comma — exactly the kind of small structural error json_repair
+        # handles. Expect successful recovery + BriefErrorKind.NONE +
+        # INFO log so the operator can monitor repair frequency.
+        malformed = (
+            '{"tldr": "thesis", "supply_chain_reasoning": "chain", '
+            '"bear_summary": "bear", "catalyst_failure_exit": "exit", '
+            '"entry_price_note": "entry",'  # trailing comma + no close
+        )
+        resp = SimpleNamespace(
+            text=malformed,
+            candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+        )
+        with patch.object(generator, "_call_gemini", return_value=resp):
+            with self.assertLogs("alphalens.thematic.argumentation.generator", level="INFO") as cm:
+                brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
+        self.assertIsNotNone(brief)
+        self.assertEqual(brief["tldr"], "thesis")
+        self.assertEqual(brief["bear_summary"], "bear")
+        self.assertEqual(brief["model_used"], generator.PRO_MODEL)
+        self.assertTrue(any("json_repair recovered brief" in m for m in cm.output))
+
+    def test_repair_partial_recovery_fills_missing_required_keys(self):
+        # Malformed JSON: only tldr present + missing closing brace, so
+        # parse_extraction fails and the repair path is actually invoked.
+        # Missing schema-required fields default to "" (defensive contract
+        # preserved from pre-PR generator behaviour).
+        resp = SimpleNamespace(
+            text='{"tldr": "only this field"',  # no closing brace → repair triggers
+            candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+        )
+        with patch.object(generator, "_call_gemini", return_value=resp):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
+        self.assertEqual(brief["tldr"], "only this field")
+        for key in ("supply_chain_reasoning", "bear_summary"):
+            self.assertEqual(brief[key], "")
+
+    def test_repair_non_dict_result_treated_as_malformed(self):
+        # "{ completely unparseable garbage" → json_repair yields a list
+        # → _try_json_repair rejects non-dict → MALFORMED_JSON.
+        resp = SimpleNamespace(
+            text="{ completely unparseable garbage",
+            candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+        )
+        with patch.object(generator, "_call_gemini", return_value=resp):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.MALFORMED_JSON)
+
+
+class TestTryJsonRepairUnit(unittest.TestCase):
+    """Unit tests for the _try_json_repair helper in isolation. Direct unit
+    coverage matters here because the schema-defaults loop in generate_brief
+    masks empty-dict edge cases at the integration level (parse_extraction
+    happily extracts bare '{}' from '{} unclosed garbage' and the loop pads
+    with ''). The substantive-field guard lives in _try_json_repair."""
+
+    def test_returns_none_for_empty_dict(self):
+        # Zen review 2026-05-17 M1: empty {} from json_repair must NOT
+        # count as recovery.
+        self.assertIsNone(generator._try_json_repair("{} unclosed", ticker="QUBT"))
+
+    def test_returns_none_for_non_dict(self):
+        # "{ garbage" yields a list — rejected.
+        self.assertIsNone(generator._try_json_repair("{ totally garbage", ticker="QUBT"))
+
+    def test_returns_none_when_dict_has_no_required_keys(self):
+        # Has keys, but none of them are schema-required.
+        self.assertIsNone(generator._try_json_repair('{"foo": "bar", "baz": "qux"}', ticker="QUBT"))
+
+    def test_returns_none_when_required_keys_are_empty_strings(self):
+        # Has schema-required keys but all empty → still not recovery.
+        self.assertIsNone(
+            generator._try_json_repair('{"tldr": "", "bear_summary": "  "}', ticker="QUBT")
+        )
+
+    def test_returns_dict_when_at_least_one_required_key_has_content(self):
+        out = generator._try_json_repair('{"tldr": "real thesis"', ticker="QUBT")
+        self.assertEqual(out, {"tldr": "real thesis"})
+
+    def test_returns_none_when_loads_raises(self):
+        with patch.object(generator.json_repair, "loads", side_effect=RuntimeError("library boom")):
+            self.assertIsNone(generator._try_json_repair("anything", ticker="QUBT"))
+
+    def test_repair_failure_returns_malformed_json(self):
+        # Completely garbled response that json_repair cannot salvage
+        # into a dict — return MALFORMED_JSON as before.
+        resp = SimpleNamespace(
+            text="this is not even close to JSON, just prose ramble",
+            candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+        )
+        with patch.object(generator, "_call_gemini", return_value=resp):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.MALFORMED_JSON)
+
+    def test_repair_not_applied_to_truncated_finish_reason(self):
+        # TRUNCATED short-circuits BEFORE the parse/repair stage so the
+        # retry wrapper can drive a fresh attempt with more tokens. json
+        # _repair would produce garbled mid-sentence text on a truncated
+        # response — exactly what we want to avoid.
+        with patch.object(generator, "_call_gemini", return_value=_truncated_response()):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.TRUNCATED)
+
+
+class TestGenerateBriefWithRetryClient(unittest.TestCase):
     def test_client_built_once_across_retry(self):
         # Zen review 2026-05-17 M1: when api_key is given without hoisted
         # clients, the retry path used to lazy-build a 2nd client. Verify
