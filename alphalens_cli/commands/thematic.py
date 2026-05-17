@@ -1,4 +1,4 @@
-"""`alphalens thematic` — thematic event-driven tool (Phase A ingest, B extract, C map)."""
+"""`alphalens thematic` — thematic event-driven tool (Phase A-D)."""
 
 from __future__ import annotations
 
@@ -7,12 +7,14 @@ import logging
 import os
 from pathlib import Path
 
+import pandas as pd
 import typer
 
 from alphalens.thematic import news_ingest
 from alphalens.thematic.extraction import gemini_flash
 from alphalens.thematic.extraction import themes as themes_mod
 from alphalens.thematic.mapping import gemini_mapper, orchestrator
+from alphalens.thematic.screening import scorer as screening_scorer
 
 thematic_app = typer.Typer(
     name="thematic",
@@ -223,4 +225,64 @@ def map_themes_cmd(
                 f"{row['theme'][:27]:28s} {row['ticker']:8s} "
                 f"{passed:20s} {unknown:16s} {row['gemini_confidence']:.2f}  "
                 f"{row['rationale'][:40]}"
+            )
+
+
+DEFAULT_SCORED_DIR = Path.home() / ".alphalens" / "thematic_scored"
+
+
+@thematic_app.command("score")
+def score(
+    date: str = typer.Option(None, "--date", help="UTC date in YYYY-MM-DD (default: yesterday)."),
+    candidates_dir: Path = typer.Option(
+        orchestrator.DEFAULT_OUTPUT_DIR,
+        "--candidates-dir",
+        help="Phase C candidate parquet root.",
+    ),
+    output_dir: Path = typer.Option(
+        DEFAULT_SCORED_DIR,
+        "--output-dir",
+        help="Phase D scored parquet root.",
+    ),
+) -> None:
+    """Layer 4 quantitative screen — enrich Phase C candidates with 4 signals."""
+    target = (
+        dt.date.fromisoformat(date)
+        if date
+        else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    )
+    src = candidates_dir / f"{target.isoformat()}.parquet"
+    if not src.exists():
+        raise typer.BadParameter(f"Phase C parquet missing: {src}")
+
+    candidates = pd.read_parquet(src)
+    typer.echo(f"Scoring {len(candidates)} candidates from {src} (asof={target.isoformat()})...")
+    enriched = screening_scorer.score_candidates(candidates, asof=target)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"{target.isoformat()}.parquet"
+    enriched.to_parquet(out_path, index=False)
+
+    score_counts = enriched["layer4_weighted_score"].value_counts().sort_index().to_dict()
+    typer.echo(f"Wrote {len(enriched)} scored rows → {out_path}")
+    typer.echo(f"  layer4_weighted_score distribution: {score_counts}")
+    if len(enriched) > 0:
+        typer.echo("")
+        typer.echo(
+            f"{'ticker':8s} {'industry':20s} {'score':5s} {'ins$':>10s} "
+            f"{'fcff%':>6s} {'val%':>5s} technicals"
+        )
+        typer.echo("-" * 110)
+        for _, row in enriched.head(25).iterrows():
+            ind = (row.get("industry_name") or "?")[:19]
+            ins = row.get("insider_score_usd")
+            ins_str = f"{ins / 1000:.0f}k" if ins is not None and not pd.isna(ins) else "-"
+            fcff = row.get("fcff_yield_pct")
+            fcff_str = f"{fcff:.1f}" if fcff is not None and not pd.isna(fcff) else "-"
+            val = row.get("valuation_composite_sector_percentile")
+            val_str = f"{val:.0f}" if val is not None and not pd.isna(val) else "-"
+            typer.echo(
+                f"{row['ticker']:8s} {ind:20s} {int(row['layer4_weighted_score']):>5d} "
+                f"{ins_str:>10s} {fcff_str:>6s} {val_str:>5s} "
+                f"{row.get('technicals_summary_str', '')[:50]}"
             )

@@ -148,5 +148,102 @@ class TestMapThemesCLI(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
 
 
+class TestScoreCLI(unittest.TestCase):
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def test_score_reads_phase_c_writes_enriched(self):
+        candidates = pd.DataFrame(
+            [
+                {
+                    "theme": "quantum_computing",
+                    "ticker": "QUBT",
+                    "company_name": "Quantum Computing Inc",
+                    "rationale": "x",
+                    "gemini_confidence": 0.85,
+                    "market_cap": 1.78e9,
+                    "gates_passed": ["tenk"],
+                    "gates_passed_str": "tenk",
+                    "n_gates_passed": 1,
+                    "gates_failed": [],
+                    "gates_failed_str": "",
+                    "n_gates_failed": 0,
+                    "gates_unknown": [],
+                    "gates_unknown_str": "",
+                    "n_gates_unknown": 0,
+                    "verified": True,
+                }
+            ]
+        )
+        enriched = candidates.copy()
+        enriched["industry_id"] = 101001
+        enriched["industry_name"] = "Quantum Computing Software"
+        enriched["sector_name"] = "Technology"
+        enriched["insider_score_usd"] = 50_000.0
+        enriched["insider_score_sector_percentile"] = 75.0
+        enriched["fcff_yield_pct"] = 4.0
+        enriched["fcff_yield_sector_percentile"] = 80.0
+        enriched["valuation_pe"] = None
+        enriched["valuation_ps"] = 30.0
+        enriched["valuation_ev_rev"] = 32.0
+        enriched["valuation_fcf_margin"] = -0.5
+        enriched["valuation_composite_sector_percentile"] = 60.0
+        enriched["technical_rsi"] = 55.0
+        enriched["technical_ma50_distance_pct"] = 5.0
+        enriched["technical_atr_pct"] = 4.0
+        enriched["technical_volume_zscore"] = 1.0
+        enriched["technicals_summary_str"] = "RSI 55 / MA50 +5.0% / ATR 4.0% / volZ 1.0"
+        enriched["layer4_weighted_score"] = 4
+
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as cdir, tempfile.TemporaryDirectory() as tmp:
+            cpath = Path(cdir) / "2026-04-14.parquet"
+            candidates.to_parquet(cpath, index=False)
+            with patch(
+                "alphalens_cli.commands.thematic.screening_scorer.score_candidates",
+                return_value=enriched,
+            ):
+                result = self.runner.invoke(
+                    app,
+                    [
+                        "thematic",
+                        "score",
+                        "--date",
+                        "2026-04-14",
+                        "--candidates-dir",
+                        cdir,
+                        "--output-dir",
+                        tmp,
+                    ],
+                )
+            self.assertEqual(result.exit_code, 0, msg=result.output)
+            self.assertIn("Scoring 1 candidates", result.output)
+            self.assertIn("Wrote 1 scored rows", result.output)
+            self.assertIn("QUBT", result.output)
+            out_path = Path(tmp) / "2026-04-14.parquet"
+            self.assertTrue(out_path.exists())
+            round_trip = pd.read_parquet(out_path)
+            self.assertIn("layer4_weighted_score", round_trip.columns)
+
+    def test_score_errors_when_phase_c_parquet_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.runner.invoke(
+                app,
+                [
+                    "thematic",
+                    "score",
+                    "--date",
+                    "2026-04-14",
+                    "--candidates-dir",
+                    tmp,
+                    "--output-dir",
+                    tmp,
+                ],
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Phase C parquet missing", result.output)
+
+
 if __name__ == "__main__":
     unittest.main()
