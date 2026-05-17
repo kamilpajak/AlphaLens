@@ -89,11 +89,34 @@ class TestHasOpportunisticBuy(unittest.TestCase):
             )
         self.assertFalse(result)
 
-    def test_returns_false_when_no_records(self):
+    def test_returns_none_when_no_form4_history_for_ticker(self):
+        # No Form-4 records anywhere for this ticker = "we have no data" not
+        # "insider activity was checked and absent". The orchestrator records
+        # unknown so an operator can distinguish from real-no-signal cases.
         with patch.object(insider_v, "_load_form4_for_ticker", return_value=pd.DataFrame()):
-            self.assertFalse(
+            self.assertIsNone(
                 insider_v.has_opportunistic_buy(
                     ticker="UNKN",
+                    asof=dt.date(2026, 5, 15),
+                    lookback_days=30,
+                    usd_threshold=10_000,
+                )
+            )
+
+    def test_returns_false_when_history_exists_but_window_empty(self):
+        # Ticker has Form-4 history but no trades in the lookback window.
+        # That IS a real "no recent insider activity" signal — gate FAILED,
+        # not UNKNOWN. Distinguished from the no-data-at-all case above.
+        old_history = pd.DataFrame(
+            [
+                _record("ins1", dt.date(2023, 3, 5), "P", 10, 1, "BEEM"),
+                _record("ins1", dt.date(2024, 6, 15), "P", 10, 1, "BEEM"),
+            ]
+        )
+        with patch.object(insider_v, "_load_form4_for_ticker", return_value=old_history):
+            self.assertFalse(
+                insider_v.has_opportunistic_buy(
+                    ticker="BEEM",
                     asof=dt.date(2026, 5, 15),
                     lookback_days=30,
                     usd_threshold=10_000,
@@ -183,9 +206,9 @@ class TestHasOpportunisticBuy(unittest.TestCase):
                 )
             )
 
-    def test_fails_closed_on_loader_error(self):
+    def test_returns_none_on_loader_error(self):
         with patch.object(insider_v, "_load_form4_for_ticker", side_effect=RuntimeError("IO")):
-            self.assertFalse(
+            self.assertIsNone(
                 insider_v.has_opportunistic_buy(
                     ticker="BEEM",
                     asof=dt.date(2026, 5, 15),

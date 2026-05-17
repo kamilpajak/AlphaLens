@@ -204,15 +204,23 @@ def map_themes_cmd(
         keep_unverified=keep_unverified,
     )
     out_path = output_dir / f"{target.isoformat()}.parquet"
-    typer.echo(f"Wrote {len(df)} candidate rows → {out_path}")
+    dropped = int(df.attrs.get("dropped_total", 0))
+    all_unknown = int(df.attrs.get("dropped_all_unknown", 0))
+    summary = f"Wrote {len(df)} candidate rows → {out_path}"
+    if dropped > 0:
+        summary += f"  (dropped {dropped} unverified, of which {all_unknown} were all-unknown)"
+    typer.echo(summary)
     if len(df) > 0:
         typer.echo("")
-        typer.echo(f"{'theme':28s} {'ticker':8s} {'gates':30s} {'conf':4s}  rationale")
-        typer.echo("-" * 100)
+        typer.echo(
+            f"{'theme':28s} {'ticker':8s} {'pass':20s} {'unknown':16s} {'conf':4s}  rationale"
+        )
+        typer.echo("-" * 110)
         for _, row in df.head(25).iterrows():
-            gates = ",".join(row["gates_passed"]) or "(none)"
+            passed = ",".join(row["gates_passed"]) or "(none)"
+            unknown = ",".join(row.get("gates_unknown", []) or []) or "-"
             typer.echo(
                 f"{row['theme'][:27]:28s} {row['ticker']:8s} "
-                f"{gates:30s} {row['gemini_confidence']:.2f}  "
-                f"{row['rationale'][:50]}"
+                f"{passed:20s} {unknown:16s} {row['gemini_confidence']:.2f}  "
+                f"{row['rationale'][:40]}"
             )

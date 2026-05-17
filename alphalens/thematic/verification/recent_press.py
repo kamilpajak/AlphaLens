@@ -194,8 +194,13 @@ def has_theme_in_recent_press(
     api_key: str,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     cache_dir: Path = DEFAULT_CACHE_DIR,
-) -> bool:
-    """Verification gate: does ticker's last-30d press mention any theme keyword?"""
+) -> bool | None:
+    """Verification gate: does ticker's last-30d press mention any theme keyword?
+
+    Tri-state: ``True`` (keyword hit), ``False`` (Polygon returned cleanly
+    with no theme-tagged press), ``None`` (Polygon fetch failed — rate limit,
+    network error — orchestrator records as ``gates_unknown``).
+    """
     try:
         df = fetch_recent_news_cached(
             ticker=ticker,
@@ -206,7 +211,7 @@ def has_theme_in_recent_press(
         )
     except Exception as exc:
         logger.warning("recent press fetch failed for %s: %s", ticker, exc)
-        return False
+        return None
 
     if df.empty:
         return False

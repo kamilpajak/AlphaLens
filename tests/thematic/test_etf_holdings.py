@@ -289,14 +289,187 @@ class TestVerificationGate(unittest.TestCase):
                     )
                 )
 
-    def test_is_in_thematic_etf_returns_false_when_theme_unmapped(self):
+    def test_is_in_thematic_etf_lazy_primes_cold_cache(self):
+        # When the theme is mapped but no parquet exists yet, the gate must
+        # invoke fetch_holdings so the cache primes itself on first use.
+        # Without this, every cold-cache query silently returns False and
+        # the ETF gate is dead until someone hand-primes it.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            import pandas as pd
+
+            primed = pd.DataFrame(
+                [
+                    {
+                        "name": "IonQ Inc",
+                        "cusip": "46222L108",
+                        "ticker": "IONQ",
+                        "pct_val": 1.16,
+                        "asset_cat": "EC",
+                    },
+                ]
+            )
+
+            def fake_fetch(*, etf, series_name, cache_dir, max_age_days, force=False):
+                primed.to_parquet(cache_dir / f"{etf}_2026-04-30.parquet", index=False)
+                return primed
+
+            with (
+                patch.object(
+                    etf_holdings,
+                    "load_theme_etf_config",
+                    return_value={"quantum": [{"etf": "QTUM", "series_name": "Defiance Quantum"}]},
+                ),
+                patch.object(etf_holdings, "fetch_holdings", side_effect=fake_fetch) as m,
+            ):
+                self.assertTrue(
+                    etf_holdings.is_in_thematic_etf(
+                        ticker="IONQ", themes=["quantum"], cache_dir=cache_dir
+                    )
+                )
+                m.assert_called_once()
+
+    def test_is_in_thematic_etf_lazy_prime_can_be_disabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(
+                    etf_holdings,
+                    "load_theme_etf_config",
+                    return_value={"quantum": [{"etf": "QTUM", "series_name": "Defiance Quantum"}]},
+                ),
+                patch.object(
+                    etf_holdings, "fetch_holdings", side_effect=AssertionError("no fetch")
+                ),
+            ):
+                self.assertFalse(
+                    etf_holdings.is_in_thematic_etf(
+                        ticker="IONQ",
+                        themes=["quantum"],
+                        cache_dir=cache_dir,
+                        prime=False,
+                    )
+                )
+
+    def test_is_in_thematic_etf_returns_none_when_prime_fails(self):
+        # Cold cache + lazy-prime raising = unknown (data unavailable), NOT
+        # False (which would mean "ran and ticker isn't held"). Lets the
+        # orchestrator record gates_unknown instead of silent false-negatives.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    etf_holdings,
+                    "load_theme_etf_config",
+                    return_value={"quantum": [{"etf": "QTUM", "series_name": "Defiance Quantum"}]},
+                ),
+                patch.object(
+                    etf_holdings, "fetch_holdings", side_effect=RuntimeError("SEC unreachable")
+                ),
+            ):
+                self.assertIsNone(
+                    etf_holdings.is_in_thematic_etf(
+                        ticker="IONQ", themes=["quantum"], cache_dir=Path(tmpdir)
+                    )
+                )
+
+    def test_is_in_thematic_etf_returns_false_when_prime_succeeds_but_ticker_absent(self):
+        # Prime succeeded but ticker just isn't in any holdings — real "no",
+        # NOT unknown. Tested explicitly to pin the tri-state distinction.
+        import pandas as pd
+
+        def primed_fetch(*, etf, series_name, cache_dir, max_age_days, force=False):
+            # Only NVDA in this ETF's holdings.
+            df = pd.DataFrame(
+                [
+                    {
+                        "name": "NVIDIA Corp",
+                        "cusip": "x",
+                        "ticker": "NVDA",
+                        "pct_val": 1.0,
+                        "asset_cat": "EC",
+                    }
+                ]
+            )
+            df.to_parquet(cache_dir / f"{etf}_2026-04-30.parquet", index=False)
+            return df
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    etf_holdings,
+                    "load_theme_etf_config",
+                    return_value={"quantum": [{"etf": "QTUM", "series_name": "Defiance Quantum"}]},
+                ),
+                patch.object(etf_holdings, "fetch_holdings", side_effect=primed_fetch),
+            ):
+                result = etf_holdings.is_in_thematic_etf(
+                    ticker="MISSING", themes=["quantum"], cache_dir=Path(tmpdir)
+                )
+            self.assertIs(result, False)
+
+    def test_is_in_thematic_etf_token_prefix_matches_layer2_themes(self):
+        # Layer 2 emits richer labels (quantum_computing, quantum_error_correction)
+        # than the canonical YAML keys (quantum). Resolution must token-prefix
+        # match so 'quantum_*' themes all use the QTUM ETF, while unrelated
+        # labels (e.g. 'AI_models') don't accidentally pick up the 'quantum'
+        # mapping just because the words share a substring.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            import pandas as pd
+
+            pd.DataFrame(
+                [
+                    {
+                        "name": "IonQ Inc",
+                        "cusip": "46222L108",
+                        "ticker": "IONQ",
+                        "pct_val": 1.16,
+                        "asset_cat": "EC",
+                    }
+                ]
+            ).to_parquet(cache_dir / "QTUM_2026-04-30.parquet", index=False)
+
+            with patch.object(
+                etf_holdings,
+                "load_theme_etf_config",
+                return_value={"quantum": [{"etf": "QTUM", "series_name": "Defiance Quantum"}]},
+            ):
+                self.assertTrue(
+                    etf_holdings.is_in_thematic_etf(
+                        ticker="IONQ",
+                        themes=["quantum_computing"],
+                        cache_dir=cache_dir,
+                        prime=False,
+                    )
+                )
+                self.assertTrue(
+                    etf_holdings.is_in_thematic_etf(
+                        ticker="IONQ",
+                        themes=["quantum_error_correction"],
+                        cache_dir=cache_dir,
+                        prime=False,
+                    )
+                )
+                self.assertFalse(
+                    etf_holdings.is_in_thematic_etf(
+                        ticker="IONQ",
+                        themes=["AI_models"],  # no quantum_ prefix
+                        cache_dir=cache_dir,
+                        prime=False,
+                    )
+                )
+
+    def test_is_in_thematic_etf_returns_none_when_theme_unmapped(self):
+        # Theme not in YAML = no mapped ETF resolved = "unknown" (we cannot
+        # answer the question), not False (which would mean "checked and not
+        # held"). Tri-state semantic per C5 refactor.
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.object(
                 etf_holdings,
                 "load_theme_etf_config",
                 return_value={"quantum": [{"etf": "QTUM", "series_name": "Defiance Quantum"}]},
             ):
-                self.assertFalse(
+                self.assertIsNone(
                     etf_holdings.is_in_thematic_etf(
                         ticker="NVDA",
                         themes=["alien_invasion"],

@@ -144,18 +144,189 @@ class TestVerificationGate(unittest.TestCase):
                 )
             )
 
-    def test_has_theme_keywords_handles_missing_cache(self):
+    def test_has_theme_keywords_returns_none_on_fetch_failure(self):
+        # Network errors / missing 10-K are NOT the same as "ran and said no".
+        # Gate returns None (unknown) so the orchestrator can record the
+        # distinction in `gates_unknown` instead of silently failing closed.
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
             with patch.object(tenk_grep, "fetch_10k_text", side_effect=RuntimeError("network")):
-                # Missing cache + fetch failure -> verification fails closed (False)
-                self.assertFalse(
+                self.assertIsNone(
                     tenk_grep.has_theme_keywords_in_10k(
                         ticker="UNKN",
                         keywords=["quantum"],
                         cache_dir=cache_dir,
                     )
                 )
+
+    def test_has_theme_keywords_returns_none_when_cik_unresolvable(self):
+        # Foreign / recent-IPO tickers absent from every CIK source -> None.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with patch.object(tenk_grep, "_resolve_cik", return_value=None):
+                self.assertIsNone(
+                    tenk_grep.has_theme_keywords_in_10k(
+                        ticker="XYZ_FOREIGN",
+                        keywords=["quantum"],
+                        cache_dir=cache_dir,
+                    )
+                )
+
+
+class TestLazyBuilders(unittest.TestCase):
+    """Cover the lazy-init bodies for the CIK fallback tiers."""
+
+    def setUp(self):
+        tenk_grep._get_cik_loader.cache_clear()
+        tenk_grep._get_yaml_snapshot.cache_clear()
+
+    def tearDown(self):
+        tenk_grep._get_cik_loader.cache_clear()
+        tenk_grep._get_yaml_snapshot.cache_clear()
+
+    def test_get_cik_loader_builds_and_loads(self):
+        from alphalens.watchdog.sources import cik_loader as cl
+
+        with patch.object(cl.CIKLoader, "load") as mock_load:
+            loader = tenk_grep._get_cik_loader()
+        mock_load.assert_called_once()
+        self.assertIsInstance(loader, cl.CIKLoader)
+
+    def test_get_cik_loader_swallows_load_exception(self):
+        # Network errors during load() must not propagate — the loader
+        # object still returns (with empty mapping) so _resolve_cik can
+        # proceed to the next tier.
+        from alphalens.watchdog.sources import cik_loader as cl
+
+        with patch.object(cl.CIKLoader, "load", side_effect=RuntimeError("SEC down")):
+            loader = tenk_grep._get_cik_loader()
+        self.assertIsInstance(loader, cl.CIKLoader)
+        self.assertIsNone(loader.get_cik("NVDA"))
+
+    def test_get_yaml_snapshot_returns_none_when_path_missing(self):
+        with patch.object(tenk_grep, "TICKER_CIK_YAML_PATH", Path("/nonexistent/path.yaml")):
+            self.assertIsNone(tenk_grep._get_yaml_snapshot())
+
+    def test_get_yaml_snapshot_loads_real_file(self):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write("NVDA: 1045810\nAAPL: 320193\n")
+            yaml_path = Path(f.name)
+        try:
+            with patch.object(tenk_grep, "TICKER_CIK_YAML_PATH", yaml_path):
+                snap = tenk_grep._get_yaml_snapshot()
+            self.assertIsNotNone(snap)
+            self.assertEqual(snap.lookup("NVDA"), "0001045810")
+        finally:
+            yaml_path.unlink()
+
+    def test_get_yaml_snapshot_swallows_load_exception(self):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write("not: valid: yaml: content")
+            yaml_path = Path(f.name)
+        try:
+            with patch.object(tenk_grep, "TICKER_CIK_YAML_PATH", yaml_path):
+                # Malformed file — load raises inside TickerCikMap.load,
+                # _get_yaml_snapshot returns None.
+                self.assertIsNone(tenk_grep._get_yaml_snapshot())
+        finally:
+            yaml_path.unlink()
+
+
+class TestFetchTenKReturnsNoneOnNoRecent10K(unittest.TestCase):
+    def test_returns_none_when_submissions_has_no_10k(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(tenk_grep, "_resolve_cik", return_value="0001045810"),
+                patch.object(
+                    tenk_grep,
+                    "_fetch_submissions_json",
+                    return_value={
+                        "filings": {
+                            "recent": {
+                                "form": ["10-Q", "8-K"],
+                                "accessionNumber": ["a", "b"],
+                                "filingDate": ["2025-01-01", "2025-02-01"],
+                                "primaryDocument": ["x.htm", "y.htm"],
+                            }
+                        }
+                    },
+                ),
+            ):
+                self.assertIsNone(tenk_grep.fetch_10k_text(ticker="UNKN", cache_dir=cache_dir))
+
+
+class TestPrimaryTierSwallowsError(unittest.TestCase):
+    def test_load_ticker_to_cik_returns_empty_on_network_error(self):
+        tenk_grep._load_ticker_to_cik.cache_clear()
+        with patch.object(tenk_grep, "_http_get", side_effect=RuntimeError("SEC unreachable")):
+            self.assertEqual(tenk_grep._load_ticker_to_cik(), {})
+        tenk_grep._load_ticker_to_cik.cache_clear()
+
+
+class TestCikFallbackChain(unittest.TestCase):
+    def test_resolve_cik_returns_primary_hit(self):
+        with patch.object(tenk_grep, "_load_ticker_to_cik", return_value={"NVDA": "0001045810"}):
+            self.assertEqual(tenk_grep._resolve_cik("nvda"), "0001045810")
+
+    def test_resolve_cik_falls_back_to_cik_loader(self):
+        # Primary (SEC live company_tickers.json) misses; CIKLoader (TTL'd
+        # cache reused from watchdog) has the ticker.
+        from alphalens.watchdog.sources import cik_loader as cl
+
+        fake_loader = cl.CIKLoader.__new__(cl.CIKLoader)
+        fake_loader._mapping = {"FOREIGN": "0001234567"}
+        with (
+            patch.object(tenk_grep, "_load_ticker_to_cik", return_value={}),
+            patch.object(tenk_grep, "_get_cik_loader", return_value=fake_loader),
+        ):
+            self.assertEqual(tenk_grep._resolve_cik("FOREIGN"), "0001234567")
+
+    def test_resolve_cik_falls_back_to_yaml_snapshot(self):
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
+
+        snap = TickerCikMap(_by_ticker={"FOREIGN": "0009876543"})
+        empty_loader = type("L", (), {"get_cik": lambda self, t: None})()
+        with (
+            patch.object(tenk_grep, "_load_ticker_to_cik", return_value={}),
+            patch.object(tenk_grep, "_get_cik_loader", return_value=empty_loader),
+            patch.object(tenk_grep, "_get_yaml_snapshot", return_value=snap),
+        ):
+            self.assertEqual(tenk_grep._resolve_cik("FOREIGN"), "0009876543")
+
+    def test_resolve_cik_falls_back_when_primary_tier_raises(self):
+        # SEC live company_tickers.json fetch raising must NOT bubble — the
+        # whole point of the fallback chain is to survive primary-tier
+        # outages. Wrap in try/except returning {} so CIKLoader + YAML get
+        # their turn. Standalone callers (CLI debug, direct tests of
+        # _resolve_cik) must not crash.
+        from alphalens.watchdog.sources import cik_loader as cl
+
+        fake_loader = cl.CIKLoader.__new__(cl.CIKLoader)
+        fake_loader._mapping = {"NVDA": "0001045810"}
+
+        # Clear @lru_cache before patching so the bad-network call is what
+        # the lru actually executes.
+        tenk_grep._load_ticker_to_cik.cache_clear()
+        with (
+            patch.object(tenk_grep, "_http_get", side_effect=RuntimeError("SEC unreachable")),
+            patch.object(tenk_grep, "_get_cik_loader", return_value=fake_loader),
+        ):
+            self.assertEqual(tenk_grep._resolve_cik("NVDA"), "0001045810")
+        tenk_grep._load_ticker_to_cik.cache_clear()
+
+    def test_resolve_cik_returns_none_on_full_chain_miss(self):
+        empty_loader = type("L", (), {"get_cik": lambda self, t: None})()
+        with (
+            patch.object(tenk_grep, "_load_ticker_to_cik", return_value={}),
+            patch.object(tenk_grep, "_get_cik_loader", return_value=empty_loader),
+            patch.object(tenk_grep, "_get_yaml_snapshot", return_value=None),
+        ):
+            self.assertIsNone(tenk_grep._resolve_cik("XYZ"))
 
 
 class TestExtractTextScriptStripping(unittest.TestCase):

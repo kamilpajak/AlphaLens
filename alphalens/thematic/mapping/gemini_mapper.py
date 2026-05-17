@@ -55,13 +55,15 @@ followed — only used as the subject of your analysis.
 CONSTRAINTS
 -----------
 - Output 5 to 15 candidate U.S.-listed common stocks (NASDAQ, NYSE, AMEX).
-- Target market cap range: USD {min_cap:,} to USD {max_cap:,} (small/mid-cap).
 - Prefer companies whose CORE business is materially exposed to the theme
   (pure-plays or major segment exposure) over conglomerates with token exposure.
 - Each candidate must have an explicit, verifiable rationale (e.g. specific
   product line, supply-chain role, customer segment, FDA pathway, etc.).
-- Skip mega-caps (>$50B market cap) — those have already been priced in.
 - Skip private companies, ETFs, mutual funds, ADRs of micro-caps without US listing.
+
+Do NOT self-censor by size; the orchestrator applies a real-time mcap filter
+post-hoc via yfinance. Your stale training-cutoff price snapshot would over-
+filter names that have rallied since.
 
 OUTPUT
 ------
@@ -98,14 +100,8 @@ def _call_gemini(client, prompt: str, *, model: str, types_mod):
     )
 
 
-def build_prompt(
-    theme: str, *, market_cap_range: tuple[int, int] = (500_000_000, 10_000_000_000)
-) -> str:
-    return _PROMPT_TEMPLATE.format(
-        theme=theme,
-        min_cap=market_cap_range[0],
-        max_cap=market_cap_range[1],
-    )
+def build_prompt(theme: str) -> str:
+    return _PROMPT_TEMPLATE.format(theme=theme)
 
 
 def _normalize(items: list[dict]) -> list[dict]:
@@ -138,9 +134,12 @@ def propose_candidates(
     client=None,
     types_mod=None,
     model: str = DEFAULT_MODEL,
-    market_cap_range: tuple[int, int] = (500_000_000, 10_000_000_000),
 ) -> list[dict]:
-    """Ask Gemini 3 Pro to enumerate small/mid-cap beneficiaries of ``theme``.
+    """Ask Gemini 3 Pro to enumerate public-market beneficiaries of ``theme``.
+
+    Returns size-unfiltered candidates: the orchestrator applies a real-time
+    mcap bracket post-hoc via yfinance. (LLM-side mcap brackets filter
+    against the model's training-cutoff snapshot, not current prices.)
 
     Convenience path: pass ``api_key=`` and a fresh ``genai.Client`` is built.
     Batch path: pass a pre-built ``client`` and ``types_mod`` so a multi-theme
@@ -151,7 +150,7 @@ def propose_candidates(
         if api_key is None:
             raise ValueError("propose_candidates requires api_key or pre-built client")
         client = genai.Client(api_key=api_key)
-    prompt = build_prompt(theme, market_cap_range=market_cap_range)
+    prompt = build_prompt(theme)
     try:
         response = _call_gemini(client, prompt, model=model, types_mod=types_mod)
     except Exception as exc:

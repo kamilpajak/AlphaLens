@@ -157,28 +157,35 @@ def has_opportunistic_buy(
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     usd_threshold: float = DEFAULT_USD_THRESHOLD,
     form4_root: Path = DEFAULT_FORM4_ROOT,
-) -> bool:
+) -> bool | None:
     """Layer 3 verification gate: net opportunistic insider buy over threshold?
+
+    Tri-state: ``True`` (net buy ≥ threshold), ``False`` (window had trades
+    but didn't qualify — sold, routine class, or below threshold), ``None``
+    (no Form-4 data available for ticker, or loader exception — orchestrator
+    records as unknown, NOT a false negative).
 
     Two-step Form-4 load so Cohen-Malloy sees each insider's FULL cross-ticker
     history. A March-every-year trader is ROUTINE regardless of WHICH ticker
     they touch; a ticker-restricted view would mislabel them as opportunistic
-    on whichever ticker first breaks the pattern. Active insiders are
-    identified from the ticker's recent window; their full history is then
-    loaded across all tickers for classification, but signal aggregation
-    still runs only over the ticker-of-interest's recent trades.
+    on whichever ticker first breaks the pattern.
     """
     years = _classification_years(asof)
     try:
         ticker_history = _load_form4_for_ticker(ticker, form4_root=form4_root, years=years)
     except Exception as exc:
         logger.warning("form4 load failed for %s: %s", ticker, exc)
-        return False
+        return None
     if ticker_history.empty:
-        return False
+        # No data anywhere for this ticker — distinct from "data present but
+        # window/threshold rejected". Surface as unknown so the operator can
+        # tell the difference downstream.
+        return None
 
     recent = filter_records(ticker_history, ticker=ticker, asof=asof, lookback_days=lookback_days)
     if recent.empty:
+        # Ticker has Form-4 history but no trades in the lookback window —
+        # that IS a real "no recent insider activity" signal, not missing data.
         return False
 
     active_insiders = set(recent["reporting_owner_cik"].dropna().astype(str))
@@ -186,7 +193,7 @@ def has_opportunistic_buy(
         full_history = _load_form4_for_insiders(active_insiders, form4_root=form4_root, years=years)
     except Exception as exc:
         logger.warning("form4 cross-ticker load failed for %s: %s", ticker, exc)
-        return False
+        return None
     if full_history.empty:
         # Degrade gracefully — at least classify on the visible trades.
         full_history = ticker_history
