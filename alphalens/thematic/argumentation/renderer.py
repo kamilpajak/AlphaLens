@@ -16,7 +16,6 @@ single ``.md`` file the operator can ``cat`` and forward.
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import pandas as pd
@@ -29,10 +28,17 @@ from alphalens.thematic.argumentation._common import (
 
 _PROSE_UNAVAILABLE = "_unavailable_"
 _BRIEF_DEGRADED_NOTE = "> _LLM brief unavailable — review quantitative signals and catalyst above._"
+_PROSE_FIELDS = (
+    "tldr",
+    "supply_chain_reasoning",
+    "bear_summary",
+    "catalyst_failure_exit",
+    "entry_price_note",
+)
 
 
 def _fmt_num(value: Any, fmt: str) -> str:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    if pd.isna(value):
         return "n/a"
     try:
         return format(float(value), fmt)
@@ -45,7 +51,7 @@ def _fmt_pctile(value: Any) -> str:
 
 
 def _fmt_insider_usd(value: Any) -> str:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    if pd.isna(value):
         return "n/a"
     try:
         return f"${float(value) / 1000:.0f}k"
@@ -53,13 +59,15 @@ def _fmt_insider_usd(value: Any) -> str:
         return "n/a"
 
 
-def _is_nan(value: Any) -> bool:
-    return isinstance(value, float) and math.isnan(value)
-
-
 def _prose_or_placeholder(value: Any) -> str:
-    """Return non-empty string value as-is; otherwise return the placeholder."""
-    if value is None or _is_nan(value):
+    """Return non-empty string value as-is; otherwise return the placeholder.
+
+    Uses ``pd.isna`` so all pandas-flavoured null types (None / NaN / NaT /
+    pd.NA) collapse to the placeholder; without this a NaT round-tripped
+    via parquet would render as the literal string ``"NaT"`` (zen review
+    2026-05-17 M1 finding).
+    """
+    if pd.isna(value):
         return _PROSE_UNAVAILABLE
     s = str(value).strip()
     return s if s else _PROSE_UNAVAILABLE
@@ -68,17 +76,18 @@ def _prose_or_placeholder(value: Any) -> str:
 def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
     """Assemble one candidate's brief block.
 
-    ``row`` (Phase D parquet row) is the source of truth for deterministic
-    facts and is ALWAYS rendered. ``brief`` (Phase E LLM output) contributes
-    optional prose; when None or missing fields, italic placeholders fill
-    the gap so the block keeps its structure and the operator never loses
+    ``row`` is the Phase D scored record (dict or ``pd.Series``) and is
+    the source of truth for deterministic facts — always rendered.
+    ``brief`` is the Phase E LLM-composed prose dict (``None`` when
+    generation failed); missing prose fields render italic placeholders
+    so the block keeps its structure and the operator never loses
     visibility on the quantitative signals.
     """
     r = dict(row) if not isinstance(row, dict) else row
     b = brief or {}
 
     weighted = r.get("layer4_weighted_score")
-    weighted_str = f"{int(weighted)}/5" if weighted is not None and not _is_nan(weighted) else "n/a"
+    weighted_str = f"{int(weighted)}/5" if not pd.isna(weighted) else "n/a"
 
     # --- Deterministic header ----------------------------------------------
     header = (
@@ -97,19 +106,11 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
         catalyst_line = f"**Catalyst**: {title} ({published}) {src_url}\n"
 
     # --- LLM-composed prose with placeholders ------------------------------
-    thesis = _prose_or_placeholder(b.get("tldr"))
-    supply_chain = _prose_or_placeholder(b.get("supply_chain_reasoning"))
-    bear = _prose_or_placeholder(b.get("bear_summary"))
-    catalyst_failure_exit = _prose_or_placeholder(b.get("catalyst_failure_exit"))
-    entry_note = _prose_or_placeholder(b.get("entry_price_note"))
+    prose = {k: _prose_or_placeholder(b.get(k)) for k in _PROSE_FIELDS}
 
     # --- Deterministic signal panel ----------------------------------------
     age_days = r.get("valuation_financials_age_days")
-    age_tag = (
-        f" | financials age {int(age_days)}d"
-        if age_days is not None and not _is_nan(age_days)
-        else ""
-    )
+    age_tag = f" | financials age {int(age_days)}d" if not pd.isna(age_days) else ""
     next_earnings = b.get("next_earnings_date") or r.get("next_earnings_date")
     earnings_tag = f" | next earnings {next_earnings}" if next_earnings else ""
     signal_panel = (
@@ -127,7 +128,7 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
 
     # --- Setup line: position size + exit are deterministic; entry from LLM
     setup_line = (
-        f"**Setup**: entry {entry_note}"
+        f"**Setup**: entry {prose['entry_price_note']}"
         f" | size {_fmt_num(position_pct_from_conf(weighted), '.1f')}%"
         f" | exit {TIME_EXIT_DEFAULT_WEEKS}w | stop {DISASTER_STOP_PCT:.0f}%\n"
     )
@@ -135,28 +136,20 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
     block = (
         f"{header}"
         f"{catalyst_line}\n"
-        f"**Thesis**: {thesis}\n\n"
-        f"**Supply chain**: {supply_chain}\n\n"
-        f"**Bear case**: {bear}\n\n"
+        f"**Thesis**: {prose['tldr']}\n\n"
+        f"**Supply chain**: {prose['supply_chain_reasoning']}\n\n"
+        f"**Bear case**: {prose['bear_summary']}\n\n"
         f"{setup_line}"
-        f"**Catalyst-failure exit**: {catalyst_failure_exit}\n\n"
+        f"**Catalyst-failure exit**: {prose['catalyst_failure_exit']}\n\n"
         f"{signal_panel}"
     )
 
     # Single operator-facing note when the LLM contribution was empty. We
     # detect "everything empty" rather than "brief is None" so a partial
     # response (e.g., only `tldr` recovered via json-repair) doesn't emit
-    # the global note.
-    if all(
-        _prose_or_placeholder(b.get(k)) == _PROSE_UNAVAILABLE
-        for k in (
-            "tldr",
-            "supply_chain_reasoning",
-            "bear_summary",
-            "catalyst_failure_exit",
-            "entry_price_note",
-        )
-    ):
+    # the global note. Iterating _PROSE_FIELDS keeps this in sync with
+    # the per-section rendering if a 6th field is ever added.
+    if all(v == _PROSE_UNAVAILABLE for v in prose.values()):
         block += f"\n{_BRIEF_DEGRADED_NOTE}\n"
 
     return block
