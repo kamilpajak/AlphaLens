@@ -95,12 +95,18 @@ def _enrich_facts_with_earnings(facts: dict, asof: dt.date) -> dict:
 def _brief_for_row(
     row: pd.Series, *, client_pro, client_flash, types_mod, asof: dt.date | None = None
 ) -> dict | None:
-    """Single-row LLM call with per-row exception absorption."""
+    """Single-row LLM call with per-row exception absorption.
+
+    Uses ``generator.generate_brief_with_retry`` so a Flash truncation
+    (``finish_reason == MAX_TOKENS``) auto-retries once with double
+    ``max_output_tokens`` + ``temperature=0`` before giving up. Other
+    failure kinds (MALFORMED_JSON, SAFETY, TRANSPORT) do not retry.
+    """
     facts = _row_to_facts(row)
     if asof is not None:
         facts = _enrich_facts_with_earnings(facts, asof)
     try:
-        return generator.generate_brief(
+        return generator.generate_brief_with_retry(
             facts,
             client_pro=client_pro,
             client_flash=client_flash,
