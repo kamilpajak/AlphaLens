@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import math
 from collections.abc import Callable
 from statistics import mean
 
@@ -42,7 +43,7 @@ def _safe_get(d: dict, key: str) -> float | None:
         f = float(val)
     except (TypeError, ValueError):
         return None
-    if f != f:  # NaN check
+    if math.isnan(f):
         return None
     return f
 
