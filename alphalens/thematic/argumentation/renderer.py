@@ -50,7 +50,7 @@ def render_markdown(brief: dict, row: dict | pd.Series) -> str:
     # Catalyst line — explains WHY this candidate was surfaced.
     catalyst_line = ""
     src_url = r.get("source_event_url")
-    if src_url and not _is_nan(src_url) and str(src_url) != "nan":
+    if src_url and pd.notna(src_url) and str(src_url).strip().lower() != "nan":
         title = r.get("source_event_title") or ""
         published = r.get("source_event_published_at") or ""
         catalyst_line = f"**Catalyst**: {title} ({published}) {src_url}\n"

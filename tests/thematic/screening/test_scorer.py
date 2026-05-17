@@ -296,16 +296,18 @@ class TestOhlcvLoaderDiskCache(unittest.TestCase):
             {"open": [1.0], "high": [2.0], "low": [0.5], "close": [1.5], "volume": [1000.0]},
             index=pd.DatetimeIndex(["2026-04-10"]),
         )
+        asof = dt.date(2026, 4, 14)
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = Path(tmp)
-            (cache_dir / "QUBT.parquet").parent.mkdir(parents=True, exist_ok=True)
-            cached_df.to_parquet(cache_dir / "QUBT.parquet")
+            cache_path = cache_dir / f"QUBT_{asof.isoformat()}.parquet"
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cached_df.to_parquet(cache_path)
             with (
                 patch.object(scorer, "_THEMATIC_OHLCV_CACHE", cache_dir),
                 patch("yfinance.Ticker", side_effect=AssertionError("must not fetch live")),
             ):
                 loader = scorer._build_ohlcv_loader()
-                df = loader("QUBT", dt.date(2026, 4, 14))
+                df = loader("QUBT", asof)
         self.assertEqual(len(df), 1)
         self.assertEqual(float(df["close"].iloc[0]), 1.5)
 
@@ -324,6 +326,7 @@ class TestOhlcvLoaderDiskCache(unittest.TestCase):
             },
             index=pd.DatetimeIndex(["2026-04-10"]),
         )
+        asof = dt.date(2026, 4, 14)
         with tempfile.TemporaryDirectory() as tmp:
             cache_dir = Path(tmp)
             fake_ticker = MagicMock()
@@ -333,8 +336,8 @@ class TestOhlcvLoaderDiskCache(unittest.TestCase):
                 patch("yfinance.Ticker", return_value=fake_ticker),
             ):
                 loader = scorer._build_ohlcv_loader()
-                _ = loader("RGTI", dt.date(2026, 4, 14))
-            self.assertTrue((cache_dir / "RGTI.parquet").exists())
+                _ = loader("RGTI", asof)
+            self.assertTrue((cache_dir / f"RGTI_{asof.isoformat()}.parquet").exists())
 
 
 class TestFeatureFetcherFallback(unittest.TestCase):

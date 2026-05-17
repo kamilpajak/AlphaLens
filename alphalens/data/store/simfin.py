@@ -257,7 +257,9 @@ class SimFinFundamentalsStore:
         publish_dates = []
         for frame in (bs, cf, inc):
             if frame is not None and _COL_PUBLISH_DATE in frame.columns:
-                publish_dates.append(pd.to_datetime(frame[_COL_PUBLISH_DATE]).max())
+                frame_max = pd.to_datetime(frame[_COL_PUBLISH_DATE]).max()
+                if pd.notna(frame_max):
+                    publish_dates.append(frame_max)
         latest_publish = max(publish_dates) if publish_dates else None
         publish_date_str = (
             latest_publish.strftime("%Y-%m-%d") if latest_publish is not None else None

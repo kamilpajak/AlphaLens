@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import textwrap
 from pathlib import Path
 
 import pandas as pd
@@ -97,7 +98,7 @@ def find_trigger_event(
     top = joined.sort_values("published_at", ascending=False).iloc[0]
     title = str(top.get("title", "") or "")
     if len(title) > _TITLE_MAX_LEN:
-        title = title[: _TITLE_MAX_LEN - 1] + "…"
+        title = textwrap.shorten(title, width=_TITLE_MAX_LEN, placeholder="…")
     return {
         "url": str(top.get("url", "") or ""),
         "title": title,

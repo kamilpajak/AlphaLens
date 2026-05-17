@@ -191,7 +191,10 @@ def _build_ohlcv_loader() -> Callable[[str, date], pd.DataFrame]:
     def loader(ticker: str, asof: date) -> pd.DataFrame:
         upper = ticker.upper()
         if upper not in mem_cache:
-            path = cache_dir / f"{upper}.parquet"
+            # Cache filename includes asof so cross-asof reruns don't silently
+            # reuse a stale parquet whose tail predates the new evaluation
+            # date (zen review 2026-05-17 HIGH finding).
+            path = cache_dir / f"{upper}_{asof.isoformat()}.parquet"
             df: pd.DataFrame
             if path.exists():
                 try:
