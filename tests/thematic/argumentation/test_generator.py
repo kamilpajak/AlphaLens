@@ -298,9 +298,9 @@ class TestJsonRepairFallback(unittest.TestCase):
         for key in ("supply_chain_reasoning", "bear_summary"):
             self.assertEqual(brief[key], "")
 
-    def test_repair_empty_dict_treated_as_malformed(self):
-        # Garbage input that json_repair coerces to empty {} should NOT
-        # be classified as successful recovery (zen review 2026-05-17 M1).
+    def test_repair_non_dict_result_treated_as_malformed(self):
+        # "{ completely unparseable garbage" → json_repair yields a list
+        # → _try_json_repair rejects non-dict → MALFORMED_JSON.
         resp = SimpleNamespace(
             text="{ completely unparseable garbage",
             candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
@@ -309,6 +309,41 @@ class TestJsonRepairFallback(unittest.TestCase):
             brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
         self.assertIsNone(brief)
         self.assertEqual(kind, generator.BriefErrorKind.MALFORMED_JSON)
+
+
+class TestTryJsonRepairUnit(unittest.TestCase):
+    """Unit tests for the _try_json_repair helper in isolation. Direct unit
+    coverage matters here because the schema-defaults loop in generate_brief
+    masks empty-dict edge cases at the integration level (parse_extraction
+    happily extracts bare '{}' from '{} unclosed garbage' and the loop pads
+    with ''). The substantive-field guard lives in _try_json_repair."""
+
+    def test_returns_none_for_empty_dict(self):
+        # Zen review 2026-05-17 M1: empty {} from json_repair must NOT
+        # count as recovery.
+        self.assertIsNone(generator._try_json_repair("{} unclosed", ticker="QUBT"))
+
+    def test_returns_none_for_non_dict(self):
+        # "{ garbage" yields a list — rejected.
+        self.assertIsNone(generator._try_json_repair("{ totally garbage", ticker="QUBT"))
+
+    def test_returns_none_when_dict_has_no_required_keys(self):
+        # Has keys, but none of them are schema-required.
+        self.assertIsNone(generator._try_json_repair('{"foo": "bar", "baz": "qux"}', ticker="QUBT"))
+
+    def test_returns_none_when_required_keys_are_empty_strings(self):
+        # Has schema-required keys but all empty → still not recovery.
+        self.assertIsNone(
+            generator._try_json_repair('{"tldr": "", "bear_summary": "  "}', ticker="QUBT")
+        )
+
+    def test_returns_dict_when_at_least_one_required_key_has_content(self):
+        out = generator._try_json_repair('{"tldr": "real thesis"', ticker="QUBT")
+        self.assertEqual(out, {"tldr": "real thesis"})
+
+    def test_returns_none_when_loads_raises(self):
+        with patch.object(generator.json_repair, "loads", side_effect=RuntimeError("library boom")):
+            self.assertIsNone(generator._try_json_repair("anything", ticker="QUBT"))
 
     def test_repair_failure_returns_malformed_json(self):
         # Completely garbled response that json_repair cannot salvage
