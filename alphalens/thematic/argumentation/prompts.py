@@ -36,6 +36,19 @@ def _format_facts_block(facts: dict) -> str:
     ins_str = f"${ins_usd / 1000:.0f}k" if ins_usd is not None else "n/a"
     mcap = facts.get("market_cap")
     mcap_str = f"${mcap / 1e9:.2f}B" if mcap is not None else "n/a"
+    age_days = facts.get("valuation_financials_age_days")
+    age_str = f"{age_days:.0f} days" if age_days is not None else "n/a"
+    catalyst_block = ""
+    if facts.get("source_event_url"):
+        catalyst_block = (
+            f"catalyst (triggering event):\n"
+            f"  title: {facts.get('source_event_title', '')}\n"
+            f"  published: {facts.get('source_event_published_at', '')}\n"
+            f"  url: {facts.get('source_event_url', '')}\n"
+        )
+    earnings_block = ""
+    if facts.get("next_earnings_date"):
+        earnings_block = f"next_earnings_date: {facts['next_earnings_date']}\n"
     return (
         f"ticker: {facts['ticker']}\n"
         f"company: {facts.get('company_name', '')}\n"
@@ -46,6 +59,7 @@ def _format_facts_block(facts: dict) -> str:
         f"weighted_score: {facts['weighted_score']}/5 (Phase D signal alignment)\n"
         f"Phase C rationale: {facts.get('rationale', '')}\n"
         f"verified gates: {facts.get('gates_passed_str', '')}\n"
+        f"{catalyst_block}"
         f"Phase D signals:\n"
         f"- insider opportunistic buys (90d): {ins_str},"
         f" sector percentile {_format_pctile(facts.get('insider_score_sector_percentile'))}\n"
@@ -56,7 +70,13 @@ def _format_facts_block(facts: dict) -> str:
         f" FCF margin {_format_num(facts.get('valuation_fcf_margin'), '.2f')},"
         f" composite sector pctile"
         f" {_format_pctile(facts.get('valuation_composite_sector_percentile'))}\n"
+        f"- fundamentals freshness: {age_str} since last filing\n"
         f"- technicals: {facts.get('technicals_summary_str', 'n/a')}\n"
+        f"- 52w high distance: {_format_num(facts.get('technical_pct_off_52w_high'), '.1f')}%,"
+        f" 52w low distance: {_format_num(facts.get('technical_pct_off_52w_low'), '.1f')}%\n"
+        f"- MA200 distance: {_format_num(facts.get('technical_ma200_distance_pct'), '.1f')}%,"
+        f" MA200 slope: {_format_num(facts.get('technical_ma200_slope_pct_per_day'), '.3f')}%/day\n"
+        f"{earnings_block}"
         f"position_pct: {facts.get('position_pct', 'n/a')}\n"
         f"time_exit_weeks: {facts.get('time_exit_weeks', 8)}\n"
     )
@@ -93,6 +113,19 @@ CONSTRAINTS
   anchored in specific facts (P/S, FCFF yield, insider flow, technicals,
   etc.). Do NOT pad the bear case with confidence-score caveats
   ("given the low 1/5 score..."); cite substantive risks only.
+- 52w high/low and MA200 distance are MOMENTUM/STATE descriptors only.
+  Per academic literature (Jegadeesh-Titman 1993, George-Hwang 2004), a
+  large drawdown from the 52w high typically marks a momentum LAGGARD,
+  NOT a bargain. Do NOT label a large 52w drawdown as "cheap", "on sale",
+  or "promotion". Frame it factually: "X% below 52w high indicates
+  momentum laggard status; bargain conclusion requires fundamental and
+  insider corroboration."
+- If next_earnings_date is provided, state the date factually as a
+  staleness signal only. Do NOT forecast, predict, or speculate on the
+  earnings outcome (no "expecting a beat" / "investors are anticipating").
+- If a catalyst (triggering event url/title) is provided, reference it
+  in the supply_chain_reasoning as the trigger that surfaced this
+  candidate. Cite the event factually; do NOT extrapolate market reaction.
 """
 
 
@@ -111,6 +144,10 @@ Return JSON with these string fields:
 - entry_price_note (≤100 chars)
 
 Do NOT invent numbers, names, or dates not in <facts>. No marketing tone.
+Do NOT label large 52w drawdown as "cheap" or "on sale" — it is a
+momentum laggard signal per academic literature, not a bargain. Do NOT
+speculate on next_earnings_date outcomes. If catalyst event provided,
+reference it factually as the trigger.
 """
 
 

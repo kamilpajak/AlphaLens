@@ -144,8 +144,24 @@ def score_valuation(
     cand_features = feature_fetcher(ticker, asof)
     cand_multiples = compute_multiples(cand_features)
 
+    # Freshness telemetry — surface publish_date + age so downstream consumers
+    # (briefs, observability) can flag stale fundamentals.
+    publish_date_str = (cand_features or {}).get("publish_date_str")
+    financials_age_days = None
+    if publish_date_str:
+        try:
+            publish_dt = dt.date.fromisoformat(publish_date_str)
+            financials_age_days = (asof - publish_dt).days
+        except (TypeError, ValueError):
+            financials_age_days = None
+
     if all(v is None for v in cand_multiples.values()):
-        return {**cand_multiples, "composite_sector_percentile": None}
+        return {
+            **cand_multiples,
+            "composite_sector_percentile": None,
+            "financials_publish_date": publish_date_str,
+            "financials_age_days": financials_age_days,
+        }
 
     # Build peer multiples once.
     peer_multiples: list[dict] = []
@@ -167,7 +183,12 @@ def score_valuation(
         per_metric_pctl.append(margin_pctl)
 
     composite = mean(per_metric_pctl) if per_metric_pctl else None
-    return {**cand_multiples, "composite_sector_percentile": composite}
+    return {
+        **cand_multiples,
+        "composite_sector_percentile": composite,
+        "financials_publish_date": publish_date_str,
+        "financials_age_days": financials_age_days,
+    }
 
 
 __all__ = ["compute_multiples", "score_valuation"]
