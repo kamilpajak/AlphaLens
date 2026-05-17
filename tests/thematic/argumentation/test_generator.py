@@ -56,10 +56,14 @@ class TestRouteSelection(unittest.TestCase):
 
 
 class TestGenerateBrief(unittest.TestCase):
+    """``generate_brief`` returns ``(brief | None, BriefErrorKind)`` so the
+    retry wrapper can branch on the exact failure mode (Perplexity 2026-05-17)."""
+
     def test_returns_parsed_brief_on_success(self):
         fake_response = SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
         with patch.object(generator, "_call_gemini", return_value=fake_response):
-            brief = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
         self.assertEqual(brief["tldr"], _SAMPLE_BRIEF["tldr"])
         self.assertIn("bear_summary", brief)
         self.assertEqual(brief["model_used"], generator.PRO_MODEL)
@@ -67,7 +71,7 @@ class TestGenerateBrief(unittest.TestCase):
     def test_uses_flash_model_for_low_conviction(self):
         captured: dict[str, str] = {}
 
-        def fake_call(client, prompt, *, model, types_mod):
+        def fake_call(client, prompt, *, model, types_mod, max_output_tokens, temperature):
             captured["model"] = model
             return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
 
@@ -75,15 +79,43 @@ class TestGenerateBrief(unittest.TestCase):
             generator.generate_brief(_facts(weighted_score=2), api_key="testkey")
         self.assertEqual(captured["model"], generator.FLASH_MODEL)
 
-    def test_returns_none_on_api_failure(self):
+    def test_transport_exception_classified(self):
         with patch.object(generator, "_call_gemini", side_effect=RuntimeError("rate limit")):
-            brief = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
         self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.TRANSPORT)
 
-    def test_returns_none_on_unparseable_response(self):
-        with patch.object(generator, "_call_gemini", return_value=SimpleNamespace(text="not json")):
-            brief = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
+    def test_malformed_json_classified(self):
+        resp = SimpleNamespace(
+            text="not json",
+            candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+        )
+        with patch.object(generator, "_call_gemini", return_value=resp):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
         self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.MALFORMED_JSON)
+
+    def test_truncation_classified(self):
+        resp = _truncated_response()
+        with patch.object(generator, "_call_gemini", return_value=resp):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.TRUNCATED)
+
+    def test_max_output_tokens_param_propagated(self):
+        captured: dict[str, int | float | None] = {"max_tokens": None, "temperature": None}
+
+        def fake_call(client, prompt, *, model, types_mod, max_output_tokens, temperature):
+            captured["max_tokens"] = max_output_tokens
+            captured["temperature"] = temperature
+            return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
+
+        with patch.object(generator, "_call_gemini", side_effect=fake_call):
+            generator.generate_brief(
+                _facts(weighted_score=2), api_key="k", max_output_tokens=4096, temperature=0.0
+            )
+        self.assertEqual(captured["max_tokens"], 4096)
+        self.assertEqual(captured["temperature"], 0.0)
 
     def test_reuses_passed_clients_no_handshake_per_call(self):
         # Mirror the orchestrator hoisting pattern from gemini_mapper / scorer.
@@ -101,6 +133,149 @@ class TestGenerateBrief(unittest.TestCase):
         call_kwargs = mock_call.call_args.kwargs
         self.assertIs(mock_call.call_args.args[0], sentinel_client)
         self.assertIs(call_kwargs["types_mod"], sentinel_types)
+
+
+def _truncated_response(finish_reason_name: str = "MAX_TOKENS"):
+    """SDK-shaped response with non-STOP finish_reason (mid-string truncation)."""
+    cand = SimpleNamespace(
+        finish_reason=SimpleNamespace(name=finish_reason_name),
+        content=SimpleNamespace(parts=[SimpleNamespace(text='{"tldr": "cut')]),
+    )
+    return SimpleNamespace(text='{"tldr": "cut', candidates=[cand])
+
+
+class TestClassifyFinishReason(unittest.TestCase):
+    """Per Perplexity 2026-05-17: distinguish MAX_TOKENS / SAFETY / STOP."""
+
+    def test_max_tokens_classified_as_truncated(self):
+        self.assertEqual(
+            generator._classify_finish_reason(_truncated_response("MAX_TOKENS")),
+            generator.BriefErrorKind.TRUNCATED,
+        )
+
+    def test_safety_classified_as_safety(self):
+        self.assertEqual(
+            generator._classify_finish_reason(_truncated_response("SAFETY")),
+            generator.BriefErrorKind.SAFETY,
+        )
+
+    def test_stop_or_missing_returns_none(self):
+        self.assertIsNone(generator._classify_finish_reason(_truncated_response("STOP")))
+        self.assertIsNone(generator._classify_finish_reason(SimpleNamespace(text="...")))
+
+    def test_string_finish_reason_also_recognised(self):
+        # Some SDK versions surface finish_reason as a bare string.
+        resp = SimpleNamespace(
+            text="cut",
+            candidates=[SimpleNamespace(finish_reason="MAX_TOKENS")],
+        )
+        self.assertEqual(
+            generator._classify_finish_reason(resp), generator.BriefErrorKind.TRUNCATED
+        )
+        resp_safety = SimpleNamespace(
+            text="cut",
+            candidates=[SimpleNamespace(finish_reason="SAFETY")],
+        )
+        self.assertEqual(
+            generator._classify_finish_reason(resp_safety), generator.BriefErrorKind.SAFETY
+        )
+
+
+class TestGenerateBriefWithRetry(unittest.TestCase):
+    """Retry policy: on MAX_TOKENS, retry once with double cap + temperature=0.
+
+    Other failure kinds (MALFORMED_JSON, SAFETY, TRANSPORT) do NOT retry —
+    they will not be helped by more tokens or different temperature.
+    """
+
+    def test_no_retry_on_success(self):
+        fake = SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
+        with patch.object(generator, "_call_gemini", return_value=fake) as mock_call:
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+        self.assertIsNotNone(brief)
+        self.assertEqual(mock_call.call_count, 1)
+
+    def test_retry_doubles_max_tokens_and_drops_temperature(self):
+        captured: list[dict] = []
+
+        def fake_call(client, prompt, *, model, types_mod, max_output_tokens, temperature):
+            captured.append({"max": max_output_tokens, "temp": temperature})
+            if len(captured) == 1:
+                return _truncated_response()
+            return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
+
+        with patch.object(generator, "_call_gemini", side_effect=fake_call):
+            brief = generator.generate_brief_with_retry(
+                _facts(weighted_score=2), api_key="k", base_max_output_tokens=2000
+            )
+        self.assertIsNotNone(brief)
+        self.assertEqual(len(captured), 2)
+        self.assertEqual(captured[0]["max"], 2000)
+        self.assertEqual(captured[1]["max"], 4000)
+        # Retry must use deterministic decode (greedy).
+        self.assertEqual(captured[1]["temp"], 0.0)
+
+    def test_no_retry_on_malformed_json(self):
+        # MALFORMED_JSON with finish_reason STOP — model finished but bad
+        # output; retrying with more tokens won't help.
+        resp = SimpleNamespace(
+            text="not json",
+            candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+        )
+        with patch.object(generator, "_call_gemini", return_value=resp) as mock_call:
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(mock_call.call_count, 1)
+
+    def test_no_retry_on_safety(self):
+        with patch.object(
+            generator, "_call_gemini", return_value=_truncated_response("SAFETY")
+        ) as mock_call:
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(mock_call.call_count, 1)
+
+    def test_no_retry_on_transport_error(self):
+        # Network exceptions are not retried at this layer — let the operator
+        # / outer cron decide on backoff.
+        with patch.object(
+            generator, "_call_gemini", side_effect=RuntimeError("transport boom")
+        ) as mock_call:
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(mock_call.call_count, 1)
+
+    def test_two_truncations_give_up(self):
+        with patch.object(
+            generator, "_call_gemini", side_effect=[_truncated_response(), _truncated_response()]
+        ) as mock_call:
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(mock_call.call_count, 2)
+
+    def test_client_built_once_across_retry(self):
+        # Zen review 2026-05-17 M1: when api_key is given without hoisted
+        # clients, the retry path used to lazy-build a 2nd client. Verify
+        # the SDK loader runs ONCE across both attempts (initial + retry).
+        with (
+            patch.object(generator, "_load_genai_sdk") as mock_loader,
+            patch.object(
+                generator,
+                "_call_gemini",
+                side_effect=[
+                    _truncated_response(),
+                    SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF)),
+                ],
+            ),
+        ):
+            mock_types = SimpleNamespace(GenerateContentConfig=lambda **kw: None)
+            mock_client = SimpleNamespace(models=None)
+            mock_genai = SimpleNamespace(Client=lambda api_key: mock_client)
+            mock_loader.return_value = (mock_genai, mock_types)
+
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+        self.assertIsNotNone(brief)
+        self.assertEqual(mock_loader.call_count, 1)
 
 
 class TestDefensiveClientArgs(unittest.TestCase):
