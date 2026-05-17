@@ -87,8 +87,9 @@ def _classify_finish_reason(response: Any) -> BriefErrorKind | None:
     """Return TRUNCATED / SAFETY when the candidate's finish_reason matches.
 
     Returns None when the field is absent (test mocks) or indicates STOP.
-    Tolerates both enum-shaped (``finish_reason.name == "MAX_TOKENS"``)
-    and string-shaped (``finish_reason == "MAX_TOKENS"``) SDK variants.
+    Tolerates both enum-shaped (e.g., ``genai.types.FinishReason.MAX_TOKENS``,
+    where ``.name == "MAX_TOKENS"``) and string-shaped (``finish_reason ==
+    "MAX_TOKENS"``) SDK variants.
     """
     candidates = getattr(response, "candidates", None) or []
     if not candidates:
@@ -194,7 +195,20 @@ def generate_brief_with_retry(
     Returns the brief dict (with ``model_used``) on success, ``None``
     otherwise. The orchestrator's graceful-degradation renderer then
     surfaces the deterministic facts even when this returns None.
+
+    Example:
+        >>> brief = generate_brief_with_retry(facts, api_key="sk-...", base_max_output_tokens=2000)
+        >>> brief["tldr"] if brief else "(LLM failed)"
     """
+    # Hoist SDK + client init ONCE so the retry path doesn't re-do it. When
+    # the caller passed hoisted clients (orchestrator batch path) this is a
+    # no-op; the ad-hoc path (api_key only) would otherwise pay two
+    # genai.Client() handshakes per truncation incident.
+    if types_mod is None and client_pro is None and client_flash is None and api_key is not None:
+        genai, types_mod = _load_genai_sdk()
+        client_pro = genai.Client(api_key=api_key)
+        client_flash = client_pro
+
     brief, kind = generate_brief(
         facts,
         api_key=api_key,

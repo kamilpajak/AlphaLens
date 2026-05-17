@@ -172,6 +172,13 @@ class TestClassifyFinishReason(unittest.TestCase):
         self.assertEqual(
             generator._classify_finish_reason(resp), generator.BriefErrorKind.TRUNCATED
         )
+        resp_safety = SimpleNamespace(
+            text="cut",
+            candidates=[SimpleNamespace(finish_reason="SAFETY")],
+        )
+        self.assertEqual(
+            generator._classify_finish_reason(resp_safety), generator.BriefErrorKind.SAFETY
+        )
 
 
 class TestGenerateBriefWithRetry(unittest.TestCase):
@@ -245,6 +252,30 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
             brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
         self.assertIsNone(brief)
         self.assertEqual(mock_call.call_count, 2)
+
+    def test_client_built_once_across_retry(self):
+        # Zen review 2026-05-17 M1: when api_key is given without hoisted
+        # clients, the retry path used to lazy-build a 2nd client. Verify
+        # the SDK loader runs ONCE across both attempts (initial + retry).
+        with (
+            patch.object(generator, "_load_genai_sdk") as mock_loader,
+            patch.object(
+                generator,
+                "_call_gemini",
+                side_effect=[
+                    _truncated_response(),
+                    SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF)),
+                ],
+            ),
+        ):
+            mock_types = SimpleNamespace(GenerateContentConfig=lambda **kw: None)
+            mock_client = SimpleNamespace(models=None)
+            mock_genai = SimpleNamespace(Client=lambda api_key: mock_client)
+            mock_loader.return_value = (mock_genai, mock_types)
+
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+        self.assertIsNotNone(brief)
+        self.assertEqual(mock_loader.call_count, 1)
 
 
 class TestDefensiveClientArgs(unittest.TestCase):
