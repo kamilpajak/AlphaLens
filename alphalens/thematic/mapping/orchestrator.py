@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from alphalens.thematic.mapping import gemini_mapper
+from alphalens.thematic.mapping import catalyst_resolver, gemini_mapper
 from alphalens.thematic.verification import (
     etf_holdings,
     insider,
@@ -234,7 +234,17 @@ def map_themes(
     rows: list[dict] = []
     dropped_total = 0
     dropped_all_unknown = 0
+    catalyst_cache: dict[str, dict | None] = {}
     for theme in themes:
+        if theme not in catalyst_cache:
+            try:
+                catalyst_cache[theme] = catalyst_resolver.find_trigger_event(theme=theme, asof=asof)
+            except Exception as exc:
+                logger.warning(
+                    "catalyst resolver failed for theme %s: %s", theme, exc, exc_info=True
+                )
+                catalyst_cache[theme] = None
+        catalyst = catalyst_cache[theme] or {}
         candidates = gemini_mapper.propose_candidates(
             theme=theme,
             api_key=api_key,
@@ -280,6 +290,9 @@ def map_themes(
                     "gates_unknown_str": ",".join(verdict["gates_unknown"]),
                     "n_gates_unknown": len(verdict["gates_unknown"]),
                     "verified": verdict["verified"],
+                    "source_event_url": catalyst.get("url"),
+                    "source_event_title": catalyst.get("title"),
+                    "source_event_published_at": catalyst.get("published_at"),
                 }
             )
 
@@ -311,6 +324,9 @@ def map_themes(
                 "gates_unknown_str",
                 "n_gates_unknown",
                 "verified",
+                "source_event_url",
+                "source_event_title",
+                "source_event_published_at",
             ]
         )
     df.attrs["dropped_total"] = dropped_total

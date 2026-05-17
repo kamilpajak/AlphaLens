@@ -77,12 +77,18 @@ _DEFAULT_SIGNAL_SHAPES = {
         "ev_rev": None,
         "fcf_margin": None,
         "composite_sector_percentile": None,
+        "financials_publish_date": None,
+        "financials_age_days": None,
     },
     "technicals": {
         "rsi": None,
         "ma50_distance_pct": None,
         "atr_pct": None,
         "volume_zscore": None,
+        "pct_off_52w_high": None,
+        "pct_off_52w_low": None,
+        "ma200_distance_pct": None,
+        "ma200_slope_pct_per_day": None,
         "summary": "no data",
     },
 }
@@ -195,7 +201,7 @@ def _build_ohlcv_loader() -> Callable[[str, date], pd.DataFrame]:
                     df = pd.DataFrame()
             else:
                 try:
-                    start = pd.Timestamp(asof) - pd.Timedelta(days=180)
+                    start = pd.Timestamp(asof) - pd.Timedelta(days=400)
                     end = pd.Timestamp(asof) + pd.Timedelta(days=1)
                     df = yf.Ticker(upper).history(start=start, end=end, auto_adjust=False)
                     df.columns = [c.lower() for c in df.columns]
@@ -311,10 +317,16 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
                 "valuation_ev_rev": val["ev_rev"],
                 "valuation_fcf_margin": val["fcf_margin"],
                 "valuation_composite_sector_percentile": val["composite_sector_percentile"],
+                "valuation_financials_publish_date": val.get("financials_publish_date"),
+                "valuation_financials_age_days": val.get("financials_age_days"),
                 "technical_rsi": tech["rsi"],
                 "technical_ma50_distance_pct": tech["ma50_distance_pct"],
                 "technical_atr_pct": tech["atr_pct"],
                 "technical_volume_zscore": tech["volume_zscore"],
+                "technical_pct_off_52w_high": tech.get("pct_off_52w_high"),
+                "technical_pct_off_52w_low": tech.get("pct_off_52w_low"),
+                "technical_ma200_distance_pct": tech.get("ma200_distance_pct"),
+                "technical_ma200_slope_pct_per_day": tech.get("ma200_slope_pct_per_day"),
                 "technicals_summary_str": tech["summary"],
                 "layer4_weighted_score": weighted,
             }

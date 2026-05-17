@@ -42,16 +42,35 @@ def _fmt_insider_usd(value: Any) -> str:
 
 
 def render_markdown(brief: dict, row: dict | pd.Series) -> str:
-    """Assemble one candidate's brief block (~700-1000 chars)."""
+    """Assemble one candidate's brief block (~700-1100 chars)."""
     r = dict(row) if not isinstance(row, dict) else row
     weighted = r.get("layer4_weighted_score")
     weighted_str = f"{int(weighted)}/5" if weighted is not None and not _is_nan(weighted) else "n/a"
+
+    # Catalyst line — explains WHY this candidate was surfaced.
+    catalyst_line = ""
+    src_url = r.get("source_event_url")
+    if src_url and not _is_nan(src_url) and str(src_url) != "nan":
+        title = r.get("source_event_title") or ""
+        published = r.get("source_event_published_at") or ""
+        catalyst_line = f"**Catalyst**: {title} ({published}) {src_url}\n"
+
+    # Freshness + earnings tags inline with signal block.
+    age_days = r.get("valuation_financials_age_days")
+    age_tag = (
+        f" | financials age {int(age_days)}d"
+        if age_days is not None and not _is_nan(age_days)
+        else ""
+    )
+    next_earnings = brief.get("next_earnings_date") or r.get("next_earnings_date")
+    earnings_tag = f" | next earnings {next_earnings}" if next_earnings else ""
 
     return (
         f"## {r.get('ticker')} — {r.get('company_name', '')} (conf {weighted_str})\n"
         f"**Theme**: {r.get('theme', '')} | "
         f"**Industry**: {r.get('industry_name', 'n/a')}"
-        f" ({r.get('sector_name', 'n/a')})\n\n"
+        f" ({r.get('sector_name', 'n/a')})\n"
+        f"{catalyst_line}\n"
         f"**Thesis**: {brief.get('tldr', '')}\n\n"
         f"**Supply chain**: {brief.get('supply_chain_reasoning', '')}\n\n"
         f"**Bear case**: {brief.get('bear_summary', '')}\n\n"
@@ -65,7 +84,9 @@ def render_markdown(brief: dict, row: dict | pd.Series) -> str:
         f" (pctile {_fmt_pctile(r.get('fcff_yield_sector_percentile'))})"
         f" | val composite pctile"
         f" {_fmt_pctile(r.get('valuation_composite_sector_percentile'))}"
-        f" | {r.get('technicals_summary_str', 'n/a')}\n"
+        f"{age_tag}"
+        f" | {r.get('technicals_summary_str', 'n/a')}"
+        f"{earnings_tag}\n"
         f"**Verified gates**: {r.get('gates_passed_str', '')}\n"
     )
 

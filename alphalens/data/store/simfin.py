@@ -251,6 +251,18 @@ class SimFinFundamentalsStore:
         revenue_ttm = _ttm_sum(inc, _COL_REVENUE)
         net_income_ttm = _ttm_sum(inc, _COL_NET_INCOME)
 
+        # Most-recent Publish Date across the 3 statement frames — surfaces
+        # the freshness of the underlying filing so downstream consumers can
+        # detect stale fundamentals (per zen review 2026-05-17).
+        publish_dates = []
+        for frame in (bs, cf, inc):
+            if frame is not None and _COL_PUBLISH_DATE in frame.columns:
+                publish_dates.append(pd.to_datetime(frame[_COL_PUBLISH_DATE]).max())
+        latest_publish = max(publish_dates) if publish_dates else None
+        publish_date_str = (
+            latest_publish.strftime("%Y-%m-%d") if latest_publish is not None else None
+        )
+
         # Effective tax rate from latest available quarterly Pretax / NetIncome.
         # Formula: τ = 1 − NetIncome / Pretax, clamped to [0, 0.35].
         pretax_latest = _latest_value(inc, _COL_PRETAX)
@@ -294,6 +306,7 @@ class SimFinFundamentalsStore:
             "short_term_debt": std_latest,
             "cash_and_equivalents": cash_latest,
             "net_income_ttm": net_income_ttm,
+            "publish_date_str": publish_date_str,
         }
 
 

@@ -233,6 +233,7 @@ class TestEvFcffFeaturesAsOf(unittest.TestCase):
             "short_term_debt",
             "cash_and_equivalents",
             "net_income_ttm",
+            "publish_date_str",
         }
         self.assertEqual(set(snap.keys()), expected_keys)
 

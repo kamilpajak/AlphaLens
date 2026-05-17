@@ -40,7 +40,12 @@ _BRIEF_NUMERIC_FIELDS = (
     "valuation_ev_rev",
     "valuation_fcf_margin",
     "valuation_composite_sector_percentile",
+    "valuation_financials_age_days",
     "market_cap",
+    "technical_pct_off_52w_high",
+    "technical_pct_off_52w_low",
+    "technical_ma200_distance_pct",
+    "technical_ma200_slope_pct_per_day",
 )
 
 
@@ -59,6 +64,15 @@ def _row_to_facts(row: pd.Series) -> dict:
         "technicals_summary_str": row.get("technicals_summary_str", "n/a"),
         "position_pct": position_pct_from_conf(weighted),
         "time_exit_weeks": TIME_EXIT_DEFAULT_WEEKS,
+        # Catalyst / news provenance (Z6 — explains "why surfaced").
+        "source_event_url": row.get("source_event_url") or None,
+        "source_event_title": row.get("source_event_title") or None,
+        "source_event_published_at": row.get("source_event_published_at") or None,
+        # Freshness telemetry (Z2).
+        "financials_publish_date": row.get("valuation_financials_publish_date") or None,
+        # Earnings calendar lookup (Z3) — done at orchestrator level so the
+        # row_to_facts doesn't need to know about yfinance.
+        "next_earnings_date": None,
     }
     for field in _BRIEF_NUMERIC_FIELDS:
         value = row.get(field)
@@ -66,9 +80,25 @@ def _row_to_facts(row: pd.Series) -> dict:
     return facts
 
 
-def _brief_for_row(row: pd.Series, *, client_pro, client_flash, types_mod) -> dict | None:
+def _enrich_facts_with_earnings(facts: dict, asof: dt.date) -> dict:
+    """Add next_earnings_date to facts via yfinance.calendar lookup (PIT)."""
+    from alphalens.thematic.sources.earnings_calendar import fetch_next_earnings
+
+    try:
+        next_date = fetch_next_earnings(ticker=facts["ticker"], asof=asof)
+    except Exception:
+        next_date = None
+    facts["next_earnings_date"] = next_date.isoformat() if next_date else None
+    return facts
+
+
+def _brief_for_row(
+    row: pd.Series, *, client_pro, client_flash, types_mod, asof: dt.date | None = None
+) -> dict | None:
     """Single-row LLM call with per-row exception absorption."""
     facts = _row_to_facts(row)
+    if asof is not None:
+        facts = _enrich_facts_with_earnings(facts, asof)
     try:
         return generator.generate_brief(
             facts,
@@ -170,7 +200,11 @@ def generate_briefs(
     n_flash = 0
     for _, row in verified.iterrows():
         brief = _brief_for_row(
-            row, client_pro=client_pro, client_flash=client_flash, types_mod=types_mod
+            row,
+            client_pro=client_pro,
+            client_flash=client_flash,
+            types_mod=types_mod,
+            asof=asof,
         )
         if brief is None:
             rows.append(
