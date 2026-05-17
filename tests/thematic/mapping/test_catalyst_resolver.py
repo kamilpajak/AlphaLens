@@ -184,6 +184,89 @@ class TestFindTriggerEvent(unittest.TestCase):
             )
         self.assertLessEqual(len(cat["title"]), 200)
 
+    def test_skips_files_with_invalid_filename_dates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events"
+            news = Path(tmp) / "news"
+            events.mkdir()
+            news.mkdir()
+            # Filename with non-ISO date stem — _load_window must skip silently.
+            (events / "not-a-date.parquet").write_bytes(b"junk")
+            cat = catalyst_resolver.find_trigger_event(
+                theme="quantum_computing",
+                asof=dt.date(2026, 4, 14),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNone(cat)
+
+    def test_skips_files_with_unreadable_parquet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events"
+            news = Path(tmp) / "news"
+            events.mkdir()
+            news.mkdir()
+            (events / "2026-04-14.parquet").write_bytes(b"not parquet bytes")
+            cat = catalyst_resolver.find_trigger_event(
+                theme="quantum_computing",
+                asof=dt.date(2026, 4, 14),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNone(cat)
+
+    def test_returns_none_when_news_window_empty(self):
+        # Events match theme but no news in the same window → graceful None.
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events"
+            news = Path(tmp) / "news"
+            _seed_events(
+                events,
+                dt.date(2026, 4, 14),
+                [{"news_id": "n1", "themes": ["quantum_computing"], "confidence": 0.9}],
+            )
+            news.mkdir()  # exists but empty
+            cat = catalyst_resolver.find_trigger_event(
+                theme="quantum_computing",
+                asof=dt.date(2026, 4, 14),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNone(cat)
+
+    def test_themes_field_with_non_iterable_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events"
+            news = Path(tmp) / "news"
+            _seed_news(
+                news,
+                dt.date(2026, 4, 14),
+                [
+                    {
+                        "id": "n1",
+                        "title": "T",
+                        "url": "u",
+                        "published_at": pd.Timestamp("2026-04-14T13:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 4, 14),
+                [{"news_id": "n1", "themes": 42, "confidence": 0.9}],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="quantum_computing",
+                asof=dt.date(2026, 4, 14),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNone(cat)
+
 
 if __name__ == "__main__":
     unittest.main()

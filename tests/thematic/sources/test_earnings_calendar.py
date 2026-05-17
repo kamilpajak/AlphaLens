@@ -52,6 +52,32 @@ class TestFetchNextEarnings(unittest.TestCase):
             result = earnings_calendar.fetch_next_earnings(ticker="QUBT", asof=dt.date(2026, 4, 14))
         self.assertEqual(result, dt.date(2026, 5, 11))
 
+    def test_handles_dataframe_with_earnings_date_in_index(self):
+        # Some yfinance versions return Earnings Date in the index, not columns.
+        df = pd.DataFrame({"col1": [pd.Timestamp("2026-05-11")]}, index=["Earnings Date"])
+        fake_ticker = MagicMock()
+        fake_ticker.calendar = df
+        with patch("yfinance.Ticker", return_value=fake_ticker):
+            result = earnings_calendar.fetch_next_earnings(ticker="QUBT", asof=dt.date(2026, 4, 14))
+        self.assertEqual(result, dt.date(2026, 5, 11))
+
+    def test_returns_none_for_unknown_calendar_type(self):
+        # Non-dict, non-DataFrame → _extract_earnings_dates returns [].
+        fake_ticker = MagicMock()
+        fake_ticker.calendar = "unexpected string"
+        with patch("yfinance.Ticker", return_value=fake_ticker):
+            self.assertIsNone(
+                earnings_calendar.fetch_next_earnings(ticker="QUBT", asof=dt.date(2026, 4, 14))
+            )
+
+    def test_handles_datetime_values(self):
+        # Coerces datetime instances to date via .date().
+        fake_ticker = MagicMock()
+        fake_ticker.calendar = {"Earnings Date": [dt.datetime(2026, 5, 11, 14, 30)]}
+        with patch("yfinance.Ticker", return_value=fake_ticker):
+            result = earnings_calendar.fetch_next_earnings(ticker="QUBT", asof=dt.date(2026, 4, 14))
+        self.assertEqual(result, dt.date(2026, 5, 11))
+
 
 if __name__ == "__main__":
     unittest.main()

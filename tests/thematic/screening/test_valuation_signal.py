@@ -111,5 +111,31 @@ class TestScoreValuation(unittest.TestCase):
         self.assertAlmostEqual(out["composite_sector_percentile"], 100.0, places=1)
 
 
+class TestFinancialsAgeDays(unittest.TestCase):
+    def test_age_computed_from_publish_date(self):
+        feats = _features()
+        feats["publish_date_str"] = "2026-03-15"
+        out = valuation_signal.score_valuation(
+            ticker="X",
+            asof=dt.date(2026, 4, 14),
+            peers=["X"],
+            feature_fetcher=lambda t, a: feats,
+        )
+        self.assertEqual(out["financials_publish_date"], "2026-03-15")
+        self.assertEqual(out["financials_age_days"], 30)
+
+    def test_invalid_publish_date_string_yields_none_age(self):
+        feats = _features()
+        feats["publish_date_str"] = "not-a-date"
+        out = valuation_signal.score_valuation(
+            ticker="X",
+            asof=dt.date(2026, 4, 14),
+            peers=["X"],
+            feature_fetcher=lambda t, a: feats,
+        )
+        self.assertEqual(out["financials_publish_date"], "not-a-date")
+        self.assertIsNone(out["financials_age_days"])
+
+
 if __name__ == "__main__":
     unittest.main()
