@@ -1,13 +1,16 @@
 # Thematic Event-Driven Decision-Support Tool — Design Memo v1
 
 **Date:** 2026-05-15 (locked 2026-05-16)
-**Status:** **PHASE A-E SHIPPED** (2026-05-17). MVP pipeline live end-to-end:
+**Status:** **PHASE A-E SHIPPED + brief renderer hardened** (2026-05-17). MVP pipeline live end-to-end:
 - Phase A news ingestion (PR #128)
 - Phase B Gemini Flash event extraction + theme rollup (PR #129)
 - Phase C theme→beneficiary mapping + 4 verification gates (PR #130) — gate honesty + mcap post-filter (PR #131)
 - Phase D Layer 4 4-signal screen (PR #132) — insider/FCFF/valuation/technicals stack
 - Phase E Layer 5 brief generator with Pro/Flash routing (PR #133)
-- Explainability gap closure: catalyst URL + 52w/MA200 + freshness + earnings (PR #134)
+- Explainability: catalyst URL + 52w/MA200 + freshness + earnings (PR #134)
+- Renderer resilience: graceful degradation (PR #135) + pd.isna correctness (PR #136)
+- LLM-call resilience: finish_reason classifier + retry on MAX_TOKENS (PR #137) + json-repair on STOP+parse-fail (PR #138)
+- Operator UX: Pattern line + cherry-pick sort by 52w drawdown (PR #139)
 
 Original status: LOCKED — 7 user decisions resolved §14; Phase A engineering authorized (2026-05-16).
 **Parallel track:** AlphaLens dodaje DRUGĄ równoległą ścieżkę obok kontynuowanej factor-paradigm-search. Paradigm #14 PEAD v2 audit nadal in-flight, paper-trade observations (v9D, pc_abnormal) continue, Layer 1 watchdog live, methodology bundle MIT-licensed durable. Ten tool jest **thematic event-driven discretionary decision-support** — research/operational tool augmentujący user's existing WhatsApp investing group workflow. NIE jest paradigm test pod project doctrine 3.5; nie zastępuje factor research. Both tracks operate independently.
