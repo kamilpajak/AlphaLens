@@ -16,6 +16,7 @@ import datetime as dt
 import logging
 from collections.abc import Callable
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -67,6 +68,43 @@ def technicals_are_positive(*, rsi: float | None, ma_distance_pct: float | None)
     return 30.0 <= rsi <= 70.0 and -15.0 <= ma_distance_pct <= 15.0
 
 
+_DEFAULT_SIGNAL_SHAPES = {
+    "insider": {"score_usd": None, "sector_percentile": None},
+    "fcff": {"yield_pct": None, "sector_percentile": None},
+    "valuation": {
+        "pe": None,
+        "ps": None,
+        "ev_rev": None,
+        "fcf_margin": None,
+        "composite_sector_percentile": None,
+    },
+    "technicals": {
+        "rsi": None,
+        "ma50_distance_pct": None,
+        "atr_pct": None,
+        "volume_zscore": None,
+        "summary": "no data",
+    },
+}
+
+
+def _safe_signal(name: str, fn, **kwargs):
+    """Run a signal scorer; on exception log + return the default shape.
+
+    Mirrors the Phase C orchestrator ``_safe`` pattern: a single ticker's
+    data anomaly (corrupt Form-4 partition, SimFin parse error, yfinance
+    schema drift) must not abort the entire batch. Caller sees the
+    "missing-data" dict for that signal and continues with the others.
+    """
+    try:
+        return fn(**kwargs)
+    except Exception as exc:
+        logger.warning(
+            "signal %s raised for ticker=%s: %s", name, kwargs.get("ticker"), exc, exc_info=True
+        )
+        return dict(_DEFAULT_SIGNAL_SHAPES[name])
+
+
 def compose_weighted_score(
     *,
     insider_positive: bool,
@@ -92,64 +130,85 @@ def compose_weighted_score(
 
 
 def _build_feature_fetcher(tickers: list[str] | None = None) -> Callable[[str, date], dict | None]:
-    """Build a SimFin ``ev_fcff_features_as_of``-style lookup with NI added.
+    """Build a SimFin ``ev_fcff_features_as_of`` lookup.
 
     ``tickers`` is forwarded to :meth:`SimFinFundamentalsStore.preload` so
     the store loads the bulk CSVs once for the full universe Phase D will
     query. Callers can pass an empty list — preload still loads the data
     (the ticker list only drives coverage validation, not fetching).
+
+    On preload failure (RuntimeError from SimFin's <50% coverage abort, or
+    any other exception) returns a stub fetcher that always returns None,
+    so Layer 4 still emits structured "all-signals-missing" rows instead
+    of failing the whole batch.
     """
     from alphalens.data.store.simfin import SimFinFundamentalsStore
 
-    store = SimFinFundamentalsStore(with_prices=True)
-    store.preload(tickers or [])
+    try:
+        store = SimFinFundamentalsStore(with_prices=True)
+        store.preload(tickers or [])
+    except Exception as exc:
+        logger.warning("SimFin preload aborted, valuation/fcff signals will be missing: %s", exc)
+        return lambda ticker, asof: None
+
     cache: dict[tuple[str, date], dict | None] = {}
 
     def fetcher(ticker: str, asof: date) -> dict | None:
         key = (ticker.upper(), asof)
         if key in cache:
             return cache[key]
-        ev_fcff = store.ev_fcff_features_as_of(ticker, asof)
-        base = store.features_as_of(ticker, asof) or {}
-        if ev_fcff is None:
-            cache[key] = None
-            return None
-        # Merge net_income_ttm from the features_as_of side so valuation_signal
-        # can compute P/E without re-pulling SimFin a third time.
-        merged = dict(ev_fcff)
-        merged["net_income_ttm"] = base.get("net_income_ttm")
-        cache[key] = merged
-        return merged
+        features = store.ev_fcff_features_as_of(ticker, asof)
+        cache[key] = features
+        return features
 
     return fetcher
 
 
-def _build_ohlcv_loader() -> Callable[[str, date], pd.DataFrame]:
-    """Build an on-demand OHLCV loader (yfinance live, 180d lookback).
+_THEMATIC_OHLCV_CACHE = Path.home() / ".alphalens" / "thematic_ohlcv"
 
-    Phase D candidate batches are small (~5-20 tickers/day) so direct
-    ``yf.Ticker(t).history`` calls are cheap. Cache is in-process per call;
-    a future backfill workflow can pre-populate
-    ``alphalens.data.alt_data.yfinance_cache`` if Phase D becomes batch-heavy.
+
+def _build_ohlcv_loader() -> Callable[[str, date], pd.DataFrame]:
+    """Build an OHLCV loader with disk + in-process cache.
+
+    Disk cache lives at ``~/.alphalens/thematic_ohlcv/{TICKER}.parquet``.
+    First miss triggers a live ``yfinance.Ticker.history`` fetch (180d
+    lookback) and persists the result. Subsequent runs reuse the parquet
+    until the operator clears the cache (no TTL — Phase D's 180d window
+    is robust to ~1-day staleness; clear for a fresh fetch).
     """
     import yfinance as yf
 
-    cache: dict[str, pd.DataFrame] = {}
+    cache_dir = _THEMATIC_OHLCV_CACHE
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    mem_cache: dict[str, pd.DataFrame] = {}
 
     def loader(ticker: str, asof: date) -> pd.DataFrame:
-        if ticker not in cache:
-            try:
-                start = pd.Timestamp(asof) - pd.Timedelta(days=180)
-                end = pd.Timestamp(asof) + pd.Timedelta(days=1)
-                df = yf.Ticker(ticker).history(start=start, end=end, auto_adjust=False)
-                df.columns = [c.lower() for c in df.columns]
-                if df.index.tz is not None:
-                    df.index = df.index.tz_localize(None)
-                cache[ticker] = df[["open", "high", "low", "close", "volume"]]
-            except Exception as exc:
-                logger.warning("yfinance fetch failed for %s: %s", ticker, exc)
-                cache[ticker] = pd.DataFrame()
-        df = cache[ticker]
+        upper = ticker.upper()
+        if upper not in mem_cache:
+            path = cache_dir / f"{upper}.parquet"
+            df: pd.DataFrame
+            if path.exists():
+                try:
+                    df = pd.read_parquet(path)
+                except Exception as exc:
+                    logger.warning("ohlcv cache read failed for %s: %s", upper, exc)
+                    df = pd.DataFrame()
+            else:
+                try:
+                    start = pd.Timestamp(asof) - pd.Timedelta(days=180)
+                    end = pd.Timestamp(asof) + pd.Timedelta(days=1)
+                    df = yf.Ticker(upper).history(start=start, end=end, auto_adjust=False)
+                    df.columns = [c.lower() for c in df.columns]
+                    if df.index.tz is not None:
+                        df.index = df.index.tz_localize(None)
+                    df = df[["open", "high", "low", "close", "volume"]]
+                    if not df.empty:
+                        df.to_parquet(path)
+                except Exception as exc:
+                    logger.warning("yfinance fetch failed for %s: %s", upper, exc)
+                    df = pd.DataFrame()
+            mem_cache[upper] = df
+        df = mem_cache[upper]
         if df.empty:
             return df
         return df[df.index <= pd.Timestamp(asof)]
@@ -199,14 +258,32 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
                 peer_cache[industry_id] = sector_peers.iter_industry_peers(industry_id)
             peers = peer_cache[industry_id]
 
-        ins = insider_signal.score_insider(ticker=ticker, asof=asof, peers=peers)
-        fcff = fcff_signal.score_fcff(
-            ticker=ticker, asof=asof, peers=peers, feature_fetcher=feature_fetcher
+        ins = _safe_signal(
+            "insider", insider_signal.score_insider, ticker=ticker, asof=asof, peers=peers
         )
-        val = valuation_signal.score_valuation(
-            ticker=ticker, asof=asof, peers=peers, feature_fetcher=feature_fetcher
+        fcff = _safe_signal(
+            "fcff",
+            fcff_signal.score_fcff,
+            ticker=ticker,
+            asof=asof,
+            peers=peers,
+            feature_fetcher=feature_fetcher,
         )
-        tech = technicals_signal.score_technicals(ticker=ticker, asof=asof, loader=ohlcv_loader)
+        val = _safe_signal(
+            "valuation",
+            valuation_signal.score_valuation,
+            ticker=ticker,
+            asof=asof,
+            peers=peers,
+            feature_fetcher=feature_fetcher,
+        )
+        tech = _safe_signal(
+            "technicals",
+            technicals_signal.score_technicals,
+            ticker=ticker,
+            asof=asof,
+            loader=ohlcv_loader,
+        )
 
         weighted = compose_weighted_score(
             insider_positive=insider_is_positive(score_usd=ins["score_usd"]),

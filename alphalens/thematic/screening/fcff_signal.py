@@ -21,23 +21,9 @@ from alphalens.screeners.ev_fcff_yield.scorer import (
     effective_fcff,
     impute_fcff,
 )
-from alphalens.thematic.screening.insider_signal import _percentile_rank
+from alphalens.thematic.screening._common import clamp_tax, percentile_rank
 
 logger = logging.getLogger(__name__)
-
-# Bound the SimFin-published tax rate to the paradigm #13 clamp range.
-_TAX_FLOOR = 0.0
-_TAX_CEILING = 0.35
-
-
-def _clamp_tax(value: float | None) -> float | None:
-    if value is None:
-        return None
-    if value < _TAX_FLOOR:
-        return _TAX_FLOOR
-    if value > _TAX_CEILING:
-        return _TAX_CEILING
-    return value
 
 
 def compute_fcff_yield_pct(features: dict | None) -> float | None:
@@ -52,7 +38,7 @@ def compute_fcff_yield_pct(features: dict | None) -> float | None:
         ocf = features.get("ocf_ttm")
         capex = features.get("capex_ttm")
         interest = features.get("interest_expense_ttm") or 0.0
-        tax = _clamp_tax(features.get("tax_rate"))
+        tax = clamp_tax(features.get("tax_rate"))
         revenue = features.get("revenue_ttm")
         fcf_margin = features.get("fcf_margin_5y_median")
         price = features.get("price")
@@ -127,7 +113,7 @@ def score_fcff(
         if py is not None:
             peer_yields.append(py)
 
-    percentile = _percentile_rank(candidate_yield, peer_yields)
+    percentile = percentile_rank(candidate_yield, peer_yields)
     return {"yield_pct": candidate_yield, "sector_percentile": percentile}
 
 

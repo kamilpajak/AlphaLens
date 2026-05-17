@@ -28,7 +28,7 @@ from alphalens.screeners.ev_fcff_yield.scorer import (
     effective_fcff,
     impute_fcff,
 )
-from alphalens.thematic.screening.insider_signal import _percentile_rank
+from alphalens.thematic.screening._common import clamp_tax, percentile_rank
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +67,11 @@ def _effective_fcf_margin(features: dict) -> float | None:
         # Fall back directly to the 5y median when we can't compute current FCFF.
         return _safe_get(features, "fcf_margin_5y_median")
     try:
-        tax = max(0.0, min(0.35, tax))
         actual = compute_fcff(
-            ocf_ttm=ocf, capex_ttm=capex, interest_expense_ttm=interest, tax_rate=tax
+            ocf_ttm=ocf,
+            capex_ttm=capex,
+            interest_expense_ttm=interest,
+            tax_rate=clamp_tax(tax),
         )
     except (ValueError, TypeError):
         return _safe_get(features, "fcf_margin_5y_median")
@@ -116,14 +118,14 @@ def _inverse_percentile(value: float | None, peers: list[float]) -> float | None
     """
     if value is None:
         return None
-    return _percentile_rank(-value, [-v for v in peers])
+    return percentile_rank(-value, [-v for v in peers])
 
 
 def _quality_percentile(value: float | None, peers: list[float]) -> float | None:
     """Higher-is-better percentile (used for FCF margin)."""
     if value is None:
         return None
-    return _percentile_rank(value, peers)
+    return percentile_rank(value, peers)
 
 
 def score_valuation(

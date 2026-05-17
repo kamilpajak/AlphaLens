@@ -240,6 +240,116 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
         self.assertEqual(int(ionq["layer4_weighted_score"]), 4)
 
 
+class TestScoreCandidatesIsResilientToSignalExceptions(unittest.TestCase):
+    def setUp(self):
+        # Patch sector + factory stubs as in the end-to-end test.
+        self.patches = [
+            patch.object(scorer.sector_peers, "get_industry_id", return_value=101001),
+            patch.object(
+                scorer.sector_peers, "industry_label", return_value=("Quantum SW", "Tech")
+            ),
+            patch.object(scorer.sector_peers, "iter_industry_peers", return_value=["QUBT"]),
+            patch.object(scorer, "_build_feature_fetcher", return_value=lambda t, asof: None),
+            patch.object(
+                scorer, "_build_ohlcv_loader", return_value=lambda t, asof: pd.DataFrame()
+            ),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+
+    def test_insider_signal_exception_does_not_abort_batch(self):
+        # Insider raises → row still emitted with insider_* = NaN; other 3
+        # signals run normally (return their default "no data" shapes).
+        with patch.object(
+            scorer.insider_signal,
+            "score_insider",
+            side_effect=RuntimeError("form4 parquet corrupted"),
+        ):
+            out = scorer.score_candidates(_candidates_df(["QUBT"]), asof=dt.date(2026, 4, 14))
+        self.assertEqual(len(out), 1)
+        row = out.iloc[0]
+        self.assertTrue(pd.isna(row["insider_score_usd"]))
+        # weighted_score floored at 1 — single-signal exception ≠ batch abort.
+        self.assertEqual(int(row["layer4_weighted_score"]), 1)
+
+    def test_fcff_signal_exception_does_not_abort_batch(self):
+        with patch.object(
+            scorer.fcff_signal,
+            "score_fcff",
+            side_effect=RuntimeError("simfin row missing"),
+        ):
+            out = scorer.score_candidates(_candidates_df(["QUBT"]), asof=dt.date(2026, 4, 14))
+        self.assertEqual(len(out), 1)
+        self.assertTrue(pd.isna(out.iloc[0]["fcff_yield_pct"]))
+
+
+class TestOhlcvLoaderDiskCache(unittest.TestCase):
+    def test_reads_from_parquet_cache_when_present(self):
+        import tempfile
+        from pathlib import Path
+
+        cached_df = pd.DataFrame(
+            {"open": [1.0], "high": [2.0], "low": [0.5], "close": [1.5], "volume": [1000.0]},
+            index=pd.DatetimeIndex(["2026-04-10"]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            (cache_dir / "QUBT.parquet").parent.mkdir(parents=True, exist_ok=True)
+            cached_df.to_parquet(cache_dir / "QUBT.parquet")
+            with (
+                patch.object(scorer, "_THEMATIC_OHLCV_CACHE", cache_dir),
+                patch("yfinance.Ticker", side_effect=AssertionError("must not fetch live")),
+            ):
+                loader = scorer._build_ohlcv_loader()
+                df = loader("QUBT", dt.date(2026, 4, 14))
+        self.assertEqual(len(df), 1)
+        self.assertEqual(float(df["close"].iloc[0]), 1.5)
+
+    def test_writes_parquet_after_live_fetch(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import MagicMock
+
+        live_df = pd.DataFrame(
+            {
+                "Open": [10.0],
+                "High": [11.0],
+                "Low": [9.0],
+                "Close": [10.5],
+                "Volume": [5000.0],
+            },
+            index=pd.DatetimeIndex(["2026-04-10"]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            fake_ticker = MagicMock()
+            fake_ticker.history.return_value = live_df
+            with (
+                patch.object(scorer, "_THEMATIC_OHLCV_CACHE", cache_dir),
+                patch("yfinance.Ticker", return_value=fake_ticker),
+            ):
+                loader = scorer._build_ohlcv_loader()
+                _ = loader("RGTI", dt.date(2026, 4, 14))
+            self.assertTrue((cache_dir / "RGTI.parquet").exists())
+
+
+class TestFeatureFetcherFallback(unittest.TestCase):
+    def test_preload_abort_returns_stub_fetcher_not_raises(self):
+        # SimFinFundamentalsStore.preload raises (e.g. <50% coverage) →
+        # _build_feature_fetcher returns a fetcher that always yields None
+        # instead of propagating. Layer 4 stays alive on poor-coverage cohorts.
+        with patch("alphalens.data.store.simfin.SimFinFundamentalsStore") as mock_store_cls:
+            mock_store = mock_store_cls.return_value
+            mock_store.preload.side_effect = RuntimeError("SimFin <50% coverage")
+            fetcher = scorer._build_feature_fetcher(["A", "B"])
+        self.assertIsNone(fetcher("A", dt.date(2026, 5, 15)))
+        self.assertIsNone(fetcher("B", dt.date(2026, 5, 15)))
+
+
 class TestScoreCandidatesUnknownIndustry(unittest.TestCase):
     def test_score_is_floor_when_industry_cannot_be_resolved(self):
         with (

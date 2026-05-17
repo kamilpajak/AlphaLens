@@ -232,8 +232,14 @@ class TestEvFcffFeaturesAsOf(unittest.TestCase):
             "long_term_debt",
             "short_term_debt",
             "cash_and_equivalents",
+            "net_income_ttm",
         }
         self.assertEqual(set(snap.keys()), expected_keys)
+
+    def test_net_income_ttm_aggregated(self):
+        snap = self.store.ev_fcff_features_as_of("XYZ", date(2024, 6, 30))
+        # NI = 75M/quarter × 4 = 300M (mirrors the tax_rate test fixture).
+        self.assertAlmostEqual(snap["net_income_ttm"], 300_000_000)
 
     def test_ttm_aggregation_correct(self):
         snap = self.store.ev_fcff_features_as_of("XYZ", date(2024, 6, 30))

@@ -24,6 +24,7 @@ from pathlib import Path
 from alphalens.screeners.insider_activity.opportunistic_form4 import (
     aggregate_opportunistic_signal,
 )
+from alphalens.thematic.screening._common import percentile_rank
 from alphalens.thematic.verification.insider import (
     DEFAULT_FORM4_ROOT,
     DEFAULT_LOOKBACK_DAYS,
@@ -80,17 +81,10 @@ def compute_net_opportunistic_usd(
     )
 
 
-def _percentile_rank(value: float, peers: list[float]) -> float:
-    """Return the ``≤``-percentile of ``value`` within ``peers`` (0..100).
-
-    Includes ``value`` itself in the cohort so a single-element cohort is
-    always at the top. Empty peer list → 50.0 (no information).
-    """
-    if not peers:
-        return 50.0
-    cohort = peers if value in peers else peers + [value]
-    le_count = sum(1 for v in cohort if v <= value)
-    return 100.0 * le_count / len(cohort)
+# Backwards-compatible private alias — existing call sites and tests inside
+# this module reference _percentile_rank; the implementation now lives in
+# _common.
+_percentile_rank = percentile_rank
 
 
 def score_insider(
@@ -122,7 +116,7 @@ def score_insider(
         if ps is not None:
             peer_scores.append(ps)
 
-    percentile = _percentile_rank(candidate, peer_scores)
+    percentile = percentile_rank(candidate, peer_scores)
     return {"score_usd": candidate, "sector_percentile": percentile}
 
 
