@@ -44,6 +44,21 @@ class TestFilterByMcap(unittest.TestCase):
         self.assertEqual(kept, {})
 
 
+class TestFetchMcapErrorPaths(unittest.TestCase):
+    def test_returns_none_when_yfinance_returns_none_mcap(self):
+        fake_fast_info = MagicMock(spec=["market_cap"])
+        fake_fast_info.market_cap = None
+        fake_ticker = SimpleNamespace(fast_info=fake_fast_info)
+        with patch("yfinance.Ticker", return_value=fake_ticker):
+            self.assertIsNone(mcap_filter.fetch_mcap("UNKNOWN"))
+
+    def test_returns_none_on_yfinance_exception(self):
+        # Network errors, delisted tickers, parse failures — all collapsed
+        # to None so the caller can drop the candidate cleanly.
+        with patch("yfinance.Ticker", side_effect=RuntimeError("network")):
+            self.assertIsNone(mcap_filter.fetch_mcap("DEAD"))
+
+
 class TestFetchMcapYfinanceContract(unittest.TestCase):
     """Pin the yfinance fast_info attribute-access pattern.
 
