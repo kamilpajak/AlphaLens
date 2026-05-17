@@ -1,8 +1,17 @@
 """Markdown rendering for Phase E briefs.
 
-Pure functions — no LLM, no I/O. Renders a single ~700-1000 char brief
-block per candidate and a day-bundle joiner that concatenates all of a
-day's briefs into one ``.md`` file the operator can ``cat`` and forward.
+Pure functions — no LLM, no I/O. ``render_markdown(row, brief)`` always
+renders deterministic facts (ticker header, catalyst, numeric signal
+panel, verified gates, setup line) from ``row``; LLM-composed prose
+sections (Thesis / Supply chain / Bear case / Catalyst-failure exit /
+entry note) come from ``brief`` and degrade to italic placeholders when
+missing. This is the "graceful degradation" pattern recommended by
+Perplexity 2026-05-17: a Flash truncation must NEVER cause the operator
+to lose visibility on the deterministic data already computed by
+Phase C/D.
+
+``render_day_bundle`` concatenates the per-row markdown blocks into a
+single ``.md`` file the operator can ``cat`` and forward.
 """
 
 from __future__ import annotations
@@ -17,6 +26,9 @@ from alphalens.thematic.argumentation._common import (
     TIME_EXIT_DEFAULT_WEEKS,
     position_pct_from_conf,
 )
+
+_PROSE_UNAVAILABLE = "_unavailable_"
+_BRIEF_DEGRADED_NOTE = "> _LLM brief unavailable — review quantitative signals and catalyst above._"
 
 
 def _fmt_num(value: Any, fmt: str) -> str:
@@ -41,13 +53,42 @@ def _fmt_insider_usd(value: Any) -> str:
         return "n/a"
 
 
-def render_markdown(brief: dict, row: dict | pd.Series) -> str:
-    """Assemble one candidate's brief block (~700-1100 chars)."""
+def _is_nan(value: Any) -> bool:
+    return isinstance(value, float) and math.isnan(value)
+
+
+def _prose_or_placeholder(value: Any) -> str:
+    """Return non-empty string value as-is; otherwise return the placeholder."""
+    if value is None or _is_nan(value):
+        return _PROSE_UNAVAILABLE
+    s = str(value).strip()
+    return s if s else _PROSE_UNAVAILABLE
+
+
+def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
+    """Assemble one candidate's brief block.
+
+    ``row`` (Phase D parquet row) is the source of truth for deterministic
+    facts and is ALWAYS rendered. ``brief`` (Phase E LLM output) contributes
+    optional prose; when None or missing fields, italic placeholders fill
+    the gap so the block keeps its structure and the operator never loses
+    visibility on the quantitative signals.
+    """
     r = dict(row) if not isinstance(row, dict) else row
+    b = brief or {}
+
     weighted = r.get("layer4_weighted_score")
     weighted_str = f"{int(weighted)}/5" if weighted is not None and not _is_nan(weighted) else "n/a"
 
-    # Catalyst line — explains WHY this candidate was surfaced.
+    # --- Deterministic header ----------------------------------------------
+    header = (
+        f"## {r.get('ticker')} — {r.get('company_name', '')} (conf {weighted_str})\n"
+        f"**Theme**: {r.get('theme', '')} | "
+        f"**Industry**: {r.get('industry_name', 'n/a')}"
+        f" ({r.get('sector_name', 'n/a')})\n"
+    )
+
+    # --- Deterministic catalyst line ---------------------------------------
     catalyst_line = ""
     src_url = r.get("source_event_url")
     if src_url and pd.notna(src_url) and str(src_url).strip().lower() != "nan":
@@ -55,29 +96,23 @@ def render_markdown(brief: dict, row: dict | pd.Series) -> str:
         published = r.get("source_event_published_at") or ""
         catalyst_line = f"**Catalyst**: {title} ({published}) {src_url}\n"
 
-    # Freshness + earnings tags inline with signal block.
+    # --- LLM-composed prose with placeholders ------------------------------
+    thesis = _prose_or_placeholder(b.get("tldr"))
+    supply_chain = _prose_or_placeholder(b.get("supply_chain_reasoning"))
+    bear = _prose_or_placeholder(b.get("bear_summary"))
+    catalyst_failure_exit = _prose_or_placeholder(b.get("catalyst_failure_exit"))
+    entry_note = _prose_or_placeholder(b.get("entry_price_note"))
+
+    # --- Deterministic signal panel ----------------------------------------
     age_days = r.get("valuation_financials_age_days")
     age_tag = (
         f" | financials age {int(age_days)}d"
         if age_days is not None and not _is_nan(age_days)
         else ""
     )
-    next_earnings = brief.get("next_earnings_date") or r.get("next_earnings_date")
+    next_earnings = b.get("next_earnings_date") or r.get("next_earnings_date")
     earnings_tag = f" | next earnings {next_earnings}" if next_earnings else ""
-
-    return (
-        f"## {r.get('ticker')} — {r.get('company_name', '')} (conf {weighted_str})\n"
-        f"**Theme**: {r.get('theme', '')} | "
-        f"**Industry**: {r.get('industry_name', 'n/a')}"
-        f" ({r.get('sector_name', 'n/a')})\n"
-        f"{catalyst_line}\n"
-        f"**Thesis**: {brief.get('tldr', '')}\n\n"
-        f"**Supply chain**: {brief.get('supply_chain_reasoning', '')}\n\n"
-        f"**Bear case**: {brief.get('bear_summary', '')}\n\n"
-        f"**Setup**: entry {brief.get('entry_price_note', '')}"
-        f" | size {_fmt_num(position_pct_from_conf(weighted), '.1f')}%"
-        f" | exit {TIME_EXIT_DEFAULT_WEEKS}w | stop {DISASTER_STOP_PCT:.0f}%\n"
-        f"**Catalyst-failure exit**: {brief.get('catalyst_failure_exit', '')}\n\n"
+    signal_panel = (
         f"**Signals**: insider {_fmt_insider_usd(r.get('insider_score_usd'))}"
         f" (pctile {_fmt_pctile(r.get('insider_score_sector_percentile'))})"
         f" | FCFF {_fmt_num(r.get('fcff_yield_pct'), '.1f')}%"
@@ -90,9 +125,41 @@ def render_markdown(brief: dict, row: dict | pd.Series) -> str:
         f"**Verified gates**: {r.get('gates_passed_str', '')}\n"
     )
 
+    # --- Setup line: position size + exit are deterministic; entry from LLM
+    setup_line = (
+        f"**Setup**: entry {entry_note}"
+        f" | size {_fmt_num(position_pct_from_conf(weighted), '.1f')}%"
+        f" | exit {TIME_EXIT_DEFAULT_WEEKS}w | stop {DISASTER_STOP_PCT:.0f}%\n"
+    )
 
-def _is_nan(value: Any) -> bool:
-    return isinstance(value, float) and math.isnan(value)
+    block = (
+        f"{header}"
+        f"{catalyst_line}\n"
+        f"**Thesis**: {thesis}\n\n"
+        f"**Supply chain**: {supply_chain}\n\n"
+        f"**Bear case**: {bear}\n\n"
+        f"{setup_line}"
+        f"**Catalyst-failure exit**: {catalyst_failure_exit}\n\n"
+        f"{signal_panel}"
+    )
+
+    # Single operator-facing note when the LLM contribution was empty. We
+    # detect "everything empty" rather than "brief is None" so a partial
+    # response (e.g., only `tldr` recovered via json-repair) doesn't emit
+    # the global note.
+    if all(
+        _prose_or_placeholder(b.get(k)) == _PROSE_UNAVAILABLE
+        for k in (
+            "tldr",
+            "supply_chain_reasoning",
+            "bear_summary",
+            "catalyst_failure_exit",
+            "entry_price_note",
+        )
+    ):
+        block += f"\n{_BRIEF_DEGRADED_NOTE}\n"
+
+    return block
 
 
 def render_day_bundle(briefs_df: pd.DataFrame, *, asof_str: str) -> str:
