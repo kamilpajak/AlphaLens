@@ -124,6 +124,21 @@ class TestRenderMarkdownGracefulDegradation(unittest.TestCase):
         # whole-block replacement is what this refactor eliminates.
         self.assertNotIn("(brief unavailable)", md)
 
+    def test_handles_pandas_null_types_in_prose_fields(self):
+        # Defense against parquet round-trip producing pd.NaT / pd.NA in
+        # prose fields (zen review 2026-05-17 M1 finding). With the old
+        # float-only _is_nan helper these would render as literal "NaT"/
+        # "<NA>" text; pd.isna handles them uniformly.
+        brief_with_nulls = {
+            **_BRIEF,
+            "tldr": pd.NaT,
+            "entry_price_note": pd.NA,
+        }
+        md = renderer.render_markdown(_ROW, brief_with_nulls)
+        self.assertIn("_unavailable_", md)
+        self.assertNotIn("NaT", md)
+        self.assertNotIn("<NA>", md)
+
 
 class TestRenderDayBundle(unittest.TestCase):
     def test_concatenates_briefs_with_separator(self):
