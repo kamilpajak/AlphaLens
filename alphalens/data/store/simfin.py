@@ -249,6 +249,7 @@ class SimFinFundamentalsStore:
         capex_ttm = -capex_raw_ttm if capex_raw_ttm is not None else None
         interest_ttm = _ttm_sum(inc, _COL_INTEREST)
         revenue_ttm = _ttm_sum(inc, _COL_REVENUE)
+        net_income_ttm = _ttm_sum(inc, _COL_NET_INCOME)
 
         # Effective tax rate from latest available quarterly Pretax / NetIncome.
         # Formula: τ = 1 − NetIncome / Pretax, clamped to [0, 0.35].
@@ -292,6 +293,7 @@ class SimFinFundamentalsStore:
             "long_term_debt": ltd_latest,
             "short_term_debt": std_latest,
             "cash_and_equivalents": cash_latest,
+            "net_income_ttm": net_income_ttm,
         }
 
 
