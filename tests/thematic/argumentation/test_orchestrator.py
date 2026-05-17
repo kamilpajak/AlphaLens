@@ -179,10 +179,12 @@ class TestGenerateBriefs(unittest.TestCase):
                 self.assertIn("2026-04-14", md)
                 self.assertIn("QUBT", md)
 
-    def test_brief_failure_emits_placeholder_row(self):
-        # _brief_for_row returns None (LLM failed) — row still emitted but
-        # brief_full_md = "(brief unavailable)". Mirrors Phase D's
-        # graceful per-signal degradation.
+    def test_brief_failure_still_renders_deterministic_signals(self):
+        # _brief_for_row returns None (LLM failed) — orchestrator now
+        # renders deterministic facts (ticker, catalyst, signal panel,
+        # verified gates) via the graceful-degradation renderer so the
+        # operator never loses visibility on Phase D data when Flash
+        # truncates (2026-05-17 QUBT incident).
         with patch.object(orchestrator, "_brief_for_row", return_value=None):
             with tempfile.TemporaryDirectory() as tmp:
                 out = orchestrator.generate_briefs(
@@ -190,7 +192,11 @@ class TestGenerateBriefs(unittest.TestCase):
                 )
         self.assertEqual(len(out), 2)
         for _, row in out.iterrows():
-            self.assertEqual(row["brief_full_md"], "(brief unavailable)")
+            md = row["brief_full_md"]
+            self.assertNotEqual(md, "(brief unavailable)")
+            self.assertIn(row["ticker"], md)
+            self.assertIn("Signals", md)
+            self.assertIn("LLM brief unavailable", md)
             self.assertIsNone(row["brief_tldr"])
 
     def test_attrs_contain_per_model_counts(self):

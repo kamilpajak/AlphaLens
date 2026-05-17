@@ -206,44 +206,31 @@ def generate_briefs(
             types_mod=types_mod,
             asof=asof,
         )
-        if brief is None:
-            rows.append(
-                {
-                    "ticker": row["ticker"],
-                    "brief_model_used": None,
-                    "brief_tldr": None,
-                    "brief_supply_chain_md": None,
-                    "brief_bear_summary_md": None,
-                    "brief_catalyst_failure_exit": None,
-                    "brief_entry_price_note": None,
-                    "brief_position_pct": position_pct_from_conf(row.get("layer4_weighted_score")),
-                    "brief_time_exit_weeks": TIME_EXIT_DEFAULT_WEEKS,
-                    "brief_time_exit_on_catalyst_failure_weeks": (
-                        TIME_EXIT_ON_CATALYST_FAILURE_WEEKS
-                    ),
-                    "brief_disaster_stop_pct": DISASTER_STOP_PCT,
-                    "brief_full_md": "(brief unavailable)",
-                    "brief_generated_at": pd.Timestamp.now(tz="UTC"),
-                }
-            )
-            continue
-        if brief["model_used"] == generator.PRO_MODEL:
-            n_pro += 1
-        else:
-            n_flash += 1
-        md = render_markdown(brief, row)
+        if brief is not None:
+            if brief.get("model_used") == generator.PRO_MODEL:
+                n_pro += 1
+            else:
+                n_flash += 1
+        # Graceful degradation: render always — when brief is None the
+        # renderer emits per-section placeholders so the operator never
+        # loses the deterministic catalyst + signal panel (Perplexity
+        # 2026-05-17 recommendation; QUBT 2026-04-14 incident showed the
+        # legacy "(brief unavailable)" fallback hid the winning signal).
+        md = render_markdown(row, brief)
+        b = brief or {}
         rows.append(
             {
                 "ticker": row["ticker"],
-                "brief_model_used": brief["model_used"],
-                "brief_tldr": brief.get("tldr"),
-                "brief_supply_chain_md": brief.get("supply_chain_reasoning"),
-                "brief_bear_summary_md": brief.get("bear_summary"),
-                "brief_catalyst_failure_exit": brief.get("catalyst_failure_exit"),
-                "brief_entry_price_note": brief.get("entry_price_note"),
+                "brief_model_used": b.get("model_used"),
+                "brief_tldr": b.get("tldr"),
+                "brief_supply_chain_md": b.get("supply_chain_reasoning"),
+                "brief_bear_summary_md": b.get("bear_summary"),
+                "brief_catalyst_failure_exit": b.get("catalyst_failure_exit"),
+                "brief_entry_price_note": b.get("entry_price_note"),
                 "brief_position_pct": position_pct_from_conf(row.get("layer4_weighted_score")),
-                "brief_time_exit_weeks": 8,
-                "brief_disaster_stop_pct": -25.0,
+                "brief_time_exit_weeks": TIME_EXIT_DEFAULT_WEEKS,
+                "brief_time_exit_on_catalyst_failure_weeks": TIME_EXIT_ON_CATALYST_FAILURE_WEEKS,
+                "brief_disaster_stop_pct": DISASTER_STOP_PCT,
                 "brief_full_md": md,
                 "brief_generated_at": pd.Timestamp.now(tz="UTC"),
             }
