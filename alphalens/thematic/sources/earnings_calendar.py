@@ -23,6 +23,8 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+_EARNINGS_DATE_KEY = "Earnings Date"
+
 
 def _extract_earnings_dates(calendar) -> list[dt.date]:
     """Coerce yfinance.calendar (dict or DataFrame) to a list of date objects."""
@@ -30,12 +32,12 @@ def _extract_earnings_dates(calendar) -> list[dt.date]:
         return []
     raw_values: list = []
     if isinstance(calendar, dict):
-        raw_values = calendar.get("Earnings Date", []) or []
+        raw_values = calendar.get(_EARNINGS_DATE_KEY, []) or []
     elif isinstance(calendar, pd.DataFrame):
-        if "Earnings Date" in calendar.columns:
-            raw_values = list(calendar["Earnings Date"])
-        elif "Earnings Date" in calendar.index:
-            raw_values = list(calendar.loc["Earnings Date"])
+        if _EARNINGS_DATE_KEY in calendar.columns:
+            raw_values = list(calendar[_EARNINGS_DATE_KEY])
+        elif _EARNINGS_DATE_KEY in calendar.index:
+            raw_values = list(calendar.loc[_EARNINGS_DATE_KEY])
     else:
         return []
     out: list[dt.date] = []

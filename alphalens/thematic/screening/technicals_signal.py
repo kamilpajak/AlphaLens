@@ -151,41 +151,42 @@ def _volume_zscore(volume: pd.Series, *, period: int = _VOL_PERIOD) -> float | N
     return float((float(volume.iloc[-1]) - mu) / sigma)
 
 
+def _signed_pct(label: str, value: float | None, *, decimals: int = 1) -> str | None:
+    """Render ``{label} +X.X%`` / ``{label} -X.X%``; None when value missing."""
+    if value is None:
+        return None
+    sign = "+" if value >= 0 else ""
+    return f"{label} {sign}{value:.{decimals}f}%"
+
+
+def _format_ma200(distance: float | None, slope: float | None) -> str | None:
+    if distance is None:
+        return None
+    base = _signed_pct("MA200", distance)
+    if slope is None:
+        return base
+    slope_sign = "+" if slope >= 0 else ""
+    return f"{base} (slope {slope_sign}{slope:.3f}%/d)"
+
+
 def _format_summary(metrics: dict[str, float | None]) -> str:
     """One-line human-readable summary for the parquet."""
     rsi = metrics.get("rsi")
-    ma = metrics.get("ma50_distance_pct")
     atr = metrics.get("atr_pct")
     vz = metrics.get("volume_zscore")
-    pct_high = metrics.get("pct_off_52w_high")
-    pct_low = metrics.get("pct_off_52w_low")
-    ma200 = metrics.get("ma200_distance_pct")
-    ma200_slope = metrics.get("ma200_slope_pct_per_day")
-    if all(v is None for v in (rsi, ma, atr, vz, pct_high, pct_low, ma200, ma200_slope)):
+    parts = [
+        f"RSI {rsi:.0f}" if rsi is not None else None,
+        _signed_pct("MA50", metrics.get("ma50_distance_pct")),
+        _format_ma200(metrics.get("ma200_distance_pct"), metrics.get("ma200_slope_pct_per_day")),
+        _signed_pct("52w high", metrics.get("pct_off_52w_high")),
+        _signed_pct("52w low", metrics.get("pct_off_52w_low")),
+        f"ATR {atr:.1f}%" if atr is not None else None,
+        f"volZ {vz:.1f}" if vz is not None else None,
+    ]
+    rendered = [p for p in parts if p is not None]
+    if not rendered:
         return "no data"
-    parts = []
-    if rsi is not None:
-        parts.append(f"RSI {rsi:.0f}")
-    if ma is not None:
-        sign = "+" if ma >= 0 else ""
-        parts.append(f"MA50 {sign}{ma:.1f}%")
-    if ma200 is not None:
-        sign = "+" if ma200 >= 0 else ""
-        slope_tag = ""
-        if ma200_slope is not None:
-            slope_tag = f" (slope {'+' if ma200_slope >= 0 else ''}{ma200_slope:.3f}%/d)"
-        parts.append(f"MA200 {sign}{ma200:.1f}%{slope_tag}")
-    if pct_high is not None:
-        sign = "+" if pct_high >= 0 else ""
-        parts.append(f"52w high {sign}{pct_high:.1f}%")
-    if pct_low is not None:
-        sign = "+" if pct_low >= 0 else ""
-        parts.append(f"52w low {sign}{pct_low:.1f}%")
-    if atr is not None:
-        parts.append(f"ATR {atr:.1f}%")
-    if vz is not None:
-        parts.append(f"volZ {vz:.1f}")
-    return " / ".join(parts)
+    return " / ".join(rendered)
 
 
 def score_technicals_from_frame(ohlcv: pd.DataFrame) -> dict[str, float | None | str]:
