@@ -1,0 +1,210 @@
+"""Phase E orchestrator — loop Phase D-scored candidates, emit briefs.
+
+Reads a Phase D-scored DataFrame, filters to ``verified=True`` rows,
+hoists one Pro client + one Flash client, calls
+``generator.generate_brief`` per row (routing handled there), assembles
+the enriched DataFrame, and writes parquet + markdown bundle to
+``output_dir``. Per-row exceptions are absorbed so one bad LLM call
+doesn't abort the batch (mirrors Phase D ``_safe_signal`` pattern).
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import logging
+import os
+from pathlib import Path
+
+import pandas as pd
+
+from alphalens.thematic.argumentation import generator
+from alphalens.thematic.argumentation.renderer import render_day_bundle, render_markdown
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_OUTPUT_DIR = Path.home() / ".alphalens" / "thematic_briefs"
+
+_BRIEF_NUMERIC_FIELDS = (
+    "insider_score_usd",
+    "insider_score_sector_percentile",
+    "fcff_yield_pct",
+    "fcff_yield_sector_percentile",
+    "valuation_ps",
+    "valuation_ev_rev",
+    "valuation_fcf_margin",
+    "valuation_composite_sector_percentile",
+    "market_cap",
+)
+
+
+def _row_to_facts(row: pd.Series) -> dict:
+    """Project Phase D row → flat facts dict for the prompt template."""
+    weighted = row.get("layer4_weighted_score")
+    facts = {
+        "ticker": str(row["ticker"]),
+        "company_name": row.get("company_name", ""),
+        "theme": row.get("theme", ""),
+        "industry_name": row.get("industry_name") or "n/a",
+        "sector_name": row.get("sector_name") or "n/a",
+        "weighted_score": int(weighted) if weighted is not None and not pd.isna(weighted) else 1,
+        "rationale": row.get("rationale", ""),
+        "gates_passed_str": row.get("gates_passed_str", ""),
+        "technicals_summary_str": row.get("technicals_summary_str", "n/a"),
+        "position_pct": _position_pct_from_conf(weighted),
+        "time_exit_weeks": 8,
+    }
+    for field in _BRIEF_NUMERIC_FIELDS:
+        value = row.get(field)
+        facts[field] = None if value is None or pd.isna(value) else float(value)
+    return facts
+
+
+def _position_pct_from_conf(weighted_score) -> float:
+    """Mirror renderer._position_pct_from_conf so prompt facts agree with rendered output."""
+    if weighted_score is None or pd.isna(weighted_score):
+        return 1.0
+    try:
+        ws = int(weighted_score)
+    except (TypeError, ValueError):
+        return 1.0
+    if ws >= 5:
+        return 2.5
+    if ws == 4:
+        return 2.0
+    if ws == 3:
+        return 1.5
+    return 1.0
+
+
+def _brief_for_row(row: pd.Series, *, client_pro, client_flash, types_mod) -> dict | None:
+    """Single-row LLM call with per-row exception absorption."""
+    facts = _row_to_facts(row)
+    try:
+        return generator.generate_brief(
+            facts,
+            client_pro=client_pro,
+            client_flash=client_flash,
+            types_mod=types_mod,
+        )
+    except Exception as exc:
+        logger.warning("brief generation raised for %s: %s", row.get("ticker"), exc, exc_info=True)
+        return None
+
+
+def _build_clients(api_key: str | None):
+    """Hoist one Pro client + one Flash client. Returns (pro, flash, types_mod).
+
+    Returns (None, None, None) when no api_key is available so the
+    orchestrator can still write placeholder rows (used by tests that
+    patch ``_brief_for_row`` wholesale).
+    """
+    key = api_key or os.environ.get("GOOGLE_API_KEY") or ""
+    if not key:
+        return None, None, None
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:
+        logger.warning("google-genai SDK missing; cannot generate briefs: %s", exc)
+        return None, None, None
+    pro = genai.Client(api_key=key)
+    return pro, pro, types  # Same client serves both models in google-genai SDK.
+
+
+def generate_briefs(
+    scored: pd.DataFrame,
+    *,
+    asof: dt.date,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    api_key: str | None = None,
+) -> pd.DataFrame:
+    """Enrich Phase D-scored candidates with composed briefs; persist."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if scored is None or scored.empty:
+        empty = scored.copy() if scored is not None else pd.DataFrame()
+        out_path = output_dir / f"{asof.isoformat()}.parquet"
+        empty.to_parquet(out_path, index=False)
+        (output_dir / f"{asof.isoformat()}.md").write_text(
+            render_day_bundle(empty, asof_str=asof.isoformat())
+        )
+        return empty
+
+    verified = scored[scored["verified"].astype(bool)].copy().reset_index(drop=True)
+    if verified.empty:
+        verified.to_parquet(output_dir / f"{asof.isoformat()}.parquet", index=False)
+        (output_dir / f"{asof.isoformat()}.md").write_text(
+            render_day_bundle(verified, asof_str=asof.isoformat())
+        )
+        return verified
+
+    client_pro, client_flash, types_mod = _build_clients(api_key)
+
+    rows: list[dict] = []
+    n_pro = 0
+    n_flash = 0
+    for _, row in verified.iterrows():
+        brief = _brief_for_row(
+            row, client_pro=client_pro, client_flash=client_flash, types_mod=types_mod
+        )
+        if brief is None:
+            rows.append(
+                {
+                    "ticker": row["ticker"],
+                    "brief_model_used": None,
+                    "brief_tldr": None,
+                    "brief_supply_chain_md": None,
+                    "brief_bear_summary_md": None,
+                    "brief_catalyst_failure_exit": None,
+                    "brief_entry_price_note": None,
+                    "brief_position_pct": _position_pct_from_conf(row.get("layer4_weighted_score")),
+                    "brief_time_exit_weeks": 8,
+                    "brief_disaster_stop_pct": -25.0,
+                    "brief_full_md": "(brief unavailable)",
+                    "brief_generated_at": pd.Timestamp.now(tz="UTC"),
+                }
+            )
+            continue
+        if brief["model_used"] == generator.PRO_MODEL:
+            n_pro += 1
+        else:
+            n_flash += 1
+        md = render_markdown(brief, row)
+        rows.append(
+            {
+                "ticker": row["ticker"],
+                "brief_model_used": brief["model_used"],
+                "brief_tldr": brief.get("tldr"),
+                "brief_supply_chain_md": brief.get("supply_chain_reasoning"),
+                "brief_bear_summary_md": brief.get("bear_summary"),
+                "brief_catalyst_failure_exit": brief.get("catalyst_failure_exit"),
+                "brief_entry_price_note": brief.get("entry_price_note"),
+                "brief_position_pct": _position_pct_from_conf(row.get("layer4_weighted_score")),
+                "brief_time_exit_weeks": 8,
+                "brief_disaster_stop_pct": -25.0,
+                "brief_full_md": md,
+                "brief_generated_at": pd.Timestamp.now(tz="UTC"),
+            }
+        )
+
+    enrichment = pd.DataFrame(rows)
+    merged = verified.merge(enrichment, on="ticker", how="left")
+    merged.attrs["n_pro"] = n_pro
+    merged.attrs["n_flash"] = n_flash
+    out_path = output_dir / f"{asof.isoformat()}.parquet"
+    merged.to_parquet(out_path, index=False)
+    (output_dir / f"{asof.isoformat()}.md").write_text(
+        render_day_bundle(merged, asof_str=asof.isoformat())
+    )
+    logger.info(
+        "generate_briefs %s: wrote %d briefs (Pro=%d, Flash=%d) → %s",
+        asof.isoformat(),
+        len(merged),
+        n_pro,
+        n_flash,
+        out_path,
+    )
+    return merged
+
+
+__all__ = ["DEFAULT_OUTPUT_DIR", "generate_briefs"]

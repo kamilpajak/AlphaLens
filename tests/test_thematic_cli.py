@@ -245,5 +245,106 @@ class TestScoreCLI(unittest.TestCase):
         self.assertIn("Phase C parquet missing", result.output)
 
 
+class TestBriefCLI(unittest.TestCase):
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def test_brief_reads_scored_writes_enriched_and_markdown(self):
+        from pathlib import Path
+
+        scored = pd.DataFrame(
+            [
+                {
+                    "theme": "quantum_computing",
+                    "ticker": "QUBT",
+                    "company_name": "Quantum Computing Inc",
+                    "rationale": "Pure-play",
+                    "gemini_confidence": 0.85,
+                    "market_cap": 1.78e9,
+                    "gates_passed_str": "tenk,press",
+                    "verified": True,
+                    "industry_id": 101001,
+                    "industry_name": "Computer Hardware",
+                    "sector_name": "Technology",
+                    "insider_score_usd": 0.0,
+                    "insider_score_sector_percentile": 50.0,
+                    "fcff_yield_pct": None,
+                    "fcff_yield_sector_percentile": None,
+                    "valuation_ps": 30.0,
+                    "valuation_ev_rev": 32.0,
+                    "valuation_fcf_margin": -0.5,
+                    "valuation_composite_sector_percentile": 1.0,
+                    "technical_rsi": 60.0,
+                    "technical_ma50_distance_pct": 4.1,
+                    "technical_atr_pct": 6.6,
+                    "technical_volume_zscore": 3.8,
+                    "technicals_summary_str": "RSI 60 / MA50 +4.1%",
+                    "layer4_weighted_score": 2,
+                }
+            ]
+        )
+        enriched = scored.copy()
+        enriched["brief_model_used"] = "gemini-2.5-flash"
+        enriched["brief_tldr"] = "tldr"
+        enriched["brief_full_md"] = "## QUBT brief..."
+        enriched.attrs["n_pro"] = 0
+        enriched.attrs["n_flash"] = 1
+
+        with (
+            tempfile.TemporaryDirectory() as scored_tmp,
+            tempfile.TemporaryDirectory() as out_tmp,
+        ):
+            spath = Path(scored_tmp) / "2026-04-14.parquet"
+            scored.to_parquet(spath, index=False)
+
+            def fake_generate_briefs(scored_arg, *, asof, output_dir, **kwargs):
+                # Mimic the orchestrator side effect: write the parquet + .md.
+                enriched.to_parquet(output_dir / f"{asof.isoformat()}.parquet", index=False)
+                (output_dir / f"{asof.isoformat()}.md").write_text("# bundle\n## QUBT ...")
+                return enriched
+
+            with patch(
+                "alphalens_cli.commands.thematic.brief_orchestrator.generate_briefs",
+                side_effect=fake_generate_briefs,
+            ):
+                result = self.runner.invoke(
+                    app,
+                    [
+                        "thematic",
+                        "brief",
+                        "--date",
+                        "2026-04-14",
+                        "--scored-dir",
+                        scored_tmp,
+                        "--output-dir",
+                        out_tmp,
+                    ],
+                )
+            self.assertEqual(result.exit_code, 0, msg=result.output)
+            self.assertIn("Generating briefs for 1 scored rows", result.output)
+            self.assertIn("Wrote 1 briefs", result.output)
+            self.assertIn("Pro: 0, Flash: 1", result.output)
+            self.assertTrue((Path(out_tmp) / "2026-04-14.parquet").exists())
+            self.assertTrue((Path(out_tmp) / "2026-04-14.md").exists())
+
+    def test_brief_errors_when_scored_parquet_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.runner.invoke(
+                app,
+                [
+                    "thematic",
+                    "brief",
+                    "--date",
+                    "2026-04-14",
+                    "--scored-dir",
+                    tmp,
+                    "--output-dir",
+                    tmp,
+                ],
+            )
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Phase D scored parquet missing", result.output)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,7 @@ import pandas as pd
 import typer
 
 from alphalens.thematic import news_ingest
+from alphalens.thematic.argumentation import orchestrator as brief_orchestrator
 from alphalens.thematic.extraction import gemini_flash
 from alphalens.thematic.extraction import themes as themes_mod
 from alphalens.thematic.mapping import gemini_mapper, orchestrator
@@ -286,3 +287,42 @@ def score(
                 f"{ins_str:>10s} {fcff_str:>6s} {val_str:>5s} "
                 f"{row.get('technicals_summary_str', '')[:50]}"
             )
+
+
+@thematic_app.command("brief")
+def brief(
+    date: str = typer.Option(None, "--date", help="UTC date in YYYY-MM-DD (default: yesterday)."),
+    scored_dir: Path = typer.Option(
+        DEFAULT_SCORED_DIR,
+        "--scored-dir",
+        help="Phase D scored parquet root.",
+    ),
+    output_dir: Path = typer.Option(
+        brief_orchestrator.DEFAULT_OUTPUT_DIR,
+        "--output-dir",
+        help="Phase E brief parquet + markdown root.",
+    ),
+) -> None:
+    """Layer 5 brief generator — compose mid-format markdown per scored candidate."""
+    target = (
+        dt.date.fromisoformat(date)
+        if date
+        else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    )
+    src = scored_dir / f"{target.isoformat()}.parquet"
+    if not src.exists():
+        raise typer.BadParameter(f"Phase D scored parquet missing: {src}")
+
+    scored = pd.read_parquet(src)
+    typer.echo(
+        f"Generating briefs for {len(scored)} scored rows from {src} (asof={target.isoformat()})..."
+    )
+    enriched = brief_orchestrator.generate_briefs(scored, asof=target, output_dir=output_dir)
+
+    n_pro = int(enriched.attrs.get("n_pro", 0))
+    n_flash = int(enriched.attrs.get("n_flash", 0))
+    out_md = output_dir / f"{target.isoformat()}.md"
+    out_parquet = output_dir / f"{target.isoformat()}.parquet"
+    typer.echo(f"Wrote {len(enriched)} briefs → {out_parquet}")
+    typer.echo(f"  Pro: {n_pro}, Flash: {n_flash}")
+    typer.echo(f"  Markdown bundle: {out_md}")
