@@ -26,6 +26,7 @@ dependencies = [
     "phase-robust-backtesting @ git+https://github.com/kamilpajak/phase-robust-backtesting.git@v0.2.3",
     "feedparser>=6.0.11",
     "google-genai>=0.8.0",
+    "json-repair>=0.59.10",
 ]
 
 [project.scripts]
