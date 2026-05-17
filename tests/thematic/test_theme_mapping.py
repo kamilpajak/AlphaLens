@@ -38,13 +38,18 @@ SAMPLE_MAPPER_RESPONSE = {
 
 
 class TestGeminiMapperPromptBuilding(unittest.TestCase):
-    def test_prompt_lists_theme_and_constraints(self):
-        prompt = gemini_mapper.build_prompt(
-            theme="quantum_computing", market_cap_range=(500_000_000, 10_000_000_000)
-        )
+    def test_prompt_includes_theme(self):
+        prompt = gemini_mapper.build_prompt(theme="quantum_computing")
         self.assertIn("quantum_computing", prompt)
-        self.assertIn("500", prompt)
-        self.assertIn("small", prompt.lower())
+
+    def test_prompt_does_not_constrain_market_cap(self):
+        # Mcap brackets in the prompt are unreliable: Pro filters against its
+        # training-cutoff mcap snapshot, not real-time. (Probe 2026-05-17:
+        # Pro believed QUBT mcap = $50M vs real $1.78B.) Filtering belongs in
+        # the orchestrator post-LLM via yfinance.
+        prompt = gemini_mapper.build_prompt(theme="quantum_computing")
+        for token in ("market cap", "market_cap", "small-cap", "mid-cap", "small/mid"):
+            self.assertNotIn(token.lower(), prompt.lower())
 
 
 class TestPropose(unittest.TestCase):
@@ -96,6 +101,8 @@ class TestVerifyCandidate(unittest.TestCase):
                 api_key="testkey",
             )
         self.assertEqual(set(result["gates_passed"]), {"etf", "press"})
+        self.assertEqual(set(result["gates_failed"]), {"tenk", "insider"})
+        self.assertEqual(result["gates_unknown"], [])
         self.assertTrue(result["verified"])
 
     def test_verify_returns_unverified_when_zero_gates_pass(self):
@@ -112,7 +119,100 @@ class TestVerifyCandidate(unittest.TestCase):
                 api_key="testkey",
             )
         self.assertEqual(result["gates_passed"], [])
+        self.assertEqual(set(result["gates_failed"]), {"etf", "tenk", "press", "insider"})
+        self.assertEqual(result["gates_unknown"], [])
         self.assertFalse(result["verified"])
+
+    def test_verify_records_unknown_when_gate_returns_none(self):
+        # tenk returns None (CIK miss / fetch fail) -> goes to gates_unknown,
+        # not gates_failed. Verified rule unchanged: needs ≥1 pass.
+        with (
+            patch.object(orchestrator, "_gate_etf", return_value=True),
+            patch.object(orchestrator, "_gate_tenk", return_value=None),
+            patch.object(orchestrator, "_gate_press", return_value=False),
+            patch.object(orchestrator, "_gate_insider", return_value=None),
+        ):
+            result = orchestrator.verify_candidate(
+                ticker="FOREIGN",
+                themes=["quantum_computing"],
+                asof=dt.date(2026, 5, 15),
+                api_key="testkey",
+            )
+        self.assertEqual(result["gates_passed"], ["etf"])
+        self.assertEqual(result["gates_failed"], ["press"])
+        self.assertEqual(set(result["gates_unknown"]), {"tenk", "insider"})
+        self.assertTrue(result["verified"])  # etf passed = verified
+
+    def test_verify_unknown_alone_does_not_promote_verified(self):
+        # Conservative rule: unknowns don't promote verified=True. Pinning
+        # the rule from the 2026-05-17 plan §C5 lock.
+        with (
+            patch.object(orchestrator, "_gate_etf", return_value=None),
+            patch.object(orchestrator, "_gate_tenk", return_value=None),
+            patch.object(orchestrator, "_gate_press", return_value=None),
+            patch.object(orchestrator, "_gate_insider", return_value=None),
+        ):
+            result = orchestrator.verify_candidate(
+                ticker="OPAQUE",
+                themes=["quantum_computing"],
+                asof=dt.date(2026, 5, 15),
+                api_key="testkey",
+            )
+        self.assertEqual(result["gates_passed"], [])
+        self.assertEqual(result["gates_failed"], [])
+        self.assertEqual(len(result["gates_unknown"]), 4)
+        self.assertFalse(result["verified"])
+
+    def test_verify_safe_wrapper_treats_exception_as_unknown(self):
+        # An exception inside a gate is "we don't know", not False.
+        with (
+            patch.object(orchestrator, "_gate_etf", return_value=True),
+            patch.object(orchestrator, "_gate_tenk", side_effect=RuntimeError("boom")),
+            patch.object(orchestrator, "_gate_press", return_value=False),
+            patch.object(orchestrator, "_gate_insider", return_value=False),
+        ):
+            result = orchestrator.verify_candidate(
+                ticker="QBTS",
+                themes=["quantum_computing"],
+                asof=dt.date(2026, 5, 15),
+                api_key="testkey",
+            )
+        self.assertEqual(result["gates_passed"], ["etf"])
+        self.assertEqual(set(result["gates_failed"]), {"press", "insider"})
+        self.assertEqual(result["gates_unknown"], ["tenk"])
+        self.assertTrue(result["verified"])
+
+    def test_verify_expands_snake_case_themes_when_no_explicit_keywords(self):
+        # When the caller passes themes=["quantum_computing"] without
+        # theme_keywords=, the orchestrator must expand to BOTH the underscore
+        # and the space-separated form before invoking each gate — otherwise
+        # 10-K/press gates miss any document that spells the phrase normally.
+        captured: dict[str, list[str]] = {}
+
+        def fake_tenk(*, ticker, theme_keywords, asof):
+            captured["tenk"] = list(theme_keywords)
+            return False
+
+        def fake_press(*, ticker, theme_keywords, asof, api_key, press_df=None):
+            captured["press"] = list(theme_keywords)
+            return False
+
+        with (
+            patch.object(orchestrator, "_gate_etf", return_value=False),
+            patch.object(orchestrator, "_gate_tenk", side_effect=fake_tenk),
+            patch.object(orchestrator, "_gate_press", side_effect=fake_press),
+            patch.object(orchestrator, "_gate_insider", return_value=False),
+        ):
+            orchestrator.verify_candidate(
+                ticker="QBTS",
+                themes=["quantum_computing"],
+                asof=dt.date(2026, 5, 15),
+                api_key="testkey",
+            )
+        self.assertIn("quantum_computing", captured["tenk"])
+        self.assertIn("quantum computing", captured["tenk"])
+        self.assertIn("quantum_computing", captured["press"])
+        self.assertIn("quantum computing", captured["press"])
 
     def test_verify_handles_individual_gate_failure(self):
         # Insider gate raises -> treated as gate not passing, other gates still run
@@ -147,6 +247,11 @@ class TestMapThemes(unittest.TestCase):
                         {"ticker": "MADEUP", "rationale": "halluc", "confidence": 0.3},
                     ],
                 ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value={"QBTS": 1_000_000_000, "MADEUP": 1_000_000_000},
+                ),
                 patch.object(orchestrator, "_gate_etf", side_effect=[True, False]),
                 patch.object(orchestrator, "_gate_tenk", return_value=False),
                 patch.object(orchestrator, "_gate_press", return_value=False),
@@ -177,6 +282,11 @@ class TestMapThemes(unittest.TestCase):
                         {"ticker": "MADEUP", "rationale": "halluc", "confidence": 0.3},
                     ],
                 ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value={"MADEUP": 1_000_000_000},
+                ),
                 patch.object(orchestrator, "_gate_etf", return_value=False),
                 patch.object(orchestrator, "_gate_tenk", return_value=False),
                 patch.object(orchestrator, "_gate_press", return_value=False),
@@ -191,6 +301,44 @@ class TestMapThemes(unittest.TestCase):
                 )
             self.assertEqual(len(df), 1)
             self.assertFalse(df.iloc[0]["verified"])
+
+    def test_map_themes_post_filters_out_of_bracket_candidates(self):
+        # Pro mapper now returns candidates without an mcap filter (because its
+        # training-data mcap is stale). The orchestrator applies the real-time
+        # bracket via yfinance BEFORE running the 4 verification gates — so
+        # mega-cap NVDA and micro-cap MICRO never reach the gates.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=[
+                        {"ticker": "QUBT", "rationale": "pure-play", "confidence": 0.9},
+                        {"ticker": "NVDA", "rationale": "mega-cap", "confidence": 0.5},
+                        {"ticker": "MICRO", "rationale": "tiny", "confidence": 0.4},
+                    ],
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value={"QUBT": 1_780_000_000},
+                ),
+                patch.object(orchestrator, "_gate_etf", return_value=False),
+                patch.object(orchestrator, "_gate_tenk", return_value=True),
+                patch.object(orchestrator, "_gate_press", return_value=False),
+                patch.object(orchestrator, "_gate_insider", return_value=False),
+            ):
+                df = orchestrator.map_themes(
+                    themes=["quantum_computing"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    output_dir=cache_dir,
+                    market_cap_range=(500_000_000, 10_000_000_000),
+                )
+            self.assertEqual(list(df["ticker"]), ["QUBT"])
+            self.assertIn("market_cap", df.columns)
+            self.assertEqual(df.iloc[0]["market_cap"], 1_780_000_000)
 
     def test_map_themes_empty_when_no_proposals(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -265,6 +413,11 @@ class TestMapThemesWritesGatesPassedStr(unittest.TestCase):
                     orchestrator.gemini_mapper,
                     "propose_candidates",
                     return_value=[{"ticker": "QBTS", "rationale": "x", "confidence": 0.9}],
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value={"QBTS": 1_000_000_000},
                 ),
                 patch.object(orchestrator, "_gate_etf", return_value=True),
                 patch.object(orchestrator, "_gate_tenk", return_value=False),

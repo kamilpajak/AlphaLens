@@ -246,6 +246,20 @@ def fetch_holdings(
 # --- Verification gate API ------------------------------------------------
 
 
+def _resolve_theme_keys(theme: str, cfg: dict) -> list[str]:
+    """Map a Layer-2 theme label to one or more config keys.
+
+    Layer 2 LLM emits richer labels (``quantum_computing``,
+    ``quantum_error_correction``) than the canonical YAML keys
+    (``quantum``). Exact match wins; otherwise token-prefix match — config
+    key ``quantum`` matches any theme that starts with ``quantum_``.
+    """
+    t = theme.lower()
+    if t in cfg:
+        return [t]
+    return [k for k in cfg if t.startswith(k.lower() + "_")]
+
+
 def _load_etf_holdings(etf: str, cache_dir: Path) -> pd.DataFrame:
     candidates = sorted(cache_dir.glob(f"{etf}_*.parquet"))
     if not candidates:
@@ -259,30 +273,59 @@ def is_in_thematic_etf(
     themes: Iterable[str],
     cache_dir: Path = DEFAULT_CACHE_DIR,
     ticker_to_name: dict[str, str] | None = None,
-) -> bool:
-    """Return ``True`` iff ``ticker`` is held by any ETF mapped to any of ``themes``.
+    prime: bool = True,
+    max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+) -> bool | None:
+    """Return tri-state membership check for ``ticker`` across themed ETFs.
 
-    Matching strategy:
-    1. Exact ticker match against the NPORT-P ``ticker`` column.
-    2. If that misses AND ``ticker_to_name[ticker]`` is provided, fall back to
-       case-insensitive substring match on the ``name`` column. NPORT-P
-       filings often leave the ``<ticker>`` element empty, so this
-       company-name fallback is the workhorse path for many issuers.
+    Returns:
+        - ``True``  — ticker is held by at least one mapped ETF (loaded df).
+        - ``False`` — at least one mapped ETF loaded successfully and the
+          ticker was simply not in its holdings ("ran-and-said-no").
+        - ``None``  — no mapped ETF resolved (theme unmapped) OR every mapped
+          ETF failed to load (cold cache + prime errored / disabled). The
+          orchestrator records this as ``gates_unknown``, distinct from a
+          real false-negative.
+
+    Matching strategy unchanged: exact ticker match first; optional
+    ``ticker_to_name`` word-boundary fallback for NPORT-P rows with empty
+    ``<ticker>``. With ``prime=True`` (default), a cold cache triggers a
+    one-time SEC NPORT-P download via :func:`fetch_holdings`; subsequent
+    calls reuse the parquet within ``max_age_days``. Pass ``prime=False``
+    to keep the gate read-only (offline / under test).
     """
     cfg = load_theme_etf_config()
-    relevant_etfs: list[str] = []
+    relevant: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for theme in themes:
-        for entry in cfg.get(theme, []) or []:
-            relevant_etfs.append(entry["etf"])
-    if not relevant_etfs:
-        return False
+        for cfg_key in _resolve_theme_keys(theme, cfg):
+            for entry in cfg.get(cfg_key, []) or []:
+                if entry["etf"] in seen:
+                    continue
+                seen.add(entry["etf"])
+                relevant.append((entry["etf"], entry["series_name"]))
+    if not relevant:
+        return None
 
     ticker_upper = ticker.upper()
     name_query = (ticker_to_name or {}).get(ticker_upper, "").lower()
-    for etf in relevant_etfs:
+    any_loaded = False
+    for etf, series_name in relevant:
         df = _load_etf_holdings(etf, cache_dir)
+        if df.empty and prime:
+            try:
+                df = fetch_holdings(
+                    etf=etf,
+                    series_name=series_name,
+                    cache_dir=cache_dir,
+                    max_age_days=max_age_days,
+                )
+            except Exception as exc:
+                logger.warning("ETF lazy-prime failed for %s: %s", etf, exc, exc_info=True)
+                df = pd.DataFrame()
         if df.empty:
             continue
+        any_loaded = True
         if (df["ticker"].str.upper() == ticker_upper).any():
             return True
         if name_query:
@@ -292,7 +335,7 @@ def is_in_thematic_etf(
             mask = df["name"].fillna("").str.lower().str.contains(pattern, regex=True, na=False)
             if mask.any():
                 return True
-    return False
+    return False if any_loaded else None
 
 
 __all__ = [

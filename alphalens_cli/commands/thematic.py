@@ -207,12 +207,15 @@ def map_themes_cmd(
     typer.echo(f"Wrote {len(df)} candidate rows → {out_path}")
     if len(df) > 0:
         typer.echo("")
-        typer.echo(f"{'theme':28s} {'ticker':8s} {'gates':30s} {'conf':4s}  rationale")
-        typer.echo("-" * 100)
+        typer.echo(
+            f"{'theme':28s} {'ticker':8s} {'pass':20s} {'unknown':16s} {'conf':4s}  rationale"
+        )
+        typer.echo("-" * 110)
         for _, row in df.head(25).iterrows():
-            gates = ",".join(row["gates_passed"]) or "(none)"
+            passed = ",".join(row["gates_passed"]) or "(none)"
+            unknown = ",".join(row.get("gates_unknown", []) or []) or "-"
             typer.echo(
                 f"{row['theme'][:27]:28s} {row['ticker']:8s} "
-                f"{gates:30s} {row['gemini_confidence']:.2f}  "
-                f"{row['rationale'][:50]}"
+                f"{passed:20s} {unknown:16s} {row['gemini_confidence']:.2f}  "
+                f"{row['rationale'][:40]}"
             )

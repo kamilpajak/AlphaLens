@@ -128,26 +128,29 @@ class TestVerificationGate(unittest.TestCase):
                 )
 
     def test_has_theme_returns_false_when_no_press_releases(self):
+        # Polygon returned successfully with zero items — real "no press in
+        # window" signal, distinct from a fetch error. Stays False per tri-state.
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
             with patch.object(recent_press, "_http_get_json", return_value={"results": []}):
-                self.assertFalse(
-                    recent_press.has_theme_in_recent_press(
-                        ticker="UNKN",
-                        asof=dt.date(2026, 5, 15),
-                        keywords=["anything"],
-                        api_key="testkey",
-                        cache_dir=cache_dir,
-                    )
+                result = recent_press.has_theme_in_recent_press(
+                    ticker="UNKN",
+                    asof=dt.date(2026, 5, 15),
+                    keywords=["anything"],
+                    api_key="testkey",
+                    cache_dir=cache_dir,
                 )
+                self.assertIs(result, False)
 
-    def test_has_theme_fails_closed_on_api_error(self):
+    def test_has_theme_returns_none_on_api_error(self):
+        # Polygon rate limit / network error = unknown, not False. Operator
+        # can distinguish "we couldn't check" from "we checked and no hit".
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
             with patch.object(
                 recent_press, "_http_get_json", side_effect=RuntimeError("rate limit")
             ):
-                self.assertFalse(
+                self.assertIsNone(
                     recent_press.has_theme_in_recent_press(
                         ticker="BEEM",
                         asof=dt.date(2026, 5, 15),

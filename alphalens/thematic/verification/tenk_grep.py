@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_tenk"
 DEFAULT_USER_AGENT = "AlphaLens-thematic pajakkamil@gmail.com"
 USER_AGENT_ENV = "THEMATIC_USER_AGENT"
+CIK_LOADER_CACHE_PATH = Path.home() / ".alphalens" / "thematic_cik_cache.json"
+TICKER_CIK_YAML_PATH = Path.home() / ".alphalens" / "ticker_cik_map.yaml"
 
 _WHITESPACE = re.compile(r"\s+")
 
@@ -58,8 +60,53 @@ def _load_ticker_to_cik() -> dict[str, str]:
     return mapping
 
 
+@lru_cache(maxsize=1)
+def _get_cik_loader():
+    """Lazily build the TTL'd CIKLoader reused from the watchdog stack."""
+    from alphalens.watchdog.sources.cik_loader import CIKLoader
+
+    loader = CIKLoader(user_agent=_user_agent(), cache_path=CIK_LOADER_CACHE_PATH)
+    try:
+        loader.load()
+    except Exception as exc:
+        logger.warning("CIKLoader load failed: %s", exc)
+    return loader
+
+
+@lru_cache(maxsize=1)
+def _get_yaml_snapshot():
+    """Optional 3rd-tier YAML snapshot of ticker→CIK; absent path returns None."""
+    if not TICKER_CIK_YAML_PATH.exists():
+        return None
+    from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
+
+    try:
+        return TickerCikMap.load(TICKER_CIK_YAML_PATH)
+    except Exception as exc:
+        logger.warning("TickerCikMap snapshot load failed: %s", exc)
+        return None
+
+
 def _resolve_cik(ticker: str) -> str | None:
-    return _load_ticker_to_cik().get(ticker.upper())
+    """Three-tier ticker→CIK resolution: live SEC → cached CIKLoader → YAML snapshot.
+
+    Returns ``None`` when all three tiers miss (foreign listings, recent IPOs
+    without US presence). Callers MUST treat ``None`` as "couldn't determine"
+    not "no match", so the orchestrator can record `gates_unknown` instead of
+    silently failing closed.
+    """
+    upper = ticker.upper()
+    primary = _load_ticker_to_cik().get(upper)
+    if primary is not None:
+        return primary
+    loader = _get_cik_loader()
+    via_loader = loader.get_cik(upper) if loader is not None else None
+    if via_loader is not None:
+        return via_loader
+    snapshot = _get_yaml_snapshot()
+    if snapshot is not None:
+        return snapshot.lookup(upper)
+    return None
 
 
 def _fetch_submissions_json(cik: str) -> dict:
@@ -126,8 +173,13 @@ def _find_cached(ticker: str, cache_dir: Path) -> Path | None:
     return candidates[-1] if candidates else None
 
 
-def fetch_10k_text(*, ticker: str, cache_dir: Path = DEFAULT_CACHE_DIR) -> str:
-    """Return the most recent 10-K's plain text; cache on first fetch."""
+def fetch_10k_text(*, ticker: str, cache_dir: Path = DEFAULT_CACHE_DIR) -> str | None:
+    """Return the most recent 10-K's plain text; cache on first fetch.
+
+    Returns ``None`` when CIK can't be resolved or no recent 10-K exists for
+    the ticker (foreign listing, recent IPO, etc.). Network/parse errors
+    still raise so callers can distinguish "no data" from "fetch broke".
+    """
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = _find_cached(ticker, cache_dir)
     if cached is not None:
@@ -135,12 +187,14 @@ def fetch_10k_text(*, ticker: str, cache_dir: Path = DEFAULT_CACHE_DIR) -> str:
 
     cik = _resolve_cik(ticker)
     if cik is None:
-        raise RuntimeError(f"no CIK mapping for ticker {ticker}")
+        logger.info("no CIK mapping for ticker %s — 10-K gate unknown", ticker)
+        return None
 
     submissions = _fetch_submissions_json(cik)
     rec = find_latest_10k(submissions)
     if rec is None:
-        raise RuntimeError(f"no recent 10-K for {ticker} (CIK {cik})")
+        logger.info("no recent 10-K for %s (CIK %s) — 10-K gate unknown", ticker, cik)
+        return None
 
     html = _fetch_filing_html(cik, rec["accession"], rec["primary_doc"])
     text = extract_text(html)
@@ -154,13 +208,20 @@ def has_theme_keywords_in_10k(
     ticker: str,
     keywords: Iterable[str],
     cache_dir: Path = DEFAULT_CACHE_DIR,
-) -> bool:
-    """Verification gate: any ``keyword`` substring-present in ``ticker``'s 10-K?"""
+) -> bool | None:
+    """Verification gate: any ``keyword`` substring-present in ``ticker``'s 10-K?
+
+    Tri-state: ``True`` (keyword hit), ``False`` (10-K fetched but no hit),
+    ``None`` (CIK unresolvable or fetch failed — orchestrator records as
+    ``gates_unknown``, NOT a false negative).
+    """
     try:
         text = fetch_10k_text(ticker=ticker, cache_dir=cache_dir)
     except Exception as exc:
         logger.warning("10-K fetch failed for %s: %s", ticker, exc)
-        return False
+        return None
+    if text is None:
+        return None
     return len(grep_keywords(text, keywords)) > 0
 
 

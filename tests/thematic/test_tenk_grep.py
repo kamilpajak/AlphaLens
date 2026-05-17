@@ -144,18 +144,73 @@ class TestVerificationGate(unittest.TestCase):
                 )
             )
 
-    def test_has_theme_keywords_handles_missing_cache(self):
+    def test_has_theme_keywords_returns_none_on_fetch_failure(self):
+        # Network errors / missing 10-K are NOT the same as "ran and said no".
+        # Gate returns None (unknown) so the orchestrator can record the
+        # distinction in `gates_unknown` instead of silently failing closed.
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
             with patch.object(tenk_grep, "fetch_10k_text", side_effect=RuntimeError("network")):
-                # Missing cache + fetch failure -> verification fails closed (False)
-                self.assertFalse(
+                self.assertIsNone(
                     tenk_grep.has_theme_keywords_in_10k(
                         ticker="UNKN",
                         keywords=["quantum"],
                         cache_dir=cache_dir,
                     )
                 )
+
+    def test_has_theme_keywords_returns_none_when_cik_unresolvable(self):
+        # Foreign / recent-IPO tickers absent from every CIK source -> None.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with patch.object(tenk_grep, "_resolve_cik", return_value=None):
+                self.assertIsNone(
+                    tenk_grep.has_theme_keywords_in_10k(
+                        ticker="XYZ_FOREIGN",
+                        keywords=["quantum"],
+                        cache_dir=cache_dir,
+                    )
+                )
+
+
+class TestCikFallbackChain(unittest.TestCase):
+    def test_resolve_cik_returns_primary_hit(self):
+        with patch.object(tenk_grep, "_load_ticker_to_cik", return_value={"NVDA": "0001045810"}):
+            self.assertEqual(tenk_grep._resolve_cik("nvda"), "0001045810")
+
+    def test_resolve_cik_falls_back_to_cik_loader(self):
+        # Primary (SEC live company_tickers.json) misses; CIKLoader (TTL'd
+        # cache reused from watchdog) has the ticker.
+        from alphalens.watchdog.sources import cik_loader as cl
+
+        fake_loader = cl.CIKLoader.__new__(cl.CIKLoader)
+        fake_loader._mapping = {"FOREIGN": "0001234567"}
+        with (
+            patch.object(tenk_grep, "_load_ticker_to_cik", return_value={}),
+            patch.object(tenk_grep, "_get_cik_loader", return_value=fake_loader),
+        ):
+            self.assertEqual(tenk_grep._resolve_cik("FOREIGN"), "0001234567")
+
+    def test_resolve_cik_falls_back_to_yaml_snapshot(self):
+        from alphalens.data.alt_data.ticker_cik_map import TickerCikMap
+
+        snap = TickerCikMap(_by_ticker={"FOREIGN": "0009876543"})
+        empty_loader = type("L", (), {"get_cik": lambda self, t: None})()
+        with (
+            patch.object(tenk_grep, "_load_ticker_to_cik", return_value={}),
+            patch.object(tenk_grep, "_get_cik_loader", return_value=empty_loader),
+            patch.object(tenk_grep, "_get_yaml_snapshot", return_value=snap),
+        ):
+            self.assertEqual(tenk_grep._resolve_cik("FOREIGN"), "0009876543")
+
+    def test_resolve_cik_returns_none_on_full_chain_miss(self):
+        empty_loader = type("L", (), {"get_cik": lambda self, t: None})()
+        with (
+            patch.object(tenk_grep, "_load_ticker_to_cik", return_value={}),
+            patch.object(tenk_grep, "_get_cik_loader", return_value=empty_loader),
+            patch.object(tenk_grep, "_get_yaml_snapshot", return_value=None),
+        ):
+            self.assertIsNone(tenk_grep._resolve_cik("XYZ"))
 
 
 class TestExtractTextScriptStripping(unittest.TestCase):
