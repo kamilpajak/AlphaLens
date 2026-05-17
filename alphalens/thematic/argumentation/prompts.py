@@ -34,7 +34,8 @@ def _format_facts_block(facts: dict) -> str:
     """
     ins_usd = facts.get("insider_score_usd")
     ins_str = f"${ins_usd / 1000:.0f}k" if ins_usd is not None else "n/a"
-    mcap_str = f"${facts['market_cap'] / 1e9:.2f}B" if facts.get("market_cap") else "n/a"
+    mcap = facts.get("market_cap")
+    mcap_str = f"${mcap / 1e9:.2f}B" if mcap is not None else "n/a"
     return (
         f"ticker: {facts['ticker']}\n"
         f"company: {facts.get('company_name', '')}\n"
@@ -88,7 +89,10 @@ CONSTRAINTS
 - Ground every claim in the facts provided. Do NOT invent numbers,
   prices, dates, products, or names not present in <facts>.
 - Be terse, factual, no marketing tone.
-- The bear case is MANDATORY and must include at least 2 genuine risks.
+- The bear case is MANDATORY and must include at least 2 genuine risks
+  anchored in specific facts (P/S, FCFF yield, insider flow, technicals,
+  etc.). Do NOT pad the bear case with confidence-score caveats
+  ("given the low 1/5 score..."); cite substantive risks only.
 """
 
 

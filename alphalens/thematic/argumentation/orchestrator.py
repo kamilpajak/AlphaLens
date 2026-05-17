@@ -11,6 +11,7 @@ doesn't abort the batch (mirrors Phase D ``_safe_signal`` pattern).
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import os
 from pathlib import Path
@@ -18,6 +19,12 @@ from pathlib import Path
 import pandas as pd
 
 from alphalens.thematic.argumentation import generator
+from alphalens.thematic.argumentation._common import (
+    DISASTER_STOP_PCT,
+    TIME_EXIT_DEFAULT_WEEKS,
+    TIME_EXIT_ON_CATALYST_FAILURE_WEEKS,
+    position_pct_from_conf,
+)
 from alphalens.thematic.argumentation.renderer import render_day_bundle, render_markdown
 
 logger = logging.getLogger(__name__)
@@ -50,30 +57,13 @@ def _row_to_facts(row: pd.Series) -> dict:
         "rationale": row.get("rationale", ""),
         "gates_passed_str": row.get("gates_passed_str", ""),
         "technicals_summary_str": row.get("technicals_summary_str", "n/a"),
-        "position_pct": _position_pct_from_conf(weighted),
-        "time_exit_weeks": 8,
+        "position_pct": position_pct_from_conf(weighted),
+        "time_exit_weeks": TIME_EXIT_DEFAULT_WEEKS,
     }
     for field in _BRIEF_NUMERIC_FIELDS:
         value = row.get(field)
         facts[field] = None if value is None or pd.isna(value) else float(value)
     return facts
-
-
-def _position_pct_from_conf(weighted_score) -> float:
-    """Mirror renderer._position_pct_from_conf so prompt facts agree with rendered output."""
-    if weighted_score is None or pd.isna(weighted_score):
-        return 1.0
-    try:
-        ws = int(weighted_score)
-    except (TypeError, ValueError):
-        return 1.0
-    if ws >= 5:
-        return 2.5
-    if ws == 4:
-        return 2.0
-    if ws == 3:
-        return 1.5
-    return 1.0
 
 
 def _brief_for_row(row: pd.Series, *, client_pro, client_flash, types_mod) -> dict | None:
@@ -111,6 +101,47 @@ def _build_clients(api_key: str | None):
     return pro, pro, types  # Same client serves both models in google-genai SDK.
 
 
+_EMPTY_OUT_COLUMNS = (
+    "theme",
+    "ticker",
+    "verified",
+    "brief_model_used",
+    "brief_tldr",
+    "brief_supply_chain_md",
+    "brief_bear_summary_md",
+    "brief_catalyst_failure_exit",
+    "brief_entry_price_note",
+    "brief_position_pct",
+    "brief_time_exit_weeks",
+    "brief_time_exit_on_catalyst_failure_weeks",
+    "brief_disaster_stop_pct",
+    "brief_full_md",
+    "brief_generated_at",
+)
+
+
+def _write_sidecar(output_dir: Path, asof: dt.date, n_pro: int, n_flash: int) -> None:
+    """Persist per-model counts to a JSON sidecar (parquet drops df.attrs)."""
+    sidecar = output_dir / f"{asof.isoformat()}.meta.json"
+    sidecar.write_text(
+        json.dumps(
+            {"asof": asof.isoformat(), "n_pro": n_pro, "n_flash": n_flash},
+            indent=2,
+        )
+    )
+
+
+def _empty_output(output_dir: Path, asof: dt.date) -> pd.DataFrame:
+    """Write a typed-empty parquet + empty bundle + zero-counts sidecar."""
+    empty = pd.DataFrame({c: pd.Series(dtype="object") for c in _EMPTY_OUT_COLUMNS})
+    empty.to_parquet(output_dir / f"{asof.isoformat()}.parquet", index=False)
+    (output_dir / f"{asof.isoformat()}.md").write_text(
+        render_day_bundle(empty, asof_str=asof.isoformat())
+    )
+    _write_sidecar(output_dir, asof, n_pro=0, n_flash=0)
+    return empty
+
+
 def generate_briefs(
     scored: pd.DataFrame,
     *,
@@ -122,21 +153,15 @@ def generate_briefs(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if scored is None or scored.empty:
-        empty = scored.copy() if scored is not None else pd.DataFrame()
-        out_path = output_dir / f"{asof.isoformat()}.parquet"
-        empty.to_parquet(out_path, index=False)
-        (output_dir / f"{asof.isoformat()}.md").write_text(
-            render_day_bundle(empty, asof_str=asof.isoformat())
-        )
-        return empty
+        return _empty_output(output_dir, asof)
 
     verified = scored[scored["verified"].astype(bool)].copy().reset_index(drop=True)
     if verified.empty:
-        verified.to_parquet(output_dir / f"{asof.isoformat()}.parquet", index=False)
-        (output_dir / f"{asof.isoformat()}.md").write_text(
-            render_day_bundle(verified, asof_str=asof.isoformat())
-        )
-        return verified
+        return _empty_output(output_dir, asof)
+    # Defensive dedup: Phase D should emit one row per (theme, ticker) but
+    # if the upstream parquet ever doubles a ticker, the merge below would
+    # explode into a Cartesian. Keep the first occurrence per ticker.
+    verified = verified.drop_duplicates(subset=["ticker"], keep="first").reset_index(drop=True)
 
     client_pro, client_flash, types_mod = _build_clients(api_key)
 
@@ -157,9 +182,12 @@ def generate_briefs(
                     "brief_bear_summary_md": None,
                     "brief_catalyst_failure_exit": None,
                     "brief_entry_price_note": None,
-                    "brief_position_pct": _position_pct_from_conf(row.get("layer4_weighted_score")),
-                    "brief_time_exit_weeks": 8,
-                    "brief_disaster_stop_pct": -25.0,
+                    "brief_position_pct": position_pct_from_conf(row.get("layer4_weighted_score")),
+                    "brief_time_exit_weeks": TIME_EXIT_DEFAULT_WEEKS,
+                    "brief_time_exit_on_catalyst_failure_weeks": (
+                        TIME_EXIT_ON_CATALYST_FAILURE_WEEKS
+                    ),
+                    "brief_disaster_stop_pct": DISASTER_STOP_PCT,
                     "brief_full_md": "(brief unavailable)",
                     "brief_generated_at": pd.Timestamp.now(tz="UTC"),
                 }
@@ -179,7 +207,7 @@ def generate_briefs(
                 "brief_bear_summary_md": brief.get("bear_summary"),
                 "brief_catalyst_failure_exit": brief.get("catalyst_failure_exit"),
                 "brief_entry_price_note": brief.get("entry_price_note"),
-                "brief_position_pct": _position_pct_from_conf(row.get("layer4_weighted_score")),
+                "brief_position_pct": position_pct_from_conf(row.get("layer4_weighted_score")),
                 "brief_time_exit_weeks": 8,
                 "brief_disaster_stop_pct": -25.0,
                 "brief_full_md": md,
@@ -187,7 +215,7 @@ def generate_briefs(
             }
         )
 
-    enrichment = pd.DataFrame(rows)
+    enrichment = pd.DataFrame(rows).drop_duplicates(subset=["ticker"], keep="first")
     merged = verified.merge(enrichment, on="ticker", how="left")
     merged.attrs["n_pro"] = n_pro
     merged.attrs["n_flash"] = n_flash
@@ -196,6 +224,7 @@ def generate_briefs(
     (output_dir / f"{asof.isoformat()}.md").write_text(
         render_day_bundle(merged, asof_str=asof.isoformat())
     )
+    _write_sidecar(output_dir, asof, n_pro=n_pro, n_flash=n_flash)
     logger.info(
         "generate_briefs %s: wrote %d briefs (Pro=%d, Flash=%d) → %s",
         asof.isoformat(),

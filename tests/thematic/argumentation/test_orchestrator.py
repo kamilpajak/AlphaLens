@@ -206,5 +206,78 @@ class TestGenerateBriefs(unittest.TestCase):
         self.assertEqual(out.attrs.get("n_flash"), 1)
 
 
+class TestEmptyScoredFrame(unittest.TestCase):
+    def test_empty_scored_writes_typed_empty_parquet_and_zero_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = orchestrator.generate_briefs(
+                pd.DataFrame(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
+            )
+            self.assertEqual(len(out), 0)
+            # Schema present so downstream readers don't crash on zero-column frames.
+            for col in ("ticker", "brief_full_md", "brief_position_pct"):
+                self.assertIn(col, out.columns)
+            self.assertTrue((Path(tmp) / "2026-04-14.parquet").exists())
+            self.assertTrue((Path(tmp) / "2026-04-14.md").exists())
+            sidecar_path = Path(tmp) / "2026-04-14.meta.json"
+            self.assertTrue(sidecar_path.exists())
+            import json
+
+            meta = json.loads(sidecar_path.read_text())
+            self.assertEqual(meta["n_pro"], 0)
+            self.assertEqual(meta["n_flash"], 0)
+
+    def test_none_scored_writes_typed_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = orchestrator.generate_briefs(
+                None, asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
+            )
+            self.assertEqual(len(out), 0)
+            self.assertIn("ticker", out.columns)
+
+    def test_all_unverified_scored_writes_typed_empty(self):
+        df = _scored_df()
+        df = df[df["ticker"] == "MADEUP"].copy()  # only the unverified row
+        with tempfile.TemporaryDirectory() as tmp:
+            out = orchestrator.generate_briefs(df, asof=dt.date(2026, 4, 14), output_dir=Path(tmp))
+            self.assertEqual(len(out), 0)
+
+
+class TestSidecarPersistence(unittest.TestCase):
+    def test_sidecar_records_per_model_counts(self):
+        def fake_brief(row, **kw):
+            return _FAKE_BRIEF_PRO if row["layer4_weighted_score"] >= 4 else _FAKE_BRIEF_FLASH
+
+        with patch.object(orchestrator, "_brief_for_row", side_effect=fake_brief):
+            with tempfile.TemporaryDirectory() as tmp:
+                orchestrator.generate_briefs(
+                    _scored_df(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
+                )
+                import json
+
+                meta = json.loads((Path(tmp) / "2026-04-14.meta.json").read_text())
+                self.assertEqual(meta["n_pro"], 1)
+                self.assertEqual(meta["n_flash"], 1)
+                self.assertEqual(meta["asof"], "2026-04-14")
+
+
+class TestDedupOnMerge(unittest.TestCase):
+    def test_duplicate_tickers_in_scored_dont_cause_cartesian(self):
+        # Build a scored df with duplicate verified=True QUBT rows; output
+        # should keep just one brief per ticker.
+        df = _scored_df()
+        verified = df[df["verified"]].copy()
+        duped = pd.concat([verified, verified.iloc[[0]]], ignore_index=True)
+        with patch.object(orchestrator, "_brief_for_row", return_value=_FAKE_BRIEF_FLASH):
+            with tempfile.TemporaryDirectory() as tmp:
+                out = orchestrator.generate_briefs(
+                    duped, asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
+                )
+        # Without dedup, merge on ticker would Cartesian — without it
+        # QUBT (the duplicate) would produce 2*1 = 2 rows. With dedup, 1.
+        ticker_counts = out["ticker"].value_counts().to_dict()
+        for ticker, count in ticker_counts.items():
+            self.assertEqual(count, 1, f"{ticker} duplicated to {count} rows")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,12 @@ from typing import Any
 
 import pandas as pd
 
+from alphalens.thematic.argumentation._common import (
+    DISASTER_STOP_PCT,
+    TIME_EXIT_DEFAULT_WEEKS,
+    position_pct_from_conf,
+)
+
 
 def _fmt_num(value: Any, fmt: str) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
@@ -50,8 +56,8 @@ def render_markdown(brief: dict, row: dict | pd.Series) -> str:
         f"**Supply chain**: {brief.get('supply_chain_reasoning', '')}\n\n"
         f"**Bear case**: {brief.get('bear_summary', '')}\n\n"
         f"**Setup**: entry {brief.get('entry_price_note', '')}"
-        f" | size {_fmt_num(_position_pct_from_conf(weighted), '.1f')}%"
-        f" | exit 8w | stop -25%\n"
+        f" | size {_fmt_num(position_pct_from_conf(weighted), '.1f')}%"
+        f" | exit {TIME_EXIT_DEFAULT_WEEKS}w | stop {DISASTER_STOP_PCT:.0f}%\n"
         f"**Catalyst-failure exit**: {brief.get('catalyst_failure_exit', '')}\n\n"
         f"**Signals**: insider {_fmt_insider_usd(r.get('insider_score_usd'))}"
         f" (pctile {_fmt_pctile(r.get('insider_score_sector_percentile'))})"
@@ -66,23 +72,6 @@ def render_markdown(brief: dict, row: dict | pd.Series) -> str:
 
 def _is_nan(value: Any) -> bool:
     return isinstance(value, float) and math.isnan(value)
-
-
-def _position_pct_from_conf(weighted_score: Any) -> float:
-    """Per memo §2: 1.5% (conf 3), 2.0% (conf 4), 2.5% (conf 5); 1.0% for low."""
-    if weighted_score is None or _is_nan(weighted_score):
-        return 1.0
-    try:
-        ws = int(weighted_score)
-    except (TypeError, ValueError):
-        return 1.0
-    if ws >= 5:
-        return 2.5
-    if ws == 4:
-        return 2.0
-    if ws == 3:
-        return 1.5
-    return 1.0
 
 
 def render_day_bundle(briefs_df: pd.DataFrame, *, asof_str: str) -> str:

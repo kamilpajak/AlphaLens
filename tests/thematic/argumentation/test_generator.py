@@ -103,5 +103,14 @@ class TestGenerateBrief(unittest.TestCase):
         self.assertIs(call_kwargs["types_mod"], sentinel_types)
 
 
+class TestDefensiveClientArgs(unittest.TestCase):
+    def test_raises_when_hoisted_client_passed_without_types_mod(self):
+        # Partial hoisting (client_pro without types_mod) would silently
+        # discard the user's client and lazy-build a fresh one. Better
+        # to raise so the caller knows they made a mistake.
+        with self.assertRaises(ValueError):
+            generator.generate_brief(_facts(weighted_score=4), client_pro=object())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -74,6 +74,10 @@ def generate_brief(
     model = choose_model(weighted_score=facts.get("weighted_score"))
     prompt = build_pro_prompt(facts) if model == PRO_MODEL else build_flash_prompt(facts)
 
+    # Hoisted clients must come paired with types_mod — partial hoisting
+    # would silently discard the user's client and lazy-build a new one.
+    if (client_pro is not None or client_flash is not None) and types_mod is None:
+        raise ValueError("generate_brief: hoisted clients require types_mod (pass both or neither)")
     # Build a client if the caller didn't hoist one (test path / single-call use).
     if types_mod is None:
         genai, types_mod = _load_genai_sdk()
