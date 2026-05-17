@@ -340,6 +340,51 @@ class TestMapThemes(unittest.TestCase):
             self.assertIn("market_cap", df.columns)
             self.assertEqual(df.iloc[0]["market_cap"], 1_780_000_000)
 
+    def test_map_themes_logs_dropped_candidate_counts(self):
+        # When keep_unverified=False drops candidates, operator should see
+        # how many dropped total and how many had all-4 gates unknown
+        # (distinct from real-negative). Logged at INFO so production output
+        # is auditable without polluting the parquet schema.
+        import logging
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=[
+                        {"ticker": "QBTS", "rationale": "x", "confidence": 0.9},  # verified
+                        {"ticker": "MISS1", "rationale": "x", "confidence": 0.5},  # all-failed
+                        {"ticker": "MISS2", "rationale": "x", "confidence": 0.5},  # all-unknown
+                    ],
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value={"QBTS": 1e9, "MISS1": 1e9, "MISS2": 1e9},
+                ),
+                # QBTS passes etf; MISS1 fails all (real no); MISS2 unknown all.
+                patch.object(orchestrator, "_gate_etf", side_effect=[True, False, None]),
+                patch.object(orchestrator, "_gate_tenk", side_effect=[False, False, None]),
+                patch.object(orchestrator, "_gate_press", side_effect=[False, False, None]),
+                patch.object(orchestrator, "_gate_insider", side_effect=[False, False, None]),
+                self.assertLogs(
+                    "alphalens.thematic.mapping.orchestrator", level=logging.INFO
+                ) as cm,
+            ):
+                df = orchestrator.map_themes(
+                    themes=["quantum"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    output_dir=cache_dir,
+                    keep_unverified=False,
+                )
+        self.assertEqual(len(df), 1)
+        joined = "\n".join(cm.output)
+        self.assertIn("dropped 2", joined)
+        self.assertIn("all-unknown 1", joined)
+
     def test_map_themes_press_window_failure_marks_press_unknown(self):
         # When fetch_window_universe raises (Polygon rate limit / network),
         # orchestrator must propagate None to _gate_press so the per-ticker

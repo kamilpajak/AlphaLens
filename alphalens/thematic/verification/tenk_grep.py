@@ -46,9 +46,20 @@ def _http_get(url: str, *, accept: str = "*/*", timeout: float = 30.0) -> bytes:
 
 @lru_cache(maxsize=1)
 def _load_ticker_to_cik() -> dict[str, str]:
-    """Pull SEC's company_tickers.json once and index by ticker."""
-    body = _http_get("https://www.sec.gov/files/company_tickers.json", accept="application/json")
-    payload = json.loads(body)
+    """Pull SEC's company_tickers.json once and index by ticker.
+
+    Returns ``{}`` on any fetch / parse failure so the fallback chain in
+    :func:`_resolve_cik` (CIKLoader + YAML snapshot) can proceed. The whole
+    point of a fallback chain is to survive primary-tier outages.
+    """
+    try:
+        body = _http_get(
+            "https://www.sec.gov/files/company_tickers.json", accept="application/json"
+        )
+        payload = json.loads(body)
+    except Exception as exc:
+        logger.warning("SEC company_tickers.json fetch failed: %s", exc)
+        return {}
     mapping: dict[str, str] = {}
     for entry in payload.values():
         if not isinstance(entry, dict):

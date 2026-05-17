@@ -232,6 +232,8 @@ def map_themes(
 
     min_cap, max_cap = market_cap_range
     rows: list[dict] = []
+    dropped_total = 0
+    dropped_all_unknown = 0
     for theme in themes:
         candidates = gemini_mapper.propose_candidates(
             theme=theme,
@@ -256,6 +258,9 @@ def map_themes(
                 press_df=press_df,
             )
             if not verdict["verified"] and not keep_unverified:
+                dropped_total += 1
+                if len(verdict["gates_unknown"]) == len(GATE_NAMES):
+                    dropped_all_unknown += 1
                 continue
             rows.append(
                 {
@@ -308,7 +313,17 @@ def map_themes(
                 "verified",
             ]
         )
+    df.attrs["dropped_total"] = dropped_total
+    df.attrs["dropped_all_unknown"] = dropped_all_unknown
     df.to_parquet(out_path, index=False)
+    if dropped_total > 0:
+        logger.info(
+            "map_themes %s: kept %d / dropped %d (all-unknown %d)",
+            asof.isoformat(),
+            len(df),
+            dropped_total,
+            dropped_all_unknown,
+        )
     return df
 
 

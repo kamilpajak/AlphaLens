@@ -1,5 +1,6 @@
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from alphalens.thematic.verification import mcap_filter
 
@@ -41,6 +42,32 @@ class TestFilterByMcap(unittest.TestCase):
     def test_handles_empty_input(self):
         kept = mcap_filter.filter_by_mcap([], min_cap=500_000_000, max_cap=10_000_000_000)
         self.assertEqual(kept, {})
+
+
+class TestFetchMcapYfinanceContract(unittest.TestCase):
+    """Pin the yfinance fast_info attribute-access pattern.
+
+    yfinance's FastInfo exposes `market_cap` as an attribute, NOT as a
+    `.get("market_cap")` dict key (which silently returns None). If anyone
+    clones fetch_mcap to add fetch_volume / fetch_pe / similar helpers and
+    regresses to `.get(...)`, this test fails.
+    """
+
+    def test_uses_attribute_access_not_dict_get(self):
+        # FastInfo stand-in: attribute access returns the real value;
+        # .get("market_cap") returns None (regression target). If the
+        # implementation uses .get(), it gets None -> fetch_mcap returns
+        # None -> assertion fails.
+        fake_fast_info = MagicMock(spec=["market_cap"])
+        fake_fast_info.market_cap = 1_780_000_000.0
+        fake_fast_info.get = MagicMock(return_value=None)
+        fake_ticker = SimpleNamespace(fast_info=fake_fast_info)
+
+        with patch("yfinance.Ticker", return_value=fake_ticker):
+            mc = mcap_filter.fetch_mcap("QUBT")
+        self.assertEqual(mc, 1_780_000_000.0)
+        # Sanity: the regression path (dict-get) was NOT used.
+        fake_fast_info.get.assert_not_called()
 
 
 if __name__ == "__main__":

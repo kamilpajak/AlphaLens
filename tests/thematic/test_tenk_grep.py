@@ -203,6 +203,27 @@ class TestCikFallbackChain(unittest.TestCase):
         ):
             self.assertEqual(tenk_grep._resolve_cik("FOREIGN"), "0009876543")
 
+    def test_resolve_cik_falls_back_when_primary_tier_raises(self):
+        # SEC live company_tickers.json fetch raising must NOT bubble — the
+        # whole point of the fallback chain is to survive primary-tier
+        # outages. Wrap in try/except returning {} so CIKLoader + YAML get
+        # their turn. Standalone callers (CLI debug, direct tests of
+        # _resolve_cik) must not crash.
+        from alphalens.watchdog.sources import cik_loader as cl
+
+        fake_loader = cl.CIKLoader.__new__(cl.CIKLoader)
+        fake_loader._mapping = {"NVDA": "0001045810"}
+
+        # Clear @lru_cache before patching so the bad-network call is what
+        # the lru actually executes.
+        tenk_grep._load_ticker_to_cik.cache_clear()
+        with (
+            patch.object(tenk_grep, "_http_get", side_effect=RuntimeError("SEC unreachable")),
+            patch.object(tenk_grep, "_get_cik_loader", return_value=fake_loader),
+        ):
+            self.assertEqual(tenk_grep._resolve_cik("NVDA"), "0001045810")
+        tenk_grep._load_ticker_to_cik.cache_clear()
+
     def test_resolve_cik_returns_none_on_full_chain_miss(self):
         empty_loader = type("L", (), {"get_cik": lambda self, t: None})()
         with (

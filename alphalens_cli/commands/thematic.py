@@ -204,7 +204,12 @@ def map_themes_cmd(
         keep_unverified=keep_unverified,
     )
     out_path = output_dir / f"{target.isoformat()}.parquet"
-    typer.echo(f"Wrote {len(df)} candidate rows → {out_path}")
+    dropped = int(df.attrs.get("dropped_total", 0))
+    all_unknown = int(df.attrs.get("dropped_all_unknown", 0))
+    summary = f"Wrote {len(df)} candidate rows → {out_path}"
+    if dropped > 0:
+        summary += f"  (dropped {dropped} unverified, of which {all_unknown} were all-unknown)"
+    typer.echo(summary)
     if len(df) > 0:
         typer.echo("")
         typer.echo(
