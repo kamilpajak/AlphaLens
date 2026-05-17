@@ -36,6 +36,71 @@ _PROSE_FIELDS = (
     "entry_price_note",
 )
 
+# PROVISIONAL pattern thresholds (per 2026-05-17 NVDA→QUBT post-mortem,
+# N=4 cohort only): deep_drawdown candidates (off ≥ 30% from 52w high)
+# drove the 4-week winners in the live cohort (QUBT +44.6%, QBTS +30.4%,
+# RGTI +14.2%); extended candidates (at 52w high + parabolic MA200)
+# flat-lined or faded (FORM -0.2%). These thresholds are empirical
+# observations from a single cohort, NOT structurally-locked rules —
+# revise as more live data accumulates (see feedback ledger).
+_DEEP_DRAWDOWN_PCT_OFF_HIGH = -30.0
+_EXTENDED_PCT_OFF_HIGH = -5.0
+_EXTENDED_MA200_DISTANCE_PCT = 50.0
+
+
+def classify_setup_pattern(row: dict | pd.Series) -> str:
+    """Classify the technical setup as ``deep_drawdown`` / ``extended`` /
+    ``neutral`` / ``unknown``.
+
+    ``unknown`` when the row lacks the 52w / MA200 inputs (typically
+    short OHLCV history). The operator can spot ``deep_drawdown`` at a
+    glance as the mean-reversion bucket worth fundamental + insider
+    corroboration; ``extended`` is the already-rallied bucket where
+    further upside requires a fresh catalyst beyond the original one.
+    """
+    r = dict(row) if not isinstance(row, dict) else row
+    pct_off_high = r.get("technical_pct_off_52w_high")
+    ma200_dist = r.get("technical_ma200_distance_pct")
+    if pd.isna(pct_off_high) or pd.isna(ma200_dist):
+        return "unknown"
+    if pct_off_high <= _DEEP_DRAWDOWN_PCT_OFF_HIGH:
+        return "deep_drawdown"
+    if pct_off_high >= _EXTENDED_PCT_OFF_HIGH and ma200_dist >= _EXTENDED_MA200_DISTANCE_PCT:
+        return "extended"
+    return "neutral"
+
+
+_PATTERN_LABEL = {
+    "deep_drawdown": "deep drawdown",
+    "extended": "extended",
+    "neutral": "neutral",
+}
+
+
+def _format_pattern_line(row: dict | pd.Series) -> str:
+    """One-line **Pattern** descriptor for the markdown brief.
+
+    Returns "" when the underlying inputs are missing — we'd rather
+    skip the line than print a useless "Pattern: unknown".
+    """
+    pattern = classify_setup_pattern(row)
+    if pattern == "unknown":
+        return ""
+    pct_off = row.get("technical_pct_off_52w_high")
+    ma200_dist = row.get("technical_ma200_distance_pct")
+    slope = row.get("technical_ma200_slope_pct_per_day")
+    label = _PATTERN_LABEL[pattern]
+    pieces = [f"{label}"]
+    if not pd.isna(pct_off):
+        pieces.append(f"{pct_off:.0f}% off 52w high")
+    if not pd.isna(ma200_dist):
+        slope_str = ""
+        if not pd.isna(slope):
+            sign = "+" if slope >= 0 else ""
+            slope_str = f", slope {sign}{slope:.2f}%/d"
+        pieces.append(f"MA200 {'+' if ma200_dist >= 0 else ''}{ma200_dist:.0f}%{slope_str}")
+    return f"**Pattern**: {' · '.join(pieces)}\n"
+
 
 def _fmt_num(value: Any, fmt: str) -> str:
     if pd.isna(value):
@@ -105,6 +170,12 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
         published = r.get("source_event_published_at") or ""
         catalyst_line = f"**Catalyst**: {title} ({published}) {src_url}\n"
 
+    # --- Deterministic pattern descriptor ---------------------------------
+    # Surfaces the technical setup classification (deep_drawdown / extended
+    # / neutral) so the operator can scan-bucket candidates without parsing
+    # the full signal panel.
+    pattern_line = _format_pattern_line(r)
+
     # --- LLM-composed prose with placeholders ------------------------------
     prose = {k: _prose_or_placeholder(b.get(k)) for k in _PROSE_FIELDS}
 
@@ -135,8 +206,9 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
 
     block = (
         f"{header}"
-        f"{catalyst_line}\n"
-        f"**Thesis**: {prose['tldr']}\n\n"
+        f"{catalyst_line}"
+        f"{pattern_line}"
+        f"\n**Thesis**: {prose['tldr']}\n\n"
         f"**Supply chain**: {prose['supply_chain_reasoning']}\n\n"
         f"**Bear case**: {prose['bear_summary']}\n\n"
         f"{setup_line}"
@@ -155,11 +227,30 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
     return block
 
 
-def render_day_bundle(briefs_df: pd.DataFrame, *, asof_str: str) -> str:
-    """Concatenate one day's briefs into a single markdown file body."""
+def render_day_bundle(
+    briefs_df: pd.DataFrame,
+    *,
+    asof_str: str,
+    sort_by_cherry_pick: bool = True,
+) -> str:
+    """Concatenate one day's briefs into a single markdown file body.
+
+    With ``sort_by_cherry_pick=True`` (default) the deepest-drawdown
+    candidates appear first — these are the mean-reversion bucket worth
+    closer fundamental + insider corroboration (per 2026-05-17 NVDA→QUBT
+    post-mortem: deep-drawdown drove the live 4-week winners). Tickers
+    without 52w data sort to the bottom. Set False to preserve the
+    upstream theme/conf/confidence order from Phase D.
+    """
     header = f"# Thematic briefs — {asof_str}\n\n"
     if briefs_df is None or briefs_df.empty:
         return header + "_no briefs generated for this date._\n"
+    if sort_by_cherry_pick and "technical_pct_off_52w_high" in briefs_df.columns:
+        # ascending=True with na_position=last → most-negative first
+        # (deep drawdowns), missing 52w data at bottom of bundle
+        briefs_df = briefs_df.sort_values(
+            "technical_pct_off_52w_high", ascending=True, na_position="last"
+        )
     parts: list[str] = [header]
     for _, row in briefs_df.iterrows():
         md = row.get("brief_full_md", "")
@@ -168,4 +259,4 @@ def render_day_bundle(briefs_df: pd.DataFrame, *, asof_str: str) -> str:
     return "".join(parts).rstrip() + "\n"
 
 
-__all__ = ["render_day_bundle", "render_markdown"]
+__all__ = ["classify_setup_pattern", "render_day_bundle", "render_markdown"]

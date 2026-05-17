@@ -160,5 +160,169 @@ class TestRenderDayBundle(unittest.TestCase):
         self.assertIn("no", bundle.lower())  # "no briefs" style message
 
 
+class TestClassifySetupPattern(unittest.TestCase):
+    """Pure helper exposing the technical-setup pattern label so the
+    renderer + operator both have a one-word handle on the cherry-pick
+    candidate type (per PR δ doctrine: 52w / MA200 are first-class UI
+    citizens, not ornaments).
+    """
+
+    def test_deep_drawdown_when_far_below_52w_high(self):
+        # QUBT-like: -67% off 52w high. Worth a closer look.
+        row = {"technical_pct_off_52w_high": -67.0, "technical_ma200_distance_pct": -39.0}
+        self.assertEqual(renderer.classify_setup_pattern(row), "deep_drawdown")
+
+    def test_extended_when_at_or_above_52w_high_and_parabolic_ma200(self):
+        # FORM-like: 0% off 52w high + MA200 +120%. Already rallied.
+        row = {"technical_pct_off_52w_high": 0.0, "technical_ma200_distance_pct": 120.0}
+        self.assertEqual(renderer.classify_setup_pattern(row), "extended")
+
+    def test_neutral_when_neither_extreme(self):
+        row = {"technical_pct_off_52w_high": -15.0, "technical_ma200_distance_pct": -3.0}
+        self.assertEqual(renderer.classify_setup_pattern(row), "neutral")
+
+    def test_unknown_when_inputs_missing(self):
+        row = {"technical_pct_off_52w_high": None, "technical_ma200_distance_pct": None}
+        self.assertEqual(renderer.classify_setup_pattern(row), "unknown")
+
+    def test_unknown_when_pandas_null_inputs(self):
+        row = {"technical_pct_off_52w_high": pd.NA, "technical_ma200_distance_pct": float("nan")}
+        self.assertEqual(renderer.classify_setup_pattern(row), "unknown")
+
+
+class TestRenderMarkdownPatternLine(unittest.TestCase):
+    """render_markdown surfaces the pattern label + supporting numbers
+    as a dedicated **Pattern** line so the operator can scan-classify
+    candidates without parsing the full signal panel.
+    """
+
+    def test_pattern_line_present_for_deep_drawdown(self):
+        row = {
+            **_ROW,
+            "technical_pct_off_52w_high": -67.0,
+            "technical_ma200_distance_pct": -39.0,
+            "technical_ma200_slope_pct_per_day": -0.31,
+        }
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("**Pattern**", md)
+        self.assertIn("deep drawdown", md)
+        self.assertIn("-67", md)  # the supporting number
+        # Pattern line must appear between Catalyst and Thesis so the
+        # operator reads it as scan-bucket context, not deep in the body.
+        self.assertLess(md.index("**Pattern**"), md.index("**Thesis**"))
+
+    def test_pattern_line_present_for_extended(self):
+        row = {
+            **_ROW,
+            "technical_pct_off_52w_high": 0.0,
+            "technical_ma200_distance_pct": 120.0,
+        }
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("**Pattern**: extended", md)
+
+    def test_pattern_line_present_for_neutral(self):
+        row = {
+            **_ROW,
+            "technical_pct_off_52w_high": -15.0,
+            "technical_ma200_distance_pct": -3.0,
+        }
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("**Pattern**: neutral", md)
+
+    def test_pattern_line_omitted_when_inputs_missing(self):
+        # Don't render a useless "Pattern: unknown" line — saves visual
+        # noise for tickers with insufficient OHLCV history.
+        row = {
+            **_ROW,
+            "technical_pct_off_52w_high": None,
+            "technical_ma200_distance_pct": None,
+        }
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertNotIn("**Pattern**", md)
+
+
+class TestRenderDayBundleCherryPickSort(unittest.TestCase):
+    """Default day-bundle order sorts by cherry-pick score so the
+    deepest-drawdown candidates appear first in the operator's scroll.
+    Per the 2026-05-17 NVDA→QUBT post-mortem: deep-drawdown candidates
+    drove the 1-month winners; sorting promotes them to the top.
+    """
+
+    def test_default_sort_puts_deep_drawdown_first(self):
+        briefs_df = pd.DataFrame(
+            [
+                {
+                    **_ROW,
+                    "ticker": "FORM",
+                    "technical_pct_off_52w_high": 0.0,
+                    "brief_full_md": "## FORM (extended)",
+                },
+                {
+                    **_ROW,
+                    "ticker": "QUBT",
+                    "technical_pct_off_52w_high": -67.0,
+                    "brief_full_md": "## QUBT (deep)",
+                },
+                {
+                    **_ROW,
+                    "ticker": "RGTI",
+                    "technical_pct_off_52w_high": -30.0,
+                    "brief_full_md": "## RGTI (medium)",
+                },
+            ]
+        )
+        bundle = renderer.render_day_bundle(briefs_df, asof_str="2026-04-14")
+        # QUBT (-67) before RGTI (-30) before FORM (0)
+        i_qubt = bundle.index("## QUBT")
+        i_rgti = bundle.index("## RGTI")
+        i_form = bundle.index("## FORM")
+        self.assertLess(i_qubt, i_rgti)
+        self.assertLess(i_rgti, i_form)
+
+    def test_sort_disabled_preserves_input_order(self):
+        briefs_df = pd.DataFrame(
+            [
+                {
+                    **_ROW,
+                    "ticker": "FORM",
+                    "technical_pct_off_52w_high": 0.0,
+                    "brief_full_md": "## FORM",
+                },
+                {
+                    **_ROW,
+                    "ticker": "QUBT",
+                    "technical_pct_off_52w_high": -67.0,
+                    "brief_full_md": "## QUBT",
+                },
+            ]
+        )
+        bundle = renderer.render_day_bundle(
+            briefs_df, asof_str="2026-04-14", sort_by_cherry_pick=False
+        )
+        self.assertLess(bundle.index("## FORM"), bundle.index("## QUBT"))
+
+    def test_missing_pct_off_52w_high_sorted_last(self):
+        # Tickers without 52w data still render, but sorted to the bottom
+        # so the operator sees the actionable signals first.
+        briefs_df = pd.DataFrame(
+            [
+                {
+                    **_ROW,
+                    "ticker": "QUBT",
+                    "technical_pct_off_52w_high": -67.0,
+                    "brief_full_md": "## QUBT",
+                },
+                {
+                    **_ROW,
+                    "ticker": "UNKN",
+                    "technical_pct_off_52w_high": None,
+                    "brief_full_md": "## UNKN",
+                },
+            ]
+        )
+        bundle = renderer.render_day_bundle(briefs_df, asof_str="2026-04-14")
+        self.assertLess(bundle.index("## QUBT"), bundle.index("## UNKN"))
+
+
 if __name__ == "__main__":
     unittest.main()
