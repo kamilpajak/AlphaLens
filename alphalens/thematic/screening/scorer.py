@@ -24,6 +24,7 @@ import pandas as pd
 from alphalens.thematic.screening import (
     fcff_signal,
     insider_signal,
+    magic_formula,
     sector_peers,
     technicals_signal,
     valuation_signal,
@@ -50,7 +51,12 @@ def fcff_is_positive(*, sector_percentile: float | None) -> bool:
 
 
 def valuation_is_positive(*, composite_percentile: float | None) -> bool:
-    """Positive when the cheaper-is-better composite is at or above sector median."""
+    """Positive when the cheaper-is-better composite is at or above sector median.
+
+    Retained for the secondary sector-percentile transparency line in the
+    brief renderer. The Magic Formula cohort rank is now the primary
+    valuation gate consumed by ``compose_weighted_score``.
+    """
     if composite_percentile is None:
         return False
     return composite_percentile > 50.0
@@ -115,18 +121,20 @@ def compose_weighted_score(
     *,
     insider_positive: bool,
     fcff_positive: bool,
-    valuation_positive: bool,
+    magic_formula_top_quartile: bool,
     technicals_positive: bool,
 ) -> int:
     """Combine boolean signals into a 1-5 confidence score.
 
     Weight rule (locked plan §C5): insider 2× others 1×. Floored at 1 so
-    "no information" candidates still emit a value.
+    "no information" candidates still emit a value. The valuation slot is
+    now driven by Magic Formula top-quartile membership within the daily
+    cohort (Greenblatt-style relative ranking) rather than sector-percentile.
     """
     raw = (
         2 * int(insider_positive)
         + int(fcff_positive)
-        + int(valuation_positive)
+        + int(magic_formula_top_quartile)
         + int(technicals_positive)
     )
     return max(1, min(5, raw))
@@ -294,16 +302,17 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
             loader=ohlcv_loader,
         )
 
-        weighted = compose_weighted_score(
-            insider_positive=insider_is_positive(score_usd=ins["score_usd"]),
-            fcff_positive=fcff_is_positive(sector_percentile=fcff["sector_percentile"]),
-            valuation_positive=valuation_is_positive(
-                composite_percentile=val["composite_sector_percentile"]
-            ),
-            technicals_positive=technicals_are_positive(
-                rsi=tech["rsi"], ma_distance_pct=tech["ma50_distance_pct"]
-            ),
+        # Magic Formula inputs — derived from the (cached) SimFin features
+        # dict. ``feature_fetcher`` memoises per (ticker, asof) so this call
+        # is free after the val/fcff signal scorers above.
+        features = feature_fetcher(ticker, asof) or {}
+        market_cap = _market_cap_from_features(features)
+        mf_ev_ebitda = magic_formula.compute_ev_ebitda(
+            features, market_cap=market_cap if market_cap is not None else float("nan")
         )
+        mf_roic = magic_formula.compute_roic(features)
+        mf_roe = magic_formula.compute_roe(features)
+        mf_health = magic_formula.passes_health_gate(features)
 
         rows.append(
             {
@@ -318,10 +327,14 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
                 "valuation_pe": val["pe"],
                 "valuation_ps": val["ps"],
                 "valuation_ev_rev": val["ev_rev"],
+                "valuation_ev_ebitda": mf_ev_ebitda,
                 "valuation_fcf_margin": val["fcf_margin"],
                 "valuation_composite_sector_percentile": val["composite_sector_percentile"],
                 "valuation_financials_publish_date": val.get("financials_publish_date"),
                 "valuation_financials_age_days": val.get("financials_age_days"),
+                "roic_pct": mf_roic,
+                "roe_pct": mf_roe,
+                "magic_formula_health_pass": mf_health,
                 "technical_rsi": tech["rsi"],
                 "technical_ma50_distance_pct": tech["ma50_distance_pct"],
                 "technical_atr_pct": tech["atr_pct"],
@@ -331,14 +344,66 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
                 "technical_ma200_distance_pct": tech.get("ma200_distance_pct"),
                 "technical_ma200_slope_pct_per_day": tech.get("ma200_slope_pct_per_day"),
                 "technicals_summary_str": tech["summary"],
-                "layer4_weighted_score": weighted,
+                # Signal positives stashed for the post-loop weighted-score
+                # composition; dropped before the public DataFrame is built.
+                "_insider_positive": insider_is_positive(score_usd=ins["score_usd"]),
+                "_fcff_positive": fcff_is_positive(sector_percentile=fcff["sector_percentile"]),
+                "_technicals_positive": technicals_are_positive(
+                    rsi=tech["rsi"], ma_distance_pct=tech["ma50_distance_pct"]
+                ),
             }
         )
     enrichment = pd.DataFrame(rows)
+
+    # Cohort-relative Magic Formula rank — operates on the survivor basket
+    # rather than sector peers. ``valuation_pe`` here is the SimFin-derived
+    # P/E from valuation_signal (NOT the Magic-Formula variant) to preserve
+    # the existing column semantic; both compute the same way (market_cap /
+    # net_income_ttm) so reuse is safe.
+    enrichment["magic_formula_rank"] = magic_formula.compute_cohort_rank(enrichment)
+    cohort_n = int(enrichment["magic_formula_health_pass"].sum())
+    enrichment["magic_formula_cohort_n"] = cohort_n
+
+    enrichment["layer4_weighted_score"] = [
+        compose_weighted_score(
+            insider_positive=row["_insider_positive"],
+            fcff_positive=row["_fcff_positive"],
+            magic_formula_top_quartile=magic_formula.is_top_quartile(
+                rank=row["magic_formula_rank"], cohort_n=cohort_n
+            ),
+            technicals_positive=row["_technicals_positive"],
+        )
+        for _, row in enrichment.iterrows()
+    ]
+    enrichment = enrichment.drop(
+        columns=["_insider_positive", "_fcff_positive", "_technicals_positive"]
+    )
+
     # Merge on ticker to preserve original order + Phase C columns.
     merged = candidates.copy().reset_index(drop=True)
     merged["ticker"] = merged["ticker"].astype(str).str.upper()
     return merged.merge(enrichment, on="ticker", how="left")
+
+
+def _market_cap_from_features(features: dict) -> float | None:
+    """Compute market cap from SimFin price × shares. None if either missing
+    or NaN/non-positive. NaN guard matters here: ``float(nan) <= 0`` is
+    False, so without the isnan check NaN would silently pass through.
+    """
+    import math
+
+    price = features.get("price")
+    shares = features.get("shares_outstanding")
+    if price is None or shares is None:
+        return None
+    try:
+        p = float(price)
+        s = float(shares)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(p) or math.isnan(s) or p <= 0 or s <= 0:
+        return None
+    return p * s
 
 
 __all__ = [

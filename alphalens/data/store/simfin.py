@@ -45,6 +45,9 @@ _COL_PRETAX = "Pretax Income (Loss)"
 _COL_LT_DEBT = "Long Term Debt"
 _COL_ST_DEBT = "Short Term Debt"
 _COL_PUBLISH_DATE = "Publish Date"
+_COL_EQUITY = "Total Equity"
+_COL_DA = "Depreciation & Amortization"
+_COL_OPERATING_INCOME = "Operating Income (Loss)"
 
 # Effective tax rate floor/ceiling per ev_fcff_yield design memo §3
 _TAX_RATE_FLOOR = 0.0
@@ -274,6 +277,13 @@ class SimFinFundamentalsStore:
         ltd_latest = _latest_value(bs, _COL_LT_DEBT)
         std_latest = _latest_value(bs, _COL_ST_DEBT)
         cash_latest = _latest_value(bs, _COL_CASH)
+        equity_latest = _latest_value(bs, _COL_EQUITY)
+
+        # EBIT and D&A — consumed by Magic Formula cohort ranker (ROIC, EV/EBITDA).
+        # Operating Income IS EBIT by SimFin's convention; we expose it under
+        # ``operating_income_ttm`` and let consumers treat it as EBIT.
+        operating_income_ttm = _ttm_sum(inc, _COL_OPERATING_INCOME)
+        da_ttm = _ttm_sum(cf, _COL_DA)
 
         # 5y rolling FCF margin median (last 20 quarters), used for imputation
         # when current FCFF is non-positive (per design memo §4).
@@ -309,6 +319,9 @@ class SimFinFundamentalsStore:
             "cash_and_equivalents": cash_latest,
             "net_income_ttm": net_income_ttm,
             "publish_date_str": publish_date_str,
+            "operating_income_ttm": operating_income_ttm,
+            "total_equity": equity_latest,
+            "da_ttm": da_ttm,
         }
 
 

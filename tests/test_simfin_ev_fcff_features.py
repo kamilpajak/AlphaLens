@@ -174,8 +174,9 @@ class TestEvFcffFeaturesAsOf(unittest.TestCase):
                 "Publish Date": pd,
                 "Net Cash from Operating Activities": 200_000_000,
                 "Change in Fixed Assets & Intangibles": -50_000_000,
+                "Depreciation & Amortization": 30_000_000,
             }
-            for rd, pd in zip(report_dates, publish_dates)
+            for rd, pd in zip(report_dates, publish_dates, strict=True)
         ]
         inc_rows = [
             {
@@ -183,10 +184,11 @@ class TestEvFcffFeaturesAsOf(unittest.TestCase):
                 "Publish Date": pd_,
                 "Revenue": 1_000_000_000,
                 "Interest Expense, Net": 10_000_000,
+                "Operating Income (Loss)": 110_000_000,
                 "Pretax Income (Loss)": 100_000_000,
                 "Net Income": 75_000_000,
             }
-            for rd, pd_ in zip(report_dates, publish_dates)
+            for rd, pd_ in zip(report_dates, publish_dates, strict=True)
         ]
         bs_rows = [
             {
@@ -195,8 +197,9 @@ class TestEvFcffFeaturesAsOf(unittest.TestCase):
                 "Long Term Debt": 300_000_000,
                 "Short Term Debt": 100_000_000,
                 "Cash, Cash Equivalents & Short Term Investments": 200_000_000,
+                "Total Equity": 800_000_000,
             }
-            for rd, pd_ in zip(report_dates, publish_dates)
+            for rd, pd_ in zip(report_dates, publish_dates, strict=True)
         ]
         self.cf = _make_quarterly_frame("XYZ", cf_rows)
         self.inc = _make_quarterly_frame("XYZ", inc_rows)
@@ -234,8 +237,25 @@ class TestEvFcffFeaturesAsOf(unittest.TestCase):
             "cash_and_equivalents",
             "net_income_ttm",
             "publish_date_str",
+            "operating_income_ttm",
+            "total_equity",
+            "da_ttm",
         }
         self.assertEqual(set(snap.keys()), expected_keys)
+
+    def test_operating_income_ttm_aggregated(self):
+        snap = self.store.ev_fcff_features_as_of("XYZ", date(2024, 6, 30))
+        # 110M/quarter × 4 = 440M; consumed downstream as EBIT proxy.
+        self.assertAlmostEqual(snap["operating_income_ttm"], 440_000_000)
+
+    def test_total_equity_uses_latest_balance(self):
+        snap = self.store.ev_fcff_features_as_of("XYZ", date(2024, 6, 30))
+        self.assertEqual(snap["total_equity"], 800_000_000)
+
+    def test_da_ttm_aggregated(self):
+        snap = self.store.ev_fcff_features_as_of("XYZ", date(2024, 6, 30))
+        # 30M/quarter × 4 = 120M.
+        self.assertAlmostEqual(snap["da_ttm"], 120_000_000)
 
     def test_net_income_ttm_aggregated(self):
         snap = self.store.ev_fcff_features_as_of("XYZ", date(2024, 6, 30))
