@@ -15,7 +15,9 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import logging
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterable
@@ -27,11 +29,31 @@ import yaml
 
 from alphalens.thematic.sources.schema import NEWS_COLUMNS, empty_news_frame
 
+logger = logging.getLogger(__name__)
+
 ENDPOINT = "https://api.gdeltproject.org/api/v2/doc/doc"
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_news" / "gdelt"
 THEMES_PATH = Path(__file__).parent.parent / "config" / "gdelt_themes.yaml"
 DEFAULT_MAXRECORDS = 100
-DEFAULT_INTER_QUERY_SLEEP_SEC = 8.0
+# 10s margin over GDELT's documented 5s/req soft limit. Pre-fix value was 8s,
+# but bursts from per-bucket retries on broken queries were tripping HTTP 429
+# on downstream buckets; with permanent-vs-transient distinction below the
+# extra 2s/bucket buys headroom on the tail.
+DEFAULT_INTER_QUERY_SLEEP_SEC = 10.0
+
+
+class GdeltQueryError(Exception):
+    """Permanent error returned by GDELT — query is malformed, do not retry.
+
+    Triggered when the API responds 200 OK with a non-JSON body, e.g.
+    ``"The specified phrase is too short."`` for queries containing
+    single-word quoted phrases. Retrying just burns the rate-limit budget
+    of subsequent buckets without ever succeeding.
+    """
+
+
+class GdeltMaxRetriesError(Exception):
+    """Transient retries exhausted (empty body, HTTPError) — bucket dropped."""
 
 
 def _http_get_json(
@@ -41,15 +63,15 @@ def _http_get_json(
     max_attempts: int = 3,
     backoff_sec: float = 10.0,
 ) -> dict:
-    """Fetch JSON from GDELT with retry on empty body / 429.
+    """Fetch JSON from GDELT, distinguishing permanent vs transient errors.
 
-    GDELT returns 200 OK with an empty body when soft-rate-limited; this is
-    indistinguishable from a network glitch except by the empty body itself.
+    Transient (retried with exponential backoff): empty body (soft rate-limit
+    signal) and ``HTTPError`` (including real 429).
 
-    Caveat: an empty body could in theory also mean ``0 articles matched``,
-    in which case the retries are wasted wall time before ``_safe_call`` drops
-    the bucket. In practice GDELT v2 returns ``{"articles": []}`` for zero
-    matches, so an empty body has only been observed under rate-limiting.
+    Permanent (raised immediately as ``GdeltQueryError``): non-empty body that
+    does not look like JSON. GDELT signals malformed queries with HTTP 200 and
+    a plain-text message body, so retrying is wasted wall time AND triggers
+    GDELT's 5s/req soft cap for the bucket that comes next.
     """
     last_err: Exception | None = None
     for attempt in range(max_attempts):
@@ -59,12 +81,17 @@ def _http_get_json(
                 body = r.read()
             if not body:
                 raise json.JSONDecodeError("empty body (likely rate-limited)", "", 0)
+            if body.lstrip()[:1] not in (b"{", b"["):
+                snippet = body[:200].decode("utf-8", errors="replace").strip()
+                raise GdeltQueryError(f"GDELT permanent error: {snippet}")
             return json.loads(body)
+        except GdeltQueryError:
+            raise
         except (json.JSONDecodeError, urllib.error.HTTPError) as e:
             last_err = e
             if attempt + 1 < max_attempts:
                 time.sleep(backoff_sec * (2**attempt))
-    raise RuntimeError(f"GDELT fetch failed after {max_attempts} attempts: {last_err}")
+    raise GdeltMaxRetriesError(f"GDELT fetch failed after {max_attempts} attempts: {last_err}")
 
 
 @lru_cache(maxsize=1)
@@ -177,8 +204,11 @@ def fetch_daily_news(
     for i, (theme, query) in enumerate(buckets.items()):
         if i > 0 and inter_query_sleep_sec > 0:
             time.sleep(inter_query_sleep_sec)
-        df = fetch_theme(theme=theme, query=query, timespan=timespan, maxrecords=maxrecords)
-        frames.append(df)
+        try:
+            df = fetch_theme(theme=theme, query=query, timespan=timespan, maxrecords=maxrecords)
+            frames.append(df)
+        except (GdeltQueryError, GdeltMaxRetriesError, urllib.error.URLError) as exc:
+            logger.warning("gdelt bucket %s failed: %r", theme, exc)
 
     if not frames:
         merged = empty_news_frame()
