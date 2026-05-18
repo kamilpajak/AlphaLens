@@ -206,10 +206,23 @@ class TestWindowUniverseFetch(unittest.TestCase):
 
 
 class TestHasThemeInPressFrame(unittest.TestCase):
-    def test_matches_per_ticker_in_pre_fetched_frame(self):
+    """Tri-state semantics for the in-memory frame matcher.
+
+    - ``True``  — ticker has rows in the frame AND a keyword hit.
+    - ``False`` — ticker has rows in the frame, NO keyword hit (real "no").
+    - ``None``  — ticker has NO rows in the frame (we don't know; the
+      orchestrator should fall back to a per-ticker fetch). Also returned
+      when the frame is empty.
+
+    The None case prevents silent false-negatives when Polygon's batch
+    firehose fails to tag a ticker on articles that do mention it.
+    """
+
+    @staticmethod
+    def _two_ticker_frame():
         import pandas as pd
 
-        df = pd.DataFrame(
+        return pd.DataFrame(
             [
                 {
                     "id": "1",
@@ -233,14 +246,37 @@ class TestHasThemeInPressFrame(unittest.TestCase):
                 },
             ]
         )
-        self.assertTrue(
-            recent_press.has_theme_in_press_frame(ticker="BEEM", keywords=["quantum"], press_df=df)
-        )
-        self.assertFalse(
-            recent_press.has_theme_in_press_frame(ticker="NVDA", keywords=["quantum"], press_df=df)
+
+    def test_returns_true_when_ticker_present_and_keyword_hits(self):
+        df = self._two_ticker_frame()
+        self.assertIs(
+            recent_press.has_theme_in_press_frame(ticker="BEEM", keywords=["quantum"], press_df=df),
+            True,
         )
 
-    def test_empty_frame_returns_false(self):
+    def test_returns_false_when_ticker_present_but_keyword_misses(self):
+        # NVDA HAS rows in the frame but none mention "quantum" — this is a
+        # real "no" (we checked, didn't find), distinct from "we couldn't
+        # check because no rows for this ticker". Stays False.
+        df = self._two_ticker_frame()
+        self.assertIs(
+            recent_press.has_theme_in_press_frame(ticker="NVDA", keywords=["quantum"], press_df=df),
+            False,
+        )
+
+    def test_returns_none_when_ticker_absent_from_frame(self):
+        # Polygon's batch firehose did not tag this ticker on any article in
+        # the window — we have no evidence either way. Return None so the
+        # orchestrator falls back to a per-ticker fetch instead of treating
+        # the silence as a real "no". (Issue #149 root cause.)
+        df = self._two_ticker_frame()
+        self.assertIsNone(
+            recent_press.has_theme_in_press_frame(ticker="VRT", keywords=["quantum"], press_df=df)
+        )
+
+    def test_empty_frame_returns_none(self):
+        # An empty frame is equivalent to "no rows for this ticker" — no
+        # evidence, fall through to per-ticker.
         import pandas as pd
 
         df = pd.DataFrame(
@@ -255,9 +291,63 @@ class TestHasThemeInPressFrame(unittest.TestCase):
                 "publisher",
             ]
         )
-        self.assertFalse(
+        self.assertIsNone(
             recent_press.has_theme_in_press_frame(ticker="BEEM", keywords=["quantum"], press_df=df)
         )
+
+    def test_empty_keywords_returns_none(self):
+        # Defensive: caller passed an empty keyword iterable. We can't say
+        # "no" (we never matched anything) — return None, not False.
+        df = self._two_ticker_frame()
+        self.assertIsNone(
+            recent_press.has_theme_in_press_frame(ticker="BEEM", keywords=[], press_df=df)
+        )
+
+
+class TestFetchRecentNewsPagination(unittest.TestCase):
+    def test_paginates_past_old_max_pages_cap_of_ten(self):
+        # Regression test for issue #149 bug 2: the previous cap of 10 pages
+        # × 100 limit = 1000 rows covered ~3 days on Polygon's US firehose,
+        # NOT the intended 30-day lookback. Bump to 200 pages should let the
+        # fetcher follow next_url until the window naturally exhausts.
+        pages_to_serve = 15  # ten was the old ceiling
+
+        def fake_call(url, **kwargs):
+            calls.append(url)
+            page_n = len(calls)
+            # Each page returns one article so we can count rows precisely.
+            result = {
+                "results": [
+                    {
+                        "id": f"p{page_n}",
+                        "published_utc": "2026-05-01T00:00:00Z",
+                        "title": f"page {page_n}",
+                        "description": "",
+                        "tickers": ["BEEM"],
+                        "keywords": [],
+                        "article_url": f"https://example.com/{page_n}",
+                        "publisher": {"name": "x"},
+                    }
+                ]
+            }
+            if page_n < pages_to_serve:
+                result["next_url"] = f"https://api.polygon.io/v2/reference/news?cursor={page_n}"
+            return result
+
+        calls: list[str] = []
+        with patch.object(recent_press, "_http_get_json", side_effect=fake_call):
+            items = recent_press.fetch_recent_news(
+                ticker=None,
+                asof=dt.date(2026, 5, 15),
+                lookback_days=30,
+                api_key="testkey",
+            )
+        self.assertEqual(
+            len(items),
+            pages_to_serve,
+            f"expected all {pages_to_serve} pages fetched; got {len(items)}",
+        )
+        self.assertEqual(len(calls), pages_to_serve)
 
 
 if __name__ == "__main__":

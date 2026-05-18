@@ -44,7 +44,7 @@ def fetch_recent_news(
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     api_key: str,
     limit: int = DEFAULT_LIMIT,
-    max_pages: int = 10,
+    max_pages: int = 200,
 ) -> list[dict]:
     """Fetch Polygon news over ``[asof - lookback, asof]``, with pagination.
 
@@ -160,19 +160,32 @@ def has_theme_in_press_frame(
     ticker: str,
     keywords: Iterable[str],
     press_df: pd.DataFrame,
-) -> bool:
-    """In-memory verification gate over a pre-fetched window DataFrame."""
+) -> bool | None:
+    """In-memory verification gate over a pre-fetched window DataFrame.
+
+    Tri-state return (issue #149 fix):
+    - ``True``  — ticker has at least one row in ``press_df`` AND at least
+      one keyword appears in title / description / Polygon keywords field.
+    - ``False`` — ticker has rows in ``press_df`` but none mention any of
+      the keywords (real "no" — we checked, didn't find).
+    - ``None``  — ticker has NO rows in ``press_df`` (we don't know; the
+      caller should fall back to a per-ticker fetch). Also returned for an
+      empty frame or an empty keyword iterable.
+
+    The ``None`` case prevents silent false-negatives when Polygon's batch
+    firehose fails to tag a ticker on articles that do mention it.
+    """
     if press_df.empty:
-        return False
+        return None
     kw_lower = [k.lower() for k in keywords if k]
     if not kw_lower:
-        return False
+        return None
     mask_ticker = press_df["tickers"].apply(
         lambda x: ticker.upper() in (list(x) if x is not None else [])
     )
     rows = press_df[mask_ticker]
     if rows.empty:
-        return False
+        return None
     haystack = (
         rows["title"].fillna("").astype(str).str.lower()
         + " | "
