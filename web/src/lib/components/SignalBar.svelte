@@ -44,8 +44,10 @@
 
 <div
 	data-testid="signal-bar"
-	class="group relative text-[10px] uppercase tracking-widest hover:z-50"
+	class="group relative text-[10px] uppercase tracking-widest hover:z-50 focus-within:z-50"
 	class:cursor-help={tooltip}
+	tabindex={tooltip ? 0 : undefined}
+	role={tooltip ? 'group' : undefined}
 >
 	<div class="flex items-center justify-between mb-1.5 gap-2">
 		<span class="text-fg-muted truncate">{label}</span>
@@ -70,7 +72,7 @@
 
 	{#if tooltip}
 		<span
-			class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+			class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
 			role="tooltip"
 		>
 			<span class="block border border-amber bg-bg-1 px-3 py-2 text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl">
