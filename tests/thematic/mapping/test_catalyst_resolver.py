@@ -309,6 +309,78 @@ class TestFindTriggerEventTimestampSchema(unittest.TestCase):
         self.assertEqual(cat["url"], "https://example.com/cyber")
         self.assertEqual(cat["published_at"], "2026-05-18")
 
+    def test_returns_none_when_neither_time_column_present(self):
+        # Defensive: this is the silent-failure mode the 2026-05-18 bug
+        # originally exhibited (KeyError swallowed by orchestrator _safe →
+        # source_event_url=None across all candidates). With the dispatch,
+        # the return-None path is now explicit; this test pins it so a
+        # future schema rename cannot recreate the symptom undetected.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 18),
+                [
+                    {
+                        "id": "n1",
+                        "title": "No time column",
+                        "url": "https://example.com/notime",
+                        # No timestamp, no published_at — simulates a future
+                        # schema where the time column is renamed without
+                        # the consumer being updated.
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 18),
+                [{"news_id": "n1", "themes": ["AI"], "confidence": 0.9}],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="AI",
+                asof=dt.date(2026, 5, 18),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNone(cat)
+
+    def test_handles_tz_naive_timestamp_input(self):
+        # The fix added pd.to_datetime(..., utc=True) to normalize tz handling.
+        # Verify that a tz-naive timestamp coerces cleanly (treated as UTC)
+        # and produces the expected .date() output. Defensive against a
+        # future ingest adapter that emits tz-naive instead of tz-aware.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 18),
+                [
+                    {
+                        "id": "n1",
+                        "title": "Tz-naive event",
+                        "url": "https://example.com/naive",
+                        "timestamp": pd.Timestamp("2026-05-18T13:00:00"),  # naive
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 18),
+                [{"news_id": "n1", "themes": ["AI"], "confidence": 0.9}],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="AI",
+                asof=dt.date(2026, 5, 18),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat["published_at"], "2026-05-18")
+
     def test_prefers_timestamp_when_both_columns_present(self):
         # If a news file happens to carry both legacy and new column,
         # prefer timestamp (canonical, tz-aware). Defensive.
