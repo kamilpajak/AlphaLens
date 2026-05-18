@@ -89,20 +89,29 @@ def find_trigger_event(
     if joined.empty:
         return None
 
-    # Pick the newest by published_at.
-    joined["published_at"] = pd.to_datetime(joined["published_at"], errors="coerce")
-    joined = joined.dropna(subset=["published_at"])
+    # Pick the newest by event time. Canonical news schema (sources/schema.py)
+    # uses ``timestamp`` since the 2026-05 ingest refactor; older parquets
+    # carry ``published_at``. Prefer the canonical name; fall back to legacy
+    # so historical news files still work.
+    if "timestamp" in joined.columns:
+        time_col = "timestamp"
+    elif "published_at" in joined.columns:
+        time_col = "published_at"
+    else:
+        return None
+    joined[time_col] = pd.to_datetime(joined[time_col], errors="coerce", utc=True)
+    joined = joined.dropna(subset=[time_col])
     if joined.empty:
         return None
 
-    top = joined.sort_values("published_at", ascending=False).iloc[0]
+    top = joined.sort_values(time_col, ascending=False).iloc[0]
     title = str(top.get("title", "") or "")
     if len(title) > _TITLE_MAX_LEN:
         title = textwrap.shorten(title, width=_TITLE_MAX_LEN, placeholder="…")
     return {
         "url": str(top.get("url", "") or ""),
         "title": title,
-        "published_at": top["published_at"].date().isoformat(),
+        "published_at": top[time_col].date().isoformat(),
     }
 
 
