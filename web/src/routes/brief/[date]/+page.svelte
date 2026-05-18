@@ -29,14 +29,14 @@
 	const firstCatalystTitle = $derived(data.brief.candidates[0]?.source_event_title ?? null);
 </script>
 
-<div class="max-w-[1400px] mx-auto px-4 py-6">
+<div class="max-w-[1400px] mx-auto px-3 sm:px-4 py-6">
 	<!-- Header -->
 	<header class="border border-grid bg-bg-1 corners relative fade-up mb-5">
-		<div class="grid grid-cols-12 gap-4 px-6 py-5">
+		<div class="grid grid-cols-12 gap-4 px-4 sm:px-6 py-5">
 			<div class="col-span-12 lg:col-span-8">
 				<div class="text-[10px] uppercase tracking-[0.3em] text-fg-muted">// session</div>
-				<div class="flex items-baseline gap-4 mt-1">
-					<h1 class="font-display font-bold text-5xl text-amber tracking-tight">{data.brief.date}</h1>
+				<div class="flex flex-wrap items-baseline gap-x-4 gap-y-2 mt-1">
+					<h1 class="font-display font-bold text-3xl sm:text-4xl lg:text-5xl text-amber tracking-tight">{data.brief.date}</h1>
 					<div class="text-[11px] uppercase tracking-widest text-fg-muted">
 						<div><span class="text-cyan font-bold">{data.brief.n_candidates}</span> candidates</div>
 						<div><span class="text-green font-bold">{verifiedCount}</span> verified</div>

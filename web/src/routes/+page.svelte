@@ -43,21 +43,21 @@
 	]);
 </script>
 
-<div class="px-4 py-6 max-w-[1600px] mx-auto">
+<div class="px-3 sm:px-4 py-6 max-w-[1600px] mx-auto">
 	<!-- Hero block -->
 	<section class="grid grid-cols-12 gap-4 mb-6 fade-up">
-		<div class="col-span-12 lg:col-span-8 border border-grid bg-bg-1 p-6 corners relative">
-			<div class="flex items-start justify-between mb-4">
-				<div>
+		<div class="col-span-12 lg:col-span-8 border border-grid bg-bg-1 p-4 sm:p-6 corners relative">
+			<div class="flex flex-wrap items-start justify-between gap-4 mb-4">
+				<div class="min-w-0">
 					<div class="text-[10px] uppercase tracking-[0.3em] text-fg-muted mb-2">// thematic event-driven research</div>
-					<h1 class="font-display text-4xl lg:text-5xl font-bold leading-[1.05] tracking-tight text-fg">
+					<h1 class="font-display text-3xl sm:text-4xl lg:text-5xl font-bold leading-[1.05] tracking-tight text-fg">
 						mega-cap news <span class="text-amber">→</span><br />
 						second-order <span class="italic text-amber">beneficiaries</span>
 					</h1>
 				</div>
 				<div class="text-right text-[11px] uppercase tracking-widest text-fg-muted">
 					<div>latest brief</div>
-					<div class="font-display font-bold text-3xl text-amber mt-1">{data.latestBrief.date}</div>
+					<div class="font-display font-bold text-2xl sm:text-3xl text-amber mt-1">{data.latestBrief.date}</div>
 				</div>
 			</div>
 
@@ -158,26 +158,25 @@
 					{@const ct = confidenceTone(c.gemini_confidence)}
 					<a
 						href="/brief/{data.latestBrief.date}#{c.ticker}"
-						class="grid grid-cols-12 items-center gap-3 px-4 py-3 hover:bg-bg-2 group transition-colors"
+						class="flex items-center gap-3 px-3 sm:px-4 py-3 hover:bg-bg-2 group transition-colors"
 					>
-						<div class="col-span-1 text-right font-display font-bold text-2xl text-amber">
+						<div class="shrink-0 w-8 text-right font-display font-bold text-xl sm:text-2xl text-amber">
 							{String(c.rank_in_day ?? i + 1).padStart(2, '0')}
 						</div>
-						<div class="col-span-3">
-							<div class="font-bold text-base text-fg group-hover:text-amber transition-colors">
-								{c.ticker}
+						<div class="min-w-0 flex-1">
+							<div class="flex items-baseline gap-2 flex-wrap">
+								<span class="font-bold text-base text-fg group-hover:text-amber transition-colors">
+									{c.ticker}
+								</span>
+								<span class="text-[11px] text-cyan lowercase truncate">#{c.theme}</span>
 							</div>
 							<div class="text-[10px] text-fg-muted truncate uppercase tracking-wider">{c.company_name}</div>
 						</div>
-						<div class="col-span-2 text-[11px]">
-							<div class="text-fg-muted uppercase tracking-widest">theme</div>
-							<div class="text-cyan lowercase truncate">{c.theme}</div>
-						</div>
-						<div class="col-span-2 text-[11px]">
+						<div class="hidden sm:block shrink-0 text-[11px] w-16">
 							<div class="text-fg-muted uppercase tracking-widest">mcap</div>
 							<div class="text-fg">{fmtUsdCompact(c.market_cap)}</div>
 						</div>
-						<div class="col-span-1 text-[11px]">
+						<div class="shrink-0 text-[11px] w-10 text-right">
 							<div class="text-fg-muted uppercase tracking-widest">conf</div>
 							<div
 								class:text-green={ct === 'green'}
@@ -188,13 +187,13 @@
 								{Math.round(c.gemini_confidence * 5)}/5
 							</div>
 						</div>
-						<div class="col-span-2 text-right text-[11px]">
-							<div class="text-fg-muted uppercase tracking-widest">52w high</div>
+						<div class="hidden md:block shrink-0 text-right text-[11px] w-16">
+							<div class="text-fg-muted uppercase tracking-widest">52w hi</div>
 							<div class={c.technical_pct_off_52w_high && c.technical_pct_off_52w_high < -20 ? 'text-red' : 'text-fg-dim'}>
 								{fmtPct(c.technical_pct_off_52w_high)}
 							</div>
 						</div>
-						<div class="col-span-1 flex justify-end gap-1">
+						<div class="shrink-0 flex justify-end gap-1 max-w-[60px] flex-wrap">
 							{#each c.gates_passed as _g}
 								<span class="dot bg-green" title="passed"></span>
 							{/each}
@@ -250,22 +249,22 @@
 				<table class="w-full text-[11px]">
 					<thead>
 						<tr class="text-fg-muted uppercase tracking-widest text-left">
-							<th class="px-4 py-2 border-b border-grid">gate</th>
+							<th class="px-3 sm:px-4 py-2 border-b border-grid">gate</th>
 							<th class="px-2 py-2 border-b border-grid text-right">pass</th>
 							<th class="px-2 py-2 border-b border-grid text-right">fail</th>
-							<th class="px-2 py-2 border-b border-grid text-right">unknown</th>
-							<th class="px-4 py-2 border-b border-grid w-32">distribution</th>
+							<th class="px-2 py-2 border-b border-grid text-right">unk</th>
+							<th class="hidden sm:table-cell px-4 py-2 border-b border-grid w-32">distribution</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each gateStats as [gate, s]}
 							{@const total = s.passed + s.failed + s.unknown}
 							<tr class="hover:bg-bg-2">
-								<td class="px-4 py-2 text-amber uppercase font-bold">{gate}</td>
+								<td class="px-3 sm:px-4 py-2 text-amber uppercase font-bold">{gate}</td>
 								<td class="px-2 py-2 text-right text-green">{s.passed}</td>
 								<td class="px-2 py-2 text-right text-red">{s.failed}</td>
 								<td class="px-2 py-2 text-right text-fg-muted">{s.unknown}</td>
-								<td class="px-4 py-2">
+								<td class="hidden sm:table-cell px-4 py-2">
 									<div class="h-1.5 flex bg-bg-2">
 										<div class="bg-green" style="width: {(s.passed / total) * 100}%"></div>
 										<div class="bg-red" style="width: {(s.failed / total) * 100}%"></div>

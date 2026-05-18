@@ -43,6 +43,11 @@ body {
 	font-family: var(--font-mono);
 	font-feature-settings: 'ss01', 'ss02', 'cv11', 'zero';
 	-webkit-font-smoothing: antialiased;
+	/* Prevent absolute-positioned hover tooltips from triggering page-wide
+	   horizontal scroll on narrow viewports. Tooltips that extend past the
+	   viewport edge are visually clipped; they remain readable on hover for
+	   any element whose tooltip fits within ~340px of either side. */
+	overflow-x: clip;
 }
 
 ::selection {

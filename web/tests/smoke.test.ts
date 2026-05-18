@@ -203,6 +203,27 @@ test.describe('smoke — brief detail interactions', () => {
 	});
 });
 
+test.describe('smoke — mobile (390 + 360 viewports)', () => {
+	// Catches: layout/header/nav/footer that forces a wider viewport than the
+	// device; CandidateCard header strip that can't collapse; tooltips whose
+	// absolute layout pushes scrollWidth past the viewport edge.
+	const PHONES = [
+		{ name: 'iphone-13', width: 390, height: 844 },
+		{ name: 'small-android', width: 360, height: 800 }
+	];
+	for (const { name, width, height } of PHONES) {
+		for (const path of ['/', '/briefs', '/about', `/brief/${latestDay.date}`]) {
+			test(`${name} (${width}x${height}) — no horizontal scroll on ${path}`, async ({ page }) => {
+				await page.setViewportSize({ width, height });
+				const response = await page.goto(path);
+				expect(response?.status()).toBe(200);
+				const scrollW = await page.evaluate(() => document.documentElement.scrollWidth);
+				expect(scrollW, `${path} scrollWidth must be ≤ viewport ${width}`).toBeLessThanOrEqual(width);
+			});
+		}
+	}
+});
+
 test.describe('smoke — index integrity', () => {
 	test('days.json index lists all per-day brief files', async ({ request }) => {
 		const indexRes = await request.get('/data/days.json');

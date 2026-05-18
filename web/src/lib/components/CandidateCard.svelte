@@ -24,62 +24,67 @@
 	class="border border-grid bg-bg-1 fade-up isolate"
 	style="animation-delay: {index * 0.04}s"
 >
-	<!-- Header strip -->
-	<header class="grid grid-cols-12 gap-3 items-center px-5 py-4 border-b border-grid bg-gradient-to-r from-bg-2 to-bg-1">
-		<div class="col-span-1 text-right">
-			<div class="font-display font-bold text-4xl text-amber leading-none">
-				{String(rank).padStart(2, '0')}
+	<!-- Header strip — single row on lg, ticker+rank then 4 metric tiles on mobile -->
+	<header class="px-4 sm:px-5 py-4 border-b border-grid bg-gradient-to-r from-bg-2 to-bg-1">
+		<div class="flex items-start gap-3 sm:gap-4">
+			<div class="text-right shrink-0">
+				<div class="font-display font-bold text-3xl sm:text-4xl text-amber leading-none">
+					{String(rank).padStart(2, '0')}
+				</div>
+				<div class="text-[9px] uppercase tracking-widest text-fg-muted mt-1">/{cohort}</div>
 			</div>
-			<div class="text-[9px] uppercase tracking-widest text-fg-muted mt-1">/{cohort}</div>
-		</div>
-		<div class="col-span-4">
-			<div class="flex items-baseline gap-3">
-				<h3 class="font-display font-bold text-2xl text-fg">{c.ticker}</h3>
-				{#if c.deep_drawdown_reversal}
-					<span class="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber/20 text-amber text-[9px] uppercase tracking-widest border border-amber/40">
-						<Sparkle class="size-2.5" /> reversal
-					</span>
-				{/if}
+			<div class="min-w-0 flex-1">
+				<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+					<h3 class="font-display font-bold text-xl sm:text-2xl text-fg">{c.ticker}</h3>
+					{#if c.deep_drawdown_reversal}
+						<span class="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber/20 text-amber text-[9px] uppercase tracking-widest border border-amber/40">
+							<Sparkle class="size-2.5" /> reversal
+						</span>
+					{/if}
+				</div>
+				<div class="text-fg-dim text-xs mt-0.5 truncate">{c.company_name}</div>
+				<div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-[10px] uppercase tracking-widest text-fg-muted">
+					<span class="text-cyan lowercase">#{c.theme}</span>
+					{#if c.industry_name}
+						<span class="hidden sm:inline">·</span>
+						<span class="truncate">{c.industry_name}</span>
+					{/if}
+					{#if c.sector_name}
+						<span class="hidden sm:inline">({c.sector_name})</span>
+					{/if}
+				</div>
 			</div>
-			<div class="text-fg-dim text-xs mt-0.5 truncate">{c.company_name}</div>
-			<div class="flex items-center gap-2 mt-1 text-[10px] uppercase tracking-widest text-fg-muted">
-				<span class="text-cyan lowercase">#{c.theme}</span>
-				{#if c.industry_name}
-					<span>·</span>
-					<span>{c.industry_name}</span>
-				{/if}
-				{#if c.sector_name}
-					<span>({c.sector_name})</span>
-				{/if}
+		</div>
+
+		<div class="grid grid-cols-4 gap-3 mt-4 sm:mt-3">
+			<div class="text-[10px] uppercase tracking-widest min-w-0">
+				<div class="text-fg-muted">mcap</div>
+				<div class="text-fg text-sm sm:text-lg font-bold normal-case truncate">{fmtUsdCompact(c.market_cap)}</div>
 			</div>
-		</div>
-		<div class="col-span-2 text-[10px] uppercase tracking-widest">
-			<div class="text-fg-muted">mcap</div>
-			<div class="text-fg text-lg font-bold normal-case">{fmtUsdCompact(c.market_cap)}</div>
-		</div>
-		<div class="col-span-2 text-[10px] uppercase tracking-widest">
-			<div class="text-fg-muted">layer4 score</div>
-			<div class="text-amber text-lg font-bold normal-case">{c.layer4_weighted_score ?? '—'}</div>
-		</div>
-		<div class="col-span-1 text-[10px] uppercase tracking-widest">
-			<div class="text-fg-muted">conf</div>
-			<div
-				class="text-lg font-bold normal-case"
-				class:text-green={confTone === 'green'}
-				class:text-amber={confTone === 'amber'}
-				class:text-cyan={confTone === 'cyan'}
-				class:text-fg-muted={confTone === 'muted'}
-			>{conf5}/5</div>
-		</div>
-		<div class="col-span-2 text-right text-[10px] uppercase tracking-widest">
-			<div class="text-fg-muted">catalyst</div>
-			<div class="text-fg text-lg font-bold normal-case">{fmtNum(c.catalyst_strength, 2)}</div>
-			<div class="text-fg-muted text-[9px] mt-0.5">{c.catalyst_event_type ?? '—'}</div>
+			<div class="text-[10px] uppercase tracking-widest min-w-0">
+				<div class="text-fg-muted">layer4</div>
+				<div class="text-amber text-sm sm:text-lg font-bold normal-case truncate">{c.layer4_weighted_score ?? '—'}</div>
+			</div>
+			<div class="text-[10px] uppercase tracking-widest min-w-0">
+				<div class="text-fg-muted">conf</div>
+				<div
+					class="text-sm sm:text-lg font-bold normal-case truncate"
+					class:text-green={confTone === 'green'}
+					class:text-amber={confTone === 'amber'}
+					class:text-cyan={confTone === 'cyan'}
+					class:text-fg-muted={confTone === 'muted'}
+				>{conf5}/5</div>
+			</div>
+			<div class="text-[10px] uppercase tracking-widest min-w-0">
+				<div class="text-fg-muted">catalyst</div>
+				<div class="text-fg text-sm sm:text-lg font-bold normal-case truncate">{fmtNum(c.catalyst_strength, 2)}</div>
+				<div class="text-fg-muted text-[9px] mt-0.5 truncate">{c.catalyst_event_type ?? '—'}</div>
+			</div>
 		</div>
 	</header>
 
 	<!-- TLDR + verification -->
-	<div class="grid grid-cols-12 gap-5 px-5 py-4">
+	<div class="grid grid-cols-12 gap-4 lg:gap-5 px-4 sm:px-5 py-4">
 		<div class="col-span-12 lg:col-span-8">
 			{#if c.brief_tldr}
 				<p class="text-fg text-sm leading-relaxed">{c.brief_tldr}</p>
@@ -128,7 +133,7 @@
 	</div>
 
 	<!-- Signal grid -->
-	<div class="grid grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-4 px-5 py-4 border-t border-grid bg-bg/30">
+	<div class="grid grid-cols-2 lg:grid-cols-4 gap-x-4 sm:gap-x-5 gap-y-4 px-4 sm:px-5 py-4 border-t border-grid bg-bg/30">
 		<SignalBar
 			label="insider 90d (sector %ile)"
 			value={c.insider_score_sector_percentile}
@@ -189,7 +194,7 @@
 
 	<!-- Technicals + fundamentals table -->
 	<div class="grid grid-cols-12 gap-0 border-t border-grid text-[11px]">
-		<div class="col-span-12 lg:col-span-6 px-5 py-4 lg:border-r lg:border-grid">
+		<div class="col-span-12 lg:col-span-6 px-4 sm:px-5 py-4 lg:border-r lg:border-grid">
 			<div class="text-[10px] uppercase tracking-widest text-fg-muted mb-2">fundamentals</div>
 			<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5">
 				<dt class="text-fg-muted uppercase tracking-widest">pe</dt><dd class="text-fg text-right">{fmtNum(c.valuation_pe, 1)}</dd>
@@ -211,7 +216,7 @@
 				<dt class="text-fg-muted uppercase tracking-widest">next earnings</dt><dd class="text-fg text-right">{fmtDate(c.next_earnings_date)}</dd>
 			</dl>
 		</div>
-		<div class="col-span-12 lg:col-span-6 px-5 py-4 border-t lg:border-t-0 border-grid">
+		<div class="col-span-12 lg:col-span-6 px-4 sm:px-5 py-4 border-t lg:border-t-0 border-grid">
 			<div class="text-[10px] uppercase tracking-widest text-fg-muted mb-2">technicals · trade setup</div>
 			<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5">
 				<dt class="text-fg-muted uppercase tracking-widest">ma50 dist</dt><dd class="text-fg text-right">{fmtPct(c.technical_ma50_distance_pct)}</dd>
@@ -228,15 +233,15 @@
 
 	<!-- Supply chain + bear + exit -->
 	<div class="grid grid-cols-12 gap-0 border-t border-grid">
-		<div class="col-span-12 lg:col-span-4 px-5 py-4 lg:border-r lg:border-grid">
+		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 lg:border-r lg:border-grid">
 			<div class="text-[10px] uppercase tracking-widest text-cyan mb-2">supply.chain</div>
 			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_supply_chain_md ?? '—'}</p>
 		</div>
-		<div class="col-span-12 lg:col-span-4 px-5 py-4 lg:border-r lg:border-grid border-t lg:border-t-0">
+		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 lg:border-r lg:border-grid border-t lg:border-t-0">
 			<div class="text-[10px] uppercase tracking-widest text-red mb-2">bear.case</div>
 			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_bear_summary_md ?? '—'}</p>
 		</div>
-		<div class="col-span-12 lg:col-span-4 px-5 py-4 border-t lg:border-t-0">
+		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 border-t lg:border-t-0">
 			<div class="text-[10px] uppercase tracking-widest text-amber mb-2">catalyst.failure.exit</div>
 			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_catalyst_failure_exit ?? '—'}</p>
 		</div>
@@ -244,12 +249,12 @@
 
 	<!-- Expandable full markdown -->
 	<details class="border-t border-grid group" bind:open={expanded}>
-		<summary class="px-5 py-3 text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber cursor-pointer flex items-center gap-2 select-none">
+		<summary class="px-4 sm:px-5 py-3 text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber cursor-pointer flex items-center gap-2 select-none">
 			<ArrowUpRight class="size-3 transition-transform group-open:rotate-90" />
 			{expanded ? 'collapse' : 'expand'} full brief markdown
-			<span class="ml-auto text-fg-muted">{c.brief_model_used ?? '—'}</span>
+			<span class="ml-auto text-fg-muted truncate">{c.brief_model_used ?? '—'}</span>
 		</summary>
-		<div class="px-5 py-4 bg-bg-2 border-t border-grid">
+		<div class="px-4 sm:px-5 py-4 bg-bg-2 border-t border-grid">
 			<pre class="prose-terminal whitespace-pre-wrap break-words text-[11px] leading-relaxed">{c.brief_full_md ?? ''}</pre>
 		</div>
 	</details>
