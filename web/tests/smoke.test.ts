@@ -142,18 +142,24 @@ test.describe('smoke — brief detail interactions', () => {
 
 		await page.goto(`/brief/${latestDay.date}`);
 
-		// Click each theme filter chip and then back to "all".
-		const chips = page.locator('button.lowercase');
+		// Click each theme filter chip; assert the candidate list narrows or
+		// the empty-state placeholder appears — guarantees Svelte's $derived
+		// filtered-list reactivity ran before we move on.
+		const chips = page.getByRole('button', { name: /^#/ });
 		const count = await chips.count();
 		for (let i = 0; i < count; i++) {
 			await chips.nth(i).click();
+			await expect(page.locator('article[id], .text-center')).not.toHaveCount(0);
 		}
 		await page.getByRole('button', { name: /^all \(/ }).click();
+		await expect(page.locator('article[id]')).toHaveCount(latestDay.n_candidates);
 
-		// Toggle verified-only.
+		// Toggle verified-only — same reactivity guarantee.
 		const cb = page.locator('input[type="checkbox"]').first();
 		await cb.check();
+		await expect(page.locator('article[id], .text-center')).not.toHaveCount(0);
 		await cb.uncheck();
+		await expect(page.locator('article[id]')).toHaveCount(latestDay.n_candidates);
 
 		expect(consoleErrors).toEqual([]);
 		expect(pageErrors).toEqual([]);
@@ -161,10 +167,15 @@ test.describe('smoke — brief detail interactions', () => {
 
 	test('gate-pill tooltip renders on hover (CSS regression guard)', async ({ page }) => {
 		await page.goto(`/brief/${latestDay.date}`);
-		const firstPill = page.locator('article[id] span.cursor-help').first();
+		// Inner pill carries the status symbol. Hover its wrapper (.group) to
+		// trigger group-hover:opacity-100 on the sibling tooltip.
+		const firstPill = page
+			.locator('article[id] .group:has(.cursor-help)')
+			.first();
 		await firstPill.hover();
-		// Tooltip is the sibling role=tooltip inside the same .gate-wrap.
 		const tooltip = page.locator('article[id] [role="tooltip"]').first();
+		// toBeVisible() enforces opacity > 0; this catches a regression of the
+		// group-hover:opacity-100 transition as well as DOM presence.
 		await expect(tooltip).toBeVisible();
 	});
 
