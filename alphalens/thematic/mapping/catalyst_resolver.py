@@ -74,8 +74,15 @@ def _url_matches_blocklist(url: str, patterns: tuple[re.Pattern, ...]) -> bool:
     return any(p.search(url) for p in patterns)
 
 
+@lru_cache(maxsize=8)
 def _load_window(parquet_dir: Path, asof: dt.date, lookback_days: int) -> pd.DataFrame:
-    """Concat all parquets in ``[asof - lookback, asof]`` from ``parquet_dir``."""
+    """Concat all parquets in ``[asof - lookback, asof]`` from ``parquet_dir``.
+
+    LRU-cached on (dir, asof, lookback) — scorer.py calls find_trigger_event
+    once per unique theme in a scoring batch, and each call reads the same
+    7-day events + news windows. Cache eliminates the redundant disk reads.
+    Cache size 8 = 2 dirs (events + news) × 4 distinct asofs in flight.
+    """
     if not parquet_dir.exists():
         return pd.DataFrame()
     lo = asof - dt.timedelta(days=lookback_days)
@@ -170,10 +177,21 @@ def find_trigger_event(
     title = str(top.get("title", "") or "")
     if len(title) > _TITLE_MAX_LEN:
         title = textwrap.shorten(title, width=_TITLE_MAX_LEN, placeholder="…")
+    soi = top.get("second_order_implications")
+    if soi is None:
+        soi_list: list[str] = []
+    else:
+        try:
+            soi_list = [str(s) for s in list(soi)]
+        except TypeError:
+            soi_list = []
     return {
         "url": str(top.get("url", "") or ""),
         "title": title,
         "published_at": top[time_col].date().isoformat(),
+        "event_type": str(top.get("event_type", "") or "") or None,
+        "confidence": float(top["confidence"]) if pd.notna(top.get("confidence")) else None,
+        "second_order_implications": soi_list,
     }
 
 

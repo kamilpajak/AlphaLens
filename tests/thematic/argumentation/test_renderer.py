@@ -195,6 +195,9 @@ class TestRenderMarkdownLayout(unittest.TestCase):
         self.assertIn("| Magic Formula |", md)
         self.assertIn("| Mults & ROE |", md)
         self.assertIn("| Valuation (sector pctile) |", md)
+        # New catalyst-strength + reversal rows (PR #146)
+        self.assertIn("| Catalyst strength |", md)
+        self.assertIn("| Reversal setup |", md)
         self.assertIn("| Technicals |", md)
         self.assertIn("| Verified gates |", md)
 
@@ -298,6 +301,47 @@ class TestRenderMagicFormulaCell(unittest.TestCase):
         md = renderer.render_markdown(self._row(valuation_composite_sector_percentile=72.0), _BRIEF)
         self.assertIn("| Valuation (sector pctile) |", md)
         self.assertIn("pctile 72", md)
+
+
+class TestRenderCatalystStrengthCell(unittest.TestCase):
+    """Catalyst-strength row reports value + bucket label + event type."""
+
+    def test_strong_strength_renders_strong_label(self):
+        row = {**_ROW, "catalyst_strength": 0.78, "catalyst_event_type": "product_launch"}
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("0.78 strong (product_launch)", md)
+
+    def test_moderate_strength_renders_moderate_label(self):
+        row = {**_ROW, "catalyst_strength": 0.45, "catalyst_event_type": "partnership"}
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("0.45 moderate (partnership)", md)
+
+    def test_weak_strength_renders_weak_label(self):
+        row = {**_ROW, "catalyst_strength": 0.10, "catalyst_event_type": "other"}
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("0.10 weak (other)", md)
+
+    def test_missing_strength_renders_na(self):
+        row = {**_ROW, "catalyst_strength": None, "catalyst_event_type": None}
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("| Catalyst strength | n/a |", md)
+
+
+class TestRenderReversalCell(unittest.TestCase):
+    def test_renders_yes_when_true(self):
+        row = {**_ROW, "deep_drawdown_reversal": True}
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("| Reversal setup | yes |", md)
+
+    def test_renders_no_when_false(self):
+        row = {**_ROW, "deep_drawdown_reversal": False}
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("| Reversal setup | no |", md)
+
+    def test_renders_na_when_missing(self):
+        row = {**_ROW, "deep_drawdown_reversal": None}
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("| Reversal setup | n/a |", md)
 
 
 class TestRenderDayBundle(unittest.TestCase):
