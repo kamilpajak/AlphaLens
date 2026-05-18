@@ -147,6 +147,51 @@ def _format_insider_cell(score: Any, pctile: Any) -> str:
     return f"{score_str} (pctile {_fmt_pctile(pctile)})"
 
 
+def _format_magic_formula_cell(
+    rank: Any, cohort_n: Any, health_pass: Any, fcff_yield_pct: Any, roic_pct: Any
+) -> str:
+    """Render the Magic Formula table cell.
+
+    Three cases:
+    - health_pass is False → ``health-gate fail`` (EBIT≤0 or net_debt/EBIT≥5)
+    - rank is NaN AND health passed → ``rank n/a (cohort n=N)`` (small-cohort
+      guard: fewer than 3 survivors means rank-sum carries no information)
+    - rank is integer → ``rank R/N · FCFF X.X% · ROIC Y.Y%``
+    """
+    # Short-circuit on pd.isna first — bool(pd.NA) raises TypeError, so
+    # checking NA-ness before truthiness avoids exception-driven control flow.
+    try:
+        passed = not pd.isna(health_pass) and bool(health_pass)
+    except (TypeError, ValueError):
+        passed = False
+    if not passed:
+        return "health-gate fail"
+    if pd.isna(rank):
+        try:
+            n = int(cohort_n) if not pd.isna(cohort_n) else 0
+        except (TypeError, ValueError):
+            n = 0
+        return f"rank n/a (cohort n={n})"
+    try:
+        rank_int = int(rank)
+        cohort_int = int(cohort_n)
+    except (TypeError, ValueError):
+        return "n/a"
+    fcff_str = _fmt_num(fcff_yield_pct, ".1f")
+    roic_str = _fmt_num(roic_pct, ".1f")
+    return f"rank {rank_int}/{cohort_int} · FCFF {fcff_str}% · ROIC {roic_str}%"
+
+
+def _format_magic_formula_detail(pe: Any, ev_ebitda: Any, ps: Any, roe_pct: Any) -> str:
+    """Render the secondary detail row exposing the underlying mults."""
+    return (
+        f"PE {_fmt_num(pe, '.1f')}"
+        f" · EV/EBITDA {_fmt_num(ev_ebitda, '.1f')}"
+        f" · PS {_fmt_num(ps, '.1f')}"
+        f" · ROE {_fmt_num(roe_pct, '.1f')}%"
+    )
+
+
 def _prose_or_placeholder(value: Any) -> str:
     """Return non-empty string value as-is; otherwise return the placeholder.
 
@@ -221,7 +266,26 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
             f" (pctile {_fmt_pctile(r.get('fcff_yield_sector_percentile'))})",
         ),
         (
-            "Valuation composite",
+            "Magic Formula",
+            _format_magic_formula_cell(
+                r.get("magic_formula_rank"),
+                r.get("magic_formula_cohort_n"),
+                r.get("magic_formula_health_pass"),
+                r.get("fcff_yield_pct"),
+                r.get("roic_pct"),
+            ),
+        ),
+        (
+            "Mults & ROE",
+            _format_magic_formula_detail(
+                r.get("valuation_pe"),
+                r.get("valuation_ev_ebitda"),
+                r.get("valuation_ps"),
+                r.get("roe_pct"),
+            ),
+        ),
+        (
+            "Valuation (sector pctile)",
             f"pctile {_fmt_pctile(r.get('valuation_composite_sector_percentile'))}",
         ),
     ]

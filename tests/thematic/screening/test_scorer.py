@@ -41,7 +41,7 @@ class TestWeightedScore(unittest.TestCase):
             scorer.compose_weighted_score(
                 insider_positive=True,
                 fcff_positive=True,
-                valuation_positive=True,
+                magic_formula_top_quartile=True,
                 technicals_positive=True,
             ),
             5,
@@ -52,7 +52,7 @@ class TestWeightedScore(unittest.TestCase):
             scorer.compose_weighted_score(
                 insider_positive=False,
                 fcff_positive=False,
-                valuation_positive=False,
+                magic_formula_top_quartile=False,
                 technicals_positive=False,
             ),
             1,
@@ -64,7 +64,7 @@ class TestWeightedScore(unittest.TestCase):
             scorer.compose_weighted_score(
                 insider_positive=True,
                 fcff_positive=False,
-                valuation_positive=False,
+                magic_formula_top_quartile=False,
                 technicals_positive=False,
             ),
             2,
@@ -76,7 +76,7 @@ class TestWeightedScore(unittest.TestCase):
             scorer.compose_weighted_score(
                 insider_positive=False,
                 fcff_positive=True,
-                valuation_positive=True,
+                magic_formula_top_quartile=True,
                 technicals_positive=True,
             ),
             3,
@@ -180,9 +180,40 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
                     },
                 }[ticker],
             ),
-            # Stub out the feature_fetcher / OHLCV loader factories so the
-            # orchestrator builds something the patched signal scorers receive.
-            patch.object(scorer, "_build_feature_fetcher", return_value=lambda t, asof: {}),
+            # Stub feature_fetcher with realistic per-ticker SimFin shapes so
+            # Magic Formula compute helpers can derive ROIC/ROE/EV-EBITDA.
+            patch.object(
+                scorer,
+                "_build_feature_fetcher",
+                return_value=lambda t, asof: {
+                    "QUBT": {
+                        "operating_income_ttm": -50_000_000.0,  # health-gate FAIL
+                        "interest_expense_ttm": 1_000_000.0,
+                        "net_income_ttm": -60_000_000.0,
+                        "revenue_ttm": 5_000_000.0,
+                        "da_ttm": 5_000_000.0,
+                        "long_term_debt": 100_000_000.0,
+                        "short_term_debt": 50_000_000.0,
+                        "cash_and_equivalents": 200_000_000.0,
+                        "total_equity": 400_000_000.0,
+                        "price": 18.0,
+                        "shares_outstanding": 100_000_000.0,
+                    },
+                    "IONQ": {
+                        "operating_income_ttm": 80_000_000.0,
+                        "interest_expense_ttm": 5_000_000.0,
+                        "net_income_ttm": 60_000_000.0,
+                        "revenue_ttm": 800_000_000.0,
+                        "da_ttm": 20_000_000.0,
+                        "long_term_debt": 100_000_000.0,
+                        "short_term_debt": 50_000_000.0,
+                        "cash_and_equivalents": 300_000_000.0,
+                        "total_equity": 600_000_000.0,
+                        "price": 22.0,
+                        "shares_outstanding": 200_000_000.0,
+                    },
+                }[t],
+            ),
             patch.object(
                 scorer, "_build_ohlcv_loader", return_value=lambda t, asof: pd.DataFrame()
             ),
@@ -208,8 +239,14 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
             "valuation_pe",
             "valuation_ps",
             "valuation_ev_rev",
+            "valuation_ev_ebitda",
             "valuation_fcf_margin",
             "valuation_composite_sector_percentile",
+            "roic_pct",
+            "roe_pct",
+            "magic_formula_health_pass",
+            "magic_formula_rank",
+            "magic_formula_cohort_n",
             "technical_rsi",
             "technical_ma50_distance_pct",
             "technical_atr_pct",
@@ -218,6 +255,20 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
             "layer4_weighted_score",
         ):
             self.assertIn(col, out.columns, f"missing column {col}")
+
+    def test_magic_formula_columns_reflect_health_and_rank(self):
+        candidates = _candidates_df(["QUBT", "IONQ"])
+        out = scorer.score_candidates(candidates, asof=dt.date(2026, 4, 14))
+        qubt = out[out["ticker"] == "QUBT"].iloc[0]
+        ionq = out[out["ticker"] == "IONQ"].iloc[0]
+        # QUBT: EBIT negative → health gate FAIL.
+        self.assertFalse(bool(qubt["magic_formula_health_pass"]))
+        # IONQ: EBIT positive, modest leverage → health gate PASS.
+        self.assertTrue(bool(ionq["magic_formula_health_pass"]))
+        # Cohort n=1 survivor → small-cohort guard → rank=NaN for all rows.
+        self.assertTrue(pd.isna(qubt["magic_formula_rank"]))
+        self.assertTrue(pd.isna(ionq["magic_formula_rank"]))
+        self.assertEqual(int(ionq["magic_formula_cohort_n"]), 1)
 
     def test_preserves_phase_c_columns(self):
         candidates = _candidates_df(["QUBT", "IONQ"])
@@ -231,13 +282,13 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
         out = scorer.score_candidates(candidates, asof=dt.date(2026, 4, 14))
         qubt = out[out["ticker"] == "QUBT"].iloc[0]
         ionq = out[out["ticker"] == "IONQ"].iloc[0]
-        # QUBT: insider neg, fcff sub-median, valuation sub-median, technicals
-        # ok (RSI 65 in band, MA50 +8% within ±15%). Only technicals positive
-        # -> weighted = clip(0+0+0+1, 1, 5) = 1.
+        # QUBT: insider neg, fcff sub-median, MF rank NaN (health gate FAIL),
+        # technicals ok. Only technicals positive -> clip(0+0+0+1, 1, 5) = 1.
         self.assertEqual(int(qubt["layer4_weighted_score"]), 1)
-        # IONQ: insider pos (2), fcff pos (1), valuation pos (1), technicals
-        # not positive (RSI 80 too high). -> 2+1+1+0 = 4.
-        self.assertEqual(int(ionq["layer4_weighted_score"]), 4)
+        # IONQ: insider pos (2), fcff pos (1), MF top-quartile False (cohort
+        # n=1 → rank NaN → quartile False), technicals not positive (RSI 80
+        # too high). -> 2+1+0+0 = 3.
+        self.assertEqual(int(ionq["layer4_weighted_score"]), 3)
 
 
 class TestScoreCandidatesIsResilientToSignalExceptions(unittest.TestCase):

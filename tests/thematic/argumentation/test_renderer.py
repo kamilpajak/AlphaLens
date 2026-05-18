@@ -175,7 +175,9 @@ class TestRenderMarkdownLayout(unittest.TestCase):
         positions = [md.index(m) for m in section_markers]
         self.assertEqual(positions, sorted(positions))
         # Between each consecutive pair there must be a blank line (\n\n).
-        for prev, nxt in zip(section_markers, section_markers[1:]):
+        import itertools
+
+        for prev, nxt in itertools.pairwise(section_markers):
             chunk = md[md.index(prev) : md.index(nxt)]
             self.assertIn("\n\n", chunk, f"missing blank line between {prev} and {nxt}")
 
@@ -187,7 +189,12 @@ class TestRenderMarkdownLayout(unittest.TestCase):
         # Each row keyed by a recognizable label.
         self.assertIn("| Insider 90d opportunistic |", md)
         self.assertIn("| FCFF yield |", md)
-        self.assertIn("| Valuation composite |", md)
+        # Magic Formula is the new primary valuation row; the old "Valuation
+        # composite" sector-percentile line stays as a secondary "(sector pctile)"
+        # transparency row.
+        self.assertIn("| Magic Formula |", md)
+        self.assertIn("| Mults & ROE |", md)
+        self.assertIn("| Valuation (sector pctile) |", md)
         self.assertIn("| Technicals |", md)
         self.assertIn("| Verified gates |", md)
 
@@ -239,6 +246,58 @@ class TestRenderInsiderValueDisplay(unittest.TestCase):
         md = renderer.render_markdown(row, _BRIEF)
         # n/a value with n/a pctile — no Form-4 data at all.
         self.assertIn("n/a (pctile n/a)", md)
+
+
+class TestRenderMagicFormulaCell(unittest.TestCase):
+    """Magic Formula row dispatches on (health_pass, rank):
+    health_pass=False → "health-gate fail"; rank=NaN with health passed
+    → "rank n/a (cohort n=N)"; both present → "rank R/N · FCFF X% · ROIC Y%".
+    """
+
+    def _row(self, **overrides):
+        base = {
+            **_ROW,
+            "magic_formula_rank": 2,
+            "magic_formula_cohort_n": 8,
+            "magic_formula_health_pass": True,
+            "fcff_yield_pct": 4.5,
+            "roic_pct": 18.0,
+            "valuation_pe": 12.0,
+            "valuation_ev_ebitda": 7.5,
+            "valuation_ps": 1.8,
+            "roe_pct": 22.0,
+        }
+        base.update(overrides)
+        return base
+
+    def test_renders_rank_with_fcff_and_roic_when_present(self):
+        md = renderer.render_markdown(self._row(), _BRIEF)
+        self.assertIn("rank 2/8 · FCFF 4.5% · ROIC 18.0%", md)
+
+    def test_renders_health_gate_fail_when_gate_failed(self):
+        md = renderer.render_markdown(
+            self._row(magic_formula_health_pass=False, magic_formula_rank=None),
+            _BRIEF,
+        )
+        self.assertIn("health-gate fail", md)
+        # Must not print a misleading "rank n/a" line in the health-fail case.
+        self.assertNotIn("rank n/a", md)
+
+    def test_renders_small_cohort_rank_na_with_cohort_size(self):
+        md = renderer.render_markdown(
+            self._row(magic_formula_rank=None, magic_formula_cohort_n=2),
+            _BRIEF,
+        )
+        self.assertIn("rank n/a (cohort n=2)", md)
+
+    def test_renders_mults_detail_row(self):
+        md = renderer.render_markdown(self._row(), _BRIEF)
+        self.assertIn("PE 12.0 · EV/EBITDA 7.5 · PS 1.8 · ROE 22.0%", md)
+
+    def test_keeps_sector_percentile_secondary_line(self):
+        md = renderer.render_markdown(self._row(valuation_composite_sector_percentile=72.0), _BRIEF)
+        self.assertIn("| Valuation (sector pctile) |", md)
+        self.assertIn("pctile 72", md)
 
 
 class TestRenderDayBundle(unittest.TestCase):
