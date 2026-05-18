@@ -1,0 +1,26 @@
+node_modules
+
+# Local screenshot artifacts (Playwright captures saved to web/ root during dev)
+/*.png
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*

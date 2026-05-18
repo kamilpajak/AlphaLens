@@ -1,0 +1,184 @@
+@import 'tailwindcss';
+@plugin '@tailwindcss/typography';
+
+/* Tailwind v4 module-graph detection for SvelteKit components is fragile —
+   explicit @source globs are the canonical fix per upstream guidance. */
+@source "./lib/**/*.svelte";
+@source "./routes/**/*.svelte";
+@source "./**/*.{ts,js,html,svelte}";
+
+@theme {
+	/* Bloomberg-terminal palette */
+	--color-bg: #06070a;
+	--color-bg-1: #0b0d12;
+	--color-bg-2: #11141b;
+	--color-bg-3: #181c25;
+	--color-grid: #1f2430;
+	--color-grid-strong: #2b3142;
+
+	--color-fg: #e4e7ee;
+	--color-fg-dim: #9097a8;
+	--color-fg-muted: #5d6478;
+
+	--color-amber: #ffb000;
+	--color-amber-dim: #c98a00;
+
+	--color-cyan: #41d8ff;
+	--color-cyan-dim: #2c95b3;
+	--color-green: #6dffb1;
+	--color-green-dim: #38b073;
+	--color-red: #ff5566;
+	--color-red-dim: #b53e4b;
+	--color-magenta: #d066ff;
+	--color-violet: #8d6bff;
+
+	--font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+	--font-display: 'Space Grotesk', system-ui, sans-serif;
+}
+
+html,
+body {
+	background: var(--color-bg);
+	color: var(--color-fg);
+	font-family: var(--font-mono);
+	font-feature-settings: 'ss01', 'ss02', 'cv11', 'zero';
+	-webkit-font-smoothing: antialiased;
+}
+
+::selection {
+	background: var(--color-amber);
+	color: #000;
+}
+
+.scanlines::before {
+	content: '';
+	position: fixed;
+	inset: 0;
+	pointer-events: none;
+	background-image: repeating-linear-gradient(
+		to bottom,
+		rgba(255, 255, 255, 0.01) 0px,
+		rgba(255, 255, 255, 0.01) 1px,
+		transparent 1px,
+		transparent 3px
+	);
+	z-index: 1000;
+	mix-blend-mode: overlay;
+}
+
+.grain::after {
+	content: '';
+	position: fixed;
+	inset: 0;
+	pointer-events: none;
+	background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.6 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/></svg>");
+	opacity: 0.035;
+	mix-blend-mode: overlay;
+	z-index: 999;
+}
+
+@keyframes blink {
+	0%, 50% { opacity: 1; }
+	51%, 100% { opacity: 0; }
+}
+.blink {
+	animation: blink 1.2s steps(1) infinite;
+}
+
+@keyframes ticker {
+	from { transform: translateX(0); }
+	to { transform: translateX(-50%); }
+}
+.ticker-track {
+	animation: ticker 60s linear infinite;
+}
+
+@keyframes fade-up {
+	from { opacity: 0; transform: translateY(8px); }
+	to { opacity: 1; transform: translateY(0); }
+}
+.fade-up {
+	animation: fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+.corners {
+	position: relative;
+}
+.corners::before,
+.corners::after {
+	content: '';
+	position: absolute;
+	width: 10px;
+	height: 10px;
+	border-color: var(--color-amber);
+	border-style: solid;
+	pointer-events: none;
+}
+.corners::before {
+	top: -1px;
+	left: -1px;
+	border-width: 1px 0 0 1px;
+}
+.corners::after {
+	bottom: -1px;
+	right: -1px;
+	border-width: 0 1px 1px 0;
+}
+
+.dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	display: inline-block;
+}
+
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+::-webkit-scrollbar-track {
+	background: var(--color-bg-1);
+}
+::-webkit-scrollbar-thumb {
+	background: var(--color-grid-strong);
+	border-radius: 0;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: var(--color-amber-dim);
+}
+
+.prose-terminal {
+	color: var(--color-fg-dim);
+	font-size: 0.84rem;
+	line-height: 1.55;
+}
+.prose-terminal strong {
+	color: var(--color-amber);
+	font-weight: 600;
+}
+.prose-terminal a {
+	color: var(--color-cyan);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+.prose-terminal h2,
+.prose-terminal h3 {
+	color: var(--color-fg);
+	font-family: var(--font-display);
+	letter-spacing: 0.02em;
+}
+.prose-terminal table {
+	border-collapse: collapse;
+	margin-top: 0.75rem;
+	font-size: 0.78rem;
+}
+.prose-terminal th,
+.prose-terminal td {
+	border: 1px solid var(--color-grid);
+	padding: 0.25rem 0.5rem;
+	text-align: left;
+}
+.prose-terminal th {
+	background: var(--color-bg-2);
+	color: var(--color-fg);
+}
