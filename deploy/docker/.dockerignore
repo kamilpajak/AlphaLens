@@ -1,0 +1,27 @@
+# .dockerignore for the pipeline image build (context = repo root).
+.git
+.github
+.venv
+node_modules
+web
+docs
+tests
+runpod
+launchd
+*.parquet
+*.png
+*.log
+*.cast
+.DS_Store
+.coverage
+.pytest_cache
+.ruff_cache
+.mypy_cache
+__pycache__
+.svelte-kit
+.playwright-mcp
+test-results
+playwright-report
+
+# Operator caches stay on the host, never inside the image.
+.alphalens

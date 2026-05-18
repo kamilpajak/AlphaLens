@@ -84,14 +84,17 @@ test.describe('smoke — every route renders without errors', () => {
 		});
 	}
 
-	test('GET /brief/2099-01-01 (unknown date) returns 404', async ({ page }) => {
-		const response = await page.goto('/brief/2099-01-01', { waitUntil: 'domcontentloaded' });
-		expect(response?.status()).toBe(404);
+	// Under SPA mode the HTTP response is always 200 (nginx serves index.html
+	// as fallback); the 404 surfaces as SvelteKit's error page rendering "404"
+	// after the client-side router or load function rejects.
+	test('GET /brief/2099-01-01 (unknown date) renders SvelteKit 404', async ({ page }) => {
+		await page.goto('/brief/2099-01-01');
+		await expect(page.getByText('404', { exact: false })).toBeVisible();
 	});
 
-	test('GET /unknown-route returns 404', async ({ page }) => {
-		const response = await page.goto('/this-route-does-not-exist', { waitUntil: 'domcontentloaded' });
-		expect(response?.status()).toBe(404);
+	test('GET /unknown-route renders SvelteKit 404', async ({ page }) => {
+		await page.goto('/this-route-does-not-exist');
+		await expect(page.getByText('404', { exact: false })).toBeVisible();
 	});
 });
 

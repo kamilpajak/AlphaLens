@@ -167,3 +167,39 @@ resources and complicates restart semantics. The timer pattern fires
 the script daily, picks up only uncached tickers, exits cleanly on
 `AVRateLimitError` (return code 0 — expected steady-state), and lets
 systemd handle persistence across reboots via `Persistent=true`.
+
+## alphalens-thematic-daily.service / .timer
+
+End-to-end thematic pipeline (news → brief → JSON refresh) running inside the
+`alphalens-pipeline` docker image. Fires daily at 06:30 UTC via the companion
+timer; spaced from the AV backfill (00:05 UTC) so the two don't contend for
+the Alpha Vantage key.
+
+Full operator recipe (image build, env file, Cloudflare wiring) lives at
+[`deploy/docker/README.md`](../docker/README.md). The systemd unit itself is
+a thin wrapper around:
+
+```bash
+docker compose -f deploy/docker/docker-compose.yml run --rm pipeline \
+    /app/deploy/docker/run_thematic_day.sh
+```
+
+The unit passes the operator's UID/GID to compose via `%U`/`%G` so files
+written into `~/.alphalens/` and `web-data/` are jacoren-owned, not root.
+
+### Install
+
+```bash
+cp deploy/systemd/alphalens-thematic-daily.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-thematic-daily.timer   ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-thematic-daily.timer
+```
+
+### Inspect
+
+```bash
+systemctl --user list-timers alphalens-thematic-daily
+journalctl --user -u alphalens-thematic-daily.service --since today
+systemctl --user start alphalens-thematic-daily.service     # manual fire
+```

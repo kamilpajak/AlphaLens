@@ -1,8 +1,6 @@
 import type { PageLoad } from './$types';
 import type { DayIndexEntry, DayBrief } from '$lib/types';
 
-export const prerender = true;
-
 export const load: PageLoad = async ({ fetch }) => {
 	const indexRes = await fetch('/data/days.json');
 	const days: DayIndexEntry[] = await indexRes.json();
