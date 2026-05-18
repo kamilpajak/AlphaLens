@@ -12,6 +12,7 @@ and is one filing per ticker (10-Ks are annual; refresh ~yearly).
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import os
@@ -177,24 +178,62 @@ def find_latest_10k(submissions_payload: dict) -> dict | None:
     return best
 
 
-def _find_cached(ticker: str, cache_dir: Path) -> Path | None:
+def _find_cached(ticker: str, cache_dir: Path, *, asof: dt.date | None = None) -> Path | None:
+    """Locate the most-recent cached 10-K text file for ``ticker``.
+
+    With ``asof=None`` (live flow): pick alphabetically last file —
+    preserves legacy behaviour.
+
+    With ``asof`` set (PIT flow): only consider files whose filename
+    date suffix is ``≤ asof``, pick latest of those. ``None`` when no
+    file qualifies — caller treats as gate unknown.
+    """
     if not cache_dir.exists():
         return None
     candidates = sorted(cache_dir.glob(f"{ticker.upper()}_*.txt"))
-    return candidates[-1] if candidates else None
+    if not candidates:
+        return None
+    if asof is not None:
+        prefix_len = len(ticker) + 1  # "NVDA_"
+        eligible: list[Path] = []
+        for path in candidates:
+            date_str = path.stem[prefix_len:]
+            try:
+                file_date = dt.date.fromisoformat(date_str)
+            except ValueError:
+                continue
+            if file_date <= asof:
+                eligible.append(path)
+        if not eligible:
+            return None
+        candidates = eligible
+    return candidates[-1]
 
 
-def fetch_10k_text(*, ticker: str, cache_dir: Path = DEFAULT_CACHE_DIR) -> str | None:
+def fetch_10k_text(
+    *,
+    ticker: str,
+    cache_dir: Path = DEFAULT_CACHE_DIR,
+    asof: dt.date | None = None,
+) -> str | None:
     """Return the most recent 10-K's plain text; cache on first fetch.
 
     Returns ``None`` when CIK can't be resolved or no recent 10-K exists for
     the ticker (foreign listing, recent IPO, etc.). Network/parse errors
     still raise so callers can distinguish "no data" from "fetch broke".
+
+    PIT: when ``asof < today`` and the cache has no file ≤ asof, return
+    ``None`` instead of fetching — a live SEC fetch would only surface the
+    newest 10-K, leaking future content into a historical replay.
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cached = _find_cached(ticker, cache_dir)
+    cached = _find_cached(ticker, cache_dir, asof=asof)
     if cached is not None:
         return cached.read_text()
+
+    if asof is not None and asof < dt.date.today():
+        # PIT replay miss — caller surfaces this as gates_unknown.
+        return None
 
     cik = _resolve_cik(ticker)
     if cik is None:
@@ -219,6 +258,7 @@ def has_theme_keywords_in_10k(
     ticker: str,
     keywords: Iterable[str],
     cache_dir: Path = DEFAULT_CACHE_DIR,
+    asof: dt.date | None = None,
 ) -> bool | None:
     """Verification gate: any ``keyword`` substring-present in ``ticker``'s 10-K?
 
@@ -227,7 +267,7 @@ def has_theme_keywords_in_10k(
     ``gates_unknown``, NOT a false negative).
     """
     try:
-        text = fetch_10k_text(ticker=ticker, cache_dir=cache_dir)
+        text = fetch_10k_text(ticker=ticker, cache_dir=cache_dir, asof=asof)
     except Exception as exc:
         logger.warning("10-K fetch failed for %s: %s", ticker, exc)
         return None
