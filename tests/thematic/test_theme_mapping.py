@@ -773,6 +773,57 @@ class TestGateWrappers(unittest.TestCase):
                 )
             )
 
+    def test_gate_press_falls_back_to_per_ticker_when_frame_returns_none(self):
+        # Issue #149 fix: when the batch frame has no rows for the ticker,
+        # ``has_theme_in_press_frame`` returns None (we don't know). The
+        # orchestrator must fall through to the per-ticker fetch instead of
+        # propagating None as a real "no". This catches the silent
+        # false-negative pattern seen on the 2023-01-23 retrospective.
+        import pandas as pd
+
+        with (
+            patch.object(
+                orchestrator.recent_press, "has_theme_in_press_frame", return_value=None
+            ) as mock_frame,
+            patch.object(
+                orchestrator.recent_press, "has_theme_in_recent_press", return_value=True
+            ) as mock_per_ticker,
+        ):
+            result = orchestrator._gate_press(
+                ticker="VRT",
+                theme_keywords=["AI"],
+                asof=dt.date(2023, 1, 23),
+                api_key="k",
+                press_df=pd.DataFrame({"placeholder": [1]}),
+            )
+        self.assertTrue(result)
+        mock_frame.assert_called_once()
+        mock_per_ticker.assert_called_once()
+
+    def test_gate_press_trusts_frame_when_it_returns_real_negative(self):
+        # When the frame DOES have rows for the ticker but no keyword hit,
+        # ``has_theme_in_press_frame`` returns False — that's a real "no" and
+        # the per-ticker fallback must NOT run (wasted API call, defeats
+        # the batch optimisation).
+        import pandas as pd
+
+        with (
+            patch.object(
+                orchestrator.recent_press, "has_theme_in_press_frame", return_value=False
+            ) as mock_frame,
+            patch.object(orchestrator.recent_press, "has_theme_in_recent_press") as mock_per_ticker,
+        ):
+            result = orchestrator._gate_press(
+                ticker="NVDA",
+                theme_keywords=["quantum"],
+                asof=dt.date(2026, 5, 15),
+                api_key="k",
+                press_df=pd.DataFrame({"placeholder": [1]}),
+            )
+        self.assertIs(result, False)
+        mock_frame.assert_called_once()
+        mock_per_ticker.assert_not_called()
+
     def test_gate_insider_delegates(self):
         with patch.object(orchestrator.insider, "has_opportunistic_buy", return_value=False):
             self.assertFalse(orchestrator._gate_insider(ticker="NVDA", asof=dt.date(2026, 5, 15)))

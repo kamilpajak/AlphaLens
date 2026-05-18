@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import math
 import urllib.parse
 import urllib.request
 from collections.abc import Iterable
@@ -44,7 +45,7 @@ def fetch_recent_news(
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     api_key: str,
     limit: int = DEFAULT_LIMIT,
-    max_pages: int = 10,
+    max_pages: int = 200,
 ) -> list[dict]:
     """Fetch Polygon news over ``[asof - lookback, asof]``, with pagination.
 
@@ -155,30 +156,68 @@ def fetch_window_universe(
     return df
 
 
+def _is_listlike(x) -> bool:
+    """True iff ``x`` is iterable and NOT a string / NaN scalar.
+
+    Pandas / parquet round-trips can leave NaN floats in list-typed cells.
+    ``x is not None`` lets NaN through (it's a float, not None), and
+    ``list(nan)`` raises TypeError — which the orchestrator's ``_safe``
+    wrapper would catch and silently degrade to ``gates_unknown`` for the
+    affected candidate. Filter NaN / non-iterables / bare strings upfront.
+    """
+    if x is None:
+        return False
+    if isinstance(x, str):
+        return False
+    if isinstance(x, float) and math.isnan(x):
+        return False
+    return isinstance(x, Iterable)
+
+
 def has_theme_in_press_frame(
     *,
     ticker: str,
     keywords: Iterable[str],
     press_df: pd.DataFrame,
-) -> bool:
-    """In-memory verification gate over a pre-fetched window DataFrame."""
+) -> bool | None:
+    """In-memory verification gate over a pre-fetched window DataFrame.
+
+    Tri-state return (issue #149 fix):
+    - ``True``  — ticker has at least one row in ``press_df`` AND at least
+      one keyword appears in title / description / Polygon keywords field.
+    - ``False`` — ticker has rows in ``press_df`` but none mention any of
+      the keywords (real "no" — we checked, didn't find).
+    - ``None``  — ticker has NO rows in ``press_df`` (we don't know; the
+      caller should fall back to a per-ticker fetch). Also returned for an
+      empty frame or an empty keyword iterable.
+
+    The ``None`` case prevents silent false-negatives when Polygon's batch
+    firehose fails to tag a ticker on articles that do mention it.
+
+    Ticker comparison is case-insensitive on both sides: caller passes any
+    case; cell entries are upper-cased before matching. Defensive against
+    NaN / non-list cells (parquet round-trip artefacts).
+    """
     if press_df.empty:
-        return False
+        return None
     kw_lower = [k.lower() for k in keywords if k]
     if not kw_lower:
-        return False
+        return None
+    needle = ticker.upper()
     mask_ticker = press_df["tickers"].apply(
-        lambda x: ticker.upper() in (list(x) if x is not None else [])
+        lambda x: needle in [str(t).upper() for t in x] if _is_listlike(x) else False
     )
     rows = press_df[mask_ticker]
     if rows.empty:
-        return False
+        return None
     haystack = (
         rows["title"].fillna("").astype(str).str.lower()
         + " | "
         + rows["description"].fillna("").astype(str).str.lower()
         + " | "
-        + rows["keywords"].apply(lambda x: " ".join(x) if x is not None else "").str.lower()
+        + rows["keywords"]
+        .apply(lambda x: " ".join(str(k) for k in x) if _is_listlike(x) else "")
+        .str.lower()
     )
     for kw in kw_lower:
         if haystack.str.contains(kw, regex=False).any():
@@ -219,13 +258,18 @@ def has_theme_in_recent_press(
     if not kw_lower:
         return False
 
-    # Concatenate title + description + keywords list per row, lowercase, substring grep
+    # Concatenate title + description + keywords list per row, lowercase, substring grep.
+    # Keywords lambda must use ``_is_listlike`` defence — pandas/parquet can put
+    # NaN floats in list cells, which would crash ``" ".join`` and propagate up
+    # to a silent ``gates_unknown`` via ``_safe`` in the orchestrator.
     haystack = (
         df["title"].fillna("").astype(str).str.lower()
         + " | "
         + df["description"].fillna("").astype(str).str.lower()
         + " | "
-        + df["keywords"].apply(lambda x: " ".join(x) if x is not None else "").str.lower()
+        + df["keywords"]
+        .apply(lambda x: " ".join(str(k) for k in x) if _is_listlike(x) else "")
+        .str.lower()
     )
     for kw in kw_lower:
         if haystack.str.contains(kw, regex=False).any():

@@ -64,11 +64,23 @@ def _gate_press(
     asof: dt.date,
     api_key: str,
     press_df: pd.DataFrame | None = None,
-) -> bool:
+) -> bool | None:
+    """Press verification gate with tri-state fall-through (issue #149).
+
+    Decision tree:
+    - ``press_df`` is None (batch fetch failed): per-ticker fetch.
+    - ``press_df`` is provided and frame matcher returns True/False: trust it.
+    - ``press_df`` is provided but frame matcher returns None (no rows for
+      this ticker): fall through to per-ticker fetch. Polygon's batch
+      firehose sometimes fails to tag a ticker even when articles mention
+      it; the per-ticker endpoint covers that gap.
+    """
     if press_df is not None:
-        return recent_press.has_theme_in_press_frame(
+        result = recent_press.has_theme_in_press_frame(
             ticker=ticker, keywords=theme_keywords, press_df=press_df
         )
+        if result is not None:
+            return result
     return recent_press.has_theme_in_recent_press(
         ticker=ticker, asof=asof, keywords=theme_keywords, api_key=api_key
     )
