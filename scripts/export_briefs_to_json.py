@@ -56,7 +56,11 @@ def export_day(parquet_path: Path) -> dict:
 
     theme_counts = df["theme"].value_counts().to_dict()
     # Sort by count desc, theme asc for deterministic tiebreak.
-    top_theme = max(theme_counts, key=lambda k: (theme_counts[k], k)) if theme_counts else None
+    top_theme = (
+        sorted(theme_counts.keys(), key=lambda k: (-theme_counts[k], k))[0]
+        if theme_counts
+        else None
+    )
 
     payload = {
         "date": date_str,
