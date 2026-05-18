@@ -268,5 +268,80 @@ class TestFindTriggerEvent(unittest.TestCase):
         self.assertIsNone(cat)
 
 
+class TestFindTriggerEventTimestampSchema(unittest.TestCase):
+    """As of the 2026-05 ingest refactor, all news adapters (rss/polygon/
+    gdelt/edgar) write the column ``timestamp`` (per ``sources/schema.py``)
+    instead of the legacy ``published_at``. The catalyst resolver must
+    handle the canonical column; otherwise every real-pipeline lookup
+    raises KeyError, gets swallowed by the orchestrator's _safe wrapper,
+    and silently drops the source_event_url from every brief.
+    """
+
+    def test_returns_event_when_news_uses_timestamp_column(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 18),
+                [
+                    {
+                        "id": "n1",
+                        "title": "Cybersecurity vendor M&A wave",
+                        "url": "https://example.com/cyber",
+                        "timestamp": pd.Timestamp("2026-05-18T13:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 18),
+                [{"news_id": "n1", "themes": ["cybersecurity"], "confidence": 0.9}],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="cybersecurity",
+                asof=dt.date(2026, 5, 18),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat["url"], "https://example.com/cyber")
+        self.assertEqual(cat["published_at"], "2026-05-18")
+
+    def test_prefers_timestamp_when_both_columns_present(self):
+        # If a news file happens to carry both legacy and new column,
+        # prefer timestamp (canonical, tz-aware). Defensive.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 18),
+                [
+                    {
+                        "id": "n1",
+                        "title": "Mixed-schema row",
+                        "url": "https://example.com/mixed",
+                        "timestamp": pd.Timestamp("2026-05-18T13:00:00Z"),
+                        "published_at": pd.Timestamp("2020-01-01T00:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 18),
+                [{"news_id": "n1", "themes": ["AI"], "confidence": 0.9}],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="AI",
+                asof=dt.date(2026, 5, 18),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertEqual(cat["published_at"], "2026-05-18")
+
+
 if __name__ == "__main__":
     unittest.main()
