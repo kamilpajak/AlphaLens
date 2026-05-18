@@ -149,6 +149,7 @@ _EMPTY_OUT_COLUMNS = (
     "theme",
     "ticker",
     "verified",
+    "next_earnings_date",
     "brief_model_used",
     "brief_tldr",
     "brief_supply_chain_md",

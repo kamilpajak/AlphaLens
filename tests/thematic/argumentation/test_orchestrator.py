@@ -263,8 +263,10 @@ class TestEmptyScoredFrame(unittest.TestCase):
                 pd.DataFrame(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
             )
             self.assertEqual(len(out), 0)
-            # Schema present so downstream readers don't crash on zero-column frames.
-            for col in ("ticker", "brief_full_md", "brief_position_pct"):
+            # Schema present so downstream readers don't crash on zero-column
+            # frames. ``next_earnings_date`` included so the empty schema mirrors
+            # the populated schema (zen review 2026-05-18: L1 schema asymmetry).
+            for col in ("ticker", "brief_full_md", "brief_position_pct", "next_earnings_date"):
                 self.assertIn(col, out.columns)
             self.assertTrue((Path(tmp) / "2026-04-14.parquet").exists())
             self.assertTrue((Path(tmp) / "2026-04-14.md").exists())
