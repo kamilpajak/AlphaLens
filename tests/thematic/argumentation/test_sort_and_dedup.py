@@ -145,6 +145,29 @@ class TestSortAndDedupForBrief(unittest.TestCase):
         out = orchestrator._sort_and_dedup_for_brief(df)
         self.assertEqual(list(out["ticker"]), ["HIGH_CONF", "LOW_CONF"])
 
+    def test_sort_sentinel_does_not_leak_into_output_rows(self):
+        # Empirical 2026-05-18 incident: when ``magic_formula_rank`` was
+        # NaN in the input, the sort fillna'd it with ``float("inf")`` and
+        # left the sentinel in the returned frame. Downstream renderer
+        # called ``int(rank)`` → OverflowError. The sort sentinel must be
+        # ephemeral — original NaN survives to the output so the renderer
+        # sees the same data it would have without our sort layer.
+        import math
+
+        df = pd.DataFrame(
+            [
+                _row(ticker="HAS_RANK", magic_formula_rank=3),
+                _row(ticker="NAN_RANK", magic_formula_rank=float("nan")),
+            ]
+        )
+        out = orchestrator._sort_and_dedup_for_brief(df)
+        # Find the NAN_RANK row in the sorted output.
+        nan_row = out[out["ticker"] == "NAN_RANK"].iloc[0]
+        self.assertTrue(
+            math.isnan(nan_row["magic_formula_rank"]),
+            f"sort leaked sentinel; got magic_formula_rank={nan_row['magic_formula_rank']}",
+        )
+
     def test_handles_missing_sort_columns_defensively(self):
         # Phase D scoring is still evolving; new columns may not be present
         # on older parquets. Missing column = neutral default (won't crash
