@@ -18,7 +18,7 @@ dependencies = [
     "stockstats>=0.6.5",
     "python-dotenv>=1.2.2",
     "quiverquant",
-    "simfin>=1.0.1",
+    "simfin>=1.0.2",
     "pyarrow>=24.0.0",  # explicit: pandas parquet I/O (FRED cache, history snapshots)
     "scikit-learn>=1.8.0",
     "lightgbm>=4.6.0",
