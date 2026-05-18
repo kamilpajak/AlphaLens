@@ -26,33 +26,33 @@
 <div class="scanlines grain min-h-screen flex flex-col">
 	<!-- Top status bar -->
 	<header class="border-b border-grid bg-bg-1 text-[11px] uppercase tracking-widest">
-		<div class="flex items-center gap-6 px-4 py-2">
+		<div class="flex flex-wrap items-center gap-x-4 gap-y-1 sm:gap-x-6 px-3 sm:px-4 py-2">
 			<a href="/" class="flex items-center gap-2 font-display font-bold text-amber text-base tracking-[0.2em]">
 				<Triangle class="size-4 fill-amber stroke-amber" />
 				<span>ALPHALENS</span>
-				<span class="text-fg-muted font-mono font-normal text-[10px]">// thematic ops</span>
+				<span class="hidden sm:inline text-fg-muted font-mono font-normal text-[10px]">// thematic ops</span>
 			</a>
-			<nav class="flex items-center gap-4 text-fg-dim">
+			<nav class="flex items-center gap-3 sm:gap-4 text-fg-dim">
 				<a href="/" class="hover:text-amber transition-colors" class:text-amber={route === '/'}>
-					[01] dashboard
+					<span class="hidden sm:inline">[01]&nbsp;</span>dashboard
 				</a>
 				<a href="/briefs" class="hover:text-amber transition-colors" class:text-amber={route.startsWith('/brief')}>
-					[02] briefs
+					<span class="hidden sm:inline">[02]&nbsp;</span>briefs
 				</a>
 				<a href="/about" class="hover:text-amber transition-colors" class:text-amber={route === '/about'}>
-					[03] about
+					<span class="hidden sm:inline">[03]&nbsp;</span>about
 				</a>
 			</nav>
-			<div class="ml-auto flex items-center gap-5 text-fg-muted">
+			<div class="ml-auto flex items-center gap-3 sm:gap-5 text-fg-muted">
 				<span class="flex items-center gap-1.5">
 					<span class="dot bg-green blink"></span>
 					<span class="text-green">live</span>
 				</span>
-				<span class="flex items-center gap-1.5">
+				<span class="hidden md:flex items-center gap-1.5">
 					<Database class="size-3" />
 					<span>~/.alphalens</span>
 				</span>
-				<span class="flex items-center gap-1.5">
+				<span class="hidden sm:flex items-center gap-1.5">
 					<Activity class="size-3" />
 					<span>{now} utc</span>
 				</span>

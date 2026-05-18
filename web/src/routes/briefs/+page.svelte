@@ -5,43 +5,43 @@
 	let { data }: { data: PageData } = $props();
 </script>
 
-<div class="px-4 py-8 max-w-[1200px] mx-auto">
+<div class="px-3 sm:px-4 py-8 max-w-[1200px] mx-auto">
 	<div class="mb-8 flex items-baseline gap-3 fade-up">
-		<h1 class="font-display font-bold text-3xl tracking-tight">BRIEFS.ARCHIVE</h1>
-		<span class="text-[10px] uppercase tracking-widest text-fg-muted">[{data.days.length} runs]</span>
+		<h1 class="font-display font-bold text-2xl sm:text-3xl tracking-tight">BRIEFS.ARCHIVE</h1>
+		<span class="text-[10px] uppercase tracking-widest text-fg-muted">[{data.days.length}]</span>
 		<div class="flex-1 border-b border-dashed border-grid"></div>
 	</div>
 
 	<table class="w-full text-sm">
 		<thead>
 			<tr class="text-[10px] uppercase tracking-widest text-fg-muted text-left border-b border-grid">
-				<th class="py-2 pr-4">date</th>
-				<th class="py-2 pr-4 text-right">candidates</th>
-				<th class="py-2 pr-4 text-right">themes</th>
-				<th class="py-2 pr-4">top theme</th>
+				<th class="py-2 pr-3 sm:pr-4">date</th>
+				<th class="py-2 pr-3 sm:pr-4 text-right">cand</th>
+				<th class="hidden sm:table-cell py-2 pr-4 text-right">themes</th>
+				<th class="py-2 pr-3 sm:pr-4">top theme</th>
 				<th class="py-2"></th>
 			</tr>
 		</thead>
 		<tbody>
 			{#each data.days as day, i}
 				<tr class="border-b border-grid hover:bg-bg-2 group fade-up" style="animation-delay: {i * 0.05}s">
-					<td class="py-3 pr-4">
+					<td class="py-3 pr-3 sm:pr-4">
 						<a
 							href="/brief/{day.date}"
-							class="font-display font-bold text-xl text-fg group-hover:text-amber transition-colors"
+							class="font-display font-bold text-lg sm:text-xl text-fg group-hover:text-amber transition-colors"
 						>
 							{day.date}
 						</a>
 					</td>
-					<td class="py-3 pr-4 text-right text-cyan font-bold">{day.n_candidates}</td>
-					<td class="py-3 pr-4 text-right text-fg-dim">{day.n_themes}</td>
-					<td class="py-3 pr-4 text-amber lowercase">{day.top_theme ?? '—'}</td>
+					<td class="py-3 pr-3 sm:pr-4 text-right text-cyan font-bold">{day.n_candidates}</td>
+					<td class="hidden sm:table-cell py-3 pr-4 text-right text-fg-dim">{day.n_themes}</td>
+					<td class="py-3 pr-3 sm:pr-4 text-amber lowercase truncate max-w-[140px] sm:max-w-none">{day.top_theme ?? '—'}</td>
 					<td class="py-3 text-right">
 						<a
 							href="/brief/{day.date}"
 							class="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-fg-muted group-hover:text-amber transition-colors"
 						>
-							view
+							<span class="hidden sm:inline">view</span>
 							<ChevronRight class="size-3" />
 						</a>
 					</td>

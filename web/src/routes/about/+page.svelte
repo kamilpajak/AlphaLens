@@ -17,10 +17,10 @@
 	];
 </script>
 
-<div class="max-w-[1100px] mx-auto px-4 py-10">
+<div class="max-w-[1100px] mx-auto px-3 sm:px-4 py-8 sm:py-10">
 	<header class="mb-10 fade-up">
 		<div class="text-[10px] uppercase tracking-[0.3em] text-fg-muted mb-2">// about</div>
-		<h1 class="font-display font-bold text-4xl tracking-tight text-fg">
+		<h1 class="font-display font-bold text-2xl sm:text-3xl lg:text-4xl tracking-tight text-fg">
 			How the <span class="text-amber">pipeline</span> works
 		</h1>
 		<p class="text-fg-dim mt-3 max-w-2xl text-sm leading-relaxed">
@@ -30,21 +30,22 @@
 	</header>
 
 	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.1s">
-		<div class="px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted">
+		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted">
 			pipeline.layers
 		</div>
 		<table class="w-full text-sm">
 			<tbody>
 				{#each layers as l, i}
 					<tr class="border-b border-grid last:border-b-0 hover:bg-bg-2">
-						<td class="px-5 py-3 w-20 align-top">
-							<div class="font-display font-bold text-2xl text-amber">{l.id}</div>
+						<td class="px-4 sm:px-5 py-3 w-16 sm:w-20 align-top">
+							<div class="font-display font-bold text-xl sm:text-2xl text-amber">{l.id}</div>
 						</td>
 						<td class="px-2 py-3 align-top">
 							<div class="font-bold text-fg">{l.name}</div>
 							<div class="text-fg-dim text-xs mt-0.5">{l.what}</div>
+							<div class="sm:hidden text-[10px] uppercase tracking-widest text-cyan mt-1">{l.model}</div>
 						</td>
-						<td class="px-5 py-3 text-right align-top">
+						<td class="hidden sm:table-cell px-4 sm:px-5 py-3 text-right align-top">
 							<div class="text-[10px] uppercase tracking-widest text-cyan">{l.model}</div>
 						</td>
 					</tr>
@@ -54,12 +55,12 @@
 	</section>
 
 	<section class="border border-grid bg-bg-1 fade-up" style="animation-delay: 0.2s">
-		<div class="px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted">
+		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted">
 			operating.doctrine
 		</div>
 		<ul class="divide-y divide-grid">
 			{#each doctrine as d, i}
-				<li class="px-5 py-3 text-sm text-fg-dim flex gap-3">
+				<li class="px-4 sm:px-5 py-3 text-sm text-fg-dim flex gap-3">
 					<span class="text-amber font-display font-bold">{String(i + 1).padStart(2, '0')}</span>
 					<span>{d}</span>
 				</li>
