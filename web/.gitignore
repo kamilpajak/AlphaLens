@@ -3,6 +3,11 @@ node_modules
 # Local screenshot artifacts (Playwright captures saved to web/ root during dev)
 /*.png
 
+# Playwright test outputs
+/test-results
+/playwright-report
+/playwright/.cache
+
 # Output
 .output
 .vercel
