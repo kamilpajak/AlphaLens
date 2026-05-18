@@ -2,8 +2,9 @@ import datetime as dt
 import json
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from alphalens.thematic.sources import gdelt
 from alphalens.thematic.sources.schema import NEWS_COLUMNS
@@ -158,6 +159,150 @@ class TestGdeltFetch(unittest.TestCase):
         for k, v in buckets.items():
             self.assertIsInstance(k, str)
             self.assertIsInstance(v, str)
+
+
+class _FakeResponse:
+    """Minimal context-manager stand-in for the object returned by urlopen."""
+
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return self._body
+
+
+class TestGdeltHttpGetJson(unittest.TestCase):
+    def test_phrase_too_short_raises_immediately_without_retry(self):
+        body = b"The specified phrase is too short.\n"
+        mock_urlopen = MagicMock(return_value=_FakeResponse(body))
+        with patch("urllib.request.urlopen", mock_urlopen):
+            with self.assertRaises(gdelt.GdeltQueryError) as ctx:
+                gdelt._http_get_json("https://example.invalid/q", backoff_sec=0.01)
+        self.assertEqual(mock_urlopen.call_count, 1)
+        self.assertIn("phrase is too short", str(ctx.exception))
+
+    def test_html_error_page_raises_immediately_without_retry(self):
+        body = b"<html><body>service unavailable</body></html>"
+        mock_urlopen = MagicMock(return_value=_FakeResponse(body))
+        with patch("urllib.request.urlopen", mock_urlopen):
+            with self.assertRaises(gdelt.GdeltQueryError):
+                gdelt._http_get_json("https://example.invalid/q", backoff_sec=0.01)
+        self.assertEqual(mock_urlopen.call_count, 1)
+
+    def test_empty_body_still_retries(self):
+        mock_urlopen = MagicMock(return_value=_FakeResponse(b""))
+        with patch("urllib.request.urlopen", mock_urlopen):
+            with self.assertRaises(gdelt.GdeltMaxRetriesError):
+                gdelt._http_get_json(
+                    "https://example.invalid/q",
+                    backoff_sec=0.001,
+                    max_attempts=3,
+                )
+        self.assertEqual(mock_urlopen.call_count, 3)
+
+    def test_leading_whitespace_does_not_trigger_permanent_error(self):
+        body = b'\n  {"articles": []}\n'
+        mock_urlopen = MagicMock(return_value=_FakeResponse(body))
+        with patch("urllib.request.urlopen", mock_urlopen):
+            data = gdelt._http_get_json("https://example.invalid/q", backoff_sec=0.01)
+        self.assertEqual(data, {"articles": []})
+
+    def test_valid_json_returns_payload(self):
+        body = b'{"articles": [{"url": "https://x.test"}]}'
+        mock_urlopen = MagicMock(return_value=_FakeResponse(body))
+        with patch("urllib.request.urlopen", mock_urlopen):
+            data = gdelt._http_get_json("https://example.invalid/q", backoff_sec=0.01)
+        self.assertEqual(data["articles"][0]["url"], "https://x.test")
+
+
+class TestGdeltFetchIsolation(unittest.TestCase):
+    def test_fetch_daily_news_isolates_failing_bucket(self):
+        good = SAMPLE_GDELT_RESPONSE
+        side_effects = [
+            gdelt.GdeltQueryError("phrase too short"),
+            good,
+            urllib.error.URLError("ssl handshake timeout"),
+            good,
+        ]
+        calls = {"n": 0}
+
+        def fake_call(url, **kwargs):
+            i = calls["n"]
+            calls["n"] += 1
+            result = side_effects[i]
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        fixture = {
+            "broken_a": "bad query a",
+            "ok_a": "good query a",
+            "broken_b": "bad query b",
+            "ok_b": "good query b",
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(gdelt, "_http_get_json", side_effect=fake_call):
+                df = gdelt.fetch_daily_news(
+                    date=dt.date(2026, 5, 18),
+                    theme_buckets=fixture,
+                    cache_dir=Path(tmpdir),
+                    inter_query_sleep_sec=0,
+                )
+            self.assertEqual(calls["n"], 4)
+            # Two ok buckets returned the same SAMPLE — dedup leaves 2 unique rows.
+            self.assertEqual(df["id"].nunique(), 2)
+            cached = Path(tmpdir) / "2026-05-18.parquet"
+            self.assertTrue(cached.exists())
+
+    def test_fetch_daily_news_all_buckets_fail_writes_empty_cache(self):
+        def boom(url, **kwargs):
+            raise gdelt.GdeltQueryError("phrase too short")
+
+        fixture = {"a": "x", "b": "y"}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(gdelt, "_http_get_json", side_effect=boom):
+                df = gdelt.fetch_daily_news(
+                    date=dt.date(2026, 5, 18),
+                    theme_buckets=fixture,
+                    cache_dir=Path(tmpdir),
+                    inter_query_sleep_sec=0,
+                )
+            self.assertEqual(len(df), 0)
+            self.assertEqual(list(df.columns), NEWS_COLUMNS)
+            self.assertTrue((Path(tmpdir) / "2026-05-18.parquet").exists())
+
+
+class TestGdeltThemesYamlWellFormed(unittest.TestCase):
+    """Static lint of the shipped YAML: no single-word quoted phrases.
+
+    GDELT DOC API rejects quoted phrases shorter than a small threshold
+    (empirically: a single short token like ``"CUDA"`` or ``"LLM"`` triggers
+    ``HTTP 200 + "The specified phrase is too short."``). A live smoke is in
+    ``test_gdelt_live.py`` (opt-in); this test catches the most common bug
+    class offline so YAML edits don't ship broken queries.
+    """
+
+    def test_no_single_word_quoted_phrases(self):
+        import re
+
+        buckets = gdelt.load_theme_buckets()
+        offenders: list[tuple[str, str]] = []
+        for theme, query in buckets.items():
+            for phrase in re.findall(r'"([^"]+)"', query):
+                if len(phrase.split()) < 2:
+                    offenders.append((theme, phrase))
+        self.assertEqual(
+            offenders,
+            [],
+            f"Single-word quoted phrases will trip GDELT 'phrase too short': {offenders}",
+        )
 
 
 if __name__ == "__main__":

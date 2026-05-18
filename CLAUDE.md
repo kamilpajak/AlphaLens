@@ -160,6 +160,7 @@ Vendored TradingAgents subtree + Layer 3 LLM runner removed per [ADR 0008](docs/
 ## Known issues (LIVE)
 
 - **Prescreener (Layer 2a) unvalidated**: 45% fundamentals weight wymaga PIT historicals których Polygon Starter ($29/mo) nie dostarcza. Manual ad-hoc tylko, no performance guarantee.
+- **GDELT theme YAML — multi-word quoted phrases only**: `alphalens/thematic/config/gdelt_themes.yaml` queries muszą używać multi-word phrase w cudzysłowach (np. `"CUDA toolkit"`, NIE `"CUDA"`). GDELT DOC API odrzuca single-word quoted tokens z `HTTP 200 + "The specified phrase is too short."` — co `_http_get_json` raise'uje teraz immediately jako `GdeltQueryError` (no retry, no rate-limit burn). Static lint w `tests/thematic/test_gdelt.py::TestGdeltThemesYamlWellFormed` chroni przed regresją. Live smoke per-bucket: `GDELT_LIVE_TEST=1 .venv/bin/python -m unittest tests.thematic.test_gdelt_live -v` (~90s wall, opt-in, nie odpalany domyślnie).
 
 **Recently RESOLVED:** OSS phase-robust-backtesting G4 cost-stress no-op bug fixed upstream in v0.2.3 (2026-05-14, PR #2 to `kamilpajak/phase-robust-backtesting`). `_RESULT_LINE` regex now captures optional `α-net 4F=...% t-net=...` block; `_AGGREGATED_KEYS` includes `alpha_t_net`. Future paradigm #14 + #15 audit launches via `alphalens audit <strategy>` → OSS `run_audit` path now have a functional G4 gate. Legacy experiment scripts emitting only gross tokens degrade to pre-fix no-op for that row, detectable via `has_net_regression=False` field.
 
