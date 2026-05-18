@@ -160,6 +160,50 @@ class TestVerificationGate(unittest.TestCase):
                     )
                 )
 
+    def test_has_theme_in_recent_press_handles_nan_in_keywords_cell(self):
+        # Zen pre-merge HIGH finding: the keywords lambda uses ``x is not
+        # None`` check, which lets NaN through (NaN is a float). ``" ".join``
+        # then raises TypeError. The fetch's exception handler would mark
+        # gates_unknown, hiding a real keyword hit elsewhere in the response.
+        nan_response = {
+            "results": [
+                {
+                    "id": "p_bad",
+                    "published_utc": "2026-05-10T14:30:00Z",
+                    "title": "ignore",
+                    "description": "",
+                    "tickers": ["BEEM"],
+                    "keywords": None,  # parquet round-trip → NaN
+                    "insights": [],
+                    "article_url": "u",
+                    "publisher": {"name": "x"},
+                },
+                {
+                    "id": "p_good",
+                    "published_utc": "2026-05-11T00:00:00Z",
+                    "title": "Beam launches quantum platform",
+                    "description": "",
+                    "tickers": ["BEEM"],
+                    "keywords": ["quantum"],
+                    "insights": [],
+                    "article_url": "u",
+                    "publisher": {"name": "y"},
+                },
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with patch.object(recent_press, "_http_get_json", return_value=nan_response):
+                self.assertTrue(
+                    recent_press.has_theme_in_recent_press(
+                        ticker="BEEM",
+                        asof=dt.date(2026, 5, 15),
+                        keywords=["quantum"],
+                        api_key="testkey",
+                        cache_dir=cache_dir,
+                    )
+                )
+
 
 class TestWindowUniverseFetch(unittest.TestCase):
     def test_fetch_window_universe_caches_one_unfiltered_pull(self):
@@ -301,6 +345,70 @@ class TestHasThemeInPressFrame(unittest.TestCase):
         df = self._two_ticker_frame()
         self.assertIsNone(
             recent_press.has_theme_in_press_frame(ticker="BEEM", keywords=[], press_df=df)
+        )
+
+    def test_handles_nan_cells_in_tickers_or_keywords_columns(self):
+        # Zen pre-merge HIGH finding: pandas/parquet round-trips can leave
+        # NaN in cells where the schema expects a list. ``x is not None``
+        # passes for NaN (it's a float), but ``list(x)`` then raises
+        # TypeError. The ``_safe`` wrapper would catch and silently mark
+        # gates_unknown for every candidate — bypassing the per-ticker
+        # fallback entirely on a single NaN row.
+        import numpy as np
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                {
+                    "id": "nan_row",
+                    "published_utc": "2026-05-10T14:30:00Z",
+                    "title": "should be ignored",
+                    "description": "",
+                    "url": "u1",
+                    "tickers": np.nan,
+                    "keywords": np.nan,
+                    "publisher": "x",
+                },
+                {
+                    "id": "real_row",
+                    "published_utc": "2026-05-11T00:00:00Z",
+                    "title": "NVDA launches quantum tools",
+                    "description": "",
+                    "url": "u2",
+                    "tickers": ["NVDA"],
+                    "keywords": ["Quantum"],
+                    "publisher": "y",
+                },
+            ]
+        )
+        result = recent_press.has_theme_in_press_frame(
+            ticker="NVDA", keywords=["quantum"], press_df=df
+        )
+        self.assertIs(result, True)
+
+    def test_ticker_match_is_case_insensitive_in_dataframe_cells(self):
+        # If Polygon ever returns lower-case tickers in `tickers` cells,
+        # the ticker filter must still match. ``ticker.upper()`` on the
+        # caller side is not enough — the cell contents need normalising too.
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                {
+                    "id": "1",
+                    "published_utc": "2026-05-10T14:30:00Z",
+                    "title": "nvda quantum",
+                    "description": "",
+                    "url": "u1",
+                    "tickers": ["nvda"],  # lower-case
+                    "keywords": ["quantum"],
+                    "publisher": "x",
+                },
+            ]
+        )
+        self.assertIs(
+            recent_press.has_theme_in_press_frame(ticker="NVDA", keywords=["quantum"], press_df=df),
+            True,
         )
 
 
