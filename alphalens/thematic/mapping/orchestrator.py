@@ -97,17 +97,27 @@ def _safe(name: str, fn, **kwargs) -> bool | None:
     return bool(result)
 
 
-def _theme_keywords(theme: str) -> list[str]:
-    """Expand a theme name into search keywords for the gates.
+def _theme_keywords(theme: str, *, pro_keywords: Iterable[str] | None = None) -> list[str]:
+    """Resolve search keywords for the verification gates.
 
-    Handles the common ``snake_case`` -> ``snake case`` swap so a theme like
-    ``quantum_computing`` matches a 10-K passage that says "quantum computing"
-    without underscores. Both forms are passed so the gate can substring-match
-    against either representation.
+    Pro-supplied ``pro_keywords`` are preferred — they encode the LLM's
+    full theme intent (synonyms, abbreviations, common phrasings). The
+    naive snake↔space swap is the fallback when Pro returned nothing,
+    so gates always have at least the raw theme tokens to match against.
+
+    The fallback is intentionally narrow: it matches a 10-K passage that
+    says "quantum computing" against a theme ``quantum_computing``, but
+    it will NOT match "artificial intelligence" against a theme
+    ``AI development`` — that recall gap is exactly what Pro-supplied
+    keywords are for.
     """
+    if pro_keywords:
+        deduped = list(dict.fromkeys(k for k in pro_keywords if k))
+        if deduped:
+            return deduped
     raw = str(theme).strip()
     spaced = raw.replace("_", " ")
-    return [v for v in {raw, spaced} if v]
+    return [v for v in dict.fromkeys([raw, spaced]) if v]
 
 
 def verify_candidate(
@@ -245,12 +255,14 @@ def map_themes(
                 )
                 catalyst_cache[theme] = None
         catalyst = catalyst_cache[theme] or {}
-        candidates = gemini_mapper.propose_candidates(
+        proposal = gemini_mapper.propose_candidates(
             theme=theme,
             api_key=api_key,
             client=pro_client,
             types_mod=pro_types_mod,
         )
+        candidates = proposal.get("candidates") or []
+        pro_keywords = proposal.get("search_keywords") or []
         if not candidates:
             continue
         in_bracket = mcap_filter.filter_by_mcap(
@@ -260,7 +272,7 @@ def map_themes(
             asof=asof,
         )
         candidates = [c for c in candidates if c["ticker"] in in_bracket]
-        keywords = _theme_keywords(theme)
+        keywords = _theme_keywords(theme, pro_keywords=pro_keywords)
         for cand in candidates:
             verdict = verify_candidate(
                 ticker=cand["ticker"],
@@ -296,6 +308,7 @@ def map_themes(
                     "source_event_url": catalyst.get("url"),
                     "source_event_title": catalyst.get("title"),
                     "source_event_published_at": catalyst.get("published_at"),
+                    "theme_search_keywords": list(keywords),
                 }
             )
 
@@ -330,6 +343,7 @@ def map_themes(
                 "source_event_url",
                 "source_event_title",
                 "source_event_published_at",
+                "theme_search_keywords",
             ]
         )
     df.attrs["dropped_total"] = dropped_total
