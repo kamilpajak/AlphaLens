@@ -94,8 +94,14 @@ def _enrich_facts_with_earnings(facts: dict, asof: dt.date) -> dict:
 
 def _brief_for_row(
     row: pd.Series, *, client_pro, client_flash, types_mod, asof: dt.date | None = None
-) -> dict | None:
+) -> tuple[dict | None, str | None]:
     """Single-row LLM call with per-row exception absorption.
+
+    Returns ``(brief_dict, next_earnings_date_iso)``. The earnings date is
+    surfaced separately so the orchestrator can persist it to the brief
+    parquet AND pass it to the renderer — without this split it was only
+    reaching the LLM prompt and getting dropped before reaching the
+    operator (bug 2026-05-18: next_earnings_date column was always None).
 
     Uses ``generator.generate_brief_with_retry`` so a Flash truncation
     (``finish_reason == MAX_TOKENS``) auto-retries once with double
@@ -105,8 +111,9 @@ def _brief_for_row(
     facts = _row_to_facts(row)
     if asof is not None:
         facts = _enrich_facts_with_earnings(facts, asof)
+    next_earnings = facts.get("next_earnings_date")
     try:
-        return generator.generate_brief_with_retry(
+        brief = generator.generate_brief_with_retry(
             facts,
             client_pro=client_pro,
             client_flash=client_flash,
@@ -114,7 +121,8 @@ def _brief_for_row(
         )
     except Exception as exc:
         logger.warning("brief generation raised for %s: %s", row.get("ticker"), exc, exc_info=True)
-        return None
+        brief = None
+    return brief, next_earnings
 
 
 def _build_clients(api_key: str | None):
@@ -205,7 +213,7 @@ def generate_briefs(
     n_pro = 0
     n_flash = 0
     for _, row in verified.iterrows():
-        brief = _brief_for_row(
+        brief, next_earnings = _brief_for_row(
             row,
             client_pro=client_pro,
             client_flash=client_flash,
@@ -217,16 +225,22 @@ def generate_briefs(
                 n_pro += 1
             else:
                 n_flash += 1
+        # Inject next_earnings_date into the row copy so the renderer's
+        # `r.get("next_earnings_date")` path picks it up (single source of
+        # truth — same field is also persisted to parquet below).
+        row_with_earnings = row.copy()
+        row_with_earnings["next_earnings_date"] = next_earnings
         # Graceful degradation: render always — when brief is None the
         # renderer emits per-section placeholders so the operator never
         # loses the deterministic catalyst + signal panel (Perplexity
         # 2026-05-17 recommendation; QUBT 2026-04-14 incident showed the
         # legacy "(brief unavailable)" fallback hid the winning signal).
-        md = render_markdown(row, brief)
+        md = render_markdown(row_with_earnings, brief)
         b = brief or {}
         rows.append(
             {
                 "ticker": row["ticker"],
+                "next_earnings_date": next_earnings,
                 "brief_model_used": b.get("model_used"),
                 "brief_tldr": b.get("tldr"),
                 "brief_supply_chain_md": b.get("supply_chain_reasoning"),

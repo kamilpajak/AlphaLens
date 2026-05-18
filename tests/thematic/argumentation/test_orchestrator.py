@@ -124,7 +124,8 @@ class TestGenerateBriefs(unittest.TestCase):
             orchestrator,
             "_brief_for_row",
             side_effect=lambda row, **kw: (
-                _FAKE_BRIEF_PRO if row["ticker"] == "IONQ" else _FAKE_BRIEF_FLASH
+                (_FAKE_BRIEF_PRO if row["ticker"] == "IONQ" else _FAKE_BRIEF_FLASH),
+                None,
             ),
         ):
             with tempfile.TemporaryDirectory() as tmp:
@@ -142,7 +143,7 @@ class TestGenerateBriefs(unittest.TestCase):
         def fake_brief(row, **kw):
             brief = _FAKE_BRIEF_PRO if row["layer4_weighted_score"] >= 4 else _FAKE_BRIEF_FLASH
             captured_models[row["ticker"]] = brief["model_used"]
-            return brief
+            return brief, None
 
         with patch.object(orchestrator, "_brief_for_row", side_effect=fake_brief):
             with tempfile.TemporaryDirectory() as tmp:
@@ -153,7 +154,7 @@ class TestGenerateBriefs(unittest.TestCase):
         self.assertEqual(captured_models["IONQ"], generator.PRO_MODEL)  # score 4 → Pro
 
     def test_writes_parquet_and_markdown_bundle(self):
-        with patch.object(orchestrator, "_brief_for_row", return_value=_FAKE_BRIEF_FLASH):
+        with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, None)):
             with tempfile.TemporaryDirectory() as tmp:
                 output_dir = Path(tmp)
                 out = orchestrator.generate_briefs(
@@ -167,7 +168,7 @@ class TestGenerateBriefs(unittest.TestCase):
         self.assertIn("brief_model_used", out.columns)
 
     def test_writes_parquet_and_md_files_to_disk(self):
-        with patch.object(orchestrator, "_brief_for_row", return_value=_FAKE_BRIEF_FLASH):
+        with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, None)):
             with tempfile.TemporaryDirectory() as tmp:
                 output_dir = Path(tmp)
                 orchestrator.generate_briefs(
@@ -185,7 +186,7 @@ class TestGenerateBriefs(unittest.TestCase):
         # verified gates) via the graceful-degradation renderer so the
         # operator never loses visibility on Phase D data when Flash
         # truncates (2026-05-17 QUBT incident).
-        with patch.object(orchestrator, "_brief_for_row", return_value=None):
+        with patch.object(orchestrator, "_brief_for_row", return_value=(None, None)):
             with tempfile.TemporaryDirectory() as tmp:
                 out = orchestrator.generate_briefs(
                     _scored_df(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
@@ -195,13 +196,14 @@ class TestGenerateBriefs(unittest.TestCase):
             md = row["brief_full_md"]
             self.assertNotEqual(md, "(brief unavailable)")
             self.assertIn(row["ticker"], md)
-            self.assertIn("Signals", md)
+            self.assertIn("| Signal | Value |", md)
             self.assertIn("LLM brief unavailable", md)
             self.assertIsNone(row["brief_tldr"])
 
     def test_attrs_contain_per_model_counts(self):
         def fake_brief(row, **kw):
-            return _FAKE_BRIEF_PRO if row["layer4_weighted_score"] >= 4 else _FAKE_BRIEF_FLASH
+            brief = _FAKE_BRIEF_PRO if row["layer4_weighted_score"] >= 4 else _FAKE_BRIEF_FLASH
+            return brief, None
 
         with patch.object(orchestrator, "_brief_for_row", side_effect=fake_brief):
             with tempfile.TemporaryDirectory() as tmp:
@@ -210,6 +212,48 @@ class TestGenerateBriefs(unittest.TestCase):
                 )
         self.assertEqual(out.attrs.get("n_pro"), 1)
         self.assertEqual(out.attrs.get("n_flash"), 1)
+
+
+class TestEarningsDatePropagation(unittest.TestCase):
+    """The fetched next_earnings_date must reach BOTH the brief parquet AND
+    the rendered markdown — not just the LLM prompt."""
+
+    def test_next_earnings_date_persisted_to_parquet(self):
+        # _brief_for_row returns (brief, next_earnings_iso_str). Test
+        # exercises orchestrator's promise to persist the 2nd tuple slot
+        # into the brief parquet as ``next_earnings_date``.
+        with patch.object(
+            orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, "2026-05-08")
+        ):
+            with tempfile.TemporaryDirectory() as tmp:
+                out = orchestrator.generate_briefs(
+                    _scored_df(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
+                )
+        self.assertIn("next_earnings_date", out.columns)
+        for _, row in out.iterrows():
+            self.assertEqual(row["next_earnings_date"], "2026-05-08")
+
+    def test_next_earnings_date_rendered_in_markdown(self):
+        with patch.object(
+            orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, "2026-05-08")
+        ):
+            with tempfile.TemporaryDirectory() as tmp:
+                out = orchestrator.generate_briefs(
+                    _scored_df(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
+                )
+        for _, row in out.iterrows():
+            self.assertIn("| Next earnings |", row["brief_full_md"])
+            self.assertIn("2026-05-08", row["brief_full_md"])
+
+    def test_next_earnings_date_none_when_fetch_returns_none(self):
+        with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, None)):
+            with tempfile.TemporaryDirectory() as tmp:
+                out = orchestrator.generate_briefs(
+                    _scored_df(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
+                )
+        for _, row in out.iterrows():
+            self.assertIsNone(row["next_earnings_date"])
+            self.assertNotIn("| Next earnings |", row["brief_full_md"])
 
 
 class TestEmptyScoredFrame(unittest.TestCase):
@@ -251,7 +295,8 @@ class TestEmptyScoredFrame(unittest.TestCase):
 class TestSidecarPersistence(unittest.TestCase):
     def test_sidecar_records_per_model_counts(self):
         def fake_brief(row, **kw):
-            return _FAKE_BRIEF_PRO if row["layer4_weighted_score"] >= 4 else _FAKE_BRIEF_FLASH
+            brief = _FAKE_BRIEF_PRO if row["layer4_weighted_score"] >= 4 else _FAKE_BRIEF_FLASH
+            return brief, None
 
         with patch.object(orchestrator, "_brief_for_row", side_effect=fake_brief):
             with tempfile.TemporaryDirectory() as tmp:
@@ -273,7 +318,7 @@ class TestDedupOnMerge(unittest.TestCase):
         df = _scored_df()
         verified = df[df["verified"]].copy()
         duped = pd.concat([verified, verified.iloc[[0]]], ignore_index=True)
-        with patch.object(orchestrator, "_brief_for_row", return_value=_FAKE_BRIEF_FLASH):
+        with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, None)):
             with tempfile.TemporaryDirectory() as tmp:
                 out = orchestrator.generate_briefs(
                     duped, asof=dt.date(2026, 4, 14), output_dir=Path(tmp)

@@ -54,9 +54,19 @@ def _extract_earnings_dates(calendar) -> list[dt.date]:
 def fetch_next_earnings(*, ticker: str, asof: dt.date) -> dt.date | None:
     """Return the next confirmed earnings date strictly AFTER ``asof``.
 
-    None when yfinance has no calendar entry, raises, or returns only
-    dates ≤ asof.
+    PIT contract: when ``asof < today`` we return ``None``. ``yfinance.calendar``
+    only exposes the CURRENT forward earnings schedule (re-fetched each
+    call), not a historical "as-of" calendar — so for a 2020-06-15 replay
+    it would happily return 2026-07-30, a 6-year look-ahead leak.
+
+    For the live operator workflow (``asof == today``) this matches
+    expectation: the next earnings is the one yfinance knows about right
+    now. Historical replay needs a different data source (AV EARNINGS
+    cache or SEC 8-K parsing) — until that is wired we suppress the field
+    so the operator never reads a leaked future date as factual.
     """
+    if asof < dt.date.today():
+        return None
     try:
         import yfinance as yf
 
