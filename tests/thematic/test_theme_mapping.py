@@ -28,8 +28,25 @@ SAMPLE_MAPPER_RESPONSE = {
             "rationale": "Hallucinated candidate",
             "confidence": 0.3,
         },
-    ]
+    ],
+    "search_keywords": [
+        "quantum computing",
+        "qubit",
+        "quantum annealing",
+        "trapped-ion",
+    ],
 }
+
+
+def _mapper_result(
+    candidates: list[dict] | None = None,
+    search_keywords: list[str] | None = None,
+) -> dict:
+    """Build the dict shape returned by ``gemini_mapper.propose_candidates``."""
+    return {
+        "candidates": list(candidates or []),
+        "search_keywords": list(search_keywords or []),
+    }
 
 
 # ============================================================
@@ -51,34 +68,179 @@ class TestGeminiMapperPromptBuilding(unittest.TestCase):
         for token in ("market cap", "market_cap", "small-cap", "mid-cap", "small/mid"):
             self.assertNotIn(token.lower(), prompt.lower())
 
+    def test_prompt_asks_for_search_keywords(self):
+        # Verification gates (press, 10-K) need theme-level keywords with
+        # synonyms / common phrasings, not just the snake_case theme name.
+        # The naive ``_theme_keywords`` swap proved too narrow during the
+        # 2023-01-23 MSFT-OpenAI retrospective (theme "AI development" never
+        # matched real-world press headlines that say "artificial intelligence"
+        # / "generative AI"). Pro already understands the theme — ask it for
+        # the search vocabulary in the same call rather than maintaining a
+        # synonym YAML or paying a second LLM hop.
+        prompt = gemini_mapper.build_prompt(theme="quantum_computing")
+        self.assertIn("search_keywords", prompt)
+
 
 class TestPropose(unittest.TestCase):
-    def test_propose_returns_normalized_candidates(self):
+    def test_propose_returns_dict_with_candidates_and_keywords(self):
         fake_response = SimpleNamespace(text=json.dumps(SAMPLE_MAPPER_RESPONSE))
         with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
-            candidates = gemini_mapper.propose_candidates(
-                theme="quantum_computing", api_key="testkey"
-            )
-        self.assertEqual(len(candidates), 3)
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        self.assertIsInstance(result, dict)
+        self.assertIn("candidates", result)
+        self.assertIn("search_keywords", result)
+        self.assertEqual(len(result["candidates"]), 3)
         # Tickers uppercased
-        self.assertEqual(candidates[0]["ticker"], "QBTS")
+        self.assertEqual(result["candidates"][0]["ticker"], "QBTS")
         # Confidence preserved
-        self.assertEqual(candidates[1]["confidence"], 0.9)
+        self.assertEqual(result["candidates"][1]["confidence"], 0.9)
+        # Pro-supplied keywords surfaced
+        self.assertIn("quantum computing", result["search_keywords"])
+        self.assertIn("qubit", result["search_keywords"])
+
+    def test_propose_normalizes_keywords(self):
+        # Whitespace, casing, duplicates, blanks — all normalized so downstream
+        # consumers can substring-match without reapplying.
+        payload = {
+            "candidates": SAMPLE_MAPPER_RESPONSE["candidates"],
+            "search_keywords": [
+                "  Quantum Computing  ",
+                "QUANTUM COMPUTING",
+                "qubit",
+                "",
+                "   ",
+                "trapped-ion",
+            ],
+        }
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        kws = result["search_keywords"]
+        # Dedup on case-folded form; preserves first-seen casing minus trim.
+        self.assertEqual(
+            sorted(k.lower() for k in kws),
+            sorted(["qubit", "quantum computing", "trapped-ion"]),
+        )
+        self.assertNotIn("", kws)
+
+    def test_propose_keywords_default_to_theme_swap_when_missing(self):
+        # Older Pro responses (pre-schema bump) lack `search_keywords`. Fall
+        # back to the snake↔space swap so verification gates still get
+        # *something* searchable, even if narrow.
+        payload = {"candidates": SAMPLE_MAPPER_RESPONSE["candidates"]}
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        self.assertEqual(
+            sorted(result["search_keywords"]),
+            sorted(["quantum_computing", "quantum computing"]),
+        )
 
     def test_propose_returns_empty_on_api_error(self):
         with patch.object(gemini_mapper, "_call_gemini", side_effect=RuntimeError("boom")):
-            candidates = gemini_mapper.propose_candidates(
-                theme="quantum_computing", api_key="testkey"
-            )
-        self.assertEqual(candidates, [])
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(result["search_keywords"], [])
 
     def test_propose_returns_empty_on_unparseable(self):
         bad_response = SimpleNamespace(text="not json")
         with patch.object(gemini_mapper, "_call_gemini", return_value=bad_response):
-            candidates = gemini_mapper.propose_candidates(
-                theme="quantum_computing", api_key="testkey"
-            )
-        self.assertEqual(candidates, [])
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(result["search_keywords"], [])
+
+    def test_propose_drops_malformed_candidate_entries(self):
+        # Zen pre-push HIGH finding: Pro may violate schema and return a dict
+        # where a list is expected, or non-dict items inside the list. Without
+        # type guards in ``_normalize`` the ``it.get("ticker")`` call raises
+        # AttributeError and crashes the whole batch run.
+        payload = {
+            "candidates": [
+                {"ticker": "QBTS", "rationale": "ok", "confidence": 0.9},
+                "not a dict",  # malformed: string instead of dict
+                None,  # malformed: None instead of dict
+                ["also", "wrong"],  # malformed: list instead of dict
+            ],
+            "search_keywords": ["quantum"],
+        }
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        # Only the well-formed entry survives.
+        self.assertEqual(len(result["candidates"]), 1)
+        self.assertEqual(result["candidates"][0]["ticker"], "QBTS")
+
+    def test_propose_handles_candidates_as_dict_not_list(self):
+        # Pro returning a single object instead of an array. ``_normalize``
+        # must not iterate over a dict's keys — that would yield string keys
+        # and crash on ``str.get``.
+        payload = {
+            "candidates": {"ticker": "QBTS", "rationale": "ok", "confidence": 0.9},
+            "search_keywords": ["quantum"],
+        }
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        # Non-list candidates payload coerces to empty rather than crashing.
+        self.assertEqual(result["candidates"], [])
+
+    def test_propose_handles_search_keywords_as_bare_string(self):
+        # Zen pre-push CRITICAL finding: if Pro returns ``"quantum"`` (a bare
+        # string) instead of ``["quantum"]``, iterating over it yields
+        # characters. Single-char keywords substring-match every press headline
+        # and 10-K paragraph, silently false-verifying every candidate.
+        payload = {
+            "candidates": SAMPLE_MAPPER_RESPONSE["candidates"],
+            "search_keywords": "quantum",  # bare string, not a list
+        }
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        kws = result["search_keywords"]
+        # Bare string must NOT explode into ['q','u','a',...]. Either wrap
+        # into a single-element list OR drop and fall back to swap — both are
+        # acceptable; what's unacceptable is character-level iteration.
+        self.assertTrue(
+            all(len(k) >= 2 for k in kws),
+            f"keywords contain a 1-char entry that would false-match: {kws}",
+        )
+
+    def test_propose_drops_non_string_keywords(self):
+        payload = {
+            "candidates": SAMPLE_MAPPER_RESPONSE["candidates"],
+            "search_keywords": [
+                "valid keyword",
+                123,  # int — drop
+                None,  # None — drop
+                {"keyword": "quantum"},  # dict — drop
+                "another valid",
+            ],
+        }
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        self.assertEqual(
+            sorted(k.lower() for k in result["search_keywords"]),
+            sorted(["valid keyword", "another valid"]),
+        )
+
+    def test_propose_drops_single_character_keywords(self):
+        # Defense-in-depth: even if a 1-char keyword survives normalisation
+        # somehow (e.g. Pro returns ["A","I","ML"]), it must be filtered out
+        # before reaching the gates — substring-matching "A" against any 10-K
+        # paragraph would return True for every candidate.
+        payload = {
+            "candidates": SAMPLE_MAPPER_RESPONSE["candidates"],
+            "search_keywords": ["A", "I", "ML", "machine learning"],
+        }
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        kws = result["search_keywords"]
+        self.assertNotIn("A", kws)
+        self.assertNotIn("I", kws)
+        self.assertIn("ML", kws)  # 2-char abbreviation is fine
+        self.assertIn("machine learning", kws)
 
 
 # ============================================================
@@ -242,10 +404,13 @@ class TestMapThemes(unittest.TestCase):
                 patch.object(
                     orchestrator.gemini_mapper,
                     "propose_candidates",
-                    return_value=[
-                        {"ticker": "QBTS", "rationale": "quantum", "confidence": 0.9},
-                        {"ticker": "MADEUP", "rationale": "halluc", "confidence": 0.3},
-                    ],
+                    return_value=_mapper_result(
+                        candidates=[
+                            {"ticker": "QBTS", "rationale": "quantum", "confidence": 0.9},
+                            {"ticker": "MADEUP", "rationale": "halluc", "confidence": 0.3},
+                        ],
+                        search_keywords=["quantum computing", "qubit"],
+                    ),
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
@@ -268,6 +433,14 @@ class TestMapThemes(unittest.TestCase):
             self.assertEqual(len(df), 1)  # only QBTS verified
             self.assertEqual(df.iloc[0]["ticker"], "QBTS")
             self.assertTrue(df.iloc[0]["verified"])
+            # Pro-supplied keywords persisted alongside the candidate so
+            # downstream consumers (briefs, audits) see what the verification
+            # gates actually searched against.
+            self.assertIn("theme_search_keywords", df.columns)
+            self.assertEqual(
+                sorted(df.iloc[0]["theme_search_keywords"]),
+                sorted(["quantum computing", "qubit"]),
+            )
             out = cache_dir / "2026-05-15.parquet"
             self.assertTrue(out.exists())
 
@@ -278,9 +451,11 @@ class TestMapThemes(unittest.TestCase):
                 patch.object(
                     orchestrator.gemini_mapper,
                     "propose_candidates",
-                    return_value=[
-                        {"ticker": "MADEUP", "rationale": "halluc", "confidence": 0.3},
-                    ],
+                    return_value=_mapper_result(
+                        candidates=[
+                            {"ticker": "MADEUP", "rationale": "halluc", "confidence": 0.3},
+                        ],
+                    ),
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
@@ -313,11 +488,13 @@ class TestMapThemes(unittest.TestCase):
                 patch.object(
                     orchestrator.gemini_mapper,
                     "propose_candidates",
-                    return_value=[
-                        {"ticker": "QUBT", "rationale": "pure-play", "confidence": 0.9},
-                        {"ticker": "NVDA", "rationale": "mega-cap", "confidence": 0.5},
-                        {"ticker": "MICRO", "rationale": "tiny", "confidence": 0.4},
-                    ],
+                    return_value=_mapper_result(
+                        candidates=[
+                            {"ticker": "QUBT", "rationale": "pure-play", "confidence": 0.9},
+                            {"ticker": "NVDA", "rationale": "mega-cap", "confidence": 0.5},
+                            {"ticker": "MICRO", "rationale": "tiny", "confidence": 0.4},
+                        ],
+                    ),
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
@@ -353,11 +530,13 @@ class TestMapThemes(unittest.TestCase):
                 patch.object(
                     orchestrator.gemini_mapper,
                     "propose_candidates",
-                    return_value=[
-                        {"ticker": "QBTS", "rationale": "x", "confidence": 0.9},  # verified
-                        {"ticker": "MISS1", "rationale": "x", "confidence": 0.5},  # all-failed
-                        {"ticker": "MISS2", "rationale": "x", "confidence": 0.5},  # all-unknown
-                    ],
+                    return_value=_mapper_result(
+                        candidates=[
+                            {"ticker": "QBTS", "rationale": "x", "confidence": 0.9},  # verified
+                            {"ticker": "MISS1", "rationale": "x", "confidence": 0.5},  # all-failed
+                            {"ticker": "MISS2", "rationale": "x", "confidence": 0.5},  # all-unknown
+                        ],
+                    ),
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
@@ -399,7 +578,9 @@ class TestMapThemes(unittest.TestCase):
                 patch.object(
                     orchestrator.gemini_mapper,
                     "propose_candidates",
-                    return_value=[{"ticker": "QBTS", "rationale": "x", "confidence": 0.9}],
+                    return_value=_mapper_result(
+                        candidates=[{"ticker": "QBTS", "rationale": "x", "confidence": 0.9}],
+                    ),
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
@@ -435,7 +616,11 @@ class TestMapThemes(unittest.TestCase):
 
     def test_map_themes_empty_when_no_proposals(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.object(orchestrator.gemini_mapper, "propose_candidates", return_value=[]):
+            with patch.object(
+                orchestrator.gemini_mapper,
+                "propose_candidates",
+                return_value=_mapper_result(),
+            ):
                 df = orchestrator.map_themes(
                     themes=["quantum_computing"],
                     asof=dt.date(2026, 5, 15),
@@ -443,6 +628,107 @@ class TestMapThemes(unittest.TestCase):
                     output_dir=Path(tmpdir),
                 )
             self.assertEqual(len(df), 0)
+
+    def test_map_themes_passes_pro_keywords_to_verify(self):
+        # Bug surfaced by 2023-01-23 MSFT-OpenAI retrospective: the naive
+        # ``_theme_keywords`` swap on theme "AI development" returned only
+        # ["AI development"] — too narrow to substring-match real press
+        # headlines that say "artificial intelligence" / "machine learning".
+        # When Pro supplies keywords, they MUST be threaded through to the
+        # gates instead of the fallback swap.
+        captured: dict[str, list[str] | None] = {}
+
+        def _capture_tenk(*, ticker, theme_keywords, asof):
+            captured["tenk_keywords"] = list(theme_keywords)
+            return False
+
+        def _capture_press(*, ticker, theme_keywords, asof, api_key, press_df=None):
+            captured["press_keywords"] = list(theme_keywords)
+            return False
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=_mapper_result(
+                        candidates=[{"ticker": "VRT", "rationale": "x", "confidence": 0.9}],
+                        search_keywords=[
+                            "artificial intelligence",
+                            "machine learning",
+                            "generative AI",
+                        ],
+                    ),
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value={"VRT": 1_000_000_000},
+                ),
+                patch.object(orchestrator, "_gate_etf", return_value=False),
+                patch.object(orchestrator, "_gate_tenk", side_effect=_capture_tenk),
+                patch.object(orchestrator, "_gate_press", side_effect=_capture_press),
+                patch.object(orchestrator, "_gate_insider", return_value=False),
+            ):
+                orchestrator.map_themes(
+                    themes=["AI development"],
+                    asof=dt.date(2023, 1, 23),
+                    api_key="testkey",
+                    output_dir=Path(tmpdir),
+                    keep_unverified=True,
+                )
+
+        self.assertEqual(
+            captured["tenk_keywords"],
+            ["artificial intelligence", "machine learning", "generative AI"],
+        )
+        self.assertEqual(
+            captured["press_keywords"],
+            ["artificial intelligence", "machine learning", "generative AI"],
+        )
+
+    def test_map_themes_falls_back_to_swap_when_pro_keywords_missing(self):
+        # If Pro returns no keywords (older response shape or empty list),
+        # gates still receive the snake↔space swap so they have *something*
+        # to substring-match against — narrow, but not empty.
+        captured: dict[str, list[str] | None] = {}
+
+        def _capture_tenk(*, ticker, theme_keywords, asof):
+            captured["tenk_keywords"] = list(theme_keywords)
+            return False
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=_mapper_result(
+                        candidates=[{"ticker": "QBTS", "rationale": "x", "confidence": 0.9}],
+                        # Pro returned nothing for keywords
+                        search_keywords=[],
+                    ),
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value={"QBTS": 1_000_000_000},
+                ),
+                patch.object(orchestrator, "_gate_etf", return_value=False),
+                patch.object(orchestrator, "_gate_tenk", side_effect=_capture_tenk),
+                patch.object(orchestrator, "_gate_press", return_value=False),
+                patch.object(orchestrator, "_gate_insider", return_value=False),
+            ):
+                orchestrator.map_themes(
+                    themes=["quantum_computing"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    output_dir=Path(tmpdir),
+                    keep_unverified=True,
+                )
+        self.assertEqual(
+            sorted(captured["tenk_keywords"]),
+            sorted(["quantum_computing", "quantum computing"]),
+        )
 
 
 class TestGateWrappers(unittest.TestCase):
@@ -505,7 +791,9 @@ class TestMapThemesWritesGatesPassedStr(unittest.TestCase):
                 patch.object(
                     orchestrator.gemini_mapper,
                     "propose_candidates",
-                    return_value=[{"ticker": "QBTS", "rationale": "x", "confidence": 0.9}],
+                    return_value=_mapper_result(
+                        candidates=[{"ticker": "QBTS", "rationale": "x", "confidence": 0.9}],
+                    ),
                 ),
                 patch.object(
                     orchestrator.mcap_filter,

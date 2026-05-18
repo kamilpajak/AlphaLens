@@ -37,7 +37,15 @@ _MAPPER_RESPONSE_SCHEMA: dict = {
                 },
                 "required": ["ticker", "rationale", "confidence"],
             },
-        }
+        },
+        # Theme-level keyword vocabulary used by the verification gates
+        # (press, 10-K). Pro understands the theme intent best — pulling
+        # synonyms here avoids a hand-curated synonym YAML or a second LLM
+        # hop at gate time. Optional so older response shapes still parse.
+        "search_keywords": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
     },
     "required": ["candidates"],
 }
@@ -65,14 +73,35 @@ Do NOT self-censor by size; the orchestrator applies a real-time mcap filter
 post-hoc via yfinance. Your stale training-cutoff price snapshot would over-
 filter names that have rallied since.
 
+ALSO RETURN search_keywords
+---------------------------
+A list of 5 to 10 short phrases that would plausibly appear verbatim in a
+press headline or a 10-K business-description paragraph that discusses this
+theme. Include common synonyms, abbreviations, and adjacent vocabulary —
+the goal is recall for substring matching against headlines and filings,
+not precision.
+
+Examples:
+  theme "quantum_computing"  → ["quantum computing", "qubit", "quantum
+    annealing", "trapped-ion", "superconducting qubit", "quantum hardware"]
+  theme "AI development"     → ["artificial intelligence", "machine
+    learning", "generative AI", "large language model", "LLM", "neural
+    network", "deep learning", "foundation model"]
+
 OUTPUT
 ------
-Return a JSON object with a single field `candidates`, an array of objects:
+Return a JSON object with two fields, `candidates` and `search_keywords`:
 {{
-  "ticker": "<uppercase US ticker>",
-  "company_name": "<official company name>",
-  "rationale": "<one to two sentences, factual, no marketing tone>",
-  "confidence": <0.0..1.0, your own subjective confidence>
+  "candidates": [
+    {{
+      "ticker": "<uppercase US ticker>",
+      "company_name": "<official company name>",
+      "rationale": "<one to two sentences, factual, no marketing tone>",
+      "confidence": <0.0..1.0, your own subjective confidence>
+    }},
+    ...
+  ],
+  "search_keywords": ["<phrase1>", "<phrase2>", ...]
 }}
 """
 
@@ -104,10 +133,20 @@ def build_prompt(theme: str) -> str:
     return _PROMPT_TEMPLATE.format(theme=theme)
 
 
-def _normalize(items: list[dict]) -> list[dict]:
-    """Coerce LLM output: uppercase tickers, clamp confidence, drop blanks."""
+def _normalize(items) -> list[dict]:
+    """Coerce LLM output: uppercase tickers, clamp confidence, drop blanks.
+
+    Defensive against schema violations: if ``items`` is not a list, or any
+    entry is not a dict, the bad input is silently dropped rather than
+    raising ``AttributeError`` mid-batch (Pro occasionally returns a single
+    object instead of an array when only one candidate was generated).
+    """
+    if not isinstance(items, list):
+        return []
     out: list[dict] = []
     for it in items:
+        if not isinstance(it, dict):
+            continue
         ticker = str(it.get("ticker") or "").strip().upper()
         if not ticker:
             continue
@@ -127,6 +166,55 @@ def _normalize(items: list[dict]) -> list[dict]:
     return out
 
 
+def _theme_fallback_keywords(theme: str) -> list[str]:
+    """Snake↔space swap fallback for when Pro returns no keywords."""
+    raw = str(theme).strip()
+    spaced = raw.replace("_", " ")
+    # ``dict.fromkeys`` preserves insertion order while dropping dupes;
+    # blanks (e.g. theme="") drop out via the truthy filter.
+    return [v for v in dict.fromkeys([raw, spaced]) if v]
+
+
+_MIN_KEYWORD_LEN = 2
+
+
+def _normalize_keywords(items, *, theme: str) -> list[str]:
+    """Strip, dedup case-insensitively, drop blanks. Fall back to theme swap.
+
+    Verification gates substring-match these against headlines and 10-K
+    paragraphs — duplicates and whitespace just waste work. Case-folding
+    the dedupe key keeps the first-seen casing intact so display layers
+    can show the readable form.
+
+    Defensive against schema violations:
+    - ``items`` as a bare string (e.g. ``"quantum"``) is NOT iterated
+      character-by-character — that would yield 1-char "keywords" that
+      substring-match every headline and silently false-verify everything.
+      A bare string is dropped; the swap fallback kicks in.
+    - Non-string entries (ints, dicts, None) are skipped.
+    - Keywords shorter than ``_MIN_KEYWORD_LEN`` are dropped: 1-char
+      "AI" / "I" / "A" / "M" would all substring-match noise.
+    """
+    if not isinstance(items, list):
+        items = []
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in items:
+        if not isinstance(raw, str):
+            continue
+        kw = raw.strip()
+        if len(kw) < _MIN_KEYWORD_LEN:
+            continue
+        key = kw.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(kw)
+    if not out:
+        return _theme_fallback_keywords(theme)
+    return out
+
+
 def propose_candidates(
     *,
     theme: str,
@@ -134,12 +222,18 @@ def propose_candidates(
     client=None,
     types_mod=None,
     model: str = DEFAULT_MODEL,
-) -> list[dict]:
-    """Ask Gemini 3 Pro to enumerate public-market beneficiaries of ``theme``.
+) -> dict:
+    """Ask Gemini 3 Pro for theme beneficiaries AND a keyword vocabulary.
 
-    Returns size-unfiltered candidates: the orchestrator applies a real-time
-    mcap bracket post-hoc via yfinance. (LLM-side mcap brackets filter
-    against the model's training-cutoff snapshot, not current prices.)
+    Returns a dict with two keys:
+
+    - ``candidates`` — size-unfiltered candidate list. The orchestrator
+      applies a real-time mcap bracket post-hoc via yfinance. (LLM-side
+      mcap brackets filter against training-cutoff prices, not current.)
+    - ``search_keywords`` — theme-level synonym list for the verification
+      gates (press, 10-K). Falls back to a snake↔space swap of ``theme``
+      when Pro returns nothing usable, so gates always have *something*
+      to substring-match against.
 
     Convenience path: pass ``api_key=`` and a fresh ``genai.Client`` is built.
     Batch path: pass a pre-built ``client`` and ``types_mod`` so a multi-theme
@@ -155,13 +249,16 @@ def propose_candidates(
         response = _call_gemini(client, prompt, model=model, types_mod=types_mod)
     except Exception as exc:
         logger.warning("Gemini mapper failed for theme %r: %s", theme, exc, exc_info=True)
-        return []
+        return {"candidates": [], "search_keywords": []}
     raw = getattr(response, "text", "") or ""
     parsed = parse_extraction(raw)
     if parsed is None or "candidates" not in parsed:
         logger.warning("Gemini mapper returned unparseable payload for %r: %r", theme, raw[:200])
-        return []
-    return _normalize(parsed.get("candidates") or [])
+        return {"candidates": [], "search_keywords": []}
+    return {
+        "candidates": _normalize(parsed.get("candidates") or []),
+        "search_keywords": _normalize_keywords(parsed.get("search_keywords"), theme=theme),
+    }
 
 
 __all__ = ["DEFAULT_MODEL", "build_prompt", "propose_candidates"]
