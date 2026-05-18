@@ -50,7 +50,8 @@ def export_day(parquet_path: Path) -> dict:
     candidates = [_row_to_dict(row) for _, row in df.iterrows()]
 
     theme_counts = df["theme"].value_counts().to_dict()
-    top_theme = max(theme_counts, key=theme_counts.get) if theme_counts else None
+    # Sort by count desc, theme asc for deterministic tiebreak.
+    top_theme = max(theme_counts, key=lambda k: (theme_counts[k], k)) if theme_counts else None
 
     payload = {
         "date": date_str,
@@ -77,7 +78,7 @@ def main() -> None:
     for pq in parquet_files:
         payload = export_day(pq)
         out = days_dir / f"{payload['date']}.json"
-        out.write_text(json.dumps(payload, indent=2))
+        _atomic_write_text(out, json.dumps(payload, indent=2))
         index.append(
             {
                 "date": payload["date"],
@@ -91,8 +92,20 @@ def main() -> None:
         )
 
     index.sort(key=lambda d: d["date"], reverse=True)
-    (OUT_DIR / "days.json").write_text(json.dumps(index, indent=2))
+    _atomic_write_text(OUT_DIR / "days.json", json.dumps(index, indent=2))
     print(f"wrote days.json index ({len(index)} days)")
+
+
+def _atomic_write_text(target: Path, content: str) -> None:
+    """Write `content` to `target` atomically (tmp file + os.replace).
+
+    Partial reads from a SvelteKit dev server (which watches `static/data/`)
+    would otherwise parse a half-written JSON file. os.replace is atomic on
+    POSIX and Windows.
+    """
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(content)
+    tmp.replace(target)
 
 
 if __name__ == "__main__":

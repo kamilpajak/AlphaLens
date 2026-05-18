@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Candidate } from '$lib/types';
-	import { fmtUsdCompact, fmtPct, fmtNum, fmtPctile, fmtDate, confidenceColor } from '$lib/format';
+	import { fmtUsdCompact, fmtPct, fmtNum, fmtPctile, fmtDate, confidenceTone } from '$lib/format';
 	import { ArrowUpRight, ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
 	import GatePill from './GatePill.svelte';
@@ -12,6 +12,7 @@
 	let { candidate: c, index }: Props = $props();
 
 	const conf5 = $derived(Math.round(c.gemini_confidence * 5));
+	const confTone = $derived(confidenceTone(c.gemini_confidence));
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
 
@@ -20,7 +21,7 @@
 
 <article
 	id={c.ticker}
-	class="border border-grid bg-bg-1 fade-up"
+	class="border border-grid bg-bg-1 fade-up isolate"
 	style="animation-delay: {index * 0.04}s"
 >
 	<!-- Header strip -->
@@ -62,7 +63,13 @@
 		</div>
 		<div class="col-span-1 text-[10px] uppercase tracking-widest">
 			<div class="text-fg-muted">conf</div>
-			<div class="{confidenceColor(c.gemini_confidence)} text-lg font-bold normal-case">{conf5}/5</div>
+			<div
+				class="text-lg font-bold normal-case"
+				class:text-green={confTone === 'green'}
+				class:text-amber={confTone === 'amber'}
+				class:text-cyan={confTone === 'cyan'}
+				class:text-fg-muted={confTone === 'muted'}
+			>{conf5}/5</div>
 		</div>
 		<div class="col-span-2 text-right text-[10px] uppercase tracking-widest">
 			<div class="text-fg-muted">catalyst</div>
@@ -139,7 +146,7 @@
 		/>
 		<SignalBar
 			label="catalyst strength"
-			value={c.catalyst_strength ? c.catalyst_strength * 100 : null}
+			value={c.catalyst_strength != null ? c.catalyst_strength * 100 : null}
 			format={(v) => (v / 100).toFixed(2)}
 		/>
 
@@ -150,9 +157,9 @@
 		/>
 		<SignalBar
 			label="off 52w high"
-			value={c.technical_pct_off_52w_high !== null ? Math.abs(c.technical_pct_off_52w_high) : null}
+			value={c.technical_pct_off_52w_high != null ? Math.abs(c.technical_pct_off_52w_high) : null}
 			min={0}
-			max={70}
+			max={95}
 			format={(v) => '-' + v.toFixed(1) + '%'}
 			inverted
 		/>
@@ -185,14 +192,14 @@
 				<dt class="text-fg-muted uppercase tracking-widest">roe</dt><dd class="text-fg text-right">{fmtPct(c.roe_pct)}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest">fcff yield</dt><dd class="text-fg text-right">{fmtPct(c.fcff_yield_pct, 2)}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest">magic formula</dt><dd class="text-right">
-					{#if c.magic_formula_rank !== null && c.magic_formula_rank !== undefined}
+					{#if c.magic_formula_rank != null}
 						<span class="text-amber font-bold">#{Math.round(c.magic_formula_rank)}</span>
 						<span class="text-fg-muted">/{c.magic_formula_cohort_n}</span>
 					{:else}
 						<span class="text-fg-muted">health-gate fail</span>
 					{/if}
 				</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">financials age</dt><dd class="text-fg text-right">{c.valuation_financials_age_days ? Math.round(c.valuation_financials_age_days) + 'd' : '—'}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest">financials age</dt><dd class="text-fg text-right">{c.valuation_financials_age_days != null ? Math.round(c.valuation_financials_age_days) + 'd' : '—'}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest">next earnings</dt><dd class="text-fg text-right">{fmtDate(c.next_earnings_date)}</dd>
 			</dl>
 		</div>
@@ -203,10 +210,10 @@
 				<dt class="text-fg-muted uppercase tracking-widest">ma200 dist</dt><dd class="text-fg text-right">{fmtPct(c.technical_ma200_distance_pct)}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest">ma200 slope</dt><dd class="text-fg text-right">{c.technical_ma200_slope_pct_per_day !== null ? fmtPct(c.technical_ma200_slope_pct_per_day, 3) + '/d' : '—'}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest">atr</dt><dd class="text-fg text-right">{fmtPct(c.technical_atr_pct)}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">position size</dt><dd class="text-amber text-right font-bold">{c.brief_position_pct ? c.brief_position_pct.toFixed(1) + '%' : '—'}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">time exit</dt><dd class="text-fg text-right">{c.brief_time_exit_weeks ? c.brief_time_exit_weeks + 'w' : '—'}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">catalyst-fail exit</dt><dd class="text-fg text-right">{c.brief_time_exit_on_catalyst_failure_weeks ? c.brief_time_exit_on_catalyst_failure_weeks + 'w' : '—'}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">disaster stop</dt><dd class="text-red text-right">{c.brief_disaster_stop_pct ? fmtPct(c.brief_disaster_stop_pct, 0) : '—'}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest">position size</dt><dd class="text-amber text-right font-bold">{c.brief_position_pct != null ? c.brief_position_pct.toFixed(1) + '%' : '—'}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest">time exit</dt><dd class="text-fg text-right">{c.brief_time_exit_weeks != null ? c.brief_time_exit_weeks + 'w' : '—'}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest">catalyst-fail exit</dt><dd class="text-fg text-right">{c.brief_time_exit_on_catalyst_failure_weeks != null ? c.brief_time_exit_on_catalyst_failure_weeks + 'w' : '—'}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest">disaster stop</dt><dd class="text-red text-right">{c.brief_disaster_stop_pct != null ? fmtPct(c.brief_disaster_stop_pct, 0) : '—'}</dd>
 			</dl>
 		</div>
 	</div>

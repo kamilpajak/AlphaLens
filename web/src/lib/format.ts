@@ -34,12 +34,14 @@ export function confidenceLabel(conf: number | null | undefined): string {
 	return `${stars}/5`;
 }
 
-export function confidenceColor(conf: number | null | undefined): string {
-	if (conf === null || conf === undefined) return 'text-fg-muted';
-	if (conf >= 0.8) return 'text-green';
-	if (conf >= 0.6) return 'text-amber';
-	if (conf >= 0.4) return 'text-cyan';
-	return 'text-fg-muted';
+export type ConfidenceTone = 'green' | 'amber' | 'cyan' | 'muted';
+
+export function confidenceTone(conf: number | null | undefined): ConfidenceTone {
+	if (conf == null) return 'muted';
+	if (conf >= 0.8) return 'green';
+	if (conf >= 0.6) return 'amber';
+	if (conf >= 0.4) return 'cyan';
+	return 'muted';
 }
 
 export function technicalsTrend(slope: number | null | undefined): 'up' | 'down' | 'flat' {

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ArrowUpRight, Calendar, Layers, Sparkles, Target, TrendingUp } from 'lucide-svelte';
 	import type { PageData } from './$types';
-	import { confidenceColor, fmtUsdCompact, fmtPct } from '$lib/format';
+	import { confidenceTone, fmtUsdCompact, fmtPct } from '$lib/format';
 
 	let { data }: { data: PageData } = $props();
 
@@ -176,9 +176,15 @@
 							<div class="text-fg-muted uppercase tracking-widest">mcap</div>
 							<div class="text-fg">{fmtUsdCompact(c.market_cap)}</div>
 						</div>
+						{@const ct = confidenceTone(c.gemini_confidence)}
 						<div class="col-span-1 text-[11px]">
 							<div class="text-fg-muted uppercase tracking-widest">conf</div>
-							<div class={confidenceColor(c.gemini_confidence)}>
+							<div
+								class:text-green={ct === 'green'}
+								class:text-amber={ct === 'amber'}
+								class:text-cyan={ct === 'cyan'}
+								class:text-fg-muted={ct === 'muted'}
+							>
 								{Math.round(c.gemini_confidence * 5)}/5
 							</div>
 						</div>

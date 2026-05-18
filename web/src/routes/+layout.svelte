@@ -6,7 +6,16 @@
 
 	let { children } = $props();
 
-	const now = $derived(new Date().toISOString().slice(0, 19).replace('T', ' '));
+	let now = $state('');
+	$effect(() => {
+		const tick = () => {
+			now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+		};
+		tick();
+		const id = setInterval(tick, 1000);
+		return () => clearInterval(id);
+	});
+
 	const route = $derived(page.url.pathname);
 </script>
 
@@ -66,7 +75,7 @@
 			<span class="text-amber">PRESS-WINDOW</span><span>30d</span>
 			<span class="text-amber">SLIPPAGE</span><span>50bps</span>
 			<span class="text-amber">LIMIT</span><span>polygon 5rpm</span>
-			<span class="ml-auto">v0.1 // build {now}</span>
+			<span class="ml-auto">v0.1</span>
 		</div>
 	</footer>
 </div>
