@@ -6,8 +6,18 @@
 		max?: number;
 		format?: (v: number) => string;
 		inverted?: boolean;
+		/** Optional descriptive tooltip shown on hover. */
+		tooltip?: string;
 	}
-	let { label, value, min = 0, max = 100, format = (v) => v.toFixed(1), inverted = false }: Props = $props();
+	let {
+		label,
+		value,
+		min = 0,
+		max = 100,
+		format = (v) => v.toFixed(1),
+		inverted = false,
+		tooltip
+	}: Props = $props();
 
 	const pct = $derived(
 		value === null || value === undefined || !Number.isFinite(value)
@@ -32,7 +42,11 @@
 	});
 </script>
 
-<div class="text-[10px] uppercase tracking-widest">
+<div
+	data-testid="signal-bar"
+	class="group relative text-[10px] uppercase tracking-widest hover:z-50"
+	class:cursor-help={tooltip}
+>
 	<div class="flex items-center justify-between mb-1.5 gap-2">
 		<span class="text-fg-muted truncate">{label}</span>
 		<span
@@ -53,4 +67,19 @@
 			style="width: {pct}%"
 		></div>
 	</div>
+
+	{#if tooltip}
+		<span
+			class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-80 z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+			role="tooltip"
+		>
+			<span class="block border border-amber bg-bg-1 px-3 py-2 text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl">
+				<span class="block text-amber font-bold uppercase tracking-widest text-[10px] mb-1">
+					{label}
+				</span>
+				<span class="block">{tooltip}</span>
+			</span>
+			<span class="absolute left-1/2 -translate-x-1/2 top-full w-2 h-2 border-r border-b border-amber bg-bg-1 -mt-1 rotate-45"></span>
+		</span>
+	{/if}
 </div>
