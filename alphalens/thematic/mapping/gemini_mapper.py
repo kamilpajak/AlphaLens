@@ -133,10 +133,20 @@ def build_prompt(theme: str) -> str:
     return _PROMPT_TEMPLATE.format(theme=theme)
 
 
-def _normalize(items: list[dict]) -> list[dict]:
-    """Coerce LLM output: uppercase tickers, clamp confidence, drop blanks."""
+def _normalize(items) -> list[dict]:
+    """Coerce LLM output: uppercase tickers, clamp confidence, drop blanks.
+
+    Defensive against schema violations: if ``items`` is not a list, or any
+    entry is not a dict, the bad input is silently dropped rather than
+    raising ``AttributeError`` mid-batch (Pro occasionally returns a single
+    object instead of an array when only one candidate was generated).
+    """
+    if not isinstance(items, list):
+        return []
     out: list[dict] = []
     for it in items:
+        if not isinstance(it, dict):
+            continue
         ticker = str(it.get("ticker") or "").strip().upper()
         if not ticker:
             continue
@@ -165,6 +175,9 @@ def _theme_fallback_keywords(theme: str) -> list[str]:
     return [v for v in dict.fromkeys([raw, spaced]) if v]
 
 
+_MIN_KEYWORD_LEN = 2
+
+
 def _normalize_keywords(items, *, theme: str) -> list[str]:
     """Strip, dedup case-insensitively, drop blanks. Fall back to theme swap.
 
@@ -172,19 +185,31 @@ def _normalize_keywords(items, *, theme: str) -> list[str]:
     paragraphs — duplicates and whitespace just waste work. Case-folding
     the dedupe key keeps the first-seen casing intact so display layers
     can show the readable form.
+
+    Defensive against schema violations:
+    - ``items`` as a bare string (e.g. ``"quantum"``) is NOT iterated
+      character-by-character — that would yield 1-char "keywords" that
+      substring-match every headline and silently false-verify everything.
+      A bare string is dropped; the swap fallback kicks in.
+    - Non-string entries (ints, dicts, None) are skipped.
+    - Keywords shorter than ``_MIN_KEYWORD_LEN`` are dropped: 1-char
+      "AI" / "I" / "A" / "M" would all substring-match noise.
     """
+    if not isinstance(items, list):
+        items = []
     out: list[str] = []
     seen: set[str] = set()
-    if items:
-        for raw in items:
-            kw = str(raw or "").strip()
-            if not kw:
-                continue
-            key = kw.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(kw)
+    for raw in items:
+        if not isinstance(raw, str):
+            continue
+        kw = raw.strip()
+        if len(kw) < _MIN_KEYWORD_LEN:
+            continue
+        key = kw.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(kw)
     if not out:
         return _theme_fallback_keywords(theme)
     return out

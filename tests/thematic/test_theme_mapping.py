@@ -149,6 +149,99 @@ class TestPropose(unittest.TestCase):
         self.assertEqual(result["candidates"], [])
         self.assertEqual(result["search_keywords"], [])
 
+    def test_propose_drops_malformed_candidate_entries(self):
+        # Zen pre-push HIGH finding: Pro may violate schema and return a dict
+        # where a list is expected, or non-dict items inside the list. Without
+        # type guards in ``_normalize`` the ``it.get("ticker")`` call raises
+        # AttributeError and crashes the whole batch run.
+        payload = {
+            "candidates": [
+                {"ticker": "QBTS", "rationale": "ok", "confidence": 0.9},
+                "not a dict",  # malformed: string instead of dict
+                None,  # malformed: None instead of dict
+                ["also", "wrong"],  # malformed: list instead of dict
+            ],
+            "search_keywords": ["quantum"],
+        }
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        # Only the well-formed entry survives.
+        self.assertEqual(len(result["candidates"]), 1)
+        self.assertEqual(result["candidates"][0]["ticker"], "QBTS")
+
+    def test_propose_handles_candidates_as_dict_not_list(self):
+        # Pro returning a single object instead of an array. ``_normalize``
+        # must not iterate over a dict's keys — that would yield string keys
+        # and crash on ``str.get``.
+        payload = {
+            "candidates": {"ticker": "QBTS", "rationale": "ok", "confidence": 0.9},
+            "search_keywords": ["quantum"],
+        }
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        # Non-list candidates payload coerces to empty rather than crashing.
+        self.assertEqual(result["candidates"], [])
+
+    def test_propose_handles_search_keywords_as_bare_string(self):
+        # Zen pre-push CRITICAL finding: if Pro returns ``"quantum"`` (a bare
+        # string) instead of ``["quantum"]``, iterating over it yields
+        # characters. Single-char keywords substring-match every press headline
+        # and 10-K paragraph, silently false-verifying every candidate.
+        payload = {
+            "candidates": SAMPLE_MAPPER_RESPONSE["candidates"],
+            "search_keywords": "quantum",  # bare string, not a list
+        }
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        kws = result["search_keywords"]
+        # Bare string must NOT explode into ['q','u','a',...]. Either wrap
+        # into a single-element list OR drop and fall back to swap — both are
+        # acceptable; what's unacceptable is character-level iteration.
+        self.assertTrue(
+            all(len(k) >= 2 for k in kws),
+            f"keywords contain a 1-char entry that would false-match: {kws}",
+        )
+
+    def test_propose_drops_non_string_keywords(self):
+        payload = {
+            "candidates": SAMPLE_MAPPER_RESPONSE["candidates"],
+            "search_keywords": [
+                "valid keyword",
+                123,  # int — drop
+                None,  # None — drop
+                {"keyword": "quantum"},  # dict — drop
+                "another valid",
+            ],
+        }
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        self.assertEqual(
+            sorted(k.lower() for k in result["search_keywords"]),
+            sorted(["valid keyword", "another valid"]),
+        )
+
+    def test_propose_drops_single_character_keywords(self):
+        # Defense-in-depth: even if a 1-char keyword survives normalisation
+        # somehow (e.g. Pro returns ["A","I","ML"]), it must be filtered out
+        # before reaching the gates — substring-matching "A" against any 10-K
+        # paragraph would return True for every candidate.
+        payload = {
+            "candidates": SAMPLE_MAPPER_RESPONSE["candidates"],
+            "search_keywords": ["A", "I", "ML", "machine learning"],
+        }
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+            result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        kws = result["search_keywords"]
+        self.assertNotIn("A", kws)
+        self.assertNotIn("I", kws)
+        self.assertIn("ML", kws)  # 2-char abbreviation is fine
+        self.assertIn("machine learning", kws)
+
 
 # ============================================================
 # Orchestrator
