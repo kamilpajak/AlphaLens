@@ -1,0 +1,20 @@
+[
+  {
+    "date": "2026-05-18",
+    "n_candidates": 16,
+    "n_themes": 8,
+    "top_theme": "promotions"
+  },
+  {
+    "date": "2026-04-14",
+    "n_candidates": 6,
+    "n_themes": 2,
+    "top_theme": "quantum_computing"
+  },
+  {
+    "date": "2023-01-23",
+    "n_candidates": 3,
+    "n_themes": 1,
+    "top_theme": "enterprise AI"
+  }
+]
