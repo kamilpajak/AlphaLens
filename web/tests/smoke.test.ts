@@ -165,6 +165,15 @@ test.describe('smoke — brief detail interactions', () => {
 		expect(pageErrors).toEqual([]);
 	});
 
+	test('signal-bar tooltip renders on hover (CSS regression guard)', async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		// First SignalBar wrapper in first article — has cursor-help because tooltip prop is set.
+		const firstBar = page.locator('article[id] div.group.cursor-help').first();
+		await firstBar.hover();
+		const tooltip = page.locator('article[id] [role="tooltip"]').first();
+		await expect(tooltip).toBeVisible();
+	});
+
 	test('gate-pill tooltip renders on hover (CSS regression guard)', async ({ page }) => {
 		await page.goto(`/brief/${latestDay.date}`);
 		// Inner pill carries the status symbol. Hover its wrapper (.group) to
