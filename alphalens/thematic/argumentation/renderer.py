@@ -124,6 +124,29 @@ def _fmt_insider_usd(value: Any) -> str:
         return "n/a"
 
 
+def _format_insider_cell(score: Any, pctile: Any) -> str:
+    """Render the insider table cell with score-aware suffix.
+
+    Three cases (bug 6, 2026-05-18 audit):
+    - ``score`` is NaN/None → ``n/a (pctile n/a)`` — Form-4 data missing.
+    - ``score`` is zero → ``$0k (no opportunistic buys)`` — window had
+      no qualifying buys. The mathematical pctile (often 96-100 when the
+      cohort is dominated by tied zeros) reads as a positive signal in
+      the UI; the descriptor is more honest.
+    - ``score`` is positive → ``$Xk (pctile Y)`` — meaningful ranking.
+    """
+    score_str = _fmt_insider_usd(score)
+    if score_str == "n/a":
+        return f"{score_str} (pctile {_fmt_pctile(pctile)})"
+    try:
+        is_zero = float(score) == 0.0
+    except (TypeError, ValueError):
+        is_zero = False
+    if is_zero:
+        return f"{score_str} (no opportunistic buys)"
+    return f"{score_str} (pctile {_fmt_pctile(pctile)})"
+
+
 def _prose_or_placeholder(value: Any) -> str:
     """Return non-empty string value as-is; otherwise return the placeholder.
 
@@ -154,61 +177,77 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
     weighted = r.get("layer4_weighted_score")
     weighted_str = f"{int(weighted)}/5" if not pd.isna(weighted) else "n/a"
 
-    # --- Deterministic header ----------------------------------------------
-    header = (
-        f"## {r.get('ticker')} — {r.get('company_name', '')} (conf {weighted_str})\n"
-        f"**Theme**: {r.get('theme', '')} | "
-        f"**Industry**: {r.get('industry_name', 'n/a')}"
-        f" ({r.get('sector_name', 'n/a')})\n"
-    )
-
-    # --- Deterministic catalyst line ---------------------------------------
-    catalyst_line = ""
+    # --- Deterministic head sections (each separated by blank line) --------
+    # The head bucket carries scan-cues the operator's eye should land on
+    # one at a time: ticker → theme/industry → catalyst → pattern. Blank
+    # lines between them mirror the bullet structure recommended in PR
+    # 2026-05-17 brief-layout pass.
+    head_sections: list[str] = [
+        f"## {r.get('ticker')} — {r.get('company_name', '')} (conf {weighted_str})",
+        (
+            f"**Theme**: {r.get('theme', '')} | "
+            f"**Industry**: {r.get('industry_name', 'n/a')}"
+            f" ({r.get('sector_name', 'n/a')})"
+        ),
+    ]
     src_url = r.get("source_event_url")
     if src_url and pd.notna(src_url) and str(src_url).strip().lower() != "nan":
         title = r.get("source_event_title") or ""
         published = r.get("source_event_published_at") or ""
-        catalyst_line = f"**Catalyst**: {title} ({published}) {src_url}\n"
-
-    # --- Deterministic pattern descriptor ---------------------------------
-    # Surfaces the technical setup classification (deep_drawdown / extended
-    # / neutral) so the operator can scan-bucket candidates without parsing
-    # the full signal panel.
-    pattern_line = _format_pattern_line(r)
+        head_sections.append(f"**Catalyst**: {title} ({published}) {src_url}")
+    pattern_line = _format_pattern_line(r).rstrip()
+    if pattern_line:
+        head_sections.append(pattern_line)
+    head = "\n\n".join(head_sections) + "\n\n"
 
     # --- LLM-composed prose with placeholders ------------------------------
     prose = {k: _prose_or_placeholder(b.get(k)) for k in _PROSE_FIELDS}
 
-    # --- Deterministic signal panel ----------------------------------------
+    # --- Deterministic signal panel (markdown table) -----------------------
+    # 2-col table — operator can scan label↔value vertically instead of
+    # parsing a long inline bar. Each row is independent so missing
+    # signals stay hidden rather than rendering empty cells.
+    signal_rows: list[tuple[str, str]] = [
+        (
+            "Insider 90d opportunistic",
+            _format_insider_cell(
+                r.get("insider_score_usd"),
+                r.get("insider_score_sector_percentile"),
+            ),
+        ),
+        (
+            "FCFF yield",
+            f"{_fmt_num(r.get('fcff_yield_pct'), '.1f')}%"
+            f" (pctile {_fmt_pctile(r.get('fcff_yield_sector_percentile'))})",
+        ),
+        (
+            "Valuation composite",
+            f"pctile {_fmt_pctile(r.get('valuation_composite_sector_percentile'))}",
+        ),
+    ]
     age_days = r.get("valuation_financials_age_days")
-    age_tag = f" | financials age {int(age_days)}d" if not pd.isna(age_days) else ""
+    if not pd.isna(age_days):
+        signal_rows.append(("Financials age", f"{int(age_days)}d"))
+    signal_rows.append(("Technicals", str(r.get("technicals_summary_str", "n/a"))))
     next_earnings = b.get("next_earnings_date") or r.get("next_earnings_date")
-    earnings_tag = f" | next earnings {next_earnings}" if next_earnings else ""
-    signal_panel = (
-        f"**Signals**: insider {_fmt_insider_usd(r.get('insider_score_usd'))}"
-        f" (pctile {_fmt_pctile(r.get('insider_score_sector_percentile'))})"
-        f" | FCFF {_fmt_num(r.get('fcff_yield_pct'), '.1f')}%"
-        f" (pctile {_fmt_pctile(r.get('fcff_yield_sector_percentile'))})"
-        f" | val composite pctile"
-        f" {_fmt_pctile(r.get('valuation_composite_sector_percentile'))}"
-        f"{age_tag}"
-        f" | {r.get('technicals_summary_str', 'n/a')}"
-        f"{earnings_tag}\n"
-        f"**Verified gates**: {r.get('gates_passed_str', '')}\n"
-    )
+    if next_earnings:
+        signal_rows.append(("Next earnings", str(next_earnings)))
+    signal_rows.append(("Verified gates", str(r.get("gates_passed_str", ""))))
+
+    signal_table_lines = ["| Signal | Value |", "|---|---|"]
+    signal_table_lines.extend(f"| {label} | {value} |" for label, value in signal_rows)
+    signal_panel = "\n".join(signal_table_lines) + "\n"
 
     # --- Setup line: position size + exit are deterministic; entry from LLM
     setup_line = (
         f"**Setup**: entry {prose['entry_price_note']}"
         f" | size {_fmt_num(position_pct_from_conf(weighted), '.1f')}%"
-        f" | exit {TIME_EXIT_DEFAULT_WEEKS}w | stop {DISASTER_STOP_PCT:.0f}%\n"
+        f" | exit {TIME_EXIT_DEFAULT_WEEKS}w | stop {DISASTER_STOP_PCT:.0f}%\n\n"
     )
 
     block = (
-        f"{header}"
-        f"{catalyst_line}"
-        f"{pattern_line}"
-        f"\n**Thesis**: {prose['tldr']}\n\n"
+        f"{head}"
+        f"**Thesis**: {prose['tldr']}\n\n"
         f"**Supply chain**: {prose['supply_chain_reasoning']}\n\n"
         f"**Bear case**: {prose['bear_summary']}\n\n"
         f"{setup_line}"

@@ -140,6 +140,107 @@ class TestRenderMarkdownGracefulDegradation(unittest.TestCase):
         self.assertNotIn("<NA>", md)
 
 
+class TestRenderMarkdownLayout(unittest.TestCase):
+    """Visual layout: blank lines between Theme / Catalyst / Pattern so the
+    operator's eye lands cleanly on each scan-bucket cue, and Signals +
+    Verified gates rendered as a markdown table instead of one wide bar."""
+
+    def test_blank_lines_between_all_sections(self):
+        # Every bold-prefixed section is followed by a blank line before
+        # the next one, so the operator's eye lands on each cue cleanly.
+        # Covers: Theme → Catalyst → Pattern → Thesis → Supply chain →
+        # Bear case → Setup → Catalyst-failure exit → signals table.
+        row = {
+            **_ROW,
+            "source_event_url": "https://example.com/news",
+            "source_event_title": "Headline",
+            "source_event_published_at": "2026-04-14",
+            "technical_pct_off_52w_high": -67.0,
+            "technical_ma200_distance_pct": -39.0,
+            "technical_ma200_slope_pct_per_day": -0.31,
+        }
+        md = renderer.render_markdown(row, _BRIEF)
+        section_markers = [
+            "**Theme**",
+            "**Catalyst**",
+            "**Pattern**",
+            "**Thesis**",
+            "**Supply chain**",
+            "**Bear case**",
+            "**Setup**",
+            "**Catalyst-failure exit**",
+            "| Signal | Value |",
+        ]
+        # All markers present in order.
+        positions = [md.index(m) for m in section_markers]
+        self.assertEqual(positions, sorted(positions))
+        # Between each consecutive pair there must be a blank line (\n\n).
+        for prev, nxt in zip(section_markers, section_markers[1:]):
+            chunk = md[md.index(prev) : md.index(nxt)]
+            self.assertIn("\n\n", chunk, f"missing blank line between {prev} and {nxt}")
+
+    def test_signals_rendered_as_markdown_table(self):
+        md = renderer.render_markdown(_ROW, _BRIEF)
+        # Table header + separator row.
+        self.assertIn("| Signal | Value |", md)
+        self.assertIn("|---|---|", md)
+        # Each row keyed by a recognizable label.
+        self.assertIn("| Insider 90d opportunistic |", md)
+        self.assertIn("| FCFF yield |", md)
+        self.assertIn("| Valuation composite |", md)
+        self.assertIn("| Technicals |", md)
+        self.assertIn("| Verified gates |", md)
+
+    def test_signals_table_omits_legacy_inline_signals_line(self):
+        # The old "**Signals**: insider $0k ... | ..." bar should be gone —
+        # the table replaces it. Guard against a regression that prints both.
+        md = renderer.render_markdown(_ROW, _BRIEF)
+        self.assertNotIn("**Signals**:", md)
+
+    def test_signals_table_includes_earnings_row_when_present(self):
+        brief_with_earnings = {**_BRIEF, "next_earnings_date": "2026-05-08"}
+        md = renderer.render_markdown(_ROW, brief_with_earnings)
+        self.assertIn("| Next earnings |", md)
+        self.assertIn("2026-05-08", md)
+
+    def test_signals_table_skips_earnings_row_when_absent(self):
+        md = renderer.render_markdown(_ROW, _BRIEF)
+        self.assertNotIn("| Next earnings |", md)
+
+
+class TestRenderInsiderValueDisplay(unittest.TestCase):
+    """Insider row display dispatches on score: ``None`` → n/a,
+    ``0`` → "no opportunistic buys" (descriptor, not pctile — high pctile
+    of tied zeros is mathematically true but reads as positive in UI),
+    positive → "(pctile X)". Bug 6 from 2026-05-18 audit."""
+
+    def test_insider_zero_score_shows_no_activity_not_pctile(self):
+        row = {**_ROW, "insider_score_usd": 0.0, "insider_score_sector_percentile": 96.0}
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("$0k (no opportunistic buys)", md)
+        # Pctile token must be absent from the insider row.
+        self.assertNotIn("pctile 96", md)
+
+    def test_insider_positive_score_keeps_pctile_display(self):
+        row = {
+            **_ROW,
+            "insider_score_usd": 250_000.0,
+            "insider_score_sector_percentile": 80.0,
+        }
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("$250k (pctile 80)", md)
+
+    def test_insider_none_score_renders_na(self):
+        row = {
+            **_ROW,
+            "insider_score_usd": None,
+            "insider_score_sector_percentile": None,
+        }
+        md = renderer.render_markdown(row, _BRIEF)
+        # n/a value with n/a pctile — no Form-4 data at all.
+        self.assertIn("n/a (pctile n/a)", md)
+
+
 class TestRenderDayBundle(unittest.TestCase):
     def test_concatenates_briefs_with_separator(self):
         briefs_df = pd.DataFrame(
