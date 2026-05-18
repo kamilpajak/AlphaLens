@@ -167,8 +167,8 @@ test.describe('smoke — brief detail interactions', () => {
 
 	test('signal-bar tooltip renders on hover (CSS regression guard)', async ({ page }) => {
 		await page.goto(`/brief/${latestDay.date}`);
-		// First SignalBar wrapper in first article — has cursor-help because tooltip prop is set.
-		const firstBar = page.locator('article[id] div.group.cursor-help').first();
+		// data-testid is stable across Tailwind class refactors.
+		const firstBar = page.locator('article[id] [data-testid="signal-bar"]').first();
 		await firstBar.hover();
 		const tooltip = page.locator('article[id] [role="tooltip"]').first();
 		await expect(tooltip).toBeVisible();

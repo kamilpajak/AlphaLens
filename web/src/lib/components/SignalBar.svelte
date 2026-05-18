@@ -16,7 +16,7 @@
 		max = 100,
 		format = (v) => v.toFixed(1),
 		inverted = false,
-		tooltip = ''
+		tooltip
 	}: Props = $props();
 
 	const pct = $derived(
@@ -42,7 +42,11 @@
 	});
 </script>
 
-<div class="group relative text-[10px] uppercase tracking-widest hover:z-50" class:cursor-help={tooltip}>
+<div
+	data-testid="signal-bar"
+	class="group relative text-[10px] uppercase tracking-widest hover:z-50"
+	class:cursor-help={tooltip}
+>
 	<div class="flex items-center justify-between mb-1.5 gap-2">
 		<span class="text-fg-muted truncate">{label}</span>
 		<span
