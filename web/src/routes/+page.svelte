@@ -155,6 +155,7 @@
 			</div>
 			<div class="divide-y divide-grid">
 				{#each topCandidates as c, i}
+					{@const ct = confidenceTone(c.gemini_confidence)}
 					<a
 						href="/brief/{data.latestBrief.date}#{c.ticker}"
 						class="grid grid-cols-12 items-center gap-3 px-4 py-3 hover:bg-bg-2 group transition-colors"
@@ -176,7 +177,6 @@
 							<div class="text-fg-muted uppercase tracking-widest">mcap</div>
 							<div class="text-fg">{fmtUsdCompact(c.market_cap)}</div>
 						</div>
-						{@const ct = confidenceTone(c.gemini_confidence)}
 						<div class="col-span-1 text-[11px]">
 							<div class="text-fg-muted uppercase tracking-widest">conf</div>
 							<div
