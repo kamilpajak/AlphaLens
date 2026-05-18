@@ -50,11 +50,11 @@ GATE_NAMES = ("etf", "tenk", "press", "insider")
 
 
 def _gate_etf(*, ticker: str, themes: Iterable[str], asof: dt.date) -> bool:
-    return etf_holdings.is_in_thematic_etf(ticker=ticker, themes=themes)
+    return etf_holdings.is_in_thematic_etf(ticker=ticker, themes=themes, asof=asof)
 
 
 def _gate_tenk(*, ticker: str, theme_keywords: Iterable[str], asof: dt.date) -> bool:
-    return tenk_grep.has_theme_keywords_in_10k(ticker=ticker, keywords=theme_keywords)
+    return tenk_grep.has_theme_keywords_in_10k(ticker=ticker, keywords=theme_keywords, asof=asof)
 
 
 def _gate_press(
@@ -254,7 +254,10 @@ def map_themes(
         if not candidates:
             continue
         in_bracket = mcap_filter.filter_by_mcap(
-            [c["ticker"] for c in candidates], min_cap=min_cap, max_cap=max_cap
+            [c["ticker"] for c in candidates],
+            min_cap=min_cap,
+            max_cap=max_cap,
+            asof=asof,
         )
         candidates = [c for c in candidates if c["ticker"] in in_bracket]
         keywords = _theme_keywords(theme)

@@ -1,3 +1,4 @@
+import datetime as dt
 import tempfile
 import unittest
 from pathlib import Path
@@ -353,6 +354,112 @@ class TestExtractTextScriptStripping(unittest.TestCase):
         finally:
             del os.environ["THEMATIC_USER_AGENT"]
         self.assertEqual(tenk_grep._user_agent(), tenk_grep.DEFAULT_USER_AGENT)
+
+
+class TestFetch10kPITPath(unittest.TestCase):
+    """``asof`` selects the latest cached 10-K whose ``{TICKER}_{filing_date}``
+    suffix is ≤ asof. Symmetric to ETF PIT path. When asof is None or
+    >= today, current 'always pick newest' behaviour preserved.
+    """
+
+    def _seed_cache(self, cache_dir: Path, ticker: str, filing_date: str, body: str) -> None:
+        (cache_dir / f"{ticker.upper()}_{filing_date}.txt").write_text(body)
+
+    def test_find_cached_picks_latest_on_or_before_asof(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            self._seed_cache(cache_dir, "NVDA", "2024-02-21", "v2024 text")
+            self._seed_cache(cache_dir, "NVDA", "2025-02-21", "v2025 text")
+            self._seed_cache(cache_dir, "NVDA", "2026-02-21", "v2026 text")
+            path = tenk_grep._find_cached("NVDA", cache_dir, asof=dt.date(2025, 6, 1))
+            self.assertIsNotNone(path)
+            self.assertEqual(path.name, "NVDA_2025-02-21.txt")
+
+    def test_find_cached_returns_none_when_no_file_on_or_before_asof(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            self._seed_cache(cache_dir, "NVDA", "2026-02-21", "v2026 text")
+            self.assertIsNone(tenk_grep._find_cached("NVDA", cache_dir, asof=dt.date(2025, 1, 1)))
+
+    def test_find_cached_asof_none_preserves_legacy_latest_pick(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            self._seed_cache(cache_dir, "NVDA", "2024-02-21", "v2024")
+            self._seed_cache(cache_dir, "NVDA", "2026-02-21", "v2026")
+            path = tenk_grep._find_cached("NVDA", cache_dir, asof=None)
+            self.assertEqual(path.name, "NVDA_2026-02-21.txt")
+
+    def test_find_cached_skips_unparseable_filenames(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            self._seed_cache(cache_dir, "NVDA", "2025-02-21", "good")
+            (cache_dir / "NVDA_garbage.txt").write_text("bad date")
+            path = tenk_grep._find_cached("NVDA", cache_dir, asof=dt.date(2026, 1, 1))
+            self.assertEqual(path.name, "NVDA_2025-02-21.txt")
+
+    def test_fetch_10k_text_does_not_fetch_when_historical_asof_uncached(self):
+        # Past asof + cold cache → return None, do NOT touch the SEC fetchers.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(
+                    tenk_grep,
+                    "_resolve_cik",
+                    side_effect=AssertionError("no cik resolve under historical asof"),
+                ),
+                patch.object(
+                    tenk_grep,
+                    "_fetch_submissions_json",
+                    side_effect=AssertionError("no submissions fetch"),
+                ),
+                patch.object(
+                    tenk_grep,
+                    "_fetch_filing_html",
+                    side_effect=AssertionError("no html fetch"),
+                ),
+            ):
+                text = tenk_grep.fetch_10k_text(
+                    ticker="NVDA", cache_dir=cache_dir, asof=dt.date(2024, 6, 1)
+                )
+        self.assertIsNone(text)
+
+    def test_has_theme_keywords_in_10k_uses_pit_filing(self):
+        # Older 10-K mentions quantum; newer doesn't. asof=mid → match older.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            self._seed_cache(cache_dir, "NVDA", "2024-02-21", "quantum computing roadmap")
+            self._seed_cache(cache_dir, "NVDA", "2026-02-21", "graphics products only")
+            self.assertTrue(
+                tenk_grep.has_theme_keywords_in_10k(
+                    ticker="NVDA",
+                    keywords=["quantum"],
+                    cache_dir=cache_dir,
+                    asof=dt.date(2025, 1, 1),
+                )
+            )
+            self.assertFalse(
+                tenk_grep.has_theme_keywords_in_10k(
+                    ticker="NVDA",
+                    keywords=["quantum"],
+                    cache_dir=cache_dir,
+                    asof=dt.date.today(),
+                )
+            )
+
+    def test_fetch_10k_text_live_asof_still_primes_cold_cache(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(
+                    tenk_grep, "_fetch_submissions_json", return_value=FIXTURE_FILING_INDEX
+                ),
+                patch.object(tenk_grep, "_fetch_filing_html", return_value=FIXTURE_10K_HTML),
+                patch.object(tenk_grep, "_resolve_cik", return_value="0001045810"),
+            ):
+                text = tenk_grep.fetch_10k_text(
+                    ticker="NVDA", cache_dir=cache_dir, asof=dt.date.today()
+                )
+        self.assertIn("CUDA", text)
 
 
 if __name__ == "__main__":

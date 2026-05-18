@@ -1,3 +1,4 @@
+import datetime as dt
 import tempfile
 import unittest
 from pathlib import Path
@@ -476,6 +477,159 @@ class TestVerificationGate(unittest.TestCase):
                         cache_dir=Path(tmpdir),
                     )
                 )
+
+
+class TestVerificationGatePITPath(unittest.TestCase):
+    """``asof`` selects the latest cache file with date ≤ asof, NOT the
+    newest available. Symmetric to the mcap_filter PIT path from the
+    2026-05-18 audit. When ``asof`` is None or >= today, current
+    'always pick newest' behaviour is preserved."""
+
+    def _seed_qtum(self, cache_dir: Path, *, date_iso: str, ticker_held: str) -> None:
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                {
+                    "name": f"{ticker_held} Inc",
+                    "cusip": "00000A001",
+                    "ticker": ticker_held,
+                    "pct_val": 1.0,
+                    "asset_cat": "EC",
+                }
+            ]
+        )
+        df.to_parquet(cache_dir / f"QTUM_{date_iso}.parquet", index=False)
+
+    def test_load_etf_holdings_picks_latest_on_or_before_asof(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            # 3 dated parquets; asof in the middle → should pick 2025-08-31, not 2026-04-30.
+            self._seed_qtum(cache_dir, date_iso="2024-12-31", ticker_held="OLDX")
+            self._seed_qtum(cache_dir, date_iso="2025-08-31", ticker_held="MIDX")
+            self._seed_qtum(cache_dir, date_iso="2026-04-30", ticker_held="NEWX")
+            df = etf_holdings._load_etf_holdings("QTUM", cache_dir, asof=dt.date(2025, 12, 1))
+        self.assertEqual(list(df["ticker"]), ["MIDX"])
+
+    def test_load_etf_holdings_returns_empty_when_no_file_on_or_before_asof(self):
+        # All cached parquets are AFTER asof → graceful empty df (gate later
+        # surfaces as None / gates_unknown, not a false negative).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            self._seed_qtum(cache_dir, date_iso="2026-04-30", ticker_held="NEWX")
+            df = etf_holdings._load_etf_holdings("QTUM", cache_dir, asof=dt.date(2024, 6, 1))
+        self.assertTrue(df.empty)
+
+    def test_load_etf_holdings_asof_none_preserves_legacy_latest_pick(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            self._seed_qtum(cache_dir, date_iso="2024-12-31", ticker_held="OLDX")
+            self._seed_qtum(cache_dir, date_iso="2026-04-30", ticker_held="NEWX")
+            df = etf_holdings._load_etf_holdings("QTUM", cache_dir, asof=None)
+        self.assertEqual(list(df["ticker"]), ["NEWX"])
+
+    def test_load_etf_holdings_skips_unparseable_filenames(self):
+        # Defensive: unrelated/malformed files in the cache dir don't break
+        # the date-filter — they're ignored, not coerced to NaT and crashed.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            self._seed_qtum(cache_dir, date_iso="2025-08-31", ticker_held="MIDX")
+            # Drop a junk file matching glob.
+            (cache_dir / "QTUM_not-a-date.parquet").write_text("garbage")
+            df = etf_holdings._load_etf_holdings("QTUM", cache_dir, asof=dt.date(2026, 4, 30))
+        self.assertEqual(list(df["ticker"]), ["MIDX"])
+
+    def test_is_in_thematic_etf_uses_pit_holdings(self):
+        # End-to-end: seed two parquets, candidate held in old not new.
+        # asof=mid → old wins → True. asof=today → new wins → False.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            self._seed_qtum(cache_dir, date_iso="2024-12-31", ticker_held="OLDQ")
+            self._seed_qtum(cache_dir, date_iso="2026-04-30", ticker_held="NEWQ")
+            with patch.object(
+                etf_holdings,
+                "load_theme_etf_config",
+                return_value={"quantum": [{"etf": "QTUM", "series_name": "Defiance Quantum"}]},
+            ):
+                self.assertTrue(
+                    etf_holdings.is_in_thematic_etf(
+                        ticker="OLDQ",
+                        themes=["quantum"],
+                        cache_dir=cache_dir,
+                        asof=dt.date(2025, 6, 1),
+                    )
+                )
+                self.assertFalse(
+                    etf_holdings.is_in_thematic_etf(
+                        ticker="OLDQ",
+                        themes=["quantum"],
+                        cache_dir=cache_dir,
+                        asof=dt.date.today(),
+                    )
+                )
+
+    def test_is_in_thematic_etf_past_asof_does_not_prime_cache(self):
+        # Historical asof + cold cache → return None (unknown), do NOT call
+        # fetch_holdings (that would just grab today's filing — leak).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(
+                    etf_holdings,
+                    "load_theme_etf_config",
+                    return_value={"quantum": [{"etf": "QTUM", "series_name": "Defiance Quantum"}]},
+                ),
+                patch.object(
+                    etf_holdings, "fetch_holdings", side_effect=AssertionError("no fetch")
+                ),
+            ):
+                result = etf_holdings.is_in_thematic_etf(
+                    ticker="IONQ",
+                    themes=["quantum"],
+                    cache_dir=cache_dir,
+                    asof=dt.date(2024, 6, 1),
+                )
+        self.assertIsNone(result)
+
+    def test_is_in_thematic_etf_today_asof_still_lazy_primes(self):
+        # Live flow unchanged — today/future asof primes cold cache.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            import pandas as pd
+
+            primed = pd.DataFrame(
+                [
+                    {
+                        "name": "IonQ Inc",
+                        "cusip": "46222L108",
+                        "ticker": "IONQ",
+                        "pct_val": 1.16,
+                        "asset_cat": "EC",
+                    }
+                ]
+            )
+
+            def fake_fetch(*, etf, series_name, cache_dir, max_age_days, force=False):
+                primed.to_parquet(cache_dir / f"{etf}_2026-04-30.parquet", index=False)
+                return primed
+
+            with (
+                patch.object(
+                    etf_holdings,
+                    "load_theme_etf_config",
+                    return_value={"quantum": [{"etf": "QTUM", "series_name": "Defiance Quantum"}]},
+                ),
+                patch.object(etf_holdings, "fetch_holdings", side_effect=fake_fetch) as m,
+            ):
+                self.assertTrue(
+                    etf_holdings.is_in_thematic_etf(
+                        ticker="IONQ",
+                        themes=["quantum"],
+                        cache_dir=cache_dir,
+                        asof=dt.date.today(),
+                    )
+                )
+                m.assert_called_once()
 
 
 class TestConfig(unittest.TestCase):

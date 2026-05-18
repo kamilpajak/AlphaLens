@@ -260,10 +260,36 @@ def _resolve_theme_keys(theme: str, cfg: dict) -> list[str]:
     return [k for k in cfg if t.startswith(k.lower() + "_")]
 
 
-def _load_etf_holdings(etf: str, cache_dir: Path) -> pd.DataFrame:
+def _load_etf_holdings(etf: str, cache_dir: Path, *, asof: dt.date | None = None) -> pd.DataFrame:
+    """Load the most-recent cached holdings parquet for ``etf``.
+
+    With ``asof=None`` (default, live flow): pick the alphabetically-last
+    parquet — preserves legacy behaviour.
+
+    With ``asof`` set (PIT flow): only consider parquets whose filename
+    date prefix is ``≤ asof``, then pick the latest of the remaining.
+    Empty DataFrame when no file qualifies — caller treats as "gate
+    unknown" rather than false-negative.
+    """
     candidates = sorted(cache_dir.glob(f"{etf}_*.parquet"))
     if not candidates:
         return pd.DataFrame(columns=["name", "cusip", "ticker", "pct_val", "asset_cat"])
+    if asof is not None:
+        prefix_len = len(etf) + 1  # "QTUM_"
+        eligible: list[Path] = []
+        for path in candidates:
+            # Filename shape: "{etf}_{YYYY-MM-DD}.parquet" — parse the
+            # 10-char date slice; skip unparseable filenames silently.
+            date_str = path.stem[prefix_len:]
+            try:
+                file_date = dt.date.fromisoformat(date_str)
+            except ValueError:
+                continue
+            if file_date <= asof:
+                eligible.append(path)
+        if not eligible:
+            return pd.DataFrame(columns=["name", "cusip", "ticker", "pct_val", "asset_cat"])
+        candidates = eligible
     return pd.read_parquet(candidates[-1])
 
 
@@ -275,6 +301,7 @@ def is_in_thematic_etf(
     ticker_to_name: dict[str, str] | None = None,
     prime: bool = True,
     max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+    asof: dt.date | None = None,
 ) -> bool | None:
     """Return tri-state membership check for ``ticker`` across themed ETFs.
 
@@ -309,10 +336,15 @@ def is_in_thematic_etf(
 
     ticker_upper = ticker.upper()
     name_query = (ticker_to_name or {}).get(ticker_upper, "").lower()
+    # For historical asof, never lazy-prime: fetch_holdings would only
+    # return today's NPORT-P filing — a look-ahead leak for a past asof.
+    # Caller treats empty result as gates_unknown rather than false-negative.
+    pit_replay = asof is not None and asof < dt.date.today()
+    effective_prime = prime and not pit_replay
     any_loaded = False
     for etf, series_name in relevant:
-        df = _load_etf_holdings(etf, cache_dir)
-        if df.empty and prime:
+        df = _load_etf_holdings(etf, cache_dir, asof=asof)
+        if df.empty and effective_prime:
             try:
                 df = fetch_holdings(
                     etf=etf,
