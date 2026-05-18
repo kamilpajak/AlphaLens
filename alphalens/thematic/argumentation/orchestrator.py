@@ -183,14 +183,14 @@ def _write_sidecar(output_dir: Path, asof: dt.date, n_pro: int, n_flash: int) ->
 # with an oversold setup. Magic Formula rank is ASCENDING (1 = best); all
 # other keys are DESCENDING. Neutral defaults backfill missing columns so
 # older parquets and partial enrichments don't crash the sort.
-_BRIEF_SORT_KEYS: tuple[tuple[str, bool, float], ...] = (
+_BRIEF_SORT_KEYS: tuple[tuple[str, bool, float | int | bool], ...] = (
     ("layer4_weighted_score", False, 0.0),
     ("catalyst_strength", False, 0.0),
     ("insider_score_usd", False, 0.0),
     ("deep_drawdown_reversal", False, False),
-    # ascending=True for magic_formula_rank (1 = best); use a very large
-    # default so missing rank sorts to the bottom rather than the top.
-    ("magic_formula_rank", True, 10**9),
+    # ascending=True for magic_formula_rank (1 = best); float("inf") so any
+    # missing rank sorts to the absolute bottom rather than the top.
+    ("magic_formula_rank", True, float("inf")),
     ("n_gates_passed", False, 0),
     ("gemini_confidence", False, 0.0),
 )
@@ -237,7 +237,11 @@ def _sort_and_dedup_for_brief(verified: pd.DataFrame) -> pd.DataFrame:
     def _others(row: pd.Series) -> list[str]:
         all_themes = theme_groups.get(row["ticker"], [])
         own = row.get("theme")
-        return [t for t in all_themes if t != own]
+        # ``dict.fromkeys`` dedupes case where a (ticker, theme) pair is
+        # repeated upstream — keeps the badge "also in: AI_models,
+        # quantum_computing" instead of "also in: AI_models, AI_models,
+        # quantum_computing" (zen pre-merge LOW finding).
+        return list(dict.fromkeys(t for t in all_themes if t != own))
 
     deduped["also_in_themes"] = deduped.apply(_others, axis=1)
     deduped["rank_in_day"] = range(1, len(deduped) + 1)

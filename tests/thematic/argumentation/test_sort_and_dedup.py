@@ -220,6 +220,30 @@ class TestDedupKeepsStrongestThemeRow(unittest.TestCase):
             sorted(["AI_models", "quantum_error_correction"]),
         )
 
+    def test_dedup_collapses_repeated_themes_in_also_in_themes(self):
+        # Zen pre-merge LOW finding: if upstream parquet has multiple rows
+        # for the same (ticker, theme) pair, ``also_in_themes`` must not
+        # render the theme twice in the badge. Dedup via ``dict.fromkeys``
+        # in the orchestrator prevents UI spam like "also in: AI_models,
+        # AI_models".
+        df = pd.DataFrame(
+            [
+                _row(ticker="RGTI", theme="quantum_computing", catalyst_strength=0.85),
+                _row(ticker="RGTI", theme="quantum_error_correction", catalyst_strength=0.40),
+                # Same theme as the row above — upstream Phase D bug or
+                # noisy event-rollup duplicating a (ticker, theme) pair.
+                _row(ticker="RGTI", theme="quantum_error_correction", catalyst_strength=0.30),
+                _row(ticker="RGTI", theme="AI_models", catalyst_strength=0.50),
+            ]
+        )
+        out = orchestrator._sort_and_dedup_for_brief(df)
+        also = out.iloc[0]["also_in_themes"]
+        self.assertEqual(
+            sorted(also),
+            sorted(["AI_models", "quantum_error_correction"]),
+            f"duplicate themes leaked into badge: {also}",
+        )
+
     def test_single_theme_ticker_has_empty_also_in_themes(self):
         df = pd.DataFrame([_row(ticker="ONLY_ONCE", theme="quantum_computing")])
         out = orchestrator._sort_and_dedup_for_brief(df)
