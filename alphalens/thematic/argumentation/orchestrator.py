@@ -214,16 +214,28 @@ def _sort_and_dedup_for_brief(verified: pd.DataFrame) -> pd.DataFrame:
     if verified.empty:
         return verified
 
+    # Build TEMP sort columns alongside the originals so the synthetic
+    # fillna defaults (e.g. ``float("inf")`` for missing magic_formula_rank)
+    # never leak into the returned frame. Downstream renderer must see the
+    # original NaN values — otherwise ``int(rank)`` crashes with
+    # OverflowError (empirical 2026-05-18 incident on first dogfooding).
     work = verified.copy()
-    for col, _ascending, default in _BRIEF_SORT_KEYS:
-        if col not in work.columns:
-            work[col] = default
+    sort_keys: list[str] = []
+    ascending: list[bool] = []
+    for col, asc, default in _BRIEF_SORT_KEYS:
+        tmp = f"__sort_key__{col}"
+        if col in work.columns:
+            work[tmp] = work[col].fillna(default)
         else:
-            work[col] = work[col].fillna(default)
+            work[tmp] = default
+        sort_keys.append(tmp)
+        ascending.append(asc)
 
-    sort_cols = [c for c, _a, _d in _BRIEF_SORT_KEYS]
-    ascending = [a for _c, a, _d in _BRIEF_SORT_KEYS]
-    work = work.sort_values(sort_cols, ascending=ascending, kind="mergesort").reset_index(drop=True)
+    work = (
+        work.sort_values(sort_keys, ascending=ascending, kind="mergesort")
+        .drop(columns=sort_keys)
+        .reset_index(drop=True)
+    )
 
     # Collect cross-theme appearances BEFORE dedup so the kept row carries
     # the badge. Group ticker → themes; subtract the kept row's own theme.
