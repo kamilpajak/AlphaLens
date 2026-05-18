@@ -176,6 +176,7 @@ Long-running data acquisition jobs that don't fit on the laptop run on the dedic
 |------|---------|--------|--------------|-----------|--------|
 | `form4-backfill.service` | long-running daemon (`Type=simple` + `Restart=on-failure`) | `scripts/run_form4_backfill.py` | `~/.alphalens/form4_parquet/` | ~5-10 days (SEC 10 req/s) | DONE 2026-05-08 (37MB final, 2.66M rows) |
 | `av-earnings-backfill.{service,timer}` | daily oneshot (`Type=oneshot` + `OnCalendar=*-*-* 00:05 UTC` + `Persistent=true`) | `scripts/av_earnings_daily_backfill.py` | `~/.alphalens/av_cache/earnings_<T>.json` | ~21 days (AV free-tier 25/day) | LIVE (paradigm-14 PEAD v2 backfill) |
+| `alphalens-thematic-daily.{service,timer}` | daily oneshot (`Type=oneshot` + `OnCalendar=*-*-* 06:30 UTC` + `Persistent=true`) wrapping `docker compose run --rm pipeline run_thematic_day.sh` | `alphalens thematic {ingest,extract,map-themes,score,brief}` + `scripts/export_briefs_to_json.py` | `~/.alphalens/thematic_briefs/` + `~/AlphaLens/web-data/{days.json,days/<date>.json}` | ~5-15 min (Polygon news + Gemini API) | NEW 2026-05-19 — feeds the Cloudflare-fronted SvelteKit dashboard at `~/AlphaLens/web/` (image `alphalens-web` exposing 127.0.0.1:8080) |
 
 **Why these run on VPS, not Mac:**
 - Mac sleeps / restarts → multi-day jobs lose state; VPS is always-on.
@@ -187,7 +188,7 @@ Long-running data acquisition jobs that don't fit on the laptop run on the dedic
 - Nextcloud sync between VPS and Mac is opt-in per script (`--rclone-remote` arg). Currently OFF for both backfills — VPS cache is the source of truth for downstream consumers running on VPS.
 - For cross-machine consumption (Mac-side B1 dev, audits), use `rsync -av jacoren@vps:.alphalens/<area>/ ~/.alphalens/<area>/` or enable rclone sync in the systemd unit.
 
-Operator deployment recipe lives in `deploy/systemd/README.md`.
+Operator deployment recipe lives in `deploy/systemd/README.md`. Web + thematic Docker stack operator recipe lives in `deploy/docker/README.md`.
 
 ## Environment
 

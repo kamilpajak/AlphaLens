@@ -1,0 +1,42 @@
+# AlphaLens VPS deployment.
+#
+# `docker compose up -d` starts only the web service. The pipeline service
+# lives under the `oneshot` profile and is invoked on demand from systemd:
+#   docker compose run --rm pipeline /app/deploy/docker/run_thematic_day.sh
+#
+# Both images build from the repo checkout at the VPS — no external registry.
+
+services:
+  web:
+    build:
+      context: ../../web
+      dockerfile: Dockerfile
+    image: alphalens-web:latest
+    container_name: alphalens-web
+    restart: unless-stopped
+    ports:
+      # Bind to localhost only — Cloudflare tunnel / reverse proxy on the
+      # host fronts the public surface.
+      - "127.0.0.1:8080:80"
+    volumes:
+      # Pipeline writes JSON here; nginx serves it as /data/.
+      - ../../web-data:/usr/share/nginx/html/data:ro
+
+  pipeline:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.pipeline
+    image: alphalens-pipeline:latest
+    profiles: [oneshot]
+    # Host UID/GID so files written into bind-mounts are owned by the
+    # operator, not root.
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      # scripts/export_briefs_to_json.py and alphalens.* resolve cache
+      # paths via Path.home(); HOME must point at the bind-mount target.
+      HOME: /app/home
+    env_file:
+      - .env
+    volumes:
+      - ${HOME}/.alphalens:/app/home/.alphalens
+      - ../../web-data:/web-data
