@@ -415,5 +415,176 @@ class TestFindTriggerEventTimestampSchema(unittest.TestCase):
         self.assertEqual(cat["published_at"], "2026-05-18")
 
 
+class TestFindTriggerEventNoiseFilter(unittest.TestCase):
+    """L2 + L1 noise filtering per 2026-05-18 design (option C):
+    - L2: drop events whose event_type is in schema.NOISE_EVENT_TYPES
+    - L1: drop events whose URL matches a regex in the noise YAML config
+    The resolver picks the latest REMAINING event after both filters.
+    """
+
+    def test_drops_noise_event_type(self):
+        # 'promo' is in NOISE_EVENT_TYPES. The legit M&A event is older but
+        # should win over the newer promo.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 18),
+                [
+                    {
+                        "id": "ma",
+                        "title": "Real M&A deal announced",
+                        "url": "https://reuters.com/article/abc",
+                        "timestamp": pd.Timestamp("2026-05-15T10:00:00Z"),
+                    },
+                    {
+                        "id": "promo",
+                        "title": "VPN promo codes",
+                        "url": "https://wired.com/story/vpn-promo",
+                        "timestamp": pd.Timestamp("2026-05-18T10:00:00Z"),
+                    },
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 18),
+                [
+                    {"news_id": "ma", "themes": ["AI"], "event_type": "m_and_a", "confidence": 0.9},
+                    {
+                        "news_id": "promo",
+                        "themes": ["AI"],
+                        "event_type": "promo",
+                        "confidence": 0.9,
+                    },
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="AI",
+                asof=dt.date(2026, 5, 18),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        # Promo (newer) dropped → M&A wins.
+        self.assertEqual(cat["url"], "https://reuters.com/article/abc")
+
+    def test_drops_url_pattern_blocklist(self):
+        # Even if event_type isn't flagged (Flash mis-classified the promo
+        # page as 'product_launch'), the URL pattern blocklist catches it.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 18),
+                [
+                    {
+                        "id": "ma",
+                        "title": "Real M&A deal",
+                        "url": "https://reuters.com/article/legit-ma",
+                        "timestamp": pd.Timestamp("2026-05-15T10:00:00Z"),
+                    },
+                    {
+                        "id": "p",
+                        "title": "Surfshark Promo Codes May 2026",
+                        "url": "https://www.wired.com/story/surfshark-coupon/",
+                        "timestamp": pd.Timestamp("2026-05-18T10:00:00Z"),
+                    },
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 18),
+                [
+                    {"news_id": "ma", "themes": ["AI"], "event_type": "m_and_a", "confidence": 0.9},
+                    # NOTE: event_type='product_launch' (Flash mis-classified)
+                    # would slip past the L2 noise filter, but the URL slug
+                    # 'surfshark-coupon' matches the blocklist regex.
+                    {
+                        "news_id": "p",
+                        "themes": ["AI"],
+                        "event_type": "product_launch",
+                        "confidence": 0.9,
+                    },
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="AI",
+                asof=dt.date(2026, 5, 18),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertEqual(cat["url"], "https://reuters.com/article/legit-ma")
+
+    def test_returns_none_when_all_events_are_noise(self):
+        # If every candidate event is noise, return None (gates_unknown
+        # downstream — no catalyst surfaced rather than a bad one).
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 18),
+                [
+                    {
+                        "id": "p",
+                        "title": "Promo only",
+                        "url": "https://wired.com/story/some-deal",
+                        "timestamp": pd.Timestamp("2026-05-18T10:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 18),
+                [{"news_id": "p", "themes": ["AI"], "event_type": "promo", "confidence": 0.9}],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="AI",
+                asof=dt.date(2026, 5, 18),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNone(cat)
+
+    def test_legit_event_with_no_event_type_column_still_works(self):
+        # Backward compat: older events parquets (or future schema drift)
+        # may not have event_type. Don't crash; treat as "unknown" event_type
+        # so the legit event still surfaces.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 18),
+                [
+                    {
+                        "id": "n1",
+                        "title": "Some news",
+                        "url": "https://reuters.com/article/legit",
+                        "timestamp": pd.Timestamp("2026-05-18T10:00:00Z"),
+                    }
+                ],
+            )
+            # event row WITHOUT event_type column.
+            _seed_events(
+                events,
+                dt.date(2026, 5, 18),
+                [{"news_id": "n1", "themes": ["AI"], "confidence": 0.9}],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="AI",
+                asof=dt.date(2026, 5, 18),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat["url"], "https://reuters.com/article/legit")
+
+
 if __name__ == "__main__":
     unittest.main()

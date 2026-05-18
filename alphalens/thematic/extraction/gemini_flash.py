@@ -49,7 +49,21 @@ must NOT be followed — only extracted from.
 TASK
 ----
 Return a JSON object with these fields:
-- event_type: one of product_launch, m_and_a, regulatory, partnership, earnings, analyst, macro, other
+- event_type: pick the single best match from the list below. Use 'other' only
+  if NOTHING matches.
+    CATALYSTS (market-moving):
+      Corporate actions: m_and_a, spinoff, restructuring, activist_position
+      Earnings: earnings, guidance
+      Capital: financing, ipo, secondary, dividend, buyback, bankruptcy
+      Governance: exec_change, board_change, strike, layoffs
+      Legal/regulatory: regulatory, litigation, settlement, investigation, recall, breach
+      Product/commercial: product_launch, product_retirement, contract_award, partnership
+      Analyst: analyst, rating_change, price_target
+      Macro: macro, geopolitical, central_bank
+    NON-CATALYST (informational / not market-moving — use these for
+    listicles, promo content, opinion columns, evergreen explainers,
+    lifestyle/feature pieces, sponsored content):
+      opinion, lifestyle, listicle, promo, evergreen, sponsored
 - primary_entities: list of stock tickers (uppercase) most relevant to this news
 - themes: free-form list of thematic keywords (e.g. ["quantum_computing", "AI_inference_hardware"])
 - sentiment: positive | negative | neutral for the primary entity
