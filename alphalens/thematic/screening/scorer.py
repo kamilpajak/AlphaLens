@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from alphalens.thematic.screening import (
+    catalyst_signals,
     fcff_signal,
     insider_signal,
     magic_formula,
@@ -122,20 +123,30 @@ def compose_weighted_score(
     insider_positive: bool,
     fcff_positive: bool,
     magic_formula_top_quartile: bool,
+    deep_drawdown_reversal: bool,
     technicals_positive: bool,
+    catalyst_strength: float,
 ) -> int:
-    """Combine boolean signals into a 1-5 confidence score.
+    """Combine boolean signals + catalyst strength into a 1-5 confidence score.
 
-    Weight rule (locked plan §C5): insider 2× others 1×. Floored at 1 so
-    "no information" candidates still emit a value. The valuation slot is
-    now driven by Magic Formula top-quartile membership within the daily
-    cohort (Greenblatt-style relative ranking) rather than sector-percentile.
+    Components:
+    - insider 2× (Cohen-Malloy paradigm #11 doctrine)
+    - fcff 1×, technicals 1×
+    - value/reversal slot 1×: fires on EITHER Magic Formula top-quartile
+      (mature value pick) OR deep-drawdown-reversal (thematic momentum
+      pick) — two different alpha drivers, same slot
+    - catalyst_floor 0-2: strong catalyst (≥0.70) lifts cohort by 2;
+      moderate (≥0.25) by 1; weak by 0
+
+    Result clipped to [1, 5].
     """
+    val_or_reversal = int(magic_formula_top_quartile or deep_drawdown_reversal)
     raw = (
         2 * int(insider_positive)
         + int(fcff_positive)
-        + int(magic_formula_top_quartile)
+        + val_or_reversal
         + int(technicals_positive)
+        + catalyst_signals.catalyst_floor(catalyst_strength)
     )
     return max(1, min(5, raw))
 
@@ -261,6 +272,13 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
     feature_fetcher = _build_feature_fetcher(sorted(universe))
     ohlcv_loader = _build_ohlcv_loader()
 
+    # Per-theme catalyst lookup cache. ``find_trigger_event`` returns the
+    # latest theme-tagged event (with full extraction metadata) so multiple
+    # candidates sharing a theme reuse a single resolution.
+    from alphalens.thematic.mapping import catalyst_resolver
+
+    catalyst_cache: dict[str, dict | None] = {}
+
     rows: list[dict] = []
     for _, cand in candidates.iterrows():
         ticker = str(cand["ticker"]).upper()
@@ -314,6 +332,19 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
         mf_roe = magic_formula.compute_roe(features)
         mf_health = magic_formula.passes_health_gate(features)
 
+        # Catalyst lookup — cached per theme. Returns extended event dict
+        # (url, title, published_at, event_type, confidence, second_order_
+        # implications). None when no theme-tagged event survives noise filter.
+        theme = str(cand.get("theme", ""))
+        if theme not in catalyst_cache:
+            try:
+                catalyst_cache[theme] = catalyst_resolver.find_trigger_event(theme=theme, asof=asof)
+            except Exception as exc:
+                logger.warning("catalyst lookup failed for theme=%r: %s", theme, exc)
+                catalyst_cache[theme] = None
+        catalyst_event = catalyst_cache[theme]
+        cs_val = catalyst_signals.compute_catalyst_strength(catalyst_event)
+
         rows.append(
             {
                 "ticker": ticker,
@@ -344,6 +375,13 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
                 "technical_ma200_distance_pct": tech.get("ma200_distance_pct"),
                 "technical_ma200_slope_pct_per_day": tech.get("ma200_slope_pct_per_day"),
                 "technicals_summary_str": tech["summary"],
+                "catalyst_strength": cs_val,
+                "catalyst_event_type": (catalyst_event or {}).get("event_type"),
+                "catalyst_confidence": (catalyst_event or {}).get("confidence"),
+                # Stashed for the reversal detector (source_event_url is
+                # in candidates.parquet, merged AFTER this frame). Dropped
+                # before the public DataFrame is built.
+                "_catalyst_url": (catalyst_event or {}).get("url"),
                 # Signal positives stashed for the post-loop weighted-score
                 # composition; dropped before the public DataFrame is built.
                 "_insider_positive": insider_is_positive(score_usd=ins["score_usd"]),
@@ -364,6 +402,17 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
     cohort_n = int(enrichment["magic_formula_health_pass"].sum())
     enrichment["magic_formula_cohort_n"] = cohort_n
 
+    # Deep-drawdown-reversal is per-candidate (computed once columns are
+    # final). The detector reads ``source_event_url`` so we temporarily
+    # mirror the stashed ``_catalyst_url`` into that column for the apply,
+    # then drop the temp. (candidates.parquet's own source_event_url
+    # arrives via the final merge below — we don't want to collide.)
+    enrichment["source_event_url"] = enrichment["_catalyst_url"]
+    enrichment["deep_drawdown_reversal"] = enrichment.apply(
+        catalyst_signals.is_deep_drawdown_reversal, axis=1
+    )
+    enrichment = enrichment.drop(columns=["source_event_url", "_catalyst_url"])
+
     enrichment["layer4_weighted_score"] = [
         compose_weighted_score(
             insider_positive=row["_insider_positive"],
@@ -371,7 +420,9 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
             magic_formula_top_quartile=magic_formula.is_top_quartile(
                 rank=row["magic_formula_rank"], cohort_n=cohort_n
             ),
+            deep_drawdown_reversal=bool(row["deep_drawdown_reversal"]),
             technicals_positive=row["_technicals_positive"],
+            catalyst_strength=float(row["catalyst_strength"]),
         )
         for _, row in enrichment.iterrows()
     ]

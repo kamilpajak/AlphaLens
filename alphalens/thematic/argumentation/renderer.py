@@ -182,6 +182,37 @@ def _format_magic_formula_cell(
     return f"rank {rank_int}/{cohort_int} · FCFF {fcff_str}% · ROIC {roic_str}%"
 
 
+def _format_catalyst_strength_cell(strength: Any, event_type: Any) -> str:
+    """Render catalyst strength as ``0.78 strong (product_launch)`` etc.
+
+    Bucket labels mirror the catalyst_floor thresholds: ≥0.70 strong (+2),
+    ≥0.25 moderate (+1), else weak (+0). Operator sees which catalysts
+    earn cohort lift vs which don't.
+    """
+    s = _fmt_num(strength, ".2f")
+    if s == "n/a":
+        return "n/a"
+    try:
+        f = float(strength)
+    except (TypeError, ValueError):
+        return "n/a"
+    if f >= 0.70:
+        bucket = "strong"
+    elif f >= 0.25:
+        bucket = "moderate"
+    else:
+        bucket = "weak"
+    et = str(event_type) if event_type and not pd.isna(event_type) else "?"
+    return f"{s} {bucket} ({et})"
+
+
+def _format_reversal_cell(value: Any) -> str:
+    """Yes/no flag for deep_drawdown_reversal."""
+    if pd.isna(value):
+        return "n/a"
+    return "yes" if bool(value) else "no"
+
+
 def _format_magic_formula_detail(pe: Any, ev_ebitda: Any, ps: Any, roe_pct: Any) -> str:
     """Render the secondary detail row exposing the underlying mults."""
     return (
@@ -287,6 +318,16 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
         (
             "Valuation (sector pctile)",
             f"pctile {_fmt_pctile(r.get('valuation_composite_sector_percentile'))}",
+        ),
+        (
+            "Catalyst strength",
+            _format_catalyst_strength_cell(
+                r.get("catalyst_strength"), r.get("catalyst_event_type")
+            ),
+        ),
+        (
+            "Reversal setup",
+            _format_reversal_cell(r.get("deep_drawdown_reversal")),
         ),
     ]
     age_days = r.get("valuation_financials_age_days")

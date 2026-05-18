@@ -35,51 +35,96 @@ def _candidates_df(tickers: list[str]) -> pd.DataFrame:
 
 
 class TestWeightedScore(unittest.TestCase):
-    def test_all_positive_clips_to_5(self):
-        # 2*1 (insider) + 1+1+1 = 5
+    def _kw(self, **overrides):
+        base = {
+            "insider_positive": False,
+            "fcff_positive": False,
+            "magic_formula_top_quartile": False,
+            "deep_drawdown_reversal": False,
+            "technicals_positive": False,
+            "catalyst_strength": 0.0,
+        }
+        base.update(overrides)
+        return base
+
+    def test_all_positive_with_strong_catalyst_clips_to_5(self):
+        # 2*1 + 1 + 1 + 1 + 2 (catalyst floor strong) = 7, clipped to 5
         self.assertEqual(
             scorer.compose_weighted_score(
-                insider_positive=True,
-                fcff_positive=True,
-                magic_formula_top_quartile=True,
-                technicals_positive=True,
+                **self._kw(
+                    insider_positive=True,
+                    fcff_positive=True,
+                    magic_formula_top_quartile=True,
+                    technicals_positive=True,
+                    catalyst_strength=0.90,
+                )
             ),
             5,
         )
 
     def test_all_negative_floors_to_1(self):
-        self.assertEqual(
-            scorer.compose_weighted_score(
-                insider_positive=False,
-                fcff_positive=False,
-                magic_formula_top_quartile=False,
-                technicals_positive=False,
-            ),
-            1,
-        )
+        self.assertEqual(scorer.compose_weighted_score(**self._kw()), 1)
 
     def test_insider_only_counts_double(self):
-        # 2*1 = 2
+        self.assertEqual(
+            scorer.compose_weighted_score(**self._kw(insider_positive=True)),
+            2,
+        )
+
+    def test_reversal_substitutes_for_magic_formula_in_value_slot(self):
+        # MF false, reversal true → val_or_reversal = 1; +tech = 2
         self.assertEqual(
             scorer.compose_weighted_score(
-                insider_positive=True,
-                fcff_positive=False,
-                magic_formula_top_quartile=False,
-                technicals_positive=False,
+                **self._kw(deep_drawdown_reversal=True, technicals_positive=True)
             ),
             2,
         )
 
-    def test_three_non_insider_signals_equals_three(self):
-        # 1+1+1 = 3, no insider weight
+    def test_strong_catalyst_adds_2_floor(self):
+        # base 1 (tech only) + catalyst_floor 2 = 3
         self.assertEqual(
             scorer.compose_weighted_score(
-                insider_positive=False,
-                fcff_positive=True,
-                magic_formula_top_quartile=True,
-                technicals_positive=True,
+                **self._kw(technicals_positive=True, catalyst_strength=0.80)
             ),
             3,
+        )
+
+    def test_moderate_catalyst_adds_1_floor(self):
+        # 0.50 is mid-tier (≥ 0.45 threshold, < 0.70 strong).
+        self.assertEqual(
+            scorer.compose_weighted_score(
+                **self._kw(technicals_positive=True, catalyst_strength=0.50)
+            ),
+            2,
+        )
+
+    def test_weak_catalyst_adds_no_floor(self):
+        # 0.30 is below the 0.45 moderate threshold post-zen-tuning.
+        self.assertEqual(
+            scorer.compose_weighted_score(
+                **self._kw(technicals_positive=True, catalyst_strength=0.30)
+            ),
+            1,
+        )
+        self.assertEqual(
+            scorer.compose_weighted_score(
+                **self._kw(technicals_positive=True, catalyst_strength=0.10)
+            ),
+            1,
+        )
+
+    def test_qubt_class_with_strong_catalyst_promotes_to_4(self):
+        # Pre-profit thematic momentum: no insider, no fcff, no MF, but
+        # deep_drawdown_reversal=True, technicals_positive=True, strong catalyst.
+        # 0 + 0 + 1 (reversal) + 1 (tech) + 2 (catalyst floor) = 4. Matches the
+        # 2026-05-18 NVDA→QUBT replay design goal (QUBT 1/5 → 4/5).
+        self.assertEqual(
+            scorer.compose_weighted_score(
+                **self._kw(
+                    deep_drawdown_reversal=True, technicals_positive=True, catalyst_strength=0.80
+                )
+            ),
+            4,
         )
 
 
@@ -217,6 +262,11 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
             patch.object(
                 scorer, "_build_ohlcv_loader", return_value=lambda t, asof: pd.DataFrame()
             ),
+            # Catalyst lookup — return None so cs=0 and the existing test
+            # invariants on weighted_score still hold (no catalyst lift).
+            patch(
+                "alphalens.thematic.mapping.catalyst_resolver.find_trigger_event", return_value=None
+            ),
         ]
         for p in self.patches:
             p.start()
@@ -247,6 +297,10 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
             "magic_formula_health_pass",
             "magic_formula_rank",
             "magic_formula_cohort_n",
+            "deep_drawdown_reversal",
+            "catalyst_strength",
+            "catalyst_event_type",
+            "catalyst_confidence",
             "technical_rsi",
             "technical_ma50_distance_pct",
             "technical_atr_pct",
@@ -282,12 +336,15 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
         out = scorer.score_candidates(candidates, asof=dt.date(2026, 4, 14))
         qubt = out[out["ticker"] == "QUBT"].iloc[0]
         ionq = out[out["ticker"] == "IONQ"].iloc[0]
+        # Catalyst is mocked to None → cs=0, no catalyst floor. Reversal is
+        # False (no source_event_url in fixture). So formula matches the pre-
+        # catalyst behaviour.
         # QUBT: insider neg, fcff sub-median, MF rank NaN (health gate FAIL),
-        # technicals ok. Only technicals positive -> clip(0+0+0+1, 1, 5) = 1.
+        # reversal False, technicals ok. -> clip(0+0+0+0+1+0, 1, 5) = 1.
         self.assertEqual(int(qubt["layer4_weighted_score"]), 1)
         # IONQ: insider pos (2), fcff pos (1), MF top-quartile False (cohort
-        # n=1 → rank NaN → quartile False), technicals not positive (RSI 80
-        # too high). -> 2+1+0+0 = 3.
+        # n=1 → rank NaN → quartile False), reversal False, technicals not
+        # positive (RSI 80 too high). -> 2+1+0+0+0+0 = 3.
         self.assertEqual(int(ionq["layer4_weighted_score"]), 3)
 
 
@@ -303,6 +360,9 @@ class TestScoreCandidatesIsResilientToSignalExceptions(unittest.TestCase):
             patch.object(scorer, "_build_feature_fetcher", return_value=lambda t, asof: None),
             patch.object(
                 scorer, "_build_ohlcv_loader", return_value=lambda t, asof: pd.DataFrame()
+            ),
+            patch(
+                "alphalens.thematic.mapping.catalyst_resolver.find_trigger_event", return_value=None
             ),
         ]
         for p in self.patches:
@@ -411,6 +471,9 @@ class TestScoreCandidatesUnknownIndustry(unittest.TestCase):
             patch.object(scorer, "_build_feature_fetcher", return_value=lambda t, asof: None),
             patch.object(
                 scorer, "_build_ohlcv_loader", return_value=lambda t, asof: pd.DataFrame()
+            ),
+            patch(
+                "alphalens.thematic.mapping.catalyst_resolver.find_trigger_event", return_value=None
             ),
         ):
             out = scorer.score_candidates(_candidates_df(["UNKN"]), asof=dt.date(2026, 4, 14))
