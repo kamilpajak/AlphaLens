@@ -176,6 +176,75 @@ def _write_sidecar(output_dir: Path, asof: dt.date, n_pro: int, n_flash: int) ->
     )
 
 
+# Sort priorities for the brief-render chain (zen-revised 2026-05-18).
+# Primary on layer4_weighted_score; continuous tiebreakers (catalyst_strength,
+# insider_score_usd) precede the binary deep_drawdown_reversal flag because
+# a strong continuous catalyst is structurally safer than a weak catalyst
+# with an oversold setup. Magic Formula rank is ASCENDING (1 = best); all
+# other keys are DESCENDING. Neutral defaults backfill missing columns so
+# older parquets and partial enrichments don't crash the sort.
+_BRIEF_SORT_KEYS: tuple[tuple[str, bool, float], ...] = (
+    ("layer4_weighted_score", False, 0.0),
+    ("catalyst_strength", False, 0.0),
+    ("insider_score_usd", False, 0.0),
+    ("deep_drawdown_reversal", False, False),
+    # ascending=True for magic_formula_rank (1 = best); use a very large
+    # default so missing rank sorts to the bottom rather than the top.
+    ("magic_formula_rank", True, 10**9),
+    ("n_gates_passed", False, 0),
+    ("gemini_confidence", False, 0.0),
+)
+
+
+def _sort_and_dedup_for_brief(verified: pd.DataFrame) -> pd.DataFrame:
+    """Sort by the zen-revised 7-key chain, attach also_in_themes, dedup.
+
+    Returns the sorted, deduped DataFrame with two new columns:
+    - ``also_in_themes``: list[str] of OTHER themes the ticker hit (empty
+      list for single-theme tickers); operator sees the multi-thematic
+      signal even though we collapse to one row per ticker.
+    - ``rank_in_day``: 1-based position after dedup so the renderer can
+      surface ``rank N/M`` in the header.
+
+    Sort order encoded in ``_BRIEF_SORT_KEYS``. Missing columns are
+    backfilled with neutral defaults — older Phase D parquets and partial
+    enrichments don't crash the sort. Dedup happens AFTER sort so the
+    strongest-context row per ticker survives.
+    """
+    if verified.empty:
+        return verified
+
+    work = verified.copy()
+    for col, _ascending, default in _BRIEF_SORT_KEYS:
+        if col not in work.columns:
+            work[col] = default
+        else:
+            work[col] = work[col].fillna(default)
+
+    sort_cols = [c for c, _a, _d in _BRIEF_SORT_KEYS]
+    ascending = [a for _c, a, _d in _BRIEF_SORT_KEYS]
+    work = work.sort_values(sort_cols, ascending=ascending, kind="mergesort").reset_index(drop=True)
+
+    # Collect cross-theme appearances BEFORE dedup so the kept row carries
+    # the badge. Group ticker → themes; subtract the kept row's own theme.
+    theme_groups: dict[str, list[str]] = {}
+    if "theme" in work.columns:
+        for ticker, group in work.groupby("ticker", sort=False)["theme"]:
+            theme_groups[ticker] = list(group)
+
+    deduped = work.drop_duplicates(subset=["ticker"], keep="first").reset_index(drop=True)
+
+    def _others(row: pd.Series) -> list[str]:
+        all_themes = theme_groups.get(row["ticker"], [])
+        own = row.get("theme")
+        return [t for t in all_themes if t != own]
+
+    deduped["also_in_themes"] = deduped.apply(_others, axis=1)
+    deduped["rank_in_day"] = range(1, len(deduped) + 1)
+    deduped["cohort_size_in_day"] = len(deduped)
+    return deduped
+
+
 def _empty_output(output_dir: Path, asof: dt.date) -> pd.DataFrame:
     """Write a typed-empty parquet + empty bundle + zero-counts sidecar."""
     empty = pd.DataFrame({c: pd.Series(dtype="object") for c in _EMPTY_OUT_COLUMNS})
@@ -203,10 +272,11 @@ def generate_briefs(
     verified = scored[scored["verified"].astype(bool)].copy().reset_index(drop=True)
     if verified.empty:
         return _empty_output(output_dir, asof)
-    # Defensive dedup: Phase D should emit one row per (theme, ticker) but
-    # if the upstream parquet ever doubles a ticker, the merge below would
-    # explode into a Cartesian. Keep the first occurrence per ticker.
-    verified = verified.drop_duplicates(subset=["ticker"], keep="first").reset_index(drop=True)
+    # Sort by the brief-render chain BEFORE dedup so the strongest-context
+    # row per ticker survives. Without sort-first, a ticker hitting multiple
+    # themes with different catalysts could lose the strong-catalyst row to
+    # the weak one on index-order fallback (zen pre-design HIGH finding).
+    verified = _sort_and_dedup_for_brief(verified)
 
     client_pro, client_flash, types_mod = _build_clients(api_key)
 

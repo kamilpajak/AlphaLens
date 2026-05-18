@@ -124,6 +124,25 @@ def _fmt_insider_usd(value: Any) -> str:
         return "n/a"
 
 
+def _fmt_insider_usd_compact(value: Any) -> str | None:
+    """Header-friendly compact form: ``$1.2M``, ``$250k``, or None for 0/NaN.
+
+    Returns None when there's no positive opportunistic buy to surface so
+    the header can omit the chip cleanly rather than rendering noise.
+    """
+    if pd.isna(value):
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v <= 0:
+        return None
+    if v >= 1_000_000:
+        return f"${v / 1_000_000:.1f}M"
+    return f"${v / 1000:.0f}k"
+
+
 def _format_insider_cell(score: Any, pctile: Any) -> str:
     """Render the insider table cell with score-aware suffix.
 
@@ -253,19 +272,65 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
     weighted = r.get("layer4_weighted_score")
     weighted_str = f"{int(weighted)}/5" if not pd.isna(weighted) else "n/a"
 
+    # Header chips — only render keys that carry signal. Built dynamically
+    # so single-theme tickers / weak catalysts / zero insider all hide
+    # their chips cleanly instead of rendering noise like ``catalyst n/a``.
+    chips: list[str] = []
+    rank = r.get("rank_in_day")
+    cohort_size = r.get("cohort_size_in_day")
+    if rank is not None and not pd.isna(rank):
+        try:
+            n = int(cohort_size) if cohort_size is not None and not pd.isna(cohort_size) else 0
+            if n > 0:
+                chips.append(f"rank {int(rank)}/{n}")
+        except (TypeError, ValueError):
+            pass
+    chips.append(f"conf {weighted_str}")
+    catalyst = r.get("catalyst_strength")
+    if catalyst is not None and not pd.isna(catalyst):
+        try:
+            cf = float(catalyst)
+            if cf > 0:
+                chips.append(f"catalyst {cf:.2f}")
+        except (TypeError, ValueError):
+            pass
+    insider_chip = _fmt_insider_usd_compact(r.get("insider_score_usd"))
+    if insider_chip:
+        chips.append(f"{insider_chip} insider")
+    reversal = r.get("deep_drawdown_reversal")
+    try:
+        if reversal is not None and not pd.isna(reversal) and bool(reversal):
+            chips.append("reversal")
+    except (TypeError, ValueError):
+        pass
+
+    chip_str = " · ".join(chips)
+
     # --- Deterministic head sections (each separated by blank line) --------
     # The head bucket carries scan-cues the operator's eye should land on
     # one at a time: ticker → theme/industry → catalyst → pattern. Blank
     # lines between them mirror the bullet structure recommended in PR
     # 2026-05-17 brief-layout pass.
     head_sections: list[str] = [
-        f"## {r.get('ticker')} — {r.get('company_name', '')} (conf {weighted_str})",
-        (
-            f"**Theme**: {r.get('theme', '')} | "
-            f"**Industry**: {r.get('industry_name', 'n/a')}"
-            f" ({r.get('sector_name', 'n/a')})"
-        ),
+        f"## {r.get('ticker')} — {r.get('company_name', '')} ({chip_str})",
     ]
+    theme_line = (
+        f"**Theme**: {r.get('theme', '')} | "
+        f"**Industry**: {r.get('industry_name', 'n/a')}"
+        f" ({r.get('sector_name', 'n/a')})"
+    )
+    # Multi-theme badge: surface OTHER themes the ticker hit when sort+dedup
+    # collapsed them. Operator sees the multi-thematic signal without us
+    # spawning duplicate brief blocks.
+    also = r.get("also_in_themes")
+    if also is not None:
+        try:
+            also_list = [t for t in list(also) if t]
+        except TypeError:
+            also_list = []
+        if also_list:
+            theme_line += f" | **also in**: {', '.join(also_list)}"
+    head_sections.append(theme_line)
     src_url = r.get("source_event_url")
     if src_url and pd.notna(src_url) and str(src_url).strip().lower() != "nan":
         title = r.get("source_event_title") or ""
@@ -371,30 +436,19 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
     return block
 
 
-def render_day_bundle(
-    briefs_df: pd.DataFrame,
-    *,
-    asof_str: str,
-    sort_by_cherry_pick: bool = True,
-) -> str:
+def render_day_bundle(briefs_df: pd.DataFrame, *, asof_str: str) -> str:
     """Concatenate one day's briefs into a single markdown file body.
 
-    With ``sort_by_cherry_pick=True`` (default) the deepest-drawdown
-    candidates appear first — these are the mean-reversion bucket worth
-    closer fundamental + insider corroboration (per 2026-05-17 NVDA→QUBT
-    post-mortem: deep-drawdown drove the live 4-week winners). Tickers
-    without 52w data sort to the bottom. Set False to preserve the
-    upstream theme/conf/confidence order from Phase D.
+    Preserves upstream input order — sort responsibility moved to
+    ``orchestrator._sort_and_dedup_for_brief`` which runs the full
+    7-key zen-revised tiebreaker chain before this renderer ever sees
+    the frame. The legacy cherry-pick sort (technical_pct_off_52w_high
+    ASC) is gone; that signal now feeds the upstream chain via the
+    ``deep_drawdown_reversal`` flag.
     """
     header = f"# Thematic briefs — {asof_str}\n\n"
     if briefs_df is None or briefs_df.empty:
         return header + "_no briefs generated for this date._\n"
-    if sort_by_cherry_pick and "technical_pct_off_52w_high" in briefs_df.columns:
-        # ascending=True with na_position=last → most-negative first
-        # (deep drawdowns), missing 52w data at bottom of bundle
-        briefs_df = briefs_df.sort_values(
-            "technical_pct_off_52w_high", ascending=True, na_position="last"
-        )
     parts: list[str] = [header]
     for _, row in briefs_df.iterrows():
         md = row.get("brief_full_md", "")

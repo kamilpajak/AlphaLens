@@ -39,6 +39,68 @@ class TestRenderMarkdown(unittest.TestCase):
         self.assertIn("quantum_computing", md)
         self.assertIn("Computer Hardware", md)
 
+    def test_header_includes_rank_in_day_when_present(self):
+        # Brief-render sort attaches rank_in_day (1-based). Renderer surfaces
+        # it inline so the operator sees relative position without scrolling
+        # through the bundle. Absent column → no rank suffix (graceful).
+        row = dict(_ROW)
+        row["rank_in_day"] = 1
+        row["cohort_size_in_day"] = 6
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("rank 1/6", md)
+
+    def test_header_includes_catalyst_strength_with_label(self):
+        # When catalyst_strength ≥ moderate (per catalyst_signals.py thresholds)
+        # the header surfaces the value so the operator sees what's driving
+        # the cohort lift.
+        row = dict(_ROW)
+        row["catalyst_strength"] = 0.78
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("catalyst 0.78", md)
+
+    def test_header_includes_insider_dollar_amount_when_positive(self):
+        # $1.2M is more salient at the top of the brief than buried in the
+        # signal panel — surfaces conviction magnitude on the first scan.
+        row = dict(_ROW)
+        row["insider_score_usd"] = 1_200_000.0
+        md = renderer.render_markdown(row, _BRIEF)
+        # Match the compact magnitude marker; precise format is a renderer
+        # implementation detail but $1.2M is the operator-readable form.
+        self.assertTrue(
+            "$1.2M insider" in md or "$1200k insider" in md,
+            f"expected compact insider $ in header, got: {md.splitlines()[0]}",
+        )
+
+    def test_header_includes_reversal_tag_when_true(self):
+        row = dict(_ROW)
+        row["deep_drawdown_reversal"] = True
+        md = renderer.render_markdown(row, _BRIEF)
+        # First line should mention "reversal" — concise tag, not a sentence.
+        self.assertIn("reversal", md.splitlines()[0].lower())
+
+    def test_header_omits_reversal_tag_when_false(self):
+        row = dict(_ROW)
+        row["deep_drawdown_reversal"] = False
+        md = renderer.render_markdown(row, _BRIEF)
+        # Avoid noise in the header for the negative case.
+        self.assertNotIn("reversal", md.splitlines()[0].lower())
+
+    def test_header_includes_also_in_themes_badge_when_present(self):
+        # When ticker hit multiple themes (cross-theme appearance), the
+        # ``also in: <theme>`` badge surfaces the dropped themes after dedup.
+        row = dict(_ROW)
+        row["also_in_themes"] = ["quantum_error_correction", "AI_models"]
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("also in", md.lower())
+        self.assertIn("quantum_error_correction", md)
+        self.assertIn("AI_models", md)
+
+    def test_header_omits_also_in_themes_badge_for_single_theme_ticker(self):
+        row = dict(_ROW)
+        row["also_in_themes"] = []
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertNotIn("also in", md.lower())
+
     def test_includes_all_brief_sections(self):
         md = renderer.render_markdown(_ROW, _BRIEF)
         self.assertIn("Thesis", md)
@@ -445,87 +507,49 @@ class TestRenderMarkdownPatternLine(unittest.TestCase):
         self.assertNotIn("**Pattern**", md)
 
 
-class TestRenderDayBundleCherryPickSort(unittest.TestCase):
-    """Default day-bundle order sorts by cherry-pick score so the
-    deepest-drawdown candidates appear first in the operator's scroll.
-    Per the 2026-05-17 NVDA→QUBT post-mortem: deep-drawdown candidates
-    drove the 1-month winners; sorting promotes them to the top.
+class TestRenderDayBundlePreservesUpstreamOrder(unittest.TestCase):
+    """Sort order is now owned by the orchestrator (zen-revised 7-key chain
+    + dedup), so the renderer must preserve whatever upstream feeds in. The
+    legacy ``sort_by_cherry_pick`` behaviour (technical_pct_off_52w_high
+    ASC) is gone — its responsibility moved upstream into
+    ``orchestrator._sort_and_dedup_for_brief``.
     """
 
-    def test_default_sort_puts_deep_drawdown_first(self):
+    def test_bundle_preserves_input_dataframe_order(self):
+        briefs_df = pd.DataFrame(
+            [
+                {**_ROW, "ticker": "FIRST", "brief_full_md": "## FIRST"},
+                {**_ROW, "ticker": "SECOND", "brief_full_md": "## SECOND"},
+                {**_ROW, "ticker": "THIRD", "brief_full_md": "## THIRD"},
+            ]
+        )
+        bundle = renderer.render_day_bundle(briefs_df, asof_str="2026-04-14")
+        self.assertLess(bundle.index("## FIRST"), bundle.index("## SECOND"))
+        self.assertLess(bundle.index("## SECOND"), bundle.index("## THIRD"))
+
+    def test_bundle_ignores_technical_drawdown_when_choosing_order(self):
+        # Even if technical_pct_off_52w_high tells a different story, the
+        # bundle no longer re-sorts. Upstream already sorted by the full
+        # tiebreaker chain (which includes drawdown via deep_drawdown_reversal).
         briefs_df = pd.DataFrame(
             [
                 {
                     **_ROW,
-                    "ticker": "FORM",
+                    "ticker": "EXTENDED",
                     "technical_pct_off_52w_high": 0.0,
-                    "brief_full_md": "## FORM (extended)",
+                    "brief_full_md": "## EXTENDED",
                 },
                 {
                     **_ROW,
-                    "ticker": "QUBT",
+                    "ticker": "DEEP_DRAWDOWN",
                     "technical_pct_off_52w_high": -67.0,
-                    "brief_full_md": "## QUBT (deep)",
-                },
-                {
-                    **_ROW,
-                    "ticker": "RGTI",
-                    "technical_pct_off_52w_high": -30.0,
-                    "brief_full_md": "## RGTI (medium)",
+                    "brief_full_md": "## DEEP_DRAWDOWN",
                 },
             ]
         )
         bundle = renderer.render_day_bundle(briefs_df, asof_str="2026-04-14")
-        # QUBT (-67) before RGTI (-30) before FORM (0)
-        i_qubt = bundle.index("## QUBT")
-        i_rgti = bundle.index("## RGTI")
-        i_form = bundle.index("## FORM")
-        self.assertLess(i_qubt, i_rgti)
-        self.assertLess(i_rgti, i_form)
-
-    def test_sort_disabled_preserves_input_order(self):
-        briefs_df = pd.DataFrame(
-            [
-                {
-                    **_ROW,
-                    "ticker": "FORM",
-                    "technical_pct_off_52w_high": 0.0,
-                    "brief_full_md": "## FORM",
-                },
-                {
-                    **_ROW,
-                    "ticker": "QUBT",
-                    "technical_pct_off_52w_high": -67.0,
-                    "brief_full_md": "## QUBT",
-                },
-            ]
-        )
-        bundle = renderer.render_day_bundle(
-            briefs_df, asof_str="2026-04-14", sort_by_cherry_pick=False
-        )
-        self.assertLess(bundle.index("## FORM"), bundle.index("## QUBT"))
-
-    def test_missing_pct_off_52w_high_sorted_last(self):
-        # Tickers without 52w data still render, but sorted to the bottom
-        # so the operator sees the actionable signals first.
-        briefs_df = pd.DataFrame(
-            [
-                {
-                    **_ROW,
-                    "ticker": "QUBT",
-                    "technical_pct_off_52w_high": -67.0,
-                    "brief_full_md": "## QUBT",
-                },
-                {
-                    **_ROW,
-                    "ticker": "UNKN",
-                    "technical_pct_off_52w_high": None,
-                    "brief_full_md": "## UNKN",
-                },
-            ]
-        )
-        bundle = renderer.render_day_bundle(briefs_df, asof_str="2026-04-14")
-        self.assertLess(bundle.index("## QUBT"), bundle.index("## UNKN"))
+        # Despite -67% drawdown on the second row, upstream input order wins.
+        self.assertLess(bundle.index("## EXTENDED"), bundle.index("## DEEP_DRAWDOWN"))
 
 
 if __name__ == "__main__":
