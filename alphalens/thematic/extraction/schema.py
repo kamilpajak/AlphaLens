@@ -12,14 +12,70 @@ from __future__ import annotations
 import json
 
 EVENT_TYPES: tuple[str, ...] = (
-    "product_launch",
+    # Corporate actions & ownership
     "m_and_a",
-    "regulatory",
-    "partnership",
+    "spinoff",
+    "restructuring",
+    "activist_position",
+    # Earnings & guidance
     "earnings",
+    "guidance",
+    # Capital structure & financing
+    "financing",
+    "ipo",
+    "secondary",
+    "dividend",
+    "buyback",
+    "bankruptcy",
+    # Governance & workforce
+    "exec_change",
+    "board_change",
+    "strike",
+    "layoffs",
+    # Legal & regulatory
+    "regulatory",
+    "litigation",
+    "settlement",
+    "investigation",
+    "recall",
+    "breach",
+    # Product, operations & commercial
+    "product_launch",
+    "product_retirement",
+    "contract_award",
+    "partnership",
+    # Analyst & sentiment
     "analyst",
+    "rating_change",
+    "price_target",
+    # Macro & policy
     "macro",
+    "geopolitical",
+    "central_bank",
+    # Non-market-moving / informational (explicit noise branch — per Perplexity
+    # research §5.3, standard practice in academic event extraction systems).
+    # ``evergreen`` = perennial-relevance content (explainers, "What is X"
+    # primers) — distinguished from time-sensitive catalysts.
+    "opinion",
+    "lifestyle",
+    "listicle",
+    "promo",
+    "evergreen",
+    "sponsored",
+    # Catch-all (normalize_extraction coerces unrecognised values here).
     "other",
+)
+
+# Subset of EVENT_TYPES that downstream filters (catalyst_resolver) treat as
+# non-catalyst noise. Single source of truth so the "what counts as noise"
+# decision lives in one place.
+NOISE_EVENT_TYPES: tuple[str, ...] = (
+    "opinion",
+    "lifestyle",
+    "listicle",
+    "promo",
+    "evergreen",
+    "sponsored",
 )
 
 SENTIMENTS: tuple[str, ...] = ("positive", "negative", "neutral")

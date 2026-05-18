@@ -20,10 +20,14 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 import textwrap
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
+
+from alphalens.thematic.extraction.schema import NOISE_EVENT_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +35,43 @@ DEFAULT_NEWS_DIR = Path.home() / ".alphalens" / "thematic_news"
 DEFAULT_EVENTS_DIR = Path.home() / ".alphalens" / "thematic_events"
 DEFAULT_LOOKBACK_DAYS = 30
 _TITLE_MAX_LEN = 200
+_NOISE_FILTERS_PATH = Path(__file__).parent.parent / "config" / "catalyst_noise_filters.yaml"
+
+
+@lru_cache(maxsize=1)
+def _load_url_blocklist_patterns() -> tuple[re.Pattern, ...]:
+    """Load + compile the L1 URL pattern blocklist (cached for batch reuse).
+
+    Returns empty tuple when the YAML file is missing or malformed —
+    callers degrade to "no URL filter" rather than crash. The L2 noise
+    event_type filter still fires independently.
+    """
+    try:
+        import yaml
+    except ImportError:
+        logger.warning("PyYAML not available; URL blocklist disabled")
+        return ()
+    if not _NOISE_FILTERS_PATH.exists():
+        return ()
+    try:
+        cfg = yaml.safe_load(_NOISE_FILTERS_PATH.read_text()) or {}
+    except yaml.YAMLError as exc:
+        logger.warning("catalyst noise YAML parse failed: %s", exc)
+        return ()
+    patterns = cfg.get("url_blocklist", []) or []
+    compiled: list[re.Pattern] = []
+    for p in patterns:
+        try:
+            compiled.append(re.compile(p))
+        except re.error as exc:
+            logger.warning("catalyst noise URL pattern %r is not valid regex: %s", p, exc)
+    return tuple(compiled)
+
+
+def _url_matches_blocklist(url: str, patterns: tuple[re.Pattern, ...]) -> bool:
+    if not url or not patterns:
+        return False
+    return any(p.search(url) for p in patterns)
 
 
 def _load_window(parquet_dir: Path, asof: dt.date, lookback_days: int) -> pd.DataFrame:
@@ -88,6 +129,27 @@ def find_trigger_event(
     joined = matches.merge(news, left_on="news_id", right_on="id", how="inner")
     if joined.empty:
         return None
+
+    # L2 noise filter — drop rows whose event_type is in NOISE_EVENT_TYPES
+    # (promo, listicle, opinion, lifestyle, evergreen, sponsored). Older
+    # event parquets may lack the event_type column; treat missing as
+    # "unknown" (= not noise) so backward-compat is preserved.
+    if "event_type" in joined.columns:
+        joined = joined[~joined["event_type"].isin(NOISE_EVENT_TYPES)]
+        if joined.empty:
+            return None
+
+    # L1 URL pattern blocklist — catches cases where Flash mis-classified
+    # promo content as a non-noise type (e.g. product_launch on a coupon
+    # page). Slug-scoped regex, not domain-wide, to avoid dropping legit
+    # cyber-incident reporting from the same publisher.
+    blocklist = _load_url_blocklist_patterns()
+    if blocklist and "url" in joined.columns:
+        joined = joined[
+            ~joined["url"].astype(str).apply(lambda u: _url_matches_blocklist(u, blocklist))
+        ]
+        if joined.empty:
+            return None
 
     # Pick the newest by event time. Canonical news schema (sources/schema.py)
     # uses ``timestamp`` since the 2026-05 ingest refactor; older parquets

@@ -1,0 +1,27 @@
+# Catalyst noise filters consumed by catalyst_resolver.find_trigger_event.
+#
+# L1: URL pattern blocklist — regex patterns (case-insensitive) tested against
+#   the news item's full URL string. A match drops the candidate.
+#
+# Origin: 2026-05-18 thematic noise audit. ~92% of today's noise events came
+# from wired.com lifestyle/coupon paths. Patterns are deliberately path-scoped
+# (not domain-wide) because wired.com also publishes legit cyber-incident news
+# (e.g. "Cybercriminal Twins Caught After Forgot to Turn Off Microsoft Teams
+# Recording") that we don't want to drop.
+#
+# Maintenance: grow this list when the operator-feedback ledger (deferred —
+# see roadmap) flags a recurring noise pattern. Keep patterns specific to
+# slug structure (coupon | promo | deals | discount-codes) rather than vague
+# topics so legit catalysts aren't accidentally dropped.
+
+url_blocklist:
+  # Coupon / promo code pages — empirically the dominant noise class.
+  - '(?i)/story/[^/]*-(coupon|promo|promo-code|promo-codes|discount-code|discount-codes)'
+  - '(?i)/story/[^/]*-deals?-(this|in|of)-'
+  - '(?i)/coupons?/'
+  - '(?i)/deals?/'
+  # "Best X of YYYY" listicle pattern (Wired/CNET/Engadget heavy users).
+  - '(?i)/story/the-?\d+-best-'
+  - '(?i)/story/best-[^/]+(-(of|for|in))?-\d{4}'
+  # Generic discount / save phrasing in slug.
+  - '(?i)/story/[^/]*-(save-\$|save-\d+%|\d+%-off)'

@@ -33,6 +33,107 @@ class TestEventSchema(unittest.TestCase):
         self.assertEqual(set(s["properties"]["event_type"]["enum"]), set(schema.EVENT_TYPES))
 
 
+class TestRefinedEventTaxonomy(unittest.TestCase):
+    """The 2026-05-18 noise-filter audit found 58% of events were landing in
+    'other' because legit catalysts (bankruptcy, financing, exec_change,
+    breach, ipo, …) had no dedicated label. Per Perplexity research on
+    financial NLP event taxonomies (TAXMORPH, TAXREC, FINEED), the right
+    fix is to expand the enum to ~20-30 well-chosen types covering canonical
+    catalysts AND adding an explicit non-catalyst branch."""
+
+    def test_enum_covers_canonical_catalyst_subtypes(self):
+        # Catalyst sub-types observed in real data 2026-05-18 'other' bucket
+        # OR called out by Perplexity research as standard event-driven labels.
+        for t in [
+            "bankruptcy",
+            "financing",
+            "ipo",
+            "secondary",
+            "dividend",
+            "buyback",
+            "spinoff",
+            "restructuring",
+            "activist_position",
+            "exec_change",
+            "board_change",
+            "strike",
+            "layoffs",
+            "litigation",
+            "settlement",
+            "investigation",
+            "recall",
+            "breach",
+            "contract_award",
+            "product_retirement",
+            "rating_change",
+            "price_target",
+            "geopolitical",
+            "central_bank",
+        ]:
+            self.assertIn(t, schema.EVENT_TYPES, f"missing canonical catalyst type: {t}")
+
+    def test_enum_includes_explicit_noise_branch(self):
+        # Per Perplexity §5.3: standard practice is an explicit
+        # non-market-moving branch separate from 'other'.
+        for t in ["opinion", "lifestyle", "listicle", "promo", "evergreen", "sponsored"]:
+            self.assertIn(t, schema.EVENT_TYPES, f"missing noise type: {t}")
+
+    def test_noise_event_types_helper_exposes_subset(self):
+        # NOISE_EVENT_TYPES is the canonical handle used by downstream
+        # filters (catalyst_resolver) so the "what counts as noise" list
+        # lives in one place.
+        self.assertTrue(hasattr(schema, "NOISE_EVENT_TYPES"))
+        self.assertEqual(
+            set(schema.NOISE_EVENT_TYPES),
+            {"opinion", "lifestyle", "listicle", "promo", "evergreen", "sponsored"},
+        )
+        # All noise types must also be in the master enum (consistency).
+        for t in schema.NOISE_EVENT_TYPES:
+            self.assertIn(t, schema.EVENT_TYPES)
+
+    def test_normalize_accepts_new_catalyst_types(self):
+        for new_type in ["bankruptcy", "financing", "exec_change", "breach", "ipo"]:
+            normalized = schema.normalize_extraction(
+                {
+                    "event_type": new_type,
+                    "themes": ["whatever"],
+                    "sentiment": "neutral",
+                    "confidence": 0.5,
+                }
+            )
+            self.assertEqual(normalized["event_type"], new_type)
+
+    def test_normalize_accepts_noise_types(self):
+        for noise_type in ["promo", "lifestyle", "listicle"]:
+            normalized = schema.normalize_extraction(
+                {
+                    "event_type": noise_type,
+                    "themes": ["whatever"],
+                    "sentiment": "neutral",
+                    "confidence": 0.5,
+                }
+            )
+            self.assertEqual(normalized["event_type"], noise_type)
+
+    def test_every_event_type_normalizes_to_itself(self):
+        # Parametric guard: any future enum rename / typo that breaks
+        # round-trip identity (canonical → normalize → same canonical) gets
+        # caught immediately. Zen pre-push review L2 follow-up.
+        for t in schema.EVENT_TYPES:
+            normalized = schema.normalize_extraction({"event_type": t})
+            self.assertEqual(
+                normalized["event_type"],
+                t,
+                f"event_type {t!r} did not round-trip through normalize_extraction",
+            )
+
+    def test_legacy_other_still_supported(self):
+        # Backward compat: existing rows with 'other' continue to parse
+        # without coercion, and unknown values still coerce to 'other'.
+        normalized = schema.normalize_extraction({"event_type": "other"})
+        self.assertEqual(normalized["event_type"], "other")
+
+
 class TestParseExtraction(unittest.TestCase):
     def test_parses_well_formed_json(self):
         raw = json.dumps(
