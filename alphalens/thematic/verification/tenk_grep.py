@@ -179,10 +179,12 @@ def _find_cached(ticker: str, cache_dir: Path, *, asof: dt.date | None = None) -
     if not candidates:
         return None
     if asof is not None:
-        prefix_len = len(ticker) + 1  # "NVDA_"
         eligible: list[Path] = []
         for path in candidates:
-            date_str = path.stem[prefix_len:]
+            # Cache filename shape: ``{TICKER}_{YYYY-MM-DD}.txt``. Use rsplit
+            # so tickers that themselves contain an underscore (e.g. BRK_B)
+            # don't shift the date slice and silently mis-classify the file.
+            date_str = path.stem.rsplit("_", 1)[-1]
             try:
                 file_date = dt.date.fromisoformat(date_str)
             except ValueError:

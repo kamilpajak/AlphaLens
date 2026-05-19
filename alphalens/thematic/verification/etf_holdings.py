@@ -261,12 +261,12 @@ def _load_etf_holdings(etf: str, cache_dir: Path, *, asof: dt.date | None = None
     if not candidates:
         return pd.DataFrame(columns=["name", "cusip", "ticker", "pct_val", "asset_cat"])
     if asof is not None:
-        prefix_len = len(etf) + 1  # "QTUM_"
         eligible: list[Path] = []
         for path in candidates:
-            # Filename shape: "{etf}_{YYYY-MM-DD}.parquet" — parse the
-            # 10-char date slice; skip unparseable filenames silently.
-            date_str = path.stem[prefix_len:]
+            # Cache filename shape: "{etf}_{YYYY-MM-DD}.parquet". Use rsplit
+            # so an ETF symbol with an underscore can't shift the date slice
+            # and silently mis-classify the file.
+            date_str = path.stem.rsplit("_", 1)[-1]
             try:
                 file_date = dt.date.fromisoformat(date_str)
             except ValueError:

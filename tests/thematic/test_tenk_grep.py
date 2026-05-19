@@ -396,6 +396,17 @@ class TestFetch10kPITPath(unittest.TestCase):
             path = tenk_grep._find_cached("NVDA", cache_dir, asof=None)
             self.assertEqual(path.name, "NVDA_2026-02-21.txt")
 
+    def test_find_cached_handles_underscore_in_ticker(self):
+        """Tickers with underscores (e.g. BRK_B share-class variants) must not
+        shift the date slice. Regression for zen review LOW finding."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            self._seed_cache(cache_dir, "BRK_B", "2025-02-21", "old")
+            self._seed_cache(cache_dir, "BRK_B", "2026-02-21", "new")
+            path = tenk_grep._find_cached("BRK_B", cache_dir, asof=dt.date(2025, 6, 1))
+            self.assertIsNotNone(path)
+            self.assertEqual(path.name, "BRK_B_2025-02-21.txt")
+
     def test_find_cached_skips_unparseable_filenames(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)

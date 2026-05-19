@@ -45,12 +45,20 @@ SEC_URL_FRAGMENTS = (
     "efts.sec.gov",
 )
 
-# Patterns that constitute a raw HTTP call. The canonical client uses
-# ``self._session.get(...)`` which does not match ``requests.get(``.
+# Module-level patterns that constitute a raw HTTP call. We match the
+# module-and-attribute prefix rather than specific function names so the
+# enforcement covers requests.post / requests.Session().get / httpx.* /
+# aiohttp.ClientSession() if a future contributor reaches for a different
+# HTTP library. The canonical client uses ``self._session.get(...)`` which
+# does not match any of these (no module name in the call). The
+# ``urllib.parse.urlencode`` helper used to build SEC URLs in watchdog
+# edgar.py is fine — it doesn't fetch anything — and only matches
+# ``urllib.request.`` below.
 RAW_HTTP_PATTERNS = (
-    "urllib.request.urlopen(",
-    "urllib.request.Request(",
-    "requests.get(",
+    "urllib.request.",
+    "requests.",
+    "httpx.",
+    "aiohttp.",
 )
 
 
