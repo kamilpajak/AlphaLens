@@ -310,6 +310,144 @@ class TestRateLimit(unittest.TestCase):
         self.assertTrue(sleep.called)
 
 
+class TestPublicGetHelpers(unittest.TestCase):
+    """get_json / get_bytes / get_text are the public escape hatch for shadow
+    callers (watchdog, thematic verification) that need to fetch SEC URLs
+    not covered by the fetch_* convenience methods. They MUST go through
+    the same throttle + retry + User-Agent contract as fetch_submissions.
+    """
+
+    def setUp(self):
+        from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient
+
+        self.session = MagicMock()
+        self.sleep = MagicMock()
+        self.client = SecEdgarClient(
+            user_agent="AlphaLens test@example.com",
+            rate_limit_per_sec=10,
+            session=self.session,
+            sleep=self.sleep,
+        )
+
+    def test_get_json_returns_parsed_dict(self):
+        self.session.get.return_value = _response(200, {"hello": "world"})
+
+        data = self.client.get_json("https://data.sec.gov/some/url.json")
+
+        self.assertEqual(data, {"hello": "world"})
+
+    def test_get_bytes_returns_raw_bytes(self):
+        self.session.get.return_value = _response(200, content=b"<atom/>")
+
+        data = self.client.get_bytes("https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany")
+
+        self.assertEqual(data, b"<atom/>")
+
+    def test_get_text_decodes_bytes(self):
+        self.session.get.return_value = _response(200, content="<html>żółć</html>".encode())
+
+        text = self.client.get_text("https://www.sec.gov/Archives/edgar/data/x/y/z.html")
+
+        self.assertEqual(text, "<html>żółć</html>")
+
+    def test_get_text_custom_encoding(self):
+        self.session.get.return_value = _response(200, content="<atom/>".encode("latin-1"))
+
+        text = self.client.get_text(
+            "https://www.sec.gov/some.xml",
+            encoding="latin-1",
+        )
+
+        self.assertEqual(text, "<atom/>")
+
+    def test_get_json_carries_user_agent(self):
+        self.session.get.return_value = _response(200, {})
+
+        self.client.get_json("https://data.sec.gov/x.json")
+
+        _, kwargs = self.session.get.call_args
+        self.assertEqual(kwargs["headers"]["User-Agent"], "AlphaLens test@example.com")
+
+    def test_get_bytes_retries_on_429(self):
+        self.session.get.side_effect = [
+            _response(429, text="rate limited"),
+            _response(200, content=b"OK"),
+        ]
+
+        data = self.client.get_bytes("https://www.sec.gov/x")
+
+        self.assertEqual(data, b"OK")
+        self.assertEqual(self.session.get.call_count, 2)
+        self.sleep.assert_any_call(60)
+
+    def test_get_json_raises_on_404(self):
+        from alphalens.data.alt_data.sec_edgar_client import SecEdgarError
+
+        self.session.get.return_value = _response(404, text="Not Found")
+
+        with self.assertRaises(SecEdgarError):
+            self.client.get_json("https://data.sec.gov/missing.json")
+
+
+class TestDefaultClientSingleton(unittest.TestCase):
+    """Module-level get_default_sec_client() is the single entry point for
+    callers that don't have their own SecEdgarClient instance to inject
+    (e.g. thematic verification module-level functions). MUST be lazy
+    (no side-effects at import) and MUST resolve User-Agent from
+    SEC_EDGAR_USER_AGENT env var with ALPHALENS_DEFAULT_USER_AGENT as
+    fallback. The fallback string must satisfy SEC's UA contract
+    (email or URL).
+    """
+
+    def setUp(self):
+        from alphalens.data.alt_data import sec_edgar_client as mod
+
+        self._mod = mod
+        # Each test starts with a fresh singleton (real production code
+        # has it cached for the process lifetime; tests reset to isolate).
+        mod._reset_default_client_for_tests()
+
+    def tearDown(self):
+        self._mod._reset_default_client_for_tests()
+
+    def test_default_ua_constant_is_valid_per_sec_contract(self):
+        ua = self._mod.ALPHALENS_DEFAULT_USER_AGENT
+        self.assertTrue("@" in ua or "http" in ua.lower(), ua)
+
+    def test_singleton_returns_same_instance(self):
+        c1 = self._mod.get_default_sec_client()
+        c2 = self._mod.get_default_sec_client()
+
+        self.assertIs(c1, c2)
+
+    def test_singleton_uses_env_user_agent(self):
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"SEC_EDGAR_USER_AGENT": "Custom-UA contact@example.com"}):
+            client = self._mod.get_default_sec_client()
+
+        self.assertEqual(client._user_agent, "Custom-UA contact@example.com")
+
+    def test_singleton_falls_back_to_default_ua(self):
+        import os
+        from unittest.mock import patch
+
+        # Force env var absence even if operator has it set locally.
+        env_without_ua = {k: v for k, v in os.environ.items() if k != "SEC_EDGAR_USER_AGENT"}
+        with patch.dict(os.environ, env_without_ua, clear=True):
+            client = self._mod.get_default_sec_client()
+
+        self.assertEqual(client._user_agent, self._mod.ALPHALENS_DEFAULT_USER_AGENT)
+
+    def test_reset_helper_creates_new_instance(self):
+        c1 = self._mod.get_default_sec_client()
+        self._mod._reset_default_client_for_tests()
+        c2 = self._mod.get_default_sec_client()
+
+        self.assertIsNot(c1, c2)
+
+
 class TestTransientRetries(unittest.TestCase):
     def test_retries_on_connection_error_then_succeeds(self):
         import requests
