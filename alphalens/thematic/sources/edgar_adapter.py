@@ -15,7 +15,6 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-import os
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -31,26 +30,14 @@ from alphalens.watchdog.types import Event, FormType
 logger = logging.getLogger(__name__)
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_news" / "edgar"
-DEFAULT_USER_AGENT_ENV = "THEMATIC_USER_AGENT"
-FALLBACK_USER_AGENT = "AlphaLens-thematic pajakkamil@gmail.com"
 
 
-def _resolve_user_agent(explicit: str | None) -> str:
-    if explicit:
-        return explicit
-    return os.environ.get(DEFAULT_USER_AGENT_ENV) or FALLBACK_USER_AGENT
-
-
-def _detect_events(
-    *,
-    tickers: list[str],
-    user_agent: str,
-    cache_dir: Path,
-) -> list[Event]:
+def _detect_events(*, tickers: list[str], cache_dir: Path) -> list[Event]:
     """Run one SEC EDGAR Atom-feed sweep and return new 8-K events.
 
     Isolated in its own function so tests can patch this single seam without
-    spinning up real HTTP traffic.
+    spinning up real HTTP traffic. SEC transport (UA + throttle) is owned by
+    the shared :class:`SecEdgarClient` singleton.
     """
     cik_cache = cache_dir / "company_tickers.json"
     cik_cache.parent.mkdir(parents=True, exist_ok=True)
@@ -61,7 +48,7 @@ def _detect_events(
     store = SeenEventStore(db_path=seen_db)
     source = SECEdgarSource(
         tickers=tickers,
-        config={"user_agent": user_agent, "form_filter": [FormType.FORM_8K]},
+        config={"form_filter": [FormType.FORM_8K]},
         store=store,
         cik_loader=loader,
     )
@@ -113,7 +100,6 @@ def fetch_daily_news(
     date: dt.date,
     universe: Iterable[str] | None = None,
     cache_dir: Path = DEFAULT_CACHE_DIR,
-    user_agent: str | None = None,
     lookback_days: int = 2,
     force: bool = False,
 ) -> pd.DataFrame:
@@ -124,8 +110,7 @@ def fetch_daily_news(
         return pd.read_parquet(cache_path)
 
     universe_set = {t.upper() for t in universe} if universe is not None else load_input_universe()
-    ua = _resolve_user_agent(user_agent)
-    events = _detect_events(tickers=sorted(universe_set), user_agent=ua, cache_dir=cache_dir)
+    events = _detect_events(tickers=sorted(universe_set), cache_dir=cache_dir)
     events = [e for e in events if e.ticker.upper() in universe_set]
 
     df = transform(events)

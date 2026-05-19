@@ -35,12 +35,10 @@ def _watchdog_callback() -> None:
 
 
 def _build_watchdog() -> Watchdog:
-    user_agent = os.environ.get("WATCHDOG_USER_AGENT") or "AlphaLens Watchdog pajakkamil@gmail.com"
     bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
 
     cfg = dict(WATCHDOG_DEFAULTS)
-    cfg["user_agent"] = user_agent
     cfg["fetch_form4_details"] = True
     cfg["fetch_8k_details"] = True
 

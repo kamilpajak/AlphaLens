@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from urllib.parse import urlencode
 
-import requests
+from alphalens.data.alt_data.sec_edgar_client import (
+    SecEdgarClient,
+    SecEdgarError,
+    get_default_sec_client,
+)
 
 from ..config import WATCHDOG_DEFAULTS
 from ..storage import SeenEventStore
@@ -32,34 +36,30 @@ class SECEdgarSource(EventSource):
         store: SeenEventStore | None = None,
         ticker_to_cik: dict[str, str] | None = None,
         cik_loader: CIKLoader | None = None,
+        sec_client: SecEdgarClient | None = None,
     ):
         self.config = dict(WATCHDOG_DEFAULTS)
         if config:
             self.config.update(config)
-
-        if not self.config.get("user_agent"):
-            raise ValueError(
-                "SEC mandates a real contact email in User-Agent. "
-                "Set config['user_agent'] to 'YourName contact@example.com'."
-            )
 
         self.tickers = tickers
         self.store = store if store is not None else SeenEventStore()
         self.ticker_to_cik = ticker_to_cik or {}
         self.cik_loader = cik_loader
         self.form_filter: set[FormType] = set(self.config["form_filter"])
-        self.rate_limit_seconds = float(self.config["rate_limit_seconds"])
         self.fetch_form4_details = bool(self.config.get("fetch_form4_details", False))
         self.fetch_8k_details = bool(self.config.get("fetch_8k_details", False))
+        # All SEC HTTP goes through the canonical client (10 req/s global
+        # throttle, retry/backoff, User-Agent). The previous per-ticker
+        # time.sleep(rate_limit_seconds) is subsumed by that throttle.
+        self._sec = sec_client or get_default_sec_client()
 
-    def _collect_events_for_ticker(self, idx: int, ticker: str) -> list[Event]:
+    def _collect_events_for_ticker(self, ticker: str) -> list[Event]:
         """Fetch + parse one ticker's Atom feed; logs and skips on missing CIK or fetch error."""
         cik = self._resolve_cik(ticker)
         if not cik:
             logger.warning("No CIK mapping for %s, skipping", ticker)
             return []
-        if idx > 0:
-            time.sleep(self.rate_limit_seconds)
         xml_text = self._fetch_feed(cik)
         if xml_text is None:
             return []
@@ -77,8 +77,8 @@ class SECEdgarSource(EventSource):
 
     def detect(self) -> list[Event]:
         all_events: list[Event] = []
-        for idx, ticker in enumerate(self.tickers):
-            all_events.extend(self._collect_events_for_ticker(idx, ticker))
+        for ticker in self.tickers:
+            all_events.extend(self._collect_events_for_ticker(ticker))
 
         filtered = [e for e in all_events if e.form_type in self.form_filter]
         unseen = self.store.filter_unseen(filtered)
@@ -104,7 +104,8 @@ class SECEdgarSource(EventSource):
             "count": str(self.config["edgar_recent_count"]),
             "output": "atom",
         }
-        return self._get(self.config["edgar_base_url"], params=params, context=f"feed CIK={cik}")
+        url = f"{self.config['edgar_base_url']}?{urlencode(params)}"
+        return self._get(url, context=f"feed CIK={cik}")
 
     def _enrich_form4(self, event: Event) -> None:
         """Find and parse the Form 4 XBRL via SEC's index.json (canonical file listing)."""
@@ -157,13 +158,17 @@ class SECEdgarSource(EventSource):
         if items:
             event.raw_data["items"] = _resolve_5_02_subsection(items, html_text)
 
-    def _get(self, url: str, params: dict | None = None, context: str = "") -> str | None:
-        headers = {"User-Agent": self.config["user_agent"]}
+    def _get(self, url: str, context: str = "") -> str | None:
+        """Best-effort text fetch via the canonical SEC client.
+
+        Returns None on any client error so a single bad filing doesn't crash
+        detection of the rest of the universe (Layer 1 watchdog runs cron-style
+        and must degrade gracefully). The canonical client handles throttle +
+        retry/backoff; SecEdgarError reaches us only after retries exhaust.
+        """
         try:
-            resp = requests.get(url, params=params, headers=headers, timeout=10)
-            resp.raise_for_status()
-            return resp.text
-        except requests.RequestException as exc:
+            return self._sec.get_text(url)
+        except SecEdgarError as exc:
             logger.error("EDGAR fetch failed (%s): %s", context, exc)
             return None
 

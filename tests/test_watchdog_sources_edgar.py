@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 SAMPLE_ATOM = """<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
@@ -34,20 +34,26 @@ SAMPLE_ATOM = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-def _make_response(text: str, status_code: int = 200):
-    resp = MagicMock()
-    resp.status_code = status_code
-    resp.text = text
-    resp.raise_for_status = MagicMock()
-    return resp
+def _make_sec_client(text=SAMPLE_ATOM):
+    """Mock SecEdgarClient that returns ``text`` from get_text for every URL."""
+    from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient
+
+    client = MagicMock(spec=SecEdgarClient)
+    client.get_text.return_value = text
+    return client
 
 
-def _make_source(tickers=None, config_overrides=None, store=None, ticker_to_cik=None):
+def _make_source(
+    tickers=None,
+    config_overrides=None,
+    store=None,
+    ticker_to_cik=None,
+    sec_client=None,
+):
     from alphalens.watchdog.config import WATCHDOG_DEFAULTS
     from alphalens.watchdog.sources.edgar import SECEdgarSource
 
     cfg = dict(WATCHDOG_DEFAULTS)
-    cfg["user_agent"] = "AlphaLens Test test@example.com"
     if config_overrides:
         cfg.update(config_overrides)
 
@@ -56,6 +62,7 @@ def _make_source(tickers=None, config_overrides=None, store=None, ticker_to_cik=
         config=cfg,
         store=store,
         ticker_to_cik=ticker_to_cik or {"AAPL": "0000320193"},
+        sec_client=sec_client or _make_sec_client(),
     )
 
 
@@ -72,35 +79,22 @@ class TestSECEdgarSource(unittest.TestCase):
 
         return SeenEventStore(self.db_path)
 
-    @patch("alphalens.watchdog.sources.edgar.requests.get")
-    def test_user_agent_header_is_sent(self, mock_get):
-        mock_get.return_value = _make_response(SAMPLE_ATOM)
-        source = _make_source(store=self._store())
+    def test_all_http_routes_through_sec_client(self):
+        """SECEdgarSource must NEVER call requests.get directly — every URL
+        goes through SecEdgarClient.get_text so the global 10 req/s throttle
+        and User-Agent contract are honoured."""
+        sec = _make_sec_client()
+        source = _make_source(store=self._store(), sec_client=sec)
         source.detect()
 
-        self.assertTrue(mock_get.called)
-        _, kwargs = mock_get.call_args
-        self.assertIn("headers", kwargs)
-        self.assertEqual(kwargs["headers"]["User-Agent"], "AlphaLens Test test@example.com")
+        self.assertTrue(sec.get_text.called)
+        url = sec.get_text.call_args[0][0]
+        self.assertIn("cgi-bin/browse-edgar", url)
+        self.assertIn("CIK=0000320193", url)
 
-    def test_missing_user_agent_in_config_raises(self):
-        from alphalens.watchdog.config import WATCHDOG_DEFAULTS
-        from alphalens.watchdog.sources.edgar import SECEdgarSource
-
-        cfg = dict(WATCHDOG_DEFAULTS)  # user_agent=None
-        with self.assertRaises(ValueError):
-            SECEdgarSource(
-                tickers=["AAPL"],
-                config=cfg,
-                store=self._store(),
-                ticker_to_cik={"AAPL": "0000320193"},
-            )
-
-    @patch("alphalens.watchdog.sources.edgar.requests.get")
-    def test_detect_parses_atom_entries_into_events(self, mock_get):
+    def test_detect_parses_atom_entries_into_events(self):
         from alphalens.watchdog.types import FormType
 
-        mock_get.return_value = _make_response(SAMPLE_ATOM)
         # filter=None → accept all forms for this test
         source = _make_source(
             store=self._store(),
@@ -117,11 +111,9 @@ class TestSECEdgarSource(unittest.TestCase):
         self.assertIn("sec.gov", evt_8k.url)
         self.assertIsNotNone(evt_8k.filed_at.tzinfo)
 
-    @patch("alphalens.watchdog.sources.edgar.requests.get")
-    def test_detect_filters_by_form_type(self, mock_get):
+    def test_detect_filters_by_form_type(self):
         from alphalens.watchdog.types import FormType
 
-        mock_get.return_value = _make_response(SAMPLE_ATOM)
         source = _make_source(
             store=self._store(),
             config_overrides={"form_filter": [FormType.FORM_8K]},
@@ -131,11 +123,9 @@ class TestSECEdgarSource(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].form_type, FormType.FORM_8K)
 
-    @patch("alphalens.watchdog.sources.edgar.requests.get")
-    def test_detect_deduplicates_via_store(self, mock_get):
+    def test_detect_deduplicates_via_store(self):
         from alphalens.watchdog.types import FormType
 
-        mock_get.return_value = _make_response(SAMPLE_ATOM)
         store = self._store()
         source = _make_source(
             store=store,
@@ -144,55 +134,47 @@ class TestSECEdgarSource(unittest.TestCase):
         first = source.detect()
         self.assertEqual(len(first), 2)
 
-        # Second call with fresh mock should see 0 (already seen)
+        # Second call should see 0 (already seen)
         second = source.detect()
         self.assertEqual(second, [])
 
-    @patch("alphalens.watchdog.sources.edgar.time.sleep")
-    @patch("alphalens.watchdog.sources.edgar.requests.get")
-    def test_rate_limit_sleeps_between_ticker_requests(self, mock_get, mock_sleep):
-        mock_get.return_value = _make_response(SAMPLE_ATOM)
-        source = _make_source(
-            tickers=["AAPL", "MSFT"],
-            store=self._store(),
-            ticker_to_cik={"AAPL": "0000320193", "MSFT": "0000789019"},
-            config_overrides={"rate_limit_seconds": 0.15},
-        )
-        source.detect()
+    def test_no_direct_time_sleep_between_tickers(self):
+        """The per-ticker time.sleep(rate_limit_seconds) is gone — the global
+        SecEdgarClient throttle subsumes it. This guards against re-introducing
+        a double-cap (per-ticker sleep on top of canonical 10 req/s)."""
+        import alphalens.watchdog.sources.edgar as edgar_mod
 
-        self.assertTrue(mock_sleep.called)
-        slept = [args[0] for args, _ in mock_sleep.call_args_list]
-        self.assertTrue(all(s >= 0.15 for s in slept))
+        self.assertFalse(hasattr(edgar_mod, "time"))
 
-    @patch("alphalens.watchdog.sources.edgar.requests.get")
-    def test_detect_returns_empty_on_network_error(self, mock_get):
-        import requests
+    def test_detect_returns_empty_on_sec_client_error(self):
+        from alphalens.data.alt_data.sec_edgar_client import SecEdgarError
 
-        mock_get.side_effect = requests.ConnectionError("network down")
-        source = _make_source(store=self._store())
+        sec = _make_sec_client()
+        sec.get_text.side_effect = SecEdgarError("network down")
+        source = _make_source(store=self._store(), sec_client=sec)
         events = source.detect()
 
         self.assertEqual(events, [])
 
-    @patch("alphalens.watchdog.sources.edgar.requests.get")
-    def test_detect_returns_empty_on_malformed_xml(self, mock_get):
-        mock_get.return_value = _make_response("<not-xml<>>")
-        source = _make_source(store=self._store())
+    def test_detect_returns_empty_on_malformed_xml(self):
+        sec = _make_sec_client(text="<not-xml<>>")
+        source = _make_source(store=self._store(), sec_client=sec)
         events = source.detect()
 
         self.assertEqual(events, [])
 
-    @patch("alphalens.watchdog.sources.edgar.requests.get")
-    def test_skips_ticker_without_cik_mapping(self, mock_get):
-        mock_get.return_value = _make_response(SAMPLE_ATOM)
+    def test_skips_ticker_without_cik_mapping(self):
+        sec = _make_sec_client()
         source = _make_source(
             tickers=["AAPL", "UNKNOWN_TICKER"],
             store=self._store(),
             ticker_to_cik={"AAPL": "0000320193"},
+            sec_client=sec,
         )
         source.detect()
 
-        self.assertEqual(mock_get.call_count, 1)
+        # Only one Atom fetch (for AAPL); UNKNOWN_TICKER skipped pre-fetch.
+        self.assertEqual(sec.get_text.call_count, 1)
 
 
 if __name__ == "__main__":

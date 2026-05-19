@@ -84,7 +84,6 @@ class TestEdgarAdapterFetch(unittest.TestCase):
                     date=dt.date(2026, 5, 15),
                     universe=["NVDA", "AAPL"],
                     cache_dir=Path(tmpdir),
-                    user_agent="AlphaLens-test test@example.com",
                     lookback_days=2,
                 )
 
@@ -99,7 +98,6 @@ class TestEdgarAdapterFetch(unittest.TestCase):
                     date=dt.date(2026, 5, 15),
                     universe=["NVDA", "AAPL"],
                     cache_dir=Path(tmpdir),
-                    user_agent="AlphaLens-test test@example.com",
                 )
             cached = Path(tmpdir) / "2026-05-15.parquet"
             self.assertTrue(cached.exists())
@@ -111,7 +109,6 @@ class TestEdgarAdapterFetch(unittest.TestCase):
                     date=dt.date(2026, 5, 15),
                     universe=["NVDA"],
                     cache_dir=Path(tmpdir),
-                    user_agent="AlphaLens-test test@example.com",
                 )
             with patch.object(
                 edgar_adapter, "_detect_events", side_effect=AssertionError("no call")
@@ -120,7 +117,6 @@ class TestEdgarAdapterFetch(unittest.TestCase):
                     date=dt.date(2026, 5, 15),
                     universe=["NVDA"],
                     cache_dir=Path(tmpdir),
-                    user_agent="AlphaLens-test test@example.com",
                 )
             self.assertEqual(len(df2), 1)
 
@@ -135,7 +131,6 @@ class TestEdgarAdapterFetch(unittest.TestCase):
                 df = edgar_adapter.fetch_daily_news(
                     date=dt.date(2026, 5, 15),
                     cache_dir=Path(tmpdir),
-                    user_agent="AlphaLens-test test@example.com",
                 )
             self.assertEqual(len(df), 1)
             self.assertEqual(df.iloc[0]["tickers"], ["NVDA"])
