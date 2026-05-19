@@ -103,6 +103,8 @@ class EdgarFundamentalsStore:
         # ticker (upper) -> 10-digit CIK; populated by preload() + on-demand.
         self._ticker_to_cik: dict[str, str] = {}
         self._loaded_tickers: bool = False
+        # ticker (upper) -> latest close from yfinance batch in preload().
+        self._prices: dict[str, float] = {}
 
     @staticmethod
     def _default_sec_client() -> SecEdgarClient:
@@ -167,17 +169,21 @@ class EdgarFundamentalsStore:
                 continue
             if not (self._dir / f"{cik}.parquet").exists():
                 missing_ciks.append((ticker, cik))
-        if not missing_ciks:
-            return
-        logger.info("preload: fetching %d missing companyfacts from SEC", len(missing_ciks))
-        for ticker, cik in missing_ciks:
-            try:
-                facts = self._sec_client.fetch_company_facts(cik)
-            except Exception as exc:
-                logger.warning("companyfacts fetch failed for %s/%s: %s", ticker, cik, exc)
-                continue
-            table = companyfacts_json_to_parquet_table(facts)
-            pq.write_table(table, self._dir / f"{cik}.parquet")
+        if missing_ciks:
+            logger.info("preload: fetching %d missing companyfacts from SEC", len(missing_ciks))
+            for ticker, cik in missing_ciks:
+                try:
+                    facts = self._sec_client.fetch_company_facts(cik)
+                except Exception as exc:
+                    logger.warning("companyfacts fetch failed for %s/%s: %s", ticker, cik, exc)
+                    continue
+                table = companyfacts_json_to_parquet_table(facts)
+                pq.write_table(table, self._dir / f"{cik}.parquet")
+        # Batch-fetch prices for all tickers in one yfinance round-trip even
+        # when no companyfacts are missing — otherwise warm-cache runs would
+        # never populate prices and fall through to per-ticker fast_info.
+        if self._with_prices and tickers:
+            self._batch_fetch_prices(tickers)
 
     # --- the parity contract: 16-field features dict ---------------------
 
@@ -264,7 +270,10 @@ class EdgarFundamentalsStore:
 
         # FCF margin 5y median: rolling 20-quarter window. Set to None for
         # now; valuation_signal._effective_fcf_margin() already handles the
-        # None case by falling back to the spot TTM margin.
+        # None case by falling back to the spot TTM margin. TODO: implement
+        # the 20-quarter rolling median via _arrow_table_to_entries +
+        # _pit_filter + per-quarter (ocf - capex - interest*(1-tax)) /
+        # revenue, take median when ≥ 8 quarters present.
         fcf_margin_5y_median = None
 
         publish_date_str = self._latest_publish_date(cik, asof)
@@ -302,15 +311,46 @@ class EdgarFundamentalsStore:
             return _TAX_RATE_DEFAULT
         return max(_TAX_RATE_MIN, min(_TAX_RATE_MAX, rate))
 
-    @staticmethod
-    def _fetch_price(ticker: str, asof: date) -> float | None:
-        """Current close from yfinance.
+    def _batch_fetch_prices(self, tickers: list[str]) -> None:
+        """Populate self._prices from a single yfinance batch download.
 
-        Snapshot (yfinance.fast_info.last_price), not PIT. Acceptable for
-        live thematic briefs where asof ≈ today; the future paradigm-13
-        audit replay (which IS PIT-sensitive) is out of scope of this
-        store and routes through a separate price loader.
+        Cuts N sequential HTTPS round-trips (one per ticker) down to one.
+        Misses (delisted, weird tickers, partial yfinance returns) fall
+        through to the per-ticker path in :meth:`_fetch_price`.
         """
+        try:
+            import pandas as pd
+            import yfinance as yf
+        except ImportError:
+            logger.warning("yfinance unavailable; prices empty")
+            return
+        try:
+            df = yf.download(tickers, period="5d", progress=False, auto_adjust=False)
+        except Exception as exc:
+            logger.warning("yfinance batch download failed: %s", exc)
+            return
+        if df is None or df.empty or "Close" not in df.columns:
+            return
+        closes = df["Close"].ffill().iloc[-1]
+        if isinstance(closes, pd.Series):
+            for t, val in closes.items():
+                if pd.notna(val):
+                    self._prices[str(t).upper()] = float(val)
+        # Single-ticker batch returns a scalar.
+        elif pd.notna(closes):
+            self._prices[tickers[0].upper()] = float(closes)
+
+    def _fetch_price(self, ticker: str, asof: date) -> float | None:
+        """Latest close from yfinance.
+
+        Snapshot (most recent close on or before today), not PIT.
+        Acceptable for live thematic briefs where asof ≈ today; the
+        future paradigm-13 audit replay (which IS PIT-sensitive) is out
+        of scope of this store and routes through a separate price loader.
+        """
+        cached = self._prices.get(ticker.upper())
+        if cached is not None:
+            return cached
         try:
             import yfinance as yf
         except ImportError:
@@ -324,7 +364,9 @@ class EdgarFundamentalsStore:
             return None
         if price is None or price != price:  # NaN check
             return None
-        return float(price)
+        result = float(price)
+        self._prices[ticker.upper()] = result
+        return result
 
     def _latest_publish_date(self, cik: str, asof: date) -> str | None:
         """ISO date of the most recent visible filing across the core concepts.

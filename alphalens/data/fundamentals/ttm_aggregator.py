@@ -136,22 +136,28 @@ def compute_ttm(
     taxonomy: str = DEFAULT_TAXONOMY,
     unit: str = DEFAULT_UNIT,
 ) -> float | None:
-    """Try each concept in ``chain``; return the first non-None TTM value.
+    """Scan every concept in ``chain``; return the value at the freshest end.
 
     For each candidate concept:
       1. Read all entries for that concept from the CIK's parquet table.
       2. PIT-filter on ``filed_date <= asof``.
       3. Keep the latest-filed entry per (start, end) pair (handles
          restatements).
-      4. Apply ``_ttm_at_end`` at the most recent visible end.
+      4. Apply ``_ttm_at_end`` at that concept's most recent visible end.
 
-    Returns None when the entire chain misses (concept-mismatch + truly
-    missing data are indistinguishable at this layer; callers can
-    discriminate via ``latest_instant`` on a marker concept).
+    Across concepts we keep the result with the chronologically latest
+    ``end`` — early-returning on the first non-None hit would silently
+    serve a stale value for issuers that switched XBRL tags (e.g. ASC
+    606 migration when ``Revenues`` is in the chain alongside
+    ``RevenueFromContractWithCustomerExcludingAssessedTax``).
+
+    Returns None when the entire chain misses.
     """
     table = reader.get_cik_table(cik)
     if table is None:
         return None
+    best_end: str | None = None
+    best_val: float | None = None
     for concept in chain:
         entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
         if not entries:
@@ -163,10 +169,14 @@ def compute_ttm(
         end = _latest_end_visible(per_period)
         if end is None:
             continue
+        if best_end is not None and end <= best_end:
+            continue
         value = _ttm_at_end(per_period, end)
-        if value is not None:
-            return value
-    return None
+        if value is None:
+            continue
+        best_end = end
+        best_val = value
+    return best_val
 
 
 # --- Instant concepts: latest balance-sheet value at asof ------------------
@@ -183,14 +193,15 @@ def latest_instant(
 ) -> float | None:
     """Most-recent point-in-time value for an instant concept visible at asof.
 
-    Tries each concept in ``chain``; first hit (any entry visible at
-    asof) wins. Within a single concept's entries we keep the latest-filed
-    per ``end`` (handles balance-sheet restatements) and pick the
-    chronologically latest end.
+    Scans every concept in ``chain`` and returns the value attached to the
+    chronologically latest ``end`` date — see :func:`compute_ttm` for why
+    we do not early-return on first hit (stale-tag protection).
     """
     table = reader.get_cik_table(cik)
     if table is None:
         return None
+    best_end: str | None = None
+    best_val: float | None = None
     for concept in chain:
         entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
         if not entries:
@@ -202,8 +213,10 @@ def latest_instant(
         if not per_end:
             continue
         latest_end = max(per_end.keys())
-        return per_end[latest_end].val
-    return None
+        if best_end is None or latest_end > best_end:
+            best_end = latest_end
+            best_val = per_end[latest_end].val
+    return best_val
 
 
 def has_any_concept(
@@ -214,18 +227,23 @@ def has_any_concept(
     *,
     taxonomy: str = DEFAULT_TAXONOMY,
     unit: str = DEFAULT_UNIT,
+    min_distinct_ends: int = 4,
 ) -> bool:
-    """True if at least one entry for any concept in ``chain`` is visible at asof.
+    """True if any concept in ``chain`` has ≥ ``min_distinct_ends`` distinct ends.
 
     Marker for the debt-free fallback: callers verify the issuer files
-    balance sheets at all before treating missing debt rows as 0.0.
+    balance sheets at all before treating missing debt rows as 0.0. We
+    require ≥4 distinct period-end dates so a single 8-K mention of
+    ``Assets`` doesn't false-positive a partial-filing issuer into the
+    "structurally debt-free" bucket.
     """
     table = reader.get_cik_table(cik)
     if table is None:
         return False
     for concept in chain:
         entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
-        if entries and _pit_filter(entries, asof):
+        visible = _pit_filter(entries, asof)
+        if len({e.end for e in visible}) >= min_distinct_ends:
             return True
     return False
 
