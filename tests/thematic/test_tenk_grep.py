@@ -263,10 +263,19 @@ class TestFetchTenKReturnsNoneOnNoRecent10K(unittest.TestCase):
 
 class TestPrimaryTierSwallowsError(unittest.TestCase):
     def test_load_ticker_to_cik_returns_empty_on_network_error(self):
+        from alphalens.data.alt_data import sec_edgar_client as sec_mod
+
         tenk_grep._load_ticker_to_cik.cache_clear()
-        with patch.object(tenk_grep, "_http_get", side_effect=RuntimeError("SEC unreachable")):
-            self.assertEqual(tenk_grep._load_ticker_to_cik(), {})
-        tenk_grep._load_ticker_to_cik.cache_clear()
+        sec_mod._reset_default_client_for_tests()
+        try:
+            client = sec_mod.get_default_sec_client()
+            with patch.object(
+                client, "fetch_company_tickers", side_effect=RuntimeError("SEC unreachable")
+            ):
+                self.assertEqual(tenk_grep._load_ticker_to_cik(), {})
+        finally:
+            tenk_grep._load_ticker_to_cik.cache_clear()
+            sec_mod._reset_default_client_for_tests()
 
 
 class TestCikFallbackChain(unittest.TestCase):
@@ -305,6 +314,7 @@ class TestCikFallbackChain(unittest.TestCase):
         # outages. Wrap in try/except returning {} so CIKLoader + YAML get
         # their turn. Standalone callers (CLI debug, direct tests of
         # _resolve_cik) must not crash.
+        from alphalens.data.alt_data import sec_edgar_client as sec_mod
         from alphalens.watchdog.sources import cik_loader as cl
 
         fake_loader = cl.CIKLoader.__new__(cl.CIKLoader)
@@ -313,12 +323,19 @@ class TestCikFallbackChain(unittest.TestCase):
         # Clear @lru_cache before patching so the bad-network call is what
         # the lru actually executes.
         tenk_grep._load_ticker_to_cik.cache_clear()
-        with (
-            patch.object(tenk_grep, "_http_get", side_effect=RuntimeError("SEC unreachable")),
-            patch.object(tenk_grep, "_get_cik_loader", return_value=fake_loader),
-        ):
-            self.assertEqual(tenk_grep._resolve_cik("NVDA"), "0001045810")
-        tenk_grep._load_ticker_to_cik.cache_clear()
+        sec_mod._reset_default_client_for_tests()
+        try:
+            client = sec_mod.get_default_sec_client()
+            with (
+                patch.object(
+                    client, "fetch_company_tickers", side_effect=RuntimeError("SEC unreachable")
+                ),
+                patch.object(tenk_grep, "_get_cik_loader", return_value=fake_loader),
+            ):
+                self.assertEqual(tenk_grep._resolve_cik("NVDA"), "0001045810")
+        finally:
+            tenk_grep._load_ticker_to_cik.cache_clear()
+            sec_mod._reset_default_client_for_tests()
 
     def test_resolve_cik_returns_none_on_full_chain_miss(self):
         empty_loader = type("L", (), {"get_cik": lambda self, t: None})()
@@ -344,16 +361,6 @@ class TestExtractTextScriptStripping(unittest.TestCase):
         self.assertNotIn("quantum_red", text)
         self.assertNotIn("biotech_secret", text)
         self.assertIn("quantum computing", text)
-
-    def test_user_agent_env_override(self):
-        import os
-
-        os.environ["THEMATIC_USER_AGENT"] = "TestAgent override@test"
-        try:
-            self.assertEqual(tenk_grep._user_agent(), "TestAgent override@test")
-        finally:
-            del os.environ["THEMATIC_USER_AGENT"]
-        self.assertEqual(tenk_grep._user_agent(), tenk_grep.DEFAULT_USER_AGENT)
 
 
 class TestFetch10kPITPath(unittest.TestCase):

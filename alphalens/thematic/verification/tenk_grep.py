@@ -6,43 +6,32 @@ HTML to plain text, cache locally, and grep for theme keywords. SEC's
 ``find_latest_10k`` picks the freshest 10-K entry from the ``filings.recent``
 arrays.
 
-The cache lives at ``~/.alphalens/thematic_tenk/{TICKER}_{filing_date}.txt``
-and is one filing per ticker (10-Ks are annual; refresh ~yearly).
+All SEC HTTP goes through the canonical :class:`SecEdgarClient` singleton —
+no parallel transport, no separate User-Agent. The cache lives at
+``~/.alphalens/thematic_tenk/{TICKER}_{filing_date}.txt`` and is one filing
+per ticker (10-Ks are annual; refresh ~yearly).
 """
 
 from __future__ import annotations
 
 import datetime as dt
-import json
 import logging
-import os
 import re
-import urllib.request
 from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
 
 from bs4 import BeautifulSoup
 
+from alphalens.data.alt_data.sec_edgar_client import get_default_sec_client
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_tenk"
-DEFAULT_USER_AGENT = "AlphaLens-thematic pajakkamil@gmail.com"
-USER_AGENT_ENV = "THEMATIC_USER_AGENT"
 CIK_LOADER_CACHE_PATH = Path.home() / ".alphalens" / "thematic_cik_cache.json"
 TICKER_CIK_YAML_PATH = Path.home() / ".alphalens" / "ticker_cik_map.yaml"
 
 _WHITESPACE = re.compile(r"\s+")
-
-
-def _user_agent() -> str:
-    return os.environ.get(USER_AGENT_ENV) or DEFAULT_USER_AGENT
-
-
-def _http_get(url: str, *, accept: str = "*/*", timeout: float = 30.0) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": _user_agent(), "Accept": accept})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
 
 
 @lru_cache(maxsize=1)
@@ -54,10 +43,7 @@ def _load_ticker_to_cik() -> dict[str, str]:
     point of a fallback chain is to survive primary-tier outages.
     """
     try:
-        body = _http_get(
-            "https://www.sec.gov/files/company_tickers.json", accept="application/json"
-        )
-        payload = json.loads(body)
+        payload = get_default_sec_client().fetch_company_tickers()
     except Exception as exc:
         logger.warning("SEC company_tickers.json fetch failed: %s", exc)
         return {}
@@ -122,14 +108,13 @@ def _resolve_cik(ticker: str) -> str | None:
 
 
 def _fetch_submissions_json(cik: str) -> dict:
-    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-    return json.loads(_http_get(url, accept="application/json"))
+    return get_default_sec_client().fetch_submissions(cik)
 
 
 def _fetch_filing_html(cik: str, accession: str, primary_doc: str) -> str:
     accession_clean = accession.replace("-", "")
     url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_clean}/{primary_doc}"
-    return _http_get(url).decode("utf-8", errors="replace")
+    return get_default_sec_client().get_text(url, encoding="utf-8")
 
 
 def extract_text(html: str) -> str:
