@@ -31,6 +31,7 @@ Differences vs SimFin that callers do NOT need to handle:
 from __future__ import annotations
 
 import logging
+import math
 import os
 from datetime import date
 from pathlib import Path
@@ -307,7 +308,7 @@ class EdgarFundamentalsStore:
             rate = tax_expense / pretax_income
         except ZeroDivisionError:
             return _TAX_RATE_DEFAULT
-        if rate != rate:  # NaN  # noqa: PLR0124 — math.isnan adds an import for one call
+        if math.isnan(rate):
             return _TAX_RATE_DEFAULT
         return max(_TAX_RATE_MIN, min(_TAX_RATE_MAX, rate))
 
@@ -362,7 +363,7 @@ class EdgarFundamentalsStore:
         except Exception as exc:
             logger.warning("yfinance fast_info failed for %s: %s", ticker, exc)
             return None
-        if price is None or price != price:  # NaN check
+        if price is None or math.isnan(price):
             return None
         result = float(price)
         self._prices[ticker.upper()] = result
