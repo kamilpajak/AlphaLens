@@ -70,7 +70,6 @@ class TestBuilderFactoriesResolveLazyImports(unittest.TestCase):
         self.env_patches = {
             "TELEGRAM_BOT_TOKEN": "test-token",
             "TELEGRAM_CHAT_ID": "test-chat",
-            "WATCHDOG_USER_AGENT": "test-ua",
         }
 
     @patch.dict(os.environ, {}, clear=False)
