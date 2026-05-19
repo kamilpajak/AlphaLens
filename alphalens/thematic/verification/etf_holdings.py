@@ -17,12 +17,9 @@ Public API:
 from __future__ import annotations
 
 import datetime as dt
-import json
 import logging
-import os
 import re
 import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
 from functools import lru_cache
@@ -31,25 +28,15 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+from alphalens.data.alt_data.sec_edgar_client import get_default_sec_client
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_etf_holdings"
 THEME_ETFS_PATH = Path(__file__).parent.parent / "config" / "theme_etfs.yaml"
-DEFAULT_USER_AGENT = "AlphaLens-thematic pajakkamil@gmail.com"
-USER_AGENT_ENV = "THEMATIC_USER_AGENT"
 SEC_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
 DEFAULT_MAX_AGE_DAYS = 100  # NPORT-P files quarterly; refresh every ~14 weeks
 SERIES_DISAMBIG_MAX_FETCHES = 5  # cap N+1 EDGAR primary_doc.xml lookups per search
-
-
-def _user_agent() -> str:
-    return os.environ.get(USER_AGENT_ENV) or DEFAULT_USER_AGENT
-
-
-def _http_get(url: str, *, accept: str = "*/*", timeout: float = 20.0) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": _user_agent(), "Accept": accept})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
 
 
 @lru_cache(maxsize=1)
@@ -127,8 +114,7 @@ def _search_nport_p(query: str, *, max_results: int = 25) -> dict:
         "enddt": dt.date.today().isoformat(),
     }
     url = f"{SEC_SEARCH_URL}?{urllib.parse.urlencode(params)}"
-    body = _http_get(url, accept="application/json")
-    data = json.loads(body)
+    data = get_default_sec_client().get_json(url)
     hits = data.get("hits", {}).get("hits", [])[:max_results]
     return {"hits": {"hits": hits}}
 
@@ -137,7 +123,7 @@ def _fetch_series_name(cik: str, adsh: str) -> str:
     """Fetch primary_doc.xml for ``(cik, adsh)`` and return the ``seriesName``."""
     adsh_clean = adsh.replace("-", "")
     url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{adsh_clean}/primary_doc.xml"
-    xml_bytes = _http_get(url, accept="application/xml")
+    xml_bytes = get_default_sec_client().get_bytes(url)
     root = ET.fromstring(xml_bytes)
     _strip_namespace(root)
     return _text(root, ".//seriesName")
@@ -146,7 +132,7 @@ def _fetch_series_name(cik: str, adsh: str) -> str:
 def _fetch_primary_doc(cik: str, adsh: str) -> str:
     adsh_clean = adsh.replace("-", "")
     url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{adsh_clean}/primary_doc.xml"
-    return _http_get(url, accept="application/xml").decode("utf-8", errors="replace")
+    return get_default_sec_client().get_text(url, encoding="utf-8")
 
 
 def find_latest_filing(*, series_name: str) -> dict | None:
@@ -275,12 +261,12 @@ def _load_etf_holdings(etf: str, cache_dir: Path, *, asof: dt.date | None = None
     if not candidates:
         return pd.DataFrame(columns=["name", "cusip", "ticker", "pct_val", "asset_cat"])
     if asof is not None:
-        prefix_len = len(etf) + 1  # "QTUM_"
         eligible: list[Path] = []
         for path in candidates:
-            # Filename shape: "{etf}_{YYYY-MM-DD}.parquet" — parse the
-            # 10-char date slice; skip unparseable filenames silently.
-            date_str = path.stem[prefix_len:]
+            # Cache filename shape: "{etf}_{YYYY-MM-DD}.parquet". Use rsplit
+            # so an ETF symbol with an underscore can't shift the date slice
+            # and silently mis-classify the file.
+            date_str = path.stem.rsplit("_", 1)[-1]
             try:
                 file_date = dt.date.fromisoformat(date_str)
             except ValueError:

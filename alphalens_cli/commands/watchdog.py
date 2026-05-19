@@ -35,19 +35,17 @@ def _watchdog_callback() -> None:
 
 
 def _build_watchdog() -> Watchdog:
-    user_agent = os.environ.get("WATCHDOG_USER_AGENT") or "AlphaLens Watchdog pajakkamil@gmail.com"
     bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
 
     cfg = dict(WATCHDOG_DEFAULTS)
-    cfg["user_agent"] = user_agent
     cfg["fetch_form4_details"] = True
     cfg["fetch_8k_details"] = True
 
     portfolio = PortfolioState.load(default_portfolio_path())
 
     home = Path.home() / ".alphalens" / "watchdog"
-    cik_loader = CIKLoader(user_agent=user_agent, cache_path=home / "company_tickers.json")
+    cik_loader = CIKLoader(cache_path=home / "company_tickers.json")
     cik_loader.load()
 
     tickers = sorted(set(portfolio.held + portfolio.watchlist))

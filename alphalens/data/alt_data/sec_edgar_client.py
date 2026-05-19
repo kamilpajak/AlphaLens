@@ -9,6 +9,7 @@ SEC requires a descriptive ``User-Agent`` header containing a contact
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any
 
@@ -19,6 +20,13 @@ logger = logging.getLogger(__name__)
 _DATA_BASE = "https://data.sec.gov"
 _ARCHIVES_BASE = "https://www.sec.gov"
 _COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+
+USER_AGENT_ENV = "SEC_EDGAR_USER_AGENT"
+
+# Project-wide default UA used when SEC_EDGAR_USER_AGENT is unset. Includes the
+# operator contact required by SEC's fair-access policy (must contain "@" or
+# a URL or every request gets 403). Single source of truth — duplicated nowhere.
+ALPHALENS_DEFAULT_USER_AGENT = "AlphaLens pajakkamil@gmail.com"
 
 
 class SecEdgarError(RuntimeError):
@@ -132,11 +140,30 @@ class SecEdgarClient:
         self._form4_xml_cache[cache_key] = data
         return data
 
-    _TRANSIENT_NET_EXCEPTIONS = (
-        requests.exceptions.ConnectionError,
-        requests.exceptions.Timeout,
-        requests.exceptions.ChunkedEncodingError,
-    )
+    def get_json(self, url: str) -> dict[str, Any]:
+        """Fetch ``url`` and parse JSON. Public escape hatch for shadow callers
+        (watchdog, thematic verification) that need SEC URLs not covered by
+        the ``fetch_*`` convenience methods. Goes through the same throttle +
+        retry + User-Agent contract.
+        """
+        return self._get_json(url)
+
+    def get_bytes(self, url: str) -> bytes:
+        """Fetch ``url`` and return raw bytes. Used for atom feeds, XML
+        primary docs, and 10-K/8-K HTML where the caller does its own parsing.
+        """
+        return self._get_bytes(url)
+
+    def get_text(self, url: str, *, encoding: str = "utf-8") -> str:
+        """Fetch ``url`` and decode as text (default UTF-8). Convenience over
+        ``get_bytes`` for callers that immediately decode."""
+        return self._get_bytes(url).decode(encoding)
+
+    # Catch the entire RequestException family — SSLError, InvalidURL,
+    # TooManyRedirects, and the connection/timeout subclasses all surface
+    # here. Narrow tuples leak unrelated requests failures to callers and
+    # crash the launchd watchdog on otherwise-transient SSL noise.
+    _TRANSIENT_NET_EXCEPTIONS = (requests.RequestException,)
 
     def _throttle(self) -> None:
         elapsed = time.monotonic() - self._last_call_ts
@@ -215,3 +242,32 @@ class SecEdgarClient:
                     continue
                 break
         raise SecEdgarError(f"exhausted network retries: {last_exc}") from last_exc
+
+
+# Module-level lazy singleton — single SecEdgarClient instance shared by every
+# caller that doesn't have its own injected client (watchdog, thematic
+# verification module-level functions). Reading SEC_EDGAR_USER_AGENT once at
+# first call keeps the env-var resolution centralized; tests reset via
+# _reset_default_client_for_tests().
+_DEFAULT_CLIENT: SecEdgarClient | None = None
+
+
+def get_default_sec_client() -> SecEdgarClient:
+    """Return the process-wide default SecEdgarClient (lazy-initialized).
+
+    Reads ``SEC_EDGAR_USER_AGENT`` from the environment on first call; falls
+    back to :data:`ALPHALENS_DEFAULT_USER_AGENT`. Subsequent calls return the
+    same instance — caches and throttle state are shared across every caller
+    in the process, which is precisely the SEC fair-access contract we want.
+    """
+    global _DEFAULT_CLIENT  # noqa: PLW0603 — lazy singleton is the documented pattern
+    if _DEFAULT_CLIENT is None:
+        user_agent = os.environ.get(USER_AGENT_ENV) or ALPHALENS_DEFAULT_USER_AGENT
+        _DEFAULT_CLIENT = SecEdgarClient(user_agent=user_agent)
+    return _DEFAULT_CLIENT
+
+
+def _reset_default_client_for_tests() -> None:
+    """Test-only hook: clear the cached singleton so each test starts clean."""
+    global _DEFAULT_CLIENT  # noqa: PLW0603 — lazy singleton is the documented pattern
+    _DEFAULT_CLIENT = None

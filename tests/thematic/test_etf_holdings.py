@@ -652,16 +652,6 @@ class TestFetchHoldingsEmptyAndAux(unittest.TestCase):
                 )
             self.assertTrue(df.empty)
 
-    def test_user_agent_env_override(self):
-        import os
-
-        os.environ["THEMATIC_USER_AGENT"] = "Override foo@bar"
-        try:
-            self.assertEqual(etf_holdings._user_agent(), "Override foo@bar")
-        finally:
-            del os.environ["THEMATIC_USER_AGENT"]
-        self.assertEqual(etf_holdings._user_agent(), etf_holdings.DEFAULT_USER_AGENT)
-
     def test_is_in_thematic_etf_word_boundary_avoids_overmatch(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
