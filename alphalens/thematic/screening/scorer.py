@@ -155,25 +155,24 @@ def compose_weighted_score(
 
 
 def _build_feature_fetcher(tickers: list[str] | None = None) -> Callable[[str, date], dict | None]:
-    """Build a SimFin ``ev_fcff_features_as_of`` lookup.
+    """Build an EDGAR-backed ``ev_fcff_features_as_of`` lookup.
 
-    ``tickers`` is forwarded to :meth:`SimFinFundamentalsStore.preload` so
-    the store loads the bulk CSVs once for the full universe Phase D will
-    query. Callers can pass an empty list — preload still loads the data
-    (the ticker list only drives coverage validation, not fetching).
+    ``tickers`` is forwarded to :meth:`EdgarFundamentalsStore.preload` so
+    the store on-demand-fetches any missing CIK companyfacts from SEC
+    (throttled to 10 req/s; first cold-cache run adds ~12 s per 100 missing
+    tickers, subsequent runs are free).
 
-    On preload failure (RuntimeError from SimFin's <50% coverage abort, or
-    any other exception) returns a stub fetcher that always returns None,
-    so Layer 4 still emits structured "all-signals-missing" rows instead
-    of failing the whole batch.
+    On preload failure (network outage, SEC 5xx) the store keeps any locally
+    cached parquets and just logs the failed CIKs; this fetcher then returns
+    the cached features per ticker (or None when no cache + no live fetch).
     """
-    from alphalens.data.store.simfin import SimFinFundamentalsStore
+    from alphalens.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
     try:
-        store = SimFinFundamentalsStore(with_prices=True)
+        store = EdgarFundamentalsStore(with_prices=True)
         store.preload(tickers or [])
     except Exception as exc:
-        logger.warning("SimFin preload aborted, valuation/fcff signals will be missing: %s", exc)
+        logger.warning("EDGAR preload aborted, valuation/fcff signals will be missing: %s", exc)
         return lambda ticker, asof: None
 
     cache: dict[tuple[str, date], dict | None] = {}

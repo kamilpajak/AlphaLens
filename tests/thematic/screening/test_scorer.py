@@ -453,12 +453,14 @@ class TestOhlcvLoaderDiskCache(unittest.TestCase):
 
 class TestFeatureFetcherFallback(unittest.TestCase):
     def test_preload_abort_returns_stub_fetcher_not_raises(self):
-        # SimFinFundamentalsStore.preload raises (e.g. <50% coverage) →
+        # EdgarFundamentalsStore.preload raises (e.g. SEC outage) →
         # _build_feature_fetcher returns a fetcher that always yields None
         # instead of propagating. Layer 4 stays alive on poor-coverage cohorts.
-        with patch("alphalens.data.store.simfin.SimFinFundamentalsStore") as mock_store_cls:
+        with patch(
+            "alphalens.data.store.edgar_fundamentals.EdgarFundamentalsStore"
+        ) as mock_store_cls:
             mock_store = mock_store_cls.return_value
-            mock_store.preload.side_effect = RuntimeError("SimFin <50% coverage")
+            mock_store.preload.side_effect = RuntimeError("SEC EDGAR unreachable")
             fetcher = scorer._build_feature_fetcher(["A", "B"])
         self.assertIsNone(fetcher("A", dt.date(2026, 5, 15)))
         self.assertIsNone(fetcher("B", dt.date(2026, 5, 15)))
