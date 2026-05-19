@@ -25,7 +25,10 @@
 					.map(([theme, count]) => ({
 						theme,
 						count,
-						pct: (count / data.latestBrief!.n_candidates) * 100
+						pct:
+							data.latestBrief!.n_candidates > 0
+								? (count / data.latestBrief!.n_candidates) * 100
+								: 0
 					}))
 			: []
 	);
@@ -185,7 +188,7 @@
 				{#each topCandidates as c, i}
 					{@const ct = confidenceTone(c.gemini_confidence)}
 					<a
-						href="/brief/{data.latestBrief.date}#{c.ticker}"
+						href="/brief/{data.latestBrief!.date}#{c.ticker}"
 						class="flex items-center gap-3 px-3 sm:px-4 py-3 hover:bg-bg-2 group transition-colors"
 					>
 						<div class="shrink-0 w-8 text-right font-display font-bold text-xl sm:text-2xl text-amber">
