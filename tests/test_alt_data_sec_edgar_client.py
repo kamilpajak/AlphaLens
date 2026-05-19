@@ -344,11 +344,11 @@ class TestPublicGetHelpers(unittest.TestCase):
         self.assertEqual(data, b"<atom/>")
 
     def test_get_text_decodes_bytes(self):
-        self.session.get.return_value = _response(200, content="<html>żółć</html>".encode())
+        self.session.get.return_value = _response(200, content="<html>über</html>".encode())
 
         text = self.client.get_text("https://www.sec.gov/Archives/edgar/data/x/y/z.html")
 
-        self.assertEqual(text, "<html>żółć</html>")
+        self.assertEqual(text, "<html>über</html>")
 
     def test_get_text_custom_encoding(self):
         self.session.get.return_value = _response(200, content="<atom/>".encode("latin-1"))
