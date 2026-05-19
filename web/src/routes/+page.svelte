@@ -5,25 +5,37 @@
 
 	let { data }: { data: PageData } = $props();
 
+	// Defensive: data.latestBrief is null on a fresh VPS where the pipeline
+	// hasn't produced any briefs yet. Every derived value below either falls
+	// back to empty or is gated behind {#if hasBrief} in the template.
+	const hasBrief = $derived(data.latestBrief !== null);
+
 	const totalCandidates = $derived(data.days.reduce((s, d) => s + d.n_candidates, 0));
 	const avgConf = $derived(
-		data.latestBrief.candidates.length
-			? data.latestBrief.candidates.reduce((s, c) => s + c.gemini_confidence, 0) / data.latestBrief.candidates.length
+		data.latestBrief && data.latestBrief.candidates.length
+			? data.latestBrief.candidates.reduce((s, c) => s + c.gemini_confidence, 0) /
+				data.latestBrief.candidates.length
 			: 0
 	);
 
 	const themeBars = $derived(
-		Object.entries(data.latestBrief.theme_counts)
-			.sort(([, a], [, b]) => b - a)
-			.map(([theme, count]) => ({
-				theme,
-				count,
-				pct: (count / data.latestBrief.n_candidates) * 100
-			}))
+		data.latestBrief
+			? Object.entries(data.latestBrief.theme_counts)
+					.sort(([, a], [, b]) => b - a)
+					.map(([theme, count]) => ({
+						theme,
+						count,
+						pct:
+							data.latestBrief!.n_candidates > 0
+								? (count / data.latestBrief!.n_candidates) * 100
+								: 0
+					}))
+			: []
 	);
 
 	const gateStats = $derived.by(() => {
 		const stats: Record<string, { passed: number; failed: number; unknown: number }> = {};
+		if (!data.latestBrief) return [];
 		for (const c of data.latestBrief.candidates) {
 			for (const g of c.gates_passed) stats[g] = { ...(stats[g] ?? { passed: 0, failed: 0, unknown: 0 }), passed: (stats[g]?.passed ?? 0) + 1 };
 			for (const g of c.gates_failed) stats[g] = { ...(stats[g] ?? { passed: 0, failed: 0, unknown: 0 }), failed: (stats[g]?.failed ?? 0) + 1 };
@@ -32,14 +44,14 @@
 		return Object.entries(stats).sort(([a], [b]) => a.localeCompare(b));
 	});
 
-	const topCandidates = $derived(data.latestBrief.candidates.slice(0, 8));
+	const topCandidates = $derived(data.latestBrief?.candidates.slice(0, 8) ?? []);
 
 	type Tone = 'amber' | 'cyan' | 'green' | 'magenta';
 	const stats: { icon: typeof Calendar; label: string; value: string; tone: Tone }[] = $derived([
 		{ icon: Calendar, label: 'days', value: String(data.days.length), tone: 'amber' },
 		{ icon: Target, label: 'candidates', value: String(totalCandidates), tone: 'cyan' },
-		{ icon: Layers, label: 'themes (latest)', value: String(data.latestBrief.n_themes), tone: 'green' },
-		{ icon: Sparkles, label: 'avg conf', value: (avgConf * 5).toFixed(1) + '/5', tone: 'magenta' }
+		{ icon: Layers, label: 'themes (latest)', value: hasBrief ? String(data.latestBrief!.n_themes) : '—', tone: 'green' },
+		{ icon: Sparkles, label: 'avg conf', value: hasBrief ? (avgConf * 5).toFixed(1) + '/5' : '—', tone: 'magenta' }
 	]);
 </script>
 
@@ -57,7 +69,9 @@
 				</div>
 				<div class="text-right text-[11px] uppercase tracking-widest text-fg-muted">
 					<div>latest brief</div>
-					<div class="font-display font-bold text-2xl sm:text-3xl text-amber mt-1">{data.latestBrief.date}</div>
+					<div class="font-display font-bold text-2xl sm:text-3xl text-amber mt-1">
+						{hasBrief ? data.latestBrief!.date : 'pending'}
+					</div>
 				</div>
 			</div>
 
@@ -70,19 +84,27 @@
 			</p>
 
 			<div class="flex gap-3 mt-6">
-				<a
-					href="/brief/{data.latestBrief.date}"
-					class="inline-flex items-center gap-2 px-4 py-2 bg-amber text-bg font-semibold text-xs uppercase tracking-widest hover:bg-amber-dim transition-colors"
-				>
-					open {data.latestBrief.date} brief
-					<ArrowUpRight class="size-3" />
-				</a>
-				<a
-					href="/briefs"
-					class="inline-flex items-center gap-2 px-4 py-2 border border-grid-strong text-fg font-semibold text-xs uppercase tracking-widest hover:border-amber hover:text-amber transition-colors"
-				>
-					all briefs
-				</a>
+				{#if hasBrief}
+					<a
+						href="/brief/{data.latestBrief!.date}"
+						class="inline-flex items-center gap-2 px-4 py-2 bg-amber text-bg font-semibold text-xs uppercase tracking-widest hover:bg-amber-dim transition-colors"
+					>
+						open {data.latestBrief!.date} brief
+						<ArrowUpRight class="size-3" />
+					</a>
+					<a
+						href="/briefs"
+						class="inline-flex items-center gap-2 px-4 py-2 border border-grid-strong text-fg font-semibold text-xs uppercase tracking-widest hover:border-amber hover:text-amber transition-colors"
+					>
+						all briefs
+					</a>
+				{:else}
+					<div
+						class="inline-flex items-center gap-2 px-4 py-2 border border-grid-strong text-fg-dim text-xs uppercase tracking-widest"
+					>
+						no briefs yet — pipeline fires daily at 06:30 UTC
+					</div>
+				{/if}
 			</div>
 		</div>
 
@@ -115,6 +137,14 @@
 			<div class="flex-1 border-b border-dashed border-grid"></div>
 		</div>
 
+		{#if data.days.length === 0}
+			<div class="border border-dashed border-grid bg-bg-1/40 p-8 text-center text-fg-dim text-sm">
+				<div class="text-[10px] uppercase tracking-widest text-fg-muted mb-2">// no captured sessions yet</div>
+				The daily pipeline writes briefs at 06:30 UTC. After the first run completes,
+				captured sessions and analytics appear here.
+			</div>
+		{/if}
+
 		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
 			{#each data.days as day, i}
 				<a
@@ -143,13 +173,14 @@
 		</div>
 	</section>
 
-	<!-- Two-column: top picks + theme distribution -->
+	<!-- Two-column: top picks + theme distribution (only when we have a brief) -->
+	{#if hasBrief}
 	<section class="grid grid-cols-12 gap-4">
 		<div class="col-span-12 lg:col-span-7 border border-grid bg-bg-1">
 			<div class="flex items-baseline gap-3 px-4 py-3 border-b border-grid">
 				<TrendingUp class="size-4 text-amber" />
 				<h2 class="font-display font-bold text-sm tracking-widest uppercase">
-					Top picks // {data.latestBrief.date}
+					Top picks // {data.latestBrief!.date}
 				</h2>
 				<span class="text-[10px] text-fg-muted uppercase tracking-widest ml-auto">rank by layer4</span>
 			</div>
@@ -157,7 +188,7 @@
 				{#each topCandidates as c, i}
 					{@const ct = confidenceTone(c.gemini_confidence)}
 					<a
-						href="/brief/{data.latestBrief.date}#{c.ticker}"
+						href="/brief/{data.latestBrief!.date}#{c.ticker}"
 						class="flex items-center gap-3 px-3 sm:px-4 py-3 hover:bg-bg-2 group transition-colors"
 					>
 						<div class="shrink-0 w-8 text-right font-display font-bold text-xl sm:text-2xl text-amber">
@@ -216,7 +247,7 @@
 						theme.distribution
 					</h2>
 					<span class="text-[10px] text-fg-muted uppercase tracking-widest ml-auto">
-						{data.latestBrief.date}
+						{data.latestBrief!.date}
 					</span>
 				</div>
 				<div class="p-4 space-y-2">
@@ -278,4 +309,5 @@
 			</div>
 		</div>
 	</section>
+	{/if}
 </div>
