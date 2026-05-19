@@ -47,7 +47,7 @@ def _build_watchdog() -> Watchdog:
     portfolio = PortfolioState.load(default_portfolio_path())
 
     home = Path.home() / ".alphalens" / "watchdog"
-    cik_loader = CIKLoader(user_agent=user_agent, cache_path=home / "company_tickers.json")
+    cik_loader = CIKLoader(cache_path=home / "company_tickers.json")
     cik_loader.load()
 
     tickers = sorted(set(portfolio.held + portfolio.watchlist))

@@ -77,7 +77,7 @@ def _get_cik_loader():
     """Lazily build the TTL'd CIKLoader reused from the watchdog stack."""
     from alphalens.watchdog.sources.cik_loader import CIKLoader
 
-    loader = CIKLoader(user_agent=_user_agent(), cache_path=CIK_LOADER_CACHE_PATH)
+    loader = CIKLoader(cache_path=CIK_LOADER_CACHE_PATH)
     try:
         loader.load()
     except Exception as exc:

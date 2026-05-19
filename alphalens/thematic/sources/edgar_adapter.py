@@ -56,7 +56,7 @@ def _detect_events(
     cik_cache.parent.mkdir(parents=True, exist_ok=True)
     seen_db = cache_dir / "seen.db"
 
-    loader = CIKLoader(user_agent=user_agent, cache_path=cik_cache)
+    loader = CIKLoader(cache_path=cik_cache)
     loader.load()
     store = SeenEventStore(db_path=seen_db)
     source = SECEdgarSource(
