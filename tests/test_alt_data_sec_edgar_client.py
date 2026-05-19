@@ -472,6 +472,33 @@ class TestTransientRetries(unittest.TestCase):
         self.assertEqual(data["cik"], "320193")
         self.assertEqual(session.get.call_count, 2)
 
+    def test_retries_on_sslerror_then_succeeds(self):
+        """SSLError is a RequestException subclass — must be treated as
+        transient (retry), not propagated unhandled. Regression test for
+        the zen review finding that the narrow _TRANSIENT_NET_EXCEPTIONS
+        tuple leaked SSL/redirect noise to callers and crashed the watchdog.
+        """
+        import requests
+
+        from alphalens.data.alt_data.sec_edgar_client import SecEdgarClient
+
+        session = MagicMock()
+        session.get.side_effect = [
+            requests.exceptions.SSLError("ssl handshake failed"),
+            _response(200, {"cik": "320193"}),
+        ]
+        sleep = MagicMock()
+        client = SecEdgarClient(
+            user_agent="AlphaLens test@example.com",
+            rate_limit_per_sec=10,
+            session=session,
+            sleep=sleep,
+        )
+
+        data = client.fetch_submissions("0000320193")
+        self.assertEqual(data["cik"], "320193")
+        self.assertEqual(session.get.call_count, 2)
+
     def test_exhausts_retries_raises(self):
         import requests
 

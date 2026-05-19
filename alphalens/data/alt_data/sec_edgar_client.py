@@ -159,11 +159,11 @@ class SecEdgarClient:
         ``get_bytes`` for callers that immediately decode."""
         return self._get_bytes(url).decode(encoding)
 
-    _TRANSIENT_NET_EXCEPTIONS = (
-        requests.exceptions.ConnectionError,
-        requests.exceptions.Timeout,
-        requests.exceptions.ChunkedEncodingError,
-    )
+    # Catch the entire RequestException family — SSLError, InvalidURL,
+    # TooManyRedirects, and the connection/timeout subclasses all surface
+    # here. Narrow tuples leak unrelated requests failures to callers and
+    # crash the launchd watchdog on otherwise-transient SSL noise.
+    _TRANSIENT_NET_EXCEPTIONS = (requests.RequestException,)
 
     def _throttle(self) -> None:
         elapsed = time.monotonic() - self._last_call_ts
