@@ -20,6 +20,13 @@
 	}
 
 	let { term, full = '', body, children }: Props = $props();
+
+	// Unique id linking the focusable trigger to the tooltip body via
+	// aria-describedby. Svelte 5 doesn't ship a built-in useId, so we
+	// generate a stable per-instance id at construction time. Screen
+	// readers (NVDA, VoiceOver, JAWS) announce the tooltip text when the
+	// trigger receives focus.
+	const tooltipId = `jargon-tip-${Math.random().toString(36).slice(2, 10)}`;
 </script>
 
 <span
@@ -28,12 +35,14 @@
 	role="group"
 	data-testid="jargon-tip"
 	data-term={term}
+	aria-describedby={tooltipId}
 >
 	<span class="cursor-help underline decoration-dotted decoration-fg-muted underline-offset-2">
 		{#if children}{@render children()}{:else}{term}{/if}
 	</span>
 
 	<span
+		id={tooltipId}
 		class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
 		role="tooltip"
 	>
