@@ -40,7 +40,7 @@ class TelegramHandler(AlertHandler):
             resp = requests.post(self.api_url, json=payload, timeout=10)
             resp.raise_for_status()
         except requests.RequestException as exc:
-            logger.error("Telegram send failed: %s", exc)
+            logger.exception("Telegram send failed: %s", exc)
 
     @staticmethod
     def _format(classified: ClassifiedEvent) -> str:

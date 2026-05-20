@@ -37,6 +37,58 @@ from alphalens.screeners.event_drift.sector_filter import SectorFilter
 from alphalens.screeners.event_drift.t0_timing import TradingCalendar
 
 
+def _collect_event_windows(
+    *,
+    universe: Sequence[str],
+    sector_filter: SectorFilter,
+    announcement_lookup: Callable[[str], Iterable[EarningsAnnouncement]],
+    sue_lookup: Callable[[str, date], float | None],
+    accruals_lookup: Callable[[str, date], float | None],
+    calendar: TradingCalendar,
+    skip_days: int,
+    exit_days: int,
+) -> list[EventWindow]:
+    all_windows: list[EventWindow] = []
+    for ticker in universe:
+        if sector_filter.is_excluded(ticker):
+            continue
+        anns = list(announcement_lookup(ticker))
+        if not anns:
+            continue
+        all_windows.extend(
+            build_event_windows(
+                anns,
+                sue_lookup=sue_lookup,
+                accruals_lookup=accruals_lookup,
+                calendar=calendar,
+                skip_days=skip_days,
+                exit_days=exit_days,
+            )
+        )
+    return all_windows
+
+
+def _compute_cohort_thresholds(
+    *,
+    deduped: list[EventWindow],
+    asof: date,
+    quantile_cohort_window_days: int,
+    sue_quantile_top_pct: float,
+    accrual_quantile_bottom_pct: float,
+) -> tuple[float, float]:
+    """Trailing-90d cohort quantile thresholds. Sparse cohort → pass-through."""
+    cohort_lookback = asof - timedelta(days=quantile_cohort_window_days)
+    cohort = [w for w in deduped if cohort_lookback <= w.market_day <= asof]
+    if len(cohort) < 2:
+        return -float("inf"), float("inf")
+    sue_values = np.asarray([w.sue for w in cohort], dtype=float)
+    accruals_values = np.asarray([w.accruals_ratio for w in cohort], dtype=float)
+    return (
+        float(np.percentile(sue_values, 100.0 - sue_quantile_top_pct)),
+        float(np.percentile(accruals_values, accrual_quantile_bottom_pct)),
+    )
+
+
 def score_pead_quality(
     *,
     asof: date,
@@ -57,56 +109,35 @@ def score_pead_quality(
     if not universe:
         return pd.DataFrame(columns=["ticker", "score"])
 
-    # 1. Build all candidate event windows for the universe.
-    all_windows: list[EventWindow] = []
-    for ticker in universe:
-        if sector_filter.is_excluded(ticker):
-            continue
-        anns = list(announcement_lookup(ticker))
-        if not anns:
-            continue
-        windows_for_ticker = build_event_windows(
-            anns,
-            sue_lookup=sue_lookup,
-            accruals_lookup=accruals_lookup,
-            calendar=calendar,
-            skip_days=skip_days,
-            exit_days=exit_days,
-        )
-        all_windows.extend(windows_for_ticker)
-
+    all_windows = _collect_event_windows(
+        universe=universe,
+        sector_filter=sector_filter,
+        announcement_lookup=announcement_lookup,
+        sue_lookup=sue_lookup,
+        accruals_lookup=accruals_lookup,
+        calendar=calendar,
+        skip_days=skip_days,
+        exit_days=exit_days,
+    )
     if not all_windows:
         return pd.DataFrame(columns=["ticker", "score"])
 
-    # 2. Apply single-active-window invariant.
     deduped = apply_single_active_window(all_windows)
-
-    # 3. Active windows on asof.
     active = windows_active_on(deduped, asof)
     if not active:
         return pd.DataFrame(columns=["ticker", "score"])
 
-    # 4. Build trailing-90d cohort (across whole universe).
-    cohort_lookback = asof - timedelta(days=quantile_cohort_window_days)
-    cohort = [w for w in deduped if cohort_lookback <= w.market_day <= asof]
-    if len(cohort) < 2:
-        # Sparse cohort -> pass-through (no quantile filter), keeps signal alive
-        # in early-period or low-frequency announcement regimes. Verdict gate
-        # in Phase 2 / Phase 4 will catch breadth issues.
-        sue_threshold = -float("inf")
-        accruals_threshold = float("inf")
-    else:
-        sue_values = np.asarray([w.sue for w in cohort], dtype=float)
-        accruals_values = np.asarray([w.accruals_ratio for w in cohort], dtype=float)
-        sue_threshold = float(np.percentile(sue_values, 100.0 - sue_quantile_top_pct))
-        accruals_threshold = float(np.percentile(accruals_values, accrual_quantile_bottom_pct))
+    sue_threshold, accruals_threshold = _compute_cohort_thresholds(
+        deduped=deduped,
+        asof=asof,
+        quantile_cohort_window_days=quantile_cohort_window_days,
+        sue_quantile_top_pct=sue_quantile_top_pct,
+        accrual_quantile_bottom_pct=accrual_quantile_bottom_pct,
+    )
 
-    # 5. Filter active windows by quantile gates + Day-1 sign confirmation.
     rows: list[dict] = []
     for w in active:
-        if w.sue < sue_threshold:
-            continue
-        if w.accruals_ratio > accruals_threshold:
+        if w.sue < sue_threshold or w.accruals_ratio > accruals_threshold:
             continue
         d1_ret = day1_return_lookup(w.ticker, w.market_day)
         if not day1_sign_confirmed(sue=w.sue, day1_return=d1_ret):

@@ -41,9 +41,11 @@ __closed_reason__: str = (
     "price_factor_search_2026_04_29 remains OPEN per project doctrine "
     "(feedback_never_close_the_door); this module is the v1 implementation only."
 )
+_VERDICT_MEMO = "docs/research/idiosyncratic_momentum_audit_verdict_2026_05_14.md"
+
 __closed_evidence__: dict[str, str] = {
-    "walk_forward_oos": "docs/research/idiosyncratic_momentum_audit_verdict_2026_05_14.md",
-    "carhart_4f_hac": "docs/research/idiosyncratic_momentum_audit_verdict_2026_05_14.md",
+    "walk_forward_oos": _VERDICT_MEMO,
+    "carhart_4f_hac": _VERDICT_MEMO,
     "cost_drag": (
         "docs/research/idiosyncratic_momentum_audit_2026-05-14.json (G4 reads "
         "alpha_t_net from net-cost regression per H1 fix pattern; all 3 windows "
@@ -55,7 +57,7 @@ __closed_evidence__: dict[str, str] = {
         "overlay paradigms)"
     ),
     "multiple_testing_correction": "docs/research/idiosyncratic_momentum_v1_design_2026_05_14.md",
-    "sanity_checks_4gate": "docs/research/idiosyncratic_momentum_audit_verdict_2026_05_14.md",
+    "sanity_checks_4gate": _VERDICT_MEMO,
     "survivorship_pit": (
         "UNTESTED: S&P 1500 PIT union is survivorship-biased per memo section 3 "
         "documented limitation (single recent snapshot fallback per index; ~100-300 "

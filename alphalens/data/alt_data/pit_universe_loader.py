@@ -92,6 +92,5 @@ def load_universe_union(start: date, end: date, *, root: Path = DEFAULT_ROOT) ->
         if not (start <= s_asof <= end):
             continue
         payload = yaml.safe_load(path.read_text()) or {}
-        for t in payload.get("tickers") or []:
-            seen.add(t)
+        seen.update(payload.get("tickers") or [])
     return sorted(seen)

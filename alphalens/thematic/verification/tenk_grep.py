@@ -27,9 +27,10 @@ from alphalens.data.alt_data.sec_edgar_client import get_default_sec_client
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_tenk"
-CIK_LOADER_CACHE_PATH = Path.home() / ".alphalens" / "thematic_cik_cache.json"
-TICKER_CIK_YAML_PATH = Path.home() / ".alphalens" / "ticker_cik_map.yaml"
+_ALPHALENS_HOME = Path.home() / ".alphalens"
+DEFAULT_CACHE_DIR = _ALPHALENS_HOME / "thematic_tenk"
+CIK_LOADER_CACHE_PATH = _ALPHALENS_HOME / "thematic_cik_cache.json"
+TICKER_CIK_YAML_PATH = _ALPHALENS_HOME / "ticker_cik_map.yaml"
 
 _WHITESPACE = re.compile(r"\s+")
 

@@ -16,6 +16,7 @@ single ``.md`` file the operator can ``cat`` and forward.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import pandas as pd
@@ -158,7 +159,7 @@ def _format_insider_cell(score: Any, pctile: Any) -> str:
     if score_str == "n/a":
         return f"{score_str} (pctile {_fmt_pctile(pctile)})"
     try:
-        is_zero = float(score) == 0.0
+        is_zero = math.isclose(float(score), 0.0, abs_tol=1e-9)
     except (TypeError, ValueError):
         is_zero = False
     if is_zero:
@@ -256,6 +257,60 @@ def _prose_or_placeholder(value: Any) -> str:
     return s if s else _PROSE_UNAVAILABLE
 
 
+def _rank_chip(rank: Any, cohort_size: Any) -> str | None:
+    if rank is None or pd.isna(rank):
+        return None
+    try:
+        n = int(cohort_size) if cohort_size is not None and not pd.isna(cohort_size) else 0
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    return f"rank {int(rank)}/{n}"
+
+
+def _catalyst_chip(catalyst: Any) -> str | None:
+    if catalyst is None or pd.isna(catalyst):
+        return None
+    try:
+        cf = float(catalyst)
+    except (TypeError, ValueError):
+        return None
+    return f"catalyst {cf:.2f}" if cf > 0 else None
+
+
+def _reversal_chip(reversal: Any) -> str | None:
+    try:
+        if reversal is not None and not pd.isna(reversal) and bool(reversal):
+            return "reversal"
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _build_header_chips(r: dict, weighted_str: str) -> str:
+    """Header chips — only render keys that carry signal.
+
+    Built dynamically so single-theme tickers / weak catalysts / zero insider
+    all hide their chips cleanly instead of rendering noise like ``catalyst n/a``.
+    """
+    chips: list[str] = []
+    chip = _rank_chip(r.get("rank_in_day"), r.get("cohort_size_in_day"))
+    if chip:
+        chips.append(chip)
+    chips.append(f"conf {weighted_str}")
+    chip = _catalyst_chip(r.get("catalyst_strength"))
+    if chip:
+        chips.append(chip)
+    insider_chip = _fmt_insider_usd_compact(r.get("insider_score_usd"))
+    if insider_chip:
+        chips.append(f"{insider_chip} insider")
+    chip = _reversal_chip(r.get("deep_drawdown_reversal"))
+    if chip:
+        chips.append(chip)
+    return " · ".join(chips)
+
+
 def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
     """Assemble one candidate's brief block.
 
@@ -272,39 +327,7 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
     weighted = r.get("layer4_weighted_score")
     weighted_str = f"{int(weighted)}/5" if not pd.isna(weighted) else "n/a"
 
-    # Header chips — only render keys that carry signal. Built dynamically
-    # so single-theme tickers / weak catalysts / zero insider all hide
-    # their chips cleanly instead of rendering noise like ``catalyst n/a``.
-    chips: list[str] = []
-    rank = r.get("rank_in_day")
-    cohort_size = r.get("cohort_size_in_day")
-    if rank is not None and not pd.isna(rank):
-        try:
-            n = int(cohort_size) if cohort_size is not None and not pd.isna(cohort_size) else 0
-            if n > 0:
-                chips.append(f"rank {int(rank)}/{n}")
-        except (TypeError, ValueError):
-            pass
-    chips.append(f"conf {weighted_str}")
-    catalyst = r.get("catalyst_strength")
-    if catalyst is not None and not pd.isna(catalyst):
-        try:
-            cf = float(catalyst)
-            if cf > 0:
-                chips.append(f"catalyst {cf:.2f}")
-        except (TypeError, ValueError):
-            pass
-    insider_chip = _fmt_insider_usd_compact(r.get("insider_score_usd"))
-    if insider_chip:
-        chips.append(f"{insider_chip} insider")
-    reversal = r.get("deep_drawdown_reversal")
-    try:
-        if reversal is not None and not pd.isna(reversal) and bool(reversal):
-            chips.append("reversal")
-    except (TypeError, ValueError):
-        pass
-
-    chip_str = " · ".join(chips)
+    chip_str = _build_header_chips(r, weighted_str)
 
     # --- Deterministic head sections (each separated by blank line) --------
     # The head bucket carries scan-cues the operator's eye should land on
@@ -325,7 +348,7 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
     also = r.get("also_in_themes")
     if also is not None:
         try:
-            also_list = [t for t in list(also) if t]
+            also_list = [t for t in also if t]
         except TypeError:
             also_list = []
         if also_list:

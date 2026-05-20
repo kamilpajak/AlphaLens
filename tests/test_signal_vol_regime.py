@@ -132,7 +132,7 @@ class TestClassifyCyclicality(unittest.TestCase):
         self.assertTrue(v.classification.startswith("STRONG counter-cyclical"))
         self.assertFalse(v.proceed)
         expected_R = (0.003 + 0.004) / (0.0005 + 0.0010)
-        self.assertLess(abs(v.R_mean - expected_R), 0.01)
+        self.assertLess(abs(v.r_mean - expected_R), 0.01)
 
     def test_both_positive_orthogonal_proceeds(self):
         s = _make_summary(0.001, 0.001, 0.001, 0.0011, 0.0009)
@@ -153,7 +153,7 @@ class TestClassifyCyclicality(unittest.TestCase):
         self.assertTrue(v.classification.startswith("EXTREME counter-cyclical"))
         self.assertFalse(v.proceed)
         # R_mean should be negative or +inf when denominator is non-positive
-        self.assertTrue(v.R_mean < 0 or math.isinf(v.R_mean))
+        self.assertTrue(v.r_mean < 0 or math.isinf(v.r_mean))
 
     def test_sign_flip_q1q2_pos_q4q5_neg_extreme_calm_concentrated_proceeds(self):
         s = _make_summary(0.003, 0.002, 0.0, -0.001, -0.0015)
@@ -176,13 +176,13 @@ class TestClassifyCyclicality(unittest.TestCase):
         )
         self.assertFalse(v.proceed)
         # No division-by-zero crash; R_mean either +inf or specially flagged
-        self.assertTrue(math.isinf(v.R_mean) or v.R_mean > 1e6)
+        self.assertTrue(math.isinf(v.r_mean) or v.r_mean > 1e6)
 
     def test_sharpe_cross_check_consistent_with_mean_no_override(self):
         s = _make_summary(-0.001, 0.0, 0.0014, 0.0022, 0.0027, std=0.01)
         v = classify_cyclicality(s)
         # Sign-flip in mean → also in Sharpe
-        self.assertLess(v.R_sharpe, 0)
+        self.assertLess(v.r_sharpe, 0)
         self.assertFalse(v.proceed)
 
     def test_sharpe_flat_overrides_strong_counter_cyclical_to_proceed(self):
@@ -199,9 +199,9 @@ class TestClassifyCyclicality(unittest.TestCase):
             quintile_sharpes=sharpes,
         )
         v = classify_cyclicality(summary)
-        self.assertGreaterEqual(v.R_mean, 1.5)
-        self.assertGreater(v.R_sharpe, 0.95)
-        self.assertLess(v.R_sharpe, 1.05)
+        self.assertGreaterEqual(v.r_mean, 1.5)
+        self.assertGreater(v.r_sharpe, 0.95)
+        self.assertLess(v.r_sharpe, 1.05)
         # Decision flipped to PROCEED with annotation
         self.assertTrue(v.proceed)
         self.assertIn("sharpe", v.rationale.lower())
@@ -210,8 +210,8 @@ class TestClassifyCyclicality(unittest.TestCase):
         s = _make_summary(0.001, 0.001, 0.001, 0.001, 0.001)
         v = classify_cyclicality(s)
         self.assertIsInstance(v, CounterCyclicalVerdict)
-        self.assertIsInstance(v.R_mean, float)
-        self.assertIsInstance(v.R_sharpe, float)
+        self.assertIsInstance(v.r_mean, float)
+        self.assertIsInstance(v.r_sharpe, float)
         self.assertIsInstance(v.sign_pattern, str)
         self.assertIsInstance(v.classification, str)
         self.assertIsInstance(v.rationale, str)
@@ -251,7 +251,7 @@ class TestClassifyCyclicalityExcess(unittest.TestCase):
         bench = self._make_summary_from_R(mean_low=-0.0006, mean_high=0.0009)  # R_mean ≈ -1.5
         v = classify_cyclicality_excess(strat, bench)
         # Excess R_mean strongly negative → strategy-specific counter-cyclical
-        self.assertLess(v.excess_R_mean, -1.0)
+        self.assertLess(v.excess_r_mean, -1.0)
         self.assertEqual(v.classification, "strategy-specific counter-cyclical")
         self.assertFalse(v.proceed)  # Layer 4 overlay would structurally hurt
 
@@ -261,7 +261,7 @@ class TestClassifyCyclicalityExcess(unittest.TestCase):
         bench = self._make_summary_from_R(mean_low=-0.0005, mean_high=0.001)
         v = classify_cyclicality_excess(strat, bench)
         # Excess ≈ 0 → matches baseline → not strategy-specific cyclical
-        self.assertLess(abs(v.excess_R_mean), 0.5)
+        self.assertLess(abs(v.excess_r_mean), 0.5)
         self.assertEqual(v.classification, "matches benchmark baseline")
         self.assertTrue(
             v.proceed
@@ -275,7 +275,7 @@ class TestClassifyCyclicalityExcess(unittest.TestCase):
         )  # benchmark is sign-flip
         v = classify_cyclicality_excess(strat, bench)
         # Strategy R is positive (or near zero), benchmark R is negative → excess > 0
-        self.assertGreater(v.excess_R_mean, 0.5)
+        self.assertGreater(v.excess_r_mean, 0.5)
         self.assertEqual(v.classification, "less counter-cyclical than benchmark")
         self.assertTrue(v.proceed)
 
@@ -284,9 +284,9 @@ class TestClassifyCyclicalityExcess(unittest.TestCase):
         bench = self._make_summary_from_R(mean_low=0.001, mean_high=0.002)
         v = classify_cyclicality_excess(strat, bench)
         self.assertIsInstance(v, CyclicalityExcessVerdict)
-        self.assertIsInstance(v.strategy_R_mean, float)
-        self.assertIsInstance(v.benchmark_R_mean, float)
-        self.assertIsInstance(v.excess_R_mean, float)
+        self.assertIsInstance(v.strategy_r_mean, float)
+        self.assertIsInstance(v.benchmark_r_mean, float)
+        self.assertIsInstance(v.excess_r_mean, float)
         self.assertIsInstance(v.classification, str)
         self.assertIsInstance(v.rationale, str)
         self.assertIn(v.proceed, (True, False, None))
@@ -313,7 +313,7 @@ class TestClassifyCyclicalityExcess(unittest.TestCase):
         # Hard-fail to INCONCLUSIVE — no fall-through to standard branches
         self.assertIsNone(v.proceed)
         self.assertTrue(v.classification.startswith("INCONCLUSIVE"))
-        self.assertTrue(math.isnan(v.excess_R_mean))
+        self.assertTrue(math.isnan(v.excess_r_mean))
 
 
 if __name__ == "__main__":

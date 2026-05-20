@@ -185,7 +185,7 @@ def _post_drag_cyclicality(
             strat_pre = aggregate_returns_by_regime(gross, quintiles)
             bench_pre = aggregate_returns_by_regime(iwm_daily.reindex(gross.index), quintiles)
             pre_verdict = classify_cyclicality_excess(strat_pre, bench_pre)
-            pre_excess = pre_verdict.excess_R_mean
+            pre_excess = pre_verdict.excess_r_mean
         except (ValueError, RuntimeError) as exc:
             logger.warning("pre-drag cyclicality failed phase %d %s: %s", phase_idx, label, exc)
             pre_excess = float("nan")
@@ -197,7 +197,7 @@ def _post_drag_cyclicality(
             strat_post = aggregate_returns_by_regime(rets_net, quintiles_post)
             bench_post = aggregate_returns_by_regime(iwm_daily.reindex(post_idx), quintiles_post)
             post_verdict = classify_cyclicality_excess(strat_post, bench_post)
-            post_excess = post_verdict.excess_R_mean
+            post_excess = post_verdict.excess_r_mean
             post_classification = post_verdict.classification
         except (ValueError, RuntimeError) as exc:
             logger.warning("post-drag cyclicality failed phase %d %s: %s", phase_idx, label, exc)

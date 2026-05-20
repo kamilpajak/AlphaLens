@@ -121,7 +121,7 @@ def broadcast_turnover_to_daily(
     n_daily = len(daily_index)
     arr = np.zeros(n_daily, dtype=float)
     for rebal_ts, t in zip(rebal_dates, turnover.values, strict=False):
-        if t == 0.0:
+        if t <= 0.0:
             continue
         start_pos = daily_positions.get(rebal_ts)
         if start_pos is None:
@@ -267,9 +267,9 @@ def run_post_drag_cyclicality(
 
     verdict = classify_cyclicality_excess(strategy_summary, benchmark_summary)
     return {
-        "strategy_R_mean": verdict.strategy_R_mean,
-        "benchmark_R_mean": verdict.benchmark_R_mean,
-        "excess_R_mean": verdict.excess_R_mean,
+        "strategy_r_mean": verdict.strategy_r_mean,
+        "benchmark_r_mean": verdict.benchmark_r_mean,
+        "excess_r_mean": verdict.excess_r_mean,
         "classification": verdict.classification,
         "proceed": verdict.proceed,
     }
@@ -279,7 +279,6 @@ def run_full_grid(
     *,
     gross_per_phase: Sequence[pd.Series],
     turnover_per_phase: Sequence[pd.DataFrame],
-    benchmark_daily: pd.Series,
     vol_series: pd.Series,
     factors: pd.DataFrame,
     half_spread_grid: Sequence[float],

@@ -31,16 +31,14 @@ __closed_reason__ = (
     "remain registered separately (insider_form4_opportunistic_2026_05_08_v2 "
     "PASS_MARGINAL paper-trade; pc_abnormal_volume INCONCLUSIVE paper-trade)."
 )
+_VERDICT_MEMO = "docs/research/insider_pc_compound_audit_postmortem_2026_05_12_verdict.md"
+
 __closed_evidence__: dict[str, str] = {
-    "carhart_4f_hac": ("docs/research/insider_pc_compound_audit_postmortem_2026_05_12_verdict.md"),
+    "carhart_4f_hac": _VERDICT_MEMO,
     "sanity_checks_4gate": "N/A: not a rotation overlay; compound is Layer 1 fusion screener per ADR 0007",
-    "walk_forward_oos": (
-        "docs/research/insider_pc_compound_audit_postmortem_2026_05_12_verdict.md"
-    ),
-    "multiple_testing_correction": ("docs/research/insider_pc_compound_design_2026_05_10.md"),
-    "cost_drag": ("docs/research/insider_pc_compound_audit_postmortem_2026_05_12_verdict.md"),
-    "bootstrap_ci": ("docs/research/insider_pc_compound_audit_postmortem_2026_05_12_verdict.md"),
-    "survivorship_pit": (
-        "docs/research/insider_pc_compound_audit_postmortem_2026_05_12_verdict.md"
-    ),
+    "walk_forward_oos": _VERDICT_MEMO,
+    "multiple_testing_correction": "docs/research/insider_pc_compound_design_2026_05_10.md",
+    "cost_drag": _VERDICT_MEMO,
+    "bootstrap_ci": _VERDICT_MEMO,
+    "survivorship_pit": _VERDICT_MEMO,
 }

@@ -44,7 +44,7 @@ class AutoTriggerEnqueueHandler(AlertHandler):
             self.queue.submit([candidate])
             logger.info("Submitted candidate for %s (%s)", event.ticker, event.accession_number)
         except Exception as exc:
-            logger.error("Candidate submit failed for %s: %s", event.ticker, exc, exc_info=True)
+            logger.exception("Candidate submit failed for %s: %s", event.ticker, exc)
 
     def close(self) -> None:
         self.queue.close()

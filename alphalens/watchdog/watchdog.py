@@ -32,7 +32,7 @@ class Watchdog:
                 events = source.detect()
                 all_events.extend(events)
             except Exception as exc:
-                logger.error("Source %s failed: %s", type(source).__name__, exc, exc_info=True)
+                logger.exception("Source %s failed: %s", type(source).__name__, exc)
 
         dispatched = 0
         for event in all_events:

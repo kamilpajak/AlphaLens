@@ -25,6 +25,8 @@ thematic_app = typer.Typer(
 
 logger = logging.getLogger(__name__)
 
+_DATE_OPTION_HELP = "UTC date in YYYY-MM-DD (default: yesterday)."
+
 
 @thematic_app.callback()
 def _thematic_callback() -> None:
@@ -33,7 +35,7 @@ def _thematic_callback() -> None:
 
 @thematic_app.command("ingest")
 def ingest(
-    date: str = typer.Option(None, "--date", help="UTC date in YYYY-MM-DD (default: yesterday)."),
+    date: str = typer.Option(None, "--date", help=_DATE_OPTION_HELP),
     cache_dir: Path = typer.Option(
         news_ingest.DEFAULT_CACHE_DIR, "--cache-dir", help="Parquet output root."
     ),
@@ -70,7 +72,7 @@ def ingest(
 
 @thematic_app.command("extract")
 def extract(
-    date: str = typer.Option(None, "--date", help="UTC date in YYYY-MM-DD (default: yesterday)."),
+    date: str = typer.Option(None, "--date", help=_DATE_OPTION_HELP),
     news_dir: Path = typer.Option(
         gemini_flash.DEFAULT_NEWS_DIR, "--news-dir", help="Unified-news parquet root."
     ),
@@ -136,7 +138,7 @@ def extract(
 
 @thematic_app.command("map-themes")
 def map_themes_cmd(
-    date: str = typer.Option(None, "--date", help="UTC date in YYYY-MM-DD (default: yesterday)."),
+    date: str = typer.Option(None, "--date", help=_DATE_OPTION_HELP),
     events_dir: Path = typer.Option(
         gemini_flash.DEFAULT_EVENTS_DIR,
         "--events-dir",
@@ -234,7 +236,7 @@ DEFAULT_SCORED_DIR = Path.home() / ".alphalens" / "thematic_scored"
 
 @thematic_app.command("score")
 def score(
-    date: str = typer.Option(None, "--date", help="UTC date in YYYY-MM-DD (default: yesterday)."),
+    date: str = typer.Option(None, "--date", help=_DATE_OPTION_HELP),
     candidates_dir: Path = typer.Option(
         orchestrator.DEFAULT_OUTPUT_DIR,
         "--candidates-dir",
@@ -268,30 +270,38 @@ def score(
     typer.echo(f"Wrote {len(enriched)} scored rows → {out_path}")
     typer.echo(f"  layer4_weighted_score distribution: {score_counts}")
     if len(enriched) > 0:
-        typer.echo("")
+        _print_score_preview(enriched)
+
+
+def _fmt_num_or_dash(value, fmt: str) -> str:
+    if value is None or pd.isna(value):
+        return "-"
+    return f"{value:{fmt}}"
+
+
+def _print_score_preview(enriched: pd.DataFrame) -> None:
+    typer.echo("")
+    typer.echo(
+        f"{'ticker':8s} {'industry':20s} {'score':5s} {'ins$':>10s} "
+        f"{'fcff%':>6s} {'val%':>5s} technicals"
+    )
+    typer.echo("-" * 110)
+    for _, row in enriched.head(25).iterrows():
+        ind = (row.get("industry_name") or "?")[:19]
+        ins = row.get("insider_score_usd")
+        ins_str = f"{ins / 1000:.0f}k" if ins is not None and not pd.isna(ins) else "-"
+        fcff_str = _fmt_num_or_dash(row.get("fcff_yield_pct"), ".1f")
+        val_str = _fmt_num_or_dash(row.get("valuation_composite_sector_percentile"), ".0f")
         typer.echo(
-            f"{'ticker':8s} {'industry':20s} {'score':5s} {'ins$':>10s} "
-            f"{'fcff%':>6s} {'val%':>5s} technicals"
+            f"{row['ticker']:8s} {ind:20s} {int(row['layer4_weighted_score']):>5d} "
+            f"{ins_str:>10s} {fcff_str:>6s} {val_str:>5s} "
+            f"{row.get('technicals_summary_str', '')[:50]}"
         )
-        typer.echo("-" * 110)
-        for _, row in enriched.head(25).iterrows():
-            ind = (row.get("industry_name") or "?")[:19]
-            ins = row.get("insider_score_usd")
-            ins_str = f"{ins / 1000:.0f}k" if ins is not None and not pd.isna(ins) else "-"
-            fcff = row.get("fcff_yield_pct")
-            fcff_str = f"{fcff:.1f}" if fcff is not None and not pd.isna(fcff) else "-"
-            val = row.get("valuation_composite_sector_percentile")
-            val_str = f"{val:.0f}" if val is not None and not pd.isna(val) else "-"
-            typer.echo(
-                f"{row['ticker']:8s} {ind:20s} {int(row['layer4_weighted_score']):>5d} "
-                f"{ins_str:>10s} {fcff_str:>6s} {val_str:>5s} "
-                f"{row.get('technicals_summary_str', '')[:50]}"
-            )
 
 
 @thematic_app.command("brief")
 def brief(
-    date: str = typer.Option(None, "--date", help="UTC date in YYYY-MM-DD (default: yesterday)."),
+    date: str = typer.Option(None, "--date", help=_DATE_OPTION_HELP),
     scored_dir: Path = typer.Option(
         DEFAULT_SCORED_DIR,
         "--scored-dir",

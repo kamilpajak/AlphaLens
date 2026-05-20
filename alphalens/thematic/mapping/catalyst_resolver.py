@@ -24,6 +24,7 @@ import re
 import textwrap
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -103,6 +104,53 @@ def _load_window(parquet_dir: Path, asof: dt.date, lookback_days: int) -> pd.Dat
     return pd.concat(frames, ignore_index=True)
 
 
+def _apply_noise_and_blocklist_filters(joined: pd.DataFrame) -> pd.DataFrame:
+    """Drop event_type ∈ NOISE_EVENT_TYPES and URLs matching the blocklist regex."""
+    if "event_type" in joined.columns:
+        joined = joined[~joined["event_type"].isin(NOISE_EVENT_TYPES)]
+        if joined.empty:
+            return joined
+
+    blocklist = _load_url_blocklist_patterns()
+    if blocklist and "url" in joined.columns:
+        joined = joined[
+            ~joined["url"].astype(str).apply(lambda u: _url_matches_blocklist(u, blocklist))
+        ]
+    return joined
+
+
+def _resolve_time_column(joined: pd.DataFrame) -> str | None:
+    """Canonical schema uses ``timestamp``; older parquets carry ``published_at``."""
+    if "timestamp" in joined.columns:
+        return "timestamp"
+    if "published_at" in joined.columns:
+        return "published_at"
+    return None
+
+
+def _soi_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    try:
+        return [str(s) for s in value]
+    except TypeError:
+        return []
+
+
+def _build_catalyst_payload(top: pd.Series, time_col: str) -> dict:
+    title = str(top.get("title", "") or "")
+    if len(title) > _TITLE_MAX_LEN:
+        title = textwrap.shorten(title, width=_TITLE_MAX_LEN, placeholder="…")
+    return {
+        "url": str(top.get("url", "") or ""),
+        "title": title,
+        "published_at": top[time_col].date().isoformat(),
+        "event_type": str(top.get("event_type", "") or "") or None,
+        "confidence": float(top["confidence"]) if pd.notna(top.get("confidence")) else None,
+        "second_order_implications": _soi_list(top.get("second_order_implications")),
+    }
+
+
 def find_trigger_event(
     *,
     theme: str,
@@ -116,7 +164,6 @@ def find_trigger_event(
     if events.empty:
         return None
 
-    # Filter to events whose `themes` list contains the target theme.
     def _has_theme(themes_field) -> bool:
         if themes_field is None:
             return False
@@ -137,36 +184,12 @@ def find_trigger_event(
     if joined.empty:
         return None
 
-    # L2 noise filter — drop rows whose event_type is in NOISE_EVENT_TYPES
-    # (promo, listicle, opinion, lifestyle, evergreen, sponsored). Older
-    # event parquets may lack the event_type column; treat missing as
-    # "unknown" (= not noise) so backward-compat is preserved.
-    if "event_type" in joined.columns:
-        joined = joined[~joined["event_type"].isin(NOISE_EVENT_TYPES)]
-        if joined.empty:
-            return None
+    joined = _apply_noise_and_blocklist_filters(joined)
+    if joined.empty:
+        return None
 
-    # L1 URL pattern blocklist — catches cases where Flash mis-classified
-    # promo content as a non-noise type (e.g. product_launch on a coupon
-    # page). Slug-scoped regex, not domain-wide, to avoid dropping legit
-    # cyber-incident reporting from the same publisher.
-    blocklist = _load_url_blocklist_patterns()
-    if blocklist and "url" in joined.columns:
-        joined = joined[
-            ~joined["url"].astype(str).apply(lambda u: _url_matches_blocklist(u, blocklist))
-        ]
-        if joined.empty:
-            return None
-
-    # Pick the newest by event time. Canonical news schema (sources/schema.py)
-    # uses ``timestamp`` since the 2026-05 ingest refactor; older parquets
-    # carry ``published_at``. Prefer the canonical name; fall back to legacy
-    # so historical news files still work.
-    if "timestamp" in joined.columns:
-        time_col = "timestamp"
-    elif "published_at" in joined.columns:
-        time_col = "published_at"
-    else:
+    time_col = _resolve_time_column(joined)
+    if time_col is None:
         return None
     joined[time_col] = pd.to_datetime(joined[time_col], errors="coerce", utc=True)
     joined = joined.dropna(subset=[time_col])
@@ -174,25 +197,7 @@ def find_trigger_event(
         return None
 
     top = joined.sort_values(time_col, ascending=False).iloc[0]
-    title = str(top.get("title", "") or "")
-    if len(title) > _TITLE_MAX_LEN:
-        title = textwrap.shorten(title, width=_TITLE_MAX_LEN, placeholder="…")
-    soi = top.get("second_order_implications")
-    if soi is None:
-        soi_list: list[str] = []
-    else:
-        try:
-            soi_list = [str(s) for s in list(soi)]
-        except TypeError:
-            soi_list = []
-    return {
-        "url": str(top.get("url", "") or ""),
-        "title": title,
-        "published_at": top[time_col].date().isoformat(),
-        "event_type": str(top.get("event_type", "") or "") or None,
-        "confidence": float(top["confidence"]) if pd.notna(top.get("confidence")) else None,
-        "second_order_implications": soi_list,
-    }
+    return _build_catalyst_payload(top, time_col)
 
 
 __all__ = ["DEFAULT_EVENTS_DIR", "DEFAULT_NEWS_DIR", "find_trigger_event"]

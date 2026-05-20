@@ -228,7 +228,7 @@ def main() -> int:
         "VERDICT: %s | proceed=%s | R_mean=%+.3f | sign=%s",
         verdict.classification,
         verdict.proceed,
-        verdict.R_mean,
+        verdict.r_mean,
         verdict.sign_pattern,
     )
     logger.info("=" * 60)

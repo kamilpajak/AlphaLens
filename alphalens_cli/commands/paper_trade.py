@@ -25,6 +25,8 @@ paper_trade_app = typer.Typer(
     no_args_is_help=True,
 )
 
+_STRATEGY_OPTION_HELP = "Registered strategy id (see alphalens.paper_trade.registry.REGISTRY)."
+
 
 @paper_trade_app.callback()
 def _paper_trade_callback() -> None:
@@ -36,7 +38,7 @@ def refresh_data(
     strategy: str = typer.Option(
         ...,
         "--strategy",
-        help="Registered strategy id (see alphalens.paper_trade.registry.REGISTRY).",
+        help=_STRATEGY_OPTION_HELP,
     ),
     days: int = typer.Option(
         7,
@@ -105,7 +107,7 @@ def score(
     strategy: str = typer.Option(
         ...,
         "--strategy",
-        help="Registered strategy id (see alphalens.paper_trade.registry.REGISTRY).",
+        help=_STRATEGY_OPTION_HELP,
     ),
     asof: str = typer.Option(
         "",
@@ -255,7 +257,7 @@ def verdict_cmd(
     strategy: str = typer.Option(
         ...,
         "--strategy",
-        help="Registered strategy id (see alphalens.paper_trade.registry.REGISTRY).",
+        help=_STRATEGY_OPTION_HELP,
     ),
     out: Path = typer.Option(
         None,
