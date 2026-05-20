@@ -105,6 +105,32 @@ def _period_returns_for(
     return period_returns.mean(axis=1, skipna=True)
 
 
+def _per_ticker_daily_returns(
+    histories: dict[str, pd.DataFrame],
+) -> dict[str, pd.Series]:
+    """Pre-compute pct-change series per ticker, skipping empty/malformed."""
+    out: dict[str, pd.Series] = {}
+    for ticker, hist in histories.items():
+        if hist is None or hist.empty or "close" not in hist.columns:
+            continue
+        out[ticker] = hist["close"].pct_change()
+    return out
+
+
+def _period_end(
+    sorted_asofs: list[pd.Timestamp], i: int, asof: pd.Timestamp, tail_days: int
+) -> pd.Timestamp:
+    """Holding-window end for asof at index ``i`` in ``sorted_asofs``.
+
+    Use next asof when available; otherwise extend by ``tail_days`` business
+    days. Business-day offset (not calendar days) avoids systematic
+    under-sampling of the final period — see zen review 2026-05-10.
+    """
+    if i + 1 < len(sorted_asofs):
+        return sorted_asofs[i + 1]
+    return asof + pd.offsets.BDay(tail_days)
+
+
 def top_decile_portfolio_daily_returns(
     scores: pd.DataFrame,
     histories: dict[str, pd.DataFrame],
@@ -137,12 +163,7 @@ def top_decile_portfolio_daily_returns(
     if not asofs or scores.empty:
         return pd.Series(dtype=float, name="portfolio_daily")
 
-    # Pre-compute daily returns per ticker (cached)
-    daily_returns_per_ticker: dict[str, pd.Series] = {}
-    for ticker, hist in histories.items():
-        if hist is None or hist.empty or "close" not in hist.columns:
-            continue
-        daily_returns_per_ticker[ticker] = hist["close"].pct_change()
+    daily_returns_per_ticker = _per_ticker_daily_returns(histories)
 
     # Normalize asof column for robust matching (drop time-of-day component)
     scores = scores.copy()
@@ -160,13 +181,7 @@ def top_decile_portfolio_daily_returns(
         )
         if not held_tickers:
             continue
-
-        # tail_days is in TRADING days (default 21 = ~monthly stride). Use BDay
-        # offset, NOT calendar days, to avoid systematic under-sampling of the
-        # final period (per zen 2026-05-10 code review).
-        next_asof = sorted_asofs[i + 1] if i + 1 < len(sorted_asofs) else None
-        end_idx = next_asof if next_asof is not None else asof + pd.offsets.BDay(tail_days)
-
+        end_idx = _period_end(sorted_asofs, i, asof, tail_days)
         period_returns = _period_returns_for(
             held_tickers=held_tickers,
             daily_returns_per_ticker=daily_returns_per_ticker,
