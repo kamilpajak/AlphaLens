@@ -101,7 +101,10 @@ def main() -> int:
         except SecEdgarError as exc:
             # 404 = filer has no submissions (no longer registered);
             # other SecEdgarErrors are transient and worth surfacing.
-            if "404" in str(exc):
+            # SecEdgarError stringifies with the status code at the front,
+            # so startswith is unambiguous (vs a substring match that would
+            # collide with bodies that happen to contain "404").
+            if str(exc).startswith("404"):
                 skipped_404 += 1
                 continue
             logger.warning("fetch failed for %s (CIK %s): %s", ticker, cik, exc)

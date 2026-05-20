@@ -70,6 +70,35 @@ def _load_index() -> pa.Table | None:
     return pq.read_table(_SIC_INDEX_PATH)
 
 
+@lru_cache(maxsize=1)
+def _load_lookup_dicts() -> tuple[dict[str, int], dict[int, list[str]], dict[int, str]]:
+    """Materialise the parquet into three dicts keyed for O(1) lookup.
+
+    Returns ``(ticker_to_sic, sic_to_peers, sic_to_description)``. Empty
+    dicts when the parquet artifact is missing. Built once per process
+    (memoised); tests clear the cache between cases.
+    """
+    table = _load_index()
+    if table is None:
+        return {}, {}, {}
+    tickers = table.column("ticker").to_pylist()
+    sics = table.column("sic").to_pylist()
+    descriptions = table.column("sic_description").to_pylist()
+    ticker_to_sic: dict[str, int] = {}
+    sic_to_peers: dict[int, list[str]] = {}
+    sic_to_description: dict[int, str] = {}
+    for ticker, sic, description in zip(tickers, sics, descriptions, strict=True):
+        if sic is None:
+            continue
+        ticker_to_sic[ticker] = int(sic)
+        sic_to_peers.setdefault(int(sic), []).append(ticker)
+        # First description wins; tickers sharing a SIC share an EDGAR
+        # description by construction (filers carry the same sicDescription
+        # for the same code), so the "first wins" policy is stable.
+        sic_to_description.setdefault(int(sic), description or "")
+    return ticker_to_sic, sic_to_peers, sic_to_description
+
+
 def get_sic(ticker: str) -> int | None:
     """Return the 4-digit SEC SIC code for ``ticker``, or None if unmapped.
 
@@ -80,37 +109,22 @@ def get_sic(ticker: str) -> int | None:
     """
     if not ticker:
         return None
-    table = _load_index()
-    if table is None:
-        return None
-    upper = ticker.upper()
-    tickers = table.column("ticker").to_pylist()
-    try:
-        idx = tickers.index(upper)
-    except ValueError:
-        return None
-    value = table.column("sic")[idx].as_py()
-    if value is None:
-        return None
-    return int(value)
+    ticker_to_sic, _, _ = _load_lookup_dicts()
+    return ticker_to_sic.get(ticker.upper())
 
 
 def iter_sic_peers(sic: int | None) -> list[str]:
     """Return all tickers sharing ``sic``. Empty list for unknown / None.
 
-    Membership is computed from the same parquet artifact, so the peer set
-    reflects whichever PIT universe the index was built from. New IPOs that
-    were absent at build time will not appear as peers until the next
-    ``scripts/build_sic_index.py`` refresh.
+    Membership is computed from the shipped parquet artifact, so the peer
+    set reflects whichever ticker universe the index was built from. New
+    IPOs that were absent at build time will not appear as peers until
+    the next ``scripts/build_sic_index.py`` refresh.
     """
     if sic is None:
         return []
-    table = _load_index()
-    if table is None:
-        return []
-    tickers = table.column("ticker").to_pylist()
-    sics = table.column("sic").to_pylist()
-    return [t for t, s in zip(tickers, sics, strict=True) if s == sic]
+    _, sic_to_peers, _ = _load_lookup_dicts()
+    return sic_to_peers.get(sic, [])
 
 
 def sic_label(sic: int | None) -> tuple[str | None, str | None]:
@@ -123,15 +137,10 @@ def sic_label(sic: int | None) -> tuple[str | None, str | None]:
     """
     if sic is None:
         return (None, None)
-    table = _load_index()
-    if table is None:
+    _, _, sic_to_description = _load_lookup_dicts()
+    description = sic_to_description.get(sic)
+    if description is None:
         return (None, None)
-    sics = table.column("sic").to_pylist()
-    try:
-        idx = sics.index(sic)
-    except ValueError:
-        return (None, None)
-    description = table.column("sic_description")[idx].as_py()
     return (description, _division_name(sic))
 
 

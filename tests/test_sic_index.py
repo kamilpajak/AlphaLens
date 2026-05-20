@@ -60,6 +60,12 @@ class _PatchedIndexTestCase(unittest.TestCase):
         self._patch.start()
         self.addCleanup(self._patch.stop)
         sic_index._load_index.cache_clear()
+        sic_index._load_lookup_dicts.cache_clear()
+        # Without these on teardown the parsed table from this test's
+        # TemporaryDirectory would persist into subsequent tests and either
+        # crash on a deleted path or silently serve the synthetic fixture.
+        self.addCleanup(sic_index._load_index.cache_clear)
+        self.addCleanup(sic_index._load_lookup_dicts.cache_clear)
 
 
 class TestGetSic(_PatchedIndexTestCase):
@@ -182,6 +188,9 @@ class TestMissingIndexFile(unittest.TestCase):
         self._patch.start()
         self.addCleanup(self._patch.stop)
         sic_index._load_index.cache_clear()
+        sic_index._load_lookup_dicts.cache_clear()
+        self.addCleanup(sic_index._load_index.cache_clear)
+        self.addCleanup(sic_index._load_lookup_dicts.cache_clear)
 
     def test_get_sic_returns_none_when_index_absent(self) -> None:
         self.assertIsNone(sic_index.get_sic("AAPL"))
