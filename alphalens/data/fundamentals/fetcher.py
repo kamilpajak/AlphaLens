@@ -1,11 +1,13 @@
 """Alpha Vantage fundamentals fetcher + feature extraction.
 
 Calls the four AV endpoints (OVERVIEW, BALANCE_SHEET, CASH_FLOW,
-INCOME_STATEMENT) directly via stdlib `urllib.request` and applies a PIT
-filter on `fiscalDateEnding` to drop reports ending after `curr_date`.
+INCOME_STATEMENT) via the canonical
+:class:`alphalens.data.alt_data.alphavantage_client.AlphaVantageClient`
+and applies a PIT filter on ``fiscalDateEnding`` to drop reports ending
+after ``curr_date``.
 
-`extract_features` produces the canonical feature dict consumed by
-`alphalens.data.fundamentals.gate`:
+``extract_features`` produces the canonical feature dict consumed by
+``alphalens.data.fundamentals.gate``:
   - cash_runway_months: cash / abs(quarterly OCF) x 3
   - ps_ratio: from OVERVIEW.PriceToSalesRatioTTM
   - net_income_ttm: sum of last 4 quarterly netIncome values
@@ -14,26 +16,26 @@ filter on `fiscalDateEnding` to drop reports ending after `curr_date`.
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 from collections.abc import Mapping
 from typing import Any
 from urllib.error import URLError
-from urllib.parse import urlencode
-from urllib.request import urlopen
+
+from alphalens.data.alt_data.alphavantage_client import (
+    AlphaVantageClient,
+    AVRateLimitError,
+    AVSchemaError,
+    get_default_av_client,
+)
 
 logger = logging.getLogger(__name__)
 
-_AV_BASE_URL = "https://www.alphavantage.co/query"
-
-
-class AlphaVantageRateLimitError(RuntimeError):
-    """Alpha Vantage signalled rate-limit / quota exhaustion.
-
-    Distinct from generic fetch failures so callers that want to abort a batch
-    rather than degrade to null features can branch on it.
-    """
+# Back-compat re-export: external callers used to import this from here.
+# Today there are none in the repo, but keeping the alias makes
+# `from alphalens.data.fundamentals.fetcher import AlphaVantageRateLimitError`
+# stay equivalent to the canonical name should an out-of-tree script depend
+# on it.
+AlphaVantageRateLimitError = AVRateLimitError
 
 
 def _filter_reports_by_date(result: Any, curr_date: str | None) -> Any:
@@ -51,42 +53,32 @@ def _filter_reports_by_date(result: Any, curr_date: str | None) -> Any:
     return result
 
 
-def _make_av_request(function_name: str, symbol: str) -> dict:
-    """Call the Alpha Vantage REST API and return parsed JSON.
+def _make_av_request(
+    function_name: str,
+    symbol: str,
+    *,
+    client: AlphaVantageClient | None = None,
+) -> dict:
+    """Call Alpha Vantage via the canonical client and return parsed JSON.
 
-    Returns {} on application-level errors (invalid ticker, malformed JSON).
-    Raises AlphaVantageRateLimitError on rate-limit / quota signals so the
-    caller can abort a batch instead of polluting it with null features.
-    Network errors propagate as urllib.error.URLError / HTTPError.
+    Returns ``{}`` on AV-reported application errors (invalid ticker, malformed
+    payload) so partial bundles still flow through ``fetch_ticker_bundle``.
+    Raises :class:`AVRateLimitError` on quota / api-key / premium signals so
+    the caller can abort a batch instead of polluting it with null features.
+    Network errors propagate as ``urllib.error.URLError`` / ``HTTPError``.
+
+    ``client`` is optional — when omitted, the process-wide default client
+    (lazy-initialized from ``ALPHA_VANTAGE_API_KEY``) is used.
     """
-    api_key = os.getenv("ALPHA_VANTAGE_API_KEY")
-    if not api_key:
-        raise ValueError("ALPHA_VANTAGE_API_KEY environment variable is not set.")
-
-    params = {"function": function_name, "symbol": symbol, "apikey": api_key}
-    url = f"{_AV_BASE_URL}?{urlencode(params)}"
-    with urlopen(url, timeout=30) as resp:
-        body = resp.read().decode("utf-8")
-
+    av = client or get_default_av_client()
     try:
-        data = json.loads(body)
-    except json.JSONDecodeError:
+        return av.query(function_name, symbol=symbol)
+    except AVSchemaError as exc:
+        # Soft-fail: extract_features defends against missing sections, and
+        # an invalid-ticker / malformed payload should not abort the whole
+        # bundle. Rate-limit / network errors still propagate.
+        logger.warning("Alpha Vantage error on %s/%s: %s", function_name, symbol, exc)
         return {}
-
-    if isinstance(data, dict):
-        if "Information" in data:
-            info = str(data["Information"]).lower()
-            if "rate limit" in info or "api key" in info:
-                raise AlphaVantageRateLimitError(
-                    f"Alpha Vantage rate-limited on {function_name}/{symbol}: {data['Information']}"
-                )
-        if "Error Message" in data:
-            logger.warning(
-                "Alpha Vantage error on %s/%s: %s", function_name, symbol, data["Error Message"]
-            )
-            return {}
-
-    return data if isinstance(data, dict) else {}
 
 
 def _av_overview(ticker: str, curr_date: str | None = None) -> Mapping:

@@ -241,90 +241,62 @@ class TestFetchTickerBundle(unittest.TestCase):
 
 
 class TestMakeAVRequest(unittest.TestCase):
+    """Behaviour tests for the fetcher's thin adapter over the canonical
+    AlphaVantageClient. Network is never hit — each test injects a client
+    backed by a fake urlopen_fn so the adapter's soft-fail vs propagate
+    contract is observable.
+    """
+
+    @staticmethod
+    def _client_with_body(body: str):
+        from unittest.mock import MagicMock
+
+        from alphalens.data.alt_data.alphavantage_client import AlphaVantageClient
+
+        class _CM:
+            def __enter__(self_inner):
+                class _Resp:
+                    def read(_self):
+                        return body.encode("utf-8")
+
+                return _Resp()
+
+            def __exit__(self_inner, *exc):
+                return False
+
+        return AlphaVantageClient(api_key="test", urlopen_fn=MagicMock(return_value=_CM()))
+
     def test_rate_limit_information_raises(self):
         from alphalens.data.fundamentals.fetcher import (
             AlphaVantageRateLimitError,
             _make_av_request,
         )
 
-        rate_limit_body = '{"Information": "Thank you for using Alpha Vantage! ...rate limit..."}'
-
-        class _Resp:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def read(self):
-                return rate_limit_body.encode()
-
-        with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "test"}):
-            with patch("alphalens.data.fundamentals.fetcher.urlopen", return_value=_Resp()):
-                with self.assertRaises(AlphaVantageRateLimitError):
-                    _make_av_request("OVERVIEW", "AAPL")
+        client = self._client_with_body(
+            '{"Information": "Thank you for using Alpha Vantage! ...rate limit..."}'
+        )
+        with self.assertRaises(AlphaVantageRateLimitError):
+            _make_av_request("OVERVIEW", "AAPL", client=client)
 
     def test_error_message_returns_empty(self):
         """Invalid ticker / malformed request → {} with warning, not exception."""
         from alphalens.data.fundamentals.fetcher import _make_av_request
 
-        body = '{"Error Message": "Invalid API call. Please retry..."}'
-
-        class _Resp:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def read(self):
-                return body.encode()
-
-        with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "test"}):
-            with patch("alphalens.data.fundamentals.fetcher.urlopen", return_value=_Resp()):
-                self.assertEqual(_make_av_request("OVERVIEW", "BOGUS"), {})
-
-    def test_missing_api_key_raises_value_error(self):
-        from alphalens.data.fundamentals.fetcher import _make_av_request
-
-        with patch.dict("os.environ", {}, clear=True):
-            with self.assertRaises(ValueError):
-                _make_av_request("OVERVIEW", "AAPL")
+        client = self._client_with_body('{"Error Message": "Invalid API call. Please retry..."}')
+        self.assertEqual(_make_av_request("OVERVIEW", "BOGUS", client=client), {})
 
     def test_non_json_response_returns_empty(self):
         from alphalens.data.fundamentals.fetcher import _make_av_request
 
-        class _Resp:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def read(self):
-                return b"<html>not json</html>"
-
-        with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "test"}):
-            with patch("alphalens.data.fundamentals.fetcher.urlopen", return_value=_Resp()):
-                self.assertEqual(_make_av_request("OVERVIEW", "AAPL"), {})
+        client = self._client_with_body("<html>not json</html>")
+        self.assertEqual(_make_av_request("OVERVIEW", "AAPL", client=client), {})
 
     def test_non_dict_json_returns_empty(self):
         """AV occasionally returns a JSON list / scalar — coerce to {}."""
         from alphalens.data.fundamentals.fetcher import _make_av_request
 
-        class _Resp:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-            def read(self):
-                return b"[1, 2, 3]"
-
-        with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "test"}):
-            with patch("alphalens.data.fundamentals.fetcher.urlopen", return_value=_Resp()):
-                self.assertEqual(_make_av_request("OVERVIEW", "AAPL"), {})
+        client = self._client_with_body("[1, 2, 3]")
+        self.assertEqual(_make_av_request("OVERVIEW", "AAPL", client=client), {})
 
 
 class TestFilterReportsByDate(unittest.TestCase):
