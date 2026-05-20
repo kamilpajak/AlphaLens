@@ -541,10 +541,14 @@
 		// natural than the default "any pixel" rule for tall sections.
 		const io = new IntersectionObserver(
 			(entries) => {
-				for (const e of entries) {
-					if (e.isIntersecting) {
-						activeSection = (e.target as HTMLElement).id;
-					}
+				// When the user scrolls fast, the callback can receive several
+				// intersecting entries in a single batch — picking any one of
+				// them caused activeSection to flicker as the array order is
+				// not document-order. Filter to intersecting only and take the
+				// last (which is the section deepest into the viewport).
+				const visible = entries.filter((e) => e.isIntersecting);
+				if (visible.length > 0) {
+					activeSection = (visible[visible.length - 1].target as HTMLElement).id;
 				}
 			},
 			{ rootMargin: '-33% 0% -50% 0%', threshold: 0 }

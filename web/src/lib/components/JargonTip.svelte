@@ -1,3 +1,17 @@
+<script module lang="ts">
+	// Module-level counter for hydration-stable tooltip ids. SvelteKit
+	// adapter-static prerenders pages at build time, then the client
+	// re-instantiates the same components in the same order; both runs see
+	// the counter increment deterministically, so SSR HTML and hydrated
+	// DOM agree on every `id` / `aria-describedby` linkage. (The earlier
+	// Math.random() approach risked desync between SSR and client init.)
+	//
+	// Svelte 5.55 does NOT export a built-in useId — verified against
+	// node_modules/svelte/src/index-client.js. When a future minor adds
+	// it, swap this counter for `useId()`.
+	let __jargonTipIdCounter = 0;
+</script>
+
 <script lang="ts">
 	// Hover/focus tooltip for inline jargon terms. Mirrors the GatePill
 	// tooltip pattern (group wrapper + cursor-help + pointer-events-none popover
@@ -21,13 +35,10 @@
 
 	let { term, full = '', body, children }: Props = $props();
 
-	// Unique id linking the focusable trigger to the tooltip body via
-	// aria-describedby. Svelte 5.55 doesn't ship a built-in useId (verified
-	// against node_modules/svelte/src/index-client.js — no such export), so
-	// we generate a stable per-instance id at construction time. Screen
-	// readers (NVDA, VoiceOver, JAWS) announce the tooltip text when the
-	// trigger receives focus.
-	const tooltipId = `jargon-tip-${Math.random().toString(36).slice(2, 10)}`;
+	// Per-instance id linking the focusable trigger to the tooltip body via
+	// aria-describedby. Sourced from the module-level counter so SSR and
+	// client hydration produce the same value (no hydration mismatch).
+	const tooltipId = `jargon-tip-${__jargonTipIdCounter++}`;
 
 	// Touch-device support: iOS Safari + Android Chrome don't reliably trigger
 	// :hover or auto-focus when tapping an element with tabindex=0. Without an
