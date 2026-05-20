@@ -75,23 +75,33 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
-def _iter_unit_entries(facts_block: dict) -> Any:
-    """Yield (taxonomy, concept, unit, entry) tuples for each valid record."""
+def _iter_concepts(facts_block: dict) -> Any:
+    """Yield (taxonomy, concept, concept_block) for dict-shaped sub-blocks."""
     for taxonomy, concepts in facts_block.items():
         if not isinstance(concepts, dict):
             continue
         for concept, concept_block in concepts.items():
-            if not isinstance(concept_block, dict):
-                continue
-            units_block = concept_block.get("units")
-            if not isinstance(units_block, dict):
-                continue
-            for unit, entries in units_block.items():
-                if not isinstance(entries, list):
-                    continue
-                for entry in entries:
-                    if isinstance(entry, dict):
-                        yield taxonomy, concept, unit, entry
+            if isinstance(concept_block, dict):
+                yield taxonomy, concept, concept_block
+
+
+def _iter_unit_lists(concept_block: dict) -> Any:
+    """Yield (unit, entries) for list-shaped ``units`` sub-blocks."""
+    units_block = concept_block.get("units")
+    if not isinstance(units_block, dict):
+        return
+    for unit, entries in units_block.items():
+        if isinstance(entries, list):
+            yield unit, entries
+
+
+def _iter_unit_entries(facts_block: dict) -> Any:
+    """Yield (taxonomy, concept, unit, entry) tuples for each valid record."""
+    for taxonomy, concept, concept_block in _iter_concepts(facts_block):
+        for unit, entries in _iter_unit_lists(concept_block):
+            for entry in entries:
+                if isinstance(entry, dict):
+                    yield taxonomy, concept, unit, entry
 
 
 def _append_entry_row(
