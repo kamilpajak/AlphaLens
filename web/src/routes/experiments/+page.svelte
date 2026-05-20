@@ -367,6 +367,13 @@
 		return out;
 	}
 
+	// Glossary subset scoped to /experiments — drops brief-only entries
+	// (PE, PS, EV/EBITDA, ROE, etc. — pages: ['briefs']) so the lookup table
+	// here only lists terms actually used by paradigms / patterns above.
+	const experimentsGlossary = GLOSSARY.filter(
+		(g) => !g.pages || g.pages.includes('experiments')
+	);
+
 	const summaryCounts = $derived.by(() => {
 		const c: Record<ParadigmStatus, number> = { FAIL: 0, 'SLIPPAGE-FAIL': 0, 'IN-FLIGHT': 0, INCONCLUSIVE: 0, PASS_MARGINAL: 0 };
 		for (const p of paradigms) c[p.status]++;
@@ -836,23 +843,31 @@
 
 	<!-- B3: glossary section. Non-quant-friendly definitions of the jargon used
 	     throughout this page. Acronyms also referenced via inline JargonTip in
-	     the "how.to.read" block above. -->
+	     the "how.to.read" block above — the inline tooltips are the primary
+	     reference, this <details> is the secondary lookup table. Brief-only
+	     terms (PE, PS, EV/EBITDA, etc.) are filtered out so the table matches
+	     terms actually used on /experiments. -->
 	<section class="border border-grid bg-bg-1 fade-up" style="animation-delay: 0.3s">
-		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<h2 class="font-normal">glossary.terms</h2>
-			<span class="text-fg-dim normal-case tracking-normal">{GLOSSARY.length} terms · for non-quant readers</span>
-		</div>
-		<dl class="divide-y divide-grid">
-			{#each GLOSSARY as g}
-				<div class="px-4 sm:px-5 py-3 grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-x-4 gap-y-1 text-sm">
-					<dt class="font-display font-bold text-amber">
-						{g.term}
-						<span class="block text-[10px] uppercase tracking-widest text-fg-muted font-normal normal-case mt-0.5">{g.full}</span>
-					</dt>
-					<dd class="text-fg-dim text-xs sm:text-sm leading-relaxed">{g.body}</dd>
-				</div>
-			{/each}
-		</dl>
+		<details class="group/glossary">
+			<summary class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted hover:bg-bg-2 cursor-pointer flex items-center justify-between list-none [&::-webkit-details-marker]:hidden">
+				<span class="flex items-center gap-2">
+					<span class="text-amber transition-transform inline-block group-open/glossary:rotate-90">▸</span>
+					<h2 class="font-normal">glossary.terms</h2>
+				</span>
+				<span class="text-fg-dim normal-case tracking-normal">{experimentsGlossary.length} terms · click to expand · hover dotted-underlined inline terms above for primary reference</span>
+			</summary>
+			<dl class="divide-y divide-grid">
+				{#each experimentsGlossary as g}
+					<div class="px-4 sm:px-5 py-3 grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-x-4 gap-y-1 text-sm">
+						<dt class="font-display font-bold text-amber">
+							{g.term}
+							<span class="block text-[10px] uppercase tracking-widest text-fg-muted font-normal normal-case mt-0.5">{g.full}</span>
+						</dt>
+						<dd class="text-fg-dim text-xs sm:text-sm leading-relaxed">{g.body}</dd>
+					</div>
+				{/each}
+			</dl>
+		</details>
 	</section>
 </div>
 
