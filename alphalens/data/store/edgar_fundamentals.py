@@ -1,17 +1,18 @@
-"""EDGAR-backed replacement for ``SimFinFundamentalsStore``.
+"""Canonical SEC EDGAR fundamentals store for AlphaLens.
 
-Returns the same 16-field features dict that the thematic scorers consume,
+Returns the 16-field features dict that the thematic scorers consume,
 backed by SEC XBRL companyfacts parquets at
 ``~/.alphalens/companyfacts_parquet/{CIK}.parquet``. Missing CIKs are
 fetched on demand via :class:`alphalens.data.alt_data.sec_edgar_client.SecEdgarClient`
 (throttled to SEC's 10 req/s polite limit, retry/backoff included).
 
-Parity contract — must match :meth:`alphalens.data.store.simfin.SimFinFundamentalsStore.ev_fcff_features_as_of`
-exactly so the downstream scorers in
+The 16-field parity contract was originally defined by the now-deleted
+SimFinFundamentalsStore; downstream scorers in
 ``alphalens/thematic/screening/{fcff_signal,valuation_signal,magic_formula}.py``
-keep working with a single-line import swap.
+work via single-line import swap. Validation gate evidence:
+``docs/research/edgar_fundamentals_validation_2026_05_19.md``.
 
-Differences vs SimFin that callers do NOT need to handle:
+Implementation notes callers do NOT need to handle:
 
 - EDGAR ``CapEx`` is reported with positive sign (cash outflow magnitude),
   not negated as in SimFin. No client-side sign flip needed — but the
@@ -68,9 +69,11 @@ _TAX_RATE_DEFAULT = 0.21
 class EdgarFundamentalsStore:
     """PIT fundamentals store backed by SEC XBRL companyfacts.
 
-    Drop-in replacement for ``SimFinFundamentalsStore``. The 16-field dict
-    returned by :meth:`ev_fcff_features_as_of` matches SimFin's exactly so
-    the thematic scorers keep working with a single import-line change.
+    Canonical fundamentals source for AlphaLens. The 16-field dict
+    returned by :meth:`ev_fcff_features_as_of` is the parity contract that
+    thematic scorers in
+    ``alphalens/thematic/screening/{fcff_signal,valuation_signal,magic_formula}.py``
+    consume.
 
     Parameters
     ----------

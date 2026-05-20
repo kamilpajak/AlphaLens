@@ -22,7 +22,6 @@ import argparse
 import json
 import logging
 import math
-import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -43,8 +42,8 @@ from alphalens.backtest.metrics import sharpe, turnover_pct  # noqa: E402
 from alphalens.data.alt_data.russell_universe import load_iwm_current  # noqa: E402
 from alphalens.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
 from alphalens.data.factors import load_carhart_daily  # noqa: E402
+from alphalens.data.store.edgar_fundamentals import EdgarFundamentalsStore  # noqa: E402
 from alphalens.data.store.history import HistoryStore  # noqa: E402
-from alphalens.data.store.simfin import SimFinFundamentalsStore  # noqa: E402
 from alphalens.screeners.ev_fcff_yield.adapter import EvFcffYieldScorer  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -61,28 +60,29 @@ _PRICES_DIR = Path.home() / ".alphalens" / "prices"
 
 
 def _load_universe_ex_financials(
-    store: SimFinFundamentalsStore,
+    store: EdgarFundamentalsStore,
 ) -> list[str]:
-    """R2000 active ∩ SimFin us-income-annual (implicit financials exclusion).
+    """R2000 active ∩ EDGAR-cached companyfacts (post-SimFin migration).
 
-    Banks and insurance live in SimFin's separate ``us-income-banks-annual``
-    and ``us-income-insurance-annual`` datasets — by intersecting with the
-    *standard* income annual, financials drop out by construction.
+    Prior to PR #160 follow-up, this intersected with SimFin's
+    ``us-income-annual`` dataset which implicitly excluded financials
+    (banks/insurance live in separate SimFin datasets). EDGAR's
+    companyfacts cache covers all SEC filers including financials, so
+    financials exclusion is now an upstream concern for the experiment
+    setup — paradigm-13 is CLOSED per ADR 0005 and this script is
+    replay infrastructure only.
 
-    Universe is forward-looking (current IWM snapshot, not PIT) per design
-    memo §2 known-limitation. Survivorship effect partially mitigated by
-    the SimFin universe also including delisted firms with final filings.
+    Universe is forward-looking (current IWM snapshot, not PIT) per
+    design memo §2 known-limitation.
     """
     iwm_tickers = set(load_iwm_current(_IWM_SNAPSHOT))
-    if store._income is None:
-        raise RuntimeError("SimFinFundamentalsStore not preloaded — call store.preload() first.")
-    simfin_tickers = set(store._income.index.get_level_values("Ticker").astype(str))
-    universe = sorted(iwm_tickers & simfin_tickers)
+    edgar_tickers = set(store.universe())
+    universe = sorted(iwm_tickers & edgar_tickers)
     logger.info(
-        "R2000 ex-fin universe: %d tickers (IWM=%d ∩ SimFin us-income-annual=%d)",
+        "R2000 ex-fin universe: %d tickers (IWM=%d ∩ EDGAR companyfacts=%d)",
         len(universe),
         len(iwm_tickers),
-        len(simfin_tickers),
+        len(edgar_tickers),
     )
     return universe
 
@@ -253,11 +253,6 @@ def main() -> int:
         )
         return 9
 
-    api_key = os.environ.get("SIMFIN_API_KEY")
-    if not api_key:
-        sys.stderr.write("ERROR: SIMFIN_API_KEY not set in environment.\n")
-        return 2
-
     logger.info(
         "experiment ev_fcff_yield | universe=%s | %s..%s | phase_offset=%d",
         args.universe_mode,
@@ -266,13 +261,8 @@ def main() -> int:
         args.phase_offset,
     )
 
-    store = SimFinFundamentalsStore(
-        api_key=api_key,
-        with_prices=not args.no_prices,
-    )
-    logger.info("Preloading SimFin bulk CSVs (cached)…")
-    # Empty list disables the 50%-coverage threshold; we pass real universe later.
-    store.preload([])
+    store = EdgarFundamentalsStore(with_prices=not args.no_prices)
+    logger.info("EdgarFundamentalsStore ready (SEC XBRL companyfacts parquets).")
 
     universe = _load_universe_ex_financials(store)
     if not universe:

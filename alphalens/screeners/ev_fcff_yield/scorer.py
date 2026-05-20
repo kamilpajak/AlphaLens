@@ -1,14 +1,14 @@
 """Pure scoring functions for the EV/FCFF-yield value screener.
 
 Decomposed into atomic pure functions so each one is testable in isolation
-without SimFin / network / cache fixtures. The integration layer that pulls
-fundamentals from ``alphalens.data.store.simfin.SimFinFundamentalsStore``
+without vendor / network / cache fixtures. The integration layer that pulls
+fundamentals from ``alphalens.data.store.edgar_fundamentals.EdgarFundamentalsStore``
 lives separately and composes these primitives at audit time.
 
 Sign conventions:
 - ``ocf`` positive when the firm generated operating cash.
-- ``capex`` positive when the firm invested (i.e. flip the sign of SimFin's
-  ``Change in Fixed Assets & Intangibles`` which is negative for capex).
+- ``capex`` positive when the firm invested (EDGAR ``PaymentsToAcquirePropertyPlantAndEquipment``
+  is already positive; legacy SimFin path used to flip the sign).
 - ``interest_expense`` positive (cost to the firm).
 - ``tax_rate`` in [0, 0.35], clamped on the caller side.
 - ``fcff_actual`` positive when the firm has unlevered free cash flow.

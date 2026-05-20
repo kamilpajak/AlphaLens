@@ -109,14 +109,13 @@ def _apply_fundamental_gate(
     with_prices: bool,
 ) -> None:
     """Pre-load fundamentals and wire them into scorer_config in place."""
-    if source == "simfin":
-        from alphalens.data.store.simfin import SimFinFundamentalsStore
+    if source == "edgar":
+        from alphalens.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
         typer.echo(
-            f"Preloading SimFin fundamentals (bulk CSV, 5y US quarterly, "
-            f"with_prices={with_prices})…"
+            f"Preloading EDGAR fundamentals (SEC XBRL companyfacts, with_prices={with_prices})…"
         )
-        store = SimFinFundamentalsStore(with_prices=with_prices)
+        store = EdgarFundamentalsStore(with_prices=with_prices)
     elif source == "av":
         from alphalens.data.store.fundamentals_pit import HistoricalFundamentalsStore
 
@@ -124,7 +123,7 @@ def _apply_fundamental_gate(
         store = HistoricalFundamentalsStore()
     else:
         raise typer.BadParameter(
-            f"Unknown --fundamentals-source: {source!r} (expected: simfin | av)"
+            f"Unknown --fundamentals-source: {source!r} (expected: edgar | av)"
         )
 
     store.preload(screener_tickers)
@@ -233,11 +232,12 @@ def backtest(  # NOSONAR — Typer CLI legitimately needs many flags
         "the gate score. Only meaningful for --scorer momentum | early-stage.",
     ),
     fundamentals_source: str = typer.Option(
-        "simfin",
+        "edgar",
         "--fundamentals-source",
-        help="Data source when --fundamental-gate is on: 'simfin' (free 5y bulk CSV, "
-        "requires SIMFIN_API_KEY in .env; recommended) or 'av' (Alpha Vantage, "
-        "25 req/day free tier so 113 tickers × 4 endpoints will throttle).",
+        help="Data source when --fundamental-gate is on: 'edgar' (SEC XBRL "
+        "companyfacts via SecEdgarClient; recommended — see PR #159) or 'av' "
+        "(Alpha Vantage, 25 req/day free tier so 113 tickers × 4 endpoints "
+        "will throttle).",
     ),
     with_prices: bool = typer.Option(
         False,
