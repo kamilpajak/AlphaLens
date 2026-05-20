@@ -195,6 +195,46 @@ class TestSharesChainOrder(unittest.TestCase):
             self.assertEqual(features["shares_outstanding"], 130_000_000.0)
             mock_yf.assert_called_once_with("AI", date(2026, 5, 19))
 
+    def test_yfinance_transient_exception_not_cached(self):
+        """Zen finding #3 (PR #174): a yfinance rate-limit / network blip
+        must not permanently disable the fallback for the lifetime of the
+        store. The second call must re-attempt and pick up the value
+        (None is cached only for definitive "no data" results).
+        """
+        from alphalens.data.store.edgar_fundamentals import EdgarFundamentalsStore
+
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            store = EdgarFundamentalsStore(cache_dir=tdp, sec_client=_stub_sec_client({}))
+
+            # Mock yfinance.Ticker so the first invocation raises and the
+            # second returns a real fast_info.shares value.
+            ticker_mock_attempt = [0]
+
+            class _FakeFastInfo:
+                shares = 140_000_000.0
+
+            class _FakeTicker:
+                def __init__(self, t):
+                    ticker_mock_attempt[0] += 1
+                    if ticker_mock_attempt[0] == 1:
+                        raise RuntimeError("network blip")
+                    self.fast_info = _FakeFastInfo()
+
+                def get_shares_full(self, start, end):
+                    return None
+
+            fake_yf = MagicMock()
+            fake_yf.Ticker.side_effect = _FakeTicker
+
+            with patch.dict("sys.modules", {"yfinance": fake_yf}):
+                first = store._fetch_shares_yf("AI", date(2026, 5, 19))
+                self.assertIsNone(first)  # transient failure
+                self.assertNotIn("AI", store._shares_cache)  # not cached
+                second = store._fetch_shares_yf("AI", date(2026, 5, 19))
+            self.assertEqual(second, 140_000_000.0)
+            self.assertEqual(store._shares_cache["AI"], 140_000_000.0)
+
     def test_yfinance_fallback_skipped_when_xbrl_succeeds(self):
         """Don't waste yfinance roundtrips when EDGAR is fresh."""
         from alphalens.data.store.edgar_fundamentals import EdgarFundamentalsStore

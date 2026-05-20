@@ -443,8 +443,13 @@ class EdgarFundamentalsStore:
             fallback = getattr(tk.fast_info, "shares", None)
             val = float(fallback) if fallback else None
         except Exception as exc:
+            # Transient failures (rate limit, DNS, malformed response) do
+            # NOT pollute the cache — a retry within the same store
+            # lifetime should be able to succeed (zen finding #3 on PR
+            # #174). Only definitive ``None`` results from a clean call
+            # are cached.
             logger.warning("yfinance shares fallback failed for %s: %s", ticker, exc)
-            val = None
+            return None
         self._shares_cache[key] = val
         return val
 
