@@ -475,12 +475,46 @@
 		if (!drawerOpen) return;
 		if (e.key === 'Escape') closeDrawer();
 	}
+
+	// Hash auto-expand. When a reader lands on /experiments#P14 (deep-linked
+	// from a postmortem markdown / commit body / external doc), open the
+	// matching paradigm row's <details> and scroll it into view — otherwise
+	// the row's detail fields stay collapsed (P0.1 default) and the deep link
+	// loses its meaning.
+	//
+	// Match the fragment to <article id="..."> and toggle the nested <details>
+	// open. Re-run on `hashchange` so client-side anchor navigation behaves
+	// the same as initial load.
+	function expandRowForHash() {
+		const id = location.hash.slice(1);
+		if (!id) return;
+		const article = document.getElementById(id);
+		if (!article) return;
+		const det = article.querySelector('details');
+		if (det && !det.open) det.open = true;
+		// Defer scroll to next frame so the just-opened details has its final
+		// height before the browser computes the target scroll offset.
+		requestAnimationFrame(() => {
+			article.scrollIntoView({ block: 'start', behavior: 'instant' });
+		});
+	}
+
+	function onHashChange() {
+		expandRowForHash();
+	}
+
+	// Run once after hydration so the initial-load hash is honoured (the
+	// hashchange listener below only fires on subsequent changes, not on
+	// first paint). $effect inherently runs after the DOM is wired up.
+	$effect(() => {
+		expandRowForHash();
+	});
 </script>
 
 <!-- Window-level Esc handler. Must be at component root per Svelte 5 (no
      conditional <svelte:window>); handler internally guards on drawerOpen
      so it's a no-op when the drawer is closed. -->
-<svelte:window onkeydown={onDrawerKey} />
+<svelte:window onkeydown={onDrawerKey} onhashchange={onHashChange} />
 
 <div class="max-w-[1200px] mx-auto px-3 sm:px-4 py-8 sm:py-10">
 	<header class="mb-10 fade-up">
