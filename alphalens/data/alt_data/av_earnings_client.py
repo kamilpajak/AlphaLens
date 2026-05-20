@@ -14,25 +14,29 @@ the ~3-week 510-name backfill is resumable across crashes / day-boundary
 quota resets.
 
 The fetcher is injected as a callable so tests never hit the network.
-The default fetcher uses stdlib `urllib.request` (same pattern as
-`alphalens.data.fundamentals.fetcher`).
+The default fetcher delegates to
+:class:`alphalens.data.alt_data.alphavantage_client.AlphaVantageClient`,
+which is the canonical HTTP wrapper for every AV call in the repo (one
+client → one quota tracker → one rate-limit-detection code path).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 import urllib.error
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import urlencode
-from urllib.request import urlopen
+
+from alphalens.data.alt_data.alphavantage_client import (
+    AVRateLimitError,
+    AVSchemaError,
+    get_default_av_client,
+)
 
 logger = logging.getLogger(__name__)
 
-_AV_BASE_URL = "https://www.alphavantage.co/query"
 _REQUIRED_QUARTERLY_FIELDS = (
     "fiscalDateEnding",
     "reportedDate",
@@ -49,42 +53,28 @@ _REQUIRED_QUARTERLY_FIELDS = (
 FetcherFn = Callable[[str], dict]
 SleepFn = Callable[[float], None]
 
-
-class AVRateLimitError(RuntimeError):
-    """Alpha Vantage signalled rate-limit / quota exhaustion."""
-
-
-class AVSchemaError(ValueError):
-    """AV EARNINGS response missing required fields."""
+# Re-export so downstream callers that catch these errors keep importing
+# from the EARNINGS module unchanged.
+__all__ = [
+    "AVRateLimitError",
+    "AVSchemaError",
+    "FetcherFn",
+    "SleepFn",
+    "fetch_earnings",
+    "fetch_earnings_batch",
+    "load_earnings",
+]
 
 
 def _default_fetcher(ticker: str) -> dict:
-    api_key = os.getenv("ALPHA_VANTAGE_API_KEY")
-    if not api_key:
-        raise ValueError("ALPHA_VANTAGE_API_KEY environment variable is not set.")
+    """Default EARNINGS fetcher — routes through the canonical AV client.
 
-    params = {"function": "EARNINGS", "symbol": ticker, "apikey": api_key}
-    url = f"{_AV_BASE_URL}?{urlencode(params)}"
-    with urlopen(url, timeout=30) as resp:
-        body = resp.read().decode("utf-8")
-
-    try:
-        data = json.loads(body)
-    except json.JSONDecodeError as exc:
-        raise AVSchemaError(f"AV returned non-JSON body for {ticker}") from exc
-
-    if not isinstance(data, dict):
-        raise AVSchemaError(f"AV returned non-dict body for {ticker}")
-
-    if "Information" in data:
-        info = str(data["Information"]).lower()
-        if "rate limit" in info or "api key" in info or "premium" in info:
-            raise AVRateLimitError(f"AV rate-limited on {ticker}: {data['Information']}")
-
-    if "Error Message" in data:
-        raise AVSchemaError(f"AV error for {ticker}: {data['Error Message']}")
-
-    return data
+    The throttle / cache / batch orchestration in this module remains
+    EARNINGS-specific (3-week backfill, quota-window resumption). The
+    canonical client owns the HTTP request + auth + per-response
+    schema/rate-limit detection.
+    """
+    return get_default_av_client().query("EARNINGS", symbol=ticker)
 
 
 def _validate_payload(payload: dict) -> None:
