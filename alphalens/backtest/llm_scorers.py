@@ -21,10 +21,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from collections.abc import Mapping
 from datetime import date
+
+from alphalens.data.alt_data.gemini_client import GeminiClient, get_default_gemini_client
 
 from .historical_validation import LLMVerdict
 
@@ -57,18 +58,6 @@ A name is REJECT-worthy if it has:
 Respond with: verdict (one of accept/reject/uncertain), confidence (0.0-1.0),
 and one-sentence reasoning explaining tractability.
 """
-
-
-def _load_genai_sdk():
-    """Import google-genai SDK; raise with actionable message if absent."""
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError as exc:
-        raise RuntimeError(
-            "google-genai SDK not installed. `uv add google-genai` or use an alternative scorer."
-        ) from exc
-    return genai, types
 
 
 def _parse_gemini_response(raw: str) -> dict | None:
@@ -107,19 +96,21 @@ def gemini_flash_tractability_scorer(
     context: Mapping,
     model_name: str = "gemini-2.5-flash",
     api_key: str | None = None,
+    gemini_client: GeminiClient | None = None,
 ) -> LLMVerdict:
     """Single Gemini Flash call ~$0.01-0.03 per ticker.
 
-    Uses the Google Gen AI SDK (google-genai). Raises if the API key is missing
-    or the SDK is not installed.
+    Routes through the canonical
+    :class:`alphalens.data.alt_data.gemini_client.GeminiClient`. Pass
+    ``gemini_client=`` for tests; pass ``api_key=`` for ad-hoc one-off
+    use; omit both to fall back to ``get_default_gemini_client()`` which
+    reads ``GOOGLE_API_KEY`` once per process.
 
     `context` must include: rank, momentum_score, themes.
     """
-    api_key = api_key or os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        raise RuntimeError("GOOGLE_API_KEY not set — cannot call Gemini")
+    if gemini_client is None:
+        gemini_client = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
 
-    genai, types = _load_genai_sdk()
     prompt = _TRACTABILITY_PROMPT.format(
         ticker=ticker,
         asof=asof.isoformat(),
@@ -128,13 +119,12 @@ def gemini_flash_tractability_scorer(
         score=context.get("momentum_score", 0.0),
     )
 
-    client = genai.Client(api_key=api_key)
     t0 = time.perf_counter()
     try:
-        response = client.models.generate_content(
+        response = gemini_client.generate_content(
             model=model_name,
             contents=prompt,
-            config=types.GenerateContentConfig(
+            config=gemini_client.build_config(
                 response_mime_type="application/json",
                 response_schema=_TRACTABILITY_RESPONSE_SCHEMA,
                 temperature=0.0,

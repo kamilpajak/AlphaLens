@@ -71,7 +71,7 @@ class TestGenerateBrief(unittest.TestCase):
     def test_uses_flash_model_for_low_conviction(self):
         captured: dict[str, str] = {}
 
-        def fake_call(client, prompt, *, model, types_mod, max_output_tokens, temperature):
+        def fake_call(client, prompt, *, model, max_output_tokens, temperature):
             captured["model"] = model
             return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
 
@@ -105,7 +105,7 @@ class TestGenerateBrief(unittest.TestCase):
     def test_max_output_tokens_param_propagated(self):
         captured: dict[str, int | float | None] = {"max_tokens": None, "temperature": None}
 
-        def fake_call(client, prompt, *, model, types_mod, max_output_tokens, temperature):
+        def fake_call(client, prompt, *, model, max_output_tokens, temperature):
             captured["max_tokens"] = max_output_tokens
             captured["temperature"] = temperature
             return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
@@ -118,21 +118,18 @@ class TestGenerateBrief(unittest.TestCase):
         self.assertEqual(captured["temperature"], 0.0)
 
     def test_reuses_passed_clients_no_handshake_per_call(self):
-        # Mirror the orchestrator hoisting pattern from gemini_mapper / scorer.
+        # Mirror the orchestrator hoisting pattern: pass one GeminiClient and
+        # both Pro/Flash routes reuse it.
         fake_response = SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
         sentinel_client = object()
-        sentinel_types = object()
         with patch.object(generator, "_call_gemini", return_value=fake_response) as mock_call:
             generator.generate_brief(
                 _facts(weighted_score=4),
                 api_key=None,
-                client_pro=sentinel_client,
-                client_flash=sentinel_client,
-                types_mod=sentinel_types,
+                gemini_client_pro=sentinel_client,
+                gemini_client_flash=sentinel_client,
             )
-        call_kwargs = mock_call.call_args.kwargs
         self.assertIs(mock_call.call_args.args[0], sentinel_client)
-        self.assertIs(call_kwargs["types_mod"], sentinel_types)
 
 
 def _truncated_response(finish_reason_name: str = "MAX_TOKENS"):
@@ -198,7 +195,7 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
     def test_retry_doubles_max_tokens_and_drops_temperature(self):
         captured: list[dict] = []
 
-        def fake_call(client, prompt, *, model, types_mod, max_output_tokens, temperature):
+        def fake_call(client, prompt, *, model, max_output_tokens, temperature):
             captured.append({"max": max_output_tokens, "temp": temperature})
             if len(captured) == 1:
                 return _truncated_response()
@@ -370,37 +367,26 @@ class TestTryJsonRepairUnit(unittest.TestCase):
 
 class TestGenerateBriefWithRetryClient(unittest.TestCase):
     def test_client_built_once_across_retry(self):
-        # Zen review 2026-05-17 M1: when api_key is given without hoisted
-        # clients, the retry path used to lazy-build a 2nd client. Verify
-        # the SDK loader runs ONCE across both attempts (initial + retry).
-        with (
-            patch.object(generator, "_load_genai_sdk") as mock_loader,
-            patch.object(
+        """The retry path must NOT rebuild a fresh GeminiClient per attempt.
+        Verify that when only api_key is given, the underlying GeminiClient
+        ctor runs once across initial + retry (was 2x in the pre-canonical
+        code; zen review 2026-05-17 M1)."""
+        with patch.object(generator, "GeminiClient") as mock_ctor:
+            mock_ctor.return_value = SimpleNamespace(
+                generate_content=lambda **kw: None,
+                build_config=lambda **kw: None,
+            )
+            with patch.object(
                 generator,
                 "_call_gemini",
                 side_effect=[
                     _truncated_response(),
                     SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF)),
                 ],
-            ),
-        ):
-            mock_types = SimpleNamespace(GenerateContentConfig=lambda **kw: None)
-            mock_client = SimpleNamespace(models=None)
-            mock_genai = SimpleNamespace(Client=lambda api_key: mock_client)
-            mock_loader.return_value = (mock_genai, mock_types)
-
-            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+            ):
+                brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
         self.assertIsNotNone(brief)
-        self.assertEqual(mock_loader.call_count, 1)
-
-
-class TestDefensiveClientArgs(unittest.TestCase):
-    def test_raises_when_hoisted_client_passed_without_types_mod(self):
-        # Partial hoisting (client_pro without types_mod) would silently
-        # discard the user's client and lazy-build a fresh one. Better
-        # to raise so the caller knows they made a mistake.
-        with self.assertRaises(ValueError):
-            generator.generate_brief(_facts(weighted_score=4), client_pro=object())
+        self.assertEqual(mock_ctor.call_count, 1)
 
 
 if __name__ == "__main__":

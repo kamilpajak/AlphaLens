@@ -81,7 +81,7 @@ def classify_with_gemini(row: dict, client) -> dict:
         rating=row["rating"],
         verdict=row["verdict_text"][:8000],  # cap to avoid huge prompts
     )
-    resp = client.models.generate_content(model=MODEL, contents=prompt)
+    resp = client.generate_content(model=MODEL, contents=prompt)
     text = resp.text.strip()
     # Gemini sometimes wraps in ```json fences — strip defensively.
     if text.startswith("```"):
@@ -96,7 +96,7 @@ def classify_with_gemini(row: dict, client) -> dict:
 
 
 def main() -> None:
-    from google import genai  # type: ignore
+    from alphalens.data.alt_data.gemini_client import GeminiClient
 
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -110,7 +110,7 @@ def main() -> None:
     if not api_key:
         raise SystemExit("GOOGLE_API_KEY not set")
 
-    client = genai.Client(api_key=api_key)
+    client = GeminiClient(api_key=api_key)
 
     all_rows = []
     for scorer in ("momentum", "early-stage"):

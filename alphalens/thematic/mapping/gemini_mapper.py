@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 
+from alphalens.data.alt_data.gemini_client import GeminiClient, get_default_gemini_client
 from alphalens.thematic.extraction.schema import parse_extraction
 
 logger = logging.getLogger(__name__)
@@ -106,21 +107,12 @@ Return a JSON object with two fields, `candidates` and `search_keywords`:
 """
 
 
-def _load_genai_sdk():
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError as exc:
-        raise RuntimeError("google-genai SDK not installed. `uv add google-genai`.") from exc
-    return genai, types
-
-
-def _call_gemini(client, prompt: str, *, model: str, types_mod):
+def _call_gemini(gemini_client: GeminiClient, prompt: str, *, model: str):
     """Single seam for tests to patch."""
-    return client.models.generate_content(
+    return gemini_client.generate_content(
         model=model,
         contents=prompt,
-        config=types_mod.GenerateContentConfig(
+        config=gemini_client.build_config(
             response_mime_type="application/json",
             response_schema=_MAPPER_RESPONSE_SCHEMA,
             temperature=0.0,
@@ -219,8 +211,7 @@ def propose_candidates(
     *,
     theme: str,
     api_key: str | None = None,
-    client=None,
-    types_mod=None,
+    gemini_client: GeminiClient | None = None,
     model: str = DEFAULT_MODEL,
 ) -> dict:
     """Ask Gemini 3 Pro for theme beneficiaries AND a keyword vocabulary.
@@ -235,18 +226,15 @@ def propose_candidates(
       when Pro returns nothing usable, so gates always have *something*
       to substring-match against.
 
-    Convenience path: pass ``api_key=`` and a fresh ``genai.Client`` is built.
-    Batch path: pass a pre-built ``client`` and ``types_mod`` so a multi-theme
-    orchestrator amortises one SDK handshake across many calls.
+    Pass ``gemini_client=`` for tests or to hoist one client across many
+    themes. Pass ``api_key=`` for ad-hoc one-off use. Omit both to fall
+    back to ``get_default_gemini_client()``.
     """
-    if client is None or types_mod is None:
-        genai, types_mod = _load_genai_sdk()
-        if api_key is None:
-            raise ValueError("propose_candidates requires api_key or pre-built client")
-        client = genai.Client(api_key=api_key)
+    if gemini_client is None:
+        gemini_client = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
     prompt = build_prompt(theme)
     try:
-        response = _call_gemini(client, prompt, model=model, types_mod=types_mod)
+        response = _call_gemini(gemini_client, prompt, model=model)
     except Exception as exc:
         logger.warning("Gemini mapper failed for theme %r: %s", theme, exc, exc_info=True)
         return {"candidates": [], "search_keywords": []}
