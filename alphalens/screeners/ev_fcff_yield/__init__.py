@@ -35,9 +35,11 @@ __closed_reason__: str = (
     "fundamental_value_dcf_2026_05_12 remains OPEN per project doctrine "
     "(feedback_never_close_the_door); this module is the v1 implementation only."
 )
+_VERDICT_MEMO = "docs/research/ev_fcff_yield_audit_verdict_2026_05_12.md"
+
 __closed_evidence__: dict[str, str] = {
-    "walk_forward_oos": "docs/research/ev_fcff_yield_audit_verdict_2026_05_12.md",
-    "carhart_4f_hac": "docs/research/ev_fcff_yield_audit_verdict_2026_05_12.md",
+    "walk_forward_oos": _VERDICT_MEMO,
+    "carhart_4f_hac": _VERDICT_MEMO,
     "cost_drag": (
         "UNTESTED: G4 cost-stress in this orchestrator computes alpha as scalar "
         "(alpha_gross − drag_ann), leaving t-stat invariant to cost level — flagged "
@@ -50,7 +52,7 @@ __closed_evidence__: dict[str, str] = {
         "overlay paradigms)"
     ),
     "multiple_testing_correction": "docs/research/ev_fcff_yield_v1_design_2026_05_12.md",
-    "sanity_checks_4gate": "docs/research/ev_fcff_yield_audit_verdict_2026_05_12.md",
+    "sanity_checks_4gate": _VERDICT_MEMO,
     "survivorship_pit": (
         "UNTESTED: universe is forward-looking — current IWM snapshot intersected "
         "with SimFin us-income-annual (memo §2 documented limitation). Survivorship "

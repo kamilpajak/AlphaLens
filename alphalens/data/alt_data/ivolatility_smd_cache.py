@@ -162,26 +162,38 @@ def download_and_cache(
         path = cache_dir / f"{ticker.upper()}.parquet"
         if path.exists():
             continue
-        try:
-            df = fetch(ticker, start, end)
-        except Exception as exc:
-            logger.warning("smd fetch %s failed: %s", ticker, exc)
-            continue
-        if df is None or (isinstance(df, pd.DataFrame) and df.empty):
-            logger.info("smd returned empty for %s (likely no coverage)", ticker)
-            continue
-        df = _coerce_mixed_object_columns(df)
-        try:
-            df.to_parquet(path)
-        except Exception as exc:
-            logger.warning("[%s] parquet write failed: %s — skipping", ticker, exc)
-            if path.exists():
-                path.unlink()
-            continue
-        new_count += 1
-        if sleep_between > 0:
-            time.sleep(sleep_between)
+        if _fetch_and_write_one(ticker, start, end, path, fetch):
+            new_count += 1
+            if sleep_between > 0:
+                time.sleep(sleep_between)
     return new_count
+
+
+def _fetch_and_write_one(
+    ticker: str,
+    start: date,
+    end: date,
+    path: Path,
+    fetch: FetcherFn,
+) -> bool:
+    """Fetch + coerce + write one ticker's smd parquet. Returns True on write."""
+    try:
+        df = fetch(ticker, start, end)
+    except Exception as exc:
+        logger.warning("smd fetch %s failed: %s", ticker, exc)
+        return False
+    if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+        logger.info("smd returned empty for %s (likely no coverage)", ticker)
+        return False
+    df = _coerce_mixed_object_columns(df)
+    try:
+        df.to_parquet(path)
+    except Exception as exc:
+        logger.warning("[%s] parquet write failed: %s — skipping", ticker, exc)
+        if path.exists():
+            path.unlink()
+        return False
+    return True
 
 
 def load_cached_smd(ticker: str, cache_dir: Path) -> pd.DataFrame | None:

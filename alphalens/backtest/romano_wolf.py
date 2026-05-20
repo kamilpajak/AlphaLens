@@ -326,6 +326,45 @@ def romano_wolf_step_down_stratified(
     )
 
 
+def _validate_per_strategy_inputs(
+    returns_per_strategy: list[np.ndarray],
+    alpha: float,
+    n_bootstrap: int,
+    mean_block_length: float,
+) -> None:
+    if not returns_per_strategy:
+        raise ValueError("returns_per_strategy must contain at least one strategy")
+    for s, arr in enumerate(returns_per_strategy):
+        if arr.ndim != 1:
+            raise ValueError(f"returns_per_strategy[{s}] must be 1-D, got shape {arr.shape}")
+        if arr.shape[0] == 0:
+            raise ValueError(f"returns_per_strategy[{s}] must be non-empty")
+    if not (0.0 < alpha < 1.0):
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+    if n_bootstrap <= 0:
+        raise ValueError(f"n_bootstrap must be > 0, got {n_bootstrap}")
+    if mean_block_length <= 0:
+        raise ValueError(f"mean_block_length must be > 0, got {mean_block_length}")
+
+
+def _per_strategy_observed_stats(
+    returns_per_strategy: list[np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    n_strats = len(returns_per_strategy)
+    observed_tstats = np.empty(n_strats, dtype=np.float64)
+    observed_means = np.empty(n_strats, dtype=np.float64)
+    for s, arr in enumerate(returns_per_strategy):
+        n_s = arr.shape[0]
+        mean_s = arr.mean()
+        std_s = arr.std(ddof=1)
+        observed_means[s] = mean_s
+        if not np.isfinite(std_s) or std_s <= 0:
+            observed_tstats[s] = np.nan
+        else:
+            observed_tstats[s] = mean_s / (std_s / math.sqrt(n_s))
+    return observed_tstats, observed_means
+
+
 def romano_wolf_step_down_per_strategy(
     returns_per_strategy: list[np.ndarray],
     *,
@@ -355,19 +394,7 @@ def romano_wolf_step_down_per_strategy(
     which would inflate by ~n_strategies and mislead readers about the
     effective time-series length.
     """
-    if not returns_per_strategy:
-        raise ValueError("returns_per_strategy must contain at least one strategy")
-    for s, arr in enumerate(returns_per_strategy):
-        if arr.ndim != 1:
-            raise ValueError(f"returns_per_strategy[{s}] must be 1-D, got shape {arr.shape}")
-        if arr.shape[0] == 0:
-            raise ValueError(f"returns_per_strategy[{s}] must be non-empty")
-    if not (0.0 < alpha < 1.0):
-        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
-    if n_bootstrap <= 0:
-        raise ValueError(f"n_bootstrap must be > 0, got {n_bootstrap}")
-    if mean_block_length <= 0:
-        raise ValueError(f"mean_block_length must be > 0, got {mean_block_length}")
+    _validate_per_strategy_inputs(returns_per_strategy, alpha, n_bootstrap, mean_block_length)
 
     # Caller passes seeded rng for reproducibility; unseeded default is intentional.
     if rng is None:
@@ -376,17 +403,7 @@ def romano_wolf_step_down_per_strategy(
     n_strats = len(returns_per_strategy)
     n_obs_max = max(arr.shape[0] for arr in returns_per_strategy)
 
-    observed_tstats = np.empty(n_strats, dtype=np.float64)
-    observed_means = np.empty(n_strats, dtype=np.float64)
-    for s, arr in enumerate(returns_per_strategy):
-        n_s = arr.shape[0]
-        mean_s = arr.mean()
-        std_s = arr.std(ddof=1)
-        observed_means[s] = mean_s
-        if not np.isfinite(std_s) or std_s <= 0:
-            observed_tstats[s] = np.nan
-        else:
-            observed_tstats[s] = mean_s / (std_s / math.sqrt(n_s))
+    observed_tstats, observed_means = _per_strategy_observed_stats(returns_per_strategy)
 
     # Per-strategy independent bootstrap. Centered: subtract each strategy's
     # observed mean (own H_0: μ_s = 0).

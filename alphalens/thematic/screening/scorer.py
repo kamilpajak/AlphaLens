@@ -191,17 +191,39 @@ def _build_feature_fetcher(tickers: list[str] | None = None) -> Callable[[str, d
 _THEMATIC_OHLCV_CACHE = Path.home() / ".alphalens" / "thematic_ohlcv"
 
 
+def _read_ohlcv_cache(path: Path) -> pd.DataFrame:
+    try:
+        return pd.read_parquet(path)
+    except Exception as exc:
+        logger.warning("ohlcv cache read failed for %s: %s", path.name, exc)
+        return pd.DataFrame()
+
+
+def _fetch_ohlcv_via_yfinance(upper: str, asof: date) -> pd.DataFrame:
+    import yfinance as yf
+
+    try:
+        start = pd.Timestamp(asof) - pd.Timedelta(days=400)
+        end = pd.Timestamp(asof) + pd.Timedelta(days=1)
+        df = yf.Ticker(upper).history(start=start, end=end, auto_adjust=False)
+    except Exception as exc:
+        logger.warning("yfinance fetch failed for %s: %s", upper, exc)
+        return pd.DataFrame()
+    df.columns = [c.lower() for c in df.columns]
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    return df[["open", "high", "low", "close", "volume"]]
+
+
 def _build_ohlcv_loader() -> Callable[[str, date], pd.DataFrame]:
     """Build an OHLCV loader with disk + in-process cache.
 
-    Disk cache lives at ``~/.alphalens/thematic_ohlcv/{TICKER}.parquet``.
-    First miss triggers a live ``yfinance.Ticker.history`` fetch (180d
-    lookback) and persists the result. Subsequent runs reuse the parquet
-    until the operator clears the cache (no TTL — Phase D's 180d window
-    is robust to ~1-day staleness; clear for a fresh fetch).
+    Disk cache lives at ``~/.alphalens/thematic_ohlcv/{TICKER}_{asof}.parquet``.
+    First miss triggers a live ``yfinance.Ticker.history`` fetch (~400d
+    lookback) and persists the result. Cache filename includes asof so
+    cross-asof reruns don't silently reuse a stale parquet whose tail
+    predates the new evaluation date (zen review 2026-05-17 HIGH finding).
     """
-    import yfinance as yf
-
     cache_dir = _THEMATIC_OHLCV_CACHE
     cache_dir.mkdir(parents=True, exist_ok=True)
     mem_cache: dict[str, pd.DataFrame] = {}
@@ -209,31 +231,13 @@ def _build_ohlcv_loader() -> Callable[[str, date], pd.DataFrame]:
     def loader(ticker: str, asof: date) -> pd.DataFrame:
         upper = ticker.upper()
         if upper not in mem_cache:
-            # Cache filename includes asof so cross-asof reruns don't silently
-            # reuse a stale parquet whose tail predates the new evaluation
-            # date (zen review 2026-05-17 HIGH finding).
             path = cache_dir / f"{upper}_{asof.isoformat()}.parquet"
-            df: pd.DataFrame
             if path.exists():
-                try:
-                    df = pd.read_parquet(path)
-                except Exception as exc:
-                    logger.warning("ohlcv cache read failed for %s: %s", upper, exc)
-                    df = pd.DataFrame()
+                df = _read_ohlcv_cache(path)
             else:
-                try:
-                    start = pd.Timestamp(asof) - pd.Timedelta(days=400)
-                    end = pd.Timestamp(asof) + pd.Timedelta(days=1)
-                    df = yf.Ticker(upper).history(start=start, end=end, auto_adjust=False)
-                    df.columns = [c.lower() for c in df.columns]
-                    if df.index.tz is not None:
-                        df.index = df.index.tz_localize(None)
-                    df = df[["open", "high", "low", "close", "volume"]]
-                    if not df.empty:
-                        df.to_parquet(path)
-                except Exception as exc:
-                    logger.warning("yfinance fetch failed for %s: %s", upper, exc)
-                    df = pd.DataFrame()
+                df = _fetch_ohlcv_via_yfinance(upper, asof)
+                if not df.empty:
+                    df.to_parquet(path)
             mem_cache[upper] = df
         df = mem_cache[upper]
         if df.empty:
@@ -278,19 +282,30 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
 
     catalyst_cache: dict[str, dict | None] = {}
 
+    def _resolve_industry(
+        ticker: str,
+    ) -> tuple[int | None, str | None, str | None, list[str]]:
+        industry_id = sector_peers.get_industry_id(ticker)
+        if industry_id is None:
+            return None, None, None, []
+        industry_name, sector_name = sector_peers.industry_label(industry_id)
+        if industry_id not in peer_cache:
+            peer_cache[industry_id] = sector_peers.iter_industry_peers(industry_id)
+        return industry_id, industry_name, sector_name, peer_cache[industry_id]
+
+    def _resolve_catalyst_event(theme: str) -> dict | None:
+        if theme not in catalyst_cache:
+            try:
+                catalyst_cache[theme] = catalyst_resolver.find_trigger_event(theme=theme, asof=asof)
+            except Exception as exc:
+                logger.warning("catalyst lookup failed for theme=%r: %s", theme, exc)
+                catalyst_cache[theme] = None
+        return catalyst_cache[theme]
+
     rows: list[dict] = []
     for _, cand in candidates.iterrows():
         ticker = str(cand["ticker"]).upper()
-        industry_id = sector_peers.get_industry_id(ticker)
-        if industry_id is None:
-            industry_name: str | None = None
-            sector_name: str | None = None
-            peers: list[str] = []
-        else:
-            industry_name, sector_name = sector_peers.industry_label(industry_id)
-            if industry_id not in peer_cache:
-                peer_cache[industry_id] = sector_peers.iter_industry_peers(industry_id)
-            peers = peer_cache[industry_id]
+        industry_id, industry_name, sector_name, peers = _resolve_industry(ticker)
 
         ins = _safe_signal(
             "insider", insider_signal.score_insider, ticker=ticker, asof=asof, peers=peers
@@ -334,14 +349,7 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
         # Catalyst lookup — cached per theme. Returns extended event dict
         # (url, title, published_at, event_type, confidence, second_order_
         # implications). None when no theme-tagged event survives noise filter.
-        theme = str(cand.get("theme", ""))
-        if theme not in catalyst_cache:
-            try:
-                catalyst_cache[theme] = catalyst_resolver.find_trigger_event(theme=theme, asof=asof)
-            except Exception as exc:
-                logger.warning("catalyst lookup failed for theme=%r: %s", theme, exc)
-                catalyst_cache[theme] = None
-        catalyst_event = catalyst_cache[theme]
+        catalyst_event = _resolve_catalyst_event(str(cand.get("theme", "")))
         cs_val = catalyst_signals.compute_catalyst_strength(catalyst_event)
 
         rows.append(

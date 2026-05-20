@@ -270,7 +270,7 @@ def per_rebalance_turnover(
         turnovers.append(len(prev - nxt) / size)
 
     n_tickers = [len(b) for b in baskets]
-    proxy = [t * 2.0 if not (t != t) else float("nan") for t in turnovers]  # NaN-safe
+    proxy = [t * 2.0 if not math.isnan(t) else float("nan") for t in turnovers]
 
     if dates is None:
         index: pd.Index = pd.RangeIndex(n_obs)

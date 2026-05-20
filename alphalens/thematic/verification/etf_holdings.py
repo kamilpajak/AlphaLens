@@ -279,6 +279,56 @@ def _load_etf_holdings(etf: str, cache_dir: Path, *, asof: dt.date | None = None
     return pd.read_parquet(candidates[-1])
 
 
+def _collect_relevant_etfs(themes: Iterable[str], cfg: dict) -> list[tuple[str, str]]:
+    """Resolve themes → unique (etf, series_name) tuples (preserves first-seen order)."""
+    relevant: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for theme in themes:
+        for cfg_key in _resolve_theme_keys(theme, cfg):
+            for entry in cfg.get(cfg_key, []) or []:
+                if entry["etf"] in seen:
+                    continue
+                seen.add(entry["etf"])
+                relevant.append((entry["etf"], entry["series_name"]))
+    return relevant
+
+
+def _load_or_prime(
+    etf: str,
+    series_name: str,
+    cache_dir: Path,
+    *,
+    effective_prime: bool,
+    max_age_days: int,
+    asof: dt.date | None,
+) -> pd.DataFrame:
+    df = _load_etf_holdings(etf, cache_dir, asof=asof)
+    if not df.empty or not effective_prime:
+        return df
+    try:
+        return fetch_holdings(
+            etf=etf,
+            series_name=series_name,
+            cache_dir=cache_dir,
+            max_age_days=max_age_days,
+        )
+    except Exception as exc:
+        logger.warning("ETF lazy-prime failed for %s: %s", etf, exc, exc_info=True)
+        return pd.DataFrame()
+
+
+def _matches_ticker_or_name(df: pd.DataFrame, ticker_upper: str, name_query: str) -> bool:
+    if (df["ticker"].str.upper() == ticker_upper).any():
+        return True
+    if not name_query:
+        return False
+    # Word-boundary match — "sun" must not match "sunrun" / "sunoco" /
+    # "sunset", but it should still match "Sun Microsystems Inc".
+    pattern = rf"\b{re.escape(name_query)}\b"
+    mask = df["name"].fillna("").str.lower().str.contains(pattern, regex=True, na=False)
+    return bool(mask.any())
+
+
 def is_in_thematic_etf(
     *,
     ticker: str,
@@ -308,15 +358,7 @@ def is_in_thematic_etf(
     to keep the gate read-only (offline / under test).
     """
     cfg = load_theme_etf_config()
-    relevant: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for theme in themes:
-        for cfg_key in _resolve_theme_keys(theme, cfg):
-            for entry in cfg.get(cfg_key, []) or []:
-                if entry["etf"] in seen:
-                    continue
-                seen.add(entry["etf"])
-                relevant.append((entry["etf"], entry["series_name"]))
+    relevant = _collect_relevant_etfs(themes, cfg)
     if not relevant:
         return None
 
@@ -329,30 +371,19 @@ def is_in_thematic_etf(
     effective_prime = prime and not pit_replay
     any_loaded = False
     for etf, series_name in relevant:
-        df = _load_etf_holdings(etf, cache_dir, asof=asof)
-        if df.empty and effective_prime:
-            try:
-                df = fetch_holdings(
-                    etf=etf,
-                    series_name=series_name,
-                    cache_dir=cache_dir,
-                    max_age_days=max_age_days,
-                )
-            except Exception as exc:
-                logger.warning("ETF lazy-prime failed for %s: %s", etf, exc, exc_info=True)
-                df = pd.DataFrame()
+        df = _load_or_prime(
+            etf,
+            series_name,
+            cache_dir,
+            effective_prime=effective_prime,
+            max_age_days=max_age_days,
+            asof=asof,
+        )
         if df.empty:
             continue
         any_loaded = True
-        if (df["ticker"].str.upper() == ticker_upper).any():
+        if _matches_ticker_or_name(df, ticker_upper, name_query):
             return True
-        if name_query:
-            # Word-boundary match — "sun" must not match "sunrun" / "sunoco" /
-            # "sunset", but it should still match "Sun Microsystems Inc".
-            pattern = rf"\b{re.escape(name_query)}\b"
-            mask = df["name"].fillna("").str.lower().str.contains(pattern, regex=True, na=False)
-            if mask.any():
-                return True
     return False if any_loaded else None
 
 

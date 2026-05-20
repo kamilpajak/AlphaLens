@@ -69,6 +69,42 @@ def monthly_asof_calendar(
     return asofs
 
 
+def _select_held_tickers(
+    *,
+    scores: pd.DataFrame,
+    asof: pd.Timestamp,
+    top_decile_pct: float,
+    available: dict[str, pd.Series],
+) -> list[str]:
+    asof_norm = asof.normalize()
+    scores_at_asof = scores[scores["asof"] == asof_norm]
+    if scores_at_asof.empty:
+        return []
+    valid = scores_at_asof.dropna(subset=["score"])
+    # Drop zero-score rows (distress_credit zeroes non-bottom-quintile)
+    valid = valid[valid["score"] != 0]
+    if valid.empty:
+        return []
+    n_decile = max(1, int(len(valid) * top_decile_pct))
+    top_tickers = valid.nlargest(n_decile, "score")["ticker"].tolist()
+    return [t for t in top_tickers if t in available]
+
+
+def _period_returns_for(
+    *,
+    held_tickers: list[str],
+    daily_returns_per_ticker: dict[str, pd.Series],
+    asof: pd.Timestamp,
+    end_idx: pd.Timestamp,
+) -> pd.Series | None:
+    held_returns = pd.DataFrame({t: daily_returns_per_ticker[t] for t in held_tickers})
+    period_mask = (held_returns.index > asof) & (held_returns.index <= end_idx)
+    period_returns = held_returns.loc[period_mask]
+    if period_returns.empty:
+        return None
+    return period_returns.mean(axis=1, skipna=True)
+
+
 def top_decile_portfolio_daily_returns(
     scores: pd.DataFrame,
     histories: dict[str, pd.DataFrame],
@@ -116,35 +152,29 @@ def top_decile_portfolio_daily_returns(
     portfolio_returns_chunks: list[pd.Series] = []
 
     for i, asof in enumerate(sorted_asofs):
-        asof_norm = asof.normalize()
-        scores_at_asof = scores[scores["asof"] == asof_norm]
-        if scores_at_asof.empty:
-            continue
-
-        valid = scores_at_asof.dropna(subset=["score"])
-        # Drop zero-score rows (distress_credit zeroes non-bottom-quintile)
-        valid = valid[valid["score"] != 0]
-        if valid.empty:
-            continue
-
-        n_decile = max(1, int(len(valid) * top_decile_pct))
-        top_tickers = valid.nlargest(n_decile, "score")["ticker"].tolist()
-        held_tickers = [t for t in top_tickers if t in daily_returns_per_ticker]
+        held_tickers = _select_held_tickers(
+            scores=scores,
+            asof=asof,
+            top_decile_pct=top_decile_pct,
+            available=daily_returns_per_ticker,
+        )
         if not held_tickers:
             continue
 
-        next_asof = sorted_asofs[i + 1] if i + 1 < len(sorted_asofs) else None
         # tail_days is in TRADING days (default 21 = ~monthly stride). Use BDay
         # offset, NOT calendar days, to avoid systematic under-sampling of the
         # final period (per zen 2026-05-10 code review).
+        next_asof = sorted_asofs[i + 1] if i + 1 < len(sorted_asofs) else None
         end_idx = next_asof if next_asof is not None else asof + pd.offsets.BDay(tail_days)
 
-        held_returns = pd.DataFrame({t: daily_returns_per_ticker[t] for t in held_tickers})
-        period_mask = (held_returns.index > asof) & (held_returns.index <= end_idx)
-        period_returns = held_returns.loc[period_mask]
-        if period_returns.empty:
-            continue
-        portfolio_returns_chunks.append(period_returns.mean(axis=1, skipna=True))
+        period_returns = _period_returns_for(
+            held_tickers=held_tickers,
+            daily_returns_per_ticker=daily_returns_per_ticker,
+            asof=asof,
+            end_idx=end_idx,
+        )
+        if period_returns is not None:
+            portfolio_returns_chunks.append(period_returns)
 
     if not portfolio_returns_chunks:
         return pd.Series(dtype=float, name="portfolio_daily")

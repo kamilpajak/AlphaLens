@@ -298,6 +298,33 @@ def _violates_etl_bounds(features: dict[str, float], close_now: float) -> bool:
 # Main builder
 
 
+def _build_row_for_asof(
+    *,
+    history: pd.DataFrame,
+    asof: str,
+    ticker: str,
+    adv_min_dollar: float,
+) -> dict | None:
+    sliced = _slice_pit(history, asof)
+    row = _last_row_or_none(sliced)
+    if row is None or len(sliced) < 2:
+        return None
+    if not _check_optionable(sliced.iloc[-2]):
+        return None
+    close_now = row.get("close")
+    if pd.isna(close_now) or close_now < ETL_ANOMALY_BOUNDS["stock_price_min"]:
+        return None
+    if not _check_adv(sliced, adv_min_dollar):
+        return None
+    opts = _compute_options_features(row)
+    if opts is None or _violates_etl_bounds(opts, float(close_now)):
+        return None
+    controls = _compute_equity_controls(sliced)
+    if controls is None:
+        return None
+    return {"asof": asof, "ticker": ticker.upper(), **opts, **controls}
+
+
 def build_feature_frame(
     *,
     smd_loader: Callable[[str], pd.DataFrame | None],
@@ -335,45 +362,15 @@ def build_feature_frame(
         history = _filter_us_primary(history)
         if history.empty:
             continue
-
         for asof in asof_strs:
-            sliced = _slice_pit(history, asof)
-            row = _last_row_or_none(sliced)
-            if row is None:
-                continue
-
-            # Dynamic optionable filter on t-1 (penultimate row).
-            if len(sliced) < 2:
-                continue
-            prev_row = sliced.iloc[-2]
-            if not _check_optionable(prev_row):
-                continue
-
-            close_now = row.get("close")
-            if pd.isna(close_now) or close_now < ETL_ANOMALY_BOUNDS["stock_price_min"]:
-                continue
-
-            if not _check_adv(sliced, adv_min_dollar):
-                continue
-
-            opts = _compute_options_features(row)
-            if opts is None:
-                continue
-            if _violates_etl_bounds(opts, float(close_now)):
-                continue
-
-            controls = _compute_equity_controls(sliced)
-            if controls is None:
-                continue
-
-            rows.append(
-                {
-                    "asof": asof,
-                    "ticker": ticker.upper(),
-                    **opts,
-                    **controls,
-                }
+            row = _build_row_for_asof(
+                history=history,
+                asof=asof,
+                ticker=ticker,
+                adv_min_dollar=adv_min_dollar,
             )
+            if row is not None:
+                rows.append(row)
 
     if not rows:
         return pd.DataFrame(columns=["asof", "ticker", *FEATURE_NAMES])

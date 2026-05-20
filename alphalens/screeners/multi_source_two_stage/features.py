@@ -332,6 +332,21 @@ def _nan_if_none(v: float | None) -> float:
     return float("nan") if v is None else float(v)
 
 
+def _vix_change_20d(vix_level: float | None, vix_series: pd.Series, asof: date) -> float:
+    vix_20bd_ago = _value_n_bdays_before(vix_series, asof, 20)
+    if vix_level is None or vix_20bd_ago is None or vix_20bd_ago == 0:
+        return float("nan")
+    return vix_level / vix_20bd_ago - 1.0
+
+
+def _term_spread(dgs10: pd.Series, dgs3mo: pd.Series, asof: date) -> float:
+    dgs10_at = _last_value_on_or_before(dgs10, asof)
+    dgs3mo_at = _last_value_on_or_before(dgs3mo, asof)
+    if dgs10_at is None or dgs3mo_at is None:
+        return float("nan")
+    return dgs10_at - dgs3mo_at
+
+
 # ---------------------------------------------------------------------------
 # Main builder
 
@@ -401,49 +416,35 @@ def build_feature_frame(
     benchmark_up = benchmark.upper()
     universe_up = [t.upper() for t in universe if t.upper() != benchmark_up]
 
-    all_rows: list[pd.DataFrame] = []
-    for asof in asof_dates:
-        # Per-ticker feature rows
-        rows = []
-        for ticker in universe_up:
-            row = _compute_per_ticker_features(
-                ticker,
-                asof,
-                history_store=history_store,
-                insider_scorer=insider_scorer,
-                mkt_excess=mkt_excess,
-                rf_series=rf_series,
+    def _build_asof_block(asof: date) -> pd.DataFrame | None:
+        rows = [
+            row
+            for ticker in universe_up
+            if (
+                row := _compute_per_ticker_features(
+                    ticker,
+                    asof,
+                    history_store=history_store,
+                    insider_scorer=insider_scorer,
+                    mkt_excess=mkt_excess,
+                    rf_series=rf_series,
+                )
             )
-            if row is not None:
-                rows.append(row)
+            is not None
+        ]
         if not rows:
-            continue
+            return None
         df_asof = pd.DataFrame(rows)
 
-        # Macro at asof (broadcast to all tickers)
         vix_level = _last_value_on_or_before(vix_series, asof)
-        vix_20bd_ago = _value_n_bdays_before(vix_series, asof, 20)
-        if vix_level is not None and vix_20bd_ago is not None and vix_20bd_ago != 0:
-            vix_change_20d = vix_level / vix_20bd_ago - 1.0
-        else:
-            vix_change_20d = float("nan")
-        dgs10_at = _last_value_on_or_before(dgs10, asof)
-        dgs3mo_at = _last_value_on_or_before(dgs3mo, asof)
-        if dgs10_at is not None and dgs3mo_at is not None:
-            term_spread = dgs10_at - dgs3mo_at
-        else:
-            term_spread = float("nan")
-
         df_asof["vix_level"] = float("nan") if vix_level is None else vix_level
-        df_asof["vix_change_20d"] = vix_change_20d
-        df_asof["term_spread_10y_3m"] = term_spread
+        df_asof["vix_change_20d"] = _vix_change_20d(vix_level, vix_series, asof)
+        df_asof["term_spread_10y_3m"] = _term_spread(dgs10, dgs3mo, asof)
 
-        # Cross-sectional ranks (per-asof)
         df_asof["rank_momentum_60d"] = _cross_sectional_rank(df_asof["ret_60d"])
         df_asof["rank_lowvol_20d"] = _cross_sectional_rank(-df_asof["vol_realized_20d"])
         df_asof["rank_dollar_volume_size"] = _cross_sectional_rank(df_asof["dollar_volume_z_20d"])
 
-        # Interactions (per pre-registration; products, not regression interactions)
         vix_high = _vix_high_indicator(vix_level, vix_series, asof)
         df_asof["interaction_insider_x_vix_high"] = df_asof["insider_log_count"] * vix_high
         df_asof["interaction_mom20_x_vol_regime"] = df_asof["ret_20d"] * df_asof["vol_realized_20d"]
@@ -452,10 +453,14 @@ def build_feature_frame(
         )
         df_asof["interaction_insider_x_mom20"] = df_asof["insider_log_count"] * df_asof["ret_20d"]
 
-        # Regime label (frozen train-quartile thresholds)
         df_asof["regime"] = assign_regime(vix_level, vix_thresholds)
+        return df_asof
 
-        all_rows.append(df_asof)
+    all_rows: list[pd.DataFrame] = []
+    for asof in asof_dates:
+        block = _build_asof_block(asof)
+        if block is not None:
+            all_rows.append(block)
 
     if not all_rows:
         return _empty_frame()

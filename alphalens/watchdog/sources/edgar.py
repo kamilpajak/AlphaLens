@@ -169,14 +169,14 @@ class SECEdgarSource(EventSource):
         try:
             return self._sec.get_text(url)
         except SecEdgarError as exc:
-            logger.error("EDGAR fetch failed (%s): %s", context, exc)
+            logger.exception("EDGAR fetch failed (%s): %s", context, exc)
             return None
 
     def _parse_atom(self, xml_text: str, ticker: str) -> list[Event]:
         try:
             root = ET.fromstring(xml_text)
         except ET.ParseError as exc:
-            logger.error("Malformed Atom feed for %s: %s", ticker, exc)
+            logger.exception("Malformed Atom feed for %s: %s", ticker, exc)
             return []
 
         events: list[Event] = []

@@ -49,6 +49,8 @@ LAMBDA_GRID_POINTS_DEFAULT = 25
 LAMBDA_MIN_RATIO = 1e-3  # lambda_min / lambda_max
 RANDOM_STATE = 0
 
+_MISSING_ASOF_MSG = "features_train must include an 'asof' column"
+
 
 @dataclass(frozen=True)
 class RegimeFit:
@@ -291,7 +293,7 @@ def fit_two_stage(
     if "regime" not in features_train.columns:
         raise KeyError("features_train must include a 'regime' column")
     if "asof" not in features_train.columns:
-        raise KeyError("features_train must include an 'asof' column")
+        raise KeyError(_MISSING_ASOF_MSG)
     if len(features_train) != len(target_train):
         raise ValueError(
             f"features ({len(features_train)}) and target ({len(target_train)}) lengths must match"
@@ -374,7 +376,7 @@ def fit_global(
     Returns ``None`` if the train pool is empty or has no valid CV splits.
     """
     if "asof" not in features_train.columns:
-        raise KeyError("features_train must include an 'asof' column")
+        raise KeyError(_MISSING_ASOF_MSG)
     if len(features_train) != len(target_train):
         raise ValueError(
             f"features ({len(features_train)}) and target ({len(target_train)}) lengths must match"
@@ -460,6 +462,24 @@ class LightGBMFit:
             return self.model.predict(X)
 
 
+@dataclass(frozen=True)
+class LightGBMConfig:
+    """LightGBM hyperparameters (pre-registration locked; override only for tests)."""
+
+    max_depth: int = 5
+    num_leaves: int = 32
+    min_child_samples: int = 500
+    learning_rate: float = 0.05
+    n_estimators_max: int = 500
+    early_stopping_rounds: int = 20
+    reg_alpha: float = 0.1
+    reg_lambda: float = 0.1
+    feature_fraction: float = 1.0
+    bagging_fraction: float = 0.8
+    bagging_freq: int = 1
+    random_state: int = 42
+
+
 def fit_lightgbm_mse_global(
     features_train: pd.DataFrame,
     target_train: pd.Series,
@@ -467,18 +487,7 @@ def fit_lightgbm_mse_global(
     n_folds: int = N_FOLDS_DEFAULT,
     embargo_days: int = EMBARGO_DAYS_DEFAULT,
     feature_names: tuple[str, ...] = FEATURE_NAMES,
-    max_depth: int = 5,
-    num_leaves: int = 32,
-    min_child_samples: int = 500,
-    learning_rate: float = 0.05,
-    n_estimators_max: int = 500,
-    early_stopping_rounds: int = 20,
-    reg_alpha: float = 0.1,
-    reg_lambda: float = 0.1,
-    feature_fraction: float = 1.0,
-    bagging_fraction: float = 0.8,
-    bagging_freq: int = 1,
-    random_state: int = 42,
+    config: LightGBMConfig | None = None,
 ) -> LightGBMFit | None:
     """Fit LightGBM MSE on full train pool with CV-tuned n_estimators.
 
@@ -491,8 +500,10 @@ def fit_lightgbm_mse_global(
     """
     from lightgbm import LGBMRegressor
 
+    cfg = config or LightGBMConfig()
+
     if "asof" not in features_train.columns:
-        raise KeyError("features_train must include an 'asof' column")
+        raise KeyError(_MISSING_ASOF_MSG)
     if len(features_train) != len(target_train):
         raise ValueError(
             f"features ({len(features_train)}) and target ({len(target_train)}) lengths must match"
@@ -524,16 +535,16 @@ def fit_lightgbm_mse_global(
 
     base_kwargs = {
         "objective": "regression",
-        "max_depth": max_depth,
-        "num_leaves": num_leaves,
-        "min_child_samples": min_child_samples,
-        "learning_rate": learning_rate,
-        "reg_alpha": reg_alpha,
-        "reg_lambda": reg_lambda,
-        "feature_fraction": feature_fraction,
-        "bagging_fraction": bagging_fraction,
-        "bagging_freq": bagging_freq,
-        "random_state": random_state,
+        "max_depth": cfg.max_depth,
+        "num_leaves": cfg.num_leaves,
+        "min_child_samples": cfg.min_child_samples,
+        "learning_rate": cfg.learning_rate,
+        "reg_alpha": cfg.reg_alpha,
+        "reg_lambda": cfg.reg_lambda,
+        "feature_fraction": cfg.feature_fraction,
+        "bagging_fraction": cfg.bagging_fraction,
+        "bagging_freq": cfg.bagging_freq,
+        "random_state": cfg.random_state,
         "verbose": -1,
         "n_jobs": -1,
     }
@@ -547,7 +558,7 @@ def fit_lightgbm_mse_global(
         X_vl = X_full[val_pos]
         y_tr = y_full[train_pos]
         y_vl = y_full[val_pos]
-        model_cv = LGBMRegressor(n_estimators=n_estimators_max, **base_kwargs)
+        model_cv = LGBMRegressor(n_estimators=cfg.n_estimators_max, **base_kwargs)
         from lightgbm import early_stopping, log_evaluation
 
         model_cv.fit(
@@ -556,11 +567,13 @@ def fit_lightgbm_mse_global(
             eval_set=[(X_vl, y_vl)],
             eval_metric="l2",
             callbacks=[
-                early_stopping(stopping_rounds=early_stopping_rounds, verbose=False),
+                early_stopping(stopping_rounds=cfg.early_stopping_rounds, verbose=False),
                 log_evaluation(period=0),
             ],
         )
-        best_iter = int(model_cv.best_iteration_) if model_cv.best_iteration_ else n_estimators_max
+        best_iter = (
+            int(model_cv.best_iteration_) if model_cv.best_iteration_ else cfg.n_estimators_max
+        )
         best_mse = float(model_cv.best_score_["valid_0"]["l2"])
         fold_best_iters.append(best_iter)
         fold_best_mses.append(best_mse)
@@ -617,6 +630,7 @@ __all__ = [
     "GLOBAL_REGIME_LABEL",
     "LAMBDA_GRID_POINTS_DEFAULT",
     "N_FOLDS_DEFAULT",
+    "LightGBMConfig",
     "LightGBMFit",
     "RegimeFit",
     "fit_global",

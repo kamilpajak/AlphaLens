@@ -99,7 +99,7 @@ class AlphaVantageClient:
         self._sleep = sleep_fn
         # monotonic ts of the most recent call; 0.0 means "no calls yet" so the
         # first query() skips the throttle.
-        self._last_call_ts: float = 0.0
+        self._last_call_ts: float | None = None
 
     @classmethod
     def from_env(
@@ -169,7 +169,7 @@ class AlphaVantageClient:
         return data
 
     def _throttle(self) -> None:
-        if self._throttle_seconds <= 0 or self._last_call_ts == 0.0:
+        if self._throttle_seconds <= 0 or self._last_call_ts is None:
             self._last_call_ts = time.monotonic()
             return
         elapsed = time.monotonic() - self._last_call_ts

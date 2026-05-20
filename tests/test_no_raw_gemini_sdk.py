@@ -90,9 +90,7 @@ class TestNoRawGeminiSdk(unittest.TestCase):
         ]
         for sample in shadow_samples:
             hits = _find_shadow_lines(sample)
-            self.assertEqual(
-                len(hits), 1, f"expected one hit on shadow sample: {sample!r}"
-            )
+            self.assertEqual(len(hits), 1, f"expected one hit on shadow sample: {sample!r}")
 
         safe_samples = [
             "self._sdk_client.models.generate_content(model=m)",

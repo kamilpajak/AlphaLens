@@ -65,6 +65,56 @@ def _parse_iso(value: str | None) -> date | None:
     return date.fromisoformat(value)
 
 
+def _safe_int(value: Any) -> int | None:
+    """Defensive cast for SEC ``fy`` field — None for missing or non-numeric."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iter_unit_entries(facts_block: dict) -> Any:
+    """Yield (taxonomy, concept, unit, entry) tuples for each valid record."""
+    for taxonomy, concepts in facts_block.items():
+        if not isinstance(concepts, dict):
+            continue
+        for concept, concept_block in concepts.items():
+            if not isinstance(concept_block, dict):
+                continue
+            units_block = concept_block.get("units")
+            if not isinstance(units_block, dict):
+                continue
+            for unit, entries in units_block.items():
+                if not isinstance(entries, list):
+                    continue
+                for entry in entries:
+                    if isinstance(entry, dict):
+                        yield taxonomy, concept, unit, entry
+
+
+def _append_entry_row(
+    columns: dict[str, list],
+    taxonomy: str,
+    concept: str,
+    unit: str,
+    entry: dict,
+) -> None:
+    columns["taxonomy"].append(taxonomy)
+    columns["concept"].append(concept)
+    columns["unit"].append(unit)
+    columns["period_start"].append(_parse_iso(entry.get("start")))
+    columns["period_end"].append(_parse_iso(entry.get("end")))
+    columns["val"].append(float(entry["val"]))
+    columns["accn"].append(entry.get("accn") or "")
+    columns["fy"].append(_safe_int(entry.get("fy")))
+    columns["fp"].append(entry.get("fp"))
+    columns["form"].append(entry.get("form") or "")
+    columns["filed_date"].append(_parse_iso(entry["filed"]))
+    columns["frame"].append(entry.get("frame"))
+
+
 def companyfacts_json_to_parquet_table(facts: dict[str, Any]) -> pa.Table:
     """Convert a parsed SEC companyfacts JSON dict into a long-format Arrow Table.
 
@@ -79,41 +129,10 @@ def companyfacts_json_to_parquet_table(facts: dict[str, Any]) -> pa.Table:
     if not isinstance(facts_block, dict):
         return pa.Table.from_pydict(columns, schema=SCHEMA)
 
-    for taxonomy, concepts in facts_block.items():
-        if not isinstance(concepts, dict):
+    for taxonomy, concept, unit, entry in _iter_unit_entries(facts_block):
+        if entry.get("end") is None or entry.get("filed") is None or entry.get("val") is None:
             continue
-        for concept, concept_block in concepts.items():
-            if not isinstance(concept_block, dict):
-                continue
-            units_block = concept_block.get("units")
-            if not isinstance(units_block, dict):
-                continue
-            for unit, entries in units_block.items():
-                if not isinstance(entries, list):
-                    continue
-                for entry in entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    end = entry.get("end")
-                    filed = entry.get("filed")
-                    val = entry.get("val")
-                    # Required: end + filed + val. Other fields default to ""
-                    # / None so synthetic / partial SEC records remain queryable.
-                    if end is None or filed is None or val is None:
-                        continue
-                    columns["taxonomy"].append(taxonomy)
-                    columns["concept"].append(concept)
-                    columns["unit"].append(unit)
-                    columns["period_start"].append(_parse_iso(entry.get("start")))
-                    columns["period_end"].append(_parse_iso(end))
-                    columns["val"].append(float(val))
-                    columns["accn"].append(entry.get("accn") or "")
-                    fy_value = entry.get("fy")
-                    columns["fy"].append(int(fy_value) if fy_value is not None else None)
-                    columns["fp"].append(entry.get("fp"))
-                    columns["form"].append(entry.get("form") or "")
-                    columns["filed_date"].append(_parse_iso(filed))
-                    columns["frame"].append(entry.get("frame"))
+        _append_entry_row(columns, taxonomy, concept, unit, entry)
 
     return pa.Table.from_pydict(columns, schema=SCHEMA)
 

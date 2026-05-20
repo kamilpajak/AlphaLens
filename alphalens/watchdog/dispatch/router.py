@@ -20,10 +20,9 @@ class DispatchRouter:
             try:
                 handler.handle(classified)
             except Exception as exc:
-                logger.error(
+                logger.exception(
                     "Handler %s failed for %s: %s",
                     type(handler).__name__,
                     classified.event.ticker,
                     exc,
-                    exc_info=True,
                 )

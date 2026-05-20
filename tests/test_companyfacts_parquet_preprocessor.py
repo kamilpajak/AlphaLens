@@ -385,6 +385,36 @@ class TestCompanyfactsJsonToParquetTableEdgeCases(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["concept"], "Liabilities")
 
+    def test_non_numeric_fy_value_does_not_abort_table(self):
+        # Defensive: zen pre-merge review 2026-05-20 flagged that int(fy_value)
+        # would ValueError on hypothetical SEC values like "2024A" or
+        # "Transition", aborting the whole parquet build. Safe-cast keeps the
+        # row with fy=None instead.
+        facts = {
+            "facts": {
+                "us-gaap": {
+                    "Assets": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "end": "2023-12-31",
+                                    "val": 100.0,
+                                    "accn": "0001-23-456",
+                                    "fy": "Transition",
+                                    "fp": "FY",
+                                    "form": "10-K",
+                                    "filed": "2024-02-15",
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        }
+        rows = companyfacts_json_to_parquet_table(facts).to_pylist()
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]["fy"])
+
 
 def _expected_schema() -> pa.Schema:
     """Snapshot of the canonical schema used to assert empty-table shape."""

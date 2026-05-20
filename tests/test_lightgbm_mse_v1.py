@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from alphalens.screeners.multi_source_two_stage.model import (
+    LightGBMConfig,
     LightGBMFit,
     fit_lightgbm_mse_global,
     predict_scores_lightgbm,
@@ -57,8 +58,7 @@ class FitLightGBMMSEGlobalTest(unittest.TestCase):
             feat,
             target,
             feature_names=_FEATURE_NAMES,
-            n_estimators_max=50,
-            early_stopping_rounds=10,
+            config=LightGBMConfig(n_estimators_max=50, early_stopping_rounds=10),
         )
         self.assertIsNotNone(fit)
         self.assertIsInstance(fit, LightGBMFit)
@@ -73,8 +73,7 @@ class FitLightGBMMSEGlobalTest(unittest.TestCase):
             feat,
             target,
             feature_names=_FEATURE_NAMES,
-            n_estimators_max=30,
-            early_stopping_rounds=10,
+            config=LightGBMConfig(n_estimators_max=30, early_stopping_rounds=10),
         )
         self.assertIsNotNone(fit)
         scores = predict_scores_lightgbm(fit, feat)
@@ -89,7 +88,7 @@ class FitLightGBMMSEGlobalTest(unittest.TestCase):
             feat,
             target,
             feature_names=_FEATURE_NAMES,
-            n_estimators_max=10,
+            config=LightGBMConfig(n_estimators_max=10),
         )
         self.assertIsNone(fit)
 
@@ -100,8 +99,7 @@ class FitLightGBMMSEGlobalTest(unittest.TestCase):
             feat,
             target,
             feature_names=_FEATURE_NAMES,
-            n_estimators_max=50,
-            early_stopping_rounds=10,
+            config=LightGBMConfig(n_estimators_max=50, early_stopping_rounds=10),
         )
         self.assertIsNotNone(fit)
         scores = predict_scores_lightgbm(fit, feat)

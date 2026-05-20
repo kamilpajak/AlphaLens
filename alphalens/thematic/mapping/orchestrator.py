@@ -23,7 +23,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 import pandas as pd
@@ -201,6 +201,73 @@ def verify_candidate(
     }
 
 
+def _init_pro_client(api_key: str):
+    """Build Gemini Pro client once for the whole batch; ``None`` if SDK missing."""
+    if not api_key:
+        return None
+    from alphalens.data.alt_data.gemini_client import GeminiClient
+
+    try:
+        return GeminiClient(api_key=api_key)
+    except RuntimeError:
+        logger.warning("google-genai SDK missing; mapper will lazy-init per call")
+        return None
+
+
+def _fetch_press_window(asof: dt.date, polygon_key: str) -> pd.DataFrame | None:
+    """Pre-fetch the window-wide press frame. ``None`` on outage so callers fall back."""
+    if not polygon_key:
+        return None
+    try:
+        return recent_press.fetch_window_universe(asof=asof, api_key=polygon_key)
+    except Exception as exc:
+        logger.warning("press window fetch failed: %s", exc, exc_info=True)
+        return None
+
+
+def _resolve_catalyst(theme: str, asof: dt.date, cache: dict[str, dict | None]) -> dict:
+    if theme not in cache:
+        try:
+            cache[theme] = catalyst_resolver.find_trigger_event(theme=theme, asof=asof)
+        except Exception as exc:
+            logger.warning("catalyst resolver failed for theme %s: %s", theme, exc, exc_info=True)
+            cache[theme] = None
+    return cache[theme] or {}
+
+
+def _build_row(
+    *,
+    theme: str,
+    cand: dict,
+    verdict: dict,
+    market_cap: float,
+    catalyst: dict,
+    keywords: Sequence[str],
+) -> dict:
+    return {
+        "theme": theme,
+        "ticker": cand["ticker"],
+        "company_name": cand.get("company_name", ""),
+        "rationale": cand.get("rationale", ""),
+        "gemini_confidence": cand.get("confidence", 0.0),
+        "market_cap": market_cap,
+        "gates_passed": verdict["gates_passed"],
+        "gates_passed_str": ",".join(verdict["gates_passed"]),
+        "n_gates_passed": len(verdict["gates_passed"]),
+        "gates_failed": verdict["gates_failed"],
+        "gates_failed_str": ",".join(verdict["gates_failed"]),
+        "n_gates_failed": len(verdict["gates_failed"]),
+        "gates_unknown": verdict["gates_unknown"],
+        "gates_unknown_str": ",".join(verdict["gates_unknown"]),
+        "n_gates_unknown": len(verdict["gates_unknown"]),
+        "verified": verdict["verified"],
+        "source_event_url": catalyst.get("url"),
+        "source_event_title": catalyst.get("title"),
+        "source_event_published_at": catalyst.get("published_at"),
+        "theme_search_keywords": list(keywords),
+    }
+
+
 def map_themes(
     *,
     themes: Iterable[str],
@@ -227,27 +294,8 @@ def map_themes(
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{asof.isoformat()}.parquet"
 
-    # Hoist Gemini Pro client out of the per-theme loop.
-    pro_client = None
-    if api_key:
-        from alphalens.data.alt_data.gemini_client import GeminiClient
-
-        try:
-            pro_client = GeminiClient(api_key=api_key)
-        except RuntimeError:
-            logger.warning("google-genai SDK missing; mapper will lazy-init per call")
-
-    # Pre-fetch one window-wide press frame for all candidates. On fetch
-    # failure leave ``press_df`` as ``None`` so ``_gate_press`` falls back to
-    # the per-ticker tri-state path — leaving an empty DataFrame here would
-    # mask the outage as a definite "no" via ``has_theme_in_press_frame`` for
-    # every candidate.
-    press_df: pd.DataFrame | None = None
-    if polygon_key:
-        try:
-            press_df = recent_press.fetch_window_universe(asof=asof, api_key=polygon_key)
-        except Exception as exc:
-            logger.warning("press window fetch failed: %s", exc, exc_info=True)
+    pro_client = _init_pro_client(api_key)
+    press_df = _fetch_press_window(asof, polygon_key)
 
     min_cap, max_cap = market_cap_range
     rows: list[dict] = []
@@ -255,22 +303,13 @@ def map_themes(
     dropped_all_unknown = 0
     catalyst_cache: dict[str, dict | None] = {}
     for theme in themes:
-        if theme not in catalyst_cache:
-            try:
-                catalyst_cache[theme] = catalyst_resolver.find_trigger_event(theme=theme, asof=asof)
-            except Exception as exc:
-                logger.warning(
-                    "catalyst resolver failed for theme %s: %s", theme, exc, exc_info=True
-                )
-                catalyst_cache[theme] = None
-        catalyst = catalyst_cache[theme] or {}
+        catalyst = _resolve_catalyst(theme, asof, catalyst_cache)
         proposal = gemini_mapper.propose_candidates(
             theme=theme,
             api_key=api_key,
             gemini_client=pro_client,
         )
         candidates = proposal.get("candidates") or []
-        pro_keywords = proposal.get("search_keywords") or []
         if not candidates:
             continue
         in_bracket = mcap_filter.filter_by_mcap(
@@ -280,7 +319,7 @@ def map_themes(
             asof=asof,
         )
         candidates = [c for c in candidates if c["ticker"] in in_bracket]
-        keywords = _theme_keywords(theme, pro_keywords=pro_keywords)
+        keywords = _theme_keywords(theme, pro_keywords=proposal.get("search_keywords") or [])
         for cand in candidates:
             verdict = verify_candidate(
                 ticker=cand["ticker"],
@@ -296,28 +335,14 @@ def map_themes(
                     dropped_all_unknown += 1
                 continue
             rows.append(
-                {
-                    "theme": theme,
-                    "ticker": cand["ticker"],
-                    "company_name": cand.get("company_name", ""),
-                    "rationale": cand.get("rationale", ""),
-                    "gemini_confidence": cand.get("confidence", 0.0),
-                    "market_cap": in_bracket[cand["ticker"]],
-                    "gates_passed": verdict["gates_passed"],
-                    "gates_passed_str": ",".join(verdict["gates_passed"]),
-                    "n_gates_passed": len(verdict["gates_passed"]),
-                    "gates_failed": verdict["gates_failed"],
-                    "gates_failed_str": ",".join(verdict["gates_failed"]),
-                    "n_gates_failed": len(verdict["gates_failed"]),
-                    "gates_unknown": verdict["gates_unknown"],
-                    "gates_unknown_str": ",".join(verdict["gates_unknown"]),
-                    "n_gates_unknown": len(verdict["gates_unknown"]),
-                    "verified": verdict["verified"],
-                    "source_event_url": catalyst.get("url"),
-                    "source_event_title": catalyst.get("title"),
-                    "source_event_published_at": catalyst.get("published_at"),
-                    "theme_search_keywords": list(keywords),
-                }
+                _build_row(
+                    theme=theme,
+                    cand=cand,
+                    verdict=verdict,
+                    market_cap=in_bracket[cand["ticker"]],
+                    catalyst=catalyst,
+                    keywords=keywords,
+                )
             )
 
     if rows:
