@@ -213,6 +213,87 @@ export const GLOSSARY: GlossaryEntry[] = [
 		body: 'Clip the top and bottom N% of a distribution to the N-th percentile values, then compute statistics. Reveals the median/middle behaviour of heavy-tailed distributions (events, M&A, momentum) where the raw mean is dominated by a few large outliers. 8-K Item 5.03 had +606 bps raw mean but +602 bps winsorized with std 5783 across n=36 — meaning most positive contribution came from rare large spikes, not consistent drift.'
 ,
 		category: 'first-per-section'
+	},
+	// Layer architecture tags (ADR 0007). Each paradigm row's header carries a
+	// "<layer> · <axis_a> / <axis_b>" tag — the tooltip explains the tag inline
+	// so first-time readers don't need an upfront architecture primer.
+	{
+		term: 'L2',
+		full: 'Layer 2 — stock-selection',
+		body: 'Picks WHICH tickers to trade. 17 of 18 paradigms here are L2 rules. The axis_a (screener/combo/compound/gate) says how the rule is built; axis_b (price/fundamental/insider/options/event-drift/macro) says what data it reads.',
+		category: 'first-per-section'
+	},
+	{
+		term: 'L4',
+		full: 'Layer 4 — risk overlay',
+		body: 'Time-series sizing on portfolio realised vol. Changes HOW MUCH exposure, not which tickers. P10 vol-target overlay is the only L4 paradigm tested.',
+		category: 'first-per-section'
+	},
+	{
+		term: 'screener',
+		full: 'single-signal ranker',
+		body: 'L2 structural type — one signal ranks the universe (e.g. opportunistic-buy magnitude, FCFF yield). The simplest L2 form.',
+		category: 'first-per-section'
+	},
+	{
+		term: 'combo',
+		full: 'multi-signal composite, same data class',
+		body: 'L2 structural type — two or more signals from the SAME data class (e.g. momentum × value × quality on price/fundamentals). Cheaper Bonferroni cost than compound because no new data classes.',
+		category: 'first-per-section'
+	},
+	{
+		term: 'compound',
+		full: 'cross-class composite',
+		body: 'L2 structural type — signals from DIFFERENT data classes (e.g. insider × options). Adds a Bonferroni budget cost vs single-class because crossing classes is a fresh hypothesis space.',
+		category: 'first-per-section'
+	},
+	{
+		term: 'gate',
+		full: 'conditional filter on an existing rule',
+		body: 'L2 structural type — a filter ON TOP of another rule (e.g. "deploy mom+lowvol only when VIX > 20"). Doesn\'t make new picks; just turns an existing rule on/off.',
+		category: 'first-per-section'
+	},
+	{
+		term: 'overlay',
+		full: 'time-series exposure modulation',
+		body: 'L4 structural type — modulates total portfolio exposure based on realised vol or drawdown. Doesn\'t change which tickers are held; changes the dollar size of the book.',
+		category: 'first-per-section'
+	},
+	{
+		term: 'price',
+		full: 'price-return data class',
+		body: 'Data-source axis — signal computed from price returns alone (momentum, mean-reversion, idiosyncratic momentum, BAB).',
+		category: 'first-per-section'
+	},
+	{
+		term: 'fundamental',
+		full: 'company-financials data class',
+		body: 'Data-source axis — signal computed from financial statements (FCFF, ROE, book/price, distance-to-default).',
+		category: 'first-per-section'
+	},
+	{
+		term: 'insider',
+		full: 'SEC Form-4 insider-trade data class',
+		body: 'Data-source axis — signal computed from insider purchases/sales (cluster-buys, opportunistic Cohen-Malloy magnitude).',
+		category: 'first-per-section'
+	},
+	{
+		term: 'options',
+		full: 'options-market data class',
+		body: 'Data-source axis — signal computed from options data (implied vol, put/call ratios, abnormal volume).',
+		category: 'first-per-section'
+	},
+	{
+		term: 'event-drift',
+		full: 'scheduled-event data class',
+		body: 'Data-source axis — signal triggered by scheduled events (earnings surprises = PEAD, 8-K filings). Pre-announcement timing matters.',
+		category: 'first-per-section'
+	},
+	{
+		term: 'macro',
+		full: 'macroeconomic data class',
+		body: 'Data-source axis — signal computed from macro indicators (yield curve, VIX, credit spreads, NFCI). Used by P03/P08 gate paradigms.',
+		category: 'first-per-section'
 	}
 ];
 
