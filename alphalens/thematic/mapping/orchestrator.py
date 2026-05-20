@@ -268,6 +268,110 @@ def _build_row(
     }
 
 
+_MAP_THEMES_COLUMNS: tuple[str, ...] = (
+    "theme",
+    "ticker",
+    "company_name",
+    "rationale",
+    "gemini_confidence",
+    "market_cap",
+    "gates_passed",
+    "gates_passed_str",
+    "n_gates_passed",
+    "gates_failed",
+    "gates_failed_str",
+    "n_gates_failed",
+    "gates_unknown",
+    "gates_unknown_str",
+    "n_gates_unknown",
+    "verified",
+    "source_event_url",
+    "source_event_title",
+    "source_event_published_at",
+    "theme_search_keywords",
+)
+
+
+def _propose_and_filter_candidates(
+    *,
+    theme: str,
+    api_key: str,
+    pro_client,
+    min_cap: int,
+    max_cap: int,
+    asof: dt.date,
+) -> tuple[list[dict], dict[str, float], list[str]]:
+    """Pro proposal → real-time mcap filter → keyword harvest.
+
+    Returns (in-bracket candidate dicts, ticker→mcap map, search keywords).
+    Empty candidates list signals "nothing further to do for this theme".
+    """
+    proposal = gemini_mapper.propose_candidates(
+        theme=theme, api_key=api_key, gemini_client=pro_client
+    )
+    candidates = proposal.get("candidates") or []
+    if not candidates:
+        return [], {}, []
+    in_bracket = mcap_filter.filter_by_mcap(
+        [c["ticker"] for c in candidates],
+        min_cap=min_cap,
+        max_cap=max_cap,
+        asof=asof,
+    )
+    candidates = [c for c in candidates if c["ticker"] in in_bracket]
+    keywords = _theme_keywords(theme, pro_keywords=proposal.get("search_keywords") or [])
+    return candidates, in_bracket, keywords
+
+
+def _verify_candidates_for_theme(
+    *,
+    theme: str,
+    candidates: list[dict],
+    in_bracket: dict[str, float],
+    keywords: list[str],
+    catalyst: dict | None,
+    asof: dt.date,
+    polygon_key: str,
+    press_df,
+    keep_unverified: bool,
+) -> tuple[list[dict], int, int]:
+    """Run the 4-gate verify on each candidate, drop unverified by default.
+
+    Returns (kept rows, dropped count, dropped-all-unknown count). The
+    second counter tracks candidates where every gate returned UNKNOWN
+    (typically Polygon outage or yfinance miss), distinct from a real
+    failed-gate rejection.
+    """
+    rows: list[dict] = []
+    dropped = 0
+    dropped_all_unknown = 0
+    for cand in candidates:
+        verdict = verify_candidate(
+            ticker=cand["ticker"],
+            themes=[theme],
+            asof=asof,
+            api_key=polygon_key,
+            theme_keywords=keywords,
+            press_df=press_df,
+        )
+        if not verdict["verified"] and not keep_unverified:
+            dropped += 1
+            if len(verdict["gates_unknown"]) == len(GATE_NAMES):
+                dropped_all_unknown += 1
+            continue
+        rows.append(
+            _build_row(
+                theme=theme,
+                cand=cand,
+                verdict=verdict,
+                market_cap=in_bracket[cand["ticker"]],
+                catalyst=catalyst,
+                keywords=keywords,
+            )
+        )
+    return rows, dropped, dropped_all_unknown
+
+
 def map_themes(
     *,
     themes: Iterable[str],
@@ -304,46 +408,30 @@ def map_themes(
     catalyst_cache: dict[str, dict | None] = {}
     for theme in themes:
         catalyst = _resolve_catalyst(theme, asof, catalyst_cache)
-        proposal = gemini_mapper.propose_candidates(
+        candidates, in_bracket, keywords = _propose_and_filter_candidates(
             theme=theme,
             api_key=api_key,
-            gemini_client=pro_client,
-        )
-        candidates = proposal.get("candidates") or []
-        if not candidates:
-            continue
-        in_bracket = mcap_filter.filter_by_mcap(
-            [c["ticker"] for c in candidates],
+            pro_client=pro_client,
             min_cap=min_cap,
             max_cap=max_cap,
             asof=asof,
         )
-        candidates = [c for c in candidates if c["ticker"] in in_bracket]
-        keywords = _theme_keywords(theme, pro_keywords=proposal.get("search_keywords") or [])
-        for cand in candidates:
-            verdict = verify_candidate(
-                ticker=cand["ticker"],
-                themes=[theme],
-                asof=asof,
-                api_key=polygon_key,
-                theme_keywords=keywords,
-                press_df=press_df,
-            )
-            if not verdict["verified"] and not keep_unverified:
-                dropped_total += 1
-                if len(verdict["gates_unknown"]) == len(GATE_NAMES):
-                    dropped_all_unknown += 1
-                continue
-            rows.append(
-                _build_row(
-                    theme=theme,
-                    cand=cand,
-                    verdict=verdict,
-                    market_cap=in_bracket[cand["ticker"]],
-                    catalyst=catalyst,
-                    keywords=keywords,
-                )
-            )
+        if not candidates:
+            continue
+        theme_rows, dropped, dropped_unknown = _verify_candidates_for_theme(
+            theme=theme,
+            candidates=candidates,
+            in_bracket=in_bracket,
+            keywords=keywords,
+            catalyst=catalyst,
+            asof=asof,
+            polygon_key=polygon_key,
+            press_df=press_df,
+            keep_unverified=keep_unverified,
+        )
+        rows.extend(theme_rows)
+        dropped_total += dropped
+        dropped_all_unknown += dropped_unknown
 
     if rows:
         df = (
@@ -355,30 +443,7 @@ def map_themes(
             .reset_index(drop=True)
         )
     else:
-        df = pd.DataFrame(
-            columns=[
-                "theme",
-                "ticker",
-                "company_name",
-                "rationale",
-                "gemini_confidence",
-                "market_cap",
-                "gates_passed",
-                "gates_passed_str",
-                "n_gates_passed",
-                "gates_failed",
-                "gates_failed_str",
-                "n_gates_failed",
-                "gates_unknown",
-                "gates_unknown_str",
-                "n_gates_unknown",
-                "verified",
-                "source_event_url",
-                "source_event_title",
-                "source_event_published_at",
-                "theme_search_keywords",
-            ]
-        )
+        df = pd.DataFrame(columns=list(_MAP_THEMES_COLUMNS))
     df.attrs["dropped_total"] = dropped_total
     df.attrs["dropped_all_unknown"] = dropped_all_unknown
     df.to_parquet(out_path, index=False)
