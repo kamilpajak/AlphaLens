@@ -65,6 +65,16 @@ def _parse_iso(value: str | None) -> date | None:
     return date.fromisoformat(value)
 
 
+def _safe_int(value: Any) -> int | None:
+    """Defensive cast for SEC ``fy`` field — None for missing or non-numeric."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _iter_unit_entries(facts_block: dict) -> Any:
     """Yield (taxonomy, concept, unit, entry) tuples for each valid record."""
     for taxonomy, concepts in facts_block.items():
@@ -98,8 +108,7 @@ def _append_entry_row(
     columns["period_end"].append(_parse_iso(entry.get("end")))
     columns["val"].append(float(entry["val"]))
     columns["accn"].append(entry.get("accn") or "")
-    fy_value = entry.get("fy")
-    columns["fy"].append(int(fy_value) if fy_value is not None else None)
+    columns["fy"].append(_safe_int(entry.get("fy")))
     columns["fp"].append(entry.get("fp"))
     columns["form"].append(entry.get("form") or "")
     columns["filed_date"].append(_parse_iso(entry["filed"]))

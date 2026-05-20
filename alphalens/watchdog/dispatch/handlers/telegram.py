@@ -40,7 +40,14 @@ class TelegramHandler(AlertHandler):
             resp = requests.post(self.api_url, json=payload, timeout=10)
             resp.raise_for_status()
         except requests.RequestException as exc:
-            logger.exception("Telegram send failed: %s", exc)
+            # Don't use logger.exception / exc_info=True: requests' string
+            # repr embeds the request URL which contains the bot token
+            # (api.telegram.org/bot{TOKEN}/sendMessage). Sanitise str(exc)
+            # and log without traceback so logs stay credential-safe.
+            safe_msg = str(exc).replace(self.bot_token, "***")
+            logger.error(
+                "Telegram send failed: %s", safe_msg
+            )  # NOSONAR(python:S8572): traceback would re-leak bot_token
 
     @staticmethod
     def _format(classified: ClassifiedEvent) -> str:
