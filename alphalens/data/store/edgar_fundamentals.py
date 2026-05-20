@@ -50,6 +50,7 @@ from alphalens.data.fundamentals.edgar_companyfacts import _pit_filter
 from alphalens.data.fundamentals.ttm_aggregator import (
     _arrow_table_to_entries,
     compute_ttm,
+    fcf_margin_rolling_median,
     has_any_concept,
     latest_instant,
 )
@@ -273,13 +274,15 @@ class EdgarFundamentalsStore:
         # different price source. SimFin parity reserves the field.
         price = self._fetch_price(ticker, asof) if self._with_prices else None
 
-        # FCF margin 5y median: rolling 20-quarter window. Set to None for
-        # now; valuation_signal._effective_fcf_margin() already handles the
-        # None case by falling back to the spot TTM margin. TODO: implement
-        # the 20-quarter rolling median via _arrow_table_to_entries +
-        # _pit_filter + per-quarter (ocf - capex - interest*(1-tax)) /
-        # revenue, take median when ≥ 8 quarters present.
-        fcf_margin_5y_median = None
+        # FCF margin 5y median: rolling 20-quarter window. Returns None when
+        # fewer than 8 quarter-aligned data points are visible at asof — too
+        # thin for a stable median. ~90% of S&P 500-class issuers clear the
+        # bar (probe 2026-05-20). When None, downstream impute_fcff /
+        # _effective_fcf_margin gracefully fall back to the spot TTM margin.
+        # We pass the already-derived TTM tax_rate as the per-quarter proxy:
+        # per-quarter tax rates are too noisy and a TTM-stable rate yields a
+        # consistent FCFF tax shield across the 20-quarter window.
+        fcf_margin_5y_median = fcf_margin_rolling_median(self._reader, cik, asof, tax_rate=tax_rate)
 
         publish_date_str = self._latest_publish_date(cik, asof)
 
