@@ -516,6 +516,45 @@
 	$effect(() => {
 		expandRowForHash();
 	});
+
+	// Sticky TOC — section anchor list rendered on xl+ screens, with the
+	// currently-visible section highlighted via IntersectionObserver. The
+	// items match the in-page <section id="..."> anchors created above.
+	const TOC_ITEMS = [
+		{ id: 'status', label: 'status.legend' },
+		{ id: 'how-to-read', label: 'how.to.read' },
+		{ id: 'paradigms', label: 'paradigms.ledger' },
+		{ id: 'patterns', label: 'failure.patterns' },
+		{ id: 'infra', label: 'infrastructure.live' },
+		{ id: 'methodology', label: 'methodology.artifacts' },
+		{ id: 'glossary', label: 'glossary.terms' }
+	];
+	let activeSection = $state<string>('status');
+
+	$effect(() => {
+		// Bail on SSR / when DOM isn't ready. IntersectionObserver lives only
+		// in browser env; $effect doesn't run server-side anyway, but the
+		// guard makes the code unit-testable without jsdom.
+		if (typeof IntersectionObserver === 'undefined') return;
+		// rootMargin pulls the active boundary up so a section counts as
+		// "visible" once its top hits ~33% from the viewport top — feels more
+		// natural than the default "any pixel" rule for tall sections.
+		const io = new IntersectionObserver(
+			(entries) => {
+				for (const e of entries) {
+					if (e.isIntersecting) {
+						activeSection = (e.target as HTMLElement).id;
+					}
+				}
+			},
+			{ rootMargin: '-33% 0% -50% 0%', threshold: 0 }
+		);
+		for (const item of TOC_ITEMS) {
+			const el = document.getElementById(item.id);
+			if (el) io.observe(el);
+		}
+		return () => io.disconnect();
+	});
 </script>
 
 <!-- Window-level Esc handler. Must be at component root per Svelte 5 (no
@@ -523,7 +562,30 @@
      so it's a no-op when the drawer is closed. -->
 <svelte:window onkeydown={onDrawerKey} onhashchange={onHashChange} />
 
-<div class="max-w-[1200px] mx-auto px-3 sm:px-4 py-8 sm:py-10">
+<div class="max-w-[1400px] mx-auto px-3 sm:px-4 py-8 sm:py-10 xl:grid xl:grid-cols-[160px_minmax(0,1fr)] xl:gap-6">
+	<!-- Section TOC rail (xl+ only). Sticky to the viewport top so the section
+	     list stays visible regardless of scroll depth. Matches in-page section
+	     ids; the IntersectionObserver wired in <script> updates activeSection
+	     so the current section reads as the amber accent. -->
+	<aside class="hidden xl:block">
+		<nav aria-label="Section table of contents" class="sticky top-4 border border-grid bg-bg-1 px-3 py-3">
+			<div class="text-[10px] uppercase tracking-widest text-fg-muted mb-2">// toc</div>
+			<ul class="space-y-1 text-[11px]">
+				{#each TOC_ITEMS as item}
+					<li>
+						<a
+							href="#{item.id}"
+							class="block py-0.5 hover:text-amber transition-colors"
+							class:text-amber={activeSection === item.id}
+							class:text-fg-dim={activeSection !== item.id}
+						>{item.label}</a>
+					</li>
+				{/each}
+			</ul>
+		</nav>
+	</aside>
+
+	<div class="xl:min-w-0">
 	<header class="mb-10 fade-up">
 		<div class="text-[10px] uppercase tracking-[0.3em] text-fg-muted mb-2">// experiments</div>
 		<h1 class="font-display font-bold text-2xl sm:text-3xl lg:text-4xl tracking-tight text-fg">
@@ -561,7 +623,7 @@
 	</header>
 
 	<!-- C: status taxonomy legend. Five chips, defined. -->
-	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.05s">
+	<section id="status" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.05s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
 			<h2 class="font-normal">status.legend</h2>
 			<span class="text-fg-dim normal-case tracking-normal">what each verdict means</span>
@@ -585,7 +647,7 @@
 	</section>
 
 	<!-- D: αt scale "how to read this" block. Sets up the mini-bars below. -->
-	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.08s">
+	<section id="how-to-read" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.08s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted">
 			<h2 class="font-normal inline">how.to.read</h2>
 		</div>
@@ -624,7 +686,7 @@
 		</div>
 	</section>
 
-	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.1s">
+	<section id="paradigms" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.1s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
 			<h2 class="font-normal">paradigms.ledger</h2>
 			<span class="text-fg-dim normal-case tracking-normal">{paradigms.length} rows · click each "show detail" for hypothesis / mechanism / outcome / lesson</span>
@@ -747,7 +809,7 @@
 		</div>
 	</section>
 
-	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.15s">
+	<section id="patterns" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.15s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
 			<h2 class="font-normal">failure.patterns</h2>
 			<span class="text-fg-dim normal-case tracking-normal">{patterns.length} reusable lessons · hover dotted terms for definitions</span>
@@ -781,7 +843,7 @@
 		</ul>
 	</section>
 
-	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.2s">
+	<section id="infra" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.2s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
 			<h2 class="font-normal">infrastructure.live</h2>
 			<span class="text-fg-dim normal-case tracking-normal">{live.length} tracks · what is currently running</span>
@@ -811,7 +873,7 @@
 		</table>
 	</section>
 
-	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.25s">
+	<section id="methodology" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.25s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
 			<h2 class="font-normal">methodology.artifacts</h2>
 			<span class="text-fg-dim normal-case tracking-normal">{artifacts.length} items · what survived</span>
@@ -847,7 +909,7 @@
 	     reference, this <details> is the secondary lookup table. Brief-only
 	     terms (PE, PS, EV/EBITDA, etc.) are filtered out so the table matches
 	     terms actually used on /experiments. -->
-	<section class="border border-grid bg-bg-1 fade-up" style="animation-delay: 0.3s">
+	<section id="glossary" class="border border-grid bg-bg-1 fade-up" style="animation-delay: 0.3s">
 		<details class="group/glossary">
 			<summary class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted hover:bg-bg-2 cursor-pointer flex items-center justify-between list-none [&::-webkit-details-marker]:hidden">
 				<span class="flex items-center gap-2">
@@ -869,6 +931,7 @@
 			</dl>
 		</details>
 	</section>
+	</div>
 </div>
 
 {#if drawerOpen}
