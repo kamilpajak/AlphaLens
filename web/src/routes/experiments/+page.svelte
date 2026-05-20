@@ -586,7 +586,7 @@
 	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.1s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
 			<span>paradigms.ledger</span>
-			<span class="text-fg-dim normal-case tracking-normal">{paradigms.length} rows · click evidence to expand</span>
+			<span class="text-fg-dim normal-case tracking-normal">{paradigms.length} rows · click each "show detail" for hypothesis / mechanism / outcome / lesson</span>
 		</div>
 		<div class="divide-y divide-grid">
 			{#each paradigms as p}
@@ -656,39 +656,51 @@
 						</div>
 					{/if}
 
-					<dl class="text-xs sm:text-sm text-fg-dim space-y-1.5 sm:pl-12">
-						<div class="flex gap-2">
-							<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Hypothesis</dt>
-							<dd>{#each parseMarkup(p.hypothesis) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
-						</div>
-						<div class="flex gap-2">
-							<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Mechanism</dt>
-							<dd>{#each parseMarkup(p.mechanism) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
-						</div>
-						<div class="flex gap-2">
-							<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Outcome</dt>
-							<dd class="text-fg">{#each parseMarkup(p.metric) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
-						</div>
-						<div class="flex gap-2">
-							<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Lesson</dt>
-							<dd>{#each parseMarkup(p.lesson) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
-						</div>
-						{#if p.evidence}
+					<!-- Detail fields (hypothesis / mechanism / metric / lesson / evidence)
+					     collapsed by default. Header + story + IS/OOS mini-bar stay
+					     always visible above so the row is glanceable; user opts in to
+					     technical detail per row. Mirrors the brief CandidateCard
+					     details-toggle pattern (see CandidateCard.svelte:251). -->
+					<details class="sm:ml-12 group/details">
+						<summary class="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber cursor-pointer flex items-center gap-2 select-none list-none [&::-webkit-details-marker]:hidden py-1.5">
+							<span class="text-amber transition-transform inline-block group-open/details:rotate-90">▸</span>
+							<span class="group-open/details:hidden">show detail</span>
+							<span class="hidden group-open/details:inline">hide detail</span>
+						</summary>
+						<dl class="text-xs sm:text-sm text-fg-dim space-y-1.5 pt-1.5">
 							<div class="flex gap-2">
-								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Evidence</dt>
-								<dd>
-									<button
-										type="button"
-										class="font-mono text-[11px] text-cyan hover:text-amber underline decoration-dotted underline-offset-2 break-all text-left"
-										onclick={() => openEvidence(p.evidence!)}
-										aria-label="open evidence: {p.evidence}"
-									>
-										{p.evidence} ↗
-									</button>
-								</dd>
+								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Hypothesis</dt>
+								<dd>{#each parseMarkup(p.hypothesis) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
 							</div>
-						{/if}
-					</dl>
+							<div class="flex gap-2">
+								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Mechanism</dt>
+								<dd>{#each parseMarkup(p.mechanism) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
+							</div>
+							<div class="flex gap-2">
+								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Outcome</dt>
+								<dd class="text-fg">{#each parseMarkup(p.metric) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
+							</div>
+							<div class="flex gap-2">
+								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Lesson</dt>
+								<dd>{#each parseMarkup(p.lesson) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
+							</div>
+							{#if p.evidence}
+								<div class="flex gap-2">
+									<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Evidence</dt>
+									<dd>
+										<button
+											type="button"
+											class="font-mono text-[11px] text-cyan hover:text-amber underline decoration-dotted underline-offset-2 break-all text-left"
+											onclick={() => openEvidence(p.evidence!)}
+											aria-label="open evidence: {p.evidence}"
+										>
+											{p.evidence} ↗
+										</button>
+									</dd>
+								</div>
+							{/if}
+						</dl>
+					</details>
 				</article>
 			{/each}
 		</div>
