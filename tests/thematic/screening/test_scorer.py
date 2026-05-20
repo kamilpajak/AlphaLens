@@ -159,14 +159,19 @@ class TestSignalPositiveRules(unittest.TestCase):
 class TestScoreCandidatesEndToEnd(unittest.TestCase):
     def setUp(self):
         # Patch all 4 signal scorers + sector resolution + SimFin store fetch.
+        # Mocked industry ID is the real SEC SIC code for Semiconductors
+        # (3674) so the fixture matches the post-SimFin reality, even though
+        # the value is opaque to the scorer.
         self.patches = [
             patch.object(
                 scorer.sector_peers,
                 "get_industry_id",
-                side_effect=lambda t: 101001 if t in ("QUBT", "IONQ") else None,
+                side_effect=lambda t: 3674 if t in ("QUBT", "IONQ") else None,
             ),
             patch.object(
-                scorer.sector_peers, "industry_label", return_value=("Quantum SW", "Tech")
+                scorer.sector_peers,
+                "industry_label",
+                return_value=("Semiconductors & Related Devices", "Manufacturing"),
             ),
             patch.object(scorer.sector_peers, "iter_industry_peers", return_value=["QUBT", "IONQ"]),
             patch.object(
@@ -352,9 +357,11 @@ class TestScoreCandidatesIsResilientToSignalExceptions(unittest.TestCase):
     def setUp(self):
         # Patch sector + factory stubs as in the end-to-end test.
         self.patches = [
-            patch.object(scorer.sector_peers, "get_industry_id", return_value=101001),
+            patch.object(scorer.sector_peers, "get_industry_id", return_value=3674),
             patch.object(
-                scorer.sector_peers, "industry_label", return_value=("Quantum SW", "Tech")
+                scorer.sector_peers,
+                "industry_label",
+                return_value=("Semiconductors & Related Devices", "Manufacturing"),
             ),
             patch.object(scorer.sector_peers, "iter_industry_peers", return_value=["QUBT"]),
             patch.object(scorer, "_build_feature_fetcher", return_value=lambda t, asof: None),

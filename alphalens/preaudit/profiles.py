@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from enum import Enum
+from enum import StrEnum
 
 
-class CheckType(str, Enum):
+class CheckType(StrEnum):
     """How :mod:`coverage` should peek at a data dir to verify date coverage.
 
     Each member maps to one branch in :func:`coverage.check_coverage`.
@@ -200,14 +200,11 @@ EV_FCFF_YIELD_PROFILE = SmokeProfile(
         "5.0",
     ),
     data_deps=(
-        # SimFin bulk cache — single directory with CSV blobs; no native
-        # date partitioning, so existence check is the only available signal.
-        # Per-file freshness is enforced by SimFin SDK's own refresh logic
-        # (refresh_days_total / refresh_days_shareprices) when the audit runs.
-        DataDep(
-            name="simfin_cache",
-            check_type=CheckType.EXISTS_NONEMPTY,
-        ),
+        # SimFin bulk cache was removed in PR #161 (paradigm-13 ev_fcff_yield
+        # migrated to EDGAR per `--fundamentals-source edgar`). Ticker→industry
+        # resolution moved to alphalens.data.fundamentals.sic_index, a
+        # package-internal parquet — always present in a healthy install,
+        # so no preaudit DataDep is needed.
         # yfinance R2000 + IWM prices, R2000 sample tickers must span the
         # smoke window. 0.5 pass ratio mirrors insider_pc_compound — recent
         # IPOs / delisted in the random sample account for the gap.
@@ -379,7 +376,7 @@ SMOKE_PROFILE_EXEMPT: frozenset[str] = frozenset(
 # -------------------------------------------------------------------------
 
 
-class CoverageStatus(str, Enum):
+class CoverageStatus(StrEnum):
     PASS = "pass"
     FAIL_MISSING = "fail_missing"  # directory absent
     FAIL_EMPTY = "fail_empty"  # directory present but empty
@@ -414,7 +411,7 @@ class CoverageReport:
         return tuple(c for c in self.checks if not c.passed)
 
 
-class SmokeStatus(str, Enum):
+class SmokeStatus(StrEnum):
     PASS = "pass"
     FAIL = "fail"  # subprocess exited non-zero
     TIMEOUT = "timeout"  # exceeded smoke wall budget

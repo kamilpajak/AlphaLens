@@ -1,93 +1,89 @@
-import tempfile
+"""sector_peers is now a thin alias over alphalens.data.fundamentals.sic_index.
+
+The substantive contract tests live in ``tests/test_sic_index.py``. This
+suite verifies the OBSERVABLE behaviour of the legacy public names
+(``get_industry_id`` / ``iter_industry_peers`` / ``industry_label``)
+through a synthetic SIC-index fixture, so that any future evolution of
+the shim (e.g., adding logging, parameter coercion, or deprecation
+warnings) does not silently break the contract — testing identity via
+``assertIs`` would not survive such a wrapper.
+"""
+
+from __future__ import annotations
+
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from alphalens.data.fundamentals import sic_index
 from alphalens.thematic.screening import sector_peers
 
-_COMPANIES_CSV = """Ticker;SimFinId;Company Name;IndustryId;ISIN;End of financial year (month);Number Employees;Business Summary;Market;CIK;Main Currency
-QUBT;100;Quantum Computing, Inc.;101001;US123;12;100;quantum computing;us;1758009;USD
-IONQ;101;IonQ, Inc.;101001;US124;12;200;quantum;us;1824920;USD
-RGTI;102;Rigetti Computing, Inc.;101001;US125;12;150;quantum;us;1838359;USD
-AAPL;200;Apple Inc.;102002;US126;9;100000;consumer electronics;us;320193;USD
-"""
 
-_INDUSTRIES_CSV = """IndustryId;Industry;Sector
-101001;Quantum Computing Software;Technology
-102002;Consumer Electronics;Technology
-"""
+class TestSectorPeersLegacyContract(unittest.TestCase):
+    """The pre-migration public names continue to honour the same contract
+    (returning the int / list / tuple shapes that ``scorer.py`` expects),
+    now backed by the SIC index instead of SimFin CSVs.
+    """
 
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        index_path = Path(self._tmp.name) / "sic_index.parquet"
+        table = pa.Table.from_pylist(
+            [
+                {"ticker": "QUBT", "cik": "1", "sic": 3674, "sic_description": "Semiconductors"},
+                {"ticker": "IONQ", "cik": "2", "sic": 3674, "sic_description": "Semiconductors"},
+                {
+                    "ticker": "AAPL",
+                    "cik": "3",
+                    "sic": 3571,
+                    "sic_description": "Electronic Computers",
+                },
+            ],
+            schema=pa.schema(
+                [
+                    ("ticker", pa.string()),
+                    ("cik", pa.string()),
+                    ("sic", pa.int32()),
+                    ("sic_description", pa.string()),
+                ]
+            ),
+        )
+        pq.write_table(table, index_path)
+        self._patch = patch.object(sic_index, "_SIC_INDEX_PATH", index_path)
+        self._patch.start()
+        self.addCleanup(self._patch.stop)
+        sic_index._load_index.cache_clear()
+        sic_index._load_lookup_dicts.cache_clear()
+        self.addCleanup(sic_index._load_index.cache_clear)
+        self.addCleanup(sic_index._load_lookup_dicts.cache_clear)
 
-def _write_csvs(dir_path: Path) -> None:
-    (dir_path / "us-companies.csv").write_text(_COMPANIES_CSV)
-    (dir_path / "industries.csv").write_text(_INDUSTRIES_CSV)
+    def test_get_industry_id_returns_sic_for_known_ticker(self) -> None:
+        self.assertEqual(sector_peers.get_industry_id("QUBT"), 3674)
+        self.assertEqual(sector_peers.get_industry_id("AAPL"), 3571)
 
+    def test_get_industry_id_returns_none_for_unknown_ticker(self) -> None:
+        self.assertIsNone(sector_peers.get_industry_id("NVDA"))
 
-class TestSectorPeers(unittest.TestCase):
-    def setUp(self):
-        sector_peers._load_companies.cache_clear()
-        sector_peers._load_industries.cache_clear()
+    def test_iter_industry_peers_returns_co_sic_tickers(self) -> None:
+        peers = sector_peers.iter_industry_peers(3674)
+        self.assertEqual(sorted(peers), ["IONQ", "QUBT"])
 
-    def tearDown(self):
-        sector_peers._load_companies.cache_clear()
-        sector_peers._load_industries.cache_clear()
+    def test_industry_label_returns_description_and_division(self) -> None:
+        self.assertEqual(
+            sector_peers.industry_label(3674),
+            ("Semiconductors", "Manufacturing"),
+        )
 
-    def test_get_industry_id_returns_int(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_csvs(Path(tmp))
-            with patch.object(sector_peers, "SIMFIN_CACHE_DIR", Path(tmp)):
-                self.assertEqual(sector_peers.get_industry_id("QUBT"), 101001)
-                self.assertEqual(sector_peers.get_industry_id("AAPL"), 102002)
-
-    def test_get_industry_id_case_insensitive(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_csvs(Path(tmp))
-            with patch.object(sector_peers, "SIMFIN_CACHE_DIR", Path(tmp)):
-                self.assertEqual(sector_peers.get_industry_id("qubt"), 101001)
-
-    def test_get_industry_id_returns_none_for_unknown_ticker(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_csvs(Path(tmp))
-            with patch.object(sector_peers, "SIMFIN_CACHE_DIR", Path(tmp)):
-                self.assertIsNone(sector_peers.get_industry_id("XYZ_UNKNOWN"))
-
-    def test_iter_industry_peers_returns_all_tickers_in_industry(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_csvs(Path(tmp))
-            with patch.object(sector_peers, "SIMFIN_CACHE_DIR", Path(tmp)):
-                peers = sector_peers.iter_industry_peers(101001)
-                self.assertEqual(set(peers), {"QUBT", "IONQ", "RGTI"})
-
-    def test_iter_industry_peers_returns_empty_for_unknown(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_csvs(Path(tmp))
-            with patch.object(sector_peers, "SIMFIN_CACHE_DIR", Path(tmp)):
-                self.assertEqual(sector_peers.iter_industry_peers(999999), [])
-
-    def test_industry_label_returns_industry_and_sector(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_csvs(Path(tmp))
-            with patch.object(sector_peers, "SIMFIN_CACHE_DIR", Path(tmp)):
-                label = sector_peers.industry_label(101001)
-                self.assertEqual(label, ("Quantum Computing Software", "Technology"))
-
-    def test_industry_label_returns_none_for_unknown(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_csvs(Path(tmp))
-            with patch.object(sector_peers, "SIMFIN_CACHE_DIR", Path(tmp)):
-                self.assertEqual(sector_peers.industry_label(999999), (None, None))
-
-    def test_companies_csv_loaded_once_via_lru_cache(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_csvs(Path(tmp))
-            with patch.object(sector_peers, "SIMFIN_CACHE_DIR", Path(tmp)):
-                sector_peers.get_industry_id("QUBT")
-                sector_peers.get_industry_id("IONQ")
-                sector_peers.iter_industry_peers(101001)
-            # _load_companies is LRU-cached, so a single hit only
-            info = sector_peers._load_companies.cache_info()
-            self.assertEqual(info.misses, 1)
-            self.assertGreaterEqual(info.hits, 2)
+    def test_module_does_not_re_expose_simfin_cache_dir(self) -> None:
+        # SIMFIN_CACHE_DIR was the only reason this module ever needed
+        # filesystem state. Confirm it is gone so an accidental
+        # `from sector_peers import SIMFIN_CACHE_DIR` fails fast.
+        self.assertFalse(hasattr(sector_peers, "SIMFIN_CACHE_DIR"))
 
 
 if __name__ == "__main__":
