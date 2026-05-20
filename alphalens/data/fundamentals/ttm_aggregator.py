@@ -23,6 +23,7 @@ existing :func:`alphalens.data.fundamentals.edgar_companyfacts._pit_filter`.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable, Sequence
 from datetime import date
 
@@ -219,6 +220,181 @@ def latest_instant(
     return best_val
 
 
+# --- Per-quarter series (standalone-Q rows + FY-minus-YTD9M Q4 derivation) ---
+
+
+_STANDALONE_Q_MIN_DAYS = 60
+_STANDALONE_Q_MAX_DAYS = 100
+_YTD9M_MIN_DAYS = 240
+_YTD9M_MAX_DAYS = 300
+_FY_MIN_DAYS = 350
+_FY_MAX_DAYS = 380
+
+
+def _span_days(entry: _Entry) -> int:
+    if not entry.start:
+        return 0
+    try:
+        s = date.fromisoformat(entry.start)
+        e = date.fromisoformat(entry.end)
+    except ValueError:
+        return 0
+    return (e - s).days
+
+
+def compute_per_quarter_series(
+    reader: CompanyfactsParquetReader,
+    cik: str,
+    chain: Sequence[str],
+    asof: date,
+    *,
+    taxonomy: str = DEFAULT_TAXONOMY,
+    unit: str = DEFAULT_UNIT,
+) -> list[tuple[str, float]]:
+    """Build a per-quarter value series for one duration concept chain.
+
+    Returns ``[(end_iso, value), ...]`` sorted ascending by ``end``. Each
+    entry represents a single fiscal quarter's value (not YTD-cumulative).
+
+    Two paths feed the output:
+
+    1. **Standalone Q rows** — 10-Q filings (and 8-K recasts) typically
+       include both a YTD row and a same-period standalone-quarter row
+       (span ~90 days, ``fp ∈ {Q1, Q2, Q3}``). Standalone rows are used
+       directly when present. Probed across MANH/CAT/AAPL/MSFT/JPM:
+       all 5 file standalone Q-rows for OCF/CapEx/Revenue.
+
+    2. **Q4 derivation** — fiscal year-end rows (~365-day span,
+       ``fp == 'FY'``) are paired with the matching YTD9M row (~270-day
+       span, ``fp == 'Q3'``, same ``period_start``) and the Q4 value
+       computed as ``FY - YTD9M``. The fiscal-year match is by
+       ``period_start`` equality so a stray cross-year FY+YTD9M pair
+       cannot trigger a bogus derivation.
+
+    Standalone Q4 rows (when 8-K recasts file one) win over the derived
+    value; auditors occasionally adjust the FY result, so the derived
+    value can absorb 100 % of audit adjustments. A direct standalone Q4
+    row is more authoritative.
+
+    PIT contract: only entries with ``filed_date <= asof`` are visible.
+    Restatements are handled per-(start, end) by keeping the latest
+    filed entry.
+
+    Chain traversal mirrors :func:`compute_ttm`: iterate concepts in
+    order, but unlike compute_ttm (where the chronologically-latest end
+    wins), here we accumulate per-end values from the first concept that
+    supplies them. Subsequent chain entries fill ends not already
+    covered.
+    """
+    table = reader.get_cik_table(cik)
+    if table is None:
+        return []
+
+    per_end: dict[str, float] = {}
+    derived_ends: set[str] = set()  # ends populated by Q4 derivation, not standalone
+
+    for concept in chain:
+        entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
+        if not entries:
+            continue
+        visible = _pit_filter(entries, asof)
+        if not visible:
+            continue
+        per_period = _latest_per_period(visible)
+
+        # Bucket entries by span class.
+        standalone_q: dict[str, _Entry] = {}
+        ytd9m_by_start: dict[str, _Entry] = {}
+        fy_by_start: dict[str, _Entry] = {}
+        for entry in per_period.values():
+            span = _span_days(entry)
+            if _STANDALONE_Q_MIN_DAYS <= span <= _STANDALONE_Q_MAX_DAYS:
+                standalone_q[entry.end] = entry
+            elif _YTD9M_MIN_DAYS <= span <= _YTD9M_MAX_DAYS:
+                # YTD9M keyed by period_start so we can pair it with a same-
+                # fiscal-year FY row.
+                if entry.start:
+                    ytd9m_by_start[entry.start] = entry
+            elif _FY_MIN_DAYS <= span <= _FY_MAX_DAYS and entry.start:
+                fy_by_start[entry.start] = entry
+
+        # Standalone Q-rows (primary path).
+        for end, entry in standalone_q.items():
+            if end not in per_end:
+                per_end[end] = entry.val
+
+        # Q4 derivation (FY - YTD9M, matched by period_start).
+        for start, fy_entry in fy_by_start.items():
+            ytd9m = ytd9m_by_start.get(start)
+            if ytd9m is None:
+                continue
+            end = fy_entry.end
+            if end in per_end and end not in derived_ends:
+                # A standalone row already populated this end from this or
+                # an earlier concept — prefer the direct measurement.
+                continue
+            per_end[end] = fy_entry.val - ytd9m.val
+            derived_ends.add(end)
+
+    return sorted(per_end.items(), key=lambda kv: kv[0])
+
+
+def fcf_margin_rolling_median(
+    reader: CompanyfactsParquetReader,
+    cik: str,
+    asof: date,
+    *,
+    window_quarters: int = 20,
+    min_quarters: int = 8,
+    tax_rate: float = 0.21,
+) -> float | None:
+    """5-year (20-quarter) rolling median FCF margin.
+
+    For each quarter where OCF, CapEx, and Revenue all align (same
+    ``period_end``), compute ``(ocf - capex - interest*(1 - tax)) / revenue``
+    and take the median over the trailing ``window_quarters`` (up to 20).
+    Quarters with non-positive revenue are skipped. Interest is treated
+    as 0 when the issuer files no InterestExpense concept (debt-free
+    SaaS / tech) — matches the ``compute_fcff`` "or 0.0" guard.
+
+    Returns ``None`` when fewer than ``min_quarters`` aligned quarters
+    survive — too thin a sample for a stable median.
+
+    Local imports of the chain constants avoid a circular dependency:
+    ``concept_chains`` imports from this module would invert the
+    dependency arrow.
+    """
+    from alphalens.data.fundamentals import concept_chains as chains
+
+    ocf_series = dict(compute_per_quarter_series(reader, cik, chains.OPERATING_CASH_FLOW, asof))
+    if not ocf_series:
+        return None
+    capex_series = dict(compute_per_quarter_series(reader, cik, chains.CAPEX, asof))
+    revenue_series = dict(compute_per_quarter_series(reader, cik, chains.REVENUE, asof))
+    interest_series = dict(compute_per_quarter_series(reader, cik, chains.INTEREST_EXPENSE, asof))
+
+    common_ends = sorted(set(ocf_series) & set(capex_series) & set(revenue_series))
+    margins: list[float] = []
+    for end in common_ends:
+        revenue = revenue_series[end]
+        if revenue <= 0:
+            continue
+        interest = interest_series.get(end, 0.0)
+        fcff = ocf_series[end] - capex_series[end] - interest * (1.0 - tax_rate)
+        margin = fcff / revenue
+        if math.isnan(margin) or math.isinf(margin):
+            continue
+        margins.append(margin)
+
+    if len(margins) < min_quarters:
+        return None
+    trimmed = margins[-window_quarters:]
+    # statistics.median accepts any odd / even length >= 1.
+    import statistics
+
+    return float(statistics.median(trimmed))
+
+
 def has_any_concept(
     reader: CompanyfactsParquetReader,
     cik: str,
@@ -249,7 +425,9 @@ def has_any_concept(
 
 
 __all__ = [
+    "compute_per_quarter_series",
     "compute_ttm",
+    "fcf_margin_rolling_median",
     "has_any_concept",
     "latest_instant",
 ]
