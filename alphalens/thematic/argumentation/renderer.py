@@ -311,6 +311,58 @@ def _build_header_chips(r: dict, weighted_str: str) -> str:
     return " · ".join(chips)
 
 
+def _theme_line(r: dict) -> str:
+    """Compose ``**Theme**: ... | **Industry**: ...`` line with multi-theme badge."""
+    line = (
+        f"**Theme**: {r.get('theme', '')} | "
+        f"**Industry**: {r.get('industry_name', 'n/a')}"
+        f" ({r.get('sector_name', 'n/a')})"
+    )
+    # Multi-theme badge: surface OTHER themes the ticker hit when sort+dedup
+    # collapsed them. Operator sees the multi-thematic signal without us
+    # spawning duplicate brief blocks.
+    also = r.get("also_in_themes")
+    if also is None:
+        return line
+    try:
+        also_list = [t for t in also if t]
+    except TypeError:
+        return line
+    if also_list:
+        line += f" | **also in**: {', '.join(also_list)}"
+    return line
+
+
+def _catalyst_line(r: dict) -> str | None:
+    """``**Catalyst**: ...`` line, or None when source URL is missing/NaN."""
+    src_url = r.get("source_event_url")
+    if not (src_url and pd.notna(src_url) and str(src_url).strip().lower() != "nan"):
+        return None
+    title = r.get("source_event_title") or ""
+    published = r.get("source_event_published_at") or ""
+    return f"**Catalyst**: {title} ({published}) {src_url}"
+
+
+def _head_sections(r: dict, chip_str: str) -> list[str]:
+    """Deterministic head sections: ticker, theme, catalyst, pattern.
+
+    The head bucket carries scan-cues the operator's eye should land on
+    one at a time. Blank lines between them mirror the bullet structure
+    recommended in PR 2026-05-17 brief-layout pass.
+    """
+    sections: list[str] = [
+        f"## {r.get('ticker')} — {r.get('company_name', '')} ({chip_str})",
+        _theme_line(r),
+    ]
+    catalyst = _catalyst_line(r)
+    if catalyst:
+        sections.append(catalyst)
+    pattern_line = _format_pattern_line(r).rstrip()
+    if pattern_line:
+        sections.append(pattern_line)
+    return sections
+
+
 def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
     """Assemble one candidate's brief block.
 
@@ -328,41 +380,7 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
     weighted_str = f"{int(weighted)}/5" if not pd.isna(weighted) else "n/a"
 
     chip_str = _build_header_chips(r, weighted_str)
-
-    # --- Deterministic head sections (each separated by blank line) --------
-    # The head bucket carries scan-cues the operator's eye should land on
-    # one at a time: ticker → theme/industry → catalyst → pattern. Blank
-    # lines between them mirror the bullet structure recommended in PR
-    # 2026-05-17 brief-layout pass.
-    head_sections: list[str] = [
-        f"## {r.get('ticker')} — {r.get('company_name', '')} ({chip_str})",
-    ]
-    theme_line = (
-        f"**Theme**: {r.get('theme', '')} | "
-        f"**Industry**: {r.get('industry_name', 'n/a')}"
-        f" ({r.get('sector_name', 'n/a')})"
-    )
-    # Multi-theme badge: surface OTHER themes the ticker hit when sort+dedup
-    # collapsed them. Operator sees the multi-thematic signal without us
-    # spawning duplicate brief blocks.
-    also = r.get("also_in_themes")
-    if also is not None:
-        try:
-            also_list = [t for t in also if t]
-        except TypeError:
-            also_list = []
-        if also_list:
-            theme_line += f" | **also in**: {', '.join(also_list)}"
-    head_sections.append(theme_line)
-    src_url = r.get("source_event_url")
-    if src_url and pd.notna(src_url) and str(src_url).strip().lower() != "nan":
-        title = r.get("source_event_title") or ""
-        published = r.get("source_event_published_at") or ""
-        head_sections.append(f"**Catalyst**: {title} ({published}) {src_url}")
-    pattern_line = _format_pattern_line(r).rstrip()
-    if pattern_line:
-        head_sections.append(pattern_line)
-    head = "\n\n".join(head_sections) + "\n\n"
+    head = "\n\n".join(_head_sections(r, chip_str)) + "\n\n"
 
     # --- LLM-composed prose with placeholders ------------------------------
     prose = {k: _prose_or_placeholder(b.get(k)) for k in _PROSE_FIELDS}
