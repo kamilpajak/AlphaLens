@@ -76,8 +76,10 @@ function sectionForLine(lineIndex) {
 				const idPeek = lines[k].match(/\bid:\s*'(P\d\d|R\d\d|S\d\d|L\d)'/);
 				if (idPeek) return `entry-${idPeek[1]}`;
 				// Stop peek at the row-opening brace so we don't bleed into the
-				// previous row.
-				if (lines[k].match(/^\s*\{$/) || lines[k].match(/^\s*\{,?$/)) break;
+				// previous row. Use a relaxed brace check (`{` anywhere on the
+				// line) — survives formatter changes that put the opening brace
+				// on the same line as `=` or `[` (e.g. `const xs = [{`).
+				if (lines[k].includes('{')) break;
 			}
 			return `status-${statusMatch[1]}`;
 		}
