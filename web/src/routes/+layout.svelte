@@ -17,6 +17,35 @@
 	});
 
 	const route = $derived(page.url.pathname);
+
+	// Footer ticker chips — context-switch per route so the slogans match
+	// the page the user is reading. Dashboard / briefs / brief / about all
+	// concern the thematic-tool pipeline (Polygon news + Gemini Pro/Flash +
+	// verification gates), while /experiments concerns the active-alpha
+	// research ledger (αt thresholds, Bonferroni, multi-phase audit, PIT
+	// discipline). Same component, two vocabularies.
+	type Chip = { label: string; value: string };
+	const tickerThematic: Chip[] = [
+		{ label: 'PRESS-GATE', value: 'tri-state ok' },
+		{ label: 'CATALYST-FLOOR', value: '0.55' },
+		{ label: 'MAGIC-FORMULA', value: 'cohort' },
+		{ label: 'PRO-MODEL', value: 'gemini-3-pro-preview' },
+		{ label: 'FLASH-MODEL', value: 'gemini-2.5-flash' },
+		{ label: 'PRESS-WINDOW', value: '30d' },
+		{ label: 'SLIPPAGE', value: '50bps' },
+		{ label: 'LIMIT', value: 'polygon 5rpm' }
+	];
+	const tickerExperiments: Chip[] = [
+		{ label: 'DOCTRINE', value: 'αt ≥ 3.5 deploy' },
+		{ label: 'MARGINAL', value: 'αt 2.0-3.5 paper' },
+		{ label: 'NOISE', value: 'αt < 2.0' },
+		{ label: 'BONFERRONI', value: 'escalates per test' },
+		{ label: 'MULTI-PHASE', value: 'stride-5 mean ± std' },
+		{ label: 'PIT', value: 'point-in-time mandatory' },
+		{ label: 'SLIPPAGE-STRESS', value: '50bps half-spread' },
+		{ label: 'LITERATURE', value: 'not oracle' }
+	];
+	const ticker = $derived(route === '/experiments' ? tickerExperiments : tickerThematic);
 </script>
 
 <svelte:head>
@@ -67,17 +96,12 @@
 		{@render children()}
 	</main>
 
-	<!-- Bottom ticker / status -->
+	<!-- Bottom ticker / status — chips switch per route via $derived(ticker). -->
 	<footer class="border-t border-grid bg-bg-1 text-[10px] uppercase tracking-widest text-fg-muted overflow-hidden">
 		<div class="flex items-center gap-6 px-4 py-2 whitespace-nowrap">
-			<span class="text-amber">PRESS-GATE</span><span>tri-state ok</span>
-			<span class="text-amber">CATALYST-FLOOR</span><span>0.55</span>
-			<span class="text-amber">MAGIC-FORMULA</span><span>cohort</span>
-			<span class="text-amber">PRO-MODEL</span><span>gemini-3-pro-preview</span>
-			<span class="text-amber">FLASH-MODEL</span><span>gemini-2.5-flash</span>
-			<span class="text-amber">PRESS-WINDOW</span><span>30d</span>
-			<span class="text-amber">SLIPPAGE</span><span>50bps</span>
-			<span class="text-amber">LIMIT</span><span>polygon 5rpm</span>
+			{#each ticker as chip}
+				<span class="text-amber">{chip.label}</span><span>{chip.value}</span>
+			{/each}
 			<span class="ml-auto">v0.1</span>
 		</div>
 	</footer>
