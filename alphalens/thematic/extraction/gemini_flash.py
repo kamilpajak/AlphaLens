@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import os
 from pathlib import Path
 
 import pandas as pd
 
+from alphalens.data.alt_data.gemini_client import GeminiClient, get_default_gemini_client
 from alphalens.thematic.extraction.schema import (
     EVENT_RESPONSE_SCHEMA,
     normalize_extraction,
@@ -74,21 +74,12 @@ Be terse, ground every claim in the article content, and skip speculation past s
 """
 
 
-def _load_genai_sdk():
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError as exc:
-        raise RuntimeError("google-genai SDK not installed. `uv add google-genai`.") from exc
-    return genai, types
-
-
-def _call_gemini(client, prompt: str, *, model: str, types_mod):
+def _call_gemini(gemini_client: GeminiClient, prompt: str, *, model: str):
     """Single seam for tests to patch. Returns the raw SDK response."""
-    return client.models.generate_content(
+    return gemini_client.generate_content(
         model=model,
         contents=prompt,
-        config=types_mod.GenerateContentConfig(
+        config=gemini_client.build_config(
             response_mime_type="application/json",
             response_schema=EVENT_RESPONSE_SCHEMA,
             temperature=0.0,
@@ -120,24 +111,26 @@ def extract_one(
     news_row: dict | pd.Series,
     *,
     api_key: str | None = None,
-    client=None,
-    types_mod=None,
+    gemini_client: GeminiClient | None = None,
     model: str = DEFAULT_MODEL,
 ) -> dict | None:
     """Run Gemini Flash on a single news row; return normalised event dict or ``None``.
 
-    Convenience path: pass ``api_key=`` and a fresh ``genai.Client`` is built.
-    Batch path: pass a pre-built ``client`` and ``types_mod`` (hoisted out of
-    a per-row loop by ``extract_daily``) to avoid handshake overhead per item.
+    Pass ``gemini_client=`` for tests or to hoist a single client across a
+    batch (see ``extract_daily``). Pass ``api_key=`` for ad-hoc one-off use.
+    Omit both to fall back to ``get_default_gemini_client()`` which reads
+    ``GOOGLE_API_KEY`` once per process.
     """
-    if client is None or types_mod is None:
-        genai, types_mod = _load_genai_sdk()
-        if api_key is None:
-            raise ValueError("extract_one requires api_key or pre-built client")
-        client = genai.Client(api_key=api_key)
     prompt = build_prompt(news_row)
     try:
-        response = _call_gemini(client, prompt, model=model, types_mod=types_mod)
+        # Client init inside try so missing-SDK / missing-key failures
+        # degrade per-row rather than crashing extract_daily's loop (zen
+        # pre-merge HIGH 2026-05-20).
+        if gemini_client is None:
+            gemini_client = (
+                GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
+            )
+        response = _call_gemini(gemini_client, prompt, model=model)
     except Exception as exc:
         logger.warning("Gemini extract failed: %s", exc, exc_info=True)
         return None
@@ -168,9 +161,7 @@ def extract_daily(
     Idempotent per ``news_id``: items already in the events parquet are kept
     untouched and not re-sent to Gemini.
     """
-    api_key = api_key or os.environ.get("GOOGLE_API_KEY") or ""
-    if not api_key:
-        raise RuntimeError("GOOGLE_API_KEY not set — cannot call Gemini")
+    gemini_client = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
 
     news_path = news_dir / f"{date.isoformat()}.parquet"
     if not news_path.exists():
@@ -192,13 +183,9 @@ def extract_daily(
         len(to_extract),
     )
 
-    # Hoist client out of the loop — single SDK handshake per daily batch.
-    genai, types_mod = _load_genai_sdk()
-    client = genai.Client(api_key=api_key)
-
     new_rows: list[dict] = []
     for _, row in to_extract.iterrows():
-        event = extract_one(row, client=client, types_mod=types_mod, model=model)
+        event = extract_one(row, gemini_client=gemini_client, model=model)
         if event is None:
             continue
         new_rows.append(

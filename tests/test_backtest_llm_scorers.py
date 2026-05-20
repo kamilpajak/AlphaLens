@@ -1,9 +1,8 @@
 """Characterization tests for `alphalens.backtest.llm_scorers.gemini_flash_tractability_scorer`.
 
-Locks down API-error / parse-fallback / verdict-coercion behavior so the
-planned cognitive-complexity refactor (issue #26 Tier 3) can be validated.
-External Gemini SDK is mocked via `_load_genai_sdk` helper to avoid sys.modules
-pollution (which would break downstream tests that import the real SDK).
+Locks down API-error / parse-fallback / verdict-coercion behavior. Tests
+inject a stub :class:`GeminiClient` via the ``gemini_client=`` kwarg so
+the real google-genai SDK is never touched.
 """
 
 from __future__ import annotations
@@ -14,38 +13,30 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 
-def _make_genai_stubs() -> tuple[MagicMock, MagicMock, MagicMock]:
-    fake_client = MagicMock()
-    fake_genai = MagicMock()
-    fake_genai.Client.return_value = fake_client
-    fake_types = MagicMock()
-    return fake_genai, fake_types, fake_client
+def _make_stub_gemini_client() -> MagicMock:
+    """Build a MagicMock that looks enough like a GeminiClient for the
+    scorer to use: it has ``generate_content`` and ``build_config``."""
+    client = MagicMock()
+    client.build_config.side_effect = lambda **kw: SimpleNamespace(**kw)
+    return client
 
 
 class TestGeminiFlashTractabilityScorer(unittest.TestCase):
     def setUp(self):
-        self._env_patch = patch.dict("os.environ", {"GOOGLE_API_KEY": "stub-key"})
-        self._env_patch.start()
-        self._fake_genai, self._fake_types, self._client = _make_genai_stubs()
-        self._sdk_patch = patch(
-            "alphalens.backtest.llm_scorers._load_genai_sdk",
-            return_value=(self._fake_genai, self._fake_types),
-        )
-        self._sdk_patch.start()
-
-    def tearDown(self):
-        self._sdk_patch.stop()
-        self._env_patch.stop()
+        self._client = _make_stub_gemini_client()
 
     def _set_response(self, text: str) -> None:
-        self._client.models.generate_content.return_value = SimpleNamespace(text=text)
+        self._client.generate_content.return_value = SimpleNamespace(text=text)
 
     def test_happy_path_parses_json_and_returns_verdict(self):
         from alphalens.backtest.llm_scorers import gemini_flash_tractability_scorer
 
         self._set_response('{"verdict":"accept","confidence":0.85,"reasoning":"strong base"}')
         v = gemini_flash_tractability_scorer(
-            "MSFT", date(2025, 6, 30), {"rank": 1, "momentum_score": 0.92, "themes": ["AI"]}
+            "MSFT",
+            date(2025, 6, 30),
+            {"rank": 1, "momentum_score": 0.92, "themes": ["AI"]},
+            gemini_client=self._client,
         )
 
         self.assertEqual(v.verdict, "accept")
@@ -59,7 +50,7 @@ class TestGeminiFlashTractabilityScorer(unittest.TestCase):
         self._set_response(
             'Here is my answer:\n{"verdict":"reject","confidence":0.3,"reasoning":"choppy"}\n--end--'
         )
-        v = gemini_flash_tractability_scorer("X", date(2025, 1, 1), {})
+        v = gemini_flash_tractability_scorer("X", date(2025, 1, 1), {}, gemini_client=self._client)
 
         self.assertEqual(v.verdict, "reject")
         self.assertAlmostEqual(v.confidence, 0.3)
@@ -68,7 +59,7 @@ class TestGeminiFlashTractabilityScorer(unittest.TestCase):
         from alphalens.backtest.llm_scorers import gemini_flash_tractability_scorer
 
         self._set_response("totally not json and no braces either")
-        v = gemini_flash_tractability_scorer("X", date(2025, 1, 1), {})
+        v = gemini_flash_tractability_scorer("X", date(2025, 1, 1), {}, gemini_client=self._client)
 
         self.assertEqual(v.verdict, "uncertain")
         self.assertEqual(v.confidence, 0.0)
@@ -77,8 +68,8 @@ class TestGeminiFlashTractabilityScorer(unittest.TestCase):
     def test_returns_uncertain_on_api_error(self):
         from alphalens.backtest.llm_scorers import gemini_flash_tractability_scorer
 
-        self._client.models.generate_content.side_effect = RuntimeError("rate limit")
-        v = gemini_flash_tractability_scorer("X", date(2025, 1, 1), {})
+        self._client.generate_content.side_effect = RuntimeError("rate limit")
+        v = gemini_flash_tractability_scorer("X", date(2025, 1, 1), {}, gemini_client=self._client)
 
         self.assertEqual(v.verdict, "uncertain")
         self.assertEqual(v.cost_usd, 0.0)
@@ -88,7 +79,7 @@ class TestGeminiFlashTractabilityScorer(unittest.TestCase):
         from alphalens.backtest.llm_scorers import gemini_flash_tractability_scorer
 
         self._set_response('{"verdict":"strong-buy","confidence":0.9,"reasoning":"ok"}')
-        v = gemini_flash_tractability_scorer("X", date(2025, 1, 1), {})
+        v = gemini_flash_tractability_scorer("X", date(2025, 1, 1), {}, gemini_client=self._client)
 
         self.assertEqual(v.verdict, "uncertain")
 
@@ -97,17 +88,27 @@ class TestGeminiFlashTractabilityScorer(unittest.TestCase):
 
         long_reason = "x" * 500
         self._set_response(f'{{"verdict":"accept","confidence":0.5,"reasoning":"{long_reason}"}}')
-        v = gemini_flash_tractability_scorer("X", date(2025, 1, 1), {})
+        v = gemini_flash_tractability_scorer("X", date(2025, 1, 1), {}, gemini_client=self._client)
 
         self.assertEqual(len(v.reasoning), 280)
 
-    def test_missing_api_key_raises(self):
+    def test_missing_api_key_degrades_to_uncertain(self):
+        """Per zen pre-merge HIGH 2026-05-20: when neither gemini_client nor
+        api_key is supplied AND GOOGLE_API_KEY is unset,
+        get_default_gemini_client() raises ValueError but it is caught and
+        the scorer returns LLMVerdict('uncertain'). This keeps the
+        historical_validation loop from crashing on misconfigured nodes."""
         from alphalens.backtest.llm_scorers import gemini_flash_tractability_scorer
+        from alphalens.data.alt_data import gemini_client as gc_mod
 
-        with patch.dict("os.environ", {}, clear=True), self.assertRaises(RuntimeError) as cm:
-            gemini_flash_tractability_scorer("X", date(2025, 1, 1), {})
-
-        self.assertIn("GOOGLE_API_KEY", str(cm.exception))
+        gc_mod._reset_default_client_for_tests()
+        try:
+            with patch.dict("os.environ", {}, clear=True):
+                v = gemini_flash_tractability_scorer("X", date(2025, 1, 1), {})
+            self.assertEqual(v.verdict, "uncertain")
+            self.assertIn("GOOGLE_API_KEY", v.reasoning)
+        finally:
+            gc_mod._reset_default_client_for_tests()
 
 
 if __name__ == "__main__":

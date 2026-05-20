@@ -229,15 +229,12 @@ def map_themes(
 
     # Hoist Gemini Pro client out of the per-theme loop.
     pro_client = None
-    pro_types_mod = None
     if api_key:
-        try:
-            from google import genai as _genai
-            from google.genai import types as _types
+        from alphalens.data.alt_data.gemini_client import GeminiClient
 
-            pro_client = _genai.Client(api_key=api_key)
-            pro_types_mod = _types
-        except ImportError:
+        try:
+            pro_client = GeminiClient(api_key=api_key)
+        except RuntimeError:
             logger.warning("google-genai SDK missing; mapper will lazy-init per call")
 
     # Pre-fetch one window-wide press frame for all candidates. On fetch
@@ -270,8 +267,7 @@ def map_themes(
         proposal = gemini_mapper.propose_candidates(
             theme=theme,
             api_key=api_key,
-            client=pro_client,
-            types_mod=pro_types_mod,
+            gemini_client=pro_client,
         )
         candidates = proposal.get("candidates") or []
         pro_keywords = proposal.get("search_keywords") or []

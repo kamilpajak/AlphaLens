@@ -22,6 +22,7 @@ from typing import Any
 
 import json_repair
 
+from alphalens.data.alt_data.gemini_client import GeminiClient, get_default_gemini_client
 from alphalens.thematic.argumentation.prompts import build_flash_prompt, build_pro_prompt
 from alphalens.thematic.argumentation.schema import BRIEF_RESPONSE_SCHEMA
 from alphalens.thematic.extraction.schema import parse_extraction
@@ -60,23 +61,19 @@ def choose_model(*, weighted_score: int | float | None) -> str:
         return FLASH_MODEL
 
 
-def _load_genai_sdk():
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError as exc:
-        raise RuntimeError("google-genai SDK not installed. `uv add google-genai`.") from exc
-    return genai, types
-
-
 def _call_gemini(
-    client, prompt: str, *, model: str, types_mod, max_output_tokens: int, temperature: float
+    gemini_client: GeminiClient,
+    prompt: str,
+    *,
+    model: str,
+    max_output_tokens: int,
+    temperature: float,
 ):
     """Single seam for tests to patch. Returns the raw SDK response."""
-    return client.models.generate_content(
+    return gemini_client.generate_content(
         model=model,
         contents=prompt,
-        config=types_mod.GenerateContentConfig(
+        config=gemini_client.build_config(
             response_mime_type="application/json",
             response_schema=BRIEF_RESPONSE_SCHEMA,
             temperature=temperature,
@@ -111,9 +108,8 @@ def generate_brief(
     facts: dict,
     *,
     api_key: str | None = None,
-    client_pro=None,
-    client_flash=None,
-    types_mod=None,
+    gemini_client_pro: GeminiClient | None = None,
+    gemini_client_flash: GeminiClient | None = None,
     max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
     temperature: float = _DEFAULT_TEMPERATURE,
 ) -> tuple[dict | None, BriefErrorKind]:
@@ -121,30 +117,34 @@ def generate_brief(
 
     Returns ``(brief_dict_with_model_used, BriefErrorKind.NONE)`` on
     success, or ``(None, kind)`` describing the failure mode.
+
+    Pro and Flash models can be routed through the same or different
+    :class:`GeminiClient` instances (the SDK uses one client for all
+    models). Pass either ``gemini_client_pro`` / ``gemini_client_flash``
+    (orchestrator batch path) OR ``api_key=`` (ad-hoc), otherwise the
+    process-wide default client is used.
     """
     model = choose_model(weighted_score=facts.get("weighted_score"))
     prompt = build_pro_prompt(facts) if model == PRO_MODEL else build_flash_prompt(facts)
 
-    # Hoisted clients must come paired with types_mod — partial hoisting
-    # would silently discard the user's client and lazy-build a new one.
-    if (client_pro is not None or client_flash is not None) and types_mod is None:
-        raise ValueError("generate_brief: hoisted clients require types_mod (pass both or neither)")
-    if types_mod is None:
-        genai, types_mod = _load_genai_sdk()
-        if api_key is None:
-            raise ValueError("generate_brief requires api_key or pre-built clients + types_mod")
-        client_pro = client_pro or genai.Client(api_key=api_key)
-        client_flash = client_flash or client_pro
-    client = client_pro if model == PRO_MODEL else (client_flash or client_pro)
-    if client is None:
-        raise ValueError(f"missing client for model {model}")
-
     try:
+        # Client init inside try so missing-SDK / missing-key failures
+        # degrade per-brief (BriefErrorKind.TRANSPORT) rather than
+        # crashing the orchestrator's loop (zen pre-merge HIGH 2026-05-20).
+        if gemini_client_pro is None and gemini_client_flash is None:
+            default = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
+            gemini_client_pro = default
+            gemini_client_flash = default
+        else:
+            # Partial hoisting — fill in the other half with the supplied one.
+            gemini_client_pro = gemini_client_pro or gemini_client_flash
+            gemini_client_flash = gemini_client_flash or gemini_client_pro
+        client = gemini_client_pro if model == PRO_MODEL else gemini_client_flash
+
         response = _call_gemini(
             client,
             prompt,
             model=model,
-            types_mod=types_mod,
             max_output_tokens=max_output_tokens,
             temperature=temperature,
         )
@@ -225,9 +225,8 @@ def generate_brief_with_retry(
     facts: dict,
     *,
     api_key: str | None = None,
-    client_pro=None,
-    client_flash=None,
-    types_mod=None,
+    gemini_client_pro: GeminiClient | None = None,
+    gemini_client_flash: GeminiClient | None = None,
     base_max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
 ) -> dict | None:
     """Generate a brief, retrying once on ``BriefErrorKind.TRUNCATED``.
@@ -240,26 +239,19 @@ def generate_brief_with_retry(
     Returns the brief dict (with ``model_used``) on success, ``None``
     otherwise. The orchestrator's graceful-degradation renderer then
     surfaces the deterministic facts even when this returns None.
-
-    Example:
-        >>> brief = generate_brief_with_retry(facts, api_key="sk-...", base_max_output_tokens=2000)
-        >>> brief["tldr"] if brief else "(LLM failed)"
     """
-    # Hoist SDK + client init ONCE so the retry path doesn't re-do it. When
-    # the caller passed hoisted clients (orchestrator batch path) this is a
-    # no-op; the ad-hoc path (api_key only) would otherwise pay two
-    # genai.Client() handshakes per truncation incident.
-    if types_mod is None and client_pro is None and client_flash is None and api_key is not None:
-        genai, types_mod = _load_genai_sdk()
-        client_pro = genai.Client(api_key=api_key)
-        client_flash = client_pro
+    # Resolve clients ONCE so the retry path doesn't re-do lazy-singleton
+    # lookup. Cheap when the caller already hoisted (orchestrator batch
+    # path); meaningful when called ad-hoc with just an api_key.
+    if gemini_client_pro is None and gemini_client_flash is None:
+        default = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
+        gemini_client_pro = default
+        gemini_client_flash = default
 
     brief, kind = generate_brief(
         facts,
-        api_key=api_key,
-        client_pro=client_pro,
-        client_flash=client_flash,
-        types_mod=types_mod,
+        gemini_client_pro=gemini_client_pro,
+        gemini_client_flash=gemini_client_flash,
         max_output_tokens=base_max_output_tokens,
         temperature=_DEFAULT_TEMPERATURE,
     )
@@ -278,10 +270,8 @@ def generate_brief_with_retry(
     )
     brief, kind = generate_brief(
         facts,
-        api_key=api_key,
-        client_pro=client_pro,
-        client_flash=client_flash,
-        types_mod=types_mod,
+        gemini_client_pro=gemini_client_pro,
+        gemini_client_flash=gemini_client_flash,
         max_output_tokens=retry_tokens,
         temperature=_RETRY_TEMPERATURE,
     )
