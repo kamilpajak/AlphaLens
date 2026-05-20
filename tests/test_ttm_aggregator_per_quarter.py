@@ -294,6 +294,144 @@ class TestComputePerQuarterSeries(unittest.TestCase):
             [],
         )
 
+    def test_cross_concept_standalone_overrides_earlier_derived(self):
+        """When concept A only supplies an FY+YTD9M (=> Q4 is DERIVED) and
+        concept B supplies a STANDALONE row for the same end, the direct
+        measurement from B must win over A's arithmetic derivation."""
+        from alphalens.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+
+        rows = [
+            # Concept A — derivation path for 2024-12-31 (FY 1200 - YTD9M 900 = 300).
+            _row(
+                concept="RevenueFromContractWithCustomerExcludingAssessedTax",
+                period_start="2024-01-01",
+                period_end="2024-09-30",
+                val=900.0,
+                filed_date="2024-11-01",
+                fp="Q3",
+            ),
+            _row(
+                concept="RevenueFromContractWithCustomerExcludingAssessedTax",
+                period_start="2024-01-01",
+                period_end="2024-12-31",
+                val=1200.0,
+                filed_date="2025-02-14",
+                fp="FY",
+                form="10-K",
+            ),
+            # Concept B — standalone Q4 row (8-K recast). 305 is the direct
+            # measurement that should win.
+            _row(
+                concept="Revenues",
+                period_start="2024-10-01",
+                period_end="2024-12-31",
+                val=305.0,
+                filed_date="2025-02-14",
+                fp=None,
+                form="8-K",
+            ),
+        ]
+        reader = _stub_reader(_arrow_table(rows))
+        out = compute_per_quarter_series(
+            reader,
+            "0000",
+            ("RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues"),
+            date(2025, 4, 1),
+        )
+        # 305 (standalone from later chain entry) wins over 300 (derived from earlier).
+        self.assertEqual(out, [("2024-12-31", 305.0)])
+
+    def test_cross_concept_derived_does_not_override_earlier_derived(self):
+        """Derivation is the weakest evidence — once an end is filled by
+        any concept's derivation, a later concept's derivation must NOT
+        displace it. First-concept-wins protects against non-deterministic
+        ordering when both concepts have equally-weak (derived) values."""
+        from alphalens.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+
+        rows = [
+            # Concept A derives Q4 = 300 (FY 1200 - YTD9M 900).
+            _row(
+                concept="RevenueFromContractWithCustomerExcludingAssessedTax",
+                period_start="2024-01-01",
+                period_end="2024-09-30",
+                val=900.0,
+                filed_date="2024-11-01",
+                fp="Q3",
+            ),
+            _row(
+                concept="RevenueFromContractWithCustomerExcludingAssessedTax",
+                period_start="2024-01-01",
+                period_end="2024-12-31",
+                val=1200.0,
+                filed_date="2025-02-14",
+                fp="FY",
+                form="10-K",
+            ),
+            # Concept B also derives Q4 = 250 (different values, same end).
+            # Must not override concept A's derived value.
+            _row(
+                concept="Revenues",
+                period_start="2024-01-01",
+                period_end="2024-09-30",
+                val=750.0,
+                filed_date="2024-11-01",
+                fp="Q3",
+            ),
+            _row(
+                concept="Revenues",
+                period_start="2024-01-01",
+                period_end="2024-12-31",
+                val=1000.0,
+                filed_date="2025-02-14",
+                fp="FY",
+                form="10-K",
+            ),
+        ]
+        reader = _stub_reader(_arrow_table(rows))
+        out = compute_per_quarter_series(
+            reader,
+            "0000",
+            ("RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues"),
+            date(2025, 4, 1),
+        )
+        # 300 (A's derivation) wins; B's derivation is ignored.
+        self.assertEqual(out, [("2024-12-31", 300.0)])
+
+    def test_period_start_restatement_uses_latest_filed(self):
+        """A 10-Q/A that changes period_start (rare — fiscal-year boundary
+        recast) creates a new (start, end) key so _latest_per_period keeps
+        BOTH rows. The bucketing layer must apply a filed-date tiebreaker
+        so the newest restatement wins, not Python dict insertion order."""
+        from alphalens.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+
+        rows = [
+            # Original Q1 row.
+            _row(
+                concept="Revenues",
+                period_start="2024-01-01",
+                period_end="2024-03-31",
+                val=100.0,
+                filed_date="2024-05-01",
+                fp="Q1",
+            ),
+            # 10-Q/A restatement with a shifted period_start (transition
+            # period). Same end, different start → different (start, end) tuple.
+            # Bucket key is end=2024-03-31 in both cases; filed-date tiebreaker
+            # must pick this newer one.
+            _row(
+                concept="Revenues",
+                period_start="2024-01-02",
+                period_end="2024-03-31",
+                val=105.0,
+                filed_date="2024-11-15",
+                fp="Q1",
+                form="10-Q/A",
+            ),
+        ]
+        reader = _stub_reader(_arrow_table(rows))
+        out = compute_per_quarter_series(reader, "0000", ("Revenues",), date(2025, 1, 1))
+        self.assertEqual(out, [("2024-03-31", 105.0)])
+
     def test_chain_traversal_picks_first_matching_concept(self):
         """When the chain offers a primary + a fallback and the primary has
         data, the fallback isn't consulted (per existing aggregator pattern)."""
