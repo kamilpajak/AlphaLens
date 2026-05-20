@@ -331,6 +331,14 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		expect(details, 'one <details> per paradigm article').toBe(articles);
 	});
 
+	test('heading semantics: ≥7 h2 (one per section), ≥31 h3 (paradigms+patterns) (P0.3)', async ({ page }) => {
+		await page.goto('/experiments');
+		const h2 = await page.locator('h2').count();
+		const h3 = await page.locator('h3').count();
+		expect(h2, '≥7 h2 (status.legend, how.to.read, paradigms.ledger, failure.patterns, infrastructure.live, methodology.artifacts, glossary.terms)').toBeGreaterThanOrEqual(7);
+		expect(h3, '≥31 h3 (18 paradigm names + 13 pattern names)').toBeGreaterThanOrEqual(31);
+	});
+
 	test('hash auto-expand opens target paradigm row (P0.2)', async ({ page }) => {
 		await page.goto('/experiments#P14');
 		// $effect runs after hydration; wait briefly for the details to flip.
