@@ -262,7 +262,11 @@ def _collect_universe(candidates: pd.DataFrame, peer_cache: dict[int, list[str]]
         universe.add(tkr)
         ind = sector_peers.get_industry_id(tkr)
         if ind is not None:
-            peer_cache.setdefault(ind, sector_peers.iter_industry_peers(ind))
+            # Lazy lookup: `dict.setdefault(k, expr)` always evaluates `expr`,
+            # so the SimFin sector_peers DataFrame slice would re-run for every
+            # repeated industry. Branch explicitly to keep the cache hit free.
+            if ind not in peer_cache:
+                peer_cache[ind] = sector_peers.iter_industry_peers(ind)
             universe.update(peer_cache[ind])
     return universe
 
