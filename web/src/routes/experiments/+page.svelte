@@ -451,11 +451,23 @@
 	let drawerLoading = $state(false);
 	let drawerError = $state<string | null>(null);
 
+	// Cache parsed evidence HTML across openings in the same session. The
+	// referenced research files are static (synced at build time via
+	// scripts/sync-research-docs.mjs) so repeat fetches add no information,
+	// just network round-trips and marked.parse() CPU work.
+	const evidenceCache = new Map<string, string>();
+
 	async function openEvidence(path: string) {
 		drawerPath = path;
 		drawerOpen = true;
-		drawerLoading = true;
 		drawerError = null;
+		const cached = evidenceCache.get(path);
+		if (cached !== undefined) {
+			drawerContent = cached;
+			drawerLoading = false;
+			return;
+		}
+		drawerLoading = true;
 		drawerContent = '';
 		try {
 			const url = `/docs/research/${path}`;
@@ -465,17 +477,20 @@
 				return;
 			}
 			const text = await resp.text();
+			let parsed: string;
 			if (path.endsWith('.json')) {
 				try {
 					const obj = JSON.parse(text);
 					const pretty = JSON.stringify(obj, null, 2);
-					drawerContent = await marked.parse('```json\n' + pretty + '\n```');
+					parsed = await marked.parse('```json\n' + pretty + '\n```');
 				} catch {
-					drawerContent = await marked.parse('```\n' + text + '\n```');
+					parsed = await marked.parse('```\n' + text + '\n```');
 				}
 			} else {
-				drawerContent = await marked.parse(text);
+				parsed = await marked.parse(text);
 			}
+			drawerContent = parsed;
+			evidenceCache.set(path, parsed);
 		} catch (e) {
 			drawerError = `Network error: ${(e as Error).message}`;
 		} finally {
@@ -488,10 +503,16 @@
 	}
 
 	function onDrawerKey(e: KeyboardEvent) {
+		// Guard on drawerOpen so the global listener is a no-op when drawer
+		// is closed (Svelte 5 disallows conditional <svelte:window>).
+		if (!drawerOpen) return;
 		if (e.key === 'Escape') closeDrawer();
 	}
 </script>
 
+<!-- Window-level Esc handler. Must be at component root per Svelte 5 (no
+     conditional <svelte:window>); handler internally guards on drawerOpen
+     so it's a no-op when the drawer is closed. -->
 <svelte:window onkeydown={onDrawerKey} />
 
 <div class="max-w-[1200px] mx-auto px-3 sm:px-4 py-8 sm:py-10">
