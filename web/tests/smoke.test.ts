@@ -331,6 +331,30 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		expect(details, 'one <details> per paradigm article').toBe(articles);
 	});
 
+	test('--color-fg-muted contrast against --color-bg meets WCAG AA (≥4.5:1) (P1.1)', async ({ page }) => {
+		await page.goto('/experiments');
+		const ratio = await page.evaluate(() => {
+			const cs = getComputedStyle(document.documentElement);
+			const fg = cs.getPropertyValue('--color-fg-muted').trim();
+			const bg = cs.getPropertyValue('--color-bg').trim();
+			const hexToRgb = (h: string) => {
+				const m = h.replace('#', '');
+				return [0, 2, 4].map((i) => parseInt(m.slice(i, i + 2), 16));
+			};
+			const lum = (rgb: number[]) => {
+				const c = rgb.map((v) => {
+					const s = v / 255;
+					return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+				});
+				return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+			};
+			const la = lum(hexToRgb(fg));
+			const lb = lum(hexToRgb(bg));
+			return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+		});
+		expect(ratio, '--color-fg-muted vs --color-bg WCAG ratio').toBeGreaterThanOrEqual(4.5);
+	});
+
 	test('heading semantics: ≥7 h2 (one per section), ≥31 h3 (paradigms+patterns) (P0.3)', async ({ page }) => {
 		await page.goto('/experiments');
 		const h2 = await page.locator('h2').count();
