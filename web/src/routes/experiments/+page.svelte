@@ -29,6 +29,12 @@
 	// the rule reads. Compound paradigms have ≥2 entries in axis_b.
 	// Layer-4 paradigms (overlay) use axis_a='overlay' and axis_b=null.
 	//
+	// KEEP IN SYNC with the AxisA / AxisB / layer_id type unions above and the
+	// glossary.ts entries. If a value is retired from the data, remove it from
+	// this list — otherwise the audit script's "unreferenced terms" check
+	// silently passes the dead entry (the Playwright auto-discovery DOM test
+	// would still catch a missing inline render, but the audit script alone
+	// would not).
 	// audit-tooltips:dynamic-terms L2 L4 screener combo compound gate overlay price fundamental insider options event-drift macro
 	// (Paradigm headers render <JargonTip {...tipProps(VAR)}> where VAR is the
 	// paradigm's layer_id / axis_a / axis_b. The audit script's literal-only

@@ -22,17 +22,29 @@
 	let { term, full = '', body, children }: Props = $props();
 
 	// Unique id linking the focusable trigger to the tooltip body via
-	// aria-describedby. Svelte 5 doesn't ship a built-in useId, so we
-	// generate a stable per-instance id at construction time. Screen
+	// aria-describedby. Svelte 5.55 doesn't ship a built-in useId (verified
+	// against node_modules/svelte/src/index-client.js — no such export), so
+	// we generate a stable per-instance id at construction time. Screen
 	// readers (NVDA, VoiceOver, JAWS) announce the tooltip text when the
 	// trigger receives focus.
 	const tooltipId = `jargon-tip-${Math.random().toString(36).slice(2, 10)}`;
+
+	// Touch-device support: iOS Safari + Android Chrome don't reliably trigger
+	// :hover or auto-focus when tapping an element with tabindex=0. Without an
+	// explicit pointerdown→focus call, mobile users would have no way to
+	// surface the tooltip — which becomes a hard regression now that the
+	// upfront architecture primer block on /experiments is gone. Focusing on
+	// pointerdown activates `group-focus-within:opacity-100` on the popover.
+	function onPointerDown(e: PointerEvent) {
+		(e.currentTarget as HTMLElement).focus();
+	}
 </script>
 
 <span
 	class="group relative inline-block hover:z-50 focus-within:z-50"
 	tabindex="0"
 	role="group"
+	onpointerdown={onPointerDown}
 	data-testid="jargon-tip"
 	data-term={term}
 	aria-describedby={tooltipId}
