@@ -160,9 +160,15 @@ STRUCTURAL_EXCLUSIONS: dict[tuple[str, str], str] = {
         "weighted-average where EDGAR uses spot snapshot at filing date"
     ),
     ("CAT", "interest_expense_ttm"): (
-        "EDGAR concept_chain gap — CAT files interest under "
-        "InterestExpenseDebt rather than InterestExpense; tracked as "
-        "follow-up to extend INTEREST_EXPENSE chain in concept_chains.py"
+        "captive-finance subsidiary divergence — CAT files NEITHER "
+        "InterestExpense nor InterestExpenseDebt (both already in the chain). "
+        "The only US-GAAP interest concept CAT files is InterestPaidNet "
+        "($1,842M FY2025), which rolls up CAT Financial subsidiary cash "
+        "interest paid and diverges from yfinance's parent-only Interest "
+        "Expense ($520M) by 254% — well outside any tolerance band. "
+        "Structural; not fixable by chain extension. Verified via direct "
+        "parquet probe 2026-05-20 (supersedes the PR #161 diagnosis that "
+        "mistakenly proposed extending the chain with InterestExpenseDebt)."
     ),
     # JPM (bank): yfinance "Long Term Debt" for banks rolls up all long-term
     # funding (deposits with >1yr maturity, FHLB advances, subordinated debt).

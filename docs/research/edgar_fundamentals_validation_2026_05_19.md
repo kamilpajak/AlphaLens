@@ -12,7 +12,7 @@
 | cash_and_equivalents | 9980.00M | 4072.00M | — | — | exempt — structural exclusion — yfinance includes restricted cash + ST investments; EDGAR CashAndCashEquivalentsAtCarryingValue narrower |
 | da_ttm | 2262.00M | 2317.00M | 2.37 | 15.0 | ✓ |
 | fcf_margin_5y_median | — | — | — | — | exempt — exempt: known TODO in EDGAR (rolling median pending) |
-| interest_expense_ttm | — | 520.00M | — | — | exempt — structural exclusion — EDGAR concept_chain gap — CAT files interest under InterestExpenseDebt rather than InterestExpense; tracked as follow-up to extend INTEREST_EXPENSE chain in concept_chains.py |
+| interest_expense_ttm | — | 520.00M | — | — | exempt — structural exclusion — captive-finance subsidiary divergence — CAT files NEITHER InterestExpense nor InterestExpenseDebt (both already in the chain). The only US-GAAP interest concept CAT files is InterestPaidNet ($1,842M FY2025), which rolls up CAT Financial subsidiary cash interest paid and diverges from yfinance's parent-only Interest Expense ($520M) by 254% — well outside any tolerance band. Structural; not fixable by chain extension. Verified via direct parquet probe 2026-05-20 (supersedes the PR #161 diagnosis that mistakenly proposed extending the chain with InterestExpenseDebt). |
 | long_term_debt | 30696.00M | 30642.00M | 0.18 | 15.0 | ✓ |
 | net_income_ttm | 8884.00M | 9430.00M | — | — | exempt — structural exclusion — 5.79% drift just outside TTM tolerance — CY 2025 quarterly volatility in consumer-cycle exposure; both vendors defensible |
 | ocf_ttm | 11739.00M | 12320.00M | 4.72 | 5.0 | ✓ |
