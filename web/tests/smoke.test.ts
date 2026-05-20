@@ -409,6 +409,11 @@ test.describe('glossary auto-discovery (per-page coverage)', () => {
 			const url = PAGE_URL[tp];
 			test(`glossary term "${entry.term}" has ≥1 inline JargonTip on ${url}`, async ({ page }) => {
 				await page.goto(url);
+				// Brief detail loads candidates via client-side fetch; wait for at
+				// least the first CandidateCard to mount before counting tooltips.
+				// /experiments is fully prerendered, so the wait resolves instantly
+				// for that route.
+				await page.locator('[data-testid="jargon-tip"]').first().waitFor({ timeout: 5000 });
 				const count = await page
 					.locator(`[data-testid="jargon-tip"][data-term="${entry.term}"]`)
 					.count();
