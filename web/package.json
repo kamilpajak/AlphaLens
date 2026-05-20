@@ -4,6 +4,10 @@
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
+		"sync:docs": "node scripts/sync-research-docs.mjs",
+		"audit:tooltips": "node scripts/audit-tooltips.mjs",
+		"predev": "node scripts/sync-research-docs.mjs",
+		"prebuild": "node scripts/sync-research-docs.mjs",
 		"dev": "vite dev",
 		"build": "vite build",
 		"preview": "vite preview",

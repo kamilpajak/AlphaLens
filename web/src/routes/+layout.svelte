@@ -42,6 +42,9 @@
 				<a href="/about" class="hover:text-amber transition-colors" class:text-amber={route === '/about'}>
 					<span class="hidden sm:inline">[03]&nbsp;</span>about
 				</a>
+				<a href="/experiments" class="hover:text-amber transition-colors" class:text-amber={route === '/experiments'}>
+					<span class="hidden sm:inline">[04]&nbsp;</span>experiments
+				</a>
 			</nav>
 			<div class="ml-auto flex items-center gap-3 sm:gap-5 text-fg-muted">
 				<span class="flex items-center gap-1.5">
