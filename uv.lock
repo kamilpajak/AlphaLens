@@ -20,7 +20,6 @@ dependencies = [
     { name = "quiverquant" },
     { name = "scikit-learn" },
     { name = "scipy" },
-    { name = "simfin" },
     { name = "statsmodels" },
     { name = "stockstats" },
     { name = "typer" },
@@ -49,15 +48,14 @@ requires-dist = [
     { name = "phase-robust-backtesting", git = "https://github.com/kamilpajak/phase-robust-backtesting.git?rev=v0.2.3" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7" },
     { name = "pyarrow", specifier = ">=24.0.0" },
-    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "quiverquant" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.12" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "scipy", specifier = ">=1.17.1" },
-    { name = "simfin", specifier = ">=1.0.1" },
     { name = "statsmodels", specifier = ">=0.14.6" },
     { name = "stockstats", specifier = ">=0.6.5" },
-    { name = "typer", specifier = ">=0.21.1" },
+    { name = "typer", specifier = ">=0.25.1" },
     { name = "yfinance", specifier = ">=0.2.63" },
 ]
 provides-extras = ["dev"]
@@ -1213,20 +1211,6 @@ wheels = [
 ]
 
 [[package]]
-name = "simfin"
-version = "1.0.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/30/22/f187f230f42c96ae7508abccb11532f5342a1000480d552cc3744f212dff/simfin-1.0.1.tar.gz", hash = "sha256:24e921daff7f938e714ccc7543fd8e75d267f2844dcb0cee8e203259f1a17673", size = 54815, upload-time = "2024-04-03T11:31:11.879Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/45/43/e84640f5692b24d354001b2c635f09f6f5ddc3b89b1399ecff84dfd79a11/simfin-1.0.1-py3-none-any.whl", hash = "sha256:e2e6d9404d75f30e919f50f84dc576c0d833514a3ded1e38745365da150e5bf2", size = 61599, upload-time = "2024-04-03T11:31:04.995Z" },
-]
-
-[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1322,7 +1306,7 @@ wheels = [
 
 [[package]]
 name = "typer"
-version = "0.25.0"
+version = "0.25.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
@@ -1330,9 +1314,9 @@ dependencies = [
     { name = "rich" },
     { name = "shellingham" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7b/27/ede8cec7596e0041ba7e7b80b47d132562f56ff454313a16f6084e555c9f/typer-0.25.0.tar.gz", hash = "sha256:123eaf9f19bb40fd268310e12a542c0c6b4fab9c98d9d23342a01ff95e3ce930", size = 120150, upload-time = "2026-04-26T08:46:14.767Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e4/51/9aed62104cea109b820bbd6c14245af756112017d309da813ef107d42e7e/typer-0.25.1.tar.gz", hash = "sha256:9616eb8853a09ffeabab1698952f33c6f29ffdbceb4eaeecf571880e8d7664cc", size = 122276, upload-time = "2026-04-30T19:32:16.964Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/72/193d4e586ec5a4db834a36bbeb47641a62f951f114ffd0fe5b1b46e8d56f/typer-0.25.0-py3-none-any.whl", hash = "sha256:ac01b48823d3db9a83c9e164338057eadbb1c9957a2a6b4eeb486669c560b5dc", size = 55993, upload-time = "2026-04-26T08:46:15.889Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/f9/2b3ff4e56e5fa7debfaf9eb135d0da96f3e9a1d5b27222223c7296336e5f/typer-0.25.1-py3-none-any.whl", hash = "sha256:75caa44ed46a03fb2dab8808753ffacdbfea88495e74c85a28c5eefcf5f39c89", size = 58409, upload-time = "2026-04-30T19:32:18.271Z" },
 ]
 
 [[package]]

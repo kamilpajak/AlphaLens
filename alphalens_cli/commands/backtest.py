@@ -109,14 +109,13 @@ def _apply_fundamental_gate(
     with_prices: bool,
 ) -> None:
     """Pre-load fundamentals and wire them into scorer_config in place."""
-    if source == "simfin":
-        from alphalens.data.store.simfin import SimFinFundamentalsStore
+    if source == "edgar":
+        from alphalens.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
         typer.echo(
-            f"Preloading SimFin fundamentals (bulk CSV, 5y US quarterly, "
-            f"with_prices={with_prices})…"
+            f"Preloading EDGAR fundamentals (SEC XBRL companyfacts, with_prices={with_prices})…"
         )
-        store = SimFinFundamentalsStore(with_prices=with_prices)
+        store = EdgarFundamentalsStore(with_prices=with_prices)
     elif source == "av":
         from alphalens.data.store.fundamentals_pit import HistoricalFundamentalsStore
 
@@ -124,7 +123,7 @@ def _apply_fundamental_gate(
         store = HistoricalFundamentalsStore()
     else:
         raise typer.BadParameter(
-            f"Unknown --fundamentals-source: {source!r} (expected: simfin | av)"
+            f"Unknown --fundamentals-source: {source!r} (expected: edgar | av)"
         )
 
     store.preload(screener_tickers)
@@ -233,20 +232,20 @@ def backtest(  # NOSONAR — Typer CLI legitimately needs many flags
         "the gate score. Only meaningful for --scorer momentum | early-stage.",
     ),
     fundamentals_source: str = typer.Option(
-        "simfin",
+        "edgar",
         "--fundamentals-source",
-        help="Data source when --fundamental-gate is on: 'simfin' (free 5y bulk CSV, "
-        "requires SIMFIN_API_KEY in .env; recommended) or 'av' (Alpha Vantage, "
-        "25 req/day free tier so 113 tickers × 4 endpoints will throttle).",
+        help="Data source when --fundamental-gate is on: 'edgar' (SEC XBRL "
+        "companyfacts via SecEdgarClient; recommended — see PR #159) or 'av' "
+        "(Alpha Vantage, 25 req/day free tier so 113 tickers × 4 endpoints "
+        "will throttle).",
     ),
     with_prices: bool = typer.Option(
         False,
         "--with-prices/--no-prices",
-        help="SimFin-only: load daily share-prices CSV for PIT P/S gate. Requires "
-        "~/.alphalens/simfin_cache/us-shareprices-daily.csv (~435MB). If "
-        "missing, simfin will download it (download speed varies — can be "
-        "slow on throttled broadband). When off, P/S penalty is skipped "
-        "and gate uses only runway/OCF/net_income.",
+        help="EDGAR-only: load snapshot prices via yfinance for the fundamental "
+        "gate's PIT P/S penalty. When off, P/S penalty is skipped and the gate "
+        "uses only runway/OCF/net_income. The 'av' source path does not consume "
+        "this flag.",
     ),
 ) -> None:
     """Run backtest over Lean CSV data and emit a decision-matrix report.

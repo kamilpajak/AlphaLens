@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 from alphalens.thematic.screening import fcff_signal
 
 
-# 11-field dict shape returned by SimFinFundamentalsStore.ev_fcff_features_as_of
+# 11-field dict shape returned by EdgarFundamentalsStore.ev_fcff_features_as_of
 def _features(
     ocf_ttm=200.0,
     capex_ttm=80.0,

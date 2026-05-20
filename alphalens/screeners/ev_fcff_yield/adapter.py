@@ -2,7 +2,7 @@
 
 The engine expects ``Callable[[Mapping[str, pd.DataFrame], Mapping], pd.DataFrame]``
 (see ``alphalens.backtest.engine.Scorer``). This module wraps the pure
-``score_ev_fcff_yield`` primitive together with a ``SimFinFundamentalsStore``
+``score_ev_fcff_yield`` primitive together with an ``EdgarFundamentalsStore``
 into an instance whose ``__call__`` matches that protocol.
 
 The scorer derives ``asof`` from the maximum trailing-index across the
@@ -17,22 +17,23 @@ from collections.abc import Mapping
 
 import pandas as pd
 
-from alphalens.data.store.simfin import SimFinFundamentalsStore
+from alphalens.data.store.edgar_fundamentals import EdgarFundamentalsStore
 from alphalens.screeners.ev_fcff_yield.scorer import score_ev_fcff_yield
 
 logger = logging.getLogger(__name__)
 
 
 class EvFcffYieldScorer:
-    """Adapter — composes SimFin fundamentals + pure scorer for one rebalance."""
+    """Adapter — composes EDGAR fundamentals + pure scorer for one rebalance."""
 
     # FCFF / EV ranking doesn't need any price history bars to score (the
-    # market-cap input comes from SimFin daily shareprices, not from the
-    # engine's yfinance histories). 1 satisfies the engine's "histories must
-    # be non-empty" precondition while not gating tickers on warm-up bars.
+    # market-cap input comes from EDGAR-store + yfinance snapshot prices,
+    # not from the engine's yfinance histories). 1 satisfies the engine's
+    # "histories must be non-empty" precondition while not gating tickers
+    # on warm-up bars.
     MIN_BARS_REQUIRED = 1
 
-    def __init__(self, fundamentals_store: SimFinFundamentalsStore):
+    def __init__(self, fundamentals_store: EdgarFundamentalsStore):
         self._store = fundamentals_store
 
     def __call__(
@@ -54,7 +55,7 @@ class EvFcffYieldScorer:
 
         if not snapshots:
             logger.debug(
-                "No SimFin snapshots for asof %s across %d tickers", asof_date, len(histories)
+                "No EDGAR snapshots for asof %s across %d tickers", asof_date, len(histories)
             )
             return pd.DataFrame(columns=["ticker", "score"])
 

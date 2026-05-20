@@ -97,7 +97,7 @@ def score_fcff(
     """Rank ``ticker``'s FCFF yield within its industry ``peers`` cohort.
 
     ``feature_fetcher`` should mirror
-    :meth:`SimFinFundamentalsStore.ev_fcff_features_as_of` — called once per
+    :meth:`EdgarFundamentalsStore.ev_fcff_features_as_of` — called once per
     ticker (candidate + each peer that participates in percentile).
     """
     candidate_features = feature_fetcher(ticker, asof)
