@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Iterable, Sequence
-from datetime import date
+from datetime import date, timedelta
 
 import pyarrow as pa
 
@@ -48,6 +48,34 @@ logger = logging.getLogger(__name__)
 DEFAULT_TAXONOMY = "us-gaap"
 DEFAULT_UNIT = "USD"
 
+# Forms whose XBRL facts feed the TTM / instant aggregators. Proxy
+# statements (DEF 14A), registration statements (S-1, S-3), prospectuses
+# (424B*) and similar were observed in 2026-05 to carry scale-truncated or
+# illustrative numbers that have no place in a Compustat-style TTM rollup
+# (issue #172 Bug 3a: SOUN DEF 14A NetIncomeLoss val=-14,006 stamped in
+# $thousands but XBRL-labelled as plain USD, overrode the canonical 10-K
+# entry of -14,006,000 because of the filed-date tiebreaker).
+DEFAULT_FORM_WHITELIST: frozenset[str] = frozenset(
+    {
+        # Annual + interim US domestic.
+        "10-K",
+        "10-K/A",
+        "10-Q",
+        "10-Q/A",
+        # 8-K earnings recasts: some issuers re-state prior periods with
+        # standalone-Q rows here before the next 10-Q lands.
+        "8-K",
+        "8-K/A",
+        # Foreign private issuers.
+        "20-F",
+        "20-F/A",
+        "40-F",
+        "40-F/A",
+        "6-K",
+        "6-K/A",
+    }
+)
+
 
 def _arrow_table_to_entries(
     table: pa.Table,
@@ -55,6 +83,7 @@ def _arrow_table_to_entries(
     *,
     taxonomy: str = DEFAULT_TAXONOMY,
     unit: str = DEFAULT_UNIT,
+    form_whitelist: frozenset[str] | set[str] | None = DEFAULT_FORM_WHITELIST,
 ) -> list[_Entry]:
     """Filter ``table`` rows to (taxonomy, concept, unit) and convert to _Entry list.
 
@@ -62,6 +91,10 @@ def _arrow_table_to_entries(
     intentionally so the new fundamentals store does not import from the
     event_drift screener (cycle direction: data depends on screeners would
     invert the architecture).
+
+    Rows whose ``form`` is not in ``form_whitelist`` are dropped. Pass
+    ``form_whitelist=None`` to disable the gate (tests asserting legacy
+    behavior on synthetic non-canonical forms).
     """
     filtered = filter_concept(table, taxonomy, concept, unit=unit)
     if filtered.num_rows == 0:
@@ -76,6 +109,7 @@ def _arrow_table_to_entries(
             start=row["period_start"].isoformat() if row["period_start"] is not None else None,
         )
         for row in filtered.to_pylist()
+        if form_whitelist is None or (row["form"] or "") in form_whitelist
     ]
 
 
@@ -134,6 +168,9 @@ def _latest_end_visible(per_period: dict[tuple[str | None, str], _Entry]) -> str
     return max(entry.end for entry in per_period.values())
 
 
+DEFAULT_TTM_MAX_STALENESS_DAYS = 270
+
+
 def compute_ttm(
     reader: CompanyfactsParquetReader,
     cik: str,
@@ -142,27 +179,48 @@ def compute_ttm(
     *,
     taxonomy: str = DEFAULT_TAXONOMY,
     unit: str = DEFAULT_UNIT,
+    max_staleness_days: int | None = DEFAULT_TTM_MAX_STALENESS_DAYS,
 ) -> float | None:
-    """Scan every concept in ``chain``; return the value at the freshest end.
+    """TTM for a semantic concept family with chain-migration protection.
 
-    For each candidate concept:
-      1. Read all entries for that concept from the CIK's parquet table.
-      2. PIT-filter on ``filed_date <= asof``.
-      3. Keep the latest-filed entry per (start, end) pair (handles
-         restatements).
-      4. Apply ``_ttm_at_end`` at that concept's most recent visible end.
+    Two paths, tried in order:
 
-    Across concepts we keep the result with the chronologically latest
-    ``end`` — early-returning on the first non-None hit would silently
-    serve a stale value for issuers that switched XBRL tags (e.g. ASC
-    606 migration when ``Revenues`` is in the chain alongside
-    ``RevenueFromContractWithCustomerExcludingAssessedTax``).
+    1. **Trailing 4-quarter sum** of standalone quarter rows merged across
+       the entire chain (delegated to :func:`compute_per_quarter_series`,
+       which handles standalone-Q + Q4-derivation + concept families).
+       Issue #172 Bug 2 (AVAV): the older per-concept Compustat formula
+       returned ``None`` because a post-merger family lacked a prior-FY
+       anchor, and the aggregator silently fell back to a different
+       concept's ancient TTM. The 4-quarter sum treats the chain as one
+       semantic family, eliminating the false fallback.
 
-    Returns None when the entire chain misses.
+    2. **Compustat ``current_YTD + prior_FY − prior_YTD``** as a secondary
+       method when fewer than 4 quarters are visible across the family.
+       Scoped per-concept (same as before) so that the formula is only
+       applied within an accounting-basis-consistent set of rows.
+
+    A ``max_staleness_days`` gate (default 270 ≈ 9 months) rejects results
+    whose freshest input is older than the window — better to emit
+    ``None`` than to surface a multi-year-old TTM in a daily brief.
     """
     table = reader.get_cik_table(cik)
     if table is None:
         return None
+    cutoff: date | None = (
+        asof - timedelta(days=max_staleness_days) if max_staleness_days is not None else None
+    )
+
+    # Path 1: trailing 4-quarter sum over the merged family.
+    series = compute_per_quarter_series(reader, cik, chain, asof, taxonomy=taxonomy, unit=unit)
+    if len(series) >= 4:
+        last_end = date.fromisoformat(series[-1][0])
+        if cutoff is None or last_end >= cutoff:
+            return float(sum(v for _, v in series[-4:]))
+
+    # Path 2: per-concept Compustat identity. Walk the chain, keep the
+    # result tied to the chronologically latest end, refuse cross-concept
+    # silent fallback whose end is materially older than the freshest
+    # within-concept attempt.
     best_end: str | None = None
     best_val: float | None = None
     for concept in chain:
@@ -183,6 +241,11 @@ def compute_ttm(
             continue
         best_end = end
         best_val = value
+
+    if best_val is None or best_end is None:
+        return None
+    if cutoff is not None and date.fromisoformat(best_end) < cutoff:
+        return None
     return best_val
 
 
@@ -197,18 +260,27 @@ def latest_instant(
     *,
     taxonomy: str = DEFAULT_TAXONOMY,
     unit: str = DEFAULT_UNIT,
+    max_age_days: int | None = None,
 ) -> float | None:
     """Most-recent point-in-time value for an instant concept visible at asof.
 
     Scans every concept in ``chain`` and returns the value attached to the
     chronologically latest ``end`` date — see :func:`compute_ttm` for why
     we do not early-return on first hit (stale-tag protection).
+
+    When ``max_age_days`` is set, entries whose ``period_end`` is older than
+    ``asof - max_age_days`` are treated as if they were not present. Used by
+    the shares-outstanding chain to defend against issuers (e.g. C3.ai,
+    issue #172 Bug 1) whose ``us-gaap:CommonStockSharesOutstanding`` tag was
+    populated once at IPO and never refreshed. ``None`` (default) preserves
+    legacy behavior — equity / debt / cash callers don't currently opt in.
     """
     table = reader.get_cik_table(cik)
     if table is None:
         return None
     best_end: str | None = None
     best_val: float | None = None
+    cutoff: date | None = asof - timedelta(days=max_age_days) if max_age_days is not None else None
     for concept in chain:
         entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
         if not entries:
@@ -216,6 +288,10 @@ def latest_instant(
         visible = _pit_filter(entries, asof)
         if not visible:
             continue
+        if cutoff is not None:
+            visible = [e for e in visible if date.fromisoformat(e.end) >= cutoff]
+            if not visible:
+                continue
         per_end = _latest_per_end(visible)
         if not per_end:
             continue
