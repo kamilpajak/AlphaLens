@@ -121,10 +121,15 @@ def extract_one(
     Omit both to fall back to ``get_default_gemini_client()`` which reads
     ``GOOGLE_API_KEY`` once per process.
     """
-    if gemini_client is None:
-        gemini_client = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
     prompt = build_prompt(news_row)
     try:
+        # Client init inside try so missing-SDK / missing-key failures
+        # degrade per-row rather than crashing extract_daily's loop (zen
+        # pre-merge HIGH 2026-05-20).
+        if gemini_client is None:
+            gemini_client = (
+                GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
+            )
         response = _call_gemini(gemini_client, prompt, model=model)
     except Exception as exc:
         logger.warning("Gemini extract failed: %s", exc, exc_info=True)

@@ -108,9 +108,6 @@ def gemini_flash_tractability_scorer(
 
     `context` must include: rank, momentum_score, themes.
     """
-    if gemini_client is None:
-        gemini_client = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
-
     prompt = _TRACTABILITY_PROMPT.format(
         ticker=ticker,
         asof=asof.isoformat(),
@@ -121,6 +118,13 @@ def gemini_flash_tractability_scorer(
 
     t0 = time.perf_counter()
     try:
+        # Client init inside try so missing-SDK / missing-key failures
+        # degrade to LLMVerdict('uncertain') rather than crashing the
+        # historical_validation loop (zen pre-merge HIGH 2026-05-20).
+        if gemini_client is None:
+            gemini_client = (
+                GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
+            )
         response = gemini_client.generate_content(
             model=model_name,
             contents=prompt,

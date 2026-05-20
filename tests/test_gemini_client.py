@@ -14,9 +14,10 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-def _install_fake_genai() -> tuple[MagicMock, MagicMock]:
-    """Install a fake ``google.genai`` + ``google.genai.types`` into
-    ``sys.modules`` so ``from google import genai`` resolves to the mock.
+def _install_fake_genai(target: dict) -> tuple[MagicMock, MagicMock]:
+    """Install a fake ``google.genai`` + ``google.genai.types`` into the
+    given module map (typically a patch.dict snapshot of ``sys.modules``)
+    so ``from google import genai`` resolves to the mock.
 
     Returns the mock ``genai`` module and a mock ``types`` module so each
     test can configure return values on ``genai.Client(...)`` etc.
@@ -33,25 +34,30 @@ def _install_fake_genai() -> tuple[MagicMock, MagicMock]:
     # call args so test_build_config_passes_through can verify them.
     fake_genai_types.GenerateContentConfig = MagicMock(name="types.GenerateContentConfig")
 
-    sys.modules["google"] = fake_google
-    sys.modules["google.genai"] = fake_genai
-    sys.modules["google.genai.types"] = fake_genai_types
+    target["google"] = fake_google
+    target["google.genai"] = fake_genai
+    target["google.genai.types"] = fake_genai_types
     fake_google.genai = fake_genai
 
     return fake_genai, fake_genai_types
 
 
-def _uninstall_fake_genai() -> None:
-    for name in ("google.genai.types", "google.genai", "google"):
-        sys.modules.pop(name, None)
-
-
 class _FakeGenaiTestCase(unittest.TestCase):
-    """Base test case: installs a fake SDK around each test and resets the
-    canonical client's lazy singleton + module-level SDK cache."""
+    """Base test case: snapshots ``sys.modules`` via ``patch.dict`` so the
+    fake SDK installed for the duration of each test is restored on
+    teardown — even if the real ``google`` namespace was previously loaded
+    by another test (langchain pulls in google.protobuf etc.). Manual
+    ``sys.modules.pop("google", None)`` would have destroyed the real
+    namespace and broken downstream tests.
+
+    Also resets the canonical client's lazy singleton + module-level SDK
+    cache so each test starts clean.
+    """
 
     def setUp(self):
-        self.fake_genai, self.fake_types = _install_fake_genai()
+        self._sys_modules_patcher = patch.dict("sys.modules")
+        self._sys_modules_patcher.start()
+        self.fake_genai, self.fake_types = _install_fake_genai(sys.modules)
         from alphalens.data.alt_data import gemini_client as mod
 
         mod._reset_default_client_for_tests()
@@ -62,7 +68,9 @@ class _FakeGenaiTestCase(unittest.TestCase):
 
         mod._reset_default_client_for_tests()
         mod._reset_sdk_cache_for_tests()
-        _uninstall_fake_genai()
+        # patch.dict reverts sys.modules to its pre-setUp state — restoring
+        # the real `google` namespace if another test had imported it.
+        self._sys_modules_patcher.stop()
 
 
 class TestClientConstruction(_FakeGenaiTestCase):
@@ -100,11 +108,16 @@ class TestClientConstruction(_FakeGenaiTestCase):
         """If google-genai is not installed, _load_genai_sdk must raise with
         the canonical actionable message. google-genai is a hard dep in
         pyproject so the real import succeeds — we patch the import
-        machinery to simulate absence."""
+        machinery to simulate absence. sys.modules is still snapshotted
+        by the base class so the simulated absence cannot leak into the
+        next test."""
         from alphalens.data.alt_data import gemini_client as mod
 
         mod._reset_sdk_cache_for_tests()
-        _uninstall_fake_genai()
+        # Remove fake from the current snapshot so the import falls through
+        # to __import__ — base-class patch.dict will restore on tearDown.
+        for name in ("google.genai.types", "google.genai", "google"):
+            sys.modules.pop(name, None)
 
         real_import = (
             __builtins__["__import__"]

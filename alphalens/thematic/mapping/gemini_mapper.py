@@ -230,10 +230,15 @@ def propose_candidates(
     themes. Pass ``api_key=`` for ad-hoc one-off use. Omit both to fall
     back to ``get_default_gemini_client()``.
     """
-    if gemini_client is None:
-        gemini_client = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
     prompt = build_prompt(theme)
     try:
+        # Client init inside try so missing-SDK / missing-key failures
+        # degrade per-theme rather than crashing the orchestrator's loop
+        # over all themes (zen pre-merge HIGH 2026-05-20).
+        if gemini_client is None:
+            gemini_client = (
+                GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
+            )
         response = _call_gemini(gemini_client, prompt, model=model)
     except Exception as exc:
         logger.warning("Gemini mapper failed for theme %r: %s", theme, exc, exc_info=True)

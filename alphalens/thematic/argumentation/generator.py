@@ -127,17 +127,20 @@ def generate_brief(
     model = choose_model(weighted_score=facts.get("weighted_score"))
     prompt = build_pro_prompt(facts) if model == PRO_MODEL else build_flash_prompt(facts)
 
-    if gemini_client_pro is None and gemini_client_flash is None:
-        default = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
-        gemini_client_pro = default
-        gemini_client_flash = default
-    else:
-        # Partial hoisting — fill in the other half with the supplied one.
-        gemini_client_pro = gemini_client_pro or gemini_client_flash
-        gemini_client_flash = gemini_client_flash or gemini_client_pro
-    client = gemini_client_pro if model == PRO_MODEL else gemini_client_flash
-
     try:
+        # Client init inside try so missing-SDK / missing-key failures
+        # degrade per-brief (BriefErrorKind.TRANSPORT) rather than
+        # crashing the orchestrator's loop (zen pre-merge HIGH 2026-05-20).
+        if gemini_client_pro is None and gemini_client_flash is None:
+            default = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
+            gemini_client_pro = default
+            gemini_client_flash = default
+        else:
+            # Partial hoisting — fill in the other half with the supplied one.
+            gemini_client_pro = gemini_client_pro or gemini_client_flash
+            gemini_client_flash = gemini_client_flash or gemini_client_pro
+        client = gemini_client_pro if model == PRO_MODEL else gemini_client_flash
+
         response = _call_gemini(
             client,
             prompt,

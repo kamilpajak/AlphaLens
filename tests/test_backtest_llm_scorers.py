@@ -92,19 +92,21 @@ class TestGeminiFlashTractabilityScorer(unittest.TestCase):
 
         self.assertEqual(len(v.reasoning), 280)
 
-    def test_missing_api_key_raises(self):
-        """When neither gemini_client nor api_key is supplied, the lazy
-        singleton attempts GeminiClient.from_env() which raises ValueError
-        if GOOGLE_API_KEY is unset."""
+    def test_missing_api_key_degrades_to_uncertain(self):
+        """Per zen pre-merge HIGH 2026-05-20: when neither gemini_client nor
+        api_key is supplied AND GOOGLE_API_KEY is unset,
+        get_default_gemini_client() raises ValueError but it is caught and
+        the scorer returns LLMVerdict('uncertain'). This keeps the
+        historical_validation loop from crashing on misconfigured nodes."""
         from alphalens.backtest.llm_scorers import gemini_flash_tractability_scorer
         from alphalens.data.alt_data import gemini_client as gc_mod
 
         gc_mod._reset_default_client_for_tests()
         try:
             with patch.dict("os.environ", {}, clear=True):
-                with self.assertRaises(ValueError) as cm:
-                    gemini_flash_tractability_scorer("X", date(2025, 1, 1), {})
-            self.assertIn("GOOGLE_API_KEY", str(cm.exception))
+                v = gemini_flash_tractability_scorer("X", date(2025, 1, 1), {})
+            self.assertEqual(v.verdict, "uncertain")
+            self.assertIn("GOOGLE_API_KEY", v.reasoning)
         finally:
             gc_mod._reset_default_client_for_tests()
 
