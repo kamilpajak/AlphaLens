@@ -4,6 +4,14 @@
 	import { ArrowUpRight, ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
 	import GatePill from './GatePill.svelte';
+	import JargonTip from './JargonTip.svelte';
+	import { GLOSSARY_BY_TERM } from '$lib/data/glossary';
+
+	// Same tipProps pattern as /experiments — looks up term in shared glossary.
+	function tipProps(term: string) {
+		const g = GLOSSARY_BY_TERM.get(term);
+		return { term: g?.term ?? term, full: g?.full ?? '', body: g?.body ?? '' };
+	}
 
 	interface Props {
 		candidate: Candidate;
@@ -197,14 +205,14 @@
 		<div class="col-span-12 lg:col-span-6 px-4 sm:px-5 py-4 lg:border-r lg:border-grid">
 			<div class="text-[10px] uppercase tracking-widest text-fg-muted mb-2">fundamentals</div>
 			<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5">
-				<dt class="text-fg-muted uppercase tracking-widest">pe</dt><dd class="text-fg text-right">{fmtNum(c.valuation_pe, 1)}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">ps</dt><dd class="text-fg text-right">{fmtNum(c.valuation_ps, 1)}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">ev/rev</dt><dd class="text-fg text-right">{fmtNum(c.valuation_ev_rev, 1)}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">ev/ebitda</dt><dd class="text-fg text-right">{fmtNum(c.valuation_ev_ebitda, 1)}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">fcf margin</dt><dd class="text-fg text-right">{c.valuation_fcf_margin !== null ? fmtPct(c.valuation_fcf_margin * 100) : '—'}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">roe</dt><dd class="text-fg text-right">{fmtPct(c.roe_pct)}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">fcff yield</dt><dd class="text-fg text-right">{fmtPct(c.fcff_yield_pct, 2)}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">magic formula</dt><dd class="text-right">
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('PE')}>pe</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_pe, 1)}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('PS')}>ps</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ps, 1)}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('EV/REV')}>ev/rev</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ev_rev, 1)}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('EV/EBITDA')}>ev/ebitda</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ev_ebitda, 1)}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('FCF margin')}>fcf margin</JargonTip></dt><dd class="text-fg text-right">{c.valuation_fcf_margin !== null ? fmtPct(c.valuation_fcf_margin * 100) : '—'}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('ROE')}>roe</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.roe_pct)}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('FCFF')}>fcff yield</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.fcff_yield_pct, 2)}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('magic formula')}>magic formula</JargonTip></dt><dd class="text-right">
 					{#if c.magic_formula_rank != null}
 						<span class="text-amber font-bold">#{Math.round(c.magic_formula_rank)}</span>
 						<span class="text-fg-muted">/{c.magic_formula_cohort_n}</span>
@@ -219,10 +227,10 @@
 		<div class="col-span-12 lg:col-span-6 px-4 sm:px-5 py-4 border-t lg:border-t-0 border-grid">
 			<div class="text-[10px] uppercase tracking-widest text-fg-muted mb-2">technicals · trade setup</div>
 			<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5">
-				<dt class="text-fg-muted uppercase tracking-widest">ma50 dist</dt><dd class="text-fg text-right">{fmtPct(c.technical_ma50_distance_pct)}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">ma200 dist</dt><dd class="text-fg text-right">{fmtPct(c.technical_ma200_distance_pct)}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA50')}>ma50 dist</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_ma50_distance_pct)}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA200')}>ma200 dist</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_ma200_distance_pct)}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest">ma200 slope</dt><dd class="text-fg text-right">{c.technical_ma200_slope_pct_per_day !== null ? fmtPct(c.technical_ma200_slope_pct_per_day, 3) + '/d' : '—'}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">atr</dt><dd class="text-fg text-right">{fmtPct(c.technical_atr_pct)}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('ATR')}>atr</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_atr_pct)}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest">position size</dt><dd class="text-amber text-right font-bold">{c.brief_position_pct != null ? c.brief_position_pct.toFixed(1) + '%' : '—'}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest">time exit</dt><dd class="text-fg text-right">{c.brief_time_exit_weeks != null ? c.brief_time_exit_weeks + 'w' : '—'}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest">catalyst-fail exit</dt><dd class="text-fg text-right">{c.brief_time_exit_on_catalyst_failure_weeks != null ? c.brief_time_exit_on_catalyst_failure_weeks + 'w' : '—'}</dd>

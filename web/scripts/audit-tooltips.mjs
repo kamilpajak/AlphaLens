@@ -31,16 +31,34 @@ const glossarySrc = readFileSync(GLOSSARY_TS, 'utf-8');
 // ---------- Parse glossary ----------
 const glossaryEntries = new Map();
 {
+	// Match {...category: 'X'} as before, then optionally capture a following
+	// pages: [...] array. Terms with pages NOT including 'experiments' are
+	// scoped to other routes (e.g. /brief/[date]) and the unreferenced-check
+	// below skips them — this audit script scans the /experiments page only.
 	const entryRe =
-		/\{\s*\n\s*term:\s*'([^']+)',\s*\n\s*full:\s*'([^']*)',\s*\n\s*body:\s*'((?:[^'\\]|\\.)*)'[\s,\n]*category:\s*'(always|first-per-section)'/g;
+		/\{\s*\n\s*term:\s*'([^']+)',\s*\n\s*full:\s*'([^']*)',\s*\n\s*body:\s*'((?:[^'\\]|\\.)*)'[\s,\n]*category:\s*'(always|first-per-section)'([^}]*)/g;
 	let m;
 	while ((m = entryRe.exec(glossarySrc)) !== null) {
-		glossaryEntries.set(m[1], { full: m[2], body: m[3], category: m[4] });
+		const trailing = m[5] ?? '';
+		const pagesMatch = trailing.match(/pages:\s*\[([^\]]+)\]/);
+		let pages = ['experiments'];
+		if (pagesMatch) {
+			pages = pagesMatch[1]
+				.split(',')
+				.map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
+				.filter(Boolean);
+		}
+		glossaryEntries.set(m[1], { full: m[2], body: m[3], category: m[4], pages });
 	}
 }
 const glossaryKeys = new Set(glossaryEntries.keys());
 const alwaysTerms = new Set(
 	[...glossaryEntries.entries()].filter(([, v]) => v.category === 'always').map(([k]) => k)
+);
+const experimentsScopedTerms = new Set(
+	[...glossaryEntries.entries()]
+		.filter(([, v]) => v.pages.includes('experiments'))
+		.map(([k]) => k)
 );
 
 // ---------- Identify sections (line-range based) ----------
@@ -283,7 +301,10 @@ const refCounts = new Map();
 for (const w of wraps) {
 	refCounts.set(w.term, (refCounts.get(w.term) ?? 0) + 1);
 }
-const unreferenced = [...glossaryKeys].filter((t) => (refCounts.get(t) ?? 0) === 0);
+// Only fail unreferenced for terms scoped to /experiments — brief-only terms
+// (e.g. PE, PS, EV/EBITDA) live in CandidateCard.svelte which this script
+// doesn't scan. The auto-discovery smoke tests cover those per-page.
+const unreferenced = [...experimentsScopedTerms].filter((t) => (refCounts.get(t) ?? 0) === 0);
 
 // ---------- Over-wrap detection for FIRST-per-section ----------
 // Group wraps by (term, section). For each FIRST-per-section term with >1 wrap
@@ -344,13 +365,16 @@ reportCheck(
 	(o) => `${o.term} wrapped ${o.count}× in ${o.section} (lines ${o.lines.join(', ')})`
 );
 
-console.log(`\nPer-term reference count:`);
+console.log(`\nPer-term reference count (/experiments scan only):`);
 for (const t of [...glossaryKeys].sort()) {
+	const entry = glossaryEntries.get(t);
 	const n = refCounts.get(t) ?? 0;
-	const cat = glossaryEntries.get(t).category;
-	const tag = cat === 'always' ? '[ALW]' : '[FPS]';
-	const mark = n === 0 ? '✗' : '✓';
-	console.log(`  ${mark} ${tag} ${t}: ${n}`);
+	const tag = entry.category === 'always' ? '[ALW]' : '[FPS]';
+	const scope = entry.pages.includes('experiments') ? '' : ` (page-scope: ${entry.pages.join(',')})`;
+	// Brief-only terms never count against /experiments, so 0 is expected.
+	const required = entry.pages.includes('experiments');
+	const mark = !required ? '·' : n === 0 ? '✗' : '✓';
+	console.log(`  ${mark} ${tag} ${t}: ${n}${scope}`);
 }
 
 process.exit(exitCode);
