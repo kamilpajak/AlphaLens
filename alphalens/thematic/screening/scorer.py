@@ -34,6 +34,19 @@ from alphalens.thematic.screening import (
 logger = logging.getLogger(__name__)
 
 
+def _yfinance_mcap_for_gate(ticker: str, asof: dt.date) -> float | None:
+    """External mcap reference for ``valuation_signal``'s consistency gate.
+
+    Thin wrapper around
+    :func:`alphalens.thematic.verification.mcap_filter.fetch_mcap` so the
+    scorer doesn't import yfinance directly and the import remains lazy
+    (avoids slowing down CLI startup per CLAUDE.md "lazy CLI imports").
+    """
+    from alphalens.thematic.verification.mcap_filter import fetch_mcap
+
+    return fetch_mcap(ticker, asof=asof)
+
+
 # ---- Per-signal "positive" rules ----------------------------------------
 
 
@@ -293,6 +306,7 @@ def _score_signals(
         asof=asof,
         peers=peers,
         feature_fetcher=feature_fetcher,
+        external_mcap_fetcher=_yfinance_mcap_for_gate,
     )
     tech = _safe_signal(
         "technicals",

@@ -33,6 +33,24 @@ from alphalens.thematic.screening._common import clamp_tax, percentile_rank
 
 logger = logging.getLogger(__name__)
 
+# Fractional divergence between (price × EDGAR shares) and an external
+# market-cap reference above which valuation multiples are degraded to
+# None. Issue #172 Bug 1 (C3.ai): EDGAR shares were 37× stale, putting
+# valuation_composite at the cohort's 93%ile while UI mcap (from
+# yfinance) was correct. The gate refuses to score a candidate when the
+# two mcap sources disagree by more than this tolerance.
+MCAP_CONSISTENCY_TOLERANCE = 0.10
+
+# Degraded payload returned when the gate trips. Keeps the dict shape
+# stable for downstream consumers (renderer, brief writer) that expect
+# all keys to be present.
+_DEGRADED_MULTIPLES: dict[str, float | None] = {
+    "pe": None,
+    "ps": None,
+    "ev_rev": None,
+    "fcf_margin": None,
+}
+
 
 def _safe_get(d: dict, key: str) -> float | None:
     """Return ``d[key]`` cast to float, or None on missing/NaN/non-numeric."""
@@ -135,14 +153,52 @@ def score_valuation(
     asof: dt.date,
     peers: list[str],
     feature_fetcher: Callable[[str, dt.date], dict | None],
+    external_mcap_fetcher: Callable[[str, dt.date], float | None] | None = None,
 ) -> dict[str, float | None]:
     """Compute the 4 multiples + a composite sector percentile.
 
     Composite = average of available per-metric percentiles. ``None`` when
     every multiple is missing (no input data resolved for the candidate).
+
+    When ``external_mcap_fetcher`` is supplied (typically
+    :func:`alphalens.thematic.verification.mcap_filter.fetch_mcap`), the
+    candidate's EDGAR-derived mcap (``price × shares_outstanding``) is
+    cross-checked against the external reference. Divergence above
+    :data:`MCAP_CONSISTENCY_TOLERANCE` degrades all multiples to ``None``
+    so a bogus "deep value" composite cannot reach the brief. Peers are
+    NOT gated — they're a percentile basket where individual stale points
+    matter much less than the candidate's own mis-pricing.
     """
     cand_features = feature_fetcher(ticker, asof)
     cand_multiples = compute_multiples(cand_features)
+
+    if external_mcap_fetcher is not None:
+        edgar_mcap = _market_cap(cand_features) if cand_features else None
+        if edgar_mcap is not None and edgar_mcap > 0:
+            external_mcap = external_mcap_fetcher(ticker, asof)
+            if external_mcap is not None and external_mcap > 0:
+                divergence = abs(edgar_mcap - external_mcap) / external_mcap
+                if divergence > MCAP_CONSISTENCY_TOLERANCE:
+                    logger.warning(
+                        "mcap consistency gate tripped for %s: edgar=%.2e external=%.2e divergence=%.2f",
+                        ticker,
+                        edgar_mcap,
+                        external_mcap,
+                        divergence,
+                    )
+                    publish_date_str = (cand_features or {}).get("publish_date_str")
+                    age_days = None
+                    if publish_date_str:
+                        try:
+                            age_days = (asof - dt.date.fromisoformat(publish_date_str)).days
+                        except (TypeError, ValueError):
+                            age_days = None
+                    return {
+                        **_DEGRADED_MULTIPLES,
+                        "composite_sector_percentile": None,
+                        "financials_publish_date": publish_date_str,
+                        "financials_age_days": age_days,
+                    }
 
     # Freshness telemetry — surface publish_date + age so downstream consumers
     # (briefs, observability) can flag stale fundamentals.
