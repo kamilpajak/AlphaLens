@@ -317,6 +317,27 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		const count = await glossarySection.locator('[data-testid="jargon-tip"]').count();
 		expect(count, 'glossary section JargonTip count must be 0').toBe(0);
 	});
+
+	test('paradigm detail fields collapsed by default (P0.1)', async ({ page }) => {
+		await page.goto('/experiments');
+		// Every paradigm row's <details> must start closed so the page is
+		// scannable on initial render. If a future edit flips a default to
+		// open, scroll depth balloons back to the pre-P0.1 level.
+		const opened = await page.locator('article details[open]').count();
+		expect(opened, 'no paradigm details should be open on initial load').toBe(0);
+		// And every paradigm row must contain exactly one <details>.
+		const articles = await page.locator('article').count();
+		const details = await page.locator('article details').count();
+		expect(details, 'one <details> per paradigm article').toBe(articles);
+	});
+
+	test('hash auto-expand opens target paradigm row (P0.2)', async ({ page }) => {
+		await page.goto('/experiments#P14');
+		// $effect runs after hydration; wait briefly for the details to flip.
+		await page.locator('article#P14 details[open]').waitFor({ timeout: 2000 });
+		const opened = await page.locator('article#P14 details[open]').count();
+		expect(opened, 'P14 details must be open after hash deep-link').toBe(1);
+	});
 });
 
 test.describe('experiments — glossary auto-discovery', () => {
