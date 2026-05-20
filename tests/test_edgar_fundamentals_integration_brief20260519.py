@@ -117,9 +117,11 @@ class TestBrief20260519Replay(unittest.TestCase):
                 features = store.ev_fcff_features_as_of("AI", date(2026, 5, 19))
             self.assertEqual(features["shares_outstanding"], 140_000_000.0)
 
-    def test_AVAV_revenue_uses_4quarter_sum_not_legacy_concept(self):
+    def test_AVAV_revenue_degraded_when_fy_anchor_missing_not_legacy(self):
         """Pre-fix: silent fallback to ``Revenues`` 2020 returned ~$297M.
-        Post-fix: 4-quarter sum across the merged family returns ~$1.5B.
+        Post-fix: 4Q span fails contiguity guard (no Q4 FY25 standalone
+        in this fixture); Compustat per-concept fails too. Result: None
+        (signal degraded — issue #172 acceptance branch (b)).
         """
         from alphalens.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
@@ -182,8 +184,13 @@ class TestBrief20260519Replay(unittest.TestCase):
                 cache_dir=tdp, sec_client=_stub_sec_client({"AVAV": cik})
             )
             features = store.ev_fcff_features_as_of("AVAV", date(2026, 5, 19))
-            self.assertGreater(features["revenue_ttm"], 1_400_000_000.0)
-            self.assertLess(features["revenue_ttm"], 1_600_000_000.0)
+            # In this fixture (no Q4 FY25 derivation possible — the new
+            # concept has no FY25 10-K row) the 4Q span fails contiguity
+            # and the Compustat per-concept path also fails. The gate
+            # degrades the signal to None — the honest outcome, and the
+            # critical property is that the bogus $297M legacy fallback
+            # never reaches the brief.
+            self.assertIsNone(features["revenue_ttm"])
 
     def test_SOUN_def14a_proxy_does_not_corrupt_ROE(self):
         """Pre-fix: DEF 14A NetIncomeLoss val=-14_006 won by filed-date

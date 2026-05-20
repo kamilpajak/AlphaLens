@@ -210,11 +210,19 @@ def compute_ttm(
         asof - timedelta(days=max_staleness_days) if max_staleness_days is not None else None
     )
 
-    # Path 1: trailing 4-quarter sum over the merged family.
+    # Path 1: trailing 4-quarter sum over the merged family. Guarded by a
+    # 250..300d span check (zen finding #1 on PR #174): an issuer who
+    # skips a quarter would otherwise produce a 5-calendar-quarter sum
+    # ``Q1+Q2+Q4+Q1_next`` which is arithmetically valid but
+    # semantically wrong — three of the four rows belong to different
+    # fiscal years. The window covers 52/53-week fiscal calendar drift
+    # (4 quarters ≈ 273 days; allow ±~3 weeks).
     series = compute_per_quarter_series(reader, cik, chain, asof, taxonomy=taxonomy, unit=unit)
     if len(series) >= 4:
+        first_end = date.fromisoformat(series[-4][0])
         last_end = date.fromisoformat(series[-1][0])
-        if cutoff is None or last_end >= cutoff:
+        span_days = (last_end - first_end).days
+        if 250 <= span_days <= 300 and (cutoff is None or last_end >= cutoff):
             return float(sum(v for _, v in series[-4:]))
 
     # Path 2: per-concept Compustat identity. Walk the chain, keep the
@@ -224,7 +232,16 @@ def compute_ttm(
     best_end: str | None = None
     best_val: float | None = None
     for concept in chain:
-        entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
+        # Explicit form_whitelist=DEFAULT_FORM_WHITELIST per zen finding #4
+        # (PR #174): the constraint is visible at the call site so future
+        # readers can audit the form gating without chasing default values.
+        entries = _arrow_table_to_entries(
+            table,
+            concept,
+            taxonomy=taxonomy,
+            unit=unit,
+            form_whitelist=DEFAULT_FORM_WHITELIST,
+        )
         if not entries:
             continue
         visible = _pit_filter(entries, asof)
@@ -282,7 +299,16 @@ def latest_instant(
     best_val: float | None = None
     cutoff: date | None = asof - timedelta(days=max_age_days) if max_age_days is not None else None
     for concept in chain:
-        entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
+        # Explicit form_whitelist=DEFAULT_FORM_WHITELIST per zen finding #4
+        # (PR #174): the constraint is visible at the call site so future
+        # readers can audit the form gating without chasing default values.
+        entries = _arrow_table_to_entries(
+            table,
+            concept,
+            taxonomy=taxonomy,
+            unit=unit,
+            form_whitelist=DEFAULT_FORM_WHITELIST,
+        )
         if not entries:
             continue
         visible = _pit_filter(entries, asof)
@@ -448,7 +474,16 @@ def compute_per_quarter_series(
     derived_ends: set[str] = set()
 
     for concept in chain:
-        entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
+        # Explicit form_whitelist=DEFAULT_FORM_WHITELIST per zen finding #4
+        # (PR #174): the constraint is visible at the call site so future
+        # readers can audit the form gating without chasing default values.
+        entries = _arrow_table_to_entries(
+            table,
+            concept,
+            taxonomy=taxonomy,
+            unit=unit,
+            form_whitelist=DEFAULT_FORM_WHITELIST,
+        )
         if not entries:
             continue
         visible = _pit_filter(entries, asof)
@@ -540,7 +575,16 @@ def has_any_concept(
     if table is None:
         return False
     for concept in chain:
-        entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
+        # Explicit form_whitelist=DEFAULT_FORM_WHITELIST per zen finding #4
+        # (PR #174): the constraint is visible at the call site so future
+        # readers can audit the form gating without chasing default values.
+        entries = _arrow_table_to_entries(
+            table,
+            concept,
+            taxonomy=taxonomy,
+            unit=unit,
+            form_whitelist=DEFAULT_FORM_WHITELIST,
+        )
         visible = _pit_filter(entries, asof)
         if len({e.end for e in visible}) >= min_distinct_ends:
             return True
