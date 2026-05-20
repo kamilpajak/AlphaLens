@@ -250,6 +250,137 @@ def _build_ohlcv_loader() -> Callable[[str, date], pd.DataFrame]:
 # ---- Main entry point ---------------------------------------------------
 
 
+def _collect_universe(candidates: pd.DataFrame, peer_cache: dict[int, list[str]]) -> set[str]:
+    """Build the SimFin preload universe: candidate tickers + each industry's peers.
+
+    Side effect: populates ``peer_cache`` with industry → peer list lookups so
+    ``score_candidates`` can reuse them later without re-querying.
+    """
+    universe: set[str] = set()
+    for _, cand in candidates.iterrows():
+        tkr = str(cand["ticker"]).upper()
+        universe.add(tkr)
+        ind = sector_peers.get_industry_id(tkr)
+        if ind is not None:
+            peer_cache.setdefault(ind, sector_peers.iter_industry_peers(ind))
+            universe.update(peer_cache[ind])
+    return universe
+
+
+def _score_signals(
+    *, ticker: str, asof: dt.date, peers: list[str], feature_fetcher, ohlcv_loader
+) -> tuple[dict, dict, dict, dict]:
+    """Run the four per-candidate signal scorers under ``_safe_signal``."""
+    ins = _safe_signal(
+        "insider", insider_signal.score_insider, ticker=ticker, asof=asof, peers=peers
+    )
+    fcff = _safe_signal(
+        "fcff",
+        fcff_signal.score_fcff,
+        ticker=ticker,
+        asof=asof,
+        peers=peers,
+        feature_fetcher=feature_fetcher,
+    )
+    val = _safe_signal(
+        "valuation",
+        valuation_signal.score_valuation,
+        ticker=ticker,
+        asof=asof,
+        peers=peers,
+        feature_fetcher=feature_fetcher,
+    )
+    tech = _safe_signal(
+        "technicals",
+        technicals_signal.score_technicals,
+        ticker=ticker,
+        asof=asof,
+        loader=ohlcv_loader,
+    )
+    return ins, fcff, val, tech
+
+
+def _compute_magic_formula_fields(features: dict) -> tuple[float, float, float, bool]:
+    """EV/EBITDA, ROIC, ROE, health-gate verdict from the SimFin features dict."""
+    market_cap = _market_cap_from_features(features)
+    mf_ev_ebitda = magic_formula.compute_ev_ebitda(
+        features, market_cap=market_cap if market_cap is not None else float("nan")
+    )
+    return (
+        mf_ev_ebitda,
+        magic_formula.compute_roic(features),
+        magic_formula.compute_roe(features),
+        magic_formula.passes_health_gate(features),
+    )
+
+
+def _build_candidate_row(
+    *,
+    ticker: str,
+    industry_id: int | None,
+    industry_name: str | None,
+    sector_name: str | None,
+    ins: dict,
+    fcff: dict,
+    val: dict,
+    tech: dict,
+    mf_ev_ebitda: float,
+    mf_roic: float,
+    mf_roe: float,
+    mf_health: bool,
+    catalyst_event: dict | None,
+    cs_val: float,
+) -> dict:
+    """Assemble one candidate's enrichment row (deferred Magic-Formula rank
+    + weighted score + reversal detection are post-loop because they need
+    the whole cohort).
+    """
+    return {
+        "ticker": ticker,
+        "industry_id": industry_id if industry_id is not None else np.nan,
+        "industry_name": industry_name,
+        "sector_name": sector_name,
+        "insider_score_usd": ins["score_usd"],
+        "insider_score_sector_percentile": ins["sector_percentile"],
+        "fcff_yield_pct": fcff["yield_pct"],
+        "fcff_yield_sector_percentile": fcff["sector_percentile"],
+        "valuation_pe": val["pe"],
+        "valuation_ps": val["ps"],
+        "valuation_ev_rev": val["ev_rev"],
+        "valuation_ev_ebitda": mf_ev_ebitda,
+        "valuation_fcf_margin": val["fcf_margin"],
+        "valuation_composite_sector_percentile": val["composite_sector_percentile"],
+        "valuation_financials_publish_date": val.get("financials_publish_date"),
+        "valuation_financials_age_days": val.get("financials_age_days"),
+        "roic_pct": mf_roic,
+        "roe_pct": mf_roe,
+        "magic_formula_health_pass": mf_health,
+        "technical_rsi": tech["rsi"],
+        "technical_ma50_distance_pct": tech["ma50_distance_pct"],
+        "technical_atr_pct": tech["atr_pct"],
+        "technical_volume_zscore": tech["volume_zscore"],
+        "technical_pct_off_52w_high": tech.get("pct_off_52w_high"),
+        "technical_pct_off_52w_low": tech.get("pct_off_52w_low"),
+        "technical_ma200_distance_pct": tech.get("ma200_distance_pct"),
+        "technical_ma200_slope_pct_per_day": tech.get("ma200_slope_pct_per_day"),
+        "technicals_summary_str": tech["summary"],
+        "catalyst_strength": cs_val,
+        "catalyst_event_type": (catalyst_event or {}).get("event_type"),
+        "catalyst_confidence": (catalyst_event or {}).get("confidence"),
+        # Stashed for the reversal detector (source_event_url is
+        # in candidates.parquet, merged AFTER this frame). Dropped
+        # before the public DataFrame is built.
+        "_catalyst_url": (catalyst_event or {}).get("url"),
+        # Signal positives stashed for the post-loop weighted-score
+        # composition; dropped before the public DataFrame is built.
+        "_insider_positive": insider_is_positive(score_usd=ins["score_usd"]),
+        "_fcff_positive": fcff_is_positive(sector_percentile=fcff["sector_percentile"]),
+        "_technicals_positive": technicals_are_positive(
+            rsi=tech["rsi"], ma_distance_pct=tech["ma50_distance_pct"]
+        ),
+    }
+
+
 def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame:
     """Enrich the Phase C candidates frame with Layer 4 columns.
 
@@ -260,17 +391,8 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
     if candidates.empty:
         return candidates.copy()
 
-    # Collect candidate tickers + each industry's peer set so SimFin preload
-    # validates coverage across the full universe Phase D will query.
     peer_cache: dict[int, list[str]] = {}
-    universe: set[str] = set()
-    for _, cand in candidates.iterrows():
-        tkr = str(cand["ticker"]).upper()
-        universe.add(tkr)
-        ind = sector_peers.get_industry_id(tkr)
-        if ind is not None:
-            peer_cache.setdefault(ind, sector_peers.iter_industry_peers(ind))
-            universe.update(peer_cache[ind])
+    universe = _collect_universe(candidates, peer_cache)
 
     feature_fetcher = _build_feature_fetcher(sorted(universe))
     ohlcv_loader = _build_ohlcv_loader()
@@ -306,97 +428,40 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
     for _, cand in candidates.iterrows():
         ticker = str(cand["ticker"]).upper()
         industry_id, industry_name, sector_name, peers = _resolve_industry(ticker)
-
-        ins = _safe_signal(
-            "insider", insider_signal.score_insider, ticker=ticker, asof=asof, peers=peers
-        )
-        fcff = _safe_signal(
-            "fcff",
-            fcff_signal.score_fcff,
+        ins, fcff, val, tech = _score_signals(
             ticker=ticker,
             asof=asof,
             peers=peers,
             feature_fetcher=feature_fetcher,
+            ohlcv_loader=ohlcv_loader,
         )
-        val = _safe_signal(
-            "valuation",
-            valuation_signal.score_valuation,
-            ticker=ticker,
-            asof=asof,
-            peers=peers,
-            feature_fetcher=feature_fetcher,
-        )
-        tech = _safe_signal(
-            "technicals",
-            technicals_signal.score_technicals,
-            ticker=ticker,
-            asof=asof,
-            loader=ohlcv_loader,
-        )
-
         # Magic Formula inputs — derived from the (cached) SimFin features
         # dict. ``feature_fetcher`` memoises per (ticker, asof) so this call
         # is free after the val/fcff signal scorers above.
         features = feature_fetcher(ticker, asof) or {}
-        market_cap = _market_cap_from_features(features)
-        mf_ev_ebitda = magic_formula.compute_ev_ebitda(
-            features, market_cap=market_cap if market_cap is not None else float("nan")
-        )
-        mf_roic = magic_formula.compute_roic(features)
-        mf_roe = magic_formula.compute_roe(features)
-        mf_health = magic_formula.passes_health_gate(features)
-
+        mf_ev_ebitda, mf_roic, mf_roe, mf_health = _compute_magic_formula_fields(features)
         # Catalyst lookup — cached per theme. Returns extended event dict
         # (url, title, published_at, event_type, confidence, second_order_
         # implications). None when no theme-tagged event survives noise filter.
         catalyst_event = _resolve_catalyst_event(str(cand.get("theme", "")))
         cs_val = catalyst_signals.compute_catalyst_strength(catalyst_event)
-
         rows.append(
-            {
-                "ticker": ticker,
-                "industry_id": industry_id if industry_id is not None else np.nan,
-                "industry_name": industry_name,
-                "sector_name": sector_name,
-                "insider_score_usd": ins["score_usd"],
-                "insider_score_sector_percentile": ins["sector_percentile"],
-                "fcff_yield_pct": fcff["yield_pct"],
-                "fcff_yield_sector_percentile": fcff["sector_percentile"],
-                "valuation_pe": val["pe"],
-                "valuation_ps": val["ps"],
-                "valuation_ev_rev": val["ev_rev"],
-                "valuation_ev_ebitda": mf_ev_ebitda,
-                "valuation_fcf_margin": val["fcf_margin"],
-                "valuation_composite_sector_percentile": val["composite_sector_percentile"],
-                "valuation_financials_publish_date": val.get("financials_publish_date"),
-                "valuation_financials_age_days": val.get("financials_age_days"),
-                "roic_pct": mf_roic,
-                "roe_pct": mf_roe,
-                "magic_formula_health_pass": mf_health,
-                "technical_rsi": tech["rsi"],
-                "technical_ma50_distance_pct": tech["ma50_distance_pct"],
-                "technical_atr_pct": tech["atr_pct"],
-                "technical_volume_zscore": tech["volume_zscore"],
-                "technical_pct_off_52w_high": tech.get("pct_off_52w_high"),
-                "technical_pct_off_52w_low": tech.get("pct_off_52w_low"),
-                "technical_ma200_distance_pct": tech.get("ma200_distance_pct"),
-                "technical_ma200_slope_pct_per_day": tech.get("ma200_slope_pct_per_day"),
-                "technicals_summary_str": tech["summary"],
-                "catalyst_strength": cs_val,
-                "catalyst_event_type": (catalyst_event or {}).get("event_type"),
-                "catalyst_confidence": (catalyst_event or {}).get("confidence"),
-                # Stashed for the reversal detector (source_event_url is
-                # in candidates.parquet, merged AFTER this frame). Dropped
-                # before the public DataFrame is built.
-                "_catalyst_url": (catalyst_event or {}).get("url"),
-                # Signal positives stashed for the post-loop weighted-score
-                # composition; dropped before the public DataFrame is built.
-                "_insider_positive": insider_is_positive(score_usd=ins["score_usd"]),
-                "_fcff_positive": fcff_is_positive(sector_percentile=fcff["sector_percentile"]),
-                "_technicals_positive": technicals_are_positive(
-                    rsi=tech["rsi"], ma_distance_pct=tech["ma50_distance_pct"]
-                ),
-            }
+            _build_candidate_row(
+                ticker=ticker,
+                industry_id=industry_id,
+                industry_name=industry_name,
+                sector_name=sector_name,
+                ins=ins,
+                fcff=fcff,
+                val=val,
+                tech=tech,
+                mf_ev_ebitda=mf_ev_ebitda,
+                mf_roic=mf_roic,
+                mf_roe=mf_roe,
+                mf_health=mf_health,
+                catalyst_event=catalyst_event,
+                cs_val=cs_val,
+            )
         )
     enrichment = pd.DataFrame(rows)
 
