@@ -331,6 +331,18 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		expect(details, 'one <details> per paradigm article').toBe(articles);
 	});
 
+	test('footer ticker switches vocabulary on /experiments vs other routes (P1.2)', async ({ page }) => {
+		await page.goto('/');
+		const dashChips = (await page.locator('footer span.text-amber').allTextContents()).join(' ');
+		expect(dashChips, 'dashboard footer keeps thematic vocab').toContain('PRESS-GATE');
+		expect(dashChips, 'dashboard footer does not show research vocab').not.toContain('DOCTRINE');
+
+		await page.goto('/experiments');
+		const expChips = (await page.locator('footer span.text-amber').allTextContents()).join(' ');
+		expect(expChips, '/experiments footer shows research vocab').toContain('DOCTRINE');
+		expect(expChips, '/experiments footer does not show thematic vocab').not.toContain('PRESS-GATE');
+	});
+
 	test('--color-fg-muted contrast against --color-bg meets WCAG AA (≥4.5:1) (P1.1)', async ({ page }) => {
 		await page.goto('/experiments');
 		const ratio = await page.evaluate(() => {
