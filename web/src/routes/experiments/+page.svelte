@@ -556,7 +556,7 @@
 	<!-- C: status taxonomy legend. Five chips, defined. -->
 	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.05s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<span>status.legend</span>
+			<h2 class="font-normal">status.legend</h2>
 			<span class="text-fg-dim normal-case tracking-normal">what each verdict means</span>
 		</div>
 		<ul class="divide-y divide-grid">
@@ -580,7 +580,7 @@
 	<!-- D: αt scale "how to read this" block. Sets up the mini-bars below. -->
 	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.08s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted">
-			how.to.read
+			<h2 class="font-normal inline">how.to.read</h2>
 		</div>
 		<div class="px-4 sm:px-5 py-3 text-sm text-fg-dim leading-relaxed">
 			Each paradigm row carries a t-statistic on
@@ -619,7 +619,7 @@
 
 	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.1s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<span>paradigms.ledger</span>
+			<h2 class="font-normal">paradigms.ledger</h2>
 			<span class="text-fg-dim normal-case tracking-normal">{paradigms.length} rows · click each "show detail" for hypothesis / mechanism / outcome / lesson</span>
 		</div>
 		<div class="divide-y divide-grid">
@@ -627,7 +627,7 @@
 				<article id={p.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors">
 					<header class="flex flex-wrap items-baseline gap-2 sm:gap-3 mb-3">
 						<span class="font-display font-bold text-base sm:text-lg text-amber w-10 sm:w-12 shrink-0">{p.display}</span>
-						<span class="font-bold text-fg text-sm sm:text-base">{p.name}</span>
+						<h3 class="font-bold text-fg text-sm sm:text-base">{p.name}</h3>
 						<span class="text-[10px] uppercase tracking-widest">
 							<!-- Two-axis layer tag. Renders Layer · A / B (or A × B+B for
 							     compounds). Each token (layer_id, axis_a, axis_b) is wrapped
@@ -742,7 +742,7 @@
 
 	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.15s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<span>failure.patterns</span>
+			<h2 class="font-normal">failure.patterns</h2>
 			<span class="text-fg-dim normal-case tracking-normal">{patterns.length} reusable lessons · hover dotted terms for definitions</span>
 		</div>
 		<ul class="divide-y divide-grid">
@@ -750,7 +750,7 @@
 				<li class="px-4 sm:px-5 py-3 text-sm flex gap-3">
 					<span class="text-amber font-display font-bold w-6 shrink-0">{p.n}</span>
 					<div>
-						<div class="font-bold text-fg">
+						<h3 class="font-bold text-fg">
 							{#each parseMarkup(p.name) as seg}
 								{#if seg.kind === 'term'}
 									<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>
@@ -758,7 +758,7 @@
 									{seg.text}
 								{/if}
 							{/each}
-						</div>
+						</h3>
 						<div class="text-fg-dim text-xs mt-0.5 leading-relaxed">
 							{#each parseMarkup(p.body) as seg}
 								{#if seg.kind === 'term'}
@@ -776,7 +776,7 @@
 
 	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.2s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<span>infrastructure.live</span>
+			<h2 class="font-normal">infrastructure.live</h2>
 			<span class="text-fg-dim normal-case tracking-normal">{live.length} tracks · what is currently running</span>
 		</div>
 		<table class="w-full text-sm">
@@ -806,7 +806,7 @@
 
 	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.25s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<span>methodology.artifacts</span>
+			<h2 class="font-normal">methodology.artifacts</h2>
 			<span class="text-fg-dim normal-case tracking-normal">{artifacts.length} items · what survived</span>
 		</div>
 		<table class="w-full text-sm">
@@ -839,7 +839,7 @@
 	     the "how.to.read" block above. -->
 	<section class="border border-grid bg-bg-1 fade-up" style="animation-delay: 0.3s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<span>glossary.terms</span>
+			<h2 class="font-normal">glossary.terms</h2>
 			<span class="text-fg-dim normal-case tracking-normal">{GLOSSARY.length} terms · for non-quant readers</span>
 		</div>
 		<dl class="divide-y divide-grid">
