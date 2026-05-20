@@ -174,9 +174,7 @@ def _run_one_phase(
         universe_size_cap=universe_size_cap,
         out_path=out_path,
     )
-    # Explicit env propagation — zen review 2026-05-12 (avoid SimFin SDK
-    # defaulting to ~/.simfin/ and bypassing our cache → 5 parallel API
-    # downloads = rate-limit ban / OOM).
+    # Explicit env propagation for any caller-specified overrides.
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
@@ -470,12 +468,6 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Pass through to experiment script (SMOKE ONLY).",
     )
-    ap.add_argument(
-        "--simfin-data-dir",
-        type=str,
-        default=str(Path.home() / ".alphalens" / "simfin_cache"),
-        help="SimFin bulk CSV directory (forwarded as env var to subprocesses).",
-    )
     return ap
 
 
@@ -497,7 +489,7 @@ def main() -> int:
         name = args.window_only
         windows = [(name, args.is_start_override, args.is_end_override)]
 
-    extra_env = {"SIMFIN_DATA_DIR": args.simfin_data_dir}
+    extra_env: dict[str, str] = {}
     logger.info(
         "orchestrator launch | windows=%s | n_phases=%d | log_dir=%s",
         [w[0] for w in windows],

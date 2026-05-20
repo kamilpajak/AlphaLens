@@ -68,8 +68,10 @@ def _load_universe_ex_financials(
     dataset which structurally excluded financials (banks/insurance lived
     in separate SimFin datasets). EDGAR companyfacts covers every filer
     including financials, so we restore the original semantics by
-    filtering on SimFin's industry metadata (still cached locally even
-    after the simfin-pkg removal — see ``alphalens/thematic/screening/sector_peers.py``).
+    filtering on SEC SIC division metadata via
+    ``alphalens.data.fundamentals.sic_index`` (re-exported through
+    ``alphalens/thematic/screening/sector_peers.py``). SEC Division H is
+    "Finance, Insurance and Real Estate" — match the substring "Finance".
     Required: EV / FCFF math is mathematically broken for banks (debt is
     raw material, OCF is dominated by loan originations), so leaking them
     in would corrupt the paradigm-13 replay verdicts.
@@ -87,7 +89,7 @@ def _load_universe_ex_financials(
         ind_id = sector_peers.get_industry_id(ticker)
         if ind_id is not None:
             _, sector = sector_peers.industry_label(ind_id)
-            if sector and "Financial" in sector:
+            if sector and "Finance" in sector:
                 excluded_financials += 1
                 continue
         universe.append(ticker)
