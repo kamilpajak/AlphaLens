@@ -41,14 +41,16 @@ logger = logging.getLogger(__name__)
 # two mcap sources disagree by more than this tolerance.
 MCAP_CONSISTENCY_TOLERANCE = 0.10
 
-# Degraded payload returned when the gate trips. Keeps the dict shape
-# stable for downstream consumers (renderer, brief writer) that expect
-# all keys to be present.
+# Degraded payload returned when the gate trips. Only the mcap-dependent
+# multiples (pe = mcap/ni, ps = mcap/rev, ev_rev = (mcap+net_debt)/rev)
+# are dropped; ``fcf_margin = effective_fcff / revenue_ttm`` does not use
+# mcap or shares and remains valid (zen finding #2 on PR #174). The caller
+# layers ``fcf_margin`` back in from the candidate's features so the
+# downstream dict-shape contract still has every key present.
 _DEGRADED_MULTIPLES: dict[str, float | None] = {
     "pe": None,
     "ps": None,
     "ev_rev": None,
-    "fcf_margin": None,
 }
 
 
@@ -195,6 +197,7 @@ def score_valuation(
                             age_days = None
                     return {
                         **_DEGRADED_MULTIPLES,
+                        "fcf_margin": cand_multiples.get("fcf_margin"),
                         "composite_sector_percentile": None,
                         "financials_publish_date": publish_date_str,
                         "financials_age_days": age_days,

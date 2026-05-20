@@ -61,6 +61,39 @@ class TestMcapConsistencyGate(unittest.TestCase):
         self.assertIsNone(out["composite_sector_percentile"])
         external.assert_called_once_with("AI", dt.date(2026, 5, 19))
 
+    def test_divergence_preserves_fcf_margin(self):
+        """Zen finding #2 (PR #174): ``fcf_margin = effective_fcff / revenue_ttm``
+        does NOT depend on market cap or shares, so a mcap-source divergence
+        cannot invalidate it. The gate must surface this quality signal
+        even when the multiples cohort is wiped.
+        """
+        # Build a feature set where actual FCFF is computable (so fcf_margin
+        # is a real number, not the 5y-median fallback).
+        fetcher = MagicMock(
+            return_value=_features(
+                ocf_ttm=200_000_000.0,
+                capex_ttm=80_000_000.0,
+                interest_expense_ttm=10_000_000.0,
+                tax_rate=0.21,
+                revenue_ttm=1_000_000_000.0,
+                fcf_margin_5y_median=0.10,
+            )
+        )
+        external = MagicMock(return_value=1_280_000_000.0)
+        out = valuation_signal.score_valuation(
+            ticker="AI",
+            asof=dt.date(2026, 5, 19),
+            peers=[],
+            feature_fetcher=fetcher,
+            external_mcap_fetcher=external,
+        )
+        self.assertIsNone(out["ps"])
+        self.assertIsNone(out["ev_rev"])
+        self.assertIsNone(out["pe"])
+        # fcf_margin survives: (200M + 10M*(1-0.21) - 80M) / 1B = 0.1279
+        # (interest is added back to OCF to undo its post-interest sign).
+        self.assertAlmostEqual(out["fcf_margin"], 0.1279, places=4)
+
     def test_within_tolerance_keeps_multiples(self):
         """Stale-free case: edgar mcap = external × (1 ± 5%) → keep multiples."""
         fetcher = MagicMock(return_value=_features(price=10.0, shares=140_000_000.0))
