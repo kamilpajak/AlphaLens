@@ -23,6 +23,12 @@ export interface GlossaryEntry {
 	//   - 'first-per-section' = multi-word / longer term; wrap first occurrence
 	//                  per section only. Over-wrap (>1 in one section) = fail.
 	category: 'always' | 'first-per-section';
+	// Routes where this term is expected to appear. Drives the per-page
+	// auto-discovery smoke test (tests/smoke.test.ts loops the glossary and
+	// asserts ≥1 inline JargonTip with matching data-term on each page in
+	// this list). Default ['experiments']; brief-detail-only acronyms set
+	// ['briefs']; shared concepts set both.
+	pages?: ('experiments' | 'briefs')[];
 }
 
 export const GLOSSARY: GlossaryEntry[] = [
@@ -294,6 +300,80 @@ export const GLOSSARY: GlossaryEntry[] = [
 		full: 'macroeconomic data class',
 		body: 'Data-source axis — signal computed from macro indicators (yield curve, VIX, credit spreads, NFCI). Used by P03/P08 gate paradigms.',
 		category: 'first-per-section'
+	},
+	// ---- Brief-detail-page valuation + technical jargon (P2) ----
+	// These terms appear in /brief/[date] candidate cards (CandidateCard.svelte)
+	// as dt labels in the fundamentals + technicals grids. Per-card scoping
+	// means each card naturally wraps each acronym once → first-per-section.
+	{
+		term: 'PE',
+		full: 'price-to-earnings ratio',
+		body: 'Market price per share divided by trailing twelve-month earnings per share. Lower = "cheaper" relative to current profits; very low can also mean the market expects earnings to fall.',
+		category: 'first-per-section',
+		pages: ['briefs']
+	},
+	{
+		term: 'PS',
+		full: 'price-to-sales ratio',
+		body: 'Market cap divided by trailing twelve-month revenue. Useful for unprofitable / cyclical companies where PE is undefined or volatile. Lower = pay less per dollar of revenue.',
+		category: 'first-per-section',
+		pages: ['briefs']
+	},
+	{
+		term: 'EV/REV',
+		full: 'enterprise value to revenue',
+		body: 'Enterprise value (market cap + debt − cash) divided by revenue. Like PS but adjusts for capital structure — a debt-heavy company looks "cheap" on PS but expensive on EV/REV.',
+		category: 'first-per-section',
+		pages: ['briefs']
+	},
+	{
+		term: 'EV/EBITDA',
+		full: 'enterprise value to EBITDA',
+		body: 'Enterprise value divided by earnings before interest, taxes, depreciation, and amortization. A profitability-aware valuation multiple — comparable across companies regardless of leverage or D&A policy.',
+		category: 'first-per-section',
+		pages: ['briefs']
+	},
+	{
+		term: 'ROE',
+		full: 'return on equity',
+		body: 'Net income divided by shareholder equity, expressed as %. How efficiently the company turns its equity base into profit. >15% is generally considered strong for non-leveraged businesses.',
+		category: 'first-per-section',
+		pages: ['briefs']
+	},
+	{
+		term: 'FCF margin',
+		full: 'free cash flow margin',
+		body: 'Free cash flow (operating cash flow minus capex) divided by revenue. Measures how much of each dollar of sales the business converts to discretionary cash — a "real" profitability signal less manipulable than reported earnings.',
+		category: 'first-per-section',
+		pages: ['briefs']
+	},
+	{
+		term: 'ATR',
+		full: 'average true range',
+		body: 'A volatility measure: average daily price range (high − low, adjusted for gaps) over a lookback window (here %). Used for position sizing (smaller positions on higher-ATR names) and stop placement.',
+		category: 'first-per-section',
+		pages: ['briefs']
+	},
+	{
+		term: 'MA50',
+		full: '50-day moving average',
+		body: 'Average closing price over the last 50 trading days. Distance from the MA50 is a short-term trend gauge: well above = trending strongly, well below = falling. Crosses with MA200 ("golden cross" / "death cross") are momentum signals.',
+		category: 'first-per-section',
+		pages: ['briefs']
+	},
+	{
+		term: 'MA200',
+		full: '200-day moving average',
+		body: 'Average closing price over the last 200 trading days — the canonical long-term trend filter. Price above + MA200 slope > 0 = secular uptrend; price below + slope < 0 = downtrend; positive slope under price = deep-drawdown-reversal candidate setup.',
+		category: 'first-per-section',
+		pages: ['briefs']
+	},
+	{
+		term: 'magic formula',
+		full: 'Greenblatt magic-formula rank',
+		body: 'Joel Greenblatt\'s ranking that combines earnings yield (cheap) with return on capital (high quality). Each candidate gets ranked within its sector cohort — lower magic-formula rank # = better combined score. Failed health gates (no PE / negative equity) leave the cell blank.',
+		category: 'first-per-section',
+		pages: ['briefs']
 	}
 ];
 

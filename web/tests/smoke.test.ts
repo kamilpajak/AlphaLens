@@ -384,27 +384,40 @@ test.describe('experiments — hybrid tooltip policy', () => {
 	});
 });
 
-test.describe('experiments — glossary auto-discovery', () => {
+test.describe('glossary auto-discovery (per-page coverage)', () => {
 	// For every entry in $lib/data/glossary, assert at least one inline
-	// JargonTip with the corresponding data-term attribute renders on
-	// /experiments. The data-term attribute (set on JargonTip wrapper) is
-	// stable across text-label variants — so [Bonferroni correction|Bonferroni]
-	// still passes the "Bonferroni correction" assertion.
+	// JargonTip with the corresponding data-term attribute renders on every
+	// page in entry.pages (default ['experiments']). The data-term attribute
+	// (set on JargonTip wrapper) is stable across text-label variants — so
+	// [Bonferroni correction|Bonferroni] still passes the "Bonferroni
+	// correction" assertion.
 	//
 	// Adding a new glossary entry without an inline reference will fail the
 	// matching test here, surfacing orphan glossary entries automatically.
+	//
+	// pages mapping → URL:
+	//   - 'experiments' → '/experiments'
+	//   - 'briefs'      → '/brief/2026-05-18' (a known-good fixture)
+	const PAGE_URL: Record<'experiments' | 'briefs', string> = {
+		experiments: '/experiments',
+		briefs: '/brief/2026-05-18'
+	};
 
 	for (const entry of GLOSSARY) {
-		test(`glossary term "${entry.term}" has ≥1 inline JargonTip`, async ({ page }) => {
-			await page.goto('/experiments');
-			const count = await page
-				.locator(`[data-testid="jargon-tip"][data-term="${entry.term}"]`)
-				.count();
-			expect(
-				count,
-				`term "${entry.term}" should appear as inline JargonTip somewhere on /experiments (glossary section excluded — those terms appear in <dt>, not JargonTip)`
-			).toBeGreaterThanOrEqual(1);
-		});
+		const targetPages = entry.pages ?? ['experiments'];
+		for (const tp of targetPages) {
+			const url = PAGE_URL[tp];
+			test(`glossary term "${entry.term}" has ≥1 inline JargonTip on ${url}`, async ({ page }) => {
+				await page.goto(url);
+				const count = await page
+					.locator(`[data-testid="jargon-tip"][data-term="${entry.term}"]`)
+					.count();
+				expect(
+					count,
+					`term "${entry.term}" should appear as inline JargonTip somewhere on ${url} (glossary section excluded — those terms appear in <dt>, not JargonTip)`
+				).toBeGreaterThanOrEqual(1);
+			});
+		}
 	}
 });
 
