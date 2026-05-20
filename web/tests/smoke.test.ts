@@ -343,6 +343,19 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		expect(expChips, '/experiments footer does not show thematic vocab').not.toContain('PRESS-GATE');
 	});
 
+	test('sticky TOC renders on xl viewport with 7 section anchors (P3.1)', async ({ page }) => {
+		await page.setViewportSize({ width: 1440, height: 900 });
+		await page.goto('/experiments');
+		// Aside rail is `hidden xl:block` — invisible below 1280px.
+		const tocLinks = await page.locator('nav[aria-label="Section table of contents"] a').count();
+		expect(tocLinks, '7 section anchors in TOC').toBe(7);
+		// Section ids the TOC points to must exist on the page.
+		for (const id of ['status', 'how-to-read', 'paradigms', 'patterns', 'infra', 'methodology', 'glossary']) {
+			const ok = await page.locator(`section#${id}`).count();
+			expect(ok, `section#${id} exists`).toBe(1);
+		}
+	});
+
 	test('--color-fg-muted contrast against --color-bg meets WCAG AA (≥4.5:1) (P1.1)', async ({ page }) => {
 		await page.goto('/experiments');
 		const ratio = await page.evaluate(() => {
