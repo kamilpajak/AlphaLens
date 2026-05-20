@@ -107,9 +107,20 @@ def _fmt_num(value: Any, fmt: str) -> str:
     if pd.isna(value):
         return "n/a"
     try:
-        return format(float(value), fmt)
+        rendered = format(float(value), fmt)
     except (TypeError, ValueError):
         return "n/a"
+    # IEEE-754 negative zero survives ``f`` / ``g`` formatting as a
+    # leading minus (issue #172 Bug 3a: SOUN ROE -3e-6% rendered as
+    # ``-0.0``). When the rendered string evaluates to zero, strip the
+    # leading minus so the brief shows ``0.0`` not ``-0.0``.
+    if rendered.startswith("-"):
+        try:
+            if float(rendered) == 0.0:
+                return rendered[1:]
+        except ValueError:
+            pass
+    return rendered
 
 
 def _fmt_pctile(value: Any) -> str:
