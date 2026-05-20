@@ -30,13 +30,6 @@ from alphalens.data.alt_data.alphavantage_client import (
 
 logger = logging.getLogger(__name__)
 
-# Back-compat re-export: external callers used to import this from here.
-# Today there are none in the repo, but keeping the alias makes
-# `from alphalens.data.fundamentals.fetcher import AlphaVantageRateLimitError`
-# stay equivalent to the canonical name should an out-of-tree script depend
-# on it.
-AlphaVantageRateLimitError = AVRateLimitError
-
 
 def _filter_reports_by_date(result: Any, curr_date: str | None) -> Any:
     """Drop annualReports/quarterlyReports entries with fiscalDateEnding > curr_date.
@@ -102,14 +95,14 @@ def fetch_ticker_bundle(ticker: str, curr_date: str | None = None) -> dict:
 
     Individual application-level endpoint failures return {} so partial data
     still flows through — extract_features defends against missing sections.
-    Rate-limit signals (AlphaVantageRateLimitError) propagate to the caller
-    so a batch can be aborted instead of polluted with null features.
+    Rate-limit signals (AVRateLimitError) propagate to the caller so a batch
+    can be aborted instead of polluted with null features.
     """
 
     def _safe(fn):
         try:
             return fn(ticker, curr_date=curr_date)
-        except AlphaVantageRateLimitError:
+        except AVRateLimitError:
             raise
         except URLError as exc:
             logger.warning("AV network error for %s: %s", ticker, exc)

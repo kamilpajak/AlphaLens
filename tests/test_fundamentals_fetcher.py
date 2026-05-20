@@ -231,12 +231,12 @@ class TestFetchTickerBundle(unittest.TestCase):
     def test_fetch_bundle_propagates_rate_limit(self, mock_ov):
         """Rate-limit must abort the batch (not degrade to null features)."""
         from alphalens.data.fundamentals.fetcher import (
-            AlphaVantageRateLimitError,
+            AVRateLimitError,
             fetch_ticker_bundle,
         )
 
-        mock_ov.side_effect = AlphaVantageRateLimitError("daily quota exhausted")
-        with self.assertRaises(AlphaVantageRateLimitError):
+        mock_ov.side_effect = AVRateLimitError("daily quota exhausted")
+        with self.assertRaises(AVRateLimitError):
             fetch_ticker_bundle("X")
 
 
@@ -254,28 +254,28 @@ class TestMakeAVRequest(unittest.TestCase):
         from alphalens.data.alt_data.alphavantage_client import AlphaVantageClient
 
         class _CM:
-            def __enter__(self_inner):
+            def __enter__(self):
                 class _Resp:
-                    def read(_self):
+                    def read(self):
                         return body.encode("utf-8")
 
                 return _Resp()
 
-            def __exit__(self_inner, *exc):
+            def __exit__(self, *exc):
                 return False
 
         return AlphaVantageClient(api_key="test", urlopen_fn=MagicMock(return_value=_CM()))
 
     def test_rate_limit_information_raises(self):
         from alphalens.data.fundamentals.fetcher import (
-            AlphaVantageRateLimitError,
+            AVRateLimitError,
             _make_av_request,
         )
 
         client = self._client_with_body(
             '{"Information": "Thank you for using Alpha Vantage! ...rate limit..."}'
         )
-        with self.assertRaises(AlphaVantageRateLimitError):
+        with self.assertRaises(AVRateLimitError):
             _make_av_request("OVERVIEW", "AAPL", client=client)
 
     def test_error_message_returns_empty(self):

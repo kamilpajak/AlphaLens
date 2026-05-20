@@ -71,6 +71,40 @@ def _find_raw_http_lines(text: str) -> list[tuple[int, str]]:
 
 
 class TestNoRawAvHttp(unittest.TestCase):
+    def test_detection_regex_locks_shadow_patterns(self):
+        """Positive control on the detection regex itself. The negative test
+        could silently pass if the regex / URL-fragment lists rot to empty;
+        this test asserts that each shape we MEAN to catch (bare urlopen,
+        urllib.request.urlopen, requests.get, httpx.post, aiohttp.Client) is
+        flagged, and that two known-safe shapes (canonical DI ``self._urlopen``
+        and docstring prose like ``"burning further requests."``) are NOT.
+        """
+        shadow_samples = [
+            'with urlopen("https://www.alphavantage.co/query") as resp:',
+            'urllib.request.urlopen("https://www.alphavantage.co/query")',
+            'resp = requests.get("https://www.alphavantage.co/query")',
+            'await httpx.post("https://www.alphavantage.co/query")',
+            "aiohttp.ClientSession()  # https://www.alphavantage.co/query",
+        ]
+        for sample in shadow_samples:
+            hits = _find_raw_http_lines(sample)
+            self.assertEqual(len(hits), 1, f"expected exactly one hit on shadow sample: {sample!r}")
+
+        safe_samples = [
+            "with self._urlopen(url, timeout=self._timeout) as resp:",
+            '"""...persistent rate-limit (retry exhausted), the exception """',
+            "# urlopen line in a comment must never trip detection",
+            "the operator can resume on next quota window without burning further requests.",
+        ]
+        for sample in safe_samples:
+            hits = _find_raw_http_lines(sample)
+            self.assertEqual(
+                len(hits), 0, f"expected zero hits on safe sample: {sample!r} (got {hits})"
+            )
+
+        # And the URL fragment list must cover the AV base URL itself.
+        self.assertTrue(_file_uses_av_url('"https://www.alphavantage.co/query"'))
+
     def test_no_shadow_av_http_outside_canonical_client(self):
         offenders: list[tuple[str, int, str]] = []
         for root in SCAN_DIRS:

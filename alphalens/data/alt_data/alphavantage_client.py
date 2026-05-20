@@ -47,6 +47,14 @@ _RATE_LIMIT_PHRASES = ("rate limit", "api key", "premium")
 UrlopenFn = Callable[..., Any]
 SleepFn = Callable[[float], None]
 
+__all__ = [
+    "API_KEY_ENV",
+    "AVRateLimitError",
+    "AVSchemaError",
+    "AlphaVantageClient",
+    "get_default_av_client",
+]
+
 
 class AVRateLimitError(RuntimeError):
     """Alpha Vantage signalled rate-limit / quota / auth exhaustion.
@@ -130,7 +138,10 @@ class AlphaVantageClient:
                 failure — caller decides whether to retry.
         """
         self._throttle()
-        full_params = {"function": function, "apikey": self._api_key, **params}
+        # Canonical keys win: putting them after **params spread means a caller
+        # that accidentally passes `function=...` or `apikey=...` via kwargs
+        # cannot shadow the injected values.
+        full_params = {**params, "function": function, "apikey": self._api_key}
         url = f"{_AV_BASE_URL}?{urlencode(full_params)}"
         with self._urlopen(url, timeout=self._timeout) as resp:
             body = resp.read().decode("utf-8")
