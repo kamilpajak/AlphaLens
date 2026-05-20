@@ -18,7 +18,10 @@
 
 	--color-fg: #e4e7ee;
 	--color-fg-dim: #9097a8;
-	--color-fg-muted: #5d6478;
+	/* Bumped from #5d6478 (3.29:1 against bg #06070a — fails WCAG AA) to
+	   #7d8498 (~5.45:1). Affects header tags, footer ticker text, and many
+	   per-row metadata labels site-wide. */
+	--color-fg-muted: #7d8498;
 
 	--color-amber: #ffb000;
 	--color-amber-dim: #c98a00;
