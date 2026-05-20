@@ -7,7 +7,7 @@ fetched on demand via :class:`alphalens.data.alt_data.sec_edgar_client.SecEdgarC
 (throttled to SEC's 10 req/s polite limit, retry/backoff included).
 
 The 16-field parity contract was originally defined by the now-deleted
-SimFinFundamentalsStore; downstream scorers in
+SimFin store; downstream scorers in
 ``alphalens/thematic/screening/{fcff_signal,valuation_signal,magic_formula}.py``
 work via single-line import swap. Validation gate evidence:
 ``docs/research/edgar_fundamentals_validation_2026_05_19.md``.
@@ -194,8 +194,9 @@ class EdgarFundamentalsStore:
     def ev_fcff_features_as_of(self, ticker: str, asof: date) -> dict[str, Any] | None:
         """Return the 16-field features dict, or None when no CIK / no data.
 
-        Field-by-field parity with
-        :meth:`SimFinFundamentalsStore.ev_fcff_features_as_of`.
+        Field-by-field parity with the now-deleted SimFin store's
+        ``ev_fcff_features_as_of`` so the downstream scorers consume the
+        same shape regardless of the migration history.
         """
         cik = self._cik_for(ticker)
         if cik is None:
