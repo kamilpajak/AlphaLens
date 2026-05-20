@@ -248,6 +248,74 @@ def _span_days(entry: _Entry) -> int:
     return (e - s).days
 
 
+def _keep_latest_filed(target: dict[str, _Entry], key: str, new_entry: _Entry) -> None:
+    """Bucketing tiebreaker: when a 10-Q/A restatement changes
+    ``period_start`` between filings, ``_latest_per_period`` (keyed by
+    ``(start, end)``) lets both rows survive. Without a filed-date
+    tiebreaker here, dict insertion order would non-deterministically
+    decide the winner. Keep the entry with the latest ``filed`` date.
+    """
+    cur = target.get(key)
+    if cur is None or new_entry.filed > cur.filed:
+        target[key] = new_entry
+
+
+def _bucket_by_span(
+    entries: Iterable[_Entry],
+) -> tuple[dict[str, _Entry], dict[str, _Entry], dict[str, _Entry]]:
+    """Split a concept's PIT-visible entries into standalone-Q / YTD9M / FY
+    buckets with filed-date tiebreaker.
+    """
+    standalone_q: dict[str, _Entry] = {}
+    ytd9m_by_start: dict[str, _Entry] = {}
+    fy_by_start: dict[str, _Entry] = {}
+    for entry in entries:
+        span = _span_days(entry)
+        if _STANDALONE_Q_MIN_DAYS <= span <= _STANDALONE_Q_MAX_DAYS:
+            _keep_latest_filed(standalone_q, entry.end, entry)
+        elif _YTD9M_MIN_DAYS <= span <= _YTD9M_MAX_DAYS and entry.start:
+            _keep_latest_filed(ytd9m_by_start, entry.start, entry)
+        elif _FY_MIN_DAYS <= span <= _FY_MAX_DAYS and entry.start:
+            _keep_latest_filed(fy_by_start, entry.start, entry)
+    return standalone_q, ytd9m_by_start, fy_by_start
+
+
+def _apply_standalone_q(
+    per_end: dict[str, float],
+    derived_ends: set[str],
+    standalone_q: dict[str, _Entry],
+) -> None:
+    """Standalone Q-row override policy: direct measurement beats both
+    'nothing yet' and an earlier concept's derived value, but does NOT
+    override an existing standalone value (first concept wins).
+    """
+    for end, entry in standalone_q.items():
+        if end not in per_end or end in derived_ends:
+            per_end[end] = entry.val
+            derived_ends.discard(end)
+
+
+def _apply_q4_derivation(
+    per_end: dict[str, float],
+    derived_ends: set[str],
+    fy_by_start: dict[str, _Entry],
+    ytd9m_by_start: dict[str, _Entry],
+) -> None:
+    """Q4 = FY - YTD9M, matched by ``period_start``. Fills only ends that
+    no concept (this or earlier) has supplied — derivation is the weakest
+    evidence and must not displace a measurement.
+    """
+    for start, fy_entry in fy_by_start.items():
+        ytd9m = ytd9m_by_start.get(start)
+        if ytd9m is None:
+            continue
+        end = fy_entry.end
+        if end in per_end:
+            continue
+        per_end[end] = fy_entry.val - ytd9m.val
+        derived_ends.add(end)
+
+
 def compute_per_quarter_series(
     reader: CompanyfactsParquetReader,
     cik: str,
@@ -303,17 +371,6 @@ def compute_per_quarter_series(
     # measurement; derivation is arithmetic and can absorb audit adjustments.
     derived_ends: set[str] = set()
 
-    def _keep_latest_filed(target: dict[str, _Entry], key: str, new_entry: _Entry) -> None:
-        """Bucketing tiebreaker: when a 10-Q/A restatement changes
-        ``period_start`` between filings, ``_latest_per_period`` (keyed by
-        ``(start, end)``) lets both rows survive. Without a filed-date
-        tiebreaker here, dict insertion order would non-deterministically
-        decide the winner. Keep the entry with the latest ``filed`` date.
-        """
-        cur = target.get(key)
-        if cur is None or new_entry.filed > cur.filed:
-            target[key] = new_entry
-
     for concept in chain:
         entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
         if not entries:
@@ -322,41 +379,9 @@ def compute_per_quarter_series(
         if not visible:
             continue
         per_period = _latest_per_period(visible)
-
-        # Bucket entries by span class with filed-date tiebreaker.
-        standalone_q: dict[str, _Entry] = {}
-        ytd9m_by_start: dict[str, _Entry] = {}
-        fy_by_start: dict[str, _Entry] = {}
-        for entry in per_period.values():
-            span = _span_days(entry)
-            if _STANDALONE_Q_MIN_DAYS <= span <= _STANDALONE_Q_MAX_DAYS:
-                _keep_latest_filed(standalone_q, entry.end, entry)
-            elif _YTD9M_MIN_DAYS <= span <= _YTD9M_MAX_DAYS and entry.start:
-                _keep_latest_filed(ytd9m_by_start, entry.start, entry)
-            elif _FY_MIN_DAYS <= span <= _FY_MAX_DAYS and entry.start:
-                _keep_latest_filed(fy_by_start, entry.start, entry)
-
-        # Standalone Q-rows (primary path). A standalone row from this
-        # concept overrides a derived value from an earlier concept (direct
-        # measurement beats arithmetic). It does NOT override an existing
-        # standalone value — first concept with a direct measurement wins.
-        for end, entry in standalone_q.items():
-            if end not in per_end or end in derived_ends:
-                per_end[end] = entry.val
-                derived_ends.discard(end)
-
-        # Q4 derivation (FY - YTD9M, matched by period_start). Only fills
-        # ends that no concept (this or earlier) has supplied — derivation
-        # is the weakest evidence and must not displace a measurement.
-        for start, fy_entry in fy_by_start.items():
-            ytd9m = ytd9m_by_start.get(start)
-            if ytd9m is None:
-                continue
-            end = fy_entry.end
-            if end in per_end:
-                continue
-            per_end[end] = fy_entry.val - ytd9m.val
-            derived_ends.add(end)
+        standalone_q, ytd9m_by_start, fy_by_start = _bucket_by_span(per_period.values())
+        _apply_standalone_q(per_end, derived_ends, standalone_q)
+        _apply_q4_derivation(per_end, derived_ends, fy_by_start, ytd9m_by_start)
 
     return sorted(per_end.items(), key=lambda kv: kv[0])
 
