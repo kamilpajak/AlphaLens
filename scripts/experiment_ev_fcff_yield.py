@@ -62,27 +62,41 @@ _PRICES_DIR = Path.home() / ".alphalens" / "prices"
 def _load_universe_ex_financials(
     store: EdgarFundamentalsStore,
 ) -> list[str]:
-    """R2000 active ∩ EDGAR-cached companyfacts (post-SimFin migration).
+    """R2000 active ∩ EDGAR cache, with banks + insurance explicitly excluded.
 
-    Prior to PR #160 follow-up, this intersected with SimFin's
-    ``us-income-annual`` dataset which implicitly excluded financials
-    (banks/insurance live in separate SimFin datasets). EDGAR's
-    companyfacts cache covers all SEC filers including financials, so
-    financials exclusion is now an upstream concern for the experiment
-    setup — paradigm-13 is CLOSED per ADR 0005 and this script is
-    replay infrastructure only.
+    Prior to PR #161, this intersected with SimFin's ``us-income-annual``
+    dataset which structurally excluded financials (banks/insurance lived
+    in separate SimFin datasets). EDGAR companyfacts covers every filer
+    including financials, so we restore the original semantics by
+    filtering on SimFin's industry metadata (still cached locally even
+    after the simfin-pkg removal — see ``alphalens/thematic/screening/sector_peers.py``).
+    Required: EV / FCFF math is mathematically broken for banks (debt is
+    raw material, OCF is dominated by loan originations), so leaking them
+    in would corrupt the paradigm-13 replay verdicts.
 
     Universe is forward-looking (current IWM snapshot, not PIT) per
     design memo §2 known-limitation.
     """
+    from alphalens.thematic.screening import sector_peers
+
     iwm_tickers = set(load_iwm_current(_IWM_SNAPSHOT))
     edgar_tickers = set(store.universe())
-    universe = sorted(iwm_tickers & edgar_tickers)
+    universe: list[str] = []
+    excluded_financials = 0
+    for ticker in sorted(iwm_tickers & edgar_tickers):
+        ind_id = sector_peers.get_industry_id(ticker)
+        if ind_id is not None:
+            _, sector = sector_peers.industry_label(ind_id)
+            if sector and "Financial" in sector:
+                excluded_financials += 1
+                continue
+        universe.append(ticker)
     logger.info(
-        "R2000 ex-fin universe: %d tickers (IWM=%d ∩ EDGAR companyfacts=%d)",
+        "R2000 ex-fin universe: %d tickers (IWM=%d ∩ EDGAR=%d, %d financials dropped)",
         len(universe),
         len(iwm_tickers),
         len(edgar_tickers),
+        excluded_financials,
     )
     return universe
 

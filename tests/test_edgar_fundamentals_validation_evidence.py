@@ -3,12 +3,12 @@
 The gate itself is operator-triggered (live SEC + yfinance fetches) — running
 it on every CI invocation would burn quota and flake. Instead this test
 asserts that the committed memo is present, the verdict is ``PASS``, and
-every required anchor was checked. Prevents future migrations from
-silently skipping the project doctrine in
-``CLAUDE.md > Research methodology > Data-vendor PIT validation gate``.
+every required anchor was checked. Pins the *EDGAR* migration specifically;
+a future migration to a different vendor MUST delete this file and write a
+new vendor-specific evidence guard rather than relying on this stale memo.
 
-Refresh procedure: run ``scripts/edgar_fundamentals_validation_gate.py``
-and commit the regenerated memo.
+Refresh procedure: re-run ``scripts/edgar_fundamentals_validation_gate.py``
+and commit the regenerated memo at ``docs/research/edgar_fundamentals_validation_2026_05_19.md``.
 """
 
 from __future__ import annotations
@@ -30,7 +30,14 @@ REQUIRED_ANCHORS = ("MANH", "SYM", "JPM", "CAT", "UNH")
 MIN_GATE_DATE = date(2026, 5, 20)
 
 
-class TestValidationGateEvidence(unittest.TestCase):
+class TestEdgarMigrationEvidence(unittest.TestCase):
+    """EDGAR-specific evidence guard. Named to make it obvious that this test
+    pins the EDGAR migration; a future vendor migration (Alpha Vantage,
+    Polygon, …) cannot reuse this memo / test class — operator MUST delete
+    this file and write a new vendor-specific one for that migration's gate
+    run. Static date floor below isn't sufficient on its own to enforce that.
+    """
+
     def setUp(self):
         self.assertTrue(MEMO.exists(), f"gate memo missing at {MEMO}")
         self.text = MEMO.read_text(encoding="utf-8")

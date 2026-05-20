@@ -242,11 +242,10 @@ def backtest(  # NOSONAR — Typer CLI legitimately needs many flags
     with_prices: bool = typer.Option(
         False,
         "--with-prices/--no-prices",
-        help="SimFin-only: load daily share-prices CSV for PIT P/S gate. Requires "
-        "~/.alphalens/simfin_cache/us-shareprices-daily.csv (~435MB). If "
-        "missing, simfin will download it (download speed varies — can be "
-        "slow on throttled broadband). When off, P/S penalty is skipped "
-        "and gate uses only runway/OCF/net_income.",
+        help="EDGAR-only: load snapshot prices via yfinance for the fundamental "
+        "gate's PIT P/S penalty. When off, P/S penalty is skipped and the gate "
+        "uses only runway/OCF/net_income. The 'av' source path does not consume "
+        "this flag.",
     ),
 ) -> None:
     """Run backtest over Lean CSV data and emit a decision-matrix report.
