@@ -21,10 +21,19 @@
 	type ParadigmStatus = 'FAIL' | 'SLIPPAGE-FAIL' | 'IN-FLIGHT' | 'INCONCLUSIVE' | 'PASS_MARGINAL';
 	type LiveStatus = 'LIVE' | 'SHIPPED' | 'DONE';
 
-	// Layer + two-axis taxonomy per architecture.layers section.
+	// Layer + two-axis taxonomy. Each paradigm header carries a
+	// "<layer> · <axis_a> / <axis_b>" tag with inline JargonTips; the tooltips
+	// (sourced from $lib/data/glossary) explain the taxonomy on hover, replacing
+	// the upfront architecture block.
 	// `axis_a` = structural (how the rule is built); `axis_b` = data sources
 	// the rule reads. Compound paradigms have ≥2 entries in axis_b.
 	// Layer-4 paradigms (overlay) use axis_a='overlay' and axis_b=null.
+	//
+	// audit-tooltips:dynamic-terms L2 L4 screener combo compound gate overlay price fundamental insider options event-drift macro
+	// (Paradigm headers render <JargonTip {...tipProps(VAR)}> where VAR is the
+	// paradigm's layer_id / axis_a / axis_b. The audit script's literal-only
+	// regex can't see these dynamic uses, so the line above credits each term
+	// with one inline reference for the "unreferenced terms" check.)
 	type AxisA = 'screener' | 'combo' | 'compound' | 'gate' | 'overlay';
 	type AxisB = 'price' | 'fundamental' | 'insider' | 'options' | 'event-drift' | 'macro';
 
@@ -73,18 +82,6 @@
 	type StatusDef = {
 		status: ParadigmStatus;
 		definition: string;
-	};
-
-	type LayerDef = {
-		id: string;
-		name: string;
-		what: string;
-	};
-
-	type SubtypeAxis = {
-		axis: string;
-		question: string;
-		items: { suffix: string; body: string }[];
 	};
 
 	// `Glossary` type + GLOSSARY array extracted to `$lib/data/glossary` —
@@ -324,42 +321,6 @@
 		{ n: '13', name: 'Counter-cyclical alpha can be cost-mirage', body: '[R2000-PIT|R2000] long-only [PASS_MARGINAL] with EXTREME counter-cyclical [Q5] alpha MUST run slippage diagnostic BEFORE Layer 4 design. insider_form4: gross [αt]=+2.71 → net +1.27.' }
 	];
 
-	// 5-layer architecture per ADR 0007. Every paradigm row carries a "Layer X
-	// (suffix)" tag — the layer tells you WHAT KIND of intervention the
-	// strategy is, and the suffix is the subtype of that layer.
-	const layerArchitecture: LayerDef[] = [
-		{ id: 'L1', name: 'Watchdog', what: 'detects raw events → candidate queue. Only production data feed.' },
-		{ id: 'L2', name: 'Stock-selection layer', what: 'picks WHICH tickers (17 of 18 paradigms here). Tag = structural × data-source axes — see below.' },
-		{ id: 'L3', name: 'Backtest engine', what: 'runs the chosen L2 rule over a rebalance calendar → portfolio returns. Harness, not a paradigm.' },
-		{ id: 'L4', name: 'Risk overlay', what: 'time-series sizing on portfolio vol. Changes HOW MUCH, not which tickers. P10 only test here.' },
-		{ id: 'L5', name: 'Attribution', what: 'cost-drag + [Carhart 4F|Carhart-4F] + [Bonferroni correction|Bonferroni] gates → ledger verdict (FAIL / PASS_MARGINAL / etc).' }
-	];
-
-	const layer2Axes: SubtypeAxis[] = [
-		{
-			axis: 'A. Structural — how is the rule built?',
-			question: '',
-			items: [
-				{ suffix: 'screener', body: 'single-signal ranker (e.g. opportunistic-buy magnitude).' },
-				{ suffix: 'combo', body: 'multi-signal composite, same data class (mom × value × quality).' },
-				{ suffix: 'compound', body: 'cross-class composite (insider × options). Adds Bonferroni cost.' },
-				{ suffix: 'gate', body: 'filter ON TOP of an existing rule (deploy only when VIX > 20).' }
-			]
-		},
-		{
-			axis: 'B. Data source — where does the signal come from?',
-			question: '',
-			items: [
-				{ suffix: 'price', body: 'price returns — momentum, mean-reversion, idio-mom.' },
-				{ suffix: 'fundamental', body: 'company financials — [FCFF], ROE, book/price, distance-to-default.' },
-				{ suffix: 'insider', body: '[Form-4] transactions — cluster-buys, opportunistic.' },
-				{ suffix: 'options', body: 'implied vol, put/call ratios, abnormal volume.' },
-				{ suffix: 'event-drift', body: 'scheduled events — earnings ([PEAD]), 8-K filings.' },
-				{ suffix: 'macro', body: 'yield curve, VIX, credit spreads, NFCI (P03, P08).' }
-			]
-		}
-	];
-
 	const statusLegend: StatusDef[] = [
 		{ status: 'FAIL', definition: 'hypothesis rejected on [multi-phase audit] gates ([αt] below the required threshold OR negative on ≥1 phase OR cost-stress fail).' },
 		{ status: 'INCONCLUSIVE', definition: '[αt] landed in the ambiguous 1.0-2.85 band — paper-trade activated for 12-month forward observation, no capital deploy.' },
@@ -576,75 +537,6 @@
 		</ul>
 	</section>
 
-	<!-- Architecture layers (ADR 0007). Collapsible via <details> — reference
-	     material, reader hits it once then can fold it away. Default open so
-	     first-time visitors see the framework that the row tags use. -->
-	<details open class="border border-grid bg-bg-1 mb-8 fade-up group/section" style="animation-delay: 0.07s">
-		<summary class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between cursor-pointer hover:bg-bg-2 list-none [&::-webkit-details-marker]:hidden">
-			<span class="flex items-center gap-2">
-				<span class="text-amber text-[10px] group-open/section:rotate-90 transition-transform inline-block">▸</span>
-				architecture.layers
-			</span>
-			<span class="text-fg-dim normal-case tracking-normal">5-layer separation · ADR 0007 · click to collapse</span>
-		</summary>
-		<div class="px-4 sm:px-5 py-2 border-b border-grid bg-bg-2 text-[11px] text-fg-dim leading-snug">
-			<span class="text-amber font-bold uppercase tracking-widest text-[10px]">note —</span>
-			L1–L5 here = active-alpha research layers. <a href="/about" class="text-cyan hover:text-amber underline decoration-dotted underline-offset-2">/about</a>
-			uses same L1–L5 numbering for the thematic-tool pipeline; only L1 (Watchdog) is shared.
-		</div>
-		<ul class="divide-y divide-grid text-sm">
-			{#each layerArchitecture as l}
-				<li class="px-4 sm:px-5 py-2 flex items-baseline gap-3 hover:bg-bg-2">
-					<span class="font-display font-bold text-amber w-8 shrink-0">{l.id}</span>
-					<span class="font-bold text-fg w-44 sm:w-48 shrink-0">{l.name}</span>
-					<span class="text-fg-dim text-xs flex-1 min-w-0 leading-snug">
-						{#each parseMarkup(l.what) as seg}
-							{#if seg.kind === 'term'}
-								<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>
-							{:else}
-								{seg.text}
-							{/if}
-						{/each}
-					</span>
-				</li>
-			{/each}
-		</ul>
-		<div class="px-4 sm:px-5 py-3 border-t border-grid">
-			<div class="text-[10px] uppercase tracking-widest text-fg-muted mb-2">
-				layer 2 tags · two orthogonal axes
-			</div>
-			<p class="text-xs text-fg-dim leading-snug mb-3">
-				A tag picks one from <span class="text-amber font-bold">axis A</span> AND one from <span class="text-amber font-bold">axis B</span>.
-				Rows show the more salient axis (e.g. <span class="font-mono text-cyan">combo</span> implies price-data,
-				<span class="font-mono text-cyan">price</span> implies screener-structure). Compounds span multiple (P12:
-				<span class="font-mono text-cyan">compound × insider × options</span>).
-			</p>
-			<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-				{#each layer2Axes as ax}
-					<div>
-						<div class="text-[11px] uppercase tracking-widest text-amber mb-1.5 font-bold">{ax.axis}</div>
-						<dl class="space-y-1 text-xs">
-							{#each ax.items as it}
-								<div class="flex gap-2">
-									<dt class="font-mono text-cyan w-24 shrink-0">{it.suffix}</dt>
-									<dd class="text-fg-dim flex-1 min-w-0 leading-snug">
-										{#each parseMarkup(it.body) as seg}
-											{#if seg.kind === 'term'}
-												<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>
-											{:else}
-												{seg.text}
-											{/if}
-										{/each}
-									</dd>
-								</div>
-							{/each}
-						</dl>
-					</div>
-				{/each}
-			</div>
-		</div>
-	</details>
-
 	<!-- D: αt scale "how to read this" block. Sets up the mini-bars below. -->
 	<section class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.08s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted">
@@ -697,21 +589,25 @@
 						<span class="font-display font-bold text-base sm:text-lg text-amber w-10 sm:w-12 shrink-0">{p.display}</span>
 						<span class="font-bold text-fg text-sm sm:text-base">{p.name}</span>
 						<span class="text-[10px] uppercase tracking-widest">
-							<!-- Two-axis layer tag per architecture.layers section. Renders
-							     Layer 2 · A / B (or A × B+B for compounds). `axis_a` = screener
-							     is the default structural choice — rendered muted to subordinate
-							     it visually so combo/compound/gate read louder. Layer 4 (overlay)
-							     uses axis_a only, no axis_b. -->
-							<span class="text-fg-muted">{p.layer_id} ·&nbsp;</span>
+							<!-- Two-axis layer tag. Renders Layer · A / B (or A × B+B for
+							     compounds). Each token (layer_id, axis_a, axis_b) is wrapped
+							     in a JargonTip so first-time readers can hover for the inline
+							     definition — replaces the upfront architecture.layers primer.
+							     `axis_a` = screener is the default structural choice —
+							     rendered muted to subordinate it visually so combo/compound/
+							     gate read louder. Layer 4 (overlay) uses axis_a only, no
+							     axis_b. -->
+							<span class="text-fg-muted">
+								<JargonTip {...tipProps(p.layer_id)}>{p.layer_id}</JargonTip> ·&nbsp;</span>
 							{#if p.axis_a === 'screener'}
-								<span class="text-fg-muted">screener</span>
+								<span class="text-fg-muted"><JargonTip {...tipProps('screener')}>screener</JargonTip></span>
 							{:else}
-								<span class="text-fg-dim font-bold">{p.axis_a}</span>
+								<span class="text-fg-dim font-bold"><JargonTip {...tipProps(p.axis_a)}>{p.axis_a}</JargonTip></span>
 							{/if}
 							{#if p.axis_b && p.axis_b.length > 0}
 								<span class="text-fg-muted"> / </span>
 								{#each p.axis_b as b, i}
-									{#if i > 0}<span class="text-fg-muted"> × </span>{/if}<span class="text-fg-dim font-bold">{b}</span>
+									{#if i > 0}<span class="text-fg-muted"> × </span>{/if}<span class="text-fg-dim font-bold"><JargonTip {...tipProps(b)}>{b}</JargonTip></span>
 								{/each}
 							{/if}
 						</span>

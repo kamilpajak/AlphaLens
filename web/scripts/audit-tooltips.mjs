@@ -64,6 +64,23 @@ function sectionForLine(lineIndex) {
 		if (idMatch) return `entry-${idMatch[1]}`;
 		const nMatch = line.match(/\bn:\s*'(\d\d)'/);
 		if (nMatch) return `pattern-${nMatch[1]}`;
+		// statusLegend entries — each row is its own section so a term cited in
+		// one definition doesn't bleed into the over-wrap count for adjacent
+		// definitions. The `status:` field also appears in paradigm rows where
+		// `id:` is the canonical anchor — peek back a few lines for an `id:` to
+		// disambiguate (paradigm row → use id, standalone status row → use
+		// status).
+		const statusMatch = line.match(/\bstatus:\s*'(FAIL|SLIPPAGE-FAIL|IN-FLIGHT|INCONCLUSIVE|PASS_MARGINAL)'/);
+		if (statusMatch) {
+			for (let k = i - 1; k >= Math.max(0, i - 12); k--) {
+				const idPeek = lines[k].match(/\bid:\s*'(P\d\d|R\d\d|S\d\d|L\d)'/);
+				if (idPeek) return `entry-${idPeek[1]}`;
+				// Stop peek at the row-opening brace so we don't bleed into the
+				// previous row.
+				if (lines[k].match(/^\s*\{$/) || lines[k].match(/^\s*\{,?$/)) break;
+			}
+			return `status-${statusMatch[1]}`;
+		}
 		// JSX section anchors — find <section ...> or <details ...>
 		if (line.match(/<section\b/) || line.match(/<details\b/)) {
 			// Look ahead a few lines for the section title text inside the header
@@ -128,6 +145,35 @@ while ((jm = jsxJargonRe.exec(src)) !== null) {
 			source: 'jsx',
 			section: sectionForLine(lineNo - 1)
 		});
+	}
+}
+
+// Dynamic-term hints. Paradigm headers render
+//   <JargonTip {...tipProps(VAR)}>...</JargonTip>
+// where VAR is a Svelte expression (e.g. `p.layer_id`, `p.axis_a`, `b` from
+// an each-block). The literal-only `jsxJargonRe` above can't credit these
+// uses, so authors declare them via a comment of the form:
+//   // audit-tooltips:dynamic-terms TERM1 TERM2 ...
+// Each listed term is credited with one reference at the comment's line for
+// the "unreferenced terms" check. Over-wrap detection still runs from the
+// literal/markup wraps (each paradigm header is its own section, so the
+// dynamic L2/L4/axis tooltips can never over-wrap by construction).
+const dynamicHintRe = /\/\/\s*audit-tooltips:dynamic-terms\s+([^\n]+)/g;
+let dm;
+while ((dm = dynamicHintRe.exec(src)) !== null) {
+	const lineNo = src.slice(0, dm.index).split('\n').length;
+	const terms = dm[1].trim().split(/\s+/);
+	for (const term of terms) {
+		if (!glossaryKeys.has(term)) {
+			orphans.push({ line: lineNo, field: 'dynamic-hint', term });
+		} else {
+			wraps.push({
+				term,
+				line: lineNo,
+				source: 'dynamic',
+				section: `dynamic-hint-L${lineNo}`
+			});
+		}
 	}
 }
 

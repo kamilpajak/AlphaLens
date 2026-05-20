@@ -271,13 +271,13 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		expect(count, 'Q5 JargonTip count in S01').toBeGreaterThanOrEqual(1);
 	});
 
-	test('Bonferroni — first-per-section across architecture + patterns + paradigm rows', async ({ page }) => {
+	test('Bonferroni — first-per-section across patterns + paradigm rows', async ({ page }) => {
 		await page.goto('/experiments');
 		const count = await page.locator('[data-testid="jargon-tip"]:has-text("Bonferroni")').count();
-		expect(count, 'Bonferroni JargonTip count').toBeGreaterThanOrEqual(3);
+		expect(count, 'Bonferroni JargonTip count').toBeGreaterThanOrEqual(2);
 	});
 
-	test('Carhart 4F — first-per-section in architecture + patterns', async ({ page }) => {
+	test('Carhart 4F — first-per-section in how.to.read + patterns', async ({ page }) => {
 		await page.goto('/experiments');
 		const count = await page.locator('[data-testid="jargon-tip"]:has-text("Carhart")').count();
 		expect(count, 'Carhart 4F JargonTip count').toBeGreaterThanOrEqual(2);
