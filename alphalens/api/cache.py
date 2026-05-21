@@ -101,9 +101,6 @@ def _stored_mtimes(conn: sqlite3.Connection) -> dict[str, float]:
     return {r["date"]: float(r["parquet_mtime"]) for r in rows}
 
 
-_DISPATCH = {}  # populated below; one per Column.py_kind
-
-
 def _coerce_str(value: Any) -> Any:
     if isinstance(value, (pd.Timestamp, dt.datetime, dt.date)):
         return value.isoformat()
@@ -268,8 +265,12 @@ def rebuild_from_parquet(
                 stored_version,
                 SCHEMA_VERSION,
             )
-            conn.execute("DELETE FROM briefs")
-            conn.execute("DELETE FROM days_meta")
+            # DROP, not DELETE: CREATE TABLE IF NOT EXISTS won't add new columns
+            # to an existing table, so a schema bump that adds columns would
+            # crash the subsequent INSERT. Dropping forces a fresh schema.
+            conn.execute("DROP TABLE IF EXISTS briefs")
+            conn.execute("DROP TABLE IF EXISTS days_meta")
+            _create_schema(conn)
             _set_schema_version(conn)
             force = True
 

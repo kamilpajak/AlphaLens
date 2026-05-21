@@ -47,10 +47,15 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> FastAPI:
     app.state.db_path = Path(resolved_db)
 
     origins = _parse_cors(os.environ.get(ENV_CORS))
+    # Starlette refuses to combine `allow_origins=["*"]` with
+    # `allow_credentials=True` and raises at app construction. If the operator
+    # opts into wildcard CORS (typically for diagnostics / open public API),
+    # drop credentials so the app still boots instead of crashing.
+    allow_all = "*" in origins
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True,
+        allow_origins=["*"] if allow_all else origins,
+        allow_credentials=not allow_all,
         allow_methods=["GET"],
         allow_headers=["*"],
     )

@@ -105,11 +105,12 @@ class DaysRouteTests(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
     def test_get_day_invalid_date_422(self):
-        r = self.client.get("/v1/days/2026-13-99")
-        # Format check passes (length+dashes); SQL returns no rows -> 404 not 422.
-        # But /v1/days/abc should be 422 via validate_date.
-        r2 = self.client.get("/v1/days/abcdefghij")
-        self.assertEqual(r2.status_code, 422)
+        # Bad shape and impossible calendar dates both rejected at validation.
+        # (Slash-separated dates like ``05/18/2026`` are path-routing matters,
+        # not handler concerns — FastAPI returns 404 before the handler runs.)
+        for bad in ["abcdefghij", "2026-13-01", "2026-02-30"]:
+            r = self.client.get(f"/v1/days/{bad}")
+            self.assertEqual(r.status_code, 422, f"expected 422 for {bad}, got {r.status_code}")
 
     def test_day_candidates_theme_filter(self):
         r = self.client.get("/v1/days/2026-05-18/candidates?theme=weight_loss_drugs")
