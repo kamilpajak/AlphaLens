@@ -116,7 +116,10 @@ def _fmt_num(value: Any, fmt: str) -> str:
     # leading minus so the brief shows ``0.0`` not ``-0.0``.
     if rendered.startswith("-"):
         try:
-            if float(rendered) == 0.0:
+            # NOSONAR (S1244): IEEE-754 negative-zero detection requires
+            # exact float equality — `-0.0 == 0.0` is True by spec and is
+            # precisely the property we test (issue #172 Bug 3a).
+            if float(rendered) == 0.0:  # NOSONAR
                 return rendered[1:]
         except ValueError:
             pass
