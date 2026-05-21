@@ -37,7 +37,7 @@
 	     empty right gutter). On mobile/sm, metrics wrap below as full-width
 	     4-col grid. -->
 	<header class="px-4 sm:px-5 py-3 border-b border-grid bg-gradient-to-r from-bg-2 to-bg-1">
-		<div class="flex flex-wrap items-center gap-x-4 gap-y-3 sm:gap-x-6">
+		<div class="flex flex-wrap items-start gap-x-4 gap-y-3 sm:gap-x-6">
 			<div class="text-right shrink-0">
 				<div class="font-display font-bold text-3xl sm:text-4xl text-amber leading-none">
 					{String(rank).padStart(2, '0')}
