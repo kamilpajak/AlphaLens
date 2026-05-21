@@ -359,3 +359,9 @@ once — the Authorized redirect URI is
   guard). Verification is only triggered by sensitive / restricted
   scopes (Gmail, Drive, Calendar — none of which AlphaLens uses) or
   by exceeding the ~100-user cap.
+  Caveat: until the app is Google-verified (which is **not** required
+  for our basic scopes), every first-time SSO shows the "Google hasn't
+  verified this app" interstitial — user clicks **Advanced** → **Go
+  to AlphaLens (unsafe)** once per Google account and is never asked
+  again. Mention this to new operators before they log in so they
+  don't mistake it for a phishing prompt and bounce.
