@@ -55,6 +55,11 @@ services:
     container_name: alphalens-api
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"
+    env_file:
+      # Symmetry with the pipeline service so future env-only knobs (log
+      # level, JWT verifier secrets) reach the container without another
+      # compose edit. Empty .env is fine.
+      - .env
     environment:
       HOME: /app/home
       # Cache db path inside the container — bind-mount resolves it to
@@ -65,12 +70,17 @@ services:
       # via Cloudflare Tunnel; the localhost entries cover SvelteKit dev.
       CORS_ORIGINS: "${API_CORS_ORIGINS:-http://localhost:5173,http://localhost:8080}"
     volumes:
-      # Read-write so the operator can run rebuild-cache via `exec` when
-      # debugging, but the routine path is the pipeline container writing.
-      - ${HOME}/.alphalens:/app/home/.alphalens
+      # Read-only — the api opens SQLite with mode=ro anyway, and the
+      # routine rebuild path runs inside the pipeline container (which
+      # mounts the same path RW). Tightening to :ro means a compromised
+      # api process cannot corrupt the cache or write elsewhere under
+      # ~/.alphalens.
+      - ${HOME}/.alphalens:/app/home/.alphalens:ro
     ports:
       # Bind to localhost only — Cloudflare Access (Tunnel + policy) fronts
-      # the public surface. See deploy/cloudflare/access_setup.md.
+      # the public surface. NEVER change this to 0.0.0.0:8081 — that would
+      # silently bypass every Access policy. See
+      # deploy/cloudflare/access_setup.md.
       - "127.0.0.1:8081:8000"
     entrypoint:
       - /app/.venv/bin/alphalens
@@ -91,5 +101,7 @@ services:
         - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=2).status==200 else 1)"
       interval: 30s
       timeout: 3s
-      start_period: 5s
+      # 15s buys margin for uvicorn cold start on a small VPS — the local
+      # Mac smoke ran ~12s wall before the first probe returned 200.
+      start_period: 15s
       retries: 3

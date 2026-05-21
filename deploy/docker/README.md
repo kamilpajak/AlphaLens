@@ -104,9 +104,10 @@ docker ps --filter name=alphalens-api   # should be Up / healthy
 
 # First-time cache build (the SQLite file doesn't exist yet, so /readyz
 # will return 503 until either the daily pipeline runs OR you trigger a
-# manual rebuild):
+# manual rebuild). The pipeline image's ENTRYPOINT is already
+# /app/.venv/bin/alphalens, so the command line starts at `api`:
 UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
-    run --rm pipeline alphalens api rebuild-cache
+    run --rm pipeline api rebuild-cache
 
 # Sanity check from the host:
 curl -fsS http://127.0.0.1:8081/healthz
@@ -139,11 +140,13 @@ journalctl --user -u alphalens-thematic-daily.service -f
 ```bash
 cd ~/AlphaLens && git pull
 UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml build
-UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml up -d web
+UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml up -d web api
 ```
 
-The pipeline image rebuild only matters for the next timer fire — the
-running web container keeps serving JSON from the bind-mount.
+The web container keeps serving JSON from the bind-mount during the
+build. The api container shares the alphalens-pipeline image, so the
+`up -d api` step is mandatory — otherwise it keeps running the old code.
+The pipeline image picks up the new build at the next timer fire.
 
 ### Inspect what nginx is serving
 
@@ -164,12 +167,15 @@ open http://127.0.0.1:8081/docs   # browser (via Cloudflare Access)
 
 ### Manually rebuild the api SQLite cache
 
+The pipeline image's ENTRYPOINT is `/app/.venv/bin/alphalens`, so the
+arguments start with the typer subcommand — no leading `alphalens`.
+
 ```bash
 UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
-    run --rm pipeline alphalens api rebuild-cache
+    run --rm pipeline api rebuild-cache
 # --force ignores the parquet mtime gate
 UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
-    run --rm pipeline alphalens api rebuild-cache --force
+    run --rm pipeline api rebuild-cache --force
 ```
 
 ### Disable the timer

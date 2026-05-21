@@ -171,3 +171,9 @@ UID="$(id -u)" GID="$(id -g)" docker compose \
 - Cloudflare Access free tier caps at 50 active users. If the operator
   count grows, switch to a paid Teams plan; nothing in this setup
   presumes a particular SKU.
+- **Never change the api port binding in `docker-compose.yml` from
+  `127.0.0.1:8081:8000` to `0.0.0.0:8081:8000`** — the api would then
+  answer requests arriving on the VPS's public interface directly,
+  silently bypassing every Cloudflare Access policy above. The whole
+  threat model assumes the origin is reachable only via Cloudflare
+  Tunnel, so an externally-bound port is equivalent to disabling auth.
