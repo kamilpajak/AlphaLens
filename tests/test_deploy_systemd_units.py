@@ -5,12 +5,12 @@ any ``docker compose run pipeline <script>`` invocation must explicitly
 override the entrypoint, otherwise typer interprets the script path as a
 command name and dies before the pipeline starts. The systemd unit silently
 exits non-zero in that case, so a missing override yields the symptom
-"daily timer fires, briefs/ stays empty" — exactly the failure mode caught
-during PR 2's zen pre-merge review.
+"daily timer fires, briefs/ stays empty" — surfaced by zen pre-merge review.
 """
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -49,17 +49,16 @@ class TestSystemdUnits(unittest.TestCase):
         # successful pipeline closes that overlap window deterministically.
         # If this regresses, the symptom is "daily timer fires, briefs
         # render but data goes stale" — silent until someone notices.
-        self.assertIn(
-            "ExecStartPost=",
+        #
+        # Regex bound to a directive line (multiline ``^``) so the assertion
+        # cannot pass on a comment mentioning ``restart api``. Allows for
+        # the ``\`` line-continuation between the directive and its args.
+        self.assertRegex(
             self.unit_text,
-            "Missing ExecStartPost — api container will not re-open the "
-            "refreshed SQLite cache after the daily pipeline run.",
-        )
-        self.assertIn(
-            "restart api",
-            self.unit_text,
-            "ExecStartPost present but does not restart the api container "
-            "— see alphalens/api/db.py for why immutable=1 needs a bounce.",
+            re.compile(r"^ExecStartPost=[^\n]*(?:\\\n[^\n]*)*restart api\b", re.MULTILINE),
+            "Missing or malformed ExecStartPost — api container will not "
+            "re-open the refreshed SQLite cache after the daily pipeline "
+            "run; see alphalens/api/db.py for why immutable=1 needs a bounce.",
         )
 
 
