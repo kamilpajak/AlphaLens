@@ -24,9 +24,14 @@ Implementation notes callers do NOT need to handle:
 - ``long_term_debt`` and ``short_term_debt`` use a debt-free fallback to
   ``0.0`` when the issuer has filed at least one balance sheet but never
   a debt row — fixes the gap that broke EV/EBITDA for MANH-class tickers.
-- ``shares_outstanding`` tries ``us-gaap:CommonStockSharesOutstanding``
-  then ``dei:EntityCommonStockSharesOutstanding`` (matches existing
-  :mod:`alphalens.data.alt_data.shares_outstanding`).
+- ``shares_outstanding`` follows a 3-tier chain (issue #172 Bug 1):
+  1. ``dei:EntityCommonStockSharesOutstanding`` — modern primary (cover-
+     page disclosure, often fresher than the balance-sheet tag).
+  2. ``us-gaap:CommonStockSharesOutstanding`` — legacy fallback.
+  Both XBRL tiers apply a 180-day staleness gate (issuers like C3.ai
+  populated us-gaap once at IPO and never refreshed it).
+  3. yfinance ``Ticker.get_shares_full`` / ``fast_info.shares`` —
+     external fallback when both XBRL chains are missing or stale.
 """
 
 from __future__ import annotations
@@ -65,6 +70,12 @@ USER_AGENT_ENV = "SEC_EDGAR_USER_AGENT"
 _TAX_RATE_MIN = 0.0
 _TAX_RATE_MAX = 0.35
 _TAX_RATE_DEFAULT = 0.21
+
+# Shares-outstanding XBRL freshness window. Issuers file 10-Q every ~90
+# days; 180 days covers one missed quarter plus filing lag. See
+# `docs/research/edgar_fundamentals_data_quality_2026_05_20.md` and
+# Perplexity research persisted under `~/.claude/projects/.../tool-results/`.
+SHARES_MAX_AGE_DAYS = 180
 
 
 class EdgarFundamentalsStore:
@@ -110,6 +121,8 @@ class EdgarFundamentalsStore:
         self._loaded_tickers: bool = False
         # ticker (upper) -> latest close from yfinance batch in preload().
         self._prices: dict[str, float] = {}
+        # ticker (upper) -> shares from yfinance 3rd-tier fallback.
+        self._shares_cache: dict[str, float | None] = {}
 
     @staticmethod
     def _default_sec_client() -> SecEdgarClient:
@@ -254,19 +267,32 @@ class EdgarFundamentalsStore:
             long_term_debt = 0.0
             short_term_debt = 0.0
 
-        # Shares outstanding — us-gaap first, then dei.
+        # Shares outstanding — 3-tier chain per issue #172 Bug 1:
+        # (1) dei (modern primary, cover-page disclosure)
+        # (2) us-gaap (legacy fallback)
+        # Both XBRL tiers apply a 180-day age gate to defend against
+        # issuers (e.g. C3.ai) whose tag was populated once at IPO and
+        # never updated. (3) yfinance fallback when both XBRL tiers miss.
         shares_outstanding = latest_instant(
-            self._reader, cik, chains.SHARES_OUTSTANDING_US_GAAP, asof, unit="shares"
+            self._reader,
+            cik,
+            chains.SHARES_OUTSTANDING_DEI,
+            asof,
+            taxonomy="dei",
+            unit="shares",
+            max_age_days=SHARES_MAX_AGE_DAYS,
         )
         if shares_outstanding is None:
             shares_outstanding = latest_instant(
                 self._reader,
                 cik,
-                chains.SHARES_OUTSTANDING_DEI,
+                chains.SHARES_OUTSTANDING_US_GAAP,
                 asof,
-                taxonomy="dei",
                 unit="shares",
+                max_age_days=SHARES_MAX_AGE_DAYS,
             )
+        if shares_outstanding is None:
+            shares_outstanding = self._fetch_shares_yf(ticker, asof)
 
         # Price: not in EDGAR. When ``with_prices=True`` we pull a current
         # close from yfinance. Snapshot, not PIT — acceptable for live
@@ -375,6 +401,57 @@ class EdgarFundamentalsStore:
         result = float(price)
         self._prices[ticker.upper()] = result
         return result
+
+    def _fetch_shares_yf(self, ticker: str, asof: date) -> float | None:
+        """Third-tier shares fallback — yfinance ``get_shares_full`` / ``fast_info.shares``.
+
+        Mirrors the PIT shares pattern in
+        :mod:`alphalens.thematic.verification.mcap_filter` so live brief
+        cohorts (asof ≈ today) and historical replays use the same
+        external source. ``get_shares_full`` is the only yfinance API that
+        exposes a dated series; ``fast_info.shares`` is a snapshot used
+        when the series returns nothing. Results are cached per ticker for
+        the lifetime of the store so a single brief doesn't double-fetch.
+        """
+        key = ticker.upper()
+        if key in self._shares_cache:
+            return self._shares_cache[key]
+        try:
+            import pandas as pd
+            import yfinance as yf
+        except ImportError:
+            logger.warning("yfinance unavailable; shares fallback skipped for %s", ticker)
+            self._shares_cache[key] = None
+            return None
+        try:
+            tk = yf.Ticker(ticker)
+            asof_ts = pd.Timestamp(asof)
+            try:
+                series = tk.get_shares_full(
+                    start=(asof_ts - pd.Timedelta(days=400)).date().isoformat(),
+                    end=(asof_ts + pd.Timedelta(days=1)).date().isoformat(),
+                )
+            except Exception:
+                series = None
+            if series is not None and len(series) > 0:
+                series.index = pd.to_datetime(series.index).tz_localize(None)
+                pit = series[series.index <= asof_ts]
+                if not pit.empty:
+                    val = float(pit.iloc[-1])
+                    self._shares_cache[key] = val
+                    return val
+            fallback = getattr(tk.fast_info, "shares", None)
+            val = float(fallback) if fallback else None
+        except Exception as exc:
+            # Transient failures (rate limit, DNS, malformed response) do
+            # NOT pollute the cache — a retry within the same store
+            # lifetime should be able to succeed (zen finding #3 on PR
+            # #174). Only definitive ``None`` results from a clean call
+            # are cached.
+            logger.warning("yfinance shares fallback failed for %s: %s", ticker, exc)
+            return None
+        self._shares_cache[key] = val
+        return val
 
     def _latest_publish_date(self, cik: str, asof: date) -> str | None:
         """ISO date of the most recent visible filing across the core concepts.

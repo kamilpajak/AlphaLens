@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Iterable, Sequence
-from datetime import date
+from datetime import date, timedelta
 
 import pyarrow as pa
 
@@ -48,6 +48,34 @@ logger = logging.getLogger(__name__)
 DEFAULT_TAXONOMY = "us-gaap"
 DEFAULT_UNIT = "USD"
 
+# Forms whose XBRL facts feed the TTM / instant aggregators. Proxy
+# statements (DEF 14A), registration statements (S-1, S-3), prospectuses
+# (424B*) and similar were observed in 2026-05 to carry scale-truncated or
+# illustrative numbers that have no place in a Compustat-style TTM rollup
+# (issue #172 Bug 3a: SOUN DEF 14A NetIncomeLoss val=-14,006 stamped in
+# $thousands but XBRL-labelled as plain USD, overrode the canonical 10-K
+# entry of -14,006,000 because of the filed-date tiebreaker).
+DEFAULT_FORM_WHITELIST: frozenset[str] = frozenset(
+    {
+        # Annual + interim US domestic.
+        "10-K",
+        "10-K/A",
+        "10-Q",
+        "10-Q/A",
+        # 8-K earnings recasts: some issuers re-state prior periods with
+        # standalone-Q rows here before the next 10-Q lands.
+        "8-K",
+        "8-K/A",
+        # Foreign private issuers.
+        "20-F",
+        "20-F/A",
+        "40-F",
+        "40-F/A",
+        "6-K",
+        "6-K/A",
+    }
+)
+
 
 def _arrow_table_to_entries(
     table: pa.Table,
@@ -55,6 +83,7 @@ def _arrow_table_to_entries(
     *,
     taxonomy: str = DEFAULT_TAXONOMY,
     unit: str = DEFAULT_UNIT,
+    form_whitelist: frozenset[str] | set[str] | None = DEFAULT_FORM_WHITELIST,
 ) -> list[_Entry]:
     """Filter ``table`` rows to (taxonomy, concept, unit) and convert to _Entry list.
 
@@ -62,6 +91,10 @@ def _arrow_table_to_entries(
     intentionally so the new fundamentals store does not import from the
     event_drift screener (cycle direction: data depends on screeners would
     invert the architecture).
+
+    Rows whose ``form`` is not in ``form_whitelist`` are dropped. Pass
+    ``form_whitelist=None`` to disable the gate (tests asserting legacy
+    behavior on synthetic non-canonical forms).
     """
     filtered = filter_concept(table, taxonomy, concept, unit=unit)
     if filtered.num_rows == 0:
@@ -76,6 +109,7 @@ def _arrow_table_to_entries(
             start=row["period_start"].isoformat() if row["period_start"] is not None else None,
         )
         for row in filtered.to_pylist()
+        if form_whitelist is None or (row["form"] or "") in form_whitelist
     ]
 
 
@@ -134,6 +168,90 @@ def _latest_end_visible(per_period: dict[tuple[str | None, str], _Entry]) -> str
     return max(entry.end for entry in per_period.values())
 
 
+DEFAULT_TTM_MAX_STALENESS_DAYS = 270
+
+# 4-quarter sum contiguity window (zen finding #1 on PR #174): 4 quarters
+# ≈ 273 days; allow ~±3 weeks for 52/53-week fiscal calendar drift.
+_TTM_4Q_MIN_SPAN_DAYS = 250
+_TTM_4Q_MAX_SPAN_DAYS = 300
+
+
+def _try_4quarter_sum(
+    reader: CompanyfactsParquetReader,
+    cik: str,
+    chain: Sequence[str],
+    asof: date,
+    *,
+    taxonomy: str,
+    unit: str,
+    cutoff: date | None,
+) -> float | None:
+    """Path 1 of :func:`compute_ttm` — trailing 4 standalone quarter rows
+    across the merged concept family. Returns ``None`` when fewer than 4
+    are available, when the span is non-contiguous, or when the freshest
+    row is older than ``cutoff``.
+    """
+    series = compute_per_quarter_series(reader, cik, chain, asof, taxonomy=taxonomy, unit=unit)
+    if len(series) < 4:
+        return None
+    first_end = date.fromisoformat(series[-4][0])
+    last_end = date.fromisoformat(series[-1][0])
+    span_days = (last_end - first_end).days
+    if not (_TTM_4Q_MIN_SPAN_DAYS <= span_days <= _TTM_4Q_MAX_SPAN_DAYS):
+        return None
+    if cutoff is not None and last_end < cutoff:
+        return None
+    return float(sum(v for _, v in series[-4:]))
+
+
+def _try_compustat_per_concept(
+    table: pa.Table,
+    chain: Sequence[str],
+    asof: date,
+    *,
+    taxonomy: str,
+    unit: str,
+    cutoff: date | None,
+) -> float | None:
+    """Path 2 of :func:`compute_ttm` — per-concept ``current_YTD + prior_FY
+    − prior_YTD`` Compustat identity. Keeps the result tied to the
+    chronologically latest end; refuses to fall back to an older concept's
+    answer when a fresher one was attempted.
+    """
+    best_end: str | None = None
+    best_val: float | None = None
+    for concept in chain:
+        # Explicit form_whitelist=DEFAULT_FORM_WHITELIST per zen finding #4
+        # (PR #174) — visible at the call site for audit.
+        entries = _arrow_table_to_entries(
+            table,
+            concept,
+            taxonomy=taxonomy,
+            unit=unit,
+            form_whitelist=DEFAULT_FORM_WHITELIST,
+        )
+        if not entries:
+            continue
+        visible = _pit_filter(entries, asof)
+        if not visible:
+            continue
+        per_period = _latest_per_period(visible)
+        end = _latest_end_visible(per_period)
+        if end is None or (best_end is not None and end <= best_end):
+            continue
+        value = _ttm_at_end(per_period, end)
+        if value is None:
+            continue
+        best_end = end
+        best_val = value
+
+    if best_val is None or best_end is None:
+        return None
+    if cutoff is not None and date.fromisoformat(best_end) < cutoff:
+        return None
+    return best_val
+
+
 def compute_ttm(
     reader: CompanyfactsParquetReader,
     cik: str,
@@ -142,51 +260,82 @@ def compute_ttm(
     *,
     taxonomy: str = DEFAULT_TAXONOMY,
     unit: str = DEFAULT_UNIT,
+    max_staleness_days: int | None = DEFAULT_TTM_MAX_STALENESS_DAYS,
 ) -> float | None:
-    """Scan every concept in ``chain``; return the value at the freshest end.
+    """TTM for a semantic concept family with chain-migration protection.
 
-    For each candidate concept:
-      1. Read all entries for that concept from the CIK's parquet table.
-      2. PIT-filter on ``filed_date <= asof``.
-      3. Keep the latest-filed entry per (start, end) pair (handles
-         restatements).
-      4. Apply ``_ttm_at_end`` at that concept's most recent visible end.
+    Two paths, tried in order:
 
-    Across concepts we keep the result with the chronologically latest
-    ``end`` — early-returning on the first non-None hit would silently
-    serve a stale value for issuers that switched XBRL tags (e.g. ASC
-    606 migration when ``Revenues`` is in the chain alongside
-    ``RevenueFromContractWithCustomerExcludingAssessedTax``).
+    1. **Trailing 4-quarter sum** (:func:`_try_4quarter_sum`) of
+       standalone quarter rows merged across the entire chain (delegated
+       to :func:`compute_per_quarter_series`, which handles standalone-Q
+       + Q4-derivation + concept families). Issue #172 Bug 2 (AVAV): the
+       older per-concept Compustat formula returned ``None`` because a
+       post-merger family lacked a prior-FY anchor, and the aggregator
+       silently fell back to a different concept's ancient TTM. The
+       4-quarter sum treats the chain as one semantic family.
 
-    Returns None when the entire chain misses.
+    2. **Compustat ``current_YTD + prior_FY − prior_YTD``**
+       (:func:`_try_compustat_per_concept`) as a secondary method when
+       fewer than 4 quarters are visible across the family. Scoped
+       per-concept so that the formula is only applied within an
+       accounting-basis-consistent set of rows.
+
+    A ``max_staleness_days`` gate (default 270 ≈ 9 months) rejects results
+    whose freshest input is older than the window — better to emit
+    ``None`` than to surface a multi-year-old TTM in a daily brief.
     """
     table = reader.get_cik_table(cik)
     if table is None:
         return None
-    best_end: str | None = None
-    best_val: float | None = None
-    for concept in chain:
-        entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
-        if not entries:
-            continue
-        visible = _pit_filter(entries, asof)
-        if not visible:
-            continue
-        per_period = _latest_per_period(visible)
-        end = _latest_end_visible(per_period)
-        if end is None:
-            continue
-        if best_end is not None and end <= best_end:
-            continue
-        value = _ttm_at_end(per_period, end)
-        if value is None:
-            continue
-        best_end = end
-        best_val = value
-    return best_val
+    cutoff: date | None = (
+        asof - timedelta(days=max_staleness_days) if max_staleness_days is not None else None
+    )
+    out = _try_4quarter_sum(reader, cik, chain, asof, taxonomy=taxonomy, unit=unit, cutoff=cutoff)
+    if out is not None:
+        return out
+    return _try_compustat_per_concept(
+        table, chain, asof, taxonomy=taxonomy, unit=unit, cutoff=cutoff
+    )
 
 
 # --- Instant concepts: latest balance-sheet value at asof ------------------
+
+
+def _latest_instant_for_concept(
+    table: pa.Table,
+    concept: str,
+    asof: date,
+    *,
+    taxonomy: str,
+    unit: str,
+    cutoff: date | None,
+) -> tuple[str, float] | None:
+    """Resolve one concept's latest visible (end, value) pair under the
+    PIT filter and the optional ``cutoff`` freshness gate. Returns
+    ``None`` when no row survives.
+    """
+    entries = _arrow_table_to_entries(
+        table,
+        concept,
+        taxonomy=taxonomy,
+        unit=unit,
+        form_whitelist=DEFAULT_FORM_WHITELIST,
+    )
+    if not entries:
+        return None
+    visible = _pit_filter(entries, asof)
+    if not visible:
+        return None
+    if cutoff is not None:
+        visible = [e for e in visible if date.fromisoformat(e.end) >= cutoff]
+        if not visible:
+            return None
+    per_end = _latest_per_end(visible)
+    if not per_end:
+        return None
+    latest_end = max(per_end.keys())
+    return latest_end, per_end[latest_end].val
 
 
 def latest_instant(
@@ -197,32 +346,37 @@ def latest_instant(
     *,
     taxonomy: str = DEFAULT_TAXONOMY,
     unit: str = DEFAULT_UNIT,
+    max_age_days: int | None = None,
 ) -> float | None:
     """Most-recent point-in-time value for an instant concept visible at asof.
 
     Scans every concept in ``chain`` and returns the value attached to the
     chronologically latest ``end`` date — see :func:`compute_ttm` for why
     we do not early-return on first hit (stale-tag protection).
+
+    When ``max_age_days`` is set, entries whose ``period_end`` is older than
+    ``asof - max_age_days`` are treated as if they were not present. Used by
+    the shares-outstanding chain to defend against issuers (e.g. C3.ai,
+    issue #172 Bug 1) whose ``us-gaap:CommonStockSharesOutstanding`` tag was
+    populated once at IPO and never refreshed. ``None`` (default) preserves
+    legacy behavior — equity / debt / cash callers don't currently opt in.
     """
     table = reader.get_cik_table(cik)
     if table is None:
         return None
+    cutoff: date | None = asof - timedelta(days=max_age_days) if max_age_days is not None else None
     best_end: str | None = None
     best_val: float | None = None
     for concept in chain:
-        entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
-        if not entries:
+        hit = _latest_instant_for_concept(
+            table, concept, asof, taxonomy=taxonomy, unit=unit, cutoff=cutoff
+        )
+        if hit is None:
             continue
-        visible = _pit_filter(entries, asof)
-        if not visible:
-            continue
-        per_end = _latest_per_end(visible)
-        if not per_end:
-            continue
-        latest_end = max(per_end.keys())
+        latest_end, latest_val = hit
         if best_end is None or latest_end > best_end:
             best_end = latest_end
-            best_val = per_end[latest_end].val
+            best_val = latest_val
     return best_val
 
 
@@ -372,7 +526,16 @@ def compute_per_quarter_series(
     derived_ends: set[str] = set()
 
     for concept in chain:
-        entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
+        # Explicit form_whitelist=DEFAULT_FORM_WHITELIST per zen finding #4
+        # (PR #174): the constraint is visible at the call site so future
+        # readers can audit the form gating without chasing default values.
+        entries = _arrow_table_to_entries(
+            table,
+            concept,
+            taxonomy=taxonomy,
+            unit=unit,
+            form_whitelist=DEFAULT_FORM_WHITELIST,
+        )
         if not entries:
             continue
         visible = _pit_filter(entries, asof)
@@ -464,7 +627,16 @@ def has_any_concept(
     if table is None:
         return False
     for concept in chain:
-        entries = _arrow_table_to_entries(table, concept, taxonomy=taxonomy, unit=unit)
+        # Explicit form_whitelist=DEFAULT_FORM_WHITELIST per zen finding #4
+        # (PR #174): the constraint is visible at the call site so future
+        # readers can audit the form gating without chasing default values.
+        entries = _arrow_table_to_entries(
+            table,
+            concept,
+            taxonomy=taxonomy,
+            unit=unit,
+            form_whitelist=DEFAULT_FORM_WHITELIST,
+        )
         visible = _pit_filter(entries, asof)
         if len({e.end for e in visible}) >= min_distinct_ends:
             return True

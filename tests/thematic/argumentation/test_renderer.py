@@ -552,5 +552,37 @@ class TestRenderDayBundlePreservesUpstreamOrder(unittest.TestCase):
         self.assertLess(bundle.index("## EXTENDED"), bundle.index("## DEEP_DRAWDOWN"))
 
 
+class TestFmtNumSignedZeroSuppression(unittest.TestCase):
+    """Issue #172 Bug 3a: ``_fmt_num(-3e-6, ".1f")`` previously returned
+    ``"-0.0"`` because Python's IEEE-754 negative zero survives rounding
+    via the ``f`` format spec. The brief rendered SOUN ROE as ``-0.0%``,
+    which the reader naturally parsed as "essentially zero" rather than
+    the signed-zero artifact it actually was.
+    """
+
+    def test_negative_near_zero_renders_unsigned(self):
+        self.assertEqual(renderer._fmt_num(-0.04, ".1f"), "0.0")
+
+    def test_explicit_negative_zero_renders_unsigned(self):
+        self.assertEqual(renderer._fmt_num(-0.0, ".1f"), "0.0")
+
+    def test_regular_negative_unchanged(self):
+        self.assertEqual(renderer._fmt_num(-3.2, ".1f"), "-3.2")
+
+    def test_regular_positive_unchanged(self):
+        self.assertEqual(renderer._fmt_num(7.81, ".2f"), "7.81")
+
+    def test_nan_still_returns_n_a(self):
+        self.assertEqual(renderer._fmt_num(float("nan"), ".1f"), "n/a")
+
+    def test_none_still_returns_n_a(self):
+        self.assertEqual(renderer._fmt_num(None, ".1f"), "n/a")
+
+    def test_negative_zero_with_higher_precision_unsigned(self):
+        # 0.00005 rounds to "0.0001" under .4f but to "0.0" under .1f.
+        # The guard kicks only when the rendered string evaluates to 0.
+        self.assertEqual(renderer._fmt_num(-0.00005, ".4f"), "-0.0001")
+
+
 if __name__ == "__main__":
     unittest.main()
