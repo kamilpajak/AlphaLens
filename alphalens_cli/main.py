@@ -21,6 +21,7 @@ import logging
 import typer
 from dotenv import load_dotenv
 
+from alphalens_cli.commands.api import api_app
 from alphalens_cli.commands.archive import archive_app
 from alphalens_cli.commands.audit import audit_command
 from alphalens_cli.commands.backtest import backtest
@@ -63,6 +64,7 @@ app.add_typer(preregister_app, name="preregister")
 app.add_typer(research_app, name="research")
 app.add_typer(archive_app, name="archive")
 app.add_typer(thematic_app, name="thematic")
+app.add_typer(api_app, name="api")
 app.command(name="status")(status)
 app.command(name="backtest")(backtest)
 app.command(
