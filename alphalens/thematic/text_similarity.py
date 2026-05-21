@@ -31,15 +31,40 @@ _MIN_TOKEN_LEN = 4
 # already does the bulk of the work.
 _STOPWORDS = frozenset(
     {
-        "says", "said",
-        "report", "reports", "reported", "reporting",
-        "after", "before",
-        "with", "without",
-        "from", "into", "onto", "upon",
-        "this", "that", "what", "when", "where", "which",
-        "will", "would", "could", "should", "shall",
-        "have", "been", "were",
-        "news", "update", "updates", "breaking", "story", "article",
+        "says",
+        "said",
+        "report",
+        "reports",
+        "reported",
+        "reporting",
+        "after",
+        "before",
+        "with",
+        "without",
+        "from",
+        "into",
+        "onto",
+        "upon",
+        "this",
+        "that",
+        "what",
+        "when",
+        "where",
+        "which",
+        "will",
+        "would",
+        "could",
+        "should",
+        "shall",
+        "have",
+        "been",
+        "were",
+        "news",
+        "update",
+        "updates",
+        "breaking",
+        "story",
+        "article",
         "again",
     }
 )
@@ -68,9 +93,7 @@ def normalize_title(s: str) -> frozenset[str]:
     for ap in _APOSTROPHES:
         cleaned = cleaned.replace(ap, "")
     tokens = _TOKEN_RE.findall(cleaned.lower())
-    return frozenset(
-        t for t in tokens if len(t) >= _MIN_TOKEN_LEN and t not in _STOPWORDS
-    )
+    return frozenset(t for t in tokens if len(t) >= _MIN_TOKEN_LEN and t not in _STOPWORDS)
 
 
 def titles_similar(

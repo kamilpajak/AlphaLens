@@ -200,7 +200,9 @@ def _build_catalyst_payload_v2(
         "title": title,
         "published_at": catalyst[time_col].date().isoformat(),
         "event_type": str(catalyst.get("event_type", "") or "") or None,
-        "confidence": float(catalyst["confidence"]) if pd.notna(catalyst.get("confidence")) else None,
+        "confidence": float(catalyst["confidence"])
+        if pd.notna(catalyst.get("confidence"))
+        else None,
         "second_order_implications": _soi_list(catalyst.get("second_order_implications")),
         "echo_count": int(echo_count),
         "trigger_url": str(trigger.get("url", "") or ""),
@@ -276,8 +278,10 @@ def find_trigger_event(
         return _build_catalyst_payload_v2(trigger, trigger, time_col, echo_count=1)
 
     arc_mask = joined.apply(
-        lambda row: text_similarity.entity_jaccard(_entity_set(row), trigger_entities)
-        >= ENTITY_JACCARD_THRESHOLD,
+        lambda row: (
+            text_similarity.entity_jaccard(_entity_set(row), trigger_entities)
+            >= ENTITY_JACCARD_THRESHOLD
+        ),
         axis=1,
     )
     arc = joined[arc_mask]

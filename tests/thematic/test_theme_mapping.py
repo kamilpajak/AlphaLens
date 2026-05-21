@@ -884,10 +884,7 @@ def _five_candidates_unsorted_confidences() -> list[dict]:
     — verify_candidate must be called in that order.
     """
     confs = [0.5, 0.9, 0.6, 0.8, 0.7]
-    return [
-        {"ticker": f"T{i}", "rationale": "x", "confidence": c}
-        for i, c in enumerate(confs)
-    ]
+    return [{"ticker": f"T{i}", "rationale": "x", "confidence": c} for i, c in enumerate(confs)]
 
 
 def _verify_dict(ticker: str, *, verified: bool, all_unknown: bool = False) -> dict:
@@ -966,9 +963,9 @@ class TestDiversityGuardrail(unittest.TestCase):
         mcap = {c["ticker"]: 1_000_000_000 for c in candidates}
         verify_results = [
             _verify_dict("T1", verified=True),
-            _verify_dict("T3", verified=False),       # hard-fail
+            _verify_dict("T3", verified=False),  # hard-fail
             _verify_dict("T4", verified=True),
-            _verify_dict("T2", verified=True),        # backfill
+            _verify_dict("T2", verified=True),  # backfill
         ]
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
@@ -1003,9 +1000,7 @@ class TestDiversityGuardrail(unittest.TestCase):
         candidates = _five_candidates_unsorted_confidences()
         mcap = {c["ticker"]: 1_000_000_000 for c in candidates}
         ordered_tickers = ["T1", "T3", "T4", "T2", "T0"]
-        verify_results = [
-            _verify_dict(t, verified=False) for t in ordered_tickers
-        ]
+        verify_results = [_verify_dict(t, verified=False) for t in ordered_tickers]
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
                 patch.object(

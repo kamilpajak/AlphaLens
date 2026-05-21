@@ -77,8 +77,12 @@ class TestRootSourceWinsEndToEnd(unittest.TestCase):
 
             # --- Stage 1: Tier 1 lexical clustering at ingest ---
             with (
-                patch.object(news_ingest, "_fetch_polygon", return_value=_news_frame([polygon_row])),
-                patch.object(news_ingest, "_fetch_gdelt", return_value=news_ingest.empty_news_frame()),
+                patch.object(
+                    news_ingest, "_fetch_polygon", return_value=_news_frame([polygon_row])
+                ),
+                patch.object(
+                    news_ingest, "_fetch_gdelt", return_value=news_ingest.empty_news_frame()
+                ),
                 patch.object(news_ingest, "_fetch_rss", return_value=_news_frame([rss_echo])),
             ):
                 ingested = news_ingest.ingest_daily(
@@ -153,16 +157,26 @@ class TestRootSourceWinsEndToEnd(unittest.TestCase):
 
             # Day 1 ingest: only Polygon publishes
             with (
-                patch.object(news_ingest, "_fetch_polygon", return_value=_news_frame([polygon_day1])),
-                patch.object(news_ingest, "_fetch_gdelt", return_value=news_ingest.empty_news_frame()),
-                patch.object(news_ingest, "_fetch_rss", return_value=news_ingest.empty_news_frame()),
+                patch.object(
+                    news_ingest, "_fetch_polygon", return_value=_news_frame([polygon_day1])
+                ),
+                patch.object(
+                    news_ingest, "_fetch_gdelt", return_value=news_ingest.empty_news_frame()
+                ),
+                patch.object(
+                    news_ingest, "_fetch_rss", return_value=news_ingest.empty_news_frame()
+                ),
             ):
                 news_ingest.ingest_daily(date=dt.date(2026, 5, 19), cache_dir=news_dir)
 
             # Day 3 ingest: only FT publishes (different headline; Tier 1 untouched)
             with (
-                patch.object(news_ingest, "_fetch_polygon", return_value=news_ingest.empty_news_frame()),
-                patch.object(news_ingest, "_fetch_gdelt", return_value=news_ingest.empty_news_frame()),
+                patch.object(
+                    news_ingest, "_fetch_polygon", return_value=news_ingest.empty_news_frame()
+                ),
+                patch.object(
+                    news_ingest, "_fetch_gdelt", return_value=news_ingest.empty_news_frame()
+                ),
                 patch.object(news_ingest, "_fetch_rss", return_value=_news_frame([ft_day3])),
             ):
                 news_ingest.ingest_daily(date=dt.date(2026, 5, 21), cache_dir=news_dir)

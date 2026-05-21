@@ -256,6 +256,7 @@ class TestTier1LexicalClustering(unittest.TestCase):
         self.assertEqual(row["timestamp"], pd.Timestamp("2026-05-15T09:00:00Z"))
         # cluster_size persists in the existing `extra` JSON blob — no schema change.
         import json
+
         extra = json.loads(row["extra"])
         self.assertEqual(extra.get("cluster_size"), 3)
 
@@ -333,9 +334,7 @@ class TestTier1LexicalClustering(unittest.TestCase):
         breaking_rows = df[df["id"] == "broot"]
         self.assertEqual(len(breaking_rows), 1)
         self.assertEqual(breaking_rows.iloc[0]["source"], "polygon")
-        self.assertEqual(
-            breaking_rows.iloc[0]["timestamp"], pd.Timestamp("2026-05-15T05:00:00Z")
-        )
+        self.assertEqual(breaking_rows.iloc[0]["timestamp"], pd.Timestamp("2026-05-15T05:00:00Z"))
 
     def test_two_day_window_does_not_cluster_across_dates(self):
         # Two same-titled rows on adjacent days must stay separate — Tier 1 only
