@@ -33,8 +33,8 @@ services:
     # operator, not root.
     user: "${UID:-1000}:${GID:-1000}"
     environment:
-      # scripts/export_briefs_to_json.py and alphalens.* resolve cache
-      # paths via Path.home(); HOME must point at the bind-mount target.
+      # alphalens.* resolves cache paths via Path.home(); HOME must point
+      # at the bind-mount target so writes land in ~/.alphalens on host.
       HOME: /app/home
     env_file:
       - .env
