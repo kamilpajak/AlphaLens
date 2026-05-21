@@ -32,16 +32,19 @@
 	class="border border-grid bg-bg-1 fade-up isolate"
 	style="animation-delay: {index * 0.04}s"
 >
-	<!-- Header strip — single row on lg, ticker+rank then 4 metric tiles on mobile -->
-	<header class="px-4 sm:px-5 py-4 border-b border-grid bg-gradient-to-r from-bg-2 to-bg-1">
-		<div class="flex items-start gap-3 sm:gap-4">
+	<!-- Header strip: rank + title + 4 metric tiles on one wrapping flex row.
+	     On lg+, metrics align right of the title block (fills the previously
+	     empty right gutter). On mobile/sm, metrics wrap below as full-width
+	     4-col grid. -->
+	<header class="px-4 sm:px-5 py-3 border-b border-grid bg-gradient-to-r from-bg-2 to-bg-1">
+		<div class="flex flex-wrap items-center gap-x-4 gap-y-3 sm:gap-x-6">
 			<div class="text-right shrink-0">
 				<div class="font-display font-bold text-3xl sm:text-4xl text-amber leading-none">
 					{String(rank).padStart(2, '0')}
 				</div>
 				<div class="text-[9px] uppercase tracking-widest text-fg-muted mt-1">/{cohort}</div>
 			</div>
-			<div class="min-w-0 flex-1">
+			<div class="min-w-0 flex-1 basis-[200px]">
 				<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
 					<h3 class="font-display font-bold text-xl sm:text-2xl text-fg">{c.ticker}</h3>
 					{#if c.deep_drawdown_reversal}
@@ -62,31 +65,31 @@
 					{/if}
 				</div>
 			</div>
-		</div>
 
-		<div class="grid grid-cols-4 gap-3 mt-4 sm:mt-3">
-			<div class="text-[10px] uppercase tracking-widest min-w-0">
-				<div class="text-fg-muted">mcap</div>
-				<div class="text-fg text-sm sm:text-lg font-bold normal-case truncate">{fmtUsdCompact(c.market_cap)}</div>
-			</div>
-			<div class="text-[10px] uppercase tracking-widest min-w-0">
-				<div class="text-fg-muted">layer4</div>
-				<div class="text-amber text-sm sm:text-lg font-bold normal-case truncate">{c.layer4_weighted_score ?? '—'}</div>
-			</div>
-			<div class="text-[10px] uppercase tracking-widest min-w-0">
-				<div class="text-fg-muted">conf</div>
-				<div
-					class="text-sm sm:text-lg font-bold normal-case truncate"
-					class:text-green={confTone === 'green'}
-					class:text-amber={confTone === 'amber'}
-					class:text-cyan={confTone === 'cyan'}
-					class:text-fg-muted={confTone === 'muted'}
-				>{conf5}/5</div>
-			</div>
-			<div class="text-[10px] uppercase tracking-widest min-w-0">
-				<div class="text-fg-muted">catalyst</div>
-				<div class="text-fg text-sm sm:text-lg font-bold normal-case truncate">{fmtNum(c.catalyst_strength, 2)}</div>
-				<div class="text-fg-muted text-[9px] mt-0.5 truncate">{c.catalyst_event_type ?? '—'}</div>
+			<div class="grid grid-cols-4 gap-x-4 sm:gap-x-6 w-full lg:w-auto lg:ml-auto">
+				<div class="text-[10px] uppercase tracking-widest min-w-0">
+					<div class="text-fg-muted">mcap</div>
+					<div class="text-fg text-sm sm:text-base font-bold normal-case truncate">{fmtUsdCompact(c.market_cap)}</div>
+				</div>
+				<div class="text-[10px] uppercase tracking-widest min-w-0">
+					<div class="text-fg-muted">layer4</div>
+					<div class="text-amber text-sm sm:text-base font-bold normal-case truncate">{c.layer4_weighted_score ?? '—'}</div>
+				</div>
+				<div class="text-[10px] uppercase tracking-widest min-w-0">
+					<div class="text-fg-muted">conf</div>
+					<div
+						class="text-sm sm:text-base font-bold normal-case truncate"
+						class:text-green={confTone === 'green'}
+						class:text-amber={confTone === 'amber'}
+						class:text-cyan={confTone === 'cyan'}
+						class:text-fg-muted={confTone === 'muted'}
+					>{conf5}/5</div>
+				</div>
+				<div class="text-[10px] uppercase tracking-widest min-w-0">
+					<div class="text-fg-muted">catalyst</div>
+					<div class="text-fg text-sm sm:text-base font-bold normal-case truncate">{fmtNum(c.catalyst_strength, 2)}</div>
+					<div class="text-fg-muted text-[9px] mt-0.5 truncate">{c.catalyst_event_type ?? '—'}</div>
+				</div>
 			</div>
 		</div>
 	</header>
