@@ -95,11 +95,36 @@ systemctl --user enable --now alphalens-thematic-daily.timer
 systemctl --user list-timers alphalens-thematic-daily  # next fire ≈ 06:30 UTC
 ```
 
-### 6. Wire Cloudflare
+### 6. Bring up the api service
 
-Same pattern as your other apps (e.g. `gridfinitylabels.com`): point a
-subdomain at the VPS, send traffic to `127.0.0.1:8080`. This file does not
-manage Cloudflare.
+```bash
+# Image already built in step 3 (reused by api).
+UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml up -d api
+docker ps --filter name=alphalens-api   # should be Up / healthy
+
+# First-time cache build (the SQLite file doesn't exist yet, so /readyz
+# will return 503 until either the daily pipeline runs OR you trigger a
+# manual rebuild). The pipeline image's ENTRYPOINT is already
+# /app/.venv/bin/alphalens, so the command line starts at `api`:
+UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
+    run --rm pipeline api rebuild-cache
+
+# Sanity check from the host:
+curl -fsS http://127.0.0.1:8081/healthz
+curl -fsS http://127.0.0.1:8081/readyz | jq
+curl -fsS http://127.0.0.1:8081/v1/days | jq '.meta'
+```
+
+### 7. Wire Cloudflare
+
+Web (anonymous read): same pattern as the other apps (e.g.
+`gridfinitylabels.com`) — point a subdomain at the VPS and send traffic
+to `127.0.0.1:8080`.
+
+API (auth-gated): point `api.<your-subdomain>` at `127.0.0.1:8081` via
+Cloudflare Tunnel and front it with Cloudflare Access (Google SSO for the
+browser, Service Tokens for bots). Full operator manual:
+`deploy/cloudflare/access_setup.md`.
 
 ## Day-to-day operations
 
@@ -115,17 +140,42 @@ journalctl --user -u alphalens-thematic-daily.service -f
 ```bash
 cd ~/AlphaLens && git pull
 UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml build
-UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml up -d web
+UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml up -d web api
 ```
 
-The pipeline image rebuild only matters for the next timer fire — the
-running web container keeps serving JSON from the bind-mount.
+The web container keeps serving JSON from the bind-mount during the
+build. The api container shares the alphalens-pipeline image, so the
+`up -d api` step is mandatory — otherwise it keeps running the old code.
+The pipeline image picks up the new build at the next timer fire.
 
 ### Inspect what nginx is serving
 
 ```bash
 curl -fsS http://127.0.0.1:8080/data/days.json | jq '.[0]'
 ls -la web-data/days/ | head
+```
+
+### Inspect what the api is serving
+
+```bash
+curl -fsS http://127.0.0.1:8081/readyz | jq
+curl -fsS http://127.0.0.1:8081/v1/days | jq '.data[0]'
+curl -fsS http://127.0.0.1:8081/v1/stats | jq
+# OpenAPI / Swagger
+open http://127.0.0.1:8081/docs   # browser (via Cloudflare Access)
+```
+
+### Manually rebuild the api SQLite cache
+
+The pipeline image's ENTRYPOINT is `/app/.venv/bin/alphalens`, so the
+arguments start with the typer subcommand — no leading `alphalens`.
+
+```bash
+UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
+    run --rm pipeline api rebuild-cache
+# --force ignores the parquet mtime gate
+UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
+    run --rm pipeline api rebuild-cache --force
 ```
 
 ### Disable the timer
@@ -152,3 +202,11 @@ systemctl --user disable --now alphalens-thematic-daily.timer
 - `Type=oneshot` systemd unit blocks overlap by default — if a previous
   run is still going when the next 06:30 UTC fire would trigger, the timer
   skips. No `flock` wrapper required.
+- The `api` service reuses the `alphalens-pipeline` image (`fastapi` +
+  `uvicorn[standard]` are in the project's main dependencies). Rebuilding
+  the pipeline image with `docker compose build pipeline` and then
+  `docker compose up -d api` picks up the new image; the daily timer
+  refresh of the SQLite cache is unaffected.
+- The api cache (`~/.alphalens/api/briefs.db`) is a derived artifact — safe
+  to delete; the next `alphalens api rebuild-cache` reconstructs it from
+  the parquet briefs.

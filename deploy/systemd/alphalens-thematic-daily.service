@@ -30,9 +30,13 @@ WorkingDirectory=%h/AlphaLens
 # land as the operator, not root. Compose reads UID/GID from the
 # environment. Inject via `env` in ExecStart= because Environment= does not
 # reliably expand %U/%G specifiers across systemd versions.
+# --entrypoint /bin/bash overrides the image's
+# ENTRYPOINT=["/app/.venv/bin/alphalens"] so the shell can execute the
+# pipeline driver script. Without the override the script path would be
+# passed to typer as a command name and fail with "No such command".
 ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker compose \
     -f %h/AlphaLens/deploy/docker/docker-compose.yml \
-    run --rm pipeline /app/deploy/docker/run_thematic_day.sh
+    run --rm --entrypoint /bin/bash pipeline /app/deploy/docker/run_thematic_day.sh
 
 # Keep stdout/stderr in journald.
 StandardOutput=journal
