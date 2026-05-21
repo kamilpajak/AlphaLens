@@ -17,12 +17,13 @@ const STATIC_DATA_DIR = resolve(__dirname, '../static/data');
 // Pre-read fixture files at module load — synchronous reads in the route
 // handler add per-request latency that races SvelteKit's client-side load
 // function against the Playwright test's first DOM query.
+const DAYS_INDEX = JSON.parse(readFileSync(`${STATIC_DATA_DIR}/days.json`, 'utf-8'));
 const DAYS_INDEX_BODY = JSON.stringify({
-	data: JSON.parse(readFileSync(`${STATIC_DATA_DIR}/days.json`, 'utf-8')),
-	meta: { total: 0, limit: 200, offset: 0 }
+	data: DAYS_INDEX,
+	meta: { total: DAYS_INDEX.length, limit: 200, offset: 0 }
 });
 const DAY_BODIES: Record<string, string> = {};
-for (const day of JSON.parse(readFileSync(`${STATIC_DATA_DIR}/days.json`, 'utf-8'))) {
+for (const day of DAYS_INDEX) {
 	const path = `${STATIC_DATA_DIR}/days/${day.date}.json`;
 	try {
 		DAY_BODIES[day.date] = readFileSync(path, 'utf-8');

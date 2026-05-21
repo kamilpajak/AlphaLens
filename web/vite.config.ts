@@ -8,10 +8,11 @@ import { defineConfig } from 'vite';
 // mirrors that behaviour for Vite so dev and production fetch URLs stay
 // identical (`/api/v1/*`). Playwright smoke tests intercept the same
 // `/api/` paths via page.route() and don't need a live API.
-//
-// Reading process.env in vite.config requires Node ambient types we don't
-// bundle; ignoring the TS check here is cheaper than a new dev dep.
-// @ts-expect-error process is defined in Node where vite.config runs.
+
+// Local ambient declaration so the config compiles without @types/node.
+// Replace with a real Node typedef dep if any other Node global lands here.
+declare const process: { env: Record<string, string | undefined> };
+
 const apiTarget: string = process.env.VITE_API_TARGET ?? 'http://127.0.0.1:8081';
 
 const apiProxy = {
