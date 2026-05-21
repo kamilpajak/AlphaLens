@@ -186,12 +186,14 @@ test.describe('smoke — SPA navigation', () => {
 			await page.goto(path);
 			const hrefs = await page.locator('a[href^="/"]').evaluateAll((nodes) =>
 				nodes
-					// target="_blank" signals "different upstream" (e.g. /api/docs
-					// served by the FastAPI process behind nginx in prod) — the
-					// SvelteKit preview server doesn't proxy it, so excluding the
-					// link keeps the test honest without 5xx false positives.
-					.filter((n) => (n as HTMLAnchorElement).getAttribute('target') !== '_blank')
 					.map((n) => (n as HTMLAnchorElement).getAttribute('href') ?? '')
+					// /api/* is served by the FastAPI process behind nginx in
+					// production — the SvelteKit preview server doesn't proxy
+					// it, so a raw GET would 502/ECONNREFUSED. Path-prefix is
+					// narrower than filtering by target="_blank", which would
+					// also skip legitimate SvelteKit routes if a future link
+					// chose to open in a new tab.
+					.filter((h) => !h.startsWith('/api/'))
 					.filter((h) => !h.startsWith('//') && !h.startsWith('/#'))
 			);
 			for (const href of hrefs) seen.add(href.split('#')[0]);
