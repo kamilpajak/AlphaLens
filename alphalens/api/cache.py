@@ -174,7 +174,7 @@ def _theme_counts(df: pd.DataFrame) -> dict[str, int]:
 def _top_theme(theme_counts: dict[str, int]) -> str | None:
     if not theme_counts:
         return None
-    return sorted(theme_counts.keys(), key=lambda k: (-theme_counts[k], k))[0]
+    return min(theme_counts.keys(), key=lambda k: (-theme_counts[k], k))
 
 
 REQUIRED_PARQUET_COLUMNS = frozenset({"ticker", "theme"})

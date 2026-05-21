@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -28,6 +28,14 @@ from alphalens.api.routes._query import (
 
 router = APIRouter(prefix="/v1/days", tags=["days"])
 
+DbDep = Annotated[sqlite3.Connection, Depends(get_db)]
+DateFromQ = Annotated[str | None, Query(alias="from", description="Inclusive ISO date.")]
+DateToQ = Annotated[str | None, Query(alias="to", description="Inclusive ISO date.")]
+LimitQ = Annotated[int, Query(ge=1, le=200)]
+OffsetQ = Annotated[int, Query(ge=0)]
+ThemeQ = Annotated[str | None, Query(description="Exact theme match.")]
+MinScoreQ = Annotated[int | None, Query(ge=0, description="Layer-4 weighted score floor.")]
+
 
 def _day_meta_from_row(row: sqlite3.Row) -> DayMeta:
     return DayMeta(
@@ -44,11 +52,11 @@ def _day_meta_from_row(row: sqlite3.Row) -> DayMeta:
     summary="List days with brief metadata (most recent first).",
 )
 def list_days(
-    conn: sqlite3.Connection = Depends(get_db),
-    date_from: str | None = Query(None, alias="from", description="Inclusive ISO date."),
-    date_to: str | None = Query(None, alias="to", description="Inclusive ISO date."),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    conn: DbDep,
+    date_from: DateFromQ = None,
+    date_to: DateToQ = None,
+    limit: LimitQ = 50,
+    offset: OffsetQ = 0,
 ) -> dict[str, Any]:
     where_parts: list[str] = []
     params: list[Any] = []
@@ -78,14 +86,10 @@ def list_days(
 
 @router.get(
     "/{date}",
-    response_model=DayBrief,
     responses={404: {"description": "No brief for that date."}},
     summary="Full payload for one day (metadata + every candidate).",
 )
-def get_day(
-    date: str,
-    conn: sqlite3.Connection = Depends(get_db),
-) -> DayBrief:
+def get_day(date: str, conn: DbDep) -> DayBrief:
     validate_date(date)
     meta_row = conn.execute(
         "SELECT date, n_candidates, n_themes, top_theme, theme_counts_json "
@@ -119,11 +123,11 @@ def get_day(
 )
 def list_day_candidates(
     date: str,
-    conn: sqlite3.Connection = Depends(get_db),
-    theme: str | None = Query(None, description="Exact theme match."),
-    min_score: int | None = Query(None, ge=0, description="Layer-4 weighted score floor."),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    conn: DbDep,
+    theme: ThemeQ = None,
+    min_score: MinScoreQ = None,
+    limit: LimitQ = 50,
+    offset: OffsetQ = 0,
 ) -> dict[str, Any]:
     validate_date(date)
 

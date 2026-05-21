@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 
@@ -19,6 +19,12 @@ from alphalens.api.routes._query import (
 
 router = APIRouter(prefix="/v1/tickers", tags=["tickers"])
 
+DbDep = Annotated[sqlite3.Connection, Depends(get_db)]
+DateFromQ = Annotated[str | None, Query(alias="from")]
+DateToQ = Annotated[str | None, Query(alias="to")]
+LimitQ = Annotated[int, Query(ge=1, le=200)]
+OffsetQ = Annotated[int, Query(ge=0)]
+
 
 @router.get(
     "/{ticker}/history",
@@ -27,11 +33,11 @@ router = APIRouter(prefix="/v1/tickers", tags=["tickers"])
 )
 def get_ticker_history(
     ticker: str,
-    conn: sqlite3.Connection = Depends(get_db),
-    date_from: str | None = Query(None, alias="from"),
-    date_to: str | None = Query(None, alias="to"),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    conn: DbDep,
+    date_from: DateFromQ = None,
+    date_to: DateToQ = None,
+    limit: LimitQ = 50,
+    offset: OffsetQ = 0,
 ) -> dict[str, Any]:
     where_parts = ["ticker = ?"]
     params: list[Any] = [ticker.upper()]

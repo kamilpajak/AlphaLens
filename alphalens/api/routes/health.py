@@ -13,7 +13,7 @@ from alphalens.api.models import Health, Ready
 router = APIRouter(tags=["health"])
 
 
-@router.get("/healthz", response_model=Health, summary="Liveness probe (no DB).")
+@router.get("/healthz", summary="Liveness probe (no DB).")
 def healthz() -> Health:
     return Health(status="ok")
 
@@ -25,7 +25,6 @@ def _last_rebuild_at(conn: sqlite3.Connection) -> str | None:
 
 @router.get(
     "/readyz",
-    response_model=Ready,
     summary="Readiness probe — confirms cache DB is reachable.",
     responses={503: {"description": "Cache DB missing or unreadable."}},
 )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
@@ -11,16 +12,12 @@ from alphalens.api.models import Stats, TopTheme
 
 router = APIRouter(prefix="/v1/stats", tags=["stats"])
 
+DbDep = Annotated[sqlite3.Connection, Depends(get_db)]
+TopNQ = Annotated[int, Query(ge=1, le=50, description="How many top themes to include.")]
 
-@router.get(
-    "",
-    response_model=Stats,
-    summary="Top-line counters and most-frequent themes.",
-)
-def get_stats(
-    conn: sqlite3.Connection = Depends(get_db),
-    top_n: int = Query(10, ge=1, le=50, description="How many top themes to include."),
-) -> Stats:
+
+@router.get("", summary="Top-line counters and most-frequent themes.")
+def get_stats(conn: DbDep, top_n: TopNQ = 10) -> Stats:
     counts = conn.execute(
         "SELECT COUNT(*) AS n_days, SUM(n_candidates) AS n_candidates, "
         "MIN(date) AS earliest, MAX(date) AS latest, MAX(rebuilt_at) AS last_rebuild "

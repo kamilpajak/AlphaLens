@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -15,14 +16,13 @@ router = APIRouter(prefix="/v1/candidates", tags=["candidates"])
 
 @router.get(
     "/{date}/{ticker}",
-    response_model=Candidate,
     responses={404: {"description": "No candidate for that date/ticker."}},
     summary="Fetch a single candidate by (date, ticker).",
 )
 def get_candidate(
     date: str,
     ticker: str,
-    conn: sqlite3.Connection = Depends(get_db),
+    conn: Annotated[sqlite3.Connection, Depends(get_db)],
 ) -> Candidate:  # type: ignore[valid-type]
     validate_date(date)
     row = conn.execute(
