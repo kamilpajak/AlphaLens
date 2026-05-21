@@ -77,10 +77,11 @@
 				<a
 					href="/api/docs"
 					target="_blank"
-					rel="noreferrer"
+					rel="noopener"
 					class="hover:text-amber transition-colors"
+					aria-label="api documentation (opens in a new tab)"
 				>
-					<span class="hidden sm:inline">[05]&nbsp;</span>api ↗
+					<span class="hidden sm:inline">[05]&nbsp;</span>api <span aria-hidden="true">↗</span>
 				</a>
 			</nav>
 			<div class="ml-auto flex items-center gap-3 sm:gap-5 text-fg-muted">
