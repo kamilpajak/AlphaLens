@@ -68,7 +68,7 @@ StandardError=journal
 
 # Reasonable resource limits — Form-4 parser is memory-light, but pyarrow
 # can spike on large groupby. Tune up if OOM-killed.
-MemoryMax=2G
+MemoryMax=6G
 TasksMax=64
 
 [Install]
