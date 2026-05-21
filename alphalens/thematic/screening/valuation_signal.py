@@ -149,6 +149,81 @@ def _quality_percentile(value: float | None, peers: list[float]) -> float | None
     return percentile_rank(value, peers)
 
 
+def _financials_age_days(publish_date_str: str | None, asof: dt.date) -> int | None:
+    """Days between ``publish_date_str`` (ISO) and ``asof``. ``None`` on
+    missing or malformed input."""
+    if not publish_date_str:
+        return None
+    try:
+        return (asof - dt.date.fromisoformat(publish_date_str)).days
+    except (TypeError, ValueError):
+        return None
+
+
+def _mcap_gate_payload(
+    ticker: str,
+    asof: dt.date,
+    cand_features: dict | None,
+    cand_multiples: dict[str, float | None],
+    external_mcap_fetcher: Callable[[str, dt.date], float | None] | None,
+) -> dict[str, float | None] | None:
+    """Return the degraded payload when the EDGAR-vs-external mcap gate
+    trips; ``None`` to let the normal scoring path proceed.
+
+    Peers are NOT gated — they're a percentile basket where individual
+    stale points matter much less than the candidate's own mis-pricing.
+    ``fcf_margin`` is preserved (zen finding #2 on PR #174) because it
+    has no mcap dependency.
+    """
+    if external_mcap_fetcher is None or not cand_features:
+        return None
+    edgar_mcap = _market_cap(cand_features)
+    if edgar_mcap is None or edgar_mcap <= 0:
+        return None
+    external_mcap = external_mcap_fetcher(ticker, asof)
+    if external_mcap is None or external_mcap <= 0:
+        return None
+    divergence = abs(edgar_mcap - external_mcap) / external_mcap
+    if divergence <= MCAP_CONSISTENCY_TOLERANCE:
+        return None
+    logger.warning(
+        "mcap consistency gate tripped for %s: edgar=%.2e external=%.2e divergence=%.2f",
+        ticker,
+        edgar_mcap,
+        external_mcap,
+        divergence,
+    )
+    publish_date_str = cand_features.get("publish_date_str")
+    return {
+        **_DEGRADED_MULTIPLES,
+        "fcf_margin": cand_multiples.get("fcf_margin"),
+        "composite_sector_percentile": None,
+        "financials_publish_date": publish_date_str,
+        "financials_age_days": _financials_age_days(publish_date_str, asof),
+    }
+
+
+def _composite_percentile(
+    cand_multiples: dict[str, float | None],
+    peer_multiples: list[dict[str, float | None]],
+) -> float | None:
+    """Mean of the available cheaper-is-better multiples percentiles plus
+    the higher-is-better fcf_margin percentile. ``None`` when no metric
+    has a peer-comparable value.
+    """
+    per_metric_pctl: list[float] = []
+    for metric in ("pe", "ps", "ev_rev"):
+        peer_vals = [pm[metric] for pm in peer_multiples if pm[metric] is not None]
+        pctl = _inverse_percentile(cand_multiples[metric], peer_vals)
+        if pctl is not None:
+            per_metric_pctl.append(pctl)
+    peer_margins = [pm["fcf_margin"] for pm in peer_multiples if pm["fcf_margin"] is not None]
+    margin_pctl = _quality_percentile(cand_multiples["fcf_margin"], peer_margins)
+    if margin_pctl is not None:
+        per_metric_pctl.append(margin_pctl)
+    return mean(per_metric_pctl) if per_metric_pctl else None
+
+
 def score_valuation(
     *,
     ticker: str,
@@ -164,89 +239,40 @@ def score_valuation(
 
     When ``external_mcap_fetcher`` is supplied (typically
     :func:`alphalens.thematic.verification.mcap_filter.fetch_mcap`), the
-    candidate's EDGAR-derived mcap (``price × shares_outstanding``) is
-    cross-checked against the external reference. Divergence above
-    :data:`MCAP_CONSISTENCY_TOLERANCE` degrades all multiples to ``None``
-    so a bogus "deep value" composite cannot reach the brief. Peers are
-    NOT gated — they're a percentile basket where individual stale points
-    matter much less than the candidate's own mis-pricing.
+    candidate's EDGAR-derived mcap is cross-checked against the external
+    reference. Divergence above :data:`MCAP_CONSISTENCY_TOLERANCE`
+    degrades mcap-dependent multiples to ``None`` (issue #172 Bug 1).
     """
     cand_features = feature_fetcher(ticker, asof)
     cand_multiples = compute_multiples(cand_features)
 
-    if external_mcap_fetcher is not None:
-        edgar_mcap = _market_cap(cand_features) if cand_features else None
-        if edgar_mcap is not None and edgar_mcap > 0:
-            external_mcap = external_mcap_fetcher(ticker, asof)
-            if external_mcap is not None and external_mcap > 0:
-                divergence = abs(edgar_mcap - external_mcap) / external_mcap
-                if divergence > MCAP_CONSISTENCY_TOLERANCE:
-                    logger.warning(
-                        "mcap consistency gate tripped for %s: edgar=%.2e external=%.2e divergence=%.2f",
-                        ticker,
-                        edgar_mcap,
-                        external_mcap,
-                        divergence,
-                    )
-                    publish_date_str = (cand_features or {}).get("publish_date_str")
-                    age_days = None
-                    if publish_date_str:
-                        try:
-                            age_days = (asof - dt.date.fromisoformat(publish_date_str)).days
-                        except (TypeError, ValueError):
-                            age_days = None
-                    return {
-                        **_DEGRADED_MULTIPLES,
-                        "fcf_margin": cand_multiples.get("fcf_margin"),
-                        "composite_sector_percentile": None,
-                        "financials_publish_date": publish_date_str,
-                        "financials_age_days": age_days,
-                    }
+    gate_payload = _mcap_gate_payload(
+        ticker, asof, cand_features, cand_multiples, external_mcap_fetcher
+    )
+    if gate_payload is not None:
+        return gate_payload
 
-    # Freshness telemetry — surface publish_date + age so downstream consumers
-    # (briefs, observability) can flag stale fundamentals.
     publish_date_str = (cand_features or {}).get("publish_date_str")
-    financials_age_days = None
-    if publish_date_str:
-        try:
-            publish_dt = dt.date.fromisoformat(publish_date_str)
-            financials_age_days = (asof - publish_dt).days
-        except (TypeError, ValueError):
-            financials_age_days = None
+    financials_age_days = _financials_age_days(publish_date_str, asof)
 
+    base_return = {
+        "composite_sector_percentile": None,
+        "financials_publish_date": publish_date_str,
+        "financials_age_days": financials_age_days,
+    }
     if all(v is None for v in cand_multiples.values()):
-        return {
-            **cand_multiples,
-            "composite_sector_percentile": None,
-            "financials_publish_date": publish_date_str,
-            "financials_age_days": financials_age_days,
-        }
+        return {**cand_multiples, **base_return}
 
-    # Build peer multiples once.
     peer_multiples: list[dict] = []
     for p in peers:
         if p.upper() == ticker.upper():
             continue
-        m = compute_multiples(feature_fetcher(p, asof))
-        peer_multiples.append(m)
+        peer_multiples.append(compute_multiples(feature_fetcher(p, asof)))
 
-    per_metric_pctl: list[float] = []
-    for metric in ("pe", "ps", "ev_rev"):
-        peer_vals = [pm[metric] for pm in peer_multiples if pm[metric] is not None]
-        pctl = _inverse_percentile(cand_multiples[metric], peer_vals)
-        if pctl is not None:
-            per_metric_pctl.append(pctl)
-    peer_margins = [pm["fcf_margin"] for pm in peer_multiples if pm["fcf_margin"] is not None]
-    margin_pctl = _quality_percentile(cand_multiples["fcf_margin"], peer_margins)
-    if margin_pctl is not None:
-        per_metric_pctl.append(margin_pctl)
-
-    composite = mean(per_metric_pctl) if per_metric_pctl else None
     return {
         **cand_multiples,
-        "composite_sector_percentile": composite,
-        "financials_publish_date": publish_date_str,
-        "financials_age_days": financials_age_days,
+        **base_return,
+        "composite_sector_percentile": _composite_percentile(cand_multiples, peer_multiples),
     }
 
 
