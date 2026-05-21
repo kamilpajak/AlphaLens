@@ -1,8 +1,11 @@
 """SQLite connection helpers for the API.
 
-Opens the cache DB in WAL mode so reads can proceed while
-``cache.rebuild_from_parquet`` writes. Connections are per-request via the
-``get_db`` FastAPI dependency.
+Write path (``cache.rebuild_from_parquet``) opens in WAL mode so the
+rebuild itself can proceed concurrently. Read path (api request handlers)
+opens with ``?mode=ro&immutable=1`` so the api container can serve from a
+``:ro`` bind-mount where SQLite cannot create ``-wal``/``-shm`` sidecars;
+the writer must checkpoint WAL into the main file before exit. Read
+connections are per-request via the ``get_db`` FastAPI dependency.
 """
 
 from __future__ import annotations
@@ -28,16 +31,20 @@ def resolve_db_path(override: str | os.PathLike[str] | None = None) -> Path:
 
 
 def connect(db_path: str | os.PathLike[str], *, read_only: bool = False) -> sqlite3.Connection:
-    """Open a SQLite connection to ``db_path`` with WAL + row factory.
+    """Open a SQLite connection to ``db_path``.
 
-    Read-only connections use SQLite URI mode so concurrent readers don't
-    create the file as a side effect.
+    Write path: WAL journal mode + ``synchronous=NORMAL`` for ingest speed.
+    Read path: ``?mode=ro&immutable=1`` so the connection can be served
+    from a ``:ro`` bind-mount (SQLite would otherwise need to create
+    ``-wal``/``-shm`` sidecars in the containing directory). The writer
+    must checkpoint the WAL into the main db file before exit — see
+    ``cache.rebuild_from_parquet``.
     """
     path = Path(db_path)
     if read_only:
         if not path.exists():
             raise FileNotFoundError(f"cache DB not found: {path}")
-        uri = f"file:{path}?mode=ro"
+        uri = f"file:{path}?mode=ro&immutable=1"
         conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
     else:
         path.parent.mkdir(parents=True, exist_ok=True)

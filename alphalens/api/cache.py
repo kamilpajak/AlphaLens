@@ -316,6 +316,21 @@ def rebuild_from_parquet(
             )
 
         conn.commit()
+        # Fold the WAL back into the main file + delete -wal/-shm sidecars,
+        # so the api can open the db read-only on a ``:ro`` bind-mount
+        # (SQLite needs a writable directory to maintain WAL otherwise).
+        # Returns ``(busy, log_frames, checkpointed_frames)``; busy=1 means
+        # another connection held a lock and the WAL was not fully drained.
+        # In that case the ``:ro`` api will fail to open the db until the
+        # sidecars are cleaned up — surface as a warning so the operator
+        # can investigate (typically: a stray sqlite3 shell on the file).
+        row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if row and row[0]:
+            logger.warning(
+                "wal_checkpoint(TRUNCATE) reported busy=%s, log_frames=%s, checkpointed=%s; "
+                "-wal sidecar may persist and break the :ro api mount",
+                *row,
+            )
     finally:
         conn.close()
 
