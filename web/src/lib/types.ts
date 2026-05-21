@@ -6,6 +6,10 @@ export interface DayIndexEntry {
 }
 
 export interface Candidate {
+	// ``date`` is the second half of the (date, ticker) primary key. The api
+	// surfaces it on every candidate so cross-day endpoints (theme history,
+	// ticker history) are self-describing without an envelope per row.
+	date: string;
 	theme: string;
 	ticker: string;
 	company_name: string;
@@ -85,4 +89,16 @@ export interface DayBrief {
 	top_theme: string | null;
 	theme_counts: Record<string, number>;
 	candidates: Candidate[];
+}
+
+// Pagination envelope returned by every list endpoint on the api
+// (`/api/v1/days`, `/api/v1/themes`, `/api/v1/tickers/{ticker}/history`, …).
+// Mirrors `alphalens.api.models.Paginated[T]`.
+export interface Paginated<T> {
+	data: T[];
+	meta: {
+		total: number;
+		limit: number;
+		offset: number;
+	};
 }

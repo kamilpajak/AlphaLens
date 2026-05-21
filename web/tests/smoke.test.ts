@@ -1,10 +1,72 @@
-import { expect, test, type ConsoleMessage } from '@playwright/test';
+import { expect, test, type ConsoleMessage, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GLOSSARY } from '../src/lib/data/glossary.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const STATIC_DATA_DIR = resolve(__dirname, '../static/data');
+
+/**
+ * After PR 3 the app fetches /api/v1/* instead of /data/*.json. The preview
+ * server here has no live api container, so we intercept those requests and
+ * serve responses synthesised from the same static/data/*.json fixture set
+ * the legacy exporter writes. This keeps the smoke test hermetic — no
+ * second process to manage — while exercising the production fetch path.
+ */
+// Pre-read fixture files at module load — synchronous reads in the route
+// handler add per-request latency that races SvelteKit's client-side load
+// function against the Playwright test's first DOM query.
+const DAYS_INDEX_BODY = JSON.stringify({
+	data: JSON.parse(readFileSync(`${STATIC_DATA_DIR}/days.json`, 'utf-8')),
+	meta: { total: 0, limit: 200, offset: 0 }
+});
+const DAY_BODIES: Record<string, string> = {};
+for (const day of JSON.parse(readFileSync(`${STATIC_DATA_DIR}/days.json`, 'utf-8'))) {
+	const path = `${STATIC_DATA_DIR}/days/${day.date}.json`;
+	try {
+		DAY_BODIES[day.date] = readFileSync(path, 'utf-8');
+	} catch {
+		/* missing — handler will surface 404 */
+	}
+}
+
+function installApiMock(page: Page) {
+	return page.route('**/api/v1/**', (route) => {
+		const url = new URL(route.request().url());
+		// /api/v1/days[?limit=…]
+		if (url.pathname === '/api/v1/days') {
+			return route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: DAYS_INDEX_BODY
+			});
+		}
+		// /api/v1/days/{date}
+		const dayMatch = url.pathname.match(/^\/api\/v1\/days\/(\d{4}-\d{2}-\d{2})$/);
+		if (dayMatch) {
+			const date = dayMatch[1];
+			const body = DAY_BODIES[date];
+			if (body) {
+				return route.fulfill({ status: 200, contentType: 'application/json', body });
+			}
+			return route.fulfill({
+				status: 404,
+				contentType: 'application/json',
+				body: JSON.stringify({ detail: `no brief for date=${date}` })
+			});
+		}
+		return route.fulfill({
+			status: 404,
+			contentType: 'application/json',
+			body: JSON.stringify({ detail: `unhandled api mock: ${url.pathname}` })
+		});
+	});
+}
+
+test.beforeEach(async ({ page }) => {
+	await installApiMock(page);
+});
 
 /**
  * Smoke tests covering every route + interactive surface in the production build.
@@ -208,6 +270,12 @@ test.describe('smoke — brief detail interactions', () => {
 
 	test('expanding the full-markdown <details> works for every candidate', async ({ page }) => {
 		await page.goto(`/brief/${latestDay.date}`);
+		// Auto-wait until the client-side load function has rendered the
+		// candidate cards. The pre-PR-3 test used a sync `.count()` and
+		// happened to win the race because static-JSON fetches resolved
+		// before the first DOM query; the api route mock has slightly more
+		// latency so the race tips the other way without auto-wait.
+		await expect(page.locator('article[id] details')).toHaveCount(latestDay.n_candidates);
 		const detailsCount = await page.locator('article[id] details').count();
 		expect(detailsCount).toBe(latestDay.n_candidates);
 
@@ -333,11 +401,18 @@ test.describe('experiments — hybrid tooltip policy', () => {
 
 	test('footer ticker switches vocabulary on /experiments vs other routes (P1.2)', async ({ page }) => {
 		await page.goto('/');
+		// Auto-wait until the layout's $derived ticker computation has
+		// flushed and the chip spans are in the DOM with text-amber class.
+		// Without this the sync `.allTextContents()` race-loses on warm
+		// Vite preview runs that boot the preview server's hot-class scan
+		// after the navigation completes.
+		await expect(page.locator('footer span.text-amber').first()).toBeVisible();
 		const dashChips = (await page.locator('footer span.text-amber').allTextContents()).join(' ');
 		expect(dashChips, 'dashboard footer keeps thematic vocab').toContain('PRESS-GATE');
 		expect(dashChips, 'dashboard footer does not show research vocab').not.toContain('DOCTRINE');
 
 		await page.goto('/experiments');
+		await expect(page.locator('footer span.text-amber').first()).toBeVisible();
 		const expChips = (await page.locator('footer span.text-amber').allTextContents()).join(' ');
 		expect(expChips, '/experiments footer shows research vocab').toContain('DOCTRINE');
 		expect(expChips, '/experiments footer does not show thematic vocab').not.toContain('PRESS-GATE');
