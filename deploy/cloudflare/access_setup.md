@@ -341,9 +341,27 @@ once — the Authorized redirect URI is
   `127.0.0.1:8085`. The threat model assumes the origin is reachable
   **only** via Cloudflare Tunnel; an externally-bound port is equivalent
   to disabling auth.
-- **Google OAuth publishing status.** If your Google Cloud project is
-  in `Testing` status (default for personal use), only emails listed
-  under OAuth consent screen → Test users can complete the SSO flow.
-  Add additional operator emails there before adding them to Policy A.
-  Promote to `In production` only if you need >100 users (requires
-  Google verification — overkill for solo / small group ops).
+- **Google OAuth publishing status — publish, do not stay in Testing.**
+  A fresh Google Cloud project defaults to `Testing` status, which
+  creates a *second* allowlist (OAuth consent screen → Test users) that
+  gates SSO independently of Cloudflare Policy A. Two allowlists for the
+  same access decision means every new user must be added in both
+  places; forgetting one yields a confusing Google-side 403 ("AlphaLens
+  has not completed verification") even though Cloudflare would have
+  allowed them.
+  Click **Publish app** on the OAuth consent screen. With only the
+  basic scopes (`openid email profile`) and well under 100 users,
+  Google verification is **not** required — publishing is instant and
+  removes the Test users gate entirely. Cloudflare Policy A then
+  becomes the sole identity allowlist, which matches the threat model
+  (Cloudflare Access enforces ZTNA + MFA at the edge; the Google Test
+  users list was never load-bearing security, just a development
+  guard). Verification is only triggered by sensitive / restricted
+  scopes (Gmail, Drive, Calendar — none of which AlphaLens uses) or
+  by exceeding the ~100-user cap.
+  Caveat: until the app is Google-verified (which is **not** required
+  for our basic scopes), every first-time SSO shows the "Google hasn't
+  verified this app" interstitial — user clicks **Advanced** → **Go
+  to AlphaLens (unsafe)** once per Google account and is never asked
+  again. Mention this to new operators before they log in so they
+  don't mistake it for a phishing prompt and bounce.
