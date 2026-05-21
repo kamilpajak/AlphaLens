@@ -1,16 +1,16 @@
 import { error } from '@sveltejs/kit';
 import type { PageLoad } from './$types';
-import type { DayBrief, DayIndexEntry } from '$lib/types';
+import type { DayBrief, DayIndexEntry, Paginated } from '$lib/types';
 
 export const load: PageLoad = async ({ fetch, params }) => {
 	const [indexRes, briefRes] = await Promise.all([
-		fetch('/data/days.json'),
-		fetch(`/data/days/${params.date}.json`)
+		fetch('/api/v1/days?limit=200'),
+		fetch(`/api/v1/days/${params.date}`)
 	]);
 	if (!briefRes.ok) {
 		error(404, `No brief for ${params.date}`);
 	}
-	const days: DayIndexEntry[] = await indexRes.json();
+	const indexBody: Paginated<DayIndexEntry> = await indexRes.json();
 	const brief: DayBrief = await briefRes.json();
-	return { days, brief };
+	return { days: indexBody.data, brief };
 };
