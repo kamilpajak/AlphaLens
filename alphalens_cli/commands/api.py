@@ -33,6 +33,11 @@ def serve(
         "--db",
         help="SQLite cache path (read-only at request time).",
     ),
+    root_path: str | None = typer.Option(
+        None,
+        "--root-path",
+        help="External URL prefix when behind a reverse proxy (e.g. /api). Pass an empty string to explicitly disable the prefix even when ALPHALENS_ROOT_PATH is set.",
+    ),
     reload: bool = typer.Option(False, "--reload", help="Auto-reload (development)."),
 ) -> None:
     """Run the FastAPI server with uvicorn.
@@ -44,8 +49,15 @@ def serve(
 
     import uvicorn
 
+    from alphalens.api.app import ENV_ROOT_PATH
+
     os.environ[db_module.ENV_DB_PATH] = str(db_path)
-    typer.echo(f"AlphaLens Briefs API → http://{host}:{port}  (db={db_path})")
+    # ``--root-path ""`` explicitly disables the prefix even when the env var
+    # is set; absence of the flag (None) leaves the env var untouched.
+    if root_path is not None:
+        os.environ[ENV_ROOT_PATH] = root_path
+    suffix = f"  (root_path={root_path!r})" if root_path else ""
+    typer.echo(f"AlphaLens Briefs API → http://{host}:{port}  (db={db_path}){suffix}")
     uvicorn.run(
         "alphalens.api.app:create_app",
         factory=True,

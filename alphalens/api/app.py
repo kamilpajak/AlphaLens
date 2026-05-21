@@ -19,6 +19,8 @@ from alphalens.api.routes import candidates, days, health, stats, themes, ticker
 ENV_CORS = "CORS_ORIGINS"
 DEFAULT_CORS = "http://localhost:5173,http://localhost:8080"
 
+ENV_ROOT_PATH = "ALPHALENS_ROOT_PATH"
+
 API_VERSION = "1.0.0"
 API_TITLE = "AlphaLens Briefs API"
 API_DESCRIPTION = (
@@ -33,8 +35,18 @@ def _parse_cors(value: str | None) -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
-def create_app(db_path: str | os.PathLike[str] | None = None) -> FastAPI:
+def create_app(
+    db_path: str | os.PathLike[str] | None = None,
+    *,
+    root_path: str | None = None,
+) -> FastAPI:
     resolved_db = db_module.resolve_db_path(db_path)
+    # External URL prefix when behind a reverse proxy (e.g. nginx maps
+    # ``/api/*`` → upstream ``/*``). FastAPI needs this to emit absolute
+    # URLs for Swagger UI and the OpenAPI ``servers`` list — otherwise
+    # Swagger HTML fetches ``/openapi.json`` and hits whatever the proxy
+    # serves at the root instead of the api.
+    resolved_root_path = root_path if root_path is not None else os.environ.get(ENV_ROOT_PATH, "")
 
     app = FastAPI(
         title=API_TITLE,
@@ -43,6 +55,7 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
+        root_path=resolved_root_path,
     )
     app.state.db_path = Path(resolved_db)
 
