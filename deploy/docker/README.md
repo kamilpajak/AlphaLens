@@ -162,6 +162,11 @@ UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml
 # --force ignores the parquet mtime gate
 UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
     run --rm pipeline api rebuild-cache --force
+# After a manual rebuild, restart the api container so it re-opens the
+# refreshed cache. The systemd timer does this automatically via
+# ExecStartPost; manual rebuilds must do it explicitly.
+UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
+    restart api
 ```
 
 ### Disable the timer
@@ -195,3 +200,10 @@ systemctl --user disable --now alphalens-thematic-daily.timer
 - The api cache (`~/.alphalens/api/briefs.db`) is a derived artifact — safe
   to delete; the next `alphalens api rebuild-cache` reconstructs it from
   the parquet briefs.
+- The api opens the cache with `?mode=ro&immutable=1` so it can serve from
+  a `:ro` bind-mount. `immutable=1` disables SQLite's change detection,
+  which is racy against a concurrent writer — a request opening mid-write
+  could read inconsistent rows. The daily systemd unit closes this window
+  with `ExecStartPost=docker compose restart api` after the pipeline
+  succeeds; manual `api rebuild-cache` invocations must restart the api
+  container explicitly (see "Manually rebuild the api SQLite cache" above).

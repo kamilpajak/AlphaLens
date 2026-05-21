@@ -41,6 +41,27 @@ class TestSystemdUnits(unittest.TestCase):
     def test_thematic_daily_service_keeps_oneshot_type(self):
         self.assertIn("Type=oneshot", self.unit_text)
 
+    def test_thematic_daily_service_restarts_api_post_run(self):
+        # The api opens the cache with ``?mode=ro&immutable=1`` so it can
+        # serve from a ``:ro`` bind-mount, but ``immutable=1`` disables
+        # SQLite's change detection — a request opening mid-write may read
+        # inconsistent rows. ExecStartPost bouncing the api after a
+        # successful pipeline closes that overlap window deterministically.
+        # If this regresses, the symptom is "daily timer fires, briefs
+        # render but data goes stale" — silent until someone notices.
+        self.assertIn(
+            "ExecStartPost=",
+            self.unit_text,
+            "Missing ExecStartPost — api container will not re-open the "
+            "refreshed SQLite cache after the daily pipeline run.",
+        )
+        self.assertIn(
+            "restart api",
+            self.unit_text,
+            "ExecStartPost present but does not restart the api container "
+            "— see alphalens/api/db.py for why immutable=1 needs a bounce.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

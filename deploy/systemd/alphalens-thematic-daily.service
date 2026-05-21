@@ -38,6 +38,20 @@ ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker compose \
     -f %h/AlphaLens/deploy/docker/docker-compose.yml \
     run --rm --entrypoint /bin/bash pipeline /app/deploy/docker/run_thematic_day.sh
 
+# Restart the api container after a successful pipeline run so it re-opens
+# the freshly-rebuilt SQLite cache. The api opens with `?mode=ro&immutable=1`
+# (see `alphalens/api/db.py`), which lets it serve from a `:ro` bind-mount
+# but is racy against a concurrent writer: if a request opens immutable=1
+# mid-checkpoint, SQLite may return inconsistent rows. Restarting after
+# write closes that window deterministically — the next request opens a
+# fresh connection against the post-checkpoint file. ExecStartPost fires
+# only on ExecStart success; pipeline failures leave the api untouched
+# serving the previous day's cache. Brief 502 from nginx during restart is
+# acceptable at 06:30 UTC.
+ExecStartPost=/usr/bin/env UID=%U GID=%G /usr/bin/docker compose \
+    -f %h/AlphaLens/deploy/docker/docker-compose.yml \
+    restart api
+
 # Keep stdout/stderr in journald.
 StandardOutput=journal
 StandardError=journal

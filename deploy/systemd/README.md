@@ -187,6 +187,14 @@ docker compose -f deploy/docker/docker-compose.yml run --rm pipeline \
 The unit passes the operator's UID/GID to compose via `%U`/`%G` so files
 written into `~/.alphalens/` and `web-data/` are jacoren-owned, not root.
 
+After a successful pipeline run, `ExecStartPost=` restarts the `api`
+container so it re-opens the freshly-rebuilt SQLite cache. The api opens
+with `?mode=ro&immutable=1` (lets it serve from a `:ro` bind-mount but
+disables change detection); restarting after each write closes that
+overlap window. ExecStartPost fires only on ExecStart success, so a
+failed pipeline leaves the api untouched serving the previous day's
+cache.
+
 ### Install
 
 ```bash
