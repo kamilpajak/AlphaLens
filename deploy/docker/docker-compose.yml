@@ -1,10 +1,12 @@
 # AlphaLens VPS deployment.
 #
-# `docker compose up -d` starts only the web service. The pipeline service
+# `docker compose up -d` starts the web + api services. The pipeline service
 # lives under the `oneshot` profile and is invoked on demand from systemd:
 #   docker compose run --rm pipeline /app/deploy/docker/run_thematic_day.sh
 #
-# Both images build from the repo checkout at the VPS — no external registry.
+# All images build from the repo checkout at the VPS — no external registry.
+# The api service reuses the pipeline image (FastAPI + uvicorn ship in the
+# main dependency set), overriding the entrypoint to launch uvicorn.
 
 services:
   web:
@@ -40,3 +42,54 @@ services:
     volumes:
       - ${HOME}/.alphalens:/app/home/.alphalens
       - ../../web-data:/web-data
+
+  api:
+    # Reuses the pipeline image — fastapi + uvicorn ship in the project's
+    # main dependencies, so no separate Dockerfile is needed. The `build:`
+    # block matches the pipeline service so `docker compose up api` cold
+    # (without a prior `docker compose build pipeline`) still works.
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.pipeline
+    image: alphalens-pipeline:latest
+    container_name: alphalens-api
+    restart: unless-stopped
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      HOME: /app/home
+      # Cache db path inside the container — bind-mount resolves it to
+      # ${HOME}/.alphalens/api/briefs.db on the host. Pipeline's daily run
+      # rebuilds this file via `alphalens api rebuild-cache`.
+      ALPHALENS_CACHE_DB: /app/home/.alphalens/api/briefs.db
+      # Browser origins allowed to call the API. The deployed origin lands
+      # via Cloudflare Tunnel; the localhost entries cover SvelteKit dev.
+      CORS_ORIGINS: "${API_CORS_ORIGINS:-http://localhost:5173,http://localhost:8080}"
+    volumes:
+      # Read-write so the operator can run rebuild-cache via `exec` when
+      # debugging, but the routine path is the pipeline container writing.
+      - ${HOME}/.alphalens:/app/home/.alphalens
+    ports:
+      # Bind to localhost only — Cloudflare Access (Tunnel + policy) fronts
+      # the public surface. See deploy/cloudflare/access_setup.md.
+      - "127.0.0.1:8081:8000"
+    entrypoint:
+      - /app/.venv/bin/alphalens
+    command:
+      - api
+      - serve
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --db
+      - /app/home/.alphalens/api/briefs.db
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=2).status==200 else 1)"
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
