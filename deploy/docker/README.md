@@ -18,13 +18,13 @@ inside its own image and refreshes the SQLite cache the api reads.
 │           │ ~/.alphalens                  ▲   on systemd timer   │
 │           │                               │                      │
 │  ┌────────┴──────────┐                    │                      │
-│  │ alphalens-api     │ ── 127.0.0.1:8081 ─┘                      │
+│  │ alphalens-api     │ ── 127.0.0.1:8086 ─┘                      │
 │  │ uvicorn /v1/*     │                                           │
 │  └────────┬──────────┘                                           │
 │           │ docker DNS `api:8000`                                │
 │           ▼                                                      │
 │  ┌──────────────────────────┐                                    │
-│  │ alphalens-web            │ ── 127.0.0.1:8080 ─►               │
+│  │ alphalens-web            │ ── 127.0.0.1:8085 ─►               │
 │  │ nginx:1-alpine           │           Cloudflare ► <sub>       │
 │  │   /api/ → http://api/    │                                    │
 │  └──────────────────────────┘                                    │
@@ -81,7 +81,7 @@ the first cache build.
 ```bash
 UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
     run --rm pipeline api rebuild-cache
-curl -fsS http://127.0.0.1:8080/api/v1/days | jq '.meta'
+curl -fsS http://127.0.0.1:8085/api/v1/days | jq '.meta'
 ```
 
 ### 5. Install the systemd timer for autonomous daily runs
@@ -99,12 +99,18 @@ systemctl --user list-timers alphalens-thematic-daily  # next fire ≈ 06:30 UTC
 
 Web (anonymous read): same pattern as the other apps (e.g.
 `gridfinitylabels.com`) — point a subdomain at the VPS and send traffic
-to `127.0.0.1:8080`.
+to `127.0.0.1:8085`.
 
-API (auth-gated): point `api.<your-subdomain>` at `127.0.0.1:8081` via
+API (auth-gated): point `api.<your-subdomain>` at `127.0.0.1:8086` via
 Cloudflare Tunnel and front it with Cloudflare Access (Google SSO for the
 browser, Service Tokens for bots). Full operator manual:
 `deploy/cloudflare/access_setup.md`.
+
+> **Port note:** Host-side bind is 8085, not 8080, because CrowdSec's
+> local API already holds 127.0.0.1:8080 on this VPS. 8085 is the next
+> free slot in the reserved 8085-8089 production range per
+> `/home/jacoren/CLAUDE.md`. Container-internal ports are unchanged
+> (nginx on 80, api on 8000); only the host-side mapping moves.
 
 ## Day-to-day operations
 
@@ -131,18 +137,18 @@ image picks up the new build at the next timer fire.
 ### Inspect what nginx is reverse-proxying
 
 ```bash
-curl -fsS http://127.0.0.1:8080/api/v1/days | jq '.meta'
-curl -fsS http://127.0.0.1:8080/api/v1/days/2026-05-18 | jq '.n_candidates'
+curl -fsS http://127.0.0.1:8085/api/v1/days | jq '.meta'
+curl -fsS http://127.0.0.1:8085/api/v1/days/2026-05-18 | jq '.n_candidates'
 ```
 
 ### Inspect what the api is serving
 
 ```bash
-curl -fsS http://127.0.0.1:8081/readyz | jq
-curl -fsS http://127.0.0.1:8081/v1/days | jq '.data[0]'
-curl -fsS http://127.0.0.1:8081/v1/stats | jq
+curl -fsS http://127.0.0.1:8086/readyz | jq
+curl -fsS http://127.0.0.1:8086/v1/days | jq '.data[0]'
+curl -fsS http://127.0.0.1:8086/v1/stats | jq
 # OpenAPI / Swagger
-open http://127.0.0.1:8081/docs   # browser (via Cloudflare Access)
+open http://127.0.0.1:8086/docs   # browser (via Cloudflare Access)
 ```
 
 ### Manually rebuild the api SQLite cache
@@ -156,6 +162,11 @@ UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml
 # --force ignores the parquet mtime gate
 UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
     run --rm pipeline api rebuild-cache --force
+# After a manual rebuild, restart the api container so it re-opens the
+# refreshed cache. The systemd timer does this automatically via
+# ExecStartPost; manual rebuilds must do it explicitly.
+UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
+    restart api
 ```
 
 ### Disable the timer
@@ -189,3 +200,10 @@ systemctl --user disable --now alphalens-thematic-daily.timer
 - The api cache (`~/.alphalens/api/briefs.db`) is a derived artifact — safe
   to delete; the next `alphalens api rebuild-cache` reconstructs it from
   the parquet briefs.
+- The api opens the cache with `?mode=ro&immutable=1` so it can serve from
+  a `:ro` bind-mount. `immutable=1` disables SQLite's change detection,
+  which is racy against a concurrent writer — a request opening mid-write
+  could read inconsistent rows. The daily systemd unit closes this window
+  with `ExecStartPost=docker compose restart api` after the pipeline
+  succeeds; manual `api rebuild-cache` invocations must restart the api
+  container explicitly (see "Manually rebuild the api SQLite cache" above).

@@ -38,6 +38,33 @@ ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker compose \
     -f %h/AlphaLens/deploy/docker/docker-compose.yml \
     run --rm --entrypoint /bin/bash pipeline /app/deploy/docker/run_thematic_day.sh
 
+# Restart the api container after a successful pipeline run so it re-opens
+# the freshly-rebuilt SQLite cache. The api opens with `?mode=ro&immutable=1`
+# (see `alphalens/api/db.py`), which lets it serve from a `:ro` bind-mount
+# but is racy against a concurrent writer: if a request opens immutable=1
+# mid-checkpoint, SQLite may return inconsistent rows. Restarting after
+# write closes that window deterministically — the next request opens a
+# fresh connection against the post-checkpoint file. ExecStartPost fires
+# only on ExecStart success; pipeline failures leave the api untouched
+# serving the previous day's cache.
+#
+# Failure semantics: this line has no `-` prefix, so if `docker compose
+# restart api` itself fails (docker daemon hiccup, container missing),
+# systemd marks the whole unit as failed even though the pipeline part
+# already succeeded. That is intentional — a restart failure means the
+# api is now serving stale data against a refreshed cache, which is the
+# exact invariant violation an operator would want surfaced in
+# `systemctl --user status`. Switch to `-/usr/bin/env ...` to make
+# restart failures non-fatal if a noisier failure mode becomes a problem.
+#
+# Timing: `compose restart` returns when the container is started, not
+# when its healthcheck passes (start_period=15s — see docker-compose.yml).
+# nginx upstream returns 502 for ~15s during the gap. Acceptable at
+# 06:30 UTC for a single-user dashboard.
+ExecStartPost=/usr/bin/env UID=%U GID=%G /usr/bin/docker compose \
+    -f %h/AlphaLens/deploy/docker/docker-compose.yml \
+    restart api
+
 # Keep stdout/stderr in journald.
 StandardOutput=journal
 StandardError=journal

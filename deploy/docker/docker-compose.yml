@@ -21,7 +21,9 @@ services:
       # host fronts the public surface. Briefs reach the SPA via the
       # `api` service over the docker-compose default network; nginx in
       # this container proxies `/api/` → `http://api:8000/`.
-      - "127.0.0.1:8080:80"
+      # 8080 is occupied by CrowdSec local API on this VPS; 8085 is the
+      # next free slot in the reserved production range per /home/jacoren/CLAUDE.md.
+      - "127.0.0.1:8085:80"
 
   pipeline:
     build:
@@ -66,20 +68,31 @@ services:
       ALPHALENS_CACHE_DB: /app/home/.alphalens/api/briefs.db
       # Browser origins allowed to call the API. The deployed origin lands
       # via Cloudflare Tunnel; the localhost entries cover SvelteKit dev.
-      CORS_ORIGINS: "${API_CORS_ORIGINS:-http://localhost:5173,http://localhost:8080}"
+      CORS_ORIGINS: "${API_CORS_ORIGINS:-http://localhost:5173,http://localhost:8085}"
+      # nginx in the web container reverse-proxies ``/api/*`` → ``api:8000/*``
+      # (stripping the prefix). FastAPI needs ``root_path=/api`` to emit
+      # absolute URLs (Swagger UI, OpenAPI ``servers``) that travel back
+      # through that prefix. Without this, ``/api/docs`` renders empty
+      # because Swagger UI fetches the root-relative ``/openapi.json``
+      # and gets the SvelteKit SPA fallback HTML instead of the schema.
+      ALPHALENS_ROOT_PATH: /api
     volumes:
-      # Read-only — the api opens SQLite with mode=ro anyway, and the
-      # routine rebuild path runs inside the pipeline container (which
-      # mounts the same path RW). Tightening to :ro means a compromised
+      # Read-only — the api opens SQLite with `?mode=ro&immutable=1` (see
+      # `alphalens/api/db.py`), which lets it serve traffic from a `:ro`
+      # mount where SQLite cannot create `-wal`/`-shm` sidecars. The
+      # pipeline runs in a sibling container that mounts the same path
+      # RW and checkpoints the WAL before exit. Net effect: a compromised
       # api process cannot corrupt the cache or write elsewhere under
       # ~/.alphalens.
       - ${HOME}/.alphalens:/app/home/.alphalens:ro
     ports:
       # Bind to localhost only — Cloudflare Access (Tunnel + policy) fronts
-      # the public surface. NEVER change this to 0.0.0.0:8081 — that would
+      # the public surface. NEVER change this to 0.0.0.0:8086 — that would
       # silently bypass every Access policy. See
       # deploy/cloudflare/access_setup.md.
-      - "127.0.0.1:8081:8000"
+      # 8081 is occupied by gridscribe (Gridfinity Label Generator) on this
+      # VPS; 8086 is the next free slot in the 8085-8089 production range.
+      - "127.0.0.1:8086:8000"
     entrypoint:
       - /app/.venv/bin/alphalens
     command:
