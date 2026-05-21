@@ -74,6 +74,14 @@
 				<a href="/experiments" class="hover:text-amber transition-colors" class:text-amber={route === '/experiments'}>
 					<span class="hidden sm:inline">[04]&nbsp;</span>experiments
 				</a>
+				<a
+					href="/api/docs"
+					target="_blank"
+					rel="noreferrer"
+					class="hover:text-amber transition-colors"
+				>
+					<span class="hidden sm:inline">[05]&nbsp;</span>api ↗
+				</a>
 			</nav>
 			<div class="ml-auto flex items-center gap-3 sm:gap-5 text-fg-muted">
 				<span class="flex items-center gap-1.5">
