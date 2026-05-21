@@ -5,26 +5,27 @@ import { fileURLToPath } from 'node:url';
 import { GLOSSARY } from '../src/lib/data/glossary.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const STATIC_DATA_DIR = resolve(__dirname, '../static/data');
+const FIXTURES_DIR = resolve(__dirname, 'fixtures/api-mock');
 
 /**
- * After PR 3 the app fetches /api/v1/* instead of /data/*.json. The preview
- * server here has no live api container, so we intercept those requests and
- * serve responses synthesised from the same static/data/*.json fixture set
- * the legacy exporter writes. This keeps the smoke test hermetic — no
- * second process to manage — while exercising the production fetch path.
+ * The app fetches /api/v1/* from the FastAPI service in production; the
+ * preview server here has no live api container, so we intercept those
+ * requests and serve bodies synthesised from a checked-in fixture set
+ * under tests/fixtures/api-mock/. Fixtures are an explicit testing
+ * artefact — not a production export — so they don't drift with daily
+ * pipeline runs and the test stays fully hermetic.
  */
 // Pre-read fixture files at module load — synchronous reads in the route
 // handler add per-request latency that races SvelteKit's client-side load
 // function against the Playwright test's first DOM query.
-const DAYS_INDEX = JSON.parse(readFileSync(`${STATIC_DATA_DIR}/days.json`, 'utf-8'));
+const DAYS_INDEX = JSON.parse(readFileSync(`${FIXTURES_DIR}/days.json`, 'utf-8'));
 const DAYS_INDEX_BODY = JSON.stringify({
 	data: DAYS_INDEX,
 	meta: { total: DAYS_INDEX.length, limit: 200, offset: 0 }
 });
 const DAY_BODIES: Record<string, string> = {};
 for (const day of DAYS_INDEX) {
-	const path = `${STATIC_DATA_DIR}/days/${day.date}.json`;
+	const path = `${FIXTURES_DIR}/days/${day.date}.json`;
 	try {
 		DAY_BODIES[day.date] = readFileSync(path, 'utf-8');
 	} catch {
@@ -91,9 +92,7 @@ test.beforeEach(async ({ page }) => {
  *   - Data correctness vs source parquet
  */
 
-const days: { date: string; n_candidates: number }[] = JSON.parse(
-	readFileSync(resolve(__dirname, '../static/data/days.json'), 'utf-8')
-);
+const days: { date: string; n_candidates: number }[] = DAYS_INDEX;
 const latestDay = days[0];
 
 function attachErrorCollectors(consoleErrors: string[], pageErrors: string[]) {
@@ -536,16 +535,12 @@ test.describe('smoke — mobile (390 + 360 viewports)', () => {
 	}
 });
 
-test.describe('smoke — index integrity', () => {
-	test('days.json index lists all per-day brief files', async ({ request }) => {
-		const indexRes = await request.get('/data/days.json');
-		expect(indexRes.status()).toBe(200);
-		const index: { date: string }[] = await indexRes.json();
-		expect(index.length).toBeGreaterThan(0);
-
-		for (const day of index) {
-			const dayRes = await request.get(`/data/days/${day.date}.json`);
-			expect(dayRes.status(), `per-day file for ${day.date}`).toBe(200);
-		}
+test.describe('smoke — api fixture integrity', () => {
+	test('every fixture day listed in days.json has a per-day file', () => {
+		// Sanity check the mock fixture set itself — if a day is missing
+		// from DAY_BODIES we want to fail at test discovery, not silently
+		// 404 inside one of the route handlers downstream.
+		const missing = days.filter((day) => !DAY_BODIES[day.date]);
+		expect(missing, `fixtures missing per-day JSON for: ${missing.map((d) => d.date)}`).toEqual([]);
 	});
 });

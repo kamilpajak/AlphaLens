@@ -18,11 +18,10 @@ services:
     restart: unless-stopped
     ports:
       # Bind to localhost only — Cloudflare tunnel / reverse proxy on the
-      # host fronts the public surface.
+      # host fronts the public surface. Briefs reach the SPA via the
+      # `api` service over the docker-compose default network; nginx in
+      # this container proxies `/api/` → `http://api:8000/`.
       - "127.0.0.1:8080:80"
-    volumes:
-      # Pipeline writes JSON here; nginx serves it as /data/.
-      - ../../web-data:/usr/share/nginx/html/data:ro
 
   pipeline:
     build:
@@ -41,7 +40,6 @@ services:
       - .env
     volumes:
       - ${HOME}/.alphalens:/app/home/.alphalens
-      - ../../web-data:/web-data
 
   api:
     # Reuses the pipeline image — fastapi + uvicorn ship in the project's

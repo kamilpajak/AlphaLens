@@ -1,32 +1,34 @@
 # VPS Docker deployment
 
-Two images, one compose file, one systemd timer. Web UI is served by nginx;
-the thematic pipeline runs on demand inside its own image and refreshes the
-JSON the web container serves.
+Three services, one compose file, one systemd timer. Web UI is served by
+nginx; a long-running FastAPI process (`api`) exposes briefs over REST and
+nginx reverse-proxies `/api/` to it; the thematic pipeline runs on demand
+inside its own image and refreshes the SQLite cache the api reads.
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ jacoren@vps  ~/AlphaLens/  (git checkout of main)            │
-│                                                              │
-│  ~/.alphalens/             ─── bind-mount ──┐                │
-│    form4_parquet/                            ▼               │
-│    av_cache/                       ┌─────────────────────┐   │
-│    companyfacts_parquet/           │ alphalens-pipeline  │   │
-│    thematic_briefs/  ── exporter ► │ python:3.13-bookw.  │   │
-│    …                               └─────────────────────┘   │
-│                                              │               │
-│  ~/AlphaLens/web-data/  ◄────────────────────┘ writes JSON   │
-│      days.json                       ▲                       │
-│      days/<date>.json                │                       │
-│              ▲                       │                       │
-│              │ bind-mounted          │ docker compose run    │
-│              │ as /usr/share/nginx/  │ --rm pipeline …       │
-│              │ html/data:ro         on systemd timer         │
-│  ┌──────────────────────────┐                                │
-│  │ alphalens-web            │ ── 127.0.0.1:8080 ─►           │
-│  │ nginx:1-alpine           │           Cloudflare ► <sub>   │
-│  └──────────────────────────┘                                │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ jacoren@vps  ~/AlphaLens/  (git checkout of main)                │
+│                                                                  │
+│  ~/.alphalens/             ─── bind-mount ──┐                    │
+│    thematic_briefs/                          ▼                   │
+│    api/briefs.db   ◄── rebuild-cache ── ┌─────────────────────┐  │
+│    …                                    │ alphalens-pipeline  │  │
+│           ▲                             │  python:3.13-bookw. │  │
+│           │ ro mount via                └─────────────────────┘  │
+│           │ ~/.alphalens                  ▲   on systemd timer   │
+│           │                               │                      │
+│  ┌────────┴──────────┐                    │                      │
+│  │ alphalens-api     │ ── 127.0.0.1:8081 ─┘                      │
+│  │ uvicorn /v1/*     │                                           │
+│  └────────┬──────────┘                                           │
+│           │ docker DNS `api:8000`                                │
+│           ▼                                                      │
+│  ┌──────────────────────────┐                                    │
+│  │ alphalens-web            │ ── 127.0.0.1:8080 ─►               │
+│  │ nginx:1-alpine           │           Cloudflare ► <sub>       │
+│  │   /api/ → http://api/    │                                    │
+│  └──────────────────────────┘                                    │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## One-time bootstrap
@@ -62,26 +64,24 @@ $EDITOR deploy/docker/.env
 # fill GOOGLE_API_KEY, POLYGON_API_KEY, ALPHA_VANTAGE_API_KEY
 ```
 
-### 3. Build + start the web image
+### 3. Build + start the web and api images
 
 ```bash
-mkdir -p web-data
 UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml build
-UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml up -d web
-docker ps --filter name=alphalens-web   # should be Up / healthy
+UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml up -d web api
+docker ps --filter name=alphalens   # both Up / healthy
 ```
 
-At this point `web-data/` is empty so `/data/days.json` will 404. Move on
-to the first pipeline run.
+At this point the api's SQLite cache doesn't exist yet, so `/api/v1/days`
+returns 503 and the web UI shows the empty-state placeholder. Move on to
+the first cache build.
 
-### 4. Seed JSON from the briefs you rsync'd in step 1
+### 4. Seed the api cache from the briefs you rsync'd in step 1
 
 ```bash
 UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
-    run --rm --entrypoint /app/.venv/bin/python pipeline \
-    /app/scripts/export_briefs_to_json.py --out /web-data
-ls web-data/days.json web-data/days/    # should show jacoren-owned files
-curl -fsS http://127.0.0.1:8080/data/days.json | jq length
+    run --rm pipeline api rebuild-cache
+curl -fsS http://127.0.0.1:8080/api/v1/days | jq '.meta'
 ```
 
 ### 5. Install the systemd timer for autonomous daily runs
@@ -95,27 +95,7 @@ systemctl --user enable --now alphalens-thematic-daily.timer
 systemctl --user list-timers alphalens-thematic-daily  # next fire ≈ 06:30 UTC
 ```
 
-### 6. Bring up the api service
-
-```bash
-# Image already built in step 3 (reused by api).
-UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml up -d api
-docker ps --filter name=alphalens-api   # should be Up / healthy
-
-# First-time cache build (the SQLite file doesn't exist yet, so /readyz
-# will return 503 until either the daily pipeline runs OR you trigger a
-# manual rebuild). The pipeline image's ENTRYPOINT is already
-# /app/.venv/bin/alphalens, so the command line starts at `api`:
-UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml \
-    run --rm pipeline api rebuild-cache
-
-# Sanity check from the host:
-curl -fsS http://127.0.0.1:8081/healthz
-curl -fsS http://127.0.0.1:8081/readyz | jq
-curl -fsS http://127.0.0.1:8081/v1/days | jq '.meta'
-```
-
-### 7. Wire Cloudflare
+### 6. Wire Cloudflare
 
 Web (anonymous read): same pattern as the other apps (e.g.
 `gridfinitylabels.com`) — point a subdomain at the VPS and send traffic
@@ -143,16 +123,16 @@ UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml
 UID="$(id -u)" GID="$(id -g)" docker compose -f deploy/docker/docker-compose.yml up -d web api
 ```
 
-The web container keeps serving JSON from the bind-mount during the
-build. The api container shares the alphalens-pipeline image, so the
-`up -d api` step is mandatory — otherwise it keeps running the old code.
-The pipeline image picks up the new build at the next timer fire.
+The web container keeps serving the SPA shell during the build. The api
+container shares the alphalens-pipeline image, so the `up -d api` step
+is mandatory — otherwise it keeps running the old code. The pipeline
+image picks up the new build at the next timer fire.
 
-### Inspect what nginx is serving
+### Inspect what nginx is reverse-proxying
 
 ```bash
-curl -fsS http://127.0.0.1:8080/data/days.json | jq '.[0]'
-ls -la web-data/days/ | head
+curl -fsS http://127.0.0.1:8080/api/v1/days | jq '.meta'
+curl -fsS http://127.0.0.1:8080/api/v1/days/2026-05-18 | jq '.n_candidates'
 ```
 
 ### Inspect what the api is serving
@@ -187,16 +167,15 @@ systemctl --user disable --now alphalens-thematic-daily.timer
 ## Known issues / behaviour notes
 
 - The pipeline container runs **as `${UID}:${GID}`** from the host so writes
-  to `~/.alphalens/` and `web-data/` are jacoren-owned. The compose file
-  defaults to `1000:1000` if `UID`/`GID` aren't exported. Systemd passes
-  them via `%U`/`%G` in the service unit.
+  to `~/.alphalens/` are jacoren-owned. The compose file defaults to
+  `1000:1000` if `UID`/`GID` aren't exported. Systemd passes them via
+  `%U`/`%G` in the service unit.
 - `HOME=/app/home` in the pipeline container is mandatory — every cache
   path in `alphalens.thematic.*` resolves via `Path.home() / ".alphalens"`.
   Without it the bind-mount target wouldn't match the code.
-- nginx serves `/data/*.json` with `Cache-Control: no-cache, must-revalidate`
-  and `/_app/<hash>` immutable for 30 days. New briefs are visible within
-  the browser's next request (~no cache miss); hashed JS/CSS still cache
-  aggressively.
+- nginx serves `/api/*` with `Cache-Control: no-cache` and `/_app/<hash>`
+  immutable for 30 days. New briefs are visible within the browser's
+  next request (~no cache miss); hashed JS/CSS still cache aggressively.
 - Pipeline image build pulls `phase-robust-backtesting` from git — needs
   outbound HTTPS to GitHub during build.
 - `Type=oneshot` systemd unit blocks overlap by default — if a previous

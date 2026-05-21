@@ -10,17 +10,11 @@
 #                   → ~/.alphalens/thematic_candidates/{date}.parquet
 #   4. score      — Layer 4 quant scorer → ~/.alphalens/thematic_scored/
 #   5. brief      — Layer 5 brief generator → ~/.alphalens/thematic_briefs/
-#   6. export     — parquet → JSON the web container serves (legacy, kept
-#                   until PR 4 deprecates it)
-#   7. api cache  — parquet → SQLite the api container serves over REST
+#   6. api cache  — parquet → SQLite the api container serves over REST
 #
 # Exit non-zero on any stage failure so systemd marks the run as failed
 # (visible via `systemctl --user status alphalens-thematic-daily`).
 set -euo pipefail
-
-# Output dir for the JSON the web container serves. Compose binds the host's
-# `./web-data/` to `/web-data` inside this container.
-OUT_DIR="${ALPHALENS_WEB_DATA_DIR:-/web-data}"
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic ingest"
 alphalens thematic ingest
@@ -37,12 +31,9 @@ alphalens thematic score
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic brief"
 alphalens thematic brief
 
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] export briefs → ${OUT_DIR}"
-python /app/scripts/export_briefs_to_json.py --out "${OUT_DIR}"
-
-# Rebuild the API SQLite cache from the same parquet set the export step
-# just consumed. The api container reads ~/.alphalens/api/briefs.db in
-# WAL mode, so this write is safe to do while it's serving traffic.
+# Rebuild the API SQLite cache from the parquet set the brief stage just
+# produced. The api container reads ~/.alphalens/api/briefs.db in WAL mode,
+# so this write is safe to do while it's serving traffic.
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] api rebuild-cache"
 alphalens api rebuild-cache
 
