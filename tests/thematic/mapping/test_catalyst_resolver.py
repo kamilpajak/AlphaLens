@@ -867,6 +867,54 @@ class TestTier2StoryArc(unittest.TestCase):
         self.assertEqual(cat["url"], "https://reuters.example/spacex-trigger")
         self.assertEqual(cat["echo_count"], 1)
 
+    def test_bare_string_primary_entities_not_shredded_into_chars(self):
+        """If Gemini emits "SPACEX" (str) instead of ["SPACEX"] (list), the
+        resolver must treat it as a single entity — NOT iterate it
+        character-by-character into {"S","P","A","C","E","X"} which would
+        otherwise create spurious entity-overlap with any unrelated event
+        whose primary_entities happens to share a letter.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "id": "n_str",
+                        "title": "SpaceX IPO breaking",
+                        "url": "https://reuters.example/spacex-str",
+                        "timestamp": pd.Timestamp("2026-05-14T14:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "news_id": "n_str",
+                        "themes": ["space_exploration"],
+                        # BARE STRING, not list — Gemini-emitted malformed schema
+                        "primary_entities": "SPACEX",
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="space_exploration",
+                asof=dt.date(2026, 5, 14),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        # Single-entity (post-coercion) → sparse-entity gate fires → legacy mode.
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat["url"], "https://reuters.example/spacex-str")
+        self.assertEqual(cat["echo_count"], 1)
+        self.assertFalse(cat["is_amplified"])
+
     def test_arc_high_jaccard_includes_partial_entity_overlap(self):
         # Trigger {SPACEX, MUSK}; candidate {SPACEX, MUSK, BOEING} →
         # jaccard = 2/3 = 0.67 > 0.3 → IN arc. Catalyst = earliest.

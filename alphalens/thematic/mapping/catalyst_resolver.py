@@ -139,6 +139,12 @@ def _resolve_time_column(joined: pd.DataFrame) -> str | None:
 def _soi_list(value: Any) -> list[str]:
     if value is None:
         return []
+    # Defensive: a bare string would otherwise be shredded into per-character
+    # entries by ``for s in value``. Wrap as a single-element list instead so
+    # an LLM emitting a string-vs-list mistake doesn't corrupt the brief.
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
     try:
         return [str(s) for s in value]
     except TypeError:
@@ -158,6 +164,13 @@ def _entity_set(row: pd.Series) -> set[str]:
         return set()
     if val is None:
         return set()
+    # Defensive: a bare string (an LLM mistake emitting ``"AAPL"`` instead of
+    # ``["AAPL"]``) would otherwise be iterated character-by-character into
+    # ``{"A", "P", "L"}`` and poison the entity-overlap arc. Treat it as a
+    # single-entity input instead.
+    if isinstance(val, str):
+        stripped = val.strip().upper()
+        return {stripped} if stripped else set()
     try:
         return {str(e).strip().upper() for e in val if str(e).strip()}
     except TypeError:

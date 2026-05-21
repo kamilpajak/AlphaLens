@@ -83,6 +83,12 @@ def _attach_cluster_size_to_extra(extra_str: str, cluster_size: int) -> str:
     try:
         payload = json.loads(extra_str) if extra_str else {}
         if not isinstance(payload, dict):
+            # A future source adapter writing a JSON list / scalar / null
+            # would otherwise lose that data silently. Surface the clobber.
+            logger.warning(
+                "overwriting non-dict extra JSON payload during cluster merge: %r",
+                extra_str,
+            )
             payload = {}
     except (json.JSONDecodeError, TypeError):
         payload = {}

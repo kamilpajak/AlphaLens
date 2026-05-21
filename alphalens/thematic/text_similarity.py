@@ -15,6 +15,7 @@ the design memo at ``/home/jacoren/.claude/plans/witty-marinating-stroustrup.md`
 
 from __future__ import annotations
 
+import functools
 import re
 
 JACCARD_THRESHOLD = 0.6
@@ -50,11 +51,16 @@ _APOSTROPHES = ("'", "’", "ʼ")
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
 
+@functools.lru_cache(maxsize=2048)
 def normalize_title(s: str) -> frozenset[str]:
     """Lowercase, strip punctuation, drop short tokens + inline stopwords.
 
-    Returns a frozenset so callers can use it directly in set arithmetic and
-    so equal titles produce equal hashes (handy for tests).
+    Cached so the same title encountered repeatedly in the O(n²) pairwise
+    clustering loop (``news_ingest._cluster_same_day_lexical``) does not
+    re-run the regex on every comparison. For a typical 200-item same-day
+    pool, this turns the ~40k regex invocations of the naive version into
+    ~200 regex + ~40k dict lookups. Returns a frozenset so callers can use
+    it directly in set arithmetic.
     """
     if not s:
         return frozenset()

@@ -131,6 +131,15 @@ class TestEntityJaccard(unittest.TestCase):
         self.assertLess(score, ts.ENTITY_JACCARD_THRESHOLD)
 
 
+class TestNormalizeTitleCaching(unittest.TestCase):
+    def test_lru_cache_hits_on_repeat_call(self):
+        ts.normalize_title.cache_clear()
+        ts.normalize_title("Federal Reserve raises interest rates again")
+        ts.normalize_title("Federal Reserve raises interest rates again")
+        info = ts.normalize_title.cache_info()
+        self.assertGreaterEqual(info.hits, 1)
+
+
 class TestModuleConstants(unittest.TestCase):
     """Lock the tunable defaults so future drift requires a deliberate test edit."""
 

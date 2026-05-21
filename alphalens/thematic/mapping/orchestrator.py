@@ -461,9 +461,13 @@ def map_themes(
     if rows:
         df = (
             pd.DataFrame(rows)
+            # ``ticker`` is the deterministic tie-break so ties on
+            # (n_gates_passed, gemini_confidence) don't produce
+            # run-to-run ordering jitter (e.g. when Pro returns two
+            # candidates at the same confidence).
             .sort_values(
-                ["theme", "n_gates_passed", "gemini_confidence"],
-                ascending=[True, False, False],
+                ["theme", "n_gates_passed", "gemini_confidence", "ticker"],
+                ascending=[True, False, False, True],
             )
             .reset_index(drop=True)
         )
