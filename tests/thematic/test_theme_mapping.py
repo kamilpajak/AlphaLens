@@ -872,5 +872,218 @@ class TestMapThemesWritesGatesPassedStr(unittest.TestCase):
             self.assertEqual(df.iloc[0]["gates_passed_str"], "etf,press")
 
 
+# ============================================================
+# Diversity guardrail + verify-backfill (Phase D)
+# ============================================================
+
+
+def _five_candidates_unsorted_confidences() -> list[dict]:
+    """5 candidates with confidences [0.5, 0.9, 0.6, 0.8, 0.7] in insertion order.
+
+    Sorting desc yields the order T1(0.9), T3(0.8), T4(0.7), T2(0.6), T0(0.5)
+    — verify_candidate must be called in that order.
+    """
+    confs = [0.5, 0.9, 0.6, 0.8, 0.7]
+    return [
+        {"ticker": f"T{i}", "rationale": "x", "confidence": c}
+        for i, c in enumerate(confs)
+    ]
+
+
+def _verify_dict(ticker: str, *, verified: bool, all_unknown: bool = False) -> dict:
+    if verified:
+        return {
+            "ticker": ticker,
+            "verified": True,
+            "gates_passed": ["etf"],
+            "gates_failed": [],
+            "gates_unknown": [],
+        }
+    if all_unknown:
+        return {
+            "ticker": ticker,
+            "verified": False,
+            "gates_passed": [],
+            "gates_failed": [],
+            "gates_unknown": list(orchestrator.GATE_NAMES),
+        }
+    return {
+        "ticker": ticker,
+        "verified": False,
+        "gates_passed": [],
+        "gates_failed": list(orchestrator.GATE_NAMES),
+        "gates_unknown": [],
+    }
+
+
+class TestDiversityGuardrail(unittest.TestCase):
+    def test_module_constants_locked(self):
+        self.assertEqual(orchestrator._MAX_CANDIDATES_PER_THEME, 3)
+        self.assertEqual(orchestrator._MAX_VERIFY_ATTEMPTS_PER_THEME, 5)
+
+    def test_top3_by_confidence_passed_to_verify(self):
+        candidates = _five_candidates_unsorted_confidences()
+        mcap = {c["ticker"]: 1_000_000_000 for c in candidates}
+        # Verify called in confidence-desc order: T1(0.9), T3(0.8), T4(0.7).
+        # All three pass; cap reached → no further verify calls.
+        verify_results = [
+            _verify_dict("T1", verified=True),
+            _verify_dict("T3", verified=True),
+            _verify_dict("T4", verified=True),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=_mapper_result(candidates=candidates),
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value=mcap,
+                ),
+                patch.object(
+                    orchestrator,
+                    "verify_candidate",
+                    side_effect=verify_results,
+                ) as mock_verify,
+            ):
+                df = orchestrator.map_themes(
+                    themes=["quantum"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    output_dir=Path(tmpdir),
+                )
+        self.assertEqual(mock_verify.call_count, 3)
+        self.assertEqual(len(df), 3)
+        self.assertEqual(set(df["ticker"]), {"T1", "T3", "T4"})
+
+    def test_backfills_after_verification_failure(self):
+        # Order: T1(0.9), T3(0.8), T4(0.7), T2(0.6), T0(0.5).
+        # T3 hard-fails → backfill to T2 → 4 verify calls total, 3 kept.
+        candidates = _five_candidates_unsorted_confidences()
+        mcap = {c["ticker"]: 1_000_000_000 for c in candidates}
+        verify_results = [
+            _verify_dict("T1", verified=True),
+            _verify_dict("T3", verified=False),       # hard-fail
+            _verify_dict("T4", verified=True),
+            _verify_dict("T2", verified=True),        # backfill
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=_mapper_result(candidates=candidates),
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value=mcap,
+                ),
+                patch.object(
+                    orchestrator,
+                    "verify_candidate",
+                    side_effect=verify_results,
+                ) as mock_verify,
+            ):
+                df = orchestrator.map_themes(
+                    themes=["quantum"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    output_dir=Path(tmpdir),
+                )
+        self.assertEqual(mock_verify.call_count, 4)
+        self.assertEqual(len(df), 3)
+        self.assertEqual(set(df["ticker"]), {"T1", "T4", "T2"})
+
+    def test_backfill_capped_at_max_attempts(self):
+        # All 5 candidates hard-fail; cap at MAX_VERIFY_ATTEMPTS_PER_THEME=5.
+        candidates = _five_candidates_unsorted_confidences()
+        mcap = {c["ticker"]: 1_000_000_000 for c in candidates}
+        ordered_tickers = ["T1", "T3", "T4", "T2", "T0"]
+        verify_results = [
+            _verify_dict(t, verified=False) for t in ordered_tickers
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=_mapper_result(candidates=candidates),
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value=mcap,
+                ),
+                patch.object(
+                    orchestrator,
+                    "verify_candidate",
+                    side_effect=verify_results,
+                ) as mock_verify,
+            ):
+                df = orchestrator.map_themes(
+                    themes=["quantum"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    output_dir=Path(tmpdir),
+                )
+        self.assertEqual(mock_verify.call_count, 5)
+        self.assertEqual(len(df), 0)
+
+    def test_two_themes_each_capped_independently(self):
+        # Two themes, each with 5 candidates all verifying True.
+        # Each theme should contribute exactly 3 rows; total 6.
+        candidates_a = _five_candidates_unsorted_confidences()
+        candidates_b = [
+            {"ticker": f"S{i}", "rationale": "x", "confidence": c}
+            for i, c in enumerate([0.5, 0.9, 0.6, 0.8, 0.7])
+        ]
+        mcap = {c["ticker"]: 1_000_000_000 for c in (candidates_a + candidates_b)}
+
+        # Mapper returns different candidates per theme call.
+        def _propose_side_effect(*, theme, api_key, gemini_client):
+            if theme == "theme_a":
+                return _mapper_result(candidates=candidates_a)
+            return _mapper_result(candidates=candidates_b)
+
+        verify_count = {"n": 0}
+
+        def _verify_side_effect(**kwargs):
+            verify_count["n"] += 1
+            return _verify_dict(kwargs["ticker"], verified=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    side_effect=_propose_side_effect,
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value=mcap,
+                ),
+                patch.object(
+                    orchestrator,
+                    "verify_candidate",
+                    side_effect=_verify_side_effect,
+                ),
+            ):
+                df = orchestrator.map_themes(
+                    themes=["theme_a", "theme_b"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    output_dir=Path(tmpdir),
+                )
+        self.assertEqual(len(df), 6)  # 3 per theme
+        self.assertEqual(verify_count["n"], 6)
+        self.assertEqual(len(df[df["theme"] == "theme_a"]), 3)
+        self.assertEqual(len(df[df["theme"] == "theme_b"]), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
