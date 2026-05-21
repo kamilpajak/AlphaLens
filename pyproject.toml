@@ -15,7 +15,7 @@ dependencies = [
     "langchain-google-genai>=4.2.2",
     "typer>=0.25.1",
     "yfinance>=0.2.63",
-    "stockstats>=0.6.5",
+    "stockstats>=0.6.8",
     "python-dotenv>=1.2.2",
     "quiverquant",
     "pyarrow>=24.0.0",  # explicit: pandas parquet I/O (FRED cache, history snapshots)
