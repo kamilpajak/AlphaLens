@@ -60,7 +60,8 @@ class ApiServeRootPathPrecedenceTests(unittest.TestCase):
 
     def test_flag_value_overrides_env(self):
         env_after = self._invoke(
-            {ENV_ROOT_PATH: "/api"}, ["--root-path", "/v1"],
+            {ENV_ROOT_PATH: "/api"},
+            ["--root-path", "/v1"],
         )
         self.assertEqual(env_after[ENV_ROOT_PATH], "/v1")
 
@@ -68,7 +69,8 @@ class ApiServeRootPathPrecedenceTests(unittest.TestCase):
         # The point of the ``str | None`` default — an explicit empty
         # string from the CLI must clear the env value, not be ignored.
         env_after = self._invoke(
-            {ENV_ROOT_PATH: "/api"}, ["--root-path", ""],
+            {ENV_ROOT_PATH: "/api"},
+            ["--root-path", ""],
         )
         self.assertEqual(env_after[ENV_ROOT_PATH], "")
 
