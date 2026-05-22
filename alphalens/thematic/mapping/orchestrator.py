@@ -442,6 +442,17 @@ def map_themes(
     catalyst_cache: dict[str, dict | None] = {}
     for theme in themes:
         catalyst = _resolve_catalyst(theme, asof, catalyst_cache)
+        if not catalyst:
+            # UI requires source_event_url for provenance. If the theme's
+            # events are all noise (e.g. ``discounts`` → 100% promo,
+            # stripped by NOISE_EVENT_TYPES), skip the theme rather than
+            # burn a Pro call to emit link-less rows.
+            logger.info(
+                "map_themes %s: skipping theme %r (no catalyst event in window)",
+                asof.isoformat(),
+                theme,
+            )
+            continue
         candidates, in_bracket, keywords = _propose_and_filter_candidates(
             theme=theme,
             api_key=api_key,
