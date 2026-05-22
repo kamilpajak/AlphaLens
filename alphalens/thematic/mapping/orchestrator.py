@@ -442,6 +442,20 @@ def map_themes(
     catalyst_cache: dict[str, dict | None] = {}
     for theme in themes:
         catalyst = _resolve_catalyst(theme, asof, catalyst_cache)
+        if not catalyst:
+            # Every row carries ``source_event_{url,title,published_at}`` as
+            # the provenance link rendered in the UI. When the resolver
+            # returns nothing (theme's events are all noise event types —
+            # e.g. ``discounts`` → 100% ``event_type=promo`` which the
+            # ``NOISE_EVENT_TYPES`` filter strips), we'd emit candidates
+            # whose card points at nowhere. Skip the theme entirely
+            # rather than burning a Pro call to produce link-less rows.
+            logger.info(
+                "map_themes %s: skipping theme %r (no catalyst event in window)",
+                asof.isoformat(),
+                theme,
+            )
+            continue
         candidates, in_bracket, keywords = _propose_and_filter_candidates(
             theme=theme,
             api_key=api_key,

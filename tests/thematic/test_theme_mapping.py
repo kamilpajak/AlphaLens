@@ -381,7 +381,32 @@ class TestVerifyCandidate(unittest.TestCase):
         self.assertTrue(result["verified"])
 
 
+_DEFAULT_CATALYST = {
+    "url": "https://example.com/catalyst",
+    "title": "Stub catalyst event",
+    "published_at": "2026-05-14",
+}
+
+
+def _install_default_catalyst(testcase: unittest.TestCase) -> None:
+    """Patch ``find_trigger_event`` so legacy ``map_themes`` tests still
+    produce rows. Per ``TestSkipsThemesWithoutCatalyst``, a falsy catalyst
+    now short-circuits the theme — tests that don't care about that path
+    must inject a truthy stub.
+    """
+    patcher = patch.object(
+        orchestrator.catalyst_resolver,
+        "find_trigger_event",
+        return_value=_DEFAULT_CATALYST,
+    )
+    patcher.start()
+    testcase.addCleanup(patcher.stop)
+
+
 class TestMapThemes(unittest.TestCase):
+    def setUp(self) -> None:
+        _install_default_catalyst(self)
+
     def test_map_themes_writes_parquet_with_verified_candidates(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
@@ -797,6 +822,9 @@ class TestGateWrappers(unittest.TestCase):
 
 
 class TestMapThemesWritesGatesPassedStr(unittest.TestCase):
+    def setUp(self) -> None:
+        _install_default_catalyst(self)
+
     def test_gates_passed_str_column_present(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
@@ -874,6 +902,9 @@ def _verify_dict(ticker: str, *, verified: bool, all_unknown: bool = False) -> d
 
 
 class TestDiversityGuardrail(unittest.TestCase):
+    def setUp(self) -> None:
+        _install_default_catalyst(self)
+
     def test_module_constants_locked(self):
         self.assertEqual(orchestrator._MAX_CANDIDATES_PER_THEME, 3)
         self.assertEqual(orchestrator._MAX_VERIFY_ATTEMPTS_PER_THEME, 5)
@@ -1043,6 +1074,116 @@ class TestDiversityGuardrail(unittest.TestCase):
         self.assertEqual(verify_count["n"], 6)
         self.assertEqual(len(df[df["theme"] == "theme_a"]), 3)
         self.assertEqual(len(df[df["theme"] == "theme_b"]), 3)
+
+
+# ============================================================
+# Skip themes whose catalyst resolver returns no event
+# ============================================================
+
+
+class TestSkipsThemesWithoutCatalyst(unittest.TestCase):
+    """When ``_resolve_catalyst`` returns nothing for a theme (no
+    non-noise events tagged with the theme in the lookback window),
+    ``map_themes`` must skip the whole theme — no Pro proposal, no
+    candidates, no rows. Pinned 2026-05-22 after GO/OLLI surfaced in the
+    brief with empty ``source_event_url``: the ``discounts`` theme had
+    only ``event_type=promo`` events, all dropped by
+    ``NOISE_EVENT_TYPES`` filter, so the catalyst payload was empty and
+    every emitted row pointed at nowhere.
+    """
+
+    def test_theme_without_catalyst_does_not_call_pro_proposal(self):
+        propose_calls: list[str] = []
+
+        def _track_propose(*, theme, api_key, gemini_client):
+            propose_calls.append(theme)
+            return _mapper_result(
+                candidates=[{"ticker": "FOO", "rationale": "x", "confidence": 0.9}],
+            )
+
+        def _resolver(*, theme, asof):
+            if theme == "discounts":
+                return None
+            return {
+                "url": f"https://example.com/{theme}",
+                "title": f"{theme} catalyst",
+                "published_at": "2026-05-15",
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    orchestrator.catalyst_resolver,
+                    "find_trigger_event",
+                    side_effect=_resolver,
+                ),
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    side_effect=_track_propose,
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value={"FOO": 1_000_000_000},
+                ),
+                patch.object(orchestrator, "_gate_tenk", return_value=True),
+                patch.object(orchestrator, "_gate_press", return_value=False),
+                patch.object(orchestrator, "_gate_insider", return_value=False),
+            ):
+                df = orchestrator.map_themes(
+                    themes=["discounts", "quantum_computing"],
+                    asof=dt.date(2026, 5, 15),
+                    output_dir=Path(tmpdir),
+                )
+
+        # Pro proposal called only for the theme that has a catalyst.
+        self.assertEqual(propose_calls, ["quantum_computing"])
+        # df has exactly one row from the surviving theme.
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]["theme"], "quantum_computing")
+        self.assertEqual(df.iloc[0]["ticker"], "FOO")
+        # And that row has a non-empty source URL (sanity — the invariant
+        # the skip is enforcing is that surviving candidates carry a real
+        # provenance link).
+        self.assertTrue(df.iloc[0]["source_event_url"])
+
+    def test_all_themes_without_catalyst_produces_empty_df(self):
+        # Edge case: zero themes have a catalyst → df is empty but schema-
+        # complete (downstream readers shouldn't crash on a 0-row frame).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    orchestrator.catalyst_resolver,
+                    "find_trigger_event",
+                    return_value=None,
+                ),
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=_mapper_result(
+                        candidates=[{"ticker": "FOO", "confidence": 0.9}],
+                    ),
+                ) as mock_propose,
+            ):
+                df = orchestrator.map_themes(
+                    themes=["discounts", "lifestyle_brands"],
+                    asof=dt.date(2026, 5, 15),
+                    output_dir=Path(tmpdir),
+                )
+
+        mock_propose.assert_not_called()
+        self.assertEqual(len(df), 0)
+        # Schema preserved on empty frame (downstream parquet consumers
+        # do ``df.columns`` introspection).
+        for col in (
+            "theme",
+            "ticker",
+            "source_event_url",
+            "source_event_title",
+            "source_event_published_at",
+        ):
+            self.assertIn(col, df.columns)
 
 
 if __name__ == "__main__":
