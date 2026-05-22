@@ -249,10 +249,9 @@ class TestPropose(unittest.TestCase):
 
 
 class TestVerifyCandidate(unittest.TestCase):
-    def test_verify_runs_all_four_gates_and_collects_passes(self):
+    def test_verify_runs_all_three_gates_and_collects_passes(self):
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=True),
-            patch.object(orchestrator, "_gate_tenk", return_value=False),
+            patch.object(orchestrator, "_gate_tenk", return_value=True),
             patch.object(orchestrator, "_gate_press", return_value=True),
             patch.object(orchestrator, "_gate_insider", return_value=False),
         ):
@@ -262,14 +261,13 @@ class TestVerifyCandidate(unittest.TestCase):
                 asof=dt.date(2026, 5, 15),
                 api_key="testkey",
             )
-        self.assertEqual(set(result["gates_passed"]), {"etf", "press"})
-        self.assertEqual(set(result["gates_failed"]), {"tenk", "insider"})
+        self.assertEqual(set(result["gates_passed"]), {"tenk", "press"})
+        self.assertEqual(set(result["gates_failed"]), {"insider"})
         self.assertEqual(result["gates_unknown"], [])
         self.assertTrue(result["verified"])
 
     def test_verify_returns_unverified_when_zero_gates_pass(self):
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=False),
             patch.object(orchestrator, "_gate_tenk", return_value=False),
             patch.object(orchestrator, "_gate_press", return_value=False),
             patch.object(orchestrator, "_gate_insider", return_value=False),
@@ -281,17 +279,17 @@ class TestVerifyCandidate(unittest.TestCase):
                 api_key="testkey",
             )
         self.assertEqual(result["gates_passed"], [])
-        self.assertEqual(set(result["gates_failed"]), {"etf", "tenk", "press", "insider"})
+        self.assertEqual(set(result["gates_failed"]), {"tenk", "press", "insider"})
         self.assertEqual(result["gates_unknown"], [])
         self.assertFalse(result["verified"])
 
     def test_verify_records_unknown_when_gate_returns_none(self):
-        # tenk returns None (CIK miss / fetch fail) -> goes to gates_unknown,
-        # not gates_failed. Verified rule unchanged: needs ≥1 pass.
+        # tenk + insider return None (CIK miss / fetch fail) -> go to
+        # gates_unknown, not gates_failed. Verified rule unchanged: needs
+        # ≥1 pass.
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=True),
             patch.object(orchestrator, "_gate_tenk", return_value=None),
-            patch.object(orchestrator, "_gate_press", return_value=False),
+            patch.object(orchestrator, "_gate_press", return_value=True),
             patch.object(orchestrator, "_gate_insider", return_value=None),
         ):
             result = orchestrator.verify_candidate(
@@ -300,16 +298,15 @@ class TestVerifyCandidate(unittest.TestCase):
                 asof=dt.date(2026, 5, 15),
                 api_key="testkey",
             )
-        self.assertEqual(result["gates_passed"], ["etf"])
-        self.assertEqual(result["gates_failed"], ["press"])
+        self.assertEqual(result["gates_passed"], ["press"])
+        self.assertEqual(result["gates_failed"], [])
         self.assertEqual(set(result["gates_unknown"]), {"tenk", "insider"})
-        self.assertTrue(result["verified"])  # etf passed = verified
+        self.assertTrue(result["verified"])  # press passed = verified
 
     def test_verify_unknown_alone_does_not_promote_verified(self):
         # Conservative rule: unknowns don't promote verified=True. Pinning
         # the rule from the 2026-05-17 plan §C5 lock.
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=None),
             patch.object(orchestrator, "_gate_tenk", return_value=None),
             patch.object(orchestrator, "_gate_press", return_value=None),
             patch.object(orchestrator, "_gate_insider", return_value=None),
@@ -322,15 +319,14 @@ class TestVerifyCandidate(unittest.TestCase):
             )
         self.assertEqual(result["gates_passed"], [])
         self.assertEqual(result["gates_failed"], [])
-        self.assertEqual(len(result["gates_unknown"]), 4)
+        self.assertEqual(len(result["gates_unknown"]), 3)
         self.assertFalse(result["verified"])
 
     def test_verify_safe_wrapper_treats_exception_as_unknown(self):
         # An exception inside a gate is "we don't know", not False.
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=True),
             patch.object(orchestrator, "_gate_tenk", side_effect=RuntimeError("boom")),
-            patch.object(orchestrator, "_gate_press", return_value=False),
+            patch.object(orchestrator, "_gate_press", return_value=True),
             patch.object(orchestrator, "_gate_insider", return_value=False),
         ):
             result = orchestrator.verify_candidate(
@@ -339,8 +335,8 @@ class TestVerifyCandidate(unittest.TestCase):
                 asof=dt.date(2026, 5, 15),
                 api_key="testkey",
             )
-        self.assertEqual(result["gates_passed"], ["etf"])
-        self.assertEqual(set(result["gates_failed"]), {"press", "insider"})
+        self.assertEqual(result["gates_passed"], ["press"])
+        self.assertEqual(set(result["gates_failed"]), {"insider"})
         self.assertEqual(result["gates_unknown"], ["tenk"])
         self.assertTrue(result["verified"])
 
@@ -360,7 +356,6 @@ class TestVerifyCandidate(unittest.TestCase):
             return False
 
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=False),
             patch.object(orchestrator, "_gate_tenk", side_effect=fake_tenk),
             patch.object(orchestrator, "_gate_press", side_effect=fake_press),
             patch.object(orchestrator, "_gate_insider", return_value=False),
@@ -379,8 +374,7 @@ class TestVerifyCandidate(unittest.TestCase):
     def test_verify_handles_individual_gate_failure(self):
         # Insider gate raises -> treated as gate not passing, other gates still run
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=True),
-            patch.object(orchestrator, "_gate_tenk", return_value=False),
+            patch.object(orchestrator, "_gate_tenk", return_value=True),
             patch.object(orchestrator, "_gate_press", return_value=False),
             patch.object(orchestrator, "_gate_insider", side_effect=RuntimeError("io")),
         ):
@@ -390,7 +384,7 @@ class TestVerifyCandidate(unittest.TestCase):
                 asof=dt.date(2026, 5, 15),
                 api_key="testkey",
             )
-        self.assertEqual(result["gates_passed"], ["etf"])
+        self.assertEqual(result["gates_passed"], ["tenk"])
         self.assertTrue(result["verified"])
 
 
@@ -417,8 +411,7 @@ class TestMapThemes(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"QBTS": 1_000_000_000, "MADEUP": 1_000_000_000},
                 ),
-                patch.object(orchestrator, "_gate_etf", side_effect=[True, False]),
-                patch.object(orchestrator, "_gate_tenk", return_value=False),
+                patch.object(orchestrator, "_gate_tenk", side_effect=[True, False]),
                 patch.object(orchestrator, "_gate_press", return_value=False),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
             ):
@@ -462,7 +455,6 @@ class TestMapThemes(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"MADEUP": 1_000_000_000},
                 ),
-                patch.object(orchestrator, "_gate_etf", return_value=False),
                 patch.object(orchestrator, "_gate_tenk", return_value=False),
                 patch.object(orchestrator, "_gate_press", return_value=False),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
@@ -501,7 +493,6 @@ class TestMapThemes(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"QUBT": 1_780_000_000},
                 ),
-                patch.object(orchestrator, "_gate_etf", return_value=False),
                 patch.object(orchestrator, "_gate_tenk", return_value=True),
                 patch.object(orchestrator, "_gate_press", return_value=False),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
@@ -543,9 +534,8 @@ class TestMapThemes(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"QBTS": 1e9, "MISS1": 1e9, "MISS2": 1e9},
                 ),
-                # QBTS passes etf; MISS1 fails all (real no); MISS2 unknown all.
-                patch.object(orchestrator, "_gate_etf", side_effect=[True, False, None]),
-                patch.object(orchestrator, "_gate_tenk", side_effect=[False, False, None]),
+                # QBTS passes tenk; MISS1 fails all (real no); MISS2 unknown all.
+                patch.object(orchestrator, "_gate_tenk", side_effect=[True, False, None]),
                 patch.object(orchestrator, "_gate_press", side_effect=[False, False, None]),
                 patch.object(orchestrator, "_gate_insider", side_effect=[False, False, None]),
                 self.assertLogs(
@@ -598,7 +588,6 @@ class TestMapThemes(unittest.TestCase):
                     "has_theme_in_recent_press",
                     return_value=None,
                 ),
-                patch.object(orchestrator, "_gate_etf", return_value=False),
                 patch.object(orchestrator, "_gate_tenk", return_value=False),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
             ):
@@ -665,7 +654,6 @@ class TestMapThemes(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"VRT": 1_000_000_000},
                 ),
-                patch.object(orchestrator, "_gate_etf", return_value=False),
                 patch.object(orchestrator, "_gate_tenk", side_effect=_capture_tenk),
                 patch.object(orchestrator, "_gate_press", side_effect=_capture_press),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
@@ -713,7 +701,6 @@ class TestMapThemes(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"QBTS": 1_000_000_000},
                 ),
-                patch.object(orchestrator, "_gate_etf", return_value=False),
                 patch.object(orchestrator, "_gate_tenk", side_effect=_capture_tenk),
                 patch.object(orchestrator, "_gate_press", return_value=False),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
@@ -732,12 +719,6 @@ class TestMapThemes(unittest.TestCase):
 
 
 class TestGateWrappers(unittest.TestCase):
-    def test_gate_etf_delegates(self):
-        with patch.object(orchestrator.etf_holdings, "is_in_thematic_etf", return_value=True):
-            self.assertTrue(
-                orchestrator._gate_etf(ticker="NVDA", themes=["q"], asof=dt.date(2026, 5, 15))
-            )
-
     def test_gate_tenk_delegates(self):
         with patch.object(orchestrator.tenk_grep, "has_theme_keywords_in_10k", return_value=False):
             self.assertFalse(
@@ -851,8 +832,7 @@ class TestMapThemesWritesGatesPassedStr(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"QBTS": 1_000_000_000},
                 ),
-                patch.object(orchestrator, "_gate_etf", return_value=True),
-                patch.object(orchestrator, "_gate_tenk", return_value=False),
+                patch.object(orchestrator, "_gate_tenk", return_value=True),
                 patch.object(orchestrator, "_gate_press", return_value=True),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
                 patch.object(
@@ -869,7 +849,224 @@ class TestMapThemesWritesGatesPassedStr(unittest.TestCase):
                     output_dir=cache_dir,
                 )
             self.assertIn("gates_passed_str", df.columns)
-            self.assertEqual(df.iloc[0]["gates_passed_str"], "etf,press")
+            self.assertEqual(df.iloc[0]["gates_passed_str"], "tenk,press")
+
+
+# ============================================================
+# Diversity guardrail + verify-backfill (Phase D)
+# ============================================================
+
+
+def _five_candidates_unsorted_confidences() -> list[dict]:
+    """5 candidates with confidences [0.5, 0.9, 0.6, 0.8, 0.7] in insertion order.
+
+    Sorting desc yields the order T1(0.9), T3(0.8), T4(0.7), T2(0.6), T0(0.5)
+    — verify_candidate must be called in that order.
+    """
+    confs = [0.5, 0.9, 0.6, 0.8, 0.7]
+    return [{"ticker": f"T{i}", "rationale": "x", "confidence": c} for i, c in enumerate(confs)]
+
+
+def _verify_dict(ticker: str, *, verified: bool, all_unknown: bool = False) -> dict:
+    if verified:
+        return {
+            "ticker": ticker,
+            "verified": True,
+            "gates_passed": ["tenk"],
+            "gates_failed": [],
+            "gates_unknown": [],
+        }
+    if all_unknown:
+        return {
+            "ticker": ticker,
+            "verified": False,
+            "gates_passed": [],
+            "gates_failed": [],
+            "gates_unknown": list(orchestrator.GATE_NAMES),
+        }
+    return {
+        "ticker": ticker,
+        "verified": False,
+        "gates_passed": [],
+        "gates_failed": list(orchestrator.GATE_NAMES),
+        "gates_unknown": [],
+    }
+
+
+class TestDiversityGuardrail(unittest.TestCase):
+    def test_module_constants_locked(self):
+        self.assertEqual(orchestrator._MAX_CANDIDATES_PER_THEME, 3)
+        self.assertEqual(orchestrator._MAX_VERIFY_ATTEMPTS_PER_THEME, 5)
+
+    def test_etf_dropped_from_gate_names(self):
+        # ETF gate dropped per docs/research/thematic_verification_gate_audit_2026_05_22.md.
+        # Thematic ETFs cover ~9 narrow industries; Layer 2's free-form theme
+        # vocabulary rarely matches the YAML keys, so this gate was 100% UNK
+        # in production. Keeping it in GATE_NAMES inflated the gates_unknown
+        # column without providing signal.
+        self.assertNotIn("etf", orchestrator.GATE_NAMES)
+        self.assertEqual(orchestrator.GATE_NAMES, ("tenk", "press", "insider"))
+
+    def test_top3_by_confidence_passed_to_verify(self):
+        candidates = _five_candidates_unsorted_confidences()
+        mcap = {c["ticker"]: 1_000_000_000 for c in candidates}
+        # Verify called in confidence-desc order: T1(0.9), T3(0.8), T4(0.7).
+        # All three pass; cap reached → no further verify calls.
+        verify_results = [
+            _verify_dict("T1", verified=True),
+            _verify_dict("T3", verified=True),
+            _verify_dict("T4", verified=True),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=_mapper_result(candidates=candidates),
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value=mcap,
+                ),
+                patch.object(
+                    orchestrator,
+                    "verify_candidate",
+                    side_effect=verify_results,
+                ) as mock_verify,
+            ):
+                df = orchestrator.map_themes(
+                    themes=["quantum"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    output_dir=Path(tmpdir),
+                )
+        self.assertEqual(mock_verify.call_count, 3)
+        self.assertEqual(len(df), 3)
+        self.assertEqual(set(df["ticker"]), {"T1", "T3", "T4"})
+
+    def test_backfills_after_verification_failure(self):
+        # Order: T1(0.9), T3(0.8), T4(0.7), T2(0.6), T0(0.5).
+        # T3 hard-fails → backfill to T2 → 4 verify calls total, 3 kept.
+        candidates = _five_candidates_unsorted_confidences()
+        mcap = {c["ticker"]: 1_000_000_000 for c in candidates}
+        verify_results = [
+            _verify_dict("T1", verified=True),
+            _verify_dict("T3", verified=False),  # hard-fail
+            _verify_dict("T4", verified=True),
+            _verify_dict("T2", verified=True),  # backfill
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=_mapper_result(candidates=candidates),
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value=mcap,
+                ),
+                patch.object(
+                    orchestrator,
+                    "verify_candidate",
+                    side_effect=verify_results,
+                ) as mock_verify,
+            ):
+                df = orchestrator.map_themes(
+                    themes=["quantum"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    output_dir=Path(tmpdir),
+                )
+        self.assertEqual(mock_verify.call_count, 4)
+        self.assertEqual(len(df), 3)
+        self.assertEqual(set(df["ticker"]), {"T1", "T4", "T2"})
+
+    def test_backfill_capped_at_max_attempts(self):
+        # All 5 candidates hard-fail; cap at MAX_VERIFY_ATTEMPTS_PER_THEME=5.
+        candidates = _five_candidates_unsorted_confidences()
+        mcap = {c["ticker"]: 1_000_000_000 for c in candidates}
+        ordered_tickers = ["T1", "T3", "T4", "T2", "T0"]
+        verify_results = [_verify_dict(t, verified=False) for t in ordered_tickers]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    return_value=_mapper_result(candidates=candidates),
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value=mcap,
+                ),
+                patch.object(
+                    orchestrator,
+                    "verify_candidate",
+                    side_effect=verify_results,
+                ) as mock_verify,
+            ):
+                df = orchestrator.map_themes(
+                    themes=["quantum"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    output_dir=Path(tmpdir),
+                )
+        self.assertEqual(mock_verify.call_count, 5)
+        self.assertEqual(len(df), 0)
+
+    def test_two_themes_each_capped_independently(self):
+        # Two themes, each with 5 candidates all verifying True.
+        # Each theme should contribute exactly 3 rows; total 6.
+        candidates_a = _five_candidates_unsorted_confidences()
+        candidates_b = [
+            {"ticker": f"S{i}", "rationale": "x", "confidence": c}
+            for i, c in enumerate([0.5, 0.9, 0.6, 0.8, 0.7])
+        ]
+        mcap = {c["ticker"]: 1_000_000_000 for c in (candidates_a + candidates_b)}
+
+        # Mapper returns different candidates per theme call.
+        def _propose_side_effect(*, theme, api_key, gemini_client):
+            if theme == "theme_a":
+                return _mapper_result(candidates=candidates_a)
+            return _mapper_result(candidates=candidates_b)
+
+        verify_count = {"n": 0}
+
+        def _verify_side_effect(**kwargs):
+            verify_count["n"] += 1
+            return _verify_dict(kwargs["ticker"], verified=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    orchestrator.gemini_mapper,
+                    "propose_candidates",
+                    side_effect=_propose_side_effect,
+                ),
+                patch.object(
+                    orchestrator.mcap_filter,
+                    "filter_by_mcap",
+                    return_value=mcap,
+                ),
+                patch.object(
+                    orchestrator,
+                    "verify_candidate",
+                    side_effect=_verify_side_effect,
+                ),
+            ):
+                df = orchestrator.map_themes(
+                    themes=["theme_a", "theme_b"],
+                    asof=dt.date(2026, 5, 15),
+                    api_key="testkey",
+                    output_dir=Path(tmpdir),
+                )
+        self.assertEqual(len(df), 6)  # 3 per theme
+        self.assertEqual(verify_count["n"], 6)
+        self.assertEqual(len(df[df["theme"] == "theme_a"]), 3)
+        self.assertEqual(len(df[df["theme"] == "theme_b"]), 3)
 
 
 if __name__ == "__main__":

@@ -244,6 +244,46 @@ class TestScoreCLI(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("Phase C parquet missing", result.output)
 
+    def test_score_empty_candidates_writes_empty_scored_parquet(self):
+        # Thin days (upstream outages, strict gating) yield zero verified
+        # candidates. The score stage must persist an empty Phase D parquet
+        # and exit 0 so the downstream brief + api stages can short-circuit
+        # via their own empty-input handlers.
+        candidates = pd.DataFrame(
+            columns=[
+                "theme",
+                "ticker",
+                "verified",
+                "gates_passed",
+                "gates_passed_str",
+                "n_gates_passed",
+            ]
+        )
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as cdir, tempfile.TemporaryDirectory() as tmp:
+            cpath = Path(cdir) / "2026-05-21.parquet"
+            candidates.to_parquet(cpath, index=False)
+            result = self.runner.invoke(
+                app,
+                [
+                    "thematic",
+                    "score",
+                    "--date",
+                    "2026-05-21",
+                    "--candidates-dir",
+                    cdir,
+                    "--output-dir",
+                    tmp,
+                ],
+            )
+            self.assertEqual(result.exit_code, 0, msg=result.output)
+            self.assertIn("Wrote 0 scored rows", result.output)
+            out_path = Path(tmp) / "2026-05-21.parquet"
+            self.assertTrue(out_path.exists())
+            round_trip = pd.read_parquet(out_path)
+            self.assertEqual(len(round_trip), 0)
+
 
 class TestBriefCLI(unittest.TestCase):
     def setUp(self):

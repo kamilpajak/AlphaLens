@@ -28,6 +28,7 @@ from typing import Any
 
 import pandas as pd
 
+from alphalens.thematic import text_similarity
 from alphalens.thematic.extraction.schema import NOISE_EVENT_TYPES
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,13 @@ DEFAULT_EVENTS_DIR = Path.home() / ".alphalens" / "thematic_events"
 DEFAULT_LOOKBACK_DAYS = 30
 _TITLE_MAX_LEN = 200
 _NOISE_FILTERS_PATH = Path(__file__).parent.parent / "config" / "catalyst_noise_filters.yaml"
+
+# Tier 2 story-arc parameters. Below MIN_TRIGGER_ENTITIES the resolver
+# degrades to legacy "latest event = catalyst" behaviour, because a single
+# entity is too sparse a signal to define a story arc — it would pull in
+# unrelated newsletters happening to mention the same ticker.
+ENTITY_JACCARD_THRESHOLD = text_similarity.ENTITY_JACCARD_THRESHOLD
+MIN_TRIGGER_ENTITIES = 2
 
 
 @lru_cache(maxsize=1)
@@ -131,24 +139,81 @@ def _resolve_time_column(joined: pd.DataFrame) -> str | None:
 def _soi_list(value: Any) -> list[str]:
     if value is None:
         return []
+    # Defensive: a bare string would otherwise be shredded into per-character
+    # entries by ``for s in value``. Wrap as a single-element list instead so
+    # an LLM emitting a string-vs-list mistake doesn't corrupt the brief.
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
     try:
         return [str(s) for s in value]
     except TypeError:
         return []
 
 
-def _build_catalyst_payload(top: pd.Series, time_col: str) -> dict:
-    title = str(top.get("title", "") or "")
+def _entity_set(row: pd.Series) -> set[str]:
+    """Coerce a row's ``primary_entities`` field to a Python set of upper-cased strings.
+
+    Mirrors the access pattern used by ``_has_theme`` for the ``themes`` field
+    but operates on a full row so it can be applied row-wise via ``.apply``.
+    Returns an empty set if the column is missing, ``None``, or non-iterable.
+    """
+    try:
+        val = row.get("primary_entities")
+    except (AttributeError, TypeError):
+        return set()
+    if val is None:
+        return set()
+    # Defensive: a bare string (an LLM mistake emitting ``"AAPL"`` instead of
+    # ``["AAPL"]``) would otherwise be iterated character-by-character into
+    # ``{"A", "P", "L"}`` and poison the entity-overlap arc. Treat it as a
+    # single-entity input instead.
+    if isinstance(val, str):
+        stripped = val.strip().upper()
+        return {stripped} if stripped else set()
+    try:
+        return {str(e).strip().upper() for e in val if str(e).strip()}
+    except TypeError:
+        return set()
+
+
+def _build_catalyst_payload_v2(
+    catalyst: pd.Series,
+    trigger: pd.Series,
+    time_col: str,
+    *,
+    echo_count: int,
+) -> dict:
+    """Build the resolver's return payload from catalyst+trigger pair.
+
+    ``catalyst`` is the root of the story arc (earliest entity-overlapping
+    event); ``trigger`` is the latest event that activated the brief.
+    When ``echo_count == 1`` the resolver degraded to single-event mode and
+    ``catalyst is trigger``; in that case the trigger-* fields equal the
+    primary fields and ``is_amplified`` is False.
+    """
+    title = str(catalyst.get("title", "") or "")
     if len(title) > _TITLE_MAX_LEN:
         title = textwrap.shorten(title, width=_TITLE_MAX_LEN, placeholder="…")
     return {
-        "url": str(top.get("url", "") or ""),
+        "url": str(catalyst.get("url", "") or ""),
         "title": title,
-        "published_at": top[time_col].date().isoformat(),
-        "event_type": str(top.get("event_type", "") or "") or None,
-        "confidence": float(top["confidence"]) if pd.notna(top.get("confidence")) else None,
-        "second_order_implications": _soi_list(top.get("second_order_implications")),
+        "published_at": catalyst[time_col].date().isoformat(),
+        "event_type": str(catalyst.get("event_type", "") or "") or None,
+        "confidence": float(catalyst["confidence"])
+        if pd.notna(catalyst.get("confidence"))
+        else None,
+        "second_order_implications": _soi_list(catalyst.get("second_order_implications")),
+        "echo_count": int(echo_count),
+        "trigger_url": str(trigger.get("url", "") or ""),
+        "trigger_published_at": trigger[time_col].date().isoformat(),
+        "is_amplified": int(echo_count) > 1,
     }
+
+
+def _build_catalyst_payload(top: pd.Series, time_col: str) -> dict:
+    """Backward-compatible single-event payload (no arc): catalyst == trigger."""
+    return _build_catalyst_payload_v2(top, top, time_col, echo_count=1)
 
 
 def find_trigger_event(
@@ -159,7 +224,16 @@ def find_trigger_event(
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
 ) -> dict | None:
-    """Return ``{url, title, published_at}`` of the latest theme-tagged event."""
+    """Return the catalyst payload for a theme.
+
+    Walks the rolling events window for events tagged with ``theme``, joins
+    to news, and either:
+      - returns the **latest** event (degraded mode) when the trigger has
+        fewer than ``MIN_TRIGGER_ENTITIES`` primary entities, or
+      - returns the **earliest** event in the entity-overlap story arc
+        (entity Jaccard ≥ ``ENTITY_JACCARD_THRESHOLD`` against the trigger),
+        plus ``echo_count`` / ``trigger_url`` / ``is_amplified`` metadata.
+    """
     events = _load_window(events_dir, asof, lookback_days)
     if events.empty:
         return None
@@ -196,8 +270,27 @@ def find_trigger_event(
     if joined.empty:
         return None
 
-    top = joined.sort_values(time_col, ascending=False).iloc[0]
-    return _build_catalyst_payload(top, time_col)
+    joined = joined.reset_index(drop=True)
+    trigger = joined.sort_values(time_col, ascending=False).iloc[0]
+    trigger_entities = _entity_set(trigger)
+
+    if len(trigger_entities) < MIN_TRIGGER_ENTITIES:
+        return _build_catalyst_payload_v2(trigger, trigger, time_col, echo_count=1)
+
+    arc_mask = joined.apply(
+        lambda row: (
+            text_similarity.entity_jaccard(_entity_set(row), trigger_entities)
+            >= ENTITY_JACCARD_THRESHOLD
+        ),
+        axis=1,
+    )
+    arc = joined[arc_mask]
+    if arc.empty:
+        # Defensive: trigger itself should always satisfy jaccard(s, s) = 1.0.
+        return _build_catalyst_payload_v2(trigger, trigger, time_col, echo_count=1)
+
+    catalyst = arc.sort_values(time_col, ascending=True).iloc[0]
+    return _build_catalyst_payload_v2(catalyst, trigger, time_col, echo_count=len(arc))
 
 
 __all__ = ["DEFAULT_EVENTS_DIR", "DEFAULT_NEWS_DIR", "find_trigger_event"]

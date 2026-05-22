@@ -586,5 +586,402 @@ class TestFindTriggerEventNoiseFilter(unittest.TestCase):
         self.assertEqual(cat["url"], "https://reuters.com/article/legit")
 
 
+class TestTier2StoryArc(unittest.TestCase):
+    """Resolver picks the EARLIEST member of an entity-overlap story arc."""
+
+    def test_returns_earliest_in_story_arc_via_entity_jaccard(self):
+        # Three events on three days, all theme="space_exploration", sharing
+        # primary_entities {SPACEX, MUSK}. The LATEST event (14:00 RSS echo)
+        # activates the brief, but the catalyst URL must point back to the
+        # EARLIEST root (09:00 Polygon source two days earlier).
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 12),
+                [
+                    {
+                        "id": "n_root",
+                        "title": "SpaceX files IPO with SEC",
+                        "url": "https://reuters.example/spacex-ipo",
+                        "timestamp": pd.Timestamp("2026-05-12T09:00:00Z"),
+                    }
+                ],
+            )
+            _seed_news(
+                news,
+                dt.date(2026, 5, 13),
+                [
+                    {
+                        "id": "n_mid",
+                        "title": "SpaceX IPO valuation jumps",
+                        "url": "https://bloomberg.example/spacex-ipo-valuation",
+                        "timestamp": pd.Timestamp("2026-05-13T11:00:00Z"),
+                    }
+                ],
+            )
+            _seed_news(
+                news,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "id": "n_echo",
+                        "title": "Asteroid mining and Musk's plans",
+                        "url": "https://ft.example/spacex-echo",
+                        "timestamp": pd.Timestamp("2026-05-14T14:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 12),
+                [
+                    {
+                        "news_id": "n_root",
+                        "themes": ["space_exploration"],
+                        "primary_entities": ["SPACEX", "MUSK"],
+                        "confidence": 0.92,
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 13),
+                [
+                    {
+                        "news_id": "n_mid",
+                        "themes": ["space_exploration"],
+                        "primary_entities": ["SPACEX", "MUSK"],
+                        "confidence": 0.89,
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "news_id": "n_echo",
+                        "themes": ["space_exploration"],
+                        "primary_entities": ["SPACEX", "MUSK"],
+                        "confidence": 0.85,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="space_exploration",
+                asof=dt.date(2026, 5, 14),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        # Catalyst URL traces back to the root, not the latest echo
+        self.assertEqual(cat["url"], "https://reuters.example/spacex-ipo")
+        self.assertEqual(cat["published_at"], "2026-05-12")
+        # Trigger URL is the LATEST event (the freshness that activated the brief)
+        self.assertEqual(cat["trigger_url"], "https://ft.example/spacex-echo")
+        self.assertEqual(cat["trigger_published_at"], "2026-05-14")
+        self.assertEqual(cat["echo_count"], 3)
+        self.assertTrue(cat["is_amplified"])
+
+    def test_returns_trigger_when_entities_sparse(self):
+        # Trigger has only 1 primary_entity (< MIN_TRIGGER_ENTITIES=2). Anchor
+        # gate fires; resolver degrades to the legacy "latest-as-catalyst"
+        # behaviour to avoid pulling cross-story noise via a single-entity arc.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "id": "n_lone",
+                        "title": "Apple Q4 earnings beat",
+                        "url": "https://wsj.example/apple-q4",
+                        "timestamp": pd.Timestamp("2026-05-14T14:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "news_id": "n_lone",
+                        "themes": ["earnings"],
+                        "primary_entities": ["AAPL"],  # only 1 entity
+                        "confidence": 0.88,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="earnings",
+                asof=dt.date(2026, 5, 14),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat["url"], "https://wsj.example/apple-q4")
+        self.assertEqual(cat["echo_count"], 1)
+        self.assertFalse(cat["is_amplified"])
+        # When degraded, trigger fields equal catalyst fields
+        self.assertEqual(cat["trigger_url"], cat["url"])
+
+    def test_arc_excludes_unrelated_theme_entity_overlap(self):
+        # Two events share entity {SPACEX} but belong to DIFFERENT themes.
+        # The theme filter (which runs first) is still load-bearing — the
+        # arc resolver must NOT cross theme boundaries even when entities match.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 12),
+                [
+                    {
+                        "id": "n_geo",
+                        "title": "Geopolitics piece naming SpaceX exports",
+                        "url": "https://geo.example/old",
+                        "timestamp": pd.Timestamp("2026-05-12T09:00:00Z"),
+                    }
+                ],
+            )
+            _seed_news(
+                news,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "id": "n_space",
+                        "title": "SpaceX IPO breaking",
+                        "url": "https://space.example/new",
+                        "timestamp": pd.Timestamp("2026-05-14T14:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 12),
+                [
+                    {
+                        "news_id": "n_geo",
+                        "themes": ["geopolitics"],  # different theme
+                        "primary_entities": ["SPACEX", "MUSK"],
+                        "confidence": 0.91,
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "news_id": "n_space",
+                        "themes": ["space_exploration"],
+                        "primary_entities": ["SPACEX", "MUSK"],
+                        "confidence": 0.93,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="space_exploration",
+                asof=dt.date(2026, 5, 14),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        # Geopolitics event SHARES entities but is theme-isolated → NOT in arc
+        self.assertEqual(cat["url"], "https://space.example/new")
+        self.assertEqual(cat["echo_count"], 1)
+        self.assertFalse(cat["is_amplified"])
+
+    def test_arc_excludes_low_entity_jaccard(self):
+        # Trigger entities {SPACEX, MUSK}; candidate entities {SPACEX, NASA,
+        # BOEING, LOCKHEED} share 1 entity → jaccard = 1/5 = 0.2 < 0.3 → out.
+        # Catalyst stays as the trigger (no arc to walk back through).
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 12),
+                [
+                    {
+                        "id": "n_old_diluted",
+                        "title": "Aerospace consortium update",
+                        "url": "https://defense.example/coalition",
+                        "timestamp": pd.Timestamp("2026-05-12T09:00:00Z"),
+                    }
+                ],
+            )
+            _seed_news(
+                news,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "id": "n_trigger",
+                        "title": "SpaceX files IPO",
+                        "url": "https://reuters.example/spacex-trigger",
+                        "timestamp": pd.Timestamp("2026-05-14T14:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 12),
+                [
+                    {
+                        "news_id": "n_old_diluted",
+                        "themes": ["space_exploration"],
+                        # 4 entities; shares only SPACEX with trigger → 1/5 = 0.2
+                        "primary_entities": ["SPACEX", "NASA", "BOEING", "LOCKHEED"],
+                        "confidence": 0.85,
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "news_id": "n_trigger",
+                        "themes": ["space_exploration"],
+                        "primary_entities": ["SPACEX", "MUSK"],
+                        "confidence": 0.93,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="space_exploration",
+                asof=dt.date(2026, 5, 14),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        # Diluted event excluded; catalyst == trigger
+        self.assertEqual(cat["url"], "https://reuters.example/spacex-trigger")
+        self.assertEqual(cat["echo_count"], 1)
+
+    def test_bare_string_primary_entities_not_shredded_into_chars(self):
+        """If Gemini emits "SPACEX" (str) instead of ["SPACEX"] (list), the
+        resolver must treat it as a single entity — NOT iterate it
+        character-by-character into {"S","P","A","C","E","X"} which would
+        otherwise create spurious entity-overlap with any unrelated event
+        whose primary_entities happens to share a letter.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "id": "n_str",
+                        "title": "SpaceX IPO breaking",
+                        "url": "https://reuters.example/spacex-str",
+                        "timestamp": pd.Timestamp("2026-05-14T14:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "news_id": "n_str",
+                        "themes": ["space_exploration"],
+                        # BARE STRING, not list — Gemini-emitted malformed schema
+                        "primary_entities": "SPACEX",
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="space_exploration",
+                asof=dt.date(2026, 5, 14),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        # Single-entity (post-coercion) → sparse-entity gate fires → legacy mode.
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat["url"], "https://reuters.example/spacex-str")
+        self.assertEqual(cat["echo_count"], 1)
+        self.assertFalse(cat["is_amplified"])
+
+    def test_arc_high_jaccard_includes_partial_entity_overlap(self):
+        # Trigger {SPACEX, MUSK}; candidate {SPACEX, MUSK, BOEING} →
+        # jaccard = 2/3 = 0.67 > 0.3 → IN arc. Catalyst = earliest.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 12),
+                [
+                    {
+                        "id": "n_root_partial",
+                        "title": "Boeing-SpaceX partnership announced by Musk",
+                        "url": "https://reuters.example/spacex-boeing",
+                        "timestamp": pd.Timestamp("2026-05-12T09:00:00Z"),
+                    }
+                ],
+            )
+            _seed_news(
+                news,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "id": "n_trigger_partial",
+                        "title": "SpaceX IPO with Musk addresses board",
+                        "url": "https://ft.example/spacex-trigger",
+                        "timestamp": pd.Timestamp("2026-05-14T14:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 12),
+                [
+                    {
+                        "news_id": "n_root_partial",
+                        "themes": ["space_exploration"],
+                        "primary_entities": ["SPACEX", "MUSK", "BOEING"],
+                        "confidence": 0.88,
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "news_id": "n_trigger_partial",
+                        "themes": ["space_exploration"],
+                        "primary_entities": ["SPACEX", "MUSK"],
+                        "confidence": 0.93,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="space_exploration",
+                asof=dt.date(2026, 5, 14),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat["url"], "https://reuters.example/spacex-boeing")
+        self.assertEqual(cat["echo_count"], 2)
+        self.assertTrue(cat["is_amplified"])
+        self.assertEqual(cat["trigger_url"], "https://ft.example/spacex-trigger")
+
+
 if __name__ == "__main__":
     unittest.main()

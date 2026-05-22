@@ -266,11 +266,12 @@ def score(
     out_path = output_dir / f"{target.isoformat()}.parquet"
     enriched.to_parquet(out_path, index=False)
 
-    score_counts = enriched["layer4_weighted_score"].value_counts().sort_index().to_dict()
     typer.echo(f"Wrote {len(enriched)} scored rows → {out_path}")
+    if enriched.empty:
+        return
+    score_counts = enriched["layer4_weighted_score"].value_counts().sort_index().to_dict()
     typer.echo(f"  layer4_weighted_score distribution: {score_counts}")
-    if len(enriched) > 0:
-        _print_score_preview(enriched)
+    _print_score_preview(enriched)
 
 
 def _fmt_num_or_dash(value, fmt: str) -> str:

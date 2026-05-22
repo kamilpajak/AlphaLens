@@ -30,7 +30,6 @@ import pandas as pd
 
 from alphalens.thematic.mapping import catalyst_resolver, gemini_mapper
 from alphalens.thematic.verification import (
-    etf_holdings,
     insider,
     mcap_filter,
     recent_press,
@@ -42,15 +41,18 @@ DEFAULT_MCAP_RANGE = (500_000_000, 10_000_000_000)
 logger = logging.getLogger(__name__)
 
 DEFAULT_OUTPUT_DIR = Path.home() / ".alphalens" / "thematic_candidates"
-GATE_NAMES = ("etf", "tenk", "press", "insider")
+GATE_NAMES = ("tenk", "press", "insider")
+
+# Diversity guardrail: each theme contributes at most _MAX_CANDIDATES_PER_THEME
+# rows to the daily brief. If a top-N candidate hard-fails verification, the
+# resolver backfills from the next-highest-confidence candidate, bounded by
+# _MAX_VERIFY_ATTEMPTS_PER_THEME to keep API budgets predictable.
+_MAX_CANDIDATES_PER_THEME = 3
+_MAX_VERIFY_ATTEMPTS_PER_THEME = 5
 
 
 # Per-gate wrappers — keep tests patchable through `orchestrator.*` and let
 # each gate fail closed if its underlying data path errors.
-
-
-def _gate_etf(*, ticker: str, themes: Iterable[str], asof: dt.date) -> bool:
-    return etf_holdings.is_in_thematic_etf(ticker=ticker, themes=themes, asof=asof)
 
 
 def _gate_tenk(*, ticker: str, theme_keywords: Iterable[str], asof: dt.date) -> bool:
@@ -167,7 +169,6 @@ def verify_candidate(
     gates_failed: list[str] = []
     gates_unknown: list[str] = []
 
-    _record("etf", _safe("etf", _gate_etf, ticker=ticker, themes=themes_list, asof=asof))
     _record(
         "tenk",
         _safe(
@@ -318,7 +319,11 @@ def _propose_and_filter_candidates(
         max_cap=max_cap,
         asof=asof,
     )
-    candidates = [c for c in candidates if c["ticker"] in in_bracket]
+    candidates = sorted(
+        [c for c in candidates if c["ticker"] in in_bracket],
+        key=lambda c: c.get("confidence", 0.0),
+        reverse=True,
+    )
     keywords = _theme_keywords(theme, pro_keywords=proposal.get("search_keywords") or [])
     return candidates, in_bracket, keywords
 
@@ -335,7 +340,15 @@ def _verify_candidates_for_theme(
     press_df,
     keep_unverified: bool,
 ) -> tuple[list[dict], int, int]:
-    """Run the 4-gate verify on each candidate, drop unverified by default.
+    """Run the 4-gate verify on each candidate with diversity cap + backfill.
+
+    Candidates arrive sorted by ``gemini_confidence`` desc. The loop keeps up
+    to ``_MAX_CANDIDATES_PER_THEME`` rows per theme; on hard-fail, it pulls
+    the next-highest-confidence candidate (backfill), capped at
+    ``_MAX_VERIFY_ATTEMPTS_PER_THEME`` total verify calls. Without the
+    backfill, a single failed gate would silently shrink a theme to 2 rows;
+    without the attempt cap, a fully-broken external API could burn the
+    entire mapper batch on retries.
 
     Returns (kept rows, dropped count, dropped-all-unknown count). The
     second counter tracks candidates where every gate returned UNKNOWN
@@ -345,7 +358,13 @@ def _verify_candidates_for_theme(
     rows: list[dict] = []
     dropped = 0
     dropped_all_unknown = 0
+    attempts = 0
     for cand in candidates:
+        if len(rows) >= _MAX_CANDIDATES_PER_THEME:
+            break
+        if attempts >= _MAX_VERIFY_ATTEMPTS_PER_THEME:
+            break
+        attempts += 1
         verdict = verify_candidate(
             ticker=cand["ticker"],
             themes=[theme],
@@ -436,9 +455,13 @@ def map_themes(
     if rows:
         df = (
             pd.DataFrame(rows)
+            # ``ticker`` is the deterministic tie-break so ties on
+            # (n_gates_passed, gemini_confidence) don't produce
+            # run-to-run ordering jitter (e.g. when Pro returns two
+            # candidates at the same confidence).
             .sort_values(
-                ["theme", "n_gates_passed", "gemini_confidence"],
-                ascending=[True, False, False],
+                ["theme", "n_gates_passed", "gemini_confidence", "ticker"],
+                ascending=[True, False, False, True],
             )
             .reset_index(drop=True)
         )
