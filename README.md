@@ -174,12 +174,6 @@ watchlist: [NVDA, GOOGL]
 .venv/bin/alphalens audit insider_form4_opportunistic \
     --is-start 2018-01-01 --is-end 2023-12-31 --rebalance-stride 21
 
-# Backtest replay (closed scorers — research only, NOT for capital deploy)
-.venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose
-.venv/bin/alphalens backtest --scorer lean
-.venv/bin/alphalens archive themed status --days 90    # historical themed monitoring
-.venv/bin/alphalens research validate-llm-filter --scorer rule
-
 # Tests (unittest, not pytest) — 2187 tests
 .venv/bin/python -m unittest discover tests -v
 
@@ -200,7 +194,7 @@ Five live jobs in `launchd/`:
 | `com.alphalens.paper-trade.refresh` | Sunday, 17:00 | Paper-trade portfolio refresh |
 | `com.alphalens.paper-trade.score` | Monday, 06:00 | Paper-trade scorer |
 
-Archived plists live in `launchd/archived/` with reactivation notes (worker per ADR 0008, themed, lean, insider). See [`launchd/README.md`](launchd/README.md).
+Previously archived plists (themed/lean/insider/worker) were removed per [ADR 0010](docs/adr/0010-archive-extracted-and-removed.md). Reactivation rationale, if needed, lives in git history and `docs/research/paradigm_failures_postmortem.md`.
 
 ```bash
 cp launchd/com.alphalens.*.plist ~/Library/LaunchAgents/
@@ -250,11 +244,11 @@ alphalens/                       ← Python package (Phase 1-6 reorg per ADR 000
 
 alphalens_cli/                   CLI entry points (separate package)
 
-launchd/                         macOS scheduled jobs (5 live; archived under launchd/archived/)
+launchd/                         macOS scheduled jobs (5 live)
 deploy/systemd/                  Linux VPS unit + parallel-backfill recipe
 
 docs/
-├── adr/                         Architecture Decision Records (8 ADRs)
+├── adr/                         Architecture Decision Records (10 ADRs)
 ├── research/                    paradigm_failures_postmortem + per-strategy design + ledger
 └── backtest/                    historical backtest run outputs
 

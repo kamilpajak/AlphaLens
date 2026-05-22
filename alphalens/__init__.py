@@ -16,6 +16,8 @@ Cross-cutting:
 Methodology bundle (preregistration ledger + multi-phase audit + Bonferroni)
 is consumed via the external `phase-robust-backtesting` dep (ADR 0006).
 
-Closed strategies (11 paradigm failures) live under `alphalens.archive.*` per
-ADR 0005 (anti-pattern catalog). See `docs/research/paradigm_failures_postmortem.md`.
+Closed paradigms are documented as postmortem only — code retained for
+reuse has been promoted to live packages (e.g. ParquetInsiderScorer →
+`alphalens.screeners.insider_activity`). See ADR 0010 and
+`docs/research/paradigm_failures_postmortem.md`.
 """

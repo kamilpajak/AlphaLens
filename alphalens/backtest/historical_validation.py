@@ -311,59 +311,6 @@ def picks_from_backtest_report(report) -> list[PickRecord]:
     return out
 
 
-def picks_from_history_store(store, days: int = 60, top_n: int = 5) -> list[PickRecord]:
-    """Extract picks from ThemedHistoryStore (Layer 2b production).
-
-    Requires `themed_history.db` populated by daily runs. Forward return is
-    derived from later picks — if the same ticker appears in history again, we
-    use the later price as a proxy. Fallback: None (skip).
-    """
-    # RESEARCH-ONLY: Layer 2b (themed) CLOSED 2026-04-22 (momentum overfit + cost
-    # drag). Production history store is the only source of recorded picks for
-    # historical-acceptance validation. Exempt from backtest/ ↔ screeners/ rule.
-    from alphalens.archive.screeners.themed.history_store import ThemedHistoryStore  # late
-
-    if not isinstance(store, ThemedHistoryStore):
-        raise TypeError(f"expected ThemedHistoryStore, got {type(store)}")
-
-    timeline = store.picks_timeline(days=days)
-    timeline = timeline[timeline["rank"] <= top_n]
-    if timeline.empty:
-        return []
-
-    # Forward return from HistoryStore (OHLCV) — store is generic, loader lives Lean-side.
-    # RESEARCH-ONLY: Layer 2c (Lean) ARCHIVED 2026-04-19 after Sharpe 0.25 net /
-    # FF3 alpha t=0.14 failure. The Lean CSV loader is the only readily-available
-    # OHLCV source for backtest replay; imports are intentional and exempt from
-    # the backtest/ ↔ screeners/ dependency rule. Do not extend.
-    from alphalens.archive.screeners.lean.config import DATA_DIR
-    from alphalens.archive.screeners.lean.lean_csv_loader import load_lean_histories
-    from alphalens.data.store.history import HistoryStore
-
-    tickers = sorted(timeline["ticker"].unique())
-    histories = load_lean_histories(DATA_DIR, tickers)
-    hs = HistoryStore(histories)
-
-    out: list[PickRecord] = []
-    for _, row in timeline.iterrows():
-        asof = date.fromisoformat(str(row["run_date"]))
-        fwd = hs.forward_return(row["ticker"], asof, holding_period=5)
-        if fwd is None:
-            continue
-        themes = [t for t in str(row["themes"]).split(",") if t]
-        out.append(
-            PickRecord(
-                asof_date=asof,
-                ticker=str(row["ticker"]),
-                rank=int(row["rank"]),
-                momentum_score=float(row["momentum_score"]),
-                themes=themes,
-                forward_return=fwd,
-            )
-        )
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Reference scorer implementations — pluggable baselines
 # ---------------------------------------------------------------------------

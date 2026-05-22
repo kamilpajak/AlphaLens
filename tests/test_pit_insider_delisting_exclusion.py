@@ -28,8 +28,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from alphalens.archive.screeners.insider.parquet_scorer import ParquetInsiderScorer
 from alphalens.data.store.survivorship_pit import DelistingEvent
+from alphalens.screeners.insider_activity.parquet_scorer import ParquetInsiderScorer
 
 
 def _write_dataset(root: Path) -> None:

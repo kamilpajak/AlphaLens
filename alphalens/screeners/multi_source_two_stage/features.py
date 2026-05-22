@@ -35,8 +35,8 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from alphalens.archive.screeners.insider.parquet_scorer import ParquetInsiderScorer
 from alphalens.data.store.history import HistoryStore
+from alphalens.screeners.insider_activity.parquet_scorer import ParquetInsiderScorer
 
 logger = logging.getLogger(__name__)
 

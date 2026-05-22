@@ -1,3 +1,0 @@
-#!/bin/bash
-# Layer 3 worker — drains auto-trigger queue by running TradingAgents analyses.
-exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens queue process "$@"

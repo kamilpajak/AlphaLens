@@ -44,16 +44,7 @@ _SCRIPTS: dict[str, Path] = {
     "quality_momentum": REPO / "scripts" / "experiment_quality_momentum_combo.py",
     "longshort_mom_lowvol": REPO / "scripts" / "experiment_longshort_mom_lowvol.py",
     "regime_overlay": REPO / "scripts" / "experiment_regime_overlay.py",
-    "layer2d_prior_returns": REPO / "scripts" / "experiment_layer2d_prior_returns.py",
-    "layer2d_random_null": REPO / "scripts" / "experiment_layer2d_random_null.py",
-    "layer2d_str_and_contrarian": REPO / "scripts" / "experiment_layer2d_str_and_contrarian.py",
-    "layer2d_variants": REPO / "scripts" / "experiment_layer2d_variants.py",
     "vol_target_overlay": REPO / "scripts" / "experiment_vol_target_overlay.py",
-    "multi_source_two_stage": REPO / "scripts" / "experiment_multi_source_two_stage.py",
-    "multi_source_global_lasso": REPO / "scripts" / "experiment_multi_source_global_lasso.py",
-    "multi_source_global_lasso_20d": REPO
-    / "scripts"
-    / "experiment_multi_source_global_lasso_20d.py",
     "v7_options_implied": REPO / "scripts" / "experiment_v7_options_implied.py",
     "v8_literature_direct": REPO / "scripts" / "experiment_v8_literature_direct.py",
     "v9_sign_constrained": REPO / "scripts" / "experiment_v9_sign_constrained.py",

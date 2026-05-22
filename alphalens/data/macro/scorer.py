@@ -15,14 +15,21 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from alphalens.archive.rotation.config import Rule
-
 _OPS = {
     "gt": lambda x, t: x > t,
     "lt": lambda x, t: x < t,
     "ge": lambda x, t: x >= t,
     "le": lambda x, t: x <= t,
 }
+
+
+@dataclass(frozen=True)
+class Rule:
+    name: str
+    signal: str
+    operator: str  # "gt" | "lt" | "ge" | "le"
+    threshold: float
+    tilt: Mapping[str, float]
 
 
 @dataclass(frozen=True)

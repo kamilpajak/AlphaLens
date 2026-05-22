@@ -65,15 +65,9 @@ uv sync
 .venv/bin/alphalens status                       # global queue + digest + dedup
 .venv/bin/alphalens literature monthly           # ad-hoc deep literature scan (Perplexity high)
 .venv/bin/alphalens literature weekly            # ad-hoc weekly RSS scan
-
-# Backtest replay (closed scorers — research only, NOT for capital deploy)
-.venv/bin/alphalens backtest --start 2021-04-19 --end 2026-04-17 --diagnose
-.venv/bin/alphalens backtest --scorer lean
-.venv/bin/alphalens archive themed status --days 90
-.venv/bin/alphalens research validate-llm-filter --scorer rule
 ```
 
-CLI commands for CLOSED layers exist as research replay tooling — see [ADR 0005](docs/adr/0005-closed-layers-as-anti-pattern-catalog.md).
+Closed paradigms used to ship CLI replay tooling; that surface was removed per [ADR 0010](docs/adr/0010-archive-extracted-and-removed.md). Failure rationale lives in `docs/research/paradigm_failures_postmortem.md`.
 
 ## Conventions
 
@@ -161,7 +155,7 @@ CLI commands for CLOSED layers exist as research replay tooling — see [ADR 000
 - **Prescreener (Layer 2a) unvalidated** — 45% fundamentals weight requires PIT historicals that Polygon Starter ($29/mo) does not provide. Manual ad-hoc only, no performance guarantee.
 - **GDELT theme YAML — multi-word quoted phrases only** — `alphalens/thematic/config/gdelt_themes.yaml` queries must use multi-word phrases in quotes (e.g. `"CUDA toolkit"`, NOT `"CUDA"`). GDELT DOC API rejects single-word quoted tokens with `HTTP 200 + "The specified phrase is too short."` — `_http_get_json` raises this immediately as `GdeltQueryError` (no retry, no rate-limit burn). Static lint in `tests/thematic/test_gdelt.py::TestGdeltThemesYamlWellFormed` guards against regression. Live smoke per-bucket: `GDELT_LIVE_TEST=1 .venv/bin/python -m unittest tests.thematic.test_gdelt_live -v` (~90s wall, opt-in).
 
-Issues regarding CLOSED layers (Lean Docker setup, Layer 2d backtest workflow, themed gate Phase 2) → see `launchd/archived/README.md` + `docs/research/paradigm_failures_postmortem.md`.
+Issues regarding CLOSED layers (Lean Docker setup, Layer 2d backtest workflow, themed gate Phase 2) → see `docs/research/paradigm_failures_postmortem.md` and ADR 0010.
 
 ## VPS backfills (always-on, `jacoren@`)
 
