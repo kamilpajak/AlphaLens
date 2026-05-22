@@ -15,12 +15,17 @@
 members = ["apps/alphalens-research", "apps/alphalens-django"]
 
 [dependency-groups]
+# Shared dev tools — installed for every workspace member by `uv sync --group dev`.
+# Per-app test-runners (pytest-django for the django app) live here too so a
+# single `uv sync --group dev` boots the full CI test matrix.
 dev = [
     "ruff>=0.15.12",
     "coverage>=7.13.5",
     "pre-commit>=3.7",
     "bandit>=1.9.4",
     "httpx>=0.28.1",
+    "pytest>=9.0",
+    "pytest-django>=4.12",
 ]
 
 [tool.ruff]

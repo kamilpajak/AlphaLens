@@ -40,7 +40,9 @@ COPY apps/alphalens-django/config/ ./config/
 COPY apps/alphalens-django/briefs/ ./briefs/
 COPY apps/alphalens-django/auth_cf/ ./auth_cf/
 COPY apps/alphalens-django/core/ ./core/
-RUN uv pip install --python .venv/bin/python -e .
+# Final install is non-editable so site-packages owns the source rather than
+# a .pth pointer back to /app. Deps already resolved in the previous layer.
+RUN uv pip install --python .venv/bin/python --no-deps --force-reinstall .
 
 
 # ---------------------------------------------------------------------------

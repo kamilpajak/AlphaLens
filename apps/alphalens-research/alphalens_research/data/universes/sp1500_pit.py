@@ -23,12 +23,18 @@ verdict memo.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pandas as pd
 import yaml
 
-DEFAULT_DATA_ROOT = Path(__file__).resolve().parents[3] / "data"
+# Editable / workspace install resolves to apps/alphalens-research/data/.
+# A wheel install loses that path (the data/ directory is not bundled), so
+# allow operators to override via $ALPHALENS_DATA_ROOT.
+DEFAULT_DATA_ROOT = Path(
+    os.environ.get("ALPHALENS_DATA_ROOT") or (Path(__file__).resolve().parents[3] / "data")
+)
 
 
 class UniverseError(RuntimeError):

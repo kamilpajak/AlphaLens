@@ -62,6 +62,10 @@ def _signing_key_for_kid(jwks: dict[str, Any], kid: str):
     raise InvalidTokenError(f"no signing key for kid={kid!r} in JWKS")
 
 
+_JWKS_REFRESH_COOLDOWN_KEY = f"{conf.JWKS_CACHE_KEY}:refresh_cooldown"
+_JWKS_REFRESH_COOLDOWN_SECONDS = 60
+
+
 def verify(token: str) -> dict[str, Any]:
     """Decode + verify a CF Access JWT. Returns the claims on success.
 
@@ -70,7 +74,10 @@ def verify(token: str) -> dict[str, Any]:
     signature, etc. Callers map that to HTTP 401.
 
     On a kid-not-found error, refreshes the JWKS once and retries — covers
-    the case where Cloudflare rotated keys between cache fetches.
+    the case where Cloudflare rotated keys between cache fetches. The
+    refresh is rate-limited via a per-process cache cooldown so an attacker
+    flooding tokens with unknown kids can't force a JWKS fetch per request
+    (would exhaust worker threads and trip Cloudflare's rate limit).
     """
     header = jwt.get_unverified_header(token)
     kid = header.get("kid")
@@ -80,6 +87,10 @@ def verify(token: str) -> dict[str, Any]:
     try:
         signing_key = _signing_key_for_kid(get_jwks(), kid)
     except InvalidTokenError:
+        # cache.add returns True only when the key is newly set — gates one
+        # refresh per cooldown window across all workers sharing the cache.
+        if not cache.add(_JWKS_REFRESH_COOLDOWN_KEY, 1, timeout=_JWKS_REFRESH_COOLDOWN_SECONDS):
+            raise
         signing_key = _signing_key_for_kid(get_jwks(refresh=True), kid)
 
     return jwt.decode(

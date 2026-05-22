@@ -55,10 +55,12 @@ COPY apps/alphalens-django/README.md ./apps/alphalens-django/README.md
 # caps RAM during any source build on a small VPS.
 RUN uv sync --frozen --no-dev --no-install-project --package alphalens-research
 # Now copy the project source and install it on top of the prepared venv.
+# data/ (SP1500 PIT yamls) is used by paradigm audits run on the laptop /
+# runpod, not by the thematic daily pipeline — intentionally omitted from
+# this image. Mount via volume + $ALPHALENS_DATA_ROOT if needed.
 COPY apps/alphalens-research/alphalens_research ./apps/alphalens-research/alphalens_research
 COPY apps/alphalens-research/alphalens_cli ./apps/alphalens-research/alphalens_cli
 COPY apps/alphalens-research/scripts ./apps/alphalens-research/scripts
-COPY apps/alphalens-research/data ./apps/alphalens-research/data
 COPY deploy/docker/run_thematic_day.sh /app/deploy/docker/run_thematic_day.sh
 RUN chmod +x /app/deploy/docker/run_thematic_day.sh \
     && uv sync --frozen --no-dev --package alphalens-research
