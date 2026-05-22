@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from alphalens.api.app import create_app
 from alphalens.api.cache import rebuild_from_parquet
-from tests.api._fixtures import seed_two_days
+from tests.api._fixtures import seed_day_with_distinct_rank_order, seed_two_days
 
 
 class DaysRouteTests(unittest.TestCase):
@@ -129,6 +129,47 @@ class DaysRouteTests(unittest.TestCase):
     def test_day_candidates_404_for_unknown_date(self):
         r = self.client.get("/v1/days/2099-01-01/candidates")
         self.assertEqual(r.status_code, 404)
+
+
+class RankInDayOrderingTests(unittest.TestCase):
+    """The orchestrator's 7-key sort assigns ``rank_in_day``; the API must
+    serve candidates in that order so DOM position matches the rank chip
+    rendered on each card. Pinned 2026-05-22 after the order-mismatch was
+    spotted live (BAH=01, MMS=03, TTEK=04, WK=02 in DOM but the chips
+    showed the 7-key permutation 1,3,4,2).
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._tmp = tempfile.TemporaryDirectory()
+        root = Path(cls._tmp.name)
+        cls.briefs_dir = root / "briefs"
+        cls.db_path = root / "briefs.db"
+        seed_day_with_distinct_rank_order(cls.briefs_dir)
+        rebuild_from_parquet(briefs_dir=cls.briefs_dir, db_path=cls.db_path)
+        cls.app = create_app(cls.db_path)
+        cls.client = TestClient(cls.app)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def test_get_day_returns_candidates_in_rank_in_day_order(self):
+        r = self.client.get("/v1/days/2026-05-21")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        tickers = [c["ticker"] for c in body["candidates"]]
+        ranks = [c["rank_in_day"] for c in body["candidates"]]
+        # Expected 7-key sort order seeded by the fixture
+        self.assertEqual(tickers, ["AAA", "DDD", "BBB", "CCC", "EEE"])
+        self.assertEqual(ranks, [1, 2, 3, 4, 5])
+
+    def test_day_candidates_endpoint_also_orders_by_rank_in_day(self):
+        r = self.client.get("/v1/days/2026-05-21/candidates")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        tickers = [c["ticker"] for c in body["data"]]
+        self.assertEqual(tickers, ["AAA", "DDD", "BBB", "CCC", "EEE"])
 
 
 if __name__ == "__main__":

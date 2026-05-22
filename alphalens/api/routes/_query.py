@@ -16,7 +16,12 @@ from alphalens.api.models import Candidate, candidate_from_row
 from alphalens.api.schema import CANDIDATE_COLUMN_NAMES
 
 SELECT_COLUMNS = ", ".join(["date", *CANDIDATE_COLUMN_NAMES])
-DEFAULT_ORDER = "ORDER BY date DESC, layer4_weighted_score DESC, ticker ASC"
+# Within a single day, candidates are served in ``rank_in_day`` order so the
+# DOM position matches the orchestrator's 7-key sort (and the ``NN/NN`` chip
+# the renderer prints on each card). Across dates, latest day first.
+# ``COALESCE(..., 999999)`` shoves legacy parquets without rank_in_day to
+# the bottom; ``ticker ASC`` is the deterministic final tie-break.
+DEFAULT_ORDER = "ORDER BY date DESC, COALESCE(rank_in_day, 999999) ASC, ticker ASC"
 MAX_LIMIT = 200
 
 
