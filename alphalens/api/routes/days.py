@@ -101,7 +101,7 @@ def get_day(date: str, conn: DbDep) -> DayBrief:
 
     rows = conn.execute(
         f"SELECT {SELECT_COLUMNS} FROM briefs WHERE date=? "
-        "ORDER BY layer4_weighted_score DESC, ticker ASC",
+        "ORDER BY COALESCE(rank_in_day, 999999) ASC, ticker ASC",
         (date,),
     ).fetchall()
 

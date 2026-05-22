@@ -101,6 +101,34 @@ def seed_two_days(briefs_dir: Path) -> tuple[Path, Path]:
     return write_brief(briefs_dir, day_old, older), write_brief(briefs_dir, day_new, newer)
 
 
+def seed_day_with_distinct_rank_order(briefs_dir: Path) -> Path:
+    """Write a day where ``rank_in_day`` deliberately disagrees with
+    ``(layer4_weighted_score DESC, ticker ASC)``.
+
+    Models the post-2026-05-18 orchestrator's 7-key sort: within a layer4
+    tier, tiebreakers (catalyst_strength, insider_score_usd, …) can elevate
+    a ticker above its alphabetical neighbour. The route handler must serve
+    candidates in ``rank_in_day`` order so the displayed cards match the
+    ``NN/NN`` rank chips the renderer prints.
+    """
+    day = dt.date(2026, 5, 21)
+    # Layer-4 + alphabetical would give: AAA(5)→1, BBB(4)→2, CCC(4)→3, DDD(4)→4, EEE(3)→5
+    # But the orchestrator's 7-key sort (with assumed tiebreakers) places
+    # rank_in_day as: AAA=1, DDD=2, BBB=3, CCC=4, EEE=5.
+    rows = [
+        _default_row("AAA", "quantum_computing", 5),
+        _default_row("BBB", "quantum_computing", 4),
+        _default_row("CCC", "quantum_computing", 4),
+        _default_row("DDD", "quantum_computing", 4),
+        _default_row("EEE", "robotics", 3),
+    ]
+    ranks = {"AAA": 1, "DDD": 2, "BBB": 3, "CCC": 4, "EEE": 5}
+    for r in rows:
+        r["rank_in_day"] = ranks[r["ticker"]]
+        r["cohort_size_in_day"] = len(rows)
+    return write_brief(briefs_dir, day, rows)
+
+
 def seed_min_schema_day(briefs_dir: Path) -> Path:
     """Write a parquet with only the required (ticker, theme) columns + score.
 
