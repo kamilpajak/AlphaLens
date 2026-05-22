@@ -34,7 +34,7 @@ from alphalens_research.screeners.multi_source_two_stage import (
     train_quartile_thresholds,
 )
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[3]
 PREREG_JSON = (
     REPO_ROOT
     / "docs"

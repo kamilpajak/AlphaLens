@@ -33,7 +33,7 @@ from alphalens_research.screeners.options_implied import (
     validate_phase_a_gates,
 )
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[3]
 PREREG_JSON = (
     REPO_ROOT
     / "docs"

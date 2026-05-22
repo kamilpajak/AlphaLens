@@ -26,7 +26,7 @@ REQUIRED_EVIDENCE_KEYS = frozenset(
     }
 )
 EVIDENCE_PREFIXES = ("N/A: ", "UNTESTED: ")
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 LAYERS_WITH_STATUS = (
     "alphalens_research.data.alt_data",

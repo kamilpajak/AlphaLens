@@ -118,7 +118,11 @@ _PRECHECK_IS_END = date(2017, 12, 31)
 # pre-reg class registration in the ledger.
 _COMPONENT_LOCKED_HASHES: dict[str, str] = {
     "alphalens_research/screeners/insider_activity/opportunistic_form4.py": (
-        "59ee0cd59f51f5d842b510a1e5533c36f6237abd4618948f4b3a384e03b3d932"
+        # Re-locked after F3 monorepo flatten: the `\balphalens\b` codemod
+        # rewrote `from alphalens.X` -> `from alphalens_research.X` inside
+        # the file. No behavioural change (just import-rename), so the
+        # pre-reg observation protocol is unaffected. New SHA256 below.
+        "3c075255aa50897eeff14136f090e1d3f142d90f906ec3bc0ecdcb42a94c995e"
     ),
     "alphalens_research/screeners/options_volume/pc_abnormal_volume.py": (
         "d53ab6af4c3842208ea17a291f16de60efece43c89afeb952001864793c0e7d1"

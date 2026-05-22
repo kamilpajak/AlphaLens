@@ -46,7 +46,7 @@ _PRE_SCREEN_EVIDENCE_MARKERS = (
     "vol regime conditional",
 )
 
-_RESEARCH_DIR = Path(__file__).resolve().parent.parent / "docs" / "research"
+_RESEARCH_DIR = Path(__file__).resolve().parents[3] / "docs" / "research"
 
 
 def _collect_overlay_memos() -> list[Path]:

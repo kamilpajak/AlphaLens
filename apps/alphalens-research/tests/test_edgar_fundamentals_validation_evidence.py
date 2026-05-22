@@ -18,7 +18,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[3]
 MEMO = REPO_ROOT / "docs" / "research" / "edgar_fundamentals_validation_2026_05_19.md"
 
 # Anchors the gate run must cover. Matches DEFAULT_ANCHORS in the harness.

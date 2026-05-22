@@ -62,7 +62,7 @@ class TestLedgerLiveLoadable(unittest.TestCase):
     and broke `Ledger._load()` on the next reload.
     """
 
-    LIVE_LEDGER_ROOT = Path(__file__).resolve().parent.parent / "docs/research/preregistration"
+    LIVE_LEDGER_ROOT = Path(__file__).resolve().parents[3] / "docs/research/preregistration"
 
     def test_live_ledger_loads_without_error(self):
         from phase_robust_backtesting.ledger import Ledger
