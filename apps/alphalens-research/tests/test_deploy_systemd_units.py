@@ -1,6 +1,6 @@
 """Guard against regressions in the deploy/systemd unit files.
 
-The pipeline image declares ``ENTRYPOINT ["/app/.venv/bin/alphalens_research"]`` so
+The pipeline image declares ``ENTRYPOINT ["/app/.venv/bin/alphalens"]`` so
 any ``docker compose run pipeline <script>`` invocation must explicitly
 override the entrypoint, otherwise typer interprets the script path as a
 command name and dies before the pipeline starts. The systemd unit silently
@@ -14,8 +14,10 @@ import re
 import unittest
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SERVICE_PATH = REPO_ROOT / "deploy" / "systemd" / "alphalens_research-thematic-daily.service"
+# Test file lives at apps/alphalens-research/tests/<name>.py; the repo root
+# is three parents up. deploy/ stays at the repo root, not under the app.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SERVICE_PATH = REPO_ROOT / "deploy" / "systemd" / "alphalens-thematic-daily.service"
 
 
 class TestSystemdUnits(unittest.TestCase):
@@ -29,7 +31,7 @@ class TestSystemdUnits(unittest.TestCase):
             "ExecStart must override the pipeline image ENTRYPOINT or typer "
             "will refuse to run the script — see "
             "deploy/docker/Dockerfile.pipeline:ENTRYPOINT and the comment "
-            "above ExecStart in alphalens_research-thematic-daily.service.",
+            "above ExecStart in alphalens-thematic-daily.service.",
         )
 
     def test_thematic_daily_service_invokes_driver_script(self):

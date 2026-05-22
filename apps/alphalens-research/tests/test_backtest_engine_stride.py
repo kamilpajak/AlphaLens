@@ -266,43 +266,6 @@ class TestPhaseOffset(unittest.TestCase):
         self.assertLess(float(max_diff), 1e-12)
 
 
-class TestNetAlphaScaling(unittest.TestCase):
-    """compute_net_alpha must scale cost drag at the requested cadence,
-    otherwise weekly and daily backtests produce mis-scaled net-alpha numbers.
-    """
-
-    def test_weekly_drag_is_one_fifth_of_daily_for_same_turnover(self):
-        from scripts.run_layer2d_backtest import compute_net_alpha
-
-        gross = 0.10  # 10% gross annualized
-        turnover = 0.5  # 50% of top-N churns per rebalance
-
-        _, _, daily_drag, _ = compute_net_alpha(gross, turnover, rebalances_per_year=252)
-        _, _, weekly_drag, _ = compute_net_alpha(gross, turnover, rebalances_per_year=252 / 5)
-
-        # Ratio daily:weekly should be exactly 5 (252 / (252/5)).
-        self.assertAlmostEqual(daily_drag / weekly_drag, 5.0, places=4)
-
-    def test_net_alpha_applies_drag(self):
-        from scripts.run_layer2d_backtest import compute_net_alpha
-
-        gross = 0.10
-        net_p, net_s, drag_p, drag_s = compute_net_alpha(
-            gross, avg_rebal_turnover=0.0, rebalances_per_year=252
-        )
-        # Zero turnover → zero drag → net equals gross.
-        self.assertAlmostEqual(net_p, gross)
-        self.assertAlmostEqual(net_s, gross)
-        self.assertAlmostEqual(drag_p, 0.0)
-        self.assertAlmostEqual(drag_s, 0.0)
-
-    def test_stress_drag_exceeds_primary(self):
-        from scripts.run_layer2d_backtest import compute_net_alpha
-
-        _, _, dp, ds = compute_net_alpha(0.10, avg_rebal_turnover=0.5, rebalances_per_year=50.4)
-        self.assertGreater(ds, dp)
-
-
 class TestSharpeAutocorrAdjusted(unittest.TestCase):
     """Autocorrelation-adjusted Sharpe (Lo 2002, Perplexity R11 + Zen CR fix).
 

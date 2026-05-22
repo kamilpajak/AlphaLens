@@ -64,9 +64,11 @@ class TestFeatureSchema(unittest.TestCase):
         """Read the pre-reg JSON directly and assert byte-for-byte alignment."""
         from alphalens_research.screeners.alt_data.features import FEATURE_NAMES
 
-        repo = Path(__file__).resolve().parent.parent
+        # Test file lives at apps/alphalens-research/tests/<name>.py; repo root
+        # is three parents up. docs/ stays at the repo root, not under the app.
+        repo_root = Path(__file__).resolve().parents[3]
         json_path = (
-            repo / "docs/research/preregistration/params_alt_data_screener_v2_2026_04_30.json"
+            repo_root / "docs/research/preregistration/params_alt_data_screener_v2_2026_04_30.json"
         )
         spec = json.loads(json_path.read_text())
         self.assertEqual(
