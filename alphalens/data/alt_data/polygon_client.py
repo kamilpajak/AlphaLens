@@ -63,7 +63,11 @@ def _strip_apikey_from_url(url: str) -> str:
     parsed = urlparse(url)
     if not parsed.query:
         return url
-    kept = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k != "apiKey"]
+    # Case-insensitive match — defensive against third-party intermediaries
+    # echoing the param with any casing (``apiKey``, ``apikey``, ``APIKEY``).
+    kept = [
+        (k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() != "apikey"
+    ]
     new_query = urlencode(kept)
     return urlunparse(parsed._replace(query=new_query))
 

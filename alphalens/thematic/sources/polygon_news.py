@@ -25,7 +25,11 @@ from alphalens.thematic.sources.schema import NEWS_COLUMNS, empty_news_frame
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_news" / "polygon"
 DEFAULT_PAGE_LIMIT = 1000  # Polygon hard max
-DEFAULT_MAX_ITEMS = 1000
+# Daily firehose on a heavy market day exceeds the previous 1000 ceiling; with
+# the canonical client now enforcing a strict ``max_items`` cap, that ceiling
+# silently dropped late-day articles when ``order=asc``. 50k comfortably covers
+# the busiest observed sessions (~3-5k items) with margin.
+DEFAULT_MAX_ITEMS = 50000
 
 
 def fetch_news_range(

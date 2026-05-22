@@ -27,7 +27,13 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_press"
 DEFAULT_LOOKBACK_DAYS = 30
-DEFAULT_LIMIT = 100
+# Polygon's hard max page size. The previous limit=100 throttled throughput
+# 10x AND implicitly capped ``fetch_window_universe`` at ``max_pages * limit
+# = 200 * 100 = 20,000`` rows — below the 30-day market-wide firehose volume.
+# Raising to 1000 yields max_items=200,000 (safely covers a 30-day window)
+# and cuts API calls 10x for the same coverage. Critical for the 5-req/min
+# Starter quota that the canonical client now coordinates globally.
+DEFAULT_LIMIT = 1000
 
 
 def fetch_recent_news(

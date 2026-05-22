@@ -91,6 +91,16 @@ class StripApiKeyTests(unittest.TestCase):
         url = "https://api.polygon.io/v2/reference/news"
         self.assertEqual(_strip_apikey_from_url(url), url)
 
+    def test_strip_is_case_insensitive(self):
+        # Polygon currently uses ``apiKey`` exactly but third-party intermediaries
+        # can echo with any casing. The stripper must catch all variants so
+        # credentials never leak even on misbehaving proxies.
+        for variant in ("apiKey", "apikey", "APIKEY", "ApiKey", "apiKEY"):
+            url = f"https://api.polygon.io/v2/reference/news?cursor=abc&{variant}=secret"
+            stripped = _strip_apikey_from_url(url)
+            self.assertNotIn("secret", stripped, f"failed to strip variant {variant!r}")
+            self.assertIn("cursor=abc", stripped)
+
 
 class PolygonClientAuthTests(unittest.TestCase):
     def test_empty_api_key_rejected(self):
