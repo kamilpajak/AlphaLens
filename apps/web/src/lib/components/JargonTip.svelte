@@ -26,11 +26,13 @@
 	// label shown in the tooltip header, `full` is the expanded acronym (if
 	// any), `body` is the 1-2 sentence definition.
 
+	import type { Snippet } from 'svelte';
+
 	interface Props {
 		term: string;
 		full?: string;
 		body: string;
-		children?: () => unknown;
+		children?: Snippet;
 	}
 
 	let { term, full = '', body, children }: Props = $props();
