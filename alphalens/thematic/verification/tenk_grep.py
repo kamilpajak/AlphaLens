@@ -142,14 +142,21 @@ def grep_keywords(text: str, keywords: Iterable[str]) -> list[str]:
     return hits
 
 
-def find_latest_10k(submissions_payload: dict) -> dict | None:
-    """Pick the most recent 10-K from ``filings.recent`` arrays.
+def find_latest_10k(submissions_payload: dict, asof: dt.date | None = None) -> dict | None:
+    """Pick the most recent 10-K from ``filings.recent`` arrays, ≤ asof.
 
     Returns ``{accession, filing_date, primary_doc}`` or ``None`` if no 10-K
     is in the recent filings window (SEC's submissions JSON typically holds
     the last ~1000 filings; for older 10-Ks the ``filings.files`` paginated
     pointers would be needed — not implemented since 10-Ks are annual).
+
+    With ``asof`` set, filings dated after asof are skipped — the function
+    returns the latest 10-K whose ``filingDate`` is ≤ ``asof``. This is the
+    primary PIT correctness gate for the 10-K verification path: a
+    ``find_latest_10k`` that respected ``asof`` natively eliminates the
+    post-fetch check + arbitrary day-staleness guard the prior shape needed.
     """
+    asof_str = asof.isoformat() if asof is not None else None
     recent = submissions_payload.get("filings", {}).get("recent", {})
     forms = recent.get("form") or []
     accessions = recent.get("accessionNumber") or []
@@ -159,9 +166,14 @@ def find_latest_10k(submissions_payload: dict) -> dict | None:
     for form, acc, dt_, doc in zip(forms, accessions, dates, docs, strict=False):
         if form != "10-K":
             continue
+        if asof_str is not None and dt_ > asof_str:
+            continue
         if best is None or dt_ > best["filing_date"]:
             best = {"accession": acc, "filing_date": dt_, "primary_doc": doc}
     return best
+
+
+_CACHE_TTL_DAYS = 380  # 10-Ks are annual; refresh once the latest cached file is more than ~one filing cycle stale, so a SEC index check supersedes a long-since-obsolete cache entry.
 
 
 def _find_cached(ticker: str, cache_dir: Path, *, asof: dt.date | None = None) -> Path | None:
@@ -173,29 +185,39 @@ def _find_cached(ticker: str, cache_dir: Path, *, asof: dt.date | None = None) -
     With ``asof`` set (PIT flow): only consider files whose filename
     date suffix is ``≤ asof``, pick latest of those. ``None`` when no
     file qualifies — caller treats as gate unknown.
+
+    Also returns ``None`` when the latest eligible file is older than
+    ``_CACHE_TTL_DAYS`` relative to ``asof`` (or today, when ``asof`` is
+    None): the caller is then forced to re-consult SEC submissions for a
+    fresher 10-K, preventing the cache from masking a newer filing
+    indefinitely.
     """
     if not cache_dir.exists():
         return None
     candidates = sorted(cache_dir.glob(f"{ticker.upper()}_*.txt"))
     if not candidates:
         return None
-    if asof is not None:
-        eligible: list[Path] = []
-        for path in candidates:
-            # Cache filename shape: ``{TICKER}_{YYYY-MM-DD}.txt``. Use rsplit
-            # so tickers that themselves contain an underscore (e.g. BRK_B)
-            # don't shift the date slice and silently mis-classify the file.
-            date_str = path.stem.rsplit("_", 1)[-1]
-            try:
-                file_date = dt.date.fromisoformat(date_str)
-            except ValueError:
-                continue
-            if file_date <= asof:
-                eligible.append(path)
-        if not eligible:
-            return None
-        candidates = eligible
-    return candidates[-1]
+    # Cache filename shape: ``{TICKER}_{YYYY-MM-DD}.txt``. Use rsplit so
+    # tickers that themselves contain an underscore (e.g. BRK_B) don't shift
+    # the date slice and silently mis-classify the file.
+    dated: list[tuple[dt.date, Path]] = []
+    for path in candidates:
+        date_str = path.stem.rsplit("_", 1)[-1]
+        try:
+            file_date = dt.date.fromisoformat(date_str)
+        except ValueError:
+            continue
+        if asof is not None and file_date > asof:
+            continue
+        dated.append((file_date, path))
+    if not dated:
+        return None
+    dated.sort()
+    file_date, path = dated[-1]
+    horizon = asof if asof is not None else dt.date.today()
+    if (horizon - file_date).days > _CACHE_TTL_DAYS:
+        return None
+    return path
 
 
 def fetch_10k_text(
@@ -210,23 +232,17 @@ def fetch_10k_text(
     the ticker (foreign listing, recent IPO, etc.). Network/parse errors
     still raise so callers can distinguish "no data" from "fetch broke".
 
-    PIT: when ``asof < today - 1 day`` and the cache has no file ≤ asof,
-    return ``None`` instead of fetching — a live SEC fetch would only
-    surface the newest 10-K, leaking future content into a historical
-    replay. The 1-day relaxation lets the daily systemd timer (which runs
-    with ``asof = yesterday`` at 06:30 UTC) prime the cache on first call;
-    a 10-K filed within the past day is annual-cadence content describing
-    a fiscal year that ended months earlier, so the look-ahead window is
-    operationally negligible (and ``_find_cached`` still filters by
-    ``file_date <= asof`` once the cache is warm).
+    PIT correctness lives in :func:`find_latest_10k` — it filters the SEC
+    submissions index to filings ``≤ asof`` so a 10-K filed today doesn't
+    bleed into yesterday's verdict AND a stale prior-year filing is still
+    picked up when the latest filing post-dates ``asof``. The previously
+    needed ``asof < today - 1 day`` guard and post-fetch correction helper
+    are gone now that the asof filter happens at the index source.
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = _find_cached(ticker, cache_dir, asof=asof)
     if cached is not None:
         return cached.read_text()
-
-    if asof is not None and asof < dt.date.today() - dt.timedelta(days=1):
-        return None
 
     cik = _resolve_cik(ticker)
     if cik is None:
@@ -234,31 +250,23 @@ def fetch_10k_text(
         return None
 
     submissions = _fetch_submissions_json(cik)
-    rec = find_latest_10k(submissions)
+    rec = find_latest_10k(submissions, asof=asof)
     if rec is None:
         logger.info("no recent 10-K for %s (CIK %s) — 10-K gate unknown", ticker, cik)
         return None
 
+    # Anti-hammering: if SEC's latest-≤asof matches a 10-K we already wrote
+    # to disk for this ticker, skip the HTML fetch + extract + write cycle.
+    # This guards against re-fetching the same filing every call once the
+    # TTL re-arms the cache check above.
+    cache_path = cache_dir / f"{ticker.upper()}_{rec['filing_date']}.txt"
+    if cache_path.exists():
+        return cache_path.read_text()
+
     html = _fetch_filing_html(cik, rec["accession"], rec["primary_doc"])
     text = extract_text(html)
-    cache_path = cache_dir / f"{ticker.upper()}_{rec['filing_date']}.txt"
     cache_path.write_text(text)
-    return _enforce_pit_after_fetch(text, rec["filing_date"], asof)
-
-
-def _enforce_pit_after_fetch(text: str, filing_date_raw: str, asof: dt.date | None) -> str | None:
-    """PIT safety: cache for future runs but do NOT surface a filing dated
-    after asof to the current caller. Without this, the relaxed today-1d
-    guard in :func:`fetch_10k_text` would let a 10-K filed today bleed into
-    yesterday's verification verdict.
-    """
-    if asof is None:
-        return text
-    try:
-        filing_date = dt.date.fromisoformat(filing_date_raw)
-    except (TypeError, ValueError):
-        return text
-    return None if filing_date > asof else text
+    return text
 
 
 def has_theme_keywords_in_10k(

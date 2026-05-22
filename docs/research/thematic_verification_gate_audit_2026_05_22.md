@@ -62,32 +62,38 @@ The daily systemd timer runs with `--date yesterday` (asof = today - 1 day), so 
 
 Of the nominal 4-gate verification, only `press` and (sometimes) `insider` are functional in production. The "4-gate verified" architecture has effectively been a `~1.3-gate verified` architecture for as long as this VPS deployment has been running. False-negative rate is structurally elevated; the verified-candidate count understates true thematic match by a wide margin.
 
-## Actions taken in this commit
+## Actions taken across the two commits on this branch (4da12ea + zen pre-merge follow-up)
 
 1. **CLI score-on-empty fix** (`alphalens_cli/commands/thematic.py`). Score command crashed with `KeyError: 'layer4_weighted_score'` when `score_candidates(empty_df)` returned an empty df without the synthetic column. Patched to early-return after writing the empty parquet so downstream `brief` + `api rebuild-cache` can short-circuit gracefully on a thin day. Independent of PR #185 in spirit — same bug exists on `main`.
 
-2. **Drop ETF gate from `GATE_NAMES`** (`alphalens/thematic/mapping/orchestrator.py`). `GATE_NAMES = ("tenk", "press", "insider")` now. `_record("etf", ...)` removed from `verify_candidate`. The `_gate_etf` function + `etf_holdings` module + the theme-ETF YAML are *retained* in-tree; they remain unit-tested and importable, so a future operator who decides to expand thematic-ETF coverage (semantic match, hand-curated alias table, etc.) can re-add the gate by re-inserting one line into `verify_candidate`. The decision today is "the gate's UNK output isn't actionable signal," not "the gate's logic is broken." Tests asserting `etf` in `gates_passed_str` / `gates_failed` updated.
+2. **Delete ETF gate decisively** (`alphalens/thematic/mapping/orchestrator.py`, `alphalens/thematic/verification/etf_holdings.py`, `alphalens/thematic/config/theme_etfs.yaml`, `tests/thematic/test_etf_holdings.py`). `GATE_NAMES = ("tenk", "press", "insider")` now. The first commit (4da12ea) retained the etf_holdings module as a "restore-ready" stub; zen pre-merge review pushed back that ~400 LOC of dead XML parsing + SEC fetch logic + its test suite is a maintenance tax, and that git history is the truer restore-ready state. The zen-review follow-up commit deletes the module, the YAML config, and the dedicated unit-test file outright. To re-add the gate later, restore those three files from git history and re-add the `_gate_etf` wrapper + `_record("etf", ...)` line in `verify_candidate`.
 
-3. **Relax 10-K PIT guard** (`alphalens/thematic/verification/tenk_grep.py::fetch_10k_text`). Guard changed from `asof < today` to `asof < today - 1 day`. After fetch, `_enforce_pit_after_fetch` checks the filing date against `asof`: a 10-K filed today is still cached (so tomorrow's run sees it), but its text is *not* surfaced to today's verification — preserving PIT correctness for the edge case the relaxation creates. Daily systemd timer can now warm the cache on first call.
+3. **PIT-correct `find_latest_10k`** (`alphalens/thematic/verification/tenk_grep.py`). First commit relaxed the file-level guard from `asof < today` to `asof < today - 1 day` and added a post-fetch `_enforce_pit_after_fetch` helper that returned `None` when the latest 10-K's filing date post-dated `asof`. Zen pre-merge review flagged this as a regression: when the latest filing post-dates `asof`, the post-fetch helper would discard a valid prior-year 10-K instead of falling back to it. The zen-review follow-up commit instead pushes the asof filter INTO `find_latest_10k(asof=...)` so the SEC index is filtered at the source, surfaces the latest-≤-asof filing natively, and removes both the file-level day-staleness guard AND the post-fetch helper. The remaining `fetch_10k_text` shape: cache hit → return; else fetch submissions → `find_latest_10k(asof)` → if None return None; else short-circuit on `cache_path.exists()` (avoids re-HTML-fetch on TTL re-arm) → else HTML-fetch + extract + write + return.
+
+4. **10-K cache TTL** (`alphalens/thematic/verification/tenk_grep.py::_find_cached`). New `_CACHE_TTL_DAYS = 380` constant. `_find_cached` returns `None` when the latest eligible cache file is older than 380 days relative to `asof` (or today, when asof is None), forcing a SEC-index check that catches a newer filing the cache had been masking. Combined with the `cache_path.exists()` short-circuit in `fetch_10k_text`, the gate doesn't re-fetch HTML for filings it has already cached — only the cheap submissions JSON is re-consulted.
 
 ## Verification
 
-- 3442 / 3442 tests pass; 19 skipped (network-gated, unchanged).
-- `ruff format` + `ruff check` clean.
+- 3443 / 3443 tests pass; 19 skipped (network-gated, unchanged).
+- `ruff format` + `ruff check` clean on touched files (the ~9 pre-existing repo-wide lint errors are in untouched modules from PR #185's main refactor).
 - New tests:
   - `tests/test_thematic_cli.py::test_score_empty_candidates_writes_empty_scored_parquet` (red→green for the score fix)
   - `tests/thematic/test_theme_mapping.py::test_etf_dropped_from_gate_names` (pins `GATE_NAMES` shape)
   - `tests/thematic/test_tenk_grep.py::test_fetch_10k_text_yesterday_asof_primes_cold_cache` (asserts yesterday-asof now primes)
-  - `tests/thematic/test_tenk_grep.py::test_fetch_10k_text_caches_but_returns_none_when_filing_date_after_asof` (asserts PIT safety after relaxed fetch)
+  - `tests/thematic/test_tenk_grep.py::test_fetch_10k_text_picks_prior_year_when_latest_filing_post_dates_asof` (asserts asof-filter at SEC index source picks a valid prior 10-K instead of returning None)
+  - `tests/thematic/test_tenk_grep.py::test_find_cached_evicts_files_older_than_ttl` (asserts TTL eviction)
+  - `tests/thematic/test_tenk_grep.py::test_fetch_10k_text_short_circuits_html_fetch_when_cache_file_matches_sec_index` (asserts anti-hammering short-circuit after TTL eviction)
 
-## Deferred follow-ups (not in this commit)
+## Deferred follow-ups (not in these two commits)
 
-- **10-K cache warm-up audit** — once the relaxed guard runs in production for a few days, audit whether the 10-K gate's pass rate is materially > 0% on rolling candidate sets. If yes, the gate is restored to usefulness; if no, investigate the CIK-resolver hit rate for the small-cap universe Pro is emitting.
 - **Press gate Polygon flakiness** — `press_window_fetch_failed: HTTP Error 429` hit on both 2026-05-22 production runs (06:30 UTC + 09:44 UTC). Pre-fetch + per-candidate fallback path works, but the variance (`kept 0` vs `kept 3` for the same cached inputs) is too high. Possible mitigations: (a) wait/backoff between batch attempts, (b) cache the pre-fetched window across runs, (c) accept the variance and rely on three independent gates instead of one.
-- **ETF coverage expansion** — if downstream consumers report that thematic-ETF inclusion is a material signal, revisit the gate with either (i) `theme_aliases.yaml` mapping free-form labels to canonical keys, or (ii) embedding-based semantic match against ETF series names. Both are out of scope for this commit.
+- **10-K cache warm-up audit** — once the relaxed guard runs in production for a few days, audit whether the 10-K gate's pass rate is materially > 0% on rolling candidate sets. If yes, the gate is restored to usefulness; if no, investigate the CIK-resolver hit rate for the small-cap universe Pro is emitting.
+- **Web mock fixtures regeneration** — `web/tests/fixtures/api-mock/days/*.json` still contain `"etf"` in `gates_unknown` arrays from historical brief snapshots. Frontend GatePill silently handles missing keys, so no breakage; the fixtures will diverge from live API output until they're regenerated from a post-deploy snapshot.
 
 ## References
 
 - PR #185 (`refactor/two-tier-clustering`): two-tier clustering + diversity guardrail, drop EDGAR. The 0-vs-1 candidate differential between `main` and the branch was variance on the press gate, not the new cap.
 - `docs/research/thematic_event_tool_v1_design_2026_05_15.md`: original 4-gate verification design.
-- Conversation with the zen reviewer (gemini-3-pro-preview, thinking=high) on 2026-05-22 — agreed on (1) drop-ETF over alias/embedding work, and (2) relax the PIT guard rather than add a separate priming script.
+- Zen pre-merge review (gemini-3-pro-preview, thinking=high) on 2026-05-22:
+  - Round 1 (continuation `09bdf1ef`) — agreed on (1) drop-ETF over alias/embedding work, and (2) relax the PIT guard rather than add a separate priming script.
+  - Round 2 (continuation `5ef409db`) on commit 4da12ea — pushed (3) move asof filter INTO `find_latest_10k`, (4) add cache TTL, (5) delete ETF module decisively instead of retaining as restore-ready stub.

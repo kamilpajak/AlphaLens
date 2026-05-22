@@ -356,7 +356,6 @@ class TestVerifyCandidate(unittest.TestCase):
             return False
 
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=False),
             patch.object(orchestrator, "_gate_tenk", side_effect=fake_tenk),
             patch.object(orchestrator, "_gate_press", side_effect=fake_press),
             patch.object(orchestrator, "_gate_insider", return_value=False),
@@ -456,7 +455,6 @@ class TestMapThemes(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"MADEUP": 1_000_000_000},
                 ),
-                patch.object(orchestrator, "_gate_etf", return_value=False),
                 patch.object(orchestrator, "_gate_tenk", return_value=False),
                 patch.object(orchestrator, "_gate_press", return_value=False),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
@@ -495,7 +493,6 @@ class TestMapThemes(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"QUBT": 1_780_000_000},
                 ),
-                patch.object(orchestrator, "_gate_etf", return_value=False),
                 patch.object(orchestrator, "_gate_tenk", return_value=True),
                 patch.object(orchestrator, "_gate_press", return_value=False),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
@@ -591,7 +588,6 @@ class TestMapThemes(unittest.TestCase):
                     "has_theme_in_recent_press",
                     return_value=None,
                 ),
-                patch.object(orchestrator, "_gate_etf", return_value=False),
                 patch.object(orchestrator, "_gate_tenk", return_value=False),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
             ):
@@ -658,7 +654,6 @@ class TestMapThemes(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"VRT": 1_000_000_000},
                 ),
-                patch.object(orchestrator, "_gate_etf", return_value=False),
                 patch.object(orchestrator, "_gate_tenk", side_effect=_capture_tenk),
                 patch.object(orchestrator, "_gate_press", side_effect=_capture_press),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
@@ -706,7 +701,6 @@ class TestMapThemes(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"QBTS": 1_000_000_000},
                 ),
-                patch.object(orchestrator, "_gate_etf", return_value=False),
                 patch.object(orchestrator, "_gate_tenk", side_effect=_capture_tenk),
                 patch.object(orchestrator, "_gate_press", return_value=False),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
@@ -725,12 +719,6 @@ class TestMapThemes(unittest.TestCase):
 
 
 class TestGateWrappers(unittest.TestCase):
-    def test_gate_etf_delegates(self):
-        with patch.object(orchestrator.etf_holdings, "is_in_thematic_etf", return_value=True):
-            self.assertTrue(
-                orchestrator._gate_etf(ticker="NVDA", themes=["q"], asof=dt.date(2026, 5, 15))
-            )
-
     def test_gate_tenk_delegates(self):
         with patch.object(orchestrator.tenk_grep, "has_theme_keywords_in_10k", return_value=False):
             self.assertFalse(

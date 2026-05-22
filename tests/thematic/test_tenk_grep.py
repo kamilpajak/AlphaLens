@@ -102,12 +102,22 @@ class TestFetchAndCache(unittest.TestCase):
             self.assertEqual(len(cached), 1)
 
     def test_fetch_10k_text_reuses_cache(self):
+        # Use a recent fixture date so the cache TTL doesn't expire mid-test.
+        recent = (dt.date.today() - dt.timedelta(days=30)).isoformat()
+        fixture_index = {
+            "filings": {
+                "recent": {
+                    "form": ["10-K"],
+                    "accessionNumber": ["0001045810-25-000001"],
+                    "filingDate": [recent],
+                    "primaryDocument": ["nvda-recent.htm"],
+                }
+            }
+        }
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
             with (
-                patch.object(
-                    tenk_grep, "_fetch_submissions_json", return_value=FIXTURE_FILING_INDEX
-                ),
+                patch.object(tenk_grep, "_fetch_submissions_json", return_value=fixture_index),
                 patch.object(tenk_grep, "_fetch_filing_html", return_value=FIXTURE_10K_HTML),
                 patch.object(tenk_grep, "_resolve_cik", return_value="0001045810"),
             ):
@@ -119,10 +129,11 @@ class TestFetchAndCache(unittest.TestCase):
 
 class TestVerificationGate(unittest.TestCase):
     def test_has_theme_keywords_in_10k_true_on_match(self):
+        # Use a recent fixture date so the cache TTL doesn't expire mid-test.
+        recent = (dt.date.today() - dt.timedelta(days=30)).isoformat()
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
-            # Pre-seed cached text
-            (cache_dir / "NVDA_2025-02-21.txt").write_text(
+            (cache_dir / f"NVDA_{recent}.txt").write_text(
                 "We work on quantum computing and AI accelerators."
             )
             self.assertTrue(
@@ -134,9 +145,10 @@ class TestVerificationGate(unittest.TestCase):
             )
 
     def test_has_theme_keywords_in_10k_false_on_miss(self):
+        recent = (dt.date.today() - dt.timedelta(days=30)).isoformat()
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
-            (cache_dir / "NVDA_2025-02-21.txt").write_text("We sell potatoes.")
+            (cache_dir / f"NVDA_{recent}.txt").write_text("We sell potatoes.")
             self.assertFalse(
                 tenk_grep.has_theme_keywords_in_10k(
                     ticker="NVDA",
@@ -415,31 +427,28 @@ class TestFetch10kPITPath(unittest.TestCase):
             path = tenk_grep._find_cached("NVDA", cache_dir, asof=dt.date(2026, 1, 1))
             self.assertEqual(path.name, "NVDA_2025-02-21.txt")
 
-    def test_fetch_10k_text_does_not_fetch_when_historical_asof_uncached(self):
-        # Past asof + cold cache → return None, do NOT touch the SEC fetchers.
+    def test_fetch_10k_text_returns_none_when_asof_predates_all_filings(self):
+        # Past asof + cold cache: SEC submissions IS consulted, but
+        # find_latest_10k(asof) filters out filings post-dating asof and
+        # returns None — caller surfaces gates_unknown. The HTML fetch must
+        # never be reached (we only have post-asof filings to surface).
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
             with (
+                patch.object(tenk_grep, "_resolve_cik", return_value="0001045810"),
                 patch.object(
-                    tenk_grep,
-                    "_resolve_cik",
-                    side_effect=AssertionError("no cik resolve under historical asof"),
-                ),
-                patch.object(
-                    tenk_grep,
-                    "_fetch_submissions_json",
-                    side_effect=AssertionError("no submissions fetch"),
+                    tenk_grep, "_fetch_submissions_json", return_value=FIXTURE_FILING_INDEX
                 ),
                 patch.object(
                     tenk_grep,
                     "_fetch_filing_html",
-                    side_effect=AssertionError("no html fetch"),
+                    side_effect=AssertionError("no html fetch when find_latest_10k returns None"),
                 ),
             ):
                 text = tenk_grep.fetch_10k_text(
                     ticker="NVDA", cache_dir=cache_dir, asof=dt.date(2024, 6, 1)
                 )
-        self.assertIsNone(text)
+            self.assertIsNone(text)
 
     def test_has_theme_keywords_in_10k_uses_pit_filing(self):
         # Older 10-K mentions quantum; newer doesn't. asof=mid → match older.
@@ -500,35 +509,89 @@ class TestFetch10kPITPath(unittest.TestCase):
             cached = list(cache_dir.glob("NVDA_*.txt"))
             self.assertEqual(len(cached), 1)
 
-    def test_fetch_10k_text_caches_but_returns_none_when_filing_date_after_asof(self):
-        # Edge case the relaxed guard creates: a 10-K filed TODAY shouldn't
-        # bleed into yesterday's verification verdict. Cache it for future
-        # runs, return None for the current asof.
+    def test_fetch_10k_text_picks_prior_year_when_latest_filing_post_dates_asof(self):
+        # Edge case the relaxed-guard era resolved with a post-fetch hack:
+        # a 10-K filed TODAY (or any date > asof) must NOT bleed into
+        # yesterday's verdict, AND if a valid prior-year 10-K exists, it
+        # must be surfaced instead of returning None. find_latest_10k(asof=)
+        # filters at the SEC index source, so the older filing wins.
         yesterday = dt.date.today() - dt.timedelta(days=1)
         today = dt.date.today()
-        future_filing_index = {
+        prior_year_str = (today - dt.timedelta(days=365)).isoformat()
+        mixed_filing_index = {
             "filings": {
                 "recent": {
-                    "form": ["10-K"],
-                    "accessionNumber": ["0001045810-99-999999"],
-                    "filingDate": [today.isoformat()],
-                    "primaryDocument": ["nvda-today.htm"],
+                    "form": ["10-K", "10-K"],
+                    "accessionNumber": [
+                        "0001045810-99-999999",
+                        "0001045810-24-000001",
+                    ],
+                    "filingDate": [today.isoformat(), prior_year_str],
+                    "primaryDocument": ["nvda-today.htm", "nvda-prior.htm"],
                 }
             }
         }
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
             with (
-                patch.object(
-                    tenk_grep, "_fetch_submissions_json", return_value=future_filing_index
-                ),
+                patch.object(tenk_grep, "_fetch_submissions_json", return_value=mixed_filing_index),
                 patch.object(tenk_grep, "_fetch_filing_html", return_value=FIXTURE_10K_HTML),
                 patch.object(tenk_grep, "_resolve_cik", return_value="0001045810"),
             ):
                 text = tenk_grep.fetch_10k_text(ticker="NVDA", cache_dir=cache_dir, asof=yesterday)
-            self.assertIsNone(text)
-            cached = list(cache_dir.glob(f"NVDA_{today.isoformat()}.txt"))
+            self.assertIsNotNone(text)
+            self.assertIn("CUDA", text)
+            cached = list(cache_dir.glob(f"NVDA_{prior_year_str}.txt"))
             self.assertEqual(len(cached), 1)
+            # Today's filing must NOT have been fetched/cached at all.
+            self.assertEqual(list(cache_dir.glob(f"NVDA_{today.isoformat()}.txt")), [])
+
+    def test_find_cached_evicts_files_older_than_ttl(self):
+        # _find_cached enforces _CACHE_TTL_DAYS so a one-time-cached 10-K
+        # can't mask newer filings indefinitely. Files older than the TTL
+        # horizon force a re-consultation of the SEC index.
+        ticker = "NVDA"
+        stale_date = (
+            dt.date.today() - dt.timedelta(days=tenk_grep._CACHE_TTL_DAYS + 30)
+        ).isoformat()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            (cache_dir / f"{ticker}_{stale_date}.txt").write_text("stale content")
+            self.assertIsNone(tenk_grep._find_cached(ticker, cache_dir, asof=dt.date.today()))
+
+    def test_fetch_10k_text_short_circuits_html_fetch_when_cache_file_matches_sec_index(self):
+        # Anti-hammering: once the TTL re-arms `_find_cached`, a SEC
+        # submissions check that resolves to a 10-K we've already cached
+        # must skip the HTML re-fetch + extract + re-write cycle. Without
+        # this, every call after TTL expiry would re-pull the same filing.
+        ticker = "NVDA"
+        recent = (dt.date.today() - dt.timedelta(days=400)).isoformat()
+        fixture_index = {
+            "filings": {
+                "recent": {
+                    "form": ["10-K"],
+                    "accessionNumber": ["0001045810-25-000001"],
+                    "filingDate": [recent],
+                    "primaryDocument": ["nvda-old.htm"],
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            # Cache file exists with the same filing date the SEC index reports
+            # but is past the TTL horizon, so _find_cached returns None.
+            (cache_dir / f"{ticker}_{recent}.txt").write_text("cached body with CUDA reference")
+            with (
+                patch.object(tenk_grep, "_resolve_cik", return_value="0001045810"),
+                patch.object(tenk_grep, "_fetch_submissions_json", return_value=fixture_index),
+                patch.object(
+                    tenk_grep,
+                    "_fetch_filing_html",
+                    side_effect=AssertionError("must short-circuit when cache_path matches"),
+                ),
+            ):
+                text = tenk_grep.fetch_10k_text(ticker=ticker, cache_dir=cache_dir)
+            self.assertIn("CUDA", text)
 
 
 if __name__ == "__main__":

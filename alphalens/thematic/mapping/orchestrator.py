@@ -30,7 +30,6 @@ import pandas as pd
 
 from alphalens.thematic.mapping import catalyst_resolver, gemini_mapper
 from alphalens.thematic.verification import (
-    etf_holdings,
     insider,
     mcap_filter,
     recent_press,
@@ -54,10 +53,6 @@ _MAX_VERIFY_ATTEMPTS_PER_THEME = 5
 
 # Per-gate wrappers — keep tests patchable through `orchestrator.*` and let
 # each gate fail closed if its underlying data path errors.
-
-
-def _gate_etf(*, ticker: str, themes: Iterable[str], asof: dt.date) -> bool:
-    return etf_holdings.is_in_thematic_etf(ticker=ticker, themes=themes, asof=asof)
 
 
 def _gate_tenk(*, ticker: str, theme_keywords: Iterable[str], asof: dt.date) -> bool:
