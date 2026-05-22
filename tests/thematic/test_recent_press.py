@@ -2,84 +2,102 @@ import datetime as dt
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 from alphalens.thematic.verification import recent_press
 
-SAMPLE_POLYGON_RESPONSE = {
-    "results": [
-        {
-            "id": "p1",
-            "published_utc": "2026-05-10T14:30:00Z",
-            "title": "Beam Global expands quantum compute partnerships",
-            "description": "Press release announces quantum computing pilot.",
-            "tickers": ["BEEM"],
-            "keywords": ["quantum", "energy storage"],
-            "insights": [],
-            "article_url": "https://example.com/beem-quantum",
-            "publisher": {"name": "PRNewswire"},
-        },
-        {
-            "id": "p2",
-            "published_utc": "2026-05-12T08:00:00Z",
-            "title": "Beam Global Q1 earnings beat",
-            "description": "Revenue up 50% YoY",
-            "tickers": ["BEEM"],
-            "keywords": ["earnings"],
-            "insights": [],
-            "article_url": "https://example.com/beem-q1",
-            "publisher": {"name": "Reuters"},
-        },
-    ]
-}
+# Two-row Polygon response after the 2026-05-22 canonical-client consolidation.
+# The mock layer is now ``PolygonClient.get_news_range`` (returns ``list[dict]``)
+# instead of the previous ``_http_get_json`` (which returned the full envelope
+# with ``results`` / ``next_url``). Pagination + HTTP + retry are owned by
+# PolygonClient; tests at this layer only see the flat row list.
+SAMPLE_POLYGON_ROWS = [
+    {
+        "id": "p1",
+        "published_utc": "2026-05-10T14:30:00Z",
+        "title": "Beam Global expands quantum compute partnerships",
+        "description": "Press release announces quantum computing pilot.",
+        "tickers": ["BEEM"],
+        "keywords": ["quantum", "energy storage"],
+        "insights": [],
+        "article_url": "https://example.com/beem-quantum",
+        "publisher": {"name": "PRNewswire"},
+    },
+    {
+        "id": "p2",
+        "published_utc": "2026-05-12T08:00:00Z",
+        "title": "Beam Global Q1 earnings beat",
+        "description": "Revenue up 50% YoY",
+        "tickers": ["BEEM"],
+        "keywords": ["earnings"],
+        "insights": [],
+        "article_url": "https://example.com/beem-q1",
+        "publisher": {"name": "Reuters"},
+    },
+]
+
+
+def _mock_client(*, rows=None, side_effect=None) -> MagicMock:
+    """Build a mock PolygonClient whose ``get_news_range`` returns ``rows``.
+
+    Pass ``side_effect`` to simulate exceptions (rate-limit, network error)
+    raised by the canonical client; this is the post-consolidation analogue
+    of the old ``patch.object(recent_press, "_http_get_json", side_effect=...)``
+    pattern.
+    """
+    client = MagicMock()
+    if side_effect is not None:
+        client.get_news_range.side_effect = side_effect
+    else:
+        client.get_news_range.return_value = rows if rows is not None else SAMPLE_POLYGON_ROWS
+    return client
 
 
 class TestFetchRecentNews(unittest.TestCase):
     def test_fetch_recent_news_calls_polygon_with_ticker_filter(self):
-        captured = {}
+        client = _mock_client()
 
-        def fake_call(url, **kwargs):
-            captured["url"] = url
-            return SAMPLE_POLYGON_RESPONSE
+        items = recent_press.fetch_recent_news(
+            ticker="BEEM",
+            asof=dt.date(2026, 5, 15),
+            lookback_days=30,
+            client=client,
+        )
 
-        with patch.object(recent_press, "_http_get_json", side_effect=fake_call):
-            items = recent_press.fetch_recent_news(
-                ticker="BEEM",
-                asof=dt.date(2026, 5, 15),
-                lookback_days=30,
-                api_key="testkey",
-            )
-
-        self.assertIn("ticker=BEEM", captured["url"])
-        self.assertIn("published_utc.gte=2026-04-15", captured["url"])
-        self.assertIn("apiKey=testkey", captured["url"])
+        # The canonical PolygonClient is responsible for URL construction +
+        # Bearer auth (the api key is NEVER in the URL post-consolidation),
+        # so we assert against the kwargs passed to its get_news_range method.
+        client.get_news_range.assert_called_once()
+        kwargs = client.get_news_range.call_args.kwargs
+        self.assertEqual(kwargs["ticker"], "BEEM")
+        self.assertEqual(kwargs["start"], dt.datetime(2026, 4, 15, tzinfo=dt.UTC))
+        self.assertEqual(kwargs["end"], dt.datetime(2026, 5, 16, tzinfo=dt.UTC))
         self.assertEqual(len(items), 2)
 
     def test_fetch_caches_to_parquet_and_reuses(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
-            with patch.object(recent_press, "_http_get_json", return_value=SAMPLE_POLYGON_RESPONSE):
-                df = recent_press.fetch_recent_news_cached(
-                    ticker="BEEM",
-                    asof=dt.date(2026, 5, 15),
-                    lookback_days=30,
-                    api_key="testkey",
-                    cache_dir=cache_dir,
-                )
+            client = _mock_client()
+            df = recent_press.fetch_recent_news_cached(
+                ticker="BEEM",
+                asof=dt.date(2026, 5, 15),
+                lookback_days=30,
+                client=client,
+                cache_dir=cache_dir,
+            )
             self.assertEqual(len(df), 2)
             cached = cache_dir / "BEEM_2026-05-15.parquet"
             self.assertTrue(cached.exists())
 
-            with patch.object(
-                recent_press, "_http_get_json", side_effect=AssertionError("no call")
-            ):
-                df2 = recent_press.fetch_recent_news_cached(
-                    ticker="BEEM",
-                    asof=dt.date(2026, 5, 15),
-                    lookback_days=30,
-                    api_key="testkey",
-                    cache_dir=cache_dir,
-                )
+            blocking_client = MagicMock()
+            blocking_client.get_news_range.side_effect = AssertionError("no call")
+            df2 = recent_press.fetch_recent_news_cached(
+                ticker="BEEM",
+                asof=dt.date(2026, 5, 15),
+                lookback_days=30,
+                client=blocking_client,
+                cache_dir=cache_dir,
+            )
             self.assertEqual(len(df2), 2)
 
 
@@ -87,165 +105,149 @@ class TestVerificationGate(unittest.TestCase):
     def test_has_theme_in_recent_press_true_on_keyword_match(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
-            with patch.object(recent_press, "_http_get_json", return_value=SAMPLE_POLYGON_RESPONSE):
-                self.assertTrue(
-                    recent_press.has_theme_in_recent_press(
-                        ticker="BEEM",
-                        asof=dt.date(2026, 5, 15),
-                        keywords=["quantum"],
-                        api_key="testkey",
-                        cache_dir=cache_dir,
-                    )
+            self.assertTrue(
+                recent_press.has_theme_in_recent_press(
+                    ticker="BEEM",
+                    asof=dt.date(2026, 5, 15),
+                    keywords=["quantum"],
+                    client=_mock_client(),
+                    cache_dir=cache_dir,
                 )
+            )
 
     def test_has_theme_in_recent_press_matches_title_or_description(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
-            with patch.object(recent_press, "_http_get_json", return_value=SAMPLE_POLYGON_RESPONSE):
-                # 'energy storage' is in the keywords field of p1
-                self.assertTrue(
-                    recent_press.has_theme_in_recent_press(
-                        ticker="BEEM",
-                        asof=dt.date(2026, 5, 15),
-                        keywords=["energy storage"],
-                        api_key="testkey",
-                        cache_dir=cache_dir,
-                    )
+            # 'energy storage' is in the keywords field of p1
+            self.assertTrue(
+                recent_press.has_theme_in_recent_press(
+                    ticker="BEEM",
+                    asof=dt.date(2026, 5, 15),
+                    keywords=["energy storage"],
+                    client=_mock_client(),
+                    cache_dir=cache_dir,
                 )
+            )
 
     def test_has_theme_in_recent_press_false_on_miss(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
-            with patch.object(recent_press, "_http_get_json", return_value=SAMPLE_POLYGON_RESPONSE):
-                self.assertFalse(
-                    recent_press.has_theme_in_recent_press(
-                        ticker="BEEM",
-                        asof=dt.date(2026, 5, 15),
-                        keywords=["alien_invasion", "cybersecurity"],
-                        api_key="testkey",
-                        cache_dir=cache_dir,
-                    )
+            self.assertFalse(
+                recent_press.has_theme_in_recent_press(
+                    ticker="BEEM",
+                    asof=dt.date(2026, 5, 15),
+                    keywords=["alien_invasion", "cybersecurity"],
+                    client=_mock_client(),
+                    cache_dir=cache_dir,
                 )
+            )
 
     def test_has_theme_returns_false_when_no_press_releases(self):
-        # Polygon returned successfully with zero items — real "no press in
+        # PolygonClient returned cleanly with zero rows — real "no press in
         # window" signal, distinct from a fetch error. Stays False per tri-state.
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
-            with patch.object(recent_press, "_http_get_json", return_value={"results": []}):
-                result = recent_press.has_theme_in_recent_press(
-                    ticker="UNKN",
-                    asof=dt.date(2026, 5, 15),
-                    keywords=["anything"],
-                    api_key="testkey",
-                    cache_dir=cache_dir,
-                )
-                self.assertIs(result, False)
+            result = recent_press.has_theme_in_recent_press(
+                ticker="UNKN",
+                asof=dt.date(2026, 5, 15),
+                keywords=["anything"],
+                client=_mock_client(rows=[]),
+                cache_dir=cache_dir,
+            )
+            self.assertIs(result, False)
 
     def test_has_theme_returns_none_on_api_error(self):
-        # Polygon rate limit / network error = unknown, not False. Operator
-        # can distinguish "we couldn't check" from "we checked and no hit".
+        # PolygonClient rate-limit / network error = unknown, not False.
+        # Operator can distinguish "we couldn't check" from "we checked and no hit".
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
-            with patch.object(
-                recent_press, "_http_get_json", side_effect=RuntimeError("rate limit")
-            ):
-                self.assertIsNone(
-                    recent_press.has_theme_in_recent_press(
-                        ticker="BEEM",
-                        asof=dt.date(2026, 5, 15),
-                        keywords=["quantum"],
-                        api_key="testkey",
-                        cache_dir=cache_dir,
-                    )
+            self.assertIsNone(
+                recent_press.has_theme_in_recent_press(
+                    ticker="BEEM",
+                    asof=dt.date(2026, 5, 15),
+                    keywords=["quantum"],
+                    client=_mock_client(side_effect=RuntimeError("rate limit")),
+                    cache_dir=cache_dir,
                 )
+            )
 
     def test_has_theme_in_recent_press_handles_nan_in_keywords_cell(self):
         # Zen pre-merge HIGH finding: the keywords lambda uses ``x is not
         # None`` check, which lets NaN through (NaN is a float). ``" ".join``
         # then raises TypeError. The fetch's exception handler would mark
         # gates_unknown, hiding a real keyword hit elsewhere in the response.
-        nan_response = {
-            "results": [
-                {
-                    "id": "p_bad",
-                    "published_utc": "2026-05-10T14:30:00Z",
-                    "title": "ignore",
-                    "description": "",
-                    "tickers": ["BEEM"],
-                    "keywords": None,  # parquet round-trip → NaN
-                    "insights": [],
-                    "article_url": "u",
-                    "publisher": {"name": "x"},
-                },
-                {
-                    "id": "p_good",
-                    "published_utc": "2026-05-11T00:00:00Z",
-                    "title": "Beam launches quantum platform",
-                    "description": "",
-                    "tickers": ["BEEM"],
-                    "keywords": ["quantum"],
-                    "insights": [],
-                    "article_url": "u",
-                    "publisher": {"name": "y"},
-                },
-            ]
-        }
+        nan_rows = [
+            {
+                "id": "p_bad",
+                "published_utc": "2026-05-10T14:30:00Z",
+                "title": "ignore",
+                "description": "",
+                "tickers": ["BEEM"],
+                "keywords": None,  # parquet round-trip → NaN
+                "insights": [],
+                "article_url": "u",
+                "publisher": {"name": "x"},
+            },
+            {
+                "id": "p_good",
+                "published_utc": "2026-05-11T00:00:00Z",
+                "title": "Beam launches quantum platform",
+                "description": "",
+                "tickers": ["BEEM"],
+                "keywords": ["quantum"],
+                "insights": [],
+                "article_url": "u",
+                "publisher": {"name": "y"},
+            },
+        ]
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
-            with patch.object(recent_press, "_http_get_json", return_value=nan_response):
-                self.assertTrue(
-                    recent_press.has_theme_in_recent_press(
-                        ticker="BEEM",
-                        asof=dt.date(2026, 5, 15),
-                        keywords=["quantum"],
-                        api_key="testkey",
-                        cache_dir=cache_dir,
-                    )
+            self.assertTrue(
+                recent_press.has_theme_in_recent_press(
+                    ticker="BEEM",
+                    asof=dt.date(2026, 5, 15),
+                    keywords=["quantum"],
+                    client=_mock_client(rows=nan_rows),
+                    cache_dir=cache_dir,
                 )
+            )
 
 
 class TestWindowUniverseFetch(unittest.TestCase):
     def test_fetch_window_universe_caches_one_unfiltered_pull(self):
-
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
-            calls = []
+            client = _mock_client()
 
-            def fake_call(url, **kwargs):
-                calls.append(url)
-                return SAMPLE_POLYGON_RESPONSE
-
-            with patch.object(recent_press, "_http_get_json", side_effect=fake_call):
-                df = recent_press.fetch_window_universe(
-                    asof=dt.date(2026, 5, 15),
-                    lookback_days=30,
-                    api_key="testkey",
-                    cache_dir=cache_dir,
-                )
-            self.assertEqual(len(calls), 1)
-            self.assertNotIn("ticker=", calls[0])
+            df = recent_press.fetch_window_universe(
+                asof=dt.date(2026, 5, 15),
+                lookback_days=30,
+                client=client,
+                cache_dir=cache_dir,
+            )
+            # Exactly one call to the canonical client (PolygonClient handles
+            # pagination internally — wrapper sees a single flat-list response).
+            self.assertEqual(client.get_news_range.call_count, 1)
+            # Universe-wide fetch must NOT scope to a single ticker.
+            self.assertIsNone(client.get_news_range.call_args.kwargs.get("ticker"))
             self.assertEqual(len(df), 2)
             cache_file = cache_dir / "_universe_2026-05-15.parquet"
             self.assertTrue(cache_file.exists())
 
-    def test_fetch_recent_news_handles_pagination(self):
-        page1 = {**SAMPLE_POLYGON_RESPONSE, "next_url": "https://x.com?cursor=a"}
-        page2 = {**SAMPLE_POLYGON_RESPONSE, "next_url": None}
-        seen = []
+    def test_fetch_recent_news_passes_through_paginated_rows(self):
+        # Pagination is the canonical client's responsibility now; the wrapper
+        # receives whatever flat row list PolygonClient produces. Confirm that
+        # a "two-pages-worth" row list flows through unmodified.
+        two_pages_worth = SAMPLE_POLYGON_ROWS * 2  # 4 rows total
+        client = _mock_client(rows=two_pages_worth)
 
-        def fake_call(url, **kwargs):
-            seen.append(url)
-            return page1 if len(seen) == 1 else page2
-
-        with patch.object(recent_press, "_http_get_json", side_effect=fake_call):
-            items = recent_press.fetch_recent_news(
-                ticker=None,
-                asof=dt.date(2026, 5, 15),
-                lookback_days=30,
-                api_key="testkey",
-            )
-        self.assertEqual(len(seen), 2)
+        items = recent_press.fetch_recent_news(
+            ticker=None,
+            asof=dt.date(2026, 5, 15),
+            lookback_days=30,
+            client=client,
+        )
+        self.assertEqual(client.get_news_range.call_count, 1)
         self.assertEqual(len(items), 4)
 
 
@@ -416,46 +418,38 @@ class TestFetchRecentNewsPagination(unittest.TestCase):
     def test_paginates_past_old_max_pages_cap_of_ten(self):
         # Regression test for issue #149 bug 2: the previous cap of 10 pages
         # × 100 limit = 1000 rows covered ~3 days on Polygon's US firehose,
-        # NOT the intended 30-day lookback. Bump to 200 pages should let the
-        # fetcher follow next_url until the window naturally exhausts.
-        pages_to_serve = 15  # ten was the old ceiling
-
-        def fake_call(url, **kwargs):
-            calls.append(url)
-            page_n = len(calls)
-            # Each page returns one article so we can count rows precisely.
-            result = {
-                "results": [
-                    {
-                        "id": f"p{page_n}",
-                        "published_utc": "2026-05-01T00:00:00Z",
-                        "title": f"page {page_n}",
-                        "description": "",
-                        "tickers": ["BEEM"],
-                        "keywords": [],
-                        "article_url": f"https://example.com/{page_n}",
-                        "publisher": {"name": "x"},
-                    }
-                ]
+        # NOT the intended 30-day lookback. After the 2026-05-22 canonical
+        # client consolidation, pagination is owned by ``PolygonClient`` and
+        # tested independently in ``tests/test_polygon_client.py``. At this
+        # wrapper layer we only need to confirm that the row count
+        # PolygonClient produces flows through unchanged — including beyond
+        # the historical 10-page ceiling.
+        rows_to_serve = 15  # ten was the old ceiling
+        rows = [
+            {
+                "id": f"p{i}",
+                "published_utc": "2026-05-01T00:00:00Z",
+                "title": f"page {i}",
+                "description": "",
+                "tickers": ["BEEM"],
+                "keywords": [],
+                "article_url": f"https://example.com/{i}",
+                "publisher": {"name": "x"},
             }
-            if page_n < pages_to_serve:
-                result["next_url"] = f"https://api.polygon.io/v2/reference/news?cursor={page_n}"
-            return result
-
-        calls: list[str] = []
-        with patch.object(recent_press, "_http_get_json", side_effect=fake_call):
-            items = recent_press.fetch_recent_news(
-                ticker=None,
-                asof=dt.date(2026, 5, 15),
-                lookback_days=30,
-                api_key="testkey",
-            )
+            for i in range(1, rows_to_serve + 1)
+        ]
+        client = _mock_client(rows=rows)
+        items = recent_press.fetch_recent_news(
+            ticker=None,
+            asof=dt.date(2026, 5, 15),
+            lookback_days=30,
+            client=client,
+        )
         self.assertEqual(
             len(items),
-            pages_to_serve,
-            f"expected all {pages_to_serve} pages fetched; got {len(items)}",
+            rows_to_serve,
+            f"expected all {rows_to_serve} rows passed through; got {len(items)}",
         )
-        self.assertEqual(len(calls), pages_to_serve)
 
 
 if __name__ == "__main__":

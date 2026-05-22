@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from alphalens.data.alt_data.polygon_client import PolygonClient, get_default_polygon_client
 from alphalens.thematic.mapping import catalyst_resolver, gemini_mapper
 from alphalens.thematic.verification import (
     insider,
@@ -64,7 +65,7 @@ def _gate_press(
     ticker: str,
     theme_keywords: Iterable[str],
     asof: dt.date,
-    api_key: str,
+    polygon_client: PolygonClient | None = None,
     press_df: pd.DataFrame | None = None,
 ) -> bool | None:
     """Press verification gate with tri-state fall-through (issue #149).
@@ -84,7 +85,7 @@ def _gate_press(
         if result is not None:
             return result
     return recent_press.has_theme_in_recent_press(
-        ticker=ticker, asof=asof, keywords=theme_keywords, api_key=api_key
+        ticker=ticker, asof=asof, keywords=theme_keywords, client=polygon_client
     )
 
 
@@ -139,7 +140,7 @@ def verify_candidate(
     ticker: str,
     themes: Iterable[str],
     asof: dt.date,
-    api_key: str,
+    polygon_client: PolygonClient | None = None,
     theme_keywords: Iterable[str] | None = None,
     press_df: pd.DataFrame | None = None,
 ) -> dict:
@@ -187,7 +188,7 @@ def verify_candidate(
             ticker=ticker,
             theme_keywords=keywords,
             asof=asof,
-            api_key=api_key,
+            polygon_client=polygon_client,
             press_df=press_df,
         ),
     )
@@ -215,12 +216,12 @@ def _init_pro_client(api_key: str):
         return None
 
 
-def _fetch_press_window(asof: dt.date, polygon_key: str) -> pd.DataFrame | None:
+def _fetch_press_window(asof: dt.date, polygon_client: PolygonClient | None) -> pd.DataFrame | None:
     """Pre-fetch the window-wide press frame. ``None`` on outage so callers fall back."""
-    if not polygon_key:
+    if polygon_client is None:
         return None
     try:
-        return recent_press.fetch_window_universe(asof=asof, api_key=polygon_key)
+        return recent_press.fetch_window_universe(asof=asof, client=polygon_client)
     except Exception as exc:
         logger.warning("press window fetch failed: %s", exc, exc_info=True)
         return None
@@ -336,7 +337,7 @@ def _verify_candidates_for_theme(
     keywords: list[str],
     catalyst: dict | None,
     asof: dt.date,
-    polygon_key: str,
+    polygon_client: PolygonClient | None,
     press_df,
     keep_unverified: bool,
 ) -> tuple[list[dict], int, int]:
@@ -369,7 +370,7 @@ def _verify_candidates_for_theme(
             ticker=cand["ticker"],
             themes=[theme],
             asof=asof,
-            api_key=polygon_key,
+            polygon_client=polygon_client,
             theme_keywords=keywords,
             press_df=press_df,
         )
@@ -412,13 +413,27 @@ def map_themes(
     unified parquet to ``output_dir / {asof}.parquet`` and returns it.
     """
     api_key = api_key or os.environ.get("GOOGLE_API_KEY") or ""
-    polygon_key = polygon_api_key or os.environ.get("POLYGON_API_KEY") or ""
+    # The legacy ``polygon_api_key`` parameter is preserved for source-compat
+    # with call sites that still pass it (``alphalens_cli/commands/thematic.py``,
+    # ``scripts/replay_nvda_qubt.py``, several unit tests). When provided
+    # explicitly, build a fresh PolygonClient from that key directly (bypasses
+    # env lookup so tests don't need to mutate environment state). When absent
+    # but ``POLYGON_API_KEY`` is in env, fall through to the lazy singleton.
+    # When neither is present, run with ``polygon_client=None`` — the press
+    # gate then short-circuits into batch-skip + per-ticker fallback (same as
+    # the historical "no key" code path).
+    if polygon_api_key:
+        polygon_client = PolygonClient(polygon_api_key)
+    elif os.environ.get("POLYGON_API_KEY"):
+        polygon_client = get_default_polygon_client()
+    else:
+        polygon_client = None
 
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{asof.isoformat()}.parquet"
 
     pro_client = _init_pro_client(api_key)
-    press_df = _fetch_press_window(asof, polygon_key)
+    press_df = _fetch_press_window(asof, polygon_client)
 
     min_cap, max_cap = market_cap_range
     rows: list[dict] = []
@@ -444,7 +459,7 @@ def map_themes(
             keywords=keywords,
             catalyst=catalyst,
             asof=asof,
-            polygon_key=polygon_key,
+            polygon_client=polygon_client,
             press_df=press_df,
             keep_unverified=keep_unverified,
         )

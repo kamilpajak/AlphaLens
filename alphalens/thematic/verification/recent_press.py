@@ -14,28 +14,26 @@ that the LLM-mapping path surfaces).
 from __future__ import annotations
 
 import datetime as dt
-import json
 import logging
 import math
-import urllib.parse
-import urllib.request
 from collections.abc import Iterable
 from pathlib import Path
 
 import pandas as pd
 
+from alphalens.data.alt_data.polygon_client import PolygonClient, get_default_polygon_client
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_press"
-ENDPOINT = "https://api.polygon.io/v2/reference/news"
 DEFAULT_LOOKBACK_DAYS = 30
-DEFAULT_LIMIT = 100
-
-
-def _http_get_json(url: str, *, timeout: float = 20.0) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": "AlphaLens-thematic/0.1"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
+# Polygon's hard max page size. The previous limit=100 throttled throughput
+# 10x AND implicitly capped ``fetch_window_universe`` at ``max_pages * limit
+# = 200 * 100 = 20,000`` rows — below the 30-day market-wide firehose volume.
+# Raising to 1000 yields max_items=200,000 (safely covers a 30-day window)
+# and cuts API calls 10x for the same coverage. Critical for the 5-req/min
+# Starter quota that the canonical client now coordinates globally.
+DEFAULT_LIMIT = 1000
 
 
 def fetch_recent_news(
@@ -43,7 +41,7 @@ def fetch_recent_news(
     ticker: str | None,
     asof: dt.date,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
-    api_key: str,
+    client: PolygonClient | None = None,
     limit: int = DEFAULT_LIMIT,
     max_pages: int = 200,
 ) -> list[dict]:
@@ -52,33 +50,25 @@ def fetch_recent_news(
     Passing ``ticker=None`` retrieves the unfiltered firehose for the window —
     the orchestrator uses this single window-wide fetch to cover every
     candidate locally, avoiding the per-ticker 5-req/min Starter ceiling.
-    """
-    start = asof - dt.timedelta(days=lookback_days)
-    end_excl = asof + dt.timedelta(days=1)
-    params: dict[str, object] = {
-        "published_utc.gte": start.isoformat(),
-        "published_utc.lt": end_excl.isoformat(),
-        "order": "desc",
-        "sort": "published_utc",
-        "limit": limit,
-        "apiKey": api_key,
-    }
-    if ticker:
-        params["ticker"] = ticker
-    url = f"{ENDPOINT}?{urllib.parse.urlencode(params)}"
 
-    items: list[dict] = []
-    pages = 0
-    while url and pages < max_pages:
-        data = _http_get_json(url)
-        items.extend(data.get("results") or [])
-        nxt = data.get("next_url")
-        if not nxt:
-            break
-        sep = "&" if "?" in nxt else "?"
-        url = f"{nxt}{sep}apiKey={api_key}"
-        pages += 1
-    return items
+    HTTP, pagination, rate-limit (5 req/min Starter), Retry-After honoring,
+    and Bearer auth are owned by the canonical PolygonClient. Pass
+    ``client=None`` to use the process-wide default singleton.
+    """
+    if client is None:
+        client = get_default_polygon_client()
+    start = dt.datetime.combine(asof - dt.timedelta(days=lookback_days), dt.time.min, tzinfo=dt.UTC)
+    end_excl = dt.datetime.combine(asof + dt.timedelta(days=1), dt.time.min, tzinfo=dt.UTC)
+    return client.get_news_range(
+        start=start,
+        end=end_excl,
+        ticker=ticker,
+        order="desc",
+        sort="published_utc",
+        limit=limit,
+        max_items=max_pages * limit,
+        max_pages=max_pages,
+    )
 
 
 def _to_dataframe(items: list[dict]) -> pd.DataFrame:
@@ -116,7 +106,7 @@ def fetch_recent_news_cached(
     ticker: str,
     asof: dt.date,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
-    api_key: str,
+    client: PolygonClient | None = None,
     cache_dir: Path = DEFAULT_CACHE_DIR,
     force: bool = False,
 ) -> pd.DataFrame:
@@ -124,9 +114,7 @@ def fetch_recent_news_cached(
     cache_path = cache_dir / f"{ticker.upper()}_{asof.isoformat()}.parquet"
     if cache_path.exists() and not force:
         return pd.read_parquet(cache_path)
-    items = fetch_recent_news(
-        ticker=ticker, asof=asof, lookback_days=lookback_days, api_key=api_key
-    )
+    items = fetch_recent_news(ticker=ticker, asof=asof, lookback_days=lookback_days, client=client)
     df = _to_dataframe(items)
     df.to_parquet(cache_path, index=False)
     return df
@@ -136,7 +124,7 @@ def fetch_window_universe(
     *,
     asof: dt.date,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
-    api_key: str,
+    client: PolygonClient | None = None,
     cache_dir: Path = DEFAULT_CACHE_DIR,
     force: bool = False,
 ) -> pd.DataFrame:
@@ -150,7 +138,7 @@ def fetch_window_universe(
     cache_path = cache_dir / f"_universe_{asof.isoformat()}.parquet"
     if cache_path.exists() and not force:
         return pd.read_parquet(cache_path)
-    items = fetch_recent_news(ticker=None, asof=asof, lookback_days=lookback_days, api_key=api_key)
+    items = fetch_recent_news(ticker=None, asof=asof, lookback_days=lookback_days, client=client)
     df = _to_dataframe(items)
     df.to_parquet(cache_path, index=False)
     return df
@@ -230,7 +218,7 @@ def has_theme_in_recent_press(
     ticker: str,
     asof: dt.date,
     keywords: Iterable[str],
-    api_key: str,
+    client: PolygonClient | None = None,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     cache_dir: Path = DEFAULT_CACHE_DIR,
 ) -> bool | None:
@@ -245,7 +233,7 @@ def has_theme_in_recent_press(
             ticker=ticker,
             asof=asof,
             lookback_days=lookback_days,
-            api_key=api_key,
+            client=client,
             cache_dir=cache_dir,
         )
     except Exception as exc:

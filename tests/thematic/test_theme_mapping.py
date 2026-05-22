@@ -259,7 +259,6 @@ class TestVerifyCandidate(unittest.TestCase):
                 ticker="QBTS",
                 themes=["quantum_computing"],
                 asof=dt.date(2026, 5, 15),
-                api_key="testkey",
             )
         self.assertEqual(set(result["gates_passed"]), {"tenk", "press"})
         self.assertEqual(set(result["gates_failed"]), {"insider"})
@@ -276,7 +275,6 @@ class TestVerifyCandidate(unittest.TestCase):
                 ticker="MADEUP",
                 themes=["quantum_computing"],
                 asof=dt.date(2026, 5, 15),
-                api_key="testkey",
             )
         self.assertEqual(result["gates_passed"], [])
         self.assertEqual(set(result["gates_failed"]), {"tenk", "press", "insider"})
@@ -296,7 +294,6 @@ class TestVerifyCandidate(unittest.TestCase):
                 ticker="FOREIGN",
                 themes=["quantum_computing"],
                 asof=dt.date(2026, 5, 15),
-                api_key="testkey",
             )
         self.assertEqual(result["gates_passed"], ["press"])
         self.assertEqual(result["gates_failed"], [])
@@ -315,7 +312,6 @@ class TestVerifyCandidate(unittest.TestCase):
                 ticker="OPAQUE",
                 themes=["quantum_computing"],
                 asof=dt.date(2026, 5, 15),
-                api_key="testkey",
             )
         self.assertEqual(result["gates_passed"], [])
         self.assertEqual(result["gates_failed"], [])
@@ -333,7 +329,6 @@ class TestVerifyCandidate(unittest.TestCase):
                 ticker="QBTS",
                 themes=["quantum_computing"],
                 asof=dt.date(2026, 5, 15),
-                api_key="testkey",
             )
         self.assertEqual(result["gates_passed"], ["press"])
         self.assertEqual(set(result["gates_failed"]), {"insider"})
@@ -351,7 +346,7 @@ class TestVerifyCandidate(unittest.TestCase):
             captured["tenk"] = list(theme_keywords)
             return False
 
-        def fake_press(*, ticker, theme_keywords, asof, api_key, press_df=None):
+        def fake_press(*, ticker, theme_keywords, asof, polygon_client=None, press_df=None):
             captured["press"] = list(theme_keywords)
             return False
 
@@ -364,7 +359,6 @@ class TestVerifyCandidate(unittest.TestCase):
                 ticker="QBTS",
                 themes=["quantum_computing"],
                 asof=dt.date(2026, 5, 15),
-                api_key="testkey",
             )
         self.assertIn("quantum_computing", captured["tenk"])
         self.assertIn("quantum computing", captured["tenk"])
@@ -382,7 +376,6 @@ class TestVerifyCandidate(unittest.TestCase):
                 ticker="QBTS",
                 themes=["quantum_computing"],
                 asof=dt.date(2026, 5, 15),
-                api_key="testkey",
             )
         self.assertEqual(result["gates_passed"], ["tenk"])
         self.assertTrue(result["verified"])
@@ -418,7 +411,6 @@ class TestMapThemes(unittest.TestCase):
                 df = orchestrator.map_themes(
                     themes=["quantum_computing"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="testkey",
                     output_dir=cache_dir,
                     keep_unverified=False,
                 )
@@ -462,7 +454,6 @@ class TestMapThemes(unittest.TestCase):
                 df = orchestrator.map_themes(
                     themes=["quantum_computing"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="testkey",
                     output_dir=cache_dir,
                     keep_unverified=True,
                 )
@@ -500,7 +491,6 @@ class TestMapThemes(unittest.TestCase):
                 df = orchestrator.map_themes(
                     themes=["quantum_computing"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="testkey",
                     output_dir=cache_dir,
                     market_cap_range=(500_000_000, 10_000_000_000),
                 )
@@ -545,7 +535,6 @@ class TestMapThemes(unittest.TestCase):
                 df = orchestrator.map_themes(
                     themes=["quantum"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="testkey",
                     output_dir=cache_dir,
                     keep_unverified=False,
                 )
@@ -594,7 +583,6 @@ class TestMapThemes(unittest.TestCase):
                 df = orchestrator.map_themes(
                     themes=["quantum"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="testkey",
                     polygon_api_key="px",
                     output_dir=cache_dir,
                     keep_unverified=True,
@@ -613,7 +601,6 @@ class TestMapThemes(unittest.TestCase):
                 df = orchestrator.map_themes(
                     themes=["quantum_computing"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="testkey",
                     output_dir=Path(tmpdir),
                 )
             self.assertEqual(len(df), 0)
@@ -631,7 +618,7 @@ class TestMapThemes(unittest.TestCase):
             captured["tenk_keywords"] = list(theme_keywords)
             return False
 
-        def _capture_press(*, ticker, theme_keywords, asof, api_key, press_df=None):
+        def _capture_press(*, ticker, theme_keywords, asof, polygon_client=None, press_df=None):
             captured["press_keywords"] = list(theme_keywords)
             return False
 
@@ -661,7 +648,6 @@ class TestMapThemes(unittest.TestCase):
                 orchestrator.map_themes(
                     themes=["AI development"],
                     asof=dt.date(2023, 1, 23),
-                    api_key="testkey",
                     output_dir=Path(tmpdir),
                     keep_unverified=True,
                 )
@@ -708,7 +694,6 @@ class TestMapThemes(unittest.TestCase):
                 orchestrator.map_themes(
                     themes=["quantum_computing"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="testkey",
                     output_dir=Path(tmpdir),
                     keep_unverified=True,
                 )
@@ -736,7 +721,6 @@ class TestGateWrappers(unittest.TestCase):
                     ticker="NVDA",
                     theme_keywords=["q"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="k",
                     press_df=pd.DataFrame(),
                 )
             )
@@ -750,7 +734,6 @@ class TestGateWrappers(unittest.TestCase):
                     ticker="NVDA",
                     theme_keywords=["q"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="k",
                 )
             )
 
@@ -774,7 +757,6 @@ class TestGateWrappers(unittest.TestCase):
                 ticker="VRT",
                 theme_keywords=["AI"],
                 asof=dt.date(2023, 1, 23),
-                api_key="k",
                 press_df=pd.DataFrame({"placeholder": [1]}),
             )
         self.assertTrue(result)
@@ -798,7 +780,6 @@ class TestGateWrappers(unittest.TestCase):
                 ticker="NVDA",
                 theme_keywords=["quantum"],
                 asof=dt.date(2026, 5, 15),
-                api_key="k",
                 press_df=pd.DataFrame({"placeholder": [1]}),
             )
         self.assertIs(result, False)
@@ -844,7 +825,6 @@ class TestMapThemesWritesGatesPassedStr(unittest.TestCase):
                 df = orchestrator.map_themes(
                     themes=["quantum"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="testkey",
                     polygon_api_key="px",
                     output_dir=cache_dir,
                 )
@@ -938,7 +918,6 @@ class TestDiversityGuardrail(unittest.TestCase):
                 df = orchestrator.map_themes(
                     themes=["quantum"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="testkey",
                     output_dir=Path(tmpdir),
                 )
         self.assertEqual(mock_verify.call_count, 3)
@@ -977,7 +956,6 @@ class TestDiversityGuardrail(unittest.TestCase):
                 df = orchestrator.map_themes(
                     themes=["quantum"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="testkey",
                     output_dir=Path(tmpdir),
                 )
         self.assertEqual(mock_verify.call_count, 4)
@@ -1011,7 +989,6 @@ class TestDiversityGuardrail(unittest.TestCase):
                 df = orchestrator.map_themes(
                     themes=["quantum"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="testkey",
                     output_dir=Path(tmpdir),
                 )
         self.assertEqual(mock_verify.call_count, 5)
@@ -1060,7 +1037,6 @@ class TestDiversityGuardrail(unittest.TestCase):
                 df = orchestrator.map_themes(
                     themes=["theme_a", "theme_b"],
                     asof=dt.date(2026, 5, 15),
-                    api_key="testkey",
                     output_dir=Path(tmpdir),
                 )
         self.assertEqual(len(df), 6)  # 3 per theme
