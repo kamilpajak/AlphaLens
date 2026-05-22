@@ -1,6 +1,6 @@
 # alphalens-django
 
-Read/write API for thematic briefs. Replaces `alphalens/api/` (FastAPI).
+Read/write API for thematic briefs. See [ADR 0009](../../docs/adr/0009-django-replaces-fastapi.md) for the migration record.
 
 ## Quickstart
 
