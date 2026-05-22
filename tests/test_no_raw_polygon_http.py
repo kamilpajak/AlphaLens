@@ -127,14 +127,6 @@ class TestNoRawPolygonHttp(unittest.TestCase):
         # And the URL fragment list must cover the Polygon base URL itself.
         self.assertTrue(_file_uses_polygon_url('"https://api.polygon.io/v2/reference/news"'))
 
-    # Activated by the migration commit. This commit introduces the canonical
-    # PolygonClient + tests + enforcement scaffold but does not yet migrate the
-    # three shadow callers (polygon_news.py, recent_press.py,
-    # scripts/build_optionable_universe.py). The decorator is removed in the
-    # follow-up migration commit. Keep the test body so the regex + path-walk
-    # logic still gets exercised end-to-end in CI; expectedFailure flags the
-    # known shadow set as "expected" without failing the suite.
-    @unittest.expectedFailure
     def test_no_shadow_polygon_http_outside_canonical_client(self):
         offenders: list[tuple[str, int, str]] = []
         for root in SCAN_DIRS:

@@ -23,28 +23,30 @@ from __future__ import annotations
 
 import logging
 import os
-import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import requests
+
+from alphalens.data.alt_data.polygon_client import (
+    PolygonAuthError,
+    PolygonClient,
+    PolygonError,
+    get_default_polygon_client,
+)
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://api.polygon.io/stocks/v1/short-interest"
 _DISSEMINATION_LAG_BD = 8
 
 
-class PolygonShortInterestError(RuntimeError):
-    """Non-transient Polygon failure (4xx other than 401, exhausted retries)."""
-
-
-class PolygonShortInterestAuthError(PolygonShortInterestError):
-    """401: missing or invalid API key."""
+# Re-exported under the historical names so existing callers and tests that
+# catch ``PolygonShortInterestError`` / ``PolygonShortInterestAuthError`` keep
+# working. The canonical exceptions are now defined once in polygon_client.
+PolygonShortInterestError = PolygonError
+PolygonShortInterestAuthError = PolygonAuthError
 
 
 @dataclass(frozen=True)
@@ -77,33 +79,37 @@ def _is_available_at(*, asof: date, settlement: date) -> bool:
 
 
 class PolygonShortInterestClient:
+    """Domain wrapper around Polygon's ``/stocks/v1/short-interest`` endpoint.
+
+    HTTP, pagination, rate-limit, and retry are delegated to the canonical
+    :class:`PolygonClient`. This wrapper retains the per-ticker parquet cache,
+    the FINRA dissemination-lag PIT contract, and the ``ShortInterestRecord``
+    domain-typed surface used by ``alphalens/screeners/alt_data/features.py``.
+    """
+
     def __init__(
         self,
         *,
-        api_key: str,
         cache_dir: Path,
-        session: requests.Session | None = None,
-        sleep: Callable[[float], None] = time.sleep,
-        max_retries: int = 3,
-        retry_backoff_s: float = 2.0,
+        polygon_client: PolygonClient | None = None,
     ):
-        if not api_key:
-            raise PolygonShortInterestAuthError(
-                "POLYGON_API_KEY is required (set env var or pass api_key=)"
-            )
-        self._api_key = api_key
         self._cache_dir = Path(cache_dir)
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-        self._session = session or requests.Session()
-        self._sleep = sleep
-        self._max_retries = max_retries
-        self._retry_backoff_s = retry_backoff_s
+        self._polygon_client = polygon_client or get_default_polygon_client()
 
     @classmethod
     def from_env(cls, *, cache_dir: Path | None = None) -> PolygonShortInterestClient:
-        api_key = os.environ.get("POLYGON_API_KEY", "")
+        # The canonical client reads POLYGON_API_KEY via its own ``from_env``;
+        # we just need a place to anchor the per-ticker cache directory. The
+        # historical signature kept ``POLYGON_API_KEY`` as a required env var
+        # for fail-fast UX — preserve that contract here so test failures point
+        # at the same root cause.
+        if not os.environ.get("POLYGON_API_KEY"):
+            raise PolygonShortInterestAuthError(
+                "POLYGON_API_KEY is required (set env var or pass polygon_client=)"
+            )
         cache_dir = cache_dir or Path.home() / ".alphalens" / "polygon_short_interest"
-        return cls(api_key=api_key, cache_dir=cache_dir)
+        return cls(cache_dir=cache_dir)
 
     def _cache_path(self, ticker: str) -> Path:
         return self._cache_dir / f"{ticker.upper()}.parquet"
@@ -122,19 +128,8 @@ class PolygonShortInterestClient:
         if cache.exists() and not refresh:
             return pd.read_parquet(cache)
 
-        all_rows: list[dict] = []
-        url = f"{_BASE_URL}?ticker={ticker.upper()}&limit=500&order=asc"
-        while url:
-            payload = self._get_with_retry(url)
-            rows = payload.get("results", []) or []
-            all_rows.extend(rows)
-            next_url = payload.get("next_url")
-            if not next_url:
-                break
-            # Polygon's next_url may or may not include apiKey; preserve auth via header
-            url = next_url
-
-        df = self._rows_to_frame(all_rows)
+        rows = self._polygon_client.get_short_interest(ticker=ticker, limit=500, order="asc")
+        df = self._rows_to_frame(rows)
         df.to_parquet(cache)
         return df
 
@@ -153,35 +148,6 @@ class PolygonShortInterestClient:
         out["avg_daily_volume"] = out["avg_daily_volume"].astype("int64")
         out["days_to_cover"] = out["days_to_cover"].astype(float)
         return out
-
-    def _get_with_retry(self, url: str) -> dict:
-        attempt = 0
-        headers = {"Authorization": f"Bearer {self._api_key}"}
-        while True:
-            resp = self._session.get(url, timeout=30, headers=headers)
-            if resp.status_code == 200:
-                return resp.json()
-            if resp.status_code == 401:
-                raise PolygonShortInterestAuthError("Polygon returned 401: API key rejected")
-            if 400 <= resp.status_code < 500 and resp.status_code != 429:
-                raise PolygonShortInterestError(
-                    f"Polygon returned {resp.status_code}: {resp.text[:200]}"
-                )
-            # 429 / 5xx: retry
-            if attempt >= self._max_retries:
-                raise PolygonShortInterestError(
-                    f"Polygon {resp.status_code} persisted after {attempt} retries"
-                )
-            backoff = self._retry_backoff_s * (2**attempt)
-            logger.warning(
-                "Polygon short-interest %s; retrying in %.1fs (attempt %d/%d)",
-                resp.status_code,
-                backoff,
-                attempt + 1,
-                self._max_retries,
-            )
-            self._sleep(backoff)
-            attempt += 1
 
     def features_as_of(self, ticker: str, asof: date) -> ShortInterestRecord | None:
         """Most recent record with `(settlement_date + 8 BD) <= asof`. None if none."""

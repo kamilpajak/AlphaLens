@@ -29,7 +29,12 @@ from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
-import requests
+
+from alphalens.data.alt_data.polygon_client import (
+    PolygonError,
+    PolygonRateLimitError,
+    get_default_polygon_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,36 +47,29 @@ OUTPUT_PARQUET = (
 WINDOW_START = pd.Timestamp("2018-04-30")
 WINDOW_END = pd.Timestamp("2024-04-30")
 
-POLYGON_URL = "https://api.polygon.io/v3/reference/options/contracts"
-HTTP_TIMEOUT = 15
 DELAY_BETWEEN_REQUESTS = 0.05  # 20 req/s — Polygon Starter unlimited but be polite
 
 
-def _load_polygon_key() -> str:
-    env = (REPO_ROOT / ".env").read_text()
-    for line in env.splitlines():
-        if line.startswith("POLYGON_API_KEY="):
-            return line.split("=", 1)[1].strip().strip('"').strip("'")
-    raise RuntimeError("POLYGON_API_KEY not in .env")
+def _query_chain_count(client, ticker: str, as_of: str) -> tuple[int, str | None]:
+    """Returns (n_contracts, error). n_contracts=-1 on error.
 
-
-def _query_chain_count(api_key: str, ticker: str, as_of: str) -> tuple[int, str | None]:
-    """Returns (n_contracts, error). n_contracts=-1 on error."""
-    params = {
-        "underlying_ticker": ticker,
-        "as_of": as_of,
-        "limit": 1000,
-        "apiKey": api_key,
-    }
+    HTTP, 429/Retry-After handling, and Bearer auth are owned by the canonical
+    PolygonClient. We only do a single paginated call here (``max_pages=1``)
+    because the script is interested in "are there contracts at all?", not the
+    full chain.
+    """
     try:
-        r = requests.get(POLYGON_URL, params=params, timeout=HTTP_TIMEOUT)
-        if r.status_code == 200:
-            d = r.json()
-            return len(d.get("results", [])), None
-        if r.status_code == 429:
-            time.sleep(2)
-            return _query_chain_count(api_key, ticker, as_of)
-        return -1, f"HTTP {r.status_code}"
+        results = client.get_options_contracts(
+            underlying_ticker=ticker,
+            as_of=as_of,
+            limit=1000,
+            max_pages=1,
+        )
+        return len(results), None
+    except PolygonRateLimitError as e:
+        return -1, f"rate-limit: {e}"
+    except PolygonError as e:
+        return -1, str(e)[:120]
     except Exception as e:
         return -1, str(e)[:120]
 
@@ -86,7 +84,7 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    api_key = _load_polygon_key()
+    client = get_default_polygon_client()
     df = pd.read_parquet(SURVIVORSHIP_PARQUET)
     mask = (df["delisted_date"] >= WINDOW_START) & (df["delisted_date"] <= WINDOW_END)
     pool = df.loc[mask].copy().reset_index(drop=True)
@@ -110,7 +108,7 @@ def main() -> int:
         delisted = row["delisted_date"]
         as_of = (delisted - timedelta(days=30)).strftime("%Y-%m-%d")
 
-        n, err = _query_chain_count(api_key, ticker, as_of)
+        n, err = _query_chain_count(client, ticker, as_of)
         results.append(
             {
                 "ticker": ticker,

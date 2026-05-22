@@ -47,8 +47,10 @@ DEFAULT_MAX_ITEMS = 200
 _SOURCE_PRIORITY = {"polygon": 0, "gdelt": 1, "rss": 2}
 
 
-def _fetch_polygon(*, date: dt.date, api_key: str) -> pd.DataFrame:
-    return polygon_news.fetch_daily_news(date=date, api_key=api_key)
+def _fetch_polygon(*, date: dt.date) -> pd.DataFrame:
+    # PolygonClient reads POLYGON_API_KEY via get_default_polygon_client();
+    # rate-limit + Bearer auth + retry are owned by the canonical client.
+    return polygon_news.fetch_daily_news(date=date)
 
 
 def _fetch_gdelt(*, date: dt.date) -> pd.DataFrame:
@@ -169,7 +171,12 @@ def ingest_daily(
     if cache_path.exists() and not force:
         return pd.read_parquet(cache_path)
 
-    polygon_df = _safe_call("polygon", _fetch_polygon, date=date, api_key=polygon_api_key or "")
+    # ``polygon_api_key`` is accepted for backwards-compatibility with the CLI
+    # signature, but the canonical PolygonClient reads ``POLYGON_API_KEY``
+    # from the environment directly. Passing it explicitly is now a no-op
+    # — kept so older callers don't blow up at the kwarg boundary.
+    del polygon_api_key
+    polygon_df = _safe_call("polygon", _fetch_polygon, date=date)
     gdelt_df = _safe_call("gdelt", _fetch_gdelt, date=date)
     rss_df = _safe_call("rss", _fetch_rss, date=date)
 
