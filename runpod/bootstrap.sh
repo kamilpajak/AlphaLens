@@ -15,7 +15,7 @@
 # Usage on the pod:
 #   bootstrap.sh
 #   sync_in.sh
-#   run_experiment.sh "scripts/experiment_event_drift_v4.py --mode breadth-audit ..."
+#   run_experiment.sh "apps/alphalens-research/scripts/experiment_event_drift_v4.py --mode breadth-audit ..."
 
 set -euo pipefail
 

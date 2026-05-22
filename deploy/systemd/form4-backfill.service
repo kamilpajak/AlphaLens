@@ -44,7 +44,7 @@ Environment=ALPHALENS_START_YEAR=2006
 Environment=ALPHALENS_END_YEAR=2026
 Environment=ALPHALENS_FLUSH_THRESHOLD=5000
 
-ExecStart=%h/AlphaLens/.venv/bin/python scripts/run_form4_backfill.py \
+ExecStart=%h/AlphaLens/.venv/bin/python apps/alphalens-research/scripts/run_form4_backfill.py \
     --user-agent "${ALPHALENS_USER_AGENT}" \
     --cik-list ${ALPHALENS_CIK_LIST} \
     --parquet-root ${ALPHALENS_PARQUET_ROOT} \

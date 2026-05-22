@@ -60,7 +60,7 @@ run_one() {
 
     echo "[${label}] starting at $(date -u +%H:%M:%S)Z"
     local start_s; start_s=$(date +%s)
-    /usr/bin/time -p .venv/bin/python scripts/experiment_insider_pc_compound.py \
+    /usr/bin/time -p .venv/bin/python apps/alphalens-research/scripts/experiment_insider_pc_compound.py \
         "${COMMON_ARGS[@]}" \
         --out "${out_json}" \
         2>&1 | tee "${out_log}"

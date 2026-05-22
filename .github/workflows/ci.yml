@@ -40,20 +40,20 @@ jobs:
         # Research-lab posture: surface findings without blocking. Strict mode
         # later when paradigm stabilizes (would target IS Carhart t > 3.0
         # before re-enabling 0-warning bar).
-        run: uv run ruff check alphalens/ alphalens_cli/ tests/
+        run: uv run ruff check apps/alphalens-research/alphalens_research/ apps/alphalens-research/alphalens_cli/ apps/alphalens-research/tests/
         continue-on-error: true
 
       - name: Ruff format check
         # Strict — formatting is mechanical and zero-cost to fix.
-        run: uv run ruff format --check alphalens/ alphalens_cli/ tests/
+        run: uv run ruff format --check apps/alphalens-research/alphalens_research/ apps/alphalens-research/alphalens_cli/ apps/alphalens-research/tests/
 
       - name: Bandit security scan
-        run: uv run bandit -r alphalens/ alphalens_cli/ -ll -q
+        run: uv run bandit -r apps/alphalens-research/alphalens_research/ apps/alphalens-research/alphalens_cli/ -ll -q
         continue-on-error: true  # surface findings without blocking initially
 
       - name: Run tests with coverage
         run: |
-          uv run coverage run -m unittest discover -s tests
+          uv run coverage run -m unittest discover -s apps/alphalens-research/tests -t apps/alphalens-research
           uv run coverage report
           uv run coverage xml -o coverage.xml
 

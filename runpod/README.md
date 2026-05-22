@@ -131,7 +131,7 @@ sync_in.sh
 .venv/bin/alphalens preaudit insider_pc_compound  # or your strategy
 
 # 6. Run an experiment (any AlphaLens script + args, in quotes)
-run_experiment.sh "scripts/experiment_event_drift_v4.py \
+run_experiment.sh "apps/alphalens-research/scripts/experiment_event_drift_v4.py \
                    --mode breadth-audit \
                    --start 2024-04-30 --end 2026-04-30 \
                    --output /workspace/alphalens/runs/\$RUN_ID/artifacts/breadth.json"
@@ -162,10 +162,10 @@ Before trusting full holdout runs, validate the toolchain end-to-end:
 # On the pod, after bootstrap.sh + sync_in.sh
 .venv/bin/python -m unittest discover tests 2>&1 | tail -5    # 1820+ tests green
 .venv/bin/python runpod/verify_data.py                        # all datasets present
-.venv/bin/python scripts/audit_v4_memory.py --ns 100          # peak RSS < 1 GB
+.venv/bin/python apps/alphalens-research/scripts/audit_v4_memory.py --ns 100          # peak RSS < 1 GB
 
 # If those three pass, fire a small breadth audit:
-run_experiment.sh "scripts/experiment_event_drift_v4.py \
+run_experiment.sh "apps/alphalens-research/scripts/experiment_event_drift_v4.py \
                    --mode breadth-audit \
                    --start 2024-04-30 --end 2025-04-30 \
                    --max-tickers 200 \

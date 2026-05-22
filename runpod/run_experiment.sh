@@ -2,7 +2,7 @@
 # Wrap an AlphaLens experiment with manifest + tee log + telegram notify.
 #
 # Usage on the pod:
-#   run_experiment.sh "scripts/experiment_event_drift_v4.py --mode breadth-audit \
+#   run_experiment.sh "apps/alphalens-research/scripts/experiment_event_drift_v4.py --mode breadth-audit \
 #                      --start 2024-04-30 --end 2026-04-30 \
 #                      --output /workspace/alphalens/runs/<run_id>/artifacts/breadth.json"
 #

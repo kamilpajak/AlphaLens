@@ -1,7 +1,7 @@
 # AlphaLens thematic pipeline image — runs the CLI inside a container so the
 # VPS doesn't need its own Python 3.13 + uv + apt deps. Built from the repo
-# root context; the alphalens + alphalens_cli packages are installed into
-# /app/.venv via `uv sync`.
+# root context; the alphalens_research + alphalens_cli packages (which live
+# under apps/alphalens-research/) are installed into /app/.venv via `uv sync`.
 #
 # Why bookworm and NOT slim: lxml and lightgbm sometimes fall back to a source
 # build on cold cache; slim is missing the C headers/libraries those need, and
@@ -49,9 +49,11 @@ COPY pyproject.toml uv.lock README.md ./
 # build on a small VPS.
 RUN uv sync --frozen --no-dev --no-install-project
 # Now copy the project source and install it on top of the prepared venv.
-COPY alphalens ./alphalens
-COPY alphalens_cli ./alphalens_cli
-COPY scripts ./scripts
+# pyproject.toml declares `where = ["apps/alphalens-research"]` for setuptools
+# package discovery, so the layout inside the container must mirror that.
+COPY apps/alphalens-research/alphalens_research ./apps/alphalens-research/alphalens_research
+COPY apps/alphalens-research/alphalens_cli ./apps/alphalens-research/alphalens_cli
+COPY apps/alphalens-research/scripts ./apps/alphalens-research/scripts
 COPY deploy/docker/run_thematic_day.sh /app/deploy/docker/run_thematic_day.sh
 RUN chmod +x /app/deploy/docker/run_thematic_day.sh \
     && uv sync --frozen --no-dev

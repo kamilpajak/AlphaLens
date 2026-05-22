@@ -33,7 +33,8 @@ dependencies = [
 alphalens = "alphalens_cli.main:app"
 
 [tool.setuptools.packages.find]
-include = ["alphalens*", "alphalens_cli*"]
+where = ["apps/alphalens-research"]
+include = ["alphalens_research*", "alphalens_cli*"]
 
 [project.optional-dependencies]
 dev = [
@@ -90,7 +91,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = [
+"apps/alphalens-research/tests/*" = [
     "PLR0915",  # tests can be long
     "B011",     # asserts in tests OK
     "B017",     # generic Exception in assertRaises is OK in test scaffolding
@@ -103,12 +104,8 @@ ignore = [
     "SIM117",   # nested with-statements in tests highlight scope structure
     "PLW1510",  # subprocess.run in tests asserts on returncode explicitly; check= is the test's job
 ]
-"alphalens/watchdog/lock.py" = [
+"apps/alphalens-research/alphalens_research/watchdog/lock.py" = [
     "N818",     # WorkerLockBusy is a state signal, not a fatal error — keep without Error suffix
-]
-"alphalens/archive/**" = [
-    "PLW0603",  # closed-layer code retained per ADR 0005; not refactoring closed modules
-    "PLR0911",  # closed strategies have legitimate guard-return chains; not refactoring
 ]
 
 [tool.ruff.format]
@@ -117,7 +114,7 @@ indent-style = "space"
 docstring-code-format = true
 
 [tool.coverage.run]
-source = ["alphalens", "alphalens_cli"]
+source = ["alphalens_research", "alphalens_cli"]
 omit = [
     "*/tests/*",
 ]
@@ -155,14 +152,14 @@ exclude_lines = [
 # run_form4_backfill, compact_form4_parquet), run on Linux VPS — fork-safe
 # there.
 paths_to_mutate = [
-    "scripts/split_cik_list.py",
-    "alphalens/data/alt_data/sec_edgar_client.py",
+    "apps/alphalens-research/scripts/split_cik_list.py",
+    "apps/alphalens-research/alphalens_research/data/alt_data/sec_edgar_client.py",
 ]
 also_copy = [
-    "alphalens/",
-    "scripts/",
+    "apps/alphalens-research/alphalens_research/",
+    "apps/alphalens-research/scripts/",
 ]
 tests_dir = [
-    "tests/test_split_cik_list.py",
-    "tests/test_sec_edgar_client.py",
+    "apps/alphalens-research/tests/test_split_cik_list.py",
+    "apps/alphalens-research/tests/test_sec_edgar_client.py",
 ]
