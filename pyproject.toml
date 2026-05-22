@@ -1,42 +1,20 @@
-[build-system]
-requires = ["setuptools>=82.0.1"]
-build-backend = "setuptools.build_meta"
+# Virtual workspace root — owns shared tooling config; no top-level package.
+#
+# Members:
+#   - apps/alphalens-research   (Typer CLI + research engine)
+#   - apps/alphalens-django     (DRF briefs API)
+#
+# Setup (single venv at repo root):
+#   uv sync           # installs every member + shared dev tools
+#
+# Per-member install (rare):
+#   uv pip install -e apps/alphalens-research
+#   uv pip install -e apps/alphalens-django
 
-[project]
-name = "alphalens"
-version = "0.1.0"
-description = "Stock analysis pipeline: event detection + screening + multi-agent LLM analysis"
-readme = "README.md"
-requires-python = ">=3.13"
-dependencies = [
-    "pandas>=2.3.0",
-    "scipy>=1.17.1",
-    "statsmodels>=0.14.6",
-    "langchain-google-genai>=4.2.2",
-    "typer>=0.25.1",
-    "yfinance>=0.2.63",
-    "stockstats>=0.6.5",
-    "python-dotenv>=1.2.2",
-    "quiverquant",
-    "pyarrow>=24.0.0",  # explicit: pandas parquet I/O (FRED cache, history snapshots)
-    "scikit-learn>=1.8.0",
-    "lightgbm>=4.6.0",
-    "ivolatility>=1.9.3",
-    "phase-robust-backtesting @ git+https://github.com/kamilpajak/phase-robust-backtesting.git@v0.2.3",
-    "feedparser>=6.0.11",
-    "google-genai>=0.8.0",
-    "json-repair>=0.59.10",
-    "requests>=2.32.0",
-]
+[tool.uv.workspace]
+members = ["apps/alphalens-research", "apps/alphalens-django"]
 
-[project.scripts]
-alphalens = "alphalens_cli.main:app"
-
-[tool.setuptools.packages.find]
-where = ["apps/alphalens-research"]
-include = ["alphalens_research*", "alphalens_cli*"]
-
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "ruff>=0.15.12",
     "coverage>=7.13.5",
@@ -56,6 +34,8 @@ exclude = [
     "logs",
     "reports",
     ".alphalens",
+    "apps/web",
+    "apps/alphalens-django/.venv",
 ]
 
 [tool.ruff.lint]
@@ -112,54 +92,3 @@ ignore = [
 quote-style = "double"
 indent-style = "space"
 docstring-code-format = true
-
-[tool.coverage.run]
-source = ["alphalens_research", "alphalens_cli"]
-omit = [
-    "*/tests/*",
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "if __name__ == .__main__.:",
-    "raise NotImplementedError",
-    "if TYPE_CHECKING:",
-]
-
-[tool.mutmut]
-# Transient — ad-hoc mutation testing of form4 backfill modules. Not part
-# of CI; remove when no longer needed.
-#
-# Known limitation: mutmut 3.x uses multiprocessing.Pool, which segfaults
-# on macOS + Python 3.13 with native libs (EXC_BAD_ACCESS). Workaround:
-# downgrade to mutmut 2.x (`uv pip install "mutmut<3"`) which spawns
-# subprocesses sequentially. Run with explicit unittest runner:
-#
-#   uv pip install "mutmut<3"
-#   .venv/bin/mutmut run \
-#     --paths-to-mutate "scripts/split_cik_list.py,alphalens/data/alt_data/sec_edgar_client.py" \
-#     --runner ".venv/bin/python -m unittest tests.test_split_cik_list tests.test_sec_edgar_client" \
-#     --tests-dir tests/
-#
-# Last run (2026-05-06): 91 killed / 84 survived / 1 timeout / 1 suspicious
-# = 51% kill rate. Survivors are mostly low-value: error message strings,
-# main() CLI plumbing, module-level URL/REPO_ROOT constants, __init__
-# defaults. Targeted gaps closed: _load_cik_list parsing, _evict_to_capacity
-# boundary.
-#
-# To mutate pyarrow-touching modules (form4_bulk_backfill,
-# run_form4_backfill, compact_form4_parquet), run on Linux VPS — fork-safe
-# there.
-paths_to_mutate = [
-    "apps/alphalens-research/scripts/split_cik_list.py",
-    "apps/alphalens-research/alphalens_research/data/alt_data/sec_edgar_client.py",
-]
-also_copy = [
-    "apps/alphalens-research/alphalens_research/",
-    "apps/alphalens-research/scripts/",
-]
-tests_dir = [
-    "apps/alphalens-research/tests/test_split_cik_list.py",
-    "apps/alphalens-research/tests/test_sec_edgar_client.py",
-]

@@ -161,7 +161,7 @@ Before trusting full holdout runs, validate the toolchain end-to-end:
 ```sh
 # On the pod, after bootstrap.sh + sync_in.sh
 .venv/bin/python -m unittest discover tests 2>&1 | tail -5    # 1820+ tests green
-.venv/bin/python runpod/verify_data.py                        # all datasets present
+.venv/bin/python deploy/runpod/verify_data.py                        # all datasets present
 .venv/bin/python apps/alphalens-research/scripts/audit_v4_memory.py --ns 100          # peak RSS < 1 GB
 
 # If those three pass, fire a small breadth audit:

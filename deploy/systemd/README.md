@@ -51,7 +51,7 @@ sharded so each machine fetches a non-overlapping slice in parallel. A
 
 ```bash
 .venv/bin/python scripts/split_cik_list.py \
-    data/form4_cik_universe.txt \
+    apps/alphalens-research/data/form4_cik_universe.txt \
     --num-shards 5 \
     --output-dir data/shards/
 # Produces ciks_shard_{1..5}_of_5.txt

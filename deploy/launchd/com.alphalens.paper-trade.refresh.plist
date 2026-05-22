@@ -8,7 +8,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jacoren/Developer/Personal/AlphaLens/launchd/bin/alphalens-paper-trade-refresh</string>
+        <string>/Users/jacoren/Developer/Personal/AlphaLens/deploy/launchd/bin/alphalens-paper-trade-refresh</string>
     </array>
 
     <key>WorkingDirectory</key>

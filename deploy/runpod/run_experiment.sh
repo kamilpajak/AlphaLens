@@ -38,13 +38,13 @@ mkdir -p "${RUN_DIR}/artifacts"
 echo ">>> Run ID: ${RUN_ID}"
 echo ">>> Run dir: ${RUN_DIR}"
 
-.venv/bin/python runpod/manifest.py \
+.venv/bin/python deploy/runpod/manifest.py \
     --run-id "${RUN_ID}" \
     --command "${CMD}" \
     --output "${RUN_DIR}/manifest.json"
 
 # Pre-flight integrity check: surface missing datasets BEFORE the experiment.
-.venv/bin/python runpod/verify_data.py || {
+.venv/bin/python deploy/runpod/verify_data.py || {
     echo "VERIFY FAILED -- aborting before experiment runs" >&2
     exit 3
 }

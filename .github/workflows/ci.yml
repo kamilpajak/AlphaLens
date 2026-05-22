@@ -13,8 +13,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    runs-on: macos-latest  # match dev env (M-series Mac)
+  # -----------------------------------------------------------------------
+  # Research engine — Python (unittest), runs ruff/bandit/coverage on
+  # apps/alphalens-research. macOS matches the dev box and the lightgbm
+  # wheel availability story.
+  # -----------------------------------------------------------------------
+  research:
+    name: research (Python)
+    runs-on: macos-latest
     timeout-minutes: 15
 
     steps:
@@ -33,27 +39,28 @@ jobs:
       - name: Install libomp (lightgbm runtime dep on macOS)
         run: brew install libomp
 
-      - name: Install dependencies
-        run: uv sync --extra dev --frozen
+      - name: Install workspace
+        run: uv sync --group dev --frozen
 
-      - name: Ruff lint
+      - name: Ruff lint (research)
         # Research-lab posture: surface findings without blocking. Strict mode
         # later when paradigm stabilizes (would target IS Carhart t > 3.0
         # before re-enabling 0-warning bar).
-        run: uv run ruff check apps/alphalens-research/alphalens_research/ apps/alphalens-research/alphalens_cli/ apps/alphalens-research/tests/
+        run: uv run ruff check apps/alphalens-research/
         continue-on-error: true
 
-      - name: Ruff format check
-        # Strict — formatting is mechanical and zero-cost to fix.
-        run: uv run ruff format --check apps/alphalens-research/alphalens_research/ apps/alphalens-research/alphalens_cli/ apps/alphalens-research/tests/
+      - name: Ruff format check (research)
+        run: uv run ruff format --check apps/alphalens-research/
 
       - name: Bandit security scan
         run: uv run bandit -r apps/alphalens-research/alphalens_research/ apps/alphalens-research/alphalens_cli/ -ll -q
-        continue-on-error: true  # surface findings without blocking initially
+        continue-on-error: true
 
       - name: Run tests with coverage
         run: |
-          uv run coverage run -m unittest discover -s apps/alphalens-research/tests -t apps/alphalens-research
+          uv run coverage run -m unittest discover \
+              -s apps/alphalens-research/tests \
+              -t apps/alphalens-research
           uv run coverage report
           uv run coverage xml -o coverage.xml
 
@@ -64,16 +71,101 @@ jobs:
           path: coverage.xml
           retention-days: 14
 
+  # -----------------------------------------------------------------------
+  # Django app — pytest + ruff. Doesn't need libomp / lightgbm so we
+  # stay on linux for faster runtime.
+  # -----------------------------------------------------------------------
+  django:
+    name: django (DRF)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python via uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install workspace
+        run: uv sync --group dev --frozen
+
+      - name: Ruff lint (django)
+        run: uv run ruff check apps/alphalens-django/
+
+      - name: Pytest
+        working-directory: apps/alphalens-django
+        run: uv run pytest -q
+
+  # -----------------------------------------------------------------------
+  # Web — SvelteKit type-check + Playwright hermetic smoke. Build verifies
+  # the SPA still bundles after refactors.
+  # -----------------------------------------------------------------------
+  web:
+    name: web (SvelteKit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Install deps
+        working-directory: apps/web
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check + svelte-check
+        working-directory: apps/web
+        run: pnpm run check
+
+      - name: Build
+        working-directory: apps/web
+        run: pnpm run build
+
+  # -----------------------------------------------------------------------
+  # SonarCloud — runs after research/django produce coverage. Skipped on
+  # scheduled (weekly) CI to avoid daily quota churn.
+  # -----------------------------------------------------------------------
+  sonar:
+    name: sonarcloud
+    needs: [research, django, web]
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-xml
+
       - name: SonarCloud scan
-        if: github.event_name != 'schedule'
-        uses: SonarSource/sonarqube-scan-action@v6  # v4 deprecated 2026-Q1
+        uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # Explicit branch name on push to main — disambiguates when repo has
-          # multiple feature/dependabot branches and SonarCloud auto-detection
-          # picks the wrong one as Main Branch.
           args: >-
             ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '-Dsonar.branch.name=main' || '' }}
-        continue-on-error: true  # don't block CI if SonarCloud is down or misconfigured
+        continue-on-error: true

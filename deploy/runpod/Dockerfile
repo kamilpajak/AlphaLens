@@ -44,10 +44,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/
 #                  contains: alphalens/ (git clone), data/ (rsync from /network)
 RUN mkdir -p /workspace/alphalens /workspace/data /network
 
-COPY runpod/bootstrap.sh /usr/local/bin/bootstrap.sh
-COPY runpod/sync_in.sh /usr/local/bin/sync_in.sh
-COPY runpod/sync_out.sh /usr/local/bin/sync_out.sh
-COPY runpod/run_experiment.sh /usr/local/bin/run_experiment.sh
+COPY deploy/runpod/bootstrap.sh /usr/local/bin/bootstrap.sh
+COPY deploy/runpod/sync_in.sh /usr/local/bin/sync_in.sh
+COPY deploy/runpod/sync_out.sh /usr/local/bin/sync_out.sh
+COPY deploy/runpod/run_experiment.sh /usr/local/bin/run_experiment.sh
 RUN chmod +x /usr/local/bin/bootstrap.sh \
               /usr/local/bin/sync_in.sh \
               /usr/local/bin/sync_out.sh \

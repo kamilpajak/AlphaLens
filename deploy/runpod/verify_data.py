@@ -5,8 +5,8 @@ range, and that a sampled subset is readable. Designed to fail fast before
 a multi-hour experiment hits a missing-data error mid-run.
 
 Usage on the pod:
-    .venv/bin/python runpod/verify_data.py
-    .venv/bin/python runpod/verify_data.py --strict   # fail on any warning
+    .venv/bin/python deploy/runpod/verify_data.py
+    .venv/bin/python deploy/runpod/verify_data.py --strict   # fail on any warning
 """
 
 from __future__ import annotations

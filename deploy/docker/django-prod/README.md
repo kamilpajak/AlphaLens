@@ -54,7 +54,7 @@ inspectable from outside).
 cd ../../../web
 pnpm install --frozen-lockfile
 pnpm build
-# nginx mounts web/build/ via the SPA_DIST env var in .env
+# nginx mounts apps/web/build/ via the SPA_DIST env var in .env
 ```
 
 ## Greenfield notes

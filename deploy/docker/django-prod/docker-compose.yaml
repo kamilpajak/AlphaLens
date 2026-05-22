@@ -4,7 +4,7 @@
 #
 #   nginx ────────────────────► django ────► postgres
 #     │                                │
-#     ├─ serves web/build/ static     └─ reads ~/.alphalens/thematic_briefs
+#     ├─ serves apps/web/build/ static     └─ reads ~/.alphalens/thematic_briefs
 #     └─ proxies /api/* → django:8000     via a host bind-mount (read-only)
 #
 # Bring up the stack from the repo root:
@@ -98,7 +98,7 @@ services:
       # Operator builds the SPA on the host (``pnpm build`` in web/) and
       # ships the static artifact via this bind. Cloudflare Pages is the
       # alternate path; in that case nginx only serves the API proxy.
-      - ${SPA_DIST:-../../../web/build}:/usr/share/nginx/html:ro
+      - ${SPA_DIST:-../../../apps/web/build}:/usr/share/nginx/html:ro
     restart: unless-stopped
 
 volumes:

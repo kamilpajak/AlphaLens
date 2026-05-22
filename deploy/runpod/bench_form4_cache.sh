@@ -7,7 +7,7 @@
 # same pod CPU so MooseFS variance doesn't muddy the result.
 #
 # Usage on the pod:
-#   cd /workspace/AlphaLens && bash runpod/bench_form4_cache.sh
+#   cd /workspace/AlphaLens && bash deploy/runpod/bench_form4_cache.sh
 #
 # Expected:
 #   - Baseline (main):                ~20 min

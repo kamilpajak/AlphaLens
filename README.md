@@ -14,11 +14,9 @@ Research lab infrastructure for retail active alpha experimentation — real-tim
 The repo is a small monorepo with two apps and shared infra:
 
 - **`apps/alphalens-research/`** — the research engine (`alphalens_research` Python package + `alphalens_cli` Typer CLI). Screeners, backtest, attribution, watchdog, paper-trade, thematic pipeline.
-- **`apps/alphalens-django/`** — read/write briefs API (Django 6 + DRF + Postgres + Cloudflare Access). Consumed by the SvelteKit dashboard at `web/`. Migration history in [ADR 0009](docs/adr/0009-django-replaces-fastapi.md).
-- **`web/`** — SvelteKit + Tailwind dashboard.
-- **`deploy/`** — Dockerfile.pipeline (research engine container) + `django-prod/` compose stack + systemd units.
-- **`launchd/`** — macOS scheduled jobs (5 live).
-- **`runpod/`** — GPU/CPU pod bootstrap + experiment-runner scripts.
+- **`apps/alphalens-django/`** — read/write briefs API (Django 6 + DRF + Postgres + Cloudflare Access). Migration history in [ADR 0009](docs/adr/0009-django-replaces-fastapi.md).
+- **`apps/web/`** — SvelteKit + Tailwind dashboard that consumes the Django API.
+- **`deploy/`** — all deploy targets: `docker/` (pipeline + django-prod), `systemd/` (Linux VPS units), `launchd/` (5 live macOS jobs), `runpod/` (GPU/CPU pod bootstrap).
 - **`docs/adr/`** — 10 ADRs covering the load-bearing decisions.
 
 Architectural detail and quick contributor guide: [`CLAUDE.md`](CLAUDE.md). Per-layer postmortems: [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md).
@@ -197,7 +195,7 @@ sqlite3 ~/.alphalens/candidates.db \
 Install:
 
 ```bash
-cp launchd/com.alphalens.*.plist ~/Library/LaunchAgents/
+cp deploy/launchd/com.alphalens.*.plist ~/Library/LaunchAgents/
 for plist in com.alphalens.watchdog.detect \
              com.alphalens.literature-review.monthly \
              com.alphalens.literature-review.weekly \
@@ -215,22 +213,21 @@ apps/
 │   ├── alphalens_research/      ← Layer 1-5 + data clients + thematic pipeline
 │   ├── alphalens_cli/           ← Typer CLI entry points (alphalens binary)
 │   ├── tests/                   ← unittest suite (~2000+ tests; 4 architectural enforcers)
-│   └── scripts/                 ← experiment runners + backfill orchestrators
-└── alphalens-django/            ← briefs API (Django 6 + DRF + Postgres)
-    ├── briefs/                  ← models + ingest + /v1/* viewsets
-    ├── auth_cf/                 ← Cloudflare Access JWT
-    └── config/                  ← settings split (base/dev/prod)
-
-web/                             ← SvelteKit + Tailwind dashboard
+│   ├── scripts/                 ← experiment runners + backfill orchestrators
+│   └── data/                    ← S&P 400/500/600 PIT yamls
+├── alphalens-django/            ← briefs API (Django 6 + DRF + Postgres)
+│   ├── briefs/                  ← models + ingest + /v1/* viewsets
+│   ├── auth_cf/                 ← Cloudflare Access JWT
+│   └── config/                  ← settings split (base/dev/prod)
+└── web/                         ← SvelteKit + Tailwind dashboard
 
 deploy/
 ├── docker/
 │   ├── Dockerfile.pipeline      ← research engine image (thematic daily)
 │   └── django-prod/             ← Django + nginx + Postgres compose
-└── systemd/                     ← VPS user units (form4-backfill, av-earnings, thematic daily)
-
-launchd/                         ← macOS scheduled jobs (5 live)
-runpod/                          ← GPU/CPU pod bootstrap + experiment runner
+├── systemd/                     ← VPS user units (form4-backfill, av-earnings, thematic daily)
+├── launchd/                     ← macOS scheduled jobs (5 live)
+└── runpod/                      ← GPU/CPU pod bootstrap + experiment runner
 
 docs/
 ├── adr/                         ← 10 Architecture Decision Records

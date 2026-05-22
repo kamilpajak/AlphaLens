@@ -37,7 +37,7 @@ WorkingDirectory=%h/AlphaLens
 # Wrong UA returns 403; left as a placeholder so misconfiguration fails
 # fast rather than running with someone else's contact.
 Environment="ALPHALENS_USER_AGENT=EDIT_ME_Your_Name your@email.com"
-Environment=ALPHALENS_CIK_LIST=%h/AlphaLens/data/form4_cik_universe.txt
+Environment=ALPHALENS_CIK_LIST=%h/AlphaLens/apps/alphalens-research/data/form4_cik_universe.txt
 Environment=ALPHALENS_PARQUET_ROOT=%h/.alphalens/form4_parquet
 Environment=ALPHALENS_MANIFEST=%h/.alphalens/form4_backfill_manifest.json
 Environment=ALPHALENS_START_YEAR=2006

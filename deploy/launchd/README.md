@@ -24,8 +24,8 @@ Three launchd jobs run the live pipeline on macOS:
 
 ```bash
 # Copy the plists to LaunchAgents (user-level, survives reboots)
-cp launchd/com.alphalens.watchdog.detect.plist ~/Library/LaunchAgents/
-cp launchd/com.alphalens.literature-review.*.plist ~/Library/LaunchAgents/
+cp deploy/launchd/com.alphalens.watchdog.detect.plist ~/Library/LaunchAgents/
+cp deploy/launchd/com.alphalens.literature-review.*.plist ~/Library/LaunchAgents/
 
 # Create state dir (for logs + SQLite)
 mkdir -p ~/.alphalens/watchdog

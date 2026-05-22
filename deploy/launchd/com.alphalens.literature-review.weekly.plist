@@ -4,11 +4,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.alphalens.watchdog.detect</string>
+    <string>com.alphalens.literature-review.weekly</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jacoren/Developer/Personal/AlphaLens/launchd/bin/alphalens-detect</string>
+        <string>/Users/jacoren/Developer/Personal/AlphaLens/deploy/launchd/bin/alphalens-literature-weekly</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -20,19 +20,23 @@
         <string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin</string>
     </dict>
 
-    <key>StartInterval</key>
-    <integer>900</integer>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>18</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/jacoren/.alphalens/watchdog/detect.log</string>
+    <string>/Users/jacoren/.alphalens/watchdog/literature-weekly.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/jacoren/.alphalens/watchdog/detect.err</string>
+    <string>/Users/jacoren/.alphalens/watchdog/literature-weekly.err</string>
 
     <key>RunAtLoad</key>
     <false/>
-
-    <key>ThrottleInterval</key>
-    <integer>10</integer>
 </dict>
 </plist>

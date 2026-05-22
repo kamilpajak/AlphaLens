@@ -41,22 +41,27 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/
 
 WORKDIR /app
 
-# Cache layer for deps — copy lockfile + manifest first.
+# Cache layer for deps — copy workspace root + every member's manifest first.
+# uv needs all member pyproject.toml files present to resolve the lockfile.
 COPY pyproject.toml uv.lock README.md ./
+COPY apps/alphalens-research/pyproject.toml ./apps/alphalens-research/pyproject.toml
+COPY apps/alphalens-research/README.md ./apps/alphalens-research/README.md
+COPY apps/alphalens-django/pyproject.toml ./apps/alphalens-django/pyproject.toml
+COPY apps/alphalens-django/README.md ./apps/alphalens-django/README.md
 
-# Install deps WITHOUT the project itself (the source isn't here yet).
-# UV_CONCURRENT_BUILDS=UV_CONCURRENT_INSTALLS=1 caps RAM during any source
-# build on a small VPS.
-RUN uv sync --frozen --no-dev --no-install-project
+# Install deps WITHOUT the project itself (source not here yet).
+# --package limits the sync to alphalens-research; alphalens-django is not
+# needed for the pipeline image. UV_CONCURRENT_BUILDS=UV_CONCURRENT_INSTALLS=1
+# caps RAM during any source build on a small VPS.
+RUN uv sync --frozen --no-dev --no-install-project --package alphalens-research
 # Now copy the project source and install it on top of the prepared venv.
-# pyproject.toml declares `where = ["apps/alphalens-research"]` for setuptools
-# package discovery, so the layout inside the container must mirror that.
 COPY apps/alphalens-research/alphalens_research ./apps/alphalens-research/alphalens_research
 COPY apps/alphalens-research/alphalens_cli ./apps/alphalens-research/alphalens_cli
 COPY apps/alphalens-research/scripts ./apps/alphalens-research/scripts
+COPY apps/alphalens-research/data ./apps/alphalens-research/data
 COPY deploy/docker/run_thematic_day.sh /app/deploy/docker/run_thematic_day.sh
 RUN chmod +x /app/deploy/docker/run_thematic_day.sh \
-    && uv sync --frozen --no-dev
+    && uv sync --frozen --no-dev --package alphalens-research
 # Bind-mount target for the operator's ~/.alphalens cache. The compose file
 # sets HOME=/app/home so Path.home() inside the container resolves here.
 # Pre-create + chown so the bind-mount inherits the right ownership when the

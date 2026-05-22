@@ -53,16 +53,21 @@ Compound hypotheses combine layers (e.g. mom+lowvol × VIX>20 gate × vol-target
 ## Commands
 
 ```bash
-# Setup (fresh clone) — requires Python 3.13
-uv venv --python 3.13
-uv sync
+# Setup (fresh clone) — single workspace venv at ./.venv
+uv sync                                          # both apps + dev tools
 
-# Tests (unittest, NOT pytest)
-.venv/bin/python -m unittest discover tests -v
+# Common orchestrator recipes (justfile)
+just sync                                        # uv sync + pnpm install (web)
+just test                                        # research + django + web in series
+just lint                                        # ruff + svelte-check
+just dev-django  / just dev-web                  # local dev servers
+just up / just down                              # Django prod compose stack
 
-# Live workflows
+# Direct invocations
+uv run python -m unittest discover \
+    -s apps/alphalens-research/tests \
+    -t apps/alphalens-research -v
 .venv/bin/alphalens watchdog run-once            # Layer 1: poll EDGAR, classify, dispatch
-.venv/bin/alphalens queue scorer-stats --since-days 30   # historical viewer over candidates.db
 .venv/bin/alphalens status                       # global queue + digest + dedup
 .venv/bin/alphalens literature monthly           # ad-hoc deep literature scan (Perplexity high)
 .venv/bin/alphalens literature weekly            # ad-hoc weekly RSS scan
@@ -178,7 +183,7 @@ Long-running data acquisition jobs that don't fit on the laptop run on the dedic
 - Nextcloud sync between VPS and Mac is opt-in per script (`--rclone-remote` arg). Currently OFF — VPS cache is source of truth for VPS-side consumers
 - For Mac-side use: `rsync -av jacoren@vps:.alphalens/<area>/ ~/.alphalens/<area>/`
 
-Operator recipes: `deploy/systemd/README.md` (systemd units), `deploy/docker/README.md` (Docker stack + Cloudflare wiring).
+Operator recipes: `deploy/systemd/README.md` (systemd units), `deploy/docker/README.md` (Docker stack + Cloudflare wiring), `deploy/launchd/README.md` (macOS jobs), `deploy/runpod/README.md` (GPU/CPU pod bootstrap).
 
 ## Environment
 

@@ -4,7 +4,7 @@ Output:
 - Monthly: ``docs/research/literature_review/YYYY-MM.md`` + Telegram digest.
 - Weekly:  ``docs/research/literature_review/weekly/YYYY-Www.md`` + Telegram digest.
 
-Driven by launchd plists in ``launchd/com.alphalens.literature-review.*.plist``;
+Driven by launchd plists in ``deploy/launchd/com.alphalens.literature-review.*.plist``;
 manual invocation via ``alphalens literature monthly|weekly``.
 """
 
