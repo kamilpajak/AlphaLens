@@ -28,6 +28,7 @@ dependencies = [
     "json-repair>=0.59.10",
     "fastapi>=0.136.1",
     "uvicorn[standard]>=0.47.0",
+    "requests>=2.32.0",
 ]
 
 [project.scripts]
