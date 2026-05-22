@@ -249,10 +249,9 @@ class TestPropose(unittest.TestCase):
 
 
 class TestVerifyCandidate(unittest.TestCase):
-    def test_verify_runs_all_four_gates_and_collects_passes(self):
+    def test_verify_runs_all_three_gates_and_collects_passes(self):
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=True),
-            patch.object(orchestrator, "_gate_tenk", return_value=False),
+            patch.object(orchestrator, "_gate_tenk", return_value=True),
             patch.object(orchestrator, "_gate_press", return_value=True),
             patch.object(orchestrator, "_gate_insider", return_value=False),
         ):
@@ -262,14 +261,13 @@ class TestVerifyCandidate(unittest.TestCase):
                 asof=dt.date(2026, 5, 15),
                 api_key="testkey",
             )
-        self.assertEqual(set(result["gates_passed"]), {"etf", "press"})
-        self.assertEqual(set(result["gates_failed"]), {"tenk", "insider"})
+        self.assertEqual(set(result["gates_passed"]), {"tenk", "press"})
+        self.assertEqual(set(result["gates_failed"]), {"insider"})
         self.assertEqual(result["gates_unknown"], [])
         self.assertTrue(result["verified"])
 
     def test_verify_returns_unverified_when_zero_gates_pass(self):
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=False),
             patch.object(orchestrator, "_gate_tenk", return_value=False),
             patch.object(orchestrator, "_gate_press", return_value=False),
             patch.object(orchestrator, "_gate_insider", return_value=False),
@@ -281,17 +279,17 @@ class TestVerifyCandidate(unittest.TestCase):
                 api_key="testkey",
             )
         self.assertEqual(result["gates_passed"], [])
-        self.assertEqual(set(result["gates_failed"]), {"etf", "tenk", "press", "insider"})
+        self.assertEqual(set(result["gates_failed"]), {"tenk", "press", "insider"})
         self.assertEqual(result["gates_unknown"], [])
         self.assertFalse(result["verified"])
 
     def test_verify_records_unknown_when_gate_returns_none(self):
-        # tenk returns None (CIK miss / fetch fail) -> goes to gates_unknown,
-        # not gates_failed. Verified rule unchanged: needs ≥1 pass.
+        # tenk + insider return None (CIK miss / fetch fail) -> go to
+        # gates_unknown, not gates_failed. Verified rule unchanged: needs
+        # ≥1 pass.
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=True),
             patch.object(orchestrator, "_gate_tenk", return_value=None),
-            patch.object(orchestrator, "_gate_press", return_value=False),
+            patch.object(orchestrator, "_gate_press", return_value=True),
             patch.object(orchestrator, "_gate_insider", return_value=None),
         ):
             result = orchestrator.verify_candidate(
@@ -300,16 +298,15 @@ class TestVerifyCandidate(unittest.TestCase):
                 asof=dt.date(2026, 5, 15),
                 api_key="testkey",
             )
-        self.assertEqual(result["gates_passed"], ["etf"])
-        self.assertEqual(result["gates_failed"], ["press"])
+        self.assertEqual(result["gates_passed"], ["press"])
+        self.assertEqual(result["gates_failed"], [])
         self.assertEqual(set(result["gates_unknown"]), {"tenk", "insider"})
-        self.assertTrue(result["verified"])  # etf passed = verified
+        self.assertTrue(result["verified"])  # press passed = verified
 
     def test_verify_unknown_alone_does_not_promote_verified(self):
         # Conservative rule: unknowns don't promote verified=True. Pinning
         # the rule from the 2026-05-17 plan §C5 lock.
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=None),
             patch.object(orchestrator, "_gate_tenk", return_value=None),
             patch.object(orchestrator, "_gate_press", return_value=None),
             patch.object(orchestrator, "_gate_insider", return_value=None),
@@ -322,15 +319,14 @@ class TestVerifyCandidate(unittest.TestCase):
             )
         self.assertEqual(result["gates_passed"], [])
         self.assertEqual(result["gates_failed"], [])
-        self.assertEqual(len(result["gates_unknown"]), 4)
+        self.assertEqual(len(result["gates_unknown"]), 3)
         self.assertFalse(result["verified"])
 
     def test_verify_safe_wrapper_treats_exception_as_unknown(self):
         # An exception inside a gate is "we don't know", not False.
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=True),
             patch.object(orchestrator, "_gate_tenk", side_effect=RuntimeError("boom")),
-            patch.object(orchestrator, "_gate_press", return_value=False),
+            patch.object(orchestrator, "_gate_press", return_value=True),
             patch.object(orchestrator, "_gate_insider", return_value=False),
         ):
             result = orchestrator.verify_candidate(
@@ -339,8 +335,8 @@ class TestVerifyCandidate(unittest.TestCase):
                 asof=dt.date(2026, 5, 15),
                 api_key="testkey",
             )
-        self.assertEqual(result["gates_passed"], ["etf"])
-        self.assertEqual(set(result["gates_failed"]), {"press", "insider"})
+        self.assertEqual(result["gates_passed"], ["press"])
+        self.assertEqual(set(result["gates_failed"]), {"insider"})
         self.assertEqual(result["gates_unknown"], ["tenk"])
         self.assertTrue(result["verified"])
 
@@ -379,8 +375,7 @@ class TestVerifyCandidate(unittest.TestCase):
     def test_verify_handles_individual_gate_failure(self):
         # Insider gate raises -> treated as gate not passing, other gates still run
         with (
-            patch.object(orchestrator, "_gate_etf", return_value=True),
-            patch.object(orchestrator, "_gate_tenk", return_value=False),
+            patch.object(orchestrator, "_gate_tenk", return_value=True),
             patch.object(orchestrator, "_gate_press", return_value=False),
             patch.object(orchestrator, "_gate_insider", side_effect=RuntimeError("io")),
         ):
@@ -390,7 +385,7 @@ class TestVerifyCandidate(unittest.TestCase):
                 asof=dt.date(2026, 5, 15),
                 api_key="testkey",
             )
-        self.assertEqual(result["gates_passed"], ["etf"])
+        self.assertEqual(result["gates_passed"], ["tenk"])
         self.assertTrue(result["verified"])
 
 
@@ -417,8 +412,7 @@ class TestMapThemes(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"QBTS": 1_000_000_000, "MADEUP": 1_000_000_000},
                 ),
-                patch.object(orchestrator, "_gate_etf", side_effect=[True, False]),
-                patch.object(orchestrator, "_gate_tenk", return_value=False),
+                patch.object(orchestrator, "_gate_tenk", side_effect=[True, False]),
                 patch.object(orchestrator, "_gate_press", return_value=False),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
             ):
@@ -543,9 +537,8 @@ class TestMapThemes(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"QBTS": 1e9, "MISS1": 1e9, "MISS2": 1e9},
                 ),
-                # QBTS passes etf; MISS1 fails all (real no); MISS2 unknown all.
-                patch.object(orchestrator, "_gate_etf", side_effect=[True, False, None]),
-                patch.object(orchestrator, "_gate_tenk", side_effect=[False, False, None]),
+                # QBTS passes tenk; MISS1 fails all (real no); MISS2 unknown all.
+                patch.object(orchestrator, "_gate_tenk", side_effect=[True, False, None]),
                 patch.object(orchestrator, "_gate_press", side_effect=[False, False, None]),
                 patch.object(orchestrator, "_gate_insider", side_effect=[False, False, None]),
                 self.assertLogs(
@@ -851,8 +844,7 @@ class TestMapThemesWritesGatesPassedStr(unittest.TestCase):
                     "filter_by_mcap",
                     return_value={"QBTS": 1_000_000_000},
                 ),
-                patch.object(orchestrator, "_gate_etf", return_value=True),
-                patch.object(orchestrator, "_gate_tenk", return_value=False),
+                patch.object(orchestrator, "_gate_tenk", return_value=True),
                 patch.object(orchestrator, "_gate_press", return_value=True),
                 patch.object(orchestrator, "_gate_insider", return_value=False),
                 patch.object(
@@ -869,7 +861,7 @@ class TestMapThemesWritesGatesPassedStr(unittest.TestCase):
                     output_dir=cache_dir,
                 )
             self.assertIn("gates_passed_str", df.columns)
-            self.assertEqual(df.iloc[0]["gates_passed_str"], "etf,press")
+            self.assertEqual(df.iloc[0]["gates_passed_str"], "tenk,press")
 
 
 # ============================================================
@@ -892,7 +884,7 @@ def _verify_dict(ticker: str, *, verified: bool, all_unknown: bool = False) -> d
         return {
             "ticker": ticker,
             "verified": True,
-            "gates_passed": ["etf"],
+            "gates_passed": ["tenk"],
             "gates_failed": [],
             "gates_unknown": [],
         }
@@ -917,6 +909,15 @@ class TestDiversityGuardrail(unittest.TestCase):
     def test_module_constants_locked(self):
         self.assertEqual(orchestrator._MAX_CANDIDATES_PER_THEME, 3)
         self.assertEqual(orchestrator._MAX_VERIFY_ATTEMPTS_PER_THEME, 5)
+
+    def test_etf_dropped_from_gate_names(self):
+        # ETF gate dropped per docs/research/thematic_verification_gate_audit_2026_05_22.md.
+        # Thematic ETFs cover ~9 narrow industries; Layer 2's free-form theme
+        # vocabulary rarely matches the YAML keys, so this gate was 100% UNK
+        # in production. Keeping it in GATE_NAMES inflated the gates_unknown
+        # column without providing signal.
+        self.assertNotIn("etf", orchestrator.GATE_NAMES)
+        self.assertEqual(orchestrator.GATE_NAMES, ("tenk", "press", "insider"))
 
     def test_top3_by_confidence_passed_to_verify(self):
         candidates = _five_candidates_unsorted_confidences()

@@ -47,7 +47,7 @@ def _scored_df():
                 "rationale": "Trapped-ion",
                 "gemini_confidence": 0.95,
                 "market_cap": 19.4e9,
-                "gates_passed_str": "etf,tenk,press",
+                "gates_passed_str": "tenk,press",
                 "verified": True,
                 "industry_id": 101001,
                 "industry_name": "Computer Hardware",

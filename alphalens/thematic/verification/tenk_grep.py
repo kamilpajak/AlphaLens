@@ -210,17 +210,22 @@ def fetch_10k_text(
     the ticker (foreign listing, recent IPO, etc.). Network/parse errors
     still raise so callers can distinguish "no data" from "fetch broke".
 
-    PIT: when ``asof < today`` and the cache has no file ≤ asof, return
-    ``None`` instead of fetching — a live SEC fetch would only surface the
-    newest 10-K, leaking future content into a historical replay.
+    PIT: when ``asof < today - 1 day`` and the cache has no file ≤ asof,
+    return ``None`` instead of fetching — a live SEC fetch would only
+    surface the newest 10-K, leaking future content into a historical
+    replay. The 1-day relaxation lets the daily systemd timer (which runs
+    with ``asof = yesterday`` at 06:30 UTC) prime the cache on first call;
+    a 10-K filed within the past day is annual-cadence content describing
+    a fiscal year that ended months earlier, so the look-ahead window is
+    operationally negligible (and ``_find_cached`` still filters by
+    ``file_date <= asof`` once the cache is warm).
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = _find_cached(ticker, cache_dir, asof=asof)
     if cached is not None:
         return cached.read_text()
 
-    if asof is not None and asof < dt.date.today():
-        # PIT replay miss — caller surfaces this as gates_unknown.
+    if asof is not None and asof < dt.date.today() - dt.timedelta(days=1):
         return None
 
     cik = _resolve_cik(ticker)
@@ -238,7 +243,22 @@ def fetch_10k_text(
     text = extract_text(html)
     cache_path = cache_dir / f"{ticker.upper()}_{rec['filing_date']}.txt"
     cache_path.write_text(text)
-    return text
+    return _enforce_pit_after_fetch(text, rec["filing_date"], asof)
+
+
+def _enforce_pit_after_fetch(text: str, filing_date_raw: str, asof: dt.date | None) -> str | None:
+    """PIT safety: cache for future runs but do NOT surface a filing dated
+    after asof to the current caller. Without this, the relaxed today-1d
+    guard in :func:`fetch_10k_text` would let a 10-K filed today bleed into
+    yesterday's verification verdict.
+    """
+    if asof is None:
+        return text
+    try:
+        filing_date = dt.date.fromisoformat(filing_date_raw)
+    except (TypeError, ValueError):
+        return text
+    return None if filing_date > asof else text
 
 
 def has_theme_keywords_in_10k(

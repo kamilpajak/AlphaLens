@@ -42,7 +42,7 @@ DEFAULT_MCAP_RANGE = (500_000_000, 10_000_000_000)
 logger = logging.getLogger(__name__)
 
 DEFAULT_OUTPUT_DIR = Path.home() / ".alphalens" / "thematic_candidates"
-GATE_NAMES = ("etf", "tenk", "press", "insider")
+GATE_NAMES = ("tenk", "press", "insider")
 
 # Diversity guardrail: each theme contributes at most _MAX_CANDIDATES_PER_THEME
 # rows to the daily brief. If a top-N candidate hard-fails verification, the
@@ -174,7 +174,6 @@ def verify_candidate(
     gates_failed: list[str] = []
     gates_unknown: list[str] = []
 
-    _record("etf", _safe("etf", _gate_etf, ticker=ticker, themes=themes_list, asof=asof))
     _record(
         "tenk",
         _safe(

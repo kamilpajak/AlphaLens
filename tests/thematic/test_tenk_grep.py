@@ -479,6 +479,57 @@ class TestFetch10kPITPath(unittest.TestCase):
                 )
         self.assertIn("CUDA", text)
 
+    def test_fetch_10k_text_yesterday_asof_primes_cold_cache(self):
+        # The daily systemd timer runs at 06:30 UTC with asof = today - 1 day.
+        # The PIT guard must allow priming in that operational window;
+        # otherwise the cache never warms and the 10-K gate is permanently
+        # gates_unknown for every candidate (the 2026-05-22 audit bug).
+        yesterday = dt.date.today() - dt.timedelta(days=1)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(
+                    tenk_grep, "_fetch_submissions_json", return_value=FIXTURE_FILING_INDEX
+                ),
+                patch.object(tenk_grep, "_fetch_filing_html", return_value=FIXTURE_10K_HTML),
+                patch.object(tenk_grep, "_resolve_cik", return_value="0001045810"),
+            ):
+                text = tenk_grep.fetch_10k_text(ticker="NVDA", cache_dir=cache_dir, asof=yesterday)
+            self.assertIsNotNone(text)
+            self.assertIn("CUDA", text)
+            cached = list(cache_dir.glob("NVDA_*.txt"))
+            self.assertEqual(len(cached), 1)
+
+    def test_fetch_10k_text_caches_but_returns_none_when_filing_date_after_asof(self):
+        # Edge case the relaxed guard creates: a 10-K filed TODAY shouldn't
+        # bleed into yesterday's verification verdict. Cache it for future
+        # runs, return None for the current asof.
+        yesterday = dt.date.today() - dt.timedelta(days=1)
+        today = dt.date.today()
+        future_filing_index = {
+            "filings": {
+                "recent": {
+                    "form": ["10-K"],
+                    "accessionNumber": ["0001045810-99-999999"],
+                    "filingDate": [today.isoformat()],
+                    "primaryDocument": ["nvda-today.htm"],
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(
+                    tenk_grep, "_fetch_submissions_json", return_value=future_filing_index
+                ),
+                patch.object(tenk_grep, "_fetch_filing_html", return_value=FIXTURE_10K_HTML),
+                patch.object(tenk_grep, "_resolve_cik", return_value="0001045810"),
+            ):
+                text = tenk_grep.fetch_10k_text(ticker="NVDA", cache_dir=cache_dir, asof=yesterday)
+            self.assertIsNone(text)
+            cached = list(cache_dir.glob(f"NVDA_{today.isoformat()}.txt"))
+            self.assertEqual(len(cached), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
