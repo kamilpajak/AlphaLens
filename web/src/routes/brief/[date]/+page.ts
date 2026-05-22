@@ -1,11 +1,12 @@
 import { error } from '@sveltejs/kit';
 import type { PageLoad } from './$types';
+import { api } from '$lib/api';
 import type { DayBrief, DayIndexEntry, Paginated } from '$lib/types';
 
 export const load: PageLoad = async ({ fetch, params }) => {
 	const [indexRes, briefRes] = await Promise.all([
-		fetch('/api/v1/days?limit=200'),
-		fetch(`/api/v1/days/${params.date}`)
+		fetch(api('/v1/days?limit=200')),
+		fetch(api(`/v1/days/${params.date}`))
 	]);
 	if (!briefRes.ok) {
 		error(404, `No brief for ${params.date}`);

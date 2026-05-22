@@ -41,24 +41,24 @@ class TestSystemdUnits(unittest.TestCase):
     def test_thematic_daily_service_keeps_oneshot_type(self):
         self.assertIn("Type=oneshot", self.unit_text)
 
-    def test_thematic_daily_service_restarts_api_post_run(self):
-        # The api opens the cache with ``?mode=ro&immutable=1`` so it can
-        # serve from a ``:ro`` bind-mount, but ``immutable=1`` disables
-        # SQLite's change detection — a request opening mid-write may read
-        # inconsistent rows. ExecStartPost bouncing the api after a
-        # successful pipeline closes that overlap window deterministically.
-        # If this regresses, the symptom is "daily timer fires, briefs
-        # render but data goes stale" — silent until someone notices.
+    def test_thematic_daily_service_rebuilds_briefs_cache_post_run(self):
+        # After a successful pipeline run the new parquet output must be
+        # synced into the Django Postgres-backed cache. The unit invokes
+        # the ``rebuild-cache`` maintenance one-shot from the django-prod
+        # compose stack. Regression here surfaces as "daily timer fires,
+        # parquet refreshed, but the API still serves yesterday's briefs"
+        # — silent until someone notices.
         #
-        # Regex bound to a directive line (multiline ``^``) so the assertion
-        # cannot pass on a comment mentioning ``restart api``. Allows for
-        # the ``\`` line-continuation between the directive and its args.
+        # Regex bound to a directive line (multiline ``^``) so the
+        # assertion cannot pass on a comment mentioning ``rebuild-cache``.
+        # Allows for the ``\`` line-continuation between the directive
+        # and its args.
         self.assertRegex(
             self.unit_text,
-            re.compile(r"^ExecStartPost=[^\n]*(?:\\\n[^\n]*)*restart api\b", re.MULTILINE),
-            "Missing or malformed ExecStartPost — api container will not "
-            "re-open the refreshed SQLite cache after the daily pipeline "
-            "run; see alphalens/api/db.py for why immutable=1 needs a bounce.",
+            re.compile(r"^ExecStartPost=[^\n]*(?:\\\n[^\n]*)*rebuild-cache\b", re.MULTILINE),
+            "Missing or malformed ExecStartPost — the Django briefs "
+            "cache will not pick up the freshly written parquet from "
+            "the daily pipeline run.",
         )
 
 

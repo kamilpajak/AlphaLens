@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alphalens-django"
+version = "0.1.0"
+description = "AlphaLens read/write API + auth + ingest, Django 6.0"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "django==6.0.5",
+    "djangorestframework>=3.17",
+    "drf-spectacular>=0.29",
+    "django-cors-headers>=4.9",
+    "django-environ>=0.13",
+    "psycopg[binary]>=3.3",
+    "gunicorn>=26.0",
+    "uvicorn[standard]>=0.47",
+    "pyarrow>=24.0",
+    "pandas>=2.3",
+    "pyjwt[crypto]>=2.9",
+    "httpx>=0.28",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0",
+    "pytest-django>=4.12",
+    "ruff>=0.15",
+    "httpx>=0.28",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["config*", "briefs*", "auth_cf*", "core*"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.dev"
+python_files = ["tests.py", "test_*.py", "*_tests.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"

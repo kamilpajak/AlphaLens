@@ -17,13 +17,10 @@ export interface Candidate {
 	gemini_confidence: number;
 	market_cap: number | null;
 	gates_passed: string[];
-	gates_passed_str: string;
 	n_gates_passed: number;
 	gates_failed: string[];
-	gates_failed_str: string;
 	n_gates_failed: number;
 	gates_unknown: string[];
-	gates_unknown_str: string;
 	n_gates_unknown: number;
 	verified: boolean;
 	source_event_url: string;
@@ -56,7 +53,6 @@ export interface Candidate {
 	technical_pct_off_52w_low: number | null;
 	technical_ma200_distance_pct: number | null;
 	technical_ma200_slope_pct_per_day: number | null;
-	technicals_summary_str: string | null;
 	catalyst_strength: number | null;
 	catalyst_event_type: string | null;
 	catalyst_confidence: number | null;
