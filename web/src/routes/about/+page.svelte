@@ -3,7 +3,7 @@
 		{ id: 'L1', name: 'EDGAR Watchdog', what: 'detects S&P 100 filings + macro news', model: 'rule-based + launchd' },
 		{ id: 'L2', name: 'Theme Extraction', what: 'distills news → tradeable thematic narrative', model: 'gemini-2.5-flash' },
 		{ id: 'L3', name: 'Beneficiary Mapping', what: 'theme → 6-12 small-cap second-order beneficiaries', model: 'gemini-3-pro-preview' },
-		{ id: 'V', name: 'Verification Gates', what: 'press · insider · ETF · 10-K (tri-state, post-PR #150)', model: 'polygon + form-4 parquet + EDGAR' },
+		{ id: 'V', name: 'Verification Gates', what: 'press · insider · 10-K (tri-state, post-PR #150; ETF dropped #185)', model: 'polygon + form-4 parquet + EDGAR' },
 		{ id: 'L4', name: 'Quant Scorer', what: 'insider × FCFF × Magic Formula × technicals × catalyst-floor', model: 'reused paradigm #11 + #13 scorers' },
 		{ id: 'L5', name: 'Brief Generator', what: 'per-candidate WhatsApp-format markdown', model: 'gemini-3-pro-preview / gemini-2.5-flash' }
 	];

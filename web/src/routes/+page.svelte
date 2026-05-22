@@ -75,13 +75,18 @@
 				</div>
 			</div>
 
-			<p class="text-fg-dim max-w-2xl text-sm leading-relaxed mt-6">
-				Layer 1 detects S&amp;P 100 news. Layer 2 (gemini-2.5-flash) extracts themes. Layer 3
-				(gemini-3-pro-preview) maps to small-cap beneficiaries.
-				<span class="text-cyan">Four verification gates</span> — press · insider · ETF · 10-K — gate
-				the cohort. Layer 4 ranks survivors via insider × FCFF × Magic Formula × technicals ×
-				catalyst-floor. Layer 5 renders briefs for the WhatsApp investing group.
-			</p>
+			<div class="max-w-2xl mt-6 space-y-3 text-fg-dim text-sm leading-relaxed">
+				<p>
+					Mega-caps catch the headline. The structural beneficiaries are often
+					<span class="text-cyan">under-covered small-caps</span> nobody is writing about —
+					that's where this pipeline looks.
+				</p>
+				<p>
+					Every morning at <span class="text-amber">06:30 UTC</span> it scans S&amp;P 100 news,
+					distills thematic narratives, and surfaces a ranked watchlist of small-cap
+					beneficiaries.
+				</p>
+			</div>
 
 			<div class="flex gap-3 mt-6">
 				{#if hasBrief}
