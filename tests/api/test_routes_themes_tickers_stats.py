@@ -65,6 +65,23 @@ class ThemesTickersStatsTests(unittest.TestCase):
         self.assertEqual(len(body["data"]), 1)
         self.assertEqual(body["meta"]["total"], 3)
 
+    def test_theme_candidates_cross_date_orders_by_date_desc_then_rank(self):
+        # DEFAULT_ORDER: date DESC, COALESCE(rank_in_day, 999999) ASC, ticker ASC.
+        # quantum_computing has AAA@rank=1 on 2026-05-18 and AAA@rank=1 +
+        # BBB@rank=2 on 2026-05-17. Newer date first; within each date,
+        # rank_in_day ASC.
+        r = self.client.get("/v1/themes/quantum_computing/candidates")
+        body = r.json()
+        rows = [(c["date"], c["ticker"], c["rank_in_day"]) for c in body["data"]]
+        self.assertEqual(
+            rows,
+            [
+                ("2026-05-18", "AAA", 1),
+                ("2026-05-17", "AAA", 1),
+                ("2026-05-17", "BBB", 2),
+            ],
+        )
+
     # ----------------------------------------------------------------- tickers
 
     def test_ticker_history_descending(self):

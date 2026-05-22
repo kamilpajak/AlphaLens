@@ -98,6 +98,15 @@ def seed_two_days(briefs_dir: Path) -> tuple[Path, Path]:
     ]
     # Add an explicit NaN to exercise float coercion.
     newer[1]["technical_rsi"] = np.float64("nan")
+    # Assign distinct rank_in_day in insertion order so any route test
+    # asserting position actually exercises the rank_in_day ASC sort, not
+    # the ticker-ASC tie-break of a uniformly-ranked fixture.
+    for i, row in enumerate(older, start=1):
+        row["rank_in_day"] = i
+        row["cohort_size_in_day"] = len(older)
+    for i, row in enumerate(newer, start=1):
+        row["rank_in_day"] = i
+        row["cohort_size_in_day"] = len(newer)
     return write_brief(briefs_dir, day_old, older), write_brief(briefs_dir, day_new, newer)
 
 
