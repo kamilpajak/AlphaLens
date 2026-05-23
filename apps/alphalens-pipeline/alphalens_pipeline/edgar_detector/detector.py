@@ -10,7 +10,7 @@ from .sources.base import EventSource
 logger = logging.getLogger(__name__)
 
 
-class Watchdog:
+class Detector:
     """Orchestrator: polls all sources, classifies events, dispatches via router."""
 
     def __init__(

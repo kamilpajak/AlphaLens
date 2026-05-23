@@ -121,19 +121,19 @@ SAMPLE_FORM4_SALE_WITH_EXERCISE = """<?xml version="1.0"?>
 
 class TestForm4Parser(unittest.TestCase):
     def test_parse_transaction_code_P_is_buy(self):
-        from alphalens_pipeline.watchdog.sources.form4 import parse_form4_xml
+        from alphalens_pipeline.edgar_detector.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml(SAMPLE_FORM4_BUY)
         self.assertEqual(result["insider_action"], "BUY")
 
     def test_parse_transaction_code_S_is_sale(self):
-        from alphalens_pipeline.watchdog.sources.form4 import parse_form4_xml
+        from alphalens_pipeline.edgar_detector.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml(SAMPLE_FORM4_SALE)
         self.assertEqual(result["insider_action"], "SELL")
 
     def test_parse_extracts_shares_and_price_and_value(self):
-        from alphalens_pipeline.watchdog.sources.form4 import parse_form4_xml
+        from alphalens_pipeline.edgar_detector.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml(SAMPLE_FORM4_BUY)
         self.assertEqual(result["total_shares"], 1000.0)
@@ -141,7 +141,7 @@ class TestForm4Parser(unittest.TestCase):
 
     def test_parse_handles_multiple_transactions(self):
         """Net buy: 1000+500 buys vs 100 sell → BUY dominates."""
-        from alphalens_pipeline.watchdog.sources.form4 import parse_form4_xml
+        from alphalens_pipeline.edgar_detector.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml(SAMPLE_FORM4_MULTIPLE)
         self.assertEqual(result["insider_action"], "BUY")
@@ -149,13 +149,13 @@ class TestForm4Parser(unittest.TestCase):
         self.assertAlmostEqual(result["transaction_value_usd"], buy_value)
 
     def test_parse_handles_missing_fields_returns_empty_dict(self):
-        from alphalens_pipeline.watchdog.sources.form4 import parse_form4_xml
+        from alphalens_pipeline.edgar_detector.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml("<?xml version='1.0'?><ownershipDocument/>")
         self.assertEqual(result, {})
 
     def test_parse_returns_empty_on_malformed_xml(self):
-        from alphalens_pipeline.watchdog.sources.form4 import parse_form4_xml
+        from alphalens_pipeline.edgar_detector.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml("<bad<<xml")
         self.assertEqual(result, {})
@@ -164,7 +164,7 @@ class TestForm4Parser(unittest.TestCase):
         """Form 4 with only M (option exercise) + F (tax withholding) — no open-market
         buy/sell. Parser should return EXERCISE so the digest entry shows what happened
         instead of being mute."""
-        from alphalens_pipeline.watchdog.sources.form4 import parse_form4_xml
+        from alphalens_pipeline.edgar_detector.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml(SAMPLE_FORM4_EXERCISE_ONLY)
         self.assertEqual(result["insider_action"], "EXERCISE")
@@ -174,7 +174,7 @@ class TestForm4Parser(unittest.TestCase):
     def test_parse_real_sell_overrides_exercise(self):
         """Mixed filing: real S sale + M exercise. Real market action is the signal —
         EXERCISE must not shadow it."""
-        from alphalens_pipeline.watchdog.sources.form4 import parse_form4_xml
+        from alphalens_pipeline.edgar_detector.sources.form4 import parse_form4_xml
 
         result = parse_form4_xml(SAMPLE_FORM4_SALE_WITH_EXERCISE)
         self.assertEqual(result["insider_action"], "SELL")

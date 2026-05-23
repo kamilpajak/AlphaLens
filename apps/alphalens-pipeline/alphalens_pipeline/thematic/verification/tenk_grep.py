@@ -62,7 +62,7 @@ def _load_ticker_to_cik() -> dict[str, str]:
 @lru_cache(maxsize=1)
 def _get_cik_loader():
     """Lazily build the TTL'd CIKLoader reused from the watchdog stack."""
-    from alphalens_pipeline.watchdog.sources.cik_loader import CIKLoader
+    from alphalens_pipeline.edgar_detector.sources.cik_loader import CIKLoader
 
     loader = CIKLoader(cache_path=CIK_LOADER_CACHE_PATH)
     try:

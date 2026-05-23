@@ -4,9 +4,9 @@ This package is the deployment tier: the code that runs in launchd
 (macOS) + systemd (VPS) + Docker on a daily / event-driven cadence.
 
 Sub-packages:
-    alphalens_pipeline.watchdog          — Layer 1 SEC EDGAR detection (launchd)
+    alphalens_pipeline.edgar_detector          — Layer 1 SEC EDGAR detection (launchd)
     alphalens_pipeline.thematic          — Phase A-E daily pipeline (VPS systemd)
-    alphalens_pipeline.literature_review — monthly + weekly Perplexity scan (launchd)
+    alphalens_pipeline.literature_scanner — monthly + weekly Perplexity scan (launchd)
     alphalens_pipeline.data              — clients, PIT store, universes, fundamentals, macro
     alphalens_pipeline.core              — candidate queue + dataclass plumbing
     alphalens_pipeline.scorers           — reusable validated scorer library

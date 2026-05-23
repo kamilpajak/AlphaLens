@@ -1,4 +1,4 @@
-"""Tests for `alphalens_pipeline.literature_review` module.
+"""Tests for `alphalens_pipeline.literature_scanner` module.
 
 Covers: prompt loading, Perplexity HTTP client request shape, runner
 orchestration (file write + Telegram dispatch + git branch commit),
@@ -44,17 +44,17 @@ SAMPLE_TRIGGER_RESPONSE = """\
 
 class TestTriggerDetection(unittest.TestCase):
     def test_no_trigger_when_response_says_none(self):
-        from alphalens_pipeline.literature_review.runner import has_reactivation_trigger
+        from alphalens_pipeline.literature_scanner.runner import has_reactivation_trigger
 
         self.assertFalse(has_reactivation_trigger(SAMPLE_MONTHLY_RESPONSE))
 
     def test_trigger_detected_when_candidate_listed(self):
-        from alphalens_pipeline.literature_review.runner import has_reactivation_trigger
+        from alphalens_pipeline.literature_scanner.runner import has_reactivation_trigger
 
         self.assertTrue(has_reactivation_trigger(SAMPLE_TRIGGER_RESPONSE))
 
     def test_trigger_section_must_have_content_below(self):
-        from alphalens_pipeline.literature_review.runner import has_reactivation_trigger
+        from alphalens_pipeline.literature_scanner.runner import has_reactivation_trigger
 
         # Heading present but only "None" content -> no trigger
         empty = "## TRIGGER_REACTIVATION candidates\n\nNone this month.\n"
@@ -65,7 +65,7 @@ class TestTriggerDetection(unittest.TestCase):
         also be treated as no-trigger. The previous regex required the exact
         prefix 'none this' which silently flipped these to trigger=True.
         """
-        from alphalens_pipeline.literature_review.runner import has_reactivation_trigger
+        from alphalens_pipeline.literature_scanner.runner import has_reactivation_trigger
 
         for body in (
             "## TRIGGER_REACTIVATION candidates\n\nNone of the above.\n",
@@ -79,9 +79,9 @@ class TestTriggerDetection(unittest.TestCase):
 
 
 class TestPerplexityClient(unittest.TestCase):
-    @patch("alphalens_pipeline.literature_review.perplexity_client.requests.post")
+    @patch("alphalens_pipeline.literature_scanner.perplexity_client.requests.post")
     def test_ask_posts_to_chat_completions(self, mock_post):
-        from alphalens_pipeline.literature_review.perplexity_client import PerplexityClient
+        from alphalens_pipeline.literature_scanner.perplexity_client import PerplexityClient
 
         mock_post.return_value = MagicMock(
             status_code=200,
@@ -96,9 +96,9 @@ class TestPerplexityClient(unittest.TestCase):
         self.assertIn("api.perplexity.ai", url)
         self.assertIn("chat/completions", url)
 
-    @patch("alphalens_pipeline.literature_review.perplexity_client.requests.post")
+    @patch("alphalens_pipeline.literature_scanner.perplexity_client.requests.post")
     def test_ask_includes_search_context_size(self, mock_post):
-        from alphalens_pipeline.literature_review.perplexity_client import PerplexityClient
+        from alphalens_pipeline.literature_scanner.perplexity_client import PerplexityClient
 
         mock_post.return_value = MagicMock(
             status_code=200,
@@ -111,9 +111,9 @@ class TestPerplexityClient(unittest.TestCase):
         body = mock_post.call_args.kwargs["json"]
         self.assertEqual(body["web_search_options"]["search_context_size"], "high")
 
-    @patch("alphalens_pipeline.literature_review.perplexity_client.requests.post")
+    @patch("alphalens_pipeline.literature_scanner.perplexity_client.requests.post")
     def test_ask_sends_bearer_auth(self, mock_post):
-        from alphalens_pipeline.literature_review.perplexity_client import PerplexityClient
+        from alphalens_pipeline.literature_scanner.perplexity_client import PerplexityClient
 
         mock_post.return_value = MagicMock(
             status_code=200,
@@ -127,7 +127,7 @@ class TestPerplexityClient(unittest.TestCase):
         self.assertEqual(headers["Authorization"], "Bearer pplx-test")
 
     def test_constructor_rejects_empty_key(self):
-        from alphalens_pipeline.literature_review.perplexity_client import PerplexityClient
+        from alphalens_pipeline.literature_scanner.perplexity_client import PerplexityClient
 
         with self.assertRaises(ValueError):
             PerplexityClient(api_key="")
@@ -135,7 +135,7 @@ class TestPerplexityClient(unittest.TestCase):
 
 class TestPrompts(unittest.TestCase):
     def test_monthly_prompt_mentions_4_topic_baskets(self):
-        from alphalens_pipeline.literature_review.prompts import build_monthly_prompt
+        from alphalens_pipeline.literature_scanner.prompts import build_monthly_prompt
 
         prompt = build_monthly_prompt(period="2026-05")
         # 4 baskets per project pivot postmortem
@@ -145,7 +145,7 @@ class TestPrompts(unittest.TestCase):
         self.assertIn("factor decay", prompt.lower())
 
     def test_monthly_prompt_includes_triage_filters(self):
-        from alphalens_pipeline.literature_review.prompts import build_monthly_prompt
+        from alphalens_pipeline.literature_scanner.prompts import build_monthly_prompt
 
         prompt = build_monthly_prompt(period="2026-05")
         self.assertIn("15", prompt)  # sample period >= 15y
@@ -154,7 +154,7 @@ class TestPrompts(unittest.TestCase):
         self.assertIn("multiple", prompt.lower())  # multiple-testing
 
     def test_monthly_prompt_demands_trigger_section(self):
-        from alphalens_pipeline.literature_review.prompts import build_monthly_prompt
+        from alphalens_pipeline.literature_scanner.prompts import build_monthly_prompt
 
         prompt = build_monthly_prompt(period="2026-05")
         self.assertIn("TRIGGER_REACTIVATION", prompt)
@@ -164,7 +164,7 @@ class TestPrompts(unittest.TestCase):
         if no triggers' as content. The instruction must be unambiguous about
         omitting the heading entirely when there are no triggers.
         """
-        from alphalens_pipeline.literature_review.prompts import build_monthly_prompt
+        from alphalens_pipeline.literature_scanner.prompts import build_monthly_prompt
 
         prompt = build_monthly_prompt(period="2026-05")
         lower = prompt.lower()
@@ -175,22 +175,22 @@ class TestPrompts(unittest.TestCase):
         """First smoke test had Perplexity report '0 papers' because the
         prompt narrowed to 2025-2026. Widen to 2024+ with 2025+ priority.
         """
-        from alphalens_pipeline.literature_review.prompts import build_monthly_prompt
+        from alphalens_pipeline.literature_scanner.prompts import build_monthly_prompt
 
         prompt = build_monthly_prompt(period="2026-05")
         self.assertIn("2024", prompt)
 
     def test_monthly_prompt_provides_empty_basket_fallback(self):
-        from alphalens_pipeline.literature_review.prompts import build_monthly_prompt
+        from alphalens_pipeline.literature_scanner.prompts import build_monthly_prompt
 
         prompt = build_monthly_prompt(period="2026-05")
         self.assertIn("background reading", prompt)
 
     def test_weekly_prompt_is_shorter_and_mentions_top_3(self):
-        from alphalens_pipeline.literature_review.prompts import build_weekly_prompt
+        from alphalens_pipeline.literature_scanner.prompts import build_weekly_prompt
 
         monthly = __import__(
-            "alphalens_pipeline.literature_review.prompts", fromlist=["build_monthly_prompt"]
+            "alphalens_pipeline.literature_scanner.prompts", fromlist=["build_monthly_prompt"]
         ).build_monthly_prompt(period="2026-W17")
         weekly = build_weekly_prompt(period="2026-W17")
         self.assertLess(len(weekly), len(monthly))
@@ -200,8 +200,10 @@ class TestPrompts(unittest.TestCase):
 class TestRunnerOrchestration(unittest.TestCase):
     def setUp(self):
         # Patch all I/O at module-level for orchestration tests
-        self.client_patcher = patch("alphalens_pipeline.literature_review.runner.PerplexityClient")
-        self.telegram_patcher = patch("alphalens_pipeline.literature_review.runner.TelegramHandler")
+        self.client_patcher = patch("alphalens_pipeline.literature_scanner.runner.PerplexityClient")
+        self.telegram_patcher = patch(
+            "alphalens_pipeline.literature_scanner.runner.TelegramHandler"
+        )
         self.client_cls = self.client_patcher.start()
         self.telegram_cls = self.telegram_patcher.start()
         self.client_instance = self.client_cls.return_value
@@ -215,7 +217,7 @@ class TestRunnerOrchestration(unittest.TestCase):
     def test_run_monthly_writes_markdown_to_correct_path(self):
         import tempfile
 
-        from alphalens_pipeline.literature_review.runner import run_monthly
+        from alphalens_pipeline.literature_scanner.runner import run_monthly
 
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
@@ -235,7 +237,7 @@ class TestRunnerOrchestration(unittest.TestCase):
     def test_run_monthly_dispatches_telegram_digest(self):
         import tempfile
 
-        from alphalens_pipeline.literature_review.runner import run_monthly
+        from alphalens_pipeline.literature_scanner.runner import run_monthly
 
         with tempfile.TemporaryDirectory() as tmp:
             run_monthly(
@@ -254,7 +256,7 @@ class TestRunnerOrchestration(unittest.TestCase):
     def test_run_monthly_skips_telegram_when_chat_id_missing(self):
         import tempfile
 
-        from alphalens_pipeline.literature_review.runner import run_monthly
+        from alphalens_pipeline.literature_scanner.runner import run_monthly
 
         with tempfile.TemporaryDirectory() as tmp:
             run_monthly(
@@ -269,7 +271,7 @@ class TestRunnerOrchestration(unittest.TestCase):
     def test_run_weekly_uses_weekly_subdir(self):
         import tempfile
 
-        from alphalens_pipeline.literature_review.runner import run_weekly
+        from alphalens_pipeline.literature_scanner.runner import run_weekly
 
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
@@ -287,7 +289,7 @@ class TestRunnerOrchestration(unittest.TestCase):
     def test_run_monthly_returns_trigger_flag(self):
         import tempfile
 
-        from alphalens_pipeline.literature_review.runner import run_monthly
+        from alphalens_pipeline.literature_scanner.runner import run_monthly
 
         self.client_instance.ask.return_value = SAMPLE_TRIGGER_RESPONSE
         with tempfile.TemporaryDirectory() as tmp:
@@ -308,7 +310,7 @@ class TestRunnerOrchestration(unittest.TestCase):
         """
         import tempfile
 
-        from alphalens_pipeline.literature_review.runner import run_monthly
+        from alphalens_pipeline.literature_scanner.runner import run_monthly
 
         with tempfile.TemporaryDirectory() as tmp:
             run_monthly(
@@ -326,7 +328,7 @@ class TestPeriodFormat(unittest.TestCase):
     def test_default_monthly_period_is_yyyy_mm(self):
         from datetime import date
 
-        from alphalens_pipeline.literature_review.runner import default_period
+        from alphalens_pipeline.literature_scanner.runner import default_period
 
         result = default_period(date(2026, 5, 1), cadence="monthly")
         self.assertEqual(result, "2026-05")
@@ -334,7 +336,7 @@ class TestPeriodFormat(unittest.TestCase):
     def test_default_weekly_period_uses_iso_week(self):
         from datetime import date
 
-        from alphalens_pipeline.literature_review.runner import default_period
+        from alphalens_pipeline.literature_scanner.runner import default_period
 
         # 2026-05-03 is Sunday of ISO week 18
         result = default_period(date(2026, 5, 3), cadence="weekly")
@@ -343,7 +345,7 @@ class TestPeriodFormat(unittest.TestCase):
 
 class TestLayerStatus(unittest.TestCase):
     def test_literature_review_module_declares_active_status(self):
-        import alphalens_pipeline.literature_review as mod
+        import alphalens_pipeline.literature_scanner as mod
 
         self.assertEqual(mod.__status__, "ACTIVE")
 

@@ -16,7 +16,7 @@ from alphalens_pipeline.data.alt_data.sec_edgar_client import (
     get_default_sec_client,
 )
 
-from ..config import WATCHDOG_DEFAULTS
+from ..config import DETECTOR_DEFAULTS
 from ..storage import SeenEventStore
 from ..types import Event, FormType
 from .base import EventSource
@@ -41,7 +41,7 @@ class SECEdgarSource(EventSource):
         cik_loader: CIKLoader | None = None,
         sec_client: SecEdgarClient | None = None,
     ):
-        self.config = dict(WATCHDOG_DEFAULTS)
+        self.config = dict(DETECTOR_DEFAULTS)
         if config:
             self.config.update(config)
 

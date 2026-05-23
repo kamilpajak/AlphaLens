@@ -101,11 +101,11 @@ class TestEdgarEnhanced(unittest.TestCase):
         cik_loader=None,
         sec_client=None,
     ):
-        from alphalens_pipeline.watchdog.config import WATCHDOG_DEFAULTS
-        from alphalens_pipeline.watchdog.sources.edgar import SECEdgarSource
-        from alphalens_pipeline.watchdog.storage import SeenEventStore
+        from alphalens_pipeline.edgar_detector.config import DETECTOR_DEFAULTS
+        from alphalens_pipeline.edgar_detector.sources.edgar import SECEdgarSource
+        from alphalens_pipeline.edgar_detector.storage import SeenEventStore
 
-        cfg = dict(WATCHDOG_DEFAULTS)
+        cfg = dict(DETECTOR_DEFAULTS)
         if config_overrides:
             cfg.update(config_overrides)
 
@@ -178,7 +178,7 @@ class TestEdgarEnhanced(unittest.TestCase):
         self.assertNotIn("insider_action", events[0].raw_data)
 
     def test_cik_loader_takes_precedence_over_dict(self):
-        from alphalens_pipeline.watchdog.sources.cik_loader import CIKLoader
+        from alphalens_pipeline.edgar_detector.sources.cik_loader import CIKLoader
 
         loader = MagicMock(spec=CIKLoader)
         loader.get_cik.return_value = "0000789019"

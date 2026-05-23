@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 class TestEventDataclass(unittest.TestCase):
     def test_event_holds_required_fields(self):
-        from alphalens_pipeline.watchdog.types import Event, FormType
+        from alphalens_pipeline.edgar_detector.types import Event, FormType
 
         filed_at = datetime(2026, 4, 17, 12, 0, tzinfo=UTC)
         event = Event(
@@ -24,7 +24,7 @@ class TestEventDataclass(unittest.TestCase):
         self.assertEqual(event.raw_data["items"], ["2.02"])
 
     def test_event_equality_by_accession_number(self):
-        from alphalens_pipeline.watchdog.types import Event, FormType
+        from alphalens_pipeline.edgar_detector.types import Event, FormType
 
         filed_at = datetime(2026, 4, 17, 12, 0, tzinfo=UTC)
         event_a = Event(
@@ -57,7 +57,7 @@ class TestEventDataclass(unittest.TestCase):
         self.assertEqual(hash(event_a), hash(event_b))
 
     def test_form_type_enum_covers_mvp_forms(self):
-        from alphalens_pipeline.watchdog.types import FormType
+        from alphalens_pipeline.edgar_detector.types import FormType
 
         required = {
             "FORM_8K",
@@ -72,7 +72,7 @@ class TestEventDataclass(unittest.TestCase):
         self.assertFalse(missing, f"Missing FormType members: {missing}")
 
     def test_form_type_values_map_to_sec_form_strings(self):
-        from alphalens_pipeline.watchdog.types import FormType
+        from alphalens_pipeline.edgar_detector.types import FormType
 
         self.assertEqual(FormType.FORM_8K.value, "8-K")
         self.assertEqual(FormType.FORM_4.value, "4")
@@ -80,7 +80,7 @@ class TestEventDataclass(unittest.TestCase):
         self.assertEqual(FormType.FORM_13G.value, "SC 13G")
 
     def test_form_type_from_sec_string(self):
-        from alphalens_pipeline.watchdog.types import FormType
+        from alphalens_pipeline.edgar_detector.types import FormType
 
         self.assertEqual(FormType.from_sec_string("8-K"), FormType.FORM_8K)
         self.assertEqual(FormType.from_sec_string("4"), FormType.FORM_4)

@@ -7,19 +7,19 @@ from pathlib import Path
 
 import typer
 from alphalens_pipeline.core.queue import default_queue_path
-from alphalens_pipeline.watchdog.classifier import Action, SignalClassifier
-from alphalens_pipeline.watchdog.config import WATCHDOG_DEFAULTS
-from alphalens_pipeline.watchdog.dispatch.handlers.auto_trigger import (
+from alphalens_pipeline.edgar_detector.classifier import Action, SignalClassifier
+from alphalens_pipeline.edgar_detector.config import DETECTOR_DEFAULTS
+from alphalens_pipeline.edgar_detector.detector import Detector
+from alphalens_pipeline.edgar_detector.dispatch.handlers.auto_trigger import (
     AutoTriggerEnqueueHandler,
 )
-from alphalens_pipeline.watchdog.dispatch.handlers.digest import DigestHandler
-from alphalens_pipeline.watchdog.dispatch.handlers.telegram import TelegramHandler
-from alphalens_pipeline.watchdog.dispatch.router import DispatchRouter
-from alphalens_pipeline.watchdog.portfolio import PortfolioState, default_portfolio_path
-from alphalens_pipeline.watchdog.sources.cik_loader import CIKLoader
-from alphalens_pipeline.watchdog.sources.edgar import SECEdgarSource
-from alphalens_pipeline.watchdog.storage import SeenEventStore
-from alphalens_pipeline.watchdog.watchdog import Watchdog
+from alphalens_pipeline.edgar_detector.dispatch.handlers.digest import DigestHandler
+from alphalens_pipeline.edgar_detector.dispatch.handlers.telegram import TelegramHandler
+from alphalens_pipeline.edgar_detector.dispatch.router import DispatchRouter
+from alphalens_pipeline.edgar_detector.portfolio import PortfolioState, default_portfolio_path
+from alphalens_pipeline.edgar_detector.sources.cik_loader import CIKLoader
+from alphalens_pipeline.edgar_detector.sources.edgar import SECEdgarSource
+from alphalens_pipeline.edgar_detector.storage import SeenEventStore
 
 watchdog_app = typer.Typer(
     name="watchdog",
@@ -33,11 +33,11 @@ def _watchdog_callback() -> None:
     """Force multi-command behaviour even when only one command is registered."""
 
 
-def _build_watchdog() -> Watchdog:
+def _build_detector() -> Detector:
     bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
 
-    cfg = dict(WATCHDOG_DEFAULTS)
+    cfg = dict(DETECTOR_DEFAULTS)
     cfg["fetch_form4_details"] = True
     cfg["fetch_8k_details"] = True
 
@@ -73,7 +73,7 @@ def _build_watchdog() -> Watchdog:
         }
     )
 
-    return Watchdog(
+    return Detector(
         sources=[source],
         classifier=SignalClassifier(),
         portfolio=portfolio,
@@ -84,6 +84,6 @@ def _build_watchdog() -> Watchdog:
 @watchdog_app.command(name="run-once")
 def run_once() -> None:
     """Poll EDGAR once, classify new events, dispatch alerts."""
-    watchdog = _build_watchdog()
+    watchdog = _build_detector()
     result = watchdog.run_once()
     typer.echo(f"detected={result['events_detected']} dispatched={result['events_dispatched']}")

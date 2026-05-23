@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 
-class TestWatchdogCLI(unittest.TestCase):
+class TestDetectorCLI(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
 
@@ -15,7 +15,7 @@ class TestWatchdogCLI(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertIn("run-once", result.stdout)
 
-    @patch("alphalens_cli.commands.watchdog._build_watchdog")
+    @patch("alphalens_cli.commands.watchdog._build_detector")
     def test_run_once_invokes_watchdog(self, mock_build):
         from alphalens_cli.commands.watchdog import watchdog_app
 

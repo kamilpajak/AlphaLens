@@ -111,7 +111,7 @@ def format_status(status: dict[str, Any]) -> str:
     s = status["seen_events"]
 
     lines = [
-        "📊 Watchdog status",
+        "📊 EDGAR detector status",
         "",
         "Queue (auto-trigger)",
         f"  pending:      {q['pending']}",

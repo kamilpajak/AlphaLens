@@ -20,7 +20,7 @@ from datetime import date
 from pathlib import Path
 from typing import Literal
 
-from alphalens_pipeline.watchdog.dispatch.handlers.telegram import TelegramHandler
+from alphalens_pipeline.edgar_detector.dispatch.handlers.telegram import TelegramHandler
 
 from .perplexity_client import PerplexityClient
 from .prompts import build_monthly_prompt, build_weekly_prompt

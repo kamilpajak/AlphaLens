@@ -8,7 +8,7 @@ from datetime import date
 from pathlib import Path
 
 import typer
-from alphalens_pipeline.literature_review.runner import (
+from alphalens_pipeline.literature_scanner.runner import (
     default_period,
     run_monthly,
     run_weekly,

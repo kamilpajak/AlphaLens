@@ -12,7 +12,7 @@ class TestSeenEventStoreContextManager(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_context_manager_closes_connection(self):
-        from alphalens_pipeline.watchdog.storage import SeenEventStore
+        from alphalens_pipeline.edgar_detector.storage import SeenEventStore
 
         with SeenEventStore(self.db_path) as store:
             store.mark_seen("ACC-1")

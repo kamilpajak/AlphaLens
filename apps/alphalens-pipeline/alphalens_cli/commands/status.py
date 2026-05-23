@@ -10,7 +10,7 @@ from alphalens_pipeline.core.queue import default_queue_path
 
 def status() -> None:
     """Report current state: queue, digest buffer, dedup count."""
-    from alphalens_pipeline.watchdog.status import collect_status, format_status
+    from alphalens_pipeline.edgar_detector.status import collect_status, format_status
 
     home = Path.home() / ".alphalens" / "watchdog"
     result = collect_status(

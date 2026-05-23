@@ -1,6 +1,6 @@
 from .types import FormType
 
-WATCHDOG_DEFAULTS = {
+DETECTOR_DEFAULTS = {
     "edgar_base_url": "https://www.sec.gov/cgi-bin/browse-edgar",
     "edgar_recent_count": 40,
     "fetch_form4_details": False,

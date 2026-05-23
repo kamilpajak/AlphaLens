@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 
 def _mk_event(ticker="AAPL", accession="ACC-1"):
-    from alphalens_pipeline.watchdog.types import Event, FormType
+    from alphalens_pipeline.edgar_detector.types import Event, FormType
 
     return Event(
         ticker=ticker,
@@ -17,19 +17,19 @@ def _mk_event(ticker="AAPL", accession="ACC-1"):
     )
 
 
-class TestWatchdogOrchestrator(unittest.TestCase):
+class TestDetectorOrchestrator(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _build_watchdog(self, sources, router=None, portfolio=None, classifier=None):
-        from alphalens_pipeline.watchdog.classifier import SignalClassifier
-        from alphalens_pipeline.watchdog.portfolio import PortfolioState
-        from alphalens_pipeline.watchdog.watchdog import Watchdog
+    def _build_detector(self, sources, router=None, portfolio=None, classifier=None):
+        from alphalens_pipeline.edgar_detector.classifier import SignalClassifier
+        from alphalens_pipeline.edgar_detector.detector import Detector
+        from alphalens_pipeline.edgar_detector.portfolio import PortfolioState
 
-        return Watchdog(
+        return Detector(
             sources=sources,
             classifier=classifier or SignalClassifier(),
             portfolio=portfolio or PortfolioState(held=["AAPL"]),
@@ -42,7 +42,7 @@ class TestWatchdogOrchestrator(unittest.TestCase):
         source_b = MagicMock()
         source_b.detect.return_value = [_mk_event("MSFT", "ACC-B1")]
 
-        watchdog = self._build_watchdog(sources=[source_a, source_b])
+        watchdog = self._build_detector(sources=[source_a, source_b])
         watchdog.run_once()
 
         source_a.detect.assert_called_once()
@@ -56,7 +56,7 @@ class TestWatchdogOrchestrator(unittest.TestCase):
             _mk_event("MSFT", "ACC-2"),
         ]
 
-        watchdog = self._build_watchdog(sources=[source], router=router)
+        watchdog = self._build_detector(sources=[source], router=router)
         watchdog.run_once()
 
         self.assertEqual(router.dispatch.call_count, 2)
@@ -68,7 +68,7 @@ class TestWatchdogOrchestrator(unittest.TestCase):
         good = MagicMock()
         good.detect.return_value = [_mk_event("AAPL")]
 
-        watchdog = self._build_watchdog(sources=[bad, good], router=router)
+        watchdog = self._build_detector(sources=[bad, good], router=router)
         watchdog.run_once()
 
         router.dispatch.assert_called_once()
@@ -77,7 +77,7 @@ class TestWatchdogOrchestrator(unittest.TestCase):
         source = MagicMock()
         source.detect.return_value = [_mk_event(), _mk_event("MSFT", "ACC-2")]
 
-        watchdog = self._build_watchdog(sources=[source])
+        watchdog = self._build_detector(sources=[source])
         result = watchdog.run_once()
 
         self.assertEqual(result["events_detected"], 2)

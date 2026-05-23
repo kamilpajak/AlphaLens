@@ -1,6 +1,6 @@
 """SEC EDGAR 8-K adapter for the thematic tool.
 
-Wraps the existing ``alphalens_pipeline.watchdog.sources.edgar.SECEdgarSource`` so that
+Wraps the existing ``alphalens_pipeline.edgar_detector.sources.edgar.SECEdgarSource`` so that
 parsing logic, CIK resolution and rate-limiting are shared with the Layer 1
 production watchdog. To avoid colliding with the live watchdog's deduplication
 state, this adapter uses its own ``SeenEventStore`` at
@@ -20,12 +20,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from alphalens_pipeline.edgar_detector.sources.cik_loader import CIKLoader
+from alphalens_pipeline.edgar_detector.sources.edgar import SECEdgarSource
+from alphalens_pipeline.edgar_detector.storage import SeenEventStore
+from alphalens_pipeline.edgar_detector.types import Event, FormType
 from alphalens_pipeline.thematic.config.universe import load_input_universe
 from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS, empty_news_frame
-from alphalens_pipeline.watchdog.sources.cik_loader import CIKLoader
-from alphalens_pipeline.watchdog.sources.edgar import SECEdgarSource
-from alphalens_pipeline.watchdog.storage import SeenEventStore
-from alphalens_pipeline.watchdog.types import Event, FormType
 
 logger = logging.getLogger(__name__)
 

@@ -7,9 +7,9 @@ from pathlib import Path
 
 
 def _classified(ticker="AAPL", accession="ACC-001", url="https://sec.gov/f"):
-    from alphalens_pipeline.watchdog.classifier import Action, ClassifiedEvent, Severity
-    from alphalens_pipeline.watchdog.portfolio import Relevance
-    from alphalens_pipeline.watchdog.types import Event, FormType
+    from alphalens_pipeline.edgar_detector.classifier import Action, ClassifiedEvent, Severity
+    from alphalens_pipeline.edgar_detector.portfolio import Relevance
+    from alphalens_pipeline.edgar_detector.types import Event, FormType
 
     return ClassifiedEvent(
         event=Event(
@@ -36,7 +36,7 @@ class TestAutoTriggerHandlerWritesCandidate(unittest.TestCase):
 
     def test_handle_submits_watchdog_sec_candidate(self):
         from alphalens_pipeline.core.queue import CandidateQueue
-        from alphalens_pipeline.watchdog.dispatch.handlers.auto_trigger import (
+        from alphalens_pipeline.edgar_detector.dispatch.handlers.auto_trigger import (
             AutoTriggerEnqueueHandler,
         )
 
@@ -60,7 +60,7 @@ class TestAutoTriggerHandlerWritesCandidate(unittest.TestCase):
 
     def test_handle_deduplicates_by_accession_number(self):
         from alphalens_pipeline.core.queue import CandidateQueue
-        from alphalens_pipeline.watchdog.dispatch.handlers.auto_trigger import (
+        from alphalens_pipeline.edgar_detector.dispatch.handlers.auto_trigger import (
             AutoTriggerEnqueueHandler,
         )
 
