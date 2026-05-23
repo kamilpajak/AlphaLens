@@ -160,7 +160,9 @@ def aggregate_returns_by_regime(
     stds = stds.reindex(_QUINTILE_LABELS)
     counts = counts.reindex(_QUINTILE_LABELS).astype(int)
     annualizer = math.sqrt(periods_per_year)
-    sharpes = (means / stds * annualizer).fillna(0.0)
+    # zero-variance quintile (e.g. degenerate synthetic data) gives 0/0 = NaN
+    # or finite/0 = ±inf; both clamp to 0 so downstream comparisons don't choke.
+    sharpes = (means / stds * annualizer).replace([np.inf, -np.inf], 0.0).fillna(0.0)
 
     return VolRegimeQuintileSummary(
         quintile_means=means,
