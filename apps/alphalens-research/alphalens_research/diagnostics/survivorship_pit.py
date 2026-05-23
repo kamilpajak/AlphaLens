@@ -250,39 +250,53 @@ def _count_picks_with_delisting_in_window(
     picks_df: pd.DataFrame,
     events_by_ticker: dict[str, list[date]],
     window_days: int,
-) -> int:
+) -> tuple[int, set[str]]:
+    """Count picks (rows) with a delisting inside the window + collect the
+    unique tickers affected.
+
+    Returns ``(n_rows, unique_tickers_affected)``. The row-count drives the
+    user-facing rate metric (``pick_delisting_rate``); the unique-ticker set
+    feeds the Fisher's-exact contingency table (which must use disjoint
+    per-ticker counts — see ``_fisher_p``).
+    """
     n = 0
-    for _, row in picks_df.iterrows():
-        pick_date = row["pick_date"]
-        delistings = events_by_ticker.get(row["ticker"], [])
+    unique_affected: set[str] = set()
+    for row in picks_df.itertuples(index=False):
+        pick_date = row.pick_date
+        ticker = row.ticker
+        delistings = events_by_ticker.get(ticker, [])
         if any(pick_date <= d <= pick_date + timedelta(days=window_days) for d in delistings):
             n += 1
-    return n
+            unique_affected.add(ticker)
+    return n, unique_affected
 
 
 def _fisher_p(
-    n_delistings_in_picks: int, n_picks: int, universe_delistings: int, universe_n: int
+    unique_picks_delisted: int,
+    unique_picks_n: int,
+    non_picks_delisted: int,
+    non_picks_n: int,
 ) -> float:
-    """Two-sided Fisher's exact test for picks vs NON-picks delisting rate.
+    """Two-sided Fisher's exact test for unique picks vs strictly disjoint NON-picks.
 
-    The 2×2 contingency table must have mutually exclusive rows. Picks are
-    typically a subset of the universe, so the control group is
-    ``non-picks = universe \\ picks`` — NOT the full universe. Building the
-    table with full-universe totals double-counts the picks' delistings in
-    row 2 and biases the p-value upward (loss of power). Empirically this
-    can flip a clear bias (true p < 1e-3) into a non-rejection at α=5%.
+    The 2×2 contingency table must have mutually exclusive rows. The caller
+    builds ``non_picks = universe \\ picks`` as a set and counts
+    ``non_picks_delisted`` directly on that disjoint set — NOT by subtracting
+    picks-side counts from universe-side totals.
 
-    Inputs are clamped to ≥ 0 to defend against caller-side miscounts where
-    e.g. ``universe_delistings < n_delistings_in_picks`` because the picks
-    pass through a slightly different events-by-ticker map than the universe
-    aggregation; in that case the cell collapses to 0 rather than raising.
+    Why set logic (not subtraction): the picks-side count is windowed (a
+    pick "counts" only when its delisting falls inside ``[pick_date,
+    pick_date + window]``) while the universe-side count is any-time
+    (a ticker with any historical delisting). Subtracting the windowed
+    count from the any-time count silently re-attributes a pick's
+    out-of-window delisting to the control group — inflating the control
+    rate and biasing the p-value. Set-based construction makes every cell
+    naturally non-negative and statistically clean.
     """
-    non_picks_n = max(0, universe_n - n_picks)
-    non_picks_delistings = max(0, universe_delistings - n_delistings_in_picks)
     table = np.array(
         [
-            [n_delistings_in_picks, n_picks - n_delistings_in_picks],
-            [non_picks_delistings, non_picks_n - non_picks_delistings],
+            [unique_picks_delisted, unique_picks_n - unique_picks_delisted],
+            [non_picks_delisted, non_picks_n - non_picks_delisted],
         ]
     )
     try:
@@ -314,14 +328,30 @@ def compute_selection_bias(
 
     n_picks = len(picks_df)
 
+    # Disjoint control group for the Fisher's-exact test. Built on UNIQUE
+    # tickers (not picks_df rows) so the 2×2 table is statistically clean:
+    # every cell is bounded ≥ 0 without clamps, and a pick's out-of-window
+    # delisting can never silently leak into the non-picks count (see
+    # `_fisher_p` docstring for the failure mode this defends against).
+    unique_picks_set = set(picks_df["ticker"]) if "ticker" in picks_df.columns else set()
+    unique_picks_n = len(unique_picks_set)
+    non_picks_set = universe_set - unique_picks_set
+    non_picks_n = len(non_picks_set)
+    non_picks_delisted = sum(1 for t in non_picks_set if events_by_ticker.get(t))
+
     results: list[SelectionBiasResult] = []
     for window in windows:
-        n_delistings_in_picks = _count_picks_with_delisting_in_window(
-            picks_df, events_by_ticker, window
+        n_delistings_in_picks, unique_picks_delisted_in_window = (
+            _count_picks_with_delisting_in_window(picks_df, events_by_ticker, window)
         )
         pick_rate = n_delistings_in_picks / n_picks if n_picks else 0.0
         lift = (pick_rate / uni_rate) if uni_rate > 0 else 0.0
-        p = _fisher_p(n_delistings_in_picks, n_picks, universe_delistings, universe_n)
+        p = _fisher_p(
+            unique_picks_delisted=len(unique_picks_delisted_in_window),
+            unique_picks_n=unique_picks_n,
+            non_picks_delisted=non_picks_delisted,
+            non_picks_n=non_picks_n,
+        )
 
         results.append(
             SelectionBiasResult(
