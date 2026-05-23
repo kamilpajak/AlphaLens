@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/django-migration]
   pull_request:
-    branches: [main]
+    branches: [main, feature/django-migration]
   schedule:
     - cron: "0 2 * * 1"  # Weekly Monday 02:00 UTC — detect dependency drift
 
