@@ -67,9 +67,9 @@ def _prefetch_closes(
             full = history_store.full(tkr)
         except KeyError:
             continue
-        close_col = cast(pd.Series, full["close"])
+        close_col = full["close"]
         closes_by_ticker[tkr] = close_col.reindex(held_days)
-        prev_closes_by_ticker[tkr] = cast(pd.Series, close_col.shift(1).reindex(held_days))
+        prev_closes_by_ticker[tkr] = close_col.shift(1).reindex(held_days)
     return closes_by_ticker, prev_closes_by_ticker
 
 

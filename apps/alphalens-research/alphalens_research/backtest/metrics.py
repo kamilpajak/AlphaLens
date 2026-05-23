@@ -23,7 +23,7 @@ import itertools
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -139,7 +139,8 @@ def rank_ic(predicted_scores: Sequence[float], actual_returns: Sequence[float]) 
     if np.ptp(p_valid) == 0 or np.ptp(a_valid) == 0:
         return 0.0
     try:
-        rho, _ = spearmanr(p_valid, a_valid)
+        result = spearmanr(p_valid, a_valid)
+        rho: Any = result[0]
     except ValueError:
         return 0.0
     if rho is None or np.isnan(rho):
@@ -167,9 +168,7 @@ def rank_ic_tstat(ic_series: Sequence[float]) -> float:
 def rank_ic_rolling(ic_series: Sequence[float], window: int = 20) -> pd.Series:
     """Rolling-mean IC over a lookback window (default 20 trading days)."""
     s = pd.Series(list(ic_series), dtype=float)
-    # rolling().mean() returns Series | DataFrame in pandas-stubs; on a 1-D
-    # Series input it is always Series at runtime.
-    return cast(pd.Series, s.rolling(window=window, min_periods=max(1, window // 2)).mean())
+    return s.rolling(window=window, min_periods=max(1, window // 2)).mean()
 
 
 def rank_ic_positive_pct(ic_series: Sequence[float], window: int = 20) -> float:
