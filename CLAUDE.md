@@ -19,24 +19,36 @@ Guidance for Claude Code (claude.ai/code) when working in this repo.
 
 ## Layer status
 
-Lifecycle status of each layer lives in its `__init__.py` as the `__status__` constant (enforced by `apps/alphalens-research/tests/test_layer_status.py`). Live packages under `apps/alphalens-research/alphalens_research/`:
+Lifecycle status of each layer lives in its `__init__.py` as the `__status__` constant (enforced by `apps/alphalens-research/tests/test_layer_status.py`). The workspace splits live infrastructure from the research lab per [ADR 0011](docs/adr/0011-split-pipeline-and-research.md):
+
+### Live production (`apps/alphalens-pipeline/alphalens_pipeline/`)
 
 | Path | Status | Notes |
 |------|--------|-------|
-| `alphalens_research/core/` | ACTIVE (namespace) | plumbing — candidates, queue, registry |
-| `alphalens_research/watchdog/` | ACTIVE | Layer 1 — `detect` live in launchd |
-| `alphalens_research/literature_review/` | ACTIVE | Monthly + weekly Perplexity scan, live in launchd |
-| `alphalens_research/paper_trade/` | ACTIVE | Portfolio refresh + scorer, live in launchd |
-| `alphalens_research/thematic/` | ACTIVE | Daily thematic pipeline, live on VPS |
+| `alphalens_pipeline/core/` | ACTIVE (namespace) | plumbing — candidates, queue |
+| `alphalens_pipeline/watchdog/` | ACTIVE | Layer 1 — `detect` live in launchd |
+| `alphalens_pipeline/literature_review/` | ACTIVE | Monthly + weekly Perplexity scan, live in launchd |
+| `alphalens_pipeline/thematic/` | ACTIVE | Daily thematic pipeline, live on VPS |
+| `alphalens_pipeline/data/` | ACTIVE (namespace) | data infrastructure — `data/store/` PIT SoT, `data/{alt_data,fundamentals,macro}/` clients, `data/factors.py`, `data/universes/` |
+| `alphalens_pipeline/scorers/` | ACTIVE | reusable validated-scorer library (fcff_yield, cohen_malloy_classifier, opportunistic_form4) |
+
+The CLI binary `alphalens` is registered in `apps/alphalens-pipeline/pyproject.toml` and lives under `apps/alphalens-pipeline/alphalens_cli/`. Research-side commands (`audit`, `preaudit`, `preregister`) lazy-import the lab tier inside command bodies so the pipeline package has zero top-level imports from research.
+
+### Research lab (`apps/alphalens-research/alphalens_research/`)
+
+| Path | Status | Notes |
+|------|--------|-------|
 | `alphalens_research/screeners/prescreener/` | RESEARCH_ONLY | Layer 2a — unvalidated, manual ad-hoc |
 | `alphalens_research/screeners/momentum_lowvol/` | RESEARCH_ONLY | Layer 2 mom + low-vol — strategy FAILed; scorer reused as base for Layer 4 vol-target overlay test |
 | `alphalens_research/gates/` | RESEARCH_ONLY | Layer 2 selection-gates wrapper |
 | `alphalens_research/backtest/` | ACTIVE | Layer 3 engine — engine, multi_phase, multiple_testing, weighting, theme_analysis, llm_scorers, historical_validation, metrics |
 | `alphalens_research/overlays/` | RESEARCH_ONLY | Layer 4 risk-overlays; single occupant `vol_target.py` |
 | `alphalens_research/attribution/` | ACTIVE | Layer 5 — cost_model, factor_analysis, regime, decision_matrix, diagnostics, report, walk_forward |
-| `alphalens_research/data/` | ACTIVE (namespace) | data infrastructure — `data/store/` PIT SoT, `data/{alt_data,fundamentals,macro}/` clients, `data/factors.py` |
+| `alphalens_research/preaudit/` | ACTIVE | per-strategy SmokeProfile + coverage gate before audit launch |
+| `alphalens_research/diagnostics/` | ACTIVE | survivorship_pit, cyclicality screens |
+| `alphalens_research/paper_trade/` | ACTIVE | forward-observation refresh + scorer, live in launchd |
 
-**Methodology bundle** (preregistration ledger, multi_phase audit, multiple_testing thresholds, audit_multi_phase driver) consumed via external dep `phase-robust-backtesting>=0.2.0` — see [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md). `alphalens audit <strategy>` (`apps/alphalens-research/alphalens_cli/commands/audit.py`) resolves a short strategy name to a file path and delegates in-process to `phase_robust_backtesting.audit_multi_phase.run_audit`.
+**Methodology bundle** (preregistration ledger, multi_phase audit, multiple_testing thresholds, audit_multi_phase driver) consumed via external dep `phase-robust-backtesting>=0.2.0` — see [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md). `alphalens audit <strategy>` (`apps/alphalens-pipeline/alphalens_cli/commands/audit.py`) resolves a short strategy name to a file path and delegates in-process to `phase_robust_backtesting.audit_multi_phase.run_audit`.
 
 ## Layer architecture (active alpha experimentation)
 
@@ -49,6 +61,8 @@ Five-layer separation per **[ADR 0007](docs/adr/0007-layer-architecture.md)**. E
 5. **Attribution** (`alphalens_research/attribution/{cost_model, factor_analysis, regime, ...}`) — cost-drag, Carhart-4F, Sharpe, Bonferroni → ledger verdict. Engine-side primitives (`rank_ic`, `turnover_pct`, `sharpe`) live in `alphalens_research/backtest/metrics.py`.
 
 Compound hypotheses combine layers (e.g. mom+lowvol × VIX>20 gate × vol-target overlay), each combination paying its own Bonferroni cost. **Time-varying-beta hazard:** overlay-bearing strategies use Sharpe-improvement (not Carhart α t-stat) as primary success metric — see ADR 0007.
+
+**Dependency direction across the workspace split:** `alphalens_research.*` may import from `alphalens_pipeline.{data, core, scorers}` (lab consumes infra). `alphalens_pipeline.*` must not import from `alphalens_research.*` at top level — only lazy imports inside CLI command bodies are allowed. Enforced by `apps/alphalens-research/tests/test_module_dependencies.py` (ast.NodeVisitor walk that catches `import X`, `from X import Y`, and TYPE_CHECKING / try-except / with-nested forms).
 
 ## Commands
 
@@ -81,17 +95,18 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 
 **English-only in code** — comments, docstrings, identifiers in English. Math notation (α, ρ, ×, −) stays. Polish prose lives in CLAUDE.md, MEMORY, conversations, commit messages, postmortems. Enforcement: `apps/alphalens-research/tests/test_no_polish_chars.py`.
 
-**Dependency direction** — two enforcement rules in `apps/alphalens-research/tests/test_module_dependencies.py`:
+**Dependency direction** — enforcement rules in `apps/alphalens-research/tests/test_module_dependencies.py`:
 - `alphalens_research.backtest.*` does NOT import from `alphalens_research.screeners.*` (exemption: `historical_validation.py`)
 - `alphalens_research.backtest.*` does NOT import from `alphalens_research.attribution.*` (Layer 3 → Layer 5 direction; engine produces `BacktestReport`, attribution consumes)
+- `alphalens_pipeline.*` does NOT import from `alphalens_research.*` at top level (workspace DAG — lazy imports inside `alphalens_cli.commands.{audit,preaudit,preregister}` command bodies are the documented exception)
 
 **Config parity** — `SCORER_CONFIG` in `lean_project/main.py` (Docker-inlined) must match `LEAN_DEFAULTS` on shared keys. Enforcement: `apps/alphalens-research/tests/test_lean_config_parity.py`.
 
-**Lazy CLI imports** — `apps/alphalens-research/alphalens_cli/commands/research.py` intentionally does NOT promote cross-function duplicates to top-level. Measured +913ms regression in `alphalens` startup time per invoke (Layer 1 watchdog cron fires often).
+**Lazy CLI imports** — `apps/alphalens-pipeline/alphalens_cli/commands/research.py` intentionally does NOT promote cross-function duplicates to top-level. Measured +913ms regression in `alphalens` startup time per invoke (Layer 1 watchdog cron fires often). The same pattern keeps `pipeline → research` from leaking into top-level imports across the workspace split.
 
 **No backward compatibility** — solo project, zero external users. Rename, refactor, drop old behavior in one commit without aliases.
 
-**New components** — always in `apps/alphalens-research/alphalens_research/<name>/` or `apps/alphalens-research/alphalens_cli/`, never top-level.
+**New components** — pick the side per the [ADR 0011](docs/adr/0011-split-pipeline-and-research.md) DAG: infra / live services / data clients / scorer libraries → `apps/alphalens-pipeline/alphalens_pipeline/<name>/`; lab / backtest / attribution / overlays / preaudit / experiments → `apps/alphalens-research/alphalens_research/<name>/`; CLI commands → `apps/alphalens-pipeline/alphalens_cli/`. Never top-level.
 
 ## Workflow conventions
 
@@ -113,13 +128,13 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 
 **PR descriptions: surface known issues / limitations / deferrals** — noted limitations (silent-fail mode, edge cases, scope cuts, "worth fallback later" items) go in a dedicated `## Known issues` / `## Behaviour notes` PR-body section so future sessions can pick up follow-ups without re-discovering. Overrides global "keep PR bodies short" rule — known-issues section stays.
 
-**One canonical HTTP client per external vendor** — every SEC EDGAR call goes through `alphalens_research/data/alt_data/sec_edgar_client.py::SecEdgarClient`; every Alpha Vantage call through `alphavantage_client.py::AlphaVantageClient`; every Gemini call through `gemini_client.py::GeminiClient`; every Polygon call through `polygon_client.py::PolygonClient`. Why: rate caps are per-IP / per-key — shadow clients fragment the request stream and break quota tracking. Sites with an injected client (watchdog `SECEdgarSource`, `CIKLoader`; thematic mapper/extractor/generator; thematic press verification + news ingest; `PolygonShortInterestClient` domain wrapper) keep DI; module-level helpers call the respective `get_default_*_client()`. Env vars: `SEC_EDGAR_USER_AGENT`, `ALPHA_VANTAGE_API_KEY`, `GOOGLE_API_KEY`, `POLYGON_API_KEY`. Enforcement: `apps/alphalens-research/tests/test_no_raw_sec_http.py`, `apps/alphalens-research/tests/test_no_raw_av_http.py`, `apps/alphalens-research/tests/test_no_raw_gemini_sdk.py`, `apps/alphalens-research/tests/test_no_raw_polygon_http.py` — each with a positive-control case so the regex / URL-list cannot rot to empty silently. Design memos: `docs/research/{sec_edgar,alphavantage,gemini,polygon}_client_consolidation_2026_05_*.md`.
+**One canonical HTTP client per external vendor** — every SEC EDGAR call goes through `alphalens_pipeline/data/alt_data/sec_edgar_client.py::SecEdgarClient`; every Alpha Vantage call through `alphavantage_client.py::AlphaVantageClient`; every Gemini call through `gemini_client.py::GeminiClient`; every Polygon call through `polygon_client.py::PolygonClient`. Why: rate caps are per-IP / per-key — shadow clients fragment the request stream and break quota tracking. Sites with an injected client (watchdog `SECEdgarSource`, `CIKLoader`; thematic mapper/extractor/generator; thematic press verification + news ingest; `PolygonShortInterestClient` domain wrapper) keep DI; module-level helpers call the respective `get_default_*_client()`. Env vars: `SEC_EDGAR_USER_AGENT`, `ALPHA_VANTAGE_API_KEY`, `GOOGLE_API_KEY`, `POLYGON_API_KEY`. Enforcement: `apps/alphalens-research/tests/test_no_raw_sec_http.py`, `apps/alphalens-research/tests/test_no_raw_av_http.py`, `apps/alphalens-research/tests/test_no_raw_gemini_sdk.py`, `apps/alphalens-research/tests/test_no_raw_polygon_http.py` — each with a positive-control case so the regex / URL-list cannot rot to empty silently. Design memos: `docs/research/{sec_edgar,alphavantage,gemini,polygon}_client_consolidation_2026_05_*.md`.
 
 **Zen pre-MERGE codereview is mandatory** for any non-trivial PR (Python pipeline OR `web/` frontend). Workflow: push → open PR → `mcp__zen__codereview` with `gemini-3-pro-preview` + `thinking_mode="high"` → apply findings as additional commits on the open PR (preserve review trail) → wait CI green on latest commit → merge. Mixed-stack PRs need one combined zen pass, not two. Skippable only for doc-only / single-line typo / pure comment changes.
 
 **Polish primary, English for tech terms** — Polish as primary in prose / conversations; English only for technical names without a Polish equivalent.
 
-**Pre-audit smoke before any audit > 1h compute** — `alphalens preaudit <strategy>` runs (1) per-DataDep coverage check against `~/.alphalens/` and (2) tiny end-to-end smoke subprocess (cap=300, 1-quarter window, ephemeral `--out`). Catches: missing data, coverage gap, hash drift, CLI passthrough breakage, end-to-end pipeline failure. Does NOT catch: OOM-at-scale, MooseFS I/O contention, time-varying signal corrosion. `apps/alphalens-research/scripts/launch_dual_audits.sh` prepends `alphalens preaudit <strategy> --skip-smoke` as fail-fast gate. New strategies require adding a `SmokeProfile` to `alphalens_research/preaudit/profiles.py::SMOKE_PROFILES` (enforced by `apps/alphalens-research/tests/test_preaudit_profiles.py`). Postmortem: `docs/research/insider_pc_compound_audit_launch_postmortem_2026_05_11.md`.
+**Pre-audit smoke before any audit > 1h compute** — `alphalens preaudit <strategy>` runs (1) per-DataDep coverage check against `~/.alphalens/` and (2) tiny end-to-end smoke subprocess (cap=300, 1-quarter window, ephemeral `--out`). Catches: missing data, coverage gap, hash drift, CLI passthrough breakage, end-to-end pipeline failure. Does NOT catch: OOM-at-scale, MooseFS I/O contention, time-varying signal corrosion. `apps/alphalens-research/scripts/launch_dual_audits.sh` prepends `alphalens preaudit <strategy> --skip-smoke` as fail-fast gate. New strategies require adding a `SmokeProfile` to `alphalens_research/preaudit/profiles.py::SMOKE_PROFILES` (enforced by `apps/alphalens-research/tests/test_preaudit_profiles.py`). Note: `_DEFAULT_SMOKE_TIMEOUT_S` is duplicated CLI-side at `apps/alphalens-pipeline/alphalens_cli/commands/preaudit.py` because typer.Option evaluates defaults at import time and the CLI lazy-imports research — parity pinned by `apps/alphalens-research/tests/test_preaudit_cli_default_in_sync.py`. Postmortem: `docs/research/insider_pc_compound_audit_launch_postmortem_2026_05_11.md`.
 
 ## Research methodology
 
@@ -138,7 +153,7 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 
 **Literature ≠ oracle** — the project explores genuinely novel combinations (multi-source × PIT × interaction × live EDGAR @ retail scale); literature aggregate distributions are NOT informative priors. Methodology bundle (pre-reg + multi-phase + Bonferroni) = observation protocol, not gate.
 
-**True PIT universe mandatory for paradigms >100 tickers** — every paradigm with universe >100 tickers MUST use true PIT panel from pre-reg day-one: intersected snapshot rosters from `data/universes/sp{500,400,600}_pit/` × delisted-ticker augmentation from `~/.alphalens/survivorship/{delisted_2007_2018,delisted_2021_2026}.parquet`. Implementation contract: `load_sp1500_pit_for_date_augmented(asof, include_delisted=True)` in `alphalens_research/data/universes/sp1500_pit.py` (to implement alongside paradigm #16). Completed paradigms (1-15) are NOT re-run retrospectively — verdicts stand. Apply 20-40 bps/y snapshot-bias prior to literature numbers when universe is current-snapshot fallback (subtract ~0.3 t-stat from reported αt). Rationale: [`docs/research/plan_C_survivorship_retrospective_2026_05_14.md`](docs/research/plan_C_survivorship_retrospective_2026_05_14.md) rejection block.
+**True PIT universe mandatory for paradigms >100 tickers** — every paradigm with universe >100 tickers MUST use true PIT panel from pre-reg day-one: intersected snapshot rosters from `apps/alphalens-pipeline/data/sp{500,400,600}_pit/` × delisted-ticker augmentation from `~/.alphalens/survivorship/{delisted_2007_2018,delisted_2021_2026}.parquet`. Implementation contract: `load_sp1500_pit_for_date_augmented(asof, include_delisted=True)` in `alphalens_pipeline/data/universes/sp1500_pit.py` (to implement alongside paradigm #16). Completed paradigms (1-15) are NOT re-run retrospectively — verdicts stand. Apply 20-40 bps/y snapshot-bias prior to literature numbers when universe is current-snapshot fallback (subtract ~0.3 t-stat from reported αt). Rationale: [`docs/research/plan_C_survivorship_retrospective_2026_05_14.md`](docs/research/plan_C_survivorship_retrospective_2026_05_14.md) rejection block.
 
 **LLM training-cutoff blindness for numerical / real-time data** — never ask an LLM (Gemini Flash, Pro, or any) for a numerical or time-sensitive value (market cap, price, P/E, RSI, holdings %, news date, insider size, mcap bracket, volume threshold). The LLM filters via training-cutoff snapshot, not current state. Doctrine: **all numerical / quotable values come from authoritative sources** (yfinance / EDGAR / SEC / Polygon / Form-4 parquet) **and are pre-computed BEFORE the LLM call**. LLM does only reasoning + theme matching + text generation over injected facts. Also: **do not put bracket constraints (mcap range, P/E range, vol threshold) in LLM prompts** — filter post-hoc deterministically in Python. Enforcement: `apps/alphalens-research/tests/thematic/test_theme_mapping.py::TestGeminiMapperPromptBuilding::test_prompt_does_not_constrain_market_cap` pins that Pro prompt contains no `market cap`/`small-cap`/`mid-cap` tokens. Full empirical justification in [`feedback_llm_training_cutoff_numerical_data_2026_05_17.md`](file://~/.claude/projects/-Users-jacoren-Developer-Personal-AlphaLens/memory/feedback_llm_training_cutoff_numerical_data_2026_05_17.md).
 
@@ -150,7 +165,7 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 
 ## Where to find "why"
 
-- **Architectural decisions:** `docs/adr/` (10 ADRs: pivot, queue contract, screener-agnostic backtest, ~~vendored upstream~~ *superseded*, ~~closed-layer policy~~ *superseded*, OSS extraction, layer architecture, sunset TradingAgents, Django replaces FastAPI, archive extracted and removed)
+- **Architectural decisions:** `docs/adr/` (11 ADRs: pivot, queue contract, screener-agnostic backtest, ~~vendored upstream~~ *superseded*, ~~closed-layer policy~~ *superseded*, OSS extraction, layer architecture, sunset TradingAgents, Django replaces FastAPI, archive extracted and removed, split pipeline/research workspace)
 - **Canonical closed-paradigms reference:** [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md) — 14 failures + 2 inconclusive + 1 slippage-fail with αt values, dates, mechanisms, re-activation conditions
 - **Per-layer kill reason:** `__closed_reason__` in each layer's `__init__.py`
 - **Per-strategy design + audit docs:** `docs/research/`
@@ -159,7 +174,7 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 ## Known issues (LIVE)
 
 - **Prescreener (Layer 2a) unvalidated** — 45% fundamentals weight requires PIT historicals that Polygon Starter ($29/mo) does not provide. Manual ad-hoc only, no performance guarantee.
-- **GDELT theme YAML — multi-word quoted phrases only** — `alphalens_research/thematic/config/gdelt_themes.yaml` queries must use multi-word phrases in quotes (e.g. `"CUDA toolkit"`, NOT `"CUDA"`). GDELT DOC API rejects single-word quoted tokens with `HTTP 200 + "The specified phrase is too short."` — `_http_get_json` raises this immediately as `GdeltQueryError` (no retry, no rate-limit burn). Static lint in `apps/alphalens-research/tests/thematic/test_gdelt.py::TestGdeltThemesYamlWellFormed` guards against regression. Live smoke per-bucket: `GDELT_LIVE_TEST=1 .venv/bin/python -m unittest tests.thematic.test_gdelt_live -v` (~90s wall, opt-in).
+- **GDELT theme YAML — multi-word quoted phrases only** — `alphalens_pipeline/thematic/config/gdelt_themes.yaml` queries must use multi-word phrases in quotes (e.g. `"CUDA toolkit"`, NOT `"CUDA"`). GDELT DOC API rejects single-word quoted tokens with `HTTP 200 + "The specified phrase is too short."` — `_http_get_json` raises this immediately as `GdeltQueryError` (no retry, no rate-limit burn). Static lint in `apps/alphalens-research/tests/thematic/test_gdelt.py::TestGdeltThemesYamlWellFormed` guards against regression. Live smoke per-bucket: `GDELT_LIVE_TEST=1 .venv/bin/python -m unittest tests.thematic.test_gdelt_live -v` (~90s wall, opt-in).
 
 Issues regarding CLOSED layers (Lean Docker setup, Layer 2d backtest workflow, themed gate Phase 2) → see `docs/research/paradigm_failures_postmortem.md` and ADR 0010.
 

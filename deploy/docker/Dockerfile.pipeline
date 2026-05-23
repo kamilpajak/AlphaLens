@@ -1,7 +1,7 @@
 # AlphaLens thematic pipeline image — runs the CLI inside a container so the
 # VPS doesn't need its own Python 3.13 + uv + apt deps. Built from the repo
-# root context; the alphalens_research + alphalens_cli packages (which live
-# under apps/alphalens-research/) are installed into /app/.venv via `uv sync`.
+# root context; the alphalens_pipeline + alphalens_cli packages (which live
+# under apps/alphalens-pipeline/) are installed into /app/.venv via `uv sync`.
 #
 # Why bookworm and NOT slim: lxml and lightgbm sometimes fall back to a source
 # build on cold cache; slim is missing the C headers/libraries those need, and
@@ -44,26 +44,31 @@ WORKDIR /app
 # Cache layer for deps — copy workspace root + every member's manifest first.
 # uv needs all member pyproject.toml files present to resolve the lockfile.
 COPY pyproject.toml uv.lock README.md ./
+COPY apps/alphalens-pipeline/pyproject.toml ./apps/alphalens-pipeline/pyproject.toml
+COPY apps/alphalens-pipeline/README.md ./apps/alphalens-pipeline/README.md
 COPY apps/alphalens-research/pyproject.toml ./apps/alphalens-research/pyproject.toml
 COPY apps/alphalens-research/README.md ./apps/alphalens-research/README.md
 COPY apps/alphalens-django/pyproject.toml ./apps/alphalens-django/pyproject.toml
 COPY apps/alphalens-django/README.md ./apps/alphalens-django/README.md
 
 # Install deps WITHOUT the project itself (source not here yet).
-# --package limits the sync to alphalens-research; alphalens-django is not
-# needed for the pipeline image. UV_CONCURRENT_BUILDS=UV_CONCURRENT_INSTALLS=1
-# caps RAM during any source build on a small VPS.
-RUN uv sync --frozen --no-dev --no-install-project --package alphalens-research
+# --package limits the sync to alphalens-pipeline; alphalens-research is a
+# workspace dep so its lab-side deps come along, but its source is omitted
+# from the image (audit/preaudit commands lazy-import it — never invoked
+# inside the thematic daily container). alphalens-django is not needed.
+# UV_CONCURRENT_BUILDS=UV_CONCURRENT_INSTALLS=1 caps RAM during any source
+# build on a small VPS.
+RUN uv sync --frozen --no-dev --no-install-project --package alphalens-pipeline
 # Now copy the project source and install it on top of the prepared venv.
-# data/ (SP1500 PIT yamls) is used by paradigm audits run on the laptop /
-# runpod, not by the thematic daily pipeline — intentionally omitted from
-# this image. Mount via volume + $ALPHALENS_DATA_ROOT if needed.
-COPY apps/alphalens-research/alphalens_research ./apps/alphalens-research/alphalens_research
-COPY apps/alphalens-research/alphalens_cli ./apps/alphalens-research/alphalens_cli
-COPY apps/alphalens-research/scripts ./apps/alphalens-research/scripts
+# Note: SP1500 PIT yamls under apps/alphalens-pipeline/data/ are used by
+# paradigm audits run on the laptop / runpod, not by the thematic daily
+# pipeline — intentionally omitted from this image. Mount via volume +
+# $ALPHALENS_DATA_ROOT if needed.
+COPY apps/alphalens-pipeline/alphalens_pipeline ./apps/alphalens-pipeline/alphalens_pipeline
+COPY apps/alphalens-pipeline/alphalens_cli ./apps/alphalens-pipeline/alphalens_cli
 COPY deploy/docker/run_thematic_day.sh /app/deploy/docker/run_thematic_day.sh
 RUN chmod +x /app/deploy/docker/run_thematic_day.sh \
-    && uv sync --frozen --no-dev --package alphalens-research
+    && uv sync --frozen --no-dev --package alphalens-pipeline
 # Bind-mount target for the operator's ~/.alphalens cache. The compose file
 # sets HOME=/app/home so Path.home() inside the container resolves here.
 # Pre-create + chown so the bind-mount inherits the right ownership when the

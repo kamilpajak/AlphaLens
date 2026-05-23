@@ -5,7 +5,7 @@ hosts where launchd is unavailable.
 
 ## form4-backfill.service
 
-SEC EDGAR Form-4 bulk backfill (`scripts/run_form4_backfill.py`). Wall-time on
+SEC EDGAR Form-4 bulk backfill (`apps/alphalens-research/scripts/run_form4_backfill.py`). Wall-time on
 a small VPS: ~5-10 days for the full 2006-2026 R3000 universe (~8000 CIKs,
 limited by SEC's 10 req/s rate cap). Resume-safe via the JSON manifest at
 `~/.alphalens/form4_backfill_manifest.json`, so a crash + restart skips
@@ -50,10 +50,10 @@ sharded so each machine fetches a non-overlapping slice in parallel. A
 **Step 1 — split the CIK universe (run once on any machine):**
 
 ```bash
-.venv/bin/python scripts/split_cik_list.py \
-    apps/alphalens-research/data/form4_cik_universe.txt \
+.venv/bin/python apps/alphalens-research/scripts/split_cik_list.py \
+    ~/.alphalens/form4_cik_universe.txt \
     --num-shards 5 \
-    --output-dir data/shards/
+    --output-dir ~/.alphalens/form4_shards/
 # Produces ciks_shard_{1..5}_of_5.txt
 ```
 
@@ -65,9 +65,9 @@ prolific issuers.
 
 ```bash
 # On machine N (with its own IP):
-scripts/run_form4_backfill.py \
+apps/alphalens-research/scripts/run_form4_backfill.py \
     --user-agent "Your Name your@email.com" \
-    --cik-list data/shards/ciks_shard_N_of_5.txt \
+    --cik-list ~/.alphalens/form4_shards/ciks_shard_N_of_5.txt \
     --parquet-root ~/.alphalens/form4_parquet \
     --manifest ~/.alphalens/form4_backfill_manifest.json \
     --start-year 2006 --end-year 2026
@@ -97,7 +97,7 @@ done
 **Step 4 — compact the merged tree:**
 
 ```bash
-.venv/bin/python scripts/compact_form4_parquet.py \
+.venv/bin/python apps/alphalens-research/scripts/compact_form4_parquet.py \
     --parquet-root ~/.alphalens/form4_parquet_merged
 # Produces ~/.alphalens/form4_parquet_merged/transaction_year=YYYY/compacted.parquet
 # (one file per year — replaces all part-*.parquet from every machine)
@@ -117,7 +117,7 @@ is persistent (bad credentials, exhausted disk, SEC ban).
 
 ## av-earnings-backfill.service + av-earnings-backfill.timer
 
-Alpha Vantage `EARNINGS` daily backfill (`scripts/av_earnings_daily_backfill.py`).
+Alpha Vantage `EARNINGS` daily backfill (`apps/alphalens-research/scripts/av_earnings_daily_backfill.py`).
 Unlike the Form-4 daemon, this is a **oneshot** triggered by a daily timer:
 each fire consumes up to the AV free-tier 25-call/day quota then exits. Full
 S&P 500 union backfill (~503 names) takes ~21 calendar days. Cache lives at

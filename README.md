@@ -11,13 +11,14 @@ Research lab infrastructure for retail active alpha experimentation — real-tim
 
 ## What's here
 
-The repo is a small monorepo with two apps and shared infra:
+The repo is a small monorepo with three Python workspace members + a frontend + shared infra:
 
-- **`apps/alphalens-research/`** — the research engine (`alphalens_research` Python package + `alphalens_cli` Typer CLI). Screeners, backtest, attribution, watchdog, paper-trade, thematic pipeline.
+- **`apps/alphalens-pipeline/`** — live production tier: `alphalens_pipeline` (watchdog, thematic daily, literature_review, data clients, scorer library) + the `alphalens` Typer CLI binary. Split rationale: [ADR 0011](docs/adr/0011-split-pipeline-and-research.md).
+- **`apps/alphalens-research/`** — research lab: `alphalens_research` (screeners, backtest engine, attribution, overlays, gates, preaudit, diagnostics, paper-trade). Lab imports from pipeline (`data`, `core`, `scorers`); the reverse is forbidden at top level (enforced by `tests/test_module_dependencies.py`).
 - **`apps/alphalens-django/`** — read/write briefs API (Django 6 + DRF + Postgres + Cloudflare Access). Migration history in [ADR 0009](docs/adr/0009-django-replaces-fastapi.md).
 - **`apps/web/`** — SvelteKit + Tailwind dashboard that consumes the Django API.
 - **`deploy/`** — all deploy targets: `docker/` (pipeline + django-prod), `systemd/` (Linux VPS units), `launchd/` (5 live macOS jobs), `runpod/` (GPU/CPU pod bootstrap).
-- **`docs/adr/`** — 10 ADRs covering the load-bearing decisions.
+- **`docs/adr/`** — 11 ADRs covering the load-bearing decisions.
 
 Architectural detail and quick contributor guide: [`CLAUDE.md`](CLAUDE.md). Per-layer postmortems: [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md).
 
@@ -42,21 +43,31 @@ Everything else is RESEARCH_ONLY (active research scorers) or live infrastructur
 
 Each layer / screener package declares `__status__ ∈ {ACTIVE, CLOSED, RESEARCH_ONLY, ARCHIVED}` in its `__init__.py`; enforced by `apps/alphalens-research/tests/test_layer_status.py`.
 
+### Live production (`apps/alphalens-pipeline/alphalens_pipeline/`)
+
 | Path | Status | Notes |
 |------|--------|-------|
-| `alphalens_research/core/` | ACTIVE (namespace) | Plumbing — candidates, queue, registry |
-| `alphalens_research/watchdog/` | ACTIVE | Layer 1 — `detect` live in launchd |
-| `alphalens_research/literature_review/` | ACTIVE | Monthly + weekly Perplexity scan, live in launchd |
-| `alphalens_research/paper_trade/` | ACTIVE | Portfolio refresh + scorer, live in launchd |
-| `alphalens_research/thematic/` | ACTIVE | Daily thematic pipeline (news → brief), live on VPS |
+| `alphalens_pipeline/core/` | ACTIVE (namespace) | Plumbing — candidates, queue |
+| `alphalens_pipeline/watchdog/` | ACTIVE | Layer 1 — `detect` live in launchd |
+| `alphalens_pipeline/literature_review/` | ACTIVE | Monthly + weekly Perplexity scan, live in launchd |
+| `alphalens_pipeline/thematic/` | ACTIVE | Daily thematic pipeline (news → brief), live on VPS |
+| `alphalens_pipeline/data/` | ACTIVE (namespace) | PIT SoT + vendor clients + S&P 400/500/600 PIT yamls |
+| `alphalens_pipeline/scorers/` | ACTIVE | Reusable validated-scorer library |
+
+### Research lab (`apps/alphalens-research/alphalens_research/`)
+
+| Path | Status | Notes |
+|------|--------|-------|
 | `alphalens_research/backtest/` | ACTIVE | Layer 3 engine — screener-agnostic |
 | `alphalens_research/attribution/` | ACTIVE | Layer 5 — cost / factor / regime / verdict |
-| `alphalens_research/data/` | ACTIVE (namespace) | PIT SoT + vendor clients |
+| `alphalens_research/preaudit/` | ACTIVE | Per-strategy SmokeProfile + coverage gate |
+| `alphalens_research/diagnostics/` | ACTIVE | Survivorship + cyclicality screens |
+| `alphalens_research/paper_trade/` | ACTIVE | Forward-observation refresh + scorer, live in launchd |
 | `alphalens_research/gates/` | RESEARCH_ONLY | Layer 2 selection-gate wrapper |
 | `alphalens_research/overlays/` | RESEARCH_ONLY | Layer 4 sizing overlays |
-| `alphalens_research/screeners/*` | RESEARCH_ONLY | 10 active research scorers; per-strategy memos in `docs/research/` |
+| `alphalens_research/screeners/*` | RESEARCH_ONLY | Active research scorers; per-strategy memos in `docs/research/` |
 
-Closed paradigms used to live under `alphalens_research/archive/`; reusable scorers were promoted to live packages and the rest was removed per [ADR 0010](docs/adr/0010-archive-extracted-and-removed.md).
+Closed paradigms used to live under `alphalens_research/archive/`; reusable scorers were promoted to `alphalens_pipeline/scorers/` and the rest was removed per [ADR 0010](docs/adr/0010-archive-extracted-and-removed.md).
 
 External methodology dep: [`kamilpajak/phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting) (MIT) — see [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md).
 
@@ -83,21 +94,21 @@ External methodology dep: [`kamilpajak/phase-robust-backtesting`](https://github
 
 ### Factor attribution
 
-- **Carhart-4F** — 4-factor regression: Mkt-RF, SMB, HML, UMD. Default in `alphalens_research/attribution/factor_analysis.py`.
+- **Carhart-4F** — 4-factor regression: Mkt-RF, SMB, HML, UMD. Default in `apps/alphalens-research/alphalens_research/attribution/factor_analysis.py`.
 - **Fama-French factors** — **Mkt-RF**, **SMB** (size), **HML** (value); **UMD** (momentum) is the Carhart extension.
 - **Residualisation** — projecting the raw signal on a panel of equity controls (`reversal_1m`, `momentum_6m`, `rv_30d`) and using the OLS residual as the score.
 - **Sharpe-as-primary** — for overlay-bearing strategies (Layer 4) primary metric is Sharpe improvement, not αt — overlays modulate beta which biases αt downward.
 
 ### Data discipline
 
-- **PIT (point-in-time)** — at every asof, features use only data observable on that date. Enforced by `apps/alphalens-research/tests/test_pit_universe_loader.py` + `alphalens_research/data/store/`.
-- **Survivorship bias** — Russell PIT yamls (`alphalens_research/data/universes/r{1000,2000,3000}_pit/YYYY-MM.yaml`) keyed to membership-as-of date.
+- **PIT (point-in-time)** — at every asof, features use only data observable on that date. Enforced by `apps/alphalens-research/tests/test_pit_universe_loader.py` + `alphalens_pipeline/data/store/`.
+- **Survivorship bias** — Russell PIT yamls (`alphalens_pipeline/data/universes/r{1000,2000,3000}_pit/YYYY-MM.yaml`) keyed to membership-as-of date.
 - **Fire-sale exclusion** — drop returns 180 days before delisting date (per `survivorship_pit.DelistingEvent`). Without this, distress signals get +100-300bps inflation.
 - **First-filed semantics** — for fundamentals, use the value as first reported, not later restated.
 
 ### Architecture (5 layers per ADR 0007)
 
-1. **Watchdog** (`alphalens_research/watchdog/`) — SEC EDGAR event detection + classifier + dispatch.
+1. **Watchdog** (`alphalens_pipeline/watchdog/`) — SEC EDGAR event detection + classifier + dispatch.
 2. **Screener** (`alphalens_research/screeners/*`) — cross-sectional rank @ asof → top-N tickers.
 3. **Backtest engine** (`alphalens_research/backtest/engine.py`) — strided rebalance → `BacktestReport`.
 4. **Risk overlay** (`alphalens_research/overlays/`) — time-series sizing on portfolio realised vol.
@@ -209,12 +220,14 @@ done
 
 ```
 apps/
-├── alphalens-research/          ← research engine (Python)
-│   ├── alphalens_research/      ← Layer 1-5 + data clients + thematic pipeline
+├── alphalens-pipeline/          ← live production tier (Python)
+│   ├── alphalens_pipeline/      ← watchdog, thematic, literature_review, data, core, scorers
 │   ├── alphalens_cli/           ← Typer CLI entry points (alphalens binary)
-│   ├── tests/                   ← unittest suite (~2000+ tests; 4 architectural enforcers)
-│   ├── scripts/                 ← experiment runners + backfill orchestrators
 │   └── data/                    ← S&P 400/500/600 PIT yamls
+├── alphalens-research/          ← research lab (Python)
+│   ├── alphalens_research/      ← screeners, backtest, attribution, overlays, gates, preaudit, diagnostics, paper_trade
+│   ├── tests/                   ← unittest suite (~2000+ tests; architectural enforcers — pipeline + research together)
+│   └── scripts/                 ← experiment runners + backfill orchestrators
 ├── alphalens-django/            ← briefs API (Django 6 + DRF + Postgres)
 │   ├── briefs/                  ← models + ingest + /v1/* viewsets
 │   ├── auth_cf/                 ← Cloudflare Access JWT
@@ -223,14 +236,14 @@ apps/
 
 deploy/
 ├── docker/
-│   ├── Dockerfile.pipeline      ← research engine image (thematic daily)
+│   ├── Dockerfile.pipeline      ← pipeline image (thematic daily)
 │   └── django-prod/             ← Django + nginx + Postgres compose
 ├── systemd/                     ← VPS user units (form4-backfill, av-earnings, thematic daily)
 ├── launchd/                     ← macOS scheduled jobs (5 live)
 └── runpod/                      ← GPU/CPU pod bootstrap + experiment runner
 
 docs/
-├── adr/                         ← 10 Architecture Decision Records
+├── adr/                         ← 11 Architecture Decision Records
 ├── research/                    ← paradigm postmortems, design memos, ledger
 └── backtest/                    ← historical run outputs
 ```
@@ -241,14 +254,15 @@ docs/
 - **Testing**: unittest (not pytest) — `python -m unittest discover apps/alphalens-research/tests -t apps/alphalens-research`
 - **Commits**: Conventional Commits (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …)
 - **Code language**: English in source; enforced by `tests/test_no_polish_chars.py`
-- **New components** go in `apps/alphalens-research/alphalens_research/<name>/` or `apps/alphalens-django/`
+- **New components** — pick the side per the [ADR 0011](docs/adr/0011-split-pipeline-and-research.md) DAG: infra / live services / data clients / scorer libraries → `apps/alphalens-pipeline/alphalens_pipeline/<name>/`; lab / backtest / attribution / overlays / preaudit / experiments → `apps/alphalens-research/alphalens_research/<name>/`; CLI commands → `apps/alphalens-pipeline/alphalens_cli/`; Django app → `apps/alphalens-django/`.
 
-Four enforcement tests guard architectural invariants:
+Five enforcement tests guard architectural invariants (all in `apps/alphalens-research/tests/`):
 
-- `tests/test_layer_status.py` — every layer declares `__status__` + 7-gate `__closed_evidence__` for CLOSED/ARCHIVED.
-- `tests/test_module_dependencies.py` — `alphalens_research.backtest.*` ⇏ `alphalens_research.screeners.*` and `alphalens_research.backtest.*` ⇏ `alphalens_research.attribution.*`.
-- `tests/test_lean_config_parity.py` — kept for the legacy data layer; will retire when its last consumer is gone.
-- `tests/test_no_polish_chars.py` — English-only in source.
+- `test_layer_status.py` — every layer declares `__status__` + 7-gate `__closed_evidence__` for CLOSED/ARCHIVED.
+- `test_module_dependencies.py` — intra-research: `alphalens_research.backtest.*` ⇏ `alphalens_research.screeners.*` and `alphalens_research.backtest.*` ⇏ `alphalens_research.attribution.*`. Workspace DAG: `alphalens_pipeline.*` ⇏ `alphalens_research.*` at top level (lazy CLI imports are the documented exception).
+- `test_lean_config_parity.py` — kept for the legacy data layer; will retire when its last consumer is gone.
+- `test_no_polish_chars.py` — English-only in source.
+- `test_preaudit_cli_default_in_sync.py` — pins the duplicated `DEFAULT_SMOKE_TIMEOUT_S` constant between the CLI-side typer.Option default and the research-side runner.
 
 ## License
 
