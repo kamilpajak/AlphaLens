@@ -38,7 +38,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yaml
 from scipy import stats
 
 from alphalens_research.attribution.factor_analysis import run_carhart_attribution
@@ -50,17 +49,11 @@ from alphalens_research.backtest.engine import (
 )
 from alphalens_research.backtest.metrics import rank_ic_tstat, sharpe
 from alphalens_research.backtest.weighting import weighted_return
+from alphalens_research.data.store.delisting import DelistingEvent
 from alphalens_research.data.store.history import HistoryStore
 
 # ---------------------------------------------------------------------------
 # Dataclasses
-
-
-@dataclass(frozen=True)
-class DelistingEvent:
-    ticker: str
-    delisted_date: date
-    reason: str  # "bankruptcy" | "merger" | "acquisition" | "unknown"
 
 
 @dataclass(frozen=True)
@@ -114,57 +107,6 @@ def _build_events_index(events: Iterable[DelistingEvent]) -> dict[str, list[date
     for ev in events:
         index.setdefault(ev.ticker, []).append(ev.delisted_date)
     return index
-
-
-def _load_events_from_parquet(parquet_path: Path) -> list[DelistingEvent]:
-    df = pd.read_parquet(parquet_path)
-    return [
-        DelistingEvent(
-            ticker=str(r["ticker"]),
-            delisted_date=pd.Timestamp(r["delisted_date"]).date(),
-            reason=str(r.get("reason", "unknown")),
-        )
-        for _, r in df.iterrows()
-    ]
-
-
-def _load_events_from_yaml(yaml_path: Path) -> list[DelistingEvent]:
-    data = yaml.safe_load(yaml_path.read_text()) or {}
-    out: list[DelistingEvent] = []
-    for entry in data.get("delisted", []) or []:
-        ticker = str(entry.get("ticker") or "")
-        d_raw = entry.get("delisted")
-        if not ticker or not d_raw:
-            continue
-        d = d_raw if isinstance(d_raw, date) else pd.Timestamp(d_raw).date()
-        out.append(DelistingEvent(ticker=ticker, delisted_date=d, reason="unknown"))
-    return out
-
-
-def load_delisting_events(
-    parquet_path: Path | None = None,
-    yaml_path: Path | None = None,
-) -> list[DelistingEvent]:
-    """Merge the backfill parquet + existing YAML into a single event list.
-
-    Either source can be missing — the caller is responsible for knowing
-    what window is covered. The parquet is produced by
-    `scripts/backfill_delisted_2021_2024.py`; the YAML ships with the
-    repo at `alphalens_research/archive/screeners/lean/lean_project/delisted_universe.yaml`.
-
-    On collision (same ticker+date), parquet wins (carries the better reason).
-    """
-    rows: dict[tuple[str, date], DelistingEvent] = {}
-
-    if parquet_path and parquet_path.exists():
-        for ev in _load_events_from_parquet(parquet_path):
-            rows[(ev.ticker, ev.delisted_date)] = ev
-
-    if yaml_path and yaml_path.exists():
-        for ev in _load_events_from_yaml(yaml_path):
-            rows.setdefault((ev.ticker, ev.delisted_date), ev)
-
-    return sorted(rows.values(), key=lambda e: (e.delisted_date, e.ticker))
 
 
 # ---------------------------------------------------------------------------

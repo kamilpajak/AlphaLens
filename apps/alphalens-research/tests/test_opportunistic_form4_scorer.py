@@ -15,10 +15,10 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
-from alphalens_research.screeners.insider_activity.cohen_malloy_classifier import (
+from alphalens_research.scorers.cohen_malloy_classifier import (
     CohenMalloyLabel,
 )
-from alphalens_research.screeners.insider_activity.opportunistic_form4 import (
+from alphalens_research.scorers.opportunistic_form4 import (
     EQUITY_CONTROLS_FOR_RESIDUAL,
     aggregate_opportunistic_signal,
     score_opportunistic_form4,

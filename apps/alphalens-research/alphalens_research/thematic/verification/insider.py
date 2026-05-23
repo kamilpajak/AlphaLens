@@ -1,6 +1,6 @@
 """Form-4 opportunistic-insider verification gate (paradigm #11 reuse).
 
-Wraps :func:`alphalens_research.screeners.insider_activity.opportunistic_form4.aggregate_opportunistic_signal`
+Wraps :func:`alphalens_research.scorers.opportunistic_form4.aggregate_opportunistic_signal`
 to deliver a simple yes/no signal for the Layer 3 verification orchestrator.
 
 Reuses paradigm #11 (gross αt +2.71 OOS validated) as a corroboration signal —
@@ -17,11 +17,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from alphalens_research.screeners.insider_activity.cohen_malloy_classifier import (
+from alphalens_research.scorers.cohen_malloy_classifier import (
     CohenMalloyLabel,
     classify_from_transaction_dates,
 )
-from alphalens_research.screeners.insider_activity.opportunistic_form4 import (
+from alphalens_research.scorers.opportunistic_form4 import (
     aggregate_opportunistic_signal,
 )
 

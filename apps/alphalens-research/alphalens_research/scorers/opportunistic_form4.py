@@ -32,7 +32,7 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
-from alphalens_research.screeners.insider_activity.cohen_malloy_classifier import (
+from alphalens_research.scorers.cohen_malloy_classifier import (
     CohenMalloyLabel,
 )
 

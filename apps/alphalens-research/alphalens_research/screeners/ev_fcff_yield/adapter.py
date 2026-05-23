@@ -18,7 +18,7 @@ from collections.abc import Mapping
 import pandas as pd
 
 from alphalens_research.data.store.edgar_fundamentals import EdgarFundamentalsStore
-from alphalens_research.screeners.ev_fcff_yield.scorer import score_ev_fcff_yield
+from alphalens_research.scorers.fcff_yield import score_ev_fcff_yield
 
 logger = logging.getLogger(__name__)
 

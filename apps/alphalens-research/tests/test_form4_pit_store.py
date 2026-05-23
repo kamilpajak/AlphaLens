@@ -21,8 +21,8 @@ from unittest import mock
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+from alphalens_research.data.store.delisting import DelistingEvent
 from alphalens_research.data.store.form4_pit import FORM4_SCHEMA_COLUMNS, Form4PITStore
-from alphalens_research.data.store.survivorship_pit import DelistingEvent
 
 
 def _records_to_table(records: list[dict]) -> pa.Table:

@@ -45,12 +45,12 @@ from alphalens_research.data.store.form4_pit import (  # noqa: E402
     PARTITION_KEY,
     Form4PITStore,
 )
-from alphalens_research.screeners.distress_credit.features import (  # noqa: E402
-    make_production_stores,
-)
-from alphalens_research.screeners.insider_activity.cohen_malloy_classifier import (  # noqa: E402
+from alphalens_research.scorers.cohen_malloy_classifier import (  # noqa: E402
     CohenMalloyLabel,
     classify_from_transaction_dates,
+)
+from alphalens_research.screeners.distress_credit.features import (  # noqa: E402
+    make_production_stores,
 )
 
 _PRICES_DIR = Path.home() / ".alphalens" / "prices"
@@ -238,7 +238,7 @@ def main() -> int:
     logger.info("Parquet root: %s", args.parquet_root)
 
     # Lazy imports — keep startup fast for --help.
-    from alphalens_research.screeners.insider_activity.opportunistic_form4 import (
+    from alphalens_research.scorers.opportunistic_form4 import (
         aggregate_opportunistic_signal,
         score_opportunistic_form4,
     )
