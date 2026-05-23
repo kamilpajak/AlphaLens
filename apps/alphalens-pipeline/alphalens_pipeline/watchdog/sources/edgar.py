@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
+from xml.etree.ElementTree import Element, ParseError
+
+from defusedxml.ElementTree import fromstring as _defused_fromstring
 
 from alphalens_pipeline.data.alt_data.sec_edgar_client import (
     SecEdgarClient,
@@ -175,8 +177,8 @@ class SECEdgarSource(EventSource):
 
     def _parse_atom(self, xml_text: str, ticker: str) -> list[Event]:
         try:
-            root = ET.fromstring(xml_text)
-        except ET.ParseError as exc:
+            root = _defused_fromstring(xml_text)
+        except ParseError as exc:
             logger.exception("Malformed Atom feed for %s: %s", ticker, exc)
             return []
 
@@ -187,7 +189,7 @@ class SECEdgarSource(EventSource):
                 events.append(event)
         return events
 
-    def _parse_entry(self, entry: ET.Element, ticker: str) -> Event | None:
+    def _parse_entry(self, entry: Element, ticker: str) -> Event | None:
         category = entry.find("atom:category", ATOM_NS)
         if category is None:
             return None
@@ -229,7 +231,7 @@ class SECEdgarSource(EventSource):
         )
 
     @staticmethod
-    def _extract_accession(entry: ET.Element) -> str | None:
+    def _extract_accession(entry: Element) -> str | None:
         id_el = entry.find("atom:id", ATOM_NS)
         if id_el is not None and id_el.text and ACCESSION_URN_PREFIX in id_el.text:
             return id_el.text.split(ACCESSION_URN_PREFIX, 1)[1].strip()
@@ -252,8 +254,8 @@ def _pick_8k_primary_name(filing_summary_xml: str) -> str | None:
     from EX-99 exhibits or XBRL wrappers.
     """
     try:
-        root = ET.fromstring(filing_summary_xml)
-    except ET.ParseError:
+        root = _defused_fromstring(filing_summary_xml)
+    except ParseError:
         return None
 
     for file_el in root.iter("File"):

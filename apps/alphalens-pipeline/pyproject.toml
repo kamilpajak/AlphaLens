@@ -31,6 +31,10 @@ dependencies = [
     # Shipped as a regular dep (not dev) because schemas live in pipeline.data
     # and are imported by attribution/backtest entry points at runtime.
     "pandera>=0.26.0",
+    # XML parsing hardened against billion-laughs / external-entity attacks
+    # for SEC EDGAR Atom feeds + Form-4 XML + FilingSummary.xml parsing
+    # (B314 fix). defusedxml is a drop-in for xml.etree.ElementTree.
+    "defusedxml>=0.7.1",
 ]
 
 [project.scripts]

@@ -66,23 +66,25 @@ jobs:
         run: uv run ruff format --check apps/alphalens-pipeline/ apps/alphalens-research/
 
       - name: Bandit security scan
+        # Gate: low-and-above severity (-ll). XML parsing on untrusted SEC
+        # EDGAR feeds uses defusedxml (B314 fix); urllib3 calls go through
+        # the canonical requests-based vendor clients (sec_edgar_client,
+        # alphavantage_client, polygon_client, gemini_client). The single
+        # urllib.request.urlopen call to GDELT is # nosec B310 — URL built
+        # from a constant base + querystring, file:// not reachable.
         run: uv run bandit -r apps/alphalens-pipeline/alphalens_pipeline/ apps/alphalens-pipeline/alphalens_cli/ apps/alphalens-research/alphalens_research/ -ll -q
-        continue-on-error: true
 
       - name: pip-audit (CVE scan against uv.lock)
         # uv export --no-emit-workspace strips editable installs of the
         # three workspace members (they have no PyPI CVEs to look up).
         # The grep drops git-URL deps (phase-robust-backtesting) — pip-audit
         # can't audit a git ref. --disable-pip uses osv.dev directly so we
-        # don't need an ephemeral venv on the CI runner.
-        # TODO: flip continue-on-error to false once baseline CVE cleanup
-        # lands (PR follow-up to PR B). Baseline at branch fork: 14 known
-        # vulnerabilities, mostly transitive (urllib3, langchain, pyasn1).
+        # don't need an ephemeral venv on the CI runner. Baseline: 0 CVEs
+        # after `uv lock --upgrade` cleared 14 transitive vulns.
         run: |
           uv export --frozen --no-dev --no-emit-workspace --format requirements-txt \
             | grep -v '@ git+' > /tmp/audit-reqs.txt
           uv tool run pip-audit --disable-pip -r /tmp/audit-reqs.txt
-        continue-on-error: true
 
       - name: Pyright strict (scorers — non-locked files)
         # Dedicated blocking gate for the load-bearing scorer modules. Strict
