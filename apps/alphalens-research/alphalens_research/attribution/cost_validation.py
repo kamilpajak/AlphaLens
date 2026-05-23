@@ -211,15 +211,20 @@ def classify_tier_as_of(
     tickers_list = list(adv_at_date.keys())
     # Percentile rank for each ticker: fraction of values <= this one
     ranks = pd.Series(values).rank(pct=True, method="average").to_numpy()
+    # Lowest-percentile tier as the fallback for the `rank_pct == 0.0` edge
+    # case (only reachable with NaN-laden ranks, which `adv_at_date` already
+    # filters out, but the explicit fallback documents intent).
+    fallback_tier = min(tiers, key=lambda t: t.adv_percentile_low).name
     result: dict[str, str] = {}
     for ticker, rank_pct in zip(tickers_list, ranks, strict=False):
         for tier in tiers:
-            if tier.adv_percentile_low <= rank_pct <= tier.adv_percentile_high:
+            # Half-open `(low, high]`: a boundary rank (e.g. 0.80) belongs to
+            # the lower-percentile, higher-bps tier — "tied → conservative".
+            if tier.adv_percentile_low < rank_pct <= tier.adv_percentile_high:
                 result[ticker] = tier.name
                 break
         else:
-            # Shouldn't happen if tiers cover [0, 1]
-            result[ticker] = tiers[0].name
+            result[ticker] = fallback_tier
     return result
 
 
@@ -404,7 +409,10 @@ def apply_tiered_cost(
     the given day fall back to "mid" (silent — caller is expected to
     inspect the report's tier-coverage warning).
     """
-    gross = pd.Series(list(returns), dtype=float)
+    # Preserve the DatetimeIndex of `returns` — the previous code
+    # `pd.Series(list(returns), dtype=float)` stripped it and broke downstream
+    # Carhart-4F date-aligned merges.
+    gross = returns.astype(float)
     if len(gross) != len(daily_top_n_tickers) or len(gross) != len(daily_dates):
         raise ValueError(
             f"length mismatch: returns={len(gross)}, "

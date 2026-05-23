@@ -118,6 +118,27 @@ class TestClassifyTierAsOf(unittest.TestCase):
                 f"{tier_name} count = {counts.get(tier_name, 0)}, expected ~20",
             )
 
+    def test_boundary_rank_lands_in_higher_bps_tier(self):
+        # Zen finding (deferred from PR #209): `low <= rank <= high` on both
+        # sides + first-match-wins iteration meant a ticker exactly at the
+        # 0.80 boundary matched "mega" (3 bps) instead of "large" (10 bps),
+        # contradicting the docstring's "tied → assign to LOWER tier
+        # (conservative — higher bps)" guarantee.
+        #
+        # Build 5 tickers with ranks {0.20, 0.40, 0.60, 0.80, 1.00} so each
+        # tier boundary is exercised. Conservative assignment → the boundary
+        # rank lands in the lower-percentile, higher-bps tier.
+        adv = {"T1": 1.0, "T2": 2.0, "T3": 3.0, "T4": 4.0, "T5": 5.0}
+        tiers = classify_tier_as_of(adv, DEFAULT_TIERS)
+        # rank_pct from pandas rank(pct=True): T1=0.20, T2=0.40, ..., T5=1.00.
+        # Conservative (LOWER tier wins on tie): T1→micro, T2→small, T3→mid,
+        # T4→large, T5→mega.
+        self.assertEqual(tiers["T1"], "micro")
+        self.assertEqual(tiers["T2"], "small")
+        self.assertEqual(tiers["T3"], "mid")
+        self.assertEqual(tiers["T4"], "large")
+        self.assertEqual(tiers["T5"], "mega")
+
 
 class TestBuildPerDateTiersLookahead(unittest.TestCase):
     def test_no_lookahead(self):
@@ -241,6 +262,22 @@ class TestApplyTieredCost(unittest.TestCase):
         net_mean = float(net.mean())
         self.assertLess(net_mean, 0.0)
         self.assertGreater(net_mean, -0.001)  # within reasonable range
+
+    def test_preserves_datetime_index_from_series_input(self):
+        # Zen finding (deferred from PR #207/#209): `pd.Series(list(returns))`
+        # at the top of `apply_tiered_cost` stripped the input's DatetimeIndex
+        # and replaced it with a default RangeIndex, then re-emitted that as
+        # the return value's index. Downstream date-merges broke silently.
+        start = pd.Timestamp("2022-01-03")
+        daily_specs = [(start + pd.Timedelta(days=i), ["A"]) for i in range(3)]
+        baseline = _report(daily_specs, ret=0.001)
+        returns = baseline.portfolio_returns
+        top_n_lists = [snap.top_n_tickers for snap in baseline.rebalance_results]
+        dates = [snap.date for snap in baseline.rebalance_results]
+        per_date_tiers = {d: {"A": "mega"} for d in dates}
+        net = apply_tiered_cost(returns, top_n_lists, dates, per_date_tiers, {"mega": 3})
+        self.assertTrue(isinstance(net.index, pd.DatetimeIndex))
+        self.assertTrue(net.index.equals(returns.index))
 
     def test_per_date_tiers_used(self):
         """Same ticker with different tier on different dates → cost uses

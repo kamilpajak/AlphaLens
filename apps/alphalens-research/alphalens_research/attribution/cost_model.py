@@ -70,15 +70,27 @@ class CostModel:
         per-day value in [0, 1] indicating what fraction of the portfolio
         churned on that day; cost scales linearly with it.
         """
-        gross = pd.Series(list(daily_returns), dtype=float)
+        # Preserve a DatetimeIndex when the caller passes a Series; downstream
+        # Carhart-4F merges align on dates and silently lose rows if we strip
+        # the index here.
+        if isinstance(daily_returns, pd.Series):
+            gross = daily_returns.astype(float)
+        else:
+            gross = pd.Series(list(daily_returns), dtype=float)
         drag = self.per_period_drag(periods_per_year=periods_per_year)
         if daily_turnover is None:
             cost = pd.Series(drag, index=gross.index)
         else:
-            turnover = pd.Series(list(daily_turnover), dtype=float)
-            if len(turnover) != len(gross):
-                raise ValueError(f"turnover length {len(turnover)} != returns length {len(gross)}")
-            cost = turnover * drag
+            turnover_values = (
+                daily_turnover.astype(float).tolist()
+                if isinstance(daily_turnover, pd.Series)
+                else list(daily_turnover)
+            )
+            if len(turnover_values) != len(gross):
+                raise ValueError(
+                    f"turnover length {len(turnover_values)} != returns length {len(gross)}"
+                )
+            cost = pd.Series(turnover_values, dtype=float, index=gross.index) * drag
         return gross - cost
 
     def apply_scalar_to_sharpe(

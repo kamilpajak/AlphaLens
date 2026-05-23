@@ -36,6 +36,30 @@ class TestClassifyRegime(unittest.TestCase):
         with self.assertRaises(ValueError):
             classify_regime(pd.Series([100.0, 101.0]), lookback=1)
 
+    def test_warmup_window_dropped_not_labeled_flat(self):
+        # Zen finding (deferred from PR #208/#209): the first `lookback` rows
+        # have NaN trailing return because `closes.shift(lookback)` is NaN
+        # there. The previous logic mislabelled these as "flat" via
+        # `labels[labels.isna()] = "flat"`, then `.dropna()` was a no-op.
+        # Correct behaviour: drop the warmup window so the consumer sees only
+        # dates with a meaningful trailing-return classification.
+        from alphalens_research.attribution.regime import classify_regime
+
+        n = 70
+        lookback = 60
+        # Mixed regime: bear-trending for first lookback bars (warmup), then
+        # bull. If warmup is labelled "flat" we'd see "flat" appear before
+        # day `lookback`; if warmup is dropped the first label is on day
+        # `lookback` and is "bear".
+        bear_drift = np.full(lookback, -0.003)
+        bull_drift = np.full(n - lookback, 0.005)
+        closes = pd.Series(100 * np.exp(np.cumsum(np.concatenate([bear_drift, bull_drift]))))
+        closes.index = pd.date_range("2024-01-01", periods=n)
+        labels = classify_regime(closes, lookback=lookback)
+        # Warmup rows must be absent from the output.
+        self.assertEqual(len(labels), n - lookback)
+        self.assertEqual(labels.index[0], closes.index[lookback])
+
     def test_custom_thresholds(self):
         from alphalens_research.attribution.regime import classify_regime
 
