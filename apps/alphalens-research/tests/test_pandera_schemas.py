@@ -80,6 +80,37 @@ class TestCarhartFactorsSchema(unittest.TestCase):
         result = validate_carhart_factors(panel)
         self.assertIn("Vendor_Custom", result.columns)
 
+    def test_tz_aware_index_raises(self):
+        # FF/Dartmouth panels are tz-naive ("datetime64[ns]") by construction.
+        # Someone localising to UTC mid-pipeline would silently break alignment
+        # against tz-naive portfolio_returns -> empty regression overlap.
+        panel = _valid_carhart_panel()
+        panel.index = panel.index.tz_localize("UTC")
+        with self.assertRaises(SchemaError):
+            validate_carhart_factors(panel)
+
+    def test_empty_panel_accepted(self):
+        # Pandera accepts an empty DataFrame as long as the column schema is
+        # satisfied (zero rows trivially satisfy all row-level checks). Pin the
+        # behaviour explicitly so a future change to the schema doesn't silently
+        # flip this — call sites rely on it (start > end -> empty slice flows
+        # through normally rather than as a contract violation).
+        empty = pd.DataFrame(
+            {col: pd.Series(dtype=float) for col in CARHART_FACTOR_COLUMNS},
+            index=pd.DatetimeIndex([], dtype="datetime64[ns]"),
+        )
+        result = validate_carhart_factors(empty)
+        self.assertEqual(len(result), 0)
+
+    def test_duplicate_dates_currently_pass(self):
+        # Pin the current behaviour: schema does NOT assert index uniqueness.
+        # If a future PR adds unique=True to the Index spec, this test fails
+        # and the change becomes intentional rather than silent.
+        panel = _valid_carhart_panel(n=10)
+        panel.index = pd.DatetimeIndex([panel.index[0]] * 10)
+        result = validate_carhart_factors(panel)
+        self.assertEqual(len(result), 10)
+
 
 class TestPortfolioReturnsSchema(unittest.TestCase):
     def test_valid_series_passes(self):

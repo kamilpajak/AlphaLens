@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from alphalens_pipeline.data.schemas import validate_carhart_factors
+
 logger = logging.getLogger(__name__)
 
 _DATE_ROW_RE = re.compile(r"^\s*\d{8}\s*,")
@@ -172,8 +174,6 @@ def load_carhart_daily(
     surface as ``pandera.errors.SchemaError`` at the boundary instead of
     propagating into HAC regression.
     """
-    from alphalens_pipeline.data.schemas import validate_carhart_factors
-
     ff5 = load_ff5_daily(path=ff5_path, start=start, end=end)
     umd = load_umd_daily(path=umd_path, start=start, end=end)
     merged = ff5[["Mkt-RF", "SMB", "HML", "RF"]].join(umd, how="inner")
