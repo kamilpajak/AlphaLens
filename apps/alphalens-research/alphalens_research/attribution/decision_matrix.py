@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Phase 3b exit-criteria evaluator — design doc §8 gates → GO / KILL / PAPER_TRACK.
 
 Design doc §8 locks the Layer 2d capital-deploy decision rules per

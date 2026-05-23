@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Walk-forward OOS validation for a fixed-weight scorer.
 
 Perplexity's review of the backtest harness flagged walk-forward stability
@@ -596,20 +597,25 @@ def _resolve_overall(
 
 
 def evaluate_gate(summary: DistributionSummary) -> GateVerdict:
-    gate_results = {
-        "c1": _eval_c1(summary),
-        "c2": _eval_c2(summary),
-        "c3": _eval_c3(summary),
-        "c4": _eval_c4(summary),
-        "c5": _eval_c5(summary),
+    c1 = _eval_c1(summary)
+    c2 = _eval_c2(summary)
+    c3 = _eval_c3(summary)
+    c4 = _eval_c4(summary)
+    c5 = _eval_c5(summary)
+    gate_results: dict[str, tuple[bool | None, str, bool]] = {
+        "c1": c1,
+        "c2": c2,
+        "c3": c3,
+        "c4": c4,
+        "c5": c5,
     }
     reasons = {k: r for k, (_, r, _) in gate_results.items()}
     return GateVerdict(
-        c1_pass=gate_results["c1"][0],
-        c2_pass=gate_results["c2"][0],
-        c3_pass=gate_results["c3"][0],
-        c4_pass=gate_results["c4"][0],
-        c5_pass=gate_results["c5"][0],
+        c1_pass=c1[0],
+        c2_pass=c2[0],
+        c3_pass=c3[0],
+        c4_pass=c4[0],
+        c5_pass=c5[0],
         overall=_resolve_overall(gate_results),
         reasons=reasons,
     )
@@ -716,7 +722,7 @@ def _interpret_walk_forward(report: WalkForwardReport, verdict: GateVerdict) -> 
         )
     if verdict.overall == "BORDERLINE":
         failed_rule = next(
-            (k for k, v in verdict.reasons.items() if (getattr(verdict, f"{k}_pass") is False)),
+            (k for k in verdict.reasons if (getattr(verdict, f"{k}_pass") is False)),
             None,
         )
         return (

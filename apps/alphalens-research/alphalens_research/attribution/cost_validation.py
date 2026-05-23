@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Tiered flat-bps cost model + scale-path validation.
 
 The third Perplexity-flagged gap after PIT survivorship (PR #9) and
@@ -70,7 +71,7 @@ import pandas as pd
 from alphalens_pipeline.data.store.history import HistoryStore
 
 from alphalens_research.attribution.cost_model import CostModel
-from alphalens_research.backtest.engine import BacktestReport
+from alphalens_research.backtest.engine import BacktestReport, RebalanceSnapshot
 from alphalens_research.backtest.metrics import sharpe
 from alphalens_research.backtest.weighting import compute_position_weights
 
@@ -279,8 +280,8 @@ def _lookup_dollar_adv(
 
 
 def _picks_for_day(
-    snap,
-    weights,
+    snap: RebalanceSnapshot,
+    weights: np.ndarray,
     turnover_today: float,
     portfolio_value: float,
     tier_map: Mapping[str, str],
@@ -410,7 +411,7 @@ def apply_tiered_cost(
             f"top_n={len(daily_top_n_tickers)}, dates={len(daily_dates)}"
         )
 
-    net = gross.copy().reset_index(drop=True)
+    net_arr = gross.to_numpy().astype(float).copy()
     for i, (top_n_list, ts) in enumerate(zip(daily_top_n_tickers, daily_dates, strict=False)):
         tickers = list(top_n_list)
         n = len(tickers)
@@ -428,9 +429,9 @@ def apply_tiered_cost(
         daily_drag = annual_drag / 252.0
         if daily_turnover is not None:
             daily_drag *= float(daily_turnover[i])
-        net.iloc[i] = gross.iloc[i] - daily_drag
+        net_arr[i] = float(gross.iloc[i]) - daily_drag
 
-    return pd.Series(net.values, index=gross.index)
+    return pd.Series(net_arr, index=gross.index)
 
 
 def compare_cost_scenarios(

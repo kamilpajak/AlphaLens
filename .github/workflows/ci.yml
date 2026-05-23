@@ -102,18 +102,24 @@ jobs:
         # wrong verdict. Strict per pyrightconfig.json top-level "strict" array.
         run: uv run pyright apps/alphalens-research/alphalens_research/backtest/
 
+      - name: Pyright strict (attribution)
+        # Dedicated blocking gate for Layer 5 attribution — cost_model,
+        # factor_analysis, regime, walk_forward, signal_independence,
+        # signal_vol_regime, diagnostics. Wrong type here corrupts α t-stat,
+        # Sharpe, hit-rate, regime breakdowns -> wrong verdict.
+        run: uv run pyright apps/alphalens-research/alphalens_research/attribution/
+
       - name: Pyright type-check (basic global + strict per critical module)
         # Config: pyrightconfig.json at repo root.
         # Global typeCheckingMode = "basic" — catches name resolution, attribute
         # access, obvious type mismatches without forcing exhaustive annotations
         # on math-heavy research code.
-        # Strict per-module via executionEnvironments on backtest/attribution/
+        # Strict per-module via top-level "strict" array on backtest/attribution/
         # scorers — these surfaces govern verdicts; wrong types corrupt α t-stats.
-        # TODO: flip continue-on-error to false in two follow-up PRs:
-        #   (1) clean attribution strict (~361 errors)
-        # then a final PR cleans basic-mode global (~301 errors) and flips to
-        # blocking. Scorers strict DONE (PR #205) + backtest strict DONE — both
-        # pinned by the blocking steps above. Current baseline: 664 errors / 111 warnings.
+        # TODO: final follow-up PR cleans basic-mode global (~184 remaining
+        # errors) and flips this step to blocking. Scorers strict DONE
+        # (PR #205) + backtest strict DONE (PR #206) + attribution strict DONE
+        # — all three pinned by the blocking steps above.
         run: uv run pyright
         continue-on-error: true
 

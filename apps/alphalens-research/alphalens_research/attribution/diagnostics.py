@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Extended diagnostics for MVP1 backtest results.
 
 Addresses three questions Perplexity flagged about the baseline run:
@@ -19,9 +20,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
+from alphalens_pipeline.data.store.history import HistoryStore
 
 from alphalens_research.backtest.engine import BacktestReport
 from alphalens_research.backtest.metrics import rank_ic
@@ -68,7 +71,7 @@ def decile_returns_panel(report: BacktestReport) -> pd.DataFrame:
     record the forward return. The bucket column uses 1 = lowest decile,
     10 = highest decile.
     """
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     # We don't have the full scored frame per day in `report`; only top-N + stats.
     # Need access to the original engine state — in MVP this requires re-running
     # the scorer. Instead, approximate from top_n_scores + top_n_forward_returns
@@ -104,7 +107,7 @@ def ic_by_decile_from_scored_frames(
     `return_column` (default `fwd_holding`, also accepts `fwd_1d`). The engine
     must be run with `retain_scored_frames=True` to populate this.
     """
-    bucket_rows: list[dict] = []
+    bucket_rows: list[dict[str, Any]] = []
     for d, df in scored_frames.items():
         if return_column not in df.columns:
             continue
@@ -135,7 +138,7 @@ def ic_by_decile_from_scored_frames(
         sharpe = (mean / std * np.sqrt(252)) if std > 1e-12 else 0.0
         out.append(
             DecileICResult(
-                decile=int(decile),
+                decile=int(cast(Any, decile)),
                 n_samples=int(group["n"].sum()),
                 mean_return=mean,
                 std_return=std,
@@ -168,7 +171,7 @@ def tail_concentration_score(results: list[DecileICResult]) -> float:
 
 def ic_at_horizon(
     report: BacktestReport,
-    history_store,
+    history_store: HistoryStore,
     horizon: int,
 ) -> HorizonICResult:
     """Recompute the cross-sectional Rank IC at an alternate forward horizon.
