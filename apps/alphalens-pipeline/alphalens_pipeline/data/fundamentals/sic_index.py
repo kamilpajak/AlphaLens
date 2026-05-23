@@ -77,6 +77,18 @@ def _load_lookup_dicts() -> tuple[dict[str, int], dict[int, list[str]], dict[int
     Returns ``(ticker_to_sic, sic_to_peers, sic_to_description)``. Empty
     dicts when the parquet artifact is missing. Built once per process
     (memoised); tests clear the cache between cases.
+
+    Cache mutation invariant: the dicts returned here are shared across
+    every caller in the process. Any module-public accessor that exposes
+    a MUTABLE value (currently only ``iter_sic_peers`` on the
+    ``list[str]`` values of ``sic_to_peers``) MUST return a defensive
+    copy at its boundary — otherwise a downstream ``.append`` /
+    ``.sort`` / ``.pop`` silently corrupts the global cache for the
+    remainder of the process. If the schema ever evolves (e.g.
+    ``sic_to_description`` switching from ``str`` to ``list[str]``),
+    extend the same discipline to the new accessor — and add a
+    regression test in the shape of
+    ``test_returned_list_is_defensive_copy``.
     """
     table = _load_index()
     if table is None:
