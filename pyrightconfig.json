@@ -12,7 +12,11 @@
     "Wrong dtype in attribution -> wrong α t-stat -> bad verdict.",
     "Wrong scorer signature -> wrong stock picks. Strict here pays for itself.",
     "Tests excluded: fixture mocks and unittest.MagicMock patterns trip",
-    "every name-resolution rule pyright has; we already lint tests with ruff."
+    "every name-resolution rule pyright has; we already lint tests with ruff.",
+    "Strict at file granularity for scorers: opportunistic_form4.py is",
+    "SHA256-locked per pre-reg ledger (insider_pc_compound_2026_05_10) so it",
+    "cannot carry the pragma overrides + type-narrowing the other 3 scorer",
+    "files use. The 3 non-locked files are listed individually instead."
   ],
 
   "include": [
@@ -46,7 +50,9 @@
   "strict": [
     "apps/alphalens-research/alphalens_research/backtest",
     "apps/alphalens-research/alphalens_research/attribution",
-    "apps/alphalens-pipeline/alphalens_pipeline/scorers"
+    "apps/alphalens-pipeline/alphalens_pipeline/scorers/_common.py",
+    "apps/alphalens-pipeline/alphalens_pipeline/scorers/cohen_malloy_classifier.py",
+    "apps/alphalens-pipeline/alphalens_pipeline/scorers/fcff_yield.py"
   ],
   "reportMissingImports": "warning",
   "reportMissingTypeStubs": "none",

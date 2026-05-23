@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Cross-sectional scoring helpers shared by Layer 2 screeners.
 
 These primitives are pure-function utilities used by multiple screener
@@ -31,8 +32,8 @@ def winsorize(
     valid = series.dropna()
     if valid.empty:
         return series
-    lo = float(valid.quantile(lower_pct))
-    hi = float(valid.quantile(upper_pct))
+    lo = valid.quantile(lower_pct)
+    hi = valid.quantile(upper_pct)
     return series.clip(lower=lo, upper=hi)
 
 
@@ -46,8 +47,8 @@ def rank_zscore(series: pd.Series) -> pd.Series:
     valid = series.dropna()
     if valid.empty:
         return pd.Series(np.nan, index=series.index)
-    mean = float(valid.mean())
-    std = float(valid.std(ddof=0))
+    mean = valid.mean()
+    std = valid.std(ddof=0)
     if not np.isfinite(std) or std == 0:
         return pd.Series(np.nan, index=series.index)
     return (series - mean) / std

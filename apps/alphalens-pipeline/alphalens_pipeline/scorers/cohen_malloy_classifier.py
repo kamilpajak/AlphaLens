@@ -75,7 +75,8 @@ def classify_from_transaction_dates(
     months_per_year: dict[int, set[int]] = {y: set() for y in required_years}
     for d in in_window:
         months_per_year[d.year].add(d.month)
-    common_months = set.intersection(*months_per_year.values())
+    month_sets: list[set[int]] = list(months_per_year.values())
+    common_months: set[int] = month_sets[0].intersection(*month_sets[1:])
     if common_months:
         return CohenMalloyLabel.ROUTINE
     return CohenMalloyLabel.OPPORTUNISTIC
