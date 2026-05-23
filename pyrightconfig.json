@@ -1,23 +1,21 @@
 {
-  "//": [
-    "Pyright config — 2026 type-checking gate.",
-    "Global 'basic' mode catches name resolution, attribute access, and",
-    "obvious type mismatches without forcing exhaustive annotations on the",
-    "research code (lab-quality, often np.ndarray[Any]).",
-    "Strict per-directory via the top-level 'strict' array — pyright applies",
-    "strict to anything underneath those paths regardless of executionEnvironments.",
-    "executionEnvironments below only set 'extraPaths' so cross-package imports",
-    "resolve (research imports from pipeline.{data, core, scorers} per CLAUDE.md DAG).",
-    "Why scorers/backtest/attribution: these are the load-bearing surfaces.",
-    "Wrong dtype in attribution -> wrong α t-stat -> bad verdict.",
-    "Wrong scorer signature -> wrong stock picks. Strict here pays for itself.",
-    "Tests excluded: fixture mocks and unittest.MagicMock patterns trip",
-    "every name-resolution rule pyright has; we already lint tests with ruff.",
-    "Strict at file granularity for scorers: opportunistic_form4.py is",
-    "SHA256-locked per pre-reg ledger (insider_pc_compound_2026_05_10) so it",
-    "cannot carry the pragma overrides + type-narrowing the other 3 scorer",
-    "files use. The 3 non-locked files are listed individually instead."
-  ],
+  // Pyright config — 2026 type-checking gate.
+  // Global 'basic' mode catches name resolution, attribute access, and
+  // obvious type mismatches without forcing exhaustive annotations on the
+  // research code (lab-quality, often np.ndarray[Any]).
+  // Strict per-directory via the top-level 'strict' array — pyright applies
+  // strict to anything underneath those paths regardless of executionEnvironments.
+  // executionEnvironments below only set 'extraPaths' so cross-package imports
+  // resolve (research imports from pipeline.{data, core, scorers} per CLAUDE.md DAG).
+  // Why scorers/backtest/attribution: these are the load-bearing surfaces.
+  // Wrong dtype in attribution -> wrong α t-stat -> bad verdict.
+  // Wrong scorer signature -> wrong stock picks. Strict here pays for itself.
+  // Tests excluded: fixture mocks and unittest.MagicMock patterns trip
+  // every name-resolution rule pyright has; we already lint tests with ruff.
+  // Strict at file granularity for scorers: opportunistic_form4.py is
+  // SHA256-locked per pre-reg ledger (insider_pc_compound_2026_05_10) so it
+  // cannot carry the pragma overrides + type-narrowing the other 3 scorer
+  // files use. The 3 non-locked files are listed individually instead.
 
   "include": [
     "apps/alphalens-pipeline/alphalens_pipeline",
