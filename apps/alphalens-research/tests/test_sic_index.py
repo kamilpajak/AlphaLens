@@ -112,6 +112,26 @@ class TestIterSicPeers(_PatchedIndexTestCase):
         # ``score_candidates._resolve_industry`` when ``get_sic`` misses.
         self.assertEqual(sic_index.iter_sic_peers(None), [])  # type: ignore[arg-type]
 
+    def test_returned_list_is_defensive_copy(self) -> None:
+        """Regression: ``iter_sic_peers`` must return a copy of the cached
+        peer list, not a reference to it.
+
+        ``_load_lookup_dicts`` is ``@lru_cache``-memoized, so the inner
+        ``sic_to_peers`` dict and its list values are reused across every
+        call within a process. Returning a direct reference means that a
+        downstream caller doing ``peers.append(...)`` /  ``peers.pop()``
+        / ``peers.sort()`` silently corrupts the global cache for that
+        SIC — every subsequent call for the same code would see the
+        mutated list. Defensive copy at the boundary closes the leak.
+        """
+        first = sic_index.iter_sic_peers(3674)
+        self.assertEqual(sorted(first), ["IONQ", "QUBT", "RGTI"])
+        first.append("BOGUS")
+        first.sort()
+        second = sic_index.iter_sic_peers(3674)
+        self.assertEqual(sorted(second), ["IONQ", "QUBT", "RGTI"])
+        self.assertNotIn("BOGUS", second)
+
 
 class TestSicLabel(_PatchedIndexTestCase):
     rows = [

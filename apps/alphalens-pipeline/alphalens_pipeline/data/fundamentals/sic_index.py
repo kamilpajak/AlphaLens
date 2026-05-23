@@ -120,11 +120,17 @@ def iter_sic_peers(sic: int | None) -> list[str]:
     set reflects whichever ticker universe the index was built from. New
     IPOs that were absent at build time will not appear as peers until
     the next ``scripts/build_sic_index.py`` refresh.
+
+    Returns a fresh list each call — the underlying ``sic_to_peers`` dict
+    is built once per process via ``@lru_cache`` and reused, so a caller
+    that mutates the returned list (``.append``, ``.sort``, ``.pop``)
+    would silently corrupt the cache for every subsequent caller. The
+    ``list(...)`` copy at the boundary is the cheap defense.
     """
     if sic is None:
         return []
     _, sic_to_peers, _ = _load_lookup_dicts()
-    return sic_to_peers.get(sic, [])
+    return list(sic_to_peers.get(sic, []))
 
 
 def sic_label(sic: int | None) -> tuple[str | None, str | None]:
