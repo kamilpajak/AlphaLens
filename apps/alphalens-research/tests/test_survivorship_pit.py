@@ -8,6 +8,7 @@ every test builds small in-memory fixtures.
 
 from __future__ import annotations
 
+import math
 import tempfile
 import unittest
 from datetime import date
@@ -174,6 +175,82 @@ class TestSelectionBias(unittest.TestCase):
         # on [10,40;0,50] = 1.187e-3. Buggy table gives 0.125. Cutoff at
         # 2e-3 separates correct from buggy by 2 orders of magnitude.
         self.assertLess(r.fisher_p, 2e-3)
+
+    def test_fisher_p_ignores_out_of_window_pick_delistings_in_control(self):
+        """Regression: a pick whose delisting falls OUTSIDE the survivorship
+        window must NOT be counted toward the non-picks (control) group.
+
+        A naive "subtract picks-windowed-count from universe-anytime-count"
+        contingency fix has this leak: the universe_delistings tally counts
+        every ticker with any delisting (no time filter), while
+        n_delistings_in_picks counts only picks whose delisting falls in the
+        window. Subtracting one from the other transfers the pick's
+        out-of-window delisting into the control row, inflating the
+        non-picks rate and biasing p upward.
+
+        Set-up: 10 picks, all unique. P00 delists inside the 30-day window
+        (legit pick-side delisting). P01..P09 delist 2 years later (outside
+        the window). Universe = picks + 90 surviving non-picks. The truth
+        is "1 pick delisted within window vs 0 non-picks delisted, ever";
+        Fisher's p should be reasonably small but the leak would push 9
+        out-of-window pick-delistings into the control row instead — making
+        the test under-detect a clear leak case.
+
+        Test asserts the diagnostic returns the correct control-group
+        delisting count (zero) — which only holds if set-based, not
+        subtraction-based, control construction is used.
+        """
+        pick_tickers = [f"P{i:02d}" for i in range(10)]
+        nonpick_tickers = [f"N{i:02d}" for i in range(90)]
+        universe = pick_tickers + nonpick_tickers
+        picks = pd.DataFrame(
+            [
+                {"pick_date": date(2023, 1, 1), "ticker": t, "rank": rank}
+                for rank, t in enumerate(pick_tickers, start=1)
+            ]
+        )
+        events = [
+            DelistingEvent("P00", date(2023, 1, 15), "bankruptcy"),  # in 30d window
+        ] + [
+            DelistingEvent(f"P{i:02d}", date(2025, 6, 15), "bankruptcy")  # ~2y after window
+            for i in range(1, 10)
+        ]
+        results = compute_selection_bias(picks, events, universe, windows=(30,))
+        r = results[0]
+        # 10 unique picks, 10 universe-side delistings (all P*), 0 non-pick
+        # delistings — the strict statistical truth. universe_n_delistings
+        # is the report metric and DOES include the out-of-window picks
+        # (defined as "any ticker in universe that ever delisted"), so it
+        # stays at 10. But the Fisher p must be computed against zero
+        # non-pick delistings.
+        self.assertEqual(r.universe_n_delistings, 10)
+        self.assertEqual(r.n_delistings_in_picks, 1)
+        # Under subtraction-based control (the previous, leaky fix):
+        # control row = (10 - 1, 90 - (10 - 1)) = (9, 81) → p ≈ 0.32, no
+        # rejection. Under set-based control (this fix): control row =
+        # (0, 90) → p ≈ 0.1 (small sample, but the leak is eliminated).
+        # Cutoff threshold below would be impossible under the leak.
+        self.assertLess(r.fisher_p, 0.15)
+
+    def test_fisher_p_degenerate_picks_equal_universe(self):
+        """When picks fully equal the universe, the non-picks control group
+        is empty. scipy.stats.fisher_exact handles the zero-row table
+        gracefully (returns 1.0); the existing try/except converts any
+        ValueError to NaN. The diagnostic must not crash and must report
+        either 1.0 or NaN — not raise.
+        """
+        pick_tickers = [f"P{i:02d}" for i in range(50)]
+        picks = pd.DataFrame(
+            [
+                {"pick_date": date(2023, 1, 1), "ticker": t, "rank": rank}
+                for rank, t in enumerate(pick_tickers, start=1)
+            ]
+        )
+        events = [DelistingEvent(f"P{i:02d}", date(2023, 1, 15), "bankruptcy") for i in range(10)]
+        # Universe equals the pick set exactly.
+        results = compute_selection_bias(picks, events, pick_tickers, windows=(30,))
+        r = results[0]
+        self.assertTrue(math.isnan(r.fisher_p) or r.fisher_p == 1.0)
 
 
 class TestWipeoutReprice(unittest.TestCase):
