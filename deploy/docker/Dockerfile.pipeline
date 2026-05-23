@@ -24,16 +24,19 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # libxml2-dev + libxslt1-dev: lxml source-build headers AND runtime libs
 #           (the -dev packages depend on libxml2 + libxslt1.1, so installing
 #           the dev variants covers both cases — wheel install or source).
-# libgomp1: LightGBM OpenMP runtime — must be present even when the wheel is
-#           used, otherwise import fails with "libgomp.so.1: cannot open ...".
-# git: phase-robust-backtesting is installed from a git URL in pyproject.toml.
+#
+# Notably NOT installed: libgomp1 (LightGBM OpenMP runtime) and git.
+# Both were needed for the pre-split image. After the workspace split, the
+# `uv sync --package alphalens-pipeline` step skips the research-side
+# package, which means no LightGBM (lab-only) and no git-URL fetch for
+# phase-robust-backtesting (research-only dep declared as `... @ git+...`
+# in apps/alphalens-research/pyproject.toml). Keeping them out shrinks
+# the image without affecting the thematic daily pipeline.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libffi-dev \
         libxml2-dev \
         libxslt1-dev \
-        libgomp1 \
-        git \
     && rm -rf /var/lib/apt/lists/*
 
 # uv (Astral) — single static binary, no Python bootstrap.
