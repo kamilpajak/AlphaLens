@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Transaction cost model for MVP1 net-of-cost performance analysis.
 
 Three common parameterisations for small/mid-cap retail (per Perplexity 2026):
@@ -15,7 +16,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -236,19 +237,18 @@ def cost_sensitivity_table(
     from alphalens_research.backtest.metrics import sharpe
 
     gross = pd.Series(list(daily_returns), dtype=float)
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     for name, bps in _PROFILE_BPS.items():
         net = CostModel(annual_drag_bps=bps).apply(
             gross, daily_turnover=daily_turnover, periods_per_year=periods_per_year
         )
+        cum_growth = float(cast(Any, (1 + net).prod()))
         rows.append(
             {
                 "profile": name,
                 "drag_bps": bps,
                 "sharpe": sharpe(net.tolist(), periods_per_year=periods_per_year),
-                "annual_return": float(
-                    (1 + net).prod() ** (periods_per_year / max(len(net), 1)) - 1
-                ),
+                "annual_return": cum_growth ** (periods_per_year / max(len(net), 1)) - 1,
             }
         )
     return pd.DataFrame(rows).sort_values("drag_bps").reset_index(drop=True)

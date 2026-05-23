@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Factor-model regressions for backtest alpha attribution.
 
 Primary interface:
@@ -182,7 +183,7 @@ def bootstrap_carhart_alpha_ci(
     n_blocks = int(np.ceil(n / block_len))
 
     y_arr = (aligned["port"] - aligned["RF"]).to_numpy()
-    x_arr = sm.add_constant(aligned[factor_cols]).to_numpy()
+    x_arr = np.asarray(sm.add_constant(aligned[factor_cols]))
 
     rng = np.random.default_rng(seed)
     alphas_daily = np.empty(iterations)

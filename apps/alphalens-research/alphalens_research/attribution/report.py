@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Markdown + CSV report assembly for a `BacktestReport`.
 
 Consumes `BacktestReport.rebalance_results` plus cost/regime/factor outputs and

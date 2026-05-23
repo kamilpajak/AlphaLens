@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Conditional analysis of signal returns by exogenous vol regime.
 
 Used to test whether a strategy's alpha is concentrated in high-vol or
@@ -191,7 +192,7 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
 
 
 def _sign_pattern(low_mean: float, high_mean: float) -> str:
-    def _label(x):
+    def _label(x: float) -> str:
         if x > 0:
             return "positive"
         if x < 0:

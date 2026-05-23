@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Signal-independence pre-screen for compound-experiment design.
 
 Used before registering a multi-component compound test (per ADR 0007 +
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -92,7 +94,8 @@ def _per_asof_rho(
         return float("nan")
     if df["a"].nunique() < 2 or df["b"].nunique() < 2:
         return float("nan")
-    rho, _ = spearmanr(df["a"], df["b"])
+    result = spearmanr(df["a"], df["b"])
+    rho: Any = result[0]
     if rho is None or np.isnan(rho):
         return float("nan")
     return float(rho)
@@ -135,7 +138,7 @@ def pairwise_rank_ic_correlation(
         for asof, group in scorer_b_panel.groupby("asof", observed=True)
     }
 
-    common_asofs = sorted(set(a_by_asof) & set(b_by_asof))
+    common_asofs = sorted(cast(set[Any], set(a_by_asof) & set(b_by_asof)))
     if not common_asofs:
         raise ValueError("no common asofs between scorer_a_panel and scorer_b_panel")
 

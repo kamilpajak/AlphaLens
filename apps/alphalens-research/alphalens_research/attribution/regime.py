@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Market-regime classification based on benchmark-trend thresholds.
 
 Per Perplexity's recommendation, regime breakdown is a must-have metric:
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, cast
 
 import pandas as pd
 
@@ -85,7 +86,7 @@ def regime_breakdown(
     median = universe_median_returns.loc[idx]
     regimes = regime_labels.loc[idx]
 
-    out: dict[str, RegimeStats] = {}
+    out: dict[Regime, RegimeStats] = {}
     for label in ("bull", "bear", "flat"):
         mask = regimes == label
         if not mask.any():
@@ -93,11 +94,11 @@ def regime_breakdown(
         port_slice = port[mask]
         ic_slice = ic[mask]
         median_slice = median[mask]
-        cum = (1 + port_slice).prod()
+        cum = float(cast(Any, (1 + port_slice).prod()))
         years = max(len(port_slice) / periods_per_year, 1e-9)
-        annual = float(cum ** (1 / years) - 1) if years > 0 else 0.0
+        annual = cum ** (1 / years) - 1 if years > 0 else 0.0
         out[label] = RegimeStats(
-            regime=label,  # type: ignore[arg-type]
+            regime=label,
             days=len(port_slice),
             sharpe=sharpe(port_slice.tolist(), periods_per_year=periods_per_year),
             annual_return=annual,
