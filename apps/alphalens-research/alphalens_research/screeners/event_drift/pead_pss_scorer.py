@@ -128,7 +128,7 @@ def build_daily_weights(
         # Active days: strict-left open, closed right → (entry_idx, exit_idx].
         # Vectorise the slice assignment to avoid per-cell pandas overhead.
         active_dates = calendar[entry_idx + 1 : exit_idx + 1]
-        df.loc[active_dates, event.ticker] += weight
+        df.loc[active_dates, event.ticker] += weight  # type: ignore[index]
 
     # Enforce α2 sub-leverage contract: weight per ticker per day must NEVER
     # exceed 1/n_fixed. Concurrent same-ticker events (rare: 10-Q/A restatement

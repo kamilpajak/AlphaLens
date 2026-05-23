@@ -173,4 +173,4 @@ def apply_vol_target(returns: pd.Series, targeter: VolTargeter) -> pd.Series:
     if returns.empty:
         return returns.copy()
     scales = targeter.scale_series(returns)
-    return (returns * scales).rename(returns.name or "portfolio")
+    return (returns * scales).rename(str(returns.name) if returns.name else "portfolio")

@@ -158,4 +158,4 @@ def apply_drawdown_control(returns: pd.Series, overlay: DrawdownControlOverlay) 
     if returns.empty:
         return returns.copy()
     scales = overlay.scale_series(returns)
-    return (returns * scales).rename(returns.name or "portfolio")
+    return (returns * scales).rename(str(returns.name) if returns.name else "portfolio")

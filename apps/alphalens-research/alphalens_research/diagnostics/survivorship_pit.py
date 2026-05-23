@@ -35,6 +35,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -50,7 +51,7 @@ from alphalens_research.backtest.engine import (
     Scorer,
 )
 from alphalens_research.backtest.metrics import rank_ic_tstat, sharpe
-from alphalens_research.backtest.weighting import weighted_return
+from alphalens_research.backtest.weighting import WeightingScheme, weighted_return
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -148,7 +149,7 @@ def _summarise_cohort(
 ) -> CohortSplitResult:
     returns = report.portfolio_returns
     ic = report.ic_series
-    cum_return = float((1.0 + returns).prod() - 1.0) if len(returns) else 0.0
+    cum_return = float(cast(Any, (1.0 + returns).prod()) - 1.0) if len(returns) else 0.0
     attribution = None
     if carhart_factors is not None and len(returns) > 30:
         try:
@@ -182,7 +183,7 @@ def run_cohort_backtests(
     benchmark: str = "SPY",
     top_n: int = 5,
     holding_period: int = 5,
-    weighting: str = "linear",
+    weighting: WeightingScheme = "linear",
     carhart_factors: pd.DataFrame | None = None,
 ) -> list[CohortSplitResult]:
     """Run the backtest once per cohort plus once for the full universe.
@@ -262,8 +263,8 @@ def _count_picks_with_delisting_in_window(
     n = 0
     unique_affected: set[str] = set()
     for row in picks_df.itertuples(index=False):
-        pick_date = row.pick_date
-        ticker = row.ticker
+        pick_date = cast(date, row.pick_date)
+        ticker = cast(str, row.ticker)
         delistings = events_by_ticker.get(ticker, [])
         if any(pick_date <= d <= pick_date + timedelta(days=window_days) for d in delistings):
             n += 1
@@ -300,7 +301,8 @@ def _fisher_p(
         ]
     )
     try:
-        _, p = stats.fisher_exact(table, alternative="two-sided")
+        result = stats.fisher_exact(table, alternative="two-sided")
+        p: Any = result[1]
     except ValueError:
         return float("nan")
     return float(p) if not np.isnan(p) else float("nan")

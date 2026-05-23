@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 from typing import Any
 
 import requests
@@ -51,7 +52,7 @@ class SecEdgarClient:
         user_agent: str,
         rate_limit_per_sec: int = 10,
         session: requests.Session | None = None,
-        sleep: callable = time.sleep,
+        sleep: Callable[[float], None] = time.sleep,
     ):
         if not user_agent:
             raise ValueError("SEC EDGAR requires a non-empty User-Agent")
@@ -187,8 +188,8 @@ class SecEdgarClient:
     _RATE_LIMIT_BACKOFF = 60
     _MAX_REQUEST_ATTEMPTS = 3
 
-    def _request(self, url: str):
-        resp = None
+    def _request(self, url: str) -> requests.Response:
+        resp: requests.Response | None = None
         for attempt in range(self._MAX_REQUEST_ATTEMPTS):
             self._throttle()
             resp = self._request_with_retry(url)
@@ -217,6 +218,7 @@ class SecEdgarClient:
                 self._sleep(backoff)
                 continue
             break
+        assert resp is not None
         if resp.status_code >= 400:
             raise SecEdgarError(f"{resp.status_code} {resp.text[:200]}")
         return resp

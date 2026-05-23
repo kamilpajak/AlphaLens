@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -310,7 +311,7 @@ def run_full_grid(
     ):
         turnover_daily = broadcast_turnover_to_daily(
             turnover_df,
-            gross.index,
+            cast(pd.DatetimeIndex, gross.index),
             holding_days=holding_days,
             mode=broadcast_mode,
         )

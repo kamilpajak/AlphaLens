@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Long-format Parquet representation of SEC EDGAR companyfacts.
 
 Replaces the dict-of-parsed-JSON cache pattern of FosterSUEStore /

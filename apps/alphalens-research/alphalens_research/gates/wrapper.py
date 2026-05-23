@@ -75,12 +75,12 @@ def regime_gated_scorer(
             return pd.DataFrame(columns=["ticker", "score"])
 
         if has_is_on:
-            if not classifier.is_on(asof):
+            if not classifier.is_on(asof):  # type: ignore[attr-defined]
                 return pd.DataFrame(columns=["ticker", "score"])
             return base_scorer(histories, config)
 
         # graded path
-        weight = _clamp_unit(classifier.score(asof))
+        weight = _clamp_unit(classifier.score(asof))  # type: ignore[attr-defined]
         result = base_scorer(histories, config)
         if "score" in result.columns and len(result) > 0:
             result = result.copy()

@@ -21,6 +21,7 @@ ranks return NaN (n=2 rank is binary, n=1 is meaningless).
 from __future__ import annotations
 
 import math
+from typing import Any, TypeGuard
 
 import numpy as np
 import pandas as pd
@@ -32,7 +33,7 @@ _VALUE_ASCENDING_LOWER_BETTER = ["valuation_pe", "valuation_ev_ebitda", "valuati
 _HIGHER_BETTER_METRICS = ["fcff_yield_pct", "roic_pct", "roe_pct"]
 
 
-def _is_finite_number(v) -> bool:
+def _is_finite_number(v: Any) -> TypeGuard[float | int]:
     if v is None:
         return False
     try:
@@ -41,7 +42,7 @@ def _is_finite_number(v) -> bool:
         return False
 
 
-def compute_ebit_ttm(features: dict) -> float | None:
+def compute_ebit_ttm(features: dict[str, Any]) -> float | None:
     """EBIT proxy — SimFin's Operating Income (Loss) TTM."""
     ebit = features.get("operating_income_ttm")
     if not _is_finite_number(ebit):
@@ -49,17 +50,17 @@ def compute_ebit_ttm(features: dict) -> float | None:
     return float(ebit)
 
 
-def compute_net_debt(features: dict) -> float | None:
+def compute_net_debt(features: dict[str, Any]) -> float | None:
     """Net debt = LT debt + ST debt − cash. None if any component missing."""
     ltd = features.get("long_term_debt")
     std = features.get("short_term_debt")
     cash = features.get("cash_and_equivalents")
-    if not all(_is_finite_number(v) for v in (ltd, std, cash)):
+    if not (_is_finite_number(ltd) and _is_finite_number(std) and _is_finite_number(cash)):
         return None
     return float(ltd) + float(std) - float(cash)
 
 
-def compute_ev_ebitda(features: dict, *, market_cap: float) -> float | None:
+def compute_ev_ebitda(features: dict[str, Any], *, market_cap: float) -> float | None:
     """EV/EBITDA = (market_cap + net_debt) / (EBIT + D&A)."""
     ebit = compute_ebit_ttm(features)
     net_debt = compute_net_debt(features)
@@ -74,7 +75,7 @@ def compute_ev_ebitda(features: dict, *, market_cap: float) -> float | None:
     return (float(market_cap) + net_debt) / ebitda
 
 
-def compute_roic(features: dict) -> float | None:
+def compute_roic(features: dict[str, Any]) -> float | None:
     """ROIC = EBIT / invested_capital, where invested = total_debt + equity − cash.
 
     Returned as a percentage (0..100+). Invested capital must be > 0.
@@ -84,7 +85,12 @@ def compute_roic(features: dict) -> float | None:
     ltd = features.get("long_term_debt")
     std = features.get("short_term_debt")
     cash = features.get("cash_and_equivalents")
-    if ebit is None or not all(_is_finite_number(v) for v in (equity, ltd, std, cash)):
+    if ebit is None or not (
+        _is_finite_number(equity)
+        and _is_finite_number(ltd)
+        and _is_finite_number(std)
+        and _is_finite_number(cash)
+    ):
         return None
     invested = float(ltd) + float(std) + float(equity) - float(cash)
     if invested <= 0:
@@ -92,7 +98,7 @@ def compute_roic(features: dict) -> float | None:
     return 100.0 * ebit / invested
 
 
-def compute_roe(features: dict) -> float | None:
+def compute_roe(features: dict[str, Any]) -> float | None:
     """ROE = net_income / total_equity, as a percentage. Equity must be > 0."""
     ni = features.get("net_income_ttm")
     equity = features.get("total_equity")
@@ -103,7 +109,7 @@ def compute_roe(features: dict) -> float | None:
     return 100.0 * float(ni) / float(equity)
 
 
-def passes_health_gate(features: dict) -> bool:
+def passes_health_gate(features: dict[str, Any]) -> bool:
     """EBIT > 0 AND net_debt / EBIT < 5 (or net cash position).
 
     Conservative: missing data → fail closed. The gate exists to drop
@@ -157,7 +163,7 @@ def compute_cohort_rank(df: pd.DataFrame) -> pd.Series:
         rank_components.append(
             survivors[col].rank(method="average", ascending=False, na_option="bottom")
         )
-    rank_sum = sum(rank_components)
+    rank_sum: pd.Series = sum(rank_components)  # pyright: ignore[reportAssignmentType]
     # Dense re-rank — collapses fractional rank sums into contiguous 1..N integers.
     dense = rank_sum.rank(method="dense", ascending=True).astype(int)
 

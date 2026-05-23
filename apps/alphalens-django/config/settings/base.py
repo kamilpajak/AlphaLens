@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false, reportCallIssue=false
 """Base Django settings shared by dev and prod.
 
 Env-driven via django-environ. No secrets here — `.env` (dev) or process env

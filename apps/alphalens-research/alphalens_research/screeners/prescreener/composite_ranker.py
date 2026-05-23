@@ -52,5 +52,5 @@ class CompositeRanker:
     def top_n(self, ranked: pd.DataFrame, n: int | None = None) -> pd.DataFrame:
         """Return top N candidates."""
         if n is None:
-            n = self.config["top_n"]
+            n = int(self.config["top_n"])
         return ranked.head(n)

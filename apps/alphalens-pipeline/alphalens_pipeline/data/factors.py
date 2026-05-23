@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from datetime import date
 from io import StringIO
 from pathlib import Path
@@ -234,7 +235,7 @@ def load_q4_daily(
     start: date | None = None,
     end: date | None = None,
     *,
-    fetch: callable | None = None,
+    fetch: Callable[[str], str] | None = None,
 ) -> pd.DataFrame:
     """Load Hou-Xue-Zhang q-factor daily returns (Q4: Mkt-RF, ME, I/A, ROE).
 
@@ -269,7 +270,8 @@ def load_q4_daily(
                 continue
         frames.append(_parse_q4_csv(path.read_text()))
 
-    combined = pd.concat(frames).sort_index().loc[lambda df: ~df.index.duplicated(keep="last")]
+    combined = pd.concat(frames).sort_index()
+    combined = combined.loc[~combined.index.duplicated(keep="last")]
     return _apply_date_filter(combined, start, end)
 
 

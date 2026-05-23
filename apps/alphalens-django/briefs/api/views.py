@@ -125,12 +125,12 @@ class DayViewSet(viewsets.ViewSet):
 
     @extend_schema(responses=DayBriefSerializer)
     def retrieve(self, request: Request, date: str | None = None) -> Response:
-        date = _date_from_path(date, what="brief")
-        meta = DayMeta.objects.filter(date=date).first()
+        asof = _date_from_path(date, what="brief")
+        meta = DayMeta.objects.filter(date=asof).first()
         if meta is None:
-            raise NotFound(f"no brief for date={date.isoformat()}")
+            raise NotFound(f"no brief for date={asof.isoformat()}")
 
-        candidates = Brief.objects.filter(date=date).order_by("-layer4_weighted_score", "ticker")
+        candidates = Brief.objects.filter(date=asof).order_by("-layer4_weighted_score", "ticker")
         payload = {
             "date": meta.date,
             "n_candidates": meta.n_candidates,
@@ -150,11 +150,11 @@ class DayViewSet(viewsets.ViewSet):
     )
     @action(detail=True, methods=["get"], url_path="candidates")
     def candidates(self, request: Request, date: str | None = None) -> Response:
-        date = _date_from_path(date, what="brief")
-        if not DayMeta.objects.filter(date=date).exists():
-            raise NotFound(f"no brief for date={date.isoformat()}")
+        asof = _date_from_path(date, what="brief")
+        if not DayMeta.objects.filter(date=asof).exists():
+            raise NotFound(f"no brief for date={asof.isoformat()}")
 
-        qs = Brief.objects.filter(date=date)
+        qs = Brief.objects.filter(date=asof)
         theme = request.query_params.get("theme")
         if theme:
             qs = qs.filter(theme=theme)

@@ -5,6 +5,7 @@ import logging
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from typing import Any
 from urllib.parse import urlencode
 
 from alphalens_pipeline.data.alt_data.sec_edgar_client import (
@@ -212,7 +213,7 @@ class SECEdgarSource(EventSource):
         title_el = entry.find("atom:title", ATOM_NS)
         title_text = title_el.text if title_el is not None and title_el.text else ""
 
-        raw = {"title": title_text, "form_str": form_str}
+        raw: dict[str, Any] = {"title": title_text, "form_str": form_str}
         if form_type == FormType.FORM_8K:
             items = ITEM_PATTERN.findall(title_text)
             if items:

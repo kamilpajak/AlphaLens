@@ -41,6 +41,7 @@ expectation, not undesirable surprise.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -124,7 +125,7 @@ def fit_sign_constrained_lasso(
         X_aug[:, n_options + n_equity + j] = -X_std[:, idx]
 
     model = LassoCV(
-        n_alphas=lambda_grid_points,
+        n_alphas=cast(Any, lambda_grid_points),
         cv=n_folds,
         eps=eps,
         random_state=random_state,
@@ -154,6 +155,6 @@ def fit_sign_constrained_lasso(
         n_train_obs=int(X_raw.shape[0]),
         n_nonzero_coefs=int(nonzero_mask.sum()),
         n_nonzero_options=nonzero_options,
-        scaler_means=scaler.mean_,
-        scaler_stds=scaler.scale_,
+        scaler_means=cast(np.ndarray, scaler.mean_),
+        scaler_stds=cast(np.ndarray, scaler.scale_),
     )

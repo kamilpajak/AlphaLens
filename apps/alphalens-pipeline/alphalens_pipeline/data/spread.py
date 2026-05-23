@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false, reportCallIssue=false
 """Daily-OHLC bid-ask spread estimators (Phase 1 of issue #3).
 
 Two published low-frequency spread estimators that work on daily high/low/close

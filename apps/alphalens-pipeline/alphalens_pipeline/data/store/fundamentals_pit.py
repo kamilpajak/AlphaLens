@@ -15,6 +15,7 @@ import copy
 import logging
 from collections.abc import Callable, Mapping
 from datetime import date
+from typing import Any
 
 from alphalens_pipeline.data.fundamentals.fetcher import extract_features, fetch_ticker_bundle
 
@@ -28,7 +29,7 @@ class HistoricalFundamentalsStore:
     def __init__(self, fetcher: BundleFetcher | None = None):
         """fetcher(ticker, curr_date=None) -> bundle. Defaults to fetch_ticker_bundle."""
         self._fetcher = fetcher or (lambda t, curr_date=None: fetch_ticker_bundle(t))
-        self._bundles: dict[str, dict] = {}
+        self._bundles: dict[str, Any] = {}
 
     # Raise if more than this fraction of tickers fail to preload — silent
     # degradation would make Phase 2 backtest falsely report "gate has no
