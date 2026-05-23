@@ -1,6 +1,16 @@
 # alphalens-research
 
-The research engine — screeners, backtest, attribution, watchdog, paper-trade, and the thematic daily pipeline. Installed from the workspace root `pyproject.toml`.
+The research lab — screeners, backtest, attribution, overlays, gates,
+preaudit, diagnostics, and paper-trade. Installed from the workspace
+root `pyproject.toml`.
+
+> Live infrastructure (watchdog, thematic, data clients, literature_review,
+> scorers, and the `alphalens` CLI binary) lives in the sibling
+> [`apps/alphalens-pipeline/`](../alphalens-pipeline/) workspace member.
+> This lab depends on it via a workspace dep; the `alphalens` CLI is only
+> available when the full workspace is synced (`uv sync` from repo root).
+> A focused `uv pip install -e apps/alphalens-research/` will install the
+> lab but leave the CLI broken — use workspace sync instead.
 
 ## Quickstart
 

@@ -71,21 +71,50 @@ RULES = (
 
 
 def _iter_imports(path: Path, *, include_function_scope: bool):
-    """Yield every ``module`` name from ``from <module> import ...`` in path.
+    """Yield every imported module name in ``path``.
 
-    If ``include_function_scope`` is False, restrict to module-level imports
-    (skip imports inside function/method bodies — the documented lazy-CLI
-    pattern). Otherwise all imports, including lazy ones, are emitted.
+    Covers both ``import X`` and ``from X import Y`` shapes (using ``ast.Import``
+    + ``ast.ImportFrom`` respectively). Walks into all non-function nodes so
+    forbidden imports nested in ``if TYPE_CHECKING:`` / ``try`` / ``with`` blocks
+    are caught — the rule should hold module-import-time regardless of
+    surrounding control flow.
+
+    If ``include_function_scope`` is False, skip imports inside function /
+    method / lambda bodies (the documented lazy-CLI pattern). Otherwise all
+    imports, including lazy ones, are emitted.
     """
     tree = ast.parse(path.read_text(), filename=str(path))
-    if include_function_scope:
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                yield node.module
-    else:
-        for node in tree.body:
-            if isinstance(node, ast.ImportFrom) and node.module:
-                yield node.module
+
+    class _ImportCollector(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.modules: list[str] = []
+
+        def visit_Import(self, node: ast.Import) -> None:
+            for alias in node.names:
+                if alias.name:
+                    self.modules.append(alias.name)
+            self.generic_visit(node)
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            if node.module:
+                self.modules.append(node.module)
+            self.generic_visit(node)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            if include_function_scope:
+                self.generic_visit(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            if include_function_scope:
+                self.generic_visit(node)
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            # Lambdas can't contain import statements; no-op for symmetry.
+            return
+
+    collector = _ImportCollector()
+    collector.visit(tree)
+    yield from collector.modules
 
 
 def _python_files(pkg_dir: Path):
