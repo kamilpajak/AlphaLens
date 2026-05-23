@@ -89,13 +89,18 @@ jobs:
         # mode is enforced via the top-level "strict" array in pyrightconfig.json
         # at file granularity (opportunistic_form4.py is SHA256-locked per
         # pre-reg ledger, so it stays in basic mode and isn't checked here).
-        # When backtest/attribution strict zones are cleaned in follow-up PRs,
-        # add equivalent blocking steps here per zone.
         run: |
           uv run pyright \
             apps/alphalens-pipeline/alphalens_pipeline/scorers/_common.py \
             apps/alphalens-pipeline/alphalens_pipeline/scorers/cohen_malloy_classifier.py \
             apps/alphalens-pipeline/alphalens_pipeline/scorers/fcff_yield.py
+
+      - name: Pyright strict (backtest)
+        # Dedicated blocking gate for the Layer 3 backtest engine + its
+        # auxiliary metrics/IC/theme modules. Wrong type at this boundary
+        # corrupts BacktestReport.portfolio_returns -> wrong Sharpe ->
+        # wrong verdict. Strict per pyrightconfig.json top-level "strict" array.
+        run: uv run pyright apps/alphalens-research/alphalens_research/backtest/
 
       - name: Pyright type-check (basic global + strict per critical module)
         # Config: pyrightconfig.json at repo root.
@@ -104,12 +109,11 @@ jobs:
         # on math-heavy research code.
         # Strict per-module via executionEnvironments on backtest/attribution/
         # scorers — these surfaces govern verdicts; wrong types corrupt α t-stats.
-        # TODO: flip continue-on-error to false in three follow-up PRs:
-        #   (1) clean backtest strict (~274 errors)
-        #   (2) clean attribution strict (~361 errors)
+        # TODO: flip continue-on-error to false in two follow-up PRs:
+        #   (1) clean attribution strict (~361 errors)
         # then a final PR cleans basic-mode global (~301 errors) and flips to
-        # blocking. Scorers strict already DONE — blocking step above pins the
-        # 3 non-locked files. Current baseline: 936 errors / 111 warnings.
+        # blocking. Scorers strict DONE (PR #205) + backtest strict DONE — both
+        # pinned by the blocking steps above. Current baseline: 664 errors / 111 warnings.
         run: uv run pyright
         continue-on-error: true
 

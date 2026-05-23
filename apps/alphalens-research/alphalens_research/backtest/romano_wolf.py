@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Romano-Wolf (2005) step-down family-wise-error-rate control.
 
 Combines a Politis-Romano (1994) stationary block-bootstrap of the

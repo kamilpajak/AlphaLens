@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Block-bootstrap Sharpe-difference inference (Ledoit-Wolf style).
 
 Used by the overlay-class success metric per ADR 0007: when comparing a

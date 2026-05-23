@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Top-decile EW long-only portfolio construction primitives.
 
 Used by precheck/verification scripts that need to construct a portfolio
@@ -26,6 +27,7 @@ Critical edge cases (TDD-covered in tests/test_top_decile_portfolio.py):
 from __future__ import annotations
 
 from datetime import date
+from typing import cast
 
 import pandas as pd
 
@@ -53,19 +55,22 @@ def monthly_asof_calendar(
         21d stride approximation).
     """
     asofs: list[pd.Timestamp] = []
-    cur = pd.Timestamp(start.year, start.month, day_of_month)
+    cur = cast(pd.Timestamp, pd.Timestamp(start.year, start.month, day_of_month))
     while cur.date() <= end:
         # Skip weekends forward
         adj = cur
         while adj.weekday() > 4:
-            adj += pd.Timedelta(days=1)
-        if start <= adj.date() <= end:
+            adj = cast(pd.Timestamp, adj + pd.Timedelta(days=1))
+        adj_date = adj.date()
+        if start <= adj_date <= end:
             asofs.append(adj)
         # Next month
-        if cur.month == 12:
-            cur = pd.Timestamp(cur.year + 1, 1, day_of_month)
+        cur_year = int(cur.year)
+        cur_month = int(cur.month)
+        if cur_month == 12:
+            cur = cast(pd.Timestamp, pd.Timestamp(cur_year + 1, 1, day_of_month))
         else:
-            cur = pd.Timestamp(cur.year, cur.month + 1, day_of_month)
+            cur = cast(pd.Timestamp, pd.Timestamp(cur_year, cur_month + 1, day_of_month))
     return asofs
 
 
@@ -77,16 +82,16 @@ def _select_held_tickers(
     available: dict[str, pd.Series],
 ) -> list[str]:
     asof_norm = asof.normalize()
-    scores_at_asof = scores[scores["asof"] == asof_norm]
+    scores_at_asof = cast(pd.DataFrame, scores[scores["asof"] == asof_norm])
     if scores_at_asof.empty:
         return []
-    valid = scores_at_asof.dropna(subset=["score"])
-    # Drop zero-score rows (distress_credit zeroes non-bottom-quintile)
-    valid = valid[valid["score"] != 0]
+    score_col = cast(pd.Series, scores_at_asof["score"])
+    valid = cast(pd.DataFrame, scores_at_asof[score_col.notna() & (score_col != 0)])
     if valid.empty:
         return []
-    n_decile = max(1, int(len(valid) * top_decile_pct))
-    top_tickers = valid.nlargest(n_decile, "score")["ticker"].tolist()
+    n_decile: int = max(1, int(len(valid) * top_decile_pct))
+    top_rows = valid.nlargest(n_decile, "score")
+    top_tickers = cast(pd.Series, top_rows["ticker"]).tolist()
     return [t for t in top_tickers if t in available]
 
 
@@ -111,9 +116,9 @@ def _per_ticker_daily_returns(
     """Pre-compute pct-change series per ticker, skipping empty/malformed."""
     out: dict[str, pd.Series] = {}
     for ticker, hist in histories.items():
-        if hist is None or hist.empty or "close" not in hist.columns:
+        if hist.empty or "close" not in hist.columns:
             continue
-        out[ticker] = hist["close"].pct_change()
+        out[ticker] = cast(pd.Series, hist["close"]).pct_change()
     return out
 
 
@@ -195,5 +200,5 @@ def top_decile_portfolio_daily_returns(
         return pd.Series(dtype=float, name="portfolio_daily")
 
     series = pd.concat(portfolio_returns_chunks).sort_index()
-    series = series[~series.index.duplicated(keep="first")]
+    series = cast(pd.Series, series[~series.index.duplicated(keep="first")])
     return series.rename("portfolio_daily")

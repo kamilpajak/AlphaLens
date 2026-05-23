@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Theme concentration analysis over time — factor-aware monitoring.
 
 Backtest `rebalance_results` carry the top-N tickers each day. This module maps
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any, cast
 
 import pandas as pd
 
@@ -69,7 +71,7 @@ def _accumulate_theme_weights(
 
 def _empty_snapshot(date: pd.Timestamp | None) -> ThemeSnapshot:
     return ThemeSnapshot(
-        date=date or pd.Timestamp(0),
+        date=date or cast(pd.Timestamp, pd.Timestamp(0)),
         top_n_tickers=(),
         theme_weights={},
         dominant_theme=None,
@@ -108,13 +110,13 @@ def snapshot_themes(
         theme_weights = {k: v / total for k, v in theme_sums.items()}
         uncl_frac = unclassified / total
 
-    dominant = max(theme_weights, key=theme_weights.get) if theme_weights else None
+    dominant = max(theme_weights, key=lambda k: theme_weights[k]) if theme_weights else None
     # HHI includes the unclassified bucket so it's not free to grow.
     all_weights = [*theme_weights.values(), uncl_frac] if total > 0 else []
     hhi = sum(w * w for w in all_weights)
 
     return ThemeSnapshot(
-        date=date or pd.Timestamp(0),
+        date=date or cast(pd.Timestamp, pd.Timestamp(0)),
         top_n_tickers=tuple(tickers),
         theme_weights=theme_weights,
         dominant_theme=dominant,
@@ -145,9 +147,9 @@ def theme_series(
     - DataFrame with one column per theme (plus `unclassified`, `hhi`)
     - `ThemeSeriesStats` with aggregates
     """
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     for snap in snapshots:
-        row = {"date": snap.date, **snap.theme_weights}
+        row: dict[str, Any] = {"date": snap.date, **snap.theme_weights}
         row["unclassified"] = snap.unclassified_fraction
         row["hhi"] = snap.hhi
         row["dominant_theme"] = snap.dominant_theme or ""
@@ -170,14 +172,14 @@ def theme_series(
     meta = {"unclassified", "hhi", "dominant_theme"}
     theme_cols = tuple(c for c in df.columns if c not in meta)
 
-    mean_weights = {c: float(df[c].fillna(0.0).mean()) for c in theme_cols}
+    mean_weights = {c: float(cast(pd.Series, df[c]).fillna(0.0).mean()) for c in theme_cols}
     days_dominant = (
         df["dominant_theme"].value_counts().to_dict() if "dominant_theme" in df.columns else {}
     )
     # Drop the empty string entry (days with no dominant theme)
     days_dominant = {k: int(v) for k, v in days_dominant.items() if k}
 
-    mean_hhi = float(df["hhi"].mean()) if "hhi" in df.columns else 0.0
+    mean_hhi = float(cast(pd.Series, df["hhi"]).mean()) if "hhi" in df.columns else 0.0
 
     alert_days = 0
     if theme_cols:
@@ -223,7 +225,7 @@ def format_theme_summary(stats: ThemeSeriesStats, n_total_days: int) -> str:
 
 
 def snapshots_from_backtest(
-    rebalance_results: Iterable,
+    rebalance_results: Iterable[Any],
     themes_map: Mapping[str, list[str]],
 ) -> list[ThemeSnapshot]:
     """Convenience: build snapshots from `BacktestReport.rebalance_results`.

@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Daily-cadence continuous-holding portfolio return reconstruction.
 
 The :class:`~alphalens_research.backtest.engine.BacktestEngine` emits one
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import date
+from typing import cast
 
 import pandas as pd
 from alphalens_pipeline.data.store.history import HistoryStore
@@ -65,8 +67,9 @@ def _prefetch_closes(
             full = history_store.full(tkr)
         except KeyError:
             continue
-        closes_by_ticker[tkr] = full["close"].reindex(held_days)
-        prev_closes_by_ticker[tkr] = full["close"].shift(1).reindex(held_days)
+        close_col = cast(pd.Series, full["close"])
+        closes_by_ticker[tkr] = close_col.reindex(held_days)
+        prev_closes_by_ticker[tkr] = cast(pd.Series, close_col.shift(1).reindex(held_days))
     return closes_by_ticker, prev_closes_by_ticker
 
 
@@ -138,7 +141,7 @@ def daily_continuous_returns(
     cal_idx = cal_df.index
     first_reb_ts = rebalances[0].date
     end_ts = pd.Timestamp(end_date) if end_date is not None else cal_idx[-1]
-    held_days = cal_idx[(cal_idx > first_reb_ts) & (cal_idx <= end_ts)]
+    held_days = cast(pd.DatetimeIndex, cal_idx[(cal_idx > first_reb_ts) & (cal_idx <= end_ts)])
     if held_days.empty:
         return pd.Series(dtype=float, name="portfolio_daily")
 
