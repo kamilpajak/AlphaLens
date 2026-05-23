@@ -3,7 +3,7 @@
 The 2026-05-22 vendor-client consolidation routes every Polygon REST fetch
 in the repo (thematic news ingest, press verification, short-interest
 features, options-contracts reference) through
-:class:`alphalens_research.data.alt_data.polygon_client.PolygonClient`.
+:class:`alphalens_pipeline.data.alt_data.polygon_client.PolygonClient`.
 
 Polygon's Starter-tier rate limit (5 req/min) is per-API-key, so any
 uncoordinated shadow client drains budget from every other consumer in
@@ -30,22 +30,20 @@ import re
 import unittest
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 
 SCAN_DIRS = (
-    REPO_ROOT / "alphalens_research",
-    REPO_ROOT / "alphalens_cli",
-    REPO_ROOT / "scripts",
+    WORKSPACE_ROOT / "apps" / "alphalens-pipeline" / "alphalens_pipeline",
+    WORKSPACE_ROOT / "apps" / "alphalens-pipeline" / "alphalens_cli",
+    WORKSPACE_ROOT / "apps" / "alphalens-research" / "alphalens_research",
+    WORKSPACE_ROOT / "apps" / "alphalens-research" / "scripts",
 )
 
 # The canonical client itself — only file allowed to make raw Polygon HTTP.
-CANONICAL_CLIENT_REL = "alphalens_research/data/alt_data/polygon_client.py"
+CANONICAL_CLIENT_REL = "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/polygon_client.py"
 
-# Path-prefix exemption for the closed-layer anti-pattern catalog (ADR 0005).
-# These shadow clients are frozen as historical reference; the enforcement
-# test should not chase them. Same exemption shape as
-# ``tests/test_no_raw_gemini_sdk.py``.
-EXEMPT_PATH_PREFIXES = ("alphalens_research/archive/",)
+# Path-prefix exemption (empty — archive/ tree removed per ADR 0010).
+EXEMPT_PATH_PREFIXES: tuple[str, ...] = ()
 
 # Fragments that uniquely identify Polygon endpoints used by the project.
 POLYGON_URL_FRAGMENTS = (
@@ -115,7 +113,7 @@ class TestNoRawPolygonHttp(unittest.TestCase):
             "return self._session.get(url, headers=headers, params=params, timeout=self._timeout)",
             '"""...persistent rate-limit (retry exhausted), the exception """',
             "# urlopen line in a comment must never trip detection",
-            "from alphalens_research.data.alt_data.polygon_client import PolygonClient",
+            "from alphalens_pipeline.data.alt_data.polygon_client import PolygonClient",
             "client = get_default_polygon_client()",
         ]
         for sample in safe_samples:
@@ -133,7 +131,7 @@ class TestNoRawPolygonHttp(unittest.TestCase):
             if not root.exists():
                 continue
             for py in root.rglob("*.py"):
-                rel = py.relative_to(REPO_ROOT).as_posix()
+                rel = py.relative_to(WORKSPACE_ROOT).as_posix()
                 if _is_exempt(rel):
                     continue
                 text = py.read_text(encoding="utf-8", errors="replace")
@@ -147,7 +145,7 @@ class TestNoRawPolygonHttp(unittest.TestCase):
             self.fail(
                 "Raw Polygon HTTP detected outside PolygonClient.\n"
                 "Route the call through "
-                "alphalens_research.data.alt_data.polygon_client (use\n"
+                "alphalens_pipeline.data.alt_data.polygon_client (use\n"
                 "get_default_polygon_client() if you don't have one to inject).\n"
                 f"Offenders:\n{details}"
             )

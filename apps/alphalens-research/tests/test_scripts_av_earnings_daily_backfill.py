@@ -78,7 +78,7 @@ class TestRateLimitExitClean(unittest.TestCase):
     def test_persistent_rate_limit_returns_zero_not_raises(self) -> None:
         """Cron job must not error-alert on rate-limit — tomorrow's quota
         window picks up where today left off."""
-        from alphalens_research.data.alt_data.av_earnings_client import AVRateLimitError
+        from alphalens_pipeline.data.alt_data.av_earnings_client import AVRateLimitError
 
         with tempfile.TemporaryDirectory() as tmp:
             data_root = Path(tmp) / "data"

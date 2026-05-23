@@ -67,12 +67,12 @@ from typing import Literal
 
 import numpy as np
 import pandas as pd
+from alphalens_pipeline.data.store.history import HistoryStore
 
 from alphalens_research.attribution.cost_model import CostModel
 from alphalens_research.backtest.engine import BacktestReport
 from alphalens_research.backtest.metrics import sharpe
 from alphalens_research.backtest.weighting import compute_position_weights
-from alphalens_research.data.store.history import HistoryStore
 
 # ---------------------------------------------------------------------------
 # Dataclasses

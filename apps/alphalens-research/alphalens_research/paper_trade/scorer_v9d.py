@@ -28,8 +28,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import yaml
+from alphalens_pipeline.data.alt_data.ivolatility_smd_cache import load_cached_smd
 
-from alphalens_research.data.alt_data.ivolatility_smd_cache import load_cached_smd
 from alphalens_research.screeners.options_implied import (
     build_feature_frame,
     score_cross_sectional_residual,
@@ -270,7 +270,7 @@ def incremental_refresh_smd(
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     if fetcher is None:
-        from alphalens_research.data.alt_data.ivolatility_smd_cache import (
+        from alphalens_pipeline.data.alt_data.ivolatility_smd_cache import (
             _robust_smd_fetcher,
         )
 
@@ -298,7 +298,7 @@ def _refresh_one_ticker(
     """Refresh one ticker's parquet; returns the counts-dict key for outcome."""
     from datetime import timedelta
 
-    from alphalens_research.data.alt_data.ivolatility_smd_cache import (
+    from alphalens_pipeline.data.alt_data.ivolatility_smd_cache import (
         _coerce_mixed_object_columns,
     )
 
@@ -361,7 +361,7 @@ def backfill_smd_history(
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     if fetcher is None:
-        from alphalens_research.data.alt_data.ivolatility_smd_cache import (
+        from alphalens_pipeline.data.alt_data.ivolatility_smd_cache import (
             _robust_smd_fetcher,
         )
 
@@ -395,7 +395,7 @@ def _backfill_one_ticker(
     """Backfill one ticker's parquet; returns the counts-dict key for outcome."""
     from datetime import timedelta
 
-    from alphalens_research.data.alt_data.ivolatility_smd_cache import (
+    from alphalens_pipeline.data.alt_data.ivolatility_smd_cache import (
         _coerce_mixed_object_columns,
     )
 

@@ -24,13 +24,13 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
-
-from alphalens_research.data.alt_data.shares_outstanding import (
+from alphalens_pipeline.data.alt_data.shares_outstanding import (
     SharesFact,
     latest_shares_as_of,
     parse_company_facts,
 )
-from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap
+from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+
 from alphalens_research.paper_trade.scorer_v9d import (
     DEFAULT_ETFS,
     DEFAULT_SMD_CACHE_DIR,

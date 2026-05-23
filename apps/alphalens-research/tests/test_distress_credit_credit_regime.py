@@ -138,7 +138,7 @@ class CreditRegimeOverlayTests(unittest.TestCase):
 class HyOasZTests(unittest.TestCase):
     def test_hy_oas_z_uses_strict_history(self):
         """z(t) must use observations strictly before t."""
-        from alphalens_research.data.macro.signals import hy_oas_z_from_series
+        from alphalens_pipeline.data.macro.signals import hy_oas_z_from_series
 
         idx = pd.bdate_range(start="2020-01-01", periods=300)
         rng = np.random.default_rng(11)
@@ -155,7 +155,7 @@ class HyOasZTests(unittest.TestCase):
         self.assertAlmostEqual(z_with_anomaly, z_clean, places=6)
 
     def test_hy_oas_z_returns_none_on_short_history(self):
-        from alphalens_research.data.macro.signals import hy_oas_z_from_series
+        from alphalens_pipeline.data.macro.signals import hy_oas_z_from_series
 
         idx = pd.bdate_range(start="2020-01-01", periods=50)
         spreads = pd.Series(np.full(50, 4.0), index=idx, name="hy_oas")

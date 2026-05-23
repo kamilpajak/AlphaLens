@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import unittest
 
-from alphalens_research.thematic.screening import catalyst_signals as cs
+from alphalens_pipeline.thematic.screening import catalyst_signals as cs
 
 
 def _event(

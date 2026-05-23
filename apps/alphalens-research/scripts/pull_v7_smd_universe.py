@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import ivolatility as ivol
 import pandas as pd
 import yaml
-from alphalens_research.data.alt_data.ivolatility_smd_cache import download_and_cache
+from alphalens_pipeline.data.alt_data.ivolatility_smd_cache import download_and_cache
 
 logger = logging.getLogger(__name__)
 

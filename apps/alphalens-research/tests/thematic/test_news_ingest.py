@@ -5,8 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
-from alphalens_research.thematic import news_ingest
-from alphalens_research.thematic.sources.schema import NEWS_COLUMNS
+from alphalens_pipeline.thematic import news_ingest
+from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS
 
 
 def _row(id_, source, ts, tickers, title):

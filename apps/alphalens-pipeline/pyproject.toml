@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alphalens-pipeline"
+version = "0.1.0"
+description = "AlphaLens live pipeline: watchdog, thematic, literature review, data ingest infrastructure, and the alphalens CLI binary."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    # Core data + analytics deps shared with research
+    "pandas>=2.3.0",
+    "scipy>=1.17.1",
+    "pyarrow>=24.0.0",
+    "requests>=2.32.0",
+    # CLI + config
+    "typer>=0.25.1",
+    "python-dotenv>=1.2.2",
+    # Vendor SDKs the pipeline directly drives
+    "google-genai>=0.8.0",
+    "yfinance>=0.2.63",
+    "quiverquant",
+    "feedparser>=6.0.11",
+    # LLM / parsing
+    "langchain-google-genai>=4.2.2",
+    "json-repair>=0.59.10",
+    # Options data vendor (consumed by thematic options-volume signal)
+    "ivolatility>=1.9.3",
+]
+
+[project.scripts]
+alphalens = "alphalens_cli.main:app"
+
+[tool.setuptools.packages.find]
+include = ["alphalens_pipeline*", "alphalens_cli*"]
+
+[tool.coverage.run]
+source = ["alphalens_pipeline", "alphalens_cli"]
+omit = [
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

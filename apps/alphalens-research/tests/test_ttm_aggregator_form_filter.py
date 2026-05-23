@@ -103,7 +103,7 @@ class TestFormWhitelist(unittest.TestCase):
         Tiebreaker prefers latest filed_date — DEF 14A wins by 5 weeks. The
         form filter must drop DEF 14A so 10-K survives.
         """
-        from alphalens_research.data.fundamentals.ttm_aggregator import _arrow_table_to_entries
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import _arrow_table_to_entries
 
         rows = [
             _row(
@@ -133,7 +133,7 @@ class TestFormWhitelist(unittest.TestCase):
 
     def test_amended_forms_pass_whitelist(self):
         """10-K/A, 10-Q/A are legitimate restatements — must survive."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import _arrow_table_to_entries
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import _arrow_table_to_entries
 
         rows = [
             _row(
@@ -161,7 +161,7 @@ class TestFormWhitelist(unittest.TestCase):
 
     def test_s1_and_prospectus_forms_dropped(self):
         """Registration / prospectus forms carry illustrative numbers; drop them."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import _arrow_table_to_entries
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import _arrow_table_to_entries
 
         rows = [
             _row(
@@ -198,7 +198,7 @@ class TestFormWhitelist(unittest.TestCase):
 
     def test_8k_recasts_preserved(self):
         """8-K and 8-K/A often carry earnings-recast standalone-Q rows; keep them."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import _arrow_table_to_entries
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import _arrow_table_to_entries
 
         rows = [
             _row(
@@ -226,7 +226,7 @@ class TestFormWhitelist(unittest.TestCase):
 
     def test_foreign_filers_20f_40f_kept(self):
         """Foreign private issuers report on 20-F / 40-F / 6-K — keep these."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import _arrow_table_to_entries
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import _arrow_table_to_entries
 
         rows = [
             _row(
@@ -263,7 +263,7 @@ class TestFormWhitelist(unittest.TestCase):
 
     def test_form_filter_param_lets_callers_override(self):
         """Tests need to bypass the gate to assert legacy behavior."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import _arrow_table_to_entries
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import _arrow_table_to_entries
 
         rows = [
             _row(

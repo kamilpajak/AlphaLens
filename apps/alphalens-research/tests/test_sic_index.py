@@ -3,7 +3,7 @@
 This module replaces the former SimFin bulk-metadata `sector_peers` data path
 (broken after PR #161 removed SimFin). Source of truth is a small parquet
 file shipped alongside the module at
-``alphalens_research/data/fundamentals/sic_index.parquet``; it is regenerated from
+``alphalens_pipeline/data/fundamentals/sic_index.parquet``; it is regenerated from
 EDGAR companyfacts by ``scripts/build_sic_index.py``.
 
 The public API mirrors the contract that `scorer.py` and `sector_peers.py`
@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from alphalens_research.data.fundamentals import sic_index
+from alphalens_pipeline.data.fundamentals import sic_index
 
 
 def _write_synthetic_index(path: Path, rows: list[dict]) -> None:

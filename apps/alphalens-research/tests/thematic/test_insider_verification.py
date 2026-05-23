@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 import pandas as pd
-from alphalens_research.thematic.verification import insider as insider_v
+from alphalens_pipeline.thematic.verification import insider as insider_v
 
 
 def _record(insider_cik, txn_date, code, shares, price, ticker="BEEM"):

@@ -33,14 +33,14 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
+from alphalens_pipeline.data.factors import load_carhart_daily  # noqa: E402
+from alphalens_pipeline.data.store.history import HistoryStore  # noqa: E402
 from alphalens_research.attribution.signal_vol_regime import (  # noqa: E402
     aggregate_returns_by_regime,
     assign_vol_regime_quintiles,
     classify_cyclicality_excess,
 )
-from alphalens_research.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
-from alphalens_research.data.factors import load_carhart_daily  # noqa: E402
-from alphalens_research.data.store.history import HistoryStore  # noqa: E402
 
 _PRICES_DIR = Path.home() / ".alphalens" / "prices"
 from alphalens_research.diagnostics.slippage_regime import (  # noqa: E402

@@ -7,8 +7,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
-from alphalens_research.thematic.extraction import gemini_flash
-from alphalens_research.thematic.sources.schema import NEWS_COLUMNS
+from alphalens_pipeline.thematic.extraction import gemini_flash
+from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS
 
 
 def _news_row(news_id: str, source: str, title: str, body: str = "", tickers=None):

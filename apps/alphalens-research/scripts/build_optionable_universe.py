@@ -29,7 +29,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
-from alphalens_research.data.alt_data.polygon_client import (
+from alphalens_pipeline.data.alt_data.polygon_client import (
     PolygonError,
     PolygonRateLimitError,
     get_default_polygon_client,

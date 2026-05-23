@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
-from alphalens_research.thematic.mapping import catalyst_resolver
+from alphalens_pipeline.thematic.mapping import catalyst_resolver
 
 
 def _seed_news(news_dir: Path, date: dt.date, rows: list[dict]) -> None:

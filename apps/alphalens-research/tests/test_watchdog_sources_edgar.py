@@ -36,7 +36,7 @@ SAMPLE_ATOM = """<?xml version="1.0" encoding="UTF-8"?>
 
 def _make_sec_client(text=SAMPLE_ATOM):
     """Mock SecEdgarClient that returns ``text`` from get_text for every URL."""
-    from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+    from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
     client = MagicMock(spec=SecEdgarClient)
     client.get_text.return_value = text
@@ -50,8 +50,8 @@ def _make_source(
     ticker_to_cik=None,
     sec_client=None,
 ):
-    from alphalens_research.watchdog.config import WATCHDOG_DEFAULTS
-    from alphalens_research.watchdog.sources.edgar import SECEdgarSource
+    from alphalens_pipeline.watchdog.config import WATCHDOG_DEFAULTS
+    from alphalens_pipeline.watchdog.sources.edgar import SECEdgarSource
 
     cfg = dict(WATCHDOG_DEFAULTS)
     if config_overrides:
@@ -75,7 +75,7 @@ class TestSECEdgarSource(unittest.TestCase):
         self.tmp.cleanup()
 
     def _store(self):
-        from alphalens_research.watchdog.storage import SeenEventStore
+        from alphalens_pipeline.watchdog.storage import SeenEventStore
 
         return SeenEventStore(self.db_path)
 
@@ -93,7 +93,7 @@ class TestSECEdgarSource(unittest.TestCase):
         self.assertIn("CIK=0000320193", url)
 
     def test_detect_parses_atom_entries_into_events(self):
-        from alphalens_research.watchdog.types import FormType
+        from alphalens_pipeline.watchdog.types import FormType
 
         # filter=None → accept all forms for this test
         source = _make_source(
@@ -112,7 +112,7 @@ class TestSECEdgarSource(unittest.TestCase):
         self.assertIsNotNone(evt_8k.filed_at.tzinfo)
 
     def test_detect_filters_by_form_type(self):
-        from alphalens_research.watchdog.types import FormType
+        from alphalens_pipeline.watchdog.types import FormType
 
         source = _make_source(
             store=self._store(),
@@ -124,7 +124,7 @@ class TestSECEdgarSource(unittest.TestCase):
         self.assertEqual(events[0].form_type, FormType.FORM_8K)
 
     def test_detect_deduplicates_via_store(self):
-        from alphalens_research.watchdog.types import FormType
+        from alphalens_pipeline.watchdog.types import FormType
 
         store = self._store()
         source = _make_source(
@@ -142,12 +142,12 @@ class TestSECEdgarSource(unittest.TestCase):
         """The per-ticker time.sleep(rate_limit_seconds) is gone — the global
         SecEdgarClient throttle subsumes it. This guards against re-introducing
         a double-cap (per-ticker sleep on top of canonical 10 req/s)."""
-        import alphalens_research.watchdog.sources.edgar as edgar_mod
+        import alphalens_pipeline.watchdog.sources.edgar as edgar_mod
 
         self.assertFalse(hasattr(edgar_mod, "time"))
 
     def test_detect_returns_empty_on_sec_client_error(self):
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarError
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarError
 
         sec = _make_sec_client()
         sec.get_text.side_effect = SecEdgarError("network down")

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
-from alphalens_research.thematic.extraction import themes
+from alphalens_pipeline.thematic.extraction import themes
 
 
 def _event_row(news_id, asof, themes_list, primary=None, confidence=0.8):

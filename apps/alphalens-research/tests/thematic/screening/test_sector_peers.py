@@ -1,4 +1,4 @@
-"""sector_peers is now a thin alias over alphalens_research.data.fundamentals.sic_index.
+"""sector_peers is now a thin alias over alphalens_pipeline.data.fundamentals.sic_index.
 
 The substantive contract tests live in ``tests/test_sic_index.py``. This
 suite verifies the OBSERVABLE behaviour of the legacy public names
@@ -18,8 +18,8 @@ from unittest.mock import patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from alphalens_research.data.fundamentals import sic_index
-from alphalens_research.thematic.screening import sector_peers
+from alphalens_pipeline.data.fundamentals import sic_index
+from alphalens_pipeline.thematic.screening import sector_peers
 
 
 class TestSectorPeersLegacyContract(unittest.TestCase):

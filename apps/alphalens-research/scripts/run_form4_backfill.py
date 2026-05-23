@@ -38,16 +38,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from alphalens_research.data.alt_data.form4_bulk_backfill import (  # noqa: E402
+from alphalens_pipeline.data.alt_data.form4_bulk_backfill import (  # noqa: E402
     BackfillManifest,
     fetch_all_form4_metadata,
     write_records_to_parquet,
 )
-from alphalens_research.data.alt_data.form4_records import (  # noqa: E402
+from alphalens_pipeline.data.alt_data.form4_records import (  # noqa: E402
     Form4ParseError,
     parse_form4_xml,
 )
-from alphalens_research.data.alt_data.sec_edgar_client import (  # noqa: E402
+from alphalens_pipeline.data.alt_data.sec_edgar_client import (  # noqa: E402
     SecEdgarClient,
     SecEdgarError,
 )

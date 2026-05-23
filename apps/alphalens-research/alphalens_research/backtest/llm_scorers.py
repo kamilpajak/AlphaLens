@@ -25,7 +25,7 @@ import time
 from collections.abc import Mapping
 from datetime import date
 
-from alphalens_research.data.alt_data.gemini_client import GeminiClient, get_default_gemini_client
+from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient, get_default_gemini_client
 
 from .historical_validation import LLMVerdict
 
@@ -101,7 +101,7 @@ def gemini_flash_tractability_scorer(
     """Single Gemini Flash call ~$0.01-0.03 per ticker.
 
     Routes through the canonical
-    :class:`alphalens_research.data.alt_data.gemini_client.GeminiClient`. Pass
+    :class:`alphalens_pipeline.data.alt_data.gemini_client.GeminiClient`. Pass
     ``gemini_client=`` for tests; pass ``api_key=`` for ad-hoc one-off
     use; omit both to fall back to ``get_default_gemini_client()`` which
     reads ``GOOGLE_API_KEY`` once per process.

@@ -24,8 +24,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
-
-from alphalens_research.data.store.history import HistoryStore
+from alphalens_pipeline.data.store.history import HistoryStore
 
 DEFAULT_HOLDING = 5
 

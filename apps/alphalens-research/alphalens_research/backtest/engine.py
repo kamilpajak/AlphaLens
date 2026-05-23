@@ -26,8 +26,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 import pandas as pd
-
-from alphalens_research.data.store.history import HistoryStore
+from alphalens_pipeline.data.store.history import HistoryStore
 
 from .metrics import rank_ic, turnover_pct
 from .weighting import (

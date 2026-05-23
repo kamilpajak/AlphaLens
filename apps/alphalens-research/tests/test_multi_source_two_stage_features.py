@@ -23,8 +23,8 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from alphalens_research.data.store.delisting import DelistingEvent
-from alphalens_research.data.store.history import HistoryStore
+from alphalens_pipeline.data.store.delisting import DelistingEvent
+from alphalens_pipeline.data.store.history import HistoryStore
 from alphalens_research.screeners.insider_activity.parquet_scorer import ParquetInsiderScorer
 from alphalens_research.screeners.multi_source_two_stage import (
     FEATURE_NAMES,

@@ -3,7 +3,7 @@
 In-class extension of v3 (event_drift_search_2026_05_03). Sole change vs
 ``experiment_event_drift_v3.py``: universe loader swapped from
 ``_pit_universe_union`` (R2000-PIT yamls in ``~/.alphalens/pit_universe/``)
-to ``alphalens_research.data.universes.sp1500_pit.load_sp1500_pit_for_date`` (S&P
+to ``alphalens_pipeline.data.universes.sp1500_pit.load_sp1500_pit_for_date`` (S&P
 500 + 400 + 600 fallback snapshots in ``data/{sp500,sp400,sp600}_pit/``).
 
 Modes:
@@ -35,12 +35,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import pandas as pd
-from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap
-from alphalens_research.data.alt_data.yfinance_cache import load_cached_histories
-from alphalens_research.data.fundamentals.companyfacts_parquet import CompanyfactsParquetReader
-from alphalens_research.data.fundamentals.sue import FosterSUEStore
-from alphalens_research.data.store.history import HistoryStore
-from alphalens_research.data.universes.sp1500_pit import load_sp1500_pit_for_date
+from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories
+from alphalens_pipeline.data.fundamentals.companyfacts_parquet import CompanyfactsParquetReader
+from alphalens_pipeline.data.fundamentals.sue import FosterSUEStore
+from alphalens_pipeline.data.store.history import HistoryStore
+from alphalens_pipeline.data.universes.sp1500_pit import load_sp1500_pit_for_date
 from alphalens_research.screeners.event_drift.accruals import SloanAccrualsStore
 from alphalens_research.screeners.event_drift.announcement_dates import (
     AnnouncementDateProvider,

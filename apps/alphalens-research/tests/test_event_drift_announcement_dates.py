@@ -20,7 +20,7 @@ from datetime import date
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from alphalens_research.data.fundamentals.companyfacts_parquet import (
+from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
     CompanyfactsParquetReader,
     companyfacts_json_to_parquet_table,
 )
@@ -262,6 +262,7 @@ class TestAnnouncementProviderOnRepresentativeFixtures(unittest.TestCase):
         from alphalens_research.screeners.event_drift.announcement_dates import (
             AnnouncementDateProvider,
         )
+
         from tests.fixtures.companyfacts_fixtures import (
             APPLE_CIK,
             IPO_CIK,

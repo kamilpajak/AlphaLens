@@ -14,7 +14,7 @@ SAMPLE_SEC_PAYLOAD = {
 
 class TestParseSecTickers(unittest.TestCase):
     def test_parses_ticker_cik_pairs(self):
-        from alphalens_research.data.alt_data.ticker_cik_refresher import parse_sec_company_tickers
+        from alphalens_pipeline.data.alt_data.ticker_cik_refresher import parse_sec_company_tickers
 
         result = parse_sec_company_tickers(SAMPLE_SEC_PAYLOAD)
 
@@ -23,24 +23,24 @@ class TestParseSecTickers(unittest.TestCase):
         self.assertEqual(result["NVDA"], 1045810)
 
     def test_empty_payload_returns_empty(self):
-        from alphalens_research.data.alt_data.ticker_cik_refresher import parse_sec_company_tickers
+        from alphalens_pipeline.data.alt_data.ticker_cik_refresher import parse_sec_company_tickers
 
         self.assertEqual(parse_sec_company_tickers({}), {})
 
     def test_missing_cik_field_raises(self):
-        from alphalens_research.data.alt_data.ticker_cik_refresher import parse_sec_company_tickers
+        from alphalens_pipeline.data.alt_data.ticker_cik_refresher import parse_sec_company_tickers
 
         with self.assertRaises(ValueError):
             parse_sec_company_tickers({"0": {"ticker": "AAPL"}})
 
     def test_missing_ticker_field_raises(self):
-        from alphalens_research.data.alt_data.ticker_cik_refresher import parse_sec_company_tickers
+        from alphalens_pipeline.data.alt_data.ticker_cik_refresher import parse_sec_company_tickers
 
         with self.assertRaises(ValueError):
             parse_sec_company_tickers({"0": {"cik_str": 320193}})
 
     def test_upper_cases_tickers(self):
-        from alphalens_research.data.alt_data.ticker_cik_refresher import parse_sec_company_tickers
+        from alphalens_pipeline.data.alt_data.ticker_cik_refresher import parse_sec_company_tickers
 
         result = parse_sec_company_tickers({"0": {"cik_str": 1, "ticker": "aapl"}})
 
@@ -48,7 +48,7 @@ class TestParseSecTickers(unittest.TestCase):
 
     def test_duplicate_ticker_last_wins(self):
         """Defensive — SEC shouldn't publish duplicates, but if they do we don't want to crash."""
-        from alphalens_research.data.alt_data.ticker_cik_refresher import parse_sec_company_tickers
+        from alphalens_pipeline.data.alt_data.ticker_cik_refresher import parse_sec_company_tickers
 
         payload = {
             "0": {"cik_str": 111, "ticker": "AAPL"},
@@ -62,8 +62,8 @@ class TestParseSecTickers(unittest.TestCase):
 
 class TestRefreshWritesYaml(unittest.TestCase):
     def test_writes_yaml_that_tickercikmap_can_load(self):
-        from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap
-        from alphalens_research.data.alt_data.ticker_cik_refresher import refresh_ticker_cik_map
+        from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens_pipeline.data.alt_data.ticker_cik_refresher import refresh_ticker_cik_map
 
         edgar = MagicMock()
         edgar.fetch_company_tickers.return_value = SAMPLE_SEC_PAYLOAD
@@ -83,7 +83,7 @@ class TestRefreshWritesYaml(unittest.TestCase):
         self.assertEqual(m.lookup("NVDA"), "0001045810")
 
     def test_refresh_on_empty_payload_writes_empty_map(self):
-        from alphalens_research.data.alt_data.ticker_cik_refresher import refresh_ticker_cik_map
+        from alphalens_pipeline.data.alt_data.ticker_cik_refresher import refresh_ticker_cik_map
 
         edgar = MagicMock()
         edgar.fetch_company_tickers.return_value = {}
@@ -98,7 +98,7 @@ class TestRefreshWritesYaml(unittest.TestCase):
         self.assertEqual(parsed or {}, {})
 
     def test_refresh_creates_parent_dirs(self):
-        from alphalens_research.data.alt_data.ticker_cik_refresher import refresh_ticker_cik_map
+        from alphalens_pipeline.data.alt_data.ticker_cik_refresher import refresh_ticker_cik_map
 
         edgar = MagicMock()
         edgar.fetch_company_tickers.return_value = SAMPLE_SEC_PAYLOAD
@@ -113,7 +113,7 @@ class TestRefreshWritesYaml(unittest.TestCase):
 
 class TestSecEdgarClientCompanyTickers(unittest.TestCase):
     def test_fetches_from_correct_url(self):
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
         session = MagicMock()
         resp = MagicMock()

@@ -13,27 +13,27 @@ def _response(status: int, body: dict | None = None, content: bytes | None = Non
 
 class TestSecEdgarClientInit(unittest.TestCase):
     def test_rejects_empty_user_agent(self):
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
         with self.assertRaises(ValueError):
             SecEdgarClient(user_agent="")
 
     def test_rejects_missing_contact_in_user_agent(self):
         """SEC requires a contact (email or URL) in the User-Agent header."""
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
         with self.assertRaises(ValueError):
             SecEdgarClient(user_agent="AlphaLens")
 
     def test_accepts_user_agent_with_email(self):
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
         SecEdgarClient(user_agent="AlphaLens research@example.com")
 
 
 class TestFetchSubmissions(unittest.TestCase):
     def setUp(self):
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
         self.session = MagicMock()
         self.sleep = MagicMock()
@@ -69,7 +69,7 @@ class TestFetchSubmissions(unittest.TestCase):
         self.assertEqual(kwargs["headers"]["User-Agent"], "AlphaLens test@example.com")
 
     def test_raises_on_404(self):
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarError
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarError
 
         self.session.get.return_value = _response(404, text="Not Found")
 
@@ -90,7 +90,7 @@ class TestFetchSubmissions(unittest.TestCase):
 
 class TestFetchForm4Xml(unittest.TestCase):
     def setUp(self):
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
         self.session = MagicMock()
         self.sleep = MagicMock()
@@ -174,7 +174,7 @@ class TestFetchForm4Xml(unittest.TestCase):
 
     def test_exhausts_5xx_retries_raises(self):
         """After all 5xx retries exhausted, must raise SecEdgarError."""
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarError
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarError
 
         self.session.get.return_value = _response(503, text="Service Unavailable")
 
@@ -189,7 +189,7 @@ class TestFetchForm4Xml(unittest.TestCase):
 
     def test_does_not_retry_on_4xx_permanent(self):
         """404 is permanent (file missing) — no retry."""
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarError
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarError
 
         self.session.get.return_value = _response(404, text="Not Found")
 
@@ -250,7 +250,7 @@ class TestCacheEviction(unittest.TestCase):
     """
 
     def _make_client(self):
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
         session = MagicMock()
         sleep = MagicMock()
@@ -292,7 +292,7 @@ class TestCacheEviction(unittest.TestCase):
 
 class TestRateLimit(unittest.TestCase):
     def test_throttles_between_calls(self):
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
         session = MagicMock()
         session.get.return_value = _response(200, {})
@@ -318,7 +318,7 @@ class TestPublicGetHelpers(unittest.TestCase):
     """
 
     def setUp(self):
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
         self.session = MagicMock()
         self.sleep = MagicMock()
@@ -381,7 +381,7 @@ class TestPublicGetHelpers(unittest.TestCase):
         self.sleep.assert_any_call(60)
 
     def test_get_json_raises_on_404(self):
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarError
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarError
 
         self.session.get.return_value = _response(404, text="Not Found")
 
@@ -400,7 +400,7 @@ class TestDefaultClientSingleton(unittest.TestCase):
     """
 
     def setUp(self):
-        from alphalens_research.data.alt_data import sec_edgar_client as mod
+        from alphalens_pipeline.data.alt_data import sec_edgar_client as mod
 
         self._mod = mod
         # Each test starts with a fresh singleton (real production code
@@ -451,7 +451,7 @@ class TestDefaultClientSingleton(unittest.TestCase):
 class TestTransientRetries(unittest.TestCase):
     def test_retries_on_connection_error_then_succeeds(self):
         import requests
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
         session = MagicMock()
         session.get.side_effect = [
@@ -478,7 +478,7 @@ class TestTransientRetries(unittest.TestCase):
         tuple leaked SSL/redirect noise to callers and crashed the watchdog.
         """
         import requests
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
         session = MagicMock()
         session.get.side_effect = [
@@ -499,7 +499,7 @@ class TestTransientRetries(unittest.TestCase):
 
     def test_exhausts_retries_raises(self):
         import requests
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
 
         session = MagicMock()
         session.get.side_effect = requests.exceptions.Timeout("timeout")

@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 
 import pandas as pd
 import yaml
-from alphalens_research.data.universes.sp1500_pit import (
+from alphalens_pipeline.data.universes.sp1500_pit import (
     UniverseError,
     load_sp400_pit_for_date,
     load_sp500_pit_for_date,

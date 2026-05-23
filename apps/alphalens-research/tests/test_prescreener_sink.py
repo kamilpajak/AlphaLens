@@ -8,7 +8,7 @@ import pandas as pd
 
 class TestPrescreenerToCandidates(unittest.TestCase):
     def test_to_candidates_emits_prescreener_candidates(self):
-        from alphalens_research.core.candidates import Candidate
+        from alphalens_pipeline.core.candidates import Candidate
         from alphalens_research.screeners.prescreener.integration import PrescreenerPipeline
 
         df = pd.DataFrame(

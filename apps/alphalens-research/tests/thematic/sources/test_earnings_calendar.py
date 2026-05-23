@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-from alphalens_research.thematic.sources import earnings_calendar
+from alphalens_pipeline.thematic.sources import earnings_calendar
 
 # All happy-path tests run with asof = today so the PIT guard doesn't
 # short-circuit. Calendar dates are pegged to today + delta so the tests

@@ -5,8 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from alphalens_research.thematic.sources import rss
-from alphalens_research.thematic.sources.schema import NEWS_COLUMNS
+from alphalens_pipeline.thematic.sources import rss
+from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS
 
 
 def _make_fake_parsed(entries):

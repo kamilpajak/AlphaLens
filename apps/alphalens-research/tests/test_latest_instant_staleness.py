@@ -93,7 +93,7 @@ def _stub_reader(table: pa.Table) -> MagicMock:
 class TestLatestInstantMaxAge(unittest.TestCase):
     def test_default_behavior_unchanged_without_gate(self):
         """No ``max_age_days`` arg → 5-year-old entry still returned (legacy)."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import latest_instant
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import latest_instant
 
         rows = [
             _row(
@@ -119,7 +119,7 @@ class TestLatestInstantMaxAge(unittest.TestCase):
 
     def test_stale_entry_rejected_when_age_exceeds_gate(self):
         """C3.ai-shaped: entry period_end 5y before asof, gate 180d → None."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import latest_instant
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import latest_instant
 
         rows = [
             _row(
@@ -146,7 +146,7 @@ class TestLatestInstantMaxAge(unittest.TestCase):
 
     def test_fresh_entry_passes_gate(self):
         """Entry filed inside the window → returned."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import latest_instant
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import latest_instant
 
         rows = [
             _row(
@@ -173,7 +173,7 @@ class TestLatestInstantMaxAge(unittest.TestCase):
 
     def test_gate_falls_through_to_next_concept_in_chain(self):
         """Stale us-gaap → empty after gate; chain advances to dei (fresh)."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import latest_instant
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import latest_instant
 
         rows = [
             _row(
@@ -210,7 +210,7 @@ class TestLatestInstantMaxAge(unittest.TestCase):
 
     def test_gate_boundary_inclusive(self):
         """Entry exactly ``max_age_days`` old is accepted (≤ window)."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import latest_instant
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import latest_instant
 
         rows = [
             _row(

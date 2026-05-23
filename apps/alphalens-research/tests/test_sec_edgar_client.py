@@ -14,7 +14,7 @@ from collections.abc import Callable
 from unittest import mock
 
 import requests
-from alphalens_research.data.alt_data.sec_edgar_client import (
+from alphalens_pipeline.data.alt_data.sec_edgar_client import (
     SecEdgarClient,
     SecEdgarError,
     _evict_to_capacity,
@@ -273,7 +273,7 @@ class TestThrottle(unittest.TestCase):
         # Force a fake monotonic clock that never advances so throttle always
         # decides we need to sleep.
         with mock.patch(
-            "alphalens_research.data.alt_data.sec_edgar_client.time.monotonic",
+            "alphalens_pipeline.data.alt_data.sec_edgar_client.time.monotonic",
             return_value=0.0,
         ):
             client = SecEdgarClient(

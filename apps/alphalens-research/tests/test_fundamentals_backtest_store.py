@@ -47,7 +47,7 @@ BUNDLE_APPL = {
 
 class TestHistoricalFundamentalsStore(unittest.TestCase):
     def test_preload_calls_fetcher_once_per_ticker(self):
-        from alphalens_research.data.store.fundamentals_pit import HistoricalFundamentalsStore
+        from alphalens_pipeline.data.store.fundamentals_pit import HistoricalFundamentalsStore
 
         calls = []
 
@@ -60,7 +60,7 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
         self.assertEqual(sorted(calls), ["AAPL", "MSFT"])
 
     def test_features_as_of_returns_nearest_prior_report(self):
-        from alphalens_research.data.store.fundamentals_pit import HistoricalFundamentalsStore
+        from alphalens_pipeline.data.store.fundamentals_pit import HistoricalFundamentalsStore
 
         store = HistoricalFundamentalsStore(fetcher=lambda t, curr_date=None: BUNDLE_APPL)
         store.preload(["AAPL"])
@@ -74,7 +74,7 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
     def test_features_as_of_trims_reports_after_date(self):
         """Given asof 2024-05-01 (between Q1 2024-03-31 and Q2 2024-06-30),
         the store must NOT use Q2 — it wasn't reported yet."""
-        from alphalens_research.data.store.fundamentals_pit import HistoricalFundamentalsStore
+        from alphalens_pipeline.data.store.fundamentals_pit import HistoricalFundamentalsStore
 
         store = HistoricalFundamentalsStore(fetcher=lambda t, curr_date=None: BUNDLE_APPL)
         store.preload(["AAPL"])
@@ -88,7 +88,7 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
         self.assertIsNotNone(features_after_q2)
 
     def test_features_as_of_before_first_report_returns_none(self):
-        from alphalens_research.data.store.fundamentals_pit import HistoricalFundamentalsStore
+        from alphalens_pipeline.data.store.fundamentals_pit import HistoricalFundamentalsStore
 
         store = HistoricalFundamentalsStore(fetcher=lambda t, curr_date=None: BUNDLE_APPL)
         store.preload(["AAPL"])
@@ -104,7 +104,7 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
         not on fiscalDateEnding. Filtering by fiscal_end leaks ~1 quarter of
         data that wasn't yet publicly filed. Correct PIT filter: reportedDate.
         """
-        from alphalens_research.data.store.fundamentals_pit import HistoricalFundamentalsStore
+        from alphalens_pipeline.data.store.fundamentals_pit import HistoricalFundamentalsStore
 
         # Fiscal Q1 ending 2024-03-31 was actually reported on 2024-05-15.
         # asof 2024-04-15 is BEFORE report date but AFTER fiscal end.
@@ -159,7 +159,7 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
 
         # The store's internal filter must expose only the 2023-12-31 report
         # when asof is 2024-04-15 — the 2024-03-31 report is not yet public.
-        from alphalens_research.data.store.fundamentals_pit import _filter_bundle_by_date
+        from alphalens_pipeline.data.store.fundamentals_pit import _filter_bundle_by_date
 
         filtered = _filter_bundle_by_date(bundle, "2024-04-15")
         latest_fiscal_dates = [
@@ -171,7 +171,7 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
     def test_features_as_of_falls_back_to_fiscal_end_if_reported_date_missing(self):
         """Some legacy bundles lack reportedDate — fall back to
         fiscalDateEnding to avoid crashing on incomplete data."""
-        from alphalens_research.data.store.fundamentals_pit import _filter_bundle_by_date
+        from alphalens_pipeline.data.store.fundamentals_pit import _filter_bundle_by_date
 
         bundle = {
             "overview": {},
@@ -192,7 +192,7 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
         self.assertEqual(kept, ["2023-12-31"])
 
     def test_features_as_of_unknown_ticker_returns_none(self):
-        from alphalens_research.data.store.fundamentals_pit import HistoricalFundamentalsStore
+        from alphalens_pipeline.data.store.fundamentals_pit import HistoricalFundamentalsStore
 
         store = HistoricalFundamentalsStore(fetcher=lambda t, curr_date=None: BUNDLE_APPL)
         store.preload(["AAPL"])
@@ -203,7 +203,7 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
         using them in a historical replay would leak today's valuation into
         2022 scoring. Both must be stripped so extract_features returns
         None / falls back to PIT income-statement."""
-        from alphalens_research.data.store.fundamentals_pit import HistoricalFundamentalsStore
+        from alphalens_pipeline.data.store.fundamentals_pit import HistoricalFundamentalsStore
 
         bundle = {
             "overview": {
@@ -245,7 +245,7 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
 
     def test_preload_skips_tickers_that_raise_below_threshold(self):
         """One bad ticker out of 10 (10%) shouldn't poison the whole preload."""
-        from alphalens_research.data.store.fundamentals_pit import HistoricalFundamentalsStore
+        from alphalens_pipeline.data.store.fundamentals_pit import HistoricalFundamentalsStore
 
         def fetcher(ticker, curr_date=None):
             if ticker == "BAD":
@@ -261,7 +261,7 @@ class TestHistoricalFundamentalsStore(unittest.TestCase):
     def test_preload_aborts_when_too_many_fail(self):
         """Silent zero-gate runs in Phase 2 would look like 'gate has no
         effect' — false negative. Abort at 15% failure threshold."""
-        from alphalens_research.data.store.fundamentals_pit import HistoricalFundamentalsStore
+        from alphalens_pipeline.data.store.fundamentals_pit import HistoricalFundamentalsStore
 
         def always_fail(ticker, curr_date=None):
             raise RuntimeError("AV outage")

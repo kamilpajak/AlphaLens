@@ -9,7 +9,7 @@ Quarterly extension per Hribar-Collins (2002):
 
     ratio_q    = accruals_q / avg(Assets_q, Assets_{q-1})
 
-PIT contract (mirrors ``alphalens_research.data.fundamentals.sue.FosterSUEStore``):
+PIT contract (mirrors ``alphalens_pipeline.data.fundamentals.sue.FosterSUEStore``):
 
   At asof t, only entries with ``filed <= t`` are visible. Per ``period_end``
   the FIRST-FILED entry is retained (earliest filed date) and amendments are
@@ -28,17 +28,16 @@ import logging
 from datetime import date
 
 import pyarrow as pa
-
-from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap
-from alphalens_research.data.fundamentals.companyfacts_parquet import (
+from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
     CompanyfactsParquetReader,
     filter_concept,
 )
-from alphalens_research.data.fundamentals.edgar_companyfacts import (
+from alphalens_pipeline.data.fundamentals.edgar_companyfacts import (
     _Entry,
     _pit_filter,
 )
-from alphalens_research.data.fundamentals.sue import _first_filed_per_period_end
+from alphalens_pipeline.data.fundamentals.sue import _first_filed_per_period_end
 
 logger = logging.getLogger(__name__)
 

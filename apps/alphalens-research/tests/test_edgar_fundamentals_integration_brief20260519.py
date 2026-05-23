@@ -71,7 +71,7 @@ class TestBrief20260519Replay(unittest.TestCase):
         """Pre-fix: stale 2021 us-gaap entry (3.5M) won, P/S ≈ 0.10.
         Post-fix: dei empty + us-gaap stale > 180d → yfinance fallback (~140M).
         """
-        from alphalens_research.data.store.edgar_fundamentals import EdgarFundamentalsStore
+        from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
         with tempfile.TemporaryDirectory() as td:
             tdp = Path(td)
@@ -123,7 +123,7 @@ class TestBrief20260519Replay(unittest.TestCase):
         in this fixture); Compustat per-concept fails too. Result: None
         (signal degraded — issue #172 acceptance branch (b)).
         """
-        from alphalens_research.data.store.edgar_fundamentals import EdgarFundamentalsStore
+        from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
         with tempfile.TemporaryDirectory() as td:
             tdp = Path(td)
@@ -197,7 +197,7 @@ class TestBrief20260519Replay(unittest.TestCase):
         tiebreaker → ROE rendered ``-0.0%``.
         Post-fix: form whitelist drops DEF 14A; 10-K ``-14,006,000`` wins.
         """
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_ttm
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_ttm
 
         rows = [
             _row(
@@ -223,7 +223,7 @@ class TestBrief20260519Replay(unittest.TestCase):
             tdp = Path(td)
             cik = "0001840856"
             _write_parquet(tdp / f"{cik}.parquet", rows)
-            from alphalens_research.data.fundamentals.companyfacts_parquet import (
+            from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
                 CompanyfactsParquetReader,
             )
 

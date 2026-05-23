@@ -16,27 +16,30 @@ import re
 import unittest
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 
 POLISH_CHARS_RE = re.compile(r"[ąęćłńśźżóĄĘĆŁŃŚŹŻÓ]")
 
-SCAN_PACKAGES = (
-    "alphalens_research",
-    "alphalens_cli",
-    "tests",
+# Scan both workspace members + the (research-side) test tree. Each entry
+# is a path relative to the workspace root.
+SCAN_DIRS = (
+    "apps/alphalens-pipeline/alphalens_pipeline",
+    "apps/alphalens-pipeline/alphalens_cli",
+    "apps/alphalens-research/alphalens_research",
+    "apps/alphalens-research/tests",
 )
 
 # This test file must contain the Polish letters in its regex; exempt itself
 # rather than weaken the rule for the rest of the codebase.
-EXEMPT_FILES = frozenset({"tests/test_no_polish_chars.py"})
+EXEMPT_FILES = frozenset({"apps/alphalens-research/tests/test_no_polish_chars.py"})
 
 
 def _python_sources():
-    for pkg in SCAN_PACKAGES:
-        for path in (REPO_ROOT / pkg).rglob("*.py"):
+    for rel_dir in SCAN_DIRS:
+        for path in (WORKSPACE_ROOT / rel_dir).rglob("*.py"):
             if "__pycache__" in path.parts:
                 continue
-            if str(path.relative_to(REPO_ROOT)) in EXEMPT_FILES:
+            if str(path.relative_to(WORKSPACE_ROOT)) in EXEMPT_FILES:
                 continue
             yield path
 
@@ -47,7 +50,7 @@ class TestNoPolishChars(unittest.TestCase):
         for path in _python_sources():
             for lineno, line in enumerate(path.read_text().splitlines(), start=1):
                 if POLISH_CHARS_RE.search(line):
-                    rel = path.relative_to(REPO_ROOT)
+                    rel = path.relative_to(WORKSPACE_ROOT)
                     offenders.append((str(rel), lineno, line.strip()[:120]))
 
         self.assertEqual(

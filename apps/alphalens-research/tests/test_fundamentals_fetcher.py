@@ -61,7 +61,7 @@ INCOME_STATEMENT_PREPROFIT = {
 
 class TestExtractFeatures(unittest.TestCase):
     def test_extract_profitable_company_features(self):
-        from alphalens_research.data.fundamentals.fetcher import extract_features
+        from alphalens_pipeline.data.fundamentals.fetcher import extract_features
 
         bundle = {
             "overview": OVERVIEW_FIXTURE,
@@ -101,7 +101,7 @@ class TestExtractFeatures(unittest.TestCase):
 
     def test_extract_preprofit_cash_burn_features(self):
         """INVZ-like pre-profit company: negative OCF streak, limited runway."""
-        from alphalens_research.data.fundamentals.fetcher import extract_features
+        from alphalens_pipeline.data.fundamentals.fetcher import extract_features
 
         bundle = {
             "overview": {
@@ -128,7 +128,7 @@ class TestExtractFeatures(unittest.TestCase):
 
     def test_extract_handles_missing_overview_fields(self):
         """If AV returns the ticker but is missing PriceToSalesRatioTTM, don't crash."""
-        from alphalens_research.data.fundamentals.fetcher import extract_features
+        from alphalens_pipeline.data.fundamentals.fetcher import extract_features
 
         bundle = {
             "overview": {"Symbol": "X"},
@@ -143,7 +143,7 @@ class TestExtractFeatures(unittest.TestCase):
 
     def test_extract_av_string_none_values(self):
         """AV often returns the string 'None' instead of null. Must be treated as missing."""
-        from alphalens_research.data.fundamentals.fetcher import extract_features
+        from alphalens_pipeline.data.fundamentals.fetcher import extract_features
 
         bundle = {
             "overview": {
@@ -161,7 +161,7 @@ class TestExtractFeatures(unittest.TestCase):
 
     def test_consecutive_neg_ocf_breaks_on_positive(self):
         """Streak counts from most recent quarter backwards; a positive breaks it."""
-        from alphalens_research.data.fundamentals.fetcher import extract_features
+        from alphalens_pipeline.data.fundamentals.fetcher import extract_features
 
         bundle = {
             "overview": {},
@@ -184,10 +184,10 @@ class TestExtractFeatures(unittest.TestCase):
 
 
 class TestFetchTickerBundle(unittest.TestCase):
-    @patch("alphalens_research.data.fundamentals.fetcher._av_income_statement")
-    @patch("alphalens_research.data.fundamentals.fetcher._av_cashflow")
-    @patch("alphalens_research.data.fundamentals.fetcher._av_balance_sheet")
-    @patch("alphalens_research.data.fundamentals.fetcher._av_overview")
+    @patch("alphalens_pipeline.data.fundamentals.fetcher._av_income_statement")
+    @patch("alphalens_pipeline.data.fundamentals.fetcher._av_cashflow")
+    @patch("alphalens_pipeline.data.fundamentals.fetcher._av_balance_sheet")
+    @patch("alphalens_pipeline.data.fundamentals.fetcher._av_overview")
     def test_fetch_bundle_calls_all_four_endpoints(
         self,
         mock_ov,
@@ -195,7 +195,7 @@ class TestFetchTickerBundle(unittest.TestCase):
         mock_cf,
         mock_is,
     ):
-        from alphalens_research.data.fundamentals.fetcher import fetch_ticker_bundle
+        from alphalens_pipeline.data.fundamentals.fetcher import fetch_ticker_bundle
 
         mock_ov.return_value = OVERVIEW_FIXTURE
         mock_bs.return_value = {"quarterlyReports": []}
@@ -210,20 +210,20 @@ class TestFetchTickerBundle(unittest.TestCase):
         mock_is.assert_called_once_with("AAPL", curr_date="2024-10-15")
         self.assertEqual(bundle["overview"], OVERVIEW_FIXTURE)
 
-    @patch("alphalens_research.data.fundamentals.fetcher._av_overview")
+    @patch("alphalens_pipeline.data.fundamentals.fetcher._av_overview")
     def test_fetch_bundle_tolerates_individual_endpoint_failure(self, mock_ov):
         """If one of four endpoints raises, bundle still contains {} for that
         key — we'd rather have partial data than crash the whole pipeline."""
-        from alphalens_research.data.fundamentals.fetcher import fetch_ticker_bundle
+        from alphalens_pipeline.data.fundamentals.fetcher import fetch_ticker_bundle
 
         mock_ov.side_effect = RuntimeError("av timeout")
         with (
             patch(
-                "alphalens_research.data.fundamentals.fetcher._av_balance_sheet", return_value={}
+                "alphalens_pipeline.data.fundamentals.fetcher._av_balance_sheet", return_value={}
             ),
-            patch("alphalens_research.data.fundamentals.fetcher._av_cashflow", return_value={}),
+            patch("alphalens_pipeline.data.fundamentals.fetcher._av_cashflow", return_value={}),
             patch(
-                "alphalens_research.data.fundamentals.fetcher._av_income_statement", return_value={}
+                "alphalens_pipeline.data.fundamentals.fetcher._av_income_statement", return_value={}
             ),
         ):
             bundle = fetch_ticker_bundle("X")
@@ -231,10 +231,10 @@ class TestFetchTickerBundle(unittest.TestCase):
         self.assertEqual(bundle["overview"], {})
         self.assertEqual(bundle["balance_sheet"], {})
 
-    @patch("alphalens_research.data.fundamentals.fetcher._av_overview")
+    @patch("alphalens_pipeline.data.fundamentals.fetcher._av_overview")
     def test_fetch_bundle_propagates_rate_limit(self, mock_ov):
         """Rate-limit must abort the batch (not degrade to null features)."""
-        from alphalens_research.data.fundamentals.fetcher import (
+        from alphalens_pipeline.data.fundamentals.fetcher import (
             AVRateLimitError,
             fetch_ticker_bundle,
         )
@@ -255,7 +255,7 @@ class TestMakeAVRequest(unittest.TestCase):
     def _client_with_body(body: str):
         from unittest.mock import MagicMock
 
-        from alphalens_research.data.alt_data.alphavantage_client import AlphaVantageClient
+        from alphalens_pipeline.data.alt_data.alphavantage_client import AlphaVantageClient
 
         class _CM:
             def __enter__(self):
@@ -271,7 +271,7 @@ class TestMakeAVRequest(unittest.TestCase):
         return AlphaVantageClient(api_key="test", urlopen_fn=MagicMock(return_value=_CM()))
 
     def test_rate_limit_information_raises(self):
-        from alphalens_research.data.fundamentals.fetcher import (
+        from alphalens_pipeline.data.fundamentals.fetcher import (
             AVRateLimitError,
             _make_av_request,
         )
@@ -284,20 +284,20 @@ class TestMakeAVRequest(unittest.TestCase):
 
     def test_error_message_returns_empty(self):
         """Invalid ticker / malformed request → {} with warning, not exception."""
-        from alphalens_research.data.fundamentals.fetcher import _make_av_request
+        from alphalens_pipeline.data.fundamentals.fetcher import _make_av_request
 
         client = self._client_with_body('{"Error Message": "Invalid API call. Please retry..."}')
         self.assertEqual(_make_av_request("OVERVIEW", "BOGUS", client=client), {})
 
     def test_non_json_response_returns_empty(self):
-        from alphalens_research.data.fundamentals.fetcher import _make_av_request
+        from alphalens_pipeline.data.fundamentals.fetcher import _make_av_request
 
         client = self._client_with_body("<html>not json</html>")
         self.assertEqual(_make_av_request("OVERVIEW", "AAPL", client=client), {})
 
     def test_non_dict_json_returns_empty(self):
         """AV occasionally returns a JSON list / scalar — coerce to {}."""
-        from alphalens_research.data.fundamentals.fetcher import _make_av_request
+        from alphalens_pipeline.data.fundamentals.fetcher import _make_av_request
 
         client = self._client_with_body("[1, 2, 3]")
         self.assertEqual(_make_av_request("OVERVIEW", "AAPL", client=client), {})
@@ -305,18 +305,18 @@ class TestMakeAVRequest(unittest.TestCase):
 
 class TestFilterReportsByDate(unittest.TestCase):
     def test_no_curr_date_returns_input_unchanged(self):
-        from alphalens_research.data.fundamentals.fetcher import _filter_reports_by_date
+        from alphalens_pipeline.data.fundamentals.fetcher import _filter_reports_by_date
 
         bundle = {"quarterlyReports": [{"fiscalDateEnding": "2024-09-30"}]}
         self.assertIs(_filter_reports_by_date(bundle, None), bundle)
 
     def test_non_dict_input_returned_unchanged(self):
-        from alphalens_research.data.fundamentals.fetcher import _filter_reports_by_date
+        from alphalens_pipeline.data.fundamentals.fetcher import _filter_reports_by_date
 
         self.assertEqual(_filter_reports_by_date("not a dict", "2024-10-15"), "not a dict")
 
     def test_filters_quarterly_and_annual_reports_by_curr_date(self):
-        from alphalens_research.data.fundamentals.fetcher import _filter_reports_by_date
+        from alphalens_pipeline.data.fundamentals.fetcher import _filter_reports_by_date
 
         bundle = {
             "annualReports": [
@@ -340,19 +340,19 @@ class TestSafeNetworkErrors(unittest.TestCase):
         """HTTPError / URLError must degrade per-endpoint without aborting the bundle."""
         from urllib.error import URLError
 
-        from alphalens_research.data.fundamentals.fetcher import fetch_ticker_bundle
+        from alphalens_pipeline.data.fundamentals.fetcher import fetch_ticker_bundle
 
         with (
             patch(
-                "alphalens_research.data.fundamentals.fetcher._av_overview",
+                "alphalens_pipeline.data.fundamentals.fetcher._av_overview",
                 side_effect=URLError("DNS lookup failed"),
             ),
             patch(
-                "alphalens_research.data.fundamentals.fetcher._av_balance_sheet", return_value={}
+                "alphalens_pipeline.data.fundamentals.fetcher._av_balance_sheet", return_value={}
             ),
-            patch("alphalens_research.data.fundamentals.fetcher._av_cashflow", return_value={}),
+            patch("alphalens_pipeline.data.fundamentals.fetcher._av_cashflow", return_value={}),
             patch(
-                "alphalens_research.data.fundamentals.fetcher._av_income_statement", return_value={}
+                "alphalens_pipeline.data.fundamentals.fetcher._av_income_statement", return_value={}
             ),
         ):
             bundle = fetch_ticker_bundle("AAPL")
@@ -364,17 +364,17 @@ class TestEndpointWrappers(unittest.TestCase):
     """Cover the four single-line wrappers that delegate to _make_av_request."""
 
     def test_av_overview_calls_make_request(self):
-        from alphalens_research.data.fundamentals.fetcher import _av_overview
+        from alphalens_pipeline.data.fundamentals.fetcher import _av_overview
 
         with patch(
-            "alphalens_research.data.fundamentals.fetcher._make_av_request",
+            "alphalens_pipeline.data.fundamentals.fetcher._make_av_request",
             return_value={"Symbol": "AAPL"},
         ) as m:
             self.assertEqual(_av_overview("AAPL"), {"Symbol": "AAPL"})
             m.assert_called_once_with("OVERVIEW", "AAPL")
 
     def test_av_balance_sheet_filters_by_date(self):
-        from alphalens_research.data.fundamentals.fetcher import _av_balance_sheet
+        from alphalens_pipeline.data.fundamentals.fetcher import _av_balance_sheet
 
         raw = {
             "quarterlyReports": [
@@ -383,26 +383,26 @@ class TestEndpointWrappers(unittest.TestCase):
             ]
         }
         with patch(
-            "alphalens_research.data.fundamentals.fetcher._make_av_request", return_value=raw
+            "alphalens_pipeline.data.fundamentals.fetcher._make_av_request", return_value=raw
         ):
             result = _av_balance_sheet("AAPL", curr_date="2024-08-01")
         self.assertEqual(len(result["quarterlyReports"]), 1)
 
     def test_av_cashflow_filters_by_date(self):
-        from alphalens_research.data.fundamentals.fetcher import _av_cashflow
+        from alphalens_pipeline.data.fundamentals.fetcher import _av_cashflow
 
         raw = {"quarterlyReports": [{"fiscalDateEnding": "2024-06-30"}]}
         with patch(
-            "alphalens_research.data.fundamentals.fetcher._make_av_request", return_value=raw
+            "alphalens_pipeline.data.fundamentals.fetcher._make_av_request", return_value=raw
         ):
             self.assertEqual(_av_cashflow("AAPL", curr_date="2024-12-31"), raw)
 
     def test_av_income_statement_filters_by_date(self):
-        from alphalens_research.data.fundamentals.fetcher import _av_income_statement
+        from alphalens_pipeline.data.fundamentals.fetcher import _av_income_statement
 
         raw = {"quarterlyReports": [{"fiscalDateEnding": "2024-06-30"}]}
         with patch(
-            "alphalens_research.data.fundamentals.fetcher._make_av_request", return_value=raw
+            "alphalens_pipeline.data.fundamentals.fetcher._make_av_request", return_value=raw
         ):
             self.assertEqual(_av_income_statement("AAPL", curr_date="2024-12-31"), raw)
 

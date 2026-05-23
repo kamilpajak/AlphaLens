@@ -202,7 +202,7 @@ EV_FCFF_YIELD_PROFILE = SmokeProfile(
     data_deps=(
         # SimFin bulk cache was removed in PR #161 (paradigm-13 ev_fcff_yield
         # migrated to EDGAR per `--fundamentals-source edgar`). Ticker→industry
-        # resolution moved to alphalens_research.data.fundamentals.sic_index, a
+        # resolution moved to alphalens_pipeline.data.fundamentals.sic_index, a
         # package-internal parquet — always present in a healthy install,
         # so no preaudit DataDep is needed.
         # yfinance R2000 + IWM prices, R2000 sample tickers must span the
@@ -246,7 +246,7 @@ PEAD_PSS_V2_PROFILE = SmokeProfile(
     ),
     data_deps=(
         # AV EARNINGS cache (per-ticker JSON written by
-        # alphalens_research.data.alt_data.av_earnings_client.fetch_earnings_batch +
+        # alphalens_pipeline.data.alt_data.av_earnings_client.fetch_earnings_batch +
         # scripts/av_earnings_daily_backfill.py). No date-partitioning on
         # disk; the existence check matches the SimFin cache pattern from
         # EV_FCFF_YIELD_PROFILE. Per-ticker freshness implicit in the
@@ -271,7 +271,7 @@ PEAD_PSS_V2_PROFILE = SmokeProfile(
             check_type=CheckType.EXISTS_NONEMPTY,
         ),
         # S&P 500 PIT snapshots used by load_sp500_pit_union ship in-repo
-        # under alphalens_research/data/universes/sp500_pit/, NOT under ~/.alphalens,
+        # under alphalens_pipeline/data/universes/sp500_pit/, NOT under ~/.alphalens,
         # so no DataDep is registered here. The repo presence is implicit;
         # an empty-snapshots path would surface at script-load time as an
         # empty universe (return code 3).
@@ -318,7 +318,7 @@ IDIOSYNCRATIC_MOMENTUM_PROFILE = SmokeProfile(
             check_type=CheckType.EXISTS_NONEMPTY,
         ),
         # S&P 1500 PIT snapshots ship in-repo under
-        # alphalens_research/data/universes/sp{500,400,600}_pit/ — load_sp1500_pit_union
+        # alphalens_pipeline/data/universes/sp{500,400,600}_pit/ — load_sp1500_pit_union
         # picks them up directly, no ~/.alphalens dep registered here.
     ),
     has_component_hash_guard=False,

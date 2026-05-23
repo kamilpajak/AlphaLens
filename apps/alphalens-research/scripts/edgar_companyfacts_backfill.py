@@ -4,7 +4,7 @@ Operator helper for warming the cache before a thematic pipeline run on
 a fresh VPS, or for catching CIKs that surfaced in new candidates.
 Idempotent — skips CIKs whose parquet already exists.
 
-Reuses :class:`alphalens_research.data.alt_data.sec_edgar_client.SecEdgarClient`
+Reuses :class:`alphalens_pipeline.data.alt_data.sec_edgar_client.SecEdgarClient`
 for throttling (10 req/s polite), retry/backoff on 429/5xx, FIFO cache,
 and the SEC-mandated descriptive ``User-Agent``.
 
@@ -28,11 +28,11 @@ import os
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
-from alphalens_research.data.fundamentals.companyfacts_parquet import (
+from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
+from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
     companyfacts_json_to_parquet_table,
 )
-from alphalens_research.data.store.edgar_fundamentals import (
+from alphalens_pipeline.data.store.edgar_fundamentals import (
     DEFAULT_PARQUET_DIR,
     DEFAULT_USER_AGENT,
     USER_AGENT_ENV,

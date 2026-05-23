@@ -6,7 +6,7 @@ synthetic Arrow tables — no live SEC calls.
 Test-data shape mirrors what `companyfacts_json_to_parquet_table` emits:
 one row per (taxonomy, concept, unit, period_start, period_end, filed_date)
 with columns matching the canonical parquet schema (see
-`alphalens_research.data.fundamentals.companyfacts_parquet`).
+`alphalens_pipeline.data.fundamentals.companyfacts_parquet`).
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ def _stub_reader(table: pa.Table) -> MagicMock:
 
 class TestComputePerQuarterSeries(unittest.TestCase):
     def test_standalone_quarters_returned_in_chronological_order(self):
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_per_quarter_series
 
         # Three standalone 90-day quarters filed via 10-Q.
         rows = [
@@ -131,7 +131,7 @@ class TestComputePerQuarterSeries(unittest.TestCase):
         self.assertEqual(out, [("2024-03-31", 100.0), ("2024-06-30", 110.0), ("2024-09-30", 120.0)])
 
     def test_q4_derived_from_fy_minus_ytd9m_same_fiscal_year(self):
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_per_quarter_series
 
         rows = [
             # YTD9M (Q3 fp, 9-month span)
@@ -163,7 +163,7 @@ class TestComputePerQuarterSeries(unittest.TestCase):
         fiscal year mismatch invalidates the derivation. Period_start is
         the match key (FY2024 and YTD9M-of-2024 both start 2024-01-01;
         FY2023 starts 2023-01-01)."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_per_quarter_series
 
         rows = [
             # YTD9M for FY2024 (273-day span).
@@ -195,7 +195,7 @@ class TestComputePerQuarterSeries(unittest.TestCase):
     def test_standalone_q_preferred_over_derived(self):
         """When a real standalone Q4 row exists (rare but possible for some
         issuers) it must win over the FY-minus-YTD9M derivation."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_per_quarter_series
 
         rows = [
             _row(
@@ -231,7 +231,7 @@ class TestComputePerQuarterSeries(unittest.TestCase):
         self.assertEqual(out, [("2024-12-31", 305.0)])
 
     def test_pit_cutoff_drops_post_asof_filings(self):
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_per_quarter_series
 
         rows = [
             _row(
@@ -257,7 +257,7 @@ class TestComputePerQuarterSeries(unittest.TestCase):
         self.assertEqual(out, [("2024-03-31", 100.0)])
 
     def test_restatement_uses_latest_filed(self):
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_per_quarter_series
 
         rows = [
             # Original Q1 filing.
@@ -285,7 +285,7 @@ class TestComputePerQuarterSeries(unittest.TestCase):
         self.assertEqual(out, [("2024-03-31", 105.0)])
 
     def test_empty_cik_returns_empty_list(self):
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_per_quarter_series
 
         reader = MagicMock()
         reader.get_cik_table.return_value = None
@@ -298,7 +298,7 @@ class TestComputePerQuarterSeries(unittest.TestCase):
         """When concept A only supplies an FY+YTD9M (=> Q4 is DERIVED) and
         concept B supplies a STANDALONE row for the same end, the direct
         measurement from B must win over A's arithmetic derivation."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_per_quarter_series
 
         rows = [
             # Concept A — derivation path for 2024-12-31 (FY 1200 - YTD9M 900 = 300).
@@ -346,7 +346,7 @@ class TestComputePerQuarterSeries(unittest.TestCase):
         any concept's derivation, a later concept's derivation must NOT
         displace it. First-concept-wins protects against non-deterministic
         ordering when both concepts have equally-weak (derived) values."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_per_quarter_series
 
         rows = [
             # Concept A derives Q4 = 300 (FY 1200 - YTD9M 900).
@@ -402,7 +402,7 @@ class TestComputePerQuarterSeries(unittest.TestCase):
         recast) creates a new (start, end) key so _latest_per_period keeps
         BOTH rows. The bucketing layer must apply a filed-date tiebreaker
         so the newest restatement wins, not Python dict insertion order."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_per_quarter_series
 
         rows = [
             # Original Q1 row.
@@ -435,7 +435,7 @@ class TestComputePerQuarterSeries(unittest.TestCase):
     def test_chain_traversal_picks_first_matching_concept(self):
         """When the chain offers a primary + a fallback and the primary has
         data, the fallback isn't consulted (per existing aggregator pattern)."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_per_quarter_series
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_per_quarter_series
 
         rows = [
             _row(
@@ -539,7 +539,7 @@ def _build_synth_table(n_quarters: int, *, with_interest: bool = True) -> pa.Tab
 
 class TestFcfMarginRollingMedian(unittest.TestCase):
     def test_returns_median_when_enough_quarters(self):
-        from alphalens_research.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
 
         reader = _stub_reader(_build_synth_table(12))
         # Per-quarter margin: (120 - 20 - 10*0.79) / 500 = (100 - 7.9) / 500 = 0.1842
@@ -548,13 +548,13 @@ class TestFcfMarginRollingMedian(unittest.TestCase):
         self.assertAlmostEqual(m, (120 - 20 - 10 * 0.79) / 500, places=4)
 
     def test_returns_none_when_fewer_than_min_quarters(self):
-        from alphalens_research.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
 
         reader = _stub_reader(_build_synth_table(7))
         self.assertIsNone(fcf_margin_rolling_median(reader, "0000", date(2030, 1, 1)))
 
     def test_missing_interest_treated_as_zero(self):
-        from alphalens_research.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
 
         reader = _stub_reader(_build_synth_table(12, with_interest=False))
         # (120 - 20 - 0) / 500 = 0.20
@@ -562,7 +562,7 @@ class TestFcfMarginRollingMedian(unittest.TestCase):
         self.assertAlmostEqual(m, 0.20, places=4)
 
     def test_revenue_zero_or_negative_quarters_dropped(self):
-        from alphalens_research.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
 
         # 9 good quarters, 3 bad-revenue quarters mixed in. Median of the 9 good.
         rows = []
@@ -614,7 +614,7 @@ class TestFcfMarginRollingMedian(unittest.TestCase):
         self.assertAlmostEqual(m, 0.20, places=4)
 
     def test_window_caps_at_20_quarters(self):
-        from alphalens_research.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
 
         # 30 quarters; only last 20 should be considered (no impact on median
         # when all are identical, but verifies the window cap doesn't break).
@@ -623,7 +623,7 @@ class TestFcfMarginRollingMedian(unittest.TestCase):
         self.assertAlmostEqual(m, (120 - 20 - 10 * 0.79) / 500, places=4)
 
     def test_pit_cutoff_truncates_visible_quarters(self):
-        from alphalens_research.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
 
         # 10 quarters but asof early — only 6 quarters filed by then, so <8 -> None.
         reader = _stub_reader(_build_synth_table(10))
@@ -632,7 +632,7 @@ class TestFcfMarginRollingMedian(unittest.TestCase):
         self.assertIsNone(fcf_margin_rolling_median(reader, "0000", date(2021, 6, 30)))
 
     def test_returns_none_for_empty_cik(self):
-        from alphalens_research.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import fcf_margin_rolling_median
 
         reader = MagicMock()
         reader.get_cik_table.return_value = None

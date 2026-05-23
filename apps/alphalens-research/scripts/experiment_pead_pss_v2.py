@@ -33,12 +33,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 import pandas as pd  # noqa: E402
+from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
+from alphalens_pipeline.data.factors import load_carhart_daily  # noqa: E402
+from alphalens_pipeline.data.universes.sp1500_pit import load_sp500_pit_union  # noqa: E402
 from alphalens_research.attribution.factor_analysis import (  # noqa: E402
     fit_carhart_4f_invested_only,
 )
-from alphalens_research.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
-from alphalens_research.data.factors import load_carhart_daily  # noqa: E402
-from alphalens_research.data.universes.sp1500_pit import load_sp500_pit_union  # noqa: E402
 from alphalens_research.screeners.event_drift.av_earnings_ingestion import (  # noqa: E402
     AVEarningsAnnouncement,
     load_av_earnings,

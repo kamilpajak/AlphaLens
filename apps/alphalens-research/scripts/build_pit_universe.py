@@ -39,12 +39,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 import yaml
-from alphalens_research.data.alt_data.pit_universe import UniverseConfig, build_pit_universe
-from alphalens_research.data.alt_data.russell_universe import load_iwm_current
-from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
-from alphalens_research.data.alt_data.shares_outstanding import SharesFact, parse_company_facts
-from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap
-from alphalens_research.data.alt_data.yfinance_cache import (
+from alphalens_pipeline.data.alt_data.pit_universe import UniverseConfig, build_pit_universe
+from alphalens_pipeline.data.alt_data.russell_universe import load_iwm_current
+from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
+from alphalens_pipeline.data.alt_data.shares_outstanding import SharesFact, parse_company_facts
+from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+from alphalens_pipeline.data.alt_data.yfinance_cache import (
     download_and_cache,
     load_cached_histories,
 )
@@ -57,8 +57,8 @@ _COMPANYFACTS_DIR = _ROOT / "companyfacts"
 _PRICES_DIR = _ROOT / "prices"
 _SNAPSHOTS_DIR = _ROOT / "pit_universe"
 
-_DEFAULT_TICKER_CIK = Path("alphalens_research/data/alt_data/data/ticker_cik_map.yaml")
-_DEFAULT_IWM = Path("alphalens_research/data/alt_data/data/iwm_current.yaml")
+_DEFAULT_TICKER_CIK = Path("alphalens_pipeline/data/alt_data/data/ticker_cik_map.yaml")
+_DEFAULT_IWM = Path("alphalens_pipeline/data/alt_data/data/iwm_current.yaml")
 
 
 def _load_cached_facts(cik: str) -> list[SharesFact] | None:

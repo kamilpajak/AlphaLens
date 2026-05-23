@@ -81,7 +81,7 @@ def _stub_reader(table: pa.Table) -> MagicMock:
 class TestTtmMaxStaleness(unittest.TestCase):
     def test_default_gate_drops_two_year_old_ttm(self):
         """Default ``max_staleness_days=270`` (~9 months) drops a 2-year-old TTM."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_ttm
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_ttm
 
         rows = [
             _row(
@@ -102,7 +102,7 @@ class TestTtmMaxStaleness(unittest.TestCase):
 
     def test_fresh_ttm_passes_default_gate(self):
         """A TTM whose latest component is recent enough returns a value."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_ttm
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_ttm
 
         # 4 quarters of standalone-Q rows ending 2026-03-31 → 4Q sum path.
         rows = [
@@ -153,7 +153,7 @@ class TestTtmMaxStaleness(unittest.TestCase):
 
     def test_explicit_max_staleness_param_overrides_default(self):
         """Callers can tighten or relax the window."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_ttm
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_ttm
 
         rows = [
             _row(

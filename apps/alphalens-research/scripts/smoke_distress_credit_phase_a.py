@@ -35,7 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 load_dotenv(REPO_ROOT / ".env")
 
-from alphalens_research.data.macro.signals import hy_oas_z_from_series  # noqa: E402
+from alphalens_pipeline.data.macro.signals import hy_oas_z_from_series  # noqa: E402
 
 OUT_DIR = REPO_ROOT / "docs" / "research" / "distress_credit"
 OUT_DIR.mkdir(parents=True, exist_ok=True)

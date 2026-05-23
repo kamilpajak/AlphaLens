@@ -69,7 +69,7 @@ def _make_sec_client(*, atom_text, form4_xml_text=None, index_json_text=None):
     index.json directory listings, and Archives/*.xml all land in the same
     transport but produce different bodies.
     """
-    from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+    from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
     index_json_text = index_json_text or SAMPLE_INDEX_JSON
 
@@ -101,9 +101,9 @@ class TestEdgarEnhanced(unittest.TestCase):
         cik_loader=None,
         sec_client=None,
     ):
-        from alphalens_research.watchdog.config import WATCHDOG_DEFAULTS
-        from alphalens_research.watchdog.sources.edgar import SECEdgarSource
-        from alphalens_research.watchdog.storage import SeenEventStore
+        from alphalens_pipeline.watchdog.config import WATCHDOG_DEFAULTS
+        from alphalens_pipeline.watchdog.sources.edgar import SECEdgarSource
+        from alphalens_pipeline.watchdog.storage import SeenEventStore
 
         cfg = dict(WATCHDOG_DEFAULTS)
         if config_overrides:
@@ -157,7 +157,7 @@ class TestEdgarEnhanced(unittest.TestCase):
         )
 
     def test_form4_fetch_failure_does_not_break_detect(self):
-        from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
+        from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient, SecEdgarError
 
         def _route(url, **_kwargs):
             if "index.json" in url:
@@ -178,7 +178,7 @@ class TestEdgarEnhanced(unittest.TestCase):
         self.assertNotIn("insider_action", events[0].raw_data)
 
     def test_cik_loader_takes_precedence_over_dict(self):
-        from alphalens_research.watchdog.sources.cik_loader import CIKLoader
+        from alphalens_pipeline.watchdog.sources.cik_loader import CIKLoader
 
         loader = MagicMock(spec=CIKLoader)
         loader.get_cik.return_value = "0000789019"

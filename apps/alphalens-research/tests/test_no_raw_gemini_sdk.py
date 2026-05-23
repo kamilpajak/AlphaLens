@@ -2,7 +2,7 @@
 
 The 2026-05-20 vendor-client consolidation routed every Gemini call in
 the repo through
-:class:`alphalens_research.data.alt_data.gemini_client.GeminiClient`. Five live
+:class:`alphalens_pipeline.data.alt_data.gemini_client.GeminiClient`. Five live
 sites (backtest LLM scorers + four thematic modules) used to each
 duplicate ``from google import genai`` + ``genai.Client(api_key=...)``
 + a hand-rolled SDK-missing error message. One canonical client means
@@ -26,21 +26,19 @@ import re
 import unittest
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 
 SCAN_DIRS = (
-    REPO_ROOT / "alphalens_research",
-    REPO_ROOT / "alphalens_cli",
-    REPO_ROOT / "scripts",
+    WORKSPACE_ROOT / "apps" / "alphalens-pipeline" / "alphalens_pipeline",
+    WORKSPACE_ROOT / "apps" / "alphalens-pipeline" / "alphalens_cli",
+    WORKSPACE_ROOT / "apps" / "alphalens-research" / "alphalens_research",
+    WORKSPACE_ROOT / "apps" / "alphalens-research" / "scripts",
 )
 
 # Path prefixes inside SCAN_DIRS that are intentionally exempt from the
-# enforcement. The canonical client itself is allowed to import the SDK;
-# archive/ is the closed-layer anti-pattern catalog and we don't refactor
-# it (ADR 0005).
+# enforcement. The canonical client itself is allowed to import the SDK.
 EXEMPT_PATH_PREFIXES = (
-    "alphalens_research/data/alt_data/gemini_client.py",
-    "alphalens_research/archive/",
+    "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/gemini_client.py",
 )
 
 # Patterns that constitute a raw SDK import or shadow client construction.
@@ -97,7 +95,7 @@ class TestNoRawGeminiSdk(unittest.TestCase):
             '"""Docstring mentioning genai and google.genai for context."""',
             "# from google import genai in a comment must never trip detection",
             "client = GeminiClient(api_key='x')",
-            "from alphalens_research.data.alt_data.gemini_client import GeminiClient",
+            "from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient",
         ]
         for sample in safe_samples:
             hits = _find_shadow_lines(sample)
@@ -111,7 +109,7 @@ class TestNoRawGeminiSdk(unittest.TestCase):
             if not root.exists():
                 continue
             for py in root.rglob("*.py"):
-                rel = py.relative_to(REPO_ROOT).as_posix()
+                rel = py.relative_to(WORKSPACE_ROOT).as_posix()
                 if _path_is_exempt(rel):
                     continue
                 text = py.read_text(encoding="utf-8", errors="replace")
@@ -123,7 +121,7 @@ class TestNoRawGeminiSdk(unittest.TestCase):
             self.fail(
                 "Raw google-genai SDK import / shadow client detected.\n"
                 "Route the call through "
-                "alphalens_research.data.alt_data.gemini_client (use\n"
+                "alphalens_pipeline.data.alt_data.gemini_client (use\n"
                 "get_default_gemini_client() if you don't have one to inject).\n"
                 f"Offenders:\n{details}"
             )

@@ -35,17 +35,17 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
-from alphalens_research.data.alt_data.pit_universe_loader import (  # noqa: E402
+from alphalens_pipeline.data.alt_data.pit_universe_loader import (  # noqa: E402
     load_pit_universe_for_asof,
     load_universe_union,
 )
-from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap  # noqa: E402
-from alphalens_research.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
-from alphalens_research.data.store.form4_pit import (  # noqa: E402
+from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap  # noqa: E402
+from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
+from alphalens_pipeline.data.store.form4_pit import (  # noqa: E402
     PARTITION_KEY,
     Form4PITStore,
 )
-from alphalens_research.scorers.cohen_malloy_classifier import (  # noqa: E402
+from alphalens_pipeline.scorers.cohen_malloy_classifier import (  # noqa: E402
     CohenMalloyLabel,
     classify_from_transaction_dates,
 )
@@ -238,7 +238,7 @@ def main() -> int:
     logger.info("Parquet root: %s", args.parquet_root)
 
     # Lazy imports — keep startup fast for --help.
-    from alphalens_research.scorers.opportunistic_form4 import (
+    from alphalens_pipeline.scorers.opportunistic_form4 import (
         aggregate_opportunistic_signal,
         score_opportunistic_form4,
     )

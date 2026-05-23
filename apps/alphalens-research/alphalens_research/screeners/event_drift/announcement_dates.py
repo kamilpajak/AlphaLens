@@ -21,14 +21,13 @@ from datetime import date
 from typing import Literal
 
 import pyarrow as pa
-
-from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap
-from alphalens_research.data.fundamentals.companyfacts_parquet import (
+from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
     CompanyfactsParquetReader,
     filter_concept,
 )
-from alphalens_research.data.fundamentals.edgar_companyfacts import _Entry
-from alphalens_research.data.fundamentals.sue import _first_filed_per_period_end, _is_quarterly
+from alphalens_pipeline.data.fundamentals.edgar_companyfacts import _Entry
+from alphalens_pipeline.data.fundamentals.sue import _first_filed_per_period_end, _is_quarterly
 
 logger = logging.getLogger(__name__)
 

@@ -19,8 +19,8 @@ from decimal import Decimal
 from pathlib import Path
 
 import pyarrow.dataset as ds
-from alphalens_research.data.alt_data.form4_bulk_backfill import write_records_to_parquet
-from alphalens_research.data.alt_data.form4_records import Form4Record
+from alphalens_pipeline.data.alt_data.form4_bulk_backfill import write_records_to_parquet
+from alphalens_pipeline.data.alt_data.form4_records import Form4Record
 from scripts.compact_form4_parquet import compact_partition, compact_root
 
 

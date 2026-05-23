@@ -43,8 +43,14 @@ from concurrent.futures import ProcessPoolExecutor
 from datetime import date
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))
+# Path layout after PR2 workspace-split:
+#   <REPO_ROOT>/                                          ← .env, hash-lock keys resolve here
+#   <REPO_ROOT>/apps/alphalens-research/scripts/          ← this file
+#   <REPO_ROOT>/apps/alphalens-research/                  ← _RESEARCH_ROOT (sys.path entry for legacy script discovery)
+#   <REPO_ROOT>/apps/alphalens-pipeline/alphalens_pipeline/scorers/opportunistic_form4.py
+REPO_ROOT = Path(__file__).resolve().parents[3]
+_RESEARCH_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_RESEARCH_ROOT))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -52,6 +58,25 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(REPO_ROOT / ".env")
 
+from alphalens_pipeline.data.alt_data.pit_universe_loader import (  # noqa: E402
+    load_universe_union,
+)
+from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap  # noqa: E402
+from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
+from alphalens_pipeline.data.factors import load_carhart_daily  # noqa: E402
+from alphalens_pipeline.data.store.form4_pit import (  # noqa: E402
+    PARTITION_KEY,
+    Form4PITStore,
+)
+from alphalens_pipeline.data.store.history import HistoryStore  # noqa: E402
+from alphalens_pipeline.scorers.cohen_malloy_classifier import (  # noqa: E402
+    CohenMalloyLabel,
+    classify_from_transaction_dates,
+)
+from alphalens_pipeline.scorers.opportunistic_form4 import (  # noqa: E402
+    aggregate_opportunistic_signal,
+    score_opportunistic_form4,
+)
 from alphalens_research.attribution.cost_model import RealisticCostModel  # noqa: E402
 from alphalens_research.attribution.factor_analysis import run_regression  # noqa: E402
 from alphalens_research.backtest.daily_continuous_returns import (  # noqa: E402
@@ -59,25 +84,6 @@ from alphalens_research.backtest.daily_continuous_returns import (  # noqa: E402
 )
 from alphalens_research.backtest.engine import BacktestEngine  # noqa: E402
 from alphalens_research.backtest.metrics import sharpe, turnover_pct  # noqa: E402
-from alphalens_research.data.alt_data.pit_universe_loader import (  # noqa: E402
-    load_universe_union,
-)
-from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap  # noqa: E402
-from alphalens_research.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
-from alphalens_research.data.factors import load_carhart_daily  # noqa: E402
-from alphalens_research.data.store.form4_pit import (  # noqa: E402
-    PARTITION_KEY,
-    Form4PITStore,
-)
-from alphalens_research.data.store.history import HistoryStore  # noqa: E402
-from alphalens_research.scorers.cohen_malloy_classifier import (  # noqa: E402
-    CohenMalloyLabel,
-    classify_from_transaction_dates,
-)
-from alphalens_research.scorers.opportunistic_form4 import (  # noqa: E402
-    aggregate_opportunistic_signal,
-    score_opportunistic_form4,
-)
 from alphalens_research.screeners.compound_insider_pc import (  # noqa: E402
     compound_score_from_components,
 )
@@ -117,16 +123,17 @@ _PRECHECK_IS_END = date(2017, 12, 31)
 # these hashes ONLY in coordination with a design-memo amendment + a new
 # pre-reg class registration in the ledger.
 _COMPONENT_LOCKED_HASHES: dict[str, str] = {
-    "alphalens_research/scorers/opportunistic_form4.py": (
-        # Re-locked after scorer carve-out PR1: the file moved from
-        # screeners/insider_activity/ to scorers/ (reusable scorer library
-        # per feedback_validated_paradigm_scorer_reuse_2026_05_16.md), and
-        # its intra-scorer cohen_malloy_classifier import rewrote to the new
-        # path. No behavioural change (file path + import-rename only), so
-        # the pre-reg observation protocol is unaffected. New SHA256 below.
-        "30792ecc3e40e72698fdf503d16c16b68a389138748f5ebdcb8d03055633b6fc"
+    "apps/alphalens-pipeline/alphalens_pipeline/scorers/opportunistic_form4.py": (
+        # Re-locked after PR2 workspace-split: scorers/ moved from the
+        # alphalens-research workspace member to the new alphalens-pipeline
+        # member; the intra-scorer cohen_malloy_classifier import was
+        # rewritten to the alphalens_pipeline.scorers namespace. No
+        # behavioural change (file path + import-rename only), so the
+        # pre-reg observation protocol is unaffected (same precedent as
+        # PR1 carve-out re-lock + F3 monorepo flatten re-lock). New SHA256.
+        "0fc74aa26112186ebf875f3c9b14c7efb3318636abba2a8bbc98f5134f954162"
     ),
-    "alphalens_research/screeners/options_volume/pc_abnormal_volume.py": (
+    "apps/alphalens-research/alphalens_research/screeners/options_volume/pc_abnormal_volume.py": (
         "d53ab6af4c3842208ea17a291f16de60efece43c89afeb952001864793c0e7d1"
     ),
 }
@@ -844,7 +851,14 @@ def main() -> int:
 
     _liab_store, share_store = make_production_stores()
     tcm_path = (
-        REPO_ROOT / "alphalens_research" / "data" / "alt_data" / "data" / "ticker_cik_map.yaml"
+        REPO_ROOT
+        / "apps"
+        / "alphalens-pipeline"
+        / "alphalens_pipeline"
+        / "data"
+        / "alt_data"
+        / "data"
+        / "ticker_cik_map.yaml"
     )
     cik_resolver = TickerCikMap.load(tcm_path)
 

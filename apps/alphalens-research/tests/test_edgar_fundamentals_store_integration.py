@@ -148,7 +148,7 @@ class TestEdgarFundamentalsStoreIntegration(unittest.TestCase):
         self._tmpdir.cleanup()
 
     def _build_store(self):
-        from alphalens_research.data.store.edgar_fundamentals import EdgarFundamentalsStore
+        from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
         sec_client = MagicMock()
         store = EdgarFundamentalsStore(

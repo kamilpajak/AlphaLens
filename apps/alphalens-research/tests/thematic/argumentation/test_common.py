@@ -1,6 +1,6 @@
 import unittest
 
-from alphalens_research.thematic.argumentation import _common
+from alphalens_pipeline.thematic.argumentation import _common
 
 
 class TestPositionPctFromConf(unittest.TestCase):

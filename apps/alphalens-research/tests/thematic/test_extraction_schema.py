@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from alphalens_research.thematic.extraction import schema
+from alphalens_pipeline.thematic.extraction import schema
 
 
 class TestEventSchema(unittest.TestCase):

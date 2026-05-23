@@ -22,7 +22,7 @@ DEFAULT_CONFIG = {
 
 class TestFundamentalGateScore(unittest.TestCase):
     def test_no_concerns_returns_one(self):
-        from alphalens_research.data.fundamentals.gate import fundamental_gate_score
+        from alphalens_pipeline.data.fundamentals.gate import fundamental_gate_score
 
         features = {
             "cash_runway_months": 36.0,
@@ -35,12 +35,12 @@ class TestFundamentalGateScore(unittest.TestCase):
     def test_missing_data_returns_neutral(self):
         """Empty features dict → no info → neutral gate = 1.0. Layer 3 will
         still see the pick; we don't want to penalize the unknown."""
-        from alphalens_research.data.fundamentals.gate import fundamental_gate_score
+        from alphalens_pipeline.data.fundamentals.gate import fundamental_gate_score
 
         self.assertEqual(fundamental_gate_score({}, DEFAULT_CONFIG), 1.0)
 
     def test_runway_between_3_and_12_months_reduces_score(self):
-        from alphalens_research.data.fundamentals.gate import fundamental_gate_score
+        from alphalens_pipeline.data.fundamentals.gate import fundamental_gate_score
 
         features = {
             "cash_runway_months": 6.0,
@@ -53,7 +53,7 @@ class TestFundamentalGateScore(unittest.TestCase):
         self.assertGreaterEqual(score, DEFAULT_CONFIG["fundamental_gate_floor"])
 
     def test_runway_above_threshold_no_penalty(self):
-        from alphalens_research.data.fundamentals.gate import fundamental_gate_score
+        from alphalens_pipeline.data.fundamentals.gate import fundamental_gate_score
 
         features = {
             "cash_runway_months": 24.0,  # > 12 threshold
@@ -66,7 +66,7 @@ class TestFundamentalGateScore(unittest.TestCase):
     def test_ps_ceiling_applies_only_preprofit(self):
         """Rule: a P/S of 150 is a red flag only for pre-profit names. Profitable
         companies routinely trade at P/S >100 (software cos), that's fine."""
-        from alphalens_research.data.fundamentals.gate import fundamental_gate_score
+        from alphalens_pipeline.data.fundamentals.gate import fundamental_gate_score
 
         preprofit = {
             "cash_runway_months": 36.0,
@@ -84,7 +84,7 @@ class TestFundamentalGateScore(unittest.TestCase):
         self.assertAlmostEqual(fundamental_gate_score(profitable, DEFAULT_CONFIG), 1.0, places=6)
 
     def test_all_red_flags_clipped_at_floor(self):
-        from alphalens_research.data.fundamentals.gate import fundamental_gate_score
+        from alphalens_pipeline.data.fundamentals.gate import fundamental_gate_score
 
         features = {
             "cash_runway_months": 4.0,  # just above hard-reject, below penalty_full
@@ -97,7 +97,7 @@ class TestFundamentalGateScore(unittest.TestCase):
         self.assertLessEqual(score, 1.0)
 
     def test_consecutive_neg_ocf_triggers_penalty(self):
-        from alphalens_research.data.fundamentals.gate import fundamental_gate_score
+        from alphalens_pipeline.data.fundamentals.gate import fundamental_gate_score
 
         features = {
             "cash_runway_months": 36.0,
@@ -108,14 +108,14 @@ class TestFundamentalGateScore(unittest.TestCase):
         self.assertLess(fundamental_gate_score(features, DEFAULT_CONFIG), 1.0)
 
     def test_disabled_flag_returns_one(self):
-        from alphalens_research.data.fundamentals.gate import fundamental_gate_score
+        from alphalens_pipeline.data.fundamentals.gate import fundamental_gate_score
 
         features = {"cash_runway_months": 2.0}  # would otherwise be extreme
         cfg = {**DEFAULT_CONFIG, "fundamental_gate_enabled": False}
         self.assertEqual(fundamental_gate_score(features, cfg), 1.0)
 
     def test_floor_is_configurable(self):
-        from alphalens_research.data.fundamentals.gate import fundamental_gate_score
+        from alphalens_pipeline.data.fundamentals.gate import fundamental_gate_score
 
         features = {
             "cash_runway_months": 4.0,
@@ -130,7 +130,7 @@ class TestFundamentalGateScore(unittest.TestCase):
 
 class TestShouldHardReject(unittest.TestCase):
     def test_runway_below_hard_reject_threshold_rejects(self):
-        from alphalens_research.data.fundamentals.gate import should_hard_reject
+        from alphalens_pipeline.data.fundamentals.gate import should_hard_reject
 
         features = {"cash_runway_months": 2.0}
         rejected, reason = should_hard_reject(features, DEFAULT_CONFIG)
@@ -139,7 +139,7 @@ class TestShouldHardReject(unittest.TestCase):
 
     def test_runway_at_exact_threshold_does_not_reject(self):
         """3mo is the boundary — we keep 3 and reject below."""
-        from alphalens_research.data.fundamentals.gate import should_hard_reject
+        from alphalens_pipeline.data.fundamentals.gate import should_hard_reject
 
         features = {"cash_runway_months": 3.0}
         rejected, _ = should_hard_reject(features, DEFAULT_CONFIG)
@@ -147,20 +147,20 @@ class TestShouldHardReject(unittest.TestCase):
 
     def test_missing_runway_data_does_not_reject(self):
         """Hard reject requires positive evidence of impending bankruptcy."""
-        from alphalens_research.data.fundamentals.gate import should_hard_reject
+        from alphalens_pipeline.data.fundamentals.gate import should_hard_reject
 
         rejected, _ = should_hard_reject({}, DEFAULT_CONFIG)
         self.assertFalse(rejected)
 
     def test_nan_runway_does_not_reject(self):
-        from alphalens_research.data.fundamentals.gate import should_hard_reject
+        from alphalens_pipeline.data.fundamentals.gate import should_hard_reject
 
         features = {"cash_runway_months": float("nan")}
         rejected, _ = should_hard_reject(features, DEFAULT_CONFIG)
         self.assertFalse(rejected)
 
     def test_disabled_flag_skips_hard_reject(self):
-        from alphalens_research.data.fundamentals.gate import should_hard_reject
+        from alphalens_pipeline.data.fundamentals.gate import should_hard_reject
 
         features = {"cash_runway_months": 0.5}  # extreme
         cfg = {**DEFAULT_CONFIG, "fundamental_gate_enabled": False}

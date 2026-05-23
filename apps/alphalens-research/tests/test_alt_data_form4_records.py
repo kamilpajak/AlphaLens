@@ -129,7 +129,7 @@ def _build_xml(
 
 class TestParseHappyPath(unittest.TestCase):
     def test_parses_single_reporting_owner_single_tx(self):
-        from alphalens_research.data.alt_data.form4_records import parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
 
         xml = _build_xml()
 
@@ -163,7 +163,7 @@ class TestParseHappyPath(unittest.TestCase):
 
 class TestMultipleReportingOwners(unittest.TestCase):
     def test_joint_ceo_cfo_emits_two_records(self):
-        from alphalens_research.data.alt_data.form4_records import parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
 
         xml = _build_xml(
             reporting_owners=[
@@ -203,7 +203,7 @@ class TestMultipleReportingOwners(unittest.TestCase):
 
 class TestMultipleTransactionsSingleFiling(unittest.TestCase):
     def test_each_tx_becomes_record(self):
-        from alphalens_research.data.alt_data.form4_records import parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
 
         xml = _build_xml(
             non_derivative=[
@@ -225,7 +225,7 @@ class TestMultipleTransactionsSingleFiling(unittest.TestCase):
 
 class TestDerivativeIgnored(unittest.TestCase):
     def test_only_non_derivative_records_returned(self):
-        from alphalens_research.data.alt_data.form4_records import parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
 
         xml = _build_xml(
             non_derivative=[
@@ -248,7 +248,7 @@ class TestDerivativeIgnored(unittest.TestCase):
 
 class TestAmendedForm4A(unittest.TestCase):
     def test_documenttype_4a_marks_is_amendment(self):
-        from alphalens_research.data.alt_data.form4_records import parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
 
         xml = _build_xml(document_type="4/A")
 
@@ -263,7 +263,7 @@ class TestAmendedForm4A(unittest.TestCase):
 
 class TestForm5Rejected(unittest.TestCase):
     def test_form_5_raises(self):
-        from alphalens_research.data.alt_data.form4_records import Form4ParseError, parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import Form4ParseError, parse_form4_xml
 
         xml = _build_xml(document_type="5")
 
@@ -273,7 +273,7 @@ class TestForm5Rejected(unittest.TestCase):
 
 class TestMissingRelationshipFields(unittest.TestCase):
     def test_missing_flags_default_false(self):
-        from alphalens_research.data.alt_data.form4_records import parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
 
         xml = _build_xml(
             reporting_owners=[
@@ -302,7 +302,7 @@ class TestMissingRelationshipFields(unittest.TestCase):
 
 class TestMalformedXml(unittest.TestCase):
     def test_broken_xml_raises(self):
-        from alphalens_research.data.alt_data.form4_records import Form4ParseError, parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import Form4ParseError, parse_form4_xml
 
         with self.assertRaises(Form4ParseError):
             parse_form4_xml(
@@ -314,7 +314,7 @@ class TestMalformedXml(unittest.TestCase):
 
 class TestFootnotesExtracted(unittest.TestCase):
     def test_footnotes_preserved_as_id_text_tuples(self):
-        from alphalens_research.data.alt_data.form4_records import parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
 
         xml = _build_xml(
             footnotes=[
@@ -340,7 +340,7 @@ class TestFootnotesExtracted(unittest.TestCase):
 
 class TestEmptyNonDerivativeTable(unittest.TestCase):
     def test_no_non_derivative_txs_returns_empty_list(self):
-        from alphalens_research.data.alt_data.form4_records import parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
 
         xml = _build_xml(
             non_derivative=[],
@@ -359,7 +359,7 @@ class TestEmptyNonDerivativeTable(unittest.TestCase):
 class TestTransactionCodePreserved(unittest.TestCase):
     def test_parser_does_not_filter_by_code(self):
         """Parser returns all non-derivative tx codes; filtering is M2b's job."""
-        from alphalens_research.data.alt_data.form4_records import parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
 
         xml = _build_xml(
             non_derivative=[
@@ -380,7 +380,7 @@ class TestTolerantDateParse(unittest.TestCase):
     def test_iso_date_with_timezone_offset_parses_to_date(self):
         """Real AEHR Form 4 filing had tx_date '2026-04-09-05:00'.
         Strip after YYYY-MM-DD rather than raise uncaught ValueError."""
-        from alphalens_research.data.alt_data.form4_records import parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
 
         xml = _build_xml(
             non_derivative=[
@@ -404,7 +404,7 @@ class TestTolerantDateParse(unittest.TestCase):
     def test_malformed_date_raises_form4_parse_error(self):
         """Genuinely malformed dates must raise Form4ParseError so scorer
         can skip the filing — NOT uncaught ValueError crashing the scan."""
-        from alphalens_research.data.alt_data.form4_records import Form4ParseError, parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import Form4ParseError, parse_form4_xml
 
         xml = _build_xml(
             non_derivative=[
@@ -418,7 +418,7 @@ class TestTolerantDateParse(unittest.TestCase):
 
 class TestMissingPriceNonePreserved(unittest.TestCase):
     def test_gift_tx_no_price_parses_as_none(self):
-        from alphalens_research.data.alt_data.form4_records import parse_form4_xml
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
 
         xml = _build_xml(
             non_derivative=[

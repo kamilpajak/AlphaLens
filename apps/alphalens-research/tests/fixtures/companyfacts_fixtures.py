@@ -27,7 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from alphalens_research.data.fundamentals.companyfacts_parquet import (
+from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
     companyfacts_json_to_parquet_table,
 )
 

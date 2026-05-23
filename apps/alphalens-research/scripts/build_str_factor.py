@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import pandas as pd
-from alphalens_research.data.alt_data.yfinance_cache import load_cached_histories
+from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories
 
 logger = logging.getLogger(__name__)
 

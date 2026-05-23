@@ -24,8 +24,8 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+from alphalens_pipeline.data.store.history import HistoryStore
 from alphalens_research.backtest.engine import BacktestEngine
-from alphalens_research.data.store.history import HistoryStore
 
 
 def _bars(

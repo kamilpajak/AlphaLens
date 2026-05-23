@@ -58,13 +58,13 @@ class _FakeGenaiTestCase(unittest.TestCase):
         self._sys_modules_patcher = patch.dict("sys.modules")
         self._sys_modules_patcher.start()
         self.fake_genai, self.fake_types = _install_fake_genai(sys.modules)
-        from alphalens_research.data.alt_data import gemini_client as mod
+        from alphalens_pipeline.data.alt_data import gemini_client as mod
 
         mod._reset_default_client_for_tests()
         mod._reset_sdk_cache_for_tests()
 
     def tearDown(self):
-        from alphalens_research.data.alt_data import gemini_client as mod
+        from alphalens_pipeline.data.alt_data import gemini_client as mod
 
         mod._reset_default_client_for_tests()
         mod._reset_sdk_cache_for_tests()
@@ -75,13 +75,13 @@ class _FakeGenaiTestCase(unittest.TestCase):
 
 class TestClientConstruction(_FakeGenaiTestCase):
     def test_constructor_api_key_required(self):
-        from alphalens_research.data.alt_data.gemini_client import GeminiClient
+        from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient
 
         with self.assertRaises(ValueError):
             GeminiClient(api_key="")
 
     def test_constructor_builds_underlying_sdk_client(self):
-        from alphalens_research.data.alt_data.gemini_client import GeminiClient
+        from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient
 
         client = GeminiClient(api_key="DEMO")
         # genai.Client(api_key="DEMO") should have been called once.
@@ -89,7 +89,7 @@ class TestClientConstruction(_FakeGenaiTestCase):
         self.assertIs(client.sdk_client, self.fake_genai.Client.return_value)
 
     def test_from_env_reads_google_api_key(self):
-        from alphalens_research.data.alt_data.gemini_client import GeminiClient
+        from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient
 
         with patch.dict("os.environ", {"GOOGLE_API_KEY": "envkey"}, clear=False):
             client = GeminiClient.from_env()
@@ -98,7 +98,7 @@ class TestClientConstruction(_FakeGenaiTestCase):
         self.assertIsNotNone(client.sdk_client)
 
     def test_from_env_raises_when_env_missing(self):
-        from alphalens_research.data.alt_data.gemini_client import GeminiClient
+        from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient
 
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaises(ValueError):
@@ -111,7 +111,7 @@ class TestClientConstruction(_FakeGenaiTestCase):
         machinery to simulate absence. sys.modules is still snapshotted
         by the base class so the simulated absence cannot leak into the
         next test."""
-        from alphalens_research.data.alt_data import gemini_client as mod
+        from alphalens_pipeline.data.alt_data import gemini_client as mod
 
         mod._reset_sdk_cache_for_tests()
         # Remove fake from the current snapshot so the import falls through
@@ -138,7 +138,7 @@ class TestClientConstruction(_FakeGenaiTestCase):
 
 class TestGenerateContent(_FakeGenaiTestCase):
     def test_generate_content_forwards_to_sdk(self):
-        from alphalens_research.data.alt_data.gemini_client import GeminiClient
+        from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient
 
         client = GeminiClient(api_key="DEMO")
         sdk_client = client.sdk_client
@@ -164,7 +164,7 @@ class TestGenerateContent(_FakeGenaiTestCase):
         """build_config is a convenience around types.GenerateContentConfig —
         callers shouldn't need to import the SDK types module just to build
         a config dict. Verify the kwargs reach the SDK."""
-        from alphalens_research.data.alt_data.gemini_client import GeminiClient
+        from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient
 
         client = GeminiClient(api_key="DEMO")
         config = client.build_config(
@@ -185,7 +185,7 @@ class TestGenerateContent(_FakeGenaiTestCase):
 
 class TestDefaultClientSingleton(_FakeGenaiTestCase):
     def test_get_default_returns_same_instance(self):
-        from alphalens_research.data.alt_data.gemini_client import get_default_gemini_client
+        from alphalens_pipeline.data.alt_data.gemini_client import get_default_gemini_client
 
         with patch.dict("os.environ", {"GOOGLE_API_KEY": "envkey"}, clear=False):
             c1 = get_default_gemini_client()
@@ -195,7 +195,7 @@ class TestDefaultClientSingleton(_FakeGenaiTestCase):
         self.assertEqual(self.fake_genai.Client.call_count, 1)
 
     def test_get_default_raises_without_env(self):
-        from alphalens_research.data.alt_data.gemini_client import get_default_gemini_client
+        from alphalens_pipeline.data.alt_data.gemini_client import get_default_gemini_client
 
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaises(ValueError):

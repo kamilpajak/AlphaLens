@@ -127,14 +127,14 @@ def _run_baseline_pipeline() -> tuple[pd.DataFrame, pd.Series, dict[str, float]]
                         Series stripped to keep JSON-serializable).
     """
     import scripts.experiment_insider_pc_compound as exp
+    from alphalens_pipeline.data.alt_data.pit_universe_loader import load_universe_union
+    from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+    from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories
+    from alphalens_pipeline.data.factors import load_carhart_daily
+    from alphalens_pipeline.data.store.form4_pit import Form4PITStore
+    from alphalens_pipeline.data.store.history import HistoryStore
     from alphalens_research.attribution.cost_model import RealisticCostModel  # noqa: F401
     from alphalens_research.backtest.engine import BacktestEngine
-    from alphalens_research.data.alt_data.pit_universe_loader import load_universe_union
-    from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap
-    from alphalens_research.data.alt_data.yfinance_cache import load_cached_histories
-    from alphalens_research.data.factors import load_carhart_daily
-    from alphalens_research.data.store.form4_pit import Form4PITStore
-    from alphalens_research.data.store.history import HistoryStore
     from alphalens_research.screeners.distress_credit.features import make_production_stores
 
     cfg = _FIXTURE_CONFIG
@@ -150,9 +150,9 @@ def _run_baseline_pipeline() -> tuple[pd.DataFrame, pd.Series, dict[str, float]]
     history_store = HistoryStore(histories)
 
     _liab_store, share_store = make_production_stores()
-    tcm_path = (
-        REPO_ROOT / "alphalens_research" / "data" / "alt_data" / "data" / "ticker_cik_map.yaml"
-    )
+    import alphalens_pipeline.data.alt_data as _alt_data_pkg
+
+    tcm_path = Path(_alt_data_pkg.__file__).resolve().parent / "data" / "ticker_cik_map.yaml"
     cik_resolver = TickerCikMap.load(tcm_path)
 
     form4_store = Form4PITStore(

@@ -6,8 +6,7 @@ import logging
 from datetime import UTC, datetime
 
 import pandas as pd
-
-from alphalens_research.core.candidates import Candidate
+from alphalens_pipeline.core.candidates import Candidate
 
 from .composite_ranker import CompositeRanker
 from .config import PRESCREENER_DEFAULTS

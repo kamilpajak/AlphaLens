@@ -69,8 +69,8 @@ class TestFirstFiledExtraction(unittest.TestCase):
         # period_end 2024-03-31 was filed 3 times: 2024-05-01 (original 10-Q),
         # 2024-08-15 (10-Q/A amendment), 2024-11-30 (another amendment).
         # First-filed snapshot must pick 2024-05-01.
-        from alphalens_research.data.fundamentals.edgar_companyfacts import _Entry
-        from alphalens_research.data.fundamentals.sue import _first_filed_per_period_end
+        from alphalens_pipeline.data.fundamentals.edgar_companyfacts import _Entry
+        from alphalens_pipeline.data.fundamentals.sue import _first_filed_per_period_end
 
         entries = [
             _Entry(
@@ -117,7 +117,7 @@ class TestNaiveForecast(unittest.TestCase):
     """Foster-1977 seasonal-random-walk-with-drift forecast formula."""
 
     def test_forecast_lag4_plus_drift(self):
-        from alphalens_research.data.fundamentals.sue import _foster_naive_forecast
+        from alphalens_pipeline.data.fundamentals.sue import _foster_naive_forecast
 
         # Series last 8 quarters (oldest first):
         # quarters t-8 .. t-1 = [1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7]
@@ -132,7 +132,7 @@ class TestNaiveForecast(unittest.TestCase):
         self.assertAlmostEqual(forecast, 1.8, places=6)
 
     def test_forecast_returns_none_on_insufficient_history(self):
-        from alphalens_research.data.fundamentals.sue import _foster_naive_forecast
+        from alphalens_pipeline.data.fundamentals.sue import _foster_naive_forecast
 
         # Need at least 8 prior quarters to compute drift over 4 seasonal pairs
         self.assertIsNone(_foster_naive_forecast([1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6]))
@@ -143,7 +143,7 @@ class TestSUE(unittest.TestCase):
     """End-to-end SUE compute with first-filed PIT."""
 
     def test_sue_computes_at_canonical_fixture(self):
-        from alphalens_research.data.fundamentals.sue import _compute_sue
+        from alphalens_pipeline.data.fundamentals.sue import _compute_sue
 
         # 9 quarters of EPS (oldest first). Forecast for the 9th uses lag-4 + drift
         # of preceding 4 seasonal pairs.
@@ -174,14 +174,14 @@ class TestSUE(unittest.TestCase):
             self.assertGreater(sue, 0.0)
 
     def test_sue_returns_none_on_zero_residual_variance(self):
-        from alphalens_research.data.fundamentals.sue import _compute_sue
+        from alphalens_pipeline.data.fundamentals.sue import _compute_sue
 
         # Constant series → all surprises zero → std = 0 → SUE undefined.
         eps = [2.0] * 20
         self.assertIsNone(_compute_sue(eps, residual_window=4))
 
     def test_sue_returns_none_on_short_history(self):
-        from alphalens_research.data.fundamentals.sue import _compute_sue
+        from alphalens_pipeline.data.fundamentals.sue import _compute_sue
 
         # Only 6 quarters — cannot even compute current forecast.
         eps = [1.0, 1.1, 1.2, 1.3, 1.4, 1.5]
@@ -191,7 +191,7 @@ class TestSUE(unittest.TestCase):
         # 16-quarter trend series: linear trend + seasonal noise.
         import math
 
-        from alphalens_research.data.fundamentals.sue import _compute_sue
+        from alphalens_pipeline.data.fundamentals.sue import _compute_sue
 
         eps = []
         for i in range(16):
@@ -209,12 +209,12 @@ class TestStorePITContract(unittest.TestCase):
 
     def _setup_store(self, tmp: Path, eps_records: list[dict]):
         import pyarrow.parquet as pq
-        from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap
-        from alphalens_research.data.fundamentals.companyfacts_parquet import (
+        from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
             CompanyfactsParquetReader,
             companyfacts_json_to_parquet_table,
         )
-        from alphalens_research.data.fundamentals.sue import FosterSUEStore
+        from alphalens_pipeline.data.fundamentals.sue import FosterSUEStore
 
         cik = 320193
         cf = _make_companyfacts(eps_records)
@@ -305,11 +305,11 @@ class TestStoreOnRepresentativeFixtures(unittest.TestCase):
         cik_map_path = tmp / "cik_map.yaml"
         cik_map_path.write_text(f"AAPL: {APPLE_CIK}\nIPO_CO: {IPO_CIK}\n")
 
-        from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap
-        from alphalens_research.data.fundamentals.companyfacts_parquet import (
+        from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
             CompanyfactsParquetReader,
         )
-        from alphalens_research.data.fundamentals.sue import FosterSUEStore
+        from alphalens_pipeline.data.fundamentals.sue import FosterSUEStore
 
         self.cik_map = TickerCikMap.load(cik_map_path)
         self.reader = CompanyfactsParquetReader(self.parquet_dir)

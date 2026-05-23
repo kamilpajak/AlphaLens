@@ -5,6 +5,7 @@ requires-python = ">=3.13"
 [manifest]
 members = [
     "alphalens-django",
+    "alphalens-pipeline",
     "alphalens-research",
 ]
 
@@ -55,26 +56,21 @@ requires-dist = [
 ]
 
 [[package]]
-name = "alphalens-research"
+name = "alphalens-pipeline"
 version = "0.1.0"
-source = { editable = "apps/alphalens-research" }
+source = { editable = "apps/alphalens-pipeline" }
 dependencies = [
     { name = "feedparser" },
     { name = "google-genai" },
     { name = "ivolatility" },
     { name = "json-repair" },
     { name = "langchain-google-genai" },
-    { name = "lightgbm" },
     { name = "pandas" },
-    { name = "phase-robust-backtesting" },
     { name = "pyarrow" },
     { name = "python-dotenv" },
     { name = "quiverquant" },
     { name = "requests" },
-    { name = "scikit-learn" },
     { name = "scipy" },
-    { name = "statsmodels" },
-    { name = "stockstats" },
     { name = "typer" },
     { name = "yfinance" },
 ]
@@ -86,19 +82,43 @@ requires-dist = [
     { name = "ivolatility", specifier = ">=1.9.3" },
     { name = "json-repair", specifier = ">=0.59.10" },
     { name = "langchain-google-genai", specifier = ">=4.2.2" },
-    { name = "lightgbm", specifier = ">=4.6.0" },
     { name = "pandas", specifier = ">=2.3.0" },
-    { name = "phase-robust-backtesting", git = "https://github.com/kamilpajak/phase-robust-backtesting.git?rev=v0.2.3" },
     { name = "pyarrow", specifier = ">=24.0.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "quiverquant" },
     { name = "requests", specifier = ">=2.32.0" },
+    { name = "scipy", specifier = ">=1.17.1" },
+    { name = "typer", specifier = ">=0.25.1" },
+    { name = "yfinance", specifier = ">=0.2.63" },
+]
+
+[[package]]
+name = "alphalens-research"
+version = "0.1.0"
+source = { editable = "apps/alphalens-research" }
+dependencies = [
+    { name = "alphalens-pipeline" },
+    { name = "lightgbm" },
+    { name = "pandas" },
+    { name = "phase-robust-backtesting" },
+    { name = "pyarrow" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+    { name = "statsmodels" },
+    { name = "stockstats" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alphalens-pipeline", editable = "apps/alphalens-pipeline" },
+    { name = "lightgbm", specifier = ">=4.6.0" },
+    { name = "pandas", specifier = ">=2.3.0" },
+    { name = "phase-robust-backtesting", git = "https://github.com/kamilpajak/phase-robust-backtesting.git?rev=v0.2.3" },
+    { name = "pyarrow", specifier = ">=24.0.0" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "statsmodels", specifier = ">=0.14.6" },
     { name = "stockstats", specifier = ">=0.6.5" },
-    { name = "typer", specifier = ">=0.25.1" },
-    { name = "yfinance", specifier = ">=0.2.63" },
 ]
 
 [[package]]

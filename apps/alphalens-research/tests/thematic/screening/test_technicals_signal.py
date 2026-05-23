@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 import pandas as pd
-from alphalens_research.thematic.screening import technicals_signal
+from alphalens_pipeline.thematic.screening import technicals_signal
 
 
 def _ohlcv(n: int = 90, start_price: float = 100.0, trend: float = 0.001, vol: float = 0.01):

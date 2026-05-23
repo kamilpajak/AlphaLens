@@ -14,7 +14,7 @@ FAKE_TICKERS_JSON = {
 
 def _make_sec_client(payload=None):
     """Mock SecEdgarClient that returns ``payload`` from fetch_company_tickers."""
-    from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarClient
+    from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 
     client = MagicMock(spec=SecEdgarClient)
     client.fetch_company_tickers.return_value = payload or FAKE_TICKERS_JSON
@@ -30,7 +30,7 @@ class TestCIKLoader(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_download_when_cache_missing(self):
-        from alphalens_research.watchdog.sources.cik_loader import CIKLoader
+        from alphalens_pipeline.watchdog.sources.cik_loader import CIKLoader
 
         sec = _make_sec_client()
         loader = CIKLoader(cache_path=self.cache_path, sec_client=sec)
@@ -40,7 +40,7 @@ class TestCIKLoader(unittest.TestCase):
         self.assertEqual(sec.fetch_company_tickers.call_count, 1)
 
     def test_use_cache_when_fresh(self):
-        from alphalens_research.watchdog.sources.cik_loader import CIKLoader
+        from alphalens_pipeline.watchdog.sources.cik_loader import CIKLoader
 
         self.cache_path.write_text(json.dumps(FAKE_TICKERS_JSON))
 
@@ -50,7 +50,7 @@ class TestCIKLoader(unittest.TestCase):
         self.assertEqual(sec.fetch_company_tickers.call_count, 0)
 
     def test_refresh_after_cache_expiry(self):
-        from alphalens_research.watchdog.sources.cik_loader import CIKLoader
+        from alphalens_pipeline.watchdog.sources.cik_loader import CIKLoader
 
         self.cache_path.write_text(json.dumps(FAKE_TICKERS_JSON))
         eight_days_ago = time.time() - (8 * 86400)
@@ -68,7 +68,7 @@ class TestCIKLoader(unittest.TestCase):
         self.assertEqual(sec.fetch_company_tickers.call_count, 1)
 
     def test_get_cik_returns_10_digit_padded(self):
-        from alphalens_research.watchdog.sources.cik_loader import CIKLoader
+        from alphalens_pipeline.watchdog.sources.cik_loader import CIKLoader
 
         sec = _make_sec_client()
         loader = CIKLoader(cache_path=self.cache_path, sec_client=sec)
@@ -79,7 +79,7 @@ class TestCIKLoader(unittest.TestCase):
         self.assertEqual(loader.get_cik("GOOGL"), "0001652044")
 
     def test_get_cik_returns_none_for_unknown_ticker(self):
-        from alphalens_research.watchdog.sources.cik_loader import CIKLoader
+        from alphalens_pipeline.watchdog.sources.cik_loader import CIKLoader
 
         sec = _make_sec_client()
         loader = CIKLoader(cache_path=self.cache_path, sec_client=sec)
@@ -88,13 +88,13 @@ class TestCIKLoader(unittest.TestCase):
         self.assertIsNone(loader.get_cik("FAKE"))
 
     def test_default_cache_path_is_in_alphalens_home(self):
-        from alphalens_research.watchdog.sources.cik_loader import default_cik_cache_path
+        from alphalens_pipeline.watchdog.sources.cik_loader import default_cik_cache_path
 
         expected = Path.home() / ".alphalens" / "watchdog" / "company_tickers.json"
         self.assertEqual(default_cik_cache_path(), expected)
 
     def test_case_insensitive_ticker_lookup(self):
-        from alphalens_research.watchdog.sources.cik_loader import CIKLoader
+        from alphalens_pipeline.watchdog.sources.cik_loader import CIKLoader
 
         sec = _make_sec_client()
         loader = CIKLoader(cache_path=self.cache_path, sec_client=sec)
@@ -105,8 +105,8 @@ class TestCIKLoader(unittest.TestCase):
     def test_default_sec_client_used_when_none_injected(self):
         """Without an injected sec_client, the loader falls back to the
         process-wide singleton so a single SEC throttle is shared."""
-        from alphalens_research.data.alt_data import sec_edgar_client as mod
-        from alphalens_research.watchdog.sources.cik_loader import CIKLoader
+        from alphalens_pipeline.data.alt_data import sec_edgar_client as mod
+        from alphalens_pipeline.watchdog.sources.cik_loader import CIKLoader
 
         mod._reset_default_client_for_tests()
         try:

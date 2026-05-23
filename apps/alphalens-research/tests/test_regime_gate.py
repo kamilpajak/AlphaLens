@@ -148,7 +148,7 @@ class RegimeGatePackageStatusTest(unittest.TestCase):
     def test_package_declares_research_only_status(self):
         """Wrapper is a reusable research utility — no concrete classifier
         ever shipped under it (the rescue use-case for mom+lowvol BASE
-        failed Phase 1 diagnostic 2026-04-29). Mirrors `alphalens_research.data.macro/`."""
+        failed Phase 1 diagnostic 2026-04-29). Mirrors `alphalens_pipeline.data.macro/`."""
         import alphalens_research.gates as pkg
 
         self.assertEqual(pkg.__status__, "RESEARCH_ONLY")

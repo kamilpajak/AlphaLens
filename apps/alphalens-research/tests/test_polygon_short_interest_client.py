@@ -4,7 +4,7 @@ PIT contract: at asof t, only settlements with (settlement_date + 8 BD) <= t are
 visible. Disk cache at ~/.alphalens/polygon_short_interest/{ticker}.parquet.
 
 After the 2026-05-22 canonical-client consolidation, this wrapper delegates HTTP
-to :class:`alphalens_research.data.alt_data.polygon_client.PolygonClient` via DI. Tests
+to :class:`alphalens_pipeline.data.alt_data.polygon_client.PolygonClient` via DI. Tests
 mock at the client level (``polygon_client.get_short_interest``) instead of at
 the requests / urllib level — that's the supported mock layer post-migration
 and matches the SecEdgar / AlphaVantage / Gemini test patterns.
@@ -57,7 +57,7 @@ def _mock_polygon_client(*, rows: list[dict] | None = None) -> MagicMock:
 
 class TestPolygonShortInterestClient(unittest.TestCase):
     def test_fetch_ticker_parses_response(self):
-        from alphalens_research.data.alt_data.polygon_short_interest import (
+        from alphalens_pipeline.data.alt_data.polygon_short_interest import (
             PolygonShortInterestClient,
         )
 
@@ -80,7 +80,7 @@ class TestPolygonShortInterestClient(unittest.TestCase):
             self.assertAlmostEqual(float(df.iloc[2]["days_to_cover"]), 1.97, places=4)
 
     def test_fetch_ticker_caches_to_parquet(self):
-        from alphalens_research.data.alt_data.polygon_short_interest import (
+        from alphalens_pipeline.data.alt_data.polygon_short_interest import (
             PolygonShortInterestClient,
         )
 
@@ -101,7 +101,7 @@ class TestPolygonShortInterestClient(unittest.TestCase):
     def test_fetch_ticker_follows_pagination(self):
         """Pagination now happens inside PolygonClient; the wrapper just receives
         a flat list of rows. Test that >1 page worth of rows are accepted."""
-        from alphalens_research.data.alt_data.polygon_short_interest import (
+        from alphalens_pipeline.data.alt_data.polygon_short_interest import (
             PolygonShortInterestClient,
         )
 
@@ -127,7 +127,7 @@ class TestPolygonShortInterestClient(unittest.TestCase):
             self.assertEqual(polygon_client.get_short_interest.call_count, 1)
 
     def test_fetch_ticker_empty_results(self):
-        from alphalens_research.data.alt_data.polygon_short_interest import (
+        from alphalens_pipeline.data.alt_data.polygon_short_interest import (
             PolygonShortInterestClient,
         )
 
@@ -147,8 +147,8 @@ class TestPolygonShortInterestClient(unittest.TestCase):
         """401 now surfaces as ``PolygonAuthError`` from the canonical client;
         the wrapper re-exports ``PolygonShortInterestAuthError`` as an alias so
         existing ``except`` clauses keep working."""
-        from alphalens_research.data.alt_data.polygon_client import PolygonAuthError
-        from alphalens_research.data.alt_data.polygon_short_interest import (
+        from alphalens_pipeline.data.alt_data.polygon_client import PolygonAuthError
+        from alphalens_pipeline.data.alt_data.polygon_short_interest import (
             PolygonShortInterestAuthError,
             PolygonShortInterestClient,
         )
@@ -173,7 +173,7 @@ class TestPITContract(unittest.TestCase):
     """8 trading-day dissemination lag (FINRA Rule 4560)."""
 
     def test_available_at_blocks_within_lag_window(self):
-        from alphalens_research.data.alt_data.polygon_short_interest import _is_available_at
+        from alphalens_pipeline.data.alt_data.polygon_short_interest import _is_available_at
 
         # Settlement Fri 2024-01-12. +8 BD (no holidays in window):
         # Mon 1/15(=+1), Tue 1/16(+2), Wed 1/17(+3), Thu 1/18(+4), Fri 1/19(+5),
@@ -184,7 +184,7 @@ class TestPITContract(unittest.TestCase):
         self.assertTrue(_is_available_at(asof=date(2024, 1, 25), settlement=date(2024, 1, 12)))
 
     def test_available_at_handles_month_end_settlement(self):
-        from alphalens_research.data.alt_data.polygon_short_interest import _is_available_at
+        from alphalens_pipeline.data.alt_data.polygon_short_interest import _is_available_at
 
         # FINRA settlement Wed 2024-01-31 (last BD of January 2024). +8 BD:
         # Thu 2/1(=+1), Fri 2/2(+2), Mon 2/5(+3), Tue 2/6(+4), Wed 2/7(+5),
@@ -196,7 +196,7 @@ class TestPITContract(unittest.TestCase):
 
 class TestFeaturesAsOf(unittest.TestCase):
     def test_features_as_of_returns_most_recent_eligible(self):
-        from alphalens_research.data.alt_data.polygon_short_interest import (
+        from alphalens_pipeline.data.alt_data.polygon_short_interest import (
             PolygonShortInterestClient,
         )
 
@@ -224,7 +224,7 @@ class TestFeaturesAsOf(unittest.TestCase):
             self.assertEqual(rec.settlement_date, date(2024, 1, 31))
 
     def test_features_as_of_returns_none_pre_history(self):
-        from alphalens_research.data.alt_data.polygon_short_interest import (
+        from alphalens_pipeline.data.alt_data.polygon_short_interest import (
             PolygonShortInterestClient,
         )
 
@@ -240,7 +240,7 @@ class TestFeaturesAsOf(unittest.TestCase):
             self.assertIsNone(rec)
 
     def test_features_as_of_returns_none_for_missing_ticker(self):
-        from alphalens_research.data.alt_data.polygon_short_interest import (
+        from alphalens_pipeline.data.alt_data.polygon_short_interest import (
             PolygonShortInterestClient,
         )
 

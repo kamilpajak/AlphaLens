@@ -2,7 +2,7 @@ import datetime as dt
 import unittest
 from unittest.mock import MagicMock
 
-from alphalens_research.thematic.screening import fcff_signal
+from alphalens_pipeline.thematic.screening import fcff_signal
 
 
 # 11-field dict shape returned by EdgarFundamentalsStore.ev_fcff_features_as_of

@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 import pyarrow.parquet as pq
+
 from tests.fixtures.companyfacts_fixtures import (
     APPLE_CIK,
     IPO_CIK,

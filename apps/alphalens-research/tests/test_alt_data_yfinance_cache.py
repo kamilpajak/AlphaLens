@@ -23,7 +23,7 @@ def _synthetic_ohlcv(n_bars: int = 50) -> pd.DataFrame:
 
 class TestDownloadAndCache(unittest.TestCase):
     def test_writes_parquet_per_ticker(self):
-        from alphalens_research.data.alt_data.yfinance_cache import download_and_cache
+        from alphalens_pipeline.data.alt_data.yfinance_cache import download_and_cache
 
         fetcher = MagicMock(side_effect=lambda t, s, e: _synthetic_ohlcv())
 
@@ -44,7 +44,7 @@ class TestDownloadAndCache(unittest.TestCase):
             self.assertTrue((cache / "MSFT.parquet").exists())
 
     def test_skips_already_cached(self):
-        from alphalens_research.data.alt_data.yfinance_cache import download_and_cache
+        from alphalens_pipeline.data.alt_data.yfinance_cache import download_and_cache
 
         fetcher = MagicMock(side_effect=lambda t, s, e: _synthetic_ohlcv())
 
@@ -73,7 +73,7 @@ class TestDownloadAndCache(unittest.TestCase):
         self.assertEqual(fetcher.call_count, 2)  # AAPL fetched once, MSFT once
 
     def test_fetch_error_ticker_skipped(self):
-        from alphalens_research.data.alt_data.yfinance_cache import download_and_cache
+        from alphalens_pipeline.data.alt_data.yfinance_cache import download_and_cache
 
         def fetcher(t, s, e):
             if t == "BAD":
@@ -98,7 +98,7 @@ class TestDownloadAndCache(unittest.TestCase):
 
     def test_empty_dataframe_skipped(self):
         """yfinance returns an empty DataFrame for delisted tickers."""
-        from alphalens_research.data.alt_data.yfinance_cache import download_and_cache
+        from alphalens_pipeline.data.alt_data.yfinance_cache import download_and_cache
 
         fetcher = MagicMock(side_effect=lambda t, s, e: pd.DataFrame())
 
@@ -120,7 +120,7 @@ class TestDownloadAndCache(unittest.TestCase):
 
 class TestLoadCachedHistories(unittest.TestCase):
     def test_loads_cached_parquets(self):
-        from alphalens_research.data.alt_data.yfinance_cache import (
+        from alphalens_pipeline.data.alt_data.yfinance_cache import (
             download_and_cache,
             load_cached_histories,
         )
@@ -145,7 +145,7 @@ class TestLoadCachedHistories(unittest.TestCase):
         self.assertEqual(len(histories["AAPL"]), 50)
 
     def test_missing_ticker_silently_skipped(self):
-        from alphalens_research.data.alt_data.yfinance_cache import load_cached_histories
+        from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories
 
         with tempfile.TemporaryDirectory() as td:
             histories = load_cached_histories(["NOPE"], Path(td))
@@ -153,7 +153,7 @@ class TestLoadCachedHistories(unittest.TestCase):
         self.assertEqual(histories, {})
 
     def test_round_trip_preserves_index(self):
-        from alphalens_research.data.alt_data.yfinance_cache import (
+        from alphalens_pipeline.data.alt_data.yfinance_cache import (
             download_and_cache,
             load_cached_histories,
         )
@@ -179,7 +179,7 @@ class TestDefaultFetcher(unittest.TestCase):
     def test_default_fetcher_normalizes_columns_to_lowercase(self):
         """yfinance returns capitalized OHLCV; fetcher must lowercase them
         so HistoryStore contract is satisfied."""
-        from alphalens_research.data.alt_data.yfinance_cache import _normalize_ohlcv
+        from alphalens_pipeline.data.alt_data.yfinance_cache import _normalize_ohlcv
 
         raw = pd.DataFrame(
             {
@@ -200,7 +200,7 @@ class TestDefaultFetcher(unittest.TestCase):
         )
 
     def test_normalize_drops_extra_columns(self):
-        from alphalens_research.data.alt_data.yfinance_cache import _normalize_ohlcv
+        from alphalens_pipeline.data.alt_data.yfinance_cache import _normalize_ohlcv
 
         raw = pd.DataFrame(
             {
@@ -224,7 +224,7 @@ class TestDefaultFetcher(unittest.TestCase):
 
     def test_normalize_empty_raises(self):
         """Missing required columns must fail loud, not silently drop."""
-        from alphalens_research.data.alt_data.yfinance_cache import _normalize_ohlcv
+        from alphalens_pipeline.data.alt_data.yfinance_cache import _normalize_ohlcv
 
         raw = pd.DataFrame({"Close": [100.0]}, index=pd.DatetimeIndex(["2024-01-03"]))
 
@@ -234,7 +234,7 @@ class TestDefaultFetcher(unittest.TestCase):
     def test_normalize_strips_timezone_from_index(self):
         """yfinance returns NY-localized DatetimeIndex; strip so downstream
         naive-Timestamp comparisons (close_as_of) don't TypeError."""
-        from alphalens_research.data.alt_data.yfinance_cache import _normalize_ohlcv
+        from alphalens_pipeline.data.alt_data.yfinance_cache import _normalize_ohlcv
 
         raw = pd.DataFrame(
             {

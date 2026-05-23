@@ -20,8 +20,7 @@ from PRIMARY hypothesis and run pure-Layer-2 long-only safe-decile.
 from __future__ import annotations
 
 import pandas as pd
-
-from alphalens_research.data.macro.signals import hy_oas_z_from_series
+from alphalens_pipeline.data.macro.signals import hy_oas_z_from_series
 
 _NEUTRAL_EXPOSURE = 1.0
 _MIN_EXPOSURE_AT_PLUS_ONE_Z = 0.5

@@ -2,7 +2,7 @@ import datetime as dt
 import unittest
 from unittest.mock import MagicMock
 
-from alphalens_research.thematic.screening import valuation_signal
+from alphalens_pipeline.thematic.screening import valuation_signal
 
 
 def _features(
