@@ -84,6 +84,22 @@ jobs:
           uv tool run pip-audit --disable-pip -r /tmp/audit-reqs.txt
         continue-on-error: true
 
+      - name: Pyright type-check (basic global + strict per critical module)
+        # Config: pyrightconfig.json at repo root.
+        # Global typeCheckingMode = "basic" — catches name resolution, attribute
+        # access, obvious type mismatches without forcing exhaustive annotations
+        # on math-heavy research code.
+        # Strict per-module via executionEnvironments on backtest/attribution/
+        # scorers — these surfaces govern verdicts; wrong types corrupt α t-stats.
+        # TODO: flip continue-on-error to false in three follow-up PRs:
+        #   (1) clean scorers strict (~22 errors, smallest scope)
+        #   (2) clean backtest strict (~40 errors)
+        #   (3) clean attribution strict (~68 errors)
+        # then a final PR cleans basic-mode global (~295 errors) and flips to
+        # blocking. Baseline at branch fork: 425 errors / 71 warnings.
+        run: uv run pyright
+        continue-on-error: true
+
       - name: Run tests with coverage
         run: |
           uv run coverage run -m unittest discover \

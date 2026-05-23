@@ -29,6 +29,7 @@ dev = [
     "pytest>=9.0",
     "pytest-django>=4.12",
     "diff-cover>=10.2",
+    "pyright>=1.1.409",
 ]
 
 [tool.ruff]
