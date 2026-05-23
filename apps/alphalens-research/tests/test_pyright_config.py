@@ -22,7 +22,12 @@ CONFIG_PATH = REPO_ROOT / "pyrightconfig.json"
 STRICT_ROOTS = {
     "apps/alphalens-research/alphalens_research/backtest",
     "apps/alphalens-research/alphalens_research/attribution",
-    "apps/alphalens-pipeline/alphalens_pipeline/scorers",
+    # Scorers strict at file granularity — opportunistic_form4.py is
+    # SHA256-locked by experiment_insider_pc_compound._COMPONENT_LOCKED_HASHES,
+    # so it cannot carry the pragma overrides the rest of the dir uses.
+    "apps/alphalens-pipeline/alphalens_pipeline/scorers/_common.py",
+    "apps/alphalens-pipeline/alphalens_pipeline/scorers/cohen_malloy_classifier.py",
+    "apps/alphalens-pipeline/alphalens_pipeline/scorers/fcff_yield.py",
 }
 
 

@@ -30,6 +30,7 @@ dev = [
     "pytest-django>=4.12",
     "diff-cover>=10.2",
     "pyright>=1.1.409",
+    "pandas-stubs>=3.0.0.260204",
 ]
 
 [tool.ruff]

@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Pure scoring functions for the EV/FCFF-yield value screener.
 
 Decomposed into atomic pure functions so each one is testable in isolation
@@ -213,6 +214,17 @@ def score_ev_fcff_yield(
             )
         ):
             continue
+        # Narrowing for strict mode — the any() guard above already proves
+        # each is non-None and finite at this point.
+        assert ocf is not None
+        assert capex is not None
+        assert interest is not None
+        assert tax is not None
+        assert price is not None
+        assert shares is not None
+        assert ltd is not None
+        assert std is not None
+        assert cash is not None
 
         tax_clamped = max(_TAX_RATE_FLOOR, min(_TAX_RATE_CEILING, float(tax)))
         fcff_actual = compute_fcff(
