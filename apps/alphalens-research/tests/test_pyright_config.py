@@ -32,8 +32,11 @@ STRICT_ROOTS = {
 
 
 def _load_config() -> dict:
+    # pyrightconfig.json is JSONC (pyright supports // line comments); strip
+    # them before handing to stdlib json which is strict-JSON only.
     raw = CONFIG_PATH.read_text(encoding="utf-8")
-    return json.loads(raw)
+    clean = "\n".join(line for line in raw.splitlines() if not line.lstrip().startswith("//"))
+    return json.loads(clean)
 
 
 class TestPyrightConfig(unittest.TestCase):
