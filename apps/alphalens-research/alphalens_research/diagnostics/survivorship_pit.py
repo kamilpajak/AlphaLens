@@ -263,10 +263,26 @@ def _count_picks_with_delisting_in_window(
 def _fisher_p(
     n_delistings_in_picks: int, n_picks: int, universe_delistings: int, universe_n: int
 ) -> float:
+    """Two-sided Fisher's exact test for picks vs NON-picks delisting rate.
+
+    The 2×2 contingency table must have mutually exclusive rows. Picks are
+    typically a subset of the universe, so the control group is
+    ``non-picks = universe \\ picks`` — NOT the full universe. Building the
+    table with full-universe totals double-counts the picks' delistings in
+    row 2 and biases the p-value upward (loss of power). Empirically this
+    can flip a clear bias (true p < 1e-3) into a non-rejection at α=5%.
+
+    Inputs are clamped to ≥ 0 to defend against caller-side miscounts where
+    e.g. ``universe_delistings < n_delistings_in_picks`` because the picks
+    pass through a slightly different events-by-ticker map than the universe
+    aggregation; in that case the cell collapses to 0 rather than raising.
+    """
+    non_picks_n = max(0, universe_n - n_picks)
+    non_picks_delistings = max(0, universe_delistings - n_delistings_in_picks)
     table = np.array(
         [
             [n_delistings_in_picks, n_picks - n_delistings_in_picks],
-            [universe_delistings, universe_n - universe_delistings],
+            [non_picks_delistings, non_picks_n - non_picks_delistings],
         ]
     )
     try:

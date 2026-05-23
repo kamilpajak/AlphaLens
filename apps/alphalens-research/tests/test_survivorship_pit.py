@@ -137,6 +137,44 @@ class TestSelectionBias(unittest.TestCase):
         # partition differently; assert it's "near 1" not >> 1.
         self.assertLess(r.lift_ratio, 2.0)
 
+    def test_fisher_p_compares_picks_vs_non_picks_not_picks_vs_full_universe(self):
+        """Regression: the Fisher 2×2 contingency table must compare
+        picks against NON-picks (control group), not picks against the
+        full universe (which includes picks themselves).
+
+        Set-up: picks are 50 of 100 universe names; all 10 delistings
+        concentrate in picks. True effect is extreme — picks rate is 20%
+        while non-picks rate is 0%. Under the correct contingency,
+        Fisher's exact p must be vanishingly small (< 1e-3).
+
+        Under the buggy table that puts (picks + non-picks) in row 2,
+        the 10 picks' delistings get double-counted and the test
+        effectively compares 10/50 vs 10/100. Empirically the buggy
+        p ≈ 0.125 — fails to reject the null at α=5% despite a clear
+        signal — while the correct table gives p ≈ 1.2e-3 (two orders
+        of magnitude tighter). The bug completely hides the selection
+        bias when picks are a non-trivial fraction of universe.
+        """
+        pick_tickers = [f"P{i:02d}" for i in range(50)]
+        nonpick_tickers = [f"N{i:02d}" for i in range(50)]
+        universe = pick_tickers + nonpick_tickers
+        picks = pd.DataFrame(
+            [
+                {"pick_date": date(2023, 1, 1), "ticker": t, "rank": rank}
+                for rank, t in enumerate(pick_tickers, start=1)
+            ]
+        )
+        events = [DelistingEvent(f"P{i:02d}", date(2023, 1, 15), "bankruptcy") for i in range(10)]
+        results = compute_selection_bias(picks, events, universe, windows=(30,))
+        r = results[0]
+        self.assertEqual(r.n_picks, 50)
+        self.assertEqual(r.n_delistings_in_picks, 10)
+        self.assertEqual(r.universe_n_delistings, 10)
+        # Picks 20% vs non-picks 0% — clear bias. Correct two-sided Fisher
+        # on [10,40;0,50] = 1.187e-3. Buggy table gives 0.125. Cutoff at
+        # 2e-3 separates correct from buggy by 2 orders of magnitude.
+        self.assertLess(r.fisher_p, 2e-3)
+
 
 class TestWipeoutReprice(unittest.TestCase):
     def _make_report(self, fwd_a: float = 0.05, fwd_b: float = -0.02) -> BacktestReport:
