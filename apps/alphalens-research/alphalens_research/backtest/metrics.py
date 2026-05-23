@@ -47,7 +47,7 @@ def sharpe(
     `risk_free` is a per-period rate (not annualised). For daily data with
     4% annual RFR, pass risk_free=0.04/252. NaN or empty input → 0.
     """
-    arr = np.asarray(list(daily_returns), dtype=float)
+    arr = np.asarray(daily_returns, dtype=float)
     arr = arr[~np.isnan(arr)]
     if len(arr) < 2:
         return 0.0
@@ -91,7 +91,7 @@ def sharpe_autocorr_adjusted(
     ``max_lag=5`` covers one-week of lag structure for daily returns; larger
     windows inflate noise on shorter series.
     """
-    arr = np.asarray(list(returns), dtype=float)
+    arr = np.asarray(returns, dtype=float)
     arr = arr[~np.isnan(arr)]
     if len(arr) < max(3, max_lag + 2):
         return 0.0
@@ -128,8 +128,8 @@ def rank_ic(predicted_scores: Sequence[float], actual_returns: Sequence[float]) 
 
     Returns 0 when input is empty or constant (no variance to measure).
     """
-    p = np.asarray(list(predicted_scores), dtype=float)
-    a = np.asarray(list(actual_returns), dtype=float)
+    p = np.asarray(predicted_scores, dtype=float)
+    a = np.asarray(actual_returns, dtype=float)
     mask = ~(np.isnan(p) | np.isnan(a))
     if mask.sum() < 3:
         return 0.0
@@ -154,7 +154,7 @@ def rank_ic_tstat(ic_series: Sequence[float]) -> float:
     threshold. On short windows (<250 days) even a legitimate IC of 0.02-0.03
     will often fail this test — treat with domain nuance.
     """
-    arr = np.asarray(list(ic_series), dtype=float)
+    arr = np.asarray(ic_series, dtype=float)
     arr = arr[~np.isnan(arr)]
     if len(arr) < 2:
         return 0.0
@@ -196,8 +196,8 @@ def decile_spread(
     A positive spread means high-scored names outperformed low-scored ones —
     basic sanity check that the scorer is ordering things in the right direction.
     """
-    s = np.asarray(list(scores), dtype=float)
-    r = np.asarray(list(forward_returns), dtype=float)
+    s = np.asarray(scores, dtype=float)
+    r = np.asarray(forward_returns, dtype=float)
     mask = ~(np.isnan(s) | np.isnan(r))
     s, r = s[mask], r[mask]
     if len(s) < n_deciles:
@@ -214,8 +214,8 @@ def hit_rate(portfolio_returns: Sequence[float], universe_median_returns: Sequen
 
     Both inputs must align by date. NaN rows are dropped pairwise.
     """
-    p = np.asarray(list(portfolio_returns), dtype=float)
-    u = np.asarray(list(universe_median_returns), dtype=float)
+    p = np.asarray(portfolio_returns, dtype=float)
+    u = np.asarray(universe_median_returns, dtype=float)
     mask = ~(np.isnan(p) | np.isnan(u))
     p, u = p[mask], u[mask]
     if len(p) == 0:
@@ -299,7 +299,7 @@ def max_drawdown(cumulative_returns: Sequence[float] | np.ndarray) -> float:
     Input is cumulative returns (starting typically at 1.0 or 0.0 for log).
     Returns a non-positive number (e.g. -0.18 for 18% drawdown), 0 if input empty.
     """
-    arr = np.asarray(list(cumulative_returns), dtype=float)
+    arr = np.asarray(cumulative_returns, dtype=float)
     arr = arr[~np.isnan(arr)]
     if len(arr) < 2:
         return 0.0
@@ -317,7 +317,7 @@ def calmar_ratio(
     >1 is excellent; 0.3-0.5 is typical for mediocre strategies. Returns 0 if
     there's no drawdown (never goes underwater) or no history.
     """
-    arr = np.asarray(list(daily_returns), dtype=float)
+    arr = np.asarray(daily_returns, dtype=float)
     arr = arr[~np.isnan(arr)]
     if len(arr) < 2:
         return 0.0
@@ -338,7 +338,7 @@ def concentration_top_k(weights: Sequence[float], k: int = 5) -> float:
     For an equal-weight top-30 portfolio with k=5: 5/30 = 0.167. Higher values
     indicate fragility to single-name shocks.
     """
-    arr = np.asarray(list(weights), dtype=float)
+    arr = np.asarray(weights, dtype=float)
     arr = np.abs(arr[~np.isnan(arr)])
     if len(arr) == 0 or k <= 0:
         return 0.0
@@ -372,7 +372,7 @@ def summarise_portfolio(
     universe_median_returns: Sequence[float] | None = None,
     periods_per_year: int = DEFAULT_PERIODS_PER_YEAR,
 ) -> PortfolioSummary:
-    arr = np.asarray(list(daily_returns), dtype=float)
+    arr = np.asarray(daily_returns, dtype=float)
     arr = arr[~np.isnan(arr)]
     if len(arr) < 2:
         return PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, len(arr))
