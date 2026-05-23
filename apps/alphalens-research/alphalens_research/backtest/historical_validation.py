@@ -25,7 +25,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -187,25 +187,25 @@ def evaluate_historical_picks(
 
     def _safe_mean(s: pd.Series) -> float:
         s = s.dropna()
-        return float(cast(float, s.mean())) if len(s) else 0.0
+        return float(s.mean()) if len(s) else 0.0
 
     def _safe_sharpe(s: pd.Series) -> float:
         s = s.dropna()
         if len(s) < 2:
             return 0.0
-        std = float(cast(float, s.std(ddof=1)))
+        std = float(s.std(ddof=1))
         if std < 1e-12:
             return 0.0
-        return float(cast(float, s.mean()) / std) * np.sqrt(252)
+        return float(s.mean() / std) * np.sqrt(252)
 
     def _hit_rate(s: pd.Series) -> float:
         s = s.dropna()
         if len(s) == 0:
             return 0.0
-        return float(cast(float, (s > 0).mean()))
+        return float((s > 0).mean())
 
-    accepted_fwd = cast(pd.Series, accepted["forward_return"])
-    rejected_fwd = cast(pd.Series, rejected["forward_return"])
+    accepted_fwd = accepted["forward_return"]
+    rejected_fwd = rejected["forward_return"]
 
     return ValidationResult(
         n_total=n,

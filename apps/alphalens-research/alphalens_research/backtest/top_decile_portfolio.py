@@ -27,7 +27,6 @@ Critical edge cases (TDD-covered in tests/test_top_decile_portfolio.py):
 from __future__ import annotations
 
 from datetime import date
-from typing import cast
 
 import pandas as pd
 
@@ -55,12 +54,12 @@ def monthly_asof_calendar(
         21d stride approximation).
     """
     asofs: list[pd.Timestamp] = []
-    cur = cast(pd.Timestamp, pd.Timestamp(start.year, start.month, day_of_month))
+    cur = pd.Timestamp(start.year, start.month, day_of_month)
     while cur.date() <= end:
         # Skip weekends forward
         adj = cur
         while adj.weekday() > 4:
-            adj = cast(pd.Timestamp, adj + pd.Timedelta(days=1))
+            adj = adj + pd.Timedelta(days=1)
         adj_date = adj.date()
         if start <= adj_date <= end:
             asofs.append(adj)
@@ -68,9 +67,9 @@ def monthly_asof_calendar(
         cur_year = int(cur.year)
         cur_month = int(cur.month)
         if cur_month == 12:
-            cur = cast(pd.Timestamp, pd.Timestamp(cur_year + 1, 1, day_of_month))
+            cur = pd.Timestamp(cur_year + 1, 1, day_of_month)
         else:
-            cur = cast(pd.Timestamp, pd.Timestamp(cur_year, cur_month + 1, day_of_month))
+            cur = pd.Timestamp(cur_year, cur_month + 1, day_of_month)
     return asofs
 
 
@@ -82,16 +81,16 @@ def _select_held_tickers(
     available: dict[str, pd.Series],
 ) -> list[str]:
     asof_norm = asof.normalize()
-    scores_at_asof = cast(pd.DataFrame, scores[scores["asof"] == asof_norm])
+    scores_at_asof = scores[scores["asof"] == asof_norm]
     if scores_at_asof.empty:
         return []
-    score_col = cast(pd.Series, scores_at_asof["score"])
-    valid = cast(pd.DataFrame, scores_at_asof[score_col.notna() & (score_col != 0)])
+    score_col = scores_at_asof["score"]
+    valid = scores_at_asof[score_col.notna() & (score_col != 0)]
     if valid.empty:
         return []
     n_decile: int = max(1, int(len(valid) * top_decile_pct))
     top_rows = valid.nlargest(n_decile, "score")
-    top_tickers = cast(pd.Series, top_rows["ticker"]).tolist()
+    top_tickers = top_rows["ticker"].tolist()
     return [t for t in top_tickers if t in available]
 
 
@@ -118,7 +117,7 @@ def _per_ticker_daily_returns(
     for ticker, hist in histories.items():
         if hist.empty or "close" not in hist.columns:
             continue
-        out[ticker] = cast(pd.Series, hist["close"]).pct_change()
+        out[ticker] = hist["close"].pct_change()
     return out
 
 
@@ -200,5 +199,5 @@ def top_decile_portfolio_daily_returns(
         return pd.Series(dtype=float, name="portfolio_daily")
 
     series = pd.concat(portfolio_returns_chunks).sort_index()
-    series = cast(pd.Series, series[~series.index.duplicated(keep="first")])
+    series = series[~series.index.duplicated(keep="first")]
     return series.rename("portfolio_daily")

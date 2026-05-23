@@ -273,7 +273,7 @@ class BacktestEngine:
             snap, scored_frame = simulated
             report.rebalance_results.append(snap)
             if self.retain_scored_frames and scored_frame is not None:
-                report.scored_frames[cast(pd.Timestamp, pd.Timestamp(day))] = scored_frame
+                report.scored_frames[pd.Timestamp(day)] = scored_frame
             if (idx + 1) % progress_stride == 0 or idx == total_days - 1:
                 logger.info(
                     "backtest progress: %d/%d days (%.0f%%) — latest snap %s scored=%d",
@@ -319,7 +319,7 @@ class BacktestEngine:
         weights = compute_position_weights(len(top_n), self.weighting)
         portfolio_ret_1d = weighted_return(top_n["fwd_1d"].to_numpy(dtype=float), weights)
         portfolio_ret_holding = weighted_return(top_n["fwd_holding"].to_numpy(dtype=float), weights)
-        fwd_1d_col = cast(pd.Series, scored["fwd_1d"])
+        fwd_1d_col = scored["fwd_1d"]
         universe_median_ret_1d = (
             float(fwd_1d_col.dropna().median()) if bool(fwd_1d_col.notna().any()) else 0.0
         )
@@ -344,7 +344,7 @@ class BacktestEngine:
             portfolio_ret_short = short_ret_1d if not _is_nan(short_ret_1d) else 0.0
 
         return RebalanceSnapshot(
-            date=cast(pd.Timestamp, pd.Timestamp(day)),
+            date=pd.Timestamp(day),
             scored_count=len(valid_holding),
             top_n_tickers=top_n["ticker"].tolist(),
             top_n_scores=[float(x) for x in top_n["score"].tolist()],
@@ -381,7 +381,7 @@ class BacktestEngine:
 
         snap = self._build_rebalance_snapshot(day, scored, valid_holding)
         scored_frame: pd.DataFrame | None = (
-            cast(pd.DataFrame, scored[["ticker", "score", "fwd_1d", "fwd_holding"]].copy())
+            scored[["ticker", "score", "fwd_1d", "fwd_holding"]].copy()
             if self.retain_scored_frames
             else None
         )
