@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import warnings
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -197,7 +198,7 @@ def _fit_single_regime(
         return None
 
     grid_scaler = StandardScaler().fit(X_full)
-    Xs_full = grid_scaler.transform(X_full)
+    Xs_full = cast(np.ndarray, grid_scaler.transform(X_full))
     lam_grid = _lambda_grid(Xs_full, y_full, lambda_grid_points, LAMBDA_MIN_RATIO)
 
     fold_mses = np.zeros((len(splits), len(lam_grid)), dtype=float)
@@ -205,8 +206,8 @@ def _fit_single_regime(
     # spurious "divide by zero in matmul" warnings (output is correct).
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
         for fi, (train_idx, val_idx) in enumerate(splits):
-            train_pos = feat_df.index.get_indexer(train_idx)
-            val_pos = feat_df.index.get_indexer(val_idx)
+            train_pos = feat_df.index.get_indexer(cast(pd.Index, train_idx))
+            val_pos = feat_df.index.get_indexer(cast(pd.Index, val_idx))
             # Fold-local scaler so val standardization uses train-only stats.
             local_scaler = StandardScaler().fit(X_full[train_pos])
             Xs_train_local = local_scaler.transform(X_full[train_pos])
@@ -459,7 +460,7 @@ class LightGBMFit:
         if X.size == 0:
             return np.array([])
         with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-            return self.model.predict(X)
+            return self.model.predict(X)  # type: ignore[attr-defined]
 
 
 @dataclass(frozen=True)
@@ -552,8 +553,8 @@ def fit_lightgbm_mse_global(
     fold_best_iters: list[int] = []
     fold_best_mses: list[float] = []
     for fi, (train_idx, val_idx) in enumerate(splits):
-        train_pos = feat.index.get_indexer(train_idx)
-        val_pos = feat.index.get_indexer(val_idx)
+        train_pos = feat.index.get_indexer(cast(pd.Index, train_idx))
+        val_pos = feat.index.get_indexer(cast(pd.Index, val_idx))
         X_tr = X_full[train_pos]
         X_vl = X_full[val_pos]
         y_tr = y_full[train_pos]

@@ -59,7 +59,7 @@ _MAX_VERIFY_ATTEMPTS_PER_THEME = 5
 # each gate fail closed if its underlying data path errors.
 
 
-def _gate_tenk(*, ticker: str, theme_keywords: Iterable[str], asof: dt.date) -> bool:
+def _gate_tenk(*, ticker: str, theme_keywords: Iterable[str], asof: dt.date) -> bool | None:
     return tenk_grep.has_theme_keywords_in_10k(ticker=ticker, keywords=theme_keywords, asof=asof)
 
 
@@ -92,7 +92,7 @@ def _gate_press(
     )
 
 
-def _gate_insider(*, ticker: str, asof: dt.date) -> bool:
+def _gate_insider(*, ticker: str, asof: dt.date) -> bool | None:
     return insider.has_opportunistic_buy(ticker=ticker, asof=asof)
 
 
@@ -246,7 +246,7 @@ def _build_row(
     cand: dict,
     verdict: dict,
     market_cap: float,
-    catalyst: dict,
+    catalyst: dict | None,
     keywords: Sequence[str],
 ) -> dict:
     return {
@@ -266,9 +266,9 @@ def _build_row(
         "gates_unknown_str": ",".join(verdict["gates_unknown"]),
         "n_gates_unknown": len(verdict["gates_unknown"]),
         "verified": verdict["verified"],
-        "source_event_url": catalyst.get("url"),
-        "source_event_title": catalyst.get("title"),
-        "source_event_published_at": catalyst.get("published_at"),
+        "source_event_url": catalyst.get("url") if catalyst else None,
+        "source_event_title": catalyst.get("title") if catalyst else None,
+        "source_event_published_at": catalyst.get("published_at") if catalyst else None,
         "theme_search_keywords": list(keywords),
     }
 

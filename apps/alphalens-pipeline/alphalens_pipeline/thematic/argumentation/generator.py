@@ -125,6 +125,7 @@ def _resolve_gemini_client(
         # Partial hoisting — fill in the other half with the supplied one.
         gemini_client_pro = gemini_client_pro or gemini_client_flash
         gemini_client_flash = gemini_client_flash or gemini_client_pro
+    assert gemini_client_pro is not None and gemini_client_flash is not None
     return gemini_client_pro if model == PRO_MODEL else gemini_client_flash
 
 

@@ -246,7 +246,7 @@ def _sort_and_dedup_for_brief(verified: pd.DataFrame) -> pd.DataFrame:
     theme_groups: dict[str, list[str]] = {}
     if "theme" in work.columns:
         for ticker, group in work.groupby("ticker", sort=False)["theme"]:
-            theme_groups[ticker] = list(group)
+            theme_groups[str(ticker)] = list(group)
 
     deduped = work.drop_duplicates(subset=["ticker"], keep="first").reset_index(drop=True)
 

@@ -38,7 +38,7 @@ def _to_date(value: Any) -> date:
     if isinstance(value, date) and not hasattr(value, "to_pydatetime"):
         return value
     if hasattr(value, "date"):
-        return value.date()
+        return value.date()  # type: ignore[attr-defined,no-any-return]
     if isinstance(value, str):
         return date.fromisoformat(value)
     raise TypeError(f"unsupported date cell type: {type(value).__name__}")

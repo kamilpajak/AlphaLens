@@ -223,7 +223,7 @@ def _fetch_ohlcv_via_yfinance(upper: str, asof: date) -> pd.DataFrame:
         logger.warning("yfinance fetch failed for %s: %s", upper, exc)
         return pd.DataFrame()
     df.columns = [c.lower() for c in df.columns]
-    if df.index.tz is not None:
+    if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
         df.index = df.index.tz_localize(None)
     return df[["open", "high", "low", "close", "volume"]]
 
@@ -318,7 +318,9 @@ def _score_signals(
     return ins, fcff, val, tech
 
 
-def _compute_magic_formula_fields(features: dict) -> tuple[float, float, float, bool]:
+def _compute_magic_formula_fields(
+    features: dict,
+) -> tuple[float | None, float | None, float | None, bool]:
     """EV/EBITDA, ROIC, ROE, health-gate verdict from the SimFin features dict."""
     market_cap = _market_cap_from_features(features)
     mf_ev_ebitda = magic_formula.compute_ev_ebitda(
@@ -342,9 +344,9 @@ def _build_candidate_row(
     fcff: dict,
     val: dict,
     tech: dict,
-    mf_ev_ebitda: float,
-    mf_roic: float,
-    mf_roe: float,
+    mf_ev_ebitda: float | None,
+    mf_roic: float | None,
+    mf_roe: float | None,
     mf_health: bool,
     catalyst_event: dict | None,
     cs_val: float,

@@ -84,7 +84,9 @@ def transform(raw_items: Iterable[dict], *, universe: Iterable[str]) -> pd.DataF
             {
                 "id": item.get("id"),
                 "source": "polygon",
-                "timestamp": pd.Timestamp(item.get("published_utc")),
+                "timestamp": pd.Timestamp(str(item.get("published_utc") or ""))
+                if item.get("published_utc")
+                else pd.NaT,
                 "tickers": kept,
                 "title": item.get("title") or "",
                 "body": item.get("description") or "",

@@ -43,12 +43,12 @@ class _MemoizedClassifier:
         for cik, grp in history.groupby("reporting_owner_cik"):
             dates = list(grp["transaction_date"])
             for year in years:
-                self._labels[(cik, year)] = classify_from_transaction_dates(
+                self._labels[(str(cik), int(year))] = classify_from_transaction_dates(
                     dates, classification_year=year
                 )
 
-    def get(self, person_cik: str, year: int) -> CohenMalloyLabel:
-        return self._labels.get((person_cik, year), CohenMalloyLabel.UNCLASSIFIED)
+    def get(self, person_cik: str, classification_year: int) -> CohenMalloyLabel:
+        return self._labels.get((person_cik, classification_year), CohenMalloyLabel.UNCLASSIFIED)
 
 
 def _classification_years(asof: dt.date, *, lookback_classification_years: int = 3) -> set[int]:

@@ -110,18 +110,16 @@ jobs:
         run: uv run pyright apps/alphalens-research/alphalens_research/attribution/
 
       - name: Pyright type-check (basic global + strict per critical module)
-        # Config: pyrightconfig.json at repo root.
+        # Config: pyrightconfig.json at repo root. BLOCKING.
         # Global typeCheckingMode = "basic" — catches name resolution, attribute
         # access, obvious type mismatches without forcing exhaustive annotations
         # on math-heavy research code.
         # Strict per-module via top-level "strict" array on backtest/attribution/
         # scorers — these surfaces govern verdicts; wrong types corrupt α t-stats.
-        # TODO: final follow-up PR cleans basic-mode global (~184 remaining
-        # errors) and flips this step to blocking. Scorers strict DONE
-        # (PR #205) + backtest strict DONE (PR #206) + attribution strict DONE
-        # — all three pinned by the blocking steps above.
+        # opportunistic_form4.py is in "exclude" because it is SHA256-locked
+        # per pre-reg ledger (insider_pc_compound_2026_05_10) and cannot carry
+        # type fixes.
         run: uv run pyright
-        continue-on-error: true
 
       - name: Run tests with coverage
         run: |

@@ -68,6 +68,7 @@ def _score_one_ticker(
     """Compute (mcap, liab, sigma, PD) for one ticker; None if any step fails."""
     if not _is_eligible(ticker, df, benchmark, liab_store, share_store):
         return None
+    assert liab_store is not None and share_store is not None
     closes = df["close"].to_numpy(dtype=float)
     sigma = realised_vol_60d(closes) if closes[-1] > 0 else None
     if sigma is None:

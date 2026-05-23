@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from typing import Any, TypeGuard
 
 
-def _is_valid(x) -> bool:
+def _is_valid(x: Any) -> TypeGuard[float | int]:
     """True iff the value is present and usable (not None, not NaN)."""
     if x is None:
         return False

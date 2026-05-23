@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from collections.abc import Callable
+from typing import Any
 
 from alphalens_pipeline.scorers.fcff_yield import (
     compute_ev,
@@ -26,7 +27,7 @@ from alphalens_pipeline.thematic.screening._common import clamp_tax, percentile_
 logger = logging.getLogger(__name__)
 
 
-def compute_fcff_yield_pct(features: dict | None) -> float | None:
+def compute_fcff_yield_pct(features: dict[str, Any] | None) -> float | None:
     """Convert an SimFin features dict to a single FCFF/EV yield in percent.
 
     Returns ``None`` whenever any required input is missing or yields an
@@ -49,7 +50,7 @@ def compute_fcff_yield_pct(features: dict | None) -> float | None:
     except AttributeError:
         return None
 
-    if any(v is None for v in (ocf, capex, tax, price, shares)):
+    if ocf is None or capex is None or tax is None or price is None or shares is None:
         return None
 
     try:
@@ -92,7 +93,7 @@ def score_fcff(
     ticker: str,
     asof: dt.date,
     peers: list[str],
-    feature_fetcher: Callable[[str, dt.date], dict | None],
+    feature_fetcher: Callable[[str, dt.date], dict[str, Any] | None],
 ) -> dict[str, float | None]:
     """Rank ``ticker``'s FCFF yield within its industry ``peers`` cohort.
 

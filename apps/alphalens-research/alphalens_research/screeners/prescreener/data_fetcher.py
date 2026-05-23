@@ -34,7 +34,7 @@ def _extract_chunk_data(
             ticker_df = raw.xs(ticker, level=1, axis=1)
         except (KeyError, ValueError):
             continue
-        filtered = ticker_df[ticker_df.index <= end_date].dropna(subset=["Close"])
+        filtered = ticker_df[ticker_df.index <= end_date].dropna(subset=["Close"])  # type: ignore[arg-type]
         if not filtered.empty:
             extracted[ticker] = filtered
     return extracted
@@ -76,6 +76,8 @@ class BatchDataFetcher:
                 )
             except Exception:
                 logger.warning("Batch download failed for chunk %d", i, exc_info=True)
+                continue
+            if raw is None:
                 continue
             all_data.update(_extract_chunk_data(raw, chunk, end_date))
 

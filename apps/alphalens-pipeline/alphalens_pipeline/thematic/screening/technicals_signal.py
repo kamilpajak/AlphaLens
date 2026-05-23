@@ -197,7 +197,7 @@ def score_technicals_from_frame(ohlcv: pd.DataFrame) -> dict[str, float | None |
     when the window is too short. Summary is always a string.
     """
     if ohlcv is None or ohlcv.empty or "close" not in ohlcv.columns:
-        empty = {
+        empty: dict[str, float | None] = {
             "rsi": None,
             "ma50_distance_pct": None,
             "atr_pct": None,

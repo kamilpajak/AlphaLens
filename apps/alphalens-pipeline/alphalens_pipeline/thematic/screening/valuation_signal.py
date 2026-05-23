@@ -84,7 +84,8 @@ def _effective_fcf_margin(features: dict) -> float | None:
     capex = _safe_get(features, "capex_ttm")
     interest = _safe_get(features, "interest_expense_ttm") or 0.0
     tax = _safe_get(features, "tax_rate")
-    if ocf is None or capex is None or tax is None:
+    clamped_tax = clamp_tax(tax)
+    if ocf is None or capex is None or clamped_tax is None:
         # Fall back directly to the 5y median when we can't compute current FCFF.
         return _safe_get(features, "fcf_margin_5y_median")
     try:
@@ -92,7 +93,7 @@ def _effective_fcf_margin(features: dict) -> float | None:
             ocf_ttm=ocf,
             capex_ttm=capex,
             interest_expense_ttm=interest,
-            tax_rate=clamp_tax(tax),
+            tax_rate=clamped_tax,
         )
     except (ValueError, TypeError):
         return _safe_get(features, "fcf_margin_5y_median")
@@ -213,11 +214,11 @@ def _composite_percentile(
     """
     per_metric_pctl: list[float] = []
     for metric in ("pe", "ps", "ev_rev"):
-        peer_vals = [pm[metric] for pm in peer_multiples if pm[metric] is not None]
+        peer_vals: list[float] = [v for pm in peer_multiples if (v := pm[metric]) is not None]
         pctl = _inverse_percentile(cand_multiples[metric], peer_vals)
         if pctl is not None:
             per_metric_pctl.append(pctl)
-    peer_margins = [pm["fcf_margin"] for pm in peer_multiples if pm["fcf_margin"] is not None]
+    peer_margins: list[float] = [v for pm in peer_multiples if (v := pm["fcf_margin"]) is not None]
     margin_pctl = _quality_percentile(cand_multiples["fcf_margin"], peer_margins)
     if margin_pctl is not None:
         per_metric_pctl.append(margin_pctl)

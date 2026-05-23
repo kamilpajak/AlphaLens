@@ -432,7 +432,7 @@ def validate_phase_a_gates(
             # Argmax of upper triangle
             stacked = corr.where(np.triu(np.ones(corr.shape, dtype=bool), k=1)).stack()
             pair = stacked.idxmax()
-            offending_pair = (pair[0], pair[1])
+            offending_pair = (str(pair[0]), str(pair[1])) if isinstance(pair, tuple) else None
         else:
             offending_pair = None
 
