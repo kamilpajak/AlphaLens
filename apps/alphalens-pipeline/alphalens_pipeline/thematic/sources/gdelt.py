@@ -77,7 +77,8 @@ def _http_get_json(
     for attempt in range(max_attempts):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "AlphaLens-thematic/0.1"})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            # URL built from gdelt-base constant + querystring; file:// not reachable.
+            with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310
                 body = r.read()
             if not body:
                 raise json.JSONDecodeError("empty body (likely rate-limited)", "", 0)

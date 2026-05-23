@@ -16,7 +16,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from xml.etree import ElementTree as ET
+from xml.etree.ElementTree import Element, ParseError
+
+from defusedxml.ElementTree import fromstring as _defused_fromstring
 
 _VALID_DOCUMENT_TYPES = {"4", "4/A"}
 
@@ -60,8 +62,8 @@ def parse_form4_xml(
     from the EDGAR submissions index (not XML) to preserve PIT discipline.
     """
     try:
-        root = ET.fromstring(xml_bytes)
-    except ET.ParseError as exc:
+        root = _defused_fromstring(xml_bytes)
+    except ParseError as exc:
         raise Form4ParseError(f"malformed XML: {exc}") from exc
 
     if root.tag != "ownershipDocument":
@@ -114,7 +116,7 @@ def parse_form4_xml(
     return records
 
 
-def _text(elem: ET.Element, path: str) -> str:
+def _text(elem: Element, path: str) -> str:
     node = elem.find(path)
     if node is None or node.text is None:
         return ""
@@ -128,14 +130,14 @@ def _zero_pad_cik(raw: str) -> str:
     return digits.zfill(10)
 
 
-def _bool_flag(elem: ET.Element, tag: str) -> bool:
+def _bool_flag(elem: Element, tag: str) -> bool:
     node = elem.find(tag)
     if node is None or not (node.text or "").strip():
         return False
     return (node.text or "").strip() in {"1", "true", "True"}
 
 
-def _parse_reporting_owner(owner: ET.Element) -> dict:
+def _parse_reporting_owner(owner: Element) -> dict:
     id_node = owner.find("reportingOwnerId")
     rel_node = owner.find("reportingOwnerRelationship")
     if id_node is None or rel_node is None:
@@ -151,7 +153,7 @@ def _parse_reporting_owner(owner: ET.Element) -> dict:
     }
 
 
-def _parse_transaction(tx: ET.Element) -> dict:
+def _parse_transaction(tx: Element) -> dict:
     coding = tx.find("transactionCoding")
     amounts = tx.find("transactionAmounts")
     tx_date_node = tx.find("transactionDate/value")
@@ -191,7 +193,7 @@ def _parse_iso_date(raw: str) -> date:
         raise Form4ParseError(f"invalid transaction date: {text!r}") from exc
 
 
-def _text_value(elem: ET.Element, tag: str) -> str:
+def _text_value(elem: Element, tag: str) -> str:
     """Read ``<tag><value>...</value></tag>`` returning '' if absent."""
     node = elem.find(f"{tag}/value")
     return node.text.strip() if node is not None and node.text else ""

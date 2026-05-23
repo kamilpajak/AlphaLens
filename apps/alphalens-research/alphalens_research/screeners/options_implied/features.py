@@ -422,12 +422,15 @@ def validate_phase_a_gates(
 
     # Pairwise correlation
     corr = feat_block.corr().abs()
-    np.fill_diagonal(corr.values, 0.0)
+    # pandas 2.x + numpy 2 returns a read-only view from .values, so copy the
+    # underlying buffer before zero-ing the diagonal.
+    corr_arr = corr.to_numpy(copy=True)
+    np.fill_diagonal(corr_arr, 0.0)
     if corr.empty:
         max_abs_corr = float("nan")
         offending_pair: tuple[str, str] | None = None
     else:
-        max_abs_corr = float(corr.values.max())
+        max_abs_corr = float(corr_arr.max())
         if max_abs_corr >= corr_max:
             # Argmax of upper triangle
             stacked = corr.where(np.triu(np.ones(corr.shape, dtype=bool), k=1)).stack()

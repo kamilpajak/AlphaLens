@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-import xml.etree.ElementTree as ET
+from xml.etree.ElementTree import Element, ParseError
+
+from defusedxml.ElementTree import fromstring as _defused_fromstring
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +22,8 @@ def parse_form4_xml(xml_text: str) -> dict:
     Returns {} on malformed input or missing transactions.
     """
     try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError as exc:
+        root = _defused_fromstring(xml_text)
+    except ParseError as exc:
         logger.warning("Malformed Form 4 XML: %s", exc)
         return {}
 
@@ -73,7 +75,7 @@ def parse_form4_xml(xml_text: str) -> dict:
     return {}
 
 
-def _extract_transaction_code(tx: ET.Element) -> str | None:
+def _extract_transaction_code(tx: Element) -> str | None:
     coding = tx.find("transactionCoding")
     if coding is None:
         return None
@@ -81,7 +83,7 @@ def _extract_transaction_code(tx: ET.Element) -> str | None:
     return code_el.text.strip() if code_el is not None and code_el.text else None
 
 
-def _extract_value_float(tx: ET.Element, wrapper_tag: str) -> float | None:
+def _extract_value_float(tx: Element, wrapper_tag: str) -> float | None:
     amounts = tx.find("transactionAmounts")
     source = amounts if amounts is not None else tx
     wrapper = source.find(wrapper_tag)
