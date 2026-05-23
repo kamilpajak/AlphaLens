@@ -43,12 +43,14 @@ def classify_regime(
     closes = benchmark_close.dropna()
     if closes.empty:
         return pd.Series(dtype=str)
-    trailing = closes / closes.shift(lookback) - 1.0
-    labels = pd.Series(index=trailing.index, dtype=object)
+    # `closes.shift(lookback)` is NaN for the first `lookback` rows, making
+    # the trailing return NaN there too. Drop those rows BEFORE classifying
+    # — otherwise the warmup window would silently land in the "flat" bucket.
+    trailing = (closes / closes.shift(lookback) - 1.0).dropna()
+    labels = pd.Series("flat", index=trailing.index, dtype=object)
     labels[trailing >= bull_threshold] = "bull"
     labels[trailing <= bear_threshold] = "bear"
-    labels[labels.isna()] = "flat"
-    return labels.dropna()
+    return labels
 
 
 @dataclass(frozen=True)

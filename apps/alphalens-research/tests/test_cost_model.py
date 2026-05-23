@@ -1,6 +1,7 @@
 import unittest
 
 import numpy as np
+import pandas as pd
 
 
 class TestCostModelFromProfile(unittest.TestCase):
@@ -59,6 +60,18 @@ class TestApply(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             CostModel().apply([0.01, 0.02], daily_turnover=[0.5])
+
+    def test_preserves_datetime_index_from_series_input(self):
+        # Zen finding (deferred from PR #207/#209): `pd.Series(list(returns))`
+        # silently dropped the input's DatetimeIndex, breaking downstream
+        # date-aligned merges with Carhart-4F factors.
+        from alphalens_research.attribution.cost_model import CostModel
+
+        idx = pd.date_range("2024-01-01", periods=5, freq="B")
+        returns = pd.Series([0.01, -0.005, 0.02, 0.0, 0.003], index=idx)
+        net = CostModel(annual_drag_bps=100.0).apply(returns)
+        self.assertTrue(isinstance(net.index, pd.DatetimeIndex))
+        self.assertTrue(net.index.equals(idx))
 
 
 class TestSensitivityTable(unittest.TestCase):
