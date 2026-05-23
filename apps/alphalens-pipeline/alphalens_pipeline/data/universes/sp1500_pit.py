@@ -29,7 +29,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-# Editable / workspace install resolves to apps/alphalens-research/data/.
+# Editable / workspace install resolves to apps/alphalens-pipeline/data/.
 # A wheel install loses that path (the data/ directory is not bundled), so
 # allow operators to override via $ALPHALENS_DATA_ROOT.
 DEFAULT_DATA_ROOT = Path(

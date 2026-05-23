@@ -32,7 +32,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 # Default artifact location: package-internal so it ships in the Docker
-# pipeline image (`deploy/docker/Dockerfile.pipeline` `COPY`s `alphalens_research/`).
+# pipeline image (`deploy/docker/Dockerfile.pipeline` `COPY`s `alphalens_pipeline/`).
 # Test code monkey-patches this module attribute.
 _SIC_INDEX_PATH = Path(__file__).parent / "sic_index.parquet"
 
