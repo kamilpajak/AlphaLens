@@ -81,16 +81,12 @@ class CostModel:
         if daily_turnover is None:
             cost = pd.Series(drag, index=gross.index)
         else:
-            turnover_values = (
-                daily_turnover.astype(float).tolist()
-                if isinstance(daily_turnover, pd.Series)
-                else list(daily_turnover)
-            )
-            if len(turnover_values) != len(gross):
+            turnover_arr = np.asarray(daily_turnover, dtype=float)
+            if len(turnover_arr) != len(gross):
                 raise ValueError(
-                    f"turnover length {len(turnover_values)} != returns length {len(gross)}"
+                    f"turnover length {len(turnover_arr)} != returns length {len(gross)}"
                 )
-            cost = pd.Series(turnover_values, dtype=float, index=gross.index) * drag
+            cost = pd.Series(turnover_arr, index=gross.index) * drag
         return gross - cost
 
     def apply_scalar_to_sharpe(
