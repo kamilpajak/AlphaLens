@@ -419,7 +419,7 @@ def apply_tiered_cost(
             f"top_n={len(daily_top_n_tickers)}, dates={len(daily_dates)}"
         )
 
-    net_arr = gross.to_numpy().astype(float).copy()
+    net_arr = gross.to_numpy(dtype=float, copy=True)
     for i, (top_n_list, ts) in enumerate(zip(daily_top_n_tickers, daily_dates, strict=False)):
         tickers = list(top_n_list)
         n = len(tickers)
@@ -437,7 +437,7 @@ def apply_tiered_cost(
         daily_drag = annual_drag / 252.0
         if daily_turnover is not None:
             daily_drag *= float(daily_turnover[i])
-        net_arr[i] = float(gross.iloc[i]) - daily_drag
+        net_arr[i] -= daily_drag
 
     return pd.Series(net_arr, index=gross.index)
 
