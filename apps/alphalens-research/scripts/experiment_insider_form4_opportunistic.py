@@ -55,16 +55,16 @@ from alphalens_research.data.store.form4_pit import (  # noqa: E402
     Form4PITStore,
 )
 from alphalens_research.data.store.history import HistoryStore  # noqa: E402
-from alphalens_research.screeners.distress_credit.features import (  # noqa: E402
-    make_production_stores,
-)
-from alphalens_research.screeners.insider_activity.cohen_malloy_classifier import (  # noqa: E402
+from alphalens_research.scorers.cohen_malloy_classifier import (  # noqa: E402
     CohenMalloyLabel,
     classify_from_transaction_dates,
 )
-from alphalens_research.screeners.insider_activity.opportunistic_form4 import (  # noqa: E402
+from alphalens_research.scorers.opportunistic_form4 import (  # noqa: E402
     aggregate_opportunistic_signal,
     score_opportunistic_form4,
+)
+from alphalens_research.screeners.distress_credit.features import (  # noqa: E402
+    make_production_stores,
 )
 from alphalens_research.screeners.options_implied.features import (  # noqa: E402
     _compute_equity_controls,

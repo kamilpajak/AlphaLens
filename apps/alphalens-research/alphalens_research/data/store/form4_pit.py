@@ -28,7 +28,7 @@ from typing import Protocol
 import pandas as pd
 import pyarrow.dataset as ds
 
-from alphalens_research.data.store.survivorship_pit import DelistingEvent
+from alphalens_research.data.store.delisting import DelistingEvent
 
 # Default LRU capacity. 32 covers the largest realistic working set:
 # a 6yr lookback × 5 audit phases × concurrent OOS+final-lock ≈ 18 unique

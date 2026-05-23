@@ -16,7 +16,7 @@ from __future__ import annotations
 import unittest
 from datetime import date
 
-from alphalens_research.screeners.insider_activity.cohen_malloy_classifier import (
+from alphalens_research.scorers.cohen_malloy_classifier import (
     CohenMalloyLabel,
     classify_from_transaction_dates,
 )

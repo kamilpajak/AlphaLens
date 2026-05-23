@@ -9,7 +9,7 @@ sector-relative ranking layer) a single import surface.
 
 from __future__ import annotations
 
-from alphalens_research.screeners.ev_fcff_yield.scorer import (
+from alphalens_research.scorers.fcff_yield import (
     _TAX_RATE_CEILING,
     _TAX_RATE_FLOOR,
 )
@@ -33,7 +33,7 @@ def clamp_tax(value: float | None) -> float | None:
 
     Returns ``None`` unchanged so callers can short-circuit on missing
     data. Bounds reused directly from
-    :mod:`alphalens_research.screeners.ev_fcff_yield.scorer` so they stay in sync
+    :mod:`alphalens_research.scorers.fcff_yield` so they stay in sync
     with the paradigm spec.
     """
     if value is None:

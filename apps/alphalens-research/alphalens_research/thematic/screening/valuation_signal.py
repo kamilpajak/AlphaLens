@@ -24,7 +24,7 @@ import math
 from collections.abc import Callable
 from statistics import mean
 
-from alphalens_research.screeners.ev_fcff_yield.scorer import (
+from alphalens_research.scorers.fcff_yield import (
     compute_fcff,
     effective_fcff,
     impute_fcff,

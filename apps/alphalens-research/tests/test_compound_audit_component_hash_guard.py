@@ -2,7 +2,7 @@
 
 The compound's per-asof score is mathematically defined by two scorer
 modules:
-  - alphalens_research/screeners/insider_activity/opportunistic_form4.py
+  - alphalens_research/scorers/opportunistic_form4.py
   - alphalens_research/screeners/options_volume/pc_abnormal_volume.py
 
 If either drifts during the ~30h pod audit (e.g. a mid-run main-branch

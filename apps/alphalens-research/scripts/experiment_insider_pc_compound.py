@@ -70,19 +70,19 @@ from alphalens_research.data.store.form4_pit import (  # noqa: E402
     Form4PITStore,
 )
 from alphalens_research.data.store.history import HistoryStore  # noqa: E402
+from alphalens_research.scorers.cohen_malloy_classifier import (  # noqa: E402
+    CohenMalloyLabel,
+    classify_from_transaction_dates,
+)
+from alphalens_research.scorers.opportunistic_form4 import (  # noqa: E402
+    aggregate_opportunistic_signal,
+    score_opportunistic_form4,
+)
 from alphalens_research.screeners.compound_insider_pc import (  # noqa: E402
     compound_score_from_components,
 )
 from alphalens_research.screeners.distress_credit.features import (  # noqa: E402
     make_production_stores,
-)
-from alphalens_research.screeners.insider_activity.cohen_malloy_classifier import (  # noqa: E402
-    CohenMalloyLabel,
-    classify_from_transaction_dates,
-)
-from alphalens_research.screeners.insider_activity.opportunistic_form4 import (  # noqa: E402
-    aggregate_opportunistic_signal,
-    score_opportunistic_form4,
 )
 from alphalens_research.screeners.options_implied.features import (  # noqa: E402
     _compute_equity_controls,
@@ -117,12 +117,14 @@ _PRECHECK_IS_END = date(2017, 12, 31)
 # these hashes ONLY in coordination with a design-memo amendment + a new
 # pre-reg class registration in the ledger.
 _COMPONENT_LOCKED_HASHES: dict[str, str] = {
-    "alphalens_research/screeners/insider_activity/opportunistic_form4.py": (
-        # Re-locked after F3 monorepo flatten: the `\balphalens\b` codemod
-        # rewrote `from alphalens.X` -> `from alphalens_research.X` inside
-        # the file. No behavioural change (just import-rename), so the
-        # pre-reg observation protocol is unaffected. New SHA256 below.
-        "3c075255aa50897eeff14136f090e1d3f142d90f906ec3bc0ecdcb42a94c995e"
+    "alphalens_research/scorers/opportunistic_form4.py": (
+        # Re-locked after scorer carve-out PR1: the file moved from
+        # screeners/insider_activity/ to scorers/ (reusable scorer library
+        # per feedback_validated_paradigm_scorer_reuse_2026_05_16.md), and
+        # its intra-scorer cohen_malloy_classifier import rewrote to the new
+        # path. No behavioural change (file path + import-rename only), so
+        # the pre-reg observation protocol is unaffected. New SHA256 below.
+        "30792ecc3e40e72698fdf503d16c16b68a389138748f5ebdcb8d03055633b6fc"
     ),
     "alphalens_research/screeners/options_volume/pc_abnormal_volume.py": (
         "d53ab6af4c3842208ea17a291f16de60efece43c89afeb952001864793c0e7d1"

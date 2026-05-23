@@ -1,6 +1,6 @@
 """Layer 4 signal 2 — FCFF yield + sector-percentile (paradigm #13 reuse).
 
-Wraps the pure scorer primitives from :mod:`alphalens_research.screeners.ev_fcff_yield.scorer`
+Wraps the pure scorer primitives from :mod:`alphalens_research.scorers.fcff_yield`
 (``compute_fcff``, ``compute_ev``, ``impute_fcff``, ``effective_fcff``,
 ``compute_fcff_yield``) to derive a single FCFF/EV yield (%) per ticker, then
 ranks within an industry peer cohort.
@@ -14,7 +14,7 @@ import datetime as dt
 import logging
 from collections.abc import Callable
 
-from alphalens_research.screeners.ev_fcff_yield.scorer import (
+from alphalens_research.scorers.fcff_yield import (
     compute_ev,
     compute_fcff,
     compute_fcff_yield,

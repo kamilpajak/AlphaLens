@@ -1,6 +1,6 @@
 """Layer 4 signal 1 — Cohen-Malloy opportunistic insider buying (paradigm #11).
 
-Wraps :func:`alphalens_research.screeners.insider_activity.opportunistic_form4.aggregate_opportunistic_signal`
+Wraps :func:`alphalens_research.scorers.opportunistic_form4.aggregate_opportunistic_signal`
 with the two-stage Form-4 load pattern from
 :mod:`alphalens_research.thematic.verification.insider` to produce a scalar
 ``net_oppor_usd`` per ticker, then ranks the candidate within its industry
@@ -21,7 +21,7 @@ import datetime as dt
 import logging
 from pathlib import Path
 
-from alphalens_research.screeners.insider_activity.opportunistic_form4 import (
+from alphalens_research.scorers.opportunistic_form4 import (
     aggregate_opportunistic_signal,
 )
 from alphalens_research.thematic.screening._common import percentile_rank
