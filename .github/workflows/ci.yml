@@ -108,7 +108,7 @@ jobs:
           uv run diff-cover coverage.xml \
             --compare-branch origin/${{ github.base_ref }} \
             --fail-under 80 \
-            --diff-range-notation "...HEAD"
+            --diff-range-notation "..."
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
