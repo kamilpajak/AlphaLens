@@ -338,7 +338,7 @@ def build_feature_frame(
     ----------
     smd_loader
         Callable mapping `ticker -> DataFrame | None` (cached vendor smd).
-        See `alphalens_research.data.alt_data.ivolatility_smd_cache.load_cached_smd`.
+        See `alphalens_pipeline.data.alt_data.ivolatility_smd_cache.load_cached_smd`.
     universe
         Tickers to consider. Cross-listed entries handled via US-primary filter.
     asof_dates

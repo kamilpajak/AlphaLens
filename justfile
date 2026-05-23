@@ -24,21 +24,23 @@ lock:
 # Lint / format
 # -------------------------------------------------------------------------
 
-# Lint Python (both apps) + check web TS
+# Lint Python (all members) + check web TS
 lint:
-    uv run ruff check apps/alphalens-research apps/alphalens-django
+    uv run ruff check apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django
     cd apps/web && pnpm run check
 
-# Format Python (both apps)
+# Format Python (all members)
 fmt:
-    uv run ruff format apps/alphalens-research apps/alphalens-django
+    uv run ruff format apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django
 
 # -------------------------------------------------------------------------
 # Tests
 # -------------------------------------------------------------------------
 
-# Research engine tests (unittest)
-test-research:
+# Pipeline + research unittests. Test files live under apps/alphalens-research/
+# tests/ (workspace install lets them import from either package) — see
+# PR2 split-pipeline-package commit for the rationale.
+test-python:
     uv run python -m unittest discover \
         -s apps/alphalens-research/tests \
         -t apps/alphalens-research -v
@@ -52,7 +54,7 @@ test-web:
     cd apps/web && pnpm test
 
 # Everything in series — same order as CI
-test: test-research test-django test-web
+test: test-python test-django test-web
 
 # -------------------------------------------------------------------------
 # Dev servers

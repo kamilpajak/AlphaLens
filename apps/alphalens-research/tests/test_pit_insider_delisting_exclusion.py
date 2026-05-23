@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from alphalens_research.data.store.delisting import DelistingEvent
+from alphalens_pipeline.data.store.delisting import DelistingEvent
 from alphalens_research.screeners.insider_activity.parquet_scorer import ParquetInsiderScorer
 
 

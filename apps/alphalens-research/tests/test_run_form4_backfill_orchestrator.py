@@ -27,9 +27,9 @@ from decimal import Decimal
 from pathlib import Path
 
 import pyarrow.dataset as ds
-from alphalens_research.data.alt_data.form4_bulk_backfill import BackfillManifest
-from alphalens_research.data.alt_data.form4_records import Form4Record
-from alphalens_research.data.alt_data.sec_edgar_client import SecEdgarError
+from alphalens_pipeline.data.alt_data.form4_bulk_backfill import BackfillManifest
+from alphalens_pipeline.data.alt_data.form4_records import Form4Record
+from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarError
 from scripts.run_form4_backfill import (
     _fetch_records_for_cik,
     _flush_batch,

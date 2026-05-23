@@ -20,7 +20,7 @@ def _history(closes_by_date: dict[str, float]) -> pd.DataFrame:
 
 
 def _shares_fact(shares: int, filed: str):
-    from alphalens_research.data.alt_data.shares_outstanding import SharesFact
+    from alphalens_pipeline.data.alt_data.shares_outstanding import SharesFact
 
     return SharesFact(
         cik="0000000001",
@@ -40,14 +40,14 @@ def _cik_map(mapping: dict[str, str]):
 
 class TestCloseAsOf(unittest.TestCase):
     def test_returns_close_on_exact_date(self):
-        from alphalens_research.data.alt_data.pit_universe import close_as_of
+        from alphalens_pipeline.data.alt_data.pit_universe import close_as_of
 
         hist = _history({"2024-06-03": 100.0, "2024-06-04": 101.0, "2024-06-05": 102.0})
 
         self.assertEqual(close_as_of(hist, date(2024, 6, 4)), 101.0)
 
     def test_returns_latest_before_asof(self):
-        from alphalens_research.data.alt_data.pit_universe import close_as_of
+        from alphalens_pipeline.data.alt_data.pit_universe import close_as_of
 
         hist = _history({"2024-06-03": 100.0, "2024-06-04": 101.0, "2024-06-05": 102.0})
 
@@ -55,21 +55,21 @@ class TestCloseAsOf(unittest.TestCase):
         self.assertEqual(close_as_of(hist, date(2024, 6, 8)), 102.0)
 
     def test_asof_before_data_returns_none(self):
-        from alphalens_research.data.alt_data.pit_universe import close_as_of
+        from alphalens_pipeline.data.alt_data.pit_universe import close_as_of
 
         hist = _history({"2024-06-03": 100.0})
 
         self.assertIsNone(close_as_of(hist, date(2024, 1, 1)))
 
     def test_empty_history_returns_none(self):
-        from alphalens_research.data.alt_data.pit_universe import close_as_of
+        from alphalens_pipeline.data.alt_data.pit_universe import close_as_of
 
         self.assertIsNone(close_as_of(pd.DataFrame(), date(2024, 6, 3)))
 
 
 class TestBuildPitUniverse(unittest.TestCase):
     def test_ticker_in_cap_band_included(self):
-        from alphalens_research.data.alt_data.pit_universe import build_pit_universe
+        from alphalens_pipeline.data.alt_data.pit_universe import build_pit_universe
 
         # shares=10M, close=$50 → mcap=$500M, in band $300M-$3B
         tickers = build_pit_universe(
@@ -82,7 +82,7 @@ class TestBuildPitUniverse(unittest.TestCase):
         self.assertEqual(tickers, ["AAPL"])
 
     def test_below_cap_band_excluded(self):
-        from alphalens_research.data.alt_data.pit_universe import build_pit_universe
+        from alphalens_pipeline.data.alt_data.pit_universe import build_pit_universe
 
         # shares=1M, close=$10 → mcap=$10M, below $300M floor
         tickers = build_pit_universe(
@@ -95,7 +95,7 @@ class TestBuildPitUniverse(unittest.TestCase):
         self.assertEqual(tickers, [])
 
     def test_above_cap_band_excluded(self):
-        from alphalens_research.data.alt_data.pit_universe import build_pit_universe
+        from alphalens_pipeline.data.alt_data.pit_universe import build_pit_universe
 
         # shares=1B, close=$100 → mcap=$100B, above $3B ceiling
         tickers = build_pit_universe(
@@ -108,7 +108,7 @@ class TestBuildPitUniverse(unittest.TestCase):
         self.assertEqual(tickers, [])
 
     def test_missing_cik_excluded(self):
-        from alphalens_research.data.alt_data.pit_universe import build_pit_universe
+        from alphalens_pipeline.data.alt_data.pit_universe import build_pit_universe
 
         tickers = build_pit_universe(
             asof=date(2024, 6, 30),
@@ -120,7 +120,7 @@ class TestBuildPitUniverse(unittest.TestCase):
         self.assertEqual(tickers, [])
 
     def test_missing_shares_data_excluded(self):
-        from alphalens_research.data.alt_data.pit_universe import build_pit_universe
+        from alphalens_pipeline.data.alt_data.pit_universe import build_pit_universe
 
         tickers = build_pit_universe(
             asof=date(2024, 6, 30),
@@ -132,7 +132,7 @@ class TestBuildPitUniverse(unittest.TestCase):
         self.assertEqual(tickers, [])
 
     def test_missing_price_excluded(self):
-        from alphalens_research.data.alt_data.pit_universe import build_pit_universe
+        from alphalens_pipeline.data.alt_data.pit_universe import build_pit_universe
 
         tickers = build_pit_universe(
             asof=date(2024, 6, 30),
@@ -145,7 +145,7 @@ class TestBuildPitUniverse(unittest.TestCase):
 
     def test_pit_filter_excludes_future_filed_shares(self):
         """Shares fact filed AFTER asof shouldn't leak back in time."""
-        from alphalens_research.data.alt_data.pit_universe import build_pit_universe
+        from alphalens_pipeline.data.alt_data.pit_universe import build_pit_universe
 
         asof = date(2024, 3, 1)
 
@@ -160,7 +160,7 @@ class TestBuildPitUniverse(unittest.TestCase):
         self.assertEqual(tickers, [])
 
     def test_multiple_tickers_sorted(self):
-        from alphalens_research.data.alt_data.pit_universe import build_pit_universe
+        from alphalens_pipeline.data.alt_data.pit_universe import build_pit_universe
 
         shares_by_cik = {
             "0000000001": [_shares_fact(10_000_000, "2024-05-01")],
@@ -182,7 +182,7 @@ class TestBuildPitUniverse(unittest.TestCase):
         self.assertEqual(tickers, ["AAA", "ZZZ"])
 
     def test_custom_cap_band(self):
-        from alphalens_research.data.alt_data.pit_universe import UniverseConfig, build_pit_universe
+        from alphalens_pipeline.data.alt_data.pit_universe import UniverseConfig, build_pit_universe
 
         # Custom narrow band: $100M-$500M
         tickers = build_pit_universe(

@@ -1,6 +1,6 @@
 import unittest
 
-from alphalens_research.thematic.config.universe import is_in_universe, load_input_universe
+from alphalens_pipeline.thematic.config.universe import is_in_universe, load_input_universe
 
 
 class TestInputUniverse(unittest.TestCase):

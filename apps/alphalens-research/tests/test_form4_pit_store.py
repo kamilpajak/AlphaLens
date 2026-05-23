@@ -21,8 +21,8 @@ from unittest import mock
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from alphalens_research.data.store.delisting import DelistingEvent
-from alphalens_research.data.store.form4_pit import FORM4_SCHEMA_COLUMNS, Form4PITStore
+from alphalens_pipeline.data.store.delisting import DelistingEvent
+from alphalens_pipeline.data.store.form4_pit import FORM4_SCHEMA_COLUMNS, Form4PITStore
 
 
 def _records_to_table(records: list[dict]) -> pa.Table:
@@ -382,7 +382,7 @@ class TestForm4PITStorePartitionCache(unittest.TestCase):
     def test_repeated_call_with_same_years_does_not_reread_parquet(self):
         store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
         with mock.patch(
-            "alphalens_research.data.store.form4_pit.ds.dataset",
+            "alphalens_pipeline.data.store.form4_pit.ds.dataset",
             wraps=__import__("pyarrow.dataset", fromlist=["dataset"]).dataset,
         ) as spy:
             store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=30)
@@ -404,7 +404,7 @@ class TestForm4PITStorePartitionCache(unittest.TestCase):
         # Total unique years across 3 calls: {2021, 2022, 2023} → 3 reads.
         store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
         with mock.patch(
-            "alphalens_research.data.store.form4_pit.ds.dataset",
+            "alphalens_pipeline.data.store.form4_pit.ds.dataset",
             wraps=__import__("pyarrow.dataset", fromlist=["dataset"]).dataset,
         ) as spy:
             store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=180)
@@ -457,7 +457,7 @@ class TestForm4PITStorePartitionCache(unittest.TestCase):
         store.records_as_of("AAPL", asof=date(2023, 6, 15), lookback_days=10)  # evict 2022
 
         with mock.patch(
-            "alphalens_research.data.store.form4_pit.ds.dataset",
+            "alphalens_pipeline.data.store.form4_pit.ds.dataset",
             wraps=__import__("pyarrow.dataset", fromlist=["dataset"]).dataset,
         ) as spy:
             store.records_as_of("AAPL", asof=date(2021, 6, 15), lookback_days=10)
@@ -484,7 +484,7 @@ class TestForm4PITStorePartitionCache(unittest.TestCase):
             partition_cache_size=0,
         )
         with mock.patch(
-            "alphalens_research.data.store.form4_pit.ds.dataset",
+            "alphalens_pipeline.data.store.form4_pit.ds.dataset",
             wraps=__import__("pyarrow.dataset", fromlist=["dataset"]).dataset,
         ) as spy:
             store.records_as_of("AAPL", asof=date(2022, 6, 15), lookback_days=10)
@@ -510,7 +510,7 @@ class TestForm4PITStorePartitionCache(unittest.TestCase):
         )
         store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
         with mock.patch(
-            "alphalens_research.data.store.form4_pit.ds.dataset",
+            "alphalens_pipeline.data.store.form4_pit.ds.dataset",
             wraps=__import__("pyarrow.dataset", fromlist=["dataset"]).dataset,
         ) as spy:
             # First: records_for_person classification_year=2023 → years [2020, 2021, 2022]

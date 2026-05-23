@@ -416,7 +416,7 @@ def format_memo(asof: dt.date, results: dict[str, list[FieldDiff]]) -> str:
         "SEC 10-Q/10-K filing for the ticker, decide whether EDGAR or yfinance "
         "reflects the source truth, and either widen the tolerance band with a "
         "documented reason or fix the EDGAR concept-chain mapping in "
-        "`alphalens_research/data/fundamentals/concept_chains.py`."
+        "`alphalens_pipeline/data/fundamentals/concept_chains.py`."
     )
     return "\n".join(lines) + "\n"
 
@@ -499,7 +499,7 @@ def _capex_positive(value: float | None) -> float | None:
 
 def run_gate(anchors: list[str], asof: dt.date) -> dict[str, list[FieldDiff]]:
     """Live gate: fetch EDGAR + yfinance for each anchor, return diffs per anchor."""
-    from alphalens_research.data.store.edgar_fundamentals import EdgarFundamentalsStore
+    from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
     edgar_store = EdgarFundamentalsStore(with_prices=True)
     edgar_store.preload(list(anchors))

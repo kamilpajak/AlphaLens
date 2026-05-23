@@ -1,6 +1,6 @@
 import unittest
 
-from alphalens_research.thematic.screening import _common
+from alphalens_pipeline.thematic.screening import _common
 
 
 class TestPercentileRank(unittest.TestCase):

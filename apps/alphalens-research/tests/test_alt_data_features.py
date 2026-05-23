@@ -221,7 +221,7 @@ class TestBuildFeatureFrame(unittest.TestCase):
 
     def _mocks_for_universe(self, universe, asof):
         """Build a self-consistent set of mocks for an end-to-end joiner test."""
-        from alphalens_research.data.alt_data.polygon_short_interest import (
+        from alphalens_pipeline.data.alt_data.polygon_short_interest import (
             ShortInterestRecord,
         )
 

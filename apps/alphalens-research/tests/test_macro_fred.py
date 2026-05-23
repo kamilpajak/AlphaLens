@@ -30,7 +30,7 @@ _SAMPLE_DGS10 = {
 
 class TestFREDClientFetch(unittest.TestCase):
     def test_fetches_dgs10_timeseries(self):
-        from alphalens_research.data.macro.fred_client import FREDClient
+        from alphalens_pipeline.data.macro.fred_client import FREDClient
 
         with tempfile.TemporaryDirectory() as tmp:
             session = MagicMock()
@@ -48,7 +48,7 @@ class TestFREDClientFetch(unittest.TestCase):
         self.assertIn("file_type=json", call_url)
 
     def test_missing_api_key_raises(self):
-        from alphalens_research.data.macro.fred_client import FREDAuthError, FREDClient
+        from alphalens_pipeline.data.macro.fred_client import FREDAuthError, FREDClient
 
         with self.assertRaises(FREDAuthError):
             FREDClient(api_key="", cache_dir=Path("/tmp"))
@@ -56,7 +56,7 @@ class TestFREDClientFetch(unittest.TestCase):
             FREDClient(api_key=None, cache_dir=Path("/tmp"))  # type: ignore[arg-type]
 
     def test_caches_response_to_disk(self):
-        from alphalens_research.data.macro.fred_client import FREDClient
+        from alphalens_pipeline.data.macro.fred_client import FREDClient
 
         with tempfile.TemporaryDirectory() as tmp:
             session = MagicMock()
@@ -73,7 +73,7 @@ class TestFREDClientFetch(unittest.TestCase):
             self.assertIn("DGS10", cache_files[0].name)
 
     def test_retries_on_5xx_then_succeeds(self):
-        from alphalens_research.data.macro.fred_client import FREDClient
+        from alphalens_pipeline.data.macro.fred_client import FREDClient
 
         with tempfile.TemporaryDirectory() as tmp:
             session = MagicMock()
@@ -97,7 +97,7 @@ class TestFREDClientFetch(unittest.TestCase):
         sleeper.assert_called_once()
 
     def test_gives_up_after_max_retries(self):
-        from alphalens_research.data.macro.fred_client import FREDClient, FREDError
+        from alphalens_pipeline.data.macro.fred_client import FREDClient, FREDError
 
         with tempfile.TemporaryDirectory() as tmp:
             session = MagicMock()
@@ -117,7 +117,7 @@ class TestFREDClientFetch(unittest.TestCase):
         self.assertEqual(session.get.call_count, 3)
 
     def test_raises_on_4xx_without_retry(self):
-        from alphalens_research.data.macro.fred_client import FREDClient, FREDError
+        from alphalens_pipeline.data.macro.fred_client import FREDClient, FREDError
 
         with tempfile.TemporaryDirectory() as tmp:
             session = MagicMock()
@@ -135,7 +135,7 @@ class TestFREDClientFetch(unittest.TestCase):
         self.assertEqual(session.get.call_count, 1)  # no retry
 
     def test_from_env_reads_api_key(self):
-        from alphalens_research.data.macro.fred_client import FREDAuthError, FREDClient
+        from alphalens_pipeline.data.macro.fred_client import FREDAuthError, FREDClient
 
         with (
             tempfile.TemporaryDirectory() as tmp,

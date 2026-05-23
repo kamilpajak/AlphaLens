@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pandas as pd
-from alphalens_research.data.alt_data.ivolatility_smd_cache import (
+from alphalens_pipeline.data.alt_data.ivolatility_smd_cache import (
     download_and_cache,
     load_cached_smd,
 )
@@ -225,7 +225,7 @@ class TestRobustFetcher(unittest.TestCase):
     def test_passes_through_when_default_succeeds(self):
         from unittest.mock import patch
 
-        from alphalens_research.data.alt_data import ivolatility_smd_cache as mod
+        from alphalens_pipeline.data.alt_data import ivolatility_smd_cache as mod
 
         df_in = _make_smd_response("AAPL", n_days=5)
         with patch.object(mod, "_default_smd_fetcher", return_value=df_in):
@@ -235,7 +235,7 @@ class TestRobustFetcher(unittest.TestCase):
     def test_retries_with_lenient_csv_on_parser_error(self):
         from unittest.mock import patch
 
-        from alphalens_research.data.alt_data import ivolatility_smd_cache as mod
+        from alphalens_pipeline.data.alt_data import ivolatility_smd_cache as mod
 
         df_recovered = _make_smd_response("AMZN", n_days=3)
 
@@ -260,12 +260,12 @@ class TestDefaultFetcher(unittest.TestCase):
     def test_default_fetcher_uses_smd_endpoint_with_range_params(self):
         from unittest.mock import patch
 
-        from alphalens_research.data.alt_data.ivolatility_smd_cache import _default_smd_fetcher
+        from alphalens_pipeline.data.alt_data.ivolatility_smd_cache import _default_smd_fetcher
 
         smd_query = MagicMock(return_value=_make_smd_response("AAPL", n_days=3))
 
         with patch(
-            "alphalens_research.data.alt_data.ivolatility_smd_cache._smd_query_fn",
+            "alphalens_pipeline.data.alt_data.ivolatility_smd_cache._smd_query_fn",
             return_value=smd_query,
         ):
             df = _default_smd_fetcher("AAPL", date(2024, 1, 1), date(2024, 1, 31))

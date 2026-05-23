@@ -1,6 +1,6 @@
 import unittest
 
-from alphalens_research.thematic.argumentation import schema
+from alphalens_pipeline.thematic.argumentation import schema
 
 
 class TestBriefResponseSchema(unittest.TestCase):

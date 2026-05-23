@@ -1,18 +1,20 @@
 # Virtual workspace root — owns shared tooling config; no top-level package.
 #
 # Members:
-#   - apps/alphalens-research   (Typer CLI + research engine)
+#   - apps/alphalens-pipeline   (live infrastructure + thematic + watchdog + literature_review + alphalens CLI binary)
+#   - apps/alphalens-research   (research lab: screeners, backtest, attribution, overlays, gates, preaudit, diagnostics, paper_trade)
 #   - apps/alphalens-django     (DRF briefs API)
 #
 # Setup (single venv at repo root):
 #   uv sync           # installs every member + shared dev tools
 #
 # Per-member install (rare):
+#   uv pip install -e apps/alphalens-pipeline
 #   uv pip install -e apps/alphalens-research
 #   uv pip install -e apps/alphalens-django
 
 [tool.uv.workspace]
-members = ["apps/alphalens-research", "apps/alphalens-django"]
+members = ["apps/alphalens-pipeline", "apps/alphalens-research", "apps/alphalens-django"]
 
 [dependency-groups]
 # Shared dev tools — installed for every workspace member by `uv sync --group dev`.
@@ -89,7 +91,11 @@ ignore = [
     "SIM117",   # nested with-statements in tests highlight scope structure
     "PLW1510",  # subprocess.run in tests asserts on returncode explicitly; check= is the test's job
 ]
-"apps/alphalens-research/alphalens_research/watchdog/lock.py" = [
+"apps/alphalens-pipeline/tests/*" = [
+    "PLR0915", "B011", "B017", "N801", "N802", "F841",
+    "RUF012", "B035", "SIM115", "SIM117", "PLW1510",
+]
+"apps/alphalens-pipeline/alphalens_pipeline/watchdog/lock.py" = [
     "N818",     # WorkerLockBusy is a state signal, not a fatal error — keep without Error suffix
 ]
 

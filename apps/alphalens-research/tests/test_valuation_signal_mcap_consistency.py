@@ -21,7 +21,7 @@ import datetime as dt
 import unittest
 from unittest.mock import MagicMock
 
-from alphalens_research.thematic.screening import valuation_signal
+from alphalens_pipeline.thematic.screening import valuation_signal
 
 
 def _features(price=10.0, shares=3_499_992.0, revenue_ttm=307_000_000.0, **overrides):

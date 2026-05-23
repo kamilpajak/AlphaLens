@@ -30,11 +30,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 import pandas as pd
 import yaml
-from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap
-from alphalens_research.data.alt_data.yfinance_cache import load_cached_histories
-from alphalens_research.data.fundamentals.companyfacts_parquet import CompanyfactsParquetReader
-from alphalens_research.data.fundamentals.sue import FosterSUEStore
-from alphalens_research.data.store.history import HistoryStore
+from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories
+from alphalens_pipeline.data.fundamentals.companyfacts_parquet import CompanyfactsParquetReader
+from alphalens_pipeline.data.fundamentals.sue import FosterSUEStore
+from alphalens_pipeline.data.store.history import HistoryStore
 from alphalens_research.screeners.event_drift.accruals import SloanAccrualsStore
 from alphalens_research.screeners.event_drift.announcement_dates import (
     AnnouncementDateProvider,

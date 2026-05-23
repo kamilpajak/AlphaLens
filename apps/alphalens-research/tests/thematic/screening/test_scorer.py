@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 import pandas as pd
-from alphalens_research.thematic.screening import scorer
+from alphalens_pipeline.thematic.screening import scorer
 
 
 def _candidates_df(tickers: list[str]) -> pd.DataFrame:
@@ -269,7 +269,7 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
             # Catalyst lookup — return None so cs=0 and the existing test
             # invariants on weighted_score still hold (no catalyst lift).
             patch(
-                "alphalens_research.thematic.mapping.catalyst_resolver.find_trigger_event",
+                "alphalens_pipeline.thematic.mapping.catalyst_resolver.find_trigger_event",
                 return_value=None,
             ),
         ]
@@ -369,7 +369,7 @@ class TestScoreCandidatesIsResilientToSignalExceptions(unittest.TestCase):
                 scorer, "_build_ohlcv_loader", return_value=lambda t, asof: pd.DataFrame()
             ),
             patch(
-                "alphalens_research.thematic.mapping.catalyst_resolver.find_trigger_event",
+                "alphalens_pipeline.thematic.mapping.catalyst_resolver.find_trigger_event",
                 return_value=None,
             ),
         ]
@@ -465,7 +465,7 @@ class TestFeatureFetcherFallback(unittest.TestCase):
         # _build_feature_fetcher returns a fetcher that always yields None
         # instead of propagating. Layer 4 stays alive on poor-coverage cohorts.
         with patch(
-            "alphalens_research.data.store.edgar_fundamentals.EdgarFundamentalsStore"
+            "alphalens_pipeline.data.store.edgar_fundamentals.EdgarFundamentalsStore"
         ) as mock_store_cls:
             mock_store = mock_store_cls.return_value
             mock_store.preload.side_effect = RuntimeError("SEC EDGAR unreachable")
@@ -483,7 +483,7 @@ class TestScoreCandidatesUnknownIndustry(unittest.TestCase):
                 scorer, "_build_ohlcv_loader", return_value=lambda t, asof: pd.DataFrame()
             ),
             patch(
-                "alphalens_research.thematic.mapping.catalyst_resolver.find_trigger_event",
+                "alphalens_pipeline.thematic.mapping.catalyst_resolver.find_trigger_event",
                 return_value=None,
             ),
         ):

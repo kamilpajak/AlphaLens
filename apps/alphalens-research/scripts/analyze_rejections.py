@@ -96,7 +96,7 @@ def classify_with_gemini(row: dict, client) -> dict:
 
 
 def main() -> None:
-    from alphalens_research.data.alt_data.gemini_client import GeminiClient
+    from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient
 
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:

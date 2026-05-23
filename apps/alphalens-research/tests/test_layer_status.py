@@ -29,15 +29,15 @@ EVIDENCE_PREFIXES = ("N/A: ", "UNTESTED: ")
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 LAYERS_WITH_STATUS = (
-    "alphalens_research.data.alt_data",
-    "alphalens_research.data.store",
-    "alphalens_research.data.universes",
+    "alphalens_pipeline.data.alt_data",
+    "alphalens_pipeline.data.store",
+    "alphalens_pipeline.data.universes",
     "alphalens_research.backtest",
     "alphalens_research.attribution",
     "alphalens_research.diagnostics",
-    "alphalens_research.data.fundamentals",
-    "alphalens_research.literature_review",
-    "alphalens_research.data.macro",
+    "alphalens_pipeline.data.fundamentals",
+    "alphalens_pipeline.literature_review",
+    "alphalens_pipeline.data.macro",
     "alphalens_research.gates",
     "alphalens_research.overlays",
     "alphalens_research.paper_trade",
@@ -52,8 +52,8 @@ LAYERS_WITH_STATUS = (
     "alphalens_research.screeners.options_implied",
     "alphalens_research.screeners.options_volume",
     "alphalens_research.screeners.prescreener",
-    "alphalens_research.thematic",
-    "alphalens_research.watchdog",
+    "alphalens_pipeline.thematic",
+    "alphalens_pipeline.watchdog",
 )
 
 

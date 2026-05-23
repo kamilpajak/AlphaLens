@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 import pyarrow.dataset as ds
 
 if TYPE_CHECKING:
-    from alphalens_research.data.store.delisting import DelistingEvent
+    from alphalens_pipeline.data.store.delisting import DelistingEvent
 
 
 def _to_date(value: Any) -> date:

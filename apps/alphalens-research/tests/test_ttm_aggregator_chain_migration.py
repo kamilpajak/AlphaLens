@@ -103,7 +103,7 @@ class TestCrossConceptFallback(unittest.TestCase):
         (no FY anchor in new concept); both pre-fix legacy-fallback and
         bogus 4Q sum suppressed. Result: ``None`` (signal degraded).
         """
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_ttm
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_ttm
 
         rows = [
             # New concept: per-quarter standalone rows post-merger (FY26).
@@ -170,7 +170,7 @@ class TestCrossConceptFallback(unittest.TestCase):
 
     def test_4q_sum_succeeds_when_quarters_contiguous(self):
         """Positive control: 4 contiguous standalone quarters → 4Q sum."""
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_ttm
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_ttm
 
         rows = [
             _row(
@@ -228,7 +228,7 @@ class TestCrossConceptFallback(unittest.TestCase):
         Q1+Q2+Q4_old+Q1_new (different fiscal year tails). The 250..300d
         span check rejects that and lets the Compustat path try.
         """
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_ttm
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_ttm
 
         # 4 standalone quarters (none FY-tagged) with a 12-month gap
         # between #2 and #3. No FY anchor → Compustat path can't form
@@ -293,7 +293,7 @@ class TestCrossConceptFallback(unittest.TestCase):
         Two quarters of new concept + FY anchor of new concept → Compustat
         identity is valid; old-concept fallback still suppressed.
         """
-        from alphalens_research.data.fundamentals.ttm_aggregator import compute_ttm
+        from alphalens_pipeline.data.fundamentals.ttm_aggregator import compute_ttm
 
         rows = [
             # New concept: only 1 standalone Q + FY anchor — not enough for 4Q sum.

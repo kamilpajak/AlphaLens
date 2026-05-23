@@ -19,10 +19,10 @@ from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
+from alphalens_pipeline.data.factors import load_carhart_daily
 
 from alphalens_research.attribution.factor_analysis import run_regression
 from alphalens_research.backtest.metrics import max_drawdown, sharpe
-from alphalens_research.data.factors import load_carhart_daily
 from alphalens_research.paper_trade.registry import default_paper_trade_dir, get_strategy
 
 CHECKPOINT_26W_N_OBS = 26

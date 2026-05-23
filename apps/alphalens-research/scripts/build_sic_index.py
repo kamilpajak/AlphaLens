@@ -1,12 +1,12 @@
 """Rebuild the ticker→SIC index parquet consumed by
-:mod:`alphalens_research.data.fundamentals.sic_index`.
+:mod:`alphalens_pipeline.data.fundamentals.sic_index`.
 
-Walks the canonical ``alphalens_research/data/alt_data/data/ticker_cik_map.yaml``
+Walks the canonical ``alphalens_pipeline/data/alt_data/data/ticker_cik_map.yaml``
 universe (~10k SEC-registered US issuers), pulls each CIK's
 submissions JSON via :class:`SecEdgarClient` (the project's single
 canonical SEC HTTP client, throttled to 10 req/s), extracts the
 top-level ``sic`` and ``sicDescription`` fields, and writes
-``alphalens_research/data/fundamentals/sic_index.parquet``.
+``alphalens_pipeline/data/fundamentals/sic_index.parquet``.
 
 Note: ``sic`` lives on the submissions endpoint, NOT on the
 companyfacts endpoint (companyfacts only carries the XBRL facts
@@ -28,11 +28,11 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
-from alphalens_research.data.alt_data.sec_edgar_client import (
+from alphalens_pipeline.data.alt_data.sec_edgar_client import (
     SecEdgarError,
     get_default_sec_client,
 )
-from alphalens_research.data.alt_data.ticker_cik_map import _normalize_cik
+from alphalens_pipeline.data.alt_data.ticker_cik_map import _normalize_cik
 
 logging.basicConfig(
     level=logging.INFO,

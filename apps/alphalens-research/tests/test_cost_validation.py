@@ -13,6 +13,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+from alphalens_pipeline.data.store.history import HistoryStore
 from alphalens_research.attribution.cost_validation import (
     DEFAULT_TIERS,
     ScalePathSummary,
@@ -25,7 +26,6 @@ from alphalens_research.attribution.cost_validation import (
     run_scale_path,
 )
 from alphalens_research.backtest.engine import BacktestReport, RebalanceSnapshot
-from alphalens_research.data.store.history import HistoryStore
 
 
 def _history(close: list[float], volume: list[int], start: str = "2022-01-03") -> pd.DataFrame:

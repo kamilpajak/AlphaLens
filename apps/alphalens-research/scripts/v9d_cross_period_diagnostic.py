@@ -31,9 +31,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
+from alphalens_pipeline.data.factors import load_carhart_daily
 from alphalens_research.attribution.factor_analysis import run_regression
 from alphalens_research.backtest.metrics import max_drawdown, sharpe
-from alphalens_research.data.factors import load_carhart_daily
 
 PHASE_DIR = Path("docs/research/v10_drawdown_overlay")
 PHASES = list(range(5))

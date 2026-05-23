@@ -1,7 +1,7 @@
 import unittest
 
 import pandas as pd
-from alphalens_research.thematic.argumentation import renderer
+from alphalens_pipeline.thematic.argumentation import renderer
 
 _BRIEF = {
     "tldr": "QUBT pure-play benefits from NVIDIA Ising tooling.",

@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`alphalens_research.data.alt_data.polygon_client`.
+"""Unit tests for :mod:`alphalens_pipeline.data.alt_data.polygon_client`.
 
 Mirrors the SecEdgar / AlphaVantage client tests in scope:
 - Throttle enforces spacing between requests
@@ -20,7 +20,7 @@ from typing import Any
 from unittest import mock
 
 import requests
-from alphalens_research.data.alt_data.polygon_client import (
+from alphalens_pipeline.data.alt_data.polygon_client import (
     PolygonAuthError,
     PolygonClient,
     PolygonError,

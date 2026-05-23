@@ -53,9 +53,9 @@ import pandas as pd
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
+from alphalens_pipeline.data.factors import load_carhart_daily  # noqa: E402
 from alphalens_research.attribution.factor_analysis import run_regression  # noqa: E402
 from alphalens_research.backtest.romano_wolf import stationary_bootstrap_indices  # noqa: E402
-from alphalens_research.data.factors import load_carhart_daily  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

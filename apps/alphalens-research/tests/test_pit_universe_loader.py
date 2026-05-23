@@ -8,7 +8,7 @@ from datetime import date
 from pathlib import Path
 
 import yaml
-from alphalens_research.data.alt_data.pit_universe_loader import (
+from alphalens_pipeline.data.alt_data.pit_universe_loader import (
     load_pit_universe_for_asof,
     load_universe_union,
 )

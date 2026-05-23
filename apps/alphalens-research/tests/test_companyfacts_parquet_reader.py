@@ -14,11 +14,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pyarrow as pa
-from alphalens_research.data.fundamentals.companyfacts_parquet import (
+from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
     SCHEMA,
     CompanyfactsParquetReader,
     filter_concept,
 )
+
 from tests.fixtures.companyfacts_fixtures import (
     APPLE_CIK,
     IPO_CIK,

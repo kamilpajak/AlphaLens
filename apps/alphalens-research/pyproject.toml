@@ -5,38 +5,34 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "alphalens-research"
 version = "0.1.0"
-description = "AlphaLens research engine: event detection, screeners, backtest, attribution, thematic pipeline."
+description = "AlphaLens research lab: screeners, backtest engine, attribution, overlays, gates, preaudit, diagnostics, paper trade."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    # Shared data + analytics
     "pandas>=2.3.0",
     "scipy>=1.17.1",
+    "pyarrow>=24.0.0",
     "statsmodels>=0.14.6",
-    "langchain-google-genai>=4.2.2",
-    "typer>=0.25.1",
-    "yfinance>=0.2.63",
-    "stockstats>=0.6.5",
-    "python-dotenv>=1.2.2",
-    "quiverquant",
-    "pyarrow>=24.0.0",  # explicit: pandas parquet I/O (FRED cache, history snapshots)
+    # Research-only modelling stack
     "scikit-learn>=1.8.0",
     "lightgbm>=4.6.0",
-    "ivolatility>=1.9.3",
+    "stockstats>=0.6.5",
+    # Methodology bundle (pre-registration ledger + multi-phase audit)
     "phase-robust-backtesting @ git+https://github.com/kamilpajak/phase-robust-backtesting.git@v0.2.3",
-    "feedparser>=6.0.11",
-    "google-genai>=0.8.0",
-    "json-repair>=0.59.10",
-    "requests>=2.32.0",
+    # Live infrastructure (data clients, PIT store, core, scorers) lives in the
+    # sibling workspace member and is consumed by screeners + backtest.
+    "alphalens-pipeline",
 ]
 
-[project.scripts]
-alphalens = "alphalens_cli.main:app"
+[tool.uv.sources]
+alphalens-pipeline = { workspace = true }
 
 [tool.setuptools.packages.find]
-include = ["alphalens_research*", "alphalens_cli*"]
+include = ["alphalens_research*"]
 
 [tool.coverage.run]
-source = ["alphalens_research", "alphalens_cli"]
+source = ["alphalens_research"]
 omit = [
     "*/tests/*",
 ]
@@ -47,25 +43,4 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "raise NotImplementedError",
     "if TYPE_CHECKING:",
-]
-
-[tool.mutmut]
-# Transient — ad-hoc mutation testing of form4 backfill modules. Not part
-# of CI; remove when no longer needed.
-#
-# Known limitation: mutmut 3.x uses multiprocessing.Pool, which segfaults
-# on macOS + Python 3.13 with native libs (EXC_BAD_ACCESS). Workaround:
-# downgrade to mutmut 2.x (`uv pip install "mutmut<3"`) which spawns
-# subprocesses sequentially.
-paths_to_mutate = [
-    "scripts/split_cik_list.py",
-    "alphalens_research/data/alt_data/sec_edgar_client.py",
-]
-also_copy = [
-    "alphalens_research/",
-    "scripts/",
-]
-tests_dir = [
-    "tests/test_split_cik_list.py",
-    "tests/test_sec_edgar_client.py",
 ]

@@ -11,7 +11,7 @@ import math
 import unittest
 
 import pandas as pd
-from alphalens_research.thematic.screening import magic_formula as mf
+from alphalens_pipeline.thematic.screening import magic_formula as mf
 
 
 def _features(

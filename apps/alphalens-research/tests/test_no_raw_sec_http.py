@@ -2,7 +2,7 @@
 
 The 2026-05-19 vendor-client consolidation routed every SEC fetch in the
 repo (watchdog, thematic verification, EDGAR fundamentals) through
-:class:`alphalens_research.data.alt_data.sec_edgar_client.SecEdgarClient`. SEC's
+:class:`alphalens_pipeline.data.alt_data.sec_edgar_client.SecEdgarClient`. SEC's
 fair-access policy (10 req/s per IP, mandatory descriptive User-Agent)
 is enforced at the IP level — every shadow client is a vector for a 403
 that takes down EVERY SEC consumer at once.
@@ -22,19 +22,22 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 
 # Directories where production / operator code lives. Tests + the canonical
 # client itself are intentionally excluded — tests can hardcode URL fragments
 # in fixtures and assertions, and the canonical client owns these URLs.
 SCAN_DIRS = (
-    REPO_ROOT / "alphalens_research",
-    REPO_ROOT / "alphalens_cli",
-    REPO_ROOT / "scripts",
+    WORKSPACE_ROOT / "apps" / "alphalens-pipeline" / "alphalens_pipeline",
+    WORKSPACE_ROOT / "apps" / "alphalens-pipeline" / "alphalens_cli",
+    WORKSPACE_ROOT / "apps" / "alphalens-research" / "alphalens_research",
+    WORKSPACE_ROOT / "apps" / "alphalens-research" / "scripts",
 )
 
 # The canonical client itself — only file allowed to make raw SEC HTTP.
-CANONICAL_CLIENT_REL = "alphalens_research/data/alt_data/sec_edgar_client.py"
+CANONICAL_CLIENT_REL = (
+    "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/sec_edgar_client.py"
+)
 
 # Fragments that uniquely identify SEC endpoints used by the project.
 SEC_URL_FRAGMENTS = (
@@ -85,7 +88,7 @@ class TestNoRawSecHttp(unittest.TestCase):
             if not root.exists():
                 continue
             for py in root.rglob("*.py"):
-                rel = py.relative_to(REPO_ROOT).as_posix()
+                rel = py.relative_to(WORKSPACE_ROOT).as_posix()
                 if rel == CANONICAL_CLIENT_REL:
                     continue
                 text = py.read_text(encoding="utf-8", errors="replace")
@@ -98,7 +101,7 @@ class TestNoRawSecHttp(unittest.TestCase):
             details = "\n".join(f"  {p}:{ln}  {src}" for p, ln, src in offenders)
             self.fail(
                 "Raw SEC HTTP detected outside SecEdgarClient. Route the\n"
-                "call through alphalens_research.data.alt_data.sec_edgar_client (use\n"
+                "call through alphalens_pipeline.data.alt_data.sec_edgar_client (use\n"
                 "get_default_sec_client() if you don't have one to inject).\n"
                 f"Offenders:\n{details}"
             )

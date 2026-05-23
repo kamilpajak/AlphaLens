@@ -38,7 +38,7 @@ def _fake_urlopen_with_body(body: str, *, status: int = 200):
 
 class TestQueryBuildsRequest(unittest.TestCase):
     def test_query_builds_url_with_function_and_params(self):
-        from alphalens_research.data.alt_data.alphavantage_client import AlphaVantageClient
+        from alphalens_pipeline.data.alt_data.alphavantage_client import AlphaVantageClient
 
         urlopen_fn = _fake_urlopen_with_body(json.dumps({"Symbol": "AAPL"}))
 
@@ -55,13 +55,13 @@ class TestQueryBuildsRequest(unittest.TestCase):
         self.assertTrue(url.startswith("https://www.alphavantage.co/query?"))
 
     def test_constructor_api_key_required(self):
-        from alphalens_research.data.alt_data.alphavantage_client import AlphaVantageClient
+        from alphalens_pipeline.data.alt_data.alphavantage_client import AlphaVantageClient
 
         with self.assertRaises(ValueError):
             AlphaVantageClient(api_key="")
 
     def test_api_key_from_env_when_omitted(self):
-        from alphalens_research.data.alt_data.alphavantage_client import AlphaVantageClient
+        from alphalens_pipeline.data.alt_data.alphavantage_client import AlphaVantageClient
 
         urlopen_fn = _fake_urlopen_with_body(json.dumps({"Symbol": "AAPL"}))
 
@@ -73,7 +73,7 @@ class TestQueryBuildsRequest(unittest.TestCase):
         self.assertIn("apikey=envkey", url)
 
     def test_from_env_raises_when_env_missing(self):
-        from alphalens_research.data.alt_data.alphavantage_client import AlphaVantageClient
+        from alphalens_pipeline.data.alt_data.alphavantage_client import AlphaVantageClient
 
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaises(ValueError):
@@ -82,7 +82,7 @@ class TestQueryBuildsRequest(unittest.TestCase):
 
 class TestRateLimitDetection(unittest.TestCase):
     def test_rate_limit_information_raises(self):
-        from alphalens_research.data.alt_data.alphavantage_client import (
+        from alphalens_pipeline.data.alt_data.alphavantage_client import (
             AlphaVantageClient,
             AVRateLimitError,
         )
@@ -99,7 +99,7 @@ class TestRateLimitDetection(unittest.TestCase):
             client.query("EARNINGS", symbol="AAPL")
 
     def test_api_key_information_raises(self):
-        from alphalens_research.data.alt_data.alphavantage_client import (
+        from alphalens_pipeline.data.alt_data.alphavantage_client import (
             AlphaVantageClient,
             AVRateLimitError,
         )
@@ -112,7 +112,7 @@ class TestRateLimitDetection(unittest.TestCase):
             client.query("EARNINGS", symbol="AAPL")
 
     def test_premium_information_raises(self):
-        from alphalens_research.data.alt_data.alphavantage_client import (
+        from alphalens_pipeline.data.alt_data.alphavantage_client import (
             AlphaVantageClient,
             AVRateLimitError,
         )
@@ -128,7 +128,7 @@ class TestRateLimitDetection(unittest.TestCase):
         """Not every 'Information' field is a quota signal — AV occasionally
         emits informational text alongside valid data. Only raise when the
         text matches a known rate-limit / api-key / premium phrase."""
-        from alphalens_research.data.alt_data.alphavantage_client import AlphaVantageClient
+        from alphalens_pipeline.data.alt_data.alphavantage_client import AlphaVantageClient
 
         body = json.dumps(
             {
@@ -145,7 +145,7 @@ class TestRateLimitDetection(unittest.TestCase):
 
 class TestSchemaValidation(unittest.TestCase):
     def test_non_json_body_raises(self):
-        from alphalens_research.data.alt_data.alphavantage_client import (
+        from alphalens_pipeline.data.alt_data.alphavantage_client import (
             AlphaVantageClient,
             AVSchemaError,
         )
@@ -156,7 +156,7 @@ class TestSchemaValidation(unittest.TestCase):
             client.query("OVERVIEW", symbol="AAPL")
 
     def test_non_dict_body_raises(self):
-        from alphalens_research.data.alt_data.alphavantage_client import (
+        from alphalens_pipeline.data.alt_data.alphavantage_client import (
             AlphaVantageClient,
             AVSchemaError,
         )
@@ -169,7 +169,7 @@ class TestSchemaValidation(unittest.TestCase):
             client.query("OVERVIEW", symbol="AAPL")
 
     def test_error_message_raises(self):
-        from alphalens_research.data.alt_data.alphavantage_client import (
+        from alphalens_pipeline.data.alt_data.alphavantage_client import (
             AlphaVantageClient,
             AVSchemaError,
         )
@@ -186,7 +186,7 @@ class TestSchemaValidation(unittest.TestCase):
 
 class TestThrottling(unittest.TestCase):
     def test_throttle_sleeps_between_calls_when_configured(self):
-        from alphalens_research.data.alt_data.alphavantage_client import AlphaVantageClient
+        from alphalens_pipeline.data.alt_data.alphavantage_client import AlphaVantageClient
 
         urlopen_fn = _fake_urlopen_with_body(json.dumps({"Symbol": "AAPL"}))
         sleep_fn = MagicMock()
@@ -211,7 +211,7 @@ class TestThrottling(unittest.TestCase):
             self.assertAlmostEqual(call.args[0], 1.5, places=2)
 
     def test_no_throttle_when_disabled(self):
-        from alphalens_research.data.alt_data.alphavantage_client import AlphaVantageClient
+        from alphalens_pipeline.data.alt_data.alphavantage_client import AlphaVantageClient
 
         urlopen_fn = _fake_urlopen_with_body(json.dumps({"Symbol": "AAPL"}))
         sleep_fn = MagicMock()
@@ -230,17 +230,17 @@ class TestThrottling(unittest.TestCase):
 
 class TestDefaultClientSingleton(unittest.TestCase):
     def setUp(self):
-        from alphalens_research.data.alt_data import alphavantage_client as mod
+        from alphalens_pipeline.data.alt_data import alphavantage_client as mod
 
         mod._reset_default_client_for_tests()
 
     def tearDown(self):
-        from alphalens_research.data.alt_data import alphavantage_client as mod
+        from alphalens_pipeline.data.alt_data import alphavantage_client as mod
 
         mod._reset_default_client_for_tests()
 
     def test_get_default_returns_same_instance(self):
-        from alphalens_research.data.alt_data.alphavantage_client import get_default_av_client
+        from alphalens_pipeline.data.alt_data.alphavantage_client import get_default_av_client
 
         with patch.dict("os.environ", {"ALPHA_VANTAGE_API_KEY": "envkey"}, clear=False):
             c1 = get_default_av_client()
@@ -248,7 +248,7 @@ class TestDefaultClientSingleton(unittest.TestCase):
             self.assertIs(c1, c2)
 
     def test_get_default_raises_without_env(self):
-        from alphalens_research.data.alt_data.alphavantage_client import get_default_av_client
+        from alphalens_pipeline.data.alt_data.alphavantage_client import get_default_av_client
 
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaises(ValueError):

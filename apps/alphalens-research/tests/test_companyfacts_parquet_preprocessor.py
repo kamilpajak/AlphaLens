@@ -13,7 +13,7 @@ import unittest
 from datetime import date
 
 import pyarrow as pa
-from alphalens_research.data.fundamentals.companyfacts_parquet import (
+from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
     companyfacts_json_to_parquet_table,
 )
 
@@ -417,7 +417,7 @@ class TestCompanyfactsJsonToParquetTableEdgeCases(unittest.TestCase):
 
 def _expected_schema() -> pa.Schema:
     """Snapshot of the canonical schema used to assert empty-table shape."""
-    from alphalens_research.data.fundamentals.companyfacts_parquet import SCHEMA
+    from alphalens_pipeline.data.fundamentals.companyfacts_parquet import SCHEMA
 
     return SCHEMA
 

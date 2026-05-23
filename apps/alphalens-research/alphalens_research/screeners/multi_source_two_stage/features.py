@@ -34,8 +34,8 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+from alphalens_pipeline.data.store.history import HistoryStore
 
-from alphalens_research.data.store.history import HistoryStore
 from alphalens_research.screeners.insider_activity.parquet_scorer import ParquetInsiderScorer
 
 logger = logging.getLogger(__name__)
@@ -374,7 +374,7 @@ def build_feature_frame(
         fire-sale exclusion (`tests/test_pit_insider_delisting_exclusion.py`).
     carhart_factors
         Daily DataFrame with columns at minimum `Mkt-RF`, `RF` in decimal returns.
-        Output of `alphalens_research.data.factors.load_carhart_daily()`.
+        Output of `alphalens_pipeline.data.factors.load_carhart_daily()`.
     fred_series
         dict with `VIXCLS`, `DGS10`, `DGS3MO` daily Series. Caller composes
         from FREDClient.fetch().

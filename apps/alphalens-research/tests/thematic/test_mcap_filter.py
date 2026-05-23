@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-from alphalens_research.thematic.verification import mcap_filter
+from alphalens_pipeline.thematic.verification import mcap_filter
 
 
 class TestFilterByMcap(unittest.TestCase):

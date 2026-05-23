@@ -18,7 +18,7 @@ import unittest
 
 import numpy as np
 import pandas as pd
-from alphalens_research.data.spread import abdi_ranaldo_spread_bps, corwin_schultz_spread_bps
+from alphalens_pipeline.data.spread import abdi_ranaldo_spread_bps, corwin_schultz_spread_bps
 
 
 def _roll_synthetic_ohlc(

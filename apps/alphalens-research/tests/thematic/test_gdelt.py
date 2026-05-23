@@ -6,8 +6,8 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from alphalens_research.thematic.sources import gdelt
-from alphalens_research.thematic.sources.schema import NEWS_COLUMNS
+from alphalens_pipeline.thematic.sources import gdelt
+from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS
 
 SAMPLE_GDELT_RESPONSE = {
     "articles": [

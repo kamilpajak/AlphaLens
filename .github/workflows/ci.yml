@@ -14,9 +14,13 @@ concurrency:
 
 jobs:
   # -----------------------------------------------------------------------
-  # Research engine — Python (unittest), runs ruff/bandit/coverage on
-  # apps/alphalens-research. macOS matches the dev box and the lightgbm
-  # wheel availability story.
+  # Python tier — covers BOTH apps/alphalens-pipeline (live infra +
+  # watchdog + thematic + literature_review + CLI) and apps/alphalens-
+  # research (screeners + backtest + attribution + paper_trade + etc.).
+  # Single job because the test files all live under apps/alphalens-
+  # research/tests/ (workspace install lets them import either package)
+  # and the libomp / lightgbm setup is amortized once. macOS matches the
+  # dev box and the lightgbm wheel availability story.
   # -----------------------------------------------------------------------
   research:
     name: research (Python)
@@ -42,18 +46,18 @@ jobs:
       - name: Install workspace
         run: uv sync --group dev --frozen
 
-      - name: Ruff lint (research)
+      - name: Ruff lint (pipeline + research)
         # Research-lab posture: surface findings without blocking. Strict mode
         # later when paradigm stabilizes (would target IS Carhart t > 3.0
         # before re-enabling 0-warning bar).
-        run: uv run ruff check apps/alphalens-research/
+        run: uv run ruff check apps/alphalens-pipeline/ apps/alphalens-research/
         continue-on-error: true
 
-      - name: Ruff format check (research)
-        run: uv run ruff format --check apps/alphalens-research/
+      - name: Ruff format check (pipeline + research)
+        run: uv run ruff format --check apps/alphalens-pipeline/ apps/alphalens-research/
 
       - name: Bandit security scan
-        run: uv run bandit -r apps/alphalens-research/alphalens_research/ apps/alphalens-research/alphalens_cli/ -ll -q
+        run: uv run bandit -r apps/alphalens-pipeline/alphalens_pipeline/ apps/alphalens-pipeline/alphalens_cli/ apps/alphalens-research/alphalens_research/ -ll -q
         continue-on-error: true
 
       - name: Run tests with coverage

@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from alphalens_research.thematic.mapping import gemini_mapper, orchestrator
+from alphalens_pipeline.thematic.mapping import gemini_mapper, orchestrator
 
 SAMPLE_MAPPER_RESPONSE = {
     "candidates": [
@@ -554,7 +554,7 @@ class TestMapThemes(unittest.TestCase):
                 patch.object(orchestrator, "_gate_press", side_effect=[False, False, None]),
                 patch.object(orchestrator, "_gate_insider", side_effect=[False, False, None]),
                 self.assertLogs(
-                    "alphalens_research.thematic.mapping.orchestrator", level=logging.INFO
+                    "alphalens_pipeline.thematic.mapping.orchestrator", level=logging.INFO
                 ) as cm,
             ):
                 df = orchestrator.map_themes(

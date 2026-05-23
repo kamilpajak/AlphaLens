@@ -45,7 +45,7 @@ def _good_payload(ticker: str = "AAPL") -> dict:
 
 class TestFetchEarningsCaching(unittest.TestCase):
     def test_writes_cache_when_missing(self):
-        from alphalens_research.data.alt_data.av_earnings_client import fetch_earnings
+        from alphalens_pipeline.data.alt_data.av_earnings_client import fetch_earnings
 
         fetcher = MagicMock(return_value=_good_payload("AAPL"))
 
@@ -62,7 +62,7 @@ class TestFetchEarningsCaching(unittest.TestCase):
             fetcher.assert_called_once_with("AAPL")
 
     def test_returns_cached_when_present_no_api_call(self):
-        from alphalens_research.data.alt_data.av_earnings_client import fetch_earnings
+        from alphalens_pipeline.data.alt_data.av_earnings_client import fetch_earnings
 
         fetcher = MagicMock(return_value=_good_payload("AAPL"))
 
@@ -84,7 +84,7 @@ class TestFetchEarningsCaching(unittest.TestCase):
         both spellings; inspect actual directory entry names to verify the
         canonical form was used.
         """
-        from alphalens_research.data.alt_data.av_earnings_client import fetch_earnings
+        from alphalens_pipeline.data.alt_data.av_earnings_client import fetch_earnings
 
         fetcher = MagicMock(return_value=_good_payload("AAPL"))
 
@@ -98,7 +98,7 @@ class TestFetchEarningsCaching(unittest.TestCase):
 
 class TestRateLimitRetry(unittest.TestCase):
     def test_retries_once_after_rate_limit_sleep(self):
-        from alphalens_research.data.alt_data.av_earnings_client import (
+        from alphalens_pipeline.data.alt_data.av_earnings_client import (
             AVRateLimitError,
             fetch_earnings,
         )
@@ -121,7 +121,7 @@ class TestRateLimitRetry(unittest.TestCase):
         sleep_fn.assert_called_once_with(60.0)
 
     def test_retry_exhausted_raises(self):
-        from alphalens_research.data.alt_data.av_earnings_client import (
+        from alphalens_pipeline.data.alt_data.av_earnings_client import (
             AVRateLimitError,
             fetch_earnings,
         )
@@ -145,7 +145,7 @@ class TestRateLimitRetry(unittest.TestCase):
 
 class TestSchemaValidation(unittest.TestCase):
     def test_missing_quarterly_earnings_rejected(self):
-        from alphalens_research.data.alt_data.av_earnings_client import (
+        from alphalens_pipeline.data.alt_data.av_earnings_client import (
             AVSchemaError,
             fetch_earnings,
         )
@@ -160,7 +160,7 @@ class TestSchemaValidation(unittest.TestCase):
             self.assertFalse((cache / "earnings_AAPL.json").exists())
 
     def test_empty_quarterly_earnings_rejected(self):
-        from alphalens_research.data.alt_data.av_earnings_client import (
+        from alphalens_pipeline.data.alt_data.av_earnings_client import (
             AVSchemaError,
             fetch_earnings,
         )
@@ -172,7 +172,7 @@ class TestSchemaValidation(unittest.TestCase):
                 fetch_earnings("AAPL", Path(td), fetcher=fetcher)
 
     def test_entry_missing_required_field_rejected(self):
-        from alphalens_research.data.alt_data.av_earnings_client import (
+        from alphalens_pipeline.data.alt_data.av_earnings_client import (
             AVSchemaError,
             fetch_earnings,
         )
@@ -201,7 +201,7 @@ class TestSchemaValidation(unittest.TestCase):
         ticker payload because a single old quarter is missing reportTime
         would drop otherwise-valid IS-window data. Downstream PEAD scorer
         must default missing reportTime to post-market on a per-event basis."""
-        from alphalens_research.data.alt_data.av_earnings_client import fetch_earnings
+        from alphalens_pipeline.data.alt_data.av_earnings_client import fetch_earnings
 
         legacy = {
             "symbol": "AAPL",
@@ -234,7 +234,7 @@ class TestSchemaValidation(unittest.TestCase):
         """If a previously-written cache file is malformed (e.g. partial write
         before crash), reading it must surface the schema error rather than
         silently propagate the corruption."""
-        from alphalens_research.data.alt_data.av_earnings_client import (
+        from alphalens_pipeline.data.alt_data.av_earnings_client import (
             AVSchemaError,
             fetch_earnings,
         )
@@ -251,7 +251,7 @@ class TestSchemaValidation(unittest.TestCase):
 
 class TestBatchThrottling(unittest.TestCase):
     def test_batch_throttles_between_uncached_fetches(self):
-        from alphalens_research.data.alt_data.av_earnings_client import fetch_earnings_batch
+        from alphalens_pipeline.data.alt_data.av_earnings_client import fetch_earnings_batch
 
         fetcher = MagicMock(side_effect=lambda t: _good_payload(t))
         sleep_fn = MagicMock()
@@ -273,7 +273,7 @@ class TestBatchThrottling(unittest.TestCase):
         self.assertEqual(statuses, {"AAPL": "fetched", "MSFT": "fetched", "GOOGL": "fetched"})
 
     def test_batch_resumable_skips_cached(self):
-        from alphalens_research.data.alt_data.av_earnings_client import fetch_earnings_batch
+        from alphalens_pipeline.data.alt_data.av_earnings_client import fetch_earnings_batch
 
         fetcher = MagicMock(side_effect=lambda t: _good_payload(t))
         sleep_fn = MagicMock()
@@ -299,7 +299,7 @@ class TestBatchThrottling(unittest.TestCase):
 
     def test_batch_continues_on_individual_schema_failure(self):
         """One bad ticker must not abort the rest of the batch."""
-        from alphalens_research.data.alt_data.av_earnings_client import fetch_earnings_batch
+        from alphalens_pipeline.data.alt_data.av_earnings_client import fetch_earnings_batch
 
         def fetcher(ticker: str) -> dict:
             if ticker == "BAD":
@@ -326,7 +326,7 @@ class TestBatchThrottling(unittest.TestCase):
     def test_batch_aborts_on_rate_limit_after_retry(self):
         """If rate-limit persists past retry on one ticker, abort the batch
         rather than keep hammering the API (preserves remaining quota)."""
-        from alphalens_research.data.alt_data.av_earnings_client import (
+        from alphalens_pipeline.data.alt_data.av_earnings_client import (
             AVRateLimitError,
             fetch_earnings_batch,
         )
@@ -359,7 +359,7 @@ class TestBatchThrottling(unittest.TestCase):
         single Comcast blip. Status='failed', continue to next ticker."""
         import urllib.error
 
-        from alphalens_research.data.alt_data.av_earnings_client import fetch_earnings_batch
+        from alphalens_pipeline.data.alt_data.av_earnings_client import fetch_earnings_batch
 
         def fetcher(ticker: str) -> dict:
             if ticker == "FLAKY":
@@ -388,7 +388,7 @@ class TestBatchThrottling(unittest.TestCase):
         as 'failed', which would consume an entire daily quota window."""
         import urllib.error
 
-        from alphalens_research.data.alt_data.av_earnings_client import fetch_earnings_batch
+        from alphalens_pipeline.data.alt_data.av_earnings_client import fetch_earnings_batch
 
         def fetcher(ticker: str) -> dict:
             if ticker == "MSFT":
@@ -422,7 +422,7 @@ class TestAtomicCacheWrite(unittest.TestCase):
         """tmp+rename pattern must clean up the .tmp file on success so a
         directory listing of the cache shows only canonical earnings_*.json
         entries."""
-        from alphalens_research.data.alt_data.av_earnings_client import fetch_earnings
+        from alphalens_pipeline.data.alt_data.av_earnings_client import fetch_earnings
 
         fetcher = MagicMock(return_value=_good_payload("AAPL"))
 
@@ -437,13 +437,13 @@ class TestAtomicCacheWrite(unittest.TestCase):
 
 class TestLoadEarnings(unittest.TestCase):
     def test_load_returns_none_when_missing(self):
-        from alphalens_research.data.alt_data.av_earnings_client import load_earnings
+        from alphalens_pipeline.data.alt_data.av_earnings_client import load_earnings
 
         with tempfile.TemporaryDirectory() as td:
             self.assertIsNone(load_earnings("NOPE", Path(td)))
 
     def test_load_returns_parsed_dict_when_present(self):
-        from alphalens_research.data.alt_data.av_earnings_client import load_earnings
+        from alphalens_pipeline.data.alt_data.av_earnings_client import load_earnings
 
         with tempfile.TemporaryDirectory() as td:
             cache = Path(td)

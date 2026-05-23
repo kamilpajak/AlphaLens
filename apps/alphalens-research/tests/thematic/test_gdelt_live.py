@@ -22,7 +22,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from alphalens_research.thematic.sources import gdelt
+from alphalens_pipeline.thematic.sources import gdelt
 
 
 @unittest.skipUnless(

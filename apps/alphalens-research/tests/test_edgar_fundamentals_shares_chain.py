@@ -79,7 +79,7 @@ def _stub_sec_client(ticker_to_cik: dict[str, str]) -> MagicMock:
 class TestSharesChainOrder(unittest.TestCase):
     def test_dei_wins_over_us_gaap_when_both_fresh(self):
         """Modern primary: dei:EntityCommonStockSharesOutstanding."""
-        from alphalens_research.data.store.edgar_fundamentals import EdgarFundamentalsStore
+        from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
         with tempfile.TemporaryDirectory() as td:
             tdp = Path(td)
@@ -115,7 +115,7 @@ class TestSharesChainOrder(unittest.TestCase):
 
     def test_us_gaap_fallback_when_dei_absent(self):
         """No dei row → us-gaap kicks in (still gated on 180-day age)."""
-        from alphalens_research.data.store.edgar_fundamentals import EdgarFundamentalsStore
+        from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
         with tempfile.TemporaryDirectory() as td:
             tdp = Path(td)
@@ -141,7 +141,7 @@ class TestSharesChainOrder(unittest.TestCase):
 
     def test_stale_us_gaap_rejected_by_180d_gate(self):
         """C3.ai-shaped: only stale us-gaap → shares is None (no yfinance mocked)."""
-        from alphalens_research.data.store.edgar_fundamentals import EdgarFundamentalsStore
+        from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
         with tempfile.TemporaryDirectory() as td:
             tdp = Path(td)
@@ -169,7 +169,7 @@ class TestSharesChainOrder(unittest.TestCase):
 
     def test_yfinance_fallback_invoked_when_both_xbrl_chains_dead(self):
         """C3.ai-shaped with yfinance live → 3rd tier returns ~130M."""
-        from alphalens_research.data.store.edgar_fundamentals import EdgarFundamentalsStore
+        from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
         with tempfile.TemporaryDirectory() as td:
             tdp = Path(td)
@@ -201,7 +201,7 @@ class TestSharesChainOrder(unittest.TestCase):
         store. The second call must re-attempt and pick up the value
         (None is cached only for definitive "no data" results).
         """
-        from alphalens_research.data.store.edgar_fundamentals import EdgarFundamentalsStore
+        from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
         with tempfile.TemporaryDirectory() as td:
             tdp = Path(td)
@@ -237,7 +237,7 @@ class TestSharesChainOrder(unittest.TestCase):
 
     def test_yfinance_fallback_skipped_when_xbrl_succeeds(self):
         """Don't waste yfinance roundtrips when EDGAR is fresh."""
-        from alphalens_research.data.store.edgar_fundamentals import EdgarFundamentalsStore
+        from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
 
         with tempfile.TemporaryDirectory() as td:
             tdp = Path(td)

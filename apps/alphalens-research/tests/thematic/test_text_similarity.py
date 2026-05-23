@@ -1,4 +1,4 @@
-"""Unit tests for alphalens_research.thematic.text_similarity.
+"""Unit tests for alphalens_pipeline.thematic.text_similarity.
 
 Two-tier clustering refactor uses these helpers at both ingest (Tier 1, lexical
 title comparison) and resolver (Tier 2, entity-set comparison). All math here
@@ -7,7 +7,7 @@ is pure stdlib — no sklearn, no nltk — so the assertions are exact.
 
 import unittest
 
-from alphalens_research.thematic import text_similarity as ts
+from alphalens_pipeline.thematic import text_similarity as ts
 
 
 class TestNormalizeTitle(unittest.TestCase):

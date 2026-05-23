@@ -1,4 +1,4 @@
-"""Unit tests for ``alphalens_research.scorers.fcff_yield``.
+"""Unit tests for ``alphalens_pipeline.scorers.fcff_yield``.
 
 Pure-function tests: no SimFin, no network, no cache. Each scoring primitive
 is tested in isolation; the high-level ``score_ev_fcff_yield`` is then tested
@@ -11,7 +11,7 @@ import math
 import unittest
 
 import pandas as pd
-from alphalens_research.scorers import fcff_yield as sc
+from alphalens_pipeline.scorers import fcff_yield as sc
 
 
 class TestComputeFcff(unittest.TestCase):

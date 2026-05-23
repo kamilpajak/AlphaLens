@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from alphalens_research.thematic.verification import recent_press
+from alphalens_pipeline.thematic.verification import recent_press
 
 # Two-row Polygon response after the 2026-05-22 canonical-client consolidation.
 # The mock layer is now ``PolygonClient.get_news_range`` (returns ``list[dict]``)

@@ -17,7 +17,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
-from alphalens_research.data.store.history import HistoryStore
+from alphalens_pipeline.data.store.history import HistoryStore
 from alphalens_research.screeners.multi_source_two_stage.target import (
     aligned_train_targets,
     build_target_frame,

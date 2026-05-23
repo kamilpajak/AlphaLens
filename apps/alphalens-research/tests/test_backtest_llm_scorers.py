@@ -98,8 +98,8 @@ class TestGeminiFlashTractabilityScorer(unittest.TestCase):
         get_default_gemini_client() raises ValueError but it is caught and
         the scorer returns LLMVerdict('uncertain'). This keeps the
         historical_validation loop from crashing on misconfigured nodes."""
+        from alphalens_pipeline.data.alt_data import gemini_client as gc_mod
         from alphalens_research.backtest.llm_scorers import gemini_flash_tractability_scorer
-        from alphalens_research.data.alt_data import gemini_client as gc_mod
 
         gc_mod._reset_default_client_for_tests()
         try:

@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
-from alphalens_research.thematic.argumentation import generator, orchestrator
+from alphalens_pipeline.thematic.argumentation import generator, orchestrator
 
 
 def _scored_df():

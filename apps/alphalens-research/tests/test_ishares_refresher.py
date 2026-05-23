@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import yaml
-from alphalens_research.data.universes.ishares_refresher import (
+from alphalens_pipeline.data.universes.ishares_refresher import (
     ETF_URLS,
     refresh_ishares_snapshot,
 )

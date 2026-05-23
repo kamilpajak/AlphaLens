@@ -4,7 +4,7 @@ Stores wrap PIT lookups for total liabilities and shares outstanding.
 Scorer adapter assembles (mcap, liabilities, sigma_60d, rf_1y) per ticker
 per asof. Read-side abstractions — actual companyfacts parquet reads
 happen via ``CompanyfactsParquetReader`` from
-``alphalens_research.data.fundamentals.companyfacts_parquet``.
+``alphalens_pipeline.data.fundamentals.companyfacts_parquet``.
 
 Survivorship caveat: SP1500 PIT loader has sparse-snapshot bias (~100-300
 bps/y), asymmetrically favoring safe names (winners-only set). Documented
@@ -105,7 +105,7 @@ class CompanyfactsLiabilitiesStore(LiabilitiesStoreProtocol):
         self._reader = reader
 
     def get(self, ticker: str, asof: pd.Timestamp) -> float | None:
-        from alphalens_research.data.fundamentals.companyfacts_parquet import filter_concept
+        from alphalens_pipeline.data.fundamentals.companyfacts_parquet import filter_concept
 
         cik = self._tcm.lookup(ticker)
         if cik is None:
@@ -150,7 +150,7 @@ class CompanyfactsShareCountStore(ShareCountStoreProtocol):
         self._reader = reader
 
     def get(self, ticker: str, asof: pd.Timestamp) -> float | None:
-        from alphalens_research.data.fundamentals.companyfacts_parquet import filter_concept
+        from alphalens_pipeline.data.fundamentals.companyfacts_parquet import filter_concept
 
         cik = self._tcm.lookup(ticker)
         if cik is None:
@@ -178,20 +178,21 @@ def make_production_stores(
     *, parquet_dir: Path | None = None, ticker_cik_map_path: Path | None = None
 ) -> tuple[CompanyfactsLiabilitiesStore, CompanyfactsShareCountStore]:
     """Wire the two production stores against the canonical local caches."""
-    from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap
-    from alphalens_research.data.fundamentals.companyfacts_parquet import (
+    from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+    from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
         CompanyfactsParquetReader,
     )
 
     parquet_dir = parquet_dir or Path.home() / ".alphalens" / "companyfacts_parquet"
-    ticker_cik_map_path = (
-        ticker_cik_map_path
-        or Path(__file__).resolve().parents[2]
-        / "data"
-        / "alt_data"
-        / "data"
-        / "ticker_cik_map.yaml"
-    )
+    # ticker_cik_map.yaml lives in the pipeline workspace member (data/ moved
+    # there in PR2). Resolve via the alphalens_pipeline package location so
+    # the path stays correct regardless of editable-install location.
+    if ticker_cik_map_path is None:
+        import alphalens_pipeline.data.alt_data as _alt_data_pkg
+
+        ticker_cik_map_path = (
+            Path(_alt_data_pkg.__file__).resolve().parent / "data" / "ticker_cik_map.yaml"
+        )
     tcm = TickerCikMap.load(ticker_cik_map_path)
     reader = CompanyfactsParquetReader(parquet_dir)
     liab = CompanyfactsLiabilitiesStore(ticker_cik_map=tcm, reader=reader)

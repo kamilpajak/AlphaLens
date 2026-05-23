@@ -21,9 +21,9 @@ import unittest
 from datetime import date
 
 import pandas as pd
+from alphalens_pipeline.data.store.history import HistoryStore
 from alphalens_research.backtest.daily_continuous_returns import daily_continuous_returns
 from alphalens_research.backtest.engine import RebalanceSnapshot
-from alphalens_research.data.store.history import HistoryStore
 
 
 def _ohlc(prices: dict[str, list[float]], dates: list[date]) -> dict[str, pd.DataFrame]:

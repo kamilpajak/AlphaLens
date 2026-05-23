@@ -66,8 +66,8 @@ class TestPreauditNoProfile(unittest.TestCase):
 class TestPreauditCoverageGating(unittest.TestCase):
     """Coverage failure must short-circuit: smoke MUST NOT run."""
 
-    @mock.patch("alphalens_cli.commands.preaudit.run_smoke")
-    @mock.patch("alphalens_cli.commands.preaudit.check_all_deps")
+    @mock.patch("alphalens_research.preaudit.runner.run_smoke")
+    @mock.patch("alphalens_research.preaudit.coverage.check_all_deps")
     def test_coverage_fail_aborts_before_smoke(self, m_cov, m_smoke):
         m_cov.return_value = _bad_report()
         result = runner.invoke(app, ["preaudit", "insider_pc_compound"])
@@ -78,8 +78,8 @@ class TestPreauditCoverageGating(unittest.TestCase):
 
 
 class TestPreauditSmokeFailure(unittest.TestCase):
-    @mock.patch("alphalens_cli.commands.preaudit.run_smoke")
-    @mock.patch("alphalens_cli.commands.preaudit.check_all_deps")
+    @mock.patch("alphalens_research.preaudit.runner.run_smoke")
+    @mock.patch("alphalens_research.preaudit.coverage.check_all_deps")
     def test_smoke_fail_exits_1(self, m_cov, m_smoke):
         m_cov.return_value = _good_report()
         m_smoke.return_value = SmokeResult(
@@ -94,8 +94,8 @@ class TestPreauditSmokeFailure(unittest.TestCase):
 
 
 class TestPreauditHappyPath(unittest.TestCase):
-    @mock.patch("alphalens_cli.commands.preaudit.run_smoke")
-    @mock.patch("alphalens_cli.commands.preaudit.check_all_deps")
+    @mock.patch("alphalens_research.preaudit.runner.run_smoke")
+    @mock.patch("alphalens_research.preaudit.coverage.check_all_deps")
     def test_coverage_and_smoke_pass_exits_0(self, m_cov, m_smoke):
         m_cov.return_value = _good_report()
         m_smoke.return_value = SmokeResult(status=SmokeStatus.PASS, exit_code=0, duration_s=82.4)
@@ -106,16 +106,16 @@ class TestPreauditHappyPath(unittest.TestCase):
 
 
 class TestPreauditSkipFlags(unittest.TestCase):
-    @mock.patch("alphalens_cli.commands.preaudit.run_smoke")
-    @mock.patch("alphalens_cli.commands.preaudit.check_all_deps")
+    @mock.patch("alphalens_research.preaudit.runner.run_smoke")
+    @mock.patch("alphalens_research.preaudit.coverage.check_all_deps")
     def test_skip_coverage_bypasses_stage_1(self, m_cov, m_smoke):
         m_smoke.return_value = SmokeResult(status=SmokeStatus.PASS, exit_code=0, duration_s=1.0)
         result = runner.invoke(app, ["preaudit", "insider_pc_compound", "--skip-coverage"])
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(m_cov.call_count, 0)
 
-    @mock.patch("alphalens_cli.commands.preaudit.run_smoke")
-    @mock.patch("alphalens_cli.commands.preaudit.check_all_deps")
+    @mock.patch("alphalens_research.preaudit.runner.run_smoke")
+    @mock.patch("alphalens_research.preaudit.coverage.check_all_deps")
     def test_skip_smoke_bypasses_stage_2(self, m_cov, m_smoke):
         m_cov.return_value = _good_report()
         result = runner.invoke(app, ["preaudit", "insider_pc_compound", "--skip-smoke"])

@@ -1,4 +1,4 @@
-"""Tests for the Polygon news ingest wrapper (``alphalens_research.thematic.sources.polygon_news``).
+"""Tests for the Polygon news ingest wrapper (``alphalens_pipeline.thematic.sources.polygon_news``).
 
 After the 2026-05-22 canonical-client consolidation, this module is a thin
 domain wrapper around :class:`PolygonClient`. HTTP, pagination, rate-limit,
@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-from alphalens_research.thematic.sources import polygon_news
+from alphalens_pipeline.thematic.sources import polygon_news
 
 SAMPLE_POLYGON_ROWS = [
     {

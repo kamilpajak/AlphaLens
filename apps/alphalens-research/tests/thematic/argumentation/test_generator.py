@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from alphalens_research.thematic.argumentation import generator
+from alphalens_pipeline.thematic.argumentation import generator
 
 
 def _facts(weighted_score: int = 4):
@@ -271,7 +271,7 @@ class TestJsonRepairFallback(unittest.TestCase):
         )
         with patch.object(generator, "_call_gemini", return_value=resp):
             with self.assertLogs(
-                "alphalens_research.thematic.argumentation.generator", level="INFO"
+                "alphalens_pipeline.thematic.argumentation.generator", level="INFO"
             ) as cm:
                 brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
         self.assertEqual(kind, generator.BriefErrorKind.NONE)

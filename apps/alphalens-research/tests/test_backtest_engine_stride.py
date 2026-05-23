@@ -11,8 +11,8 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+from alphalens_pipeline.data.store.history import HistoryStore
 from alphalens_research.backtest.engine import BacktestEngine
-from alphalens_research.data.store.history import HistoryStore
 
 
 def _make_store(n_days: int = 100, n_tickers: int = 5) -> HistoryStore:

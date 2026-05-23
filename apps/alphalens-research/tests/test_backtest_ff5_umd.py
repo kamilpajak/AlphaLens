@@ -32,7 +32,7 @@ class TestLoadFf5Umd(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from alphalens_research.data.factors import DEFAULT_FF5_PATH
+        from alphalens_pipeline.data.factors import DEFAULT_FF5_PATH
 
         if not DEFAULT_FF5_PATH.exists():
             raise unittest.SkipTest(
@@ -41,7 +41,7 @@ class TestLoadFf5Umd(unittest.TestCase):
             )
 
     def test_joined_frame_has_all_six_factors_plus_rf(self):
-        from alphalens_research.data.factors import load_ff5_umd_daily
+        from alphalens_pipeline.data.factors import load_ff5_umd_daily
 
         # Integration-style: exercise the actual Dartmouth CSVs.
         df = load_ff5_umd_daily(start=date(2023, 1, 1), end=date(2023, 12, 31))
@@ -50,7 +50,7 @@ class TestLoadFf5Umd(unittest.TestCase):
             self.assertIn(col, df.columns)
 
     def test_returns_decimals_not_percent(self):
-        from alphalens_research.data.factors import load_ff5_umd_daily
+        from alphalens_pipeline.data.factors import load_ff5_umd_daily
 
         df = load_ff5_umd_daily(start=date(2023, 1, 1), end=date(2023, 6, 30))
 

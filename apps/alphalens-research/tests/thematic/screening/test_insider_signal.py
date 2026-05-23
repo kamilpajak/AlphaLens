@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
-from alphalens_research.thematic.screening import insider_signal
+from alphalens_pipeline.thematic.screening import insider_signal
 
 
 def _record(

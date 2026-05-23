@@ -19,7 +19,7 @@ from __future__ import annotations
 import unittest
 
 import pandas as pd
-from alphalens_research.thematic.argumentation import orchestrator
+from alphalens_pipeline.thematic.argumentation import orchestrator
 
 
 def _row(**overrides) -> dict:

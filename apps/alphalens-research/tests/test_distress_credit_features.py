@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 
 import pandas as pd
 import pyarrow.parquet as pq
-from alphalens_research.data.fundamentals.companyfacts_parquet import (
+from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
     CompanyfactsParquetReader,
     companyfacts_json_to_parquet_table,
 )

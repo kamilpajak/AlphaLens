@@ -1,6 +1,6 @@
 """Paper-trade portfolio state — the most-recent v9D top decile selection.
 
-Mirrors ``alphalens_research.watchdog.portfolio.PortfolioState`` interface (load/save
+Mirrors ``alphalens_pipeline.watchdog.portfolio.PortfolioState`` interface (load/save
 to YAML at a default path under ``~/.alphalens/``). Purpose: the weekly
 score job reads this to recover last-week's holdings, computes their
 realized return over the past 7d, then writes new holdings.

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from alphalens_research.thematic.verification import tenk_grep
+from alphalens_pipeline.thematic.verification import tenk_grep
 
 FIXTURE_10K_HTML = """
 <html><head><title>NVDA 10-K</title></head>
@@ -198,7 +198,7 @@ class TestLazyBuilders(unittest.TestCase):
         tenk_grep._get_yaml_snapshot.cache_clear()
 
     def test_get_cik_loader_builds_and_loads(self):
-        from alphalens_research.watchdog.sources import cik_loader as cl
+        from alphalens_pipeline.watchdog.sources import cik_loader as cl
 
         with patch.object(cl.CIKLoader, "load") as mock_load:
             loader = tenk_grep._get_cik_loader()
@@ -209,7 +209,7 @@ class TestLazyBuilders(unittest.TestCase):
         # Network errors during load() must not propagate — the loader
         # object still returns (with empty mapping) so _resolve_cik can
         # proceed to the next tier.
-        from alphalens_research.watchdog.sources import cik_loader as cl
+        from alphalens_pipeline.watchdog.sources import cik_loader as cl
 
         with patch.object(cl.CIKLoader, "load", side_effect=RuntimeError("SEC down")):
             loader = tenk_grep._get_cik_loader()
@@ -275,7 +275,7 @@ class TestFetchTenKReturnsNoneOnNoRecent10K(unittest.TestCase):
 
 class TestPrimaryTierSwallowsError(unittest.TestCase):
     def test_load_ticker_to_cik_returns_empty_on_network_error(self):
-        from alphalens_research.data.alt_data import sec_edgar_client as sec_mod
+        from alphalens_pipeline.data.alt_data import sec_edgar_client as sec_mod
 
         tenk_grep._load_ticker_to_cik.cache_clear()
         sec_mod._reset_default_client_for_tests()
@@ -298,7 +298,7 @@ class TestCikFallbackChain(unittest.TestCase):
     def test_resolve_cik_falls_back_to_cik_loader(self):
         # Primary (SEC live company_tickers.json) misses; CIKLoader (TTL'd
         # cache reused from watchdog) has the ticker.
-        from alphalens_research.watchdog.sources import cik_loader as cl
+        from alphalens_pipeline.watchdog.sources import cik_loader as cl
 
         fake_loader = cl.CIKLoader.__new__(cl.CIKLoader)
         fake_loader._mapping = {"FOREIGN": "0001234567"}
@@ -309,7 +309,7 @@ class TestCikFallbackChain(unittest.TestCase):
             self.assertEqual(tenk_grep._resolve_cik("FOREIGN"), "0001234567")
 
     def test_resolve_cik_falls_back_to_yaml_snapshot(self):
-        from alphalens_research.data.alt_data.ticker_cik_map import TickerCikMap
+        from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
 
         snap = TickerCikMap(_by_ticker={"FOREIGN": "0009876543"})
         empty_loader = type("L", (), {"get_cik": lambda self, t: None})()
@@ -326,8 +326,8 @@ class TestCikFallbackChain(unittest.TestCase):
         # outages. Wrap in try/except returning {} so CIKLoader + YAML get
         # their turn. Standalone callers (CLI debug, direct tests of
         # _resolve_cik) must not crash.
-        from alphalens_research.data.alt_data import sec_edgar_client as sec_mod
-        from alphalens_research.watchdog.sources import cik_loader as cl
+        from alphalens_pipeline.data.alt_data import sec_edgar_client as sec_mod
+        from alphalens_pipeline.watchdog.sources import cik_loader as cl
 
         fake_loader = cl.CIKLoader.__new__(cl.CIKLoader)
         fake_loader._mapping = {"NVDA": "0001045810"}

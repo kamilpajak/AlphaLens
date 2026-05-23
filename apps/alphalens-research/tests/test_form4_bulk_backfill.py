@@ -22,14 +22,14 @@ from pathlib import Path
 
 import pandas as pd
 import pyarrow.dataset as ds
-from alphalens_research.data.alt_data.form4_bulk_backfill import (
+from alphalens_pipeline.data.alt_data.form4_bulk_backfill import (
     BackfillManifest,
     FilingMetadata,
     fetch_all_form4_metadata,
     iter_form4_filings,
     write_records_to_parquet,
 )
-from alphalens_research.data.alt_data.form4_records import Form4Record
+from alphalens_pipeline.data.alt_data.form4_records import Form4Record
 
 
 def _mk_record(
@@ -102,7 +102,7 @@ class TestWriteRecordsToParquet(unittest.TestCase):
         self.assertEqual(set(df["accession_number"]), {"ACC-2021", "ACC-2021B"})
 
     def test_schema_matches_locked_columns(self):
-        from alphalens_research.data.store.form4_pit import FORM4_SCHEMA_COLUMNS
+        from alphalens_pipeline.data.store.form4_pit import FORM4_SCHEMA_COLUMNS
 
         records = [_mk_record(transaction_date=date(2022, 5, 1))]
         write_records_to_parquet(records, parquet_root=self.root)
@@ -173,7 +173,7 @@ class TestWriteRecordsToParquet(unittest.TestCase):
             ),
         ]
         with self.assertLogs(
-            "alphalens_research.data.alt_data.form4_bulk_backfill", level="WARNING"
+            "alphalens_pipeline.data.alt_data.form4_bulk_backfill", level="WARNING"
         ) as cm:
             write_records_to_parquet(records, parquet_root=self.root)
         self.assertTrue(

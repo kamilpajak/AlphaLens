@@ -1,6 +1,6 @@
 import unittest
 
-from alphalens_research.thematic.argumentation import prompts
+from alphalens_pipeline.thematic.argumentation import prompts
 
 
 def _sample_facts():

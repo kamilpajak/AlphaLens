@@ -25,8 +25,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from alphalens_research.thematic.extraction import gemini_flash
-from alphalens_research.thematic.mapping import gemini_mapper, orchestrator
+from alphalens_pipeline.thematic.extraction import gemini_flash
+from alphalens_pipeline.thematic.mapping import gemini_mapper, orchestrator
 
 REPLAY_DIR = Path.home() / ".alphalens" / "replay" / "nvda_qubt"
 REPLAY_DIR.mkdir(parents=True, exist_ok=True)

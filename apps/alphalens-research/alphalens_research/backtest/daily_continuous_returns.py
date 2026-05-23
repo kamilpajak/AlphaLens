@@ -33,9 +33,9 @@ from collections.abc import Iterable
 from datetime import date
 
 import pandas as pd
+from alphalens_pipeline.data.store.history import HistoryStore
 
 from alphalens_research.backtest.engine import RebalanceSnapshot
-from alphalens_research.data.store.history import HistoryStore
 
 
 def _assign_baskets_to_days(
