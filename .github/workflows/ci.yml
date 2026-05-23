@@ -91,12 +91,12 @@ jobs:
         # on math-heavy research code.
         # Strict per-module via executionEnvironments on backtest/attribution/
         # scorers — these surfaces govern verdicts; wrong types corrupt α t-stats.
-        # TODO: flip continue-on-error to false in three follow-up PRs:
-        #   (1) clean scorers strict (~22 errors, smallest scope)
-        #   (2) clean backtest strict (~40 errors)
-        #   (3) clean attribution strict (~68 errors)
-        # then a final PR cleans basic-mode global (~295 errors) and flips to
-        # blocking. Baseline at branch fork: 425 errors / 71 warnings.
+        # TODO: flip continue-on-error to false in four follow-up PRs:
+        #   (1) clean scorers strict (~70 errors, smallest scope)
+        #   (2) clean backtest strict (~274 errors)
+        #   (3) clean attribution strict (~361 errors)
+        # then a final PR cleans basic-mode global (~301 errors) and flips to
+        # blocking. Baseline at branch fork: 1006 errors / 109 warnings.
         run: uv run pyright
         continue-on-error: true
 

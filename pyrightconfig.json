@@ -4,8 +4,10 @@
     "Global 'basic' mode catches name resolution, attribute access, and",
     "obvious type mismatches without forcing exhaustive annotations on the",
     "research code (lab-quality, often np.ndarray[Any]).",
-    "executionEnvironments below opt critical modules into 'strict' so the",
-    "scorer library and backtest/attribution math carry full type guarantees.",
+    "Strict per-directory via the top-level 'strict' array — pyright applies",
+    "strict to anything underneath those paths regardless of executionEnvironments.",
+    "executionEnvironments below only set 'extraPaths' so cross-package imports",
+    "resolve (research imports from pipeline.{data, core, scorers} per CLAUDE.md DAG).",
     "Why scorers/backtest/attribution: these are the load-bearing surfaces.",
     "Wrong dtype in attribution -> wrong α t-stat -> bad verdict.",
     "Wrong scorer signature -> wrong stock picks. Strict here pays for itself.",
@@ -41,32 +43,27 @@
   "pythonPlatform": "Darwin",
 
   "typeCheckingMode": "basic",
+  "strict": [
+    "apps/alphalens-research/alphalens_research/backtest",
+    "apps/alphalens-research/alphalens_research/attribution",
+    "apps/alphalens-pipeline/alphalens_pipeline/scorers"
+  ],
   "reportMissingImports": "warning",
   "reportMissingTypeStubs": "none",
 
   "executionEnvironments": [
     {
-      "root": "apps/alphalens-research/alphalens_research/backtest",
+      "root": "apps/alphalens-research/alphalens_research",
       "extraPaths": [
         "apps/alphalens-pipeline",
         "apps/alphalens-research"
-      ],
-      "//": "Layer 3 engine — strict so refactors can't silently break BacktestReport contract."
+      ]
     },
     {
-      "root": "apps/alphalens-research/alphalens_research/attribution",
-      "extraPaths": [
-        "apps/alphalens-pipeline",
-        "apps/alphalens-research"
-      ],
-      "//": "Layer 5 attribution — strict so cost/Carhart/Sharpe inputs are typed end-to-end."
-    },
-    {
-      "root": "apps/alphalens-pipeline/alphalens_pipeline/scorers",
+      "root": "apps/alphalens-pipeline/alphalens_pipeline",
       "extraPaths": [
         "apps/alphalens-pipeline"
-      ],
-      "//": "Validated-scorer library — public-API equivalent; strict prevents signature drift."
+      ]
     },
     {
       "root": ".",

@@ -46,15 +46,18 @@ class TestPyrightConfig(unittest.TestCase):
         cfg = _load_config()
         self.assertEqual(cfg.get("pythonVersion"), "3.13")
 
-    def test_strict_execution_environments_present(self):
+    def test_strict_directories_listed(self):
+        # Pyright only applies strict mode to dirs listed in the top-level
+        # `strict` array. executionEnvironments does NOT carry strictness —
+        # it only overrides extraPaths/pythonVersion. Catching that regression
+        # is the whole reason this test exists.
         cfg = _load_config()
-        envs = cfg.get("executionEnvironments", [])
-        roots = {env.get("root") for env in envs}
+        strict_dirs = set(cfg.get("strict", []))
         for expected in STRICT_ROOTS:
             self.assertIn(
                 expected,
-                roots,
-                f"strict execution environment missing for {expected}",
+                strict_dirs,
+                f"strict directory missing from top-level 'strict' array: {expected}",
             )
 
     def test_includes_cover_all_three_apps(self):
