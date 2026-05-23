@@ -74,8 +74,11 @@ updates:
     directory: "/"
     target-branch: "feature/django-migration"
     schedule:
+      # For `interval: monthly`, Dependabot fires on the first occurrence
+      # of the specified weekday of the month — NOT a day-of-month number
+      # (which is what `day: "1"` was; rejected by the schema validator).
       interval: "monthly"
-      day: "1"
+      day: "monday"
       time: "07:00"
       timezone: "Europe/Warsaw"
     open-pull-requests-limit: 3
