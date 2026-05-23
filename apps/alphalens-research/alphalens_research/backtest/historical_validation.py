@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Historical validation: do LLM rejections correlate with subsequent underperformance.
 
 Phase 0 audit per Perplexity recommendation (2026-04-19):
@@ -24,7 +25,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import pandas as pd
@@ -45,7 +46,7 @@ class LLMVerdict:
     cost_usd: float = 0.0  # approximate; -1 if unknown
 
 
-ScorerFn = Callable[[str, date, Mapping], LLMVerdict]
+ScorerFn = Callable[[str, date, Mapping[str, Any]], LLMVerdict]
 """
 Signature: scorer(ticker, asof_date, context) -> LLMVerdict.
 
@@ -87,7 +88,7 @@ class ValidationResult:
     reject_sharpe_proxy: float
     total_llm_cost_usd: float
     total_llm_latency_sec: float
-    per_pick_evaluations: list[dict] = field(default_factory=list)  # audit trail
+    per_pick_evaluations: list[dict[str, Any]] = field(default_factory=list)  # audit trail
 
 
 def _empty_validation_result() -> ValidationResult:
@@ -112,8 +113,8 @@ def _empty_validation_result() -> ValidationResult:
 def _evaluate_one_pick(
     pick: PickRecord,
     scorer_fn: ScorerFn,
-    extra_context_fn: Callable[[PickRecord], Mapping] | None,
-) -> tuple[dict, float, float]:
+    extra_context_fn: Callable[[PickRecord], Mapping[str, Any]] | None,
+) -> tuple[dict[str, Any], float, float]:
     """Run the scorer once and produce (row_dict, cost_contribution, latency_contribution)."""
     context = {
         "scorer_name": "layer2b_momentum",
@@ -151,7 +152,7 @@ def _evaluate_one_pick(
 def evaluate_historical_picks(
     picks: Iterable[PickRecord],
     scorer_fn: ScorerFn,
-    extra_context_fn: Callable[[PickRecord], Mapping] | None = None,
+    extra_context_fn: Callable[[PickRecord], Mapping[str, Any]] | None = None,
     progress_every: int = 20,
 ) -> ValidationResult:
     """Run the pluggable scorer over each historical pick, aggregate results.
@@ -168,7 +169,7 @@ def evaluate_historical_picks(
     if n == 0:
         return _empty_validation_result()
 
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     total_cost = 0.0
     total_latency = 0.0
     for idx, pick in enumerate(pick_list):
@@ -186,22 +187,25 @@ def evaluate_historical_picks(
 
     def _safe_mean(s: pd.Series) -> float:
         s = s.dropna()
-        return float(s.mean()) if len(s) else 0.0
+        return float(cast(float, s.mean())) if len(s) else 0.0
 
     def _safe_sharpe(s: pd.Series) -> float:
         s = s.dropna()
         if len(s) < 2:
             return 0.0
-        std = float(s.std(ddof=1))
+        std = float(cast(float, s.std(ddof=1)))
         if std < 1e-12:
             return 0.0
-        return float(s.mean() / std) * np.sqrt(252)
+        return float(cast(float, s.mean()) / std) * np.sqrt(252)
 
     def _hit_rate(s: pd.Series) -> float:
         s = s.dropna()
         if len(s) == 0:
             return 0.0
-        return float((s > 0).mean())
+        return float(cast(float, (s > 0).mean()))
+
+    accepted_fwd = cast(pd.Series, accepted["forward_return"])
+    rejected_fwd = cast(pd.Series, rejected["forward_return"])
 
     return ValidationResult(
         n_total=n,
@@ -209,15 +213,13 @@ def evaluate_historical_picks(
         n_reject=len(rejected),
         n_uncertain=len(uncertain),
         accept_rate=len(accepted) / n,
-        accept_mean_return=_safe_mean(accepted["forward_return"]),
-        reject_mean_return=_safe_mean(rejected["forward_return"]),
-        delta_accept_minus_reject=(
-            _safe_mean(accepted["forward_return"]) - _safe_mean(rejected["forward_return"])
-        ),
-        accept_hit_rate=_hit_rate(accepted["forward_return"]),
-        reject_hit_rate=_hit_rate(rejected["forward_return"]),
-        accept_sharpe_proxy=_safe_sharpe(accepted["forward_return"]),
-        reject_sharpe_proxy=_safe_sharpe(rejected["forward_return"]),
+        accept_mean_return=_safe_mean(accepted_fwd),
+        reject_mean_return=_safe_mean(rejected_fwd),
+        delta_accept_minus_reject=(_safe_mean(accepted_fwd) - _safe_mean(rejected_fwd)),
+        accept_hit_rate=_hit_rate(accepted_fwd),
+        reject_hit_rate=_hit_rate(rejected_fwd),
+        accept_sharpe_proxy=_safe_sharpe(accepted_fwd),
+        reject_sharpe_proxy=_safe_sharpe(rejected_fwd),
         total_llm_cost_usd=total_cost,
         total_llm_latency_sec=total_latency,
         per_pick_evaluations=rows,
@@ -281,7 +283,7 @@ def format_decision_matrix(result: ValidationResult) -> str:
 # ---------------------------------------------------------------------------
 
 
-def picks_from_backtest_report(report) -> list[PickRecord]:
+def picks_from_backtest_report(report: Any) -> list[PickRecord]:
     """Extract PickRecord from BacktestReport.rebalance_results.
 
     Uses `top_n_forward_returns` as the holding-period forward return (5-day).
@@ -296,7 +298,7 @@ def picks_from_backtest_report(report) -> list[PickRecord]:
         for rank_idx, (ticker, score, fwd) in enumerate(
             zip(r.top_n_tickers, r.top_n_scores, r.top_n_forward_returns, strict=False), start=1
         ):
-            if fwd is None or (isinstance(fwd, float) and np.isnan(fwd)):
+            if isinstance(fwd, float) and np.isnan(fwd):
                 continue
             out.append(
                 PickRecord(
@@ -316,7 +318,9 @@ def picks_from_backtest_report(report) -> list[PickRecord]:
 # ---------------------------------------------------------------------------
 
 
-def rule_based_tractability_scorer(_ticker: str, _asof: date, context: Mapping) -> LLMVerdict:
+def rule_based_tractability_scorer(
+    _ticker: str, _asof: date, context: Mapping[str, Any]
+) -> LLMVerdict:
     """Deterministic baseline — **no** LLM, pure rules.
 
     Accept criteria:

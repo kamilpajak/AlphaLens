@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Backtest replay engine — daily cross-sectional scoring + forward-return tracking.
 
 For each trading day `t` in the benchmark calendar:
@@ -24,6 +25,7 @@ import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any, cast
 
 import pandas as pd
 from alphalens_pipeline.data.store.history import HistoryStore
@@ -38,7 +40,7 @@ from .weighting import (
 logger = logging.getLogger(__name__)
 
 
-Scorer = Callable[[Mapping[str, pd.DataFrame], Mapping], pd.DataFrame]
+Scorer = Callable[[Mapping[str, pd.DataFrame], Mapping[str, Any]], pd.DataFrame]
 
 
 @dataclass(frozen=True)
@@ -80,7 +82,7 @@ class RebalanceSnapshot:
 
 @dataclass
 class BacktestReport:
-    scorer_config: dict
+    scorer_config: dict[str, Any]
     holding_period: int
     top_n: int
     start: date
@@ -178,7 +180,7 @@ class BacktestEngine:
         self,
         history_store: HistoryStore,
         scorer: Scorer,
-        scorer_config: Mapping,
+        scorer_config: Mapping[str, Any],
         holding_period: int = 5,
         top_n: int = 30,
         benchmark: str = "SPY",
@@ -271,7 +273,7 @@ class BacktestEngine:
             snap, scored_frame = simulated
             report.rebalance_results.append(snap)
             if self.retain_scored_frames and scored_frame is not None:
-                report.scored_frames[pd.Timestamp(day)] = scored_frame
+                report.scored_frames[cast(pd.Timestamp, pd.Timestamp(day))] = scored_frame
             if (idx + 1) % progress_stride == 0 or idx == total_days - 1:
                 logger.info(
                     "backtest progress: %d/%d days (%.0f%%) — latest snap %s scored=%d",
@@ -317,8 +319,9 @@ class BacktestEngine:
         weights = compute_position_weights(len(top_n), self.weighting)
         portfolio_ret_1d = weighted_return(top_n["fwd_1d"].to_numpy(dtype=float), weights)
         portfolio_ret_holding = weighted_return(top_n["fwd_holding"].to_numpy(dtype=float), weights)
+        fwd_1d_col = cast(pd.Series, scored["fwd_1d"])
         universe_median_ret_1d = (
-            float(scored["fwd_1d"].dropna().median()) if scored["fwd_1d"].notna().any() else 0.0
+            float(fwd_1d_col.dropna().median()) if bool(fwd_1d_col.notna().any()) else 0.0
         )
         ic_value = rank_ic(valid_holding["score"].tolist(), valid_holding["fwd_holding"].tolist())
 
@@ -341,7 +344,7 @@ class BacktestEngine:
             portfolio_ret_short = short_ret_1d if not _is_nan(short_ret_1d) else 0.0
 
         return RebalanceSnapshot(
-            date=pd.Timestamp(day),
+            date=cast(pd.Timestamp, pd.Timestamp(day)),
             scored_count=len(valid_holding),
             top_n_tickers=top_n["ticker"].tolist(),
             top_n_scores=[float(x) for x in top_n["score"].tolist()],
@@ -377,16 +380,16 @@ class BacktestEngine:
             return None
 
         snap = self._build_rebalance_snapshot(day, scored, valid_holding)
-        scored_frame = (
-            scored[["ticker", "score", "fwd_1d", "fwd_holding"]].copy()
+        scored_frame: pd.DataFrame | None = (
+            cast(pd.DataFrame, scored[["ticker", "score", "fwd_1d", "fwd_holding"]].copy())
             if self.retain_scored_frames
             else None
         )
         return snap, scored_frame
 
 
-def _is_nan(x) -> bool:
+def _is_nan(x: object) -> bool:
     try:
-        return math.isnan(float(x))
+        return math.isnan(float(cast(Any, x)))
     except (TypeError, ValueError):
         return False

@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
 """Reference LLM scorer implementations for historical_validation.
 
 Available implementations:
@@ -24,6 +25,7 @@ import logging
 import time
 from collections.abc import Mapping
 from datetime import date
+from typing import Any
 
 from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient, get_default_gemini_client
 
@@ -60,7 +62,7 @@ and one-sentence reasoning explaining tractability.
 """
 
 
-def _parse_gemini_response(raw: str) -> dict | None:
+def _parse_gemini_response(raw: str) -> dict[str, Any] | None:
     """Parse JSON from Gemini text. Falls back to greedy `{...}` extraction on preamble."""
     try:
         return json.loads(raw)
@@ -93,7 +95,7 @@ _TRACTABILITY_RESPONSE_SCHEMA = {
 def gemini_flash_tractability_scorer(
     ticker: str,
     asof: date,
-    context: Mapping,
+    context: Mapping[str, Any],
     model_name: str = "gemini-2.5-flash",
     api_key: str | None = None,
     gemini_client: GeminiClient | None = None,
@@ -172,7 +174,7 @@ def gemini_flash_tractability_scorer(
 def rule_and_gemini_hybrid_scorer(
     ticker: str,
     asof: date,
-    context: Mapping,
+    context: Mapping[str, Any],
 ) -> LLMVerdict:
     """Hybrid: rules first, Gemini only when the rule returns 'uncertain'.
 

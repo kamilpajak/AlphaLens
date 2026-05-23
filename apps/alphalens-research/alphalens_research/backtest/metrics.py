@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false, reportMissingImports=false
 """Backtest evaluation metrics — pure numpy/pandas.
 
 Split into two conceptual tiers (per Perplexity's 2025-2026 guidance):
@@ -22,6 +23,7 @@ import itertools
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -165,7 +167,9 @@ def rank_ic_tstat(ic_series: Sequence[float]) -> float:
 def rank_ic_rolling(ic_series: Sequence[float], window: int = 20) -> pd.Series:
     """Rolling-mean IC over a lookback window (default 20 trading days)."""
     s = pd.Series(list(ic_series), dtype=float)
-    return s.rolling(window=window, min_periods=max(1, window // 2)).mean()
+    # rolling().mean() returns Series | DataFrame in pandas-stubs; on a 1-D
+    # Series input it is always Series at runtime.
+    return cast(pd.Series, s.rolling(window=window, min_periods=max(1, window // 2)).mean())
 
 
 def rank_ic_positive_pct(ic_series: Sequence[float], window: int = 20) -> float:
@@ -289,7 +293,7 @@ def per_rebalance_turnover(
     )
 
 
-def max_drawdown(cumulative_returns: Sequence[float]) -> float:
+def max_drawdown(cumulative_returns: Sequence[float] | np.ndarray) -> float:
     """Largest peak-to-trough fractional loss in a cumulative-return series.
 
     Input is cumulative returns (starting typically at 1.0 or 0.0 for log).
@@ -317,7 +321,7 @@ def calmar_ratio(
     arr = arr[~np.isnan(arr)]
     if len(arr) < 2:
         return 0.0
-    cum = np.cumprod(1 + arr)
+    cum = np.cumprod(1.0 + arr)
     mdd = max_drawdown(cum)
     if mdd == 0:
         return 0.0
@@ -372,7 +376,7 @@ def summarise_portfolio(
     arr = arr[~np.isnan(arr)]
     if len(arr) < 2:
         return PortfolioSummary(0.0, 0.0, 0.0, 0.0, 0.0, len(arr))
-    cum = np.cumprod(1 + arr)
+    cum = np.cumprod(1.0 + arr)
     years = len(arr) / periods_per_year
     annual = cum[-1] ** (1 / years) - 1 if years > 0 else 0.0
     hit = (
