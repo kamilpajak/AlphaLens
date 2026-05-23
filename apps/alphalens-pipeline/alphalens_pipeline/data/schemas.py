@@ -45,7 +45,7 @@ CARHART_FACTORS_SCHEMA = pa.DataFrameSchema(
         col: pa.Column(float, nullable=False, checks=_RETURN_RANGE)
         for col in CARHART_FACTOR_COLUMNS
     },
-    index=pa.Index("datetime64[ns]", name=None),
+    index=pa.Index("datetime64[ns]", name=None, unique=True),
     strict=False,
     coerce=False,
     name="carhart_factors",
@@ -55,7 +55,7 @@ PORTFOLIO_RETURNS_SCHEMA = pa.SeriesSchema(
     float,
     nullable=False,
     checks=_RETURN_RANGE,
-    index=pa.Index("datetime64[ns]", name=None),
+    index=pa.Index("datetime64[ns]", name=None, unique=True),
     name=None,
     coerce=False,
 )

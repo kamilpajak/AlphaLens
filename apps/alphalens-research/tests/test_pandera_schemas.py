@@ -102,14 +102,14 @@ class TestCarhartFactorsSchema(unittest.TestCase):
         result = validate_carhart_factors(empty)
         self.assertEqual(len(result), 0)
 
-    def test_duplicate_dates_currently_pass(self):
-        # Pin the current behaviour: schema does NOT assert index uniqueness.
-        # If a future PR adds unique=True to the Index spec, this test fails
-        # and the change becomes intentional rather than silent.
+    def test_duplicate_dates_raise(self):
+        # Schema asserts index uniqueness — duplicate dates indicate a data
+        # plumbing bug (Carhart panel from concat without dedupe). Zen
+        # pre-merge LOW: silent acceptance hides upstream pipeline errors.
         panel = _valid_carhart_panel(n=10)
         panel.index = pd.DatetimeIndex([panel.index[0]] * 10)
-        result = validate_carhart_factors(panel)
-        self.assertEqual(len(result), 10)
+        with self.assertRaises(SchemaError):
+            validate_carhart_factors(panel)
 
 
 class TestPortfolioReturnsSchema(unittest.TestCase):
