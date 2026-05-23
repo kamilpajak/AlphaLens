@@ -9,6 +9,10 @@
 # VPS shadow-deploy comparison test (see ADR 0009 / ADR 0011), so every
 # automated update stacks onto the same long-lived feature branch as the
 # rest of the workspace-split work.
+#
+# TODO: drop the `target-branch:` field (or revert it to `main`) once the
+# django-migration branch lands. Leaving it pinned would aim Dependabot
+# at a deleted branch — PRs would fail to open silently.
 
 version: 2
 updates:
