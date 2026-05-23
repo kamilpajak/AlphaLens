@@ -27,7 +27,7 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
-from alphalens_research.screeners._common import rank_zscore, winsorize
+from alphalens_research.scorers._common import rank_zscore, winsorize
 
 __all__ = [
     "compute_ev",
