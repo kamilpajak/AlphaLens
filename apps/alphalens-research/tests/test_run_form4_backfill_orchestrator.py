@@ -56,7 +56,7 @@ def _mk_record(*, cik: str, accession: str, transaction_date: date) -> Form4Reco
         transaction_price_per_share=Decimal("50"),
         acquired_disposed="A",
         is_amendment=False,
-        footnotes=tuple(),
+        footnotes=(),
     )
 
 
@@ -236,7 +236,7 @@ class TestFetchRecordsForCik(unittest.TestCase):
             ["CIK0000000001-submissions-001.json"],
         )
         self.assertEqual(
-            set(r.accession_number for r in records),
+            {r.accession_number for r in records},
             {"RECENT-1", "OVERFLOW-1"},
         )
 

@@ -39,11 +39,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from alphalens_pipeline.data.alt_data.av_earnings_client import (  # noqa: E402
+from alphalens_pipeline.data.alt_data.av_earnings_client import (
     AVRateLimitError,
     fetch_earnings_batch,
 )
-from alphalens_pipeline.data.universes.sp1500_pit import (  # noqa: E402
+from alphalens_pipeline.data.universes.sp1500_pit import (
     load_sp500_pit_union,
     load_sp1500_pit_union,
 )

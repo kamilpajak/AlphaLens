@@ -90,9 +90,7 @@ def _is_quarterly_instant(entry: _Entry) -> bool:
     if entry.fp in {"Q1", "Q2", "Q3", "Q4"}:
         return True
     # FY 10-K reports a Q4 instant balance even though fp="FY"; accept it.
-    if entry.fp == "FY":
-        return True
-    return False
+    return entry.fp == "FY"
 
 
 def _is_quarterly_duration(entry: _Entry) -> bool:

@@ -51,9 +51,7 @@ def _is_eligible(
     """Cheap pre-checks before computing sigma + Merton."""
     if ticker == benchmark or df is None or len(df) < _MIN_BARS_REQUIRED:
         return False
-    if liab_store is None or share_store is None:
-        return False
-    return True
+    return not (liab_store is None or share_store is None)
 
 
 def _score_one_ticker(

@@ -9,6 +9,8 @@ prolific issuers.
 
 from __future__ import annotations
 
+import functools
+import operator
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,7 +33,7 @@ class TestShardCikList(unittest.TestCase):
     def test_no_cik_lost_or_duplicated(self):
         ciks = [f"{i:04d}" for i in range(1000)]
         shards = shard_cik_list(ciks, num_shards=5)
-        flat = sum(shards, [])
+        flat = functools.reduce(operator.iadd, shards, [])
         self.assertEqual(sorted(flat), sorted(ciks))
         # Each CIK appears exactly once.
         self.assertEqual(len(flat), len(set(flat)))
@@ -59,7 +61,7 @@ class TestShardCikList(unittest.TestCase):
         ciks = ["A", "B"]
         shards = shard_cik_list(ciks, num_shards=5)
         self.assertEqual(len(shards), 5)
-        flat = sum(shards, [])
+        flat = functools.reduce(operator.iadd, shards, [])
         self.assertEqual(sorted(flat), ["A", "B"])
 
     def test_zero_or_negative_shards_rejected(self):

@@ -17,7 +17,7 @@ def _make_stub_gemini_client() -> MagicMock:
     """Build a MagicMock that looks enough like a GeminiClient for the
     scorer to use: it has ``generate_content`` and ``build_config``."""
     client = MagicMock()
-    client.build_config.side_effect = lambda **kw: SimpleNamespace(**kw)
+    client.build_config.side_effect = SimpleNamespace
     return client
 
 

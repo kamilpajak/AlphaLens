@@ -66,6 +66,7 @@ ignore = [
     "PLR0913",  # too many args — research code often has wide signatures
     "PLR0915",  # too many statements — backtest functions are linear sequences
     "PLR0912",  # too many branches — verdict logic
+    "PLR0911",  # too many returns — verdict classifiers + value-mappers are linear early-return ladders (same family as PLR0912 verdict-logic)
     "N803",   # arg should be lowercase (pandas idioms: X, y)
     "N806",   # variable should be lowercase
     "B008",   # function call in default arg — typer.Option uses this
@@ -97,6 +98,12 @@ ignore = [
 ]
 "apps/alphalens-pipeline/alphalens_pipeline/watchdog/lock.py" = [
     "N818",     # WorkerLockBusy is a state signal, not a fatal error — keep without Error suffix
+]
+"apps/alphalens-research/alphalens_research/screeners/**/*.py" = [
+    "N802",     # capital-X design matrix (`_prepare_X`, `_fit_X`) is Murphy/Hastie convention — same exemption is configured on SonarCloud (S1542) per sonar-project.properties
+]
+"apps/alphalens-research/scripts/*.py" = [
+    "E402",     # scripts insert workspace root into sys.path before importing alphalens_* — `noqa: E402` covers most cases but the ones here predate the convention; the sys.path bootstrap is intentional
 ]
 
 [tool.ruff.format]

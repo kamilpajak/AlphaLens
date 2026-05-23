@@ -23,14 +23,14 @@ def _fake_urlopen_with_body(body: str, *, status: int = 200):
     ``urllib.request.urlopen``'s return value."""
 
     class _CM:
-        def __enter__(self_inner):
+        def __enter__(self):
             class _Resp:
-                def read(_self):
+                def read(self):
                     return body.encode("utf-8")
 
             return _Resp()
 
-        def __exit__(self_inner, *exc):
+        def __exit__(self, *exc):
             return False
 
     return MagicMock(return_value=_CM())

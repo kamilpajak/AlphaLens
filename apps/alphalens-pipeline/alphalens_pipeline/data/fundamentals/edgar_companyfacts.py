@@ -293,9 +293,7 @@ class EdgarCompanyfactsROEStore:
 
     # ---- helpers ----
 
-    def _resolve_components(  # noqa: PLR0911 — sequential resolution guards collapse N partial-failure paths into early returns
-        self, ticker: str, asof: date
-    ) -> tuple[dict, float, float, str] | None:
+    def _resolve_components(self, ticker: str, asof: date) -> tuple[dict, float, float, str] | None:
         """Look up CIK + matched pair + matched period end + TTM NI + equity.
 
         Returns ``(gaap, ttm_ni, equity, target_end)`` or ``None`` if any of

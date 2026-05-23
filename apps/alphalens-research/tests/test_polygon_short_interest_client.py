@@ -105,14 +105,15 @@ class TestPolygonShortInterestClient(unittest.TestCase):
             PolygonShortInterestClient,
         )
 
-        paginated_rows = _SAMPLE_AAPL_ROWS + [
+        paginated_rows = [
+            *_SAMPLE_AAPL_ROWS,
             {
                 "settlement_date": "2024-02-29",
                 "ticker": "AAPL",
-                "short_interest": 95_000_000,
-                "avg_daily_volume": 50_000_000,
-                "days_to_cover": 1.90,
-            }
+                "short_interest": 95000000,
+                "avg_daily_volume": 50000000,
+                "days_to_cover": 1.9,
+            },
         ]
         with tempfile.TemporaryDirectory() as tmp:
             polygon_client = _mock_polygon_client(rows=paginated_rows)

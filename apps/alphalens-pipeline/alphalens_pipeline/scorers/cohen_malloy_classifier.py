@@ -18,12 +18,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import date
-from enum import Enum
+from enum import StrEnum
 
 LOOKBACK_YEARS = 3
 
 
-class CohenMalloyLabel(str, Enum):
+class CohenMalloyLabel(StrEnum):
     """Three-way classification; UNCLASSIFIED records are dropped from signal."""
 
     ROUTINE = "routine"

@@ -124,7 +124,7 @@ class TestTickerVariantResolver(unittest.TestCase):
         # If endpoint is tariff-denied, can't conclude the variant is wrong.
         # Resolver should propagate the denial as a special signal.
         resolver = TickerVariantResolver(query_fn=lambda sym: _denied())
-        resolved, result = resolver.resolve("AAPL", reason="acquisition")
+        _resolved, result = resolver.resolve("AAPL", reason="acquisition")
         self.assertEqual(result.error, "tariff_denied")
 
 

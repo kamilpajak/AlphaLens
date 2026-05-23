@@ -199,7 +199,7 @@ def rank_transform_per_asof(
 
     out = pd.Series(np.nan, index=y.index, dtype=float)
     df = pd.DataFrame({"y": y.values, "asof": asof.values}, index=y.index)
-    for asof_val, slice_df in df.groupby("asof", sort=False):
+    for _asof_val, slice_df in df.groupby("asof", sort=False):
         valid = slice_df["y"].dropna()
         if len(valid) < min_slice_size:
             continue

@@ -52,49 +52,49 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 _RESEARCH_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_RESEARCH_ROOT))
 
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
-from dotenv import load_dotenv  # noqa: E402
+import numpy as np
+import pandas as pd
+from dotenv import load_dotenv
 
 load_dotenv(REPO_ROOT / ".env")
 
-from alphalens_pipeline.data.alt_data.pit_universe_loader import (  # noqa: E402
+from alphalens_pipeline.data.alt_data.pit_universe_loader import (
     load_universe_union,
 )
-from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap  # noqa: E402
-from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
-from alphalens_pipeline.data.factors import load_carhart_daily  # noqa: E402
-from alphalens_pipeline.data.store.form4_pit import (  # noqa: E402
+from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories
+from alphalens_pipeline.data.factors import load_carhart_daily
+from alphalens_pipeline.data.store.form4_pit import (
     PARTITION_KEY,
     Form4PITStore,
 )
-from alphalens_pipeline.data.store.history import HistoryStore  # noqa: E402
-from alphalens_pipeline.scorers.cohen_malloy_classifier import (  # noqa: E402
+from alphalens_pipeline.data.store.history import HistoryStore
+from alphalens_pipeline.scorers.cohen_malloy_classifier import (
     CohenMalloyLabel,
     classify_from_transaction_dates,
 )
-from alphalens_pipeline.scorers.opportunistic_form4 import (  # noqa: E402
+from alphalens_pipeline.scorers.opportunistic_form4 import (
     aggregate_opportunistic_signal,
     score_opportunistic_form4,
 )
-from alphalens_research.attribution.cost_model import RealisticCostModel  # noqa: E402
-from alphalens_research.attribution.factor_analysis import run_regression  # noqa: E402
-from alphalens_research.backtest.daily_continuous_returns import (  # noqa: E402
+from alphalens_research.attribution.cost_model import RealisticCostModel
+from alphalens_research.attribution.factor_analysis import run_regression
+from alphalens_research.backtest.daily_continuous_returns import (
     daily_continuous_returns,
 )
-from alphalens_research.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens_research.backtest.metrics import sharpe, turnover_pct  # noqa: E402
-from alphalens_research.screeners.compound_insider_pc import (  # noqa: E402
+from alphalens_research.backtest.engine import BacktestEngine
+from alphalens_research.backtest.metrics import sharpe, turnover_pct
+from alphalens_research.screeners.compound_insider_pc import (
     compound_score_from_components,
 )
-from alphalens_research.screeners.distress_credit.features import (  # noqa: E402
+from alphalens_research.screeners.distress_credit.features import (
     make_production_stores,
 )
-from alphalens_research.screeners.options_implied.features import (  # noqa: E402
+from alphalens_research.screeners.options_implied.features import (
     _compute_equity_controls,
 )
-from alphalens_research.screeners.options_volume.features import build_feature_frame  # noqa: E402
-from alphalens_research.screeners.options_volume.pc_abnormal_volume import (  # noqa: E402
+from alphalens_research.screeners.options_volume.features import build_feature_frame
+from alphalens_research.screeners.options_volume.pc_abnormal_volume import (
     score_pc_abnormal_residual,
 )
 
@@ -521,7 +521,7 @@ class _CompoundInsiderPcScorer:
         pc_features["asof"] = pd.to_datetime(pc_features["asof"]).dt.date
         self._pc_panel = pc_features.set_index(["asof", "ticker"])["score"].sort_index()
 
-    def __call__(self, histories, config=None) -> pd.DataFrame:  # noqa: PLR0911
+    def __call__(self, histories, config=None) -> pd.DataFrame:
         # Eight defensive early-returns: missing asof, empty form4, panel
         # miss, empty pc_features, empty pc_df, empty pc_series, empty
         # compound, normal path. Refactoring to a single return obscures

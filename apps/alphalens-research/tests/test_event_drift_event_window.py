@@ -304,7 +304,7 @@ class TestWindowActiveQuery(unittest.TestCase):
             accruals_ratio=-0.01,
         )
         active = self._fn([w1, w2], date(2024, 9, 1))
-        self.assertEqual(set(w.ticker for w in active), {"AAPL", "MSFT"})
+        self.assertEqual({w.ticker for w in active}, {"AAPL", "MSFT"})
 
     def test_empty_window_list_returns_empty(self):
         self.assertEqual(self._fn([], date(2024, 8, 5)), [])

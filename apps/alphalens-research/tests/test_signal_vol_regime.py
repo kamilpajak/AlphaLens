@@ -170,9 +170,7 @@ class TestClassifyCyclicality(unittest.TestCase):
         s = _make_summary(0.0, 0.0, 0.001, 0.002, 0.003)
         v = classify_cyclicality(s)
         cls = v.classification
-        self.assertTrue(
-            cls.startswith("EXTREME counter-cyclical") or cls.startswith("STRONG counter-cyclical")
-        )
+        self.assertTrue(cls.startswith(("EXTREME counter-cyclical", "STRONG counter-cyclical")))
         self.assertFalse(v.proceed)
         # No division-by-zero crash; R_mean either +inf or specially flagged
         self.assertTrue(math.isinf(v.r_mean) or v.r_mean > 1e6)

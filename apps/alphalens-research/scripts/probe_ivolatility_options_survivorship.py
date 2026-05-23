@@ -82,7 +82,7 @@ def _sample_stratified(
     mask = (df["delisted_date"] >= WINDOW_START) & (df["delisted_date"] <= WINDOW_END)
     pool = df.loc[mask].copy()
 
-    rng = np.random.default_rng(random_state)
+    np.random.default_rng(random_state)
     samples = []
 
     acquisitions = pool[pool["reason"] == "acquisition"]
@@ -135,7 +135,6 @@ def _query_endpoint(
         }
 
     url = f"{BASE_URL}/equities/eod/{endpoint}"
-    last_err = None
     for attempt in range(HTTP_MAX_RETRIES):
         try:
             resp = requests.get(url, params=params, timeout=HTTP_TIMEOUT)
@@ -166,7 +165,6 @@ def _query_endpoint(
 
             if resp.status_code in (429, 500, 502, 503, 504):
                 time.sleep((HTTP_BACKOFF_BASE**attempt) + float(np.random.uniform(0, 1)))
-                last_err = f"HTTP {resp.status_code}"
                 continue
 
             return {
@@ -178,8 +176,7 @@ def _query_endpoint(
                 if isinstance(body, dict)
                 else f"HTTP {resp.status_code}",
             }
-        except requests.RequestException as e:
-            last_err = str(e)
+        except requests.RequestException:
             time.sleep((HTTP_BACKOFF_BASE**attempt) + float(np.random.uniform(0, 1)))
 
     return {

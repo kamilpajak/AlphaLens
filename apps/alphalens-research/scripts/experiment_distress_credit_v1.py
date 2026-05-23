@@ -24,25 +24,25 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
-from dotenv import load_dotenv  # noqa: E402
+import numpy as np
+import pandas as pd
+from dotenv import load_dotenv
 
 load_dotenv(REPO_ROOT / ".env")
 
-from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
-from alphalens_pipeline.data.factors import load_carhart_daily  # noqa: E402
-from alphalens_pipeline.data.macro.fred_client import FREDClient  # noqa: E402
-from alphalens_pipeline.data.store.history import HistoryStore  # noqa: E402
-from alphalens_pipeline.data.universes.sp1500_pit import (  # noqa: E402
+from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories
+from alphalens_pipeline.data.factors import load_carhart_daily
+from alphalens_pipeline.data.macro.fred_client import FREDClient
+from alphalens_pipeline.data.store.history import HistoryStore
+from alphalens_pipeline.data.universes.sp1500_pit import (
     load_sp400_pit_for_date,
     load_sp500_pit_for_date,
     load_sp600_pit_for_date,
 )
-from alphalens_research.attribution.cost_model import RealisticCostModel  # noqa: E402
-from alphalens_research.attribution.factor_analysis import run_regression  # noqa: E402
-from alphalens_research.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens_research.backtest.metrics import sharpe, turnover_pct  # noqa: E402
+from alphalens_research.attribution.cost_model import RealisticCostModel
+from alphalens_research.attribution.factor_analysis import run_regression
+from alphalens_research.backtest.engine import BacktestEngine
+from alphalens_research.backtest.metrics import sharpe, turnover_pct
 from alphalens_research.screeners.distress_credit.features import (
     make_production_stores,
 )

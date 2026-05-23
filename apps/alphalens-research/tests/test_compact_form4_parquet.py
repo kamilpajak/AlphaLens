@@ -43,7 +43,7 @@ def _mk_record(*, transaction_date: date, accession: str) -> Form4Record:
         transaction_price_per_share=Decimal("50"),
         acquired_disposed="A",
         is_amendment=False,
-        footnotes=tuple(),
+        footnotes=(),
     )
 
 
