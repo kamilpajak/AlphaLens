@@ -27,6 +27,10 @@ dependencies = [
     "json-repair>=0.59.10",
     # Options data vendor (consumed by thematic options-volume signal)
     "ivolatility>=1.9.3",
+    # Runtime DataFrame schema validation at pipeline boundaries.
+    # Shipped as a regular dep (not dev) because schemas live in pipeline.data
+    # and are imported by attribution/backtest entry points at runtime.
+    "pandera>=0.26.0",
 ]
 
 [project.scripts]

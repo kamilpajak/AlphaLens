@@ -167,11 +167,17 @@ def load_carhart_daily(
     """Return Carhart-4F-ready merged DataFrame: Mkt-RF, SMB, HML, Mom, RF.
 
     Inner-joins FF5 (dropping RMW/CMA since Carhart omits them) with UMD on date.
+    Output is validated against ``CARHART_FACTORS_SCHEMA`` — contract violations
+    (missing column, NaN, non-float dtype, non-DatetimeIndex, out-of-range value)
+    surface as ``pandera.errors.SchemaError`` at the boundary instead of
+    propagating into HAC regression.
     """
+    from alphalens_pipeline.data.schemas import validate_carhart_factors
+
     ff5 = load_ff5_daily(path=ff5_path, start=start, end=end)
     umd = load_umd_daily(path=umd_path, start=start, end=end)
     merged = ff5[["Mkt-RF", "SMB", "HML", "RF"]].join(umd, how="inner")
-    return merged
+    return validate_carhart_factors(merged)
 
 
 DEFAULT_Q4_DIR = DEFAULT_FACTORS_DIR / "q4"
