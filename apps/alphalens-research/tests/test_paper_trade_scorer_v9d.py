@@ -9,6 +9,7 @@ on injected synthetic data, (c) graceful empty-features fallback in
 
 from __future__ import annotations
 
+import math
 import unittest
 from datetime import date, timedelta
 
@@ -70,7 +71,7 @@ class MakeSmdLoaderTests(unittest.TestCase):
 class ComputeRealizedReturnTests(unittest.TestCase):
     def test_empty_holdings_returns_nan(self):
         ret, n = compute_realized_return([], date(2026, 5, 4))
-        self.assertTrue(ret != ret)  # NaN
+        self.assertTrue(math.isnan(ret))
         self.assertEqual(n, 0)
 
     def test_uses_injected_smd_loader(self):

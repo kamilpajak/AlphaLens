@@ -143,7 +143,7 @@ class TestEffectiveRebalanceStrideHardLock(unittest.TestCase):
         # The script will proceed past the guard. It may still fail later
         # (data missing on CI, e.g.) — that's not what this test asserts.
         # We only check: the guard does NOT trip on the locked value.
-        rc, stderr = self._run_main_with_argv(
+        _rc, stderr = self._run_main_with_argv(
             [
                 "--phase-offset",
                 "0",
@@ -164,7 +164,7 @@ class TestEffectiveRebalanceStrideHardLock(unittest.TestCase):
         self.assertNotIn("PRE-REG VIOLATION", stderr)
 
     def test_explicit_stride_21_passes_guard(self):
-        rc, stderr = self._run_main_with_argv(
+        _rc, stderr = self._run_main_with_argv(
             [
                 "--rebalance-stride",
                 "21",

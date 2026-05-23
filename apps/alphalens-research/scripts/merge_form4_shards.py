@@ -52,7 +52,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.compact_form4_parquet import compact_root  # noqa: E402
+from scripts.compact_form4_parquet import compact_root
 
 logger = logging.getLogger(__name__)
 

@@ -253,7 +253,7 @@ class TestBatchThrottling(unittest.TestCase):
     def test_batch_throttles_between_uncached_fetches(self):
         from alphalens_pipeline.data.alt_data.av_earnings_client import fetch_earnings_batch
 
-        fetcher = MagicMock(side_effect=lambda t: _good_payload(t))
+        fetcher = MagicMock(side_effect=_good_payload)
         sleep_fn = MagicMock()
 
         with tempfile.TemporaryDirectory() as td:
@@ -275,7 +275,7 @@ class TestBatchThrottling(unittest.TestCase):
     def test_batch_resumable_skips_cached(self):
         from alphalens_pipeline.data.alt_data.av_earnings_client import fetch_earnings_batch
 
-        fetcher = MagicMock(side_effect=lambda t: _good_payload(t))
+        fetcher = MagicMock(side_effect=_good_payload)
         sleep_fn = MagicMock()
 
         with tempfile.TemporaryDirectory() as td:

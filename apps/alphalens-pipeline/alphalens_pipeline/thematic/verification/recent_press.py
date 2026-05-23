@@ -210,10 +210,7 @@ def has_theme_in_press_frame(
         .apply(lambda x: " ".join(str(k) for k in x) if _is_listlike(x) else "")
         .str.lower()
     )
-    for kw in kw_lower:
-        if haystack.str.contains(kw, regex=False).any():
-            return True
-    return False
+    return any(haystack.str.contains(kw, regex=False).any() for kw in kw_lower)
 
 
 def has_theme_in_recent_press(
@@ -262,10 +259,7 @@ def has_theme_in_recent_press(
         .apply(lambda x: " ".join(str(k) for k in x) if _is_listlike(x) else "")
         .str.lower()
     )
-    for kw in kw_lower:
-        if haystack.str.contains(kw, regex=False).any():
-            return True
-    return False
+    return any(haystack.str.contains(kw, regex=False).any() for kw in kw_lower)
 
 
 __all__ = [

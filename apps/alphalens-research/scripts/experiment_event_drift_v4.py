@@ -233,7 +233,7 @@ def _run_breadth_audit(args: argparse.Namespace) -> int:
         print(f"Truncated to first {args.max_tickers} tickers for fast audit", flush=True)
 
     t0 = time.time()
-    (cik_map, history, sue_store, accruals_store, announce_provider, calendar, sector_filter) = (
+    (_cik_map, history, sue_store, accruals_store, announce_provider, calendar, sector_filter) = (
         _setup_stores(universe_with_history)
     )
     print(f"Stores loaded in {time.time() - t0:.1f}s", flush=True)
@@ -475,7 +475,7 @@ def _run_smoke(args: argparse.Namespace) -> int:
     if args.max_tickers:
         universe_with_history = universe_with_history[: args.max_tickers]
 
-    (cik_map, history, sue_store, accruals_store, announce_provider, calendar, sector_filter) = (
+    (_cik_map, history, sue_store, accruals_store, announce_provider, calendar, sector_filter) = (
         _setup_stores(universe_with_history)
     )
 
@@ -494,8 +494,8 @@ def _run_smoke(args: argparse.Namespace) -> int:
     df = score_pead_quality(
         asof=asof,
         universe=candidate_universe,
-        sue_lookup=lambda t, pe: sue_store.sue(t, pe),
-        accruals_lookup=lambda t, pe: accruals_store.accruals_ratio(t, pe),
+        sue_lookup=sue_store.sue,
+        accruals_lookup=accruals_store.accruals_ratio,
         announcement_lookup=ann_lookup,
         day1_return_lookup=day1_lookup,
         sector_filter=sector_filter,

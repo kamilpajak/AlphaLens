@@ -16,6 +16,7 @@ recomputed IVP across N test asofs must be >= 0.95.
 
 from __future__ import annotations
 
+import itertools
 import math
 import unittest
 from datetime import date
@@ -155,7 +156,7 @@ class SelectTestAsofsTests(unittest.TestCase):
 
     def test_dates_strictly_increasing(self):
         asofs = select_test_asofs(date(2023, 1, 15), date(2023, 12, 31), stride_days=30)
-        for prev, curr in zip(asofs, asofs[1:], strict=False):
+        for prev, curr in itertools.pairwise(asofs):
             self.assertLess(prev, curr)
 
     def test_no_asof_exceeds_end(self):

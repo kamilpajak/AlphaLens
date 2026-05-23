@@ -32,18 +32,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-import pandas as pd  # noqa: E402
-from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
-from alphalens_pipeline.data.factors import load_carhart_daily  # noqa: E402
-from alphalens_pipeline.data.universes.sp1500_pit import load_sp500_pit_union  # noqa: E402
-from alphalens_research.attribution.factor_analysis import (  # noqa: E402
+import pandas as pd
+from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories
+from alphalens_pipeline.data.factors import load_carhart_daily
+from alphalens_pipeline.data.universes.sp1500_pit import load_sp500_pit_union
+from alphalens_research.attribution.factor_analysis import (
     fit_carhart_4f_invested_only,
 )
-from alphalens_research.screeners.event_drift.av_earnings_ingestion import (  # noqa: E402
+from alphalens_research.screeners.event_drift.av_earnings_ingestion import (
     AVEarningsAnnouncement,
     load_av_earnings,
 )
-from alphalens_research.screeners.event_drift.pead_pss_scorer import (  # noqa: E402
+from alphalens_research.screeners.event_drift.pead_pss_scorer import (
     build_daily_weights,
     portfolio_returns_from_weights,
 )

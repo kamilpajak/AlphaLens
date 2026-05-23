@@ -69,7 +69,7 @@ def _mk_record(
         ),
         acquired_disposed="A",
         is_amendment=is_amendment,
-        footnotes=tuple(),
+        footnotes=(),
     )
 
 

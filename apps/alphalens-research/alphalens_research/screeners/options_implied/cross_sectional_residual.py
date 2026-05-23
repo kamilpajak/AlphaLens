@@ -42,7 +42,7 @@ def score_cross_sectional_residual(features: pd.DataFrame) -> pd.Series:
     required = ("ivp30", *EQUITY_CONTROLS_FOR_RESIDUAL)
     valid_mask = features[list(required)].notna().all(axis=1)
 
-    for asof, group in features.loc[valid_mask].groupby("asof", sort=False):
+    for _asof, group in features.loc[valid_mask].groupby("asof", sort=False):
         if len(group) < _MIN_ROWS_PER_ASOF:
             continue
         y = (-group["ivp30"]).to_numpy(dtype=float)

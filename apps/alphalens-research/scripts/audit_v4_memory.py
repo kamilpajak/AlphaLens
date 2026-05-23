@@ -82,9 +82,15 @@ def run_for_n(n: int, start: date, end: date, abort_rss_mb: float | None) -> dic
     snapshots = [snap("00_universe_loaded", abort_rss_mb)]
 
     t0 = time.time()
-    (cik_map, history, sue_store, accruals_store, announce_provider, calendar, sector_filter) = (
-        _setup_stores(universe_with_history)
-    )
+    (
+        _cik_map,
+        _history,
+        sue_store,
+        accruals_store,
+        announce_provider,
+        _calendar,
+        _sector_filter,
+    ) = _setup_stores(universe_with_history)
     snapshots.append(snap(f"01_setup_stores_{time.time() - t0:.1f}s", abort_rss_mb))
 
     t1 = time.time()

@@ -215,7 +215,6 @@ def summarize(results: list[TickerProbeResult]) -> dict:
     # T4 chain-only requires per-contract calls (still infeasible at scale per zen).
     strict_retained = tier_counts["T1"] + tier_counts["T2"]
     reachable_retained = strict_retained + tier_counts["T3"]
-    extractable_retained = reachable_retained  # legacy compat
 
     by_reason: dict[str, dict] = {}
     for reason in ("acquisition", "unknown"):
@@ -393,13 +392,11 @@ def _probe_ticker_live(query_fns: dict, row: pd.Series) -> TickerProbeResult:
     from_date = (delisted_date - timedelta(days=EQUITY_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     to_date = (delisted_date + timedelta(days=5)).strftime("%Y-%m-%d")
     short_from_date = (delisted_date - timedelta(days=30)).strftime("%Y-%m-%d")
-    smd_target_date = (delisted_date - timedelta(days=30)).strftime("%Y-%m-%d")
 
     # PROBE V4: stock-market-data is PRIMARY signal — single call returns 100+
     # pre-computed features per ticker. Use ivx30 populated as canonical hit.
     # v4-fix: cascade through earlier dates because smd coverage drops pre-
     # delisting for low-liquidity tickers (HGT 2018-07-15 NaN, 2016-07-15 75.95).
-    smd_offset_used = None
     smd_result = EndpointResult(
         records_found=0, returned_symbols=[], error=None, smd_populated=False
     )
@@ -427,7 +424,6 @@ def _probe_ticker_live(query_fns: dict, row: pd.Series) -> TickerProbeResult:
         if candidate_resolved and candidate_result.smd_populated:
             resolved = candidate_resolved
             smd_result = candidate_result
-            smd_offset_used = offset
             break
         # Keep last attempted result for diagnostic
         smd_result = candidate_result
@@ -468,13 +464,11 @@ def _probe_ticker_live(query_fns: dict, row: pd.Series) -> TickerProbeResult:
     # across consecutive days). Always uses ORIGINAL ticker — option-series-on-date
     # preserves historical ticker convention.
     chain_result = EndpointResult(records_found=0, returned_symbols=[], error=None)
-    chain_offset_used = None
     for offset in CHAIN_DATE_OFFSETS:
         d = (delisted_date - timedelta(days=offset)).strftime("%Y-%m-%d")
         r = _safe_call(query_fns["option-series-on-date"], symbol=ticker, date=d)
         if r.records_found > 0:
             chain_result = r
-            chain_offset_used = offset
             break
         if r.error == "tariff_denied":
             chain_result = r
@@ -521,7 +515,11 @@ def _sample_stratified(
                 "Run scripts/build_optionable_universe.py first."
             )
         df = pd.read_parquet(OPTIONABLE_PARQUET)
-        df = df[df["optionable"] == True].copy()
+        # `== True` filters out pd.NA rows (forced-acquisition placeholders below
+        # write NA into this column); bare truth-test on `optionable` would raise
+        # on NA boolean indexing. noqa matches the convention used in sibling
+        # scripts (pull_v7_smd_universe.py, check_v7_pull_status.py).
+        df = df[df["optionable"] == True].copy()  # noqa: E712
         logger.info("Optionable pool size: %d", len(df))
     else:
         df = pd.read_parquet(SURVIVORSHIP_PARQUET)

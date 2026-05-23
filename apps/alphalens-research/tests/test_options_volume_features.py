@@ -121,9 +121,12 @@ class TestBuildFeatureFrame(unittest.TestCase):
         h1 = _make_smd_history(ticker="AAPL", n_days=200)
         h2 = _make_smd_history(ticker="MSFT", n_days=200)
         loader_map = {"AAPL": h1, "MSFT": h2}
-        loader = lambda t: (
-            loader_map.get(t, pd.DataFrame()).copy() if loader_map.get(t) is not None else None
-        )
+
+        def loader(t):
+            return (
+                loader_map.get(t, pd.DataFrame()).copy() if loader_map.get(t) is not None else None
+            )
+
         df = build_feature_frame(
             smd_loader=loader,
             universe=["AAPL", "MSFT"],

@@ -23,7 +23,7 @@ def percentile_rank(value: float, peers: list[float]) -> float:
     """
     if not peers:
         return 50.0
-    cohort = peers if value in peers else peers + [value]
+    cohort = peers if value in peers else [*peers, value]
     le_count = sum(1 for v in cohort if v <= value)
     return 100.0 * le_count / len(cohort)
 

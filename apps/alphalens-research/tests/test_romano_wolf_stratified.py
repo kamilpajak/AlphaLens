@@ -75,7 +75,7 @@ class TestStratifiedRomanoWolf(unittest.TestCase):
         n_strats = 4
         # Strategy 0 has clear positive mean (αt ~10), others null
         strata = []
-        for k in range(n_strata):
+        for _k in range(n_strata):
             arr = rng.normal(0.0, 0.005, size=(n_obs_per, n_strats))
             arr[:, 0] += 0.005  # large signal in strategy 0
             strata.append(arr)

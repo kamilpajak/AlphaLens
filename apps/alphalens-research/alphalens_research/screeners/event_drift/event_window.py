@@ -100,7 +100,7 @@ def apply_single_active_window(windows: Sequence[EventWindow]) -> list[EventWind
         by_ticker.setdefault(w.ticker, []).append(w)
 
     kept: list[EventWindow] = []
-    for ticker, sorted_windows in by_ticker.items():
+    for _ticker, sorted_windows in by_ticker.items():
         sorted_windows.sort(key=lambda w: w.market_day)
         last_exit: date | None = None
         for w in sorted_windows:

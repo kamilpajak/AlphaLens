@@ -240,19 +240,19 @@ class TestScoreEvFcffYieldIntegration(unittest.TestCase):
 
     def _good_snap(self, **overrides):
         """Reasonable defaults for a profitable mid-cap."""
-        base = dict(
-            ocf_ttm=200_000_000,
-            capex_ttm=50_000_000,
-            interest_expense_ttm=10_000_000,
-            tax_rate=0.21,
-            revenue_ttm=1_500_000_000,
-            fcf_margin_5y_median=0.07,
-            price=50.0,
-            shares_outstanding=80_000_000,  # mcap = 4B
-            long_term_debt=300_000_000,
-            short_term_debt=100_000_000,
-            cash_and_equivalents=200_000_000,  # net debt = 200M
-        )
+        base = {
+            "ocf_ttm": 200_000_000,
+            "capex_ttm": 50_000_000,
+            "interest_expense_ttm": 10_000_000,
+            "tax_rate": 0.21,
+            "revenue_ttm": 1_500_000_000,
+            "fcf_margin_5y_median": 0.07,
+            "price": 50.0,
+            "shares_outstanding": 80_000_000,  # mcap = 4B
+            "long_term_debt": 300_000_000,
+            "short_term_debt": 100_000_000,
+            "cash_and_equivalents": 200_000_000,  # net debt = 200M
+        }
         base.update(overrides)
         return base
 

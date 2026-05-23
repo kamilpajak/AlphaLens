@@ -11,6 +11,7 @@ script's default ``--out`` happens to be.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -157,10 +158,7 @@ def run_smoke(
     finally:
         # Always clean up the ephemeral output, even on timeout or
         # subprocess failure. /tmp should never accumulate
-        # preaudit_smoke_* leftovers from this code path.
-        try:
+        # preaudit_smoke_* leftovers from this code path. Permissions on
+        # /tmp aren't ours — silently ignore OSError.
+        with contextlib.suppress(OSError):
             ephemeral_out.unlink(missing_ok=True)
-        except OSError:
-            # Permissions on /tmp aren't ours — log via detail later if
-            # we ever care; for now, silently ignore.
-            pass

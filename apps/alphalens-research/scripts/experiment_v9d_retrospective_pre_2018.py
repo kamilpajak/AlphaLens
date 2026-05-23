@@ -28,6 +28,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import itertools
+
 import numpy as np
 import pandas as pd
 from alphalens_pipeline.data.alt_data.ivolatility_smd_cache import load_cached_smd
@@ -201,7 +203,7 @@ def _turnover(holdings_history: list[set]) -> float:
     total = 0.0
     # Pairs are (h[0], h[1]), (h[1], h[2]), ...; second list is len-1 shorter
     # by construction so ``strict=True`` would always raise.
-    for prev, curr in zip(holdings_history, holdings_history[1:]):
+    for prev, curr in itertools.pairwise(holdings_history):
         if not curr:
             continue
         new_names = curr - prev
@@ -370,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     logger.info("Delisting events for terminal-return patch: %d", len(delisting_events))
 
-    long_rets, asof_idx, decile_sizes, holdings_history = _portfolio_returns(
+    long_rets, asof_idx, _decile_sizes, holdings_history = _portfolio_returns(
         features,
         scores,
         decile_pct=args.decile_pct,

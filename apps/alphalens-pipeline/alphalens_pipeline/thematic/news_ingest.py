@@ -118,8 +118,8 @@ def _cluster_same_day_lexical(df: pd.DataFrame) -> pd.DataFrame:
     df["_source_rank"] = df["source"].map(_SOURCE_PRIORITY).fillna(99).astype(int)
 
     out_rows: list[dict] = []
-    for _, day_group in df.groupby("_date", sort=False):
-        day_group = day_group.reset_index(drop=True)
+    for _, raw_day_group in df.groupby("_date", sort=False):
+        day_group = raw_day_group.reset_index(drop=True)
         n = len(day_group)
         cluster_id = [-1] * n
         next_cid = 0

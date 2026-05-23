@@ -134,7 +134,7 @@ def _norm(s: str | None) -> str:
     return (s or "").lower()
 
 
-def classify_theme(  # noqa: PLR0911 — SIC-code dispatch table; one return per theme bucket is clearer than nested-if
+def classify_theme(
     sic_code: str | None,
     sic_desc: str | None,
     name: str | None,

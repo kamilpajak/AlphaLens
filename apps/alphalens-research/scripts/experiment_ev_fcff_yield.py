@@ -29,21 +29,21 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
-from alphalens_pipeline.data.alt_data.russell_universe import load_iwm_current  # noqa: E402
-from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
-from alphalens_pipeline.data.factors import load_carhart_daily  # noqa: E402
-from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore  # noqa: E402
-from alphalens_pipeline.data.store.history import HistoryStore  # noqa: E402
-from alphalens_research.attribution.cost_model import RealisticCostModel  # noqa: E402
-from alphalens_research.attribution.factor_analysis import run_regression  # noqa: E402
-from alphalens_research.backtest.daily_continuous_returns import (  # noqa: E402
+import numpy as np
+import pandas as pd
+from alphalens_pipeline.data.alt_data.russell_universe import load_iwm_current
+from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories
+from alphalens_pipeline.data.factors import load_carhart_daily
+from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
+from alphalens_pipeline.data.store.history import HistoryStore
+from alphalens_research.attribution.cost_model import RealisticCostModel
+from alphalens_research.attribution.factor_analysis import run_regression
+from alphalens_research.backtest.daily_continuous_returns import (
     daily_continuous_returns,
 )
-from alphalens_research.backtest.engine import BacktestEngine  # noqa: E402
-from alphalens_research.backtest.metrics import sharpe, turnover_pct  # noqa: E402
-from alphalens_research.screeners.ev_fcff_yield.adapter import EvFcffYieldScorer  # noqa: E402
+from alphalens_research.backtest.engine import BacktestEngine
+from alphalens_research.backtest.metrics import sharpe, turnover_pct
+from alphalens_research.screeners.ev_fcff_yield.adapter import EvFcffYieldScorer
 
 logger = logging.getLogger(__name__)
 

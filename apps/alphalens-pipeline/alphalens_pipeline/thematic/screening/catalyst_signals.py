@@ -189,10 +189,7 @@ def is_deep_drawdown_reversal(row: dict) -> bool:
         return False
 
     vol_z = _safe_float(row.get("technical_volume_zscore"))
-    if vol_z is None or vol_z < _VOLUME_SURGE_ZSCORE:
-        return False
-
-    return True
+    return not (vol_z is None or vol_z < _VOLUME_SURGE_ZSCORE)
 
 
 __all__ = [

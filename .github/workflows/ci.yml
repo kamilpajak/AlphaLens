@@ -46,12 +46,21 @@ jobs:
       - name: Install workspace
         run: uv sync --group dev --frozen
 
+      - name: Lockfile freshness (uv.lock matches pyproject)
+        # Frozen-deps drift gate: if anyone edits pyproject.toml without
+        # regenerating uv.lock, this fails. `uv lock --check` is the 2026
+        # canonical way to assert "the lockfile is up to date" without
+        # actually writing to disk.
+        run: uv lock --check
+
       - name: Ruff lint (pipeline + research)
-        # Research-lab posture: surface findings without blocking. Strict mode
-        # later when paradigm stabilizes (would target IS Carhart t > 3.0
-        # before re-enabling 0-warning bar).
+        # Blocking. Pre-existing warnings cleaned up in the foundation-
+        # cleanup PR (chore/ci-foundation-cleanup); future violations must
+        # be fixed in the PR that introduces them. Per-file-ignores +
+        # project-wide `ignore = [...]` in pyproject.toml encode the
+        # research-code posture (PLR0911 verdict ladders, capital-X math
+        # notation in screeners, Polish-language docstrings, etc).
         run: uv run ruff check apps/alphalens-pipeline/ apps/alphalens-research/
-        continue-on-error: true
 
       - name: Ruff format check (pipeline + research)
         run: uv run ruff format --check apps/alphalens-pipeline/ apps/alphalens-research/

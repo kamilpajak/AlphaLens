@@ -312,7 +312,7 @@ class TestTier1LexicalClustering(unittest.TestCase):
             "Federal Reserve interest rates emergency cut breaking",
         )
         # Push the singles via Polygon so all four are in the same source frame
-        polygon_df = _frame(single_rows + [breaking_root])
+        polygon_df = _frame([*single_rows, breaking_root])
         rss_df = _frame([breaking_echo])
         empty_df = news_ingest.empty_news_frame()
 

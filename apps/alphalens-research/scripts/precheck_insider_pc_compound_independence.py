@@ -25,18 +25,18 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from alphalens_pipeline.data.alt_data.pit_universe_loader import load_universe_union  # noqa: E402
-from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap  # noqa: E402
-from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories  # noqa: E402
-from alphalens_pipeline.data.store.form4_pit import Form4PITStore  # noqa: E402
-from alphalens_research.attribution.signal_independence import (  # noqa: E402
+from alphalens_pipeline.data.alt_data.pit_universe_loader import load_universe_union
+from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
+from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_histories
+from alphalens_pipeline.data.store.form4_pit import Form4PITStore
+from alphalens_research.attribution.signal_independence import (
     classify_independence,
     pairwise_rank_ic_correlation,
 )
 from alphalens_research.screeners.distress_credit.features import (
     make_production_stores,
 )
-from alphalens_research.screeners.options_volume.features import build_feature_frame  # noqa: E402
+from alphalens_research.screeners.options_volume.features import build_feature_frame
 from alphalens_research.screeners.options_volume.pc_abnormal_volume import (
     score_pc_abnormal_residual,
 )

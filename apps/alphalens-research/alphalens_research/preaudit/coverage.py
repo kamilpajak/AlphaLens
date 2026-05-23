@@ -202,10 +202,10 @@ def _peek_dates(parquet_path: Path, date_col: str) -> pd.Series | None:
     log = logging.getLogger(__name__)
 
     try:
-        from pyarrow.lib import ArrowInvalid as arrow_invalid
+        from pyarrow.lib import ArrowInvalid
     except ImportError:  # pragma: no cover - pyarrow is a hard repo dep
-        arrow_invalid = Exception  # type: ignore[assignment,misc]
-    schema_mismatch = (KeyError, ValueError, arrow_invalid)
+        ArrowInvalid = Exception  # type: ignore[assignment,misc]
+    schema_mismatch = (KeyError, ValueError, ArrowInvalid)
 
     try:
         df = pd.read_parquet(parquet_path, columns=[date_col])
