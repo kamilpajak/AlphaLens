@@ -542,6 +542,32 @@ test.describe('smoke — mobile (390 + 360 viewports)', () => {
 	}
 });
 
+test.describe('experiments — evidence drawer files reachable', () => {
+	// Plugs the gap that hid PR #218: the link-spider tests above only crawl
+	// `<a href="/...">` references; the Evidence drawer is a `<button>` with
+	// a JS handler that fetches `/docs/research/{file}` on click. Without
+	// this test the sync script could silently emit "0/15 synced" (which
+	// is exactly what the monorepo refactor in commit ca378a5 produced for
+	// two days) and CI would pass. Gemini 3 Pro post-merge review on
+	// commit 01ae4fb flagged the gap.
+	test('every evidence button targets a reachable /docs/research file', async ({ page, request }) => {
+		await page.goto('/experiments');
+		// Buttons are labelled ``open evidence: <path>`` — extract the path
+		// from the aria-label and verify the corresponding static asset
+		// returns 200 over real HTTP (not the api-mock — these files are
+		// served by SvelteKit from /static/).
+		const labels = await page.locator('button[aria-label^="open evidence: "]').evaluateAll(
+			(nodes) =>
+				nodes.map((n) => (n.getAttribute('aria-label') ?? '').replace('open evidence: ', ''))
+		);
+		expect(labels.length, 'experiments page must render at least one evidence button').toBeGreaterThan(0);
+		for (const file of labels) {
+			const res = await request.get(`/docs/research/${file}`);
+			expect(res.status(), `evidence file ${file} should return 200`).toBe(200);
+		}
+	});
+});
+
 test.describe('smoke — api fixture integrity', () => {
 	test('every fixture day listed in days.json has a per-day file', () => {
 		// Sanity check the mock fixture set itself — if a day is missing

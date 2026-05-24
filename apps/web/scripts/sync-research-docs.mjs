@@ -11,9 +11,11 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Keep this list in sync with the `evidence` field in
-// src/routes/experiments/+page.svelte. A test in tests/smoke.test.ts asserts
-// every referenced file is reachable at runtime, so a missing entry surfaces
-// loudly in CI rather than silently as a 404 in the drawer.
+// src/routes/experiments/+page.svelte. A Playwright test in
+// tests/smoke.test.ts (``evidence drawer files are reachable``) iterates the
+// rendered evidence buttons and asserts each /docs/research/{file} returns
+// 200 — a missing entry there surfaces loudly in CI rather than as a 404 in
+// the drawer at runtime.
 const REFERENCED = [
 	'paradigm_failures_postmortem.md',
 	'layer2b_audit_final.md',
@@ -63,3 +65,12 @@ for (const f of REFERENCED) {
 	}
 }
 console.log(`[sync-research-docs] synced ${copied}/${REFERENCED.length} files${missing ? ` (${missing} missing)` : ''}`);
+
+// Fail loud on missing files. Without this the build hook can silently emit
+// "0/15 synced" and leave the Evidence drawer to surface every entry as a
+// runtime 404 — exactly what the 2026-05-22 monorepo refactor did to this
+// script for two days (PR #218 fixed the underlying path-depth bug;
+// Gemini 3 Pro review on the merged commit flagged this guard as missing).
+if (missing > 0) {
+	process.exit(1);
+}
