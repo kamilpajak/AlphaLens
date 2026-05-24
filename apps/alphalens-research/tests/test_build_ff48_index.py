@@ -77,6 +77,26 @@ class TestParseSiccodes48(unittest.TestCase):
         self.assertEqual(industries, [])
         self.assertEqual(ranges, [])
 
+    def test_parses_when_leading_whitespace_is_stripped(self) -> None:
+        # Defensive guard against a hypothetical upstream formatting
+        # change. Both regexes use ``^\s*`` so range vs header dispatch
+        # falls back to digit-count discrimination (``\d{1,2}\s+...``
+        # headers cannot collide with ``\d{4}-\d{4}`` ranges because the
+        # dash terminates the leading token). Verified with PR #216 zen
+        # review.
+        stripped = (
+            "1 Agric  Agriculture\n"
+            "0100-0199 Agricultural production - crops\n"
+            "34 BusSv  Business Services\n"
+            "7380-7389 Misc business services\n"
+        )
+        industries, ranges = build_ff48_index._parse_siccodes48(stripped)
+        self.assertEqual([i["id"] for i in industries], [1, 34])
+        self.assertEqual(len(ranges), 2)
+        self.assertEqual(ranges[0]["ff48_id"], 1)
+        self.assertEqual(ranges[1]["ff48_id"], 34)
+        self.assertEqual(ranges[1]["sic_low"], 7380)
+
 
 class TestJoinIndustryLabels(unittest.TestCase):
     def test_decorates_each_range_with_short_and_name(self) -> None:

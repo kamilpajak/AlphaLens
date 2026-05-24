@@ -55,11 +55,16 @@ _SCHEMA = pa.schema(
     ]
 )
 
-# Header: leading whitespace, 1-2 digit industry id, short label, long name.
-# The id range 1..48 is the only ambiguity we need to guard against — SIC
-# ranges also have leading digits; ``RANGE_RE`` discriminates first.
+# Two mutually-exclusive line shapes by digit count + structure:
+# - headers lead with a 1-2 digit FF-48 industry id (1..48), then short
+#   label, then long name (3 tokens, last is multi-word);
+# - range lines lead with ``DDDD-DDDD`` (the dash terminates the leading
+#   token, so the header regex cannot collapse a range into a header).
+# Both accept zero leading whitespace so the parser stays robust if Ken
+# French ever ships the file with leading spaces stripped or tab-indented
+# (Gemini 3 Pro review on PR #216).
 _HEADER_RE = re.compile(r"^\s*(\d{1,2})\s+(\S+)\s+(.+?)\s*$")
-_RANGE_RE = re.compile(r"^\s+(\d{4})-(\d{4})\b")
+_RANGE_RE = re.compile(r"^\s*(\d{4})-(\d{4})\b")
 
 
 def _parse_siccodes48(text: str) -> tuple[list[dict], list[dict]]:
@@ -72,9 +77,10 @@ def _parse_siccodes48(text: str) -> tuple[list[dict], list[dict]]:
     matching academic convention).
 
     The text format groups SIC ranges under each industry header. A SIC
-    range line is matched before an industry header line because both
-    start with digits; ``_RANGE_RE`` requires leading whitespace to
-    discriminate.
+    range line is matched before an industry header line — the
+    ``DDDD-DDDD`` shape of a range cannot collapse into a header (the
+    dash terminates the leading token), so the per-line dispatch is:
+    try ``_RANGE_RE`` first; on miss, try ``_HEADER_RE``.
     """
     industries: list[dict] = []
     ranges: list[dict] = []
@@ -93,7 +99,7 @@ def _parse_siccodes48(text: str) -> tuple[list[dict], list[dict]]:
             )
             continue
         hmatch = _HEADER_RE.match(line)
-        if hmatch and not _RANGE_RE.match(line):
+        if hmatch:
             current_id = int(hmatch.group(1))
             industries.append(
                 {

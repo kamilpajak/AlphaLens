@@ -106,11 +106,7 @@ def _load_ff48_peers() -> dict[int, list[str]]:
         ff48 = sic_to_ff48(sic)
         if ff48 is None:
             continue
-        # Dedup defensively — the sic_index parquet itself is deduped by
-        # CIK after PR #215, but a manually-edited fixture could violate.
-        bucket = out.setdefault(ff48, [])
-        if ticker not in bucket:
-            bucket.append(ticker)
+        out.setdefault(ff48, []).append(ticker)
     return out
 
 
