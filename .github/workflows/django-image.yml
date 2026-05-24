@@ -1,0 +1,104 @@
+name: build-django-image
+
+# Build + push the prod Django image to GHCR. VPS pulls the resulting
+# tag instead of building locally — see deploy/docker/django-prod/
+# docker-compose.yaml (`image: ghcr.io/kamilpajak/alphalens-django:...`).
+#
+# Trigger surface:
+#   - push to main → tags `sha-<short>` + `latest`
+#   - push to feature/django-migration → tag `sha-<short>` + branch alias
+#     so the VPS can pin a pre-merge image during the migration arc
+#   - workflow_dispatch → manual rebuild (e.g. after base-image CVE bump)
+
+on:
+  push:
+    branches: [main, feature/django-migration]
+    paths:
+      - 'apps/alphalens-django/**'
+      - 'deploy/docker/django-prod/Dockerfile'
+      - '.github/workflows/django-image.yml'
+  workflow_dispatch:
+
+# Tokens needed: contents:read to fetch source; packages:write to push to
+# GHCR; id-token + attestations for the signed build-provenance attestation
+# (`actions/attest-build-provenance`).
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel obsolete builds on feature branches; let main builds finish so
+  # every merged SHA produces a published image.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: build + push (linux/amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/kamilpajak/alphalens-django
+          # Tag scheme:
+          #   - sha-<short>      every push (immutable, used by VPS for pinning)
+          #   - <branch>         convenience alias (e.g. `feature-django-migration`)
+          #   - latest           main branch only
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build + push image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/docker/django-prod/Dockerfile
+          # Single platform — VPS is x86_64. Add linux/arm64 only if a Mac
+          # mini ever joins the deploy target list (and accept ~2x runtime).
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GHA cache with a dedicated scope. The 10 GB per-repo cap is LRU-
+          # managed by GitHub — at ~250 MB per snapshot we get ~40 builds of
+          # headroom before eviction starts, plenty for a workflow that fires
+          # only on push to two branches. Registry cache (`type=registry,
+          # mode=max`) was the alternative but GHCR doesn't garbage-collect
+          # untagged cache blobs, so it silently bloats storage quota over
+          # time; GHA cache requires zero ops.
+          cache-from: type=gha,scope=django-build
+          cache-to: type=gha,scope=django-build,mode=max
+          # provenance/sbom are emitted as separate manifest attestations
+          # below; turn off buildkit's inline attestations to keep the
+          # primary manifest a clean single-arch image (no manifest list
+          # wrapper that some older docker clients trip over).
+          provenance: false
+          sbom: false
+
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/kamilpajak/alphalens-django
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
