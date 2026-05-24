@@ -30,6 +30,7 @@ from alphalens_pipeline.thematic.screening import (
     technicals_signal,
     valuation_signal,
 )
+from alphalens_pipeline.thematic.screening._common import filter_peers_by_mcap_price
 
 logger = logging.getLogger(__name__)
 
@@ -263,24 +264,34 @@ def _build_ohlcv_loader() -> Callable[[str, date], pd.DataFrame]:
 # ---- Main entry point ---------------------------------------------------
 
 
-def _collect_universe(candidates: pd.DataFrame, peer_cache: dict[int, list[str]]) -> set[str]:
-    """Build the SimFin preload universe: candidate tickers + each industry's peers.
+def _collect_universe(
+    candidates: pd.DataFrame, peer_cache: dict[int, tuple[list[str], str]]
+) -> set[str]:
+    """Build the EDGAR preload universe: candidate tickers + each industry's
+    raw (unfiltered) peers across both 4-digit and 3-digit cohorts.
 
-    Side effect: populates ``peer_cache`` with industry → peer list lookups so
-    ``score_candidates`` can reuse them later without re-querying.
+    Side effect: this is a PRE-FETCH-ONLY walk — peers are gathered
+    without applying the tradeability filter because the EDGAR fetcher
+    needs price + shares for every ticker in order to compute mcap.
+    The actual cohort selection (with filter) happens in
+    ``_resolve_industry`` AFTER the fetcher is built, and is what
+    populates ``peer_cache`` for downstream signal scorers.
     """
     universe: set[str] = set()
     for _, cand in candidates.iterrows():
         tkr = str(cand["ticker"]).upper()
         universe.add(tkr)
         ind = sector_peers.get_industry_id(tkr)
-        if ind is not None:
-            # Lazy lookup: `dict.setdefault(k, expr)` always evaluates `expr`,
-            # so the SimFin sector_peers DataFrame slice would re-run for every
-            # repeated industry. Branch explicitly to keep the cache hit free.
-            if ind not in peer_cache:
-                peer_cache[ind] = sector_peers.iter_industry_peers(ind)
-            universe.update(peer_cache[ind])
+        if ind is None:
+            continue
+        # Walk both candidate cohorts so the fetcher preloads every
+        # potential peer's price + shares. Use raw lookups directly —
+        # the tradeability filter will be re-applied in
+        # ``_resolve_industry`` with the fetcher wired in.
+        universe.update(sector_peers.iter_industry_peers(ind))
+        from alphalens_pipeline.data.fundamentals import sic_index as _sic_index
+
+        universe.update(_sic_index._load_sic3_peers().get(ind // 10, []))
     return universe
 
 
@@ -340,6 +351,7 @@ def _build_candidate_row(
     industry_id: int | None,
     industry_name: str | None,
     sector_name: str | None,
+    peer_cohort_level: str,
     ins: dict,
     fcff: dict,
     val: dict,
@@ -355,21 +367,32 @@ def _build_candidate_row(
     + weighted score + reversal detection are post-loop because they need
     the whole cohort).
     """
+    # Thin cohort: the candidate's own multiples / yield / score are still
+    # valid signals, but a percentile derived from an empty (or sub-floor)
+    # peer set would be misleading. Per issue #197 the brief should show
+    # the "thin cohort" badge instead of a colored percentile bar — null
+    # the percentiles here so downstream renderers see the same "no
+    # signal" sentinel they already handle.
+    is_thin = peer_cohort_level == "thin"
+    insider_pctl = None if is_thin else ins["sector_percentile"]
+    fcff_pctl = None if is_thin else fcff["sector_percentile"]
+    val_pctl = None if is_thin else val["composite_sector_percentile"]
     return {
         "ticker": ticker,
         "industry_id": industry_id if industry_id is not None else np.nan,
         "industry_name": industry_name,
         "sector_name": sector_name,
+        "peer_cohort_level": peer_cohort_level,
         "insider_score_usd": ins["score_usd"],
-        "insider_score_sector_percentile": ins["sector_percentile"],
+        "insider_score_sector_percentile": insider_pctl,
         "fcff_yield_pct": fcff["yield_pct"],
-        "fcff_yield_sector_percentile": fcff["sector_percentile"],
+        "fcff_yield_sector_percentile": fcff_pctl,
         "valuation_pe": val["pe"],
         "valuation_ps": val["ps"],
         "valuation_ev_rev": val["ev_rev"],
         "valuation_ev_ebitda": mf_ev_ebitda,
         "valuation_fcf_margin": val["fcf_margin"],
-        "valuation_composite_sector_percentile": val["composite_sector_percentile"],
+        "valuation_composite_sector_percentile": val_pctl,
         "valuation_financials_publish_date": val.get("financials_publish_date"),
         "valuation_financials_age_days": val.get("financials_age_days"),
         "roic_pct": mf_roic,
@@ -393,8 +416,11 @@ def _build_candidate_row(
         "_catalyst_url": (catalyst_event or {}).get("url"),
         # Signal positives stashed for the post-loop weighted-score
         # composition; dropped before the public DataFrame is built.
+        # ``fcff_positive`` reads the cohort-adjusted percentile so a
+        # thin-cohort candidate doesn't get a +1 lift from the
+        # midpoint-50 fallback (which would otherwise pass the ≥50 test).
         "_insider_positive": insider_is_positive(score_usd=ins["score_usd"]),
-        "_fcff_positive": fcff_is_positive(sector_percentile=fcff["sector_percentile"]),
+        "_fcff_positive": fcff_is_positive(sector_percentile=fcff_pctl),
         "_technicals_positive": technicals_are_positive(
             rsi=tech["rsi"], ma_distance_pct=tech["ma50_distance_pct"]
         ),
@@ -411,7 +437,7 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
     if candidates.empty:
         return candidates.copy()
 
-    peer_cache: dict[int, list[str]] = {}
+    peer_cache: dict[int, tuple[list[str], str]] = {}
     universe = _collect_universe(candidates, peer_cache)
 
     feature_fetcher = _build_feature_fetcher(sorted(universe))
@@ -424,16 +450,29 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
 
     catalyst_cache: dict[str, dict | None] = {}
 
+    def _tradeable_filter(peers_to_check: list[str]) -> list[str]:
+        return filter_peers_by_mcap_price(
+            peers_to_check, feature_fetcher=feature_fetcher, asof=asof
+        )
+
     def _resolve_industry(
         ticker: str,
-    ) -> tuple[int | None, str | None, str | None, list[str]]:
+    ) -> tuple[int | None, str | None, str | None, list[str], str]:
         industry_id = sector_peers.get_industry_id(ticker)
         if industry_id is None:
-            return None, None, None, []
+            return None, None, None, [], "thin"
         industry_name, sector_name = sector_peers.industry_label(industry_id)
         if industry_id not in peer_cache:
-            peer_cache[industry_id] = sector_peers.iter_industry_peers(industry_id)
-        return industry_id, industry_name, sector_name, peer_cache[industry_id]
+            # ``peer_filter`` runs BEFORE the min_cohort check inside the
+            # resolver, so a raw 4-digit cohort of 10 peers — 7 of which
+            # are warrants / shells / penny stocks — correctly falls back
+            # to sic3 (or thin) rather than rendering a "sic4" badge over
+            # an effective cohort of 3 (Gemini 3 Pro PR-215 finding).
+            peer_cache[industry_id] = sector_peers.iter_industry_peers_fallback(
+                industry_id, peer_filter=_tradeable_filter
+            )
+        peers, level = peer_cache[industry_id]
+        return industry_id, industry_name, sector_name, peers, level
 
     def _resolve_catalyst_event(theme: str) -> dict | None:
         if theme not in catalyst_cache:
@@ -447,7 +486,14 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
     rows: list[dict] = []
     for _, cand in candidates.iterrows():
         ticker = str(cand["ticker"]).upper()
-        industry_id, industry_name, sector_name, peers = _resolve_industry(ticker)
+        industry_id, industry_name, sector_name, peers, peer_cohort_level = _resolve_industry(
+            ticker
+        )
+        # When the fallback resolver returns "thin", peers is empty and
+        # every signal scorer will compute candidate yield/score against
+        # an empty cohort. Per ``_common.percentile_rank``, an empty
+        # cohort returns 50.0 ("no information" midpoint) — surfaced via
+        # ``peer_cohort_level`` so the UI can suppress the percentile bar.
         ins, fcff, val, tech = _score_signals(
             ticker=ticker,
             asof=asof,
@@ -471,6 +517,7 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
                 industry_id=industry_id,
                 industry_name=industry_name,
                 sector_name=sector_name,
+                peer_cohort_level=peer_cohort_level,
                 ins=ins,
                 fcff=fcff,
                 val=val,

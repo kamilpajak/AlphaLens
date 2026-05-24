@@ -172,7 +172,11 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
                 "industry_label",
                 return_value=("Semiconductors & Related Devices", "Manufacturing"),
             ),
-            patch.object(scorer.sector_peers, "iter_industry_peers", return_value=["QUBT", "IONQ"]),
+            patch.object(
+                scorer.sector_peers,
+                "iter_industry_peers_fallback",
+                return_value=(["QUBT", "IONQ"], "sic4"),
+            ),
             patch.object(
                 scorer.insider_signal,
                 "score_insider",
@@ -363,7 +367,11 @@ class TestScoreCandidatesIsResilientToSignalExceptions(unittest.TestCase):
                 "industry_label",
                 return_value=("Semiconductors & Related Devices", "Manufacturing"),
             ),
-            patch.object(scorer.sector_peers, "iter_industry_peers", return_value=["QUBT"]),
+            patch.object(
+                scorer.sector_peers,
+                "iter_industry_peers_fallback",
+                return_value=(["QUBT"], "sic4"),
+            ),
             patch.object(scorer, "_build_feature_fetcher", return_value=lambda t, asof: None),
             patch.object(
                 scorer, "_build_ohlcv_loader", return_value=lambda t, asof: pd.DataFrame()
@@ -491,6 +499,145 @@ class TestScoreCandidatesUnknownIndustry(unittest.TestCase):
         row = out.iloc[0]
         self.assertTrue(pd.isna(row["industry_id"]))
         self.assertEqual(int(row["layer4_weighted_score"]), 1)
+        # Issue #197: thin-cohort label must surface so the UI can suppress
+        # the percentile bar.
+        self.assertEqual(row["peer_cohort_level"], "thin")
+
+
+class TestPeerCohortLevelSurfaced(unittest.TestCase):
+    """Issue #197: ``peer_cohort_level`` must propagate to brief output,
+    and ``thin`` must null the percentile columns so the renderer falls
+    back to the thin-cohort badge instead of a midpoint bar."""
+
+    def _patch_signal_fixtures(self):
+        return [
+            patch.object(
+                scorer.insider_signal,
+                "score_insider",
+                return_value={"score_usd": 100_000.0, "sector_percentile": 75.0},
+            ),
+            patch.object(
+                scorer.fcff_signal,
+                "score_fcff",
+                return_value={"yield_pct": 5.0, "sector_percentile": 80.0},
+            ),
+            patch.object(
+                scorer.valuation_signal,
+                "score_valuation",
+                return_value={
+                    "pe": 15.0,
+                    "ps": 2.0,
+                    "ev_rev": 2.5,
+                    "fcf_margin": 0.10,
+                    "composite_sector_percentile": 70.0,
+                },
+            ),
+            patch.object(
+                scorer.technicals_signal,
+                "score_technicals",
+                return_value={
+                    "rsi": 50.0,
+                    "ma50_distance_pct": 2.0,
+                    "atr_pct": 4.0,
+                    "volume_zscore": 0.0,
+                    "summary": "ok",
+                },
+            ),
+            patch.object(scorer, "_build_feature_fetcher", return_value=lambda t, asof: None),
+            patch.object(
+                scorer, "_build_ohlcv_loader", return_value=lambda t, asof: pd.DataFrame()
+            ),
+            patch(
+                "alphalens_pipeline.thematic.mapping.catalyst_resolver.find_trigger_event",
+                return_value=None,
+            ),
+        ]
+
+    def test_sic4_level_passes_through(self):
+        ps = self._patch_signal_fixtures()
+        ps += [
+            patch.object(scorer.sector_peers, "get_industry_id", return_value=3674),
+            patch.object(
+                scorer.sector_peers,
+                "industry_label",
+                return_value=("Semiconductors", "Manufacturing"),
+            ),
+            patch.object(
+                scorer.sector_peers,
+                "iter_industry_peers_fallback",
+                return_value=(["A", "B", "C", "D", "E", "F", "G", "H"], "sic4"),
+            ),
+        ]
+        for p in ps:
+            p.start()
+        try:
+            out = scorer.score_candidates(_candidates_df(["X"]), asof=dt.date(2026, 4, 14))
+        finally:
+            for p in ps:
+                p.stop()
+        row = out.iloc[0]
+        self.assertEqual(row["peer_cohort_level"], "sic4")
+        self.assertAlmostEqual(float(row["fcff_yield_sector_percentile"]), 80.0)
+
+    def test_sic3_level_passes_through(self):
+        ps = self._patch_signal_fixtures()
+        ps += [
+            patch.object(scorer.sector_peers, "get_industry_id", return_value=7372),
+            patch.object(
+                scorer.sector_peers,
+                "industry_label",
+                return_value=("Services-Prepackaged Software", "Services"),
+            ),
+            patch.object(
+                scorer.sector_peers,
+                "iter_industry_peers_fallback",
+                return_value=(["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"], "sic3"),
+            ),
+        ]
+        for p in ps:
+            p.start()
+        try:
+            out = scorer.score_candidates(_candidates_df(["X"]), asof=dt.date(2026, 4, 14))
+        finally:
+            for p in ps:
+                p.stop()
+        row = out.iloc[0]
+        self.assertEqual(row["peer_cohort_level"], "sic3")
+        # Percentile preserved — sic3 is still trustworthy.
+        self.assertAlmostEqual(float(row["fcff_yield_sector_percentile"]), 80.0)
+
+    def test_thin_level_nulls_percentiles(self):
+        ps = self._patch_signal_fixtures()
+        ps += [
+            patch.object(scorer.sector_peers, "get_industry_id", return_value=7380),
+            patch.object(
+                scorer.sector_peers,
+                "industry_label",
+                return_value=("Services-Misc Business Services", "Services"),
+            ),
+            patch.object(
+                scorer.sector_peers,
+                "iter_industry_peers_fallback",
+                return_value=([], "thin"),
+            ),
+        ]
+        for p in ps:
+            p.start()
+        try:
+            out = scorer.score_candidates(_candidates_df(["DFIN"]), asof=dt.date(2026, 4, 14))
+        finally:
+            for p in ps:
+                p.stop()
+        row = out.iloc[0]
+        self.assertEqual(row["peer_cohort_level"], "thin")
+        # Percentile cohort fields null — the UI badge fires off this.
+        self.assertTrue(pd.isna(row["fcff_yield_sector_percentile"]))
+        self.assertTrue(pd.isna(row["insider_score_sector_percentile"]))
+        self.assertTrue(pd.isna(row["valuation_composite_sector_percentile"]))
+        # Candidate's own metrics still present — fcff yield is a candidate
+        # property, independent of cohort.
+        self.assertAlmostEqual(float(row["fcff_yield_pct"]), 5.0)
+        self.assertAlmostEqual(float(row["insider_score_usd"]), 100_000.0)
 
 
 if __name__ == "__main__":

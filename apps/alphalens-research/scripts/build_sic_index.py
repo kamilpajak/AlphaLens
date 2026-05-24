@@ -56,6 +56,34 @@ _SCHEMA = pa.schema(
 )
 
 
+def _dedup_by_cik_keep_shortest(pairs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Collapse multiple tickers sharing a CIK to one row per CIK.
+
+    Selection: shortest ticker wins (the base common share is shorter
+    than its warrants ``WS``/``W``/``Z``/``R`` suffixes and preferred
+    series ``-PA``/``-PB``); ties break alphabetically. Sound because
+    EDGAR reports fundamentals at the CIK (entity) level, so ASPS,
+    ASPSW, and ASPSZ yield identical FCFF/EV data — counting all three
+    triple-counts the same economic entity and inflates peer percentile
+    ranks of the survivor row (the 2026-05-23 DFIN audit case).
+
+    The CRSP PERMCO/PERMNO convention used in academic factor research
+    makes the same call: dedup share classes to one issuer for
+    cross-sectional ranking, keep multi-class detail only when the
+    analysis demands it.
+
+    Output sorted by CIK for determinism — the upstream walk depends on
+    stable ordering for ``progress: ...`` log positioning, and tests
+    assert exact row ordering on small fixtures.
+    """
+    by_cik: dict[str, str] = {}
+    for ticker, cik in pairs:
+        current = by_cik.get(cik)
+        if current is None or (len(ticker), ticker) < (len(current), current):
+            by_cik[cik] = ticker
+    return sorted(((ticker, cik) for cik, ticker in by_cik.items()), key=lambda p: p[1])
+
+
 def _extract_sic(submissions: dict) -> tuple[int | None, str | None]:
     """Pull (sic, sic_description) from raw submissions JSON.
 
@@ -79,7 +107,9 @@ def _extract_sic(submissions: dict) -> tuple[int | None, str | None]:
 def main() -> int:
     logger.info("loading ticker→CIK map from %s", TICKER_CIK_MAP_PATH)
     raw = yaml.safe_load(TICKER_CIK_MAP_PATH.read_text()) or {}
-    pairs = sorted((str(ticker).upper(), _normalize_cik(cik)) for ticker, cik in raw.items())
+    raw_pairs = [(str(ticker).upper(), _normalize_cik(cik)) for ticker, cik in raw.items()]
+    pairs = _dedup_by_cik_keep_shortest(raw_pairs)
+    logger.info("deduplicated %d ticker rows down to %d unique CIKs", len(raw_pairs), len(pairs))
     logger.info("walking %d (ticker, CIK) pairs", len(pairs))
 
     client = get_default_sec_client()

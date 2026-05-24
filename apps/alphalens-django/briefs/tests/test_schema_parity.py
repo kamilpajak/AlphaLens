@@ -46,6 +46,9 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     "industry_id",
     "industry_name",
     "sector_name",
+    # Issue #197 (post-legacy extension): cohort-resolution level surfaced
+    # so the UI can swap the percentile bar for a thin-cohort badge.
+    "peer_cohort_level",
     "insider_score_usd",
     "insider_score_sector_percentile",
     "fcff_yield_pct",

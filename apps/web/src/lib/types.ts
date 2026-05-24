@@ -30,6 +30,14 @@ export interface Candidate {
 	industry_id: number | null;
 	industry_name: string | null;
 	sector_name: string | null;
+	/**
+	 * Issue #197: how the SIC peer cohort was resolved.
+	 *   - `sic4` — exact 4-digit cohort
+	 *   - `sic3` — fell back to 3-digit prefix (wider cohort)
+	 *   - `thin` — neither cohort hit min size; percentiles are null
+	 * Empty string when the candidate's industry could not be resolved.
+	 */
+	peer_cohort_level: string | null;
 	insider_score_usd: number | null;
 	insider_score_sector_percentile: number | null;
 	fcff_yield_pct: number | null;

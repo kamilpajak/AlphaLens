@@ -63,6 +63,17 @@
 					{#if c.sector_name}
 						<span class="hidden sm:inline">({c.sector_name})</span>
 					{/if}
+					{#if c.peer_cohort_level === 'thin'}
+						<span
+							class="inline-flex items-center px-1.5 py-0.5 bg-fg-muted/10 text-fg-muted text-[9px] uppercase tracking-widest border border-fg-muted/30"
+							title="Issue #197: SIC peer cohort too small to compute a meaningful percentile (4-digit + 3-digit fallback both below 8 members). Sector-percentile bars below are suppressed."
+						>thin cohort</span>
+					{:else if c.peer_cohort_level === 'sic3'}
+						<span
+							class="inline-flex items-center px-1.5 py-0.5 bg-cyan/10 text-cyan text-[9px] uppercase tracking-widest border border-cyan/30"
+							title="Issue #197: 4-digit SIC cohort was too small; widened to the 3-digit prefix. Percentile computed over a broader peer set — still trustworthy but looser."
+						>sic-3 cohort</span>
+					{/if}
 				</div>
 			</div>
 

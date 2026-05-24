@@ -24,7 +24,15 @@ from alphalens_pipeline.data.fundamentals.sic_index import (
     iter_sic_peers as iter_industry_peers,
 )
 from alphalens_pipeline.data.fundamentals.sic_index import (
+    iter_sic_peers_fallback as iter_industry_peers_fallback,
+)
+from alphalens_pipeline.data.fundamentals.sic_index import (
     sic_label as industry_label,
 )
 
-__all__ = ["get_industry_id", "industry_label", "iter_industry_peers"]
+__all__ = [
+    "get_industry_id",
+    "industry_label",
+    "iter_industry_peers",
+    "iter_industry_peers_fallback",
+]

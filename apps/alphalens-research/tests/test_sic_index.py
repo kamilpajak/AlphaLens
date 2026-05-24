@@ -60,11 +60,13 @@ class _PatchedIndexTestCase(unittest.TestCase):
         self.addCleanup(self._patch.stop)
         sic_index._load_index.cache_clear()
         sic_index._load_lookup_dicts.cache_clear()
+        sic_index._load_sic3_peers.cache_clear()
         # Without these on teardown the parsed table from this test's
         # TemporaryDirectory would persist into subsequent tests and either
         # crash on a deleted path or silently serve the synthetic fixture.
         self.addCleanup(sic_index._load_index.cache_clear)
         self.addCleanup(sic_index._load_lookup_dicts.cache_clear)
+        self.addCleanup(sic_index._load_sic3_peers.cache_clear)
 
 
 class TestGetSic(_PatchedIndexTestCase):
@@ -198,6 +200,158 @@ class TestSicDivisionRanges(unittest.TestCase):
         self.assertIsNone(sic_index._division_name(10000))
 
 
+class TestIterSicPeersFallback(_PatchedIndexTestCase):
+    # SIC 7372 + 7373 + 7374 are different 4-digit codes but share the
+    # 3-digit prefix 737 ("Computer Services"). Quantum-computing tickers
+    # under PR #197 motivating example. A small 4-digit cohort (n=2) plus
+    # neighbours under 737 should aggregate to a respectable 3-digit cohort.
+    rows = [
+        {
+            "ticker": "QUBT",
+            "cik": "1",
+            "sic": 7372,
+            "sic_description": "Services-Prepackaged Software",
+        },
+        {
+            "ticker": "MSFT",
+            "cik": "2",
+            "sic": 7372,
+            "sic_description": "Services-Prepackaged Software",
+        },
+        {
+            "ticker": "IONQ",
+            "cik": "3",
+            "sic": 7373,
+            "sic_description": "Services-Computer Integrated Systems Design",
+        },
+        {
+            "ticker": "ACN",
+            "cik": "4",
+            "sic": 7373,
+            "sic_description": "Services-Computer Integrated Systems Design",
+        },
+        {
+            "ticker": "RGTI",
+            "cik": "5",
+            "sic": 7374,
+            "sic_description": "Services-Computer Processing",
+        },
+        {
+            "ticker": "PEER6",
+            "cik": "6",
+            "sic": 7374,
+            "sic_description": "Services-Computer Processing",
+        },
+        {
+            "ticker": "PEER7",
+            "cik": "7",
+            "sic": 7372,
+            "sic_description": "Services-Prepackaged Software",
+        },
+        {
+            "ticker": "PEER8",
+            "cik": "8",
+            "sic": 7373,
+            "sic_description": "Services-Computer Integrated Systems Design",
+        },
+        # Unrelated 4-digit cohort kept large to verify fallback does not
+        # silently leak across 3-digit prefixes.
+        {"ticker": "BIG1", "cik": "10", "sic": 3674, "sic_description": "Semiconductors"},
+        {"ticker": "BIG2", "cik": "11", "sic": 3674, "sic_description": "Semiconductors"},
+        {"ticker": "BIG3", "cik": "12", "sic": 3674, "sic_description": "Semiconductors"},
+        {"ticker": "BIG4", "cik": "13", "sic": 3674, "sic_description": "Semiconductors"},
+        {"ticker": "BIG5", "cik": "14", "sic": 3674, "sic_description": "Semiconductors"},
+        {"ticker": "BIG6", "cik": "15", "sic": 3674, "sic_description": "Semiconductors"},
+        {"ticker": "BIG7", "cik": "16", "sic": 3674, "sic_description": "Semiconductors"},
+        {"ticker": "BIG8", "cik": "17", "sic": 3674, "sic_description": "Semiconductors"},
+    ]
+
+    def test_returns_sic4_when_cohort_meets_min(self) -> None:
+        peers, level = sic_index.iter_sic_peers_fallback(3674, min_cohort=8)
+        self.assertEqual(level, "sic4")
+        self.assertEqual(sorted(peers), sorted(f"BIG{i}" for i in range(1, 9)))
+
+    def test_falls_back_to_sic3_when_sic4_below_min(self) -> None:
+        # SIC 7372 has only 3 tickers (QUBT, MSFT, PEER7). 3-digit prefix
+        # 737 unions 7372/7373/7374 to 8 tickers, meeting min_cohort=8.
+        peers, level = sic_index.iter_sic_peers_fallback(7372, min_cohort=8)
+        self.assertEqual(level, "sic3")
+        self.assertEqual(
+            sorted(peers),
+            sorted(["QUBT", "MSFT", "IONQ", "ACN", "RGTI", "PEER6", "PEER7", "PEER8"]),
+        )
+
+    def test_returns_thin_when_neither_sic4_nor_sic3_meets_min(self) -> None:
+        peers, level = sic_index.iter_sic_peers_fallback(3674, min_cohort=100)
+        self.assertEqual(level, "thin")
+        self.assertEqual(peers, [])
+
+    def test_none_sic_returns_thin(self) -> None:
+        peers, level = sic_index.iter_sic_peers_fallback(None, min_cohort=8)
+        self.assertEqual(level, "thin")
+        self.assertEqual(peers, [])
+
+    def test_never_falls_back_to_sic2(self) -> None:
+        # Per Bhojraj-Lee-Oler 2003, 2-digit SIC is too heterogeneous for
+        # cohort comparison (SIC 73 mixes temp staffing + software +
+        # printing). A 2-digit hop would gather BIG1..BIG8 + 737 peers,
+        # but the contract says STOP at 3-digit.
+        peers, level = sic_index.iter_sic_peers_fallback(7372, min_cohort=100)
+        self.assertEqual(level, "thin")
+        self.assertEqual(peers, [])
+
+    def test_sic3_excludes_unrelated_prefixes(self) -> None:
+        peers, _ = sic_index.iter_sic_peers_fallback(7372, min_cohort=8)
+        # BIG1..BIG8 share SIC 3674 — 3-digit prefix is 367, NOT 737.
+        for big in (f"BIG{i}" for i in range(1, 9)):
+            self.assertNotIn(big, peers)
+
+    def test_returned_list_is_defensive_copy(self) -> None:
+        peers, _ = sic_index.iter_sic_peers_fallback(3674, min_cohort=8)
+        peers.append("BOGUS")
+        peers2, _ = sic_index.iter_sic_peers_fallback(3674, min_cohort=8)
+        self.assertNotIn("BOGUS", peers2)
+
+    def test_peer_filter_applied_before_min_cohort_check(self) -> None:
+        # Scenario from Gemini 3 Pro PR-215 review: SIC 3674 has 8 raw
+        # peers; if the filter strips 7 of them (shells / penny stocks),
+        # the cohort is effectively 1 — the resolver must NOT call this
+        # sic4 just because the raw cohort cleared the floor. With 7
+        # dropped and no sic3 backup, expect ``thin``.
+        keep_only = {"BIG1"}
+
+        def shell_filter(peers: list[str]) -> list[str]:
+            return [p for p in peers if p in keep_only]
+
+        peers, level = sic_index.iter_sic_peers_fallback(
+            3674, min_cohort=8, peer_filter=shell_filter
+        )
+        self.assertEqual(level, "thin")
+        self.assertEqual(peers, [])
+
+    def test_peer_filter_returns_sic4_when_filtered_cohort_meets_floor(self) -> None:
+        peers, level = sic_index.iter_sic_peers_fallback(
+            3674, min_cohort=8, peer_filter=lambda ps: ps
+        )
+        self.assertEqual(level, "sic4")
+        self.assertEqual(len(peers), 8)
+
+    def test_peer_filter_applied_to_sic3_fallback_too(self) -> None:
+        # SIC 7372 raw cohort = 3 (below floor 8); raw 3-digit cohort
+        # 737 = 8 (meets floor). Apply a filter that drops half of the
+        # 3-digit pool — final size 4 < 8 → ``thin``.
+        keep_three = {"QUBT", "IONQ", "RGTI"}
+
+        def filter_three(peers: list[str]) -> list[str]:
+            return [p for p in peers if p in keep_three]
+
+        peers, level = sic_index.iter_sic_peers_fallback(
+            7372, min_cohort=8, peer_filter=filter_three
+        )
+        self.assertEqual(level, "thin")
+        self.assertEqual(peers, [])
+
+
 class TestMissingIndexFile(unittest.TestCase):
     """If the parquet artifact is missing the resolver must still degrade safely."""
 
@@ -208,14 +362,21 @@ class TestMissingIndexFile(unittest.TestCase):
         self.addCleanup(self._patch.stop)
         sic_index._load_index.cache_clear()
         sic_index._load_lookup_dicts.cache_clear()
+        sic_index._load_sic3_peers.cache_clear()
         self.addCleanup(sic_index._load_index.cache_clear)
         self.addCleanup(sic_index._load_lookup_dicts.cache_clear)
+        self.addCleanup(sic_index._load_sic3_peers.cache_clear)
 
     def test_get_sic_returns_none_when_index_absent(self) -> None:
         self.assertIsNone(sic_index.get_sic("AAPL"))
 
     def test_iter_peers_returns_empty_when_index_absent(self) -> None:
         self.assertEqual(sic_index.iter_sic_peers(3674), [])
+
+    def test_fallback_returns_thin_when_index_absent(self) -> None:
+        peers, level = sic_index.iter_sic_peers_fallback(3674, min_cohort=8)
+        self.assertEqual(level, "thin")
+        self.assertEqual(peers, [])
 
 
 if __name__ == "__main__":

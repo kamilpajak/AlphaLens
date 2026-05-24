@@ -264,6 +264,8 @@ def score_valuation(
     if all(v is None for v in cand_multiples.values()):
         return {**cand_multiples, **base_return}
 
+    # Tradeability filter (issue #197) is applied upstream in
+    # :func:`sic_index.iter_sic_peers_fallback`; ``peers`` is already filtered.
     peer_multiples: list[dict] = []
     for p in peers:
         if p.upper() == ticker.upper():

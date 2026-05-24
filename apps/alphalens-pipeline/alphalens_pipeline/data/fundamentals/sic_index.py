@@ -25,6 +25,7 @@ deferred.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 
@@ -68,6 +69,9 @@ def _load_index() -> pa.Table | None:
     if not _SIC_INDEX_PATH.exists():
         return None
     return pq.read_table(_SIC_INDEX_PATH)
+
+
+DEFAULT_MIN_COHORT = 8
 
 
 @lru_cache(maxsize=1)
@@ -145,6 +149,84 @@ def iter_sic_peers(sic: int | None) -> list[str]:
     return list(sic_to_peers.get(sic, []))
 
 
+@lru_cache(maxsize=1)
+def _load_sic3_peers() -> dict[int, list[str]]:
+    """Per-3-digit-SIC peer lists, deduped, used by the fallback resolver.
+
+    Bhojraj-Lee-Oler 2003 finds 3-digit aggregations modestly improve
+    within-cohort homogeneity over 4-digit (different sub-segments of the
+    same broad industry still trade on the same fundamentals), but
+    2-digit pools become too heterogeneous (SIC 73 lumps software with
+    temp staffing and commercial printing). The fallback resolver
+    therefore tops out at 3-digit.
+    """
+    _, sic_to_peers, _ = _load_lookup_dicts()
+    out: dict[int, list[str]] = {}
+    for sic, tickers in sic_to_peers.items():
+        prefix = sic // 10
+        # `setdefault` once per prefix avoids re-fetching the list per ticker.
+        bucket = out.setdefault(prefix, [])
+        bucket.extend(tickers)
+    # Dedup while preserving the first-seen order — important when a peer
+    # ranking downstream depends on stable iteration.
+    for prefix, tickers in out.items():
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for t in tickers:
+            if t not in seen:
+                seen.add(t)
+                deduped.append(t)
+        out[prefix] = deduped
+    return out
+
+
+def iter_sic_peers_fallback(
+    sic: int | None,
+    *,
+    min_cohort: int = DEFAULT_MIN_COHORT,
+    peer_filter: Callable[[list[str]], list[str]] | None = None,
+) -> tuple[list[str], str]:
+    """Resolve peers for ``sic`` with a single fallback step from 4-digit to 3-digit.
+
+    Tries the exact 4-digit cohort first; if it has fewer than
+    ``min_cohort`` members, widens to the 3-digit prefix (e.g. 7372 →
+    737, gathering 7370..7379). Stops at 3-digit by design — see
+    ``_load_sic3_peers`` doc.
+
+    ``peer_filter`` is an optional callback that drops peers the caller
+    considers non-comparable (typically the mcap / penny-stock floor in
+    :func:`alphalens_pipeline.thematic.screening._common.filter_peers_by_mcap_price`).
+    The filter is applied BEFORE the ``min_cohort`` check so a 4-digit
+    cohort of 10 raw peers — 7 of which are warrants / shells / penny
+    stocks — correctly falls back to 3-digit (or ``thin``) rather than
+    rendering a "sic4" badge over an effective cohort of 3. Without this,
+    the cohort-size invariant is leaky: the level reflects raw cohort
+    size, not tradeable cohort size, and the UI badge can lie about
+    percentile credibility (Gemini 3 Pro review on PR #215).
+
+    Returns ``(peers, level)`` where ``level`` is one of:
+    - ``"sic4"`` — exact 4-digit cohort met ``min_cohort`` AFTER filter
+    - ``"sic3"`` — fell back to 3-digit and that cohort met ``min_cohort``
+      AFTER filter
+    - ``"thin"`` — neither met the floor; caller should treat as "no
+      percentile available" and surface the thin-cohort badge instead of
+      a colored signal bar.
+    """
+    if sic is None:
+        return [], "thin"
+    sic4 = iter_sic_peers(sic)
+    if peer_filter is not None:
+        sic4 = peer_filter(sic4)
+    if len(sic4) >= min_cohort:
+        return sic4, "sic4"
+    sic3 = list(_load_sic3_peers().get(sic // 10, []))
+    if peer_filter is not None:
+        sic3 = peer_filter(sic3)
+    if len(sic3) >= min_cohort:
+        return sic3, "sic3"
+    return [], "thin"
+
+
 def sic_label(sic: int | None) -> tuple[str | None, str | None]:
     """Return ``(industry_name, sector_name)`` for ``sic``.
 
@@ -162,4 +244,10 @@ def sic_label(sic: int | None) -> tuple[str | None, str | None]:
     return (description, _division_name(sic))
 
 
-__all__ = ["get_sic", "iter_sic_peers", "sic_label"]
+__all__ = [
+    "DEFAULT_MIN_COHORT",
+    "get_sic",
+    "iter_sic_peers",
+    "iter_sic_peers_fallback",
+    "sic_label",
+]

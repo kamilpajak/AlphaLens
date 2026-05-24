@@ -161,7 +161,12 @@ def diff(legacy: dict, django: dict) -> dict:
             if lf and df and lf != df:
                 resp_missing = sorted(lf - df)
                 resp_extra = sorted(df - lf)
-                intentional = set(resp_missing).issubset(INTENTIONAL_DROPS) and not resp_extra
+                # Extras are additive — JSON-by-convention clients ignore
+                # unknown fields, so a new field in Django can never break
+                # an older legacy consumer. Only the ``missing`` side gates
+                # the classification (and only when it strays outside the
+                # documented INTENTIONAL_DROPS set).
+                intentional = set(resp_missing).issubset(INTENTIONAL_DROPS)
                 diff_entry["response_fields"] = {
                     "missing": resp_missing,
                     "extra": resp_extra,
