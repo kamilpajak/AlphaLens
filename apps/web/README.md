@@ -1,42 +1,64 @@
-# sv
+# AlphaLens dashboard (SvelteKit SPA)
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+Thematic-briefs dashboard. Pure SPA via `@sveltejs/adapter-static`
+(`apps/web/svelte.config.js`); reaches the Django briefs API at runtime
+via `VITE_API_BASE` (or same-origin `/api/*` for the local Docker stack).
 
-## Creating a project
-
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
-```
-
-To recreate this project with the same configuration:
+## Local dev
 
 ```sh
-# recreate this project
-pnpm dlx sv@0.15.3 create --template minimal --types ts --install pnpm web
+pnpm install
+pnpm dev          # http://localhost:5173
 ```
 
-## Developing
+The `predev` hook runs `scripts/sync-research-docs.mjs` to copy the
+markdown/JSON evidence files referenced from `/experiments` into
+`static/docs/research/`. The script exits 1 on missing references.
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+## Production build
 
 ```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+pnpm build        # writes apps/web/build/
 ```
 
-## Building
+`prebuild` runs the same sync-research-docs hook.
 
-To create a production version of your app:
+## Deploy targets
+
+Two paths are supported. Production uses **Cloudflare Pages**; the local
+Docker stack uses the **nginx bind-mount** path for offline testing.
+
+### Cloudflare Pages (production)
+
+Settings (configure in CF Pages dashboard → project → Settings):
+
+| Field | Value |
+|-------|-------|
+| Production branch | `main` |
+| Root directory | `apps/web` |
+| Build command | `corepack enable && pnpm install --frozen-lockfile && pnpm build` |
+| Build output directory | `build` |
+| Node version | `24` (set `NODE_VERSION` env var) |
+| Env var (Production) | `VITE_API_BASE=https://api.<your-domain>` |
+
+`static/_redirects` ships an SPA fallback so client-side routes
+(`/brief/<date>`, `/experiments`, etc.) resolve after a hard refresh.
+
+The API is reached **cross-origin** at `VITE_API_BASE`. Django prod
+settings already read `CORS_ALLOWED_ORIGINS` from env — add the Pages
+URL there before first deploy.
+
+### Local Docker stack (dev / offline test)
+
+`deploy/docker/django-prod/docker-compose.yaml` (with the
+`docker-compose.override.yaml` planned in Phase 3 of migration B) runs
+nginx with a bind-mount of `apps/web/build/`. Build BEFORE `up`
+otherwise nginx mounts an empty dir on macOS — see CLAUDE.md
+"workflow conventions" for the gotcha. Same-origin (`VITE_API_BASE`
+unset → fetch via `/api/*` reverse-proxy).
+
+## Smoke tests
 
 ```sh
-npm run build
+pnpm test:smoke   # Playwright; expects pnpm dev or Pages preview running
 ```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
