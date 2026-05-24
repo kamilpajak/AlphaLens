@@ -73,6 +73,11 @@
 							class="inline-flex items-center px-1.5 py-0.5 bg-cyan/10 text-cyan text-[9px] uppercase tracking-widest border border-cyan/30"
 							title="Issue #197: 4-digit SIC cohort was too small; widened to the 3-digit prefix. Percentile computed over a broader peer set — still trustworthy but looser."
 						>sic-3 cohort</span>
+					{:else if c.peer_cohort_level === 'ff48'}
+						<span
+							class="inline-flex items-center px-1.5 py-0.5 bg-amber/10 text-amber text-[9px] uppercase tracking-widest border border-amber/30"
+							title="Issue #198: 4-digit + 3-digit SIC cohorts were both too small; widened to the Fama-French 48-industry bucket (academic SIC aggregation, free from Ken French's data library). Percentile reflects a broader but economically coherent peer set."
+						>ff-48 cohort</span>
 					{/if}
 				</div>
 			</div>
