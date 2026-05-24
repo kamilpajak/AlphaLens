@@ -79,16 +79,20 @@ RUN apt-get update \
 
 COPY --from=builder --chown=django:django /app /app
 
+USER django
+
 # Collect static at build time so the runtime container is read-only.
-# DEBUG=False is the default in prod settings; we feed a throwaway
-# SECRET_KEY purely so the management command can boot.
+# Run as `django` (not root) so the generated staticfiles/ tree is owned
+# by the runtime user — any future WhiteNoise compression / startup
+# rewrite avoids PermissionError. /tmp is world-writable, so the
+# throwaway SQLite DB still creates fine. DEBUG=False is the default in
+# prod settings; we feed a throwaway SECRET_KEY purely so the management
+# command can boot.
 RUN DJANGO_SETTINGS_MODULE=config.settings.prod \
     SECRET_KEY=collectstatic-only \
     ALLOWED_HOSTS=localhost \
     DATABASE_URL=sqlite:///tmp/collectstatic.db \
     /app/.venv/bin/python manage.py collectstatic --noinput
-
-USER django
 
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
