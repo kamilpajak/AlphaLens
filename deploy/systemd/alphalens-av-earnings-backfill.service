@@ -28,7 +28,7 @@ WorkingDirectory=%h/AlphaLens
 # Systemd reads each KEY=VALUE line from this file before ExecStart.
 EnvironmentFile=%h/AlphaLens/.env
 
-ExecStart=%h/AlphaLens/.venv/bin/python -m scripts.av_earnings_daily_backfill \
+ExecStart=%h/AlphaLens/.venv/bin/python apps/alphalens-research/scripts/av_earnings_daily_backfill.py \
     --universe sp500_union
 
 # Keep stdout/stderr in journald (no /var/log file needed).

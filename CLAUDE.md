@@ -207,7 +207,7 @@ Operator recipes: `deploy/systemd/README.md` (systemd units), `deploy/docker/REA
 - LLM config: Gemini 3 Pro (guru pilot, low thinking budget)
 - Runtime data (outside repo, survives git ops):
   - `~/.alphalens/candidates.db` — Layer 1 candidate queue (historical log; no live drain)
-  - `~/.alphalens_research/edgar-detect/` — portfolio.yaml, EDGAR dedup, digest, launchd logs
+  - `~/.alphalens/edgar-detect/` — portfolio.yaml, EDGAR dedup, digest, launchd logs
   - `~/.alphalens/form4_parquet/` — VPS Form-4 backfill output (hive-partitioned)
   - `~/.alphalens/av_cache/` — VPS AV EARNINGS daily backfill output (per-ticker JSON)
   - `~/.alphalens/thematic_briefs/` — daily thematic pipeline parquets (consumed by Django briefs ingest)

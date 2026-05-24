@@ -206,7 +206,7 @@ systemctl --user enable --now alphalens-thematic-build.timer
 ### Inspect
 
 ```bash
-systemctl --user list-timers alphalens-thematic-daily
+systemctl --user list-timers alphalens-thematic-build
 journalctl --user -u alphalens-thematic-build.service --since today
 systemctl --user start alphalens-thematic-build.service     # manual fire
 ```

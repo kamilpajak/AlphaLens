@@ -50,7 +50,9 @@ def _resolve_credentials() -> tuple[str, str, str]:
 def _resolve_output_dir(custom: Path | None) -> Path:
     if custom is not None:
         return custom
-    repo_root = Path(__file__).resolve().parents[2]
+    # File lives at apps/alphalens-pipeline/alphalens_cli/commands/literature.py;
+    # repo root is four parents up (commands → alphalens_cli → alphalens-pipeline → apps → root).
+    repo_root = Path(__file__).resolve().parents[4]
     return repo_root / DEFAULT_OUTPUT_DIR
 
 

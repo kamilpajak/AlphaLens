@@ -72,5 +72,30 @@ class TestLiteratureCLI(unittest.TestCase):
         self.assertEqual(mock_run.call_args.kwargs["output_dir"], Path("/tmp/out"))
 
 
+class TestLiteratureOutputDir(unittest.TestCase):
+    def test_default_output_dir_resolves_to_repo_root(self):
+        # Regression: after the workspace split (ADR 0011) the literature CLI
+        # lives at apps/alphalens-pipeline/alphalens_cli/commands/literature.py,
+        # so Path(__file__).parents[2] now lands on apps/alphalens-pipeline,
+        # not the repo root. The default output dir must still resolve to the
+        # canonical docs/research/literature_review/ at the repo root, not
+        # to a stray subtree under apps/alphalens-pipeline/.
+        from alphalens_cli.commands.literature import _resolve_output_dir
+
+        resolved = _resolve_output_dir(None)
+        # Repo root contains an `apps/` directory and a `pyproject.toml`.
+        repo_root = resolved.parents[2]  # docs/research/literature_review → repo_root
+        self.assertTrue(
+            (repo_root / "apps").is_dir(),
+            f"Resolved output dir {resolved} does not sit under a repo root with apps/ "
+            "(parents[N] indexing in _resolve_output_dir has regressed).",
+        )
+        self.assertTrue(
+            (repo_root / "pyproject.toml").is_file(),
+            f"Resolved output dir {resolved} does not sit under a repo root with pyproject.toml.",
+        )
+        self.assertEqual(resolved.name, "literature_review")
+
+
 if __name__ == "__main__":
     unittest.main()
