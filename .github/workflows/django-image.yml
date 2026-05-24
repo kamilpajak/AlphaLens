@@ -15,6 +15,12 @@ on:
     branches: [main, feature/django-migration]
     paths:
       - 'apps/alphalens-django/**'
+      # uv.lock + workspace root pyproject — the Dockerfile uses
+      # `uv sync --frozen` against the workspace lockfile, so any
+      # lockfile bump (incl. research-side dep changes that propagate
+      # through the shared graph) needs to rebuild the django image.
+      - 'pyproject.toml'
+      - 'uv.lock'
       - 'deploy/docker/django-prod/Dockerfile'
       - '.github/workflows/django-image.yml'
   workflow_dispatch:

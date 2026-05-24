@@ -22,27 +22,34 @@ ENV UV_LINK_MODE=copy \
 
 WORKDIR /app
 
-# Copy only the dependency manifest first so the layer cache survives
-# source edits.
-COPY apps/alphalens-django/pyproject.toml ./pyproject.toml
+# Copy the workspace manifests + lockfile. uv sync --frozen needs every
+# member's pyproject.toml to validate the workspace dependency graph,
+# even when --package narrows the install to a single member.
+COPY pyproject.toml uv.lock ./
+COPY apps/alphalens-pipeline/pyproject.toml apps/alphalens-pipeline/pyproject.toml
+COPY apps/alphalens-research/pyproject.toml apps/alphalens-research/pyproject.toml
+COPY apps/alphalens-django/pyproject.toml apps/alphalens-django/pyproject.toml
 
-RUN uv venv .venv --python python3.13 \
-    && uv pip install --python .venv/bin/python -e . "gunicorn>=26.0"
+# Install the alphalens-django member's transitive PyPI deps from the
+# frozen lockfile. --no-install-workspace skips the workspace members
+# themselves (source isn't copied yet); --package narrows resolution to
+# the django dep subtree so the runtime image doesn't pull pandas+
+# lightgbm+statsmodels from the research stack. --no-dev excludes the
+# workspace-wide dev tools group (ruff/pytest/pyright/etc.).
+RUN uv sync --frozen --no-dev --no-install-workspace --package alphalens-django
 
-# Now copy the source modules explicitly. A blanket
-# ``COPY apps/alphalens-django/ ./`` would clobber the .venv directory
-# created above, because Docker's .dockerignore only applies when it
-# lives at the build context root — our scoped one next to the
-# Dockerfile is read by buildkit as a per-Dockerfile ignore but the
-# semantics are non-portable, so we just list directories explicitly.
-COPY apps/alphalens-django/manage.py ./manage.py
-COPY apps/alphalens-django/config/ ./config/
-COPY apps/alphalens-django/briefs/ ./briefs/
-COPY apps/alphalens-django/auth_cf/ ./auth_cf/
-COPY apps/alphalens-django/core/ ./core/
-# Final install is non-editable so site-packages owns the source rather than
-# a .pth pointer back to /app. Deps already resolved in the previous layer.
-RUN uv pip install --python .venv/bin/python --no-deps --force-reinstall .
+# Copy the django package source AFTER the deps layer so source edits
+# don't bust the (expensive) PyPI install cache.
+COPY apps/alphalens-django/manage.py apps/alphalens-django/manage.py
+COPY apps/alphalens-django/config/ apps/alphalens-django/config/
+COPY apps/alphalens-django/briefs/ apps/alphalens-django/briefs/
+COPY apps/alphalens-django/auth_cf/ apps/alphalens-django/auth_cf/
+COPY apps/alphalens-django/core/ apps/alphalens-django/core/
+
+# Install the django workspace member itself (no deps re-resolution —
+# already locked into .venv above). --no-editable so site-packages owns
+# the source rather than a .pth pointer back to /app/apps/...
+RUN uv sync --frozen --no-dev --no-editable --package alphalens-django
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +62,10 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:${PATH}" \
     DJANGO_SETTINGS_MODULE=config.settings.prod
 
-WORKDIR /app
+# WORKDIR is the django member dir so `manage.py` + `config/` are at cwd
+# (gunicorn finds `config.asgi:application` via the default cwd PYTHONPATH).
+# The .venv lives one level up at /app/.venv (workspace root).
+WORKDIR /app/apps/alphalens-django
 
 # Non-root user — Django reads ``$HOME/.cache`` on some code paths so we
 # create the home dir even though the app itself doesn't need it.
@@ -69,16 +79,20 @@ RUN apt-get update \
 
 COPY --from=builder --chown=django:django /app /app
 
+USER django
+
 # Collect static at build time so the runtime container is read-only.
-# DEBUG=False is the default in prod settings; we feed a throwaway
-# SECRET_KEY purely so the management command can boot.
+# Run as `django` (not root) so the generated staticfiles/ tree is owned
+# by the runtime user — any future WhiteNoise compression / startup
+# rewrite avoids PermissionError. /tmp is world-writable, so the
+# throwaway SQLite DB still creates fine. DEBUG=False is the default in
+# prod settings; we feed a throwaway SECRET_KEY purely so the management
+# command can boot.
 RUN DJANGO_SETTINGS_MODULE=config.settings.prod \
     SECRET_KEY=collectstatic-only \
     ALLOWED_HOSTS=localhost \
     DATABASE_URL=sqlite:///tmp/collectstatic.db \
     /app/.venv/bin/python manage.py collectstatic --noinput
-
-USER django
 
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
