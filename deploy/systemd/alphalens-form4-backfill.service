@@ -4,13 +4,13 @@
 # Install as a *user* unit so it does not require root:
 #
 #   mkdir -p ~/.config/systemd/user
-#   cp deploy/systemd/form4-backfill.service ~/.config/systemd/user/
+#   cp deploy/systemd/alphalens-form4-backfill.service ~/.config/systemd/user/
 #   # Edit Environment= lines to match your VPS paths and email
 #   systemctl --user daemon-reload
-#   systemctl --user enable --now form4-backfill.service
+#   systemctl --user enable --now alphalens-form4-backfill.service
 #
-# Inspect:  journalctl --user -u form4-backfill.service -f
-# Stop:     systemctl --user stop form4-backfill.service
+# Inspect:  journalctl --user -u alphalens-form4-backfill.service -f
+# Stop:     systemctl --user stop alphalens-form4-backfill.service
 #
 # Persistence (survives logout): once, as the user:
 #   loginctl enable-linger $USER

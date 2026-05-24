@@ -143,7 +143,7 @@ class SecEdgarClient:
 
     def get_json(self, url: str) -> dict[str, Any]:
         """Fetch ``url`` and parse JSON. Public escape hatch for shadow callers
-        (watchdog, thematic verification) that need SEC URLs not covered by
+        (edgar_detector, thematic verification) that need SEC URLs not covered by
         the ``fetch_*`` convenience methods. Goes through the same throttle +
         retry + User-Agent contract.
         """
@@ -163,7 +163,7 @@ class SecEdgarClient:
     # Catch the entire RequestException family — SSLError, InvalidURL,
     # TooManyRedirects, and the connection/timeout subclasses all surface
     # here. Narrow tuples leak unrelated requests failures to callers and
-    # crash the launchd watchdog on otherwise-transient SSL noise.
+    # crash the launchd detector on otherwise-transient SSL noise.
     _TRANSIENT_NET_EXCEPTIONS = (requests.RequestException,)
 
     def _throttle(self) -> None:
@@ -247,7 +247,7 @@ class SecEdgarClient:
 
 
 # Module-level lazy singleton — single SecEdgarClient instance shared by every
-# caller that doesn't have its own injected client (watchdog, thematic
+# caller that doesn't have its own injected client (edgar_detector, thematic
 # verification module-level functions). Reading SEC_EDGAR_USER_AGENT once at
 # first call keeps the env-var resolution centralized; tests reset via
 # _reset_default_client_for_tests().

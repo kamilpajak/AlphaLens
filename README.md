@@ -13,7 +13,7 @@ Research lab infrastructure for retail active alpha experimentation — real-tim
 
 The repo is a small monorepo with three Python workspace members + a frontend + shared infra:
 
-- **`apps/alphalens-pipeline/`** — live production tier: `alphalens_pipeline` (watchdog, thematic daily, literature_review, data clients, scorer library) + the `alphalens` Typer CLI binary. Split rationale: [ADR 0011](docs/adr/0011-split-pipeline-and-research.md).
+- **`apps/alphalens-pipeline/`** — live production tier: `alphalens_pipeline` (edgar_detector, thematic build, literature_scanner, data clients, scorer library) + the `alphalens` Typer CLI binary. Split rationale: [ADR 0011](docs/adr/0011-split-pipeline-and-research.md).
 - **`apps/alphalens-research/`** — research lab: `alphalens_research` (screeners, backtest engine, attribution, overlays, gates, preaudit, diagnostics, paper-trade). Lab imports from pipeline (`data`, `core`, `scorers`); the reverse is forbidden at top level (enforced by `tests/test_module_dependencies.py`).
 - **`apps/alphalens-django/`** — read/write briefs API (Django 6 + DRF + Postgres + Cloudflare Access). Migration history in [ADR 0009](docs/adr/0009-django-replaces-fastapi.md).
 - **`apps/web/`** — SvelteKit + Tailwind dashboard that consumes the Django API.
@@ -32,7 +32,7 @@ Two parallel research tracks active:
 The first phase-robust positive observation landed 2026-05-09 — PASS_MARGINAL on Cohen-Malloy opportunistic Form-4 — replicated across two independent OOS windows. PASS_MARGINAL is not a full PASS; it unlocks eligibility for advanced overlay testing, not capital deployment.
 
 Live in production:
-- Layer 1 SEC EDGAR watchdog (launchd `detect` every 15 min)
+- Layer 1 SEC EDGAR detector (launchd `edgar-detect` every 15 min)
 - Literature review (Perplexity, monthly + weekly)
 - Paper-trade refresh + scorer (Sun 17:00, Mon 06:00)
 - VPS daily thematic pipeline → Django brief API → SvelteKit dashboard
@@ -48,8 +48,8 @@ Each layer / screener package declares `__status__ ∈ {ACTIVE, CLOSED, RESEARCH
 | Path | Status | Notes |
 |------|--------|-------|
 | `alphalens_pipeline/core/` | ACTIVE (namespace) | Plumbing — candidates, queue |
-| `alphalens_pipeline/watchdog/` | ACTIVE | Layer 1 — `detect` live in launchd |
-| `alphalens_pipeline/literature_review/` | ACTIVE | Monthly + weekly Perplexity scan, live in launchd |
+| `alphalens_pipeline/edgar_detector/` | ACTIVE | Layer 1 — `detect` live in launchd |
+| `alphalens_pipeline/literature_scanner/` | ACTIVE | Monthly + weekly Perplexity scan, live in launchd |
 | `alphalens_pipeline/thematic/` | ACTIVE | Daily thematic pipeline (news → brief), live on VPS |
 | `alphalens_pipeline/data/` | ACTIVE (namespace) | PIT SoT + vendor clients + S&P 400/500/600 PIT yamls |
 | `alphalens_pipeline/scorers/` | ACTIVE | Reusable validated-scorer library |
@@ -108,7 +108,7 @@ External methodology dep: [`kamilpajak/phase-robust-backtesting`](https://github
 
 ### Architecture (5 layers per ADR 0007)
 
-1. **Watchdog** (`alphalens_pipeline/watchdog/`) — SEC EDGAR event detection + classifier + dispatch.
+1. **Watchdog** (`alphalens_pipeline/edgar_detector/`) — SEC EDGAR event detection + classifier + dispatch.
 2. **Screener** (`alphalens_research/screeners/*`) — cross-sectional rank @ asof → top-N tickers.
 3. **Backtest engine** (`alphalens_research/backtest/engine.py`) — strided rebalance → `BacktestReport`.
 4. **Risk overlay** (`alphalens_research/overlays/`) — time-series sizing on portfolio realised vol.
@@ -155,7 +155,7 @@ TELEGRAM_CHAT_ID=...
 POLYGON_API_KEY=...
 ```
 
-Layer 1 routing config at `~/.alphalens/watchdog/portfolio.yaml`:
+Layer 1 routing config at `~/.alphalens/edgar-detect/portfolio.yaml`:
 
 ```yaml
 held:    [AAPL, MSFT]
@@ -166,7 +166,7 @@ watchlist: [NVDA, GOOGL]
 
 ```bash
 # Live workflows
-.venv/bin/alphalens watchdog run-once          # Layer 1: poll EDGAR, classify, dispatch
+.venv/bin/alphalens edgar detect                 # Layer 1: poll EDGAR, classify, dispatch
 .venv/bin/alphalens status                     # global queue + digest + dedup
 .venv/bin/alphalens literature monthly         # ad-hoc Perplexity deep scan (~1h)
 .venv/bin/alphalens literature weekly          # ad-hoc weekly RSS scan (~15min)
@@ -197,21 +197,19 @@ sqlite3 ~/.alphalens/candidates.db \
 
 | Job | When | Purpose |
 |---|---|---|
-| `com.alphalens.watchdog.detect` | every 15 min | Layer 1 EDGAR poll → submit Candidates |
-| `com.alphalens.literature-review.monthly` | 1st of month, 09:00 | Perplexity deep literature scan |
-| `com.alphalens.literature-review.weekly` | Sunday, 18:00 | Perplexity RSS scan |
-| `com.alphalens.paper-trade.refresh` | Sunday, 17:00 | Paper-trade portfolio refresh |
-| `com.alphalens.paper-trade.score` | Monday, 06:00 | Paper-trade scorer |
+| `com.alphalens.edgar-detect` | every 15 min | Layer 1 EDGAR poll → submit Candidates |
+| `com.alphalens.literature-scan-monthly` | 1st of month, 09:00 | Perplexity deep literature scan |
+| `com.alphalens.literature-scan-weekly` | Sunday, 18:00 | Perplexity RSS scan |
+| `com.alphalens.paper-trade-track` | Sunday, 17:00 | Paper-trade portfolio refresh |
 
 Install:
 
 ```bash
 cp deploy/launchd/com.alphalens.*.plist ~/Library/LaunchAgents/
-for plist in com.alphalens.watchdog.detect \
-             com.alphalens.literature-review.monthly \
-             com.alphalens.literature-review.weekly \
-             com.alphalens.paper-trade.refresh \
-             com.alphalens.paper-trade.score; do
+for plist in com.alphalens.edgar-detect \
+             com.alphalens.literature-scan-monthly \
+             com.alphalens.literature-scan-weekly \
+             com.alphalens.paper-trade-track \
   launchctl load ~/Library/LaunchAgents/${plist}.plist
 done
 ```
@@ -221,7 +219,7 @@ done
 ```
 apps/
 ├── alphalens-pipeline/          ← live production tier (Python)
-│   ├── alphalens_pipeline/      ← watchdog, thematic, literature_review, data, core, scorers
+│   ├── alphalens_pipeline/      ← edgar_detector, thematic, literature_scanner, data, core, scorers
 │   ├── alphalens_cli/           ← Typer CLI entry points (alphalens binary)
 │   └── data/                    ← S&P 400/500/600 PIT yamls
 ├── alphalens-research/          ← research lab (Python)
@@ -238,7 +236,7 @@ deploy/
 ├── docker/
 │   ├── Dockerfile.pipeline      ← pipeline image (thematic daily)
 │   └── django-prod/             ← Django + nginx + Postgres compose
-├── systemd/                     ← VPS user units (form4-backfill, av-earnings, thematic daily)
+├── systemd/                     ← VPS user units (form4-backfill, av-earnings, thematic build)
 ├── launchd/                     ← macOS scheduled jobs (5 live)
 └── runpod/                      ← GPU/CPU pod bootstrap + experiment runner
 

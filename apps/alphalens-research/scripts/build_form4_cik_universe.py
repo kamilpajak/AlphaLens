@@ -1,7 +1,7 @@
 """Emit a CIK list file for the Form-4 backfill orchestrator.
 
 Reads SEC's ``company_tickers.json`` (cached at
-``~/.alphalens/watchdog/company_tickers.json`` by the Layer 1 watchdog) and
+``~/.alphalens/edgar-detect/company_tickers.json`` by the Layer 1 EDGAR detector) and
 emits one 10-digit zero-padded CIK per line.
 
 Scope rationale: ``company_tickers.json`` lists ~10k US public issuers with
@@ -28,7 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--source",
         type=Path,
-        default=Path.home() / ".alphalens" / "watchdog" / "company_tickers.json",
+        default=Path.home() / ".alphalens" / "edgar-detect" / "company_tickers.json",
     )
     ap.add_argument(
         "--out",
@@ -43,7 +43,7 @@ def main() -> int:
     if not args.source.is_file():
         sys.stderr.write(
             f"ERROR: SEC company_tickers cache missing at {args.source}.\n"
-            "Either run the Layer 1 watchdog once, or fetch manually:\n"
+            "Either run the Layer 1 EDGAR detector once, or fetch manually:\n"
             "  curl -A 'YourName email@example.com' "
             "https://www.sec.gov/files/company_tickers.json > "
             f"{args.source}\n"

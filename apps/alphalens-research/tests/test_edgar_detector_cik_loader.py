@@ -90,7 +90,7 @@ class TestCIKLoader(unittest.TestCase):
     def test_default_cache_path_is_in_alphalens_home(self):
         from alphalens_pipeline.edgar_detector.sources.cik_loader import default_cik_cache_path
 
-        expected = Path.home() / ".alphalens" / "watchdog" / "company_tickers.json"
+        expected = Path.home() / ".alphalens" / "edgar-detect" / "company_tickers.json"
         self.assertEqual(default_cik_cache_path(), expected)
 
     def test_case_insensitive_ticker_lookup(self):

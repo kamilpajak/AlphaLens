@@ -14,7 +14,7 @@ import unittest
 WALK_TARGETS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "alphalens_pipeline",
-        ("watchdog", "thematic", "data", "core", "scorers", "literature_review"),
+        ("edgar_detector", "thematic", "data", "core", "scorers", "literature_scanner"),
     ),
     (
         "alphalens_research",

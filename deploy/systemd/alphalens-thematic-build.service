@@ -8,17 +8,17 @@
 # Install as a *user* unit alongside the companion timer:
 #
 #   mkdir -p ~/.config/systemd/user
-#   cp deploy/systemd/alphalens-thematic-daily.service ~/.config/systemd/user/
-#   cp deploy/systemd/alphalens-thematic-daily.timer   ~/.config/systemd/user/
+#   cp deploy/systemd/alphalens-thematic-build.service ~/.config/systemd/user/
+#   cp deploy/systemd/alphalens-thematic-build.timer   ~/.config/systemd/user/
 #   systemctl --user daemon-reload
-#   systemctl --user enable --now alphalens-thematic-daily.timer
+#   systemctl --user enable --now alphalens-thematic-build.timer
 #
-# Inspect:           journalctl --user -u alphalens-thematic-daily.service -f
-# Trigger manually:  systemctl --user start alphalens-thematic-daily.service
+# Inspect:           journalctl --user -u alphalens-thematic-build.service -f
+# Trigger manually:  systemctl --user start alphalens-thematic-build.service
 #
 # Persistence (survives logout) — once, as the user:
 #   sudo loginctl enable-linger "$USER"
-Description=AlphaLens thematic pipeline daily run
+Description=AlphaLens thematic build (daily)
 After=network-online.target docker.service
 Wants=network-online.target
 

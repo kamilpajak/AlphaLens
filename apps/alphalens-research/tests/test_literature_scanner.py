@@ -344,7 +344,7 @@ class TestPeriodFormat(unittest.TestCase):
 
 
 class TestLayerStatus(unittest.TestCase):
-    def test_literature_review_module_declares_active_status(self):
+    def test_literature_scanner_module_declares_active_status(self):
         import alphalens_pipeline.literature_scanner as mod
 
         self.assertEqual(mod.__status__, "ACTIVE")

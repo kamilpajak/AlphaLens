@@ -2,7 +2,7 @@
 
 Wraps the existing ``alphalens_pipeline.edgar_detector.sources.edgar.SECEdgarSource`` so that
 parsing logic, CIK resolution and rate-limiting are shared with the Layer 1
-production watchdog. To avoid colliding with the live watchdog's deduplication
+production edgar_detector. To avoid colliding with the live detector's deduplication
 state, this adapter uses its own ``SeenEventStore`` at
 ``~/.alphalens/thematic_news/edgar/seen.db``.
 
@@ -59,7 +59,7 @@ def _detect_events(*, tickers: list[str], cache_dir: Path) -> list[Event]:
 
 
 def transform(events: Iterable[Event]) -> pd.DataFrame:
-    """Normalise watchdog ``Event`` records to the unified ``NEWS_COLUMNS`` schema."""
+    """Normalise edgar_detector ``Event`` records to the unified ``NEWS_COLUMNS`` schema."""
     rows: list[dict] = []
     for ev in events:
         items_str = (ev.raw_data or {}).get("items") or ""

@@ -42,8 +42,8 @@ class TestDetectorOrchestrator(unittest.TestCase):
         source_b = MagicMock()
         source_b.detect.return_value = [_mk_event("MSFT", "ACC-B1")]
 
-        watchdog = self._build_detector(sources=[source_a, source_b])
-        watchdog.run_once()
+        detector = self._build_detector(sources=[source_a, source_b])
+        detector.run_once()
 
         source_a.detect.assert_called_once()
         source_b.detect.assert_called_once()
@@ -56,8 +56,8 @@ class TestDetectorOrchestrator(unittest.TestCase):
             _mk_event("MSFT", "ACC-2"),
         ]
 
-        watchdog = self._build_detector(sources=[source], router=router)
-        watchdog.run_once()
+        detector = self._build_detector(sources=[source], router=router)
+        detector.run_once()
 
         self.assertEqual(router.dispatch.call_count, 2)
 
@@ -68,8 +68,8 @@ class TestDetectorOrchestrator(unittest.TestCase):
         good = MagicMock()
         good.detect.return_value = [_mk_event("AAPL")]
 
-        watchdog = self._build_detector(sources=[bad, good], router=router)
-        watchdog.run_once()
+        detector = self._build_detector(sources=[bad, good], router=router)
+        detector.run_once()
 
         router.dispatch.assert_called_once()
 
@@ -77,8 +77,8 @@ class TestDetectorOrchestrator(unittest.TestCase):
         source = MagicMock()
         source.detect.return_value = [_mk_event(), _mk_event("MSFT", "ACC-2")]
 
-        watchdog = self._build_detector(sources=[source])
-        result = watchdog.run_once()
+        detector = self._build_detector(sources=[source])
+        result = detector.run_once()
 
         self.assertEqual(result["events_detected"], 2)
         self.assertEqual(result["events_dispatched"], 2)

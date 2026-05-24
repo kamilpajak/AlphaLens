@@ -6,13 +6,13 @@
 # Install as a *user* unit alongside the companion timer:
 #
 #   mkdir -p ~/.config/systemd/user
-#   cp deploy/systemd/av-earnings-backfill.service ~/.config/systemd/user/
-#   cp deploy/systemd/av-earnings-backfill.timer   ~/.config/systemd/user/
+#   cp deploy/systemd/alphalens-av-earnings-backfill.service ~/.config/systemd/user/
+#   cp deploy/systemd/alphalens-av-earnings-backfill.timer   ~/.config/systemd/user/
 #   systemctl --user daemon-reload
-#   systemctl --user enable --now av-earnings-backfill.timer
+#   systemctl --user enable --now alphalens-av-earnings-backfill.timer
 #
-# Inspect:  journalctl --user -u av-earnings-backfill.service -f
-# Trigger manually: systemctl --user start av-earnings-backfill.service
+# Inspect:  journalctl --user -u alphalens-av-earnings-backfill.service -f
+# Trigger manually: systemctl --user start alphalens-av-earnings-backfill.service
 #
 # Persistence (survives logout) — once, as the user:
 #   sudo loginctl enable-linger "$USER"

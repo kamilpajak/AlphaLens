@@ -1,5 +1,5 @@
 [Unit]
-# Fires the companion alphalens-thematic-daily.service once per day.
+# Fires the companion alphalens-thematic-build.service once per day.
 #
 # OnCalendar: 06:30 UTC = 02:30 ET. After AV's daily 25-call quota window
 # opens (00:00 UTC) and after late press releases hit Polygon for the
@@ -8,13 +8,13 @@
 #
 # Persistent=true: if the VPS was off when a scheduled run was due, fire
 # the missed run at next boot rather than skipping the day silently.
-Description=Trigger AlphaLens thematic pipeline daily
+Description=Trigger AlphaLens thematic build daily
 After=network-online.target
 
 [Timer]
 OnCalendar=*-*-* 06:30:00 UTC
 Persistent=true
-Unit=alphalens-thematic-daily.service
+Unit=alphalens-thematic-build.service
 
 [Install]
 WantedBy=timers.target

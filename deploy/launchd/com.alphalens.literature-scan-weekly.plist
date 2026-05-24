@@ -4,11 +4,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.alphalens.paper-trade.score</string>
+    <string>com.alphalens.literature-scan-weekly</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jacoren/Developer/Personal/AlphaLens/deploy/launchd/bin/alphalens-paper-trade-score</string>
+        <string>/Users/jacoren/Developer/Personal/AlphaLens/deploy/launchd/bin/alphalens-literature-scan-weekly</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -23,18 +23,18 @@
     <key>StartCalendarInterval</key>
     <dict>
         <key>Weekday</key>
-        <integer>1</integer>
+        <integer>0</integer>
         <key>Hour</key>
-        <integer>6</integer>
+        <integer>18</integer>
         <key>Minute</key>
         <integer>0</integer>
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/jacoren/.alphalens/watchdog/paper-trade-score.log</string>
+    <string>/Users/jacoren/.alphalens/literature-scan/weekly.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/jacoren/.alphalens/watchdog/paper-trade-score.err</string>
+    <string>/Users/jacoren/.alphalens/literature-scan/weekly.err</string>
 
     <key>RunAtLoad</key>
     <false/>

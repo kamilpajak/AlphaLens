@@ -63,7 +63,7 @@ class TestSeenEventStore(unittest.TestCase):
     def test_default_path_is_in_alphalens_home(self):
         from alphalens_pipeline.edgar_detector.storage import default_db_path
 
-        expected = Path.home() / ".alphalens" / "watchdog" / "seen_events.db"
+        expected = Path.home() / ".alphalens" / "edgar-detect" / "seen_events.db"
         self.assertEqual(default_db_path(), expected)
 
     def test_mark_seen_is_idempotent(self):

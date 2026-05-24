@@ -165,7 +165,7 @@ class SECEdgarSource(EventSource):
         """Best-effort text fetch via the canonical SEC client.
 
         Returns None on any client error so a single bad filing doesn't crash
-        detection of the rest of the universe (Layer 1 watchdog runs cron-style
+        detection of the rest of the universe (Layer 1 EDGAR detector runs cron-style
         and must degrade gracefully). The canonical client handles throttle +
         retry/backoff; SecEdgarError reaches us only after retries exhaust.
         """

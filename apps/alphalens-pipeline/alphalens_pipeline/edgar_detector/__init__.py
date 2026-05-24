@@ -1,4 +1,4 @@
-"""Layer 1 SEC EDGAR watchdog (live in launchd)."""
+"""Layer 1 SEC EDGAR detector (live in launchd)."""
 
 from typing import Literal
 

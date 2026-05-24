@@ -58,7 +58,7 @@ RULES = (
     },
     {
         # Workspace split (PR2): the pipeline tier hosts live infrastructure
-        # (data, core, scorers, watchdog, thematic, literature_review) and
+        # (data, core, scorers, edgar_detector, thematic, literature_scanner) and
         # must remain downstream-free. The research tier consumes pipeline,
         # never the reverse. Direct top-level imports from alphalens_pipeline
         # to alphalens_research would create a workspace-level dependency cycle.

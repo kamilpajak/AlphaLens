@@ -58,7 +58,7 @@ class TestPortfolioState(unittest.TestCase):
     def test_default_path_is_in_alphalens_home(self):
         from alphalens_pipeline.edgar_detector.portfolio import default_portfolio_path
 
-        expected = Path.home() / ".alphalens" / "watchdog" / "portfolio.yaml"
+        expected = Path.home() / ".alphalens" / "edgar-detect" / "portfolio.yaml"
         self.assertEqual(default_portfolio_path(), expected)
 
 

@@ -297,7 +297,7 @@ class TestCikFallbackChain(unittest.TestCase):
 
     def test_resolve_cik_falls_back_to_cik_loader(self):
         # Primary (SEC live company_tickers.json) misses; CIKLoader (TTL'd
-        # cache reused from watchdog) has the ticker.
+        # cache reused from edgar_detector) has the ticker.
         from alphalens_pipeline.edgar_detector.sources import cik_loader as cl
 
         fake_loader = cl.CIKLoader.__new__(cl.CIKLoader)

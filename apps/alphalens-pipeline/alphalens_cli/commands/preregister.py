@@ -12,7 +12,7 @@ Default ledger lives at ``docs/research/preregistration/ledger.json``.
 
 Imports of `phase_robust_backtesting.ledger` are deliberately scoped
 inside command bodies — same lazy-import discipline as
-`alphalens_cli/commands/research.py` (Layer 1 watchdog cron must not pay
+`alphalens_cli/commands/research.py` (Layer 1 EDGAR detector cron must not pay
 the import cost on every invoke). The methodology bundle lives in the
 external `phase-robust-backtesting` dep (see ADR 0006).
 """

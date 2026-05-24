@@ -1,6 +1,6 @@
 """Shared domain model for the candidate queue.
 
-Every screener (watchdog SEC events, momentum, prescreener) produces `Candidate`
+Every screener (edgar_detector SEC events, momentum, prescreener) produces `Candidate`
 instances. The unified `CandidateSink` (see `alphalens_pipeline.core.queue.CandidateQueue`)
 records them; `AnalysisResult` rows are kept as a historical viewer over past
 Layer 3 runs even though no live consumer drains the queue today.

@@ -11,7 +11,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repo.
 2. **Thematic event-driven research assistant** — MVP Phase A-E shipped 2026-05-17 (PRs #128-#134). Buy-side decision-support tool augmenting WhatsApp investing group workflow. Tool is **augmentation, NOT replacement** — user cherry-picks → group discusses → each member decides. Design: [`docs/research/thematic_event_tool_v1_design_2026_05_15.md`](docs/research/thematic_event_tool_v1_design_2026_05_15.md). Remaining: Telegram bot, Form-4 independent path, feedback ledger sqlite.
 
 **Live production:**
-- Layer 1 SEC EDGAR watchdog (launchd `detect`-only; `worker` archived per ADR 0008)
+- Layer 1 SEC EDGAR detector (launchd `edgar-detect`-only; `worker` archived per ADR 0008)
 - Literature review weekly + monthly Perplexity scan
 - VPS daily thematic pipeline + API rebuild + Cloudflare-fronted SvelteKit dashboard (see `## VPS backfills`)
 
@@ -26,8 +26,8 @@ Lifecycle status of each layer lives in its `__init__.py` as the `__status__` co
 | Path | Status | Notes |
 |------|--------|-------|
 | `alphalens_pipeline/core/` | ACTIVE (namespace) | plumbing — candidates, queue |
-| `alphalens_pipeline/watchdog/` | ACTIVE | Layer 1 — `detect` live in launchd |
-| `alphalens_pipeline/literature_review/` | ACTIVE | Monthly + weekly Perplexity scan, live in launchd |
+| `alphalens_pipeline/edgar_detector/` | ACTIVE | Layer 1 — `detect` live in launchd |
+| `alphalens_pipeline/literature_scanner/` | ACTIVE | Monthly + weekly Perplexity scan, live in launchd |
 | `alphalens_pipeline/thematic/` | ACTIVE | Daily thematic pipeline, live on VPS |
 | `alphalens_pipeline/data/` | ACTIVE (namespace) | data infrastructure — `data/store/` PIT SoT, `data/{alt_data,fundamentals,macro}/` clients, `data/factors.py`, `data/universes/` |
 | `alphalens_pipeline/scorers/` | ACTIVE | reusable validated-scorer library (fcff_yield, cohen_malloy_classifier, opportunistic_form4) |
@@ -81,7 +81,7 @@ just up / just down                              # Django prod compose stack
 uv run python -m unittest discover \
     -s apps/alphalens-research/tests \
     -t apps/alphalens-research -v
-.venv/bin/alphalens watchdog run-once            # Layer 1: poll EDGAR, classify, dispatch
+.venv/bin/alphalens edgar detect                   # Layer 1: poll EDGAR, classify, dispatch
 .venv/bin/alphalens status                       # global queue + digest + dedup
 .venv/bin/alphalens literature monthly           # ad-hoc deep literature scan (Perplexity high)
 .venv/bin/alphalens literature weekly            # ad-hoc weekly RSS scan
@@ -102,7 +102,7 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 
 **Config parity** — `SCORER_CONFIG` in `lean_project/main.py` (Docker-inlined) must match `LEAN_DEFAULTS` on shared keys. Enforcement: `apps/alphalens-research/tests/test_lean_config_parity.py`.
 
-**Lazy CLI imports** — `apps/alphalens-pipeline/alphalens_cli/commands/research.py` intentionally does NOT promote cross-function duplicates to top-level. Measured +913ms regression in `alphalens` startup time per invoke (Layer 1 watchdog cron fires often). The same pattern keeps `pipeline → research` from leaking into top-level imports across the workspace split.
+**Lazy CLI imports** — `apps/alphalens-pipeline/alphalens_cli/commands/research.py` intentionally does NOT promote cross-function duplicates to top-level. Measured +913ms regression in `alphalens` startup time per invoke (Layer 1 edgar-detect cron fires often). The same pattern keeps `pipeline → research` from leaking into top-level imports across the workspace split.
 
 **No backward compatibility** — solo project, zero external users. Rename, refactor, drop old behavior in one commit without aliases.
 
@@ -128,7 +128,7 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 
 **PR descriptions: surface known issues / limitations / deferrals** — noted limitations (silent-fail mode, edge cases, scope cuts, "worth fallback later" items) go in a dedicated `## Known issues` / `## Behaviour notes` PR-body section so future sessions can pick up follow-ups without re-discovering. Overrides global "keep PR bodies short" rule — known-issues section stays.
 
-**One canonical HTTP client per external vendor** — every SEC EDGAR call goes through `alphalens_pipeline/data/alt_data/sec_edgar_client.py::SecEdgarClient`; every Alpha Vantage call through `alphavantage_client.py::AlphaVantageClient`; every Gemini call through `gemini_client.py::GeminiClient`; every Polygon call through `polygon_client.py::PolygonClient`. Why: rate caps are per-IP / per-key — shadow clients fragment the request stream and break quota tracking. Sites with an injected client (watchdog `SECEdgarSource`, `CIKLoader`; thematic mapper/extractor/generator; thematic press verification + news ingest; `PolygonShortInterestClient` domain wrapper) keep DI; module-level helpers call the respective `get_default_*_client()`. Env vars: `SEC_EDGAR_USER_AGENT`, `ALPHA_VANTAGE_API_KEY`, `GOOGLE_API_KEY`, `POLYGON_API_KEY`. Enforcement: `apps/alphalens-research/tests/test_no_raw_sec_http.py`, `apps/alphalens-research/tests/test_no_raw_av_http.py`, `apps/alphalens-research/tests/test_no_raw_gemini_sdk.py`, `apps/alphalens-research/tests/test_no_raw_polygon_http.py` — each with a positive-control case so the regex / URL-list cannot rot to empty silently. Design memos: `docs/research/{sec_edgar,alphavantage,gemini,polygon}_client_consolidation_2026_05_*.md`.
+**One canonical HTTP client per external vendor** — every SEC EDGAR call goes through `alphalens_pipeline/data/alt_data/sec_edgar_client.py::SecEdgarClient`; every Alpha Vantage call through `alphavantage_client.py::AlphaVantageClient`; every Gemini call through `gemini_client.py::GeminiClient`; every Polygon call through `polygon_client.py::PolygonClient`. Why: rate caps are per-IP / per-key — shadow clients fragment the request stream and break quota tracking. Sites with an injected client (edgar_detector `SECEdgarSource`, `CIKLoader`; thematic mapper/extractor/generator; thematic press verification + news ingest; `PolygonShortInterestClient` domain wrapper) keep DI; module-level helpers call the respective `get_default_*_client()`. Env vars: `SEC_EDGAR_USER_AGENT`, `ALPHA_VANTAGE_API_KEY`, `GOOGLE_API_KEY`, `POLYGON_API_KEY`. Enforcement: `apps/alphalens-research/tests/test_no_raw_sec_http.py`, `apps/alphalens-research/tests/test_no_raw_av_http.py`, `apps/alphalens-research/tests/test_no_raw_gemini_sdk.py`, `apps/alphalens-research/tests/test_no_raw_polygon_http.py` — each with a positive-control case so the regex / URL-list cannot rot to empty silently. Design memos: `docs/research/{sec_edgar,alphavantage,gemini,polygon}_client_consolidation_2026_05_*.md`.
 
 **Zen pre-MERGE codereview is mandatory** for any non-trivial PR (Python pipeline OR `web/` frontend). Workflow: push → open PR → `mcp__zen__codereview` with `gemini-3-pro-preview` + `thinking_mode="high"` → apply findings as additional commits on the open PR (preserve review trail) → wait CI green on latest commit → merge. Mixed-stack PRs need one combined zen pass, not two. Skippable only for doc-only / single-line typo / pure comment changes.
 
@@ -184,9 +184,9 @@ Long-running data acquisition jobs that don't fit on the laptop run on the dedic
 
 | Unit | Pattern | Script | Output cache | Wall-time | Status |
 |------|---------|--------|--------------|-----------|--------|
-| `form4-backfill.service` | long-running daemon (`Type=simple` + `Restart=on-failure`) | `apps/alphalens-research/scripts/run_form4_backfill.py` | `~/.alphalens/form4_parquet/` | ~5-10 days (SEC 10 req/s) | DONE 2026-05-08 (37MB final, 2.66M rows) |
-| `av-earnings-backfill.{service,timer}` | daily oneshot (`Type=oneshot` + `OnCalendar=*-*-* 00:05 UTC` + `Persistent=true`) | `apps/alphalens-research/scripts/av_earnings_daily_backfill.py` | `~/.alphalens/av_cache/earnings_<T>.json` | ~21 days (AV free-tier 25/day) | LIVE (paradigm-14 PEAD v2 backfill) |
-| `alphalens-thematic-daily.{service,timer}` | daily oneshot (`Type=oneshot` + `OnCalendar=*-*-* 06:30 UTC` + `Persistent=true`) wrapping `docker run --rm alphalens-pipeline` + `compose run --rm rebuild-cache` (Django stack) | `alphalens thematic {ingest,extract,map-themes,score,brief}` + `manage.py rebuild_briefs_cache` | `~/.alphalens/thematic_briefs/` + Postgres `briefs`/`days_meta` tables | ~5-15 min | LIVE — feeds Cloudflare-fronted SvelteKit dashboard via Django stack (`apps/alphalens-django/`, see `docs/django-migration` ADR) |
+| `alphalens-form4-backfill.service` | long-running daemon (`Type=simple` + `Restart=on-failure`) | `apps/alphalens-research/scripts/run_form4_backfill.py` | `~/.alphalens/form4_parquet/` | ~5-10 days (SEC 10 req/s) | DONE 2026-05-08 (37MB final, 2.66M rows) |
+| `alphalens-av-earnings-backfill.{service,timer}` | daily oneshot (`Type=oneshot` + `OnCalendar=*-*-* 00:05 UTC` + `Persistent=true`) | `apps/alphalens-research/scripts/av_earnings_daily_backfill.py` | `~/.alphalens/av_cache/earnings_<T>.json` | ~21 days (AV free-tier 25/day) | LIVE (paradigm-14 PEAD v2 backfill) |
+| `alphalens-thematic-build.{service,timer}` | daily oneshot (`Type=oneshot` + `OnCalendar=*-*-* 06:30 UTC` + `Persistent=true`) wrapping `docker run --rm alphalens-pipeline` + `compose run --rm rebuild-cache` (Django stack) | `alphalens thematic {ingest,extract,map-themes,score,brief}` + `manage.py rebuild_briefs_cache` | `~/.alphalens/thematic_briefs/` + Postgres `briefs`/`days_meta` tables | ~5-15 min | LIVE — feeds Cloudflare-fronted SvelteKit dashboard via Django stack (`apps/alphalens-django/`, see `docs/django-migration` ADR) |
 
 **Why VPS, not Mac:**
 - Mac sleeps / restarts → multi-day jobs lose state; VPS is always-on
@@ -207,7 +207,7 @@ Operator recipes: `deploy/systemd/README.md` (systemd units), `deploy/docker/REA
 - LLM config: Gemini 3 Pro (guru pilot, low thinking budget)
 - Runtime data (outside repo, survives git ops):
   - `~/.alphalens/candidates.db` — Layer 1 candidate queue (historical log; no live drain)
-  - `~/.alphalens_research/watchdog/` — portfolio.yaml, EDGAR dedup, digest, launchd logs
+  - `~/.alphalens_research/edgar-detect/` — portfolio.yaml, EDGAR dedup, digest, launchd logs
   - `~/.alphalens/form4_parquet/` — VPS Form-4 backfill output (hive-partitioned)
   - `~/.alphalens/av_cache/` — VPS AV EARNINGS daily backfill output (per-ticker JSON)
   - `~/.alphalens/thematic_briefs/` — daily thematic pipeline parquets (consumed by Django briefs ingest)

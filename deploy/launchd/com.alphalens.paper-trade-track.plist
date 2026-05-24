@@ -4,11 +4,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.alphalens.paper-trade.refresh</string>
+    <string>com.alphalens.paper-trade-track</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/jacoren/Developer/Personal/AlphaLens/deploy/launchd/bin/alphalens-paper-trade-refresh</string>
+        <string>/Users/jacoren/Developer/Personal/AlphaLens/deploy/launchd/bin/alphalens-paper-trade-track</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -31,10 +31,10 @@
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/jacoren/.alphalens/watchdog/paper-trade-refresh.log</string>
+    <string>/Users/jacoren/.alphalens/paper-trade/track.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/jacoren/.alphalens/watchdog/paper-trade-refresh.err</string>
+    <string>/Users/jacoren/.alphalens/paper-trade/track.err</string>
 
     <key>RunAtLoad</key>
     <false/>

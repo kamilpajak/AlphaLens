@@ -4,7 +4,7 @@ The research lab — screeners, backtest, attribution, overlays, gates,
 preaudit, diagnostics, and paper-trade. Installed from the workspace
 root `pyproject.toml`.
 
-> Live infrastructure (watchdog, thematic, data clients, literature_review,
+> Live infrastructure (edgar_detector, thematic, data clients, literature_scanner,
 > scorers, and the `alphalens` CLI binary) lives in the sibling
 > [`apps/alphalens-pipeline/`](../alphalens-pipeline/) workspace member.
 > This lab depends on it via a workspace dep; the `alphalens` CLI is only
@@ -20,7 +20,7 @@ uv venv --python 3.13
 uv sync
 
 # Run a CLI subcommand
-.venv/bin/alphalens watchdog run-once
+.venv/bin/alphalens edgar detect
 .venv/bin/alphalens preregister threshold
 .venv/bin/alphalens audit insider_form4_opportunistic \
     --is-start 2018-01-01 --is-end 2023-12-31 --rebalance-stride 21

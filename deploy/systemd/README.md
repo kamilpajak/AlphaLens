@@ -3,7 +3,7 @@
 User-scoped service definitions for AlphaLens long-running tasks on Linux VPS
 hosts where launchd is unavailable.
 
-## form4-backfill.service
+## alphalens-form4-backfill.service
 
 SEC EDGAR Form-4 bulk backfill (`apps/alphalens-research/scripts/run_form4_backfill.py`). Wall-time on
 a small VPS: ~5-10 days for the full 2006-2026 R3000 universe (~8000 CIKs,
@@ -15,11 +15,11 @@ already-processed CIKs and resumes from where it left off.
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp deploy/systemd/form4-backfill.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-form4-backfill.service ~/.config/systemd/user/
 
 # Edit Environment= lines in the unit file to match your VPS paths and contact.
 systemctl --user daemon-reload
-systemctl --user enable --now form4-backfill.service
+systemctl --user enable --now alphalens-form4-backfill.service
 
 # One-time: allow the unit to keep running after logout.
 sudo loginctl enable-linger "$USER"
@@ -28,16 +28,16 @@ sudo loginctl enable-linger "$USER"
 ### Inspect
 
 ```bash
-systemctl --user status form4-backfill.service
-journalctl --user -u form4-backfill.service -f       # live tail
-journalctl --user -u form4-backfill.service --since "1 hour ago"
+systemctl --user status alphalens-form4-backfill.service
+journalctl --user -u alphalens-form4-backfill.service -f       # live tail
+journalctl --user -u alphalens-form4-backfill.service --since "1 hour ago"
 ```
 
 ### Stop / restart
 
 ```bash
-systemctl --user stop form4-backfill.service
-systemctl --user restart form4-backfill.service
+systemctl --user stop alphalens-form4-backfill.service
+systemctl --user restart alphalens-form4-backfill.service
 ```
 
 ### Parallel backfill across multiple machines
@@ -115,7 +115,7 @@ OOM kill, or `pkill` aborts a multi-day run with no restart. systemd's
 `StartLimitBurst=5` prevents tight crash loops if the underlying problem
 is persistent (bad credentials, exhausted disk, SEC ban).
 
-## av-earnings-backfill.service + av-earnings-backfill.timer
+## alphalens-av-earnings-backfill.service + alphalens-av-earnings-backfill.timer
 
 Alpha Vantage `EARNINGS` daily backfill (`apps/alphalens-research/scripts/av_earnings_daily_backfill.py`).
 Unlike the Form-4 daemon, this is a **oneshot** triggered by a daily timer:
@@ -128,26 +128,26 @@ paradigm reading AV EARNINGS hits the same store).
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp deploy/systemd/av-earnings-backfill.service ~/.config/systemd/user/
-cp deploy/systemd/av-earnings-backfill.timer   ~/.config/systemd/user/
+cp deploy/systemd/alphalens-av-earnings-backfill.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-av-earnings-backfill.timer   ~/.config/systemd/user/
 
 # Create .env at AlphaLens repo root with the API key:
 #   echo 'ALPHA_VANTAGE_API_KEY=...' > ~/AlphaLens/.env && chmod 600 ~/AlphaLens/.env
 
 systemctl --user daemon-reload
-systemctl --user enable --now av-earnings-backfill.timer
+systemctl --user enable --now alphalens-av-earnings-backfill.timer
 
 # Optional: trigger an immediate fire to validate the unit works.
-systemctl --user start av-earnings-backfill.service
+systemctl --user start alphalens-av-earnings-backfill.service
 ```
 
 ### Inspect
 
 ```bash
 systemctl --user list-timers --all              # see next-fire / last-fire
-systemctl --user status av-earnings-backfill.timer
-journalctl --user -u av-earnings-backfill.service -f
-journalctl --user -u av-earnings-backfill.service --since "yesterday"
+systemctl --user status alphalens-av-earnings-backfill.timer
+journalctl --user -u alphalens-av-earnings-backfill.service -f
+journalctl --user -u alphalens-av-earnings-backfill.service --since "yesterday"
 ```
 
 ### Optional rclone sync — systemd PATH caveat
@@ -168,7 +168,7 @@ the script daily, picks up only uncached tickers, exits cleanly on
 `AVRateLimitError` (return code 0 — expected steady-state), and lets
 systemd handle persistence across reboots via `Persistent=true`.
 
-## alphalens-thematic-daily.service / .timer
+## alphalens-thematic-build.service / .timer
 
 End-to-end thematic pipeline (news → brief → JSON refresh) running inside the
 `alphalens-pipeline` docker image. Fires daily at 06:30 UTC via the companion
@@ -197,16 +197,16 @@ dashboard keeps serving the previous day's snapshot.
 ### Install
 
 ```bash
-cp deploy/systemd/alphalens-thematic-daily.service ~/.config/systemd/user/
-cp deploy/systemd/alphalens-thematic-daily.timer   ~/.config/systemd/user/
+cp deploy/systemd/alphalens-thematic-build.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-thematic-build.timer   ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now alphalens-thematic-daily.timer
+systemctl --user enable --now alphalens-thematic-build.timer
 ```
 
 ### Inspect
 
 ```bash
 systemctl --user list-timers alphalens-thematic-daily
-journalctl --user -u alphalens-thematic-daily.service --since today
-systemctl --user start alphalens-thematic-daily.service     # manual fire
+journalctl --user -u alphalens-thematic-build.service --since today
+systemctl --user start alphalens-thematic-build.service     # manual fire
 ```

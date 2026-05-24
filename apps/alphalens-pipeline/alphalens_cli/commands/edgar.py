@@ -1,4 +1,4 @@
-"""`alphalens watchdog` — Layer 1 SEC EDGAR event detector."""
+"""`alphalens edgar` — Layer 1 SEC EDGAR event detector."""
 
 from __future__ import annotations
 
@@ -21,15 +21,15 @@ from alphalens_pipeline.edgar_detector.sources.cik_loader import CIKLoader
 from alphalens_pipeline.edgar_detector.sources.edgar import SECEdgarSource
 from alphalens_pipeline.edgar_detector.storage import SeenEventStore
 
-watchdog_app = typer.Typer(
-    name="watchdog",
+edgar_app = typer.Typer(
+    name="edgar",
     help="Layer 1: SEC EDGAR event detection + Telegram alerts.",
     no_args_is_help=True,
 )
 
 
-@watchdog_app.callback()
-def _watchdog_callback() -> None:
+@edgar_app.callback()
+def _edgar_callback() -> None:
     """Force multi-command behaviour even when only one command is registered."""
 
 
@@ -43,7 +43,7 @@ def _build_detector() -> Detector:
 
     portfolio = PortfolioState.load(default_portfolio_path())
 
-    home = Path.home() / ".alphalens" / "watchdog"
+    home = Path.home() / ".alphalens" / "edgar-detect"
     cik_loader = CIKLoader(cache_path=home / "company_tickers.json")
     cik_loader.load()
 
@@ -81,9 +81,9 @@ def _build_detector() -> Detector:
     )
 
 
-@watchdog_app.command(name="run-once")
-def run_once() -> None:
-    """Poll EDGAR once, classify new events, dispatch alerts."""
-    watchdog = _build_detector()
-    result = watchdog.run_once()
+@edgar_app.command(name="detect")
+def detect() -> None:
+    """Detect new SEC filings: poll EDGAR, classify, dispatch alerts."""
+    detector = _build_detector()
+    result = detector.run_once()
     typer.echo(f"detected={result['events_detected']} dispatched={result['events_dispatched']}")
