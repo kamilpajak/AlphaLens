@@ -162,6 +162,7 @@ _PEER_COHORT_NOTE = {
     # 4-digit cohort is the default — no row emitted to keep the table tight.
     "sic4": "",
     "sic3": "3-digit SIC fallback (cohort widened)",
+    "ff48": "Fama-French 48-industry fallback (cohort widened further)",
     "thin": "thin cohort — sector percentiles suppressed",
 }
 

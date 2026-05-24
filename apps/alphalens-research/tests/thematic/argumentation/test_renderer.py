@@ -36,6 +36,12 @@ class TestPeerCohortNote(unittest.TestCase):
     def test_sic3_describes_widened_cohort(self):
         self.assertIn("3-digit", renderer._format_peer_cohort_note("sic3").lower())
 
+    def test_ff48_describes_widened_cohort(self):
+        # Fama-French 48-industry fallback step (issue #198) widens past
+        # the 3-digit SIC limit; operator should see this in the brief.
+        note = renderer._format_peer_cohort_note("ff48").lower()
+        self.assertIn("fama-french", note)
+
     def test_thin_describes_suppressed_percentiles(self):
         self.assertIn("thin", renderer._format_peer_cohort_note("thin").lower())
 
@@ -61,6 +67,13 @@ class TestRenderMarkdownPeerCohortRow(unittest.TestCase):
         md = renderer.render_markdown(row, _BRIEF)
         self.assertIn("Peer cohort", md)
         self.assertIn("3-digit", md)
+
+    def test_ff48_cohort_row_present(self):
+        row = dict(_ROW)
+        row["peer_cohort_level"] = "ff48"
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("Peer cohort", md)
+        self.assertIn("Fama-French", md)
 
     def test_sic4_cohort_row_absent(self):
         row = dict(_ROW)

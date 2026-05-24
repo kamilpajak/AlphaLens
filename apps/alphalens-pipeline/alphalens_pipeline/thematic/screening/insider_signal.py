@@ -101,7 +101,7 @@ def score_insider(
     Candidate ``ticker`` is auto-included even if absent from ``peers``.
 
     Tradeability filter (issue #197) is applied upstream in
-    :func:`sic_index.iter_sic_peers_fallback`; ``peers`` is already filtered.
+    :func:`sic_index.iter_peers_fallback`; ``peers`` is already filtered.
     """
     candidate = compute_net_opportunistic_usd(
         ticker=ticker, asof=asof, lookback_days=lookback_days, form4_root=form4_root

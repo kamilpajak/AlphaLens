@@ -107,7 +107,7 @@ def score_fcff(
         return {"yield_pct": None, "sector_percentile": None}
 
     # Tradeability filter (shells / nano-caps / penny-stock peers, issue
-    # #197) lives in :func:`sic_index.iter_sic_peers_fallback` so the
+    # #197) lives in :func:`sic_index.iter_peers_fallback` so the
     # ``min_cohort`` check measures tradeable cohort size, not raw size.
     # By the time we get here, ``peers`` is already filtered.
     peer_yields: list[float] = []
