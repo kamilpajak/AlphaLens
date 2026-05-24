@@ -80,12 +80,15 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Registry-backed buildkit cache. GHA cache (`type=gha`) caps at
-          # 10 GB per repo and is shared with every other workflow — the
-          # Python venv layer alone is ~250 MB so we'd exhaust it quickly.
-          # Registry cache lives next to the image, scales with GHCR quota.
-          cache-from: type=registry,ref=ghcr.io/kamilpajak/alphalens-django:buildcache
-          cache-to: type=registry,ref=ghcr.io/kamilpajak/alphalens-django:buildcache,mode=max
+          # GHA cache with a dedicated scope. The 10 GB per-repo cap is LRU-
+          # managed by GitHub — at ~250 MB per snapshot we get ~40 builds of
+          # headroom before eviction starts, plenty for a workflow that fires
+          # only on push to two branches. Registry cache (`type=registry,
+          # mode=max`) was the alternative but GHCR doesn't garbage-collect
+          # untagged cache blobs, so it silently bloats storage quota over
+          # time; GHA cache requires zero ops.
+          cache-from: type=gha,scope=django-build
+          cache-to: type=gha,scope=django-build,mode=max
           # provenance/sbom are emitted as separate manifest attestations
           # below; turn off buildkit's inline attestations to keep the
           # primary manifest a clean single-arch image (no manifest list
