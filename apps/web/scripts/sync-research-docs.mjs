@@ -33,7 +33,12 @@ const REFERENCED = [
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SRC = resolve(__dirname, '..', '..', 'docs', 'research');
+// Path layout: apps/web/scripts/ → repo root is 3 levels up. The web/ tree
+// moved under apps/ in commit ca378a5 "collapse seams" but this script's
+// relative path was left at the pre-refactor depth — every build hook
+// silently emitted "0/15 synced" so the Evidence drawer 404'd on each
+// referenced file. Pinning the correct depth restores the sync.
+const SRC = resolve(__dirname, '..', '..', '..', 'docs', 'research');
 const DST = resolve(__dirname, '..', 'static', 'docs', 'research');
 
 // Wipe the destination so a deleted reference doesn't linger as dead weight
