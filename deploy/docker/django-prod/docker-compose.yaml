@@ -27,7 +27,7 @@ x-django-base: &django-base
   env_file: ./.env
   environment:
     DATABASE_URL: postgres://alphalens:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/alphalens
-    DJANGO_SETTINGS_MODULE: config.settings.prod
+    DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.prod}
   depends_on:
     postgres:
       condition: service_healthy
