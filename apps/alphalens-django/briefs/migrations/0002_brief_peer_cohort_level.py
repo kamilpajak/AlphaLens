@@ -12,6 +12,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="brief",
             name="peer_cohort_level",
-            field=models.CharField(blank=True, max_length=8),
+            field=models.CharField(blank=True, default="", max_length=8),
         ),
     ]

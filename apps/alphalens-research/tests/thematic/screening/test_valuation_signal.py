@@ -1,19 +1,8 @@
 import datetime as dt
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from alphalens_pipeline.thematic.screening import valuation_signal
-
-
-def _patch_filter_passthrough():
-    """Skip the issue-#197 mcap/price filter for tests with synthetic
-    micro-cap fixtures. Filter has dedicated coverage in test_common.py.
-    """
-    return patch.object(
-        valuation_signal,
-        "filter_peers_by_mcap_price",
-        side_effect=lambda peers, **_kw: peers,
-    )
 
 
 def _features(
@@ -91,11 +80,6 @@ class TestComputeMultiples(unittest.TestCase):
 
 
 class TestScoreValuation(unittest.TestCase):
-    def setUp(self):
-        self._filter_patch = _patch_filter_passthrough()
-        self._filter_patch.start()
-        self.addCleanup(self._filter_patch.stop)
-
     def test_returns_none_percentile_when_all_multiples_missing(self):
         fetcher = MagicMock(return_value=None)
         out = valuation_signal.score_valuation(
@@ -125,30 +109,6 @@ class TestScoreValuation(unittest.TestCase):
         )
         # Cheapest -> highest composite percentile.
         self.assertAlmostEqual(out["composite_sector_percentile"], 100.0, places=1)
-
-
-class TestScoreValuationDropsShellPeers(unittest.TestCase):
-    """Issue #197: filter shell/penny peers before composite percentile."""
-
-    def test_shell_peer_excluded_from_composite(self):
-        # Without filter, SHELL with cheap P/S would raise CAND's composite
-        # percentile (CAND beats SHELL on price, ties on others). With
-        # filter, only the realistic peer counts.
-        def fetcher(ticker, _asof):
-            return {
-                "CAND": _features(price=10.0, shares_outstanding=100_000_000.0, revenue_ttm=2000.0),
-                "PEER": _features(price=10.0, shares_outstanding=100_000_000.0, revenue_ttm=1000.0),
-                "SHELL": _features(price=10.0, shares_outstanding=10_000.0, revenue_ttm=500.0),
-            }[ticker]
-
-        out = valuation_signal.score_valuation(
-            ticker="CAND",
-            asof=dt.date(2026, 5, 23),
-            peers=["CAND", "PEER", "SHELL"],
-            feature_fetcher=fetcher,
-        )
-        # 2-peer effective cohort (CAND + PEER). CAND has lower P/S (cheaper).
-        self.assertIsNotNone(out["composite_sector_percentile"])
 
 
 class TestFinancialsAgeDays(unittest.TestCase):

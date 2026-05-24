@@ -312,6 +312,45 @@ class TestIterSicPeersFallback(_PatchedIndexTestCase):
         peers2, _ = sic_index.iter_sic_peers_fallback(3674, min_cohort=8)
         self.assertNotIn("BOGUS", peers2)
 
+    def test_peer_filter_applied_before_min_cohort_check(self) -> None:
+        # Scenario from Gemini 3 Pro PR-215 review: SIC 3674 has 8 raw
+        # peers; if the filter strips 7 of them (shells / penny stocks),
+        # the cohort is effectively 1 — the resolver must NOT call this
+        # sic4 just because the raw cohort cleared the floor. With 7
+        # dropped and no sic3 backup, expect ``thin``.
+        keep_only = {"BIG1"}
+
+        def shell_filter(peers: list[str]) -> list[str]:
+            return [p for p in peers if p in keep_only]
+
+        peers, level = sic_index.iter_sic_peers_fallback(
+            3674, min_cohort=8, peer_filter=shell_filter
+        )
+        self.assertEqual(level, "thin")
+        self.assertEqual(peers, [])
+
+    def test_peer_filter_returns_sic4_when_filtered_cohort_meets_floor(self) -> None:
+        peers, level = sic_index.iter_sic_peers_fallback(
+            3674, min_cohort=8, peer_filter=lambda ps: ps
+        )
+        self.assertEqual(level, "sic4")
+        self.assertEqual(len(peers), 8)
+
+    def test_peer_filter_applied_to_sic3_fallback_too(self) -> None:
+        # SIC 7372 raw cohort = 3 (below floor 8); raw 3-digit cohort
+        # 737 = 8 (meets floor). Apply a filter that drops half of the
+        # 3-digit pool — final size 4 < 8 → ``thin``.
+        keep_three = {"QUBT", "IONQ", "RGTI"}
+
+        def filter_three(peers: list[str]) -> list[str]:
+            return [p for p in peers if p in keep_three]
+
+        peers, level = sic_index.iter_sic_peers_fallback(
+            7372, min_cohort=8, peer_filter=filter_three
+        )
+        self.assertEqual(level, "thin")
+        self.assertEqual(peers, [])
+
 
 class TestMissingIndexFile(unittest.TestCase):
     """If the parquet artifact is missing the resolver must still degrade safely."""

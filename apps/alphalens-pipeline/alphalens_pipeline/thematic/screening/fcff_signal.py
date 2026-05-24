@@ -22,11 +22,7 @@ from alphalens_pipeline.scorers.fcff_yield import (
     effective_fcff,
     impute_fcff,
 )
-from alphalens_pipeline.thematic.screening._common import (
-    clamp_tax,
-    filter_peers_by_mcap_price,
-    percentile_rank,
-)
+from alphalens_pipeline.thematic.screening._common import clamp_tax, percentile_rank
 
 logger = logging.getLogger(__name__)
 
@@ -110,14 +106,12 @@ def score_fcff(
     if candidate_yield is None:
         return {"yield_pct": None, "sector_percentile": None}
 
-    # Drop shells / nano-caps / penny-stock peers BEFORE percentile —
-    # they pollute the cohort with structurally non-comparable issuers
-    # (issue #197, 2026-05-23 DFIN audit). Filter is in-cache: every
-    # peer's features were preloaded by scorer.py::_build_feature_fetcher.
-    tradeable_peers = filter_peers_by_mcap_price(peers, feature_fetcher=feature_fetcher, asof=asof)
-
+    # Tradeability filter (shells / nano-caps / penny-stock peers, issue
+    # #197) lives in :func:`sic_index.iter_sic_peers_fallback` so the
+    # ``min_cohort`` check measures tradeable cohort size, not raw size.
+    # By the time we get here, ``peers`` is already filtered.
     peer_yields: list[float] = []
-    for p in tradeable_peers:
+    for p in peers:
         if p.upper() == ticker.upper():
             continue
         py = compute_fcff_yield_pct(feature_fetcher(p, asof))

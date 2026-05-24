@@ -58,8 +58,10 @@ class Brief(models.Model):
     # Issue #197: peer-cohort resolution level — "sic4" / "sic3" / "thin".
     # "thin" means the percentile fields above were suppressed (no
     # reliable cohort), so the UI should swap the colored bar for a
-    # thin-cohort badge.
-    peer_cohort_level = models.CharField(max_length=8, blank=True)
+    # thin-cohort badge. ``default=""`` makes the AddField migration safe
+    # over a populated table (CharField defaults to NOT NULL; without an
+    # explicit default the DDL would fail on existing Postgres rows).
+    peer_cohort_level = models.CharField(max_length=8, blank=True, default="")
 
     insider_score_usd = models.FloatField(null=True, blank=True)
     insider_score_sector_percentile = models.FloatField(null=True, blank=True)

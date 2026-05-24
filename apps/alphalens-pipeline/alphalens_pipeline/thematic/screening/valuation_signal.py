@@ -29,11 +29,7 @@ from alphalens_pipeline.scorers.fcff_yield import (
     effective_fcff,
     impute_fcff,
 )
-from alphalens_pipeline.thematic.screening._common import (
-    clamp_tax,
-    filter_peers_by_mcap_price,
-    percentile_rank,
-)
+from alphalens_pipeline.thematic.screening._common import clamp_tax, percentile_rank
 
 logger = logging.getLogger(__name__)
 
@@ -268,12 +264,10 @@ def score_valuation(
     if all(v is None for v in cand_multiples.values()):
         return {**cand_multiples, **base_return}
 
-    # Drop shells / nano-caps / penny-stock peers BEFORE composite —
-    # same cleanup as fcff_signal; see issue #197.
-    tradeable_peers = filter_peers_by_mcap_price(peers, feature_fetcher=feature_fetcher, asof=asof)
-
+    # Tradeability filter (issue #197) is applied upstream in
+    # :func:`sic_index.iter_sic_peers_fallback`; ``peers`` is already filtered.
     peer_multiples: list[dict] = []
-    for p in tradeable_peers:
+    for p in peers:
         if p.upper() == ticker.upper():
             continue
         peer_multiples.append(compute_multiples(feature_fetcher(p, asof)))

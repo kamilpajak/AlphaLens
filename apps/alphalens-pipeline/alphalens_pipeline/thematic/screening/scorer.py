@@ -30,6 +30,7 @@ from alphalens_pipeline.thematic.screening import (
     technicals_signal,
     valuation_signal,
 )
+from alphalens_pipeline.thematic.screening._common import filter_peers_by_mcap_price
 
 logger = logging.getLogger(__name__)
 
@@ -266,27 +267,31 @@ def _build_ohlcv_loader() -> Callable[[str, date], pd.DataFrame]:
 def _collect_universe(
     candidates: pd.DataFrame, peer_cache: dict[int, tuple[list[str], str]]
 ) -> set[str]:
-    """Build the EDGAR preload universe: candidate tickers + each industry's peers.
+    """Build the EDGAR preload universe: candidate tickers + each industry's
+    raw (unfiltered) peers across both 4-digit and 3-digit cohorts.
 
-    Side effect: populates ``peer_cache`` with industry → (peer list, cohort
-    level) lookups so ``score_candidates`` can reuse them later without
-    re-querying. Cohort level is ``"sic4"``/``"sic3"``/``"thin"`` per
-    :func:`sic_index.iter_sic_peers_fallback` — surfaced to the brief so
-    the operator can tell when a percentile was computed against a 3-digit
-    fallback cohort (looser) or skipped entirely (thin).
+    Side effect: this is a PRE-FETCH-ONLY walk — peers are gathered
+    without applying the tradeability filter because the EDGAR fetcher
+    needs price + shares for every ticker in order to compute mcap.
+    The actual cohort selection (with filter) happens in
+    ``_resolve_industry`` AFTER the fetcher is built, and is what
+    populates ``peer_cache`` for downstream signal scorers.
     """
     universe: set[str] = set()
     for _, cand in candidates.iterrows():
         tkr = str(cand["ticker"]).upper()
         universe.add(tkr)
         ind = sector_peers.get_industry_id(tkr)
-        if ind is not None:
-            # Lazy lookup: `dict.setdefault(k, expr)` always evaluates `expr`,
-            # so the fallback resolver would re-run for every repeated
-            # industry. Branch explicitly to keep the cache hit free.
-            if ind not in peer_cache:
-                peer_cache[ind] = sector_peers.iter_industry_peers_fallback(ind)
-            universe.update(peer_cache[ind][0])
+        if ind is None:
+            continue
+        # Walk both candidate cohorts so the fetcher preloads every
+        # potential peer's price + shares. Use raw lookups directly —
+        # the tradeability filter will be re-applied in
+        # ``_resolve_industry`` with the fetcher wired in.
+        universe.update(sector_peers.iter_industry_peers(ind))
+        from alphalens_pipeline.data.fundamentals import sic_index as _sic_index
+
+        universe.update(_sic_index._load_sic3_peers().get(ind // 10, []))
     return universe
 
 
@@ -295,12 +300,7 @@ def _score_signals(
 ) -> tuple[dict, dict, dict, dict]:
     """Run the four per-candidate signal scorers under ``_safe_signal``."""
     ins = _safe_signal(
-        "insider",
-        insider_signal.score_insider,
-        ticker=ticker,
-        asof=asof,
-        peers=peers,
-        feature_fetcher=feature_fetcher,
+        "insider", insider_signal.score_insider, ticker=ticker, asof=asof, peers=peers
     )
     fcff = _safe_signal(
         "fcff",
@@ -450,6 +450,11 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
 
     catalyst_cache: dict[str, dict | None] = {}
 
+    def _tradeable_filter(peers_to_check: list[str]) -> list[str]:
+        return filter_peers_by_mcap_price(
+            peers_to_check, feature_fetcher=feature_fetcher, asof=asof
+        )
+
     def _resolve_industry(
         ticker: str,
     ) -> tuple[int | None, str | None, str | None, list[str], str]:
@@ -458,7 +463,14 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
             return None, None, None, [], "thin"
         industry_name, sector_name = sector_peers.industry_label(industry_id)
         if industry_id not in peer_cache:
-            peer_cache[industry_id] = sector_peers.iter_industry_peers_fallback(industry_id)
+            # ``peer_filter`` runs BEFORE the min_cohort check inside the
+            # resolver, so a raw 4-digit cohort of 10 peers — 7 of which
+            # are warrants / shells / penny stocks — correctly falls back
+            # to sic3 (or thin) rather than rendering a "sic4" badge over
+            # an effective cohort of 3 (Gemini 3 Pro PR-215 finding).
+            peer_cache[industry_id] = sector_peers.iter_industry_peers_fallback(
+                industry_id, peer_filter=_tradeable_filter
+            )
         peers, level = peer_cache[industry_id]
         return industry_id, industry_name, sector_name, peers, level
 
