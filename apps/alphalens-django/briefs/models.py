@@ -55,6 +55,11 @@ class Brief(models.Model):
     industry_id = models.FloatField(null=True, blank=True)
     industry_name = models.CharField(max_length=256, blank=True)
     sector_name = models.CharField(max_length=128, blank=True)
+    # Issue #197: peer-cohort resolution level — "sic4" / "sic3" / "thin".
+    # "thin" means the percentile fields above were suppressed (no
+    # reliable cohort), so the UI should swap the colored bar for a
+    # thin-cohort badge.
+    peer_cohort_level = models.CharField(max_length=8, blank=True)
 
     insider_score_usd = models.FloatField(null=True, blank=True)
     insider_score_sector_percentile = models.FloatField(null=True, blank=True)

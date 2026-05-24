@@ -158,6 +158,24 @@ def _fmt_insider_usd_compact(value: Any) -> str | None:
     return f"${v / 1000:.0f}k"
 
 
+_PEER_COHORT_NOTE = {
+    # 4-digit cohort is the default — no row emitted to keep the table tight.
+    "sic4": "",
+    "sic3": "3-digit SIC fallback (cohort widened)",
+    "thin": "thin cohort — sector percentiles suppressed",
+}
+
+
+def _format_peer_cohort_note(level: Any) -> str:
+    """Render a one-line note when the percentile cohort widened or was
+    skipped (issue #197 minimum-honest cleanup). Empty string for the
+    default 4-digit cohort so the brief table stays tight.
+    """
+    if level is None or pd.isna(level):
+        return ""
+    return _PEER_COHORT_NOTE.get(str(level), "")
+
+
 def _format_insider_cell(score: Any, pctile: Any) -> str:
     """Render the insider table cell with score-aware suffix.
 
@@ -453,6 +471,9 @@ def render_markdown(row: dict | pd.Series, brief: dict | None = None) -> str:
     age_days = r.get("valuation_financials_age_days")
     if not pd.isna(age_days):
         signal_rows.append(("Financials age", f"{int(age_days)}d"))
+    cohort_note = _format_peer_cohort_note(r.get("peer_cohort_level"))
+    if cohort_note:
+        signal_rows.append(("Peer cohort", cohort_note))
     signal_rows.append(("Technicals", str(r.get("technicals_summary_str", "n/a"))))
     next_earnings = b.get("next_earnings_date") or r.get("next_earnings_date")
     if next_earnings:

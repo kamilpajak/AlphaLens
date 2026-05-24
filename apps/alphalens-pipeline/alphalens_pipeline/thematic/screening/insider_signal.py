@@ -19,12 +19,17 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from alphalens_pipeline.scorers.opportunistic_form4 import (
     aggregate_opportunistic_signal,
 )
-from alphalens_pipeline.thematic.screening._common import percentile_rank
+from alphalens_pipeline.thematic.screening._common import (
+    filter_peers_by_mcap_price,
+    percentile_rank,
+)
 from alphalens_pipeline.thematic.verification.insider import (
     DEFAULT_FORM4_ROOT,
     DEFAULT_LOOKBACK_DAYS,
@@ -94,11 +99,17 @@ def score_insider(
     peers: list[str],
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     form4_root: Path = DEFAULT_FORM4_ROOT,
+    feature_fetcher: Callable[[str, dt.date], dict[str, Any] | None] | None = None,
 ) -> dict[str, float | None]:
     """Compute the ticker's score + percentile rank within ``peers``.
 
     Peers without Form-4 data are skipped (do not anchor the cohort at zero).
     Candidate ``ticker`` is auto-included even if absent from ``peers``.
+
+    ``feature_fetcher``, when supplied, lets the scorer drop shells /
+    nano-caps / penny-stock peers BEFORE the Form-4 walk (issue #197).
+    ``None`` keeps the historical no-filter behavior — used by tests
+    that pin specific peer cohorts directly.
     """
     candidate = compute_net_opportunistic_usd(
         ticker=ticker, asof=asof, lookback_days=lookback_days, form4_root=form4_root
@@ -106,8 +117,10 @@ def score_insider(
     if candidate is None:
         return {"score_usd": None, "sector_percentile": None}
 
+    tradeable_peers = filter_peers_by_mcap_price(peers, feature_fetcher=feature_fetcher, asof=asof)
+
     peer_scores: list[float] = []
-    for p in peers:
+    for p in tradeable_peers:
         if p.upper() == ticker.upper():
             continue
         ps = compute_net_opportunistic_usd(

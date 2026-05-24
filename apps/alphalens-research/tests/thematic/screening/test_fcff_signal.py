@@ -1,8 +1,20 @@
 import datetime as dt
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from alphalens_pipeline.thematic.screening import fcff_signal
+
+
+def _patch_filter_passthrough():
+    """Skip the mcap/price peer filter for tests that pin synthetic
+    micro-cap fixtures (issue #197 filter is exercised in
+    ``TestScoreFcffDropsShellPeers`` below + ``test_common.py``).
+    """
+    return patch.object(
+        fcff_signal,
+        "filter_peers_by_mcap_price",
+        side_effect=lambda peers, **_kw: peers,
+    )
 
 
 # 11-field dict shape returned by EdgarFundamentalsStore.ev_fcff_features_as_of
@@ -74,6 +86,11 @@ class TestComputeYieldPct(unittest.TestCase):
 
 
 class TestScoreFcff(unittest.TestCase):
+    def setUp(self):
+        self._filter_patch = _patch_filter_passthrough()
+        self._filter_patch.start()
+        self.addCleanup(self._filter_patch.stop)
+
     def test_returns_none_when_candidate_has_no_yield(self):
         fetcher = MagicMock(return_value=None)
         out = fcff_signal.score_fcff(
@@ -118,6 +135,57 @@ class TestScoreFcff(unittest.TestCase):
         self.assertIsNotNone(out["yield_pct"])
         # 2 valid peers (A, OTHER) with identical yields -> tied at 100% (le-count).
         self.assertAlmostEqual(out["sector_percentile"], 100.0, places=2)
+
+
+class TestScoreFcffDropsShellPeers(unittest.TestCase):
+    """Issue #197: shell / penny-stock / nano-cap peers must not anchor
+    the FCFF percentile."""
+
+    def test_shell_peer_excluded_from_cohort(self):
+        # SHELL has tiny mcap — irrelevant to candidate's percentile.
+        # Without the filter, CAND with mediocre yield would land at
+        # 50%ile (50/50 against SHELL); with the filter, only HUGE counts.
+        def fetcher(ticker, _asof):
+            return {
+                "CAND": _features(
+                    ocf_ttm=120, capex_ttm=20, price=50, shares_outstanding=100_000_000
+                ),
+                "HUGE": _features(
+                    ocf_ttm=400, capex_ttm=20, price=100, shares_outstanding=100_000_000
+                ),
+                "SHELL": _features(ocf_ttm=1, capex_ttm=0, price=10, shares_outstanding=10_000),
+            }[ticker]
+
+        out = fcff_signal.score_fcff(
+            ticker="CAND",
+            asof=dt.date(2026, 5, 23),
+            peers=["CAND", "HUGE", "SHELL"],
+            feature_fetcher=fetcher,
+        )
+        # HUGE has higher yield → CAND below it → percentile ≈ 50 (2 in cohort).
+        # SHELL would have pushed CAND to ≈66 if not filtered.
+        self.assertAlmostEqual(out["sector_percentile"], 50.0, places=2)
+
+    def test_penny_stock_peer_excluded(self):
+        def fetcher(ticker, _asof):
+            return {
+                "CAND": _features(
+                    ocf_ttm=200, capex_ttm=20, price=50, shares_outstanding=100_000_000
+                ),
+                # PENNY has $50M mcap (clears) but $0.50 price (penny stock)
+                "PENNY": _features(
+                    ocf_ttm=200, capex_ttm=20, price=0.50, shares_outstanding=100_000_000
+                ),
+            }[ticker]
+
+        out = fcff_signal.score_fcff(
+            ticker="CAND",
+            asof=dt.date(2026, 5, 23),
+            peers=["CAND", "PENNY"],
+            feature_fetcher=fetcher,
+        )
+        # PENNY filtered → CAND alone → percentile 50 (empty peers neutral midpoint).
+        self.assertAlmostEqual(out["sector_percentile"], 50.0, places=2)
 
 
 if __name__ == "__main__":

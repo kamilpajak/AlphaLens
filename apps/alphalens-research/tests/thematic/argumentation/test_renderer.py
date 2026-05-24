@@ -29,6 +29,52 @@ _ROW = {
 }
 
 
+class TestPeerCohortNote(unittest.TestCase):
+    def test_sic4_returns_empty_no_brief_row(self):
+        self.assertEqual(renderer._format_peer_cohort_note("sic4"), "")
+
+    def test_sic3_describes_widened_cohort(self):
+        self.assertIn("3-digit", renderer._format_peer_cohort_note("sic3").lower())
+
+    def test_thin_describes_suppressed_percentiles(self):
+        self.assertIn("thin", renderer._format_peer_cohort_note("thin").lower())
+
+    def test_none_or_missing_returns_empty(self):
+        self.assertEqual(renderer._format_peer_cohort_note(None), "")
+        self.assertEqual(renderer._format_peer_cohort_note(""), "")
+
+    def test_unknown_level_returns_empty(self):
+        self.assertEqual(renderer._format_peer_cohort_note("unrecognized"), "")
+
+
+class TestRenderMarkdownPeerCohortRow(unittest.TestCase):
+    def test_thin_cohort_row_present(self):
+        row = dict(_ROW)
+        row["peer_cohort_level"] = "thin"
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("Peer cohort", md)
+        self.assertIn("thin cohort", md)
+
+    def test_sic3_cohort_row_present(self):
+        row = dict(_ROW)
+        row["peer_cohort_level"] = "sic3"
+        md = renderer.render_markdown(row, _BRIEF)
+        self.assertIn("Peer cohort", md)
+        self.assertIn("3-digit", md)
+
+    def test_sic4_cohort_row_absent(self):
+        row = dict(_ROW)
+        row["peer_cohort_level"] = "sic4"
+        md = renderer.render_markdown(row, _BRIEF)
+        # Default cohort path — table stays tight.
+        self.assertNotIn("Peer cohort", md)
+
+    def test_missing_level_renders_without_row(self):
+        # Older fixtures / pre-#197 briefs lack the column; no crash, no row.
+        md = renderer.render_markdown(_ROW, _BRIEF)
+        self.assertNotIn("Peer cohort", md)
+
+
 class TestRenderMarkdown(unittest.TestCase):
     def test_includes_header_with_ticker_and_score(self):
         md = renderer.render_markdown(_ROW, _BRIEF)

@@ -130,6 +130,33 @@ class TestScoreInsider(unittest.TestCase):
         # Candidate at top of cohort -> 100th percentile.
         self.assertAlmostEqual(out["sector_percentile"], 100.0, places=2)
 
+    def test_shell_peer_excluded_via_feature_fetcher(self):
+        """Issue #197: with ``feature_fetcher`` wired in, peers below the
+        mcap/price floor must not anchor the cohort."""
+        scores = {"CAND": 100.0, "BIG": 200.0, "SHELL": 50_000_000.0}
+        features = {
+            "CAND": {"price": 50.0, "shares_outstanding": 100_000_000.0},
+            "BIG": {"price": 50.0, "shares_outstanding": 100_000_000.0},
+            "SHELL": {"price": 1.0, "shares_outstanding": 10_000.0},
+        }
+        with patch.object(
+            insider_signal,
+            "compute_net_opportunistic_usd",
+            side_effect=lambda *, ticker, asof, lookback_days=90, form4_root=None: scores.get(
+                ticker
+            ),
+        ):
+            out = insider_signal.score_insider(
+                ticker="CAND",
+                asof=dt.date(2026, 5, 15),
+                peers=["CAND", "BIG", "SHELL"],
+                feature_fetcher=lambda t, _a: features.get(t),
+            )
+        # SHELL's massive (synthetic) score must not warp percentile —
+        # filter drops it; cohort = {CAND, BIG}, CAND below BIG → 50.0.
+        self.assertEqual(out["score_usd"], 100.0)
+        self.assertAlmostEqual(out["sector_percentile"], 50.0, places=2)
+
     def test_percentile_skips_peers_with_no_data(self):
         with patch.object(
             insider_signal,

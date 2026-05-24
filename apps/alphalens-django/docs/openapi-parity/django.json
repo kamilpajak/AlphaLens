@@ -589,6 +589,10 @@
                         "type": "string",
                         "maxLength": 128
                     },
+                    "peer_cohort_level": {
+                        "type": "string",
+                        "maxLength": 8
+                    },
                     "insider_score_usd": {
                         "type": "number",
                         "format": "double",
