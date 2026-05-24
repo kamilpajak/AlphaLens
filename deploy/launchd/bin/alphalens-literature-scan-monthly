@@ -1,0 +1,4 @@
+#!/bin/bash
+# Monthly deep scan — Perplexity high-context, 5-filter triage, recency=month.
+# Output: docs/research/literature_review/YYYY-MM.md + Telegram digest.
+exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens literature scan --window monthly "$@"

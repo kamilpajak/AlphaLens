@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from alphalens_pipeline.edgar_detector.types import Event, FormType
 from alphalens_pipeline.thematic.sources import edgar_adapter
 from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS
-from alphalens_pipeline.watchdog.types import Event, FormType
 
 
 def _make_event(ticker: str, accession: str, filed_at: dt.datetime, items: list[str] | None = None):

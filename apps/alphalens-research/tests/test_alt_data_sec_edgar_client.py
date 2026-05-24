@@ -312,7 +312,7 @@ class TestRateLimit(unittest.TestCase):
 
 class TestPublicGetHelpers(unittest.TestCase):
     """get_json / get_bytes / get_text are the public escape hatch for shadow
-    callers (watchdog, thematic verification) that need to fetch SEC URLs
+    callers (edgar_detector, thematic verification) that need to fetch SEC URLs
     not covered by the fetch_* convenience methods. They MUST go through
     the same throttle + retry + User-Agent contract as fetch_submissions.
     """
@@ -475,7 +475,7 @@ class TestTransientRetries(unittest.TestCase):
         """SSLError is a RequestException subclass — must be treated as
         transient (retry), not propagated unhandled. Regression test for
         the zen review finding that the narrow _TRANSIENT_NET_EXCEPTIONS
-        tuple leaked SSL/redirect noise to callers and crashed the watchdog.
+        tuple leaked SSL/redirect noise to callers and crashed the EDGAR detector.
         """
         import requests
         from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient

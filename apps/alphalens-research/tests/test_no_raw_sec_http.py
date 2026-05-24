@@ -1,7 +1,7 @@
 """Enforcement: no raw SEC HTTP outside the canonical SecEdgarClient.
 
 The 2026-05-19 vendor-client consolidation routed every SEC fetch in the
-repo (watchdog, thematic verification, EDGAR fundamentals) through
+repo (edgar_detector, thematic verification, EDGAR fundamentals) through
 :class:`alphalens_pipeline.data.alt_data.sec_edgar_client.SecEdgarClient`. SEC's
 fair-access policy (10 req/s per IP, mandatory descriptive User-Agent)
 is enforced at the IP level — every shadow client is a vector for a 403
@@ -54,7 +54,7 @@ SEC_URL_FRAGMENTS = (
 # aiohttp.ClientSession() if a future contributor reaches for a different
 # HTTP library. The canonical client uses ``self._session.get(...)`` which
 # does not match any of these (no module name in the call). The
-# ``urllib.parse.urlencode`` helper used to build SEC URLs in watchdog
+# ``urllib.parse.urlencode`` helper used to build SEC URLs in edgar_detector
 # edgar.py is fine — it doesn't fetch anything — and only matches
 # ``urllib.request.`` below.
 RAW_HTTP_PATTERNS = (

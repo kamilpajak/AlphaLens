@@ -9,7 +9,7 @@ Lazy imports across command bodies — same convention as
 ``alphalens_cli/commands/research.py``: heavy modules
 (``alphalens_research.paper_trade.scorer_v9d``, ``alphalens_research.attribution.*``,
 ``alphalens_pipeline.data.factors``) load Carhart factors + statsmodels which
-adds ~1s startup. The Layer 1 watchdog cron must not pay this cost.
+adds ~1s startup. The Layer 1 EDGAR detector cron must not pay this cost.
 """
 
 from __future__ import annotations
@@ -250,6 +250,64 @@ def score(
     new_state.save(state_path)
     typer.echo(
         f"State saved: held={len(new_state.held)} as_of={new_state.as_of} n={new_state.rebalance_n}"
+    )
+
+
+@paper_trade_app.command(name="track")
+def track(
+    strategy: str = typer.Option(
+        ...,
+        "--strategy",
+        help=_STRATEGY_OPTION_HELP,
+    ),
+    days: int = typer.Option(
+        7,
+        "--days",
+        help="Trailing window in calendar days to refresh from iVolatility.",
+    ),
+    universe_size_cap: int = typer.Option(
+        0,
+        "--universe-cap",
+        help="Optional cap on universe size for testing (0 = no cap).",
+    ),
+    asof: str = typer.Option(
+        "",
+        "--asof",
+        help="Scoring date (YYYY-MM-DD); empty = latest valid trading date in cache.",
+    ),
+    holding_period_days: int = typer.Option(
+        5,
+        "--holding-days",
+        help="Trading-day window for prior-week realized return computation.",
+    ),
+    cost_bps_rt: float = typer.Option(
+        30.0,
+        "--cost-bps-rt",
+        help="Round-trip cost in basis points (locked at 30 per pre-reg).",
+    ),
+    decile_pct: float = typer.Option(
+        0.10,
+        "--decile-pct",
+        help="Long-decile fraction (locked at 0.10 per pre-reg).",
+    ),
+) -> None:
+    """Refresh data + score in one shot (single-plist entrypoint for launchd).
+
+    Runs ``refresh-data`` then ``score`` sequentially with the same
+    ``--strategy``. Individual subcommands remain callable for manual use
+    when only one phase is needed.
+    """
+    refresh_data(
+        strategy=strategy,
+        days=days,
+        universe_size_cap=universe_size_cap,
+    )
+    score(
+        strategy=strategy,
+        asof=asof,
+        holding_period_days=holding_period_days,
+        cost_bps_rt=cost_bps_rt,
+        decile_pct=decile_pct,
     )
 
 

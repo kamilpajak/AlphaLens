@@ -17,33 +17,33 @@ from pathlib import Path
 # Test file lives at apps/alphalens-research/tests/<name>.py; the repo root
 # is three parents up. deploy/ stays at the repo root, not under the app.
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SERVICE_PATH = REPO_ROOT / "deploy" / "systemd" / "alphalens-thematic-daily.service"
+SERVICE_PATH = REPO_ROOT / "deploy" / "systemd" / "alphalens-thematic-build.service"
 
 
 class TestSystemdUnits(unittest.TestCase):
     def setUp(self) -> None:
         self.unit_text = SERVICE_PATH.read_text()
 
-    def test_thematic_daily_service_overrides_entrypoint(self):
+    def test_thematic_build_service_overrides_entrypoint(self):
         self.assertIn(
             "--entrypoint /bin/bash",
             self.unit_text,
             "ExecStart must override the pipeline image ENTRYPOINT or typer "
             "will refuse to run the script — see "
             "deploy/docker/Dockerfile.pipeline:ENTRYPOINT and the comment "
-            "above ExecStart in alphalens-thematic-daily.service.",
+            "above ExecStart in alphalens-thematic-build.service.",
         )
 
-    def test_thematic_daily_service_invokes_driver_script(self):
+    def test_thematic_build_service_invokes_driver_script(self):
         self.assertIn(
             "/app/deploy/docker/run_thematic_day.sh",
             self.unit_text,
         )
 
-    def test_thematic_daily_service_keeps_oneshot_type(self):
+    def test_thematic_build_service_keeps_oneshot_type(self):
         self.assertIn("Type=oneshot", self.unit_text)
 
-    def test_thematic_daily_service_rebuilds_briefs_cache_post_run(self):
+    def test_thematic_build_service_rebuilds_briefs_cache_post_run(self):
         # After a successful pipeline run the new parquet output must be
         # synced into the Django Postgres-backed cache. The unit invokes
         # the ``rebuild-cache`` maintenance one-shot from the django-prod

@@ -41,7 +41,7 @@ owns:
 - Parquet → Postgres sync via a `manage.py rebuild_briefs_cache`
   management command, invoked by the daily systemd timer
 
-The pipeline (`alphalens.thematic.*`, `alphalens.watchdog.*`, etc.)
+The pipeline (`alphalens.thematic.*`, `alphalens.edgar_detector.*`, etc.)
 stays intact — Django only owns the presentation surface and an
 opinionated cache.
 

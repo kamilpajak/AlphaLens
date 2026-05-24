@@ -7,7 +7,7 @@ and the ledger/state/verdict filenames.
 Resolution is **lazy** via :func:`importlib.import_module` per
 ``callable_path`` (``module.path:fn_name`` form) so the CLI startup does
 not pay the import cost of every registered strategy. The Layer 1
-watchdog cron fires ``alphalens watchdog run-once`` frequently and must
+edgar-detect cron fires ``alphalens edgar detect`` frequently and must
 not import scorer modules.
 
 Adding a new strategy

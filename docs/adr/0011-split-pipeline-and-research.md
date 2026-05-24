@@ -8,7 +8,7 @@
 
 Through 2026-05, the single workspace member `apps/alphalens-research/` held
 roughly 38 kLOC of Python. About a quarter of that was live production —
-the SEC EDGAR watchdog running every 15 minutes on launchd, the daily
+the SEC EDGAR detector running every 15 minutes on launchd, the daily
 thematic pipeline that produces the briefs cache for the Cloudflare-fronted
 dashboard, the weekly + monthly Perplexity literature review, the data
 clients keeping shared rate-limit budgets for SEC / AV / Gemini / Polygon,
@@ -50,9 +50,9 @@ apps/web/                     ← SvelteKit dashboard (unchanged)
 
 **Pipeline side** (`apps/alphalens-pipeline/alphalens_pipeline/`):
 
-- `watchdog/` — Layer 1 SEC EDGAR poller (launchd).
+- `edgar_detector/` — Layer 1 SEC EDGAR poller (launchd).
 - `thematic/` — daily VPS pipeline.
-- `literature_review/` — monthly + weekly Perplexity scans (launchd).
+- `literature_scanner/` — monthly + weekly Perplexity scans (launchd).
 - `data/` — PIT store, vendor clients (SEC, AV, Gemini, Polygon),
   universes (S&P 500/400/600 PIT yamls), factors.
 - `core/` — candidates queue plumbing.

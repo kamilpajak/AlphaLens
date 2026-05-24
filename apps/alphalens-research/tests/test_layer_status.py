@@ -36,7 +36,7 @@ LAYERS_WITH_STATUS = (
     "alphalens_research.attribution",
     "alphalens_research.diagnostics",
     "alphalens_pipeline.data.fundamentals",
-    "alphalens_pipeline.literature_review",
+    "alphalens_pipeline.literature_scanner",
     "alphalens_pipeline.data.macro",
     "alphalens_research.gates",
     "alphalens_research.overlays",
@@ -53,7 +53,7 @@ LAYERS_WITH_STATUS = (
     "alphalens_research.screeners.options_volume",
     "alphalens_research.screeners.prescreener",
     "alphalens_pipeline.thematic",
-    "alphalens_pipeline.watchdog",
+    "alphalens_pipeline.edgar_detector",
 )
 
 

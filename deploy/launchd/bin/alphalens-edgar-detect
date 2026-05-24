@@ -1,0 +1,3 @@
+#!/bin/bash
+# Layer 1 EDGAR detector — polls SEC EDGAR, classifies new filings, dispatches Telegram alerts.
+exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens edgar detect "$@"

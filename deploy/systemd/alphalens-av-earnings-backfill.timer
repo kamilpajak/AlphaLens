@@ -1,0 +1,19 @@
+[Unit]
+# Fires the companion alphalens-av-earnings-backfill.service once per day.
+#
+# OnCalendar: 00:05 UTC = 5 min after AV's daily quota window resets at
+# 00:00 UTC. The 5-min buffer absorbs clock skew + leaves no doubt that
+# the prior day's quota is closed.
+#
+# Persistent=true: if the VPS was off when a scheduled run was due, fire
+# the missed run at next boot rather than skipping the day silently.
+Description=Trigger AlphaLens AV EARNINGS backfill daily
+After=network-online.target
+
+[Timer]
+OnCalendar=*-*-* 00:05:00 UTC
+Persistent=true
+Unit=alphalens-av-earnings-backfill.service
+
+[Install]
+WantedBy=timers.target

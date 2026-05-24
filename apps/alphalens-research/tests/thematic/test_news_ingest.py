@@ -52,7 +52,7 @@ class TestNewsIngestOrchestration(unittest.TestCase):
             self.assertEqual(set(df["source"]), {"polygon", "gdelt", "rss"})
 
     def test_edgar_excluded_from_ingest(self):
-        """EDGAR signal stays in watchdog Layer 1; thematic ingest skips it."""
+        """EDGAR signal stays in Layer 1 detector; thematic ingest skips it."""
         self.assertFalse(hasattr(news_ingest, "_fetch_edgar"))
         self.assertNotIn("edgar", news_ingest._SOURCE_PRIORITY)
 
