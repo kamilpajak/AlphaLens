@@ -18,6 +18,11 @@
 
 	const route = $derived(page.url.pathname);
 
+	// Swagger UI lives on the Django origin (cross-origin in production).
+	// Same-origin in local dev uses Vite's `/api/*` proxy.
+	const apiBase = (import.meta.env.VITE_API_BASE ?? '').trim().replace(/\/+$/, '');
+	const apiDocsHref = apiBase ? `${apiBase}/api/docs/` : '/api/docs/';
+
 	// Footer ticker chips — context-switch per route so the slogans match
 	// the page the user is reading. Dashboard / briefs / brief / about all
 	// concern the thematic-tool pipeline (Polygon news + Gemini Pro/Flash +
@@ -75,7 +80,7 @@
 					<span class="hidden sm:inline">[04]&nbsp;</span>experiments
 				</a>
 				<a
-					href="/api/docs"
+					href={apiDocsHref}
 					target="_blank"
 					rel="noopener"
 					class="hover:text-amber transition-colors"
