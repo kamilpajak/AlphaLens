@@ -59,28 +59,19 @@
 				<div class="text-fg-dim text-xs mt-0.5 truncate">{c.company_name}</div>
 				<div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-[10px] uppercase tracking-widest text-fg-muted">
 					<span class="text-cyan lowercase">#{c.theme}</span>
+					{#if c.also_in_themes && c.also_in_themes.length > 0}
+						<span class="hidden sm:inline">·</span>
+						<span>also in:</span>
+						{#each c.also_in_themes as t, i}
+							<span class="text-cyan lowercase">{t}</span>{#if i < c.also_in_themes.length - 1}<span>,</span>{/if}
+						{/each}
+					{/if}
 					{#if c.industry_name}
 						<span class="hidden sm:inline">·</span>
 						<span class="truncate">{c.industry_name}</span>
 					{/if}
 					{#if c.sector_name}
 						<span class="hidden sm:inline">({c.sector_name})</span>
-					{/if}
-					{#if c.peer_cohort_level === 'thin'}
-						<span
-							class="inline-flex items-center px-1.5 py-0.5 bg-fg-muted/10 text-fg-muted text-[9px] uppercase tracking-widest border border-fg-muted/30"
-							title="Issue #197: SIC peer cohort too small to compute a meaningful percentile (4-digit + 3-digit fallback both below 8 members). Sector-percentile bars below are suppressed."
-						>thin cohort</span>
-					{:else if c.peer_cohort_level === 'sic3'}
-						<span
-							class="inline-flex items-center px-1.5 py-0.5 bg-cyan/10 text-cyan text-[9px] uppercase tracking-widest border border-cyan/30"
-							title="Issue #197: 4-digit SIC cohort was too small; widened to the 3-digit prefix. Percentile computed over a broader peer set — still trustworthy but looser."
-						>sic-3 cohort</span>
-					{:else if c.peer_cohort_level === 'ff48'}
-						<span
-							class="inline-flex items-center px-1.5 py-0.5 bg-amber/10 text-amber text-[9px] uppercase tracking-widest border border-amber/30"
-							title="Issue #198: 4-digit + 3-digit SIC cohorts were both too small; widened to the Fama-French 48-industry bucket (academic SIC aggregation, free from Ken French's data library). Percentile reflects a broader but economically coherent peer set."
-						>ff-48 cohort</span>
 					{/if}
 				</div>
 			</div>
@@ -151,19 +142,31 @@
 					<GatePill name={g} status="unknown" />
 				{/each}
 			</div>
-			{#if c.also_in_themes && c.also_in_themes.length > 0}
-				<div class="mt-3 text-[11px]">
-					<span class="text-fg-muted uppercase tracking-widest">also in: </span>
-					{#each c.also_in_themes as t, i}
-						<span class="text-cyan lowercase">{t}</span>{#if i < c.also_in_themes.length - 1}<span class="text-fg-muted">, </span>{/if}
-					{/each}
-				</div>
-			{/if}
 		</div>
 	</div>
 
 	<!-- Signal grid -->
-	<div class="grid grid-cols-2 lg:grid-cols-4 gap-x-4 sm:gap-x-5 gap-y-4 px-4 sm:px-5 py-4 border-t border-grid bg-bg/30">
+	<div class="border-t border-grid bg-bg/30 px-4 sm:px-5 py-4">
+		<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-3 text-[10px] uppercase tracking-widest text-fg-muted">
+			<span>signals · vs sector peers</span>
+			{#if c.peer_cohort_level === 'thin'}
+				<span
+					class="inline-flex items-center px-1.5 py-0.5 bg-red/10 text-red text-[9px] uppercase tracking-widest border border-red/40 cursor-help"
+					title="Issue #197: SIC peer cohort too small to compute a meaningful percentile (4-digit + 3-digit fallback both below 8 members). Sector-percentile bars below are suppressed (shown as —)."
+				>thin cohort · bars suppressed</span>
+			{:else if c.peer_cohort_level === 'sic3'}
+				<span
+					class="inline-flex items-center px-1.5 py-0.5 bg-cyan/10 text-cyan text-[9px] uppercase tracking-widest border border-cyan/30 cursor-help"
+					title="Issue #197: 4-digit SIC cohort was too small; widened to the 3-digit prefix. Percentile computed over a broader peer set — still trustworthy but looser."
+				>sic-3 cohort</span>
+			{:else if c.peer_cohort_level === 'ff48'}
+				<span
+					class="inline-flex items-center px-1.5 py-0.5 bg-fg-muted/10 text-fg-muted text-[9px] uppercase tracking-widest border border-fg-muted/40 cursor-help"
+					title="Issue #198: 4-digit + 3-digit SIC cohorts were both too small; widened to the Fama-French 48-industry bucket (academic SIC aggregation, free from Ken French's data library). Percentile reflects a broader but economically coherent peer set."
+				>ff-48 cohort</span>
+			{/if}
+		</div>
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-x-4 sm:gap-x-5 gap-y-4">
 		<SignalBar
 			label="insider 90d (sector %ile)"
 			value={c.insider_score_sector_percentile}
@@ -220,6 +223,7 @@
 			format={(v) => (c.technical_volume_zscore! >= 0 ? '+' : '-') + v.toFixed(1) + 'σ'}
 			tooltip="20-day volume z-score. >+2σ = unusual buying interest (catalyst confirmation), <-2σ = drying volume (waning thesis). Sign matters; magnitude bar shows |z|."
 		/>
+		</div>
 	</div>
 
 	<!-- Technicals + fundamentals table -->
