@@ -26,13 +26,23 @@ CI smoke runs install a stub: `sudo mkdir -p /etc/alphalens && sudo touch /etc/a
 - repo `.env` files (e.g. `apps/alphalens-django/.env`, `deploy/docker/.env`)
   are for `docker compose` interpolation and per-container runtime — different
   purpose, owned by the operator user, mixed with non-secret config knobs
-- `/etc/alphalens/env` is **secrets-only**, root:root chmod 600 — survives
-  worktree removals, git clean, repo moves; no risk of accidental commit;
-  symmetric across pipeline + backfill units
+- `/etc/alphalens/env` is **secrets-only**, `root:<operator-group>` chmod
+  640 — survives worktree removals, git clean, repo moves; no risk of
+  accidental commit; symmetric across pipeline + backfill units
+
+**Perms gotcha — `root:root 600` does NOT work for user-scope units:**
+systemd-user runs as the operator UID (typically 1000), so a `600`
+root-owned file is unreadable and the unit fails to start with
+"unavailable resources or another system error" before ExecStart fires.
+Use `chmod 640` + `chown root:<operator-group>` so root keeps write but
+the operator user reads. On Debian/Ubuntu the operator's primary group
+typically matches their username (`jacoren:jacoren`); on RHEL-family it's
+often `users`. Verify with `id -gn` before running the bootstrap.
 
 **Bootstrap (once per VPS):**
 
 ```bash
+OPERATOR_GROUP=$(id -gn)   # e.g. `jacoren` on Debian
 sudo mkdir -p /etc/alphalens
 sudo tee /etc/alphalens/env > /dev/null <<'EOF'
 GOOGLE_API_KEY=...
@@ -43,8 +53,8 @@ TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
 SEC_EDGAR_USER_AGENT=AlphaLens/1.0 (kontakt@kamilpajak.pl)
 EOF
-sudo chmod 600 /etc/alphalens/env
-sudo chown root:root /etc/alphalens/env
+sudo chmod 640 /etc/alphalens/env
+sudo chown "root:${OPERATOR_GROUP}" /etc/alphalens/env
 ```
 
 Only secrets needed by the units belong here. Knobs that change behaviour
@@ -54,8 +64,9 @@ checked in via `.env.example`.
 **Rotate a key:**
 
 ```bash
-sudo $EDITOR /etc/alphalens/env     # edit value
-sudo chmod 600 /etc/alphalens/env   # belt-and-suspenders if editor changed mode
+sudo $EDITOR /etc/alphalens/env                          # edit value
+sudo chmod 640 /etc/alphalens/env                        # restore mode if editor stripped it
+sudo chown "root:$(id -gn)" /etc/alphalens/env           # restore owner if editor rewrote inode
 # next timer fire picks up the new value — no daemon-reload needed
 ```
 
