@@ -48,7 +48,10 @@
 				<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
 					<h3 class="font-display font-bold text-xl sm:text-2xl text-fg">{c.ticker}</h3>
 					{#if c.deep_drawdown_reversal}
-						<span class="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber/20 text-amber text-[9px] uppercase tracking-widest border border-amber/40">
+						<span
+							class="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber/20 text-amber text-[9px] uppercase tracking-widest border border-amber/40 cursor-help"
+							title="Deep-drawdown-reversal pattern: ≥30% off 52-week high + fresh thematic catalyst (news URL present) + volume z-score ≥ +2σ. Archetype: oversold name on news with institutional accumulation flow. Heuristic — not validated alpha; use as decision-support signal."
+						>
 							<Sparkle class="size-2.5" /> reversal
 						</span>
 					{/if}
