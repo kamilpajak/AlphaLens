@@ -14,9 +14,9 @@ sibling ``alphalens_pipeline`` package):
     alphalens_research.attribution     — Layer 5 cost / factor / metrics / verdict (ACTIVE)
 
 Cross-cutting (also research):
-    alphalens_research.diagnostics     — survivorship + slippage stress diagnostics
-    alphalens_research.preaudit        — fail-fast gates before long compute
-    alphalens_research.paper_trade     — forward-observation paper portfolio (INCONCLUSIVE strategies)
+    alphalens_research.diagnostics          — survivorship + slippage stress diagnostics
+    alphalens_research.preaudit             — fail-fast gates before long compute
+    alphalens_research.retrospective_audit  — PIT universe loaders for one-shot retrospectives
 
 Cross-cutting (pipeline, consumed by this package):
     alphalens_pipeline.data            — clients + parsers + PIT store (data/store/ = as-of-t SoT)

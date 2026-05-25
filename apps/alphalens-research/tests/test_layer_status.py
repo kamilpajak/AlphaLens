@@ -40,7 +40,7 @@ LAYERS_WITH_STATUS = (
     "alphalens_pipeline.data.macro",
     "alphalens_research.gates",
     "alphalens_research.overlays",
-    "alphalens_research.paper_trade",
+    "alphalens_research.retrospective_audit",
     "alphalens_research.screeners.alt_data",
     "alphalens_research.screeners.compound_insider_pc",
     "alphalens_research.screeners.distress_credit",

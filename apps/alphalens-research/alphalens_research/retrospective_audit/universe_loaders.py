@@ -31,11 +31,11 @@ from alphalens_pipeline.data.alt_data.shares_outstanding import (
 )
 from alphalens_pipeline.data.alt_data.ticker_cik_map import TickerCikMap
 
-from alphalens_research.paper_trade.scorer_v9d import (
+from alphalens_research.retrospective_audit.smd_universe import (
     DEFAULT_ETFS,
     DEFAULT_SMD_CACHE_DIR,
 )
-from alphalens_research.paper_trade.scorer_v9d import (
+from alphalens_research.retrospective_audit.smd_universe import (
     pit_union as _legacy_pit_union,
 )
 
@@ -86,7 +86,7 @@ def pit_union_legacy(
 ) -> list[str]:
     """U1 — existing PIT yaml universe (today's IWM ∩ historical cap-band).
 
-    Thin wrapper around :func:`alphalens_research.paper_trade.scorer_v9d.pit_union` for
+    Thin wrapper around :func:`alphalens_research.retrospective_audit.smd_universe.pit_union` for
     naming consistency; default ``start_year=2008`` aligns with the
     retrospective window's earliest sub-period (GFC_recovery)."""
     return _legacy_pit_union(start_year=start_year, pit_dir=pit_dir, extra_etfs=extra_etfs)

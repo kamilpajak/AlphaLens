@@ -46,7 +46,7 @@ The CLI binary `alphalens` is registered in `apps/alphalens-pipeline/pyproject.t
 | `alphalens_research/attribution/` | ACTIVE | Layer 5 — cost_model, factor_analysis, regime, decision_matrix, diagnostics, report, walk_forward |
 | `alphalens_research/preaudit/` | ACTIVE | per-strategy SmokeProfile + coverage gate before audit launch |
 | `alphalens_research/diagnostics/` | ACTIVE | survivorship_pit, cyclicality screens |
-| `alphalens_research/paper_trade/` | ACTIVE | forward-observation refresh + scorer, live in launchd |
+| `alphalens_research/retrospective_audit/` | RESEARCH_ONLY | PIT universe loaders (U1/U2/U3) + SMD cache primitives for one-shot retrospectives |
 
 **Methodology bundle** (preregistration ledger, multi_phase audit, multiple_testing thresholds, audit_multi_phase driver) consumed via external dep `phase-robust-backtesting>=0.2.0` — see [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md). `alphalens audit <strategy>` (`apps/alphalens-pipeline/alphalens_cli/commands/audit.py`) resolves a short strategy name to a file path and delegates in-process to `phase_robust_backtesting.audit_multi_phase.run_audit`.
 

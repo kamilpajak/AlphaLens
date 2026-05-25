@@ -1,4 +1,0 @@
-#!/bin/bash
-# Weekly paper-trade track — refresh iVolatility SMD for PIT universe, then score + append ledger.
-# Output: ~/.alphalens/paper-trade/track.{log,err}
-exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens paper-trade track --strategy v9d "$@"

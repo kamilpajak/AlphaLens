@@ -25,7 +25,7 @@ WALK_TARGETS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "gates",
             "preaudit",
             "diagnostics",
-            "paper_trade",
+            "retrospective_audit",
             "screeners",
             "screeners.prescreener",
             "screeners.momentum_lowvol",
