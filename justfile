@@ -83,14 +83,18 @@ docker-django:
 # Build both
 docker: docker-pipeline docker-django
 
-# Bring up the Django prod stack (Postgres + Django + nginx)
+# Bring up the local dev stack — builds django locally + spins nginx with
+# bind-mount of apps/web/build (Compose auto-loads docker-compose.override.
+# yaml). For the VPS-shaped stack (pull from GHCR, no nginx), pass an
+# explicit -f to skip the override: `docker compose -f docker-compose.yaml
+# up -d`.
 up:
-    docker compose -f deploy/docker/django-prod/docker-compose.yaml up -d
+    cd deploy/docker/django-prod && docker compose up -d
 
 down:
-    docker compose -f deploy/docker/django-prod/docker-compose.yaml down
+    cd deploy/docker/django-prod && docker compose down
 
 # Rebuild the briefs cache (one-shot: parquets -> Postgres)
 rebuild-cache:
-    docker compose -f deploy/docker/django-prod/docker-compose.yaml \
+    cd deploy/docker/django-prod && docker compose \
         --profile maintenance run --rm rebuild-cache
