@@ -47,6 +47,9 @@
 			<div class="min-w-0 flex-1 basis-[200px]">
 				<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
 					<h3 class="font-display font-bold text-xl sm:text-2xl text-fg">{c.ticker}</h3>
+					<!-- Pattern tags: REVERSAL is currently the only one. When a 2nd pattern -->
+					<!-- (e.g. BREAKOUT, INSIDER_CLUSTER, PRE_EARNINGS_DRIFT) arrives, extract -->
+					<!-- to a `patterns: …` group with shared color-coding + a small label. -->
 					{#if c.deep_drawdown_reversal}
 						<span
 							class="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber/20 text-amber text-[9px] uppercase tracking-widest border border-amber/40 cursor-help"
@@ -59,28 +62,25 @@
 				<div class="text-fg-dim text-xs mt-0.5 truncate">{c.company_name}</div>
 				<div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-[10px] uppercase tracking-widest text-fg-muted">
 					<span class="text-cyan lowercase">#{c.theme}</span>
+					{#if c.also_in_themes && c.also_in_themes.length > 0}
+						<span class="hidden sm:inline">·</span>
+						<span>also in:</span>
+						{#each c.also_in_themes.slice(0, 2) as t, i}
+							<span class="text-cyan lowercase">{t}</span>{#if i < Math.min(c.also_in_themes.length, 2) - 1}<span>,</span>{/if}
+						{/each}
+						{#if c.also_in_themes.length > 2}
+							<span
+								class="text-fg-muted cursor-help"
+								title={c.also_in_themes.slice(2).join(', ')}
+							>+{c.also_in_themes.length - 2} more</span>
+						{/if}
+					{/if}
 					{#if c.industry_name}
 						<span class="hidden sm:inline">·</span>
 						<span class="truncate">{c.industry_name}</span>
 					{/if}
 					{#if c.sector_name}
 						<span class="hidden sm:inline">({c.sector_name})</span>
-					{/if}
-					{#if c.peer_cohort_level === 'thin'}
-						<span
-							class="inline-flex items-center px-1.5 py-0.5 bg-fg-muted/10 text-fg-muted text-[9px] uppercase tracking-widest border border-fg-muted/30"
-							title="Issue #197: SIC peer cohort too small to compute a meaningful percentile (4-digit + 3-digit fallback both below 8 members). Sector-percentile bars below are suppressed."
-						>thin cohort</span>
-					{:else if c.peer_cohort_level === 'sic3'}
-						<span
-							class="inline-flex items-center px-1.5 py-0.5 bg-cyan/10 text-cyan text-[9px] uppercase tracking-widest border border-cyan/30"
-							title="Issue #197: 4-digit SIC cohort was too small; widened to the 3-digit prefix. Percentile computed over a broader peer set — still trustworthy but looser."
-						>sic-3 cohort</span>
-					{:else if c.peer_cohort_level === 'ff48'}
-						<span
-							class="inline-flex items-center px-1.5 py-0.5 bg-amber/10 text-amber text-[9px] uppercase tracking-widest border border-amber/30"
-							title="Issue #198: 4-digit + 3-digit SIC cohorts were both too small; widened to the Fama-French 48-industry bucket (academic SIC aggregation, free from Ken French's data library). Percentile reflects a broader but economically coherent peer set."
-						>ff-48 cohort</span>
 					{/if}
 				</div>
 			</div>
@@ -151,75 +151,88 @@
 					<GatePill name={g} status="unknown" />
 				{/each}
 			</div>
-			{#if c.also_in_themes && c.also_in_themes.length > 0}
-				<div class="mt-3 text-[11px]">
-					<span class="text-fg-muted uppercase tracking-widest">also in: </span>
-					{#each c.also_in_themes as t, i}
-						<span class="text-cyan lowercase">{t}</span>{#if i < c.also_in_themes.length - 1}<span class="text-fg-muted">, </span>{/if}
-					{/each}
-				</div>
-			{/if}
 		</div>
 	</div>
 
 	<!-- Signal grid -->
-	<div class="grid grid-cols-2 lg:grid-cols-4 gap-x-4 sm:gap-x-5 gap-y-4 px-4 sm:px-5 py-4 border-t border-grid bg-bg/30">
-		<SignalBar
-			label="insider 90d (sector %ile)"
-			value={c.insider_score_sector_percentile}
-			format={(v) => fmtPctile(v) + '%ile'}
-			tooltip="Cohen-Malloy opportunistic insider buys ($USD) in the last 90 days, ranked within the ticker's sector. Higher percentile = stronger insider conviction vs sector peers. Paradigm #11 scorer (αt 2.71 IS, SLIPPAGE-FAIL standalone)."
-		/>
-		<SignalBar
-			label="fcff yield (sector %ile)"
-			value={c.fcff_yield_sector_percentile}
-			format={(v) => fmtPctile(v) + '%ile'}
-			tooltip="Free-cash-flow-to-firm yield = FCFF / EV, ranked within sector. Higher = cheaper on cash-generation basis. Paradigm #13 scorer (αt 1.18 IS, every-phase positive, multi-signal corroboration use only)."
-		/>
-		<SignalBar
-			label="valuation composite"
-			value={c.valuation_composite_sector_percentile}
-			format={(v) => fmtPctile(v) + '%ile'}
-			tooltip="Composite sector-percentile rank across PE, PS, EV/Revenue, EV/EBITDA, FCF margin. Higher = cheaper than sector peers on multiple multiples simultaneously."
-		/>
-		<SignalBar
-			label="catalyst strength"
-			value={c.catalyst_strength != null ? c.catalyst_strength * 100 : null}
-			format={(v) => (v / 100).toFixed(2)}
-			tooltip="Layer 4 catalyst-floor score (0-1) combining news novelty, thematic alignment with the source event, and freshness. Higher = stronger event-driven setup. Below 0.55 floor → candidate filtered out."
-		/>
+	<div class="border-t border-grid bg-bg/30 px-4 sm:px-5 py-4">
+		<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-3 text-[10px] uppercase tracking-widest text-fg-muted">
+			<span>signals · vs sector peers</span>
+			{#if c.peer_cohort_level === 'thin'}
+				<span
+					class="inline-flex items-center px-1.5 py-0.5 bg-red/10 text-red text-[9px] uppercase tracking-widest border border-red/40 cursor-help"
+					title="Issue #197: SIC peer cohort too small to compute a meaningful percentile (4-digit + 3-digit fallback both below 8 members). Sector-percentile bars below are suppressed (shown as —)."
+				>thin cohort · bars suppressed</span>
+			{:else if c.peer_cohort_level === 'sic3'}
+				<span
+					class="inline-flex items-center px-1.5 py-0.5 bg-cyan/10 text-cyan text-[9px] uppercase tracking-widest border border-cyan/30 cursor-help"
+					title="Issue #197: 4-digit SIC cohort was too small; widened to the 3-digit prefix. Percentile computed over a broader peer set — still trustworthy but looser."
+				>sic-3 cohort</span>
+			{:else if c.peer_cohort_level === 'ff48'}
+				<span
+					class="inline-flex items-center px-1.5 py-0.5 bg-fg-muted/10 text-fg-muted text-[9px] uppercase tracking-widest border border-fg-muted/40 cursor-help"
+					title="Issue #198: 4-digit + 3-digit SIC cohorts were both too small; widened to the Fama-French 48-industry bucket (academic SIC aggregation, free from Ken French's data library). Percentile reflects a broader but economically coherent peer set."
+				>ff-48 cohort</span>
+			{/if}
+		</div>
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-x-4 sm:gap-x-5 gap-y-4">
+			<SignalBar
+				label="insider 90d (sector %ile)"
+				value={c.insider_score_sector_percentile}
+				format={(v) => fmtPctile(v) + '%ile'}
+				tooltip="Cohen-Malloy opportunistic insider buys ($USD) in the last 90 days, ranked within the ticker's sector. Higher percentile = stronger insider conviction vs sector peers. Paradigm #11 scorer (αt 2.71 IS, SLIPPAGE-FAIL standalone)."
+			/>
+			<SignalBar
+				label="fcff yield (sector %ile)"
+				value={c.fcff_yield_sector_percentile}
+				format={(v) => fmtPctile(v) + '%ile'}
+				tooltip="Free-cash-flow-to-firm yield = FCFF / EV, ranked within sector. Higher = cheaper on cash-generation basis. Paradigm #13 scorer (αt 1.18 IS, every-phase positive, multi-signal corroboration use only)."
+			/>
+			<SignalBar
+				label="valuation composite"
+				value={c.valuation_composite_sector_percentile}
+				format={(v) => fmtPctile(v) + '%ile'}
+				tooltip="Composite sector-percentile rank across PE, PS, EV/Revenue, EV/EBITDA, FCF margin. Higher = cheaper than sector peers on multiple multiples simultaneously."
+			/>
+			<SignalBar
+				label="catalyst strength"
+				value={c.catalyst_strength != null ? c.catalyst_strength * 100 : null}
+				format={(v) => (v / 100).toFixed(2)}
+				tooltip="Layer 4 catalyst-floor score (0-1) combining news novelty, thematic alignment with the source event, and freshness. Higher = stronger event-driven setup. Below 0.55 floor → candidate filtered out."
+			/>
 
-		<SignalBar
-			label="rsi 14d"
-			value={c.technical_rsi}
-			format={(v) => v.toFixed(0)}
-			tooltip="Relative Strength Index, 14-day. <30 oversold (potential reversal), >70 overbought (potential pullback), ~50 neutral. Combined with MA200 distance / 52w drawdown for the deep-drawdown-reversal pattern flag."
-		/>
-		<SignalBar
-			label="off 52w high"
-			value={c.technical_pct_off_52w_high != null ? Math.abs(c.technical_pct_off_52w_high) : null}
-			min={0}
-			max={95}
-			format={(v) => '-' + v.toFixed(1) + '%'}
-			inverted
-			tooltip="% below the 52-week high. Deeper drawdown = potential reversal candidate OR continuation of secular decline. Pair with MA200 slope to discriminate."
-		/>
-		<SignalBar
-			label="off 52w low"
-			value={c.technical_pct_off_52w_low}
-			min={0}
-			max={200}
-			format={(v) => '+' + v.toFixed(1) + '%'}
-			tooltip="% above the 52-week low. Larger = stronger recovery from recent bottom. Combined with off-52w-high to gauge where the price sits within its annual range."
-		/>
-		<SignalBar
-			label="vol z-score"
-			value={c.technical_volume_zscore !== null ? Math.abs(c.technical_volume_zscore) : null}
-			min={0}
-			max={5}
-			format={(v) => (c.technical_volume_zscore! >= 0 ? '+' : '-') + v.toFixed(1) + 'σ'}
-			tooltip="20-day volume z-score. >+2σ = unusual buying interest (catalyst confirmation), <-2σ = drying volume (waning thesis). Sign matters; magnitude bar shows |z|."
-		/>
+			<SignalBar
+				label="rsi 14d"
+				value={c.technical_rsi}
+				format={(v) => v.toFixed(0)}
+				tooltip="Relative Strength Index, 14-day. <30 oversold (potential reversal), >70 overbought (potential pullback), ~50 neutral. Combined with MA200 distance / 52w drawdown for the deep-drawdown-reversal pattern flag."
+			/>
+			<SignalBar
+				label="off 52w high"
+				value={c.technical_pct_off_52w_high != null ? Math.abs(c.technical_pct_off_52w_high) : null}
+				min={0}
+				max={95}
+				format={(v) => '-' + v.toFixed(1) + '%'}
+				inverted
+				tooltip="% below the 52-week high. Deeper drawdown = potential reversal candidate OR continuation of secular decline. Pair with MA200 slope to discriminate."
+			/>
+			<SignalBar
+				label="off 52w low"
+				value={c.technical_pct_off_52w_low}
+				min={0}
+				max={200}
+				format={(v) => '+' + v.toFixed(1) + '%'}
+				tooltip="% above the 52-week low. Larger = stronger recovery from recent bottom. Combined with off-52w-high to gauge where the price sits within its annual range."
+			/>
+			<SignalBar
+				label="vol z-score"
+				value={c.technical_volume_zscore !== null ? Math.abs(c.technical_volume_zscore) : null}
+				min={0}
+				max={5}
+				format={(v) => (c.technical_volume_zscore! >= 0 ? '+' : '-') + v.toFixed(1) + 'σ'}
+				tooltip="20-day volume z-score. >+2σ = unusual buying interest (catalyst confirmation), <-2σ = drying volume (waning thesis). Sign matters; magnitude bar shows |z|."
+			/>
+		</div>
 	</div>
 
 	<!-- Technicals + fundamentals table -->
