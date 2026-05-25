@@ -270,7 +270,7 @@ Zone → Zone WAF: Edit), the full Cloudflare-side setup is API-driven.
 > the earlier `POST`s returned.
 
 ```bash
-set -a && . ~/.secrets/cloudflare.env && . ~/.secrets/google_oauth.env && set +a
+set -a && . ~/.secrets/cloudflare.env && . ~/.secrets/alphalens/google-oauth.env && set +a
 ACCT=<account-id>
 
 # Add Google IdP
@@ -298,9 +298,10 @@ TOK=$(curl -sS -X POST \
   "https://api.cloudflare.com/client/v4/accounts/$ACCT/access/service_tokens" \
   -H "Authorization: Bearer $CLOUDFLARE_TOKEN" -H "Content-Type: application/json" \
   -d '{"name":"alphalens-bot","duration":"forever"}')
+mkdir -p ~/.secrets/alphalens && chmod 700 ~/.secrets/alphalens
 echo "$TOK" | jq -r '"CF_ACCESS_CLIENT_ID=" + .result.client_id, "CF_ACCESS_CLIENT_SECRET=" + .result.client_secret' \
-  > ~/.secrets/alphalens_bot_token.env
-chmod 600 ~/.secrets/alphalens_bot_token.env
+  > ~/.secrets/alphalens/alphalens-bot.env
+chmod 600 ~/.secrets/alphalens/alphalens-bot.env
 TOK_ID=$(echo "$TOK" | jq -r .result.id)
 
 curl -sS -X POST \
