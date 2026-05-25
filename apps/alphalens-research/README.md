@@ -1,7 +1,7 @@
 # alphalens-research
 
 The research lab — screeners, backtest, attribution, overlays, gates,
-preaudit, diagnostics, and paper-trade. Installed from the workspace
+preaudit, diagnostics, and retrospective_audit. Installed from the workspace
 root `pyproject.toml`.
 
 > Live infrastructure (edgar_detector, thematic, data clients, literature_scanner,
