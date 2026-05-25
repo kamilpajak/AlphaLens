@@ -60,5 +60,16 @@ export async function apiFetch(
 	init: RequestInit = {},
 	fetcher: typeof fetch = fetch
 ): Promise<Response> {
-	return fetcher(api(path), { credentials: 'include', ...init });
+	const res = await fetcher(api(path), { credentials: 'include', ...init });
+	// CF Access session expiry: when the CF_Authorization cookie is invalid
+	// or expired, CF Access transparently serves its login HTML with status
+	// 200, so `res.ok` would be true and downstream `.json()` would crash on
+	// `<!doctype`. Detect by content-type (the API always returns JSON; any
+	// HTML body here is the login page, never legitimate API output) and
+	// surface a synthetic 401 so callsites' `if (!res.ok)` branches catch it.
+	const contentType = res.headers.get('content-type') ?? '';
+	if (contentType.includes('text/html')) {
+		return new Response(null, { status: 401, statusText: 'Unauthorized' });
+	}
+	return res;
 }
