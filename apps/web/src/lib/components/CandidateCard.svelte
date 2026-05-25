@@ -167,62 +167,62 @@
 			{/if}
 		</div>
 		<div class="grid grid-cols-2 lg:grid-cols-4 gap-x-4 sm:gap-x-5 gap-y-4">
-		<SignalBar
-			label="insider 90d (sector %ile)"
-			value={c.insider_score_sector_percentile}
-			format={(v) => fmtPctile(v) + '%ile'}
-			tooltip="Cohen-Malloy opportunistic insider buys ($USD) in the last 90 days, ranked within the ticker's sector. Higher percentile = stronger insider conviction vs sector peers. Paradigm #11 scorer (αt 2.71 IS, SLIPPAGE-FAIL standalone)."
-		/>
-		<SignalBar
-			label="fcff yield (sector %ile)"
-			value={c.fcff_yield_sector_percentile}
-			format={(v) => fmtPctile(v) + '%ile'}
-			tooltip="Free-cash-flow-to-firm yield = FCFF / EV, ranked within sector. Higher = cheaper on cash-generation basis. Paradigm #13 scorer (αt 1.18 IS, every-phase positive, multi-signal corroboration use only)."
-		/>
-		<SignalBar
-			label="valuation composite"
-			value={c.valuation_composite_sector_percentile}
-			format={(v) => fmtPctile(v) + '%ile'}
-			tooltip="Composite sector-percentile rank across PE, PS, EV/Revenue, EV/EBITDA, FCF margin. Higher = cheaper than sector peers on multiple multiples simultaneously."
-		/>
-		<SignalBar
-			label="catalyst strength"
-			value={c.catalyst_strength != null ? c.catalyst_strength * 100 : null}
-			format={(v) => (v / 100).toFixed(2)}
-			tooltip="Layer 4 catalyst-floor score (0-1) combining news novelty, thematic alignment with the source event, and freshness. Higher = stronger event-driven setup. Below 0.55 floor → candidate filtered out."
-		/>
+			<SignalBar
+				label="insider 90d (sector %ile)"
+				value={c.insider_score_sector_percentile}
+				format={(v) => fmtPctile(v) + '%ile'}
+				tooltip="Cohen-Malloy opportunistic insider buys ($USD) in the last 90 days, ranked within the ticker's sector. Higher percentile = stronger insider conviction vs sector peers. Paradigm #11 scorer (αt 2.71 IS, SLIPPAGE-FAIL standalone)."
+			/>
+			<SignalBar
+				label="fcff yield (sector %ile)"
+				value={c.fcff_yield_sector_percentile}
+				format={(v) => fmtPctile(v) + '%ile'}
+				tooltip="Free-cash-flow-to-firm yield = FCFF / EV, ranked within sector. Higher = cheaper on cash-generation basis. Paradigm #13 scorer (αt 1.18 IS, every-phase positive, multi-signal corroboration use only)."
+			/>
+			<SignalBar
+				label="valuation composite"
+				value={c.valuation_composite_sector_percentile}
+				format={(v) => fmtPctile(v) + '%ile'}
+				tooltip="Composite sector-percentile rank across PE, PS, EV/Revenue, EV/EBITDA, FCF margin. Higher = cheaper than sector peers on multiple multiples simultaneously."
+			/>
+			<SignalBar
+				label="catalyst strength"
+				value={c.catalyst_strength != null ? c.catalyst_strength * 100 : null}
+				format={(v) => (v / 100).toFixed(2)}
+				tooltip="Layer 4 catalyst-floor score (0-1) combining news novelty, thematic alignment with the source event, and freshness. Higher = stronger event-driven setup. Below 0.55 floor → candidate filtered out."
+			/>
 
-		<SignalBar
-			label="rsi 14d"
-			value={c.technical_rsi}
-			format={(v) => v.toFixed(0)}
-			tooltip="Relative Strength Index, 14-day. <30 oversold (potential reversal), >70 overbought (potential pullback), ~50 neutral. Combined with MA200 distance / 52w drawdown for the deep-drawdown-reversal pattern flag."
-		/>
-		<SignalBar
-			label="off 52w high"
-			value={c.technical_pct_off_52w_high != null ? Math.abs(c.technical_pct_off_52w_high) : null}
-			min={0}
-			max={95}
-			format={(v) => '-' + v.toFixed(1) + '%'}
-			inverted
-			tooltip="% below the 52-week high. Deeper drawdown = potential reversal candidate OR continuation of secular decline. Pair with MA200 slope to discriminate."
-		/>
-		<SignalBar
-			label="off 52w low"
-			value={c.technical_pct_off_52w_low}
-			min={0}
-			max={200}
-			format={(v) => '+' + v.toFixed(1) + '%'}
-			tooltip="% above the 52-week low. Larger = stronger recovery from recent bottom. Combined with off-52w-high to gauge where the price sits within its annual range."
-		/>
-		<SignalBar
-			label="vol z-score"
-			value={c.technical_volume_zscore !== null ? Math.abs(c.technical_volume_zscore) : null}
-			min={0}
-			max={5}
-			format={(v) => (c.technical_volume_zscore! >= 0 ? '+' : '-') + v.toFixed(1) + 'σ'}
-			tooltip="20-day volume z-score. >+2σ = unusual buying interest (catalyst confirmation), <-2σ = drying volume (waning thesis). Sign matters; magnitude bar shows |z|."
-		/>
+			<SignalBar
+				label="rsi 14d"
+				value={c.technical_rsi}
+				format={(v) => v.toFixed(0)}
+				tooltip="Relative Strength Index, 14-day. <30 oversold (potential reversal), >70 overbought (potential pullback), ~50 neutral. Combined with MA200 distance / 52w drawdown for the deep-drawdown-reversal pattern flag."
+			/>
+			<SignalBar
+				label="off 52w high"
+				value={c.technical_pct_off_52w_high != null ? Math.abs(c.technical_pct_off_52w_high) : null}
+				min={0}
+				max={95}
+				format={(v) => '-' + v.toFixed(1) + '%'}
+				inverted
+				tooltip="% below the 52-week high. Deeper drawdown = potential reversal candidate OR continuation of secular decline. Pair with MA200 slope to discriminate."
+			/>
+			<SignalBar
+				label="off 52w low"
+				value={c.technical_pct_off_52w_low}
+				min={0}
+				max={200}
+				format={(v) => '+' + v.toFixed(1) + '%'}
+				tooltip="% above the 52-week low. Larger = stronger recovery from recent bottom. Combined with off-52w-high to gauge where the price sits within its annual range."
+			/>
+			<SignalBar
+				label="vol z-score"
+				value={c.technical_volume_zscore !== null ? Math.abs(c.technical_volume_zscore) : null}
+				min={0}
+				max={5}
+				format={(v) => (c.technical_volume_zscore! >= 0 ? '+' : '-') + v.toFixed(1) + 'σ'}
+				tooltip="20-day volume z-score. >+2σ = unusual buying interest (catalyst confirmation), <-2σ = drying volume (waning thesis). Sign matters; magnitude bar shows |z|."
+			/>
 		</div>
 	</div>
 
