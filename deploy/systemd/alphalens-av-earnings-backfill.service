@@ -27,10 +27,11 @@ WorkingDirectory=%h/AlphaLens
 # Shared secrets file: /etc/alphalens/env (root:root chmod 600) — same
 # source as alphalens-thematic-build.service. Must contain at minimum
 # ALPHA_VANTAGE_API_KEY=...; other keys are ignored by this script.
-# Leading `-` makes the file optional (CI smoke runs may skip it).
-# See deploy/systemd/README.md "Environment file setup" for the bootstrap
-# recipe (sudo mkdir + cp + chmod 600 + chown root:root).
-EnvironmentFile=-/etc/alphalens/env
+# No leading `-`: fail loud on missing/typoed path so a silent quota
+# burn (script falls through to default behaviour) doesn't poison the
+# 21-day AV backfill schedule. See deploy/systemd/README.md
+# "Environment file setup" for the bootstrap recipe.
+EnvironmentFile=/etc/alphalens/env
 
 ExecStart=%h/AlphaLens/.venv/bin/python apps/alphalens-research/scripts/av_earnings_daily_backfill.py \
     --universe sp500_union

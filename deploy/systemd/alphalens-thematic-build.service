@@ -28,11 +28,12 @@ WorkingDirectory=%h/AlphaLens
 
 # Pipeline secrets live in /etc/alphalens/env (root:root chmod 600). systemd
 # loads them into the unit's process env, and the explicit `-e KEY` flags
-# below cherry-pick which ones cross into the container. Leading `-` makes
-# the file optional so a stripped install (e.g. CI smoke) still parses.
-# See deploy/systemd/README.md "Environment file setup" for the bootstrap
-# recipe (sudo mkdir + cp + chmod 600 + chown root:root).
-EnvironmentFile=-/etc/alphalens/env
+# below cherry-pick which ones cross into the container. No leading `-`:
+# if the file is missing the unit MUST fail loud rather than limp on
+# without secrets (Polygon skipped, Gemini extract fails partway, partial
+# parquet poisons cache). See deploy/systemd/README.md "Environment file
+# setup" for the bootstrap recipe.
+EnvironmentFile=/etc/alphalens/env
 
 # Inherit operator UID/GID into the pipeline container so bind-mount writes
 # land as the user, not root. The `-e KEY` form (no `=value`) tells docker

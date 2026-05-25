@@ -5,11 +5,22 @@ hosts where launchd is unavailable.
 
 ## Environment file setup (`/etc/alphalens/env`)
 
-`alphalens-thematic-build.service` and `alphalens-av-earnings-backfill.service`
-both load secrets via `EnvironmentFile=-/etc/alphalens/env`. systemd reads
-each `KEY=VALUE` line into the unit's process env before `ExecStart`; for the
-docker-run unit, the explicit `-e KEY` flags then cherry-pick which keys
-cross into the container.
+All three AlphaLens systemd units load secrets via
+`EnvironmentFile=/etc/alphalens/env`:
+- `alphalens-thematic-build.service` — `GOOGLE_API_KEY`, `POLYGON_API_KEY`,
+  `PERPLEXITY_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
+  `ALPHA_VANTAGE_API_KEY`, `SEC_EDGAR_USER_AGENT`
+- `alphalens-av-earnings-backfill.service` — `ALPHA_VANTAGE_API_KEY`
+- `alphalens-form4-backfill.service` — `SEC_EDGAR_USER_AGENT`
+
+systemd reads each `KEY=VALUE` line into the unit's process env before
+`ExecStart`; for the docker-run unit, the explicit `-e KEY` flags then
+cherry-pick which keys cross into the container.
+
+**No leading `-` on `EnvironmentFile=`** — a missing/typoed file MUST
+fail the unit loud, not silently degrade to "no secrets" (Polygon
+skipped, Gemini extract fails partway, partial parquet poisons cache).
+CI smoke runs install a stub: `sudo mkdir -p /etc/alphalens && sudo touch /etc/alphalens/env`.
 
 **Why `/etc/alphalens/env` and not the repo's `.env` files:**
 - repo `.env` files (e.g. `apps/alphalens-django/.env`, `deploy/docker/.env`)
@@ -67,10 +78,15 @@ already-processed CIKs and resumes from where it left off.
 ### Install
 
 ```bash
+# Prereq: /etc/alphalens/env must exist with SEC_EDGAR_USER_AGENT=...
+# see "Environment file setup" section at the top of this README.
+
 mkdir -p ~/.config/systemd/user
 cp deploy/systemd/alphalens-form4-backfill.service ~/.config/systemd/user/
 
-# Edit Environment= lines in the unit file to match your VPS paths and contact.
+# Edit Environment= lines in the unit file ONLY if you want non-default
+# config paths or year range. SEC_EDGAR_USER_AGENT is sourced from
+# /etc/alphalens/env, not the unit file.
 systemctl --user daemon-reload
 systemctl --user enable --now alphalens-form4-backfill.service
 
