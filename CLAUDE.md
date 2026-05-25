@@ -13,7 +13,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repo.
 **Live production:**
 - Layer 1 SEC EDGAR detector (launchd `edgar-detect`-only; `worker` archived per ADR 0008)
 - Literature review weekly + monthly Perplexity scan
-- VPS daily thematic pipeline + API rebuild + Cloudflare-fronted SvelteKit dashboard (see `## VPS backfills`)
+- VPS daily thematic pipeline + API rebuild (Django pulled from GHCR per migration B); SvelteKit dashboard hosted on Cloudflare Pages, fronted by Access (Google SSO, Path A same-domain cookies). See `## VPS backfills` + `## Production topology (migration B)`.
 
 **Everything else RESEARCH_ONLY** — code remains as reusable framework. Closed paradigms were extracted (reusable scorers promoted to live packages) and the rest removed per [ADR 0010](docs/adr/0010-archive-extracted-and-removed.md), superseding ADR 0005. Methodology bundle MIT-licensed as [`kamilpajak/phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting) per [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md). Search for better screeners stays open-ended — each new test raises the Bonferroni bar via ledger discipline, but "no further prospecting" is **not** a project position.
 
@@ -188,7 +188,8 @@ Long-running data acquisition jobs that don't fit on the laptop run on the dedic
 |------|---------|--------|--------------|-----------|--------|
 | `alphalens-form4-backfill.service` | long-running daemon (`Type=simple` + `Restart=on-failure`) | `apps/alphalens-research/scripts/run_form4_backfill.py` | `~/.alphalens/form4_parquet/` | ~5-10 days (SEC 10 req/s) | DONE 2026-05-08 (37MB final, 2.66M rows) |
 | `alphalens-av-earnings-backfill.{service,timer}` | daily oneshot (`Type=oneshot` + `OnCalendar=*-*-* 00:05 UTC` + `Persistent=true`) | `apps/alphalens-research/scripts/av_earnings_daily_backfill.py` | `~/.alphalens/av_cache/earnings_<T>.json` | ~21 days (AV free-tier 25/day) | LIVE (paradigm-14 PEAD v2 backfill) |
-| `alphalens-thematic-build.{service,timer}` | daily oneshot (`Type=oneshot` + `OnCalendar=*-*-* 06:30 UTC` + `Persistent=true`) wrapping `docker run --rm alphalens-pipeline` + `compose run --rm rebuild-cache` (Django stack) | `alphalens thematic {ingest,extract,map-themes,score,brief}` + `manage.py rebuild_briefs_cache` | `~/.alphalens/thematic_briefs/` + Postgres `briefs`/`days_meta` tables | ~5-15 min | LIVE — feeds Cloudflare-fronted SvelteKit dashboard via Django stack (`apps/alphalens-django/`, see `docs/django-migration` ADR) |
+| `alphalens-thematic-build.{service,timer}` | daily oneshot (`Type=oneshot` + `OnCalendar=*-*-* 06:30 UTC` + `Persistent=true`) wrapping `docker run --rm alphalens-pipeline` + `compose run --rm rebuild-cache` (Django stack) | `alphalens thematic {ingest,extract,map-themes,score,brief}` + `manage.py rebuild_briefs_cache` | `~/.alphalens/thematic_briefs/` + Postgres `briefs`/`days_meta` tables | ~5-15 min | LIVE — feeds CF Pages SPA via Django API (`apps/alphalens-django/`, image pulled from GHCR, see `## Production topology (migration B)`) |
+| `alphalens-django` Docker stack | long-running (`docker compose up -d` per `deploy/docker/django-prod/`) | `ghcr.io/kamilpajak/alphalens-django:${ALPHALENS_DJANGO_TAG:-latest}` (pull-only on VPS); operator workflow: `docker compose pull && up -d` after CI publishes a new tag | Postgres `briefs`/`days_meta` (read by `rebuild-cache` from `~/.alphalens/thematic_briefs/`) | ~2-5 s downtime on `up -d` (Compose stops old container before starting new) | LIVE — origin behind cloudflared tunnel to `api.<domain>` |
 
 **Why VPS, not Mac:**
 - Mac sleeps / restarts → multi-day jobs lose state; VPS is always-on
