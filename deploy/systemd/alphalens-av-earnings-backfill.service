@@ -24,9 +24,13 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=%h/AlphaLens
 
-# `.env` must contain ALPHA_VANTAGE_API_KEY=...; chmod 600 recommended.
-# Systemd reads each KEY=VALUE line from this file before ExecStart.
-EnvironmentFile=%h/AlphaLens/.env
+# Shared secrets file: /etc/alphalens/env (root:root chmod 600) — same
+# source as alphalens-thematic-build.service. Must contain at minimum
+# ALPHA_VANTAGE_API_KEY=...; other keys are ignored by this script.
+# Leading `-` makes the file optional (CI smoke runs may skip it).
+# See deploy/systemd/README.md "Environment file setup" for the bootstrap
+# recipe (sudo mkdir + cp + chmod 600 + chown root:root).
+EnvironmentFile=-/etc/alphalens/env
 
 ExecStart=%h/AlphaLens/.venv/bin/python apps/alphalens-research/scripts/av_earnings_daily_backfill.py \
     --universe sp500_union
