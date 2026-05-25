@@ -34,9 +34,14 @@ WorkingDirectory=%h/AlphaLens
 #    `Environment="KEY=value with spaces"`.
 #
 # SEC EDGAR Fair Access requires a contact: "Your Name your@email.com".
-# Wrong UA returns 403; left as a placeholder so misconfiguration fails
-# fast rather than running with someone else's contact.
-Environment="ALPHALENS_USER_AGENT=EDIT_ME_Your_Name your@email.com"
+# Wrong UA returns 403. Sourced from /etc/alphalens/env (shared secrets,
+# root:root chmod 600) as SEC_EDGAR_USER_AGENT — same name the python SEC
+# EDGAR client reads (apps/alphalens-pipeline/.../sec_edgar_client.py
+# USER_AGENT_ENV). No leading `-`: a missing file fails the unit loud
+# rather than running with a fallback that might trigger SEC's 403.
+EnvironmentFile=/etc/alphalens/env
+
+# Non-secret config knobs stay inline (deterministic, checked-in, no email).
 Environment=ALPHALENS_CIK_LIST=%h/.alphalens/form4_cik_universe.txt
 Environment=ALPHALENS_PARQUET_ROOT=%h/.alphalens/form4_parquet
 Environment=ALPHALENS_MANIFEST=%h/.alphalens/form4_backfill_manifest.json
@@ -45,7 +50,7 @@ Environment=ALPHALENS_END_YEAR=2026
 Environment=ALPHALENS_FLUSH_THRESHOLD=5000
 
 ExecStart=%h/AlphaLens/.venv/bin/python apps/alphalens-research/scripts/run_form4_backfill.py \
-    --user-agent "${ALPHALENS_USER_AGENT}" \
+    --user-agent "${SEC_EDGAR_USER_AGENT}" \
     --cik-list ${ALPHALENS_CIK_LIST} \
     --parquet-root ${ALPHALENS_PARQUET_ROOT} \
     --manifest ${ALPHALENS_MANIFEST} \

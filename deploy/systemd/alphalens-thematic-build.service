@@ -26,11 +26,30 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=%h/AlphaLens
 
+# Pipeline secrets live in /etc/alphalens/env (root:root chmod 600). systemd
+# loads them into the unit's process env, and the explicit `-e KEY` flags
+# below cherry-pick which ones cross into the container. No leading `-`:
+# if the file is missing the unit MUST fail loud rather than limp on
+# without secrets (Polygon skipped, Gemini extract fails partway, partial
+# parquet poisons cache). See deploy/systemd/README.md "Environment file
+# setup" for the bootstrap recipe.
+EnvironmentFile=/etc/alphalens/env
+
 # Inherit operator UID/GID into the pipeline container so bind-mount writes
-# land as the user, not root.
+# land as the user, not root. The `-e KEY` form (no `=value`) tells docker
+# to copy the value from the calling env — that's where systemd's
+# EnvironmentFile vars live. Adding a new pipeline secret means: update
+# /etc/alphalens/env on the host AND add a `-e NEW_KEY` line below.
 ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
     --user %U:%G \
     -e HOME=/app/home \
+    -e GOOGLE_API_KEY \
+    -e ALPHA_VANTAGE_API_KEY \
+    -e POLYGON_API_KEY \
+    -e PERPLEXITY_API_KEY \
+    -e TELEGRAM_BOT_TOKEN \
+    -e TELEGRAM_CHAT_ID \
+    -e SEC_EDGAR_USER_AGENT \
     -v %h/.alphalens:/app/home/.alphalens \
     --entrypoint /bin/bash \
     alphalens-pipeline:latest \
