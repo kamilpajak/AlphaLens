@@ -108,14 +108,16 @@
 				#{theme} <span class="text-fg-muted">({count})</span>
 			</button>
 		{/each}
-		<label class="ml-auto flex items-center gap-2 text-[10px] uppercase tracking-widest text-fg-dim cursor-pointer">
-			<input
-				type="checkbox"
-				bind:checked={onlyVerified}
-				class="accent-amber"
-			/>
-			verified only
-		</label>
+		{#if verifiedCount < data.brief.n_candidates}
+			<label class="ml-auto flex items-center gap-2 text-[10px] uppercase tracking-widest text-fg-dim cursor-pointer">
+				<input
+					type="checkbox"
+					bind:checked={onlyVerified}
+					class="accent-amber"
+				/>
+				verified only
+			</label>
+		{/if}
 	</div>
 
 	<!-- Candidates -->
