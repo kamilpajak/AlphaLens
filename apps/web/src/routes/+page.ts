@@ -1,5 +1,5 @@
 import type { PageLoad } from './$types';
-import { api } from '$lib/api';
+import { apiFetch } from '$lib/api';
 import type { DayBrief, DayIndexEntry, Paginated } from '$lib/types';
 
 const EMPTY = { days: [] as DayIndexEntry[], latestBrief: null as DayBrief | null };
@@ -12,13 +12,13 @@ export const load: PageLoad = async ({ fetch }) => {
 	// so the dashboard keeps rendering instead of crashing into the
 	// SvelteKit error boundary.
 	try {
-		const indexRes = await fetch(api('/v1/days?limit=200'));
+		const indexRes = await apiFetch('/v1/days?limit=200', {}, fetch);
 		if (!indexRes.ok) return EMPTY;
 		const indexBody: Paginated<DayIndexEntry> = await indexRes.json();
 		const days = indexBody.data;
 		if (days.length === 0) return { days, latestBrief: null as DayBrief | null };
 
-		const latestRes = await fetch(api(`/v1/days/${days[0].date}`));
+		const latestRes = await apiFetch(`/v1/days/${days[0].date}`, {}, fetch);
 		const latestBrief: DayBrief | null = latestRes.ok ? await latestRes.json() : null;
 		return { days, latestBrief };
 	} catch {
