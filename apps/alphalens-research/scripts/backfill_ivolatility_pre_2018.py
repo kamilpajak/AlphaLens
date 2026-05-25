@@ -34,7 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import ivolatility as ivol
-from alphalens_research.paper_trade.scorer_v9d import (
+from alphalens_research.retrospective_audit.smd_universe import (
     DEFAULT_SMD_CACHE_DIR,
     backfill_smd_history,
     pit_union,

@@ -3,7 +3,7 @@
 Scans every parquet in ``~/.alphalens/ivolatility_smd/`` and emits a single
 inventory frame with columns ``[ticker, first_date, last_date, n_rows,
 ivp30_rows, pre_2018_rows, pre_2008_rows]``. Consumed by the universe loaders
-in :mod:`alphalens_research.paper_trade.universe_loaders` for fast U2/U3 candidate
+in :mod:`alphalens_research.retrospective_audit.universe_loaders` for fast U2/U3 candidate
 selection.
 
 Idempotent — safe to run after every backfill batch.

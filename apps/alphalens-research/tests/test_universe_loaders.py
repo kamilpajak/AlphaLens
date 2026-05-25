@@ -1,4 +1,4 @@
-"""Tests for :mod:`alphalens_research.paper_trade.universe_loaders` (U1/U2/U3)."""
+"""Tests for :mod:`alphalens_research.retrospective_audit.universe_loaders` (U1/U2/U3)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
-from alphalens_research.paper_trade import universe_loaders as ul
+from alphalens_research.retrospective_audit import universe_loaders as ul
 
 
 def _write_inventory(

@@ -1,7 +1,7 @@
 """PIT / as-of-t data store — single source of truth for historical reads.
 
 Modules here answer the question "what did we know about X as of t?" for any
-backtest or paper-trade replay. Consolidating these reads in one namespace
+backtest or retrospective replay. Consolidating these reads in one namespace
 prevents research/live mismatch (Quant 2.0 feature-store discipline).
 
 Modules:

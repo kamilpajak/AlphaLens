@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "alphalens-research"
 version = "0.1.0"
-description = "AlphaLens research lab: screeners, backtest engine, attribution, overlays, gates, preaudit, diagnostics, paper trade."
+description = "AlphaLens research lab: screeners, backtest engine, attribution, overlays, gates, preaudit, diagnostics, retrospective audit."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

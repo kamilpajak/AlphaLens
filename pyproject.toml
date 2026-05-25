@@ -2,7 +2,7 @@
 #
 # Members:
 #   - apps/alphalens-pipeline   (live infrastructure + thematic + watchdog + literature_review + alphalens CLI binary)
-#   - apps/alphalens-research   (research lab: screeners, backtest, attribution, overlays, gates, preaudit, diagnostics, paper_trade)
+#   - apps/alphalens-research   (research lab: screeners, backtest, attribution, overlays, gates, preaudit, diagnostics, retrospective_audit)
 #   - apps/alphalens-django     (DRF briefs API)
 #
 # Setup (single venv at repo root):

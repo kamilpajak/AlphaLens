@@ -20,7 +20,7 @@ The single allowed exception is the CLI (``alphalens_cli``), which
 orchestrates both tiers via lazy imports inside command bodies.
 
 The research tier (screeners, backtest, attribution, overlays, gates,
-preaudit, diagnostics, paper_trade) lives in the sibling
+preaudit, diagnostics, retrospective_audit) lives in the sibling
 ``alphalens_research`` package and is RESEARCH_ONLY / CLOSED for the
 most part — see its README for status markers.
 """
