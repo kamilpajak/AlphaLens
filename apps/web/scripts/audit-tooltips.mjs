@@ -237,10 +237,23 @@ const scriptEnd = src.indexOf('</script>');
 const jsxText = scriptEnd > -1 ? src.slice(scriptEnd) : '';
 // Strip JargonTip blocks, HTML comments, and any data-term="..." attributes
 // (those carry the term verbatim but are tooltip metadata, not visible prose).
-const jsxStripped = jsxText
-	.replace(/<JargonTip[\s\S]*?<\/JargonTip>/g, '')
-	.replace(/<!--[\s\S]*?-->/g, '')
-	.replace(/data-term="[^"]*"/g, '');
+// Iterate each replace until stable — a single .replace() pass can leave a
+// dangerous sequence (e.g. `<!--<!---->` collapses to `<!--` after one pass)
+// which CodeQL flags as js/incomplete-multi-character-sanitization. This is
+// a dev-only build script over trusted repo source, but cheap to fix right.
+function stripUntilStable(text, pattern) {
+	let prev;
+	let curr = text;
+	do {
+		prev = curr;
+		curr = curr.replace(pattern, '');
+	} while (curr !== prev);
+	return curr;
+}
+const jsxStripped = stripUntilStable(
+	stripUntilStable(stripUntilStable(jsxText, /<JargonTip[\s\S]*?<\/JargonTip>/g), /<!--[\s\S]*?-->/g),
+	/data-term="[^"]*"/g
+);
 // Skip glossary section <dl>...</dl> when scanning unwrapped (terms inside
 // glossary `term` display are intentional — not "unwrapped" in policy sense).
 // Locate glossary section by its header "glossary.terms" anchor.

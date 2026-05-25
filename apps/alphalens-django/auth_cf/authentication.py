@@ -46,8 +46,12 @@ class CloudflareAccessAuthentication(authentication.BaseAuthentication):
         try:
             claims = verify(token)
         except JWTError as exc:
+            # Log the underlying jose/JWTError detail for operators (kid
+            # mismatch, signature fail, expired, etc.) but return a
+            # generic message to the client — JWTError text can carry
+            # library-internal hints (CodeQL py/stack-trace-exposure).
             logger.warning("auth_cf: JWT verification failed: %s", exc)
-            raise exceptions.AuthenticationFailed(f"invalid Cf-Access JWT: {exc}") from exc
+            raise exceptions.AuthenticationFailed("invalid Cf-Access JWT") from exc
 
         user = self._principal_from_claims(claims)
         return user, claims
