@@ -5,6 +5,7 @@
 	import SignalBar from './SignalBar.svelte';
 	import GatePill from './GatePill.svelte';
 	import JargonTip from './JargonTip.svelte';
+	import ChipTip from './ChipTip.svelte';
 	import { GLOSSARY_BY_TERM } from '$lib/data/glossary';
 
 	// Same tipProps pattern as /experiments — looks up term in shared glossary.
@@ -51,12 +52,18 @@
 					<!-- (e.g. BREAKOUT, INSIDER_CLUSTER, PRE_EARNINGS_DRIFT) arrives, extract -->
 					<!-- to a `patterns: …` group with shared color-coding + a small label. -->
 					{#if c.deep_drawdown_reversal}
-						<span
-							class="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber/20 text-amber text-[9px] uppercase tracking-widest border border-amber/40 cursor-help"
-							title="Deep-drawdown-reversal pattern: ≥30% off 52-week high + fresh thematic catalyst (news URL present) + volume z-score ≥ +2σ. Archetype: oversold name on news with institutional accumulation flow. Heuristic — not validated alpha; use as decision-support signal."
+						<ChipTip
+							term="REVERSAL pattern"
+							body="Deep-drawdown-reversal: ≥30% off 52-week high + fresh thematic catalyst (news URL present) + volume z-score ≥ +2σ. Archetype: oversold name on news with institutional accumulation flow. Heuristic — not validated alpha; use as decision-support signal."
 						>
-							<Sparkle class="size-2.5" /> reversal
-						</span>
+							{#snippet chip()}
+								<span
+									class="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber/20 text-amber text-[9px] uppercase tracking-widest border border-amber/40 cursor-help"
+								>
+									<Sparkle class="size-2.5" /> reversal
+								</span>
+							{/snippet}
+						</ChipTip>
 					{/if}
 				</div>
 				<div class="text-fg-dim text-xs mt-0.5 truncate">{c.company_name}</div>
@@ -159,20 +166,35 @@
 		<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-3 text-[10px] uppercase tracking-widest text-fg-muted">
 			<span>signals · vs sector peers</span>
 			{#if c.peer_cohort_level === 'thin'}
-				<span
-					class="inline-flex items-center px-1.5 py-0.5 bg-red/10 text-red text-[9px] uppercase tracking-widest border border-red/40 cursor-help"
-					title="Issue #197: SIC peer cohort too small to compute a meaningful percentile (4-digit + 3-digit fallback both below 8 members). Sector-percentile bars below are suppressed (shown as —)."
-				>thin cohort · bars suppressed</span>
+				<ChipTip
+					term="THIN cohort"
+					body="SIC peer cohort too small to compute a meaningful percentile (4-digit + 3-digit fallback both below 8 members). Sector-percentile bars below are suppressed (shown as —)."
+				>
+					{#snippet chip()}
+						<span class="inline-flex items-center px-1.5 py-0.5 bg-red/10 text-red text-[9px] uppercase tracking-widest border border-red/40 cursor-help"
+						>thin cohort · bars suppressed</span>
+					{/snippet}
+				</ChipTip>
 			{:else if c.peer_cohort_level === 'sic3'}
-				<span
-					class="inline-flex items-center px-1.5 py-0.5 bg-cyan/10 text-cyan text-[9px] uppercase tracking-widest border border-cyan/30 cursor-help"
-					title="Issue #197: 4-digit SIC cohort was too small; widened to the 3-digit prefix. Percentile computed over a broader peer set — still trustworthy but looser."
-				>sic-3 cohort</span>
+				<ChipTip
+					term="SIC-3 cohort"
+					body="4-digit SIC cohort was too small; widened to the 3-digit prefix. Percentile computed over a broader peer set — still trustworthy but looser."
+				>
+					{#snippet chip()}
+						<span class="inline-flex items-center px-1.5 py-0.5 bg-cyan/10 text-cyan text-[9px] uppercase tracking-widest border border-cyan/30 cursor-help"
+						>sic-3 cohort</span>
+					{/snippet}
+				</ChipTip>
 			{:else if c.peer_cohort_level === 'ff48'}
-				<span
-					class="inline-flex items-center px-1.5 py-0.5 bg-fg-muted/10 text-fg-muted text-[9px] uppercase tracking-widest border border-fg-muted/40 cursor-help"
-					title="Issue #198: 4-digit + 3-digit SIC cohorts were both too small; widened to the Fama-French 48-industry bucket (academic SIC aggregation, free from Ken French's data library). Percentile reflects a broader but economically coherent peer set."
-				>ff-48 cohort</span>
+				<ChipTip
+					term="FF-48 cohort"
+					body="4-digit + 3-digit SIC cohorts were both too small; widened to the Fama-French 48-industry bucket (academic SIC aggregation, free from Ken French's data library). Percentile reflects a broader but economically coherent peer set."
+				>
+					{#snippet chip()}
+						<span class="inline-flex items-center px-1.5 py-0.5 bg-fg-muted/10 text-fg-muted text-[9px] uppercase tracking-widest border border-fg-muted/40 cursor-help"
+						>ff-48 cohort</span>
+					{/snippet}
+				</ChipTip>
 			{/if}
 		</div>
 		<div class="grid grid-cols-2 lg:grid-cols-4 gap-x-4 sm:gap-x-5 gap-y-4">
