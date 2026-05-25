@@ -60,7 +60,10 @@ test: test-python test-django test-web
 # Dev servers
 # -------------------------------------------------------------------------
 
-# Django dev server (briefs API at 127.0.0.1:8000)
+# Django dev server (briefs API at 127.0.0.1:8000).
+# WARNING: conflicts with `just up` — the local Docker stack also binds
+# 127.0.0.1:8000 (canonical compose ports). Stop the stack first or pass
+# `runserver 127.0.0.1:8001` if you need both running.
 dev-django:
     cd apps/alphalens-django && uv run python manage.py runserver
 

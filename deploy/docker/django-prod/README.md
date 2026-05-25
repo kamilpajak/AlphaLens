@@ -47,27 +47,32 @@ cp .env.example .env
 # Fill in SECRET_KEY, POSTGRES_PASSWORD, ALLOWED_HOSTS,
 # CORS_ALLOWED_ORIGINS, CORS_ALLOWED_ORIGIN_REGEXES,
 # CORS_ALLOW_CREDENTIALS, CF_ACCESS_TEAM, CF_ACCESS_AUD
+# Uncomment COMPOSE_FILE=docker-compose.yaml so a stray `up -d` cannot
+# load the local-dev override.
 echo $GHCR_PAT | docker login ghcr.io -u kamilpajak --password-stdin
 
 # Deploy / re-deploy
-docker compose -f docker-compose.yaml pull
-docker compose -f docker-compose.yaml up -d
-docker compose -f docker-compose.yaml ps
+docker compose pull
+docker compose up -d
+docker compose ps
 curl -fsS http://127.0.0.1:8000/healthz
 ```
 
-Pin a specific image SHA for rollback:
+**Rollback** — edit `ALPHALENS_DJANGO_TAG` in `.env` (e.g. `sha-883574d`)
+and re-run `docker compose up -d`. Do NOT pin inline
+(`ALPHALENS_DJANGO_TAG=... docker compose up -d`) — the next `up -d`
+without it would silently roll forward to `:latest`. The `.env` file is
+the single source of truth.
 
-```bash
-ALPHALENS_DJANGO_TAG=sha-883574d \
-    docker compose -f docker-compose.yaml up -d
-```
+Downtime during `up -d`: ~2-5 s of 502 from cloudflared while gunicorn
+boots the new container. Compose stops the old container before
+starting the new one — this is NOT zero-downtime. Acceptable for the
+internal buy-side tool.
 
 ## Refresh briefs from parquet
 
 ```bash
-docker compose -f docker-compose.yaml \
-    --profile maintenance run --rm rebuild-cache
+docker compose --profile maintenance run --rm rebuild-cache
 ```
 
 Schedule from the host via systemd timer; no in-container scheduler by

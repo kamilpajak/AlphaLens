@@ -11,29 +11,35 @@
 # host can map it to api.<domain>.
 #
 # Local dev adds nginx + bind-mounts the SPA via docker-compose.override.
-# yaml, which Compose auto-loads when no `-f` flag is passed. To skip the
-# override on the VPS:
+# yaml, which Compose auto-loads when no `-f` flag is passed. On the VPS,
+# set `COMPOSE_FILE=docker-compose.yaml` in .env (template shows it
+# commented-out) so the override is never accidentally loaded — that
+# enforcement avoids the footgun of forgetting `-f` on a manual command.
 #
-#   docker compose -f docker-compose.yaml pull
-#   docker compose -f docker-compose.yaml up -d
+#   docker compose pull
+#   docker compose up -d
 #
-# Pin a specific image SHA when rolling back:
+# Rollback: edit ALPHALENS_DJANGO_TAG in .env (do NOT pin inline — the
+# value would be lost the next time someone runs `up -d` without it,
+# silently rolling forward to :latest), then:
 #
-#   ALPHALENS_DJANGO_TAG=sha-abc1234 \
-#     docker compose -f docker-compose.yaml up -d
+#   docker compose up -d
 #
 # One-shot DB sync from parquet:
 #
-#   docker compose -f docker-compose.yaml --profile maintenance run --rm rebuild-cache
+#   docker compose --profile maintenance run --rm rebuild-cache
 
 name: alphalens-prod
 
 x-django-base: &django-base
   image: ghcr.io/kamilpajak/alphalens-django:${ALPHALENS_DJANGO_TAG:-latest}
   # `pull_policy: always` makes `docker compose up -d` re-check the
-  # registry every bring-up. Combined with the immutable sha-<short>
-  # tags from the build-django-image workflow, this is the cheapest
-  # zero-downtime deploy path: bump tag in .env, re-run up -d.
+  # registry every bring-up. Combined with immutable sha-<short> tags
+  # from the build-django-image workflow, this is the cheapest minimal-
+  # downtime path: edit ALPHALENS_DJANGO_TAG in .env, re-run up -d.
+  # NOT zero downtime — Compose stops the old container before starting
+  # the new one (~2-5 s of 502 from cloudflared while gunicorn boots).
+  # OK for an internal buy-side tool.
   pull_policy: always
   env_file: ./.env
   environment:

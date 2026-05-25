@@ -27,6 +27,14 @@ services:
     # actually convenient for debug (curl Django without going through
     # nginx).
 
+  # rebuild-cache inherits from x-django-base in the canonical file, which
+  # pins the GHCR image. Without overriding here, a local `just rebuild-
+  # cache` would try to pull from GHCR (and fail when offline or without
+  # docker login). Pin to the local-built image, same as `django`.
+  rebuild-cache:
+    image: alphalens-django:local
+    pull_policy: never
+
   nginx:
     image: nginx:1.27-alpine
     depends_on:
