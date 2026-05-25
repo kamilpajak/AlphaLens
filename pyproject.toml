@@ -1,49 +1,38 @@
-[build-system]
-requires = ["setuptools>=82.0.1"]
-build-backend = "setuptools.build_meta"
+# Virtual workspace root — owns shared tooling config; no top-level package.
+#
+# Members:
+#   - apps/alphalens-pipeline   (live infrastructure + thematic + watchdog + literature_review + alphalens CLI binary)
+#   - apps/alphalens-research   (research lab: screeners, backtest, attribution, overlays, gates, preaudit, diagnostics, paper_trade)
+#   - apps/alphalens-django     (DRF briefs API)
+#
+# Setup (single venv at repo root):
+#   uv sync           # installs every member + shared dev tools
+#
+# Per-member install (rare):
+#   uv pip install -e apps/alphalens-pipeline
+#   uv pip install -e apps/alphalens-research
+#   uv pip install -e apps/alphalens-django
 
-[project]
-name = "alphalens"
-version = "0.1.0"
-description = "Stock analysis pipeline: event detection + screening + multi-agent LLM analysis"
-readme = "README.md"
-requires-python = ">=3.13"
-dependencies = [
-    "pandas>=2.3.0",
-    "scipy>=1.17.1",
-    "statsmodels>=0.14.6",
-    "langchain-google-genai>=4.2.2",
-    "typer>=0.25.1",
-    "yfinance>=0.2.63",
-    "stockstats>=0.6.5",
-    "python-dotenv>=1.2.2",
-    "quiverquant",
-    "pyarrow>=24.0.0",  # explicit: pandas parquet I/O (FRED cache, history snapshots)
-    "scikit-learn>=1.8.0",
-    "lightgbm>=4.6.0",
-    "ivolatility>=1.9.3",
-    "phase-robust-backtesting @ git+https://github.com/kamilpajak/phase-robust-backtesting.git@v0.2.3",
-    "feedparser>=6.0.11",
-    "google-genai>=0.8.0",
-    "json-repair>=0.59.10",
-    "fastapi>=0.136.1",
-    "uvicorn[standard]>=0.47.0",
-    "requests>=2.32.0",
-]
+[tool.uv.workspace]
+members = ["apps/alphalens-pipeline", "apps/alphalens-research", "apps/alphalens-django"]
 
-[project.scripts]
-alphalens = "alphalens_cli.main:app"
-
-[tool.setuptools.packages.find]
-include = ["alphalens*", "alphalens_cli*"]
-
-[project.optional-dependencies]
+[dependency-groups]
+# Shared dev tools — installed for every workspace member by `uv sync --group dev`.
+# Per-app test-runners (pytest-django for the django app) live here too so a
+# single `uv sync --group dev` boots the full CI test matrix.
 dev = [
     "ruff>=0.15.12",
     "coverage>=7.13.5",
     "pre-commit>=3.7",
     "bandit>=1.9.4",
     "httpx>=0.28.1",
+    "pytest>=9.0",
+    "pytest-django>=4.12",
+    "diff-cover>=10.2",
+    "pyright>=1.1.409",
+    "pandas-stubs>=3.0.0.260204",
+    "django-types>=0.22.0",
+    "djangorestframework-types>=0.9.0",
 ]
 
 [tool.ruff]
@@ -57,6 +46,8 @@ exclude = [
     "logs",
     "reports",
     ".alphalens",
+    "apps/web",
+    "apps/alphalens-django/.venv",
 ]
 
 [tool.ruff.lint]
@@ -80,6 +71,7 @@ ignore = [
     "PLR0913",  # too many args — research code often has wide signatures
     "PLR0915",  # too many statements — backtest functions are linear sequences
     "PLR0912",  # too many branches — verdict logic
+    "PLR0911",  # too many returns — verdict classifiers + value-mappers are linear early-return ladders (same family as PLR0912 verdict-logic)
     "N803",   # arg should be lowercase (pandas idioms: X, y)
     "N806",   # variable should be lowercase
     "B008",   # function call in default arg — typer.Option uses this
@@ -92,7 +84,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = [
+"apps/alphalens-research/tests/*" = [
     "PLR0915",  # tests can be long
     "B011",     # asserts in tests OK
     "B017",     # generic Exception in assertRaises is OK in test scaffolding
@@ -105,66 +97,21 @@ ignore = [
     "SIM117",   # nested with-statements in tests highlight scope structure
     "PLW1510",  # subprocess.run in tests asserts on returncode explicitly; check= is the test's job
 ]
-"alphalens/watchdog/lock.py" = [
+"apps/alphalens-pipeline/tests/*" = [
+    "PLR0915", "B011", "B017", "N801", "N802", "F841",
+    "RUF012", "B035", "SIM115", "SIM117", "PLW1510",
+]
+"apps/alphalens-pipeline/alphalens_pipeline/watchdog/lock.py" = [
     "N818",     # WorkerLockBusy is a state signal, not a fatal error — keep without Error suffix
 ]
-"alphalens/archive/**" = [
-    "PLW0603",  # closed-layer code retained per ADR 0005; not refactoring closed modules
-    "PLR0911",  # closed strategies have legitimate guard-return chains; not refactoring
+"apps/alphalens-research/alphalens_research/screeners/**/*.py" = [
+    "N802",     # capital-X design matrix (`_prepare_X`, `_fit_X`) is Murphy/Hastie convention — same exemption is configured on SonarCloud (S1542) per sonar-project.properties
+]
+"apps/alphalens-research/scripts/*.py" = [
+    "E402",     # scripts insert workspace root into sys.path before importing alphalens_* — `noqa: E402` covers most cases but the ones here predate the convention; the sys.path bootstrap is intentional
 ]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 docstring-code-format = true
-
-[tool.coverage.run]
-source = ["alphalens", "alphalens_cli"]
-omit = [
-    "*/tests/*",
-]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "if __name__ == .__main__.:",
-    "raise NotImplementedError",
-    "if TYPE_CHECKING:",
-]
-
-[tool.mutmut]
-# Transient — ad-hoc mutation testing of form4 backfill modules. Not part
-# of CI; remove when no longer needed.
-#
-# Known limitation: mutmut 3.x uses multiprocessing.Pool, which segfaults
-# on macOS + Python 3.13 with native libs (EXC_BAD_ACCESS). Workaround:
-# downgrade to mutmut 2.x (`uv pip install "mutmut<3"`) which spawns
-# subprocesses sequentially. Run with explicit unittest runner:
-#
-#   uv pip install "mutmut<3"
-#   .venv/bin/mutmut run \
-#     --paths-to-mutate "scripts/split_cik_list.py,alphalens/data/alt_data/sec_edgar_client.py" \
-#     --runner ".venv/bin/python -m unittest tests.test_split_cik_list tests.test_sec_edgar_client" \
-#     --tests-dir tests/
-#
-# Last run (2026-05-06): 91 killed / 84 survived / 1 timeout / 1 suspicious
-# = 51% kill rate. Survivors are mostly low-value: error message strings,
-# main() CLI plumbing, module-level URL/REPO_ROOT constants, __init__
-# defaults. Targeted gaps closed: _load_cik_list parsing, _evict_to_capacity
-# boundary.
-#
-# To mutate pyarrow-touching modules (form4_bulk_backfill,
-# run_form4_backfill, compact_form4_parquet), run on Linux VPS — fork-safe
-# there.
-paths_to_mutate = [
-    "scripts/split_cik_list.py",
-    "alphalens/data/alt_data/sec_edgar_client.py",
-]
-also_copy = [
-    "alphalens/",
-    "scripts/",
-]
-tests_dir = [
-    "tests/test_split_cik_list.py",
-    "tests/test_sec_edgar_client.py",
-]

@@ -1,7 +1,7 @@
 # AlphaLens thematic pipeline image — runs the CLI inside a container so the
 # VPS doesn't need its own Python 3.13 + uv + apt deps. Built from the repo
-# root context; the alphalens + alphalens_cli packages are installed into
-# /app/.venv via `uv sync`.
+# root context; the alphalens_pipeline + alphalens_cli packages (which live
+# under apps/alphalens-pipeline/) are installed into /app/.venv via `uv sync`.
 #
 # Why bookworm and NOT slim: lxml and lightgbm sometimes fall back to a source
 # build on cold cache; slim is missing the C headers/libraries those need, and
@@ -24,16 +24,19 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # libxml2-dev + libxslt1-dev: lxml source-build headers AND runtime libs
 #           (the -dev packages depend on libxml2 + libxslt1.1, so installing
 #           the dev variants covers both cases — wheel install or source).
-# libgomp1: LightGBM OpenMP runtime — must be present even when the wheel is
-#           used, otherwise import fails with "libgomp.so.1: cannot open ...".
-# git: phase-robust-backtesting is installed from a git URL in pyproject.toml.
+#
+# Notably NOT installed: libgomp1 (LightGBM OpenMP runtime) and git.
+# Both were needed for the pre-split image. After the workspace split, the
+# `uv sync --package alphalens-pipeline` step skips the research-side
+# package, which means no LightGBM (lab-only) and no git-URL fetch for
+# phase-robust-backtesting (research-only dep declared as `... @ git+...`
+# in apps/alphalens-research/pyproject.toml). Keeping them out shrinks
+# the image without affecting the thematic daily pipeline.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libffi-dev \
         libxml2-dev \
         libxslt1-dev \
-        libgomp1 \
-        git \
     && rm -rf /var/lib/apt/lists/*
 
 # uv (Astral) — single static binary, no Python bootstrap.
@@ -41,20 +44,34 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/
 
 WORKDIR /app
 
-# Cache layer for deps — copy lockfile + manifest first.
+# Cache layer for deps — copy workspace root + every member's manifest first.
+# uv needs all member pyproject.toml files present to resolve the lockfile.
 COPY pyproject.toml uv.lock README.md ./
+COPY apps/alphalens-pipeline/pyproject.toml ./apps/alphalens-pipeline/pyproject.toml
+COPY apps/alphalens-pipeline/README.md ./apps/alphalens-pipeline/README.md
+COPY apps/alphalens-research/pyproject.toml ./apps/alphalens-research/pyproject.toml
+COPY apps/alphalens-research/README.md ./apps/alphalens-research/README.md
+COPY apps/alphalens-django/pyproject.toml ./apps/alphalens-django/pyproject.toml
+COPY apps/alphalens-django/README.md ./apps/alphalens-django/README.md
 
-# Install deps WITHOUT the project itself (the source isn't here yet).
+# Install deps WITHOUT the project itself (source not here yet).
+# --package limits the sync to alphalens-pipeline; alphalens-research is a
+# workspace dep so its lab-side deps come along, but its source is omitted
+# from the image (audit/preaudit commands lazy-import it — never invoked
+# inside the thematic daily container). alphalens-django is not needed.
 # UV_CONCURRENT_BUILDS=UV_CONCURRENT_INSTALLS=1 caps RAM during any source
 # build on a small VPS.
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project --package alphalens-pipeline
 # Now copy the project source and install it on top of the prepared venv.
-COPY alphalens ./alphalens
-COPY alphalens_cli ./alphalens_cli
-COPY scripts ./scripts
+# Note: SP1500 PIT yamls under apps/alphalens-pipeline/data/ are used by
+# paradigm audits run on the laptop / runpod, not by the thematic daily
+# pipeline — intentionally omitted from this image. Mount via volume +
+# $ALPHALENS_DATA_ROOT if needed.
+COPY apps/alphalens-pipeline/alphalens_pipeline ./apps/alphalens-pipeline/alphalens_pipeline
+COPY apps/alphalens-pipeline/alphalens_cli ./apps/alphalens-pipeline/alphalens_cli
 COPY deploy/docker/run_thematic_day.sh /app/deploy/docker/run_thematic_day.sh
 RUN chmod +x /app/deploy/docker/run_thematic_day.sh \
-    && uv sync --frozen --no-dev
+    && uv sync --frozen --no-dev --package alphalens-pipeline
 # Bind-mount target for the operator's ~/.alphalens cache. The compose file
 # sets HOME=/app/home so Path.home() inside the container resolves here.
 # Pre-create + chown so the bind-mount inherits the right ownership when the

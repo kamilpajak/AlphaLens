@@ -1,0 +1,112 @@
+# Canonical compose for the AlphaLens API stack — pull-only, used on VPS.
+#
+# Topology:
+#
+#   CF Tunnel ──► django (gunicorn) ──► postgres
+#                        │
+#                        └─ reads ~/.alphalens/thematic_briefs (RO bind)
+#
+# The SPA is hosted on Cloudflare Pages (per migration plan B); no nginx,
+# no static-asset mount. Django binds 127.0.0.1:8000 so cloudflared on the
+# host can map it to api.<domain>.
+#
+# Local dev adds nginx + bind-mounts the SPA via docker-compose.override.
+# yaml, which Compose auto-loads when no `-f` flag is passed. On the VPS,
+# set `COMPOSE_FILE=docker-compose.yaml` in .env (template shows it
+# commented-out) so the override is never accidentally loaded — that
+# enforcement avoids the footgun of forgetting `-f` on a manual command.
+#
+#   docker compose pull
+#   docker compose up -d
+#
+# Rollback: edit ALPHALENS_DJANGO_TAG in .env (do NOT pin inline — the
+# value would be lost the next time someone runs `up -d` without it,
+# silently rolling forward to :latest), then:
+#
+#   docker compose up -d
+#
+# One-shot DB sync from parquet:
+#
+#   docker compose --profile maintenance run --rm rebuild-cache
+
+name: alphalens-prod
+
+x-django-base: &django-base
+  image: ghcr.io/kamilpajak/alphalens-django:${ALPHALENS_DJANGO_TAG:-latest}
+  # `pull_policy: always` makes `docker compose up -d` re-check the
+  # registry every bring-up. Combined with immutable sha-<short> tags
+  # from the build-django-image workflow, this is the cheapest minimal-
+  # downtime path: edit ALPHALENS_DJANGO_TAG in .env, re-run up -d.
+  # NOT zero downtime — Compose stops the old container before starting
+  # the new one (~2-5 s of 502 from cloudflared while gunicorn boots).
+  # OK for an internal buy-side tool.
+  pull_policy: always
+  env_file: ./.env
+  environment:
+    DATABASE_URL: postgres://alphalens:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/alphalens
+    DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.prod}
+  depends_on:
+    postgres:
+      condition: service_healthy
+  volumes:
+    # Read-only mount of the host's brief output so the API + rebuild
+    # command see the same artifact path as the daily pipeline. Operator
+    # may override BRIEFS_DIR in .env to point at a different snapshot.
+    - ${BRIEFS_DIR:-${HOME}/.alphalens/thematic_briefs}:/var/lib/alphalens/thematic_briefs:ro
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: alphalens
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: alphalens
+    volumes:
+      - alphalens_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alphalens"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  django:
+    <<: *django-base
+    # Migrate on every start. Idempotent; new migrations apply, no-ops on
+    # established schema. Cheap enough not to need an init container.
+    command:
+      - sh
+      - -c
+      - >-
+        python manage.py migrate --noinput &&
+        exec gunicorn
+        --bind 0.0.0.0:8000
+        --workers 2
+        --worker-class uvicorn.workers.UvicornWorker
+        --access-logfile -
+        --error-logfile -
+        config.asgi:application
+    # Bind to loopback only so cloudflared (running on the host) is the
+    # one exposing port 8000 publicly — Docker does NOT publish to
+    # 0.0.0.0 here. The override file unsets this for local dev where
+    # nginx is the public-facing port.
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+
+  # One-shot service for the daily parquet→Postgres sync. Not started by
+  # ``up``; invoke via ``docker compose run --rm rebuild-cache``. Wired as
+  # a separate service (not exec into ``django``) so an external scheduler
+  # can drive it (systemd timer on the host, or cron in a sidecar).
+  rebuild-cache:
+    <<: *django-base
+    profiles: ["maintenance"]
+    command:
+      - python
+      - manage.py
+      - rebuild_briefs_cache
+      - --briefs-dir
+      - /var/lib/alphalens/thematic_briefs
+
+volumes:
+  alphalens_pgdata:

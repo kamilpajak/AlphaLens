@@ -10,7 +10,12 @@
 #                   → ~/.alphalens/thematic_candidates/{date}.parquet
 #   4. score      — Layer 4 quant scorer → ~/.alphalens/thematic_scored/
 #   5. brief      — Layer 5 brief generator → ~/.alphalens/thematic_briefs/
-#   6. api cache  — parquet → SQLite the api container serves over REST
+#
+# The cache rebuild (parquet → Postgres) lives in the Django stack and is
+# invoked by systemd as a separate ExecStartPost step:
+#     docker compose -f deploy/docker/django-prod/docker-compose.yaml \
+#         --profile maintenance run --rm rebuild-cache
+# That keeps the pipeline image free of Django + Postgres deps.
 #
 # Exit non-zero on any stage failure so systemd marks the run as failed
 # (visible via `systemctl --user status alphalens-thematic-daily`).
@@ -30,11 +35,5 @@ alphalens thematic score
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic brief"
 alphalens thematic brief
-
-# Rebuild the API SQLite cache from the parquet set the brief stage just
-# produced. The api container reads ~/.alphalens/api/briefs.db in WAL mode,
-# so this write is safe to do while it's serving traffic.
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] api rebuild-cache"
-alphalens api rebuild-cache
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] DONE"

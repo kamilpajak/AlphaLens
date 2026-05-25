@@ -1,0 +1,38 @@
+{
+	"name": "web",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"scripts": {
+		"sync:docs": "node scripts/sync-research-docs.mjs",
+		"audit:tooltips": "node scripts/audit-tooltips.mjs",
+		"predev": "node scripts/sync-research-docs.mjs",
+		"prebuild": "node scripts/sync-research-docs.mjs",
+		"dev": "vite dev",
+		"build": "vite build",
+		"preview": "vite preview",
+		"prepare": "svelte-kit sync || echo ''",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test": "playwright test",
+		"test:smoke": "playwright test smoke.test.ts"
+	},
+	"devDependencies": {
+		"@playwright/test": "^1.60.0",
+		"@sveltejs/adapter-static": "^3.0.10",
+		"@sveltejs/kit": "^2.57.0",
+		"@sveltejs/vite-plugin-svelte": "^7.0.0",
+		"@tailwindcss/typography": "^0.5.19",
+		"@tailwindcss/vite": "^4.3.0",
+		"@types/node": "^25.9.1",
+		"svelte": "^5.55.2",
+		"svelte-check": "^4.4.6",
+		"tailwindcss": "^4.3.0",
+		"typescript": "^6.0.2",
+		"vite": "^8.0.7"
+	},
+	"dependencies": {
+		"lucide-svelte": "^1.0.1",
+		"marked": "^18.0.3"
+	}
+}

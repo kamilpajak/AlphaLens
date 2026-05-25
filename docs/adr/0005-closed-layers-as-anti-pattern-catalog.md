@@ -1,6 +1,6 @@
 # ADR 0005 — Closed layers retained as anti-pattern catalog
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR 0010](0010-archive-extracted-and-removed.md) (2026-05-22)
 - **Date:** 2026-04-25
 - **Supersedes:** —
 

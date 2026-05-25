@@ -1,0 +1,68 @@
+name: CodeQL
+
+# GitHub's native SAST. Free for public repos and required almost-zero
+# configuration. Covers both Python tiers (alphalens-pipeline + alphalens-
+# research + alphalens-django) and the SvelteKit frontend (TypeScript).
+#
+# Triggers:
+#   - push to main / feature/django-migration: gate every merge.
+#   - PRs against main / feature/django-migration: surface findings inline.
+#   - weekly schedule: catch new query-set rules added after a PR landed.
+#
+# Findings appear under the repo's Security tab → Code scanning. High/critical
+# alerts auto-block PR merge if branch protection is configured to require
+# the CodeQL check.
+
+on:
+  push:
+    branches: [main, feature/django-migration]
+  pull_request:
+    branches: [main, feature/django-migration]
+  schedule:
+    - cron: "0 3 * * 1"  # Monday 03:00 UTC — offset from the CI workflow's 02:00
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      # Required for CodeQL to upload SARIF results to the Security tab.
+      security-events: write
+      # Required for CodeQL to read the repo + check out other branches.
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          # `security-extended` adds quality queries that catch supply-chain
+          # and crypto-hygiene issues the default suite misses. Free tier
+          # includes both; no reason to limit to `default`.
+          queries: security-extended
+
+      - name: Autobuild
+        # Python + JS/TS are interpreted languages; CodeQL builds the
+        # extraction database via static analysis. Autobuild is sufficient;
+        # no manual `python setup.py build` needed.
+        uses: github/codeql-action/autobuild@v4
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

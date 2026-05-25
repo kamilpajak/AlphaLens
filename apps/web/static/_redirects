@@ -1,0 +1,13 @@
+# Cloudflare Pages _redirects — SPA client-side routing fallback.
+#
+# Every unknown path returns 200 + index.html so the SvelteKit router
+# resolves the route on the client. Without this, navigating directly to
+# `/brief/2026-05-24` would return Pages' default 404 because the static
+# build has no per-route HTML files (adapter-static `fallback: 'index.html'`
+# only handles unmatched routes during build, not at deploy-time fetch).
+#
+# The API is reached cross-origin via VITE_API_BASE (set in CF Pages
+# project env vars). Proxying /api/* through Pages was the alternative —
+# rejected because it adds ~30 ms latency per request and hides CORS
+# behaviour. See apps/web/README.md for the deploy topology.
+/*  /index.html  200

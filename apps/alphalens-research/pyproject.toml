@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alphalens-research"
+version = "0.1.0"
+description = "AlphaLens research lab: screeners, backtest engine, attribution, overlays, gates, preaudit, diagnostics, paper trade."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    # Shared data + analytics
+    "pandas>=2.3.0",
+    "scipy>=1.17.1",
+    "pyarrow>=24.0.0",
+    "statsmodels>=0.14.6",
+    # Research-only modelling stack
+    "scikit-learn>=1.8.0",
+    "lightgbm>=4.6.0",
+    "stockstats>=0.6.5",
+    # Methodology bundle (pre-registration ledger + multi-phase audit)
+    "phase-robust-backtesting @ git+https://github.com/kamilpajak/phase-robust-backtesting.git@v0.2.3",
+    # Live infrastructure (data clients, PIT store, core, scorers) lives in the
+    # sibling workspace member and is consumed by screeners + backtest.
+    "alphalens-pipeline",
+]
+
+[tool.uv.sources]
+alphalens-pipeline = { workspace = true }
+
+[tool.setuptools.packages.find]
+include = ["alphalens_research*"]
+
+[tool.coverage.run]
+source = ["alphalens_research"]
+omit = [
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

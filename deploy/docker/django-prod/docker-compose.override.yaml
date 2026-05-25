@@ -1,0 +1,51 @@
+# Local-dev override — auto-loaded by Compose when no `-f` flag is given.
+#
+# Two responsibilities, both unwanted on the VPS:
+#   1. Build the django image from the workspace Dockerfile (avoid
+#      `docker login ghcr.io` on the dev box).
+#   2. Bring up nginx with a host bind-mount of apps/web/build so the
+#      whole UI is reachable on http://localhost:8080 without CF Pages.
+#
+# To run the VPS-shaped stack locally (skip this file):
+#   docker compose -f docker-compose.yaml up -d
+
+services:
+  django:
+    # Override the pull-from-GHCR canonical setup: build locally,
+    # never pull. `image` here re-tags the local build so `docker
+    # images` lists it under a non-registry name.
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/django-prod/Dockerfile
+    image: alphalens-django:local
+    pull_policy: never
+    # Note: the canonical `ports: 127.0.0.1:8000:8000` carries through to
+    # local dev. Compose list-merges ports rather than replacing them, and
+    # the `!reset` tag tripped pre-commit's generic YAML checker. Having
+    # Django directly reachable at localhost:8000 alongside the nginx
+    # reverse-proxy on 8080 is fine — different ports, no conflict — and
+    # actually convenient for debug (curl Django without going through
+    # nginx).
+
+  # rebuild-cache inherits from x-django-base in the canonical file, which
+  # pins the GHCR image. Without overriding here, a local `just rebuild-
+  # cache` would try to pull from GHCR (and fail when offline or without
+  # docker login). Pin to the local-built image, same as `django`.
+  rebuild-cache:
+    image: alphalens-django:local
+    pull_policy: never
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - django
+    ports:
+      - "${NGINX_HTTP_PORT:-8080}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Operator runs `pnpm --filter web build` first; nginx serves the
+      # static artifact + reverse-proxies /api/* to django:8000. CLAUDE.md
+      # documents the macOS Docker Desktop gotcha (empty bind-mount when
+      # the source path is missing at container start).
+      - ${SPA_DIST:-../../../apps/web/build}:/usr/share/nginx/html:ro
+    restart: unless-stopped

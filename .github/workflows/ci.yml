@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/django-migration]
   pull_request:
-    branches: [main]
+    branches: [main, feature/django-migration]
   schedule:
     - cron: "0 2 * * 1"  # Weekly Monday 02:00 UTC — detect dependency drift
 
@@ -13,18 +13,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    runs-on: macos-latest  # match dev env (M-series Mac)
+  # -----------------------------------------------------------------------
+  # Python tier — covers BOTH apps/alphalens-pipeline (live infra +
+  # watchdog + thematic + literature_review + CLI) and apps/alphalens-
+  # research (screeners + backtest + attribution + paper_trade + etc.).
+  # Single job because the test files all live under apps/alphalens-
+  # research/tests/ (workspace install lets them import either package)
+  # and the libomp / lightgbm setup is amortized once. macOS matches the
+  # dev box and the lightgbm wheel availability story.
+  # -----------------------------------------------------------------------
+  research:
+    name: research (Python)
+    runs-on: macos-latest
     timeout-minutes: 15
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0  # full history for SonarCloud blame + coverage
 
       - name: Set up Python via uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
           enable-cache: true
@@ -33,47 +43,214 @@ jobs:
       - name: Install libomp (lightgbm runtime dep on macOS)
         run: brew install libomp
 
-      - name: Install dependencies
-        run: uv sync --extra dev --frozen
+      - name: Install workspace
+        run: uv sync --group dev --frozen
 
-      - name: Ruff lint
-        # Research-lab posture: surface findings without blocking. Strict mode
-        # later when paradigm stabilizes (would target IS Carhart t > 3.0
-        # before re-enabling 0-warning bar).
-        run: uv run ruff check alphalens/ alphalens_cli/ tests/
-        continue-on-error: true
+      - name: Lockfile freshness (uv.lock matches pyproject)
+        # Frozen-deps drift gate: if anyone edits pyproject.toml without
+        # regenerating uv.lock, this fails. `uv lock --check` is the 2026
+        # canonical way to assert "the lockfile is up to date" without
+        # actually writing to disk.
+        run: uv lock --check
 
-      - name: Ruff format check
-        # Strict — formatting is mechanical and zero-cost to fix.
-        run: uv run ruff format --check alphalens/ alphalens_cli/ tests/
+      - name: Ruff lint (pipeline + research)
+        # Blocking. Pre-existing warnings cleaned up in the foundation-
+        # cleanup PR (chore/ci-foundation-cleanup); future violations must
+        # be fixed in the PR that introduces them. Per-file-ignores +
+        # project-wide `ignore = [...]` in pyproject.toml encode the
+        # research-code posture (PLR0911 verdict ladders, capital-X math
+        # notation in screeners, Polish-language docstrings, etc).
+        run: uv run ruff check apps/alphalens-pipeline/ apps/alphalens-research/
+
+      - name: Ruff format check (pipeline + research)
+        run: uv run ruff format --check apps/alphalens-pipeline/ apps/alphalens-research/
 
       - name: Bandit security scan
-        run: uv run bandit -r alphalens/ alphalens_cli/ -ll -q
-        continue-on-error: true  # surface findings without blocking initially
+        # Gate: low-and-above severity (-ll). XML parsing on untrusted SEC
+        # EDGAR feeds uses defusedxml (B314 fix); urllib3 calls go through
+        # the canonical requests-based vendor clients (sec_edgar_client,
+        # alphavantage_client, polygon_client, gemini_client). The single
+        # urllib.request.urlopen call to GDELT is # nosec B310 — URL built
+        # from a constant base + querystring, file:// not reachable.
+        run: uv run bandit -r apps/alphalens-pipeline/alphalens_pipeline/ apps/alphalens-pipeline/alphalens_cli/ apps/alphalens-research/alphalens_research/ -ll -q
+
+      - name: pip-audit (CVE scan against uv.lock)
+        # uv export --no-emit-workspace strips editable installs of the
+        # three workspace members (they have no PyPI CVEs to look up).
+        # The grep drops git-URL deps (phase-robust-backtesting) — pip-audit
+        # can't audit a git ref. --disable-pip uses osv.dev directly so we
+        # don't need an ephemeral venv on the CI runner. Baseline: 0 CVEs
+        # after `uv lock --upgrade` cleared 14 transitive vulns.
+        run: |
+          uv export --frozen --no-dev --no-emit-workspace --format requirements-txt \
+            | grep -v '@ git+' > /tmp/audit-reqs.txt
+          uv tool run pip-audit --disable-pip -r /tmp/audit-reqs.txt
+
+      - name: Pyright strict (scorers — non-locked files)
+        # Dedicated blocking gate for the load-bearing scorer modules. Strict
+        # mode is enforced via the top-level "strict" array in pyrightconfig.json
+        # at file granularity (opportunistic_form4.py is SHA256-locked per
+        # pre-reg ledger, so it stays in basic mode and isn't checked here).
+        run: |
+          uv run pyright \
+            apps/alphalens-pipeline/alphalens_pipeline/scorers/_common.py \
+            apps/alphalens-pipeline/alphalens_pipeline/scorers/cohen_malloy_classifier.py \
+            apps/alphalens-pipeline/alphalens_pipeline/scorers/fcff_yield.py
+
+      - name: Pyright strict (backtest)
+        # Dedicated blocking gate for the Layer 3 backtest engine + its
+        # auxiliary metrics/IC/theme modules. Wrong type at this boundary
+        # corrupts BacktestReport.portfolio_returns -> wrong Sharpe ->
+        # wrong verdict. Strict per pyrightconfig.json top-level "strict" array.
+        run: uv run pyright apps/alphalens-research/alphalens_research/backtest/
+
+      - name: Pyright strict (attribution)
+        # Dedicated blocking gate for Layer 5 attribution — cost_model,
+        # factor_analysis, regime, walk_forward, signal_independence,
+        # signal_vol_regime, diagnostics. Wrong type here corrupts α t-stat,
+        # Sharpe, hit-rate, regime breakdowns -> wrong verdict.
+        run: uv run pyright apps/alphalens-research/alphalens_research/attribution/
+
+      - name: Pyright type-check (basic global + strict per critical module)
+        # Config: pyrightconfig.json at repo root. BLOCKING.
+        # Global typeCheckingMode = "basic" — catches name resolution, attribute
+        # access, obvious type mismatches without forcing exhaustive annotations
+        # on math-heavy research code.
+        # Strict per-module via top-level "strict" array on backtest/attribution/
+        # scorers — these surfaces govern verdicts; wrong types corrupt α t-stats.
+        # opportunistic_form4.py is in "exclude" because it is SHA256-locked
+        # per pre-reg ledger (insider_pc_compound_2026_05_10) and cannot carry
+        # type fixes.
+        run: uv run pyright
 
       - name: Run tests with coverage
         run: |
-          uv run coverage run -m unittest discover -s tests
+          uv run coverage run -m unittest discover \
+              -s apps/alphalens-research/tests \
+              -t apps/alphalens-research
           uv run coverage report
           uv run coverage xml -o coverage.xml
 
+      - name: Diff coverage gate (≥80% on PR-changed lines)
+        # Only fires on pull_request events — diff-cover needs two refs to
+        # compare. On push to feature/django-migration there's no diff to
+        # measure (the push IS the merge); coverage XML still uploads for
+        # SonarCloud's main-branch baseline.
+        if: github.event_name == 'pull_request'
+        # `--fail-under 80` blocks merge if PR-touched lines have <80%
+        # coverage. The total-coverage figure stays informational; we
+        # don't enforce a repo-wide threshold (research code is hard to
+        # cover beyond ~70% without simulating real backtest data). The
+        # base ref is feature/django-migration during the workspace-split
+        # arc; flip to origin/main once that merges.
+        run: |
+          uv run diff-cover coverage.xml \
+            --compare-branch origin/${{ github.base_ref }} \
+            --fail-under 80 \
+            --diff-range-notation "..."
+
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-xml
           path: coverage.xml
           retention-days: 14
 
+  # -----------------------------------------------------------------------
+  # Django app — pytest + ruff. Doesn't need libomp / lightgbm so we
+  # stay on linux for faster runtime.
+  # -----------------------------------------------------------------------
+  django:
+    name: django (DRF)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python via uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install workspace
+        run: uv sync --group dev --frozen
+
+      - name: Ruff lint (django)
+        run: uv run ruff check apps/alphalens-django/
+
+      - name: Pytest
+        working-directory: apps/alphalens-django
+        run: uv run pytest -q
+
+  # -----------------------------------------------------------------------
+  # Web — SvelteKit type-check + Playwright hermetic smoke. Build verifies
+  # the SPA still bundles after refactors.
+  # -----------------------------------------------------------------------
+  web:
+    name: web (SvelteKit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: "10"
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Install deps
+        working-directory: apps/web
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check + svelte-check
+        working-directory: apps/web
+        run: pnpm run check
+
+      - name: Build
+        working-directory: apps/web
+        run: pnpm run build
+
+  # -----------------------------------------------------------------------
+  # SonarCloud — runs after research/django produce coverage. Skipped on
+  # scheduled (weekly) CI to avoid daily quota churn.
+  # -----------------------------------------------------------------------
+  sonar:
+    name: sonarcloud
+    needs: [research, django, web]
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-xml
+
       - name: SonarCloud scan
-        if: github.event_name != 'schedule'
-        uses: SonarSource/sonarqube-scan-action@v6  # v4 deprecated 2026-Q1
+        uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # Explicit branch name on push to main — disambiguates when repo has
-          # multiple feature/dependabot branches and SonarCloud auto-detection
-          # picks the wrong one as Main Branch.
           args: >-
             ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '-Dsonar.branch.name=main' || '' }}
-        continue-on-error: true  # don't block CI if SonarCloud is down or misconfigured
+        continue-on-error: true

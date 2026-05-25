@@ -3,9 +3,9 @@
 User-scoped service definitions for AlphaLens long-running tasks on Linux VPS
 hosts where launchd is unavailable.
 
-## form4-backfill.service
+## alphalens-form4-backfill.service
 
-SEC EDGAR Form-4 bulk backfill (`scripts/run_form4_backfill.py`). Wall-time on
+SEC EDGAR Form-4 bulk backfill (`apps/alphalens-research/scripts/run_form4_backfill.py`). Wall-time on
 a small VPS: ~5-10 days for the full 2006-2026 R3000 universe (~8000 CIKs,
 limited by SEC's 10 req/s rate cap). Resume-safe via the JSON manifest at
 `~/.alphalens/form4_backfill_manifest.json`, so a crash + restart skips
@@ -15,11 +15,11 @@ already-processed CIKs and resumes from where it left off.
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp deploy/systemd/form4-backfill.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-form4-backfill.service ~/.config/systemd/user/
 
 # Edit Environment= lines in the unit file to match your VPS paths and contact.
 systemctl --user daemon-reload
-systemctl --user enable --now form4-backfill.service
+systemctl --user enable --now alphalens-form4-backfill.service
 
 # One-time: allow the unit to keep running after logout.
 sudo loginctl enable-linger "$USER"
@@ -28,16 +28,16 @@ sudo loginctl enable-linger "$USER"
 ### Inspect
 
 ```bash
-systemctl --user status form4-backfill.service
-journalctl --user -u form4-backfill.service -f       # live tail
-journalctl --user -u form4-backfill.service --since "1 hour ago"
+systemctl --user status alphalens-form4-backfill.service
+journalctl --user -u alphalens-form4-backfill.service -f       # live tail
+journalctl --user -u alphalens-form4-backfill.service --since "1 hour ago"
 ```
 
 ### Stop / restart
 
 ```bash
-systemctl --user stop form4-backfill.service
-systemctl --user restart form4-backfill.service
+systemctl --user stop alphalens-form4-backfill.service
+systemctl --user restart alphalens-form4-backfill.service
 ```
 
 ### Parallel backfill across multiple machines
@@ -50,10 +50,10 @@ sharded so each machine fetches a non-overlapping slice in parallel. A
 **Step 1 — split the CIK universe (run once on any machine):**
 
 ```bash
-.venv/bin/python scripts/split_cik_list.py \
-    data/form4_cik_universe.txt \
+.venv/bin/python apps/alphalens-research/scripts/split_cik_list.py \
+    ~/.alphalens/form4_cik_universe.txt \
     --num-shards 5 \
-    --output-dir data/shards/
+    --output-dir ~/.alphalens/form4_shards/
 # Produces ciks_shard_{1..5}_of_5.txt
 ```
 
@@ -65,9 +65,9 @@ prolific issuers.
 
 ```bash
 # On machine N (with its own IP):
-scripts/run_form4_backfill.py \
+apps/alphalens-research/scripts/run_form4_backfill.py \
     --user-agent "Your Name your@email.com" \
-    --cik-list data/shards/ciks_shard_N_of_5.txt \
+    --cik-list ~/.alphalens/form4_shards/ciks_shard_N_of_5.txt \
     --parquet-root ~/.alphalens/form4_parquet \
     --manifest ~/.alphalens/form4_backfill_manifest.json \
     --start-year 2006 --end-year 2026
@@ -97,7 +97,7 @@ done
 **Step 4 — compact the merged tree:**
 
 ```bash
-.venv/bin/python scripts/compact_form4_parquet.py \
+.venv/bin/python apps/alphalens-research/scripts/compact_form4_parquet.py \
     --parquet-root ~/.alphalens/form4_parquet_merged
 # Produces ~/.alphalens/form4_parquet_merged/transaction_year=YYYY/compacted.parquet
 # (one file per year — replaces all part-*.parquet from every machine)
@@ -115,9 +115,9 @@ OOM kill, or `pkill` aborts a multi-day run with no restart. systemd's
 `StartLimitBurst=5` prevents tight crash loops if the underlying problem
 is persistent (bad credentials, exhausted disk, SEC ban).
 
-## av-earnings-backfill.service + av-earnings-backfill.timer
+## alphalens-av-earnings-backfill.service + alphalens-av-earnings-backfill.timer
 
-Alpha Vantage `EARNINGS` daily backfill (`scripts/av_earnings_daily_backfill.py`).
+Alpha Vantage `EARNINGS` daily backfill (`apps/alphalens-research/scripts/av_earnings_daily_backfill.py`).
 Unlike the Form-4 daemon, this is a **oneshot** triggered by a daily timer:
 each fire consumes up to the AV free-tier 25-call/day quota then exits. Full
 S&P 500 union backfill (~503 names) takes ~21 calendar days. Cache lives at
@@ -128,26 +128,26 @@ paradigm reading AV EARNINGS hits the same store).
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp deploy/systemd/av-earnings-backfill.service ~/.config/systemd/user/
-cp deploy/systemd/av-earnings-backfill.timer   ~/.config/systemd/user/
+cp deploy/systemd/alphalens-av-earnings-backfill.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-av-earnings-backfill.timer   ~/.config/systemd/user/
 
 # Create .env at AlphaLens repo root with the API key:
 #   echo 'ALPHA_VANTAGE_API_KEY=...' > ~/AlphaLens/.env && chmod 600 ~/AlphaLens/.env
 
 systemctl --user daemon-reload
-systemctl --user enable --now av-earnings-backfill.timer
+systemctl --user enable --now alphalens-av-earnings-backfill.timer
 
 # Optional: trigger an immediate fire to validate the unit works.
-systemctl --user start av-earnings-backfill.service
+systemctl --user start alphalens-av-earnings-backfill.service
 ```
 
 ### Inspect
 
 ```bash
 systemctl --user list-timers --all              # see next-fire / last-fire
-systemctl --user status av-earnings-backfill.timer
-journalctl --user -u av-earnings-backfill.service -f
-journalctl --user -u av-earnings-backfill.service --since "yesterday"
+systemctl --user status alphalens-av-earnings-backfill.timer
+journalctl --user -u alphalens-av-earnings-backfill.service -f
+journalctl --user -u alphalens-av-earnings-backfill.service --since "yesterday"
 ```
 
 ### Optional rclone sync — systemd PATH caveat
@@ -168,7 +168,7 @@ the script daily, picks up only uncached tickers, exits cleanly on
 `AVRateLimitError` (return code 0 — expected steady-state), and lets
 systemd handle persistence across reboots via `Persistent=true`.
 
-## alphalens-thematic-daily.service / .timer
+## alphalens-thematic-build.service / .timer
 
 End-to-end thematic pipeline (news → brief → JSON refresh) running inside the
 `alphalens-pipeline` docker image. Fires daily at 06:30 UTC via the companion
@@ -187,27 +187,26 @@ docker compose -f deploy/docker/docker-compose.yml run --rm pipeline \
 The unit passes the operator's UID/GID to compose via `%U`/`%G` so files
 written into `~/.alphalens/` and `web-data/` are jacoren-owned, not root.
 
-After a successful pipeline run, `ExecStartPost=` restarts the `api`
-container so it re-opens the freshly-rebuilt SQLite cache. The api opens
-with `?mode=ro&immutable=1` (lets it serve from a `:ro` bind-mount but
-disables change detection); restarting after each write closes that
-overlap window. ExecStartPost fires only on ExecStart success, so a
-failed pipeline leaves the api untouched serving the previous day's
-cache.
+After a successful pipeline run, `ExecStartPost=` invokes
+`docker compose --profile maintenance run --rm rebuild-cache` against the
+Django stack so the freshly written parquet files are synced into the
+Postgres-backed briefs cache. ExecStartPost fires only on ExecStart
+success, so a failed pipeline leaves the API untouched and the
+dashboard keeps serving the previous day's snapshot.
 
 ### Install
 
 ```bash
-cp deploy/systemd/alphalens-thematic-daily.service ~/.config/systemd/user/
-cp deploy/systemd/alphalens-thematic-daily.timer   ~/.config/systemd/user/
+cp deploy/systemd/alphalens-thematic-build.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-thematic-build.timer   ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now alphalens-thematic-daily.timer
+systemctl --user enable --now alphalens-thematic-build.timer
 ```
 
 ### Inspect
 
 ```bash
-systemctl --user list-timers alphalens-thematic-daily
-journalctl --user -u alphalens-thematic-daily.service --since today
-systemctl --user start alphalens-thematic-daily.service     # manual fire
+systemctl --user list-timers alphalens-thematic-build
+journalctl --user -u alphalens-thematic-build.service --since today
+systemctl --user start alphalens-thematic-build.service     # manual fire
 ```

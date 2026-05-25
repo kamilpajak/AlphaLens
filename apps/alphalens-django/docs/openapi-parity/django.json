@@ -1,0 +1,1118 @@
+{
+    "openapi": "3.0.3",
+    "info": {
+        "title": "AlphaLens Briefs API",
+        "version": "1.0.0",
+        "description": "Read/write HTTP access to thematic briefs produced by the AlphaLens daily pipeline."
+    },
+    "paths": {
+        "/v1/candidates/{date}/{ticker}": {
+            "get": {
+                "operationId": "v1_candidates_retrieve",
+                "description": "``/v1/candidates/{date}/{ticker}`` — single candidate fetch.\n\nThe detail PK is supplied as a compound URL segment, not a single field.\nThe router pattern in ``urls.py`` is custom for this reason.",
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "date",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "required": true
+                    },
+                    {
+                        "in": "path",
+                        "name": "ticker",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "v1"
+                ],
+                "security": [
+                    {
+                        "CloudflareAccessJWT": []
+                    },
+                    {
+                        "cookieAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Candidate"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/v1/days": {
+            "get": {
+                "operationId": "v1_days_list",
+                "description": "``/v1/days`` — index + per-day envelope + per-day candidates.",
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "from",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        },
+                        "description": "Inclusive ISO date lower bound."
+                    },
+                    {
+                        "name": "limit",
+                        "required": false,
+                        "in": "query",
+                        "description": "Number of results to return per page.",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "required": false,
+                        "in": "query",
+                        "description": "The initial index from which to return the results.",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "to",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        },
+                        "description": "Inclusive ISO date upper bound."
+                    }
+                ],
+                "tags": [
+                    "v1"
+                ],
+                "security": [
+                    {
+                        "CloudflareAccessJWT": []
+                    },
+                    {
+                        "cookieAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PaginatedDayMetaList"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/v1/days/{date}": {
+            "get": {
+                "operationId": "v1_days_retrieve",
+                "description": "``/v1/days`` — index + per-day envelope + per-day candidates.",
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "date",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        },
+                        "description": "ISO 8601 date (YYYY-MM-DD).",
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "v1"
+                ],
+                "security": [
+                    {
+                        "CloudflareAccessJWT": []
+                    },
+                    {
+                        "cookieAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/DayBrief"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/v1/days/{date}/candidates": {
+            "get": {
+                "operationId": "v1_days_candidates_list",
+                "description": "``/v1/days`` — index + per-day envelope + per-day candidates.",
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "date",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        },
+                        "description": "ISO 8601 date (YYYY-MM-DD).",
+                        "required": true
+                    },
+                    {
+                        "name": "limit",
+                        "required": false,
+                        "in": "query",
+                        "description": "Number of results to return per page.",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "min_score",
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "description": "Layer-4 score floor."
+                    },
+                    {
+                        "name": "offset",
+                        "required": false,
+                        "in": "query",
+                        "description": "The initial index from which to return the results.",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "theme",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Exact theme match."
+                    }
+                ],
+                "tags": [
+                    "v1"
+                ],
+                "security": [
+                    {
+                        "CloudflareAccessJWT": []
+                    },
+                    {
+                        "cookieAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PaginatedCandidateList"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/v1/stats": {
+            "get": {
+                "operationId": "v1_stats_retrieve",
+                "description": "``/v1/stats`` — top-line counters + N most-frequent themes.",
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "top_n",
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "description": "Top themes to include (1-50)."
+                    }
+                ],
+                "tags": [
+                    "v1"
+                ],
+                "security": [
+                    {
+                        "CloudflareAccessJWT": []
+                    },
+                    {
+                        "cookieAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Stats"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/v1/themes": {
+            "get": {
+                "operationId": "v1_themes_list",
+                "description": "``/v1/themes`` — distinct-theme aggregation + per-theme candidates.",
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "from",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        },
+                        "description": "Inclusive ISO date lower bound."
+                    },
+                    {
+                        "name": "limit",
+                        "required": false,
+                        "in": "query",
+                        "description": "Number of results to return per page.",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "required": false,
+                        "in": "query",
+                        "description": "The initial index from which to return the results.",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "to",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        },
+                        "description": "Inclusive ISO date upper bound."
+                    }
+                ],
+                "tags": [
+                    "v1"
+                ],
+                "security": [
+                    {
+                        "CloudflareAccessJWT": []
+                    },
+                    {
+                        "cookieAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PaginatedThemeSummaryList"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/v1/themes/{theme}/candidates": {
+            "get": {
+                "operationId": "v1_themes_candidates_list",
+                "description": "``/v1/themes`` — distinct-theme aggregation + per-theme candidates.",
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "from",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        },
+                        "description": "Inclusive ISO date lower bound."
+                    },
+                    {
+                        "name": "limit",
+                        "required": false,
+                        "in": "query",
+                        "description": "Number of results to return per page.",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "required": false,
+                        "in": "query",
+                        "description": "The initial index from which to return the results.",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "in": "path",
+                        "name": "theme",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Exact theme name.",
+                        "required": true
+                    },
+                    {
+                        "in": "query",
+                        "name": "to",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        },
+                        "description": "Inclusive ISO date upper bound."
+                    }
+                ],
+                "tags": [
+                    "v1"
+                ],
+                "security": [
+                    {
+                        "CloudflareAccessJWT": []
+                    },
+                    {
+                        "cookieAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PaginatedCandidateList"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/v1/tickers/{ticker}/history": {
+            "get": {
+                "operationId": "v1_tickers_history_list",
+                "description": "``/v1/tickers/{ticker}/history`` — every brief appearance for one ticker.",
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "from",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        },
+                        "description": "Inclusive ISO date lower bound."
+                    },
+                    {
+                        "name": "limit",
+                        "required": false,
+                        "in": "query",
+                        "description": "Number of results to return per page.",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "offset",
+                        "required": false,
+                        "in": "query",
+                        "description": "The initial index from which to return the results.",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "in": "path",
+                        "name": "ticker",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Upper-case ticker symbol.",
+                        "required": true
+                    },
+                    {
+                        "in": "query",
+                        "name": "to",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        },
+                        "description": "Inclusive ISO date upper bound."
+                    }
+                ],
+                "tags": [
+                    "v1"
+                ],
+                "security": [
+                    {
+                        "CloudflareAccessJWT": []
+                    },
+                    {
+                        "cookieAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PaginatedCandidateList"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "Candidate": {
+                "type": "object",
+                "description": "One ranked candidate from a daily thematic brief.",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "format": "date"
+                    },
+                    "ticker": {
+                        "type": "string",
+                        "maxLength": 12
+                    },
+                    "theme": {
+                        "type": "string",
+                        "maxLength": 128
+                    },
+                    "company_name": {
+                        "type": "string",
+                        "maxLength": 256
+                    },
+                    "rationale": {
+                        "type": "string"
+                    },
+                    "gemini_confidence": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "market_cap": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "gates_passed": {},
+                    "n_gates_passed": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64"
+                    },
+                    "gates_failed": {},
+                    "n_gates_failed": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64"
+                    },
+                    "gates_unknown": {},
+                    "n_gates_unknown": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64"
+                    },
+                    "verified": {
+                        "type": "boolean"
+                    },
+                    "source_event_url": {
+                        "type": "string",
+                        "format": "uri",
+                        "maxLength": 2048
+                    },
+                    "source_event_title": {
+                        "type": "string",
+                        "maxLength": 512
+                    },
+                    "source_event_published_at": {
+                        "type": "string",
+                        "maxLength": 64
+                    },
+                    "theme_search_keywords": {},
+                    "industry_id": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "industry_name": {
+                        "type": "string",
+                        "maxLength": 256
+                    },
+                    "sector_name": {
+                        "type": "string",
+                        "maxLength": 128
+                    },
+                    "peer_cohort_level": {
+                        "type": "string",
+                        "maxLength": 8
+                    },
+                    "insider_score_usd": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "insider_score_sector_percentile": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "fcff_yield_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "fcff_yield_sector_percentile": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_pe": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_ps": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_ev_rev": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_ev_ebitda": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_fcf_margin": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_composite_sector_percentile": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_financials_publish_date": {
+                        "type": "string",
+                        "maxLength": 32
+                    },
+                    "valuation_financials_age_days": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64",
+                        "nullable": true
+                    },
+                    "roic_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "roe_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "magic_formula_health_pass": {
+                        "type": "boolean"
+                    },
+                    "technical_rsi": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_ma50_distance_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_atr_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_volume_zscore": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_pct_off_52w_high": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_pct_off_52w_low": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_ma200_distance_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_ma200_slope_pct_per_day": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "catalyst_strength": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "catalyst_event_type": {
+                        "type": "string",
+                        "maxLength": 64
+                    },
+                    "catalyst_confidence": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "magic_formula_rank": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "magic_formula_cohort_n": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64",
+                        "nullable": true
+                    },
+                    "deep_drawdown_reversal": {
+                        "type": "boolean"
+                    },
+                    "layer4_weighted_score": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64"
+                    },
+                    "also_in_themes": {},
+                    "rank_in_day": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64",
+                        "nullable": true
+                    },
+                    "cohort_size_in_day": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64",
+                        "nullable": true
+                    },
+                    "next_earnings_date": {
+                        "type": "string",
+                        "format": "date",
+                        "nullable": true
+                    },
+                    "brief_model_used": {
+                        "type": "string",
+                        "maxLength": 64
+                    },
+                    "brief_tldr": {
+                        "type": "string"
+                    },
+                    "brief_supply_chain_md": {
+                        "type": "string"
+                    },
+                    "brief_bear_summary_md": {
+                        "type": "string"
+                    },
+                    "brief_catalyst_failure_exit": {
+                        "type": "string"
+                    },
+                    "brief_entry_price_note": {
+                        "type": "string"
+                    },
+                    "brief_position_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "brief_time_exit_weeks": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64",
+                        "nullable": true
+                    },
+                    "brief_time_exit_on_catalyst_failure_weeks": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64",
+                        "nullable": true
+                    },
+                    "brief_disaster_stop_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "brief_full_md": {
+                        "type": "string"
+                    },
+                    "brief_generated_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    }
+                },
+                "required": [
+                    "company_name",
+                    "date",
+                    "theme",
+                    "ticker"
+                ]
+            },
+            "DayBrief": {
+                "type": "object",
+                "description": "Full payload for one day: meta + every ranked candidate.",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "format": "date"
+                    },
+                    "n_candidates": {
+                        "type": "integer"
+                    },
+                    "n_themes": {
+                        "type": "integer"
+                    },
+                    "top_theme": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "theme_counts": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "integer"
+                        }
+                    },
+                    "candidates": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Candidate"
+                        }
+                    }
+                },
+                "required": [
+                    "candidates",
+                    "date",
+                    "n_candidates",
+                    "n_themes",
+                    "theme_counts",
+                    "top_theme"
+                ]
+            },
+            "DayMeta": {
+                "type": "object",
+                "description": "Row in ``/v1/days``: per-day metadata only (no candidates).",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "format": "date"
+                    },
+                    "n_candidates": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64"
+                    },
+                    "n_themes": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64"
+                    },
+                    "top_theme": {
+                        "type": "string",
+                        "nullable": true,
+                        "description": "Empty-string DB default → None on the wire (parity with legacy API).",
+                        "readOnly": true
+                    }
+                },
+                "required": [
+                    "date",
+                    "n_candidates",
+                    "n_themes",
+                    "top_theme"
+                ]
+            },
+            "PaginatedCandidateList": {
+                "type": "object",
+                "required": [
+                    "data",
+                    "meta"
+                ],
+                "properties": {
+                    "data": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Candidate"
+                        }
+                    },
+                    "meta": {
+                        "type": "object",
+                        "required": [
+                            "total",
+                            "limit",
+                            "offset"
+                        ],
+                        "properties": {
+                            "total": {
+                                "type": "integer",
+                                "example": 123
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "example": 50
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "example": 0
+                            }
+                        }
+                    }
+                }
+            },
+            "PaginatedDayMetaList": {
+                "type": "object",
+                "required": [
+                    "data",
+                    "meta"
+                ],
+                "properties": {
+                    "data": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/DayMeta"
+                        }
+                    },
+                    "meta": {
+                        "type": "object",
+                        "required": [
+                            "total",
+                            "limit",
+                            "offset"
+                        ],
+                        "properties": {
+                            "total": {
+                                "type": "integer",
+                                "example": 123
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "example": 50
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "example": 0
+                            }
+                        }
+                    }
+                }
+            },
+            "PaginatedThemeSummaryList": {
+                "type": "object",
+                "required": [
+                    "data",
+                    "meta"
+                ],
+                "properties": {
+                    "data": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/ThemeSummary"
+                        }
+                    },
+                    "meta": {
+                        "type": "object",
+                        "required": [
+                            "total",
+                            "limit",
+                            "offset"
+                        ],
+                        "properties": {
+                            "total": {
+                                "type": "integer",
+                                "example": 123
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "example": 50
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "example": 0
+                            }
+                        }
+                    }
+                }
+            },
+            "Stats": {
+                "type": "object",
+                "description": "Top-line counters and most-frequent themes for ``/v1/stats``.",
+                "properties": {
+                    "n_days": {
+                        "type": "integer"
+                    },
+                    "n_candidates": {
+                        "type": "integer"
+                    },
+                    "n_themes": {
+                        "type": "integer"
+                    },
+                    "earliest_date": {
+                        "type": "string",
+                        "format": "date",
+                        "nullable": true
+                    },
+                    "latest_date": {
+                        "type": "string",
+                        "format": "date",
+                        "nullable": true
+                    },
+                    "last_rebuild_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    },
+                    "top_themes": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/TopTheme"
+                        }
+                    }
+                },
+                "required": [
+                    "earliest_date",
+                    "last_rebuild_at",
+                    "latest_date",
+                    "n_candidates",
+                    "n_days",
+                    "n_themes",
+                    "top_themes"
+                ]
+            },
+            "ThemeSummary": {
+                "type": "object",
+                "description": "Row in ``/v1/themes``: distinct theme + appearance counts.",
+                "properties": {
+                    "theme": {
+                        "type": "string"
+                    },
+                    "n_candidates": {
+                        "type": "integer"
+                    },
+                    "n_days": {
+                        "type": "integer"
+                    },
+                    "first_seen": {
+                        "type": "string",
+                        "format": "date"
+                    },
+                    "last_seen": {
+                        "type": "string",
+                        "format": "date"
+                    }
+                },
+                "required": [
+                    "first_seen",
+                    "last_seen",
+                    "n_candidates",
+                    "n_days",
+                    "theme"
+                ]
+            },
+            "TopTheme": {
+                "type": "object",
+                "properties": {
+                    "theme": {
+                        "type": "string"
+                    },
+                    "n_days": {
+                        "type": "integer"
+                    },
+                    "n_candidates": {
+                        "type": "integer"
+                    }
+                },
+                "required": [
+                    "n_candidates",
+                    "n_days",
+                    "theme"
+                ]
+            }
+        },
+        "securitySchemes": {
+            "CloudflareAccessJWT": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "Cf-Access-Jwt-Assertion",
+                "description": "Cloudflare Access service token / SSO JWT, injected by the Cloudflare edge after the user passes the configured identity provider (Google SSO). Verified server-side against the team's JWKS."
+            },
+            "cookieAuth": {
+                "type": "apiKey",
+                "in": "cookie",
+                "name": "sessionid"
+            }
+        }
+    }
+}

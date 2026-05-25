@@ -1,0 +1,15 @@
+# The build context is the repo root; we only want the Django app + lockfile.
+# (Other apps live under apps/, but only alphalens-django gets baked into
+# this image.)
+**
+!apps/alphalens-django/**
+apps/alphalens-django/.venv/
+apps/alphalens-django/db.sqlite3
+apps/alphalens-django/db.sqlite3-journal
+apps/alphalens-django/.env
+apps/alphalens-django/staticfiles/
+apps/alphalens-django/**/__pycache__/
+apps/alphalens-django/**/*.pyc
+apps/alphalens-django/.pytest_cache/
+apps/alphalens-django/.ruff_cache/
+apps/alphalens-django/docs/openapi-parity/django.json
