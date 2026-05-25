@@ -47,6 +47,9 @@
 			<div class="min-w-0 flex-1 basis-[200px]">
 				<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
 					<h3 class="font-display font-bold text-xl sm:text-2xl text-fg">{c.ticker}</h3>
+					<!-- Pattern tags: REVERSAL is currently the only one. When a 2nd pattern -->
+					<!-- (e.g. BREAKOUT, INSIDER_CLUSTER, PRE_EARNINGS_DRIFT) arrives, extract -->
+					<!-- to a `patterns: …` group with shared color-coding + a small label. -->
 					{#if c.deep_drawdown_reversal}
 						<span
 							class="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber/20 text-amber text-[9px] uppercase tracking-widest border border-amber/40 cursor-help"
@@ -62,9 +65,15 @@
 					{#if c.also_in_themes && c.also_in_themes.length > 0}
 						<span class="hidden sm:inline">·</span>
 						<span>also in:</span>
-						{#each c.also_in_themes as t, i}
-							<span class="text-cyan lowercase">{t}</span>{#if i < c.also_in_themes.length - 1}<span>,</span>{/if}
+						{#each c.also_in_themes.slice(0, 2) as t, i}
+							<span class="text-cyan lowercase">{t}</span>{#if i < Math.min(c.also_in_themes.length, 2) - 1}<span>,</span>{/if}
 						{/each}
+						{#if c.also_in_themes.length > 2}
+							<span
+								class="text-fg-muted cursor-help"
+								title={c.also_in_themes.slice(2).join(', ')}
+							>+{c.also_in_themes.length - 2} more</span>
+						{/if}
 					{/if}
 					{#if c.industry_name}
 						<span class="hidden sm:inline">·</span>
