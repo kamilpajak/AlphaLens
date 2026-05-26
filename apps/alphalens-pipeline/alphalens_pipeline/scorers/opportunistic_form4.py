@@ -194,7 +194,7 @@ def score_opportunistic_form4(features: pd.DataFrame) -> pd.Series:
         if np.any(X.std(axis=0) < 1e-12):
             continue
         ones = np.ones((X.shape[0], 1), dtype=float)
-        Xb = np.hstack([ones, X])  # NOSONAR python:S117 — X-with-bias keeps the math convention
+        Xb = np.hstack([ones, X])
         # Skip ill-conditioned designs that would produce astronomical β.
         # SVD-based cond is the principled measure — tighter than the
         # rcond cutoff used inside lstsq for singular-value truncation.
