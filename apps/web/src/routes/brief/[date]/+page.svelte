@@ -65,39 +65,41 @@
 		<!-- Metric strip — full-width cells fill the header instead of the old
 		     cramped vertical stack. gap-px over bg-grid paints clean 1px
 		     separators in both axes, surviving the 4→2 column wrap on mobile. -->
-		<div
+		<dl
 			data-testid="brief-header-stats"
 			class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-grid border-t border-grid"
 		>
-			<div class="bg-bg-1 px-4 sm:px-6 py-3">
-				<div data-testid="stat-candidates" class="font-display font-bold text-2xl sm:text-3xl text-cyan">
+			<!-- dt-before-dd keeps the DOM/spec order (and a sensible "label, value"
+			     screen-reader read); flex-col-reverse renders the value on top. -->
+			<div class="bg-bg-1 px-4 sm:px-6 py-3 flex flex-col-reverse gap-0.5">
+				<dt class="text-[10px] uppercase tracking-widest text-fg-muted">candidates</dt>
+				<dd data-testid="stat-candidates" class="font-display font-bold text-2xl sm:text-3xl text-cyan">
 					{data.brief.n_candidates}
-				</div>
-				<div class="text-[10px] uppercase tracking-widest text-fg-muted mt-0.5">candidates</div>
+				</dd>
 			</div>
-			<div class="bg-bg-1 px-4 sm:px-6 py-3">
-				<div data-testid="stat-verified" class="font-display font-bold text-2xl sm:text-3xl text-green">
+			<div class="bg-bg-1 px-4 sm:px-6 py-3 flex flex-col-reverse gap-0.5">
+				<dt class="text-[10px] uppercase tracking-widest text-fg-muted">verified</dt>
+				<dd data-testid="stat-verified" class="font-display font-bold text-2xl sm:text-3xl text-green">
 					{verifiedCount}
-				</div>
-				<div class="text-[10px] uppercase tracking-widest text-fg-muted mt-0.5">verified</div>
+				</dd>
 			</div>
-			<div class="bg-bg-1 px-4 sm:px-6 py-3">
-				<div data-testid="stat-themes" class="font-display font-bold text-2xl sm:text-3xl text-amber">
+			<div class="bg-bg-1 px-4 sm:px-6 py-3 flex flex-col-reverse gap-0.5">
+				<dt class="text-[10px] uppercase tracking-widest text-fg-muted">themes</dt>
+				<dd data-testid="stat-themes" class="font-display font-bold text-2xl sm:text-3xl text-amber">
 					{data.brief.n_themes}
-				</div>
-				<div class="text-[10px] uppercase tracking-widest text-fg-muted mt-0.5">themes</div>
+				</dd>
 			</div>
-			<div class="bg-bg-1 px-4 sm:px-6 py-3 min-w-0">
-				<div
+			<div class="bg-bg-1 px-4 sm:px-6 py-3 flex flex-col-reverse gap-0.5 min-w-0">
+				<dt class="text-[10px] uppercase tracking-widest text-fg-muted">top theme</dt>
+				<dd
 					data-testid="stat-top-theme"
 					class="font-display font-bold text-xl sm:text-2xl text-amber lowercase truncate"
 					title={data.brief.top_theme}
 				>
 					{data.brief.top_theme}
-				</div>
-				<div class="text-[10px] uppercase tracking-widest text-fg-muted mt-0.5">top theme</div>
+				</dd>
 			</div>
-		</div>
+		</dl>
 
 		<!-- Catalyst footer — full width for the long headline -->
 		{#if firstCatalystUrl}
