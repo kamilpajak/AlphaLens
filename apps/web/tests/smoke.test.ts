@@ -188,6 +188,26 @@ test.describe('brief detail — graceful session-expiry handling', () => {
 		await page.goto(`/brief/${DATE}`);
 		await expect(page.getByText('session expired', { exact: false })).toBeVisible();
 	});
+
+	test('dashboard surfaces session-expired on 401, not a misleading empty state', async ({
+		page
+	}) => {
+		// The index endpoint (pathname /api/v1/days, any query) → 401. The
+		// dashboard load must raise the session-expired error page instead of
+		// degrading to the "no briefs yet" empty state (which reads as data loss).
+		await page.route(
+			(url) => url.pathname === '/api/v1/days',
+			(route) =>
+				route.fulfill({
+					status: 401,
+					contentType: 'application/json',
+					body: JSON.stringify({ detail: 'unauthorized' })
+				})
+		);
+		await page.goto('/');
+		await expect(page.getByText('session expired', { exact: false })).toBeVisible();
+		await expect(page.locator('main')).not.toContainText('no captured sessions');
+	});
 });
 
 test.describe('smoke — SPA navigation', () => {

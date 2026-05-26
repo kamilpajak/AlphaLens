@@ -64,6 +64,14 @@ export async function apiFetch(
 	try {
 		res = await fetcher(api(path), { credentials: 'include', ...init });
 	} catch {
+		// A genuinely offline client (no network interface) shouldn't be told
+		// "session expired" — surface 503 so the error page reads as a
+		// transient connectivity failure. navigator.onLine only rules out the
+		// fully-offline case; a reachable-network-but-302 (the dominant cause
+		// for this Access-gated SPA) still falls through to 401 below.
+		if (typeof navigator !== 'undefined' && !navigator.onLine) {
+			return new Response(null, { status: 503, statusText: 'Service Unavailable' });
+		}
 		// Cross-origin fetch throws a TypeError when CF Access answers an
 		// unauthenticated XHR with a 302 to its login origin: the browser
 		// refuses to follow a cross-origin redirect, so the promise rejects.
