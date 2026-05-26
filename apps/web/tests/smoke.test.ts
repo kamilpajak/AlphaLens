@@ -568,6 +568,45 @@ test.describe('experiments — evidence drawer files reachable', () => {
 	});
 });
 
+test.describe('dashboard — captured sessions tile cap', () => {
+	// The CAPTURED.SESSIONS grid on the dashboard renders one tile per
+	// brief day. With a long history (the index returns up to 200) the grid
+	// would grow unbounded, so it is capped at 6 recent tiles — the full
+	// list lives behind the "all briefs" link. This test feeds the index
+	// endpoint 10 synthetic days and asserts only the 6 newest tiles render.
+	const MANY_DAYS = Array.from({ length: 10 }, (_, i) => ({
+		date: `2026-05-${String(20 - i).padStart(2, '0')}`,
+		n_candidates: 10 + i,
+		n_themes: 3,
+		top_theme: `theme-${i}`
+	}));
+
+	test('renders at most 6 session tiles even when index returns more', async ({ page }) => {
+		// Override only the index route; per-day fetches fall through to the
+		// beforeEach mock (404 → latestBrief null), which is fine because the
+		// session grid renders straight from data.days regardless of latestBrief.
+		await page.route(
+			(url) => url.pathname === '/api/v1/days',
+			(route) =>
+				route.fulfill({
+					status: 200,
+					contentType: 'application/json',
+					body: JSON.stringify({
+						data: MANY_DAYS,
+						meta: { total: MANY_DAYS.length, limit: 200, offset: 0 }
+					})
+				})
+		);
+
+		await page.goto('/');
+		const tiles = page.locator('[data-testid="session-tiles"] > a');
+		await expect(tiles).toHaveCount(6);
+		// The 6 newest are kept (index is newest-first).
+		await expect(tiles.first()).toContainText('2026-05-20');
+		await expect(tiles.last()).toContainText('2026-05-15');
+	});
+});
+
 test.describe('smoke — api fixture integrity', () => {
 	test('every fixture day listed in days.json has a per-day file', () => {
 		// Sanity check the mock fixture set itself — if a day is missing
