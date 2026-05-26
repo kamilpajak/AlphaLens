@@ -60,7 +60,26 @@ export async function apiFetch(
 	init: RequestInit = {},
 	fetcher: typeof fetch = fetch
 ): Promise<Response> {
-	const res = await fetcher(api(path), { credentials: 'include', ...init });
+	let res: Response;
+	try {
+		res = await fetcher(api(path), { credentials: 'include', ...init });
+	} catch {
+		// A genuinely offline client (no network interface) shouldn't be told
+		// "session expired" — surface 503 so the error page reads as a
+		// transient connectivity failure. navigator.onLine only rules out the
+		// fully-offline case; a reachable-network-but-302 (the dominant cause
+		// for this Access-gated SPA) still falls through to 401 below.
+		if (typeof navigator !== 'undefined' && !navigator.onLine) {
+			return new Response(null, { status: 503, statusText: 'Service Unavailable' });
+		}
+		// Cross-origin fetch throws a TypeError when CF Access answers an
+		// unauthenticated XHR with a 302 to its login origin: the browser
+		// refuses to follow a cross-origin redirect, so the promise rejects.
+		// Normalise to a synthetic 401 so callers' `if (!res.ok)` branch
+		// handles it as an auth failure instead of the raw throw bubbling
+		// into SvelteKit's generic "500 Internal Error" page.
+		return new Response(null, { status: 401, statusText: 'Unauthorized' });
+	}
 	// CF Access session expiry: when the CF_Authorization cookie is invalid
 	// or expired, CF Access transparently serves its login HTML with status
 	// 200, so `res.ok` would be true and downstream `.json()` would crash on
