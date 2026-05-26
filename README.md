@@ -14,7 +14,7 @@ Research lab infrastructure for retail active alpha experimentation — real-tim
 The repo is a small monorepo with three Python workspace members + a frontend + shared infra:
 
 - **`apps/alphalens-pipeline/`** — live production tier: `alphalens_pipeline` (edgar_detector, thematic build, literature_scanner, data clients, scorer library) + the `alphalens` Typer CLI binary. Split rationale: [ADR 0011](docs/adr/0011-split-pipeline-and-research.md).
-- **`apps/alphalens-research/`** — research lab: `alphalens_research` (screeners, backtest engine, attribution, overlays, gates, preaudit, diagnostics, paper-trade). Lab imports from pipeline (`data`, `core`, `scorers`); the reverse is forbidden at top level (enforced by `tests/test_module_dependencies.py`).
+- **`apps/alphalens-research/`** — research lab: `alphalens_research` (screeners, backtest engine, attribution, overlays, gates, preaudit, diagnostics, retrospective audit). Lab imports from pipeline (`data`, `core`, `scorers`); the reverse is forbidden at top level (enforced by `tests/test_module_dependencies.py`).
 - **`apps/alphalens-django/`** — read/write briefs API (Django 6 + DRF + Postgres + Cloudflare Access). Migration history in [ADR 0009](docs/adr/0009-django-replaces-fastapi.md).
 - **`apps/web/`** — SvelteKit + Tailwind dashboard that consumes the Django API.
 - **`deploy/`** — all deploy targets: `docker/` (pipeline + django-prod), `systemd/` (Linux VPS units), `launchd/` (5 live macOS jobs), `runpod/` (GPU/CPU pod bootstrap).
@@ -34,7 +34,6 @@ The first phase-robust positive observation landed 2026-05-09 — PASS_MARGINAL 
 Live in production:
 - Layer 1 SEC EDGAR detector (launchd `edgar-detect` every 15 min)
 - Literature review (Perplexity, monthly + weekly)
-- Paper-trade refresh + scorer (Sun 17:00, Mon 06:00)
 - VPS daily thematic pipeline → Django brief API → SvelteKit dashboard
 
 Everything else is RESEARCH_ONLY (active research scorers) or live infrastructure (data clients, backtest engine, attribution).
@@ -62,7 +61,7 @@ Each layer / screener package declares `__status__ ∈ {ACTIVE, CLOSED, RESEARCH
 | `alphalens_research/attribution/` | ACTIVE | Layer 5 — cost / factor / regime / verdict |
 | `alphalens_research/preaudit/` | ACTIVE | Per-strategy SmokeProfile + coverage gate |
 | `alphalens_research/diagnostics/` | ACTIVE | Survivorship + cyclicality screens |
-| `alphalens_research/paper_trade/` | ACTIVE | Forward-observation refresh + scorer, live in launchd |
+| `alphalens_research/retrospective_audit/` | RESEARCH_ONLY | Universe loaders + SMD backfill for offline retrospective audits |
 | `alphalens_research/gates/` | RESEARCH_ONLY | Layer 2 selection-gate wrapper |
 | `alphalens_research/overlays/` | RESEARCH_ONLY | Layer 4 sizing overlays |
 | `alphalens_research/screeners/*` | RESEARCH_ONLY | Active research scorers; per-strategy memos in `docs/research/` |
@@ -171,11 +170,6 @@ watchlist: [NVDA, GOOGL]
 .venv/bin/alphalens literature monthly         # ad-hoc Perplexity deep scan (~1h)
 .venv/bin/alphalens literature weekly          # ad-hoc weekly RSS scan (~15min)
 
-# Paper-trade prospective replication
-.venv/bin/alphalens paper-trade refresh-data --strategy v9d
-.venv/bin/alphalens paper-trade score --strategy v9d
-.venv/bin/alphalens paper-trade verdict --strategy v9d
-
 # Pre-registration ledger
 .venv/bin/alphalens preregister add ...
 .venv/bin/alphalens preregister threshold
@@ -200,7 +194,6 @@ sqlite3 ~/.alphalens/candidates.db \
 | `com.alphalens.edgar-detect` | every 15 min | Layer 1 EDGAR poll → submit Candidates |
 | `com.alphalens.literature-scan-monthly` | 1st of month, 09:00 | Perplexity deep literature scan |
 | `com.alphalens.literature-scan-weekly` | Sunday, 18:00 | Perplexity RSS scan |
-| `com.alphalens.paper-trade-track` | Sunday, 17:00 | Paper-trade portfolio refresh |
 
 Install:
 
@@ -208,8 +201,7 @@ Install:
 cp deploy/launchd/com.alphalens.*.plist ~/Library/LaunchAgents/
 for plist in com.alphalens.edgar-detect \
              com.alphalens.literature-scan-monthly \
-             com.alphalens.literature-scan-weekly \
-             com.alphalens.paper-trade-track \
+             com.alphalens.literature-scan-weekly; do
   launchctl load ~/Library/LaunchAgents/${plist}.plist
 done
 ```
@@ -223,7 +215,7 @@ apps/
 │   ├── alphalens_cli/           ← Typer CLI entry points (alphalens binary)
 │   └── data/                    ← S&P 400/500/600 PIT yamls
 ├── alphalens-research/          ← research lab (Python)
-│   ├── alphalens_research/      ← screeners, backtest, attribution, overlays, gates, preaudit, diagnostics, paper_trade
+│   ├── alphalens_research/      ← screeners, backtest, attribution, overlays, gates, preaudit, diagnostics, retrospective_audit
 │   ├── tests/                   ← unittest suite (~2000+ tests; architectural enforcers — pipeline + research together)
 │   └── scripts/                 ← experiment runners + backfill orchestrators
 ├── alphalens-django/            ← briefs API (Django 6 + DRF + Postgres)

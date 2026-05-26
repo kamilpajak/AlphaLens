@@ -11,7 +11,7 @@ Two tiers of rules:
    which orchestrates both tiers via lazy imports inside command bodies
    (the CLI files live in pipeline-side but route into research via
    function-scope imports — see commands/audit.py, preaudit.py,
-   preregister.py, paper_trade.py).
+   preregister.py).
 
 Adding a justified exception requires updating the EXEMPTIONS allowlist
 below with a one-line reason — making the trade-off explicit and reviewable.

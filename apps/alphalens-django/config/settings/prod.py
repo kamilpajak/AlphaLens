@@ -9,11 +9,28 @@ that non-DRF views (admin, healthz) also see the authenticated user.
 # Django's lazy settings loader sees them at module scope. Star-import is
 # canonical here; the explicit re-import below names the symbols this file
 # actually references so static checkers don't flag them as undefined.
+from django.core.exceptions import ImproperlyConfigured
+
 from .base import *  # noqa: F401,F403  # NOSONAR python:S2208
-from .base import MIDDLEWARE, env
+from .base import MIDDLEWARE, SECRET_KEY, env
 
 DEBUG = False
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
+
+# Fail-fast on a misconfigured prod container that started without supplying
+# SECRET_KEY: base.py falls back to a known dev key, which would silently
+# weaken cookie/CSRF/PRNG signing in production. Detect the sentinel here
+# rather than removing the dev fallback from base.py (which would break the
+# test suite that runs under config.settings.dev without a .env file).
+# Exact-match the sentinel — operators sometimes pick keys with the
+# ``dev-only-`` prefix to mark rotated emergency credentials, and we don't
+# want to crash those legitimately set prod keys.
+_DEV_SECRET_KEY_SENTINEL = "dev-only-insecure-do-not-use-in-prod"
+if SECRET_KEY == _DEV_SECRET_KEY_SENTINEL:
+    raise ImproperlyConfigured(
+        "SECRET_KEY must be set in the production environment "
+        "(currently using the base.py dev-only fallback)."
+    )
 
 # Insert CF middleware after AuthenticationMiddleware so request.user starts
 # as AnonymousUser and gets upgraded to the CF-vouched principal.

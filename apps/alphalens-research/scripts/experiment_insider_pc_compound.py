@@ -223,11 +223,18 @@ def benchmark_returns(
     return df["close"].pct_change().dropna()
 
 
-def _close_at(history: pd.DataFrame, asof: pd.Timestamp) -> float | None:
-    sliced = history[history.index <= asof]
-    if sliced.empty:
+def _close_at(sliced_history: pd.DataFrame, asof: pd.Timestamp) -> float | None:
+    """Return the latest close from a price frame already filtered to ``index <= asof``.
+
+    The sole caller (:meth:`_OpportunisticForm4Scorer.__call__`) slices
+    ``history[history.index <= asof_ts]`` BEFORE delegating here, so we
+    skip the redundant re-slice. ``asof`` is retained on the signature
+    so the contract stays explicit, but is otherwise unused.
+    """
+    del asof  # documents the slice-was-done-upstream contract
+    if sliced_history.empty:
         return None
-    return float(sliced["close"].iloc[-1])
+    return float(sliced_history["close"].iloc[-1])
 
 
 # -------------------------------------------------------------------------
