@@ -32,29 +32,16 @@
 <div class="max-w-[1400px] mx-auto px-3 sm:px-4 py-6">
 	<!-- Header -->
 	<header class="border border-grid bg-bg-1 corners relative fade-up mb-5">
-		<div class="grid grid-cols-12 gap-4 px-4 sm:px-6 py-5">
-			<div class="col-span-12 lg:col-span-8">
+		<!-- Top row: session label + date | day navigation -->
+		<div class="flex flex-wrap items-start justify-between gap-4 px-4 sm:px-6 pt-5 pb-4">
+			<div class="min-w-0">
 				<div class="text-[10px] uppercase tracking-[0.3em] text-fg-muted">// session</div>
-				<div class="flex flex-wrap items-baseline gap-x-4 gap-y-2 mt-1">
-					<h1 class="font-display font-bold text-3xl sm:text-4xl lg:text-5xl text-amber tracking-tight">{data.brief.date}</h1>
-					<div class="text-[11px] uppercase tracking-widest text-fg-muted">
-						<div><span class="text-cyan font-bold">{data.brief.n_candidates}</span> candidates</div>
-						<div><span class="text-green font-bold">{verifiedCount}</span> verified</div>
-						<div><span class="text-amber font-bold">{data.brief.n_themes}</span> themes</div>
-					</div>
-				</div>
-				{#if firstCatalystUrl}
-					<div class="mt-3 text-xs">
-						<span class="text-fg-muted uppercase tracking-widest text-[10px]">top catalyst: </span>
-						<a href={firstCatalystUrl} target="_blank" rel="noreferrer" class="text-cyan hover:text-amber transition-colors">
-							{firstCatalystTitle}
-						</a>
-					</div>
-				{/if}
+				<h1 class="font-display font-bold text-3xl sm:text-4xl lg:text-5xl text-amber tracking-tight mt-1">
+					{data.brief.date}
+				</h1>
 			</div>
-
-			<div class="col-span-12 lg:col-span-4 flex flex-col gap-2 lg:items-end justify-between">
-				<div class="flex gap-2">
+			{#if prevDay || nextDay}
+				<div class="flex gap-2 shrink-0">
 					{#if prevDay}
 						<a
 							href="/brief/{prevDay.date}"
@@ -72,11 +59,57 @@
 						</a>
 					{/if}
 				</div>
-				<div class="text-[10px] uppercase tracking-widest text-fg-muted">
-					top theme: <span class="text-amber lowercase">{data.brief.top_theme}</span>
-				</div>
-			</div>
+			{/if}
 		</div>
+
+		<!-- Metric strip — full-width cells fill the header instead of the old
+		     cramped vertical stack. gap-px over bg-grid paints clean 1px
+		     separators in both axes, surviving the 4→2 column wrap on mobile. -->
+		<dl
+			data-testid="brief-header-stats"
+			class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-grid border-t border-grid"
+		>
+			<!-- dt-before-dd keeps the DOM/spec order (and a sensible "label, value"
+			     screen-reader read); flex-col-reverse renders the value on top. -->
+			<div class="bg-bg-1 px-4 sm:px-6 py-3 flex flex-col-reverse gap-0.5">
+				<dt class="text-[10px] uppercase tracking-widest text-fg-muted">candidates</dt>
+				<dd data-testid="stat-candidates" class="font-display font-bold text-2xl sm:text-3xl text-cyan">
+					{data.brief.n_candidates}
+				</dd>
+			</div>
+			<div class="bg-bg-1 px-4 sm:px-6 py-3 flex flex-col-reverse gap-0.5">
+				<dt class="text-[10px] uppercase tracking-widest text-fg-muted">verified</dt>
+				<dd data-testid="stat-verified" class="font-display font-bold text-2xl sm:text-3xl text-green">
+					{verifiedCount}
+				</dd>
+			</div>
+			<div class="bg-bg-1 px-4 sm:px-6 py-3 flex flex-col-reverse gap-0.5">
+				<dt class="text-[10px] uppercase tracking-widest text-fg-muted">themes</dt>
+				<dd data-testid="stat-themes" class="font-display font-bold text-2xl sm:text-3xl text-amber">
+					{data.brief.n_themes}
+				</dd>
+			</div>
+			<div class="bg-bg-1 px-4 sm:px-6 py-3 flex flex-col-reverse gap-0.5 min-w-0">
+				<dt class="text-[10px] uppercase tracking-widest text-fg-muted">top theme</dt>
+				<dd
+					data-testid="stat-top-theme"
+					class="font-display font-bold text-xl sm:text-2xl text-amber lowercase truncate"
+					title={data.brief.top_theme}
+				>
+					{data.brief.top_theme}
+				</dd>
+			</div>
+		</dl>
+
+		<!-- Catalyst footer — full width for the long headline -->
+		{#if firstCatalystUrl}
+			<div class="border-t border-grid px-4 sm:px-6 py-3 text-xs">
+				<span class="text-fg-muted uppercase tracking-widest text-[10px]">top catalyst: </span>
+				<a href={firstCatalystUrl} target="_blank" rel="noreferrer" class="text-cyan hover:text-amber transition-colors">
+					{firstCatalystTitle}
+				</a>
+			</div>
+		{/if}
 	</header>
 
 	<!-- Filters -->

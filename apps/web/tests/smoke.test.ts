@@ -287,6 +287,22 @@ test.describe('smoke — brief detail interactions', () => {
 		expect(pageErrors).toEqual([]);
 	});
 
+	test('header metric strip renders candidate / verified / theme counts (layout regression guard)', async ({ page }) => {
+		const brief = JSON.parse(DAY_BODIES[latestDay.date]);
+		const verifiedCount = brief.candidates.filter((c: { verified: boolean }) => c.verified).length;
+
+		await page.goto(`/brief/${latestDay.date}`);
+
+		const strip = page.getByTestId('brief-header-stats');
+		await expect(strip).toBeVisible();
+		// Each value carries a stable data-testid so the assertion survives
+		// Tailwind class / layout refactors of the metric strip.
+		await expect(strip.getByTestId('stat-candidates')).toHaveText(String(brief.n_candidates));
+		await expect(strip.getByTestId('stat-verified')).toHaveText(String(verifiedCount));
+		await expect(strip.getByTestId('stat-themes')).toHaveText(String(brief.n_themes));
+		await expect(strip.getByTestId('stat-top-theme')).toContainText(brief.top_theme);
+	});
+
 	test('signal-bar tooltip renders on hover (CSS regression guard)', async ({ page }) => {
 		await page.goto(`/brief/${latestDay.date}`);
 		// data-testid is stable across Tailwind class refactors.
