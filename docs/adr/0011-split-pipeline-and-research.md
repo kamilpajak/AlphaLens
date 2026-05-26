@@ -129,9 +129,8 @@ catch DAG violations regardless of which directory holds them.
 
 ## How the rollout happened
 
-The split landed in three stacked PRs against `feature/django-migration`
-(parked away from `main` while the Django stack is shadow-deployed on
-the VPS — see [ADR 0009](0009-django-replaces-fastapi.md)):
+The split landed in three stacked PRs on the Django-migration integration
+arc (since merged to `main` — see [ADR 0009](0009-django-replaces-fastapi.md)):
 
 - **PR #193** (`c12d03f`, `590775a`) — pre-work: scorer carve-out,
   `survivorship_pit.py` relocation to `diagnostics/`,

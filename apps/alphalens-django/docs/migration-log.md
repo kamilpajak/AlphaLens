@@ -1,8 +1,7 @@
 # AlphaLens → Django: dziennik migracji
 
 Greenfield migracja `alphalens/api/` (FastAPI + SQLite cache) do Django 6.0.5
-z DRF + Postgres + Cloudflare Access auth. Branch: `feature/django-migration`,
-worktree: `.claude/worktrees/django-migration/`.
+z DRF + Postgres + Cloudflare Access auth. Zmergowane do `main`.
 
 Każda faza ma własną sekcję: cel, co powstało, problemy, decyzje, testy.
 
