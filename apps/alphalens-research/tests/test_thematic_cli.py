@@ -288,7 +288,7 @@ class TestBriefCLI(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
 
-    def test_brief_reads_scored_writes_enriched_and_markdown(self):
+    def test_brief_reads_scored_writes_enriched_parquet(self):
         from pathlib import Path
 
         scored = pd.DataFrame(
@@ -325,7 +325,6 @@ class TestBriefCLI(unittest.TestCase):
         enriched = scored.copy()
         enriched["brief_model_used"] = "gemini-2.5-flash"
         enriched["brief_tldr"] = "tldr"
-        enriched["brief_full_md"] = "## QUBT brief..."
         enriched.attrs["n_pro"] = 0
         enriched.attrs["n_flash"] = 1
 
@@ -337,9 +336,8 @@ class TestBriefCLI(unittest.TestCase):
             scored.to_parquet(spath, index=False)
 
             def fake_generate_briefs(scored_arg, *, asof, output_dir, **kwargs):
-                # Mimic the orchestrator side effect: write the parquet + .md.
+                # Mimic the orchestrator side effect: write the brief parquet.
                 enriched.to_parquet(output_dir / f"{asof.isoformat()}.parquet", index=False)
-                (output_dir / f"{asof.isoformat()}.md").write_text("# bundle\n## QUBT ...")
                 return enriched
 
             with patch(
@@ -364,7 +362,7 @@ class TestBriefCLI(unittest.TestCase):
             self.assertIn("Wrote 1 briefs", result.output)
             self.assertIn("Pro: 0, Flash: 1", result.output)
             self.assertTrue((Path(out_tmp) / "2026-04-14.parquet").exists())
-            self.assertTrue((Path(out_tmp) / "2026-04-14.md").exists())
+            self.assertFalse((Path(out_tmp) / "2026-04-14.md").exists())
 
     def test_brief_errors_when_scored_parquet_missing(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -310,10 +310,10 @@ def brief(
     output_dir: Path = typer.Option(
         brief_orchestrator.DEFAULT_OUTPUT_DIR,
         "--output-dir",
-        help="Phase E brief parquet + markdown root.",
+        help="Phase E brief parquet root.",
     ),
 ) -> None:
-    """Layer 5 brief generator — compose mid-format markdown per scored candidate."""
+    """Layer 5 brief generator — enrich scored candidates with structured brief fields."""
     target = (
         dt.date.fromisoformat(date)
         if date
@@ -331,8 +331,6 @@ def brief(
 
     n_pro = int(enriched.attrs.get("n_pro", 0))
     n_flash = int(enriched.attrs.get("n_flash", 0))
-    out_md = output_dir / f"{target.isoformat()}.md"
     out_parquet = output_dir / f"{target.isoformat()}.parquet"
     typer.echo(f"Wrote {len(enriched)} briefs → {out_parquet}")
     typer.echo(f"  Pro: {n_pro}, Flash: {n_flash}")
-    typer.echo(f"  Markdown bundle: {out_md}")

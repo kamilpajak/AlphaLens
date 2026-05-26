@@ -3,9 +3,11 @@
 Reads a Phase D-scored DataFrame, filters to ``verified=True`` rows,
 hoists one Pro client + one Flash client, calls
 ``generator.generate_brief`` per row (routing handled there), assembles
-the enriched DataFrame, and writes parquet + markdown bundle to
-``output_dir``. Per-row exceptions are absorbed so one bad LLM call
-doesn't abort the batch (mirrors Phase D ``_safe_signal`` pattern).
+the enriched DataFrame, and writes the brief parquet to ``output_dir``.
+The structured brief_* columns (tldr, supply_chain, bear_summary, …) are
+consumed directly by the Django API + SvelteKit UI; no markdown blob is
+rendered. Per-row exceptions are absorbed so one bad LLM call doesn't
+abort the batch (mirrors Phase D ``_safe_signal`` pattern).
 """
 
 from __future__ import annotations
@@ -25,7 +27,6 @@ from alphalens_pipeline.thematic.argumentation._common import (
     TIME_EXIT_ON_CATALYST_FAILURE_WEEKS,
     position_pct_from_conf,
 )
-from alphalens_pipeline.thematic.argumentation.renderer import render_day_bundle, render_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,6 @@ _EMPTY_OUT_COLUMNS = (
     "brief_time_exit_weeks",
     "brief_time_exit_on_catalyst_failure_weeks",
     "brief_disaster_stop_pct",
-    "brief_full_md",
     "brief_generated_at",
 )
 
@@ -269,9 +269,6 @@ def _empty_output(output_dir: Path, asof: dt.date) -> pd.DataFrame:
     """Write a typed-empty parquet + empty bundle + zero-counts sidecar."""
     empty = pd.DataFrame({c: pd.Series(dtype="object") for c in _EMPTY_OUT_COLUMNS})
     empty.to_parquet(output_dir / f"{asof.isoformat()}.parquet", index=False)
-    (output_dir / f"{asof.isoformat()}.md").write_text(
-        render_day_bundle(empty, asof_str=asof.isoformat())
-    )
     _write_sidecar(output_dir, asof, n_pro=0, n_flash=0)
     return empty
 
@@ -315,17 +312,12 @@ def generate_briefs(
                 n_pro += 1
             else:
                 n_flash += 1
-        # Inject next_earnings_date into the row copy so the renderer's
-        # `r.get("next_earnings_date")` path picks it up (single source of
-        # truth — same field is also persisted to parquet below).
-        row_with_earnings = row.copy()
-        row_with_earnings["next_earnings_date"] = next_earnings
-        # Graceful degradation: render always — when brief is None the
-        # renderer emits per-section placeholders so the operator never
-        # loses the deterministic catalyst + signal panel (Perplexity
-        # 2026-05-17 recommendation; QUBT 2026-04-14 incident showed the
-        # legacy "(brief unavailable)" fallback hid the winning signal).
-        md = render_markdown(row_with_earnings, brief)
+        # Graceful degradation without a rendered blob: the deterministic
+        # Phase D signal columns (catalyst, insider, valuation, technicals,
+        # gates) are always persisted below regardless of whether the LLM
+        # prose fields came back, so a Flash truncation never hides the
+        # quantitative signal (2026-05-17 QUBT incident). The brief_* prose
+        # columns simply stay None when ``brief`` is None.
         b = brief or {}
         rows.append(
             {
@@ -341,7 +333,6 @@ def generate_briefs(
                 "brief_time_exit_weeks": TIME_EXIT_DEFAULT_WEEKS,
                 "brief_time_exit_on_catalyst_failure_weeks": TIME_EXIT_ON_CATALYST_FAILURE_WEEKS,
                 "brief_disaster_stop_pct": DISASTER_STOP_PCT,
-                "brief_full_md": md,
                 "brief_generated_at": pd.Timestamp.now(tz="UTC"),
             }
         )
@@ -352,9 +343,6 @@ def generate_briefs(
     merged.attrs["n_flash"] = n_flash
     out_path = output_dir / f"{asof.isoformat()}.parquet"
     merged.to_parquet(out_path, index=False)
-    (output_dir / f"{asof.isoformat()}.md").write_text(
-        render_day_bundle(merged, asof_str=asof.isoformat())
-    )
     _write_sidecar(output_dir, asof, n_pro=n_pro, n_flash=n_flash)
     logger.info(
         "generate_briefs %s: wrote %d briefs (Pro=%d, Flash=%d) → %s",

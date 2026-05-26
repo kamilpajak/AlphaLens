@@ -45,6 +45,10 @@ INTENTIONAL_DROPS = frozenset(
         "gates_failed_str",
         "gates_unknown_str",
         "technicals_summary_str",
+        # Retired 2026-05-26: the rendered markdown blob duplicated the
+        # structured brief_* fields already served + shown in the UI. The
+        # per-candidate brief is now consumed as structured columns only.
+        "brief_full_md",
     }
 )
 

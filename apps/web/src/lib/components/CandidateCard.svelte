@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Candidate } from '$lib/types';
 	import { fmtUsdCompact, fmtPct, fmtNum, fmtPctile, fmtDate, confidenceTone } from '$lib/format';
-	import { ArrowUpRight, ExternalLink, Sparkle } from 'lucide-svelte';
+	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
 	import GatePill from './GatePill.svelte';
 	import JargonTip from './JargonTip.svelte';
@@ -24,8 +24,6 @@
 	const confTone = $derived(confidenceTone(c.gemini_confidence));
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
-
-	let expanded = $state(false);
 </script>
 
 <article
@@ -293,6 +291,12 @@
 				<dt class="text-fg-muted uppercase tracking-widest">catalyst-fail exit</dt><dd class="text-fg text-right">{c.brief_time_exit_on_catalyst_failure_weeks != null ? c.brief_time_exit_on_catalyst_failure_weeks + 'w' : '—'}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest">disaster stop</dt><dd class="text-red text-right">{c.brief_disaster_stop_pct != null ? fmtPct(c.brief_disaster_stop_pct, 0) : '—'}</dd>
 			</dl>
+			{#if c.brief_entry_price_note}
+				<div class="mt-3 pt-2 border-t border-grid">
+					<div class="text-fg-muted uppercase tracking-widest text-[10px]">entry note</div>
+					<p class="text-fg-dim mt-1 leading-relaxed">{c.brief_entry_price_note}</p>
+				</div>
+			{/if}
 		</div>
 	</div>
 
@@ -312,15 +316,4 @@
 		</div>
 	</div>
 
-	<!-- Expandable full markdown -->
-	<details class="border-t border-grid group" bind:open={expanded}>
-		<summary class="px-4 sm:px-5 py-3 text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber cursor-pointer flex items-center gap-2 select-none">
-			<ArrowUpRight class="size-3 transition-transform group-open:rotate-90" />
-			{expanded ? 'collapse' : 'expand'} full brief markdown
-			<span class="ml-auto text-fg-muted truncate">{c.brief_model_used ?? '—'}</span>
-		</summary>
-		<div class="px-4 sm:px-5 py-4 bg-bg-2 border-t border-grid">
-			<pre class="prose-terminal whitespace-pre-wrap break-words text-[11px] leading-relaxed">{c.brief_full_md ?? ''}</pre>
-		</div>
-	</details>
 </article>

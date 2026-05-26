@@ -94,7 +94,6 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     "brief_time_exit_weeks",
     "brief_time_exit_on_catalyst_failure_weeks",
     "brief_disaster_stop_pct",
-    "brief_full_md",
     "brief_generated_at",
 )
 

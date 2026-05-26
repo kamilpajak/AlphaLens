@@ -116,7 +116,6 @@ class Brief(models.Model):
     brief_time_exit_weeks = models.IntegerField(null=True, blank=True)
     brief_time_exit_on_catalyst_failure_weeks = models.IntegerField(null=True, blank=True)
     brief_disaster_stop_pct = models.FloatField(null=True, blank=True)
-    brief_full_md = models.TextField(blank=True)
     brief_generated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:

@@ -152,7 +152,7 @@ class TestGenerateBriefs(unittest.TestCase):
         self.assertEqual(captured_models["QUBT"], generator.FLASH_MODEL)  # score 2 → Flash
         self.assertEqual(captured_models["IONQ"], generator.PRO_MODEL)  # score 4 → Pro
 
-    def test_writes_parquet_and_markdown_bundle(self):
+    def test_writes_parquet_with_structured_brief_columns(self):
         with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, None)):
             with tempfile.TemporaryDirectory() as tmp:
                 output_dir = Path(tmp)
@@ -163,10 +163,12 @@ class TestGenerateBriefs(unittest.TestCase):
         # (output_dir lifetime extends through the with block but assertions live outside.)
         self.assertEqual(len(out), 2)
         self.assertIn("brief_tldr", out.columns)
-        self.assertIn("brief_full_md", out.columns)
         self.assertIn("brief_model_used", out.columns)
+        # The markdown blob was retired (2026-05-26): structured brief_*
+        # columns feed the API + UI directly, no rendered string is stored.
+        self.assertNotIn("brief_full_md", out.columns)
 
-    def test_writes_parquet_and_md_files_to_disk(self):
+    def test_writes_parquet_only_no_markdown_file(self):
         with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, None)):
             with tempfile.TemporaryDirectory() as tmp:
                 output_dir = Path(tmp)
@@ -174,29 +176,25 @@ class TestGenerateBriefs(unittest.TestCase):
                     _scored_df(), asof=dt.date(2026, 4, 14), output_dir=output_dir
                 )
                 self.assertTrue((output_dir / "2026-04-14.parquet").exists())
-                self.assertTrue((output_dir / "2026-04-14.md").exists())
-                md = (output_dir / "2026-04-14.md").read_text()
-                self.assertIn("2026-04-14", md)
-                self.assertIn("QUBT", md)
+                # The per-day .md bundle is no longer emitted.
+                self.assertFalse((output_dir / "2026-04-14.md").exists())
 
-    def test_brief_failure_still_renders_deterministic_signals(self):
-        # _brief_for_row returns None (LLM failed) — orchestrator now
-        # renders deterministic facts (ticker, catalyst, signal panel,
-        # verified gates) via the graceful-degradation renderer so the
-        # operator never loses visibility on Phase D data when Flash
-        # truncates (2026-05-17 QUBT incident).
+    def test_brief_failure_keeps_deterministic_columns(self):
+        # _brief_for_row returns None (LLM failed). With the markdown blob
+        # gone, graceful degradation is inherent: the deterministic Phase D
+        # signal columns are always persisted, so a Flash truncation never
+        # hides the quantitative signal (2026-05-17 QUBT incident). The
+        # brief_* prose columns simply stay None.
         with patch.object(orchestrator, "_brief_for_row", return_value=(None, None)):
             with tempfile.TemporaryDirectory() as tmp:
                 out = orchestrator.generate_briefs(
                     _scored_df(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
                 )
         self.assertEqual(len(out), 2)
+        # Deterministic Phase D facts survive the LLM failure.
+        for col in ("ticker", "insider_score_usd", "layer4_weighted_score"):
+            self.assertIn(col, out.columns)
         for _, row in out.iterrows():
-            md = row["brief_full_md"]
-            self.assertNotEqual(md, "(brief unavailable)")
-            self.assertIn(row["ticker"], md)
-            self.assertIn("| Signal | Value |", md)
-            self.assertIn("LLM brief unavailable", md)
             self.assertIsNone(row["brief_tldr"])
 
     def test_attrs_contain_per_model_counts(self):
@@ -214,8 +212,8 @@ class TestGenerateBriefs(unittest.TestCase):
 
 
 class TestEarningsDatePropagation(unittest.TestCase):
-    """The fetched next_earnings_date must reach BOTH the brief parquet AND
-    the rendered markdown — not just the LLM prompt."""
+    """The fetched next_earnings_date must be persisted to the brief
+    parquet as ``next_earnings_date`` — not just passed to the LLM prompt."""
 
     def test_next_earnings_date_persisted_to_parquet(self):
         # _brief_for_row returns (brief, next_earnings_iso_str). Test
@@ -232,18 +230,6 @@ class TestEarningsDatePropagation(unittest.TestCase):
         for _, row in out.iterrows():
             self.assertEqual(row["next_earnings_date"], "2026-05-08")
 
-    def test_next_earnings_date_rendered_in_markdown(self):
-        with patch.object(
-            orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, "2026-05-08")
-        ):
-            with tempfile.TemporaryDirectory() as tmp:
-                out = orchestrator.generate_briefs(
-                    _scored_df(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
-                )
-        for _, row in out.iterrows():
-            self.assertIn("| Next earnings |", row["brief_full_md"])
-            self.assertIn("2026-05-08", row["brief_full_md"])
-
     def test_next_earnings_date_none_when_fetch_returns_none(self):
         with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, None)):
             with tempfile.TemporaryDirectory() as tmp:
@@ -252,7 +238,6 @@ class TestEarningsDatePropagation(unittest.TestCase):
                 )
         for _, row in out.iterrows():
             self.assertIsNone(row["next_earnings_date"])
-            self.assertNotIn("| Next earnings |", row["brief_full_md"])
 
 
 class TestEmptyScoredFrame(unittest.TestCase):
@@ -265,10 +250,11 @@ class TestEmptyScoredFrame(unittest.TestCase):
             # Schema present so downstream readers don't crash on zero-column
             # frames. ``next_earnings_date`` included so the empty schema mirrors
             # the populated schema (zen review 2026-05-18: L1 schema asymmetry).
-            for col in ("ticker", "brief_full_md", "brief_position_pct", "next_earnings_date"):
+            for col in ("ticker", "brief_position_pct", "next_earnings_date"):
                 self.assertIn(col, out.columns)
+            self.assertNotIn("brief_full_md", out.columns)
             self.assertTrue((Path(tmp) / "2026-04-14.parquet").exists())
-            self.assertTrue((Path(tmp) / "2026-04-14.md").exists())
+            self.assertFalse((Path(tmp) / "2026-04-14.md").exists())
             sidecar_path = Path(tmp) / "2026-04-14.meta.json"
             self.assertTrue(sidecar_path.exists())
             import json

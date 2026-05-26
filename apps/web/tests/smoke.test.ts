@@ -83,7 +83,7 @@ test.beforeEach(async ({ page }) => {
  *   - Broken internal links (anything `<a href="/...">` that 404s)
  *   - Major content regressions (header chip text, candidate count)
  *   - SPA navigation hydration failures between nav links
- *   - Filter / checkbox / details interaction errors on the brief detail page
+ *   - Filter / checkbox interaction errors on the brief detail page
  *   - Hover tooltip render failures on gate pills
  *
  * What it does NOT catch:
@@ -275,24 +275,17 @@ test.describe('smoke — brief detail interactions', () => {
 		await expect(tooltip).toBeVisible();
 	});
 
-	test('expanding the full-markdown <details> works for every candidate', async ({ page }) => {
+	test('candidate cards drop the markdown expander and surface the entry note', async ({ page }) => {
 		await page.goto(`/brief/${latestDay.date}`);
 		// Auto-wait until the client-side load function has rendered the
-		// candidate cards. The pre-PR-3 test used a sync `.count()` and
-		// happened to win the race because static-JSON fetches resolved
-		// before the first DOM query; the api route mock has slightly more
-		// latency so the race tips the other way without auto-wait.
-		await expect(page.locator('article[id] details')).toHaveCount(latestDay.n_candidates);
-		const detailsCount = await page.locator('article[id] details').count();
-		expect(detailsCount).toBe(latestDay.n_candidates);
-
-		// Toggle the first three to keep test bounded.
-		const sample = Math.min(3, detailsCount);
-		for (let i = 0; i < sample; i++) {
-			const det = page.locator('article[id] details').nth(i);
-			await det.locator('summary').click();
-			await expect(det).toHaveAttribute('open', '');
-		}
+		// candidate cards before asserting on their contents.
+		await expect(page.locator('article[id]').first()).toBeVisible();
+		// The full-markdown <details> expander was retired (2026-05-26);
+		// candidate cards must no longer render any <details>.
+		await expect(page.locator('article[id] details')).toHaveCount(0);
+		// The entry-price note — previously visible only inside the markdown
+		// blob — is now surfaced as a structured line.
+		await expect(page.locator('article[id]').filter({ hasText: 'entry note' }).first()).toBeVisible();
 	});
 });
 
