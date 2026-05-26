@@ -164,7 +164,7 @@
 	<!-- Signal grid -->
 	<div class="border-t border-grid bg-bg/30 px-4 sm:px-5 py-4">
 		<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-3 text-[10px] uppercase tracking-widest text-fg-muted">
-			<span>signals · vs sector peers</span>
+			<span class="text-green">signals · vs sector peers</span>
 			{#if c.peer_cohort_level === 'thin'}
 				<ChipTip
 					term="THIN cohort"
@@ -260,7 +260,7 @@
 	<!-- Technicals + fundamentals table -->
 	<div class="grid grid-cols-12 gap-0 border-t border-grid text-[11px]">
 		<div class="col-span-12 lg:col-span-6 px-4 sm:px-5 py-4 lg:border-r lg:border-grid">
-			<div class="text-[10px] uppercase tracking-widest text-fg-muted mb-2">fundamentals</div>
+			<div class="text-[10px] uppercase tracking-widest text-green mb-2">fundamentals</div>
 			<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5">
 				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('PE')}>pe</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_pe, 1)}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('PS')}>ps</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ps, 1)}</dd>
@@ -282,7 +282,7 @@
 			</dl>
 		</div>
 		<div class="col-span-12 lg:col-span-6 px-4 sm:px-5 py-4 border-t lg:border-t-0 border-grid">
-			<div class="text-[10px] uppercase tracking-widest text-fg-muted mb-2">technicals · trade setup</div>
+			<div class="text-[10px] uppercase tracking-widest text-green mb-2">technicals · trade setup</div>
 			<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5">
 				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA50')}>ma50 dist</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_ma50_distance_pct)}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA200')}>ma200 dist</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_ma200_distance_pct)}</dd>
