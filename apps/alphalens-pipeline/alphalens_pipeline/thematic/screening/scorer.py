@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -327,37 +328,48 @@ def _score_signals(
     return ins, fcff, val, tech
 
 
-def _compute_magic_formula_fields(
-    features: dict,
-) -> tuple[float | None, float | None, float | None, bool]:
+@dataclass(frozen=True, slots=True)
+class IndustryCohort:
+    """Identity + cohort metadata stamped onto every enrichment row."""
+
+    industry_id: int | None
+    industry_name: str | None
+    sector_name: str | None
+    peer_cohort_level: str
+
+
+@dataclass(frozen=True, slots=True)
+class MagicFormulaInputs:
+    """Magic-Formula fields derived from a candidate's SimFin features dict."""
+
+    ev_ebitda: float | None
+    roic: float | None
+    roe: float | None
+    health_pass: bool
+
+
+def _compute_magic_formula_fields(features: dict) -> MagicFormulaInputs:
     """EV/EBITDA, ROIC, ROE, health-gate verdict from the SimFin features dict."""
     market_cap = _market_cap_from_features(features)
-    mf_ev_ebitda = magic_formula.compute_ev_ebitda(
-        features, market_cap=market_cap if market_cap is not None else float("nan")
-    )
-    return (
-        mf_ev_ebitda,
-        magic_formula.compute_roic(features),
-        magic_formula.compute_roe(features),
-        magic_formula.passes_health_gate(features),
+    return MagicFormulaInputs(
+        ev_ebitda=magic_formula.compute_ev_ebitda(
+            features, market_cap=market_cap if market_cap is not None else float("nan")
+        ),
+        roic=magic_formula.compute_roic(features),
+        roe=magic_formula.compute_roe(features),
+        health_pass=magic_formula.passes_health_gate(features),
     )
 
 
 def _build_candidate_row(
     *,
     ticker: str,
-    industry_id: int | None,
-    industry_name: str | None,
-    sector_name: str | None,
-    peer_cohort_level: str,
+    cohort: IndustryCohort,
     ins: dict,
     fcff: dict,
     val: dict,
     tech: dict,
-    mf_ev_ebitda: float | None,
-    mf_roic: float | None,
-    mf_roe: float | None,
-    mf_health: bool,
+    magic_formula_inputs: MagicFormulaInputs,
     catalyst_event: dict | None,
     cs_val: float,
 ) -> dict:
@@ -371,16 +383,16 @@ def _build_candidate_row(
     # the "thin cohort" badge instead of a colored percentile bar — null
     # the percentiles here so downstream renderers see the same "no
     # signal" sentinel they already handle.
-    is_thin = peer_cohort_level == "thin"
+    is_thin = cohort.peer_cohort_level == "thin"
     insider_pctl = None if is_thin else ins["sector_percentile"]
     fcff_pctl = None if is_thin else fcff["sector_percentile"]
     val_pctl = None if is_thin else val["composite_sector_percentile"]
     return {
         "ticker": ticker,
-        "industry_id": industry_id if industry_id is not None else np.nan,
-        "industry_name": industry_name,
-        "sector_name": sector_name,
-        "peer_cohort_level": peer_cohort_level,
+        "industry_id": cohort.industry_id if cohort.industry_id is not None else np.nan,
+        "industry_name": cohort.industry_name,
+        "sector_name": cohort.sector_name,
+        "peer_cohort_level": cohort.peer_cohort_level,
         "insider_score_usd": ins["score_usd"],
         "insider_score_sector_percentile": insider_pctl,
         "fcff_yield_pct": fcff["yield_pct"],
@@ -388,14 +400,14 @@ def _build_candidate_row(
         "valuation_pe": val["pe"],
         "valuation_ps": val["ps"],
         "valuation_ev_rev": val["ev_rev"],
-        "valuation_ev_ebitda": mf_ev_ebitda,
+        "valuation_ev_ebitda": magic_formula_inputs.ev_ebitda,
         "valuation_fcf_margin": val["fcf_margin"],
         "valuation_composite_sector_percentile": val_pctl,
         "valuation_financials_publish_date": val.get("financials_publish_date"),
         "valuation_financials_age_days": val.get("financials_age_days"),
-        "roic_pct": mf_roic,
-        "roe_pct": mf_roe,
-        "magic_formula_health_pass": mf_health,
+        "roic_pct": magic_formula_inputs.roic,
+        "roe_pct": magic_formula_inputs.roe,
+        "magic_formula_health_pass": magic_formula_inputs.health_pass,
         "technical_rsi": tech["rsi"],
         "technical_ma50_distance_pct": tech["ma50_distance_pct"],
         "technical_atr_pct": tech["atr_pct"],
@@ -503,27 +515,27 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
         # dict. ``feature_fetcher`` memoises per (ticker, asof) so this call
         # is free after the val/fcff signal scorers above.
         features = feature_fetcher(ticker, asof) or {}
-        mf_ev_ebitda, mf_roic, mf_roe, mf_health = _compute_magic_formula_fields(features)
+        magic_formula_inputs = _compute_magic_formula_fields(features)
         # Catalyst lookup — cached per theme. Returns extended event dict
         # (url, title, published_at, event_type, confidence, second_order_
         # implications). None when no theme-tagged event survives noise filter.
         catalyst_event = _resolve_catalyst_event(str(cand.get("theme", "")))
         cs_val = catalyst_signals.compute_catalyst_strength(catalyst_event)
+        cohort = IndustryCohort(
+            industry_id=industry_id,
+            industry_name=industry_name,
+            sector_name=sector_name,
+            peer_cohort_level=peer_cohort_level,
+        )
         rows.append(
             _build_candidate_row(
                 ticker=ticker,
-                industry_id=industry_id,
-                industry_name=industry_name,
-                sector_name=sector_name,
-                peer_cohort_level=peer_cohort_level,
+                cohort=cohort,
                 ins=ins,
                 fcff=fcff,
                 val=val,
                 tech=tech,
-                mf_ev_ebitda=mf_ev_ebitda,
-                mf_roic=mf_roic,
-                mf_roe=mf_roe,
-                mf_health=mf_health,
+                magic_formula_inputs=magic_formula_inputs,
                 catalyst_event=catalyst_event,
                 cs_val=cs_val,
             )

@@ -1,6 +1,14 @@
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
 
+/* Self-hosted fonts via @fontsource — replaces the Google Fonts <link> in
+   app.html. Google Fonts' CSS endpoint cannot be SRI-pinned (response varies
+   by User-Agent), so the only way to clear Web:S5725 without disabling SRI
+   for an external resource is to drop the cross-origin dependency. Variable
+   fonts cover the same weight range in a single woff2 per script. */
+@import '@fontsource-variable/jetbrains-mono';
+@import '@fontsource-variable/space-grotesk';
+
 /* Tailwind v4 module-graph detection for SvelteKit components is fragile —
    explicit @source globs are the canonical fix per upstream guidance. */
 @source "./lib/**/*.svelte";
@@ -35,8 +43,8 @@
 	--color-magenta: #d066ff;
 	--color-violet: #8d6bff;
 
-	--font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
-	--font-display: 'Space Grotesk', system-ui, sans-serif;
+	--font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+	--font-display: 'Space Grotesk Variable', 'Space Grotesk', system-ui, sans-serif;
 }
 
 html,
