@@ -73,6 +73,10 @@ TICKER_PATH = OpenApiParameter(
     description="Upper-case ticker symbol.",
 )
 
+# Reject URL segments containing slashes or dots so drf-spectacular doesn't
+# fall back to "string" type on custom ``lookup_field`` paths.
+_PATH_SEGMENT_NO_DOT = r"[^/.]+"
+
 
 def _date_from_path(pk: str | None, *, what: str) -> dt.date:
     """Parse a path PK as an ISO date or raise 404.
@@ -110,11 +114,10 @@ class DayViewSet(viewsets.ViewSet):
 
     pagination_class = EnvelopePagination
     # OpenAPI parity with legacy FastAPI: path parameter is named ``date``,
-    # not the DRF default ``id``. ``lookup_value_regex`` rejects URL segments
-    # containing dots so drf-spectacular doesn't fall back to "string" type.
+    # not the DRF default ``id``.
     lookup_field = "date"
     lookup_url_kwarg = "date"
-    lookup_value_regex = r"[^/.]+"
+    lookup_value_regex = _PATH_SEGMENT_NO_DOT
 
     @extend_schema(parameters=DATE_RANGE_PARAMS, responses=DayMetaSerializer(many=True))
     def list(self, request: Request) -> Response:
@@ -178,7 +181,7 @@ class ThemeViewSet(viewsets.ViewSet):
     pagination_class = EnvelopePagination
     lookup_field = "theme"
     lookup_url_kwarg = "theme"
-    lookup_value_regex = r"[^/.]+"
+    lookup_value_regex = _PATH_SEGMENT_NO_DOT
 
     @extend_schema(parameters=DATE_RANGE_PARAMS, responses=ThemeSummarySerializer(many=True))
     def list(self, request: Request) -> Response:
@@ -240,7 +243,7 @@ class TickerViewSet(viewsets.ViewSet):
     pagination_class = EnvelopePagination
     lookup_field = "ticker"
     lookup_url_kwarg = "ticker"
-    lookup_value_regex = r"[^/.]+"
+    lookup_value_regex = _PATH_SEGMENT_NO_DOT
 
     @extend_schema(parameters=DATE_RANGE_PARAMS, responses=CandidateSerializer(many=True))
     @action(detail=True, methods=["get"], url_path="history")
