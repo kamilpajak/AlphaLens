@@ -161,6 +161,55 @@ test.describe('smoke — every route renders without errors', () => {
 	});
 });
 
+test.describe('brief detail — graceful session-expiry handling', () => {
+	// Regression: an expired Cloudflare Access session makes the cross-origin
+	// API XHR fail — CF answers the unauthenticated XHR with a 302 to its login
+	// origin, the browser blocks following that cross-origin redirect, and the
+	// fetch throws. The brief-detail load used to let that throw bubble into a
+	// bare "500 Internal Error". It must now surface as a graceful "session
+	// expired" page so the operator knows to re-authenticate.
+	const DATE = latestDay.date;
+
+	test('aborted API fetch (CF redirect) shows session-expired, not a 500', async ({ page }) => {
+		await page.route(`**/api/v1/days/${DATE}`, (route) => route.abort());
+		await page.goto(`/brief/${DATE}`);
+		await expect(page.getByText('session expired', { exact: false })).toBeVisible();
+		await expect(page.locator('main')).not.toContainText('Internal Error');
+	});
+
+	test('API 401 shows the session-expired re-auth page', async ({ page }) => {
+		await page.route(`**/api/v1/days/${DATE}`, (route) =>
+			route.fulfill({
+				status: 401,
+				contentType: 'application/json',
+				body: JSON.stringify({ detail: 'unauthorized' })
+			})
+		);
+		await page.goto(`/brief/${DATE}`);
+		await expect(page.getByText('session expired', { exact: false })).toBeVisible();
+	});
+
+	test('dashboard surfaces session-expired on 401, not a misleading empty state', async ({
+		page
+	}) => {
+		// The index endpoint (pathname /api/v1/days, any query) → 401. The
+		// dashboard load must raise the session-expired error page instead of
+		// degrading to the "no briefs yet" empty state (which reads as data loss).
+		await page.route(
+			(url) => url.pathname === '/api/v1/days',
+			(route) =>
+				route.fulfill({
+					status: 401,
+					contentType: 'application/json',
+					body: JSON.stringify({ detail: 'unauthorized' })
+				})
+		);
+		await page.goto('/');
+		await expect(page.getByText('session expired', { exact: false })).toBeVisible();
+		await expect(page.locator('main')).not.toContainText('no captured sessions');
+	});
+});
+
 test.describe('smoke — SPA navigation', () => {
 	test('clicking every header nav link transitions cleanly', async ({ page }) => {
 		const consoleErrors: string[] = [];
