@@ -156,7 +156,7 @@
 		{/if}
 
 		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" data-testid="session-tiles">
-			{#each dayTiles as day, i}
+			{#each dayTiles as day, i (day.date)}
 				<a
 					href="/brief/{day.date}"
 					class="group border border-grid bg-bg-1 p-4 hover:bg-bg-2 hover:border-amber transition-all fade-up block"
