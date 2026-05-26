@@ -73,7 +73,7 @@
 			     grow on mobile (full width when wrapped) → grow-0 from sm up. -->
 			<dl
 				data-testid="brief-header-stats"
-				class="grid grid-cols-2 gap-px bg-grid border border-grid self-center grow sm:grow-0 sm:min-w-[18rem]"
+				class="grid grid-cols-2 gap-px bg-grid border border-grid grow sm:grow-0 sm:min-w-[18rem]"
 			>
 				<!-- dt-before-dd keeps the DOM/spec order (and a sensible "label,
 				     value" screen-reader read); flex-col-reverse renders the value
