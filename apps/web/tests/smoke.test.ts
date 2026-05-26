@@ -276,12 +276,22 @@ test.describe('smoke — brief detail interactions', () => {
 		await page.getByRole('button', { name: /^all \(/ }).click();
 		await expect(page.locator('article[id]')).toHaveCount(latestDay.n_candidates);
 
-		// Toggle verified-only — same reactivity guarantee.
-		const cb = page.locator('input[type="checkbox"]').first();
-		await cb.check();
-		await expect(page.locator('article[id], .text-center')).not.toHaveCount(0);
-		await cb.uncheck();
-		await expect(page.locator('article[id]')).toHaveCount(latestDay.n_candidates);
+		// Toggle verified-only — same reactivity guarantee. The filter is
+		// suppressed when every candidate is already verified (#238), so the
+		// checkbox only renders on a mixed day. Exercise the toggle when it
+		// exists; otherwise assert it stays hidden (the #238 contract). Every
+		// fixture day is currently all-verified, so the else-branch runs.
+		const brief = JSON.parse(DAY_BODIES[latestDay.date]);
+		const verifiedCount = brief.candidates.filter((c: { verified: boolean }) => c.verified).length;
+		const cb = page.locator('input[type="checkbox"]');
+		if (verifiedCount < latestDay.n_candidates) {
+			await cb.first().check();
+			await expect(page.locator('article[id], .text-center')).not.toHaveCount(0);
+			await cb.first().uncheck();
+			await expect(page.locator('article[id]')).toHaveCount(latestDay.n_candidates);
+		} else {
+			await expect(cb).toHaveCount(0);
+		}
 
 		expect(consoleErrors).toEqual([]);
 		expect(pageErrors).toEqual([]);
@@ -301,6 +311,33 @@ test.describe('smoke — brief detail interactions', () => {
 		await expect(strip.getByTestId('stat-verified')).toHaveText(String(verifiedCount));
 		await expect(strip.getByTestId('stat-themes')).toHaveText(String(brief.n_themes));
 		await expect(strip.getByTestId('stat-top-theme')).toContainText(brief.top_theme);
+	});
+
+	test('header metric grid sits beside the date, not below it (vertical-space layout guard)', async ({
+		page
+	}) => {
+		await page.goto(`/brief/${latestDay.date}`);
+
+		const date = page.getByTestId('brief-date');
+		const stats = page.getByTestId('brief-header-stats');
+		await expect(date).toBeVisible();
+		await expect(stats).toBeVisible();
+
+		const dateBox = await date.boundingBox();
+		const statsBox = await stats.boundingBox();
+		if (!dateBox || !statsBox) throw new Error('header date / stats bounding box missing');
+
+		// At desktop width the metric grid shares the date's horizontal band
+		// (vertical overlap) and sits to its right — the compact "metrics
+		// beside date" header. The old full-width strip rendered the grid
+		// BELOW the date (no overlap); this guards against regressing to that
+		// taller layout that wasted vertical space.
+		const verticalOverlap =
+			statsBox.y < dateBox.y + dateBox.height && dateBox.y < statsBox.y + statsBox.height;
+		expect(verticalOverlap, 'metric grid should share the date row').toBe(true);
+		expect(statsBox.x, 'metric grid should sit to the right of the date').toBeGreaterThan(
+			dateBox.x
+		);
 	});
 
 	test('signal-bar tooltip renders on hover (CSS regression guard)', async ({ page }) => {

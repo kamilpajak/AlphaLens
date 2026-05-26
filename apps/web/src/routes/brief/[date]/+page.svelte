@@ -32,74 +32,83 @@
 <div class="max-w-[1400px] mx-auto px-3 sm:px-4 py-6">
 	<!-- Header -->
 	<header class="border border-grid bg-bg-1 corners relative fade-up mb-5">
-		<!-- Top row: session label + date | day navigation -->
-		<div class="flex flex-wrap items-start justify-between gap-4 px-4 sm:px-6 pt-5 pb-4">
-			<div class="min-w-0">
+		<!-- Top band: session + date + day-nav on the left, a 2x2 metric grid on
+		     the right. The grid fills what used to be dead horizontal space
+		     beside the date, so the header collapses to roughly half its old
+		     height instead of stacking a full-width strip underneath. On mobile
+		     (flex-wrap) the grid drops below the date and spans full width. -->
+		<div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-4 px-4 sm:px-6 py-5">
+			<div class="min-w-0 flex flex-col">
 				<div class="text-[10px] uppercase tracking-[0.3em] text-fg-muted">// session</div>
-				<h1 class="font-display font-bold text-3xl sm:text-4xl lg:text-5xl text-amber tracking-tight mt-1">
+				<h1
+					data-testid="brief-date"
+					class="font-display font-bold text-3xl sm:text-4xl lg:text-5xl text-amber tracking-tight mt-1"
+				>
 					{data.brief.date}
 				</h1>
+				{#if prevDay || nextDay}
+					<div class="flex gap-2 mt-3">
+						{#if prevDay}
+							<a
+								href="/brief/{prevDay.date}"
+								class="inline-flex items-center gap-1 px-2 py-1 border border-grid hover:border-amber hover:text-amber text-[10px] uppercase tracking-widest text-fg-dim transition-colors"
+							>
+								<ChevronLeft class="size-3" /> {prevDay.date}
+							</a>
+						{/if}
+						{#if nextDay}
+							<a
+								href="/brief/{nextDay.date}"
+								class="inline-flex items-center gap-1 px-2 py-1 border border-grid hover:border-amber hover:text-amber text-[10px] uppercase tracking-widest text-fg-dim transition-colors"
+							>
+								{nextDay.date} <ChevronRight class="size-3" />
+							</a>
+						{/if}
+					</div>
+				{/if}
 			</div>
-			{#if prevDay || nextDay}
-				<div class="flex gap-2 shrink-0">
-					{#if prevDay}
-						<a
-							href="/brief/{prevDay.date}"
-							class="inline-flex items-center gap-1 px-2 py-1 border border-grid hover:border-amber hover:text-amber text-[10px] uppercase tracking-widest text-fg-dim transition-colors"
-						>
-							<ChevronLeft class="size-3" /> {prevDay.date}
-						</a>
-					{/if}
-					{#if nextDay}
-						<a
-							href="/brief/{nextDay.date}"
-							class="inline-flex items-center gap-1 px-2 py-1 border border-grid hover:border-amber hover:text-amber text-[10px] uppercase tracking-widest text-fg-dim transition-colors"
-						>
-							{nextDay.date} <ChevronRight class="size-3" />
-						</a>
-					{/if}
-				</div>
-			{/if}
-		</div>
 
-		<!-- Metric strip — full-width cells fill the header instead of the old
-		     cramped vertical stack. gap-px over bg-grid paints clean 1px
-		     separators in both axes, surviving the 4→2 column wrap on mobile. -->
-		<dl
-			data-testid="brief-header-stats"
-			class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-grid border-t border-grid"
-		>
-			<!-- dt-before-dd keeps the DOM/spec order (and a sensible "label, value"
-			     screen-reader read); flex-col-reverse renders the value on top. -->
-			<div class="bg-bg-1 px-4 sm:px-6 py-3 flex flex-col-reverse gap-0.5">
-				<dt class="text-[10px] uppercase tracking-widest text-fg-muted">candidates</dt>
-				<dd data-testid="stat-candidates" class="font-display font-bold text-2xl sm:text-3xl text-cyan">
-					{data.brief.n_candidates}
-				</dd>
-			</div>
-			<div class="bg-bg-1 px-4 sm:px-6 py-3 flex flex-col-reverse gap-0.5">
-				<dt class="text-[10px] uppercase tracking-widest text-fg-muted">verified</dt>
-				<dd data-testid="stat-verified" class="font-display font-bold text-2xl sm:text-3xl text-green">
-					{verifiedCount}
-				</dd>
-			</div>
-			<div class="bg-bg-1 px-4 sm:px-6 py-3 flex flex-col-reverse gap-0.5">
-				<dt class="text-[10px] uppercase tracking-widest text-fg-muted">themes</dt>
-				<dd data-testid="stat-themes" class="font-display font-bold text-2xl sm:text-3xl text-amber">
-					{data.brief.n_themes}
-				</dd>
-			</div>
-			<div class="bg-bg-1 px-4 sm:px-6 py-3 flex flex-col-reverse gap-0.5 min-w-0">
-				<dt class="text-[10px] uppercase tracking-widest text-fg-muted">top theme</dt>
-				<dd
-					data-testid="stat-top-theme"
-					class="font-display font-bold text-xl sm:text-2xl text-amber lowercase truncate"
-					title={data.brief.top_theme}
-				>
-					{data.brief.top_theme}
-				</dd>
-			</div>
-		</dl>
+			<!-- 2x2 metric grid. gap-px over bg-grid paints clean 1px separators;
+			     the outer border makes it a self-contained block beside the date.
+			     grow on mobile (full width when wrapped) → grow-0 from sm up. -->
+			<dl
+				data-testid="brief-header-stats"
+				class="grid grid-cols-2 gap-px bg-grid border border-grid grow sm:grow-0 sm:min-w-[18rem]"
+			>
+				<!-- dt-before-dd keeps the DOM/spec order (and a sensible "label,
+				     value" screen-reader read); flex-col-reverse renders the value
+				     on top. Column 1 = volume (candidates / verified), column 2 =
+				     themes (count / top), reading top-to-bottom per column. -->
+				<div class="bg-bg-1 px-4 py-2.5 flex flex-col-reverse gap-0.5">
+					<dt class="text-[10px] uppercase tracking-widest text-fg-muted">candidates</dt>
+					<dd data-testid="stat-candidates" class="font-display font-bold text-2xl text-cyan">
+						{data.brief.n_candidates}
+					</dd>
+				</div>
+				<div class="bg-bg-1 px-4 py-2.5 flex flex-col-reverse gap-0.5">
+					<dt class="text-[10px] uppercase tracking-widest text-fg-muted">themes</dt>
+					<dd data-testid="stat-themes" class="font-display font-bold text-2xl text-amber">
+						{data.brief.n_themes}
+					</dd>
+				</div>
+				<div class="bg-bg-1 px-4 py-2.5 flex flex-col-reverse gap-0.5">
+					<dt class="text-[10px] uppercase tracking-widest text-fg-muted">verified</dt>
+					<dd data-testid="stat-verified" class="font-display font-bold text-2xl text-green">
+						{verifiedCount}
+					</dd>
+				</div>
+				<div class="bg-bg-1 px-4 py-2.5 flex flex-col-reverse gap-0.5 min-w-0">
+					<dt class="text-[10px] uppercase tracking-widest text-fg-muted">top theme</dt>
+					<dd
+						data-testid="stat-top-theme"
+						class="font-display font-bold text-xl text-amber lowercase truncate"
+						title={data.brief.top_theme}
+					>
+						{data.brief.top_theme}
+					</dd>
+				</div>
+			</dl>
+		</div>
 
 		<!-- Catalyst footer — full width for the long headline -->
 		{#if firstCatalystUrl}
