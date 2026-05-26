@@ -4,15 +4,7 @@
 # npm (apps/web/ SvelteKit + Tailwind), github-actions (workflow pins).
 # Security alerts fire continuously regardless of the schedule below; the
 # `schedule` knobs control cadence of non-security version-update PRs only.
-#
-# `target-branch: feature/django-migration` — main is parked pending the
-# VPS shadow-deploy comparison test (see ADR 0009 / ADR 0011), so every
-# automated update stacks onto the same long-lived feature branch as the
-# rest of the workspace-split work.
-#
-# TODO: drop the `target-branch:` field (or revert it to `main`) once the
-# django-migration branch lands. Leaving it pinned would aim Dependabot
-# at a deleted branch — PRs would fail to open silently.
+# Update PRs target the default branch (main); no `target-branch:` override.
 
 version: 2
 updates:
@@ -23,7 +15,6 @@ updates:
   # ---------------------------------------------------------------------
   - package-ecosystem: "pip"
     directory: "/"
-    target-branch: "feature/django-migration"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -48,7 +39,6 @@ updates:
   # ---------------------------------------------------------------------
   - package-ecosystem: "npm"
     directory: "/apps/web"
-    target-branch: "feature/django-migration"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -72,7 +62,6 @@ updates:
   # ---------------------------------------------------------------------
   - package-ecosystem: "github-actions"
     directory: "/"
-    target-branch: "feature/django-migration"
     schedule:
       # For `interval: monthly`, Dependabot fires on the first occurrence
       # of the specified weekday of the month — NOT a day-of-month number

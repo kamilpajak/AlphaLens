@@ -6,13 +6,11 @@ name: build-django-image
 #
 # Trigger surface:
 #   - push to main → tags `sha-<short>` + `latest`
-#   - push to feature/django-migration → tag `sha-<short>` + branch alias
-#     so the VPS can pin a pre-merge image during the migration arc
 #   - workflow_dispatch → manual rebuild (e.g. after base-image CVE bump)
 
 on:
   push:
-    branches: [main, feature/django-migration]
+    branches: [main]
     paths:
       - 'apps/alphalens-django/**'
       # uv.lock + workspace root pyproject — the Dockerfile uses

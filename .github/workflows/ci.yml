@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, feature/django-migration]
+    branches: [main]
   pull_request:
-    branches: [main, feature/django-migration]
+    branches: [main]
   schedule:
     - cron: "0 2 * * 1"  # Weekly Monday 02:00 UTC — detect dependency drift
 
@@ -132,16 +132,14 @@ jobs:
 
       - name: Diff coverage gate (≥80% on PR-changed lines)
         # Only fires on pull_request events — diff-cover needs two refs to
-        # compare. On push to feature/django-migration there's no diff to
-        # measure (the push IS the merge); coverage XML still uploads for
-        # SonarCloud's main-branch baseline.
+        # compare. On push to main there's no diff to measure (the push IS
+        # the merge); coverage XML still uploads for SonarCloud's main-branch
+        # baseline.
         if: github.event_name == 'pull_request'
         # `--fail-under 80` blocks merge if PR-touched lines have <80%
         # coverage. The total-coverage figure stays informational; we
         # don't enforce a repo-wide threshold (research code is hard to
-        # cover beyond ~70% without simulating real backtest data). The
-        # base ref is feature/django-migration during the workspace-split
-        # arc; flip to origin/main once that merges.
+        # cover beyond ~70% without simulating real backtest data).
         run: |
           uv run diff-cover coverage.xml \
             --compare-branch origin/${{ github.base_ref }} \

@@ -5,8 +5,8 @@ name: CodeQL
 # research + alphalens-django) and the SvelteKit frontend (TypeScript).
 #
 # Triggers:
-#   - push to main / feature/django-migration: gate every merge.
-#   - PRs against main / feature/django-migration: surface findings inline.
+#   - push to main: gate every merge.
+#   - PRs against main: surface findings inline.
 #   - weekly schedule: catch new query-set rules added after a PR landed.
 #
 # Findings appear under the repo's Security tab → Code scanning. High/critical
@@ -15,9 +15,9 @@ name: CodeQL
 
 on:
   push:
-    branches: [main, feature/django-migration]
+    branches: [main]
   pull_request:
-    branches: [main, feature/django-migration]
+    branches: [main]
   schedule:
     - cron: "0 3 * * 1"  # Monday 03:00 UTC — offset from the CI workflow's 02:00
 
