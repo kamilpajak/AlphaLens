@@ -82,7 +82,6 @@ export interface Candidate {
 	brief_time_exit_weeks: number | null;
 	brief_time_exit_on_catalyst_failure_weeks: number | null;
 	brief_disaster_stop_pct: number | null;
-	brief_full_md: string | null;
 	brief_generated_at: string | null;
 }
 

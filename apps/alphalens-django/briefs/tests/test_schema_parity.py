@@ -98,16 +98,19 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     "brief_generated_at",
 )
 
-# Denormalised concat columns from the legacy SQLite cache. The list[str]
-# canonical columns (gates_passed, gates_failed, gates_unknown, also_in_themes,
-# theme_search_keywords) are kept as JSONField; the joined-string sibling
-# columns are recomputed in DRF serializers rather than stored.
+# Columns the legacy contract exposed that Django deliberately does not model.
+# The list[str] canonical columns (gates_passed, gates_failed, gates_unknown,
+# also_in_themes, theme_search_keywords) are kept as JSONField; the joined-string
+# sibling columns are recomputed in DRF serializers rather than stored.
+# brief_full_md was retired (2026-05-26): a deterministic concat of structured
+# brief_* fields that carried no unique information — see openapi_parity.py.
 INTENTIONALLY_DROPPED: frozenset[str] = frozenset(
     {
         "gates_passed_str",
         "gates_failed_str",
         "gates_unknown_str",
         "technicals_summary_str",
+        "brief_full_md",
     }
 )
 

@@ -805,9 +805,6 @@
                         "format": "double",
                         "nullable": true
                     },
-                    "brief_full_md": {
-                        "type": "string"
-                    },
                     "brief_generated_at": {
                         "type": "string",
                         "format": "date-time",
