@@ -22,7 +22,11 @@ ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 # weaken cookie/CSRF/PRNG signing in production. Detect the sentinel here
 # rather than removing the dev fallback from base.py (which would break the
 # test suite that runs under config.settings.dev without a .env file).
-if SECRET_KEY.startswith("dev-only"):
+# Exact-match the sentinel — operators sometimes pick keys with the
+# ``dev-only-`` prefix to mark rotated emergency credentials, and we don't
+# want to crash those legitimately set prod keys.
+_DEV_SECRET_KEY_SENTINEL = "dev-only-insecure-do-not-use-in-prod"
+if SECRET_KEY == _DEV_SECRET_KEY_SENTINEL:
     raise ImproperlyConfigured(
         "SECRET_KEY must be set in the production environment "
         "(currently using the base.py dev-only fallback)."

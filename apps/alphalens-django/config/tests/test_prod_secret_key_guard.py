@@ -33,8 +33,13 @@ class TestProdSecretKeyGuard(unittest.TestCase):
             if not k.startswith(("SECRET_KEY", "DEBUG", "ALLOWED_HOSTS"))
         }
         keep["ALLOWED_HOSTS"] = "localhost"  # base.py reads ALLOWED_HOSTS too
-        with patch.dict(os.environ, keep, clear=True):
-            # Drop cached settings so importlib re-reads from env.
+        # ``patch.dict(sys.modules)`` snapshots the module cache and restores
+        # it on context exit so transient settings re-imports don't poison
+        # downstream tests that depend on the cached config.settings.dev.
+        with (
+            patch.dict(os.environ, keep, clear=True),
+            patch.dict(sys.modules),
+        ):
             for mod in [m for m in list(sys.modules) if m.startswith("config.settings")]:
                 del sys.modules[mod]
             with self.assertRaises(ImproperlyConfigured) as ctx:
