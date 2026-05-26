@@ -46,6 +46,11 @@
 
 	const topCandidates = $derived(data.latestBrief?.candidates.slice(0, 8) ?? []);
 
+	// Cap the CAPTURED.SESSIONS grid to the most recent runs; the full
+	// history is reachable via the "all briefs" link. The index is newest-first.
+	const MAX_DAY_TILES = 6;
+	const dayTiles = $derived(data.days.slice(0, MAX_DAY_TILES));
+
 	type Tone = 'amber' | 'cyan' | 'green' | 'magenta';
 	const stats: { icon: typeof Calendar; label: string; value: string; tone: Tone }[] = $derived([
 		{ icon: Calendar, label: 'days', value: String(data.days.length), tone: 'amber' },
@@ -150,8 +155,8 @@
 			</div>
 		{/if}
 
-		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-			{#each data.days as day, i}
+		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" data-testid="session-tiles">
+			{#each dayTiles as day, i (day.date)}
 				<a
 					href="/brief/{day.date}"
 					class="group border border-grid bg-bg-1 p-4 hover:bg-bg-2 hover:border-amber transition-all fade-up block"
