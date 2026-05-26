@@ -146,7 +146,7 @@
 		</div>
 
 		<div class="col-span-12 lg:col-span-4">
-			<div class="text-[10px] uppercase tracking-widest text-fg-muted mb-2">verification.gates</div>
+			<div class="text-[10px] uppercase tracking-widest text-green mb-2">verification.gates</div>
 			<div class="flex flex-wrap gap-1.5">
 				{#each c.gates_passed as g}
 					<GatePill name={g} status="passed" />
