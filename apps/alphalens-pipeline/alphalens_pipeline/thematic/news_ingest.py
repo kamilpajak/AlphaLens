@@ -98,6 +98,41 @@ def _attach_cluster_size_to_extra(extra_str: str, cluster_size: int) -> str:
     return json.dumps(payload)
 
 
+def _assign_cluster_ids(titles: list[str]) -> list[int]:
+    """Greedy pairwise union-find on Jaccard-similar titles.
+
+    Returns a list of cluster ids aligned to the input order. Each title is
+    seeded as its own cluster; subsequent titles join the first earlier
+    cluster whose seed is :func:`text_similarity.titles_similar` to them.
+    """
+    n = len(titles)
+    cluster_id = [-1] * n
+    next_cid = 0
+    for i in range(n):
+        if cluster_id[i] != -1:
+            continue
+        cluster_id[i] = next_cid
+        for j in range(i + 1, n):
+            if cluster_id[j] == -1 and text_similarity.titles_similar(titles[i], titles[j]):
+                cluster_id[j] = next_cid
+        next_cid += 1
+    return cluster_id
+
+
+def _collapse_cluster_to_representative(cluster: pd.DataFrame) -> dict:
+    """Pick the (earliest, highest-priority-source) member as the cluster rep.
+
+    Stamps ``cluster_size`` into the rep's ``extra`` JSON and records
+    ``_cluster_rank_ts = max(member.timestamp)`` so downstream cap-by-recency
+    lets breaking news compete against amplified stories.
+    """
+    cluster_sorted = cluster.sort_values(["timestamp", "_source_rank"], ascending=[True, True])
+    rep = cluster_sorted.iloc[0].copy()
+    rep["extra"] = _attach_cluster_size_to_extra(rep.get("extra", "{}"), len(cluster))
+    rep["_cluster_rank_ts"] = cluster["timestamp"].max()
+    return rep.to_dict()
+
+
 def _cluster_same_day_lexical(df: pd.DataFrame) -> pd.DataFrame:
     """Collapse syndicated echoes published within the same UTC date.
 
@@ -120,30 +155,10 @@ def _cluster_same_day_lexical(df: pd.DataFrame) -> pd.DataFrame:
     out_rows: list[dict] = []
     for _, raw_day_group in df.groupby("_date", sort=False):
         day_group = raw_day_group.reset_index(drop=True)
-        n = len(day_group)
-        cluster_id = [-1] * n
-        next_cid = 0
         titles = day_group["title"].fillna("").tolist()
-        for i in range(n):
-            if cluster_id[i] != -1:
-                continue
-            cluster_id[i] = next_cid
-            for j in range(i + 1, n):
-                if cluster_id[j] != -1:
-                    continue
-                if text_similarity.titles_similar(titles[i], titles[j]):
-                    cluster_id[j] = next_cid
-            next_cid += 1
-
-        day_group["_cluster_id"] = cluster_id
+        day_group["_cluster_id"] = _assign_cluster_ids(titles)
         for _, cluster in day_group.groupby("_cluster_id"):
-            cluster_sorted = cluster.sort_values(
-                ["timestamp", "_source_rank"], ascending=[True, True]
-            )
-            rep = cluster_sorted.iloc[0].copy()
-            rep["extra"] = _attach_cluster_size_to_extra(rep.get("extra", "{}"), len(cluster))
-            rep["_cluster_rank_ts"] = cluster["timestamp"].max()
-            out_rows.append(rep.to_dict())
+            out_rows.append(_collapse_cluster_to_representative(cluster))
 
     out = pd.DataFrame(out_rows)
     if out.empty:
