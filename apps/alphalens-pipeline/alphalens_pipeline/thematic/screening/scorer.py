@@ -264,9 +264,7 @@ def _build_ohlcv_loader() -> Callable[[str, date], pd.DataFrame]:
 # ---- Main entry point ---------------------------------------------------
 
 
-def _collect_universe(
-    candidates: pd.DataFrame, peer_cache: dict[int, tuple[list[str], str]]
-) -> set[str]:
+def _collect_universe(candidates: pd.DataFrame) -> set[str]:
     """Build the EDGAR preload universe: candidate tickers + each industry's
     raw (unfiltered) peers across both 4-digit and 3-digit cohorts.
 
@@ -275,7 +273,7 @@ def _collect_universe(
     needs price + shares for every ticker in order to compute mcap.
     The actual cohort selection (with filter) happens in
     ``_resolve_industry`` AFTER the fetcher is built, and is what
-    populates ``peer_cache`` for downstream signal scorers.
+    populates the per-candidate peer cache for downstream signal scorers.
     """
     universe: set[str] = set()
     for _, cand in candidates.iterrows():
@@ -438,7 +436,7 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
         return candidates.copy()
 
     peer_cache: dict[int, tuple[list[str], str]] = {}
-    universe = _collect_universe(candidates, peer_cache)
+    universe = _collect_universe(candidates)
 
     feature_fetcher = _build_feature_fetcher(sorted(universe))
     ohlcv_loader = _build_ohlcv_loader()

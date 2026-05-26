@@ -204,7 +204,7 @@ def _peek_dates(parquet_path: Path, date_col: str) -> pd.Series | None:
     try:
         from pyarrow.lib import ArrowInvalid
     except ImportError:  # pragma: no cover - pyarrow is a hard repo dep
-        ArrowInvalid = Exception  # type: ignore[assignment,misc]
+        ArrowInvalid = Exception  # type: ignore[assignment,misc]  # NOSONAR python:S117 — exception class alias must keep PascalCase
     schema_mismatch = (KeyError, ValueError, ArrowInvalid)
 
     try:

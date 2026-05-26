@@ -5,7 +5,11 @@ CF Access JWT verification is mandatory in this environment — the
 that non-DRF views (admin, healthz) also see the authenticated user.
 """
 
-from .base import *  # noqa: F401,F403
+# Django settings pattern: derived modules re-export every name from base so
+# Django's lazy settings loader sees them at module scope. Star-import is
+# canonical here; the explicit re-import below names the symbols this file
+# actually references so static checkers don't flag them as undefined.
+from .base import *  # noqa: F401,F403  # NOSONAR python:S2208
 from .base import MIDDLEWARE, env
 
 DEBUG = False
