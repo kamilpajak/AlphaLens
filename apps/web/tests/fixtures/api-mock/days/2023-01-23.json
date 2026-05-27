@@ -82,11 +82,25 @@
       "brief_supply_chain_md": "C3.ai's platform includes pre-built enterprise AI applications specifically for supply chain optimization, enabling predictive maintenance and fraud detection. This focus allows companies to leverage AI for improved operational efficiency and resilience within their supply chains. The company's offerings are designed to integrate AI into core business processes, addressing complex supply chain challenges through data analytics.",
       "brief_bear_summary_md": "Key risks include negative technical momentum, with the MA200 slope at -0.291%/day and the stock 45.6% below its 52-week high. The company's FCFF yield is unavailable, and its valuation metrics, such as P/S of 5.9 and EV/Rev of 2.8, are noted.",
       "brief_catalyst_failure_exit": "The thesis relies on the Microsoft and OpenAI partnership, announced on 2023-01-23, driving increased adoption or strategic opportunities for C3.ai's enterprise AI solutions. Failure to observe such an impact would invalidate the position.",
-      "brief_entry_price_note": "The RSI is 71, indicating overbought conditions.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 24.5,
+        "atr": 1.22,
+        "disaster_stop": 20.23,
+        "suggested_size_pct": 12.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 23.89, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 23.04, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 22.06, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 25.72, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 27.18, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 28.77, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## AI \u2014 C3.ai, Inc. (conf 1/5)\n\n**Theme**: enterprise AI | **Industry**: Application Software (Technology)\n\n**Catalyst**: Microsoft and OpenAI extend partnership (2023-01-23) https://blogs.microsoft.com/blog/2023/01/23/microsoftandopenaiextendpartnership/\n\n**Pattern**: deep drawdown \u00b7 -46% off 52w high \u00b7 MA200 -8%, slope -0.29%/d\n\n**Thesis**: C3.ai, Inc. (AI) provides enterprise AI applications for areas like supply chain optimization, aligning with the broader enterprise AI theme reinforced by the Microsoft and OpenAI partnership announced on 2023-01-23.\n\n**Supply chain**: C3.ai's platform includes pre-built enterprise AI applications specifically for supply chain optimization, enabling predictive maintenance and fraud detection. This focus allows companies to leverage AI for improved operational efficiency and resilience within their supply chains. The company's offerings are designed to integrate AI into core business processes, addressing complex supply chain challenges through data analytics.\n\n**Bear case**: Key risks include negative technical momentum, with the MA200 slope at -0.291%/day and the stock 45.6% below its 52-week high. The company's FCFF yield is unavailable, and its valuation metrics, such as P/S of 5.9 and EV/Rev of 2.8, are noted.\n\n**Setup**: entry The RSI is 71, indicating overbought conditions. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: The thesis relies on the Microsoft and OpenAI partnership, announced on 2023-01-23, driving increased adoption or strategic opportunities for C3.ai's enterprise AI solutions. Failure to observe such an impact would invalidate the position.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS 5.9 \u00b7 ROE -25.0% |\n| Valuation (sector pctile) | pctile 52 |\n| Financials age | 46d |\n| Technicals | RSI 71 / MA50 +17.2% / MA200 -8.5% (slope -0.291%/d) / 52w high -45.6% / 52w low +41.7% / ATR 5.0% / volZ 2.2 |\n| Verified gates | press |\n",
       "brief_generated_at": "2026-05-18T14:24:13.186565+00:00"
     },
@@ -165,11 +179,25 @@
       "brief_supply_chain_md": "Elastic N.V. (ESTC) plays a foundational role in the enterprise AI supply chain by offering vector search capabilities within its Elasticsearch platform. These capabilities are critical for enterprises developing Retrieval-Augmented Generation (RAG) AI applications, enabling efficient semantic search over proprietary datasets to augment large language models. The extended partnership between Microsoft and OpenAI, announced on 2023-01-23, underscores the growing enterprise adoption of AI, which is expected to increase demand for core infrastructure components like Elastic's vector search technology.",
       "brief_bear_summary_md": "Elastic N.V. faces risks including a weak Phase D signal alignment (1/5), significant negative technical momentum with its MA200 down 17.1% and a negative slope, and no reported insider opportunistic buys. The company's valuation metrics are also in the bottom half of its sector.",
       "brief_catalyst_failure_exit": "Exit if enterprise AI adoption, specifically for RAG applications leveraging vector search, does not accelerate following the Microsoft and OpenAI partnership extension, or if Elastic fails to demonstrate market share capture in this segment within the next 8 weeks.",
-      "brief_entry_price_note": "The current price reflects a 40.3% drawdown from its 52-week high and a 17.1% distance below its MA200.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 58.4,
+        "atr": 2.92,
+        "disaster_stop": 48.18,
+        "suggested_size_pct": 10.5,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 56.94, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 54.9, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 52.56, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 61.32, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 64.82, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 68.62, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## ESTC \u2014 Elastic N.V. (conf 1/5)\n\n**Theme**: enterprise AI | **Industry**: Application Software (Technology)\n\n**Catalyst**: Microsoft and OpenAI extend partnership (2023-01-23) https://blogs.microsoft.com/blog/2023/01/23/microsoftandopenaiextendpartnership/\n\n**Pattern**: deep drawdown \u00b7 -40% off 52w high \u00b7 MA200 -17%, slope -0.24%/d\n\n**Thesis**: Elastic N.V. (ESTC) is positioned in enterprise AI through its vector search capabilities for RAG AI applications, triggered by the Microsoft and OpenAI partnership extension, though overall signal alignment is weak.\n\n**Supply chain**: Elastic N.V. (ESTC) plays a foundational role in the enterprise AI supply chain by offering vector search capabilities within its Elasticsearch platform. These capabilities are critical for enterprises developing Retrieval-Augmented Generation (RAG) AI applications, enabling efficient semantic search over proprietary datasets to augment large language models. The extended partnership between Microsoft and OpenAI, announced on 2023-01-23, underscores the growing enterprise adoption of AI, which is expected to increase demand for core infrastructure components like Elastic's vector search technology.\n\n**Bear case**: Elastic N.V. faces risks including a weak Phase D signal alignment (1/5), significant negative technical momentum with its MA200 down 17.1% and a negative slope, and no reported insider opportunistic buys. The company's valuation metrics are also in the bottom half of its sector.\n\n**Setup**: entry The current price reflects a 40.3% drawdown from its 52-week high and a 17.1% distance below its MA200. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit if enterprise AI adoption, specifically for RAG applications leveraging vector search, does not accelerate following the Microsoft and OpenAI partnership extension, or if Elastic fails to demonstrate market share capture in this segment within the next 8 weeks.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS 5.6 \u00b7 ROE -61.1% |\n| Valuation (sector pctile) | pctile 38 |\n| Financials age | 52d |\n| Technicals | RSI 61 / MA50 +4.0% / MA200 -17.1% (slope -0.237%/d) / 52w high -40.3% / 52w low +19.5% / ATR 5.0% / volZ 2.2 |\n| Verified gates | press |\n",
       "brief_generated_at": "2026-05-18T14:24:20.860897+00:00"
     },
@@ -248,11 +276,25 @@
       "brief_supply_chain_md": "Pure Storage provides high-performance, all-flash storage arrays critical for enterprise AI model training and inference workloads. These solutions deliver the necessary data throughput and low latency required to process large datasets efficiently, directly supporting the infrastructure demands of advanced AI initiatives. The extended partnership between Microsoft and OpenAI, announced on 2023-01-23, underscores the growing need for robust data infrastructure to power AI development and deployment, which Pure Storage's offerings address.",
       "brief_bear_summary_md": "PSTG exhibits weak Phase D signal alignment (1/5 score), with valuation metrics and fundamentals freshness largely unavailable. Technicals show the stock is a momentum laggard, trading -5.1% below its MA50 and -3.8% below its MA200, with a negative MA200 slope. Insider opportunistic buys are $0k.",
       "brief_catalyst_failure_exit": "If the Microsoft and OpenAI partnership extension, announced 2023-01-23, does not translate into tangible demand for high-performance storage solutions from Pure Storage, the investment thesis would be invalidated.",
-      "brief_entry_price_note": "The stock is -5.1% below its MA50, -3.8% below its MA200, and -24.9% from its 52-week high.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 31.2,
+        "atr": 1.0,
+        "disaster_stop": 27.7,
+        "suggested_size_pct": 15.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 30.7, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 30.0, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 29.2, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 32.2, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 33.4, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 34.7, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## PSTG \u2014 Pure Storage, Inc. (conf 1/5)\n\n**Theme**: enterprise AI | **Industry**: Computer Hardware (Technology)\n\n**Catalyst**: Microsoft and OpenAI extend partnership (2023-01-23) https://blogs.microsoft.com/blog/2023/01/23/microsoftandopenaiextendpartnership/\n\n**Pattern**: neutral \u00b7 -25% off 52w high \u00b7 MA200 -4%, slope -0.13%/d\n\n**Thesis**: Pure Storage, Inc. (PSTG) is positioned to benefit from increased enterprise AI adoption, driven by high-performance storage demand, as evidenced by the Microsoft and OpenAI partnership extension on 2023-01-23.\n\n**Supply chain**: Pure Storage provides high-performance, all-flash storage arrays critical for enterprise AI model training and inference workloads. These solutions deliver the necessary data throughput and low latency required to process large datasets efficiently, directly supporting the infrastructure demands of advanced AI initiatives. The extended partnership between Microsoft and OpenAI, announced on 2023-01-23, underscores the growing need for robust data infrastructure to power AI development and deployment, which Pure Storage's offerings address.\n\n**Bear case**: PSTG exhibits weak Phase D signal alignment (1/5 score), with valuation metrics and fundamentals freshness largely unavailable. Technicals show the stock is a momentum laggard, trading -5.1% below its MA50 and -3.8% below its MA200, with a negative MA200 slope. Insider opportunistic buys are $0k.\n\n**Setup**: entry The stock is -5.1% below its MA50, -3.8% below its MA200, and -24.9% from its 52-week high. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: If the Microsoft and OpenAI partnership extension, announced 2023-01-23, does not translate into tangible demand for high-performance storage solutions from Pure Storage, the investment thesis would be invalidated.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS n/a \u00b7 ROE n/a% |\n| Valuation (sector pctile) | pctile n/a |\n| Technicals | RSI 49 / MA50 -5.1% / MA200 -3.8% (slope -0.129%/d) / 52w high -24.9% / 52w low +21.1% / ATR 3.2% / volZ 2.6 |\n| Verified gates | press |\n",
       "brief_generated_at": "2026-05-18T14:24:27.028221+00:00"
     }

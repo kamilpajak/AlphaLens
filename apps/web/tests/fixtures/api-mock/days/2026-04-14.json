@@ -91,11 +91,25 @@
       "brief_supply_chain_md": "The 2026-04-14 catalyst NVIDIA Launches Ising accelerates the path to useful quantum computers. As a provider of superconducting quantum processors and cloud access, RGTI is positioned as a direct hardware and infrastructure beneficiary of NVIDIA's open AI models driving quantum utility.",
       "brief_bear_summary_md": "Extreme valuation risks exist with a P/S of 790.5 and EV/Rev of 729.9. Additionally, the stock is a momentum laggard trading 70.1% below its 52-week high and 25.1% below its MA200, lacking insider buy corroboration ($0k recent buys).",
       "brief_catalyst_failure_exit": "Exit if NVIDIA's Ising models fail to integrate with superconducting hardware or if competitors announce superior quantum cloud service adoption.",
-      "brief_entry_price_note": "Enter near current levels; RSI is neutral at 59, but watch for high volatility given ATR of 7.1%.",
-      "brief_position_pct": 2.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 18.6,
+        "atr": 1.32,
+        "disaster_stop": 13.98,
+        "suggested_size_pct": 16.2,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 17.94, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 17.02, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 15.96, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 19.92, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 21.5, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 23.22, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## RGTI \u2014 Rigetti Computing, Inc. (rank 1/6 \u00b7 conf 4/5 \u00b7 catalyst 0.76 \u00b7 reversal)\n\n**Theme**: quantum_computing | **Industry**: Computer Hardware (Technology) | **also in**: quantum_error_correction\n\n**Catalyst**: NVIDIA Launches Ising, the Worlds First Open AI Models to Accelerate the Path to Useful Quantum Computers (2026-04-14) https://nvidianews.nvidia.com/news/nvidia-launches-ising-the-worlds-first-open-ai-models-to-accelerate-the-path-to-useful-quantum-computers\n\n**Pattern**: deep drawdown \u00b7 -70% off 52w high \u00b7 MA200 -25%, slope +0.07%/d\n\n**Thesis**: RGTI benefits from the quantum computing theme by providing full-stack access to superconducting quantum processors via its Quantum Cloud Services.\n\n**Supply chain**: The 2026-04-14 catalyst NVIDIA Launches Ising accelerates the path to useful quantum computers. As a provider of superconducting quantum processors and cloud access, RGTI is positioned as a direct hardware and infrastructure beneficiary of NVIDIA's open AI models driving quantum utility.\n\n**Bear case**: Extreme valuation risks exist with a P/S of 790.5 and EV/Rev of 729.9. Additionally, the stock is a momentum laggard trading 70.1% below its 52-week high and 25.1% below its MA200, lacking insider buy corroboration ($0k recent buys).\n\n**Setup**: entry Enter near current levels; RSI is neutral at 59, but watch for high volatility given ATR of 7.1%. | size 2.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit if NVIDIA's Ising models fail to integrate with superconducting hardware or if competitors announce superior quantum cloud service adoption.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS 790.5 \u00b7 ROE -39.6% |\n| Valuation (sector pctile) | pctile 2 |\n| Catalyst strength | 0.76 strong (product_launch) |\n| Reversal setup | yes |\n| Financials age | 41d |\n| Technicals | RSI 59 / MA50 +5.5% / MA200 -25.1% (slope +0.070%/d) / 52w high -70.1% / 52w low +108.0% / ATR 7.1% / volZ 4.0 |\n| Verified gates | etf,tenk,press |\n",
       "brief_generated_at": "2026-05-18T15:49:10.700261+00:00"
     },
@@ -180,11 +194,25 @@
       "brief_supply_chain_md": "NVIDIA's launch of Ising AI models to accelerate quantum computing (2026-04-14) acts as a direct catalyst. As a specialist in quantum annealing technology, QBTS is positioned to benefit from accelerated software and AI integration, potentially driving increased adoption of its hardware and optimization solutions.",
       "brief_bear_summary_md": "Extreme valuation risks exist with a P/S of 253.1 and EV/Rev of 218.6. Additionally, trading 62.1% below its 52w high and 24.2% below its MA200 indicates momentum laggard status, lacking fundamental corroboration.",
       "brief_catalyst_failure_exit": "Exit if NVIDIA's Ising models fail to integrate with quantum annealing architectures or if competitors announce superior hardware compatibility.",
-      "brief_entry_price_note": "RSI is neutral at 55; wait for a pullback or technical confirmation above the MA50.",
-      "brief_position_pct": 2.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 9.8,
+        "atr": 0.62,
+        "disaster_stop": 7.63,
+        "suggested_size_pct": 14.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 9.49, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 9.06, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 8.56, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 10.42, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 11.16, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 11.97, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## QBTS \u2014 D-Wave Quantum Inc. (rank 2/6 \u00b7 conf 4/5 \u00b7 catalyst 0.76 \u00b7 reversal)\n\n**Theme**: quantum_computing | **Industry**: Computer Hardware (Technology)\n\n**Catalyst**: NVIDIA Launches Ising, the Worlds First Open AI Models to Accelerate the Path to Useful Quantum Computers (2026-04-14) https://nvidianews.nvidia.com/news/nvidia-launches-ising-the-worlds-first-open-ai-models-to-accelerate-the-path-to-useful-quantum-computers\n\n**Pattern**: deep drawdown \u00b7 -62% off 52w high \u00b7 MA200 -24%, slope -0.03%/d\n\n**Thesis**: QBTS benefits from the quantum computing theme as a provider of quantum annealing hardware and software for complex optimization problems.\n\n**Supply chain**: NVIDIA's launch of Ising AI models to accelerate quantum computing (2026-04-14) acts as a direct catalyst. As a specialist in quantum annealing technology, QBTS is positioned to benefit from accelerated software and AI integration, potentially driving increased adoption of its hardware and optimization solutions.\n\n**Bear case**: Extreme valuation risks exist with a P/S of 253.1 and EV/Rev of 218.6. Additionally, trading 62.1% below its 52w high and 24.2% below its MA200 indicates momentum laggard status, lacking fundamental corroboration.\n\n**Setup**: entry RSI is neutral at 55; wait for a pullback or technical confirmation above the MA50. | size 2.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit if NVIDIA's Ising models fail to integrate with quantum annealing architectures or if competitors announce superior hardware compatibility.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS 253.1 \u00b7 ROE -41.7% |\n| Valuation (sector pctile) | pctile 3 |\n| Catalyst strength | 0.76 strong (product_launch) |\n| Reversal setup | yes |\n| Financials age | 47d |\n| Technicals | RSI 55 / MA50 -2.9% / MA200 -24.2% (slope -0.026%/d) / 52w high -62.1% / 52w low +172.0% / ATR 7.5% / volZ 3.7 |\n| Verified gates | etf,tenk,press |\n",
       "brief_generated_at": "2026-05-18T15:49:43.007998+00:00"
     },
@@ -269,11 +297,25 @@
       "brief_supply_chain_md": "NVIDIA's launch of Ising open AI models to accelerate quantum computing development acts as a direct catalyst. As NVIDIA lowers the barrier to useful quantum applications, QUBT's ready-to-run quantum software and photonic hardware for optimization problems will likely see increased integration and demand within the expanding quantum ecosystem.",
       "brief_bear_summary_md": "Extreme valuation (P/S 2670.1). Being 67.1% below 52w high indicates momentum laggard status; bargain conclusion requires fundamental corroboration, which is lacking given n/a FCFF yield and negative MA200 slope (-0.308%/d).",
       "brief_catalyst_failure_exit": "Exit if NVIDIA's Ising models fail to integrate with QUBT's photonic hardware or if competitors release superior ready-to-run quantum optimization software.",
-      "brief_entry_price_note": "RSI is 60; wait for a slight pullback to avoid entering near local overbought levels.",
-      "brief_position_pct": 2.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 14.2,
+        "atr": 0.95,
+        "disaster_stop": 10.88,
+        "suggested_size_pct": 13.5,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 13.73, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 13.06, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 12.3, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 15.15, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 16.29, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 17.53, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## QUBT \u2014 Quantum Computing Inc. (rank 3/6 \u00b7 conf 4/5 \u00b7 catalyst 0.76 \u00b7 reversal)\n\n**Theme**: quantum_computing | **Industry**: Computer Hardware (Technology)\n\n**Catalyst**: NVIDIA Launches Ising, the Worlds First Open AI Models to Accelerate the Path to Useful Quantum Computers (2026-04-14) https://nvidianews.nvidia.com/news/nvidia-launches-ising-the-worlds-first-open-ai-models-to-accelerate-the-path-to-useful-quantum-computers\n\n**Pattern**: deep drawdown \u00b7 -67% off 52w high \u00b7 MA200 -39%, slope -0.31%/d\n\n**Thesis**: QUBT's photonic quantum hardware and optimization software position it to benefit directly from the quantum computing theme.\n\n**Supply chain**: NVIDIA's launch of Ising open AI models to accelerate quantum computing development acts as a direct catalyst. As NVIDIA lowers the barrier to useful quantum applications, QUBT's ready-to-run quantum software and photonic hardware for optimization problems will likely see increased integration and demand within the expanding quantum ecosystem.\n\n**Bear case**: Extreme valuation (P/S 2670.1). Being 67.1% below 52w high indicates momentum laggard status; bargain conclusion requires fundamental corroboration, which is lacking given n/a FCFF yield and negative MA200 slope (-0.308%/d).\n\n**Setup**: entry RSI is 60; wait for a slight pullback to avoid entering near local overbought levels. | size 2.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit if NVIDIA's Ising models fail to integrate with QUBT's photonic hardware or if competitors release superior ready-to-run quantum optimization software.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS 2670.1 \u00b7 ROE -1.2% |\n| Valuation (sector pctile) | pctile 1 |\n| Catalyst strength | 0.76 strong (product_launch) |\n| Reversal setup | yes |\n| Financials age | 43d |\n| Technicals | RSI 60 / MA50 +4.1% / MA200 -39.2% (slope -0.308%/d) / 52w high -67.1% / 52w low +38.2% / ATR 6.6% / volZ 3.8 |\n| Verified gates | tenk,press |\n",
       "brief_generated_at": "2026-05-18T15:50:17.515463+00:00"
     },
@@ -359,11 +401,25 @@
       "brief_supply_chain_md": "C3.ai operates in the application software layer, providing enterprise AI applications and a generative AI platform that orchestrates multiple foundational models. This positions it to leverage advancements in underlying AI models, such as those announced by NVIDIA, to deliver enhanced business solutions. Its platform approach allows it to integrate and utilize new open AI models, potentially accelerating the path to useful quantum computers for its enterprise clients.",
       "brief_bear_summary_md": "Risks include significant technical underperformance with MA200 distance at -46.5% and 52w high distance at -71.2%. The company also lacks a reported FCFF yield, and its valuation metrics like P/S of 4.0 and EV/Rev of 1.9, while moderate in sector percentile, could still be pressured.",
       "brief_catalyst_failure_exit": "Exit if NVIDIA's Ising models or similar foundational AI advancements do not translate into increased adoption or revenue for C3.ai's enterprise AI applications, or if the market fails to recognize the synergy.",
-      "brief_entry_price_note": "Current price is -71.2% from its 52-week high and -46.5% from its MA200, indicating a momentum laggard.",
-      "brief_position_pct": 1.5,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 21.4,
+        "atr": 1.5,
+        "disaster_stop": 16.15,
+        "suggested_size_pct": 11.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 20.65, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 19.6, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 18.4, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 22.9, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 24.7, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 26.65, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## AI \u2014 C3.ai, Inc. (rank 4/6 \u00b7 conf 3/5 \u00b7 catalyst 0.76)\n\n**Theme**: AI_models | **Industry**: Application Software (Technology)\n\n**Catalyst**: NVIDIA Launches Ising, the Worlds First Open AI Models to Accelerate the Path to Useful Quantum Computers (2026-04-14) https://nvidianews.nvidia.com/news/nvidia-launches-ising-the-worlds-first-open-ai-models-to-accelerate-the-path-to-useful-quantum-computers\n\n**Pattern**: deep drawdown \u00b7 -71% off 52w high \u00b7 MA200 -46%, slope -0.48%/d\n\n**Thesis**: C3.ai, an enterprise AI application provider, is aligned with the AI_models theme, with NVIDIA's new open AI models for quantum computing serving as a potential catalyst.\n\n**Supply chain**: C3.ai operates in the application software layer, providing enterprise AI applications and a generative AI platform that orchestrates multiple foundational models. This positions it to leverage advancements in underlying AI models, such as those announced by NVIDIA, to deliver enhanced business solutions. Its platform approach allows it to integrate and utilize new open AI models, potentially accelerating the path to useful quantum computers for its enterprise clients.\n\n**Bear case**: Risks include significant technical underperformance with MA200 distance at -46.5% and 52w high distance at -71.2%. The company also lacks a reported FCFF yield, and its valuation metrics like P/S of 4.0 and EV/Rev of 1.9, while moderate in sector percentile, could still be pressured.\n\n**Setup**: entry Current price is -71.2% from its 52-week high and -46.5% from its MA200, indicating a momentum laggard. | size 1.5% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit if NVIDIA's Ising models or similar foundational AI advancements do not translate into increased adoption or revenue for C3.ai's enterprise AI applications, or if the market fails to recognize the synergy.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS 4.0 \u00b7 ROE -60.4% |\n| Valuation (sector pctile) | pctile 51 |\n| Catalyst strength | 0.76 strong (product_launch) |\n| Reversal setup | no |\n| Financials age | 34d |\n| Technicals | RSI 43 / MA50 -10.1% / MA200 -46.5% (slope -0.475%/d) / 52w high -71.2% / 52w low +8.2% / ATR 5.8% / volZ 0.1 |\n| Verified gates | press |\n",
       "brief_generated_at": "2026-05-18T15:50:24.105102+00:00"
     },
@@ -449,11 +505,25 @@
       "brief_supply_chain_md": "SoundHound AI operates in the application software segment, specializing in the development and deployment of proprietary voice-enabled artificial intelligence models. These models are integrated into critical sectors such as automotive, restaurant, and customer service, providing the interface layer for AI interaction. The company's position is as a direct provider of specialized AI solutions, leveraging advancements in underlying AI infrastructure to deliver end-user applications.",
       "brief_bear_summary_md": "Key risks include a high valuation with a P/S of 17.4 and EV/Rev of 16.3, placing it in the 4th percentile for its sector. Technicals show significant underperformance, with the stock down 41.4% from its MA200 and 67.4% from its 52-week high, indicating strong negative momentum.",
       "brief_catalyst_failure_exit": "The thesis would be invalidated if NVIDIA's Ising open AI models do not translate into tangible benefits or adoption for SoundHound's proprietary voice AI applications, or if competitive pressures negate any potential gains from such industry advancements.",
-      "brief_entry_price_note": "The current price is significantly below its 52-week high (-67.4%) and MA200 (-41.4%).",
-      "brief_position_pct": 1.5,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 6.4,
+        "atr": 0.48,
+        "disaster_stop": 4.72,
+        "suggested_size_pct": 9.5,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 6.16, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 5.82, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 5.44, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 6.88, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 7.46, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 8.08, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## SOUN \u2014 SoundHound AI, Inc. (rank 5/6 \u00b7 conf 3/5 \u00b7 catalyst 0.76)\n\n**Theme**: AI_models | **Industry**: Application Software (Technology)\n\n**Catalyst**: NVIDIA Launches Ising, the Worlds First Open AI Models to Accelerate the Path to Useful Quantum Computers (2026-04-14) https://nvidianews.nvidia.com/news/nvidia-launches-ising-the-worlds-first-open-ai-models-to-accelerate-the-path-to-useful-quantum-computers\n\n**Pattern**: deep drawdown \u00b7 -67% off 52w high \u00b7 MA200 -41%, slope -0.13%/d\n\n**Thesis**: SoundHound AI, Inc. builds and deploys proprietary voice-enabled AI models for various applications, with NVIDIA's launch of Ising open AI models serving as a potential industry catalyst.\n\n**Supply chain**: SoundHound AI operates in the application software segment, specializing in the development and deployment of proprietary voice-enabled artificial intelligence models. These models are integrated into critical sectors such as automotive, restaurant, and customer service, providing the interface layer for AI interaction. The company's position is as a direct provider of specialized AI solutions, leveraging advancements in underlying AI infrastructure to deliver end-user applications.\n\n**Bear case**: Key risks include a high valuation with a P/S of 17.4 and EV/Rev of 16.3, placing it in the 4th percentile for its sector. Technicals show significant underperformance, with the stock down 41.4% from its MA200 and 67.4% from its 52-week high, indicating strong negative momentum.\n\n**Setup**: entry The current price is significantly below its 52-week high (-67.4%) and MA200 (-41.4%). | size 1.5% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: The thesis would be invalidated if NVIDIA's Ising open AI models do not translate into tangible benefits or adoption for SoundHound's proprietary voice AI applications, or if competitive pressures negate any potential gains from such industry advancements.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS 17.4 \u00b7 ROE -3.0% |\n| Valuation (sector pctile) | pctile 4 |\n| Catalyst strength | 0.76 strong (product_launch) |\n| Reversal setup | no |\n| Financials age | 43d |\n| Technicals | RSI 49 / MA50 -7.0% / MA200 -41.4% (slope -0.126%/d) / 52w high -67.4% / 52w low +18.1% / ATR 6.9% / volZ -0.1 |\n| Verified gates | press |\n",
       "brief_generated_at": "2026-05-18T15:50:30.239138+00:00"
     },
@@ -538,11 +608,17 @@
       "brief_supply_chain_md": "FormFactor, Inc. (FORM) is a critical enabler in the quantum computing supply chain, manufacturing cryogenic probe stations and measurement systems. These specialized systems are indispensable for testing and characterizing superconducting qubits at sub-Kelvin temperatures, a fundamental requirement for the development and validation of quantum hardware. Without such precise measurement capabilities, the advancement of quantum processors would be significantly hindered, positioning FORM as a key infrastructure provider for the emerging quantum industry.",
       "brief_bear_summary_md": "FORM faces significant valuation risks with a P/S of 12.7 and EV/Rev of 12.4, placing it in the 18th percentile for its sector. Insider opportunistic buys are $0k, indicating a lack of conviction from insiders. Additionally, the low FCFF yield of 0.2% and high RSI of 75 suggest potential overvaluation and technical overextension.",
       "brief_catalyst_failure_exit": "If the NVIDIA Ising launch, announced on 2026-04-14, fails to generate tangible demand for FormFactor's cryogenic testing equipment or if the stock price does not reflect positive momentum within 8 weeks, the thesis for FORM would be invalidated.",
-      "brief_entry_price_note": "Entry at current levels is near 52-week highs, with RSI at 75 and MA200 distance at 120.5%, indicating overextension.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "NO_STRUCTURE",
+        "asof_close": 44.8,
+        "atr": 3.1,
+        "disaster_stop": null,
+        "suggested_size_pct": null,
+        "order_ttl_days": 10,
+        "entry_tiers": [],
+        "tp_tranches": []
+      },
       "brief_full_md": "## FORM \u2014 FormFactor, Inc. (rank 6/6 \u00b7 conf 2/5 \u00b7 catalyst 0.76)\n\n**Theme**: quantum_computing | **Industry**: Semiconductors (Technology)\n\n**Catalyst**: NVIDIA Launches Ising, the Worlds First Open AI Models to Accelerate the Path to Useful Quantum Computers (2026-04-14) https://nvidianews.nvidia.com/news/nvidia-launches-ising-the-worlds-first-open-ai-models-to-accelerate-the-path-to-useful-quantum-computers\n\n**Pattern**: extended \u00b7 0% off 52w high \u00b7 MA200 +120%, slope +0.71%/d\n\n**Thesis**: FormFactor, Inc. (FORM) is positioned as a critical supplier for quantum computing's superconducting qubit testing, with NVIDIA's Ising launch serving as a catalyst, despite weak valuation and insider buying signals.\n\n**Supply chain**: FormFactor, Inc. (FORM) is a critical enabler in the quantum computing supply chain, manufacturing cryogenic probe stations and measurement systems. These specialized systems are indispensable for testing and characterizing superconducting qubits at sub-Kelvin temperatures, a fundamental requirement for the development and validation of quantum hardware. Without such precise measurement capabilities, the advancement of quantum processors would be significantly hindered, positioning FORM as a key infrastructure provider for the emerging quantum industry.\n\n**Bear case**: FORM faces significant valuation risks with a P/S of 12.7 and EV/Rev of 12.4, placing it in the 18th percentile for its sector. Insider opportunistic buys are $0k, indicating a lack of conviction from insiders. Additionally, the low FCFF yield of 0.2% and high RSI of 75 suggest potential overvaluation and technical overextension.\n\n**Setup**: entry Entry at current levels is near 52-week highs, with RSI at 75 and MA200 distance at 120.5%, indicating overextension. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: If the NVIDIA Ising launch, announced on 2026-04-14, fails to generate tangible demand for FormFactor's cryogenic testing equipment or if the stock price does not reflect positive momentum within 8 weeks, the thesis for FORM would be invalidated.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | 0.2% (pctile 3) |\n| Magic Formula | rank n/a (cohort n=1) |\n| Mults & ROE | PE 183.9 \u00b7 EV/EBITDA 102.8 \u00b7 PS 12.7 \u00b7 ROE 5.3% |\n| Valuation (sector pctile) | pctile 18 |\n| Catalyst strength | 0.76 strong (product_launch) |\n| Reversal setup | no |\n| Financials age | 53d |\n| Technicals | RSI 75 / MA50 +32.3% / MA200 +120.5% (slope +0.709%/d) / 52w high +0.0% / 52w low +413.3% / ATR 5.6% / volZ 0.8 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-18T15:50:38.360331+00:00"
     }

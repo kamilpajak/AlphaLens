@@ -16,21 +16,44 @@ import datetime as dt
 import json
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
 
 from alphalens_pipeline.thematic.argumentation import generator
-from alphalens_pipeline.thematic.argumentation._common import (
-    DISASTER_STOP_PCT,
-    TIME_EXIT_DEFAULT_WEEKS,
-    TIME_EXIT_ON_CATALYST_FAILURE_WEEKS,
-    position_pct_from_conf,
-)
+from alphalens_pipeline.thematic.trade_setup import builder as trade_setup_builder
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_OUTPUT_DIR = Path.home() / ".alphalens" / "thematic_briefs"
+
+# Same cache the Layer-4 scorer populated ({TICKER}_{asof}.parquet). The brief
+# step REUSES it (no re-fetch) — a cache miss degrades to NO_STRUCTURE.
+_OHLCV_CACHE_DIR = Path.home() / ".alphalens" / "thematic_ohlcv"
+
+
+def _cache_only_ohlcv_loader(
+    cache_dir: Path = _OHLCV_CACHE_DIR,
+) -> Callable[[str, dt.date], pd.DataFrame]:
+    """OHLCV loader that ONLY reads the scorer's cache (never hits yfinance).
+
+    Keeps brief generation network-free and deterministic; a miss yields an
+    empty frame -> the trade-setup builder returns NO_STRUCTURE.
+    """
+
+    def _load(ticker: str, asof: dt.date) -> pd.DataFrame:
+        path = cache_dir / f"{ticker.upper()}_{asof.isoformat()}.parquet"
+        if not path.exists():
+            return pd.DataFrame()
+        try:
+            return pd.read_parquet(path)
+        except Exception as exc:  # pragma: no cover - defensive cache read
+            logger.warning("ohlcv cache read failed for %s: %s", path.name, exc)
+            return pd.DataFrame()
+
+    return _load
+
 
 _BRIEF_NUMERIC_FIELDS = (
     "insider_score_usd",
@@ -63,8 +86,6 @@ def _row_to_facts(row: pd.Series) -> dict:
         "rationale": row.get("rationale", ""),
         "gates_passed_str": row.get("gates_passed_str", ""),
         "technicals_summary_str": row.get("technicals_summary_str", "n/a"),
-        "position_pct": position_pct_from_conf(weighted),
-        "time_exit_weeks": TIME_EXIT_DEFAULT_WEEKS,
         # Catalyst / news provenance (Z6 — explains "why surfaced").
         "source_event_url": row.get("source_event_url") or None,
         "source_event_title": row.get("source_event_title") or None,
@@ -160,11 +181,7 @@ _EMPTY_OUT_COLUMNS = (
     "brief_supply_chain_md",
     "brief_bear_summary_md",
     "brief_catalyst_failure_exit",
-    "brief_entry_price_note",
-    "brief_position_pct",
-    "brief_time_exit_weeks",
-    "brief_time_exit_on_catalyst_failure_weeks",
-    "brief_disaster_stop_pct",
+    "brief_trade_setup",
     "brief_generated_at",
 )
 
@@ -279,9 +296,15 @@ def generate_briefs(
     asof: dt.date,
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     api_key: str | None = None,
+    ohlcv_loader: Callable[[str, dt.date], pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
-    """Enrich Phase D-scored candidates with composed briefs; persist."""
+    """Enrich Phase D-scored candidates with composed briefs; persist.
+
+    ``ohlcv_loader`` is injectable for tests; it defaults to a cache-only
+    reader over the scorer's ``thematic_ohlcv`` cache (no network).
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
+    ohlcv_loader = ohlcv_loader or _cache_only_ohlcv_loader()
 
     if scored is None or scored.empty:
         return _empty_output(output_dir, asof)
@@ -318,6 +341,12 @@ def generate_briefs(
         # prose fields came back, so a Flash truncation never hides the
         # quantitative signal (2026-05-17 QUBT incident). The brief_* prose
         # columns simply stay None when ``brief`` is None.
+        # The trade setup is deterministic (cached OHLCV) and independent of
+        # the LLM — always computed so the levels persist even when the prose
+        # brief is None. A cache miss / short history yields NO_STRUCTURE.
+        setup = trade_setup_builder.build_trade_setup(
+            ticker=str(row["ticker"]), asof=asof, loader=ohlcv_loader
+        )
         b = brief or {}
         rows.append(
             {
@@ -328,11 +357,7 @@ def generate_briefs(
                 "brief_supply_chain_md": b.get("supply_chain_reasoning"),
                 "brief_bear_summary_md": b.get("bear_summary"),
                 "brief_catalyst_failure_exit": b.get("catalyst_failure_exit"),
-                "brief_entry_price_note": b.get("entry_price_note"),
-                "brief_position_pct": position_pct_from_conf(row.get("layer4_weighted_score")),
-                "brief_time_exit_weeks": TIME_EXIT_DEFAULT_WEEKS,
-                "brief_time_exit_on_catalyst_failure_weeks": TIME_EXIT_ON_CATALYST_FAILURE_WEEKS,
-                "brief_disaster_stop_pct": DISASTER_STOP_PCT,
+                "brief_trade_setup": json.dumps(setup.to_dict()),
                 "brief_generated_at": pd.Timestamp.now(tz="UTC"),
             }
         )

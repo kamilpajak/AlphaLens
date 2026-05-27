@@ -49,6 +49,16 @@ INTENTIONAL_DROPS = frozenset(
         # structured brief_* fields already served + shown in the UI. The
         # per-candidate brief is now consumed as structured columns only.
         "brief_full_md",
+        # Retired 2026-05-27: the thin trade-management fields (single
+        # position size, flat -25% stop, hardcoded 8w/4w exits, entry note)
+        # were replaced by the deterministic brief_trade_setup ladder
+        # (entry/TP tiers + structural stop). The new JSON field is an
+        # additive, non-breaking response extension.
+        "brief_entry_price_note",
+        "brief_position_pct",
+        "brief_time_exit_weeks",
+        "brief_time_exit_on_catalyst_failure_weeks",
+        "brief_disaster_stop_pct",
     }
 )
 

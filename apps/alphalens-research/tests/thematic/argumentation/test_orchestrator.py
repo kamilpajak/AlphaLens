@@ -250,7 +250,7 @@ class TestEmptyScoredFrame(unittest.TestCase):
             # Schema present so downstream readers don't crash on zero-column
             # frames. ``next_earnings_date`` included so the empty schema mirrors
             # the populated schema (zen review 2026-05-18: L1 schema asymmetry).
-            for col in ("ticker", "brief_position_pct", "next_earnings_date"):
+            for col in ("ticker", "brief_trade_setup", "next_earnings_date"):
                 self.assertIn(col, out.columns)
             self.assertNotIn("brief_full_md", out.columns)
             self.assertTrue((Path(tmp) / "2026-04-14.parquet").exists())

@@ -108,6 +108,8 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 
 **New components** — pick the side per the [ADR 0011](docs/adr/0011-split-pipeline-and-research.md) DAG: infra / live services / data clients / scorer libraries → `apps/alphalens-pipeline/alphalens_pipeline/<name>/`; lab / backtest / attribution / overlays / preaudit / experiments → `apps/alphalens-research/alphalens_research/<name>/`; CLI commands → `apps/alphalens-pipeline/alphalens_cli/`. Never top-level.
 
+**Web — atomic tokens never wrap mid-string** — in `apps/web`, any token that reads wrong when split across two lines (dates `YYYY-MM-DD`, math notation / formulas like `α=-2.01` or `L = λW`, numeric ranges `20-40 bps`, version strings, tickers) must carry Tailwind `whitespace-nowrap` on its wrapping element. Why: CSS treats `-` (hyphen-minus) and other separators as valid line-break opportunities, so `2026-05-25` can break to `2026-` / `05-25`. Apply rule: token inline with wrapping prose → wrap ONLY the token in its own `<span class="whitespace-nowrap">`; token sharing a flex row with an icon (e.g. chevron nav button) → put `whitespace-nowrap` on the flex anchor itself. Established PR #261 (all date sites). See [[feedback_web_nowrap_atomic_tokens_2026_05_27]].
+
 ## Workflow conventions
 
 **TDD always** — production code is always red→green→refactor, even 2-line fixes. Write test first.

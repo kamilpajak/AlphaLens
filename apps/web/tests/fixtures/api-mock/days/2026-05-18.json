@@ -96,11 +96,17 @@
       "brief_supply_chain_md": "Shift4 Payments provides integrated payment processing and point-of-sale software, making it a critical component in the retail and hospitality supply chain by facilitating consumer transactions. The upcoming Walmart and Target reports on May 17, 2026, detailing shifts in shopping habits due to the Iran war, directly impact the transaction volumes and types that Shift4 processes. Changes in consumer spending patterns or merchant activity, driven by these broader trends, will directly affect Shift4's revenue and operational performance, as its business scales with transaction flow.",
       "brief_bear_summary_md": "Key risks include Shift4's significant momentum laggard status, with the stock down 34.1% from its MA200 and 59.9% from its 52-week high. The competitive payment processing industry poses ongoing margin pressure, and macroeconomic headwinds impacting consumer spending could reduce transaction volumes across its merchant base.",
       "brief_catalyst_failure_exit": "If the Walmart and Target reports on May 17, 2026, indicate a significant decline in overall retail transaction volumes or a shift away from Shift4's core merchant segments, leading to a negative revision of future payment processing expectations, this would trigger an exit.",
-      "brief_entry_price_note": "The current entry reflects a stock trading 59.9% below its 52-week high, with a P/S of 0.8 and EV/Rev of 1.7.",
-      "brief_position_pct": 1.5,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "NO_STRUCTURE",
+        "asof_close": 88.4,
+        "atr": 5.74,
+        "disaster_stop": null,
+        "suggested_size_pct": null,
+        "order_ttl_days": 10,
+        "entry_tiers": [],
+        "tp_tranches": []
+      },
       "brief_full_md": "## FOUR \u2014 Shift4 Payments, Inc. (rank 1/16 \u00b7 conf 3/5 \u00b7 catalyst 0.68)\n\n**Theme**: retail | **Industry**: Application Software (Technology)\n\n**Catalyst**: Walmart and Target are about to show just how much shopping habits have changed due to the Iran war (2026-05-17) https://www.marketwatch.com/story/walmart-and-target-are-about-to-show-just-how-much-shopping-habits-have-changed-due-to-the-iran-war-105b34d9?mod=mw_rss_topstories\n\n**Pattern**: deep drawdown \u00b7 -60% off 52w high \u00b7 MA200 -34%, slope -0.42%/d\n\n**Thesis**: Shift4 Payments (FOUR) provides integrated payment processing for retail and hospitality, with an upcoming catalyst on May 17, 2026, when Walmart and Target report on changing shopping habits due to the Iran war, potentially impacting payment volumes.\n\n**Supply chain**: Shift4 Payments provides integrated payment processing and point-of-sale software, making it a critical component in the retail and hospitality supply chain by facilitating consumer transactions. The upcoming Walmart and Target reports on May 17, 2026, detailing shifts in shopping habits due to the Iran war, directly impact the transaction volumes and types that Shift4 processes. Changes in consumer spending patterns or merchant activity, driven by these broader trends, will directly affect Shift4's revenue and operational performance, as its business scales with transaction flow.\n\n**Bear case**: Key risks include Shift4's significant momentum laggard status, with the stock down 34.1% from its MA200 and 59.9% from its 52-week high. The competitive payment processing industry poses ongoing margin pressure, and macroeconomic headwinds impacting consumer spending could reduce transaction volumes across its merchant base.\n\n**Setup**: entry The current entry reflects a stock trading 59.9% below its 52-week high, with a P/S of 0.8 and EV/Rev of 1.7. | size 1.5% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: If the Walmart and Target reports on May 17, 2026, indicate a significant decline in overall retail transaction volumes or a shift away from Shift4's core merchant segments, leading to a negative revision of future payment processing expectations, this would trigger an exit.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | 9.1% (pctile 65) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE 24.0 \u00b7 EV/EBITDA 11.1 \u00b7 PS 0.8 \u00b7 ROE 10.2% |\n| Valuation (sector pctile) | pctile 58 |\n| Catalyst strength | 0.68 moderate (macro) |\n| Reversal setup | no |\n| Financials age | 18d |\n| Technicals | RSI 47 / MA50 -4.3% / MA200 -34.1% (slope -0.423%/d) / 52w high -59.9% / 52w low +6.5% / ATR 6.5% / volZ -1.9 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:53:05.992557+00:00"
     },
@@ -186,11 +192,7 @@
       "brief_supply_chain_md": "Donnelley Financial Solutions (DFIN) operates as a key enabler in the financial services supply chain by providing essential software like ActiveDisclosure for drafting and submitting Form S-1 registration statements. These services are critical for companies undertaking an Initial Public Offering (IPO), positioning DFIN as a foundational component for businesses navigating the public market entry process. Its revenue stream is directly influenced by the volume and regulatory requirements of IPO activity.",
       "brief_bear_summary_md": "DFIN faces risks including its small market capitalization of $0.99B and significant technical underperformance, with the stock down 41.2% from its 52-week high and near its 52-week low. A lack of insider opportunistic buys ($0k) also presents a bearish signal. Furthermore, a slowdown in overall IPO activity or adverse outcomes for major IPOs could negatively impact demand for DFIN's essential filing services.",
       "brief_catalyst_failure_exit": "An exit would be triggered if the OpenAI $1tn IPO, scheduled for a decision in an Oakland jury room on 2026-05-18, is cancelled, indefinitely postponed, or if the outcome significantly dampens future large-scale IPO activity, thereby negating the primary catalyst for DFIN.",
-      "brief_entry_price_note": "Entry price reflects DFIN's current position as a momentum laggard, trading 41.2% below its 52-week high and 0.4% above its 52-week low.",
-      "brief_position_pct": 1.5,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": null,
       "brief_full_md": "## DFIN \u2014 Donnelley Financial Solutions, Inc. (rank 2/16 \u00b7 conf 3/5 \u00b7 catalyst 0.62)\n\n**Theme**: IPO | **Industry**: Brokers, Exchanges & Other (Financial Services)\n\n**Catalyst**: The fate of OpenAI\u2019s $1tn IPO will be decided in an Oakland jury room (2026-05-18) https://www.ft.com/content/846479c8-4ab0-4812-a1d5-08abdd8b952b\n\n**Pattern**: deep drawdown \u00b7 -41% off 52w high \u00b7 MA200 -22%, slope -0.16%/d\n\n**Thesis**: Donnelley Financial Solutions (DFIN), a provider of SEC filing software crucial for IPOs, is positioned to benefit from the outcome of the OpenAI $1tn IPO decision on 2026-05-18, aligning with a 3/5 Phase D signal.\n\n**Supply chain**: Donnelley Financial Solutions (DFIN) operates as a key enabler in the financial services supply chain by providing essential software like ActiveDisclosure for drafting and submitting Form S-1 registration statements. These services are critical for companies undertaking an Initial Public Offering (IPO), positioning DFIN as a foundational component for businesses navigating the public market entry process. Its revenue stream is directly influenced by the volume and regulatory requirements of IPO activity.\n\n**Bear case**: DFIN faces risks including its small market capitalization of $0.99B and significant technical underperformance, with the stock down 41.2% from its 52-week high and near its 52-week low. A lack of insider opportunistic buys ($0k) also presents a bearish signal. Furthermore, a slowdown in overall IPO activity or adverse outcomes for major IPOs could negatively impact demand for DFIN's essential filing services.\n\n**Setup**: entry Entry price reflects DFIN's current position as a momentum laggard, trading 41.2% below its 52-week high and 0.4% above its 52-week low. | size 1.5% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: An exit would be triggered if the OpenAI $1tn IPO, scheduled for a decision in an Oakland jury room on 2026-05-18, is cancelled, indefinitely postponed, or if the outcome significantly dampens future large-scale IPO activity, thereby negating the primary catalyst for DFIN.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | 10.2% (pctile 68) |\n| Magic Formula | rank 1/3 \u00b7 FCFF 10.2% \u00b7 ROIC 26.8% |\n| Mults & ROE | PE 31.0 \u00b7 EV/EBITDA 5.7 \u00b7 PS 1.3 \u00b7 ROE 8.5% |\n| Valuation (sector pctile) | pctile 56 |\n| Catalyst strength | 0.62 moderate (litigation) |\n| Reversal setup | no |\n| Financials age | 90d |\n| Technicals | RSI 25 / MA50 -19.0% / MA200 -22.4% (slope -0.160%/d) / 52w high -41.2% / 52w low +0.4% / ATR 5.2% / volZ -0.2 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:53:14.386682+00:00"
     },
@@ -276,11 +278,25 @@
       "brief_supply_chain_md": "Piper Sandler Companies operates as a middle-market investment bank, deriving a significant portion of its revenue from equity underwriting fees, particularly from healthcare and technology IPOs. Its business model is directly tied to the health and activity of the primary equity markets, acting as an intermediary in the capital formation process. A robust IPO environment, especially within the technology sector, directly translates to increased deal flow and fee generation for firms like PIPR, positioning it within the financial services supply chain as a critical facilitator of public market access for private companies.",
       "brief_bear_summary_md": "PIPR faces significant risks from its heavy reliance on the volatile IPO market, especially in healthcare and technology, which can experience prolonged downturns. A general market slowdown or increased competition in investment banking could compress underwriting fees and reduce deal volume. Broader economic conditions also impact capital markets activity.",
       "brief_catalyst_failure_exit": "If the OpenAI IPO catalyst fails to materialize or is significantly delayed beyond the 2026-05-18 trial, or if the outcome negatively impacts broader technology IPO sentiment, the investment thesis for PIPR would be invalidated, prompting an exit.",
-      "brief_entry_price_note": "Current price is -16.6% from its 52-week high and +26.4% from its 52-week low, with MA200 distance at -5.7%.",
-      "brief_position_pct": 1.5,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 312.5,
+        "atr": 10.7,
+        "disaster_stop": 275.05,
+        "suggested_size_pct": 18.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 307.15, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 299.66, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 291.1, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 323.2, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 336.04, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 349.95, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## PIPR \u2014 Piper Sandler Companies (rank 3/16 \u00b7 conf 3/5 \u00b7 catalyst 0.62)\n\n**Theme**: IPO | **Industry**: Brokers, Exchanges & Other (Financial Services)\n\n**Catalyst**: The fate of OpenAI\u2019s $1tn IPO will be decided in an Oakland jury room (2026-05-18) https://www.ft.com/content/846479c8-4ab0-4812-a1d5-08abdd8b952b\n\n**Pattern**: neutral \u00b7 -17% off 52w high \u00b7 MA200 -6%, slope +0.04%/d\n\n**Thesis**: Piper Sandler, a middle-market investment bank, is positioned to benefit from a potential resurgence in technology IPOs, with the OpenAI IPO trial on 2026-05-18 serving as a key near-term catalyst for equity underwriting fees.\n\n**Supply chain**: Piper Sandler Companies operates as a middle-market investment bank, deriving a significant portion of its revenue from equity underwriting fees, particularly from healthcare and technology IPOs. Its business model is directly tied to the health and activity of the primary equity markets, acting as an intermediary in the capital formation process. A robust IPO environment, especially within the technology sector, directly translates to increased deal flow and fee generation for firms like PIPR, positioning it within the financial services supply chain as a critical facilitator of public market access for private companies.\n\n**Bear case**: PIPR faces significant risks from its heavy reliance on the volatile IPO market, especially in healthcare and technology, which can experience prolonged downturns. A general market slowdown or increased competition in investment banking could compress underwriting fees and reduce deal volume. Broader economic conditions also impact capital markets activity.\n\n**Setup**: entry Current price is -16.6% from its 52-week high and +26.4% from its 52-week low, with MA200 distance at -5.7%. | size 1.5% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: If the OpenAI IPO catalyst fails to materialize or is significantly delayed beyond the 2026-05-18 trial, or if the outcome negatively impacts broader technology IPO sentiment, the investment thesis for PIPR would be invalidated, prompting an exit.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | 152.2% (pctile 100) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE 4.8 \u00b7 EV/EBITDA n/a \u00b7 PS 0.7 \u00b7 ROE 20.5% |\n| Valuation (sector pctile) | pctile 84 |\n| Catalyst strength | 0.62 moderate (litigation) |\n| Reversal setup | no |\n| Financials age | 39d |\n| Technicals | RSI 40 / MA50 -1.4% / MA200 -5.7% (slope +0.044%/d) / 52w high -16.6% / 52w low +26.4% / ATR 3.4% / volZ -0.1 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:53:24.266109+00:00"
     },
@@ -366,11 +382,25 @@
       "brief_supply_chain_md": "CRL is an essential component in the pharmaceutical drug discovery and development supply chain, offering crucial in-vivo and in-vitro research models and pre-clinical testing services. These services are foundational for biopharmaceutical companies, enabling them to progress drug candidates from early research stages through regulatory approval. CRL's position as a key enabler of R&D makes it integral to the industry's innovation pipeline.",
       "brief_bear_summary_md": "Risks include the negative sentiment from Wells Fargo lowering expectations for Regeneron Pharmaceuticals, which could signal broader industry headwinds or reduced R&D spending impacting CRL's clients. Technicals show significant underperformance with RSI 36, MA50 -9.3%, and MA200 -13.1%, indicating momentum laggard status.",
       "brief_catalyst_failure_exit": "If the Wells Fargo downgrade for Regeneron Pharmaceuticals leads to sustained negative sentiment across the pharmaceutical services sector or if CRL's technicals continue to deteriorate past the 8-week time horizon, an exit would be warranted.",
-      "brief_entry_price_note": "Entry price reflects a -32.6% distance from 52-week high and -13.1% from MA200, indicating a momentum laggard.",
-      "brief_position_pct": 1.5,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 148.2,
+        "atr": 7.98,
+        "disaster_stop": 120.27,
+        "suggested_size_pct": 12.5,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 144.21, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 138.62, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 132.24, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 156.18, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 165.76, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 176.13, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## CRL \u2014 Charles River Laboratories International, Inc. (rank 4/16 \u00b7 conf 3/5 \u00b7 catalyst 0.54)\n\n**Theme**: pharmaceuticals | **Industry**: Medical Diagnostics & Research (Healthcare)\n\n**Catalyst**: Wells Fargo & Company Has Lowered Expectations for Regeneron Pharmaceuticals ( NASDAQ : REGN ) Stock Price (2026-05-18) https://www.tickerreport.com/banking-finance/13446254/wells-fargo-company-has-lowered-expectations-for-regeneron-pharmaceuticals-nasdaqregn-stock-price.html\n\n**Pattern**: deep drawdown \u00b7 -33% off 52w high \u00b7 MA200 -13%, slope +0.02%/d\n\n**Thesis**: Charles River Laboratories (CRL) provides critical research models and pre-clinical testing for pharmaceutical drug discovery, showing strong insider buys and FCFF yield despite recent technical weakness and a negative industry catalyst.\n\n**Supply chain**: CRL is an essential component in the pharmaceutical drug discovery and development supply chain, offering crucial in-vivo and in-vitro research models and pre-clinical testing services. These services are foundational for biopharmaceutical companies, enabling them to progress drug candidates from early research stages through regulatory approval. CRL's position as a key enabler of R&D makes it integral to the industry's innovation pipeline.\n\n**Bear case**: Risks include the negative sentiment from Wells Fargo lowering expectations for Regeneron Pharmaceuticals, which could signal broader industry headwinds or reduced R&D spending impacting CRL's clients. Technicals show significant underperformance with RSI 36, MA50 -9.3%, and MA200 -13.1%, indicating momentum laggard status.\n\n**Setup**: entry Entry price reflects a -32.6% distance from 52-week high and -13.1% from MA200, indicating a momentum laggard. | size 1.5% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: If the Wells Fargo downgrade for Regeneron Pharmaceuticals leads to sustained negative sentiment across the pharmaceutical services sector or if CRL's technicals continue to deteriorate past the 8-week time horizon, an exit would be warranted.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | 7.5% (pctile 83) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA 20.5 \u00b7 PS 1.8 \u00b7 ROE -4.6% |\n| Valuation (sector pctile) | pctile 63 |\n| Catalyst strength | 0.54 moderate (price_target) |\n| Reversal setup | no |\n| Financials age | 89d |\n| Technicals | RSI 36 / MA50 -9.3% / MA200 -13.1% (slope +0.019%/d) / 52w high -32.6% / 52w low +13.3% / ATR 5.4% / volZ -0.3 |\n| Verified gates | tenk,press |\n",
       "brief_generated_at": "2026-05-19T10:53:31.100213+00:00"
     },
@@ -456,11 +486,25 @@
       "brief_supply_chain_md": "Manhattan Associates provides critical supply chain commerce software, including warehouse management and omnichannel order routing systems, essential for major retail chains. The anticipated shifts in shopping habits, as highlighted by the upcoming Walmart and Target earnings related to the Iran war, suggest a heightened need for efficient and adaptable supply chain solutions. MANH's offerings are designed to help retailers navigate such complexities, potentially increasing demand for their software as companies adjust to new consumer behaviors and geopolitical impacts on logistics.",
       "brief_bear_summary_md": "MANH exhibits weak technicals, trading 40.3% below its 52-week high and 20.6% below its MA200 with a negative slope. Insider opportunistic buys are $0k, indicating a lack of recent insider confidence. The overall weighted score is 2/5, signaling weak alignment with Phase D criteria.",
       "brief_catalyst_failure_exit": "Exit if Walmart and Target earnings on 2026-05-17 do not indicate significant shifts in shopping habits that would drive demand for supply chain software, or if their results suggest a slowdown in retail IT spending.",
-      "brief_entry_price_note": "The stock is a momentum laggard, trading 20.6% below its MA200 with a negative slope.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 184.6,
+        "atr": 8.72,
+        "disaster_stop": 154.08,
+        "suggested_size_pct": 11.5,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 180.24, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 174.14, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 167.16, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 193.32, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 203.78, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 215.12, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## MANH \u2014 Manhattan Associates, Inc. (rank 5/16 \u00b7 conf 2/5 \u00b7 catalyst 0.68)\n\n**Theme**: retail | **Industry**: Application Software (Technology)\n\n**Catalyst**: Walmart and Target are about to show just how much shopping habits have changed due to the Iran war (2026-05-17) https://www.marketwatch.com/story/walmart-and-target-are-about-to-show-just-how-much-shopping-habits-have-changed-due-to-the-iran-war-105b34d9?mod=mw_rss_topstories\n\n**Pattern**: deep drawdown \u00b7 -40% off 52w high \u00b7 MA200 -21%, slope -0.20%/d\n\n**Thesis**: Manhattan Associates (MANH), a key provider of supply chain software to retailers, may benefit if upcoming Walmart and Target earnings on 2026-05-17 confirm significant shifts in consumer shopping habits due to the Iran war, driving demand for robust logistics solutions.\n\n**Supply chain**: Manhattan Associates provides critical supply chain commerce software, including warehouse management and omnichannel order routing systems, essential for major retail chains. The anticipated shifts in shopping habits, as highlighted by the upcoming Walmart and Target earnings related to the Iran war, suggest a heightened need for efficient and adaptable supply chain solutions. MANH's offerings are designed to help retailers navigate such complexities, potentially increasing demand for their software as companies adjust to new consumer behaviors and geopolitical impacts on logistics.\n\n**Bear case**: MANH exhibits weak technicals, trading 40.3% below its 52-week high and 20.6% below its MA200 with a negative slope. Insider opportunistic buys are $0k, indicating a lack of recent insider confidence. The overall weighted score is 2/5, signaling weak alignment with Phase D criteria.\n\n**Setup**: entry The stock is a momentum laggard, trading 20.6% below its MA200 with a negative slope. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit if Walmart and Target earnings on 2026-05-17 do not indicate significant shifts in shopping habits that would drive demand for supply chain software, or if their results suggest a slowdown in retail IT spending.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | 4.8% (pctile 34) |\n| Magic Formula | rank 3/3 \u00b7 FCFF 4.8% \u00b7 ROIC n/a% |\n| Mults & ROE | PE 37.3 \u00b7 EV/EBITDA 27.3 \u00b7 PS 7.3 \u00b7 ROE 105.6% |\n| Valuation (sector pctile) | pctile 43 |\n| Catalyst strength | 0.68 moderate (macro) |\n| Reversal setup | no |\n| Financials age | 24d |\n| Technicals | RSI 50 / MA50 +0.0% / MA200 -20.6% (slope -0.196%/d) / 52w high -40.3% / 52w low +12.5% / ATR 4.7% / volZ -1.9 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:53:40.631517+00:00"
     },
@@ -546,11 +590,25 @@
       "brief_supply_chain_md": "Symbotic Inc. designs and operates AI-powered robotic warehouse automation systems. These systems are crucial for optimizing supply chain logistics for large retail networks such as Walmart and Target. By enhancing efficiency and speed in distribution centers, Symbotic's technology helps retailers adapt to changing consumer demands and improve inventory management, which is particularly relevant given the anticipated shifts in shopping habits.",
       "brief_bear_summary_md": "Risks include a low weighted score (2/5 Phase D signal alignment) and significant insider selling (-$827k, 1st percentile). Technicals show momentum lagging, with the stock -46.2% from its 52-week high and MA50/MA200 distances of -13.8% and -19.9% respectively.",
       "brief_catalyst_failure_exit": "If Walmart and Target earnings on 2026-05-17 do not demonstrate significant shifts in shopping habits or if these shifts do not translate into increased demand for Symbotic's automation solutions, the thesis is invalidated.",
-      "brief_entry_price_note": "Current price is -46.2% from its 52-week high, with RSI at 32, indicating a momentum laggard.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 36.8,
+        "atr": 2.61,
+        "disaster_stop": 27.66,
+        "suggested_size_pct": 9.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 35.5, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 33.67, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 31.58, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 39.41, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 42.54, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 45.94, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## SYM \u2014 Symbotic Inc. (rank 6/16 \u00b7 conf 2/5 \u00b7 catalyst 0.68)\n\n**Theme**: retail | **Industry**: Banks (Financial Services)\n\n**Catalyst**: Walmart and Target are about to show just how much shopping habits have changed due to the Iran war (2026-05-17) https://www.marketwatch.com/story/walmart-and-target-are-about-to-show-just-how-much-shopping-habits-have-changed-due-to-the-iran-war-105b34d9?mod=mw_rss_topstories\n\n**Pattern**: deep drawdown \u00b7 -46% off 52w high \u00b7 MA200 -20%, slope +0.05%/d\n\n**Thesis**: Symbotic (SYM) provides AI-powered robotic warehouse automation to major retailers, and its performance may be influenced by upcoming Walmart and Target earnings reflecting evolving shopping habits.\n\n**Supply chain**: Symbotic Inc. designs and operates AI-powered robotic warehouse automation systems. These systems are crucial for optimizing supply chain logistics for large retail networks such as Walmart and Target. By enhancing efficiency and speed in distribution centers, Symbotic's technology helps retailers adapt to changing consumer demands and improve inventory management, which is particularly relevant given the anticipated shifts in shopping habits.\n\n**Bear case**: Risks include a low weighted score (2/5 Phase D signal alignment) and significant insider selling (-$827k, 1st percentile). Technicals show momentum lagging, with the stock -46.2% from its 52-week high and MA50/MA200 distances of -13.8% and -19.9% respectively.\n\n**Setup**: entry Current price is -46.2% from its 52-week high, with RSI at 32, indicating a momentum laggard. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: If Walmart and Target earnings on 2026-05-17 do not demonstrate significant shifts in shopping habits or if these shifts do not translate into increased demand for Symbotic's automation solutions, the thesis is invalidated.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $-827k (pctile 1) |\n| FCFF yield | 3.0% (pctile 1) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS 11.3 \u00b7 ROE -1.1% |\n| Valuation (sector pctile) | pctile 44 |\n| Catalyst strength | 0.68 moderate (macro) |\n| Reversal setup | no |\n| Financials age | 12d |\n| Technicals | RSI 32 / MA50 -13.8% / MA200 -19.9% (slope +0.048%/d) / 52w high -46.2% / 52w low +75.5% / ATR 7.1% / volZ -1.1 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:53:47.692598+00:00"
     },
@@ -638,11 +696,25 @@
       "brief_supply_chain_md": "NVAX's supply chain involves the research, development, clinical testing, manufacturing, and global distribution of its vaccine candidates and approved products. Success hinges on efficient R&D pipelines, securing regulatory approvals, and scaling production to meet public health needs, particularly for serious infectious diseases. The company's ability to navigate complex biological manufacturing and global distribution networks is critical for commercialization and market penetration.",
       "brief_bear_summary_md": "Key risks for NVAX include potential clinical trial failures or delays, which could halt product development and regulatory approval. The absence of a reported FCFF yield suggests potential cash flow challenges, and intense competition in the vaccine market could limit future revenue growth and market share.",
       "brief_catalyst_failure_exit": "If NVAX experiences significant setbacks in its clinical trials, fails to secure regulatory approvals for key vaccine candidates, or faces unexpected manufacturing issues, the investment thesis would be invalidated.",
-      "brief_entry_price_note": "The current price is 18.2% below its 52-week high and 47.2% above its 52-week low.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 11.3,
+        "atr": 0.73,
+        "disaster_stop": 8.74,
+        "suggested_size_pct": 13.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 10.94, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 10.42, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 9.84, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 12.03, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 12.91, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 13.86, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## NVAX \u2014 Novavax, Inc. (rank 7/16 \u00b7 conf 2/5 \u00b7 catalyst 0.56)\n\n**Theme**: disease prevention | **Industry**: Biotechnology (Healthcare) | **also in**: public health\n\n**Pattern**: neutral \u00b7 -18% off 52w high \u00b7 MA200 +10%, slope +0.10%/d\n\n**Thesis**: Novavax, Inc. (NVAX) focuses on developing and commercializing vaccines for infectious diseases, showing a 2/5 signal alignment with strong insider buying and favorable valuation metrics despite an n/a FCFF yield.\n\n**Supply chain**: NVAX's supply chain involves the research, development, clinical testing, manufacturing, and global distribution of its vaccine candidates and approved products. Success hinges on efficient R&D pipelines, securing regulatory approvals, and scaling production to meet public health needs, particularly for serious infectious diseases. The company's ability to navigate complex biological manufacturing and global distribution networks is critical for commercialization and market penetration.\n\n**Bear case**: Key risks for NVAX include potential clinical trial failures or delays, which could halt product development and regulatory approval. The absence of a reported FCFF yield suggests potential cash flow challenges, and intense competition in the vaccine market could limit future revenue growth and market share.\n\n**Setup**: entry The current price is 18.2% below its 52-week high and 47.2% above its 52-week low. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: If NVAX experiences significant setbacks in its clinical trials, fails to secure regulatory approvals for key vaccine candidates, or faces unexpected manufacturing issues, the investment thesis would be invalidated.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE 3.3 \u00b7 EV/EBITDA n/a \u00b7 PS 1.3 \u00b7 ROE n/a% |\n| Valuation (sector pctile) | pctile 86 |\n| Catalyst strength | 0.56 moderate (macro) |\n| Reversal setup | no |\n| Financials age | 81d |\n| Technicals | RSI 54 / MA50 +2.5% / MA200 +10.2% (slope +0.100%/d) / 52w high -18.2% / 52w low +47.2% / ATR 6.4% / volZ -0.9 |\n| Verified gates | tenk,press |\n",
       "brief_generated_at": "2026-05-19T10:53:54.275973+00:00"
     },
@@ -728,11 +800,25 @@
       "brief_supply_chain_md": "Open Text Corporation provides essential enterprise information management software, positioning it as a critical component for businesses managing complex data flows. Its role as a foundational anchor in the Toronto-Waterloo tech corridor highlights its significance in the regional technology ecosystem, potentially benefiting from local talent pools and infrastructure. This strategic positioning supports its continued relevance in the application software industry.",
       "brief_bear_summary_md": "OTEX exhibits weak technicals, with its stock 40.5% below its 52-week high and 21.6% below a declining MA200, indicating negative momentum. The 2/5 Phase D signal alignment suggests limited bullish indicators, and there are no reported insider opportunistic buys in the last 90 days.",
       "brief_catalyst_failure_exit": "Exit if Phase D signals, particularly technicals like MA200 slope and 52-week high distance, do not show improvement within 8 weeks, or if the weighted score declines further.",
-      "brief_entry_price_note": "Current technicals show significant drawdown from 52w high and negative MA200 slope.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 27.5,
+        "atr": 1.43,
+        "disaster_stop": 22.5,
+        "suggested_size_pct": 14.5,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 26.79, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 25.78, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 24.64, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 28.93, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 30.65, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 32.51, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## OTEX \u2014 Open Text Corporation (rank 8/16 \u00b7 conf 2/5)\n\n**Theme**: Ontario | **Industry**: Application Software (Technology)\n\n**Pattern**: deep drawdown \u00b7 -41% off 52w high \u00b7 MA200 -22%, slope -0.10%/d\n\n**Thesis**: Open Text Corporation (OTEX), a $5.72B enterprise information management software company and a foundational anchor of the Toronto-Waterloo tech corridor, shows a 2/5 Phase D signal alignment.\n\n**Supply chain**: Open Text Corporation provides essential enterprise information management software, positioning it as a critical component for businesses managing complex data flows. Its role as a foundational anchor in the Toronto-Waterloo tech corridor highlights its significance in the regional technology ecosystem, potentially benefiting from local talent pools and infrastructure. This strategic positioning supports its continued relevance in the application software industry.\n\n**Bear case**: OTEX exhibits weak technicals, with its stock 40.5% below its 52-week high and 21.6% below a declining MA200, indicating negative momentum. The 2/5 Phase D signal alignment suggests limited bullish indicators, and there are no reported insider opportunistic buys in the last 90 days.\n\n**Setup**: entry Current technicals show significant drawdown from 52w high and negative MA200 slope. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit if Phase D signals, particularly technicals like MA200 slope and 52-week high distance, do not show improvement within 8 weeks, or if the weighted score declines further.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | n/a (pctile n/a) |\n| FCFF yield | 7.5% (pctile 54) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE 11.2 \u00b7 EV/EBITDA 10.3 \u00b7 PS 1.1 \u00b7 ROE 13.0% |\n| Valuation (sector pctile) | pctile 63 |\n| Catalyst strength | 0.00 weak (?) |\n| Reversal setup | no |\n| Financials age | 11d |\n| Technicals | RSI 54 / MA50 +3.3% / MA200 -21.6% (slope -0.101%/d) / 52w high -40.5% / 52w low +14.8% / ATR 4.0% / volZ -1.3 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:54:00.460079+00:00"
     },
@@ -818,11 +904,25 @@
       "brief_supply_chain_md": "Braze's customer engagement platform is critical for brands to manage promotional messaging, push notifications, and personalized offers across various channels. This directly impacts the demand generation and customer retention aspects of a company's commercial supply chain, ensuring effective communication and conversion at the consumer interface. By optimizing customer interactions, Braze helps businesses drive sales and build loyalty, which are essential components of a healthy revenue stream and market position.",
       "brief_bear_summary_md": "BRZE exhibits significant technical weakness, trading 41.4% below its 52-week high with a declining MA200 slope of -0.116%/day and 15.8% below its MA200. Competition in the application software industry for customer engagement platforms also poses a risk to market share and pricing power.",
       "brief_catalyst_failure_exit": "Exit if technicals worsen, specifically if the stock breaks below its 52-week low distance of +37.0% or if valuation metrics deteriorate, indicating a failure of the Phase D signal alignment.",
-      "brief_entry_price_note": "Entry aligns with a P/S of 0.6 and EV/Rev of 0.5, alongside an 18.3% FCFF yield.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 32.4,
+        "atr": 1.94,
+        "disaster_stop": 25.61,
+        "suggested_size_pct": 16.2,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 31.43, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 30.07, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 28.52, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 34.34, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 36.67, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 39.19, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## BRZE \u2014 Braze, Inc. (rank 9/16 \u00b7 conf 2/5)\n\n**Theme**: promotions | **Industry**: Application Software (Technology)\n\n**Pattern**: deep drawdown \u00b7 -41% off 52w high \u00b7 MA200 -16%, slope -0.12%/d\n\n**Thesis**: Braze, Inc. (BRZE) provides a customer engagement platform for cross-channel promotions, showing strong FCFF yield and favorable valuation metrics despite lagging technicals, aligning with a Phase D signal.\n\n**Supply chain**: Braze's customer engagement platform is critical for brands to manage promotional messaging, push notifications, and personalized offers across various channels. This directly impacts the demand generation and customer retention aspects of a company's commercial supply chain, ensuring effective communication and conversion at the consumer interface. By optimizing customer interactions, Braze helps businesses drive sales and build loyalty, which are essential components of a healthy revenue stream and market position.\n\n**Bear case**: BRZE exhibits significant technical weakness, trading 41.4% below its 52-week high with a declining MA200 slope of -0.116%/day and 15.8% below its MA200. Competition in the application software industry for customer engagement platforms also poses a risk to market share and pricing power.\n\n**Setup**: entry Entry aligns with a P/S of 0.6 and EV/Rev of 0.5, alongside an 18.3% FCFF yield. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit if technicals worsen, specifically if the stock breaks below its 52-week low distance of +37.0% or if valuation metrics deteriorate, indicating a failure of the Phase D signal alignment.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | n/a (pctile n/a) |\n| FCFF yield | 18.3% (pctile 88) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS 0.6 \u00b7 ROE -21.0% |\n| Valuation (sector pctile) | pctile 61 |\n| Catalyst strength | 0.00 weak (?) |\n| Reversal setup | no |\n| Financials age | 54d |\n| Technicals | RSI 50 / MA50 +0.8% / MA200 -15.8% (slope -0.116%/d) / 52w high -41.4% / 52w low +37.0% / ATR 6.6% / volZ -1.6 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:54:06.843718+00:00"
     },
@@ -908,11 +1008,25 @@
       "brief_supply_chain_md": "Workiva's Wdesk platform is integral to the pre-IPO process for many companies, enabling them to achieve SOX compliance and prepare initial SEC registration filings. This positions Workiva as a critical software provider within the ecosystem of companies preparing for public offerings. A robust IPO market, exemplified by significant events like the potential OpenAI IPO, directly increases demand for Workiva's specialized compliance and reporting solutions.",
       "brief_bear_summary_md": "Workiva exhibits a low weighted score of 1/5, indicating poor signal alignment. Technicals are weak, with the stock down 49.2% from its 52-week high and trading significantly below its MA200 (-36.9%). There are no insider opportunistic buys in the last 90 days, and key valuation metrics like P/S and EV/Rev are not available.",
       "brief_catalyst_failure_exit": "If the OpenAI IPO catalyst, scheduled for 2026-05-18, fails to materialize or is delayed significantly, the thesis for WK's near-term upside is invalidated, prompting an exit within 8 weeks.",
-      "brief_entry_price_note": "The stock is a momentum laggard, trading 49.2% below its 52-week high and 36.9% below its MA200.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 62.7,
+        "atr": 3.2,
+        "disaster_stop": 51.5,
+        "suggested_size_pct": 10.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 61.1, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 58.86, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 56.3, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 65.9, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 69.74, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 73.9, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## WK \u2014 Workiva Inc. (rank 10/16 \u00b7 conf 1/5 \u00b7 catalyst 0.62)\n\n**Theme**: IPO | **Industry**: Application Software (Technology)\n\n**Catalyst**: The fate of OpenAI\u2019s $1tn IPO will be decided in an Oakland jury room (2026-05-18) https://www.ft.com/content/846479c8-4ab0-4812-a1d5-08abdd8b952b\n\n**Pattern**: deep drawdown \u00b7 -49% off 52w high \u00b7 MA200 -37%, slope -0.10%/d\n\n**Thesis**: Workiva Inc. (WK) is positioned to benefit from the IPO theme, specifically through its Wdesk platform supporting pre-IPO companies with compliance and SEC filings, with the OpenAI IPO catalyst on 2026-05-18 as a key trigger.\n\n**Supply chain**: Workiva's Wdesk platform is integral to the pre-IPO process for many companies, enabling them to achieve SOX compliance and prepare initial SEC registration filings. This positions Workiva as a critical software provider within the ecosystem of companies preparing for public offerings. A robust IPO market, exemplified by significant events like the potential OpenAI IPO, directly increases demand for Workiva's specialized compliance and reporting solutions.\n\n**Bear case**: Workiva exhibits a low weighted score of 1/5, indicating poor signal alignment. Technicals are weak, with the stock down 49.2% from its 52-week high and trading significantly below its MA200 (-36.9%). There are no insider opportunistic buys in the last 90 days, and key valuation metrics like P/S and EV/Rev are not available.\n\n**Setup**: entry The stock is a momentum laggard, trading 49.2% below its 52-week high and 36.9% below its MA200. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: If the OpenAI IPO catalyst, scheduled for 2026-05-18, fails to materialize or is delayed significantly, the thesis for WK's near-term upside is invalidated, prompting an exit within 8 weeks.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS n/a \u00b7 ROE n/a% |\n| Valuation (sector pctile) | pctile 58 |\n| Catalyst strength | 0.62 moderate (litigation) |\n| Reversal setup | no |\n| Financials age | 31d |\n| Technicals | RSI 37 / MA50 -16.2% / MA200 -36.9% (slope -0.102%/d) / 52w high -49.2% / 52w low +7.0% / ATR 5.9% / volZ -0.7 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:54:14.448849+00:00"
     },
@@ -1000,11 +1114,25 @@
       "brief_supply_chain_md": "QuidelOrtho manufactures rapid diagnostic testing solutions. In the context of public health threats like the recent Ebola outbreak, these tests are critical for early detection at the point of care, enabling swift containment and treatment. Their products directly support the initial phase of disease response, providing essential tools for healthcare providers to identify and manage infectious diseases efficiently within the diagnostic supply chain.",
       "brief_bear_summary_md": "QDEL faces significant risks, including its low weighted score (1/5) indicating poor signal alignment and its status as a momentum laggard with MA200 down -56.6% and 52w high down -70.6%. Additionally, the company's small market cap ($0.71B) may expose it to higher volatility and limited institutional interest.",
       "brief_catalyst_failure_exit": "Exit if the Ebola outbreak does not escalate to significantly increase demand for rapid diagnostic tests, or if competitors capture the majority of the response market, negating QDEL's potential upside from the catalyst.",
-      "brief_entry_price_note": "Current price is 4.5% above its 52-week low, with significant negative momentum indicated by technicals.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 41.9,
+        "atr": 2.05,
+        "disaster_stop": 34.72,
+        "suggested_size_pct": 13.5,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 40.88, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 39.44, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 37.8, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 43.95, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 46.41, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 49.08, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## QDEL \u2014 QuidelOrtho Corporation (rank 11/16 \u00b7 conf 1/5 \u00b7 catalyst 0.56)\n\n**Theme**: public health | **Industry**: Medical Diagnostics & Research (Healthcare) | **also in**: tick-borne illnesses\n\n**Catalyst**: Ebola outbreak: CDC mobilizes response efforts; U.S. risk remains low (2026-05-18) https://seekingalpha.com/news/4594249-ebola-outbreak-cdc-mobilizes-response-efforts-us-risk-remains-low?utm_source=feed_news_all&utm_medium=referral&feed_item_type=news\n\n**Pattern**: deep drawdown \u00b7 -71% off 52w high \u00b7 MA200 -57%, slope -0.31%/d\n\n**Thesis**: QuidelOrtho (QDEL) is a medical diagnostics company positioned to benefit from increased demand for rapid infectious disease testing, triggered by the recent CDC-mobilized Ebola outbreak response.\n\n**Supply chain**: QuidelOrtho manufactures rapid diagnostic testing solutions. In the context of public health threats like the recent Ebola outbreak, these tests are critical for early detection at the point of care, enabling swift containment and treatment. Their products directly support the initial phase of disease response, providing essential tools for healthcare providers to identify and manage infectious diseases efficiently within the diagnostic supply chain.\n\n**Bear case**: QDEL faces significant risks, including its low weighted score (1/5) indicating poor signal alignment and its status as a momentum laggard with MA200 down -56.6% and 52w high down -70.6%. Additionally, the company's small market cap ($0.71B) may expose it to higher volatility and limited institutional interest.\n\n**Setup**: entry Current price is 4.5% above its 52-week low, with significant negative momentum indicated by technicals. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit if the Ebola outbreak does not escalate to significantly increase demand for rapid diagnostic tests, or if competitors capture the majority of the response market, negating QDEL's potential upside from the catalyst.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS 0.3 \u00b7 ROE -58.9% |\n| Valuation (sector pctile) | pctile 91 |\n| Catalyst strength | 0.56 moderate (macro) |\n| Reversal setup | no |\n| Financials age | 88d |\n| Technicals | RSI 38 / MA50 -27.1% / MA200 -56.6% (slope -0.314%/d) / 52w high -70.6% / 52w low +4.5% / ATR 10.3% / volZ -2.0 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:54:20.240698+00:00"
     },
@@ -1090,11 +1218,25 @@
       "brief_supply_chain_md": "OLLI's business model is centered on acquiring closeout merchandise and excess inventory, which directly benefits from supply chain disruptions or overstocking by other retailers and manufacturers. When companies face challenges in managing inventory or shifting demand, OLLI can source goods at deep discounts. This positions OLLI defensively, as it can capitalize on market inefficiencies by providing an outlet for distressed inventory, thereby offering extreme bargains to consumers.",
       "brief_bear_summary_md": "OLLI shows weak Phase D signals (1/5 weighted score) and poor technicals, including a -31.3% distance from MA200 and -44.3% from its 52-week high. Valuation metrics and FCFF yield are average for the sector, and there have been no insider opportunistic buys in the last 90 days.",
       "brief_catalyst_failure_exit": "If technicals do not show significant improvement, such as the MA200 slope turning positive or RSI moving above 50, or if valuation metrics deteriorate further, the position should be exited. A sustained decline below the 52-week low would also trigger an exit.",
-      "brief_entry_price_note": "Current technicals show significant weakness with MA200 at -31.3% and 52w high at -44.3%.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 96.4,
+        "atr": 4.05,
+        "disaster_stop": 82.22,
+        "suggested_size_pct": 15.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 94.38, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 91.54, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 88.3, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 100.45, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 105.31, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 110.58, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## OLLI \u2014 Ollie's Bargain Outlet Holdings, Inc. (rank 12/16 \u00b7 conf 1/5)\n\n**Theme**: discounts | **Industry**: Retail - Defensive (Consumer Defensive)\n\n**Pattern**: deep drawdown \u00b7 -44% off 52w high \u00b7 MA200 -31%, slope -0.20%/d\n\n**Thesis**: Ollie's Bargain Outlet Holdings, Inc. (OLLI), a defensive retailer specializing in closeout merchandise, exhibits weak Phase D signals with a low weighted score of 1/5, indicating it is not an opportune entry despite its discount theme.\n\n**Supply chain**: OLLI's business model is centered on acquiring closeout merchandise and excess inventory, which directly benefits from supply chain disruptions or overstocking by other retailers and manufacturers. When companies face challenges in managing inventory or shifting demand, OLLI can source goods at deep discounts. This positions OLLI defensively, as it can capitalize on market inefficiencies by providing an outlet for distressed inventory, thereby offering extreme bargains to consumers.\n\n**Bear case**: OLLI shows weak Phase D signals (1/5 weighted score) and poor technicals, including a -31.3% distance from MA200 and -44.3% from its 52-week high. Valuation metrics and FCFF yield are average for the sector, and there have been no insider opportunistic buys in the last 90 days.\n\n**Setup**: entry Current technicals show significant weakness with MA200 at -31.3% and 52w high at -44.3%. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: If technicals do not show significant improvement, such as the MA200 slope turning positive or RSI moving above 50, or if valuation metrics deteriorate further, the position should be exited. A sustained decline below the 52-week low would also trigger an exit.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | 4.1% (pctile 44) |\n| Magic Formula | rank 2/3 \u00b7 FCFF 4.1% \u00b7 ROIC 16.2% |\n| Mults & ROE | PE 20.6 \u00b7 EV/EBITDA 14.5 \u00b7 PS 1.9 \u00b7 ROE 12.7% |\n| Valuation (sector pctile) | pctile 47 |\n| Catalyst strength | 0.00 weak (?) |\n| Reversal setup | no |\n| Financials age | 18d |\n| Technicals | RSI 37 / MA50 -14.8% / MA200 -31.3% (slope -0.198%/d) / 52w high -44.3% / 52w low +5.8% / ATR 4.7% / volZ 1.0 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:54:28.254229+00:00"
     },
@@ -1180,11 +1322,25 @@
       "brief_supply_chain_md": "Ibotta functions as a critical intermediary in the consumer packaged goods (CPG) supply chain by connecting brands directly with consumers through digital promotions. By delivering cash-back offers and digital coupons, Ibotta influences consumer purchasing decisions at the point of sale, driving demand for CPG products. This network helps brands move inventory and acquire customers, effectively bridging the gap between product availability and consumer engagement within the retail ecosystem.",
       "brief_bear_summary_md": "Key risks include a low weighted score of 1/5, indicating poor Phase D signal alignment, and no insider opportunistic buys in the last 90 days. Technicals show negative long-term momentum with the MA200 slope at -0.049%/day and the stock trading 48.9% below its 52-week high, suggesting potential for continued underperformance.",
       "brief_catalyst_failure_exit": "Exit if Ibotta's digital promotions network fails to maintain or grow consumer engagement and brand adoption, leading to a sustained decline in transaction volumes or a reduction in CPG brand partnerships.",
-      "brief_entry_price_note": "The stock is trading 1.4% below its 50-day moving average, 48.9% off its 52-week high, and has an RSI of 38.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 19.7,
+        "atr": 1.38,
+        "disaster_stop": 14.87,
+        "suggested_size_pct": 12.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 19.01, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 18.04, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 16.94, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 21.08, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 22.74, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 24.53, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## IBTA \u2014 Ibotta, Inc. (rank 13/16 \u00b7 conf 1/5)\n\n**Theme**: promotions | **Industry**: None (None)\n\n**Pattern**: deep drawdown \u00b7 -49% off 52w high \u00b7 MA200 +13%, slope -0.05%/d\n\n**Thesis**: Ibotta, Inc. operates a digital promotions network for CPG brands, offering cash-back and coupons to consumers, but exhibits low Phase D signal alignment with a weighted score of 1/5.\n\n**Supply chain**: Ibotta functions as a critical intermediary in the consumer packaged goods (CPG) supply chain by connecting brands directly with consumers through digital promotions. By delivering cash-back offers and digital coupons, Ibotta influences consumer purchasing decisions at the point of sale, driving demand for CPG products. This network helps brands move inventory and acquire customers, effectively bridging the gap between product availability and consumer engagement within the retail ecosystem.\n\n**Bear case**: Key risks include a low weighted score of 1/5, indicating poor Phase D signal alignment, and no insider opportunistic buys in the last 90 days. Technicals show negative long-term momentum with the MA200 slope at -0.049%/day and the stock trading 48.9% below its 52-week high, suggesting potential for continued underperformance.\n\n**Setup**: entry The stock is trading 1.4% below its 50-day moving average, 48.9% off its 52-week high, and has an RSI of 38. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit if Ibotta's digital promotions network fails to maintain or grow consumer engagement and brand adoption, leading to a sustained decline in transaction volumes or a reduction in CPG brand partnerships.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS n/a \u00b7 ROE 1.2% |\n| Valuation (sector pctile) | pctile 50 |\n| Catalyst strength | 0.00 weak (?) |\n| Reversal setup | no |\n| Financials age | 41d |\n| Technicals | RSI 38 / MA50 -1.4% / MA200 +12.8% (slope -0.049%/d) / 52w high -48.9% / 52w low +60.1% / ATR 6.3% / volZ 0.5 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:54:36.351842+00:00"
     },
@@ -1270,11 +1426,25 @@
       "brief_supply_chain_md": "Grocery Outlet's model relies on sourcing opportunistic buys and closeout products, which allows it to offer substantial discounts. This strategy capitalizes on inefficiencies or overstock situations within the broader supply chain, turning excess inventory into consumer savings. In a defensive retail context, this model provides resilience by attracting value-conscious shoppers, especially during economic uncertainties.",
       "brief_bear_summary_md": "GO faces risks from its significant momentum laggard status, with the MA200 down -36.1% and a negative slope. Its FCFF yield of 2.0% is below the sector average, indicating less attractive cash flow generation. A lack of recent insider opportunistic buys also suggests limited internal conviction.",
       "brief_catalyst_failure_exit": "Exit the position if GO fails to demonstrate improved relative strength or if its defensive discount model does not translate into sustained operational performance within the 8-week timeframe.",
-      "brief_entry_price_note": "Entry price reflects a significant drawdown from 52-week highs, though it is 27.8% above 52-week lows.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 28.9,
+        "atr": 1.36,
+        "disaster_stop": 24.14,
+        "suggested_size_pct": 14.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 28.22, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 27.27, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 26.18, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 30.26, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 31.89, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 33.66, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## GO \u2014 Grocery Outlet Holding Corp. (rank 14/16 \u00b7 conf 1/5)\n\n**Theme**: discounts | **Industry**: Retail - Defensive (Consumer Defensive)\n\n**Pattern**: deep drawdown \u00b7 -60% off 52w high \u00b7 MA200 -36%, slope -0.23%/d\n\n**Thesis**: Grocery Outlet (GO) operates an extreme-value grocery network, leveraging opportunistic buys and closeouts to offer significant discounts on name-brand consumables, positioning it as a defensive retail play.\n\n**Supply chain**: Grocery Outlet's model relies on sourcing opportunistic buys and closeout products, which allows it to offer substantial discounts. This strategy capitalizes on inefficiencies or overstock situations within the broader supply chain, turning excess inventory into consumer savings. In a defensive retail context, this model provides resilience by attracting value-conscious shoppers, especially during economic uncertainties.\n\n**Bear case**: GO faces risks from its significant momentum laggard status, with the MA200 down -36.1% and a negative slope. Its FCFF yield of 2.0% is below the sector average, indicating less attractive cash flow generation. A lack of recent insider opportunistic buys also suggests limited internal conviction.\n\n**Setup**: entry Entry price reflects a significant drawdown from 52-week highs, though it is 27.8% above 52-week lows. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit the position if GO fails to demonstrate improved relative strength or if its defensive discount model does not translate into sustained operational performance within the 8-week timeframe.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | 2.0% (pctile 25) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS 0.2 \u00b7 ROE -22.9% |\n| Valuation (sector pctile) | pctile 60 |\n| Catalyst strength | 0.00 weak (?) |\n| Reversal setup | no |\n| Financials age | 27d |\n| Technicals | RSI 44 / MA50 +3.4% / MA200 -36.1% (slope -0.231%/d) / 52w high -60.3% / 52w low +27.8% / ATR 7.1% / volZ 0.5 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:54:44.271324+00:00"
     },
@@ -1360,11 +1530,25 @@
       "brief_supply_chain_md": "Cimpress's business model, encompassing brands like Vistaprint and National Pen, is centered on the mass customization, manufacturing, and distribution of promotional products and marketing materials. This necessitates a robust and efficient supply chain for sourcing diverse raw materials, managing production workflows, and ensuring timely delivery to a broad customer base. Supply chain resilience is critical; any disruptions in raw material availability, manufacturing capacity, or logistics could directly impact production costs, delivery schedules, and overall operational efficiency, affecting profitability.",
       "brief_bear_summary_md": "Risks include the stock being at its 52-week high, suggesting limited immediate upside, and its significant run-up from the 52-week low (134.5%). The FCFF yield of 5.5% and valuation metrics (P/S 0.7, EV/Rev 1.1) are moderate, and fundamentals freshness is 109 days.",
       "brief_catalyst_failure_exit": "Exit if insider opportunistic buys reverse or significantly diminish, or if technicals show a breakdown, specifically if the MA200 slope turns negative or the stock falls significantly below its MA50.",
-      "brief_entry_price_note": "The stock is at its 52-week high (0.0% distance) and 134.5% above its 52-week low.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 71.5,
+        "atr": 3.58,
+        "disaster_stop": 58.97,
+        "suggested_size_pct": 11.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 69.71, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 67.2, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 64.34, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 75.08, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 79.38, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 84.03, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## CMPR \u2014 Cimpress plc (rank 15/16 \u00b7 conf 1/5)\n\n**Theme**: promotions | **Industry**: Advertising & Marketing Services (Consumer Cyclical)\n\n**Pattern**: neutral \u00b7 0% off 52w high \u00b7 MA200 +40%, slope +0.31%/d\n\n**Thesis**: Cimpress (CMPR) operates mass-customization businesses for promotional products, showing strong insider buying activity and robust technical momentum, despite moderate valuation and FCFF yield.\n\n**Supply chain**: Cimpress's business model, encompassing brands like Vistaprint and National Pen, is centered on the mass customization, manufacturing, and distribution of promotional products and marketing materials. This necessitates a robust and efficient supply chain for sourcing diverse raw materials, managing production workflows, and ensuring timely delivery to a broad customer base. Supply chain resilience is critical; any disruptions in raw material availability, manufacturing capacity, or logistics could directly impact production costs, delivery schedules, and overall operational efficiency, affecting profitability.\n\n**Bear case**: Risks include the stock being at its 52-week high, suggesting limited immediate upside, and its significant run-up from the 52-week low (134.5%). The FCFF yield of 5.5% and valuation metrics (P/S 0.7, EV/Rev 1.1) are moderate, and fundamentals freshness is 109 days.\n\n**Setup**: entry The stock is at its 52-week high (0.0% distance) and 134.5% above its 52-week low. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit if insider opportunistic buys reverse or significantly diminish, or if technicals show a breakdown, specifically if the MA200 slope turns negative or the stock falls significantly below its MA50.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | 5.5% (pctile 36) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE 107.2 \u00b7 EV/EBITDA 9.9 \u00b7 PS 0.7 \u00b7 ROE n/a% |\n| Valuation (sector pctile) | pctile 42 |\n| Catalyst strength | 0.00 weak (?) |\n| Reversal setup | no |\n| Financials age | 109d |\n| Technicals | RSI 70 / MA50 +23.8% / MA200 +39.9% (slope +0.305%/d) / 52w high +0.0% / 52w low +134.5% / ATR 4.1% / volZ -0.5 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:54:50.903057+00:00"
     },
@@ -1450,11 +1634,25 @@
       "brief_supply_chain_md": "PAR Technology's Punchh division provides loyalty and promotional offer management software, directly influencing the demand generation and customer retention strategies for enterprise restaurant chains. This software acts as a critical component in the digital infrastructure of restaurants, enabling them to optimize customer engagement and drive sales through targeted promotions. By streamlining loyalty programs, Punchh helps restaurants secure recurring revenue and maintain a competitive edge.",
       "brief_bear_summary_md": "PAR shows weak Phase D signal alignment (1/5) and significant negative technical momentum, with MA200 down 54.3% and a steep negative slope. Risks include zero insider opportunistic buys and an unknown FCF margin, suggesting a lack of insider conviction and an incomplete financial view.",
       "brief_catalyst_failure_exit": "Exit if Punchh's growth in restaurant loyalty software adoption falters, or if Phase D signal alignment deteriorates, indicating a sustained lack of positive momentum for PAR Technology.",
-      "brief_entry_price_note": "Position size is 1.0% of portfolio with an 8-week time horizon.",
-      "brief_position_pct": 1.0,
-      "brief_time_exit_weeks": 8,
-      "brief_time_exit_on_catalyst_failure_weeks": 4,
-      "brief_disaster_stop_pct": -25.0,
+      "brief_trade_setup": {
+        "schema_version": "1.0.0",
+        "status": "OK",
+        "asof_close": 54.2,
+        "atr": 2.71,
+        "disaster_stop": 44.71,
+        "suggested_size_pct": 13.0,
+        "order_ttl_days": 10,
+        "entry_tiers": [
+          { "limit": 52.85, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 50.95, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 48.78, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+        ],
+        "tp_tranches": [
+          { "target": 56.91, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 60.16, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 63.69, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+        ]
+      },
       "brief_full_md": "## PAR \u2014 PAR Technology Corporation (rank 16/16 \u00b7 conf 1/5)\n\n**Theme**: promotions | **Industry**: Application Software (Technology)\n\n**Pattern**: deep drawdown \u00b7 -80% off 52w high \u00b7 MA200 -54%, slope -0.74%/d\n\n**Thesis**: PAR Technology's Punchh division offers loyalty and promotional software for restaurants, but the stock shows weak Phase D signal alignment with a 1/5 weighted score.\n\n**Supply chain**: PAR Technology's Punchh division provides loyalty and promotional offer management software, directly influencing the demand generation and customer retention strategies for enterprise restaurant chains. This software acts as a critical component in the digital infrastructure of restaurants, enabling them to optimize customer engagement and drive sales through targeted promotions. By streamlining loyalty programs, Punchh helps restaurants secure recurring revenue and maintain a competitive edge.\n\n**Bear case**: PAR shows weak Phase D signal alignment (1/5) and significant negative technical momentum, with MA200 down 54.3% and a steep negative slope. Risks include zero insider opportunistic buys and an unknown FCF margin, suggesting a lack of insider conviction and an incomplete financial view.\n\n**Setup**: entry Position size is 1.0% of portfolio with an 8-week time horizon. | size 1.0% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: Exit if Punchh's growth in restaurant loyalty software adoption falters, or if Phase D signal alignment deteriorates, indicating a sustained lack of positive momentum for PAR Technology.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | n/a% (pctile n/a) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE n/a \u00b7 EV/EBITDA n/a \u00b7 PS 1.2 \u00b7 ROE -10.2% |\n| Valuation (sector pctile) | pctile 61 |\n| Catalyst strength | 0.00 weak (?) |\n| Reversal setup | no |\n| Financials age | 32d |\n| Technicals | RSI 49 / MA50 +1.0% / MA200 -54.3% (slope -0.738%/d) / 52w high -80.0% / 52w low +20.6% / ATR 7.0% / volZ -1.1 |\n| Verified gates | tenk |\n",
       "brief_generated_at": "2026-05-19T10:54:59.878202+00:00"
     }
