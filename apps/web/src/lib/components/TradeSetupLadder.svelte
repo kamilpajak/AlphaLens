@@ -1,12 +1,10 @@
 <script lang="ts">
 	import type { TradeSetup } from '$lib/types';
-	import { fmtDate } from '$lib/format';
 
 	interface Props {
 		setup: TradeSetup;
-		closeDate: string | null;
 	}
-	let { setup, closeDate }: Props = $props();
+	let { setup }: Props = $props();
 
 	const ok = $derived(setup.status === 'OK' && setup.disaster_stop != null);
 
@@ -54,7 +52,11 @@
 		     spans full width — price in the left gutter, a glow bar sized by
 		     commitment %, and a detail chip on the rail. Reference map of where
 		     orders sit vs the last close — NOT a forecast. -->
-		<div class="relative w-full h-[520px] bg-bg-1 overflow-hidden text-[11px] sm:text-xs">
+		<div
+			class="relative w-full h-[520px] bg-bg-1 overflow-hidden text-[11px] sm:text-xs"
+			role="figure"
+			aria-label="Price ladder — stop ${stop.toFixed(2)}, close ${close.toFixed(2)}, {entries.length} entry tier(s), {tpsTopDown.length} take-profit target(s) up to ${hi.toFixed(2)}."
+		>
 			<!-- zone tints: green upside above LAST, red risk below STOP -->
 			<div
 				class="absolute inset-x-0 top-0 pointer-events-none bg-gradient-to-t from-transparent to-green/[0.05]"
@@ -108,7 +110,7 @@
 					<span class="absolute left-0 right-0 border-t border-dashed border-amber/80"></span>
 					<span class="absolute left-0 size-2 rounded-full bg-amber -translate-x-[4px]"></span>
 					<span class="absolute left-2 sm:left-5 px-1.5 sm:px-2.5 py-0.5 bg-bg-1 border border-amber/40 text-amber font-bold text-[10px] uppercase tracking-widest whitespace-nowrap">
-						close{#if closeDate}<span class="text-amber-dim font-medium lowercase tracking-wide"> {fmtDate(closeDate)}</span>{/if}
+						close
 					</span>
 				</span>
 			</div>

@@ -282,7 +282,7 @@
 	</div>
 
 	{#if c.brief_trade_setup}
-		<TradeSetupLadder setup={c.brief_trade_setup} closeDate={null} />
+		<TradeSetupLadder setup={c.brief_trade_setup} />
 	{/if}
 
 	<!-- Supply chain + bear + exit -->
