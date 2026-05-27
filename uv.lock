@@ -28,7 +28,7 @@ dev = [
     { name = "pandas-stubs", specifier = ">=3.0.0.260204" },
     { name = "pre-commit", specifier = ">=3.7" },
     { name = "pyright", specifier = ">=1.1.409" },
-    { name = "pytest", specifier = ">=9.0" },
+    { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-django", specifier = ">=4.12" },
     { name = "ruff", specifier = ">=0.15.12" },
 ]
