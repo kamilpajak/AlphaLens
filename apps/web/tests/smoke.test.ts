@@ -385,12 +385,16 @@ test.describe('smoke — brief detail interactions', () => {
 		// The full-markdown <details> expander was retired (2026-05-26);
 		// candidate cards must no longer render any <details>.
 		await expect(page.locator('article[id] details')).toHaveCount(0);
-		// Trade-setup UI was reverted 2026-05-27 (brief_trade_setup data is still
-		// generated server-side, just not rendered); assert a stable structured
-		// section instead.
+		// Core structured sections render: fundamentals table + the trade-execution
+		// setup panel (re-added 2026-05-27 in the two-column layout — brief_trade_setup
+		// data was always generated server-side, now rendered again).
+		// The fundamentals section header now carries a leading icon, so the
+		// label div's text content is " fundamentals" — tolerate surrounding
+		// whitespace rather than anchoring on the bare word.
 		await expect(
-			page.locator('article[id] div').filter({ hasText: /^fundamentals$/i }).first()
+			page.locator('article[id] div').filter({ hasText: /^\s*fundamentals\s*$/i }).first()
 		).toBeVisible();
+		await expect(page.locator('article[id] [data-testid="trade-setup"]').first()).toBeVisible();
 	});
 });
 
