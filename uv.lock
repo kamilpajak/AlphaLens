@@ -30,7 +30,7 @@ dev = [
     { name = "pyright", specifier = ">=1.1.409" },
     { name = "pytest", specifier = ">=9.0" },
     { name = "pytest-django", specifier = ">=4.12" },
-    { name = "ruff", specifier = ">=0.15.12" },
+    { name = "ruff", specifier = ">=0.15.14" },
 ]
 
 [[package]]
