@@ -369,13 +369,6 @@ export const GLOSSARY: GlossaryEntry[] = [
 		pages: ['briefs']
 	},
 	{
-		term: 'MA200 slope',
-		full: 'MA200 trend slope',
-		body: 'Rate of change of the 200-day moving average over the last 20 trading days, as % per day. Positive = the long-term trend is rising (support); negative = falling — a downtrending average acts as resistance, not support. Distinguishes a mean-reversion candidate from a falling knife.',
-		category: 'first-per-section',
-		pages: ['briefs']
-	},
-	{
 		term: 'magic formula',
 		full: 'Greenblatt magic-formula rank',
 		body: 'Joel Greenblatt\'s ranking that combines earnings yield (cheap) with return on capital (high quality). Each candidate gets ranked within its sector cohort — lower magic-formula rank # = better combined score. Failed health gates (no PE / negative equity) leave the cell blank.',
