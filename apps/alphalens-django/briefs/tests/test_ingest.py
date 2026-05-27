@@ -8,6 +8,7 @@ fixture inline, no checked-in golden files.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 from pathlib import Path
 
@@ -39,6 +40,10 @@ def _sample_rows() -> list[dict]:
             "verified": True,
             "market_cap": 3_000_000_000_000.0,
             "also_in_themes": ["compute"],
+            # Pipeline persists the trade setup as a json.dumps STRING of a dict.
+            "brief_trade_setup": json.dumps(
+                {"schema_version": "1.0.0", "status": "OK", "entry_tiers": [{"limit": 307.15}]}
+            ),
         },
         {
             "ticker": "AVGO",
@@ -77,6 +82,19 @@ class TestRebuildSmoke:
         assert meta.n_themes == 1
         assert meta.top_theme == "ai-infra"
         assert meta.theme_counts == {"ai-infra": 2}
+
+    def test_trade_setup_json_string_round_trips_to_dict(self, tmp_path: Path):
+        _write_parquet(tmp_path, "2026-05-22", _sample_rows())
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        nvda = Brief.objects.get(ticker="NVDA")
+        assert isinstance(nvda.brief_trade_setup, dict)
+        assert nvda.brief_trade_setup["status"] == "OK"
+        assert nvda.brief_trade_setup["entry_tiers"][0]["limit"] == 307.15
+
+        # AVGO omits the column entirely → NULL (older parquet / no setup persisted).
+        avgo = Brief.objects.get(ticker="AVGO")
+        assert avgo.brief_trade_setup is None
 
     def test_empty_directory_is_noop(self, tmp_path: Path):
         result = rebuild_from_parquet(briefs_dir=tmp_path)

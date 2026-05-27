@@ -15,6 +15,7 @@ from briefs.ingest.coerce import (
     coerce_datetime,
     coerce_float,
     coerce_int,
+    coerce_json_obj,
     coerce_list_str,
     coerce_str,
     is_missing,
@@ -132,6 +133,27 @@ class TestCoerceDatetime:
     def test_missing(self):
         assert coerce_datetime(None) is None
         assert coerce_datetime(pd.NaT) is None
+
+
+class TestCoerceJsonObj:
+    def test_json_string_parses_to_dict(self):
+        assert coerce_json_obj('{"status": "OK", "n": 3}') == {"status": "OK", "n": 3}
+
+    def test_dict_passthrough(self):
+        assert coerce_json_obj({"a": 1}) == {"a": 1}
+
+    def test_missing_is_none(self):
+        assert coerce_json_obj(None) is None
+        assert coerce_json_obj(pd.NaT) is None
+        assert coerce_json_obj("") is None
+
+    def test_unparseable_is_none(self):
+        assert coerce_json_obj("{ not json") is None
+
+    def test_non_object_json_is_none(self):
+        # A JSON array / scalar is not an object → None (object-shaped field only).
+        assert coerce_json_obj("[1, 2, 3]") is None
+        assert coerce_json_obj("42") is None
 
 
 class TestCoerceStr:

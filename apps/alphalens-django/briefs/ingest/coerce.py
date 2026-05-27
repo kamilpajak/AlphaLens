@@ -10,6 +10,7 @@ fails to round-trip).
 from __future__ import annotations
 
 import datetime as dt
+import json
 from typing import Any
 
 import pandas as pd
@@ -71,6 +72,30 @@ def coerce_list_str(value: Any) -> list[str]:
         return [str(v) for v in value]
     except TypeError:
         return [str(value)]
+
+
+def coerce_json_obj(value: Any) -> dict | None:
+    """Object-shaped JSONField cell → ``dict`` (or ``None``).
+
+    Accepts a dict (passthrough) or a JSON string (the pipeline persists
+    ``brief_trade_setup`` via ``json.dumps``); missing / unparseable / non-object
+    input → ``None``. Distinct from :func:`coerce_list_str`, which is for
+    list-of-strings JSONFields (``also_in_themes``, ``gates_*``).
+    """
+    if is_missing(value):
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
 
 
 def coerce_date(value: Any) -> dt.date | None:

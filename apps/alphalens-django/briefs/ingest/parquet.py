@@ -37,6 +37,7 @@ from briefs.ingest.coerce import (
     coerce_datetime,
     coerce_float,
     coerce_int,
+    coerce_json_obj,
     coerce_list_str,
     coerce_str,
 )
@@ -83,6 +84,10 @@ def _coerce_for_field(field: django_models.Field, raw):
     the constraint.
     """
     if isinstance(field, django_models.JSONField):
+        # brief_trade_setup is an OBJECT JSONField (a dict the pipeline stores as
+        # a json.dumps string); every other JSONField holds a list[str].
+        if field.name == "brief_trade_setup":
+            return coerce_json_obj(raw)
         return coerce_list_str(raw)
     if isinstance(field, django_models.DateTimeField):
         value = coerce_datetime(raw)
