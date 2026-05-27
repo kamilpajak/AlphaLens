@@ -45,20 +45,18 @@ DEFAULT_INTER_QUERY_SLEEP_SEC = 10.0
 # GDELT reconstructs titles from tokenized text, leaving spaces around
 # punctuation (~25% of rows): "Alphabet ( Google )", "gas prices . ". The
 # downstream pipeline + UI render the title verbatim, so normalise at ingest.
-# Possessive `\s++`: the punctuation class is disjoint from `\s`, so giving
-# back whitespace can never help the match — possessive is behaviourally
-# identical here and removes the backtracking S5852 flags as polynomial.
-_SPACE_BEFORE_PUNCT = re.compile(r"\s++([.,;:!?)\]}])")
-_SPACE_AFTER_OPENER = re.compile(r"([(\[{])\s++")
-_WHITESPACE_RUN = re.compile(r"\s{2,}")
+# Patterns match a SINGLE literal space (whitespace runs are collapsed first
+# via str.split), so there is no quantifier to backtrack — sidesteps ReDoS.
+_SPACE_BEFORE_PUNCT = re.compile(r" ([.,;:!?)\]}])")
+_SPACE_AFTER_OPENER = re.compile(r"([(\[{]) ")
 
 
 def _clean_title(title: str) -> str:
     """Strip GDELT's space-padding around punctuation; collapse runs; trim."""
+    title = " ".join(title.split())  # collapse all whitespace runs + trim
     title = _SPACE_BEFORE_PUNCT.sub(r"\1", title)
     title = _SPACE_AFTER_OPENER.sub(r"\1", title)
-    title = _WHITESPACE_RUN.sub(" ", title)
-    return title.strip()
+    return title
 
 
 class GdeltQueryError(Exception):
