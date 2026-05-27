@@ -36,6 +36,7 @@
 						href={apiBase}
 						target="_blank"
 						rel="noreferrer"
+						aria-label="re-authenticate (opens in a new tab)"
 						class="inline-flex items-center gap-2 px-4 py-2 bg-amber text-bg font-semibold text-xs uppercase tracking-widest hover:bg-amber-dim transition-colors"
 					>
 						re-authenticate
