@@ -377,7 +377,7 @@ test.describe('smoke — brief detail interactions', () => {
 		await expect(tooltip).toBeVisible();
 	});
 
-	test('candidate cards drop the markdown expander and surface the entry note', async ({ page }) => {
+	test('candidate cards drop the markdown expander and surface the trade setup', async ({ page }) => {
 		await page.goto(`/brief/${latestDay.date}`);
 		// Auto-wait until the client-side load function has rendered the
 		// candidate cards before asserting on their contents.
@@ -385,9 +385,9 @@ test.describe('smoke — brief detail interactions', () => {
 		// The full-markdown <details> expander was retired (2026-05-26);
 		// candidate cards must no longer render any <details>.
 		await expect(page.locator('article[id] details')).toHaveCount(0);
-		// The entry-price note — previously visible only inside the markdown
-		// blob — is now surfaced as a structured line.
-		await expect(page.locator('article[id]').filter({ hasText: 'entry note' }).first()).toBeVisible();
+		// The structured trade-setup block (entry ladder + take-profit tranches)
+		// replaced the legacy position/exit/stop dl + entry-note prose.
+		await expect(page.locator('article[id]').filter({ hasText: 'trade setup' }).first()).toBeVisible();
 	});
 });
 

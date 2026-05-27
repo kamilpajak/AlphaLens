@@ -77,12 +77,46 @@ export interface Candidate {
 	brief_supply_chain_md: string | null;
 	brief_bear_summary_md: string | null;
 	brief_catalyst_failure_exit: string | null;
-	brief_entry_price_note: string | null;
-	brief_position_pct: number | null;
-	brief_time_exit_weeks: number | null;
-	brief_time_exit_on_catalyst_failure_weeks: number | null;
-	brief_disaster_stop_pct: number | null;
+	brief_trade_setup: TradeSetup | null;
 	brief_generated_at: string | null;
+}
+
+/**
+ * One limit-buy rung of the entry ladder. `atr_distance` is how far below the
+ * reference close the limit sits, expressed in ATR units (always positive;
+ * render as "−0.5 ATR").
+ */
+export interface EntryTier {
+	limit: number;
+	alloc_pct: number;
+	atr_distance: number;
+	tag: string;
+}
+
+/** One take-profit tranche. `r_multiple` is the reward-to-risk multiple. */
+export interface TpTranche {
+	target: number;
+	tranche_pct: number;
+	r_multiple: number;
+	tag: string;
+}
+
+/**
+ * Structured trade-setup block, mirrors the Python `TradeSetup.to_dict()`.
+ * Reference levels are anchored to the last close — coordination points, not a
+ * forecast. When `status === 'NO_STRUCTURE'` the price-derived fields
+ * (`disaster_stop`, `suggested_size_pct`) are null and the ladders are empty.
+ */
+export interface TradeSetup {
+	schema_version: string;
+	status: 'OK' | 'NO_STRUCTURE';
+	asof_close: number;
+	atr: number;
+	disaster_stop: number | null;
+	suggested_size_pct: number | null;
+	order_ttl_days: number;
+	entry_tiers: EntryTier[];
+	tp_tranches: TpTranche[];
 }
 
 export interface DayBrief {

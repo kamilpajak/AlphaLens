@@ -280,23 +280,74 @@
 			</dl>
 		</div>
 		<div class="col-span-12 lg:col-span-6 px-4 sm:px-5 py-4 border-t lg:border-t-0 border-grid">
-			<div class="text-[10px] uppercase tracking-widest text-green mb-2">technicals · trade setup</div>
+			<div class="text-[10px] uppercase tracking-widest text-green mb-2">technicals</div>
 			<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5">
-				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA50')}>ma50 dist</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_ma50_distance_pct)}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA200')}>ma200 dist</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_ma200_distance_pct)}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">ma200 slope</dt><dd class="text-fg text-right">{c.technical_ma200_slope_pct_per_day !== null ? fmtPct(c.technical_ma200_slope_pct_per_day, 3) + '/d' : '—'}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('ATR')}>atr</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_atr_pct)}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">position size</dt><dd class="text-amber text-right font-bold">{c.brief_position_pct != null ? c.brief_position_pct.toFixed(1) + '%' : '—'}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">time exit</dt><dd class="text-fg text-right">{c.brief_time_exit_weeks != null ? c.brief_time_exit_weeks + 'w' : '—'}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">catalyst-fail exit</dt><dd class="text-fg text-right">{c.brief_time_exit_on_catalyst_failure_weeks != null ? c.brief_time_exit_on_catalyst_failure_weeks + 'w' : '—'}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">disaster stop</dt><dd class="text-red text-right">{c.brief_disaster_stop_pct != null ? fmtPct(c.brief_disaster_stop_pct, 0) : '—'}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA50')}>ma50 dist</JargonTip></dt><dd class="text-fg text-right whitespace-nowrap">{fmtPct(c.technical_ma50_distance_pct)}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA200')}>ma200 dist</JargonTip></dt><dd class="text-fg text-right whitespace-nowrap">{fmtPct(c.technical_ma200_distance_pct)}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest">ma200 slope</dt><dd class="text-fg text-right whitespace-nowrap">{c.technical_ma200_slope_pct_per_day !== null ? fmtPct(c.technical_ma200_slope_pct_per_day, 3) + '/d' : '—'}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('ATR')}>atr</JargonTip></dt><dd class="text-fg text-right whitespace-nowrap">{fmtPct(c.technical_atr_pct)}</dd>
 			</dl>
-			{#if c.brief_entry_price_note}
-				<div class="mt-3 pt-2 border-t border-grid">
-					<div class="text-fg-muted uppercase tracking-widest text-[10px]">entry note</div>
-					<p class="text-fg-dim mt-1 leading-relaxed">{c.brief_entry_price_note}</p>
-				</div>
-			{/if}
+
+			<!-- Trade setup: structured limit-entry ladder + take-profit tranches.
+			     Reference levels anchored to last close — coordination points for the
+			     group, not a forecast. Renders nothing structural when the brief had
+			     no clean setup (NO_STRUCTURE) or no trade_setup at all. -->
+			<div class="mt-3 pt-3 border-t border-grid">
+				<div class="text-[10px] uppercase tracking-widest text-green mb-2">trade setup</div>
+				{#if c.brief_trade_setup && c.brief_trade_setup.status === 'OK'}
+					{@const ts = c.brief_trade_setup}
+					<div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] mb-3">
+						<span class="text-fg-muted uppercase tracking-widest">size</span>
+						<span class="text-amber font-bold whitespace-nowrap">{ts.suggested_size_pct != null ? ts.suggested_size_pct.toFixed(1) + '%' : '—'}</span>
+						<span class="text-fg-dim">·</span>
+						<span class="text-fg-muted uppercase tracking-widest">stop</span>
+						<span class="text-red font-bold whitespace-nowrap">{ts.disaster_stop != null ? '$' + ts.disaster_stop.toFixed(2) : '—'}</span>
+						<span class="text-fg-dim">·</span>
+						<span class="text-fg-muted uppercase tracking-widest">ttl</span>
+						<span class="text-fg-dim whitespace-nowrap">{ts.order_ttl_days}d</span>
+					</div>
+
+					{#if ts.entry_tiers.length > 0}
+						<div class="text-[10px] uppercase tracking-widest text-amber mb-1">entry ladder</div>
+						<div class="grid grid-cols-[auto_auto_auto_auto] gap-x-3 gap-y-1 text-[11px] mb-3">
+							<div class="text-fg-muted uppercase tracking-widest">tier</div>
+							<div class="text-fg-muted uppercase tracking-widest text-right">limit</div>
+							<div class="text-fg-muted uppercase tracking-widest text-right">alloc</div>
+							<div class="text-fg-muted uppercase tracking-widest text-right">dist</div>
+							{#each ts.entry_tiers as tier, i}
+								<div class="text-fg-dim whitespace-nowrap">{i + 1}</div>
+								<div class="text-fg text-right whitespace-nowrap">${tier.limit.toFixed(2)}</div>
+								<div class="text-fg text-right whitespace-nowrap">{tier.alloc_pct.toFixed(0)}%</div>
+								<div class="text-amber text-right whitespace-nowrap">−{tier.atr_distance.toFixed(1)} ATR</div>
+								<div class="col-span-4 text-fg-dim leading-snug -mt-0.5 mb-0.5">{tier.tag}</div>
+							{/each}
+						</div>
+					{/if}
+
+					{#if ts.tp_tranches.length > 0}
+						<div class="text-[10px] uppercase tracking-widest text-cyan mb-1">take-profit ladder</div>
+						<div class="grid grid-cols-[auto_auto_auto_auto] gap-x-3 gap-y-1 text-[11px]">
+							<div class="text-fg-muted uppercase tracking-widest">tp</div>
+							<div class="text-fg-muted uppercase tracking-widest text-right">target</div>
+							<div class="text-fg-muted uppercase tracking-widest text-right">tranche</div>
+							<div class="text-fg-muted uppercase tracking-widest text-right">r</div>
+							{#each ts.tp_tranches as tp, i}
+								<div class="text-fg-dim whitespace-nowrap">{i + 1}</div>
+								<div class="text-fg text-right whitespace-nowrap">${tp.target.toFixed(2)}</div>
+								<div class="text-fg text-right whitespace-nowrap">{tp.tranche_pct.toFixed(0)}%</div>
+								<div class="text-cyan text-right whitespace-nowrap">{tp.r_multiple.toFixed(1)}R</div>
+								<div class="col-span-4 text-fg-dim leading-snug -mt-0.5 mb-0.5">{tp.tag}</div>
+							{/each}
+						</div>
+					{/if}
+
+					<p class="text-fg-muted text-[10px] leading-relaxed mt-3 pt-2 border-t border-grid">
+						Reference levels from last close — coordination points, not a forecast. Verify against live price.
+					</p>
+				{:else}
+					<p class="text-fg-muted text-[11px] italic">no setup</p>
+				{/if}
+			</div>
 		</div>
 	</div>
 
