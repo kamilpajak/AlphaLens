@@ -45,8 +45,11 @@ DEFAULT_INTER_QUERY_SLEEP_SEC = 10.0
 # GDELT reconstructs titles from tokenized text, leaving spaces around
 # punctuation (~25% of rows): "Alphabet ( Google )", "gas prices . ". The
 # downstream pipeline + UI render the title verbatim, so normalise at ingest.
-_SPACE_BEFORE_PUNCT = re.compile(r"\s+([.,;:!?)\]}])")
-_SPACE_AFTER_OPENER = re.compile(r"([(\[{])\s+")
+# Possessive `\s++`: the punctuation class is disjoint from `\s`, so giving
+# back whitespace can never help the match — possessive is behaviourally
+# identical here and removes the backtracking S5852 flags as polynomial.
+_SPACE_BEFORE_PUNCT = re.compile(r"\s++([.,;:!?)\]}])")
+_SPACE_AFTER_OPENER = re.compile(r"([(\[{])\s++")
 _WHITESPACE_RUN = re.compile(r"\s{2,}")
 
 
