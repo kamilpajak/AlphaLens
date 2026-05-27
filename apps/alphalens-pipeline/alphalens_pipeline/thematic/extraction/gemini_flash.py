@@ -1,4 +1,4 @@
-"""Gemini 2.5 Flash batch event extraction over the unified news parquet.
+"""Gemini 3.5 Flash batch event extraction over the unified news parquet.
 
 For each news row, one Gemini call returns a structured ``ThematicEvent`` JSON
 object conforming to :data:`schema.EVENT_RESPONSE_SCHEMA`. Output is cached
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_NEWS_DIR = Path.home() / ".alphalens" / "thematic_news"
 DEFAULT_EVENTS_DIR = Path.home() / ".alphalens" / "thematic_events"
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.5-flash"
 
 _PROMPT_TEMPLATE = """\
 You are an analyst extracting structured events from financial news.

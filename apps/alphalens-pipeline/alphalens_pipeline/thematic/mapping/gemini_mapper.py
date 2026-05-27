@@ -18,7 +18,7 @@ from alphalens_pipeline.thematic.extraction.schema import parse_extraction
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gemini-3-pro-preview"
+DEFAULT_MODEL = "gemini-3.1-pro-preview"
 
 # Memo §14 lock 7 caps at $30/mo; one Pro call per novel theme is fine
 # (~10-20 themes/month from rollup, ~$0.05/call = ~$1/mo on Pro pricing).

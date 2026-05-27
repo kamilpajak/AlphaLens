@@ -1,7 +1,7 @@
 """Gemini brief generator — single per-row LLM call with Pro/Flash routing.
 
-Selects model per ``layer4_weighted_score``: ≥4 → ``gemini-3-pro-preview``;
-≤3 (or missing) → ``gemini-2.5-flash``. Same response schema for both so
+Selects model per ``layer4_weighted_score``: ≥4 → ``gemini-3.1-pro-preview``;
+≤3 (or missing) → ``gemini-3.5-flash``. Same response schema for both so
 the orchestrator + renderer don't need to branch.
 
 ``generate_brief`` returns ``(brief | None, BriefErrorKind)`` so callers
@@ -29,8 +29,8 @@ from alphalens_pipeline.thematic.extraction.schema import parse_extraction
 
 logger = logging.getLogger(__name__)
 
-PRO_MODEL = "gemini-3-pro-preview"
-FLASH_MODEL = "gemini-2.5-flash"
+PRO_MODEL = "gemini-3.1-pro-preview"
+FLASH_MODEL = "gemini-3.5-flash"
 
 _DEFAULT_MAX_OUTPUT_TOKENS = 2000
 _DEFAULT_TEMPERATURE = 0.2
