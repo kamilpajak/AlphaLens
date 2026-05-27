@@ -4,6 +4,7 @@
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
 	import GatePill from './GatePill.svelte';
+	import TradeSetupLadder from './TradeSetupLadder.svelte';
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
 	import { GLOSSARY_BY_TERM } from '$lib/data/glossary';
@@ -90,79 +91,68 @@
 				</div>
 			</div>
 
-			<div class="grid grid-cols-4 gap-x-4 sm:gap-x-6 w-full lg:w-auto lg:ml-auto">
-				<div class="text-[10px] uppercase tracking-widest min-w-0">
-					<div class="text-fg-muted">mcap</div>
-					<div class="text-fg text-sm sm:text-base font-bold normal-case truncate">{fmtUsdCompact(c.market_cap)}</div>
+			<div class="w-full lg:w-auto lg:ml-auto flex flex-col lg:items-end gap-1.5">
+				<!-- metrics: one inline dot-separated row; catalyst (the driver) in amber -->
+				<div class="flex flex-wrap lg:justify-end items-baseline gap-x-2 gap-y-1 text-[11px] sm:text-xs uppercase tracking-widest">
+					<span class="text-fg-dim whitespace-nowrap">mcap <span class="text-fg font-bold normal-case">{fmtUsdCompact(c.market_cap)}</span></span>
+					<span class="text-grid-strong">·</span>
+					<span class="text-fg-dim whitespace-nowrap">layer4 <span class="text-amber font-bold">{c.layer4_weighted_score ?? '—'}</span></span>
+					<span class="text-grid-strong">·</span>
+					<span class="text-fg-dim whitespace-nowrap">conf <span
+							class="font-bold"
+							class:text-green={confTone === 'green'}
+							class:text-amber={confTone === 'amber'}
+							class:text-cyan={confTone === 'cyan'}
+							class:text-fg-muted={confTone === 'muted'}
+						>{conf5}/5</span></span>
+					<span class="text-grid-strong">·</span>
+					<span class="text-amber whitespace-nowrap">catalyst <span class="font-bold">{fmtNum(c.catalyst_strength, 2)}</span>{#if c.catalyst_event_type}{' '}{c.catalyst_event_type}{/if}</span>
 				</div>
-				<div class="text-[10px] uppercase tracking-widest min-w-0">
-					<div class="text-fg-muted">layer4</div>
-					<div class="text-amber text-sm sm:text-base font-bold normal-case truncate">{c.layer4_weighted_score ?? '—'}</div>
-				</div>
-				<div class="text-[10px] uppercase tracking-widest min-w-0">
-					<div class="text-fg-muted">conf</div>
-					<div
-						class="text-sm sm:text-base font-bold normal-case truncate"
-						class:text-green={confTone === 'green'}
-						class:text-amber={confTone === 'amber'}
-						class:text-cyan={confTone === 'cyan'}
-						class:text-fg-muted={confTone === 'muted'}
-					>{conf5}/5</div>
-				</div>
-				<div class="text-[10px] uppercase tracking-widest min-w-0">
-					<div class="text-fg-muted">catalyst</div>
-					<div class="text-fg text-sm sm:text-base font-bold normal-case truncate">{fmtNum(c.catalyst_strength, 2)}</div>
-					<div class="text-fg-muted text-[9px] mt-0.5 truncate">{c.catalyst_event_type ?? '—'}</div>
+				<!-- verification gates: badges with jargon hover tooltips (moved up from the body) -->
+				<div class="flex flex-wrap lg:justify-end items-center gap-1.5">
+					<span class="text-cyan uppercase tracking-widest text-[10px] mr-1">gates</span>
+					{#each c.gates_passed as g}
+						<GatePill name={g} status="passed" />
+					{/each}
+					{#each c.gates_failed as g}
+						<GatePill name={g} status="failed" />
+					{/each}
+					{#each c.gates_unknown as g}
+						<GatePill name={g} status="unknown" />
+					{/each}
 				</div>
 			</div>
 		</div>
 	</header>
 
-	<!-- TLDR + verification -->
-	<div class="grid grid-cols-12 gap-4 lg:gap-5 px-4 sm:px-5 py-4">
-		<div class="col-span-12 lg:col-span-8">
-			{#if c.brief_tldr}
-				<p class="text-fg text-sm leading-relaxed">{c.brief_tldr}</p>
-			{:else}
-				<p class="text-fg-dim text-sm leading-relaxed italic">{c.rationale}</p>
-			{/if}
+	<!-- Thesis (verification gates moved into the header) -->
+	<div class="px-4 sm:px-5 py-4">
+		{#if c.brief_tldr}
+			<p class="text-fg text-sm leading-relaxed">{c.brief_tldr}</p>
+		{:else}
+			<p class="text-fg-dim text-sm leading-relaxed italic">{c.rationale}</p>
+		{/if}
 
-			<div class="mt-3 flex items-start gap-2 text-[11px]">
-				<ExternalLink class="size-3 text-cyan flex-shrink-0 mt-0.5" />
-				<div>
-					<a
-						href={c.source_event_url}
-						target="_blank"
-						rel="noreferrer"
-						class="text-cyan hover:text-amber transition-colors underline underline-offset-2"
-					>
-						{c.source_event_title}
-					</a>
-					<span class="text-fg-muted ml-2 whitespace-nowrap">{fmtDate(c.source_event_published_at)}</span>
-				</div>
-			</div>
-		</div>
-
-		<div class="col-span-12 lg:col-span-4">
-			<div class="text-[10px] uppercase tracking-widest text-green mb-2">verification.gates</div>
-			<div class="flex flex-wrap gap-1.5">
-				{#each c.gates_passed as g}
-					<GatePill name={g} status="passed" />
-				{/each}
-				{#each c.gates_failed as g}
-					<GatePill name={g} status="failed" />
-				{/each}
-				{#each c.gates_unknown as g}
-					<GatePill name={g} status="unknown" />
-				{/each}
+		<div class="mt-3 flex items-start gap-2 text-[11px]">
+			<ExternalLink class="size-3 text-cyan flex-shrink-0 mt-0.5" />
+			<div>
+				<a
+					href={c.source_event_url}
+					target="_blank"
+					rel="noreferrer"
+					class="text-cyan hover:text-amber transition-colors underline underline-offset-2"
+				>
+					{c.source_event_title}
+				</a>
+				<span class="text-fg-muted ml-2 whitespace-nowrap">{fmtDate(c.source_event_published_at)}</span>
 			</div>
 		</div>
 	</div>
 
 	<!-- Signal grid -->
-	<div class="border-t border-grid bg-bg/30 px-4 sm:px-5 py-4">
-		<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-3 text-[10px] uppercase tracking-widest text-fg-muted">
-			<span class="text-green">signals · vs sector peers</span>
+	<div class="border-t border-grid">
+		<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 sm:px-5 py-2.5 border-b border-grid bg-bg-2 text-[10px] uppercase tracking-widest text-fg-muted">
+			<span class="text-cyan">signals</span>
 			{#if c.peer_cohort_level === 'thin'}
 				<ChipTip
 					term="THIN cohort"
@@ -194,8 +184,9 @@
 					{/snippet}
 				</ChipTip>
 			{/if}
+			<span class="ml-auto normal-case tracking-normal text-fg-muted">%ile bars = how the company ranks within its sector peer group</span>
 		</div>
-		<div class="grid grid-cols-2 lg:grid-cols-4 gap-x-4 sm:gap-x-5 gap-y-4">
+		<div class="grid grid-cols-2 lg:grid-cols-4 gap-x-4 sm:gap-x-5 gap-y-4 px-4 sm:px-5 py-4 bg-bg/30">
 			<SignalBar
 				label="insider 90d (sector %ile)"
 				value={c.insider_score_sector_percentile}
@@ -257,9 +248,9 @@
 
 	<!-- Technicals + fundamentals table -->
 	<div class="grid grid-cols-12 gap-0 border-t border-grid text-[11px]">
-		<div class="col-span-12 lg:col-span-6 px-4 sm:px-5 py-4 lg:border-r lg:border-grid">
-			<div class="text-[10px] uppercase tracking-widest text-green mb-2">fundamentals</div>
-			<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5">
+		<div class="col-span-12 lg:col-span-8 lg:border-r lg:border-grid">
+			<div class="px-4 sm:px-5 py-2.5 border-b border-grid bg-bg-2 text-[10px] uppercase tracking-widest text-cyan">fundamentals</div>
+			<dl class="grid grid-cols-2 min-[520px]:grid-cols-4 gap-x-6 sm:gap-x-8 gap-y-1.5 px-4 sm:px-5 py-4">
 				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('PE')}>pe</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_pe, 1)}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('PS')}>ps</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ps, 1)}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('EV/REV')}>ev/rev</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ev_rev, 1)}</dd>
@@ -279,91 +270,34 @@
 				<dt class="text-fg-muted uppercase tracking-widest">next earnings</dt><dd class="text-fg text-right">{fmtDate(c.next_earnings_date)}</dd>
 			</dl>
 		</div>
-		<div class="col-span-12 lg:col-span-6 px-4 sm:px-5 py-4 border-t lg:border-t-0 border-grid">
-			<div class="text-[10px] uppercase tracking-widest text-green mb-2">technicals</div>
-			<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5">
+		<div class="col-span-12 lg:col-span-4 border-t lg:border-t-0 border-grid">
+			<div class="px-4 sm:px-5 py-2.5 border-b border-grid bg-bg-2 text-[10px] uppercase tracking-widest text-cyan">technicals</div>
+			<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 px-4 sm:px-5 py-4">
 				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA50')}>ma50 dist</JargonTip></dt><dd class="text-fg text-right whitespace-nowrap">{fmtPct(c.technical_ma50_distance_pct)}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA200')}>ma200 dist</JargonTip></dt><dd class="text-fg text-right whitespace-nowrap">{fmtPct(c.technical_ma200_distance_pct)}</dd>
-				<dt class="text-fg-muted uppercase tracking-widest">ma200 slope</dt><dd class="text-fg text-right whitespace-nowrap">{c.technical_ma200_slope_pct_per_day !== null ? fmtPct(c.technical_ma200_slope_pct_per_day, 3) + '/d' : '—'}</dd>
+				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA200 slope')}>ma200 slope</JargonTip></dt><dd class="text-fg text-right whitespace-nowrap">{c.technical_ma200_slope_pct_per_day !== null ? fmtPct(c.technical_ma200_slope_pct_per_day, 3) + '/d' : '—'}</dd>
 				<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('ATR')}>atr</JargonTip></dt><dd class="text-fg text-right whitespace-nowrap">{fmtPct(c.technical_atr_pct)}</dd>
 			</dl>
-
-			<!-- Trade setup: structured limit-entry ladder + take-profit tranches.
-			     Reference levels anchored to last close — coordination points for the
-			     group, not a forecast. Renders nothing structural when the brief had
-			     no clean setup (NO_STRUCTURE) or no trade_setup at all. -->
-			<div class="mt-3 pt-3 border-t border-grid">
-				<div class="text-[10px] uppercase tracking-widest text-green mb-2">trade setup</div>
-				{#if c.brief_trade_setup && c.brief_trade_setup.status === 'OK'}
-					{@const ts = c.brief_trade_setup}
-					<div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] mb-3">
-						<span class="text-fg-muted uppercase tracking-widest">size</span>
-						<span class="text-amber font-bold whitespace-nowrap">{ts.suggested_size_pct != null ? ts.suggested_size_pct.toFixed(1) + '%' : '—'}</span>
-						<span class="text-fg-dim">·</span>
-						<span class="text-fg-muted uppercase tracking-widest">stop</span>
-						<span class="text-red font-bold whitespace-nowrap">{ts.disaster_stop != null ? '$' + ts.disaster_stop.toFixed(2) : '—'}</span>
-						<span class="text-fg-dim">·</span>
-						<span class="text-fg-muted uppercase tracking-widest">ttl</span>
-						<span class="text-fg-dim whitespace-nowrap">{ts.order_ttl_days}d</span>
-					</div>
-
-					{#if ts.entry_tiers.length > 0}
-						<div class="text-[10px] uppercase tracking-widest text-amber mb-1">entry ladder</div>
-						<div class="grid grid-cols-[auto_auto_auto_auto] gap-x-3 gap-y-1 text-[11px] mb-3">
-							<div class="text-fg-muted uppercase tracking-widest">tier</div>
-							<div class="text-fg-muted uppercase tracking-widest text-right">limit</div>
-							<div class="text-fg-muted uppercase tracking-widest text-right">alloc</div>
-							<div class="text-fg-muted uppercase tracking-widest text-right">dist</div>
-							{#each ts.entry_tiers as tier, i}
-								<div class="text-fg-dim whitespace-nowrap">{i + 1}</div>
-								<div class="text-fg text-right whitespace-nowrap">${tier.limit.toFixed(2)}</div>
-								<div class="text-fg text-right whitespace-nowrap">{tier.alloc_pct.toFixed(0)}%</div>
-								<div class="text-amber text-right whitespace-nowrap">−{tier.atr_distance.toFixed(1)} ATR</div>
-								<div class="col-span-4 text-fg-dim leading-snug -mt-0.5 mb-0.5">{tier.tag}</div>
-							{/each}
-						</div>
-					{/if}
-
-					{#if ts.tp_tranches.length > 0}
-						<div class="text-[10px] uppercase tracking-widest text-cyan mb-1">take-profit ladder</div>
-						<div class="grid grid-cols-[auto_auto_auto_auto] gap-x-3 gap-y-1 text-[11px]">
-							<div class="text-fg-muted uppercase tracking-widest">tp</div>
-							<div class="text-fg-muted uppercase tracking-widest text-right">target</div>
-							<div class="text-fg-muted uppercase tracking-widest text-right">tranche</div>
-							<div class="text-fg-muted uppercase tracking-widest text-right">r</div>
-							{#each ts.tp_tranches as tp, i}
-								<div class="text-fg-dim whitespace-nowrap">{i + 1}</div>
-								<div class="text-fg text-right whitespace-nowrap">${tp.target.toFixed(2)}</div>
-								<div class="text-fg text-right whitespace-nowrap">{tp.tranche_pct.toFixed(0)}%</div>
-								<div class="text-cyan text-right whitespace-nowrap">{tp.r_multiple.toFixed(1)}R</div>
-								<div class="col-span-4 text-fg-dim leading-snug -mt-0.5 mb-0.5">{tp.tag}</div>
-							{/each}
-						</div>
-					{/if}
-
-					<p class="text-fg-muted text-[10px] leading-relaxed mt-3 pt-2 border-t border-grid">
-						Reference levels from last close — coordination points, not a forecast. Verify against live price.
-					</p>
-				{:else}
-					<p class="text-fg-muted text-[11px] italic">no setup</p>
-				{/if}
-			</div>
 		</div>
 	</div>
 
+	{#if c.brief_trade_setup}
+		<TradeSetupLadder setup={c.brief_trade_setup} closeDate={null} />
+	{/if}
+
 	<!-- Supply chain + bear + exit -->
 	<div class="grid grid-cols-12 gap-0 border-t border-grid">
-		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 lg:border-r lg:border-grid">
-			<div class="text-[10px] uppercase tracking-widest text-cyan mb-2">supply.chain</div>
-			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_supply_chain_md ?? '—'}</p>
+		<div class="col-span-12 lg:col-span-4 lg:border-r lg:border-grid">
+			<div class="px-4 sm:px-5 py-2.5 border-b border-grid bg-bg-2 text-[10px] uppercase tracking-widest text-cyan">supply.chain</div>
+			<p class="text-fg-dim text-xs leading-relaxed px-4 sm:px-5 py-4">{c.brief_supply_chain_md ?? '—'}</p>
 		</div>
-		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 lg:border-r lg:border-grid border-t lg:border-t-0">
-			<div class="text-[10px] uppercase tracking-widest text-red mb-2">bear.case</div>
-			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_bear_summary_md ?? '—'}</p>
+		<div class="col-span-12 lg:col-span-4 lg:border-r lg:border-grid border-t lg:border-t-0">
+			<div class="px-4 sm:px-5 py-2.5 border-b border-grid bg-bg-2 text-[10px] uppercase tracking-widest text-red">bear.case</div>
+			<p class="text-fg-dim text-xs leading-relaxed px-4 sm:px-5 py-4">{c.brief_bear_summary_md ?? '—'}</p>
 		</div>
-		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 border-t lg:border-t-0">
-			<div class="text-[10px] uppercase tracking-widest text-amber mb-2">catalyst.failure.exit</div>
-			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_catalyst_failure_exit ?? '—'}</p>
+		<div class="col-span-12 lg:col-span-4 border-t lg:border-t-0">
+			<div class="px-4 sm:px-5 py-2.5 border-b border-grid bg-bg-2 text-[10px] uppercase tracking-widest text-amber">catalyst.failure.exit</div>
+			<p class="text-fg-dim text-xs leading-relaxed px-4 sm:px-5 py-4">{c.brief_catalyst_failure_exit ?? '—'}</p>
 		</div>
 	</div>
 
