@@ -26,10 +26,12 @@ class EntryTier:
     tag: str
 
     def to_dict(self) -> dict:
+        # Full-precision floats — the frontend owns display rounding (toFixed).
+        # Rounding here too would double-round / drift vs the presentation layer.
         return {
-            "limit": round(self.limit, 2),
-            "alloc_pct": round(self.alloc_pct, 1),
-            "atr_distance": round(self.atr_distance, 2),
+            "limit": self.limit,
+            "alloc_pct": self.alloc_pct,
+            "atr_distance": self.atr_distance,
             "tag": self.tag,
         }
 
@@ -45,9 +47,9 @@ class TpTranche:
 
     def to_dict(self) -> dict:
         return {
-            "target": round(self.target, 2),
-            "tranche_pct": round(self.tranche_pct, 1),
-            "r_multiple": round(self.r_multiple, 2),
+            "target": self.target,
+            "tranche_pct": self.tranche_pct,
+            "r_multiple": self.r_multiple,
             "tag": self.tag,
         }
 
@@ -85,12 +87,10 @@ class TradeSetup:
         return {
             "schema_version": self.schema_version,
             "status": self.status,
-            "asof_close": round(self.asof_close, 2),
-            "atr": round(self.atr, 2),
-            "disaster_stop": None if self.disaster_stop is None else round(self.disaster_stop, 2),
-            "suggested_size_pct": (
-                None if self.suggested_size_pct is None else round(self.suggested_size_pct, 2)
-            ),
+            "asof_close": self.asof_close,
+            "atr": self.atr,
+            "disaster_stop": self.disaster_stop,
+            "suggested_size_pct": self.suggested_size_pct,
             "order_ttl_days": self.order_ttl_days,
             "entry_tiers": [t.to_dict() for t in self.entry_tiers],
             "tp_tranches": [t.to_dict() for t in self.tp_tranches],
