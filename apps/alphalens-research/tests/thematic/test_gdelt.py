@@ -330,6 +330,14 @@ class TestGdeltTitleCleaning(unittest.TestCase):
     def test_empty_stays_empty(self):
         self.assertEqual(gdelt._clean_title(""), "")
 
+    def test_handles_multi_space_runs_before_punctuation(self):
+        # Pins greedy \s+ behaviour: runs of >1 space adjacent to punctuation
+        # are consumed whole, so step order vs the run-collapse pass is moot.
+        self.assertEqual(
+            gdelt._clean_title("A title ( with parens )  . Final"),
+            "A title (with parens). Final",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
