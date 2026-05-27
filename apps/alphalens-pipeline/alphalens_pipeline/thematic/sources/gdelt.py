@@ -16,6 +16,7 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -40,6 +41,22 @@ DEFAULT_MAXRECORDS = 100
 # on downstream buckets; with permanent-vs-transient distinction below the
 # extra 2s/bucket buys headroom on the tail.
 DEFAULT_INTER_QUERY_SLEEP_SEC = 10.0
+
+# GDELT reconstructs titles from tokenized text, leaving spaces around
+# punctuation (~25% of rows): "Alphabet ( Google )", "gas prices . ". The
+# downstream pipeline + UI render the title verbatim, so normalise at ingest.
+# Patterns match a SINGLE literal space (whitespace runs are collapsed first
+# via str.split), so there is no quantifier to backtrack — sidesteps ReDoS.
+_SPACE_BEFORE_PUNCT = re.compile(r" ([.,;:!?)\]}])")
+_SPACE_AFTER_OPENER = re.compile(r"([(\[{]) ")
+
+
+def _clean_title(title: str) -> str:
+    """Strip GDELT's space-padding around punctuation; collapse runs; trim."""
+    title = " ".join(title.split())  # collapse all whitespace runs + trim
+    title = _SPACE_BEFORE_PUNCT.sub(r"\1", title)
+    title = _SPACE_AFTER_OPENER.sub(r"\1", title)
+    return title
 
 
 class GdeltQueryError(Exception):
@@ -156,7 +173,7 @@ def transform(raw_articles: Iterable[dict], *, theme: str) -> pd.DataFrame:
                 "source": "gdelt",
                 "timestamp": ts,
                 "tickers": [],  # GDELT doesn't tag tickers; Layer 2 LLM fills this
-                "title": art.get("title") or "",
+                "title": _clean_title(art.get("title") or ""),
                 "body": "",
                 "url": url,
                 "keywords": [],
