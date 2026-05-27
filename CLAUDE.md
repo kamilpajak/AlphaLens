@@ -130,7 +130,7 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 
 **One canonical HTTP client per external vendor** — every SEC EDGAR call goes through `alphalens_pipeline/data/alt_data/sec_edgar_client.py::SecEdgarClient`; every Alpha Vantage call through `alphavantage_client.py::AlphaVantageClient`; every Gemini call through `gemini_client.py::GeminiClient`; every Polygon call through `polygon_client.py::PolygonClient`. Why: rate caps are per-IP / per-key — shadow clients fragment the request stream and break quota tracking. Sites with an injected client (edgar_detector `SECEdgarSource`, `CIKLoader`; thematic mapper/extractor/generator; thematic press verification + news ingest; `PolygonShortInterestClient` domain wrapper) keep DI; module-level helpers call the respective `get_default_*_client()`. Env vars: `SEC_EDGAR_USER_AGENT`, `ALPHA_VANTAGE_API_KEY`, `GOOGLE_API_KEY`, `POLYGON_API_KEY`. Enforcement: `apps/alphalens-research/tests/test_no_raw_sec_http.py`, `apps/alphalens-research/tests/test_no_raw_av_http.py`, `apps/alphalens-research/tests/test_no_raw_gemini_sdk.py`, `apps/alphalens-research/tests/test_no_raw_polygon_http.py` — each with a positive-control case so the regex / URL-list cannot rot to empty silently. Design memos: `docs/research/{sec_edgar,alphavantage,gemini,polygon}_client_consolidation_2026_05_*.md`.
 
-**Zen pre-MERGE codereview is mandatory** for any non-trivial PR (Python pipeline OR `web/` frontend). Workflow: push → open PR → `mcp__zen__codereview` with `gemini-3-pro-preview` + `thinking_mode="high"` → apply findings as additional commits on the open PR (preserve review trail) → wait CI green on latest commit → merge. Mixed-stack PRs need one combined zen pass, not two. Skippable only for doc-only / single-line typo / pure comment changes.
+**Zen pre-MERGE codereview is mandatory** for any non-trivial PR (Python pipeline OR `web/` frontend). Workflow: push → open PR → `mcp__zen__codereview` with `gemini-3.1-pro-preview` + `thinking_mode="high"` → apply findings as additional commits on the open PR (preserve review trail) → wait CI green on latest commit → merge. Mixed-stack PRs need one combined zen pass, not two. Skippable only for doc-only / single-line typo / pure comment changes.
 
 **Polish primary, English for tech terms** — Polish as primary in prose / conversations; English only for technical names without a Polish equivalent.
 
@@ -214,7 +214,7 @@ Operator recipes: `deploy/systemd/README.md` (systemd units), `deploy/docker/REA
 
 - API keys in `.env` (`GOOGLE_API_KEY`, `ALPHA_VANTAGE_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `POLYGON_API_KEY`, `PERPLEXITY_API_KEY`)
 - Google API key also in macOS Keychain as `google-api-key`
-- LLM config: Gemini 3 Pro (guru pilot, low thinking budget)
+- LLM config: Gemini 3.1 Pro (guru pilot, low thinking budget)
 - Runtime data (outside repo, survives git ops):
   - `~/.alphalens/candidates.db` — Layer 1 candidate queue (historical log; no live drain)
   - `~/.alphalens/edgar-detect/` — portfolio.yaml, EDGAR dedup, digest, launchd logs
