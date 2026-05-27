@@ -21,16 +21,16 @@ members = [
 dev = [
     { name = "bandit", specifier = ">=1.9.4" },
     { name = "coverage", specifier = ">=7.14.0" },
-    { name = "diff-cover", specifier = ">=10.2" },
+    { name = "diff-cover", specifier = ">=10.2.1" },
     { name = "django-types", specifier = ">=0.22.0" },
     { name = "djangorestframework-types", specifier = ">=0.9.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pandas-stubs", specifier = ">=3.0.0.260204" },
-    { name = "pre-commit", specifier = ">=3.7" },
+    { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pyright", specifier = ">=1.1.409" },
-    { name = "pytest", specifier = ">=9.0" },
+    { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-django", specifier = ">=4.12" },
-    { name = "ruff", specifier = ">=0.15.12" },
+    { name = "ruff", specifier = ">=0.15.14" },
 ]
 
 [[package]]
