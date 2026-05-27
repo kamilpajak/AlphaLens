@@ -726,7 +726,7 @@
 						</span>
 						<span class="ml-auto flex items-center gap-2">
 							<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest {statusTone(p.status)}">{p.status}</span>
-							<span class="text-[10px] uppercase tracking-widest text-fg-muted">{p.date}</span>
+							<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{p.date}</span>
 						</span>
 					</header>
 

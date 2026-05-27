@@ -28,7 +28,7 @@
 					<td class="py-3 pr-3 sm:pr-4">
 						<a
 							href="/brief/{day.date}"
-							class="font-display font-bold text-lg sm:text-xl text-fg group-hover:text-amber transition-colors"
+							class="font-display font-bold text-lg sm:text-xl text-fg group-hover:text-amber transition-colors whitespace-nowrap"
 						>
 							{day.date}
 						</a>

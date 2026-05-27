@@ -138,7 +138,7 @@
 					>
 						{c.source_event_title}
 					</a>
-					<span class="text-fg-muted ml-2">{fmtDate(c.source_event_published_at)}</span>
+					<span class="text-fg-muted ml-2 whitespace-nowrap">{fmtDate(c.source_event_published_at)}</span>
 				</div>
 			</div>
 		</div>

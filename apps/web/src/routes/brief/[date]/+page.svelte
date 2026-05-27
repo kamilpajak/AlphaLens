@@ -42,7 +42,7 @@
 				<div class="text-[10px] uppercase tracking-[0.3em] text-fg-muted">// session</div>
 				<h1
 					data-testid="brief-date"
-					class="font-display font-bold text-3xl sm:text-4xl lg:text-5xl text-amber tracking-tight mt-1"
+					class="font-display font-bold text-3xl sm:text-4xl lg:text-5xl text-amber tracking-tight mt-1 whitespace-nowrap"
 				>
 					{data.brief.date}
 				</h1>
@@ -51,7 +51,7 @@
 						{#if prevDay}
 							<a
 								href="/brief/{prevDay.date}"
-								class="inline-flex items-center gap-1 px-2 py-1 border border-grid hover:border-amber hover:text-amber text-[10px] uppercase tracking-widest text-fg-dim transition-colors"
+								class="inline-flex items-center gap-1 px-2 py-1 border border-grid hover:border-amber hover:text-amber text-[10px] uppercase tracking-widest text-fg-dim transition-colors whitespace-nowrap"
 							>
 								<ChevronLeft class="size-3" /> {prevDay.date}
 							</a>
@@ -59,7 +59,7 @@
 						{#if nextDay}
 							<a
 								href="/brief/{nextDay.date}"
-								class="inline-flex items-center gap-1 px-2 py-1 border border-grid hover:border-amber hover:text-amber text-[10px] uppercase tracking-widest text-fg-dim transition-colors"
+								class="inline-flex items-center gap-1 px-2 py-1 border border-grid hover:border-amber hover:text-amber text-[10px] uppercase tracking-widest text-fg-dim transition-colors whitespace-nowrap"
 							>
 								{nextDay.date} <ChevronRight class="size-3" />
 							</a>

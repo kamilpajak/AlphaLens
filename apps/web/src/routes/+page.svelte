@@ -74,7 +74,7 @@
 				</div>
 				<div class="text-right text-[11px] uppercase tracking-widest text-fg-muted">
 					<div>latest brief</div>
-					<div class="font-display font-bold text-2xl sm:text-3xl text-amber mt-1">
+					<div class="font-display font-bold text-2xl sm:text-3xl text-amber mt-1 whitespace-nowrap">
 						{hasBrief ? data.latestBrief!.date : 'pending'}
 					</div>
 				</div>
@@ -97,7 +97,7 @@
 				{#if hasBrief}
 					<a
 						href="/brief/{data.latestBrief!.date}"
-						class="inline-flex items-center gap-2 px-4 py-2 bg-amber text-bg font-semibold text-xs uppercase tracking-widest hover:bg-amber-dim transition-colors"
+						class="inline-flex items-center gap-2 px-4 py-2 bg-amber text-bg font-semibold text-xs uppercase tracking-widest hover:bg-amber-dim transition-colors whitespace-nowrap"
 					>
 						open {data.latestBrief!.date} brief
 						<ArrowUpRight class="size-3" />
@@ -165,7 +165,7 @@
 					<div class="flex items-start justify-between">
 						<div>
 							<div class="text-[10px] uppercase tracking-widest text-fg-muted">brief</div>
-							<div class="font-display font-bold text-2xl text-fg group-hover:text-amber transition-colors">
+							<div class="font-display font-bold text-2xl text-fg group-hover:text-amber transition-colors whitespace-nowrap">
 								{day.date}
 							</div>
 						</div>
@@ -190,7 +190,7 @@
 			<div class="flex items-baseline gap-3 px-4 py-3 border-b border-grid">
 				<TrendingUp class="size-4 text-amber" />
 				<h2 class="font-display font-bold text-sm tracking-widest uppercase">
-					Top picks // {data.latestBrief!.date}
+					Top picks // <span class="whitespace-nowrap">{data.latestBrief!.date}</span>
 				</h2>
 				<span class="text-[10px] text-fg-muted uppercase tracking-widest ml-auto">rank by layer4</span>
 			</div>
@@ -256,7 +256,7 @@
 					<h2 class="font-display font-bold text-sm tracking-widest uppercase text-fg">
 						theme.distribution
 					</h2>
-					<span class="text-[10px] text-fg-muted uppercase tracking-widest ml-auto">
+					<span class="text-[10px] text-fg-muted uppercase tracking-widest ml-auto whitespace-nowrap">
 						{data.latestBrief!.date}
 					</span>
 				</div>
