@@ -45,3 +45,27 @@ class TestProdSecretKeyGuard(unittest.TestCase):
             with self.assertRaises(ImproperlyConfigured) as ctx:
                 importlib.import_module("config.settings.prod")
             self.assertIn("SECRET_KEY", str(ctx.exception))
+
+    def test_raises_when_secret_key_is_empty(self) -> None:
+        """An explicit empty ``SECRET_KEY=""`` must also fail closed.
+
+        An exact-match-only guard (``== sentinel``) would let an empty key
+        through and boot with no signing key; ``prod.py`` now also rejects a
+        falsy key.
+        """
+        keep = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(("SECRET_KEY", "DEBUG", "ALLOWED_HOSTS"))
+        }
+        keep["ALLOWED_HOSTS"] = "localhost"
+        keep["SECRET_KEY"] = ""  # set-but-empty: not the sentinel, still insecure
+        with (
+            patch.dict(os.environ, keep, clear=True),
+            patch.dict(sys.modules),
+        ):
+            for mod in [m for m in list(sys.modules) if m.startswith("config.settings")]:
+                del sys.modules[mod]
+            with self.assertRaises(ImproperlyConfigured) as ctx:
+                importlib.import_module("config.settings.prod")
+            self.assertIn("SECRET_KEY", str(ctx.exception))

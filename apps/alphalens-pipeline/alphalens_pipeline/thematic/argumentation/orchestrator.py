@@ -47,10 +47,16 @@ def _cache_only_ohlcv_loader(
         if not path.exists():
             return pd.DataFrame()
         try:
-            return pd.read_parquet(path)
+            df = pd.read_parquet(path)
         except Exception as exc:  # pragma: no cover - defensive cache read
             logger.warning("ohlcv cache read failed for %s: %s", path.name, exc)
             return pd.DataFrame()
+        if df.empty:
+            return df
+        # Mirror the Layer-4 scorer's loader (scorer.py: df[df.index <= asof])
+        # so Phase E builds the trade setup over the EXACT bars Phase D scored
+        # — a leaked post-asof row would otherwise desync ATR / levels.
+        return df[df.index <= pd.Timestamp(asof)]
 
     return _load
 

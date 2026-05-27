@@ -49,6 +49,10 @@ DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
 
 REQUIRED_PARQUET_COLUMNS: frozenset[str] = frozenset({"ticker", "theme"})
 
+# JSONFields that hold a dict (parsed from a json.dumps string), NOT a list[str].
+# Anything not listed here is coerced as a list of strings.
+_OBJECT_JSON_FIELDS: frozenset[str] = frozenset({"brief_trade_setup"})
+
 # Mtime equality tolerance: float seconds, sub-microsecond stability across
 # filesystems is not guaranteed.
 _MTIME_EPS = 1e-6
@@ -84,9 +88,12 @@ def _coerce_for_field(field: django_models.Field, raw):
     the constraint.
     """
     if isinstance(field, django_models.JSONField):
-        # brief_trade_setup is an OBJECT JSONField (a dict the pipeline stores as
-        # a json.dumps string); every other JSONField holds a list[str].
-        if field.name == "brief_trade_setup":
+        # Object-shaped JSONFields (a dict the pipeline stores as a json.dumps
+        # string) go through coerce_json_obj; every other JSONField holds a
+        # list[str] (gates_*, also_in_themes, …). A NEW object field must be
+        # added to _OBJECT_JSON_FIELDS or it will be silently corrupted by
+        # coerce_list_str (which would iterate the dict's keys).
+        if field.name in _OBJECT_JSON_FIELDS:
             return coerce_json_obj(raw)
         return coerce_list_str(raw)
     if isinstance(field, django_models.DateTimeField):

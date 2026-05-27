@@ -26,10 +26,13 @@ ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 # ``dev-only-`` prefix to mark rotated emergency credentials, and we don't
 # want to crash those legitimately set prod keys.
 _DEV_SECRET_KEY_SENTINEL = "dev-only-insecure-do-not-use-in-prod"
-if SECRET_KEY == _DEV_SECRET_KEY_SENTINEL:
+# Also fail closed on an empty / falsy key: `"" == sentinel` is False, so a
+# `SECRET_KEY=""` env would slip past an exact-match-only guard and boot with
+# no signing key (Django catches it deeper, but fail here with a clear cause).
+if not SECRET_KEY or SECRET_KEY == _DEV_SECRET_KEY_SENTINEL:
     raise ImproperlyConfigured(
         "SECRET_KEY must be set in the production environment "
-        "(currently using the base.py dev-only fallback)."
+        "(currently empty or using the base.py dev-only fallback)."
     )
 
 # Insert CF middleware after AuthenticationMiddleware so request.user starts

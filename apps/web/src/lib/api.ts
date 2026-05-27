@@ -87,7 +87,12 @@ export async function apiFetch(
 	// HTML body here is the login page, never legitimate API output) and
 	// surface a synthetic 401 so callsites' `if (!res.ok)` branches catch it.
 	const contentType = res.headers.get('content-type') ?? '';
-	if (contentType.includes('text/html')) {
+	// Gate on res.ok: CF Access serves its login page as 200 + text/html, so a
+	// SUCCESSFUL HTML body means an expired session → synthetic 401. A non-2xx
+	// HTML body is a genuine upstream error page (nginx/cloudflared 502/503);
+	// masking that as 401 would bounce the user into an infinite SSO loop
+	// during a transient outage, so let it through as the real error.
+	if (res.ok && contentType.includes('text/html')) {
 		return new Response(null, { status: 401, statusText: 'Unauthorized' });
 	}
 	return res;

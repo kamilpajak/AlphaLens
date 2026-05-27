@@ -8,6 +8,22 @@
 	let activeTheme = $state<string | null>(null);
 	let onlyVerified = $state(false);
 
+	// SvelteKit reuses this component across /brief/[date] navigations (same
+	// route, changed param), so the filter $state would bleed onto the next
+	// day — showing an empty candidate list if that day lacks the selected
+	// theme. Reset the filters whenever the brief date changes.
+	// Start undefined (don't capture data in the $state initializer — Svelte
+	// flags that) so the first run just records the date; later date changes
+	// clear the filters.
+	let lastDate = $state<string | undefined>(undefined);
+	$effect(() => {
+		if (data.brief.date !== lastDate) {
+			lastDate = data.brief.date;
+			activeTheme = null;
+			onlyVerified = false;
+		}
+	});
+
 	const filtered = $derived(
 		data.brief.candidates.filter((c) => {
 			if (activeTheme && c.theme !== activeTheme) return false;

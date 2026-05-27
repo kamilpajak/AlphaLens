@@ -123,8 +123,16 @@ def build_trade_setup_from_frame(
     close_series = ohlcv["close"].astype(float)
     close = float(close_series.iloc[-1])
     atr_pct = _compute_atr_pct(ohlcv)
-    if close <= 0 or atr_pct is None or atr_pct <= 0:
-        return TradeSetup.no_structure(asof_close=close, atr=0.0, order_ttl_days=order_ttl_days)
+    # NaN-guard close explicitly: `NaN <= 0` is False, so a NaN last close
+    # (forward-filled / missing bar) would slip past the `<= 0` check and
+    # poison every downstream level — serialising as JSON NaN, which the
+    # Django JSONField cannot round-trip. atr_pct is already None-or-finite
+    # (_compute_atr_pct returns None on non-finite ATR).
+    if pd.isna(close) or close <= 0 or atr_pct is None or atr_pct <= 0:
+        safe_close = 0.0 if pd.isna(close) else close
+        return TradeSetup.no_structure(
+            asof_close=safe_close, atr=0.0, order_ttl_days=order_ttl_days
+        )
     atr = atr_pct / 100.0 * close
 
     highs = ohlcv["high"].astype(float).tolist()
@@ -145,8 +153,14 @@ def build_trade_setup_from_frame(
     # -25% disaster floor: never risk more than 25% from the blended entry.
     # If the structural stop is deeper, raise it and re-validate tiers (a
     # raised stop can push the deepest tier inside the min-stop-distance).
-    floor = blended * _DISASTER_FLOOR_FRAC
-    if stop < floor:
+    # Loop, not a single pass: dropping a deep tier RAISES the blended entry,
+    # which raises the floor again — a single `if` could leave the stop below
+    # the new floor. Converges: each pass either satisfies the floor or drops
+    # >=1 tier (finite), so it terminates.
+    while True:
+        floor = blended * _DISASTER_FLOOR_FRAC
+        if stop >= floor:
+            break
         stop = floor
         tiers, blended = _assemble_tiers(close, atr, candidates, stop, risk_distribution)
         if not tiers:

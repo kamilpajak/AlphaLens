@@ -317,5 +317,35 @@ class TestDedupOnMerge(unittest.TestCase):
             self.assertEqual(count, 1, f"{ticker} duplicated to {count} rows")
 
 
+class TestCacheOnlyOhlcvLoader(unittest.TestCase):
+    def test_truncates_rows_after_asof(self):
+        asof = dt.date(2026, 4, 14)
+        idx = pd.to_datetime(["2026-04-12", "2026-04-14", "2026-04-15"])
+        df = pd.DataFrame(
+            {
+                "open": [1.0, 2.0, 3.0],
+                "high": [1.0, 2.0, 3.0],
+                "low": [1.0, 2.0, 3.0],
+                "close": [1.0, 2.0, 3.0],
+                "volume": [1.0, 1.0, 1.0],
+            },
+            index=idx,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            df.to_parquet(cache_dir / f"FOO_{asof.isoformat()}.parquet")
+            loader = orchestrator._cache_only_ohlcv_loader(cache_dir=cache_dir)
+            out = loader("FOO", asof)
+            # The post-asof 2026-04-15 row must be dropped — parity with the
+            # Layer-4 scorer loader so Phase D and Phase E see identical bars.
+            self.assertEqual(len(out), 2)
+            self.assertLessEqual(out.index.max(), pd.Timestamp(asof))
+
+    def test_missing_cache_file_returns_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            loader = orchestrator._cache_only_ohlcv_loader(cache_dir=Path(tmp))
+            self.assertTrue(loader("NOPE", dt.date(2026, 4, 14)).empty)
+
+
 if __name__ == "__main__":
     unittest.main()
