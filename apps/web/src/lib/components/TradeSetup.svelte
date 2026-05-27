@@ -90,7 +90,7 @@
 						>
 						<span class="text-fg font-bold whitespace-nowrap">{fmtPrice(tier.limit)}</span>
 						<span class="text-fg-dim text-right sm:text-left whitespace-nowrap">{tier.alloc_pct}%</span>
-						<span class="hidden sm:block text-fg-muted whitespace-nowrap">{tier.atr_distance != null ? `-${tier.atr_distance.toFixed(1)} ATR` : '—'}</span>
+						<span class="hidden sm:block text-fg-muted whitespace-nowrap">{Number.isFinite(tier.atr_distance) ? `-${tier.atr_distance.toFixed(1)} ATR` : '—'}</span>
 						<span class="hidden sm:block text-fg-muted italic text-right truncate">{tier.tag}</span>
 					</div>
 				{/each}
@@ -110,7 +110,7 @@
 						>
 						<span class="text-fg font-bold whitespace-nowrap">{fmtPrice(tp.target)}</span>
 						<span class="text-fg-dim text-right sm:text-left whitespace-nowrap">{tp.tranche_pct}%</span>
-						<span class="hidden sm:block text-fg-muted whitespace-nowrap">{tp.r_multiple != null ? `${tp.r_multiple.toFixed(1)}R` : '—'}</span>
+						<span class="hidden sm:block text-fg-muted whitespace-nowrap">{Number.isFinite(tp.r_multiple) ? `${tp.r_multiple.toFixed(1)}R` : '—'}</span>
 						<span class="hidden sm:block text-fg-muted italic text-right truncate">{tp.tag}</span>
 					</div>
 				{/each}
