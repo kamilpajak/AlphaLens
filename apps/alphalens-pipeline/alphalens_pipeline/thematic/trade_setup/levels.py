@@ -14,6 +14,63 @@ from collections.abc import Sequence
 _CLUSTER_RADIUS_MULT = 0.5  # swing prices within 0.5*ATR collapse into one zone
 
 
+class _SwingTracker:
+    """Mutable ZigZag state — tracks the running high/low extreme and emits a
+    pivot when price reverses from that extreme by >= the threshold.
+
+    The per-leg branches live in separate methods so no single function
+    carries the whole state machine's cognitive load (each stays well under
+    the Sonar S3776 ceiling). Behaviour is identical to one inlined loop.
+    """
+
+    def __init__(self, high0: float, low0: float) -> None:
+        self.direction = 0  # +1 = up-leg (tracking a high), -1 = down-leg, 0 = undetermined
+        self.hi, self.hi_idx = high0, 0
+        self.lo, self.lo_idx = low0, 0
+        self.pivots: list[tuple[int, float, str]] = []
+
+    def _flip_to_down(self, low: float, idx: int) -> None:
+        self.pivots.append((self.hi_idx, self.hi, "H"))
+        self.direction = -1
+        self.lo, self.lo_idx = low, idx
+
+    def _flip_to_up(self, high: float, idx: int) -> None:
+        self.pivots.append((self.lo_idx, self.lo, "L"))
+        self.direction = 1
+        self.hi, self.hi_idx = high, idx
+
+    def _up_leg(self, high: float, low: float, idx: int, threshold: float) -> None:
+        if high >= self.hi:
+            self.hi, self.hi_idx = high, idx
+        elif self.hi - low >= threshold:
+            self._flip_to_down(low, idx)
+
+    def _down_leg(self, high: float, low: float, idx: int, threshold: float) -> None:
+        if low <= self.lo:
+            self.lo, self.lo_idx = low, idx
+        elif high - self.lo >= threshold:
+            self._flip_to_up(high, idx)
+
+    def _seed(self, high: float, low: float, idx: int, threshold: float) -> None:
+        """Undetermined: track both extremes, lock direction on first breach."""
+        if high >= self.hi:
+            self.hi, self.hi_idx = high, idx
+        if low <= self.lo:
+            self.lo, self.lo_idx = low, idx
+        if self.hi - low >= threshold:
+            self._flip_to_down(low, idx)
+        elif high - self.lo >= threshold:
+            self._flip_to_up(high, idx)
+
+    def step(self, high: float, low: float, idx: int, threshold: float) -> None:
+        if self.direction == 1:
+            self._up_leg(high, low, idx, threshold)
+        elif self.direction == -1:
+            self._down_leg(high, low, idx, threshold)
+        else:
+            self._seed(high, low, idx, threshold)
+
+
 def detect_swing_points(
     highs: Sequence[float],
     lows: Sequence[float],
@@ -24,48 +81,16 @@ def detect_swing_points(
 
     Returns ``[(index, price, kind)]`` with ``kind`` in ``{"H", "L"}`` in
     chronological order. ``threshold`` is an absolute price move (caller
-    passes ``mult * ATR``). Deterministic single pass; ``direction`` starts
+    passes ``mult * ATR``). Deterministic single pass; direction starts
     undetermined and locks on the first threshold breach.
     """
     n = len(highs)
     if n < 2 or threshold <= 0:
         return []
-
-    pivots: list[tuple[int, float, str]] = []
-    direction = 0  # +1 = tracking a high (up-swing), -1 = tracking a low, 0 = undetermined
-    hi, hi_idx = highs[0], 0
-    lo, lo_idx = lows[0], 0
-
+    tracker = _SwingTracker(highs[0], lows[0])
     for i in range(1, n):
-        if direction == 1:
-            if highs[i] >= hi:
-                hi, hi_idx = highs[i], i
-            elif hi - lows[i] >= threshold:
-                pivots.append((hi_idx, hi, "H"))
-                direction = -1
-                lo, lo_idx = lows[i], i
-        elif direction == -1:
-            if lows[i] <= lo:
-                lo, lo_idx = lows[i], i
-            elif highs[i] - lo >= threshold:
-                pivots.append((lo_idx, lo, "L"))
-                direction = 1
-                hi, hi_idx = highs[i], i
-        else:  # undetermined — track both extremes, lock on first breach
-            if highs[i] >= hi:
-                hi, hi_idx = highs[i], i
-            if lows[i] <= lo:
-                lo, lo_idx = lows[i], i
-            if hi - lows[i] >= threshold:
-                pivots.append((hi_idx, hi, "H"))
-                direction = -1
-                lo, lo_idx = lows[i], i
-            elif highs[i] - lo >= threshold:
-                pivots.append((lo_idx, lo, "L"))
-                direction = 1
-                hi, hi_idx = highs[i], i
-
-    return pivots
+        tracker.step(highs[i], lows[i], i, threshold)
+    return tracker.pivots
 
 
 def cluster_prices(prices: Sequence[float], *, radius: float) -> list[float]:
