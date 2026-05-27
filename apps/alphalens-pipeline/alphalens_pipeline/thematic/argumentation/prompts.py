@@ -11,7 +11,7 @@ and injected into ``<facts>``; the LLM composes narrative around them.
 
 Pro vs Flash: same fact schema; Flash gets a tighter task description so
 the smaller model produces tighter output (memo §14 lock #7 sets
-gemini-2.5-flash as the marginal-confidence downgrade target).
+gemini-3.5-flash as the marginal-confidence downgrade target).
 """
 
 from __future__ import annotations
