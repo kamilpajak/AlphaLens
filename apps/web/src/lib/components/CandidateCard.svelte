@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Candidate } from '$lib/types';
-	import { fmtUsdCompact, fmtPct, fmtNum, fmtPctile, fmtDate, confidenceTone } from '$lib/format';
+	import { fmtUsdCompact, fmtPct, fmtNum, fmtPctile, fmtDate, confidenceTone, confidenceLabel } from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
 	import GatePill from './GatePill.svelte';
@@ -21,7 +21,6 @@
 	}
 	let { candidate: c, index }: Props = $props();
 
-	const conf5 = $derived(Math.round(c.gemini_confidence * 5));
 	const confTone = $derived(confidenceTone(c.gemini_confidence));
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
@@ -86,8 +85,11 @@
 		class="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 sm:px-5 py-2 border-b border-grid text-[10px] uppercase tracking-widest"
 	>
 		<span class="text-fg-muted min-w-0 truncate">
-			{c.sector_name ?? '—'}
-			{#if c.industry_name}<span class="text-grid-strong mx-1">/</span>{c.industry_name}{/if}
+			{#if c.sector_name && c.industry_name}
+				{c.sector_name}<span class="text-grid-strong mx-1">/</span>{c.industry_name}
+			{:else}
+				{c.sector_name ?? c.industry_name ?? '—'}
+			{/if}
 		</span>
 		<div class="flex flex-wrap items-center gap-x-5 gap-y-1 ml-auto">
 			<span class="text-fg-muted whitespace-nowrap">
@@ -100,7 +102,7 @@
 					class:text-green={confTone === 'green'}
 					class:text-amber={confTone === 'amber'}
 					class:text-cyan={confTone === 'cyan'}
-					class:text-fg-muted={confTone === 'muted'}>{conf5}/5</span
+					class:text-fg-muted={confTone === 'muted'}>{confidenceLabel(c.gemini_confidence)}</span
 				>
 			</span>
 			<span class="text-fg-muted whitespace-nowrap">
@@ -292,11 +294,11 @@
 
 	<!-- Analyst narrative: full-width horizontal row at the bottom (3 columns). -->
 	<div class="grid grid-cols-12 gap-0 border-t border-grid">
-		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 lg:border-r lg:border-grid">
+		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 lg:border-r border-grid">
 			<div class="text-[10px] uppercase tracking-widest text-cyan mb-2">supply.chain</div>
 			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_supply_chain_md ?? '—'}</p>
 		</div>
-		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 lg:border-r lg:border-grid border-t lg:border-t-0">
+		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 lg:border-r border-grid border-t lg:border-t-0">
 			<div class="text-[10px] uppercase tracking-widest text-red mb-2">bear.case</div>
 			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_bear_summary_md ?? '—'}</p>
 		</div>
