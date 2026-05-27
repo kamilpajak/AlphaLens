@@ -138,6 +138,7 @@
 						href={c.source_event_url}
 						target="_blank"
 						rel="noreferrer"
+						aria-label={`${c.source_event_title} (opens in a new tab)`}
 						class="inline-flex items-start gap-1 text-cyan hover:text-amber transition-colors underline underline-offset-2 min-w-0"
 					>
 						<span>{c.source_event_title}</span>

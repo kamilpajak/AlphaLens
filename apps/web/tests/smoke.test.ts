@@ -396,6 +396,24 @@ test.describe('smoke — brief detail interactions', () => {
 		).toBeVisible();
 		await expect(page.locator('article[id] [data-testid="trade-setup"]').first()).toBeVisible();
 	});
+
+	test('external (target=_blank) links announce the new tab to screen readers', async ({
+		page
+	}) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		await expect(page.locator('article[id]').first()).toBeVisible();
+		// Every link that opens a new tab must carry an aria-label ending in
+		// "(opens in a new tab)" so screen-reader users get the same cue the
+		// ExternalLink / ArrowUpRight icon gives sighted users. Covers the
+		// layout API-docs link, the candidate source-event link, and the
+		// per-day top-catalyst link.
+		const blankLinks = page.locator('a[target="_blank"]');
+		const n = await blankLinks.count();
+		expect(n).toBeGreaterThan(0);
+		for (let i = 0; i < n; i++) {
+			await expect(blankLinks.nth(i)).toHaveAttribute('aria-label', /opens in a new tab/i);
+		}
+	});
 });
 
 test.describe('experiments — hybrid tooltip policy', () => {

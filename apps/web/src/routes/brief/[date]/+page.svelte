@@ -130,7 +130,7 @@
 		{#if firstCatalystUrl}
 			<div class="border-t border-grid px-4 sm:px-6 py-3 text-xs">
 				<span class="text-fg-muted uppercase tracking-widest text-[10px]">top catalyst: </span>
-				<a href={firstCatalystUrl} target="_blank" rel="noreferrer" class="text-cyan hover:text-amber transition-colors">
+				<a href={firstCatalystUrl} target="_blank" rel="noreferrer" aria-label={`${firstCatalystTitle} (opens in a new tab)`} class="text-cyan hover:text-amber transition-colors">
 					{firstCatalystTitle}
 				</a>
 			</div>
