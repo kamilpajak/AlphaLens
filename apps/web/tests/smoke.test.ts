@@ -388,7 +388,9 @@ test.describe('smoke — brief detail interactions', () => {
 		// Trade-setup UI was reverted 2026-05-27 (brief_trade_setup data is still
 		// generated server-side, just not rendered); assert a stable structured
 		// section instead.
-		await expect(page.locator('article[id]').filter({ hasText: 'fundamentals' }).first()).toBeVisible();
+		await expect(
+			page.locator('article[id] div').filter({ hasText: /^fundamentals$/i }).first()
+		).toBeVisible();
 	});
 });
 
