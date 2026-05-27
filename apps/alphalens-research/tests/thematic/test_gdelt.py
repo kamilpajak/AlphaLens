@@ -305,5 +305,31 @@ class TestGdeltThemesYamlWellFormed(unittest.TestCase):
         )
 
 
+class TestGdeltTitleCleaning(unittest.TestCase):
+    """GDELT space-pads punctuation in titles (~25% of rows); clean at ingest."""
+
+    def test_drops_space_before_closing_punctuation(self):
+        self.assertEqual(
+            gdelt._clean_title("California urges drivers to avoid Chevron over gas prices . "),
+            "California urges drivers to avoid Chevron over gas prices.",
+        )
+
+    def test_drops_spaces_inside_parentheses(self):
+        self.assertEqual(
+            gdelt._clean_title("Druckenmiller Dumped Alphabet ( Google ) and Bought AI"),
+            "Druckenmiller Dumped Alphabet (Google) and Bought AI",
+        )
+
+    def test_collapses_internal_runs_and_strips(self):
+        self.assertEqual(gdelt._clean_title("  Foo   bar ,  baz  "), "Foo bar, baz")
+
+    def test_clean_title_is_idempotent_noop(self):
+        clean = "Apple unveils M5 chip (finally) — analysts cheer."
+        self.assertEqual(gdelt._clean_title(clean), clean)
+
+    def test_empty_stays_empty(self):
+        self.assertEqual(gdelt._clean_title(""), "")
+
+
 if __name__ == "__main__":
     unittest.main()
