@@ -1,7 +1,7 @@
 # Thematic Trade-Setup (Entry/TP Ladder) — Design Memo v1
 
 **Date:** 2026-05-27
-**Status:** **LOCKED** (pending zen adversarial review — this memo is the review artifact)
+**Status:** **SHIPPED** (PR #262, merged to `main` `ff9322b` 2026-05-27). Zen design + code review passed; SonarCloud QG green. VPS Django + pipeline image deployed; trade-setup data populates from the next daily pipeline run. v1.1 deferred: LLM per-tier "strategic logic" prose (v1 uses deterministic derivation tags).
 **Track:** Thematic event-driven decision-support tool (parallel to factor-paradigm-search). NOT a paradigm test under project doctrine 3.5. Augments the WhatsApp investing group workflow — tool proposes, group discusses, each member decides.
 **Supersedes:** the legacy Layer-5 trade-management block (`brief_position_pct`, `brief_time_exit_weeks`, `brief_time_exit_on_catalyst_failure_weeks`, `brief_disaster_stop_pct`, `brief_entry_price_note`) — removed end-to-end in the same feature PR.
 
