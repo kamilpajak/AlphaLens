@@ -7,6 +7,13 @@ export function fmtUsdCompact(value: number | null | undefined): string {
 	return `$${value.toFixed(0)}`;
 }
 
+/** Exact dollar price with 2 decimals — for trade-setup levels ($312.50),
+ *  distinct from fmtUsdCompact which abbreviates to B/M/k for market caps. */
+export function fmtPrice(value: number | null | undefined, digits = 2): string {
+	if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+	return `$${value.toFixed(digits)}`;
+}
+
 export function fmtPct(value: number | null | undefined, digits = 1): string {
 	if (value === null || value === undefined || !Number.isFinite(value)) return '—';
 	const sign = value >= 0 ? '+' : '';
