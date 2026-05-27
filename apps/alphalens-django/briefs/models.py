@@ -111,11 +111,11 @@ class Brief(models.Model):
     brief_supply_chain_md = models.TextField(blank=True)
     brief_bear_summary_md = models.TextField(blank=True)
     brief_catalyst_failure_exit = models.TextField(blank=True)
-    brief_entry_price_note = models.TextField(blank=True)
-    brief_position_pct = models.FloatField(null=True, blank=True)
-    brief_time_exit_weeks = models.IntegerField(null=True, blank=True)
-    brief_time_exit_on_catalyst_failure_weeks = models.IntegerField(null=True, blank=True)
-    brief_disaster_stop_pct = models.FloatField(null=True, blank=True)
+    # Deterministic entry/TP ladder + structural stop (see
+    # alphalens_pipeline.thematic.trade_setup). Replaces the legacy
+    # position_pct / time_exit / disaster_stop / entry_price_note fields
+    # (2026-05-27). Consumers must check the JSON's schema_version.
+    brief_trade_setup = models.JSONField(null=True, blank=True)
     brief_generated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:

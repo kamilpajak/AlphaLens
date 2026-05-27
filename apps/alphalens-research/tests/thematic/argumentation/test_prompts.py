@@ -23,8 +23,6 @@ def _sample_facts():
         "valuation_fcf_margin": -0.5,
         "technicals_summary_str": "RSI 60 / MA50 +4.1% / ATR 6.6% / volZ 3.8",
         "market_cap": 1.78e9,
-        "position_pct": 2.0,
-        "time_exit_weeks": 8,
     }
 
 

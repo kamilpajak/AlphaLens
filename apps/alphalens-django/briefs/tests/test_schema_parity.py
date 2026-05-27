@@ -96,6 +96,10 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     "brief_disaster_stop_pct",
     "brief_full_md",
     "brief_generated_at",
+    # Post-legacy extension (2026-05-27): the deterministic Trade-Setup JSON
+    # (entry/TP ladder + structural stop) that replaced the 5 numeric/entry
+    # fields above. Contract bump paired with the brief_trade_setup field.
+    "brief_trade_setup",
 )
 
 # Columns the legacy contract exposed that Django deliberately does not model.
@@ -111,6 +115,13 @@ INTENTIONALLY_DROPPED: frozenset[str] = frozenset(
         "gates_unknown_str",
         "technicals_summary_str",
         "brief_full_md",
+        # Replaced by brief_trade_setup (deterministic entry/TP ladder),
+        # 2026-05-27. Kept in the frozen LEGACY_CONTRACT_COLUMNS as history.
+        "brief_entry_price_note",
+        "brief_position_pct",
+        "brief_time_exit_weeks",
+        "brief_time_exit_on_catalyst_failure_weeks",
+        "brief_disaster_stop_pct",
     }
 )
 

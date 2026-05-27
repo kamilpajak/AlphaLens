@@ -106,14 +106,14 @@ Equal-risk: `shares_i = (B/n)/(E_i−S)`. If all fill and price hits stop, each 
 
 ## §6. Build scope (one feature PR, TDD)
 
-**New module** `apps/alphalens-pipeline/alphalens_pipeline/thematic/trade_setup/`:
+**New module** `apps/alphalens-pipeline/alphalens_pipeline/thematic/trade_setup/` (as built):
+- `model.py` — `TradeSetup` / `EntryTier` / `TpTranche` dataclasses + JSON contract (`schema_version`, `status`)
 - `levels.py` — ZigZag-ATR swing detection + clustering → support/resistance zones (§7.2)
 - `ladder.py` — geometry-safe entry tiers + TP tranches + monotonicity guard (§7.1)
-- `sizing.py` — equal-risk allocation (§7.3)
-- `probability.py` — first-passage fill-probability (§7.4)
-- `builder.py` — orchestrates cached OHLCV → `TradeSetup` dataclass
+- `sizing.py` — equal-risk allocation + suggested size + blended entry (§7.3)
+- `builder.py` — orchestrates cached OHLCV → `TradeSetup` (ATR-distance computed here, §7.4 — no separate probability module)
 
-**Generation wiring:** `argumentation/orchestrator.py` calls `builder.build_trade_setup(row, ohlcv)`; `prompts.py` injects per-tier `{level, tag}`; `schema.py` adds `tier_logic` / `tp_logic` string arrays to the LLM response schema.
+**Generation wiring:** `argumentation/orchestrator.py` builds the setup per row via a cache-only OHLCV loader (reuses the scorer's `thematic_ohlcv` cache, no network) and persists `brief_trade_setup` (JSON string). **LLM per-tier "strategic logic" prose is DEFERRED to v1.1** — v1 uses the deterministic derivation tags ("swing-low + 50-day MA", "overhead resistance") as the rationale, which keeps the whole block deterministic (more aligned with the honesty doctrine). The LLM brief loses only `entry_price_note`; `catalyst_failure_exit` prose stays.
 
 **Schema:** remove the 5 legacy columns from `_EMPTY_OUT_COLUMNS` (parquet), `briefs/models.py` + migration (Django), `types.ts` (frontend), and `LEGACY_CONTRACT_COLUMNS` → `INTENTIONALLY_DROPPED` in `test_schema_parity.py`. Add `brief_trade_setup` (JSON) — `JSONField` in Django, JSON string in parquet. **JSON shape (zen §5):** root carries `schema_version` (e.g. `"1.0.0"`) + `status` (`"OK"` | `"NO_STRUCTURE"`); `entry_tiers[]` (limit, alloc_pct, atr_distance, tag), `tp_tranches[]` (target, tranche_pct, r_multiple, tag), `disaster_stop`, `suggested_size_pct`, `order_ttl_days` (limit-cancel horizon, ≠ trade horizon), `asof_close`, `atr`. **Consumers MUST check `schema_version` and reject unknown versions** rather than parse-and-fail. Keep `brief_catalyst_failure_exit` (see §1 open item). `order_ttl_days` (when unfilled limits expire) is distinct from the 4–8w **trade horizon** (hold once filled) — both are informational fields, not the same number (zen §6).
 

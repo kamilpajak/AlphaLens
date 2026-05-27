@@ -77,8 +77,6 @@ def _format_facts_block(facts: dict) -> str:
         f"- MA200 distance: {_format_num(facts.get('technical_ma200_distance_pct'), '.1f')}%,"
         f" MA200 slope: {_format_num(facts.get('technical_ma200_slope_pct_per_day'), '.3f')}%/day\n"
         f"{earnings_block}"
-        f"position_pct: {facts.get('position_pct', 'n/a')}\n"
-        f"time_exit_weeks: {facts.get('time_exit_weeks', 8)}\n"
     )
 
 
@@ -102,8 +100,6 @@ Return a JSON object with these fields (each a single string):
   anti-confirmation-bias control, max 250 chars)
 - catalyst_failure_exit: thesis-specific exit triggers (max 200 chars,
   e.g. "exit if a competitor announces a comparable product publicly")
-- entry_price_note: brief note on entry timing (max 100 chars, e.g.
-  "prefer 5-10 bps below current; wait for pullback if RSI > 65")
 
 CONSTRAINTS
 - Ground every claim in the facts provided. Do NOT invent numbers,
@@ -141,7 +137,6 @@ Return JSON with these string fields:
 - supply_chain_reasoning (≤400 chars, 1-2 paragraphs)
 - bear_summary (≤250 chars, MANDATORY, ≥2 risks)
 - catalyst_failure_exit (≤200 chars, thesis-specific)
-- entry_price_note (≤100 chars)
 
 Do NOT invent numbers, names, or dates not in <facts>. No marketing tone.
 Do NOT label large 52w drawdown as "cheap" or "on sale" — it is a
