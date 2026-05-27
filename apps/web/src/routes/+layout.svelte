@@ -100,7 +100,7 @@
 				</span>
 				<span class="hidden sm:flex items-center gap-1.5">
 					<Activity class="size-3" />
-					<span>{now} utc</span>
+					<span class="whitespace-nowrap">{now} utc</span>
 				</span>
 			</div>
 		</div>
