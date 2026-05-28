@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { Activity, Database, Triangle } from 'lucide-svelte';
 	import favicon from '$lib/assets/favicon.svg';
+	import { GEMINI } from '$lib/models';
 
 	let { children } = $props();
 
@@ -34,8 +35,8 @@
 		{ label: 'PRESS-GATE', value: 'tri-state ok' },
 		{ label: 'CATALYST-FLOOR', value: '0.55' },
 		{ label: 'MAGIC-FORMULA', value: 'cohort' },
-		{ label: 'PRO-MODEL', value: 'gemini-3-pro-preview' },
-		{ label: 'FLASH-MODEL', value: 'gemini-2.5-flash' },
+		{ label: 'PRO-MODEL', value: GEMINI.PRO },
+		{ label: 'FLASH-MODEL', value: GEMINI.FLASH },
 		{ label: 'PRESS-WINDOW', value: '30d' },
 		{ label: 'SLIPPAGE', value: '50bps' },
 		{ label: 'LIMIT', value: 'polygon 5rpm' }

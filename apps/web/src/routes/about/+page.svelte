@@ -1,18 +1,17 @@
 <script lang="ts">
-	// Layer model labels use brand-style names ("Gemini 3 Flash" / "Gemini 3
-	// Pro") rather than exact preview IDs (e.g. gemini-3.1-pro-preview). The
-	// page is user-facing and read-only — exact preview IDs rot on every
-	// model bump (see reference_gemini_model_retirement_silent_failure.md:
-	// the retired gemini-3-pro-preview / gemini-2.5-flash labels lingered
-	// here long after PR #257 cut over the code). Brand names survive a bump
-	// without re-staling. Exact IDs live in the pipeline source.
+	import { GEMINI } from '$lib/models';
+
+	// Layer model labels use brand-style names imported from $lib/models
+	// (single source of truth across the SPA). Exact preview IDs rot on
+	// every model bump — see reference_gemini_model_retirement_silent_failure.md.
+	// The pipeline source carries exact IDs; the SPA shows brand names.
 	const layers = [
 		{ id: 'L1', name: 'EDGAR Watchdog', what: 'detects S&P 100 filings + macro news', model: 'rule-based + launchd' },
-		{ id: 'L2', name: 'Theme Extraction', what: 'distills news → tradeable thematic narrative', model: 'Gemini 3 Flash' },
-		{ id: 'L3', name: 'Beneficiary Mapping', what: 'theme → 5-15 small-cap second-order beneficiaries (≤3 shipped per theme)', model: 'Gemini 3 Pro' },
+		{ id: 'L2', name: 'Theme Extraction', what: 'distills news → tradeable thematic narrative', model: GEMINI.FLASH },
+		{ id: 'L3', name: 'Beneficiary Mapping', what: 'theme → 5-15 small-cap second-order beneficiaries (≤3 shipped per theme)', model: GEMINI.PRO },
 		{ id: 'V', name: 'Verification Gates', what: 'press · insider · 10-K (tri-state, post-PR #150; ETF dropped #185)', model: 'polygon + form-4 parquet + EDGAR' },
 		{ id: 'L4', name: 'Quant Scorer', what: 'insider × FCFF × Magic Formula × technicals × catalyst-floor', model: 'reused paradigm #11 + #13 scorers' },
-		{ id: 'L5', name: 'Brief Generator', what: 'per-candidate WhatsApp-format markdown', model: 'Gemini 3 Pro / Flash' }
+		{ id: 'L5', name: 'Brief Generator', what: 'per-candidate WhatsApp-format markdown', model: GEMINI.PRO_OR_FLASH }
 	];
 
 	// Doctrine 03 used to claim Pro-supplied keywords replaced "hand-curated
