@@ -8,6 +8,14 @@ PR 2 populates ``plans`` / ``plan_entries`` / ``plan_exits`` / ``shadow_log``.
 PR 3 will add ``orders`` / ``fills`` / ``exits``. Keep the schema additive —
 the harness rebuilds the analysis report off this DB end-to-end, so dropping
 a column would invalidate the record.
+
+PR 3 forward-compat note (zen review §2 follow-up): every new child table
+that hangs off ``plans`` (orders, fills, exits) MUST declare
+``FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE``. The
+``_delete_existing_for_date`` helper only deletes from ``plans`` +
+``shadow_log``; without CASCADE, a ``--force`` rerun would orphan order /
+fill rows and silently corrupt the ledger. ``plan_entries`` and
+``plan_exits`` already do this correctly — extend the same pattern.
 """
 
 from __future__ import annotations

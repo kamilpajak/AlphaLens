@@ -79,13 +79,6 @@ class TradeSetupNotPlannableError(ValueError):
     """
 
 
-def _cap_pct() -> float:
-    """100 / N_FIXED, expressed as a percent — i.e. the per-position weight
-    expressed in the same units as ``suggested_size_pct`` (a percent, NOT a
-    fraction). Pinned via N_FIXED so changing the constant flows through."""
-    return 100.0 / N_FIXED
-
-
 def compute_setup_plan(
     *,
     brief_trade_setup: dict,
