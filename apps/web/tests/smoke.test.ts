@@ -703,6 +703,21 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		const opened = await page.locator('article#P14 details[open]').count();
 		expect(opened, 'P14 details must be open after hash deep-link').toBe(1);
 	});
+
+	test('native <button> elements default to cursor:pointer', async ({ page }) => {
+		// Tailwind v4's reset drops the browser-historical `cursor: pointer` on
+		// <button>, so without a global rule a native button shows the arrow
+		// cursor while an adjacent <a> shows pointer — a visible inconsistency
+		// the user surfaced on the +error.svelte session-expired card. app.css
+		// restores the convention for enabled buttons.
+		await page.goto('/experiments');
+		const cursors = await page.locator('button:not(:disabled)').evaluateAll((els) =>
+			els.map((el) => getComputedStyle(el).cursor)
+		);
+		expect(cursors.length, 'experiments page must render ≥1 native <button>').toBeGreaterThan(0);
+		const nonPointer = cursors.filter((c) => c !== 'pointer');
+		expect(nonPointer, `every enabled button should default to cursor:pointer (got ${nonPointer.join(', ')})`).toEqual([]);
+	});
 });
 
 test.describe('glossary auto-discovery (per-page coverage)', () => {
