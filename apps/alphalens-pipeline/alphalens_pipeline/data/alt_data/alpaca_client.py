@@ -334,8 +334,8 @@ class AlpacaClient:
         symbol: str,
         qty: int | float,
         limit_price: float,
-        take_profit_price: float,
-        stop_loss_price: float,
+        take_profit_price: float | None = None,
+        stop_loss_price: float | None = None,
         side: str = "buy",
         time_in_force: str = "gtc",
     ) -> Any:
