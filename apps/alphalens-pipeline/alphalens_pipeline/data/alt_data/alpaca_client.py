@@ -99,7 +99,9 @@ def _round_to_alpaca_tick(price: float) -> float:
     pricing criteria``. The minimum tick is:
 
     - ``price >= $1.00`` → $0.01 (penny)
-    - ``price <  $1.00`` → $0.0001 (Reg NMS sub-penny for low-priced shares)
+    - ``price <  $1.00`` → $0.0001 (Reg NMS sub-dollar tick size for
+      low-priced shares; sometimes called "sub-penny" in vendor docs but
+      strictly it is the tick allowed on sub-dollar instruments).
 
     Applied centrally inside :class:`AlpacaClient` so every callsite
     (planner-driven entry tiers, exit_manager TPs / SLs, time-stop

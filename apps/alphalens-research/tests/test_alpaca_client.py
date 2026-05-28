@@ -511,9 +511,48 @@ class TestAlpacaTickRounding(_FakeAlpacaTestCase):
             _round_to_alpaca_tick,
         )
 
-        # < $1.00 → 4dp Reg NMS sub-penny tick
+        # < $1.00 → 4dp Reg NMS sub-dollar tick
         self.assertEqual(_round_to_alpaca_tick(0.123456), 0.1235)
         self.assertEqual(_round_to_alpaca_tick(0.99), 0.99)
+
+    def test_round_helper_exact_dollar_boundary(self):
+        """The $1.00 boundary is inclusive on the 2dp side — `>= $1.00`."""
+        from alphalens_pipeline.data.alt_data.alpaca_client import (
+            _round_to_alpaca_tick,
+        )
+
+        # Exactly $1.00 → 2dp tier
+        self.assertEqual(_round_to_alpaca_tick(1.0), 1.0)
+        # Just below → 4dp tier
+        self.assertEqual(_round_to_alpaca_tick(0.9999), 0.9999)
+
+    def test_round_helper_pins_half_cent_behaviour(self):
+        """Python's built-in ``round`` is documented as round-half-to-even
+        (banker's rounding), but IEEE-754 binary representation means many
+        nominal "half" decimals (e.g. ``69.245``) are actually a tick above
+        or below the true half, so the observed direction is not always the
+        even digit. The helper inherits all of that.
+
+        This test pins the OBSERVED behaviour on a handful of representative
+        values so a well-intentioned future swap to ``Decimal(...).quantize(
+        ROUND_HALF_UP)`` would visibly shift these outputs and prompt
+        re-review, rather than silently changing every half-cent price.
+
+        For Phase A observation the half-cent direction is immaterial
+        (~0.007% slippage on a $69 stock)."""
+        from alphalens_pipeline.data.alt_data.alpaca_client import (
+            _round_to_alpaca_tick,
+        )
+
+        # 2dp tier (>= $1) — both nominal-halves at 69.245 / 69.255 are
+        # represented slightly above the half in IEEE-754, so both round up.
+        self.assertEqual(_round_to_alpaca_tick(69.245), 69.25)
+        self.assertEqual(_round_to_alpaca_tick(69.255), 69.25)
+
+        # 4dp tier (< $1) — IEEE-754 nudges both 0.12345 and 0.12355 to the
+        # same direction at 4dp precision; observed Python behaviour pins to 0.1235.
+        self.assertEqual(_round_to_alpaca_tick(0.12345), 0.1235)
+        self.assertEqual(_round_to_alpaca_tick(0.12355), 0.1235)
 
     def test_submit_limit_order_rounds_subpenny_price(self):
         client = self._build_client()
