@@ -103,4 +103,67 @@ def plan(
         typer.echo(f"  {marker} {outcome.ticker:<6s} {outcome.theme}{suffix}")
 
 
+@paper_app.command("submit")
+def submit(
+    date: str = typer.Option(
+        ...,
+        "--date",
+        help="ISO date (YYYY-MM-DD) of the brief whose PLANNED rows to submit.",
+    ),
+    ledger_path: Path | None = typer.Option(
+        None,
+        "--ledger",
+        help="Override the default paper ledger location (~/.alphalens/paper_ledger.db).",
+    ),
+    use_test_account: bool = typer.Option(
+        False,
+        "--use-test-account",
+        help=(
+            "Route orders to the ALPACA_TEST_* account (dev sandbox) instead of "
+            "the main paper account. For PR 3 live smoke testing."
+        ),
+    ),
+) -> None:
+    """Submit entry-tier limit orders to Alpaca paper for every PLANNED
+    candidate on ``brief_date`` that hasn't been submitted yet.
+
+    Idempotent at (plan_id, tier_index) — re-running after a partial
+    submit (mid-batch crash, network blip) only pushes the tiers that
+    don't already have an ENTRY row in ``orders``.
+    """
+    from alphalens_pipeline.data.alt_data.alpaca_client import (
+        get_default_alpaca_client,
+    )
+    from alphalens_pipeline.paper.constants import DEFAULT_LEDGER_RELPATH
+    from alphalens_pipeline.paper.submitter import submit_for_date
+
+    brief_date = dt.date.fromisoformat(date)
+    resolved_ledger = (
+        ledger_path if ledger_path is not None else Path.home() / DEFAULT_LEDGER_RELPATH
+    )
+
+    profile = "test" if use_test_account else "main"
+    alpaca_client = get_default_alpaca_client(profile=profile)
+
+    report = submit_for_date(
+        brief_date=brief_date,
+        ledger_path=resolved_ledger,
+        alpaca_client=alpaca_client,
+    )
+
+    typer.echo(
+        f"paper submit {report.brief_date.isoformat()} "
+        f"(profile={profile}): plans={report.n_plans_processed} "
+        f"orders_submitted={report.n_orders_submitted}"
+    )
+    for outcome in report.outcomes:
+        suffix_parts: list[str] = []
+        if outcome.n_tiers_skipped_existing > 0:
+            suffix_parts.append(f"skipped-existing={outcome.n_tiers_skipped_existing}")
+        if outcome.n_tiers_skipped_zero_qty > 0:
+            suffix_parts.append(f"zero-qty={outcome.n_tiers_skipped_zero_qty}")
+        suffix = f"  [{', '.join(suffix_parts)}]" if suffix_parts else ""
+        typer.echo(f"  → {outcome.ticker:<6s} submitted={outcome.n_tiers_submitted}{suffix}")
+
+
 __all__ = ["paper_app"]
