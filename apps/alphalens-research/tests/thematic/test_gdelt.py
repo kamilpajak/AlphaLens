@@ -310,31 +310,31 @@ class TestGdeltTitleCleaning(unittest.TestCase):
 
     def test_drops_space_before_closing_punctuation(self):
         self.assertEqual(
-            gdelt._clean_title("California urges drivers to avoid Chevron over gas prices . "),
+            gdelt.clean_title("California urges drivers to avoid Chevron over gas prices . "),
             "California urges drivers to avoid Chevron over gas prices.",
         )
 
     def test_drops_spaces_inside_parentheses(self):
         self.assertEqual(
-            gdelt._clean_title("Druckenmiller Dumped Alphabet ( Google ) and Bought AI"),
+            gdelt.clean_title("Druckenmiller Dumped Alphabet ( Google ) and Bought AI"),
             "Druckenmiller Dumped Alphabet (Google) and Bought AI",
         )
 
     def test_collapses_internal_runs_and_strips(self):
-        self.assertEqual(gdelt._clean_title("  Foo   bar ,  baz  "), "Foo bar, baz")
+        self.assertEqual(gdelt.clean_title("  Foo   bar ,  baz  "), "Foo bar, baz")
 
     def test_clean_title_is_idempotent_noop(self):
         clean = "Apple unveils M5 chip (finally) — analysts cheer."
-        self.assertEqual(gdelt._clean_title(clean), clean)
+        self.assertEqual(gdelt.clean_title(clean), clean)
 
     def test_empty_stays_empty(self):
-        self.assertEqual(gdelt._clean_title(""), "")
+        self.assertEqual(gdelt.clean_title(""), "")
 
     def test_handles_multi_space_runs_before_punctuation(self):
         # Pins greedy \s+ behaviour: runs of >1 space adjacent to punctuation
         # are consumed whole, so step order vs the run-collapse pass is moot.
         self.assertEqual(
-            gdelt._clean_title("A title ( with parens )  . Final"),
+            gdelt.clean_title("A title ( with parens )  . Final"),
             "A title (with parens). Final",
         )
 

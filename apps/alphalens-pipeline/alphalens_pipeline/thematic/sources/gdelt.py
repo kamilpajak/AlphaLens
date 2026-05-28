@@ -51,8 +51,13 @@ _SPACE_BEFORE_PUNCT = re.compile(r" ([.,;:!?)\]}])")
 _SPACE_AFTER_OPENER = re.compile(r"([(\[{]) ")
 
 
-def _clean_title(title: str) -> str:
-    """Strip GDELT's space-padding around punctuation; collapse runs; trim."""
+def clean_title(title: str) -> str:
+    """Strip GDELT's space-padding around punctuation; collapse runs; trim.
+
+    Public — also called by the legacy-title backfill (`alphalens thematic
+    clean-titles`, see `alphalens_pipeline.thematic.clean_titles`). Idempotent
+    on already-clean input.
+    """
     title = " ".join(title.split())  # collapse all whitespace runs + trim
     title = _SPACE_BEFORE_PUNCT.sub(r"\1", title)
     title = _SPACE_AFTER_OPENER.sub(r"\1", title)
@@ -173,7 +178,7 @@ def transform(raw_articles: Iterable[dict], *, theme: str) -> pd.DataFrame:
                 "source": "gdelt",
                 "timestamp": ts,
                 "tickers": [],  # GDELT doesn't tag tickers; Layer 2 LLM fills this
-                "title": _clean_title(art.get("title") or ""),
+                "title": clean_title(art.get("title") or ""),
                 "body": "",
                 "url": url,
                 "keywords": [],
