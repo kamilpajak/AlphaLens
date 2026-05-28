@@ -898,3 +898,37 @@ test.describe('smoke — Cloudflare Pages _redirects rule order', () => {
 		expect(rules[appRuleIdx], '/_app/* rule must return 404').toMatch(/\s404\s*$/);
 	});
 });
+
+test.describe('smoke — SvelteKit stale-import recovery (version polling)', () => {
+	// Canonical fix for the post-deploy blank-screen bug per
+	// https://github.com/sveltejs/kit/issues/9089 — the build emits
+	// /_app/version.json, the client polls it on `kit.version.pollInterval`,
+	// and when a mismatch is detected `updated.current` flips true. The
+	// layout opts <main> into a full reload on the next navigation via
+	// `data-sveltekit-reload` so the browser fetches the new HTML + new
+	// hashed chunk URLs instead of trying to import the stale ones.
+
+	test('/_app/version.json is emitted by adapter-static', async ({ page }) => {
+		// page.request bypasses page.route() so the mock fixture installed in
+		// beforeEach doesn't interfere with this raw asset fetch.
+		const response = await page.request.get('/_app/version.json');
+		expect(response.status(), '/_app/version.json must be served').toBe(200);
+		const body = await response.json();
+		expect(body, 'version.json must include a `version` field').toHaveProperty('version');
+		expect(typeof body.version, 'version must be a string').toBe('string');
+	});
+
+	test('layout <main> wires data-sveltekit-reload to updated.current', async ({ page }) => {
+		await page.goto('/');
+		// updated.current starts false in a fresh tab, so the attribute renders
+		// as "off" (keep SPA routing). After a deploy the poll flips it to
+		// true and the attribute becomes "" (force full reload). Either value
+		// proves the directive is wired up; absence would indicate the layout
+		// regressed and the version-polling recovery path is dead.
+		const attr = await page.locator('main').first().getAttribute('data-sveltekit-reload');
+		expect(
+			['off', ''],
+			`<main data-sveltekit-reload> must be "off" or "" (got ${attr})`
+		).toContain(attr);
+	});
+});

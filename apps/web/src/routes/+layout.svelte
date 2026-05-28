@@ -1,6 +1,6 @@
 <script lang="ts">
 	import '../app.css';
-	import { page } from '$app/state';
+	import { page, updated } from '$app/state';
 	import { Activity, Database, Triangle } from 'lucide-svelte';
 	import favicon from '$lib/assets/favicon.svg';
 	import { GEMINI } from '$lib/models';
@@ -107,7 +107,17 @@
 		</div>
 	</header>
 
-	<main class="flex-1">
+	<!--
+		`data-sveltekit-reload` opts every in-app navigation inside <main>
+		into a full page reload (instead of client-side routing) once
+		`updated.current` flips to true. The flip is driven by the version
+		poll configured in svelte.config.js — when SvelteKit detects a new
+		build, the next click re-fetches the HTML so the browser pulls the
+		new chunk URLs instead of trying to import stale hashed modules.
+		Default (empty / undefined attr) is "follow SPA routing"; setting
+		the attribute to "" forces a reload, "off" keeps SPA routing.
+	-->
+	<main class="flex-1" data-sveltekit-reload={updated.current ? '' : 'off'}>
 		{@render children()}
 	</main>
 
