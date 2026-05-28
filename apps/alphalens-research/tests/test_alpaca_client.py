@@ -203,6 +203,79 @@ class TestFromEnv(_FakeAlpacaTestCase):
         with patch.dict("os.environ", env_no_secret, clear=True), self.assertRaises(ValueError):
             AlpacaClient.from_env()
 
+    def test_from_env_test_profile_reads_test_env_vars(self):
+        """profile='test' reads ALPACA_TEST_API_KEY/SECRET, NOT the main ones —
+        so a dev smoke-test never touches the production paper account."""
+        import os
+
+        from alphalens_pipeline.data.alt_data.alpaca_client import (
+            API_KEY_ENV,
+            SECRET_ENV,
+            TEST_API_KEY_ENV,
+            TEST_SECRET_ENV,
+            AlpacaClient,
+        )
+
+        env = {k: v for k, v in os.environ.items() if k not in (API_KEY_ENV, SECRET_ENV)}
+        env[TEST_API_KEY_ENV] = "TEST_K"
+        env[TEST_SECRET_ENV] = "TEST_S"
+        with patch.dict("os.environ", env, clear=True):
+            AlpacaClient.from_env(profile="test")
+        # SDK constructor called with the TEST credentials, not the main ones.
+        self.fake_client_mod.TradingClient.assert_called_once_with("TEST_K", "TEST_S", paper=True)
+
+    def test_from_env_main_profile_default_reads_main_env_vars(self):
+        """profile='main' (default) reads ALPACA_API_KEY/SECRET and ignores
+        ALPACA_TEST_API_KEY even if set."""
+        from alphalens_pipeline.data.alt_data.alpaca_client import (
+            API_KEY_ENV,
+            SECRET_ENV,
+            TEST_API_KEY_ENV,
+            TEST_SECRET_ENV,
+            AlpacaClient,
+        )
+
+        with patch.dict(
+            "os.environ",
+            {
+                API_KEY_ENV: "MAIN_K",
+                SECRET_ENV: "MAIN_S",
+                TEST_API_KEY_ENV: "TEST_K",
+                TEST_SECRET_ENV: "TEST_S",
+            },
+            clear=False,
+        ):
+            AlpacaClient.from_env()  # default profile="main"
+        self.fake_client_mod.TradingClient.assert_called_once_with("MAIN_K", "MAIN_S", paper=True)
+
+    def test_from_env_rejects_invalid_profile(self):
+        from alphalens_pipeline.data.alt_data.alpaca_client import AlpacaClient
+
+        with self.assertRaises(ValueError) as cm:
+            AlpacaClient.from_env(profile="prod")  # type: ignore[arg-type]
+        self.assertIn("prod", str(cm.exception))
+
+    def test_from_env_test_profile_raises_when_test_key_missing(self):
+        import os
+
+        from alphalens_pipeline.data.alt_data.alpaca_client import (
+            API_KEY_ENV,
+            SECRET_ENV,
+            TEST_API_KEY_ENV,
+            TEST_SECRET_ENV,
+            AlpacaClient,
+        )
+
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in (TEST_API_KEY_ENV, TEST_SECRET_ENV, API_KEY_ENV, SECRET_ENV)
+        }
+        env[TEST_SECRET_ENV] = "S"  # only secret set; key missing
+        with patch.dict("os.environ", env, clear=True), self.assertRaises(ValueError) as cm:
+            AlpacaClient.from_env(profile="test")
+        self.assertIn(TEST_API_KEY_ENV, str(cm.exception))
+
 
 class TestSingleton(_FakeAlpacaTestCase):
     def test_singleton_caches_instance(self):
@@ -227,6 +300,47 @@ class TestSingleton(_FakeAlpacaTestCase):
             mod._reset_default_client_for_tests()
             b = mod.get_default_alpaca_client()
         self.assertIsNot(a, b)
+
+    def test_main_and_test_profiles_cache_separately(self):
+        """Each profile gets its own singleton — calling get_default twice
+        with profile='main' then profile='test' constructs TWO clients,
+        not one. This prevents test-account creds from being used when
+        the planner asks for the main account."""
+        from alphalens_pipeline.data.alt_data import alpaca_client as mod
+
+        with patch.dict(
+            "os.environ",
+            {
+                mod.API_KEY_ENV: "MAIN_K",
+                mod.SECRET_ENV: "MAIN_S",
+                mod.TEST_API_KEY_ENV: "TEST_K",
+                mod.TEST_SECRET_ENV: "TEST_S",
+            },
+            clear=False,
+        ):
+            main = mod.get_default_alpaca_client(profile="main")
+            test = mod.get_default_alpaca_client(profile="test")
+        self.assertIsNot(main, test)
+        self.assertEqual(self.fake_client_mod.TradingClient.call_count, 2)
+        # Profile-specific re-call returns the cached instance.
+        with patch.dict(
+            "os.environ",
+            {
+                mod.API_KEY_ENV: "MAIN_K",
+                mod.SECRET_ENV: "MAIN_S",
+                mod.TEST_API_KEY_ENV: "TEST_K",
+                mod.TEST_SECRET_ENV: "TEST_S",
+            },
+            clear=False,
+        ):
+            self.assertIs(mod.get_default_alpaca_client(profile="test"), test)
+        self.assertEqual(self.fake_client_mod.TradingClient.call_count, 2)
+
+    def test_get_default_rejects_invalid_profile(self):
+        from alphalens_pipeline.data.alt_data import alpaca_client as mod
+
+        with self.assertRaises(ValueError):
+            mod.get_default_alpaca_client(profile="prod")  # type: ignore[arg-type]
 
     def test_concurrent_first_call_constructs_only_one_client(self):
         """Two threads racing on the first ``get_default_alpaca_client`` call
