@@ -254,6 +254,66 @@ test.describe('smoke — SPA navigation', () => {
 	});
 });
 
+test.describe('smoke — about page accuracy', () => {
+	// Regression for the silent-failure class documented in
+	// reference_gemini_model_retirement_silent_failure.md: retired Gemini
+	// model IDs in user-facing copy advertise a state the pipeline left
+	// behind, and the copy quietly rots every time a model is bumped. The
+	// about page now uses brand-style names ("Gemini 3 Flash", "Gemini 3
+	// Pro") so it survives a model bump without re-staling, and the test
+	// hard-fails if a retired exact ID ever reappears.
+	const RETIRED_MODEL_IDS = [
+		'gemini-2.5-flash',
+		'gemini-3-pro-preview' // dropped the "-3-" preview line; current is gemini-3.1-pro-preview
+	];
+
+	test('lists every pipeline layer with current model labels', async ({ page }) => {
+		await page.goto('/about');
+
+		const layers = page.locator('section').filter({ hasText: /pipeline\.layers/i });
+		await expect(layers).toBeVisible();
+
+		// Layer rows by ID — covers L1/L2/L3/V/L4/L5 presence.
+		for (const id of ['L1', 'L2', 'L3', 'V', 'L4', 'L5']) {
+			await expect(layers.getByText(id, { exact: true }).first()).toBeVisible();
+		}
+
+		// Current model labels (brand-style, not version-pinned).
+		await expect(layers).toContainText(/Gemini 3 Flash/);
+		await expect(layers).toContainText(/Gemini 3 Pro/);
+
+		// L3 candidate-range matches the actual prompt + diversity cap.
+		await expect(layers).toContainText(/5-15/);
+	});
+
+	test('no retired Gemini model IDs appear anywhere on the page', async ({ page }) => {
+		await page.goto('/about');
+		// body covers the full rendered tree; <script> blocks (which mention
+		// retired IDs in author comments) do not contribute to innerText, so
+		// this is hermetic against the explanatory comment in +page.svelte.
+		const body = await page.locator('body').innerText();
+		for (const dead of RETIRED_MODEL_IDS) {
+			expect(body, `retired model id "${dead}" must not appear on /about`).not.toContain(dead);
+		}
+	});
+
+	test('doctrine describes Pro-supplied keywords as a verification-gate fix, not a YAML replacement', async ({
+		page
+	}) => {
+		// PR #148 added Pro-supplied search keywords to feed the verification
+		// gates (press gate synonym matching) — it did NOT replace the
+		// hand-curated GDELT theme buckets (config/gdelt_themes.yaml is still
+		// the live news-ingest query source). The old copy claimed the
+		// opposite. Pin the corrected framing.
+		await page.goto('/about');
+		const doctrine = page.locator('section').filter({ hasText: /operating\.doctrine/i });
+		await expect(doctrine).toBeVisible();
+		await expect(doctrine).toContainText(/verification gates/i);
+		await expect(doctrine).toContainText(/PR #148/);
+		await expect(doctrine).not.toContainText(/instead of hand-curated YAML buckets/i);
+	});
+});
+
 test.describe('smoke — brief detail interactions', () => {
 	test('theme filter chips and verified-only checkbox toggle without errors', async ({ page }) => {
 		const consoleErrors: string[] = [];

@@ -1,17 +1,30 @@
 <script lang="ts">
+	// Layer model labels use brand-style names ("Gemini 3 Flash" / "Gemini 3
+	// Pro") rather than exact preview IDs (e.g. gemini-3.1-pro-preview). The
+	// page is user-facing and read-only — exact preview IDs rot on every
+	// model bump (see reference_gemini_model_retirement_silent_failure.md:
+	// the retired gemini-3-pro-preview / gemini-2.5-flash labels lingered
+	// here long after PR #257 cut over the code). Brand names survive a bump
+	// without re-staling. Exact IDs live in the pipeline source.
 	const layers = [
 		{ id: 'L1', name: 'EDGAR Watchdog', what: 'detects S&P 100 filings + macro news', model: 'rule-based + launchd' },
-		{ id: 'L2', name: 'Theme Extraction', what: 'distills news → tradeable thematic narrative', model: 'gemini-2.5-flash' },
-		{ id: 'L3', name: 'Beneficiary Mapping', what: 'theme → 6-12 small-cap second-order beneficiaries', model: 'gemini-3-pro-preview' },
+		{ id: 'L2', name: 'Theme Extraction', what: 'distills news → tradeable thematic narrative', model: 'Gemini 3 Flash' },
+		{ id: 'L3', name: 'Beneficiary Mapping', what: 'theme → 5-15 small-cap second-order beneficiaries (≤3 shipped per theme)', model: 'Gemini 3 Pro' },
 		{ id: 'V', name: 'Verification Gates', what: 'press · insider · 10-K (tri-state, post-PR #150; ETF dropped #185)', model: 'polygon + form-4 parquet + EDGAR' },
 		{ id: 'L4', name: 'Quant Scorer', what: 'insider × FCFF × Magic Formula × technicals × catalyst-floor', model: 'reused paradigm #11 + #13 scorers' },
-		{ id: 'L5', name: 'Brief Generator', what: 'per-candidate WhatsApp-format markdown', model: 'gemini-3-pro-preview / gemini-2.5-flash' }
+		{ id: 'L5', name: 'Brief Generator', what: 'per-candidate WhatsApp-format markdown', model: 'Gemini 3 Pro / Flash' }
 	];
 
+	// Doctrine 03 used to claim Pro-supplied keywords replaced "hand-curated
+	// YAML buckets" — that's wrong. The GDELT theme buckets in
+	// config/gdelt_themes.yaml are still the live news-ingest query source.
+	// PR #148 added Pro-supplied keywords downstream so the press
+	// verification gate matches synonyms ("AI" ↔ "machine learning") instead
+	// of the literal theme name. Two different stages.
 	const doctrine = [
 		'NEVER ask LLM for numerical / real-time data — always pre-compute via authoritative source (yfinance / SimFin / SEC / Form-4 parquet)',
 		'tri-state gates: True / False / None — silent false-negatives killed empty briefs',
-		'Pro-supplied search keywords (PR #148) instead of hand-curated YAML buckets',
+		'verification gates use Pro-supplied search keywords per theme (PR #148), so the press gate matches synonyms like "AI" ↔ "machine learning", not the literal theme name',
 		'cohort-based ranking: Magic Formula on per-day cohort, not universe-wide',
 		'zen pre-MERGE codereview on shared surfaces, fixes land as additional commits'
 	];
