@@ -183,9 +183,17 @@ _SCHEMA_DDL = (
 
 
 def _connect(path: Path) -> sqlite3.Connection:
-    """Open a SQLite connection with sensible defaults for this workload."""
+    """Open a SQLite connection with sensible defaults for this workload.
+
+    ``timeout=60.0``: when the fcntl.flock advisory lock falls back on
+    NFS / FUSE filesystems (warn + continue path in ``open_ledger``), the
+    only remaining serialisation is SQLite's busy-wait. The default 5s
+    is too short for a reconciler pass that polls Alpaca per open order
+    (~1s × N orders) — bump to 60s so the fallback path doesn't crash a
+    second writer with ``OperationalError: database is locked``.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, isolation_level=None)
+    conn = sqlite3.connect(path, isolation_level=None, timeout=60.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")

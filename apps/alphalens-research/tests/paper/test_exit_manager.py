@@ -39,6 +39,8 @@ class _StubAlpacaClient:
         self.submissions: list[dict] = []
         self.canceled: list[str] = []
         self._next = 1
+        # ticker → live position qty. Default 27 (matches full-fill setup).
+        self.position_qty_for: dict[str, int] = {}
 
     def _emit(self, kind: str, kwargs: dict) -> _StubOrder:
         self.submissions.append({"kind": kind, **kwargs})
@@ -57,6 +59,20 @@ class _StubAlpacaClient:
 
     def cancel_order(self, alpaca_order_id: str) -> None:
         self.canceled.append(alpaca_order_id)
+
+    def get_position(self, symbol: str):
+        """Return a stub position with .qty matching the test's expectation.
+        Tests can override via .position_qty_for[symbol] = N before the call.
+        Default: 27 (matches the standard _seed_plan + full fill setup)."""
+        qty = self.position_qty_for.get(symbol, 27)
+        if qty <= 0:
+            return None
+
+        @dataclass
+        class _Pos:
+            qty: int
+
+        return _Pos(qty=qty)
 
 
 def _seed_plan(
@@ -322,20 +338,40 @@ class TestExitClosure(_ExitTestBase):
         self.assertGreater(row["realized_r_multiple"], 0)
 
     def test_sl_fill_classifies_as_sl_hit_and_cancels_tps(self):
+        """Per the zen-fixed flow:
+        1. SL fills (test marks it via _mark_filled).
+        2. First process_plan_exit pass detects sl_fired (filled_qty > 0),
+           issues cancel requests to Alpaca for the open TPs but does NOT
+           update local status — the reconciler's job. Result: NOOP because
+           TPs are still SUBMITTED locally.
+        3. Reconciler picks up the CANCELED status on next poll (test
+           simulates this by manually updating TP status rows).
+        4. Second process_plan_exit pass sees all exits terminal +
+           classifies SL_HIT (via filled_qty_observed > 0 on the SL).
+        """
         plan_id = _seed_plan(self.ledger)
-        sl_id, _tp_ids = self._attach_and_simulate_exits(
+        sl_id, tp_ids = self._attach_and_simulate_exits(
             plan_id=plan_id, entry_qty=27, entry_price=100.0
         )
-        # Stop fires at 79.5.
         self._mark_filled(sl_id, qty=27, price=79.5)
 
+        # Pass 1: cancel requests issued, TPs still SUBMITTED → NOOP.
         with open_ledger(self.ledger) as conn:
-            o = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
-        # SL fill triggers TP cancellation + outcome write (TPs were still SUBMITTED).
-        self.assertEqual(o.action, "CLOSED")
-        self.assertEqual(o.exit_kind, "SL_HIT")
-        # Both TP alpaca ids were cancelled.
+            o1 = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+        self.assertEqual(o1.action, "NOOP")
+        # Both TP alpaca ids got a cancel request.
         self.assertEqual(len(self.client.canceled), 2)
+
+        # Simulate the reconciler's next poll picking up the CANCELED status.
+        with open_ledger(self.ledger) as conn:
+            for tp_id in tp_ids:
+                update_order_status(conn, order_id=tp_id, status="CANCELED")
+
+        # Pass 2: all exits now terminal → CLOSED with SL_HIT.
+        with open_ledger(self.ledger) as conn:
+            o2 = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+        self.assertEqual(o2.action, "CLOSED")
+        self.assertEqual(o2.exit_kind, "SL_HIT")
 
         with open_ledger(self.ledger) as conn:
             row = conn.execute(
@@ -344,6 +380,190 @@ class TestExitClosure(_ExitTestBase):
             ).fetchone()
         # R = (79.5 - 100) / (100 - 80) = -20.5 / 20 = -1.025
         self.assertAlmostEqual(row["realized_r_multiple"], (79.5 - 100) / (100 - 80))
+
+
+class TestZenRegressions(_ExitTestBase):
+    """Regression tests for issues found in the post-PR #277 zen review."""
+
+    def _attach_and_simulate_exits(self, *, plan_id: int, entry_qty: int, entry_price: float):
+        """Attach exits then return (sl_id, [tp_ids])."""
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=entry_qty,
+            status="FILLED",
+            filled_qty=entry_qty,
+            filled_price=entry_price,
+        )
+        with open_ledger(self.ledger) as conn:
+            process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            orders = fetch_orders_for_plan(conn, plan_id)
+        sl = next(o for o in orders if o["order_kind"] == "SL")
+        tps = [o for o in orders if o["order_kind"] == "TP"]
+        return int(sl["order_id"]), [int(o["order_id"]) for o in tps]
+
+    def _mark_filled(self, order_id: int, qty: int, price: float) -> None:
+        ts = dt.datetime.now(dt.UTC)
+        with open_ledger(self.ledger) as conn:
+            update_order_status(conn, order_id=order_id, status="FILLED")
+            insert_fill(
+                conn,
+                order_id=order_id,
+                alpaca_fill_id=f"exit-fill-{order_id}",
+                qty=qty,
+                price=price,
+                filled_at=ts,
+            )
+
+    def test_time_stop_does_not_refire_when_market_order_already_submitted(self):
+        """Critical bug zen flagged: an already-submitted TIME_STOP order that
+        hasn't filled yet (e.g. market closed) would otherwise be cancelled
+        and resubmitted on every reconcile pass — infinite Alpaca API spam."""
+        plan_id = _seed_plan(self.ledger)
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=27,
+            status="FILLED",
+            filled_qty=27,
+            filled_price=100.0,
+        )
+        ancient = dt.datetime.now(dt.UTC) - dt.timedelta(days=TIME_STOP_DAYS + 5)
+        with open_ledger(self.ledger) as conn:
+            conn.execute(
+                "UPDATE fills SET filled_at = ? WHERE order_id IN "
+                "(SELECT order_id FROM orders WHERE plan_id = ? AND order_kind = 'ENTRY')",
+                (ancient.isoformat(), plan_id),
+            )
+
+        # Pass 1: attach.
+        with open_ledger(self.ledger) as conn:
+            process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+        # Pass 2: time-stop fires.
+        with open_ledger(self.ledger) as conn:
+            o_first = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+        self.assertEqual(o_first.action, "TIME_STOP")
+        n_market_first = len([s for s in self.client.submissions if s["kind"] == "MARKET"])
+        self.assertEqual(n_market_first, 1)
+
+        # Pass 3 (same conditions, market order still SUBMITTED) — must NOT
+        # submit a second market order.
+        with open_ledger(self.ledger) as conn:
+            o_second = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+        n_market_second = len([s for s in self.client.submissions if s["kind"] == "MARKET"])
+        self.assertEqual(n_market_second, 1, "second pass duplicated the TIME_STOP order")
+        # The action is NOOP (no new exit kind triggered; everything pending).
+        self.assertEqual(o_second.action, "NOOP")
+
+    def test_sl_partial_fill_then_alpaca_cancels_remaining_still_classifies_sl_hit(self):
+        """Critical bug zen flagged: when partial TPs have already executed,
+        the SL (sized for full position) can only partial-fill the remaining
+        inventory before Alpaca short-prevents and cancels the rest. SL
+        status becomes CANCELED, NOT FILLED. The old code checked status ==
+        'FILLED' so this case caused a state-machine lockup. The fix
+        switches detection to filled_qty_observed > 0."""
+        plan_id = _seed_plan(self.ledger)
+        sl_id, tp_ids = self._attach_and_simulate_exits(
+            plan_id=plan_id, entry_qty=27, entry_price=100.0
+        )
+        # TP1 partial-fills first (13/13 shares at 110).
+        self._mark_filled(tp_ids[0], qty=13, price=110.0)
+        # SL partial-fires for remaining 14 then Alpaca cancels (status = CANCELED).
+        ts = dt.datetime.now(dt.UTC)
+        with open_ledger(self.ledger) as conn:
+            insert_fill(
+                conn,
+                order_id=sl_id,
+                alpaca_fill_id="sl-partial",
+                qty=14,
+                price=79.5,
+                filled_at=ts,
+            )
+            update_order_status(conn, order_id=sl_id, status="CANCELED")
+            # TP1 was FILLED; TP2 still SUBMITTED.
+
+        # Pass: sl_fired (filled_qty > 0) triggers cancel for TP2.
+        with open_ledger(self.ledger) as conn:
+            process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            tp2_row = conn.execute(
+                "SELECT alpaca_order_id FROM orders WHERE order_id = ?", (tp_ids[1],)
+            ).fetchone()
+        # TP2 cancel was requested at Alpaca by alpaca_order_id.
+        self.assertIn(tp2_row["alpaca_order_id"], self.client.canceled)
+
+        # Simulate reconciler picking up CANCELED on TP2.
+        with open_ledger(self.ledger) as conn:
+            update_order_status(conn, order_id=tp_ids[1], status="CANCELED")
+
+        # Now all exits terminal — classify SL_HIT (NOT lockup).
+        with open_ledger(self.ledger) as conn:
+            o = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+        self.assertEqual(o.action, "CLOSED")
+        self.assertEqual(o.exit_kind, "SL_HIT")
+
+    def test_cancel_does_not_eagerly_mark_local_status_canceled(self):
+        """HIGH bug zen flagged: marking the local order CANCELED immediately
+        on cancel-request drops it from fetch_open_orders, so the reconciler
+        never observes final partial fills that landed between our request
+        and Alpaca processing it.
+
+        After cancel-request, local status MUST remain SUBMITTED /
+        PARTIALLY_FILLED until the reconciler polls and observes the actual
+        terminal state from Alpaca.
+        """
+        plan_id = _seed_plan(self.ledger)
+        sl_id, _tp_ids = self._attach_and_simulate_exits(
+            plan_id=plan_id, entry_qty=27, entry_price=100.0
+        )
+        # SL fills, triggering cancel for the TPs.
+        self._mark_filled(sl_id, qty=27, price=79.5)
+        with open_ledger(self.ledger) as conn:
+            process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+
+        # Local TP statuses are still SUBMITTED — the cancel went to Alpaca
+        # but our ledger waits for the reconciler's poll.
+        with open_ledger(self.ledger) as conn:
+            rows = fetch_orders_for_plan(conn, plan_id)
+        tp_statuses = {r["status"] for r in rows if r["order_kind"] == "TP"}
+        self.assertEqual(tp_statuses, {"SUBMITTED"}, "cancel eagerly marked local CANCELED")
+
+    def test_time_stop_queries_alpaca_for_remaining_qty(self):
+        """HIGH bug zen flagged: computing remaining = entry_filled -
+        exit_filled locally over-sells when an exit fill hasn't been
+        reconciled yet. Fix queries Alpaca for the live position."""
+        plan_id = _seed_plan(self.ledger)
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=27,
+            status="FILLED",
+            filled_qty=27,
+            filled_price=100.0,
+        )
+        ancient = dt.datetime.now(dt.UTC) - dt.timedelta(days=TIME_STOP_DAYS + 5)
+        with open_ledger(self.ledger) as conn:
+            conn.execute(
+                "UPDATE fills SET filled_at = ? WHERE order_id IN "
+                "(SELECT order_id FROM orders WHERE plan_id = ? AND order_kind = 'ENTRY')",
+                (ancient.isoformat(), plan_id),
+            )
+
+        # Tell the stub Alpaca says we have 18 shares (e.g. an exit fill
+        # already happened that the reconciler hasn't picked up yet).
+        self.client.position_qty_for["NVDA"] = 18
+
+        # Pass 1: attach. Pass 2: time-stop.
+        with open_ledger(self.ledger) as conn:
+            process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+        with open_ledger(self.ledger) as conn:
+            o = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+        self.assertEqual(o.action, "TIME_STOP")
+
+        market = [s for s in self.client.submissions if s["kind"] == "MARKET"]
+        self.assertEqual(market[0]["qty"], 18, "should have used Alpaca position qty, not ledger")
 
 
 class TestTimeStop(_ExitTestBase):

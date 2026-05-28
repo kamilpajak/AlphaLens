@@ -39,7 +39,6 @@ from alphalens_pipeline.paper.ledger import (
     fetch_orders_for_plan,
     insert_order,
     insert_plan_outcome,
-    update_order_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,7 +118,15 @@ def _first_fill_at_for_plan(conn: sqlite3.Connection, plan_id: int) -> dt.dateti
     ts_str = row[0] if row else None
     if ts_str is None:
         return None
-    return dt.datetime.fromisoformat(ts_str)
+    ts = dt.datetime.fromisoformat(ts_str)
+    # SQLite has no native tz support; the writer (reconciler) stores
+    # UTC-aware ISO strings, but an operator who manually patches a row
+    # via raw SQL could leave a naive timestamp. Coerce to UTC so the
+    # subsequent ``observed_at - first_entry_fill_at`` arithmetic doesn't
+    # TypeError on tz-naive vs tz-aware mismatch.
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.UTC)
+    return ts
 
 
 def _blended_price(
@@ -293,14 +300,21 @@ def _attach_exits(
 
 
 def _classify_exit_kind(snapshot: _PlanSnapshot) -> str:
-    """Pick the canonical exit_kind from how the exit orders ended."""
+    """Pick the canonical exit_kind from how the exit orders ended.
+
+    Uses ``filled_qty_observed > 0`` rather than ``status == 'FILLED'``
+    because the Phase-A SL-not-resized simplification means Alpaca may
+    PARTIAL-fill the SL up to remaining inventory (when partial TPs
+    already executed) and then transition the order to CANCELED rather
+    than FILLED. Looking at the observed fill count avoids that lockup.
+    """
     sl_orders = [o for o in snapshot.exit_orders if o["order_kind"] == "SL"]
     tp_orders = [o for o in snapshot.exit_orders if o["order_kind"] == "TP"]
     time_stop_orders = [o for o in snapshot.exit_orders if o["order_kind"] == "TIME_STOP"]
 
-    if any(o["status"] == "FILLED" for o in time_stop_orders):
+    if any(int(o["filled_qty_observed"] or 0) > 0 for o in time_stop_orders):
         return "TIME_STOP_HIT"
-    if any(o["status"] == "FILLED" for o in sl_orders):
+    if any(int(o["filled_qty_observed"] or 0) > 0 for o in sl_orders):
         return "SL_HIT"
     if tp_orders and all(o["status"] == "FILLED" for o in tp_orders):
         return "TP_HIT"
@@ -321,10 +335,19 @@ def _cancel_open_exits(
     alpaca_client: Any,
     observed_at: dt.datetime,
 ) -> int:
-    """Cancel every still-open exit (TP or SL or TIME_STOP) for the plan.
+    """Cancel every still-open exit (TP / SL / TIME_STOP) for the plan.
     Used both when an exit triggers (cancel the others) and on time-stop.
 
-    Returns the number of orders actually cancelled."""
+    Does NOT update the local order status to CANCELED — that's the
+    reconciler's job on the next poll. Marking it CANCELED locally
+    immediately would drop the order out of ``fetch_open_orders`` and
+    the reconciler would never observe any final partial fills that
+    landed at Alpaca between our cancel request and the broker
+    processing it.
+
+    Returns the number of orders for which the cancel REQUEST was
+    successfully accepted by Alpaca (the ledger status transition
+    lands on the next reconcile pass)."""
     n = 0
     for o in snapshot.exit_orders:
         if o["status"] in ("SUBMITTED", "PARTIALLY_FILLED"):
@@ -337,12 +360,6 @@ def _cancel_open_exits(
                     exc,
                 )
                 continue
-            update_order_status(
-                conn,
-                order_id=int(o["order_id"]),
-                status="CANCELED",
-                last_updated_at=observed_at,
-            )
             n += 1
     return n
 
@@ -384,7 +401,15 @@ def _write_outcome(
 
 
 def _time_stop_should_fire(snapshot: _PlanSnapshot, now: dt.datetime) -> bool:
+    """True when the position is old enough for time-stop AND we haven't
+    already submitted a TIME_STOP order. The existence check prevents an
+    infinite re-fire loop when the time-stop market order doesn't fill
+    immediately (e.g. submitted while market is closed) and the next
+    reconcile pass would otherwise cancel-and-resubmit it endlessly.
+    """
     if snapshot.first_entry_fill_at is None:
+        return False
+    if any(o["order_kind"] == "TIME_STOP" for o in snapshot.exit_orders):
         return False
     age = (now - snapshot.first_entry_fill_at).days
     return age >= TIME_STOP_DAYS
@@ -398,19 +423,31 @@ def _submit_time_stop(
     observed_at: dt.datetime,
 ) -> int:
     """Cancel open exits + submit a market sell for the remaining open
-    position. Returns 1 if a market sell was submitted, else 0."""
+    position. Returns 1 if a market sell was submitted, else 0.
+
+    Computes the remaining-to-sell quantity by querying Alpaca for the
+    LIVE position rather than reading entry_filled - exit_filled from
+    the ledger. The same-ticker policy guarantees one active plan per
+    ticker so the broker-side position is the authoritative count.
+    Reading locally risks over-selling when an exit fill landed at
+    Alpaca but the reconciler hasn't observed it yet (we'd compute a
+    too-large remaining and submit a market-sell larger than our
+    inventory, flipping the paper account short).
+    """
     _cancel_open_exits(
         conn, snapshot=snapshot, alpaca_client=alpaca_client, observed_at=observed_at
     )
 
-    # Compute remaining open qty = entry_filled - exit_filled.
-    entry_filled = snapshot.total_entry_filled_qty
-    exit_filled_so_far = sum(
-        int(o["filled_qty_observed"] or 0)
-        for o in snapshot.exit_orders
-        if o["order_kind"] in ("TP", "SL")
-    )
-    remaining = entry_filled - exit_filled_so_far
+    try:
+        position = alpaca_client.get_position(snapshot.ticker)
+    except Exception as exc:
+        logger.warning(
+            "exit_manager time-stop failed to fetch position for %s: %s; will retry",
+            snapshot.ticker,
+            exc,
+        )
+        return 0
+    remaining = int(float(getattr(position, "qty", 0) or 0)) if position is not None else 0
     if remaining <= 0:
         return 0
 
@@ -503,9 +540,15 @@ def process_plan_exit(
         # subsequent reconcile pass. ExitOutcome reports the time-stop.
         return ExitOutcome(plan_id=plan_id, action="TIME_STOP")
 
-    # If a stop-loss filled, cancel any remaining open TPs.
-    sl_filled = any(o["order_kind"] == "SL" and o["status"] == "FILLED" for o in snap.exit_orders)
-    if sl_filled:
+    # If the stop-loss fired (FULL FILL or PARTIAL FILL before Alpaca
+    # short-circuit cancels the unfillable remainder), cancel remaining
+    # open TPs. Check ``filled_qty_observed > 0`` not ``status == FILLED``
+    # so the partial-then-canceled case caused by the Phase-A SL-not-
+    # resized simplification is caught.
+    sl_fired = any(
+        o["order_kind"] == "SL" and int(o["filled_qty_observed"] or 0) > 0 for o in snap.exit_orders
+    )
+    if sl_fired:
         _cancel_open_exits(
             conn, snapshot=snap, alpaca_client=alpaca_client, observed_at=observed_at
         )
