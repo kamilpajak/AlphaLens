@@ -17,7 +17,9 @@ from alphalens_pipeline.paper.ledger import (
     LEDGER_SCHEMA_VERSION,
     VALID_ACCOUNTS,
     fetch_open_orders,
+    fetch_orders_for_plan,
     fetch_plans_for_date,
+    insert_fill,
     insert_order,
     insert_planned,
     open_ledger,
@@ -174,6 +176,103 @@ class TestOrdersAccountFiltering(unittest.TestCase):
             ledger = Path(tmp) / "ledger.db"
             with open_ledger(ledger) as conn, self.assertRaises(ValueError):
                 fetch_open_orders(conn, account="staging")
+
+
+class TestExitManagerThreadsAccountFromSnapshot(unittest.TestCase):
+    """Per zen review (PR #279 INFO): pin the end-to-end invariant that
+    a plan tagged ``account='test'`` produces exit orders (SL + TPs) all
+    tagged ``account='test'``. Anchored at the snapshot boundary —
+    ``_PlanSnapshot.account`` reads ``plans.account`` and threads through
+    all 3 ``insert_order`` calls in :mod:`alphalens_pipeline.paper.exit_manager`.
+    """
+
+    def test_attach_exits_inherits_test_account_tag(self):
+        from dataclasses import dataclass
+
+        from alphalens_pipeline.paper.exit_manager import process_plan_exit
+
+        @dataclass
+        class _StubOrder:
+            id: str
+
+        class _StubClient:
+            def __init__(self) -> None:
+                self._next = 1
+
+            def _emit(self) -> _StubOrder:
+                oid = f"exit-{self._next:03d}"
+                self._next += 1
+                return _StubOrder(id=oid)
+
+            def submit_stop_order(self, **kwargs):
+                return self._emit()
+
+            def submit_limit_order(self, **kwargs):
+                return self._emit()
+
+            def submit_market_order(self, **kwargs):
+                return self._emit()
+
+            def cancel_order(self, _id):
+                return None
+
+            def get_position(self, _symbol):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger.db"
+            with open_ledger(ledger) as conn:
+                plan_id = _seed_plan(
+                    conn,
+                    brief_date=dt.date(2026, 5, 28),
+                    ticker="NVDA",
+                    account="test",
+                )
+                # Add a FILLED ENTRY so the snapshot enters the exit-attach
+                # branch: entry_phase_settled + total_entry_filled_qty > 0.
+                entry_id = insert_order(
+                    conn,
+                    plan_id=plan_id,
+                    alpaca_order_id="entry-test-001",
+                    side="BUY",
+                    order_kind="ENTRY",
+                    order_type="LIMIT",
+                    qty=10,
+                    time_in_force="gtc",
+                    submitted_at=dt.datetime.now(dt.UTC),
+                    tier_index=0,
+                    limit_price=100.0,
+                    status="FILLED",
+                    account="test",
+                )
+                insert_fill(
+                    conn,
+                    order_id=entry_id,
+                    alpaca_fill_id="entry-test-001-fill",
+                    qty=10,
+                    price=100.0,
+                    filled_at=dt.datetime.now(dt.UTC),
+                )
+
+                outcome = process_plan_exit(conn, plan_id=plan_id, alpaca_client=_StubClient())
+
+                self.assertEqual(outcome.action, "ATTACHED")
+                self.assertGreater(outcome.n_exits_submitted, 0)
+
+                # All non-entry orders (SL + TP) for this plan must be
+                # tagged account='test'. The exit-attach branch routes
+                # through _attach_exits which calls insert_order with
+                # account=snapshot.account.
+                orders = fetch_orders_for_plan(conn, plan_id)
+                exit_orders = [o for o in orders if o["order_kind"] in ("SL", "TP")]
+                self.assertGreater(len(exit_orders), 0)
+                for o in exit_orders:
+                    self.assertEqual(
+                        o["account"],
+                        "test",
+                        f"exit order kind={o['order_kind']} leaked account="
+                        f"{o['account']!r}, expected 'test'",
+                    )
 
 
 class TestDefaultAccountIsMain(unittest.TestCase):

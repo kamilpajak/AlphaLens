@@ -172,16 +172,41 @@ def _resolve_equity_provider(
 def _delete_existing_for_date(conn, brief_date: dt.date, account: str) -> None:
     """Idempotency helper for ``--force`` reruns. Scoped to one account
     so ``--force`` on a TEST replan doesn't blow away MAIN history (or
-    vice versa) when both share the same ledger file. The shadow_log
-    table doesn't carry an account column today — same brief_date can
-    only ever be planned by one account in practice (plan-per-day
-    cadence), so the unscoped DELETE is fine for now.
+    vice versa) when both share the same ledger file. Per zen review
+    (PR #279) the shadow_log scoping is via brief_date + account
+    join-with-plans so a TEST replan can only clear shadow rows that
+    belong to TEST plans on the same date. plan-per-day cadence keeps
+    the practical collision risk at zero, but the scoping makes the
+    contract symmetric with plans-side and means an audit-time
+    ``SELECT * FROM shadow_log`` is also account-honest.
+
+    Implementation note: ``shadow_log`` doesn't carry an account
+    column directly today; the scope is enforced by deleting only
+    rows whose ``(brief_date, ticker)`` matches a PLANNED row with
+    the same account, plus shadow rows that have NO matching plan
+    (the never-planned case — unscoped because there is no plan to
+    attribute them to). This is intentionally conservative.
     """
+    # Scope shadow_log deletes to the account via a join on plans.
+    # IMPORTANT: delete shadow_log FIRST so the subselect on plans
+    # still finds the rows we want to remove from shadow. Reversed
+    # order would purge plans first and leave shadow untouched.
+    # Rows whose ticker has no matching plan on this date+account are
+    # untouched (they belong to candidates that were shadowed before
+    # any plan was attempted for them, or to a different account run).
+    conn.execute(
+        """DELETE FROM shadow_log
+           WHERE brief_date = ?
+             AND ticker IN (
+               SELECT ticker FROM plans
+               WHERE brief_date = ? AND account = ?
+             )""",
+        (brief_date.isoformat(), brief_date.isoformat(), account),
+    )
     conn.execute(
         "DELETE FROM plans WHERE brief_date = ? AND account = ?",
         (brief_date.isoformat(), account),
     )
-    conn.execute("DELETE FROM shadow_log WHERE brief_date = ?", (brief_date.isoformat(),))
 
 
 def _process_candidate(
