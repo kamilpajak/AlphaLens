@@ -253,21 +253,15 @@ def report(
         "--ledger",
         help=_LEDGER_HELP,
     ),
+    use_main_account: bool = typer.Option(
+        False,
+        "--use-main-account",
+        help="Scope to the MAIN account only. Mutually exclusive with --use-test-account.",
+    ),
     use_test_account: bool = typer.Option(
         False,
         "--use-test-account",
-        help=(
-            "Filter to the ALPACA_TEST_* account. Omit to filter to MAIN. "
-            "Pass --all-accounts to aggregate across both."
-        ),
-    ),
-    all_accounts: bool = typer.Option(
-        False,
-        "--all-accounts",
-        help=(
-            "Aggregate across both 'main' and 'test' accounts. Overrides "
-            "--use-test-account. Useful for ledger-wide audits."
-        ),
+        help="Scope to the TEST account only. Mutually exclusive with --use-main-account.",
     ),
 ) -> None:
     """Aggregate ledger state into a human-readable report.
@@ -276,19 +270,30 @@ def report(
     lifecycle, exit outcomes, and the realised R-multiple distribution
     across the chosen (date × account) scope. Per-candidate table at
     the bottom lists every plan with its current state.
+
+    Default scope is ALL accounts — unlike plan/submit/reconcile which
+    must route through one Alpaca client, report is read-only and the
+    natural audit view is the whole ledger. Pass --use-main-account or
+    --use-test-account to narrow.
     """
     from alphalens_pipeline.paper.constants import DEFAULT_LEDGER_RELPATH
     from alphalens_pipeline.paper.report import build_report
 
+    if use_main_account and use_test_account:
+        raise typer.BadParameter(
+            "--use-main-account and --use-test-account are mutually exclusive."
+        )
     resolved_ledger = (
         ledger_path if ledger_path is not None else Path.home() / DEFAULT_LEDGER_RELPATH
     )
     brief_date = dt.date.fromisoformat(date) if date is not None else None
-    # --all-accounts wins; otherwise default 'main' unless --use-test-account flips it.
-    if all_accounts:
-        account: str | None = None
+    if use_main_account:
+        account: str | None = "main"
+    elif use_test_account:
+        account = "test"
     else:
-        account = "test" if use_test_account else "main"
+        # Default: no account filter — aggregate the whole ledger.
+        account = None
 
     rep = build_report(resolved_ledger, brief_date=brief_date, account=account)
 
@@ -300,7 +305,12 @@ def report(
     typer.echo("")
 
     s = rep.summary
-    typer.echo(f"  Plans:    {s.n_plans_planned} PLANNED, {s.n_plans_blocked} BLOCKED")
+    plan_parts = [f"{s.n_plans_planned} PLANNED", f"{s.n_plans_blocked} BLOCKED"]
+    if s.n_plans_skipped > 0:
+        # Planner never writes SKIPPED today; only surface it when something
+        # has actually populated the row so the line stays minimal pre-ship.
+        plan_parts.append(f"{s.n_plans_skipped} SKIPPED")
+    typer.echo(f"  Plans:    {', '.join(plan_parts)}")
     if s.n_shadowed > 0:
         shadow_str = ", ".join(f"{k}={v}" for k, v in sorted(s.shadow_by_reason.items()))
         typer.echo(f"  Shadowed: {s.n_shadowed} ({shadow_str})")

@@ -71,6 +71,7 @@ class TestEmptyLedger(_ReportTestBase):
         report = build_report(self.ledger)
         self.assertEqual(report.summary.n_plans_planned, 0)
         self.assertEqual(report.summary.n_plans_blocked, 0)
+        self.assertEqual(report.summary.n_plans_skipped, 0)
         self.assertEqual(report.summary.n_shadowed, 0)
         self.assertEqual(report.summary.n_entries_submitted, 0)
         self.assertEqual(report.summary.n_entries_filled, 0)
@@ -111,6 +112,43 @@ class TestPlanCounts(_ReportTestBase):
         report = build_report(self.ledger)
         self.assertEqual(report.summary.n_plans_planned, 1)
         self.assertEqual(report.summary.n_plans_blocked, 1)
+        self.assertEqual(report.summary.n_plans_skipped, 0)
+
+    def test_skipped_status_surfaced(self):
+        """The planner does not write SKIPPED today, but the schema CHECK
+        constraint allows it. A future code path that does populate
+        SKIPPED must NOT silently get absorbed into the unaccounted
+        delta between (PLANNED + BLOCKED) and the true row count."""
+        d = dt.date(2026, 5, 28)
+        with open_ledger(self.ledger) as conn:
+            _seed_plan(conn, brief_date=d, ticker="NVDA")
+            # Raw-INSERT a SKIPPED row to simulate the future code path.
+            conn.execute(
+                """INSERT INTO plans(brief_date, ticker, theme, planned_at,
+                                     suggested_size_pct, scale_factor, final_size_pct,
+                                     paper_equity, total_notional, gross_notional,
+                                     disaster_stop, order_ttl_days, status, block_reason, account)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SKIPPED', 'dedup', 'main')""",
+                (
+                    d.isoformat(),
+                    "SKIP",
+                    "ev",
+                    dt.datetime.now(dt.UTC).isoformat(),
+                    5.0,
+                    0.05,
+                    0.25,
+                    1_000_000.0,
+                    2500.0,
+                    2500.0,
+                    80.0,
+                    10,
+                ),
+            )
+
+        report = build_report(self.ledger)
+        self.assertEqual(report.summary.n_plans_planned, 1)
+        self.assertEqual(report.summary.n_plans_blocked, 0)
+        self.assertEqual(report.summary.n_plans_skipped, 1)
 
     def test_shadow_breakdown_by_reason(self):
         """shadow_log rows aggregate per reason — operator wants to know

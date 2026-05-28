@@ -34,6 +34,9 @@ class ReportSummary:
 
     n_plans_planned: int
     n_plans_blocked: int
+    n_plans_skipped: int  # planner never writes SKIPPED today but the
+    # schema allows it; surfacing it stops a future code path that does
+    # populate SKIPPED from silently undercounting plans here.
     n_shadowed: int
     shadow_by_reason: dict[str, int]
     n_entries_submitted: int
@@ -48,7 +51,12 @@ class ReportSummary:
     r_multiple_mean: float | None
     r_multiple_median: float | None
     r_multiple_stdev: float | None
-    hit_rate: float | None  # TP_HIT / outcomes-with-fills
+    # Hit rate semantic: TP_HIT / (TP_HIT + SL_HIT + PARTIAL_TP + TIME_STOP_HIT).
+    # PARTIAL_TP is bucketed as NON-hit (denominator only) because a partial
+    # TP exit did not realise the full target — it's a smaller win, not a
+    # full hit. UNFILLED is excluded from both numerator and denominator
+    # because the strategy never got exposure on those candidates.
+    hit_rate: float | None
 
 
 @dataclass(frozen=True)
@@ -87,17 +95,23 @@ def _count_plan_statuses(
     *,
     brief_date: dt.date | None,
     account: str | None,
-) -> tuple[int, int]:
-    """Returns (n_planned, n_blocked). SKIPPED is currently not used by
-    the planner but the schema allows it, so the count is implicit in
-    the planned + blocked total."""
+) -> tuple[int, int, int]:
+    """Returns (n_planned, n_blocked, n_skipped). The schema CHECK
+    constraint pins ``status IN ('PLANNED', 'BLOCKED', 'SKIPPED')``;
+    the planner only writes PLANNED + BLOCKED today, but a future code
+    path that populates SKIPPED would silently undercount total plans
+    if this function ignored it. Always surface all three."""
     where, params = _scope_where(brief_date=brief_date, account=account, alias="")
     cur = conn.execute(
         f"SELECT status, COUNT(*) FROM plans {where} GROUP BY status",  # nosec B608
         params,
     )
     counts = dict(cur.fetchall())
-    return int(counts.get("PLANNED", 0)), int(counts.get("BLOCKED", 0))
+    return (
+        int(counts.get("PLANNED", 0)),
+        int(counts.get("BLOCKED", 0)),
+        int(counts.get("SKIPPED", 0)),
+    )
 
 
 def _shadow_breakdown(
@@ -217,9 +231,23 @@ def _r_multiple_stats(
 
 
 def _hit_rate(by_kind: dict[str, int]) -> float | None:
-    """TP_HIT / (outcomes that actually had entry fills). PARTIAL_TP and
-    TIME_STOP_HIT count toward the denominator since exposure was taken;
-    UNFILLED does not (no exposure ever materialised)."""
+    """Fraction of with-exposure outcomes that hit the FULL TP ladder.
+
+    Numerator: TP_HIT only — strictly the "rode every tranche to its
+    target" outcome.
+    Denominator: TP_HIT + SL_HIT + PARTIAL_TP + TIME_STOP_HIT — every
+    outcome where exposure was taken.
+
+    PARTIAL_TP is bucketed as a non-hit: a partial-TP exit booked some
+    profit but did not realise the full target, so it dilutes the
+    rate. This is more conservative than the playbook's loose "% of
+    profitable trades" definition and is the right metric for asking
+    "how often does my exit ladder run to completion?". UNFILLED is
+    excluded entirely (no exposure → not informative about hit logic).
+
+    Returns None when the denominator is zero (no closed-with-fills
+    outcomes yet).
+    """
     with_fills = sum(by_kind.get(k, 0) for k in ("TP_HIT", "SL_HIT", "PARTIAL_TP", "TIME_STOP_HIT"))
     if with_fills == 0:
         return None
@@ -322,7 +350,9 @@ def build_report(
     whole ledger.
     """
     with open_ledger(ledger_path) as conn:
-        n_planned, n_blocked = _count_plan_statuses(conn, brief_date=brief_date, account=account)
+        n_planned, n_blocked, n_skipped = _count_plan_statuses(
+            conn, brief_date=brief_date, account=account
+        )
         n_shadowed, shadow_by_reason = _shadow_breakdown(conn, brief_date=brief_date)
         lifecycle = _order_lifecycle_counts(conn, brief_date=brief_date, account=account)
         n_fills = _count_fills(conn, brief_date=brief_date, account=account)
@@ -335,6 +365,7 @@ def build_report(
     summary = ReportSummary(
         n_plans_planned=n_planned,
         n_plans_blocked=n_blocked,
+        n_plans_skipped=n_skipped,
         n_shadowed=n_shadowed,
         shadow_by_reason=shadow_by_reason,
         n_entries_submitted=lifecycle["entries_submitted"],
