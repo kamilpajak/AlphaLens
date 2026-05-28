@@ -73,6 +73,7 @@ class _PlanSnapshot:
     entry_orders: tuple[_RowProto, ...]
     exit_orders: tuple[_RowProto, ...]
     has_outcome: bool
+    account: str  # v4: 'main' or 'test' — used when inserting exit orders
 
     @property
     def entry_phase_settled(self) -> bool:
@@ -197,6 +198,7 @@ def _snapshot(conn: sqlite3.Connection, plan_id: int) -> _PlanSnapshot | None:
         entry_orders=tuple(_RowLike(d) for d in entry_orders),
         exit_orders=tuple(_RowLike(d) for d in exit_orders),
         has_outcome=_fetch_outcome_exists(conn, plan_id),
+        account=plan["account"],
     )
 
 
@@ -256,6 +258,7 @@ def _attach_exits(
         stop_price=snapshot.disaster_stop,
         time_in_force="gtc",
         submitted_at=submitted_at,
+        account=snapshot.account,
     )
     submitted += 1
     logger.info(
@@ -297,6 +300,7 @@ def _attach_exits(
             limit_price=target_price,
             time_in_force="gtc",
             submitted_at=submitted_at,
+            account=snapshot.account,
         )
         remaining_qty -= qty
         submitted += 1
@@ -483,6 +487,7 @@ def _submit_time_stop(
         qty=remaining,
         time_in_force="day",
         submitted_at=observed_at,
+        account=snapshot.account,
     )
     logger.info(
         "exit_manager time-stop plan_id=%d ticker=%s qty=%d alpaca=%s",

@@ -41,9 +41,20 @@ logger = logging.getLogger(__name__)
 # DELETE CASCADE so --force re-runs cleanly cascade away the dependent
 # rows (per zen review forward-note 2026-05-28).
 # v1: effective_size_pct cap. v2: scale_factor + final_size_pct. v3:
-# orders/fills/exits. Per "no backward compat" doctrine no migration —
-# dev DB regenerated; main paper account already empty.
-LEDGER_SCHEMA_VERSION = 3
+# orders/fills/exits. v4: per-row account column on plans + orders
+# (2026-05-28) so a single canonical ledger file can host orders from
+# both Alpaca paper accounts ('main' + 'test') without collision when
+# the reconciler queries Alpaca by order_id. Per "no backward compat"
+# doctrine no migration code lives here — dev DB regenerated; existing
+# operator ledger files migrated via the runbook in PR #279 description.
+LEDGER_SCHEMA_VERSION = 4
+
+# Valid values for the per-row ``account`` column. Mirrors the Alpaca-
+# client profile names so the planner / submitter / reconciler can pass
+# the same string straight through. Application-level enforcement; the
+# CHECK constraint on the schema is informational (SQLite's ALTER TABLE
+# can't add CHECK retroactively so operator-migrated DBs may lack it).
+VALID_ACCOUNTS = frozenset({"main", "test"})
 
 
 _SCHEMA_DDL = (
@@ -70,7 +81,10 @@ _SCHEMA_DDL = (
         order_ttl_days INTEGER NOT NULL,
         status TEXT NOT NULL CHECK(status IN ('PLANNED', 'BLOCKED', 'SKIPPED')),
         block_reason TEXT,
-        UNIQUE(brief_date, ticker)
+        -- v4: which Alpaca paper account this plan was sized + submitted
+        -- against. 'main' = ALPACA_API_KEY/SECRET; 'test' = ALPACA_TEST_*.
+        account TEXT NOT NULL DEFAULT 'main' CHECK(account IN ('main', 'test')),
+        UNIQUE(brief_date, ticker, account)
     )
     """,
     """
@@ -134,6 +148,9 @@ _SCHEMA_DDL = (
                                               'CANCELED', 'REJECTED', 'EXPIRED')),
         submitted_at TEXT NOT NULL,
         last_updated_at TEXT NOT NULL,
+        -- v4: routing tag. Reconciler MUST filter on this when polling
+        -- Alpaca — TEST account UUIDs would 404 against MAIN client.
+        account TEXT NOT NULL DEFAULT 'main' CHECK(account IN ('main', 'test')),
         FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
     )
     """,
@@ -178,6 +195,8 @@ _SCHEMA_DDL = (
     "CREATE INDEX IF NOT EXISTS ix_orders_plan_id ON orders(plan_id)",
     "CREATE INDEX IF NOT EXISTS ix_orders_status ON orders(status)",
     "CREATE INDEX IF NOT EXISTS ix_orders_kind_status ON orders(order_kind, status)",
+    "CREATE INDEX IF NOT EXISTS ix_orders_account_status ON orders(account, status)",
+    "CREATE INDEX IF NOT EXISTS ix_plans_account_brief ON plans(account, brief_date)",
     "CREATE INDEX IF NOT EXISTS ix_fills_order_id ON fills(order_id)",
 )
 
@@ -286,6 +305,7 @@ def insert_planned(
     order_ttl_days: int,
     tiers: Iterable[tuple[int, float, int, float, str]],
     tp_tranches: Iterable[tuple[int, float, float, float, str]],
+    account: str = "main",
 ) -> PlanRow:
     """Insert a fully-planned candidate + its tier rows + TP-tranche rows.
 
@@ -293,7 +313,12 @@ def insert_planned(
     visible to readers. ``tiers`` rows: ``(tier_index, limit_price, qty,
     alloc_pct, tag)``. ``tp_tranches`` rows: ``(tranche_index, target_price,
     tranche_pct, r_multiple, tag)``.
+
+    ``account`` (v4): which Alpaca paper account this plan is sized against
+    + will submit to. Must be one of :data:`VALID_ACCOUNTS`.
     """
+    if account not in VALID_ACCOUNTS:
+        raise ValueError(f"unknown account={account!r}, expected one of {sorted(VALID_ACCOUNTS)}")
     conn.execute("BEGIN")
     try:
         cur = conn.execute(
@@ -302,8 +327,8 @@ def insert_planned(
                 brief_date, ticker, theme, planned_at,
                 suggested_size_pct, scale_factor, final_size_pct, paper_equity,
                 total_notional, gross_notional, disaster_stop,
-                order_ttl_days, status, block_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PLANNED', NULL)
+                order_ttl_days, status, block_reason, account
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PLANNED', NULL, ?)
             """,
             (
                 brief_date.isoformat(),
@@ -318,6 +343,7 @@ def insert_planned(
                 gross_notional,
                 disaster_stop,
                 order_ttl_days,
+                account,
             ),
         )
         # ``lastrowid`` is typed Optional[int] by the stdlib stubs, but
@@ -400,10 +426,29 @@ def count_shadow_for_date(conn: sqlite3.Connection, brief_date: dt.date) -> int:
     return int(cur.fetchone()[0])
 
 
-def fetch_plans_for_date(conn: sqlite3.Connection, brief_date: dt.date) -> list[sqlite3.Row]:
-    cur = conn.execute(
-        "SELECT * FROM plans WHERE brief_date = ? ORDER BY plan_id", (brief_date.isoformat(),)
-    )
+def fetch_plans_for_date(
+    conn: sqlite3.Connection,
+    brief_date: dt.date,
+    *,
+    account: str | None = None,
+) -> list[sqlite3.Row]:
+    """Plans for one brief date. ``account=None`` returns all accounts
+    (audit / report path); pass ``'main'`` or ``'test'`` to scope the
+    result to a single Alpaca paper account."""
+    if account is None:
+        cur = conn.execute(
+            "SELECT * FROM plans WHERE brief_date = ? ORDER BY plan_id",
+            (brief_date.isoformat(),),
+        )
+    else:
+        if account not in VALID_ACCOUNTS:
+            raise ValueError(
+                f"unknown account={account!r}, expected one of {sorted(VALID_ACCOUNTS)}"
+            )
+        cur = conn.execute(
+            "SELECT * FROM plans WHERE brief_date = ? AND account = ? ORDER BY plan_id",
+            (brief_date.isoformat(), account),
+        )
     return list(cur.fetchall())
 
 
@@ -434,6 +479,7 @@ def insert_order(
     limit_price: float | None = None,
     stop_price: float | None = None,
     status: str = "SUBMITTED",
+    account: str = "main",
 ) -> int:
     """Persist a freshly submitted Alpaca order. Returns the local ``order_id``.
 
@@ -441,13 +487,19 @@ def insert_order(
     ``submit_stop_order`` / ``submit_market_order`` returns from the SDK.
     The reconciler walks ``orders`` joined with Alpaca state to detect
     status transitions.
+
+    ``account`` (v4): the paper account the SDK call routed to. Reconciler
+    + exit_manager MUST filter on this when picking which Alpaca client
+    to poll; cross-account UUID lookups would 404.
     """
+    if account not in VALID_ACCOUNTS:
+        raise ValueError(f"unknown account={account!r}, expected one of {sorted(VALID_ACCOUNTS)}")
     cur = conn.execute(
         """INSERT INTO orders(plan_id, alpaca_order_id, side, order_kind,
                               tier_index, tranche_index, order_type, qty,
                               limit_price, stop_price, time_in_force, status,
-                              submitted_at, last_updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              submitted_at, last_updated_at, account)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             plan_id,
             alpaca_order_id,
@@ -463,6 +515,7 @@ def insert_order(
             status,
             submitted_at.isoformat(),
             submitted_at.isoformat(),
+            account,
         ),
     )
     last = cur.lastrowid
@@ -554,7 +607,13 @@ def insert_plan_outcome(
 
 def fetch_orders_for_plan(conn: sqlite3.Connection, plan_id: int) -> list[sqlite3.Row]:
     """All orders for a plan ordered by submission time. Used by the
-    reconciler to compute blended entry/exit prices."""
+    reconciler to compute blended entry/exit prices.
+
+    No account filter — a plan_id is unique across accounts (the
+    plans-side ``UNIQUE(brief_date, ticker, account)`` constraint means
+    one ticker on one day can produce two plan rows, one per account,
+    each with its own plan_id; all orders for a given plan_id are by
+    construction routed to the plan's account)."""
     cur = conn.execute(
         "SELECT * FROM orders WHERE plan_id = ? ORDER BY submitted_at, order_id",
         (plan_id,),
@@ -562,13 +621,33 @@ def fetch_orders_for_plan(conn: sqlite3.Connection, plan_id: int) -> list[sqlite
     return list(cur.fetchall())
 
 
-def fetch_open_orders(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def fetch_open_orders(
+    conn: sqlite3.Connection,
+    *,
+    account: str | None = None,
+) -> list[sqlite3.Row]:
     """All orders not yet in a terminal state (SUBMITTED / PARTIALLY_FILLED).
-    Reconciler uses this to know which Alpaca orders to poll."""
-    cur = conn.execute(
-        "SELECT * FROM orders WHERE status IN ('SUBMITTED', 'PARTIALLY_FILLED') "
-        "ORDER BY submitted_at"
-    )
+
+    Reconciler uses this to know which Alpaca orders to poll. The
+    ``account`` filter is REQUIRED for any reconcile pass — TEST account
+    UUIDs would 404 against MAIN client and vice versa. ``account=None``
+    returns the full open-order set across accounts (audit / report
+    path)."""
+    if account is None:
+        cur = conn.execute(
+            "SELECT * FROM orders WHERE status IN ('SUBMITTED', 'PARTIALLY_FILLED') "
+            "ORDER BY submitted_at"
+        )
+    else:
+        if account not in VALID_ACCOUNTS:
+            raise ValueError(
+                f"unknown account={account!r}, expected one of {sorted(VALID_ACCOUNTS)}"
+            )
+        cur = conn.execute(
+            "SELECT * FROM orders WHERE status IN ('SUBMITTED', 'PARTIALLY_FILLED') "
+            "AND account = ? ORDER BY submitted_at",
+            (account,),
+        )
     return list(cur.fetchall())
 
 
@@ -582,6 +661,7 @@ def fetch_fills_for_order(conn: sqlite3.Connection, order_id: int) -> list[sqlit
 
 __all__ = [
     "LEDGER_SCHEMA_VERSION",
+    "VALID_ACCOUNTS",
     "PlanRow",
     "count_plans_for_date",
     "count_shadow_for_date",

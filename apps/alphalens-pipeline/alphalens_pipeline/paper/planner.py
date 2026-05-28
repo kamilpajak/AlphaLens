@@ -169,9 +169,18 @@ def _resolve_equity_provider(
     return _FixedEquityProvider(fallback_equity)
 
 
-def _delete_existing_for_date(conn, brief_date: dt.date) -> None:
-    """Idempotency helper for ``--force`` reruns."""
-    conn.execute("DELETE FROM plans WHERE brief_date = ?", (brief_date.isoformat(),))
+def _delete_existing_for_date(conn, brief_date: dt.date, account: str) -> None:
+    """Idempotency helper for ``--force`` reruns. Scoped to one account
+    so ``--force`` on a TEST replan doesn't blow away MAIN history (or
+    vice versa) when both share the same ledger file. The shadow_log
+    table doesn't carry an account column today — same brief_date can
+    only ever be planned by one account in practice (plan-per-day
+    cadence), so the unscoped DELETE is fine for now.
+    """
+    conn.execute(
+        "DELETE FROM plans WHERE brief_date = ? AND account = ?",
+        (brief_date.isoformat(), account),
+    )
     conn.execute("DELETE FROM shadow_log WHERE brief_date = ?", (brief_date.isoformat(),))
 
 
@@ -185,6 +194,7 @@ def _process_candidate(
     cumulative_gross: float,
     gross_cap: float,
     planned_at: dt.datetime,
+    account: str,
 ) -> tuple[PlanOutcome, float]:
     """Plan one candidate. Returns ``(outcome, new_cumulative_gross)``."""
     if not candidate.verified:
@@ -258,6 +268,7 @@ def _process_candidate(
         order_ttl_days=order_ttl_days,
         tiers=tiers,
         tp_tranches=tp_rows,
+        account=account,
     )
     return (
         PlanOutcome(ticker=candidate.ticker, theme=candidate.theme, status="PLANNED"),
@@ -312,6 +323,7 @@ def plan_for_date(
     fallback_equity: float = DEFAULT_PAPER_EQUITY_USD,
     force: bool = False,
     candidates: Iterable[CandidateBrief] | None = None,
+    account: str = "main",
 ) -> PlanReport:
     """Plan one day's verified candidates and persist to the SQLite ledger.
 
@@ -374,7 +386,7 @@ def plan_for_date(
 
     with open_ledger(ledger_path) as conn:
         if force:
-            _delete_existing_for_date(conn, brief_date)
+            _delete_existing_for_date(conn, brief_date, account)
 
         for candidate in candidates_list:
             if candidate.ticker in planned_tickers_in_run:
@@ -401,6 +413,7 @@ def plan_for_date(
                 cumulative_gross=cumulative_gross,
                 gross_cap=gross_cap,
                 planned_at=planned_at,
+                account=account,
             )
             outcomes.append(outcome)
             if outcome.status == "PLANNED":
