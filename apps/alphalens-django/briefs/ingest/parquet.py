@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,7 +46,17 @@ from briefs.models import Brief, DayMeta
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
+# Container-vs-host trap: inside the Django container HOME=/home/django
+# but the compose bind mount lands at /var/lib/alphalens/thematic_briefs.
+# The legacy Path.home() default resolved to a non-existent container path
+# and `rebuild_briefs_cache --force` silently DELETED every date from the
+# DB. The compose now exports ALPHALENS_BRIEFS_DIR pointing at the mount
+# target; locally (no env) we still fall back to the host-side default so
+# dev flow works unchanged. Read at module-init so argparse's default also
+# picks it up.
+DEFAULT_BRIEFS_DIR = Path(
+    os.environ.get("ALPHALENS_BRIEFS_DIR") or Path.home() / ".alphalens" / "thematic_briefs"
+)
 
 REQUIRED_PARQUET_COLUMNS: frozenset[str] = frozenset({"ticker", "theme"})
 

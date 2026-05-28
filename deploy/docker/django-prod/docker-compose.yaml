@@ -45,6 +45,13 @@ x-django-base: &django-base
   environment:
     DATABASE_URL: postgres://alphalens:${POSTGRES_PASSWORD:?set in .env}@postgres:5432/alphalens
     DJANGO_SETTINGS_MODULE: ${DJANGO_SETTINGS_MODULE:-config.settings.prod}
+    # Container-side default for rebuild_briefs_cache. Must match the bind
+    # mount target below — without this the management command falls back
+    # to Path.home() / .alphalens / thematic_briefs which inside the
+    # container resolves to /home/django/.alphalens/... (non-existent) and
+    # `--force` then silently deletes every date from the DB. See
+    # briefs.ingest.parquet:DEFAULT_BRIEFS_DIR.
+    ALPHALENS_BRIEFS_DIR: /var/lib/alphalens/thematic_briefs
   depends_on:
     postgres:
       condition: service_healthy
