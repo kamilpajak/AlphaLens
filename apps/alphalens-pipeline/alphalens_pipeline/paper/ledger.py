@@ -214,7 +214,14 @@ def insert_planned(
                 order_ttl_days,
             ),
         )
-        plan_id = int(cur.lastrowid)
+        # ``lastrowid`` is typed Optional[int] by the stdlib stubs, but
+        # SQLite always populates it after an AUTOINCREMENT INSERT we just
+        # ran inside an open transaction. The None branch is unreachable
+        # here; the cast to int is for the pyright contract, not safety.
+        last = cur.lastrowid
+        if last is None:  # pragma: no cover - defensive against SDK contract drift
+            raise RuntimeError("sqlite returned no lastrowid after INSERT into plans")
+        plan_id = int(last)
         conn.executemany(
             """INSERT INTO plan_entries(plan_id, tier_index, limit_price, qty, alloc_pct, tag)
                VALUES (?, ?, ?, ?, ?, ?)""",
@@ -269,7 +276,10 @@ def insert_shadow(
             logged_at.isoformat(),
         ),
     )
-    return int(cur.lastrowid)
+    last = cur.lastrowid
+    if last is None:  # pragma: no cover - defensive against SDK contract drift
+        raise RuntimeError("sqlite returned no lastrowid after INSERT into shadow_log")
+    return int(last)
 
 
 def count_plans_for_date(conn: sqlite3.Connection, brief_date: dt.date) -> int:
