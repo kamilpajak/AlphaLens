@@ -133,6 +133,20 @@ def validate_trade_setup(brief_trade_setup: dict) -> float:
     if not entry_tiers_raw:
         raise TradeSetupNotPlannableError("entry_tiers empty")
 
+    # Apply the same post-sanitisation tier-emptiness check that
+    # :func:`compute_setup_plan` runs (it drops tiers with ``limit <= 0`` as
+    # defense-in-depth). Without this alignment a candidate with all-zero-
+    # limit tiers would pass pass 1 of the planner (contributing to the
+    # aggregate that feeds compute_daily_scale_factor) then fail pass 2 with
+    # "no usable entry tiers after sanitisation", introducing a downward
+    # bias on the day's global scale factor. Per zen second-round review
+    # 2026-05-28.
+    usable_tiers = [
+        t for t in entry_tiers_raw if isinstance(t, dict) and float(t.get("limit", 0) or 0) > 0
+    ]
+    if not usable_tiers:
+        raise TradeSetupNotPlannableError("no usable entry tiers (all limits <= 0)")
+
     return float(suggested_size_pct)
 
 
