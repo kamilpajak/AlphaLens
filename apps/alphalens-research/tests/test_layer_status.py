@@ -54,6 +54,7 @@ LAYERS_WITH_STATUS = (
     "alphalens_research.screeners.prescreener",
     "alphalens_pipeline.thematic",
     "alphalens_pipeline.edgar_detector",
+    "alphalens_pipeline.paper",
 )
 
 

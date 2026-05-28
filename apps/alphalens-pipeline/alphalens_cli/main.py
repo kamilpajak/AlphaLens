@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from alphalens_cli.commands.audit import audit_command
 from alphalens_cli.commands.edgar import edgar_app
 from alphalens_cli.commands.literature import literature_app
+from alphalens_cli.commands.paper import paper_app
 from alphalens_cli.commands.preaudit import preaudit_command
 from alphalens_cli.commands.preregister import preregister_app
 from alphalens_cli.commands.status import status
@@ -52,6 +53,7 @@ def _root_callback() -> None:
 
 app.add_typer(edgar_app, name="edgar")
 app.add_typer(literature_app, name="literature")
+app.add_typer(paper_app, name="paper")
 app.add_typer(preregister_app, name="preregister")
 app.add_typer(thematic_app, name="thematic")
 app.command(name="status")(status)
