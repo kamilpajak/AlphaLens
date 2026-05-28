@@ -286,14 +286,26 @@ test.describe('smoke — about page accuracy', () => {
 		await expect(layers).toContainText(/5-15/);
 	});
 
-	test('no retired Gemini model IDs appear anywhere on the page', async ({ page }) => {
-		await page.goto('/about');
-		// body covers the full rendered tree; <script> blocks (which mention
-		// retired IDs in author comments) do not contribute to innerText, so
-		// this is hermetic against the explanatory comment in +page.svelte.
-		const body = await page.locator('body').innerText();
-		for (const dead of RETIRED_MODEL_IDS) {
-			expect(body, `retired model id "${dead}" must not appear on /about`).not.toContain(dead);
+	test('no retired Gemini model IDs appear anywhere on any user-facing route', async ({
+		page
+	}) => {
+		// Earlier this test scanned only /about via .innerText() — but the
+		// global footer ticker (rendered by +layout.svelte on every route) had
+		// its own hardcoded retired IDs that .innerText() missed because
+		// overflow-hidden clipped the chips off the rendered visual layout.
+		// Use document.body.textContent (raw DOM text, no CSS visibility
+		// honoring) and iterate every static route + the latest brief.
+		const routes = ['/', '/briefs', '/about', '/experiments', `/brief/${latestDay.date}`];
+		for (const route of routes) {
+			await page.goto(route);
+			await expect(page.locator('header a[href="/"]').first()).toContainText('ALPHALENS');
+			const text = (await page.evaluate(() => document.body.textContent)) ?? '';
+			for (const dead of RETIRED_MODEL_IDS) {
+				expect(
+					text,
+					`retired model id "${dead}" leaked into ${route} — bump $lib/models constants`
+				).not.toContain(dead);
+			}
 		}
 	});
 
