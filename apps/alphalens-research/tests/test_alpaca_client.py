@@ -487,6 +487,75 @@ class TestOrderPrimitives(_FakeAlpacaTestCase):
             client.submit_limit_order(symbol="X", qty=1, limit_price=1.0, side="hold")
 
 
+class TestAlpacaTickRounding(_FakeAlpacaTestCase):
+    """Sub-penny precision in limit/stop prices is rejected by Alpaca with
+    APIError 42210000. The wrapper enforces the minimum tick centrally so
+    every call site (entry tiers, TP / SL exits, brackets) is safe."""
+
+    def _build_client(self):
+        from alphalens_pipeline.data.alt_data.alpaca_client import AlpacaClient
+
+        return AlpacaClient(api_key="k", secret_key="s")
+
+    def test_round_helper_2dp_for_dollar_and_above(self):
+        from alphalens_pipeline.data.alt_data.alpaca_client import (
+            _round_to_alpaca_tick,
+        )
+
+        self.assertEqual(_round_to_alpaca_tick(69.22318381700624), 69.22)
+        self.assertEqual(_round_to_alpaca_tick(1.0), 1.0)
+        self.assertEqual(_round_to_alpaca_tick(125.5), 125.5)
+
+    def test_round_helper_4dp_for_subdollar(self):
+        from alphalens_pipeline.data.alt_data.alpaca_client import (
+            _round_to_alpaca_tick,
+        )
+
+        # < $1.00 → 4dp Reg NMS sub-penny tick
+        self.assertEqual(_round_to_alpaca_tick(0.123456), 0.1235)
+        self.assertEqual(_round_to_alpaca_tick(0.99), 0.99)
+
+    def test_submit_limit_order_rounds_subpenny_price(self):
+        client = self._build_client()
+        client.submit_limit_order(symbol="BLBD", qty=3, limit_price=69.22318381700624)
+
+        self.fake_requests_mod.LimitOrderRequest.assert_called_once_with(
+            symbol="BLBD",
+            qty=3,
+            side=self.fake_enums_mod.OrderSide.BUY,
+            time_in_force=self.fake_enums_mod.TimeInForce.GTC,
+            limit_price=69.22,
+        )
+
+    def test_submit_stop_order_rounds_subpenny_price(self):
+        client = self._build_client()
+        client.submit_stop_order(symbol="BLBD", qty=3, stop_price=48.94110512345)
+
+        self.fake_requests_mod.StopOrderRequest.assert_called_once_with(
+            symbol="BLBD",
+            qty=3,
+            side=self.fake_enums_mod.OrderSide.SELL,
+            time_in_force=self.fake_enums_mod.TimeInForce.GTC,
+            stop_price=48.94,
+        )
+
+    def test_submit_bracket_order_rounds_all_three_legs(self):
+        client = self._build_client()
+        client.submit_bracket_order(
+            symbol="BLBD",
+            qty=3,
+            limit_price=69.22318381700624,
+            take_profit_price=85.78901234,
+            stop_loss_price=48.94110512345,
+        )
+
+        self.fake_requests_mod.TakeProfitRequest.assert_called_once_with(limit_price=85.79)
+        self.fake_requests_mod.StopLossRequest.assert_called_once_with(stop_price=48.94)
+        # Parent limit_price must also be rounded — verify via call kwargs.
+        parent_kwargs = self.fake_requests_mod.LimitOrderRequest.call_args.kwargs
+        self.assertEqual(parent_kwargs["limit_price"], 69.22)
+
+
 class TestPortfolioReads(_FakeAlpacaTestCase):
     def _build_client(self):
         from alphalens_pipeline.data.alt_data.alpaca_client import AlpacaClient
