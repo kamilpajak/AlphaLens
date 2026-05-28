@@ -14,7 +14,6 @@ import unittest
 from pathlib import Path
 
 from alphalens_pipeline.paper.brief_loader import CandidateBrief
-from alphalens_pipeline.paper.constants import N_FIXED
 from alphalens_pipeline.paper.ledger import (
     fetch_plans_for_date,
     fetch_shadow_for_date,
@@ -118,8 +117,21 @@ class TestHappyPath(unittest.TestCase):
         self.assertEqual(len(plans), 1)
         self.assertEqual(plans[0]["ticker"], "NVDA")
         self.assertEqual(plans[0]["status"], "PLANNED")
-        # Effective size cap is 100/N_FIXED → ~0.278%
-        self.assertAlmostEqual(plans[0]["effective_size_pct"], 100.0 / N_FIXED, places=8)
+        # v2 sizing: one candidate at suggested 5%, equity $1M:
+        #   aggregate = 0.05 × 1M = $50k
+        #   daily_target = STEADY_STATE_GROSS_FRAC × 1M / EXPECTED_AVG_HOLD_DAYS
+        #   scale_factor = daily_target / aggregate
+        from alphalens_pipeline.paper.constants import (
+            EXPECTED_AVG_HOLD_DAYS,
+            STEADY_STATE_GROSS_FRAC,
+        )
+
+        expected_scale = (STEADY_STATE_GROSS_FRAC * 1_000_000.0 / EXPECTED_AVG_HOLD_DAYS) / (
+            0.05 * 1_000_000.0
+        )
+        self.assertAlmostEqual(plans[0]["suggested_size_pct"], 5.0, places=8)
+        self.assertAlmostEqual(plans[0]["scale_factor"], expected_scale, places=8)
+        self.assertAlmostEqual(plans[0]["final_size_pct"], 5.0 * expected_scale, places=8)
 
 
 class TestShadowReasons(unittest.TestCase):
@@ -215,18 +227,22 @@ class TestShadowReasons(unittest.TestCase):
         """Gross cap binds when cumulative planned gross would exceed
         ``GROSS_SAFETY_FRAC × equity``. Forces the bind by monkey-patching
         the frac to a tiny value so two normal candidates exceed it together.
+
+        v2 math: 2 candidates × suggested 5% on $1M equity. Aggregate
+        uncapped = $100k; daily_target = 0.667 × $1M / 30 ≈ $22.2k;
+        scale_factor = 22.2k / 100k = 0.222; per-cand final 1.11%, total
+        notional $11.1k. Tier (limit=$100, alloc=100%): qty=111, gross
+        $11,100. Set GROSS_SAFETY_FRAC so the cap sits between 1× and 2×
+        per-cand gross ($11.1k < cap < $22.2k).
         """
         from alphalens_pipeline.paper import planner
 
         c1 = _make_candidate(ticker="A", setup=_setup_dict())
         c2 = _make_candidate(ticker="B", setup=_setup_dict())
 
-        # With equity=$1M, cap_pct=100/N_FIXED≈0.278%, limit=$100 alloc=100%,
-        # qty=floor(2778/100)=27 → per-candidate gross=$2700. Set the frac so
-        # the cap sits between one and two candidates' gross.
         original_frac = planner.GROSS_SAFETY_FRAC
         try:
-            planner.GROSS_SAFETY_FRAC = 0.004  # cap = $4_000 at $1M equity
+            planner.GROSS_SAFETY_FRAC = 0.012  # cap = $12_000 at $1M equity
             report = plan_for_date(
                 brief_date=self.d,
                 briefs_dir=self.tmpdir,

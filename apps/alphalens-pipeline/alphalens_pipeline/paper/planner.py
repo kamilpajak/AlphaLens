@@ -28,7 +28,6 @@ from alphalens_pipeline.paper.constants import (
     DEFAULT_ORDER_TTL_DAYS,
     DEFAULT_PAPER_EQUITY_USD,
     GROSS_SAFETY_FRAC,
-    N_FIXED,
 )
 from alphalens_pipeline.paper.ledger import (
     insert_planned,
@@ -38,8 +37,10 @@ from alphalens_pipeline.paper.ledger import (
 from alphalens_pipeline.paper.sizing import (
     SetupPlan,
     TradeSetupNotPlannableError,
+    compute_daily_scale_factor,
     compute_setup_plan,
     setup_plan_gross_notional,
+    validate_trade_setup,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,7 +249,8 @@ def _process_candidate(
         theme=candidate.theme,
         planned_at=planned_at,
         suggested_size_pct=setup_plan.suggested_size_pct,
-        effective_size_pct=setup_plan.effective_size_pct,
+        scale_factor=setup_plan.scale_factor,
+        final_size_pct=setup_plan.final_size_pct,
         paper_equity=setup_plan.paper_equity,
         total_notional=setup_plan.total_notional,
         gross_notional=gross_notional,
@@ -264,7 +266,7 @@ def _process_candidate(
 
 
 def _try_compute(
-    candidate: CandidateBrief, paper_equity: float
+    candidate: CandidateBrief, paper_equity: float, scale_factor: float
 ) -> tuple[SetupPlan | None, str | None]:
     """Wrap :func:`compute_setup_plan` to return either a plan or a reason."""
     if candidate.trade_setup is None:
@@ -273,11 +275,30 @@ def _try_compute(
         plan = compute_setup_plan(
             brief_trade_setup=candidate.trade_setup,
             paper_equity=paper_equity,
-            n_fixed=N_FIXED,
+            scale_factor=scale_factor,
         )
     except TradeSetupNotPlannableError as exc:
         return None, str(exc)
     return plan, None
+
+
+def _collect_plannable_suggested(
+    candidates: list[CandidateBrief],
+) -> list[float]:
+    """First pass: extract ``suggested_size_pct`` from candidates that would
+    be plannable (verified + has a setup that passes validation). Skips
+    unverified candidates and unparseable setups silently — the second pass
+    handles those with structured shadow_log reasons. This pass exists only
+    to feed :func:`compute_daily_scale_factor`."""
+    out: list[float] = []
+    for cand in candidates:
+        if not cand.verified or cand.trade_setup is None:
+            continue
+        try:
+            out.append(validate_trade_setup(cand.trade_setup))
+        except TradeSetupNotPlannableError:
+            continue
+    return out
 
 
 def plan_for_date(
@@ -324,6 +345,23 @@ def plan_for_date(
     gross_cap = GROSS_SAFETY_FRAC * paper_equity
     planned_at = dt.datetime.now(dt.UTC)
 
+    # First pass: compute the daily global scale factor over the
+    # plannable cohort. v2 sizing per memo §2.3 — preserves
+    # inter-candidate ratios while bounding aggregate steady-state gross.
+    # Candidates that fail validation here are simply skipped from the
+    # aggregate; the second pass re-runs validation per candidate and
+    # produces the structured shadow_log entry.
+    scale_factor = compute_daily_scale_factor(
+        _collect_plannable_suggested(candidates_list),
+        paper_equity,
+    )
+    logger.info(
+        "paper plan %s: scale_factor=%.4f (equity=$%.0f)",
+        brief_date.isoformat(),
+        scale_factor,
+        paper_equity,
+    )
+
     outcomes: list[PlanOutcome] = []
     cumulative_gross = 0.0
     # Track tickers that already produced a PLANNED row in THIS run. The
@@ -353,7 +391,7 @@ def plan_for_date(
                 )
                 continue
 
-            setup_plan, unplannable_reason = _try_compute(candidate, paper_equity)
+            setup_plan, unplannable_reason = _try_compute(candidate, paper_equity, scale_factor)
             outcome, cumulative_gross = _process_candidate(
                 conn,
                 candidate=candidate,
