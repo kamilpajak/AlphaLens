@@ -66,6 +66,25 @@ body {
 	color: #000;
 }
 
+/* Tailwind v4's reset omits the historical `cursor: pointer` on <button>,
+   leaving native buttons with the default arrow cursor while adjacent <a>
+   anchors still get the pointer — a visible inconsistency on dual-action
+   cards (e.g. +error.svelte session-expired RE-AUTHENTICATE / RETRY pair).
+   Restore the convention for enabled buttons only; disabled buttons keep
+   the not-allowed default.
+
+   Scoped to `@layer base` so component-level Tailwind utilities like
+   `cursor-default` or `cursor-not-allowed` can still override it without a
+   specificity battle. The selector does NOT cover `<div role="button">` or
+   similar ARIA-only buttons; no such elements exist today, but if they are
+   added later a companion rule like `[role="button"]:not([aria-disabled="true"]) { cursor: pointer; }`
+   would be needed. */
+@layer base {
+	button:not(:disabled) {
+		cursor: pointer;
+	}
+}
+
 .scanlines::before {
 	content: '';
 	position: fixed;

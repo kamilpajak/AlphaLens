@@ -703,6 +703,36 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		const opened = await page.locator('article#P14 details[open]').count();
 		expect(opened, 'P14 details must be open after hash deep-link').toBe(1);
 	});
+
+	// The fix is a global CSS rule, so the test sweeps every route that ships
+	// a native <button> (per `grep -rl '<button' src/`): error card on /error
+	// is not directly reachable without auth failure, but /experiments holds
+	// the most buttons and /brief/[date] holds the candidate-card action
+	// buttons. Loop guards against a future per-route style that re-breaks
+	// the pointer convention silently.
+	for (const url of ['/experiments', `/brief/${latestDay.date}`]) {
+		test(`native <button> elements default to cursor:pointer on ${url}`, async ({ page }) => {
+			await page.goto(url);
+			// /brief loads candidates via client-side fetch — wait for the first
+			// button to be present in the DOM before evaluating styles. Use
+			// `state: 'attached'` because /experiments buttons live inside
+			// collapsed <details> and are hidden but DOM-present; computed
+			// cursor still resolves correctly on hidden elements.
+			await page
+				.locator('button:not(:disabled)')
+				.first()
+				.waitFor({ state: 'attached', timeout: 5000 });
+			const cursors = await page.locator('button:not(:disabled)').evaluateAll((els) =>
+				els.map((el) => getComputedStyle(el).cursor)
+			);
+			expect(cursors.length, `${url} must render ≥1 native <button>`).toBeGreaterThan(0);
+			const nonPointer = cursors.filter((c) => c !== 'pointer');
+			expect(
+				nonPointer,
+				`every enabled button on ${url} should default to cursor:pointer (got ${nonPointer.join(', ')})`
+			).toEqual([]);
+		});
+	}
 });
 
 test.describe('glossary auto-discovery (per-page coverage)', () => {
