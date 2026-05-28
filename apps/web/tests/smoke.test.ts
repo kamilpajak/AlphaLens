@@ -918,17 +918,22 @@ test.describe('smoke — SvelteKit stale-import recovery (version polling)', () 
 		expect(typeof body.version, 'version must be a string').toBe('string');
 	});
 
-	test('layout <main> wires data-sveltekit-reload to updated.current', async ({ page }) => {
+	test('layout wrapper wires data-sveltekit-reload to updated.current', async ({ page }) => {
 		await page.goto('/');
 		// updated.current starts false in a fresh tab, so the attribute renders
 		// as "off" (keep SPA routing). After a deploy the poll flips it to
 		// true and the attribute becomes "" (force full reload). Either value
 		// proves the directive is wired up; absence would indicate the layout
 		// regressed and the version-polling recovery path is dead.
-		const attr = await page.locator('main').first().getAttribute('data-sveltekit-reload');
+		// Scoped at the outer wrapper (header + main both inside) so header
+		// nav links also reload on stale-build, not just <main> children.
+		const attr = await page
+			.locator('[data-sveltekit-reload]')
+			.first()
+			.getAttribute('data-sveltekit-reload');
 		expect(
 			['off', ''],
-			`<main data-sveltekit-reload> must be "off" or "" (got ${attr})`
+			`data-sveltekit-reload wrapper must be "off" or "" (got ${attr})`
 		).toContain(attr);
 	});
 });
