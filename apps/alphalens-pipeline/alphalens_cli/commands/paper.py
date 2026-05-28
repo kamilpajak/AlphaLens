@@ -239,4 +239,119 @@ def reconcile(
         typer.echo(f"  · {outcome.alpaca_order_id[:12]}  {' '.join(suffix_parts)}")
 
 
+@paper_app.command("report")
+def report(
+    date: str | None = typer.Option(
+        None,
+        "--date",
+        help=(
+            "Scope to a single brief date (YYYY-MM-DD). Omit to aggregate across the whole ledger."
+        ),
+    ),
+    ledger_path: Path | None = typer.Option(
+        None,
+        "--ledger",
+        help=_LEDGER_HELP,
+    ),
+    use_main_account: bool = typer.Option(
+        False,
+        "--use-main-account",
+        help="Scope to the MAIN account only. Mutually exclusive with --use-test-account.",
+    ),
+    use_test_account: bool = typer.Option(
+        False,
+        "--use-test-account",
+        help="Scope to the TEST account only. Mutually exclusive with --use-main-account.",
+    ),
+) -> None:
+    """Aggregate ledger state into a human-readable report.
+
+    Read-only: zero Alpaca API calls. Surfaces plan counts, order
+    lifecycle, exit outcomes, and the realised R-multiple distribution
+    across the chosen (date × account) scope. Per-candidate table at
+    the bottom lists every plan with its current state.
+
+    Default scope is ALL accounts — unlike plan/submit/reconcile which
+    must route through one Alpaca client, report is read-only and the
+    natural audit view is the whole ledger. Pass --use-main-account or
+    --use-test-account to narrow.
+    """
+    from alphalens_pipeline.paper.constants import DEFAULT_LEDGER_RELPATH
+    from alphalens_pipeline.paper.report import build_report
+
+    if use_main_account and use_test_account:
+        raise typer.BadParameter(
+            "--use-main-account and --use-test-account are mutually exclusive."
+        )
+    resolved_ledger = (
+        ledger_path if ledger_path is not None else Path.home() / DEFAULT_LEDGER_RELPATH
+    )
+    brief_date = dt.date.fromisoformat(date) if date is not None else None
+    if use_main_account:
+        account: str | None = "main"
+    elif use_test_account:
+        account = "test"
+    else:
+        # Default: no account filter — aggregate the whole ledger.
+        account = None
+
+    rep = build_report(resolved_ledger, brief_date=brief_date, account=account)
+
+    scope = []
+    if brief_date is not None:
+        scope.append(f"date={brief_date.isoformat()}")
+    scope.append(f"account={account or 'ALL'}")
+    typer.echo(f"paper report ({', '.join(scope)})")
+    typer.echo("")
+
+    s = rep.summary
+    plan_parts = [f"{s.n_plans_planned} PLANNED", f"{s.n_plans_blocked} BLOCKED"]
+    if s.n_plans_skipped > 0:
+        # Planner never writes SKIPPED today; only surface it when something
+        # has actually populated the row so the line stays minimal pre-ship.
+        plan_parts.append(f"{s.n_plans_skipped} SKIPPED")
+    typer.echo(f"  Plans:    {', '.join(plan_parts)}")
+    if s.n_shadowed > 0:
+        shadow_str = ", ".join(f"{k}={v}" for k, v in sorted(s.shadow_by_reason.items()))
+        typer.echo(f"  Shadowed: {s.n_shadowed} ({shadow_str})")
+    typer.echo(
+        f"  Orders:   ENTRY {s.n_entries_filled}/{s.n_entries_submitted} filled, "
+        f"TP={s.n_tp_orders}, SL={s.n_sl_orders}, TIME_STOP={s.n_time_stop_orders}"
+    )
+    typer.echo(f"  Fills:    {s.n_fills}")
+    if s.n_outcomes > 0:
+        kinds_str = ", ".join(f"{k}={v}" for k, v in sorted(s.outcomes_by_kind.items()))
+        typer.echo(f"  Outcomes: {s.n_outcomes} ({kinds_str})")
+        if s.hit_rate is not None:
+            typer.echo(f"  Hit rate: {s.hit_rate:.1%}")
+        if s.r_multiple_mean is not None:
+            stdev_str = f"σ={s.r_multiple_stdev:.2f}" if s.r_multiple_stdev is not None else "σ=n/a"
+            typer.echo(
+                f"  R-multiple (n={s.n_r_multiple_observations}): "
+                f"mean={s.r_multiple_mean:+.2f}  median={s.r_multiple_median:+.2f}  {stdev_str}"
+            )
+    else:
+        typer.echo("  Outcomes: 0 (no plans closed yet)")
+
+    if not rep.candidates:
+        return
+
+    typer.echo("")
+    typer.echo(
+        f"  {'date':<10} {'ticker':<6} {'acct':<4} {'status':<8} "
+        f"{'fill':<8} {'entry':>8} {'kind':<10} {'R':>6}"
+    )
+    for cand in rep.candidates:
+        fill_str = f"{cand.entry_filled_qty}/{cand.entry_planned_qty}"
+        entry_str = (
+            f"{cand.blended_entry_price:.2f}" if cand.blended_entry_price is not None else "—"
+        )
+        kind_str = cand.exit_kind or "—"
+        r_str = f"{cand.realized_r_multiple:+.2f}" if cand.realized_r_multiple is not None else "—"
+        typer.echo(
+            f"  {cand.brief_date:<10} {cand.ticker:<6} {cand.account:<4} "
+            f"{cand.status:<8} {fill_str:<8} {entry_str:>8} {kind_str:<10} {r_str:>6}"
+        )
+
+
 __all__ = ["paper_app"]
