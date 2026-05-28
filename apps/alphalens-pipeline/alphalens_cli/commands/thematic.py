@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 import typer
+from alphalens_pipeline.thematic import clean_titles as clean_titles_mod
 from alphalens_pipeline.thematic import news_ingest
 from alphalens_pipeline.thematic.argumentation import orchestrator as brief_orchestrator
 from alphalens_pipeline.thematic.extraction import gemini_flash
@@ -334,3 +335,36 @@ def brief(
     out_parquet = output_dir / f"{target.isoformat()}.parquet"
     typer.echo(f"Wrote {len(enriched)} briefs → {out_parquet}")
     typer.echo(f"  Pro: {n_pro}, Flash: {n_flash}")
+
+
+@thematic_app.command("clean-titles")
+def clean_titles_command(
+    briefs_dir: Path = typer.Option(
+        clean_titles_mod.DEFAULT_BRIEFS_DIR,
+        "--briefs-dir",
+        help="Directory of YYYY-MM-DD.parquet brief files to clean in place.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Count but do not write."),
+) -> None:
+    """One-off backfill: strip GDELT space-padded punctuation from legacy titles.
+
+    PR #259 fixed this at the ingest source (forward-only). Rows ingested
+    before 2026-05-27 keep the padded form in the parquet source-of-truth.
+    Run this then ``manage.py rebuild_briefs_cache --force`` so Postgres
+    refreshes from the cleaned parquets. Idempotent — re-running is a no-op.
+    """
+    if not briefs_dir.is_dir():
+        raise typer.BadParameter(f"--briefs-dir does not exist: {briefs_dir}")
+    result = clean_titles_mod.clean_titles_in_parquet_dir(briefs_dir, dry_run=dry_run)
+    for path, n_cleaned in result.per_file:
+        marker = "would clean" if dry_run else "cleaned"
+        if n_cleaned:
+            typer.echo(f"  {path.name}: {marker} {n_cleaned} row(s)")
+        else:
+            typer.echo(f"  {path.name}: clean")
+    summary = (
+        f"{result.total_rows_cleaned} row(s) across {result.files_touched} file(s)"
+        if not dry_run
+        else f"{result.total_rows_cleaned} row(s) would be cleaned (dry-run)"
+    )
+    typer.echo(f"done. {summary}.")
