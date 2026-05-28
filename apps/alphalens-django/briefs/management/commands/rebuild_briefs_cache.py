@@ -13,7 +13,11 @@ from briefs.ingest.parquet import DEFAULT_BRIEFS_DIR, rebuild_from_parquet
 
 
 class Command(BaseCommand):
-    help = "Rebuild the Brief / DayMeta tables from ~/.alphalens/thematic_briefs/*.parquet."
+    help = (
+        "Rebuild the Brief / DayMeta tables from thematic-brief parquets. "
+        "Default directory is ALPHALENS_BRIEFS_DIR (compose-managed in prod) "
+        "or ~/.alphalens/thematic_briefs locally; --briefs-dir overrides."
+    )
 
     def add_arguments(self, parser) -> None:
         parser.add_argument(

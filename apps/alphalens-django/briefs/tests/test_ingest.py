@@ -225,4 +225,9 @@ class TestDefaultBriefsDirEnvOverride:
         from briefs.ingest import parquet as parquet_mod
 
         importlib.reload(parquet_mod)
-        assert parquet_mod.DEFAULT_BRIEFS_DIR == Path.home() / ".alphalens" / "thematic_briefs"
+        try:
+            assert parquet_mod.DEFAULT_BRIEFS_DIR == Path.home() / ".alphalens" / "thematic_briefs"
+        finally:
+            # Mirrors the override test — reload after monkeypatch teardown
+            # so any subsequent test sees the real-env DEFAULT_BRIEFS_DIR.
+            importlib.reload(parquet_mod)
