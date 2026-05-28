@@ -109,15 +109,24 @@ def _make_plan_with_order(
     alpaca_order_id: str,
     qty: int = 27,
     limit_price: float = 100.0,
+    planned_at: dt.datetime | None = None,
+    order_ttl_days: int = 10,
+    account: str = "main",
+    ticker: str = "NVDA",
 ) -> tuple[int, int]:
-    """Seed a PLANNED row + one open ENTRY order. Returns (plan_id, order_id)."""
-    ts = dt.datetime.now(dt.UTC)
+    """Seed a PLANNED row + one open ENTRY order. Returns (plan_id, order_id).
+
+    ``planned_at`` defaults to now-UTC. The TTL-sweep tests override it to
+    simulate plans whose entry-TTL window has elapsed; the per-order tests
+    leave it on the default so the sweep is a no-op.
+    """
+    ts = planned_at if planned_at is not None else dt.datetime.now(dt.UTC)
     d = dt.date(2026, 5, 28)
     with open_ledger(ledger_path) as conn:
         row = insert_planned(
             conn,
             brief_date=d,
-            ticker="NVDA",
+            ticker=ticker,
             theme="ai-infra",
             planned_at=ts,
             suggested_size_pct=5.0,
@@ -127,9 +136,10 @@ def _make_plan_with_order(
             total_notional=2500.0,
             gross_notional=qty * limit_price,
             disaster_stop=80.0,
-            order_ttl_days=10,
+            order_ttl_days=order_ttl_days,
             tiers=[(0, limit_price, qty, 100.0, "t0")],
             tp_tranches=[(0, 120.0, 100.0, 2.0, "tp")],
+            account=account,
         )
         order_id = insert_order(
             conn,
@@ -143,6 +153,7 @@ def _make_plan_with_order(
             limit_price=limit_price,
             time_in_force="gtc",
             submitted_at=ts,
+            account=account,
         )
     return row.plan_id, order_id
 
@@ -313,6 +324,279 @@ class TestNoOpenOrders(_ReconcilerTestBase):
         self.assertEqual(report.n_orders_checked, 0)
         self.assertEqual(report.n_orders_transitioned, 0)
         self.assertEqual(report.n_fills_appended, 0)
+
+
+class TestTtlSweep(_ReconcilerTestBase):
+    """Entry-TTL sweep: cancel ENTRY orders on plans whose
+    ``order_ttl_days`` window has elapsed without all entries terminating.
+
+    Once cancelled, the per-order reconciler loop + ``process_plan_exit``
+    chain naturally transitions the plan to an outcome (UNFILLED on
+    zero fills, ATTACHED to TP+SL on partial fills) — the sweep just
+    breaks the GTC-forever stalemate that blocks the existing state
+    machine from running.
+    """
+
+    def _planned_at_days_ago(self, n: int) -> dt.datetime:
+        return dt.datetime.now(dt.UTC) - dt.timedelta(days=n)
+
+    def test_fresh_plan_within_ttl_is_not_swept(self):
+        """Plan submitted today with TTL=10 must NOT trigger a cancel."""
+        _make_plan_with_order(
+            self.ledger,
+            alpaca_order_id="fresh",
+            planned_at=self._planned_at_days_ago(0),
+            order_ttl_days=10,
+        )
+        self.client.add(_StubAlpacaOrder(id="fresh", status="new"))
+
+        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+
+        self.assertEqual(report.n_entries_ttl_canceled, 0)
+        self.assertEqual(self.client.canceled_orders, [])
+
+    def test_plan_at_exact_ttl_boundary_is_swept(self):
+        """planned_at exactly TTL days ago → boundary is inclusive (>=)."""
+        _make_plan_with_order(
+            self.ledger,
+            alpaca_order_id="boundary",
+            planned_at=self._planned_at_days_ago(10),
+            order_ttl_days=10,
+        )
+        self.client.add(_StubAlpacaOrder(id="boundary", status="new"))
+
+        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+
+        self.assertEqual(report.n_entries_ttl_canceled, 1)
+        self.assertEqual(self.client.canceled_orders, ["boundary"])
+
+    def test_plan_past_ttl_is_swept(self):
+        """planned_at 15 days ago, TTL=10 → cancel fires."""
+        _make_plan_with_order(
+            self.ledger,
+            alpaca_order_id="stale",
+            planned_at=self._planned_at_days_ago(15),
+            order_ttl_days=10,
+        )
+        self.client.add(_StubAlpacaOrder(id="stale", status="new"))
+
+        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+
+        self.assertEqual(report.n_entries_ttl_canceled, 1)
+        self.assertEqual(self.client.canceled_orders, ["stale"])
+
+    def test_plan_with_outcome_is_not_swept(self):
+        """A plan that already has a plan_outcome row (e.g. UNFILLED
+        written by an earlier pass) must NOT trigger another cancel —
+        otherwise the sweep would re-cancel already-terminal orders
+        every cycle, racking up Alpaca API calls forever."""
+        _make_plan_with_order(
+            self.ledger,
+            alpaca_order_id="closed",
+            planned_at=self._planned_at_days_ago(20),
+            order_ttl_days=10,
+        )
+        # Order already CANCELED + plan_outcome already written
+        with open_ledger(self.ledger) as conn:
+            conn.execute(
+                "UPDATE orders SET status = 'CANCELED' WHERE alpaca_order_id = ?", ("closed",)
+            )
+            from alphalens_pipeline.paper.ledger import insert_plan_outcome
+
+            insert_plan_outcome(
+                conn,
+                plan_id=1,
+                exit_kind="UNFILLED",
+                closed_at=dt.datetime.now(dt.UTC),
+            )
+
+        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+
+        self.assertEqual(report.n_entries_ttl_canceled, 0)
+        self.assertEqual(self.client.canceled_orders, [])
+
+    def test_partial_fills_only_unfilled_tiers_get_swept(self):
+        """One tier already FILLED, another still SUBMITTED, TTL elapsed:
+        the FILLED tier must NOT be cancelled (already terminal); only the
+        SUBMITTED tier goes to Alpaca cancel. The plan then naturally flows
+        through exit_manager to ATTACH TP+SL on the partial position."""
+        plan_id, _ = _make_plan_with_order(
+            self.ledger,
+            alpaca_order_id="t0-filled",
+            planned_at=self._planned_at_days_ago(15),
+            order_ttl_days=10,
+        )
+        # Mark first tier FILLED in the local ledger so the sweep skips it.
+        with open_ledger(self.ledger) as conn:
+            conn.execute(
+                "UPDATE orders SET status = 'FILLED' WHERE alpaca_order_id = ?", ("t0-filled",)
+            )
+            insert_order(
+                conn,
+                plan_id=plan_id,
+                alpaca_order_id="t1-open",
+                side="BUY",
+                order_kind="ENTRY",
+                tier_index=1,
+                order_type="LIMIT",
+                qty=15,
+                limit_price=95.0,
+                time_in_force="gtc",
+                submitted_at=self._planned_at_days_ago(15),
+            )
+
+        self.client.add(_StubAlpacaOrder(id="t1-open", status="new"))
+
+        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+
+        self.assertEqual(self.client.canceled_orders, ["t1-open"])
+        self.assertEqual(report.n_entries_ttl_canceled, 1)
+
+    def test_sweep_is_scoped_by_account(self):
+        """A TEST-account plan past TTL must NOT be swept by a MAIN-account
+        reconcile pass — the MAIN client cannot cancel TEST UUIDs (would
+        404). Symmetric for TEST sweeping MAIN."""
+        _make_plan_with_order(
+            self.ledger,
+            alpaca_order_id="main-stale",
+            planned_at=self._planned_at_days_ago(15),
+            order_ttl_days=10,
+            account="main",
+            ticker="NVDA",
+        )
+        _make_plan_with_order(
+            self.ledger,
+            alpaca_order_id="test-stale",
+            planned_at=self._planned_at_days_ago(15),
+            order_ttl_days=10,
+            account="test",
+            ticker="AMD",
+        )
+        self.client.add(_StubAlpacaOrder(id="main-stale", status="new"))
+        self.client.add(_StubAlpacaOrder(id="test-stale", status="new"))
+
+        # account=main pass: only main-stale gets cancelled
+        report_main = reconcile_orders(
+            ledger_path=self.ledger, alpaca_client=self.client, account="main"
+        )
+        self.assertEqual(self.client.canceled_orders, ["main-stale"])
+        self.assertEqual(report_main.n_entries_ttl_canceled, 1)
+
+        # account=test pass: now test-stale gets cancelled too
+        report_test = reconcile_orders(
+            ledger_path=self.ledger, alpaca_client=self.client, account="test"
+        )
+        self.assertEqual(self.client.canceled_orders, ["main-stale", "test-stale"])
+        self.assertEqual(report_test.n_entries_ttl_canceled, 1)
+
+    def test_cancel_failure_is_logged_and_sweep_continues(self):
+        """Alpaca cancel failure on one order must NOT abort the sweep —
+        log + continue so other expired entries on other plans still get
+        their cancel attempt this cycle."""
+        plan_id, _ = _make_plan_with_order(
+            self.ledger,
+            alpaca_order_id="bad-cancel",
+            planned_at=self._planned_at_days_ago(15),
+            order_ttl_days=10,
+        )
+        with open_ledger(self.ledger) as conn:
+            insert_order(
+                conn,
+                plan_id=plan_id,
+                alpaca_order_id="good-cancel",
+                side="BUY",
+                order_kind="ENTRY",
+                tier_index=1,
+                order_type="LIMIT",
+                qty=10,
+                limit_price=95.0,
+                time_in_force="gtc",
+                submitted_at=self._planned_at_days_ago(15),
+            )
+        self.client.add(_StubAlpacaOrder(id="bad-cancel", status="new"))
+        self.client.add(_StubAlpacaOrder(id="good-cancel", status="new"))
+        # Override cancel_order to fail on the first id only.
+        original_cancel = self.client.cancel_order
+
+        def selective_cancel(oid: str) -> None:
+            if oid == "bad-cancel":
+                raise RuntimeError("stub: simulated Alpaca cancel failure")
+            original_cancel(oid)
+
+        self.client.cancel_order = selective_cancel  # type: ignore[method-assign]
+
+        with self.assertLogs("alphalens_pipeline.paper.reconciler", level="WARNING") as cm:
+            report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+
+        self.assertEqual(self.client.canceled_orders, ["good-cancel"])
+        self.assertEqual(report.n_entries_ttl_canceled, 1)
+        self.assertTrue(any("ttl-sweep cancel failed" in m for m in cm.output))
+
+    def test_end_to_end_ttl_sweep_then_unfilled_outcome(self):
+        """End-to-end: TTL'd plan with one ENTRY at SUBMITTED, zero fills.
+        After the sweep the per-order loop observes Alpaca status flip to
+        'canceled' (simulated) → ledger transitions to CANCELED → exit_manager
+        sees entry_phase_settled + zero fills → writes UNFILLED outcome.
+        All within one reconcile call."""
+        plan_id, _ = _make_plan_with_order(
+            self.ledger,
+            alpaca_order_id="stale-e2e",
+            planned_at=self._planned_at_days_ago(15),
+            order_ttl_days=10,
+        )
+
+        # Alpaca returns "canceled" status when polled — simulating that
+        # the broker processed our cancel in the same cycle, so the
+        # per-order loop transitions the row to CANCELED.
+        self.client.add(_StubAlpacaOrder(id="stale-e2e", status="canceled"))
+
+        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+
+        self.assertEqual(report.n_entries_ttl_canceled, 1)
+        self.assertEqual(self.client.canceled_orders, ["stale-e2e"])
+        # Per-order loop saw 'canceled' from Alpaca → transitions to CANCELED.
+        self.assertEqual(report.outcomes[0].new_status, "CANCELED")
+        # exit_manager writes UNFILLED outcome in the same pass.
+        self.assertEqual(report.n_outcomes_written, 1)
+        with open_ledger(self.ledger) as conn:
+            cur = conn.execute("SELECT exit_kind FROM plan_outcomes WHERE plan_id = ?", (plan_id,))
+            row = cur.fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["exit_kind"], "UNFILLED")
+
+    def test_blocked_plan_is_not_swept(self):
+        """A plan whose status is BLOCKED (gross-cap rejected at plan time,
+        no Alpaca orders ever submitted) must be skipped by the sweep —
+        there's nothing to cancel."""
+        ts = self._planned_at_days_ago(15)
+        with open_ledger(self.ledger) as conn:
+            # Bypass insert_planned (which forces status='PLANNED') by raw INSERT.
+            conn.execute(
+                """INSERT INTO plans(brief_date, ticker, theme, planned_at,
+                                     suggested_size_pct, scale_factor, final_size_pct,
+                                     paper_equity, total_notional, gross_notional,
+                                     disaster_stop, order_ttl_days, status, block_reason, account)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'BLOCKED', 'gross_cap', 'main')""",
+                (
+                    "2026-05-28",
+                    "TSLA",
+                    "ev",
+                    ts.isoformat(),
+                    5.0,
+                    0.05,
+                    0.25,
+                    1_000_000.0,
+                    2500.0,
+                    2500.0,
+                    80.0,
+                    10,
+                ),
+            )
+
+        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+
+        self.assertEqual(report.n_entries_ttl_canceled, 0)
+        self.assertEqual(self.client.canceled_orders, [])
 
 
 if __name__ == "__main__":
