@@ -32,7 +32,7 @@ import datetime as dt
 import logging
 import sqlite3
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from alphalens_pipeline.paper.constants import TIME_STOP_DAYS
 from alphalens_pipeline.paper.ledger import (
@@ -47,6 +47,20 @@ logger = logging.getLogger(__name__)
 _TERMINAL_ENTRY_STATUSES = frozenset({"FILLED", "CANCELED", "EXPIRED", "REJECTED"})
 
 
+@runtime_checkable
+class _RowProto(Protocol):
+    """Structural type satisfied by ``sqlite3.Row`` and ``_RowLike``.
+
+    Both ``sqlite3.Row`` (raw fetchone()) and the augmented ``_RowLike``
+    adapter (raw row + observed-status overlay) flow through the snapshot,
+    so the dataclass field types are widened to the common protocol.
+    """
+
+    def __getitem__(self, k: str) -> Any: ...
+    def __contains__(self, k: object) -> bool: ...
+    def keys(self) -> Any: ...
+
+
 @dataclass(frozen=True)
 class _PlanSnapshot:
     """Cached projection of one plan's lifecycle state for the exit manager."""
@@ -56,8 +70,8 @@ class _PlanSnapshot:
     disaster_stop: float
     tp_tranches: tuple[dict, ...]
     first_entry_fill_at: dt.datetime | None
-    entry_orders: tuple[sqlite3.Row, ...]
-    exit_orders: tuple[sqlite3.Row, ...]
+    entry_orders: tuple[_RowProto, ...]
+    exit_orders: tuple[_RowProto, ...]
     has_outcome: bool
 
     @property
