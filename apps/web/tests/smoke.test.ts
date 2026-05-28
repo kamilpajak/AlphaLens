@@ -457,6 +457,26 @@ test.describe('smoke — brief detail interactions', () => {
 		await expect(page.locator('article[id] [data-testid="trade-setup"]').first()).toBeVisible();
 	});
 
+	test('trade-setup percentages render with at most 1 decimal place', async ({ page }) => {
+		// Regression: prod data arrives as raw floats (e.g. suggested_size_pct =
+		// 4.065583485277316, alloc_pct = 27.98308726424079) from the equal-risk
+		// ATR-allocation arithmetic. The 2026-05-18 fixture pins the prod
+		// shape so a no-format slip is caught by the smoke suite. Operators
+		// don't need 14 decimals of position-size precision; 1 decimal is the
+		// useful resolution and keeps the panel readable.
+		await page.goto(`/brief/${latestDay.date}`);
+		await expect(page.locator('article[id]').first()).toBeVisible();
+		const panels = page.locator('article[id] [data-testid="trade-setup"]');
+		const n = await panels.count();
+		expect(n).toBeGreaterThan(0);
+		const offenders: string[] = [];
+		for (let i = 0; i < n; i++) {
+			const text = await panels.nth(i).innerText();
+			for (const m of text.matchAll(/\d+\.\d{2,}%/g)) offenders.push(m[0]);
+		}
+		expect(offenders, `trade-setup must not render percentages with 2+ decimals; offenders: ${offenders.join(', ')}`).toEqual([]);
+	});
+
 	test('external (target=_blank) links announce the new tab to screen readers', async ({
 		page
 	}) => {
