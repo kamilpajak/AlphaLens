@@ -288,7 +288,10 @@ test.describe('smoke — about page accuracy', () => {
 
 	test('no retired Gemini model IDs appear anywhere on the page', async ({ page }) => {
 		await page.goto('/about');
-		const body = await page.locator('main, body').first().innerText();
+		// body covers the full rendered tree; <script> blocks (which mention
+		// retired IDs in author comments) do not contribute to innerText, so
+		// this is hermetic against the explanatory comment in +page.svelte.
+		const body = await page.locator('body').innerText();
 		for (const dead of RETIRED_MODEL_IDS) {
 			expect(body, `retired model id "${dead}" must not appear on /about`).not.toContain(dead);
 		}
