@@ -91,6 +91,35 @@ class AlpacaClientError(RuntimeError):
     """Non-transient Alpaca wrapper failure (config, missing SDK, paper-guard)."""
 
 
+def _round_to_alpaca_tick(price: float) -> float:
+    """Round a price to the minimum tick Alpaca accepts for equity orders.
+
+    Alpaca rejects sub-penny precision on equity limit / stop prices with
+    ``APIError 42210000 — sub-penny increment does not fulfill minimum
+    pricing criteria``. The minimum tick is:
+
+    - ``price >= $1.00`` → $0.01 (penny)
+    - ``price <  $1.00`` → $0.0001 (Reg NMS sub-dollar tick size for
+      low-priced shares; sometimes called "sub-penny" in vendor docs but
+      strictly it is the tick allowed on sub-dollar instruments).
+
+    Applied centrally inside :class:`AlpacaClient` so every callsite
+    (planner-driven entry tiers, exit_manager TPs / SLs, time-stop
+    market orders that route through other paths) benefits without each
+    callsite having to remember the rule. The deterministic
+    ``brief_trade_setup`` ladder produces full float precision (e.g.
+    ``69.22318381700624``); rounding here turns it into ``69.22``.
+
+    Note: ``round`` in Python 3 uses banker's rounding ("round half to
+    even"). For Alpaca that's fine — the half-cent rounding direction
+    isn't material for paper observation and any drift is bounded to
+    half a tick.
+    """
+    if price >= 1.0:
+        return round(price, 2)
+    return round(price, 4)
+
+
 # Module-level lazy SDK handle. Populated on first AlpacaClient construction
 # via _load_alpaca_sdk(); cleared between tests by _reset_sdk_cache_for_tests.
 _SDK: SimpleNamespace | None = None
@@ -324,7 +353,7 @@ class AlpacaClient:
             qty=qty,
             side=_side(side, self._sdk),
             time_in_force=_tif(time_in_force, self._sdk),
-            limit_price=limit_price,
+            limit_price=_round_to_alpaca_tick(limit_price),
         )
         return self._trading.submit_order(order_data=req)
 
@@ -343,7 +372,7 @@ class AlpacaClient:
             qty=qty,
             side=_side(side, self._sdk),
             time_in_force=_tif(time_in_force, self._sdk),
-            stop_price=stop_price,
+            stop_price=_round_to_alpaca_tick(stop_price),
         )
         return self._trading.submit_order(order_data=req)
 
@@ -413,10 +442,12 @@ class AlpacaClient:
             qty=qty,
             side=_side(side, self._sdk),
             time_in_force=_tif(time_in_force, self._sdk),
-            limit_price=limit_price,
+            limit_price=_round_to_alpaca_tick(limit_price),
             order_class=self._sdk.OrderClass.BRACKET,
-            take_profit=self._sdk.TakeProfitRequest(limit_price=take_profit_price),
-            stop_loss=self._sdk.StopLossRequest(stop_price=stop_loss_price),
+            take_profit=self._sdk.TakeProfitRequest(
+                limit_price=_round_to_alpaca_tick(take_profit_price)
+            ),
+            stop_loss=self._sdk.StopLossRequest(stop_price=_round_to_alpaca_tick(stop_loss_price)),
         )
         return self._trading.submit_order(order_data=req)
 
