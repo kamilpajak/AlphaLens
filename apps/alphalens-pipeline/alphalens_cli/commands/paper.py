@@ -53,6 +53,14 @@ def plan(
         "--force",
         help="Delete existing plans + shadow_log rows for this brief_date first.",
     ),
+    use_test_account: bool = typer.Option(
+        False,
+        "--use-test-account",
+        help=(
+            "Plan against the ALPACA_TEST_* account (dev sandbox). Pulls equity "
+            "from the test client + tags every plans row with account='test'."
+        ),
+    ),
 ) -> None:
     """Plan one day's verified candidates and persist to the SQLite ledger.
 
@@ -73,6 +81,7 @@ def plan(
     resolved_briefs = briefs_dir if briefs_dir is not None else home / DEFAULT_BRIEFS_RELPATH
     resolved_ledger = ledger_path if ledger_path is not None else home / DEFAULT_LEDGER_RELPATH
 
+    profile = "test" if use_test_account else "main"
     alpaca_client = None
     if not no_alpaca:
         # Lazy-import the client so --no-alpaca + a fresh checkout without an
@@ -81,7 +90,7 @@ def plan(
             get_default_alpaca_client,
         )
 
-        alpaca_client = get_default_alpaca_client()
+        alpaca_client = get_default_alpaca_client(profile=profile)
 
     report = plan_for_date(
         brief_date=brief_date,
@@ -89,10 +98,11 @@ def plan(
         ledger_path=resolved_ledger,
         alpaca_client=alpaca_client,
         force=force,
+        account=profile,
     )
 
     typer.echo(
-        f"paper plan {report.brief_date.isoformat()}: "
+        f"paper plan {report.brief_date.isoformat()} (account={profile}): "
         f"equity=${report.paper_equity:,.0f} "
         f"planned={report.n_planned} shadowed={report.n_shadowed} "
         f"gross=${report.total_gross_notional:,.0f}"
@@ -149,6 +159,7 @@ def submit(
         brief_date=brief_date,
         ledger_path=resolved_ledger,
         alpaca_client=alpaca_client,
+        account=profile,
     )
 
     typer.echo(
@@ -203,6 +214,7 @@ def reconcile(
     report = reconcile_orders(
         ledger_path=resolved_ledger,
         alpaca_client=alpaca_client,
+        account=profile,
     )
 
     typer.echo(

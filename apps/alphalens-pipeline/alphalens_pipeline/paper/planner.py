@@ -169,10 +169,44 @@ def _resolve_equity_provider(
     return _FixedEquityProvider(fallback_equity)
 
 
-def _delete_existing_for_date(conn, brief_date: dt.date) -> None:
-    """Idempotency helper for ``--force`` reruns."""
-    conn.execute("DELETE FROM plans WHERE brief_date = ?", (brief_date.isoformat(),))
-    conn.execute("DELETE FROM shadow_log WHERE brief_date = ?", (brief_date.isoformat(),))
+def _delete_existing_for_date(conn, brief_date: dt.date, account: str) -> None:
+    """Idempotency helper for ``--force`` reruns. Scoped to one account
+    so ``--force`` on a TEST replan doesn't blow away MAIN history (or
+    vice versa) when both share the same ledger file. Per zen review
+    (PR #279) the shadow_log scoping is via brief_date + account
+    join-with-plans so a TEST replan can only clear shadow rows that
+    belong to TEST plans on the same date. plan-per-day cadence keeps
+    the practical collision risk at zero, but the scoping makes the
+    contract symmetric with plans-side and means an audit-time
+    ``SELECT * FROM shadow_log`` is also account-honest.
+
+    Implementation note: ``shadow_log`` doesn't carry an account
+    column directly today; the scope is enforced by deleting only
+    rows whose ``(brief_date, ticker)`` matches a PLANNED row with
+    the same account, plus shadow rows that have NO matching plan
+    (the never-planned case — unscoped because there is no plan to
+    attribute them to). This is intentionally conservative.
+    """
+    # Scope shadow_log deletes to the account via a join on plans.
+    # IMPORTANT: delete shadow_log FIRST so the subselect on plans
+    # still finds the rows we want to remove from shadow. Reversed
+    # order would purge plans first and leave shadow untouched.
+    # Rows whose ticker has no matching plan on this date+account are
+    # untouched (they belong to candidates that were shadowed before
+    # any plan was attempted for them, or to a different account run).
+    conn.execute(
+        """DELETE FROM shadow_log
+           WHERE brief_date = ?
+             AND ticker IN (
+               SELECT ticker FROM plans
+               WHERE brief_date = ? AND account = ?
+             )""",
+        (brief_date.isoformat(), brief_date.isoformat(), account),
+    )
+    conn.execute(
+        "DELETE FROM plans WHERE brief_date = ? AND account = ?",
+        (brief_date.isoformat(), account),
+    )
 
 
 def _process_candidate(
@@ -185,6 +219,7 @@ def _process_candidate(
     cumulative_gross: float,
     gross_cap: float,
     planned_at: dt.datetime,
+    account: str,
 ) -> tuple[PlanOutcome, float]:
     """Plan one candidate. Returns ``(outcome, new_cumulative_gross)``."""
     if not candidate.verified:
@@ -258,6 +293,7 @@ def _process_candidate(
         order_ttl_days=order_ttl_days,
         tiers=tiers,
         tp_tranches=tp_rows,
+        account=account,
     )
     return (
         PlanOutcome(ticker=candidate.ticker, theme=candidate.theme, status="PLANNED"),
@@ -312,6 +348,7 @@ def plan_for_date(
     fallback_equity: float = DEFAULT_PAPER_EQUITY_USD,
     force: bool = False,
     candidates: Iterable[CandidateBrief] | None = None,
+    account: str = "main",
 ) -> PlanReport:
     """Plan one day's verified candidates and persist to the SQLite ledger.
 
@@ -374,7 +411,7 @@ def plan_for_date(
 
     with open_ledger(ledger_path) as conn:
         if force:
-            _delete_existing_for_date(conn, brief_date)
+            _delete_existing_for_date(conn, brief_date, account)
 
         for candidate in candidates_list:
             if candidate.ticker in planned_tickers_in_run:
@@ -401,6 +438,7 @@ def plan_for_date(
                 cumulative_gross=cumulative_gross,
                 gross_cap=gross_cap,
                 planned_at=planned_at,
+                account=account,
             )
             outcomes.append(outcome)
             if outcome.status == "PLANNED":

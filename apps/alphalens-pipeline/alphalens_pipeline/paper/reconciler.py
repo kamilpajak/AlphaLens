@@ -191,14 +191,19 @@ def reconcile_orders(
     *,
     ledger_path: Path,
     alpaca_client: Any,
+    account: str = "main",
 ) -> ReconcileReport:
-    """Walk every open ledger order, pull its Alpaca counterpart, append
-    fills + transition status as needed.
+    """Walk every open ledger order on the given ``account``, pull its
+    Alpaca counterpart, append fills + transition status as needed.
 
     "Open" = ledger status in ``('SUBMITTED', 'PARTIALLY_FILLED')``. Terminal
     statuses (FILLED / CANCELED / REJECTED / EXPIRED) are skipped — the
     reconciler does not revive them. The TP/SL/time-stop attacher in
     step 5 watches FILLED ENTRY orders to know when to submit exits.
+
+    ``account`` (v4): scopes the open-orders sweep so a reconciler pass
+    against TEST does NOT try to fetch MAIN-account UUIDs (which would
+    404). The alpaca_client passed in MUST be the matching profile.
     """
     from alphalens_pipeline.paper.exit_manager import process_plan_exit
 
@@ -209,7 +214,7 @@ def reconcile_orders(
     plans_touched: set[int] = set()
 
     with open_ledger(ledger_path) as conn:
-        open_rows = fetch_open_orders(conn)
+        open_rows = fetch_open_orders(conn, account=account)
         for ledger_row in open_rows:
             alpaca_order_id = ledger_row["alpaca_order_id"]
             try:
@@ -236,11 +241,15 @@ def reconcile_orders(
         # Plus every plan that has open exit orders or no outcome yet —
         # the exit_manager may need to attach exits / write outcomes for
         # plans whose orders are all already terminal (e.g. all entry
-        # orders CANCELED by TTL with zero fills).
+        # orders CANCELED by TTL with zero fills). Scoped to ``account``
+        # so a MAIN reconciler pass doesn't try to attach exits to TEST
+        # plans (and submit them via the MAIN client).
         cur = conn.execute(
             """SELECT DISTINCT p.plan_id FROM plans p
                LEFT JOIN plan_outcomes po ON po.plan_id = p.plan_id
-               WHERE p.status = 'PLANNED' AND po.outcome_id IS NULL"""
+               WHERE p.status = 'PLANNED' AND po.outcome_id IS NULL
+                 AND p.account = ?""",
+            (account,),
         )
         for row in cur.fetchall():
             plans_touched.add(int(row[0]))

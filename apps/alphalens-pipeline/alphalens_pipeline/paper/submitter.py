@@ -71,10 +71,13 @@ def _fetch_tiers_for_plan(conn: sqlite3.Connection, plan_id: int) -> list[sqlite
     return list(cur.fetchall())
 
 
-def _fetch_planned_for_date(conn: sqlite3.Connection, brief_date: dt.date) -> list[sqlite3.Row]:
+def _fetch_planned_for_date(
+    conn: sqlite3.Connection, brief_date: dt.date, account: str
+) -> list[sqlite3.Row]:
     cur = conn.execute(
-        "SELECT * FROM plans WHERE brief_date = ? AND status = 'PLANNED' ORDER BY plan_id",
-        (brief_date.isoformat(),),
+        "SELECT * FROM plans WHERE brief_date = ? AND status = 'PLANNED' AND account = ? "
+        "ORDER BY plan_id",
+        (brief_date.isoformat(), account),
     )
     return list(cur.fetchall())
 
@@ -84,6 +87,7 @@ def submit_for_date(
     brief_date: dt.date,
     ledger_path: Path,
     alpaca_client: Any,
+    account: str = "main",
 ) -> SubmitReport:
     """Submit entry-tier limit orders for every PLANNED candidate on
     ``brief_date`` that hasn't been submitted yet.
@@ -110,7 +114,7 @@ def submit_for_date(
     total_submitted = 0
 
     with open_ledger(ledger_path) as conn:
-        plans = _fetch_planned_for_date(conn, brief_date)
+        plans = _fetch_planned_for_date(conn, brief_date, account)
 
         for plan in plans:
             plan_id = int(plan["plan_id"])
@@ -154,6 +158,7 @@ def submit_for_date(
                     limit_price=limit_price,
                     time_in_force="gtc",
                     submitted_at=submitted_at,
+                    account=account,
                 )
                 n_submitted += 1
                 total_submitted += 1
