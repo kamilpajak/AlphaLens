@@ -1,0 +1,16 @@
+# Cloudflare Pages _headers — explicit cache directives.
+#
+# Defensive layer against the same CDN edge-cache poisoning fixed in
+# _redirects: ensure index.html (and any HTML served as SPA fallback)
+# is never cached for more than its revalidation window. Pages already
+# sends `cache-control: public, max-age=0, must-revalidate` on the bare
+# `/` route, but the SPA fallback inherits the URL's response-class cache
+# headers, so a fallback served at a `/_app/*` URL can get the immutable
+# asset cache header (~4h). The _redirects 404 prevents that path now;
+# this file pins the convention so a future _redirects regression cannot
+# silently reintroduce the bug.
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/
+  Cache-Control: public, max-age=0, must-revalidate
