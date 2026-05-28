@@ -45,6 +45,14 @@ class _StubExitOrder:
     id: str
 
 
+@dataclass
+class _StubAccount:
+    """Minimal account snapshot the gross_guard reads."""
+
+    equity: float = 1_000_000.0
+    long_market_value: float = 0.0
+
+
 class _StubAlpacaClient:
     def __init__(self) -> None:
         self.orders_by_id: dict[str, _StubAlpacaOrder] = {}
@@ -57,6 +65,9 @@ class _StubAlpacaClient:
         self.exit_submissions: list[dict] = []
         self.canceled_orders: list[str] = []
         self._next_exit_id = 1
+        # Gross-guard reads account.equity + account.long_market_value
+        # post-reconcile per memo §6.1 Path B.
+        self.account = _StubAccount()
 
     def add(self, order: _StubAlpacaOrder) -> None:
         self.orders_by_id[order.id] = order
@@ -87,6 +98,9 @@ class _StubAlpacaClient:
 
     def cancel_order(self, alpaca_order_id: str) -> None:
         self.canceled_orders.append(alpaca_order_id)
+
+    def get_account(self) -> _StubAccount:
+        return self.account
 
 
 def _make_plan_with_order(

@@ -96,6 +96,8 @@ class ReconcileReport:
     n_exits_attached: int
     n_outcomes_written: int
     n_time_stops_fired: int
+    gross_ratio: float
+    gross_warning_emitted: bool
     outcomes: tuple[OrderReconcileOutcome, ...]
 
 
@@ -261,15 +263,28 @@ def reconcile_orders(
             elif exit_outcome.action == "TIME_STOP":
                 n_time_stops += 1
 
+    # Memo §6.1 Path B — closed-loop live-gross check post-reconcile.
+    from alphalens_pipeline.paper.gross_guard import check_live_gross
+
+    try:
+        guard = check_live_gross(alpaca_client)
+        gross_ratio = guard.gross_ratio
+        gross_warning = guard.warning_emitted
+    except Exception as exc:
+        logger.warning("gross guard check failed (will retry next cycle): %s", exc)
+        gross_ratio = 0.0
+        gross_warning = False
+
     logger.info(
         "paper reconcile: %d orders checked, %d transitioned, %d fills appended, "
-        "%d exits attached, %d outcomes written, %d time-stops",
+        "%d exits attached, %d outcomes written, %d time-stops, gross=%.2f",
         len(outcomes),
         transitioned,
         appended,
         n_attached,
         n_outcomes,
         n_time_stops,
+        gross_ratio,
     )
     return ReconcileReport(
         n_orders_checked=len(outcomes),
@@ -278,6 +293,8 @@ def reconcile_orders(
         n_exits_attached=n_attached,
         n_outcomes_written=n_outcomes,
         n_time_stops_fired=n_time_stops,
+        gross_ratio=gross_ratio,
+        gross_warning_emitted=gross_warning,
         outcomes=tuple(outcomes),
     )
 

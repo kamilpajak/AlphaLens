@@ -21,13 +21,17 @@ fill rows and silently corrupt the ledger. ``plan_entries`` and
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
 import json
+import logging
 import sqlite3
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Schema versioning lives inline. The planner pins ``brief_trade_setup``'s
 # schema separately (sizing.compute_setup_plan); here we version OUR ledger
@@ -203,19 +207,44 @@ def init_ledger(path: Path) -> None:
 
 @contextmanager
 def open_ledger(path: Path):
-    """Context manager yielding a ready-to-use connection.
+    """Context manager yielding a ready-to-use connection, guarded by a
+    POSIX advisory file lock so two processes cannot both write at once.
 
     The schema is created on entry (idempotent), so first-run + every-run
     cases share one code path. Auto-commit mode (``isolation_level=None``)
     keeps DDL + INSERT statements immediately durable; the caller wraps
     multi-row inserts in an explicit transaction via ``conn.execute("BEGIN")``.
+
+    Concurrency model (memo planner docstring + zen second-round review):
+    the ledger is single-writer. SQLite's WAL journal allows concurrent
+    readers but serialises writers; before PR 3's reconciler cron was
+    added the planner was the only writer, but now ``alphalens paper
+    submit`` + ``alphalens paper reconcile`` may both run from cron AND
+    an operator may invoke ``alphalens paper plan`` manually. An advisory
+    flock on ``{db_path}.lock`` arbitrates. The lock is held for the
+    duration of the context, released on exit (close of the lockfile
+    handle). Tests run sequentially in one process so the lock is a
+    no-op there; this matters for production cron + manual overlap.
     """
     init_ledger(path)
+    lock_path = path.with_name(path.name + ".lock")
+    lock_handle = open(lock_path, "w")  # noqa: SIM115 — managed by try/finally below
+    try:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX)
+    except OSError as exc:  # pragma: no cover - platform fallback
+        # Some filesystems (NFS, FUSE) don't support flock; log + proceed
+        # unguarded. Single-writer assumption is documented either way.
+        logger.warning("ledger advisory lock unavailable (%s): %s", lock_path, exc)
     conn = _connect(path)
     try:
         yield conn
     finally:
         conn.close()
+        import contextlib
+
+        with contextlib.suppress(OSError):  # pragma: no cover - filesystem fallback
+            fcntl.flock(lock_handle, fcntl.LOCK_UN)
+        lock_handle.close()
 
 
 @dataclass(frozen=True)
