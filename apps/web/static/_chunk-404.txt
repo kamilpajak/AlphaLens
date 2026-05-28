@@ -1,0 +1,1 @@
+404 — chunk not found. The SPA likely tried to import a stale module hash that no longer exists in the current deploy; reload the page to fetch fresh chunk URLs.

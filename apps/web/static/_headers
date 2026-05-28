@@ -14,3 +14,12 @@
 
 /
   Cache-Control: public, max-age=0, must-revalidate
+
+# The 404 response served by the `_redirects` rule for missing chunk URLs
+# under /_app/*. Without this explicit pin, CF Pages can apply the same
+# immutable-asset cache policy to the 404 response itself (the URL still
+# matches the /_app/immutable/ prefix), poisoning the CDN with a sticky
+# 404 for hours. Forcing no-cache means SvelteKit's reload-on-stale-import
+# recovery always sees a fresh response on every retry.
+/_chunk-404.txt
+  Cache-Control: no-cache, must-revalidate, max-age=0
