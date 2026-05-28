@@ -299,6 +299,13 @@ test.describe('smoke — about page accuracy', () => {
 		for (const route of routes) {
 			await page.goto(route);
 			await expect(page.locator('header a[href="/"]').first()).toContainText('ALPHALENS');
+			// Wait for client-side hydration to settle so the scan covers the
+			// dynamic parts of the page (e.g. candidate cards on /brief/<date>,
+			// session tiles on /), not just the SSR'd shell. Per zen review on
+			// PR #270: the previous fixed-route test on /about happened to be
+			// fully static; this multi-route test needs to honour deferred
+			// rendering.
+			await page.waitForLoadState('networkidle');
 			const text = (await page.evaluate(() => document.body.textContent)) ?? '';
 			for (const dead of RETIRED_MODEL_IDS) {
 				expect(
