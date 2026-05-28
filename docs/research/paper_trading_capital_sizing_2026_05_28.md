@@ -94,7 +94,9 @@ per_tier_qty                  = floor(total_notional_i × alloc_pct_i / 100
                                        / limit_price_tier)
 ```
 
-With `STEADY_STATE_GROSS_FRAC = 0.667` and `EXPECTED_AVG_HOLD_DAYS = 30` the average per-candidate notional matches v1's $2,778 (verified algebraically — Little's Law gives the same total at steady state) but **variance is preserved**: a candidate with `suggested = 8%` gets a position 33% larger than one with `suggested = 6%`, instead of both being flattened to the cap.
+With `STEADY_STATE_GROSS_FRAC = 0.667` and `EXPECTED_AVG_HOLD_DAYS = 30` the **steady-state aggregate gross** matches v1's Little's Law derivation (the equivalence: `STEADY_STATE_GROSS_FRAC / EXPECTED_AVG_HOLD_DAYS = 0.0222 ≈ L / N_FIXED / W`, integrated over W=30d hold ≈ 0.667 = L/N_FIXED). The per-candidate notional in v2 NO LONGER matches v1's flat $2,778 — that uniform value was the v1 bug. Instead, each candidate's final size is proportional to its raw `suggested_size_pct`: **a candidate with `suggested = 8%` gets a position 33% larger than one with `suggested = 6%`**, instead of both being flattened to the cap. The same average per-candidate notional only emerges if every brief contains candidates with identical `suggested_size_pct`, which is not the case in practice.
+
+If `aggregate_uncapped_notional` is zero (no plannable candidates today), `scale_factor` defaults to `1.0` — the value is moot since the planner will not consume it for any candidate, but the default avoids a division-by-zero edge case in `compute_daily_scale_factor`.
 
 **Daily-variance trade-off, accepted:** on quiet days (3 candidates) the scale is 1.0 and each gets full suggested size; on busy days (15 candidates) the scale tightens. This is the inverse of v1, where the per-candidate cap forced the same size every day. The observation framing (R-multiple is size-independent) holds either way; the scale-based version additionally measures whether the trade_setup's heterogeneous calibration adds signal.
 
@@ -124,7 +126,7 @@ Perplexity's correlation-0.85 argument is statistically correct in general event
 | Entry order TTL | `order_ttl_days` from `brief_trade_setup` (default 10) | cancel unfilled limits after TTL |
 | Exit order plumbing | per-tranche limit-sells + single stop-loss at `disaster_stop` | multi-tranche TP ladder doesn't fit Alpaca's single-leg BRACKET; reconciler orchestrates |
 | Position selection bias | **no hard cap, no skip-when-full** | §2.1 |
-| Shadow log | **every** verified candidate logged (including same-ticker skipped + (rare) gross-guard blocked + duplicates) | retrospective analysis without rerun |
+| Shadow-log reasons | Complete enumeration: `not_verified`, `no_trade_setup`, `unplannable_setup`, `same_ticker_open`, `gross_cap_block`, `duplicate_ticker_in_brief` | every reason has a structured `details_json` blob; query with `SELECT reason, COUNT(*) FROM shadow_log GROUP BY reason` |
 
 ## §4. Time-stop = 60 days — rationale
 
@@ -136,7 +138,8 @@ Three options were considered:
 2. **30-day time-stop** — aligns with generic news-catalyst half-life. Conservative.
 3. **60-day time-stop** ← **CHOSEN**. Empirical event-driven horizons:
    - PEAD drift literature **as an analogy** (NOT a direct fit — our candidates are second-order beneficiaries of thematic news, not post-earnings drift): bulk of measurable drift complete by ~day 60 (Bernard-Thomas 1989; Chordia-Shivakumar 2006). The PEAD horizon is the closest formal literature anchor for "the catalyst's price impact has largely played out."
-   - Thematic / cross-sectional momentum decay (closer fit to our universe): Moskowitz, Ooi & Pedersen 2012 "Time series momentum" documents ~30–90d horizons for trend persistence; Chan, Jegadeesh & Lakonishok 1996 reports 6-month momentum decay for news-driven stock-specific moves.
+   - **Chan, Jegadeesh & Lakonishok 1996 — closest primary fit:** examines momentum in stocks sorted on past returns AND on news / earnings events. Findings: news-driven stock-specific drift decays over ~6 months; reaction is front-loaded. Single-stock universe + news catalyst = direct map to our setup.
+   - **Moskowitz, Ooi & Pedersen 2012 (time-series momentum):** documents ~30–90d momentum persistence in equity index futures, commodity, currency and bond futures. Bridging assumption needed — MOP is a macro time-series result, not cross-sectional single-stock — but the horizon evidence transfers as an upper-bound on the relevant persistence window.
    - Matches the longest catalyst-floor horizon used by L4 scoring (`apps/alphalens-pipeline/alphalens_pipeline/scorers/catalyst_floor.py`).
 
 60d is the **upper realistic bound** under which a thematic position still carries the original catalyst's information. Beyond that, exit is mechanical risk control, not signal capture. Position closes at next-session market open via market sell.
@@ -184,7 +187,26 @@ Expected binding frequency: <1% of planned candidates under normal operation. If
 
 The planner uses per-candidate transactions inside one ledger session (`insert_planned` wraps each candidate's plans + plan_entries + plan_exits in a single `BEGIN/COMMIT`). A mid-batch crash leaves the candidates processed so far committed and the rest unwritten. Recovery: re-run with `--force`, which deletes that date's rows from `plans` + `shadow_log` before re-planning. The `UNIQUE(brief_date, ticker)` constraint protects against accidental duplicate inserts on crash-then-rerun-without-`--force`.
 
-The gross guard is a **plan-time** check only; it does NOT re-evaluate after fills. A partial fill that brings live exposure above the cap is NOT a guard violation — the guard's job is bounding NEW planned notional, not pruning existing positions. This is by design: post-fill re-balancing introduces churn and violates paradigm-14's "no forced rebalancing" doctrine. If the operator observes a sustained pattern of partial-fill drift pushing total notional above 1.0× equity, escalate to a Phase-B follow-up tightening `STEADY_STATE_GROSS_FRAC`.
+The gross guard is a **plan-time** check only; it does NOT re-evaluate after fills. A partial fill that brings live exposure above the cap is NOT a guard violation — the guard's job is bounding NEW planned notional, not pruning existing positions. This is by design: post-fill re-balancing introduces churn and violates paradigm-14's "no forced rebalancing" doctrine.
+
+**But detection of slow-creep drift cannot be "operator observes" handoff** (zen review §6.1 HIGH 2026-05-28). Cumulative partial fills can creep past 1.0× equity over weeks without any single day's planner run noticing. Two concrete operator-actionable detection paths:
+
+**Path A — operator weekly query** against the paper ledger (run during the Sunday review):
+```sql
+SELECT
+    SUM(qty * limit_price)
+      FROM plan_entries pe
+      JOIN plans p ON p.plan_id = pe.plan_id
+      WHERE p.brief_date >= date('now', '-60 days')  -- positions still potentially open
+        AND p.status = 'PLANNED'
+    AS planned_aggregate_60d;
+-- compare to paper_equity (current Alpaca account.equity). If planned_aggregate_60d
+-- / paper_equity > 1.0 over multiple weeks, drift is happening — escalate.
+```
+
+**Path B — automated in the PR 3 reconciler** (cleaner, mandatory before PR 3 ships): at the end of each reconcile cycle, compute live `total_filled_notional = SUM(filled_qty × fill_price)` from the upcoming `fills` table, divide by `equity` from `AlpacaClient.get_account()`, and `logger.warning("live gross %.2f%% of equity (over 100%%)", ratio * 100)` if `> 1.0`. This is the closed-loop check the §6.1 gap currently lacks.
+
+PR 3 will land Path B; until then, Path A is the operator's manual fallback. If sustained drift is observed by either path, escalate to a Phase-B follow-up tightening `STEADY_STATE_GROSS_FRAC`.
 
 ## §7. R-multiple computation
 
