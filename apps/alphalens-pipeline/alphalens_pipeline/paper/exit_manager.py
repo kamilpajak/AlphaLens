@@ -134,11 +134,13 @@ def _blended_price(
 ) -> tuple[float | None, int]:
     """Volume-weighted average fill price over orders of the given kinds.
     Returns (price_or_None, total_qty)."""
+    # ``placeholders`` is a fixed-length ``"?,?,?"`` string derived from the
+    # arity of ``kinds`` — no user input flows into the SQL text.
     placeholders = ",".join("?" * len(kinds))
     cur = conn.execute(
         f"""SELECT f.qty, f.price
             FROM fills f JOIN orders o ON f.order_id = o.order_id
-            WHERE o.plan_id = ? AND o.order_kind IN ({placeholders})""",
+            WHERE o.plan_id = ? AND o.order_kind IN ({placeholders})""",  # nosec B608
         (plan_id, *kinds),
     )
     rows = cur.fetchall()
