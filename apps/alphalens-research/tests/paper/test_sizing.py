@@ -292,6 +292,37 @@ class TestValidateOnly(unittest.TestCase):
         with self.assertRaises(TradeSetupNotPlannableError):
             validate_trade_setup(_make_setup(status="NO_STRUCTURE"))
 
+    def test_raises_when_all_tiers_have_non_positive_limit(self):
+        """Pass-1/pass-2 drift hazard: a candidate with every tier carrying
+        ``limit <= 0`` would pass ``validate_trade_setup`` (which only checked
+        tier-list emptiness) but fail ``compute_setup_plan`` (which drops
+        such tiers and then rejects the empty result). The downstream
+        consequence was a downward bias on the day's scale_factor — the
+        aggregate counted this candidate, but no plan was actually written.
+        After the zen second-round fix, validate now applies the same
+        sanitisation so the two passes stay in lockstep.
+        """
+        setup = _make_setup(
+            entry_tiers=[
+                {"limit": 0.0, "alloc_pct": 50.0, "atr_distance": 0.0, "tag": "bad-0"},
+                {"limit": -1.0, "alloc_pct": 50.0, "atr_distance": 0.0, "tag": "bad-1"},
+            ]
+        )
+        with self.assertRaises(TradeSetupNotPlannableError):
+            validate_trade_setup(setup)
+
+    def test_accepts_when_at_least_one_tier_has_positive_limit(self):
+        """Mirror: a partially-bad tier list (one good, one zero) still
+        validates — defense-in-depth drops the bad tier in pass 2 without
+        rejecting the whole candidate."""
+        setup = _make_setup(
+            entry_tiers=[
+                {"limit": 100.0, "alloc_pct": 100.0, "atr_distance": 0.0, "tag": "ok"},
+                {"limit": 0.0, "alloc_pct": 0.0, "atr_distance": 0.0, "tag": "bad"},
+            ]
+        )
+        self.assertEqual(validate_trade_setup(setup), 5.0)
+
 
 # ---------------------------------------------------------------------------
 # TP tranches + gross-notional + frozen dataclass
