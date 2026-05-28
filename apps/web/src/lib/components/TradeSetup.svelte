@@ -58,7 +58,7 @@
 			<div>
 				<div class="text-fg-muted">suggested size</div>
 				<div class="text-fg text-base font-bold normal-case">
-					{setup.suggested_size_pct != null ? `${fmtPct(setup.suggested_size_pct, 1, false)} of book` : '—'}
+					{setup.suggested_size_pct != null ? `${fmtPct(setup.suggested_size_pct, 2, false)} of book` : '—'}
 				</div>
 			</div>
 			<div>
@@ -89,7 +89,7 @@
 							>tier {i + 1}</span
 						>
 						<span class="text-fg font-bold whitespace-nowrap">{fmtPrice(tier.limit)}</span>
-						<span class="text-fg-dim text-right sm:text-left whitespace-nowrap">{fmtPct(tier.alloc_pct, 1, false)}</span>
+						<span class="text-fg-dim text-right sm:text-left whitespace-nowrap">{fmtPct(tier.alloc_pct, 0, false)}</span>
 						<span class="hidden sm:block text-fg-muted whitespace-nowrap">{Number.isFinite(tier.atr_distance) ? `-${tier.atr_distance.toFixed(1)} ATR` : '—'}</span>
 						<span class="hidden sm:block text-fg-muted italic text-right truncate">{tier.tag}</span>
 					</div>
@@ -109,7 +109,7 @@
 							>tp{i + 1}</span
 						>
 						<span class="text-fg font-bold whitespace-nowrap">{fmtPrice(tp.target)}</span>
-						<span class="text-fg-dim text-right sm:text-left whitespace-nowrap">{fmtPct(tp.tranche_pct, 1, false)}</span>
+						<span class="text-fg-dim text-right sm:text-left whitespace-nowrap">{fmtPct(tp.tranche_pct, 0, false)}</span>
 						<span class="hidden sm:block text-fg-muted whitespace-nowrap">{Number.isFinite(tp.r_multiple) ? `${tp.r_multiple.toFixed(1)}R` : '—'}</span>
 						<span class="hidden sm:block text-fg-muted italic text-right truncate">{tp.tag}</span>
 					</div>
