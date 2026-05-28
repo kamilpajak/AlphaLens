@@ -10,4 +10,17 @@
 # project env vars). Proxying /api/* through Pages was the alternative —
 # rejected because it adds ~30 ms latency per request and hides CORS
 # behaviour. See apps/web/README.md for the deploy topology.
+#
+# IMPORTANT: `/_app/*` MUST be excluded from the SPA fallback. CF Pages
+# treats those URLs as immutable hashed assets and applies a long-cache
+# response header (~4h). When a stale browser tab requests an old chunk
+# hash that no longer exists in the deploy, falling back to index.html
+# means the CDN poisons that URL with cached HTML under a JS content-type
+# expectation — every subsequent request (including hard refresh) returns
+# the cached HTML, breaking the module loader with
+# "Failed to load module script: Expected a JavaScript-or-Wasm module
+# script but the server responded with a MIME type of text/html" and a
+# blank-screen SPA. Returning 404 for missing chunks lets SvelteKit's
+# stale-import recovery (handleError + auto-reload) do its job.
+/_app/*  /_app/:splat  404
 /*  /index.html  200
