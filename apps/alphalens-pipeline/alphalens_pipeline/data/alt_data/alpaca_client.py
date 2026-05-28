@@ -334,17 +334,25 @@ class AlpacaClient:
         symbol: str,
         qty: int | float,
         limit_price: float,
-        take_profit_price: float | None = None,
-        stop_loss_price: float | None = None,
+        take_profit_price: float,
+        stop_loss_price: float,
         side: str = "buy",
         time_in_force: str = "gtc",
     ) -> Any:
-        """Submit a bracket order: one parent limit + optional TP and SL legs.
+        """Submit a bracket order: one parent limit + REQUIRED TP and SL legs.
 
         Alpaca's ``BRACKET`` order class atomically attaches a single
         take-profit + single stop-loss leg to a parent entry. When the
         parent fills, the two child legs activate as an OCO pair so one
         cancels the other automatically.
+
+        Both legs are MANDATORY — Alpaca rejects a BRACKET order with
+        only one leg present (HTTP 422). The wrapper enforces that
+        locally so the caller fails with a clear ``ValueError`` instead
+        of an opaque SDK error at submission time. Use
+        :meth:`submit_limit_order` (+ :meth:`submit_stop_order` for an
+        SL leg, or another :meth:`submit_limit_order` for a TP leg) for
+        the one-leg-only case.
 
         Note for the upcoming reconciler: ``brief_trade_setup`` ships a
         MULTI-tranche TP ladder (typically 2-3 targets at different
@@ -355,11 +363,15 @@ class AlpacaClient:
         managed by the reconciler. This primitive lives here so callers
         don't reach into the SDK directly for the simple case.
         """
-        leg_kwargs: dict[str, Any] = {}
-        if take_profit_price is not None:
-            leg_kwargs["take_profit"] = self._sdk.TakeProfitRequest(limit_price=take_profit_price)
-        if stop_loss_price is not None:
-            leg_kwargs["stop_loss"] = self._sdk.StopLossRequest(stop_price=stop_loss_price)
+        # Local guard: Alpaca BRACKET requires both legs. Fail fast with a
+        # clear message instead of letting the SDK return a generic 422.
+        # Per zen second-round review 2026-05-28.
+        if take_profit_price is None or stop_loss_price is None:
+            raise ValueError(
+                "BRACKET orders require both take_profit_price AND stop_loss_price. "
+                "For a single-leg exit, use submit_limit_order (TP) or "
+                "submit_stop_order (SL) separately."
+            )
         req = self._sdk.LimitOrderRequest(
             symbol=symbol,
             qty=qty,
@@ -367,7 +379,8 @@ class AlpacaClient:
             time_in_force=_tif(time_in_force, self._sdk),
             limit_price=limit_price,
             order_class=self._sdk.OrderClass.BRACKET,
-            **leg_kwargs,
+            take_profit=self._sdk.TakeProfitRequest(limit_price=take_profit_price),
+            stop_loss=self._sdk.StopLossRequest(stop_price=stop_loss_price),
         )
         return self._trading.submit_order(order_data=req)
 

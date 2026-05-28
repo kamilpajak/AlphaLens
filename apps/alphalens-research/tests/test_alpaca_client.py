@@ -331,15 +331,25 @@ class TestOrderPrimitives(_FakeAlpacaTestCase):
         self.assertIn("stop_loss", kwargs)
         self.assertEqual(kwargs["side"], self.fake_enums_mod.OrderSide.BUY)
 
-    def test_submit_bracket_order_with_only_take_profit(self):
-        """Bracket where only the TP leg is supplied — SL absent."""
+    def test_submit_bracket_order_rejects_missing_take_profit(self):
+        """Alpaca BRACKET requires BOTH legs; submitting with only SL fails
+        Alpaca with HTTP 422. The wrapper guards locally with a clear
+        ValueError so the failure is unambiguous at the call site instead of
+        opaque at submission time. Per zen second-round review."""
         client = self._build_client()
-        client.submit_bracket_order(
-            symbol="NVDA", qty=10, limit_price=100.0, take_profit_price=120.0
-        )
-        kwargs = self.fake_requests_mod.LimitOrderRequest.call_args.kwargs
-        self.assertIn("take_profit", kwargs)
-        self.assertNotIn("stop_loss", kwargs)
+        with self.assertRaises(ValueError) as cm:
+            client.submit_bracket_order(
+                symbol="NVDA", qty=10, limit_price=100.0, stop_loss_price=90.0
+            )
+        self.assertIn("BRACKET", str(cm.exception))
+
+    def test_submit_bracket_order_rejects_missing_stop_loss(self):
+        """Mirror of the above — only TP supplied also raises."""
+        client = self._build_client()
+        with self.assertRaises(ValueError):
+            client.submit_bracket_order(
+                symbol="NVDA", qty=10, limit_price=100.0, take_profit_price=120.0
+            )
 
     def test_submit_market_order_defaults_day_tif(self):
         client = self._build_client()
