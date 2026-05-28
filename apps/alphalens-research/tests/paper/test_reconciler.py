@@ -370,6 +370,28 @@ class TestTtlSweep(_ReconcilerTestBase):
         self.assertEqual(report.n_entries_ttl_canceled, 1)
         self.assertEqual(self.client.canceled_orders, ["boundary"])
 
+    def test_plan_one_day_before_ttl_is_not_swept(self):
+        """planned_at TTL-1 days ago → just-before-expiry, sweep MUST NOT fire.
+
+        Paired with ``test_plan_at_exact_ttl_boundary_is_swept`` so the
+        `>=` boundary is pinned from both sides — an off-by-one in the
+        inequality (`>` instead of `>=`) would still pass the boundary
+        test, and an off-by-one the other way (`>= ttl - 1`) would still
+        pass the within-window test. This test closes that gap.
+        """
+        _make_plan_with_order(
+            self.ledger,
+            alpaca_order_id="just-before",
+            planned_at=self._planned_at_days_ago(9),
+            order_ttl_days=10,
+        )
+        self.client.add(_StubAlpacaOrder(id="just-before", status="new"))
+
+        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+
+        self.assertEqual(report.n_entries_ttl_canceled, 0)
+        self.assertEqual(self.client.canceled_orders, [])
+
     def test_plan_past_ttl_is_swept(self):
         """planned_at 15 days ago, TTL=10 → cancel fires."""
         _make_plan_with_order(
@@ -563,6 +585,57 @@ class TestTtlSweep(_ReconcilerTestBase):
             row = cur.fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(row["exit_kind"], "UNFILLED")
+
+    def test_all_entries_filled_outside_ttl_proceeds_through_exit_manager(self):
+        """A plan whose ENTRY orders are all already FILLED (no sweep
+        action needed) must still flow through exit_manager and have
+        TP+SL attached in the same reconcile pass — independent of
+        whether the TTL window has elapsed or not.
+
+        Without this regression, a refactor that gates the exit-manager
+        loop on "TTL sweep made progress" would silently strand fully-
+        filled plans without exits. The TTL sweep + exit attachment
+        paths are orthogonal; this test pins that.
+        """
+        plan_id, _ = _make_plan_with_order(
+            self.ledger,
+            alpaca_order_id="filled-old",
+            planned_at=self._planned_at_days_ago(15),
+            order_ttl_days=10,
+            qty=27,
+        )
+        # Mark the entry already FILLED locally and seed a matching fill row
+        # so process_plan_exit sees total_entry_filled_qty > 0.
+        with open_ledger(self.ledger) as conn:
+            conn.execute(
+                "UPDATE orders SET status = 'FILLED' WHERE alpaca_order_id = ?",
+                ("filled-old",),
+            )
+            from alphalens_pipeline.paper.ledger import insert_fill
+
+            insert_fill(
+                conn,
+                order_id=1,
+                alpaca_fill_id="seed-fill",
+                qty=27,
+                price=99.5,
+                filled_at=self._planned_at_days_ago(15),
+            )
+
+        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+
+        # Sweep is a no-op (no SUBMITTED/PARTIALLY_FILLED entry to cancel).
+        self.assertEqual(report.n_entries_ttl_canceled, 0)
+        # exit_manager attaches TP+SL (1 SL stop-market + 1 TP limit-sell).
+        self.assertEqual(report.n_exits_attached, 2)
+        # Plan has exits but no outcome yet (exits still SUBMITTED).
+        with open_ledger(self.ledger) as conn:
+            cur = conn.execute(
+                "SELECT order_kind FROM orders WHERE plan_id = ? AND side = 'SELL'",
+                (plan_id,),
+            )
+            exit_kinds = sorted(row["order_kind"] for row in cur.fetchall())
+        self.assertEqual(exit_kinds, ["SL", "TP"])
 
     def test_blocked_plan_is_not_swept(self):
         """A plan whose status is BLOCKED (gross-cap rejected at plan time,

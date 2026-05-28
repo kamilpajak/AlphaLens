@@ -305,7 +305,11 @@ def reconcile_orders(
         # in the SAME reconcile cycle (compresses TTL-cancel → ledger
         # CANCELED → exit_manager UNFILLED into one pass instead of three).
         # Slow Alpaca processing is fine too — the per-order loop just sees
-        # SUBMITTED for one more cycle, the next cycle catches it.
+        # SUBMITTED for one more cycle, the next cycle catches it. Note
+        # that the same order may appear in BOTH the sweep (cancel sent to
+        # Alpaca) and the per-order loop (status re-polled) within one
+        # cycle; this is expected, not redundant — the per-order poll is
+        # what transitions ``orders.status`` to CANCELED once Alpaca acks.
         n_entries_ttl_canceled = _sweep_expired_entries(
             conn,
             alpaca_client=alpaca_client,
