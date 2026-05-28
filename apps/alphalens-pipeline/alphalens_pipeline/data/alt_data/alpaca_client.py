@@ -42,6 +42,19 @@ API_KEY_ENV = "ALPACA_API_KEY"
 SECRET_ENV = "ALPACA_API_SECRET"
 BASE_URL_ENV = "ALPACA_API_BASE_URL"
 
+# Test-account env vars — read by ``from_env(profile="test")`` so the
+# PR 3 reconciler + submitter can run live smoke tests against a sandbox
+# isolated from the main paper account's persistent state. Both accounts
+# are paper-only (the ``paper=True`` hardcoding + URL guard apply to both).
+TEST_API_KEY_ENV = "ALPACA_TEST_API_KEY"
+TEST_SECRET_ENV = "ALPACA_TEST_API_SECRET"
+
+# Allowed profile names. ``main`` reads ALPACA_API_KEY/SECRET (production
+# paper account for real candidate planning); ``test`` reads
+# ALPACA_TEST_API_KEY/SECRET (dev sandbox). Both still route to
+# paper-api.alpaca.markets — the profile only switches credentials.
+_VALID_PROFILES = frozenset({"main", "test"})
+
 PAPER_BASE_URL = "https://paper-api.alpaca.markets"
 # Anything in this set is accepted as "obviously paper"; everything else is
 # rejected at construction time. Trailing slash + ``/v2`` variants are
@@ -64,6 +77,8 @@ __all__ = [
     "BASE_URL_ENV",
     "PAPER_BASE_URL",
     "SECRET_ENV",
+    "TEST_API_KEY_ENV",
+    "TEST_SECRET_ENV",
     "AlpacaClient",
     "AlpacaClientError",
     "_reset_default_client_for_tests",
@@ -192,14 +207,35 @@ class AlpacaClient:
         self._trading = sdk.TradingClient(api_key, secret_key, paper=True)
 
     @classmethod
-    def from_env(cls) -> AlpacaClient:
-        """Build a client reading ``ALPACA_API_KEY`` + ``ALPACA_API_SECRET``."""
-        api_key = os.environ.get(API_KEY_ENV)
-        secret = os.environ.get(SECRET_ENV)
+    def from_env(cls, *, profile: str = "main") -> AlpacaClient:
+        """Build a client reading credentials per profile.
+
+        Profiles:
+        - ``"main"`` (default): ``ALPACA_API_KEY`` + ``ALPACA_API_SECRET`` —
+          production paper account for real candidate planning.
+        - ``"test"``: ``ALPACA_TEST_API_KEY`` + ``ALPACA_TEST_API_SECRET`` —
+          dev sandbox for live smoke tests of the submitter + reconciler
+          without polluting the main account's persistent state.
+
+        Both profiles still route to ``paper-api.alpaca.markets`` — the
+        ``paper=True`` hardcoding + URL guard apply uniformly. The profile
+        only switches credentials.
+        """
+        if profile not in _VALID_PROFILES:
+            raise ValueError(
+                f"profile={profile!r} not in {sorted(_VALID_PROFILES)}; "
+                "AlpacaClient only supports 'main' or 'test'"
+            )
+        if profile == "test":
+            key_env, secret_env = TEST_API_KEY_ENV, TEST_SECRET_ENV
+        else:
+            key_env, secret_env = API_KEY_ENV, SECRET_ENV
+        api_key = os.environ.get(key_env)
+        secret = os.environ.get(secret_env)
         if not api_key:
-            raise ValueError(f"{API_KEY_ENV} environment variable is not set.")
+            raise ValueError(f"{key_env} environment variable is not set.")
         if not secret:
-            raise ValueError(f"{SECRET_ENV} environment variable is not set.")
+            raise ValueError(f"{secret_env} environment variable is not set.")
         return cls(api_key=api_key, secret_key=secret)
 
     @property
@@ -395,30 +431,40 @@ class AlpacaClient:
 # protects against double-construction under concurrent first calls — the
 # pipeline today is single-threaded but the reconciler (PR 3) may be invoked
 # from a daemon thread while the operator triggers a manual command.
-_DEFAULT_CLIENT: AlpacaClient | None = None
+# Per-profile singletons. Production paths use ``main`` exclusively; the
+# PR 3 dev smoke tests use ``test``. Keeping them separate prevents a
+# single ``_reset_default_client_for_tests()`` from clobbering both.
+_DEFAULT_CLIENTS: dict[str, AlpacaClient] = {}
 _DEFAULT_CLIENT_LOCK = threading.RLock()
 
 
-def get_default_alpaca_client() -> AlpacaClient:
-    """Return the process-wide default :class:`AlpacaClient` (lazy-initialized).
+def get_default_alpaca_client(*, profile: str = "main") -> AlpacaClient:
+    """Return the process-wide default :class:`AlpacaClient` for the given
+    profile (lazy-initialized).
 
-    Double-checked locking: the fast path skips the lock when the singleton
-    is already populated; the slow path re-checks inside the lock so two
-    concurrent first callers cannot each construct a fresh client (which
-    would waste an HTTP keepalive pool and a SDK keepalive).
+    Double-checked locking: the fast path skips the lock when the profile's
+    singleton is already populated; the slow path re-checks inside the lock
+    so two concurrent first callers cannot each construct a fresh client.
     """
-    global _DEFAULT_CLIENT  # noqa: PLW0603 — lazy singleton is the documented pattern
-    if _DEFAULT_CLIENT is None:
-        with _DEFAULT_CLIENT_LOCK:
-            if _DEFAULT_CLIENT is None:
-                _DEFAULT_CLIENT = AlpacaClient.from_env()
-    return _DEFAULT_CLIENT
+    if profile not in _VALID_PROFILES:
+        raise ValueError(
+            f"profile={profile!r} not in {sorted(_VALID_PROFILES)}; "
+            "AlpacaClient only supports 'main' or 'test'"
+        )
+    cached = _DEFAULT_CLIENTS.get(profile)
+    if cached is not None:
+        return cached
+    with _DEFAULT_CLIENT_LOCK:
+        cached = _DEFAULT_CLIENTS.get(profile)
+        if cached is None:
+            cached = AlpacaClient.from_env(profile=profile)
+            _DEFAULT_CLIENTS[profile] = cached
+        return cached
 
 
 def _reset_default_client_for_tests() -> None:
-    """Test-only hook: clear the cached singleton so each test starts clean."""
-    global _DEFAULT_CLIENT  # noqa: PLW0603 — lazy singleton is the documented pattern
-    _DEFAULT_CLIENT = None
+    """Test-only hook: clear all cached singletons so each test starts clean."""
+    _DEFAULT_CLIENTS.clear()
 
 
 def _reset_sdk_cache_for_tests() -> None:
