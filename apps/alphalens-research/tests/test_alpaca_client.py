@@ -36,6 +36,7 @@ def _install_fake_alpaca(target: dict) -> tuple[MagicMock, MagicMock, MagicMock]
     fake_trading_requests.StopOrderRequest = MagicMock(name="StopOrderRequest")
     fake_trading_requests.TakeProfitRequest = MagicMock(name="TakeProfitRequest")
     fake_trading_requests.StopLossRequest = MagicMock(name="StopLossRequest")
+    fake_trading_requests.GetOrdersRequest = MagicMock(name="GetOrdersRequest")
 
     class _OrderSide:
         BUY = "OrderSide.BUY"
@@ -227,6 +228,36 @@ class TestSingleton(_FakeAlpacaTestCase):
             b = mod.get_default_alpaca_client()
         self.assertIsNot(a, b)
 
+    def test_concurrent_first_call_constructs_only_one_client(self):
+        """Two threads racing on the first ``get_default_alpaca_client`` call
+        must NOT each construct a fresh client. Double-checked locking pattern
+        guards the singleton; without it the planner + reconciler could end
+        up with separate clients (separate SDK keepalive pools, separate
+        quota counters) under concurrent first-call conditions."""
+        import threading
+
+        from alphalens_pipeline.data.alt_data import alpaca_client as mod
+
+        instances: list[object] = []
+        barrier = threading.Barrier(2)
+
+        def race() -> None:
+            barrier.wait()  # release both threads simultaneously
+            instances.append(mod.get_default_alpaca_client())
+
+        with patch.dict("os.environ", {mod.API_KEY_ENV: "K", mod.SECRET_ENV: "S"}, clear=False):
+            t1 = threading.Thread(target=race)
+            t2 = threading.Thread(target=race)
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
+
+        self.assertEqual(len(instances), 2)
+        self.assertIs(instances[0], instances[1])
+        # SDK TradingClient was constructed exactly once across both threads.
+        self.assertEqual(self.fake_client_mod.TradingClient.call_count, 1)
+
 
 class TestOrderPrimitives(_FakeAlpacaTestCase):
     def _build_client(self):
@@ -277,6 +308,38 @@ class TestOrderPrimitives(_FakeAlpacaTestCase):
             time_in_force=self.fake_enums_mod.TimeInForce.GTC,
             stop_price=110.0,
         )
+
+    def test_submit_bracket_order_attaches_tp_and_sl_legs(self):
+        """One-call BRACKET for the single-TP-tranche case. The reconciler's
+        multi-tranche TP ladder still uses separate limit-sells + stop, but
+        when ``brief_trade_setup`` ships exactly one TP this is the cleaner
+        path with automatic OCO semantics on fill."""
+        client = self._build_client()
+        client.submit_bracket_order(
+            symbol="NVDA",
+            qty=10,
+            limit_price=100.0,
+            take_profit_price=120.0,
+            stop_loss_price=90.0,
+        )
+        self.fake_requests_mod.TakeProfitRequest.assert_called_once_with(limit_price=120.0)
+        self.fake_requests_mod.StopLossRequest.assert_called_once_with(stop_price=90.0)
+        # The LimitOrderRequest was called with order_class=BRACKET + legs.
+        kwargs = self.fake_requests_mod.LimitOrderRequest.call_args.kwargs
+        self.assertEqual(kwargs["order_class"], self.fake_enums_mod.OrderClass.BRACKET)
+        self.assertIn("take_profit", kwargs)
+        self.assertIn("stop_loss", kwargs)
+        self.assertEqual(kwargs["side"], self.fake_enums_mod.OrderSide.BUY)
+
+    def test_submit_bracket_order_with_only_take_profit(self):
+        """Bracket where only the TP leg is supplied — SL absent."""
+        client = self._build_client()
+        client.submit_bracket_order(
+            symbol="NVDA", qty=10, limit_price=100.0, take_profit_price=120.0
+        )
+        kwargs = self.fake_requests_mod.LimitOrderRequest.call_args.kwargs
+        self.assertIn("take_profit", kwargs)
+        self.assertNotIn("stop_loss", kwargs)
 
     def test_submit_market_order_defaults_day_tif(self):
         client = self._build_client()
@@ -330,6 +393,48 @@ class TestPortfolioReads(_FakeAlpacaTestCase):
         result = client.get_position("NVDA")
 
         self.assertIsNone(result)
+
+    def test_get_position_returns_none_on_404_status_code(self):
+        """The SDK's APIError carries a ``status_code`` attribute; the
+        wrapper accepts 404 as the missing-position signal alongside the
+        message-text path so both paths converge on returning ``None``."""
+        exc = Exception("Some other 404 text not containing the keyword")
+        exc.status_code = 404
+        self._trading_instance().get_open_position.side_effect = exc
+
+        client = self._build_client()
+        self.assertIsNone(client.get_position("NVDA"))
+
+    def test_get_position_reraises_on_non_missing_errors(self):
+        """A timeout / 5xx / auth failure is NOT a missing-position signal.
+        Swallowing it would let the planner treat the ticker as flat during
+        an Alpaca-side incident and double-up the position when the service
+        recovers — the exact opposite of the dedup intent. Re-raise so the
+        caller decides whether to retry or alert."""
+        exc = Exception("Connection timed out")
+        exc.status_code = 500
+        self._trading_instance().get_open_position.side_effect = exc
+
+        client = self._build_client()
+        with self.assertRaises(Exception) as cm:
+            client.get_position("NVDA")
+        self.assertIn("Connection timed out", str(cm.exception))
+
+    def test_get_orders_without_status_uses_sdk_default(self):
+        """No-arg call passes nothing to the SDK so its own default applies."""
+        client = self._build_client()
+        client.get_orders()
+        self._trading_instance().get_orders.assert_called_once_with()
+
+    def test_get_orders_with_status_wraps_in_get_orders_request(self):
+        """``status='open'`` is routed through the cached SDK handle's
+        GetOrdersRequest so the no-raw-http enforcement net stays intact."""
+        client = self._build_client()
+        client.get_orders(status="open")
+        self.fake_requests_mod.GetOrdersRequest.assert_called_once_with(status="open")
+        self._trading_instance().get_orders.assert_called_once_with(
+            filter=self.fake_requests_mod.GetOrdersRequest.return_value
+        )
 
     def test_get_all_positions_passes_through(self):
         self._trading_instance().get_all_positions.return_value = [MagicMock(), MagicMock()]

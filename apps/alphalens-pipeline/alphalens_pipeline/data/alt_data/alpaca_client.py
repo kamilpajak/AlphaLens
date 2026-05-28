@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -94,6 +95,7 @@ def _load_alpaca_sdk() -> SimpleNamespace:
         from alpaca.trading.client import TradingClient
         from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
         from alpaca.trading.requests import (
+            GetOrdersRequest,
             LimitOrderRequest,
             MarketOrderRequest,
             StopLossRequest,
@@ -112,6 +114,7 @@ def _load_alpaca_sdk() -> SimpleNamespace:
         StopOrderRequest=StopOrderRequest,
         TakeProfitRequest=TakeProfitRequest,
         StopLossRequest=StopLossRequest,
+        GetOrdersRequest=GetOrdersRequest,
         OrderSide=OrderSide,
         OrderClass=OrderClass,
         TimeInForce=TimeInForce,
@@ -214,25 +217,48 @@ class AlpacaClient:
     def get_position(self, symbol: str) -> Any | None:
         """Return the open position for ``symbol`` or ``None`` if flat.
 
-        The SDK raises on a missing position (404 wrapped as ``APIError``);
-        the wrapper converts to ``None`` so callers can use a simple
-        ``if pos is None`` flow for the dedup decision in the planner.
+        The SDK signals "no position" via 404 / a message containing
+        ``does not exist`` / ``position not found``. The wrapper converts
+        ONLY that case to ``None``; other failures (timeouts, 401, 500s)
+        re-raise so the caller can decide whether to retry or alert. A
+        catch-all swallow would mask network outages as "no position",
+        which the planner would then interpret as "safe to plan a fresh
+        position" — exactly wrong during an Alpaca-side incident.
         """
         try:
             return self._trading.get_open_position(symbol)
         except Exception as exc:
-            # 404 / "position does not exist" surfaces as APIError with a
-            # message rather than a typed exception. Conservative: any
-            # exception → None; the caller can re-query if it needs the
-            # underlying error.
-            logger.debug("get_position(%s) returned no position: %s", symbol, exc)
-            return None
+            status_code = getattr(exc, "status_code", None)
+            message = str(exc).lower()
+            if status_code == 404 or "does not exist" in message or "position not found" in message:
+                logger.debug("get_position(%s) returned no position: %s", symbol, exc)
+                return None
+            logger.error("get_position(%s) failed (not a missing-position error): %s", symbol, exc)
+            raise
 
     def get_all_positions(self) -> list[Any]:
         return list(self._trading.get_all_positions())
 
     def get_order(self, order_id: str) -> Any:
         return self._trading.get_order_by_id(order_id)
+
+    def get_orders(self, *, status: str | None = None) -> list[Any]:
+        """List orders, optionally filtered by status ('open', 'closed', 'all').
+
+        Required by the reconciler to enumerate pending entries + open
+        TP/SL legs without falling back to the ``trading_client`` escape
+        hatch. The SDK's GetOrdersRequest is wrapped here so callers
+        don't need to import ``alpaca.trading.requests`` directly. When
+        ``status`` is ``None`` the SDK default applies (which today
+        returns open orders only — Alpaca's convention).
+        """
+        if status is None:
+            return list(self._trading.get_orders())
+        # GetOrdersRequest in the SDK accepts a QueryOrderStatus enum;
+        # passing the bare string works for status='open'/'closed'/'all'
+        # via the underlying validator. Routed through the cached SDK
+        # handle so the no-raw-http enforcement test stays happy.
+        return list(self._trading.get_orders(filter=self._sdk.GetOrdersRequest(status=status)))
 
     # ----- order submission primitives -----
 
@@ -248,9 +274,14 @@ class AlpacaClient:
         """Submit a simple limit order (used for entry tiers + TP exits).
 
         ``side="buy"`` for entry-ladder tiers; ``side="sell"`` for TP-tranche
-        exits. The reconciler submits the OCO/stop-loss leg separately via
-        :meth:`submit_stop_order` because trade_setup ships a multi-tranche TP
-        ladder, which doesn't fit Alpaca's single-leg OCO model cleanly.
+        exits. The stop-loss leg is submitted separately via
+        :meth:`submit_stop_order` because ``brief_trade_setup`` ships a
+        multi-tranche TP ladder (Alpaca BRACKET supports a single TP +
+        single SL); the reconciler manually orchestrates "if any TP
+        fills, cancel-and-resubmit stop for reduced qty; if stop fires,
+        cancel remaining TPs". When a candidate has exactly one TP
+        tranche, :meth:`submit_bracket_order` is the simpler one-call
+        path with automatic OCO semantics.
         """
         req = self._sdk.LimitOrderRequest(
             symbol=symbol,
@@ -297,6 +328,49 @@ class AlpacaClient:
         )
         return self._trading.submit_order(order_data=req)
 
+    def submit_bracket_order(
+        self,
+        *,
+        symbol: str,
+        qty: int | float,
+        limit_price: float,
+        take_profit_price: float | None = None,
+        stop_loss_price: float | None = None,
+        side: str = "buy",
+        time_in_force: str = "gtc",
+    ) -> Any:
+        """Submit a bracket order: one parent limit + optional TP and SL legs.
+
+        Alpaca's ``BRACKET`` order class atomically attaches a single
+        take-profit + single stop-loss leg to a parent entry. When the
+        parent fills, the two child legs activate as an OCO pair so one
+        cancels the other automatically.
+
+        Note for the upcoming reconciler: ``brief_trade_setup`` ships a
+        MULTI-tranche TP ladder (typically 2-3 targets at different
+        prices, each with its own ``tranche_pct``). Alpaca's BRACKET
+        supports only ONE TP leg per parent. So bracket is usable only
+        when the candidate has exactly one TP tranche; the multi-tranche
+        case still needs separate limit-sells + a single stop-loss
+        managed by the reconciler. This primitive lives here so callers
+        don't reach into the SDK directly for the simple case.
+        """
+        leg_kwargs: dict[str, Any] = {}
+        if take_profit_price is not None:
+            leg_kwargs["take_profit"] = self._sdk.TakeProfitRequest(limit_price=take_profit_price)
+        if stop_loss_price is not None:
+            leg_kwargs["stop_loss"] = self._sdk.StopLossRequest(stop_price=stop_loss_price)
+        req = self._sdk.LimitOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=_side(side, self._sdk),
+            time_in_force=_tif(time_in_force, self._sdk),
+            limit_price=limit_price,
+            order_class=self._sdk.OrderClass.BRACKET,
+            **leg_kwargs,
+        )
+        return self._trading.submit_order(order_data=req)
+
     def cancel_order(self, order_id: str) -> None:
         """Cancel an open order. SDK returns no payload."""
         self._trading.cancel_order_by_id(order_id)
@@ -304,15 +378,27 @@ class AlpacaClient:
 
 # Module-level lazy singleton — one AlpacaClient shared by every adapter that
 # does not have its own injected client. First call reads keys from the
-# environment; tests reset via _reset_default_client_for_tests().
+# environment; tests reset via _reset_default_client_for_tests(). The lock
+# protects against double-construction under concurrent first calls — the
+# pipeline today is single-threaded but the reconciler (PR 3) may be invoked
+# from a daemon thread while the operator triggers a manual command.
 _DEFAULT_CLIENT: AlpacaClient | None = None
+_DEFAULT_CLIENT_LOCK = threading.RLock()
 
 
 def get_default_alpaca_client() -> AlpacaClient:
-    """Return the process-wide default :class:`AlpacaClient` (lazy-initialized)."""
+    """Return the process-wide default :class:`AlpacaClient` (lazy-initialized).
+
+    Double-checked locking: the fast path skips the lock when the singleton
+    is already populated; the slow path re-checks inside the lock so two
+    concurrent first callers cannot each construct a fresh client (which
+    would waste an HTTP keepalive pool and a SDK keepalive).
+    """
     global _DEFAULT_CLIENT  # noqa: PLW0603 — lazy singleton is the documented pattern
     if _DEFAULT_CLIENT is None:
-        _DEFAULT_CLIENT = AlpacaClient.from_env()
+        with _DEFAULT_CLIENT_LOCK:
+            if _DEFAULT_CLIENT is None:
+                _DEFAULT_CLIENT = AlpacaClient.from_env()
     return _DEFAULT_CLIENT
 
 

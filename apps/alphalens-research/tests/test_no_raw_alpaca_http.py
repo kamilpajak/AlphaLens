@@ -55,6 +55,12 @@ SHADOW_PATTERNS = (
     re.compile(r"\bimport\s+alpaca\b"),
     re.compile(r"(?<![\w.])TradingClient\("),
     re.compile(r"(?<![\w.])StockHistoricalDataClient\("),
+    # Fully-qualified construction: ``alpaca.trading.client.TradingClient(...)``
+    # is not caught by the dot-excluding pattern above. Flag it explicitly so
+    # a single-line qualified call without a separate ``import`` line cannot
+    # slip past the enforcement net.
+    re.compile(r"\balpaca\.trading\.client\.TradingClient\("),
+    re.compile(r"\balpaca\.data\.historical\.StockHistoricalDataClient\("),
 )
 
 
@@ -90,6 +96,8 @@ class TestNoRawAlpacaSdk(unittest.TestCase):
             "import alpaca.trading as t",
             "client = TradingClient('k', 's', paper=False)",
             "data = StockHistoricalDataClient('k', 's')",
+            "client = alpaca.trading.client.TradingClient('k', 's')",
+            "data = alpaca.data.historical.StockHistoricalDataClient('k', 's')",
         ]
         for sample in shadow_samples:
             hits = _find_shadow_lines(sample)
