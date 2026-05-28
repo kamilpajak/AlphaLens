@@ -22,5 +22,11 @@
 # script but the server responded with a MIME type of text/html" and a
 # blank-screen SPA. Returning 404 for missing chunks lets SvelteKit's
 # stale-import recovery (handleError + auto-reload) do its job.
-/_app/*  /_app/:splat  404
+# CF Pages _redirects requires the destination to point at a file that
+# EXISTS. Using `/_app/:splat` as the destination for a missing chunk
+# falls through to the next rule (SPA fallback) — exactly the behaviour
+# we are trying to avoid. Point to a real tiny text file so the 404
+# response carries Content-Type: text/plain (not text/html) and the
+# browser module loader fails fast instead of trying to parse HTML as JS.
+/_app/*  /_chunk-404.txt  404
 /*  /index.html  200
