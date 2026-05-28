@@ -32,7 +32,11 @@ from typing import Any
 # Schema versioning lives inline. The planner pins ``brief_trade_setup``'s
 # schema separately (sizing.compute_setup_plan); here we version OUR ledger
 # layout. A future migration would bump this + add an ALTER TABLE block.
-LEDGER_SCHEMA_VERSION = 1
+# Bumped to 2 (2026-05-28): v1 used per-candidate ``effective_size_pct``
+# cap, v2 uses ``scale_factor`` (daily global) + ``final_size_pct``
+# (suggested × scale). Per the project's "no backward compat" doctrine
+# nothing migrates — the development DB is regenerated.
+LEDGER_SCHEMA_VERSION = 2
 
 
 _SCHEMA_DDL = (
@@ -49,10 +53,11 @@ _SCHEMA_DDL = (
         ticker TEXT NOT NULL,
         theme TEXT NOT NULL,
         planned_at TEXT NOT NULL,
-        suggested_size_pct REAL NOT NULL,
-        effective_size_pct REAL NOT NULL,
+        suggested_size_pct REAL NOT NULL,    -- raw from brief_trade_setup
+        scale_factor REAL NOT NULL,          -- v2 daily global scale (memo §2.3)
+        final_size_pct REAL NOT NULL,        -- suggested × scale_factor
         paper_equity REAL NOT NULL,
-        total_notional REAL NOT NULL,
+        total_notional REAL NOT NULL,        -- final_size_pct/100 × equity
         gross_notional REAL NOT NULL,
         disaster_stop REAL NOT NULL,
         order_ttl_days INTEGER NOT NULL,
@@ -166,7 +171,8 @@ def insert_planned(
     theme: str,
     planned_at: dt.datetime,
     suggested_size_pct: float,
-    effective_size_pct: float,
+    scale_factor: float,
+    final_size_pct: float,
     paper_equity: float,
     total_notional: float,
     gross_notional: float,
@@ -188,10 +194,10 @@ def insert_planned(
             """
             INSERT INTO plans(
                 brief_date, ticker, theme, planned_at,
-                suggested_size_pct, effective_size_pct, paper_equity,
+                suggested_size_pct, scale_factor, final_size_pct, paper_equity,
                 total_notional, gross_notional, disaster_stop,
                 order_ttl_days, status, block_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PLANNED', NULL)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PLANNED', NULL)
             """,
             (
                 brief_date.isoformat(),
@@ -199,7 +205,8 @@ def insert_planned(
                 theme,
                 planned_at.isoformat(),
                 suggested_size_pct,
-                effective_size_pct,
+                scale_factor,
+                final_size_pct,
                 paper_equity,
                 total_notional,
                 gross_notional,
