@@ -284,17 +284,17 @@
         "asof_close": 312.5,
         "atr": 10.7,
         "disaster_stop": 275.05,
-        "suggested_size_pct": 18.0,
+        "suggested_size_pct": 4.065583485277316,
         "order_ttl_days": 10,
         "entry_tiers": [
-          { "limit": 307.15, "alloc_pct": 50, "atr_distance": 0.5, "tag": "shallow pullback" },
-          { "limit": 299.66, "alloc_pct": 30, "atr_distance": 1.2, "tag": "momentum reset" },
-          { "limit": 291.1, "alloc_pct": 20, "atr_distance": 2.0, "tag": "deep value add" }
+          { "limit": 307.15, "alloc_pct": 27.98308726424079, "atr_distance": 0.5, "tag": "shallow pullback" },
+          { "limit": 299.66, "alloc_pct": 34.35419283481206, "atr_distance": 1.2, "tag": "momentum reset" },
+          { "limit": 291.1, "alloc_pct": 37.66271990094714, "atr_distance": 2.0, "tag": "deep value add" }
         ],
         "tp_tranches": [
-          { "target": 323.2, "tranche_pct": 40, "r_multiple": 0.3, "tag": "first scale-out" },
-          { "target": 336.04, "tranche_pct": 35, "r_multiple": 0.6, "tag": "overhead resistance" },
-          { "target": 349.95, "tranche_pct": 25, "r_multiple": 1.0, "tag": "measured-move target" }
+          { "target": 323.2, "tranche_pct": 33.333333333333336, "r_multiple": 0.3, "tag": "first scale-out" },
+          { "target": 336.04, "tranche_pct": 33.333333333333336, "r_multiple": 0.6, "tag": "overhead resistance" },
+          { "target": 349.95, "tranche_pct": 33.333333333333336, "r_multiple": 1.0, "tag": "measured-move target" }
         ]
       },
       "brief_full_md": "## PIPR \u2014 Piper Sandler Companies (rank 3/16 \u00b7 conf 3/5 \u00b7 catalyst 0.62)\n\n**Theme**: IPO | **Industry**: Brokers, Exchanges & Other (Financial Services)\n\n**Catalyst**: The fate of OpenAI\u2019s $1tn IPO will be decided in an Oakland jury room (2026-05-18) https://www.ft.com/content/846479c8-4ab0-4812-a1d5-08abdd8b952b\n\n**Pattern**: neutral \u00b7 -17% off 52w high \u00b7 MA200 -6%, slope +0.04%/d\n\n**Thesis**: Piper Sandler, a middle-market investment bank, is positioned to benefit from a potential resurgence in technology IPOs, with the OpenAI IPO trial on 2026-05-18 serving as a key near-term catalyst for equity underwriting fees.\n\n**Supply chain**: Piper Sandler Companies operates as a middle-market investment bank, deriving a significant portion of its revenue from equity underwriting fees, particularly from healthcare and technology IPOs. Its business model is directly tied to the health and activity of the primary equity markets, acting as an intermediary in the capital formation process. A robust IPO environment, especially within the technology sector, directly translates to increased deal flow and fee generation for firms like PIPR, positioning it within the financial services supply chain as a critical facilitator of public market access for private companies.\n\n**Bear case**: PIPR faces significant risks from its heavy reliance on the volatile IPO market, especially in healthcare and technology, which can experience prolonged downturns. A general market slowdown or increased competition in investment banking could compress underwriting fees and reduce deal volume. Broader economic conditions also impact capital markets activity.\n\n**Setup**: entry Current price is -16.6% from its 52-week high and +26.4% from its 52-week low, with MA200 distance at -5.7%. | size 1.5% | exit 8w | stop -25%\n\n**Catalyst-failure exit**: If the OpenAI IPO catalyst fails to materialize or is significantly delayed beyond the 2026-05-18 trial, or if the outcome negatively impacts broader technology IPO sentiment, the investment thesis for PIPR would be invalidated, prompting an exit.\n\n| Signal | Value |\n|---|---|\n| Insider 90d opportunistic | $0k (no opportunistic buys) |\n| FCFF yield | 152.2% (pctile 100) |\n| Magic Formula | health-gate fail |\n| Mults & ROE | PE 4.8 \u00b7 EV/EBITDA n/a \u00b7 PS 0.7 \u00b7 ROE 20.5% |\n| Valuation (sector pctile) | pctile 84 |\n| Catalyst strength | 0.62 moderate (litigation) |\n| Reversal setup | no |\n| Financials age | 39d |\n| Technicals | RSI 40 / MA50 -1.4% / MA200 -5.7% (slope +0.044%/d) / 52w high -16.6% / 52w low +26.4% / ATR 3.4% / volZ -0.1 |\n| Verified gates | tenk |\n",

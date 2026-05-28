@@ -14,9 +14,13 @@ export function fmtPrice(value: number | null | undefined, digits = 2): string {
 	return `$${value.toFixed(digits)}`;
 }
 
-export function fmtPct(value: number | null | undefined, digits = 1): string {
+/** Format a percentage. Default prepends a sign (suited to signed deltas /
+ *  yields like FCFF yield, MA distance). Pass withSign=false for unsigned
+ *  ratios such as position-size or risk-allocation %, where a leading "+"
+ *  reads as a quote-style change indicator and is misleading. */
+export function fmtPct(value: number | null | undefined, digits = 1, withSign = true): string {
 	if (value === null || value === undefined || !Number.isFinite(value)) return '—';
-	const sign = value >= 0 ? '+' : '';
+	const sign = withSign && value >= 0 ? '+' : '';
 	return `${sign}${value.toFixed(digits)}%`;
 }
 
