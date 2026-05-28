@@ -31,6 +31,13 @@ export interface GlossaryEntry {
 	pages?: ('experiments' | 'briefs')[];
 }
 
+// Brief-detail-page metrics share the same shape (first-per-section /
+// pages: ['briefs']). Constructor avoids the literal-object repetition that
+// SonarCloud CPD flags as new-line duplication when entries are added.
+function briefMetric(term: string, full: string, body: string): GlossaryEntry {
+	return { term, full, body, category: 'first-per-section', pages: ['briefs'] };
+}
+
 export const GLOSSARY: GlossaryEntry[] = [
 	{
 		term: 'αt',
@@ -375,27 +382,21 @@ export const GLOSSARY: GlossaryEntry[] = [
 		category: 'first-per-section',
 		pages: ['briefs']
 	},
-	{
-		term: 'financials age',
-		full: 'days since last filing',
-		body: 'Calendar days between the candidate brief-date and the publish date of the latest 10-K / 10-Q used to derive fundamentals (PE, PS, ROE, FCFF yield, …). Higher = staler fundamentals = larger blind-spot risk if the business has changed since the filing. Typical fresh quarter is 30–90d; >180d means the next earnings could materially repaint the picture.',
-		category: 'first-per-section',
-		pages: ['briefs']
-	},
-	{
-		term: 'next earnings',
-		full: 'next scheduled earnings date',
-		body: 'Next confirmed quarterly earnings release for the company. Holding a position through earnings adds a binary event-risk that the trade setup (ATR-based stops / tiers) does not price — the post-print gap can blow through the disaster stop intraday. Blank = no confirmed date available; treat as "unknown, could be soon" if the last filing is >75d old.',
-		category: 'first-per-section',
-		pages: ['briefs']
-	},
-	{
-		term: 'MA200 slope',
-		full: '200-day moving average slope',
-		body: 'Day-over-day change in the MA200, expressed as % per day. Positive slope = the long-term trend is still rising (price drawdowns happen against an up-trending base — classic deep-drawdown-reversal setup). Negative slope = secular downtrend; "buy the dip" is fighting the trend. Magnitude is small by construction (typical band ±0.1–0.5%/d).',
-		category: 'first-per-section',
-		pages: ['briefs']
-	}
+	briefMetric(
+		'financials age',
+		'days since last filing',
+		'Calendar days between the candidate brief-date and the publish date of the latest 10-K / 10-Q used to derive fundamentals (PE, PS, ROE, FCFF yield, …). Higher = staler fundamentals = larger blind-spot risk if the business has changed since the filing. Typical fresh quarter is 30–90d; >180d means the next earnings could materially repaint the picture.'
+	),
+	briefMetric(
+		'next earnings',
+		'next scheduled earnings date',
+		'Next confirmed quarterly earnings release for the company. Holding a position through earnings adds a binary event-risk that the trade setup (ATR-based stops / tiers) does not price — the post-print gap can blow through the disaster stop intraday. Blank = no confirmed date available; treat as "unknown, could be soon" if the last filing is >75d old.'
+	),
+	briefMetric(
+		'MA200 slope',
+		'200-day moving average slope',
+		'Day-over-day change in the MA200, expressed as % per day. Positive slope = the long-term trend is still rising (price drawdowns happen against an up-trending base — classic deep-drawdown-reversal setup). Negative slope = secular downtrend; "buy the dip" is fighting the trend. Magnitude is small by construction (typical band ±0.1–0.5%/d).'
+	)
 ];
 
 export const GLOSSARY_BY_TERM: Map<string, GlossaryEntry> = new Map(
