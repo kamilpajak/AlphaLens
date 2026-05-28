@@ -38,11 +38,25 @@ class _StubAlpacaOrder:
     filled_avg_price: float | None = None
 
 
+@dataclass
+class _StubExitOrder:
+    """Mirror of _StubAlpacaOrder for synthetic exit submissions."""
+
+    id: str
+
+
 class _StubAlpacaClient:
     def __init__(self) -> None:
         self.orders_by_id: dict[str, _StubAlpacaOrder] = {}
         self.get_order_calls: list[str] = []
         self.fail_for: set[str] = set()
+        # Captures exit submissions so the exit-aware tests can assert
+        # what got submitted. Existing reconciler tests don't inspect
+        # these but the methods need to exist so process_plan_exit can
+        # be called transitively from the reconciler.
+        self.exit_submissions: list[dict] = []
+        self.canceled_orders: list[str] = []
+        self._next_exit_id = 1
 
     def add(self, order: _StubAlpacaOrder) -> None:
         self.orders_by_id[order.id] = order
@@ -52,6 +66,27 @@ class _StubAlpacaClient:
         if alpaca_order_id in self.fail_for:
             raise RuntimeError(f"stub: simulated SDK error for {alpaca_order_id}")
         return self.orders_by_id[alpaca_order_id]
+
+    def submit_stop_order(self, **kwargs):
+        self.exit_submissions.append({"kind": "STOP", **kwargs})
+        oid = f"exit-stop-{self._next_exit_id:03d}"
+        self._next_exit_id += 1
+        return _StubExitOrder(id=oid)
+
+    def submit_limit_order(self, **kwargs):
+        self.exit_submissions.append({"kind": "LIMIT", **kwargs})
+        oid = f"exit-limit-{self._next_exit_id:03d}"
+        self._next_exit_id += 1
+        return _StubExitOrder(id=oid)
+
+    def submit_market_order(self, **kwargs):
+        self.exit_submissions.append({"kind": "MARKET", **kwargs})
+        oid = f"exit-market-{self._next_exit_id:03d}"
+        self._next_exit_id += 1
+        return _StubExitOrder(id=oid)
+
+    def cancel_order(self, alpaca_order_id: str) -> None:
+        self.canceled_orders.append(alpaca_order_id)
 
 
 def _make_plan_with_order(
@@ -139,7 +174,7 @@ class TestStatusTransitions(_ReconcilerTestBase):
         self.assertAlmostEqual(fills[0]["price"], 99.5)
 
     def test_canceled_transition_appends_no_fill(self):
-        _, order_id = _make_plan_with_order(self.ledger, alpaca_order_id="ccc")
+        _make_plan_with_order(self.ledger, alpaca_order_id="ccc")
         self.client.add(_StubAlpacaOrder(id="ccc", status="canceled"))
 
         report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
@@ -209,7 +244,7 @@ class TestPartialFills(_ReconcilerTestBase):
         """Reconciler called twice with identical Alpaca state must not
         create duplicate fill rows. The synthetic fill_id keyed on
         cumulative qty enforces this."""
-        _, order_id = _make_plan_with_order(self.ledger, alpaca_order_id="ggg", qty=27)
+        _make_plan_with_order(self.ledger, alpaca_order_id="ggg", qty=27)
         self.client.add(
             _StubAlpacaOrder(id="ggg", status="filled", filled_qty=27, filled_avg_price=99.5)
         )

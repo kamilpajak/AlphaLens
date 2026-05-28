@@ -93,6 +93,9 @@ class ReconcileReport:
     n_orders_checked: int
     n_orders_transitioned: int
     n_fills_appended: int
+    n_exits_attached: int
+    n_outcomes_written: int
+    n_time_stops_fired: int
     outcomes: tuple[OrderReconcileOutcome, ...]
 
 
@@ -195,10 +198,13 @@ def reconcile_orders(
     reconciler does not revive them. The TP/SL/time-stop attacher in
     step 5 watches FILLED ENTRY orders to know when to submit exits.
     """
+    from alphalens_pipeline.paper.exit_manager import process_plan_exit
+
     observed_at = dt.datetime.now(dt.UTC)
     outcomes: list[OrderReconcileOutcome] = []
     transitioned = 0
     appended = 0
+    plans_touched: set[int] = set()
 
     with open_ledger(ledger_path) as conn:
         open_rows = fetch_open_orders(conn)
@@ -223,17 +229,55 @@ def reconcile_orders(
             if outcome.new_status != outcome.prev_status:
                 transitioned += 1
             appended += outcome.n_new_fills
+            plans_touched.add(int(ledger_row["plan_id"]))
+
+        # Plus every plan that has open exit orders or no outcome yet —
+        # the exit_manager may need to attach exits / write outcomes for
+        # plans whose orders are all already terminal (e.g. all entry
+        # orders CANCELED by TTL with zero fills).
+        cur = conn.execute(
+            """SELECT DISTINCT p.plan_id FROM plans p
+               LEFT JOIN plan_outcomes po ON po.plan_id = p.plan_id
+               WHERE p.status = 'PLANNED' AND po.outcome_id IS NULL"""
+        )
+        for row in cur.fetchall():
+            plans_touched.add(int(row[0]))
+
+        # Drive each touched plan through the exit-phase state machine.
+        n_attached = 0
+        n_outcomes = 0
+        n_time_stops = 0
+        for plan_id in sorted(plans_touched):
+            exit_outcome = process_plan_exit(
+                conn,
+                plan_id=plan_id,
+                alpaca_client=alpaca_client,
+                observed_at=observed_at,
+            )
+            if exit_outcome.action == "ATTACHED":
+                n_attached += exit_outcome.n_exits_submitted
+            elif exit_outcome.action in ("CLOSED", "UNFILLED"):
+                n_outcomes += 1
+            elif exit_outcome.action == "TIME_STOP":
+                n_time_stops += 1
 
     logger.info(
-        "paper reconcile: %d orders checked, %d transitioned, %d fills appended",
+        "paper reconcile: %d orders checked, %d transitioned, %d fills appended, "
+        "%d exits attached, %d outcomes written, %d time-stops",
         len(outcomes),
         transitioned,
         appended,
+        n_attached,
+        n_outcomes,
+        n_time_stops,
     )
     return ReconcileReport(
         n_orders_checked=len(outcomes),
         n_orders_transitioned=transitioned,
         n_fills_appended=appended,
+        n_exits_attached=n_attached,
+        n_outcomes_written=n_outcomes,
+        n_time_stops_fired=n_time_stops,
         outcomes=tuple(outcomes),
     )
 
