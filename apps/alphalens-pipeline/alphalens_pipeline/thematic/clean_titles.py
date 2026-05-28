@@ -86,8 +86,9 @@ def clean_titles_in_parquet_dir(briefs_dir: Path, *, dry_run: bool = False) -> C
     for path in sorted(briefs_dir.glob("*.parquet")):
         try:
             df = pd.read_parquet(path)
-        except Exception as exc:  # pragma: no cover — defensive against corrupt files
-            logger.error("skip %s — unreadable parquet: %s", path.name, exc)
+        except Exception:  # pragma: no cover — defensive against corrupt files
+            # ``logger.exception`` attaches the active traceback automatically.
+            logger.exception("skip %s — unreadable parquet", path.name)
             continue
         if TARGET_COLUMN not in df.columns:
             logger.info("skip %s — no %s column", path.name, TARGET_COLUMN)

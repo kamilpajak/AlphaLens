@@ -298,7 +298,9 @@ class AlpacaClient:
             if status_code == 404 or "does not exist" in message or "position not found" in message:
                 logger.debug("get_position(%s) returned no position: %s", symbol, exc)
                 return None
-            logger.error("get_position(%s) failed (not a missing-position error): %s", symbol, exc)
+            # ``logger.exception`` attaches the active traceback automatically;
+            # we're inside the ``except`` block so this captures ``exc``.
+            logger.exception("get_position(%s) failed (not a missing-position error)", symbol)
             raise
 
     def get_all_positions(self) -> list[Any]:

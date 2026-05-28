@@ -22,6 +22,11 @@ paper_app = typer.Typer(
     no_args_is_help=True,
 )
 
+# Shared help text for the --ledger flag across plan / submit / reconcile.
+# Sonar flagged the duplicated literal (S1192); extracting keeps the three
+# command signatures in lock-step on a single source of truth.
+_LEDGER_HELP = "Override the default paper ledger location (~/.alphalens/paper_ledger.db)."
+
 
 @paper_app.command("plan")
 def plan(
@@ -38,7 +43,7 @@ def plan(
     ledger_path: Path | None = typer.Option(
         None,
         "--ledger",
-        help="Override the default paper ledger location (~/.alphalens/paper_ledger.db).",
+        help=_LEDGER_HELP,
     ),
     no_alpaca: bool = typer.Option(
         False,
@@ -123,7 +128,7 @@ def submit(
     ledger_path: Path | None = typer.Option(
         None,
         "--ledger",
-        help="Override the default paper ledger location (~/.alphalens/paper_ledger.db).",
+        help=_LEDGER_HELP,
     ),
     use_test_account: bool = typer.Option(
         False,
@@ -182,7 +187,7 @@ def reconcile(
     ledger_path: Path | None = typer.Option(
         None,
         "--ledger",
-        help="Override the default paper ledger location (~/.alphalens/paper_ledger.db).",
+        help=_LEDGER_HELP,
     ),
     use_test_account: bool = typer.Option(
         False,
