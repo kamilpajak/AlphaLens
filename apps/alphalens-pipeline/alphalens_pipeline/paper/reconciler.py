@@ -96,6 +96,7 @@ class ReconcileReport:
     n_exits_attached: int
     n_outcomes_written: int
     n_time_stops_fired: int
+    n_entries_ttl_canceled: int  # entry-TTL sweep — see _sweep_expired_entries
     gross_ratio: float
     gross_warning_emitted: bool
     outcomes: tuple[OrderReconcileOutcome, ...]
@@ -187,6 +188,91 @@ def _process_one_order(
     )
 
 
+def _sweep_expired_entries(
+    conn: sqlite3.Connection,
+    *,
+    alpaca_client: Any,
+    account: str,
+    observed_at: dt.datetime,
+) -> int:
+    """Cancel ENTRY orders on plans whose ``order_ttl_days`` window elapsed.
+
+    For every PLANNED row scoped to ``account`` with no plan_outcome yet,
+    compute the integer-day delta between ``planned_at`` and ``observed_at``.
+    Once the delta meets or exceeds the per-plan ``order_ttl_days`` budget,
+    request Alpaca to cancel every ENTRY order on the plan still in a
+    non-terminal local state (SUBMITTED / PARTIALLY_FILLED).
+
+    The cancel REQUEST is fire-and-forget — local order.status flips on the
+    NEXT reconcile poll when Alpaca reports the canonical 'canceled' state.
+    This intentional split means the existing per-order reconciler loop +
+    ``process_plan_exit`` chain absorb the transition naturally: a plan
+    with zero fills lands on UNFILLED, a plan with partial fills lands on
+    ATTACHED (TP+SL sized to the partial position). No new exit_kind is
+    introduced — UNFILLED already carries the right semantic ("entry
+    settled without enough fills to manage").
+
+    Account scoping is mandatory: a MAIN-account reconciler pass MUST NOT
+    cancel TEST-account UUIDs (would 404 against the wrong client and the
+    cross-pollute side-effect would silently corrupt the test sandbox).
+
+    Returns the count of cancel requests Alpaca acknowledged. SDK failures
+    are warning-logged and the sweep continues so a single bad UUID does
+    not abort handling of the rest of the basket on the same cycle.
+    """
+    cur = conn.execute(
+        """SELECT p.plan_id, p.planned_at, p.order_ttl_days
+           FROM plans p
+           LEFT JOIN plan_outcomes po ON po.plan_id = p.plan_id
+           WHERE p.status = 'PLANNED' AND po.outcome_id IS NULL
+             AND p.account = ?""",
+        (account,),
+    )
+    n_canceled = 0
+    for row in cur.fetchall():
+        plan_id = int(row["plan_id"])
+        planned_at = dt.datetime.fromisoformat(row["planned_at"])
+        # SQLite has no tz; align with the rest of the harness (cf. the
+        # exit_manager._first_fill_at_for_plan helper) and coerce naive
+        # writes to UTC so the date-arithmetic does not TypeError.
+        if planned_at.tzinfo is None:
+            planned_at = planned_at.replace(tzinfo=dt.UTC)
+        ttl_days = int(row["order_ttl_days"])
+        # Calendar-day delta (not wall-clock days) so a plan submitted at
+        # 23:50 UTC and observed at 00:10 UTC the next day counts as 1 day.
+        # Mirrors how an operator reasons about "the brief is 10 days old".
+        days_since = (observed_at.date() - planned_at.date()).days
+        if days_since < ttl_days:
+            continue
+        entry_cur = conn.execute(
+            """SELECT alpaca_order_id FROM orders
+               WHERE plan_id = ? AND order_kind = 'ENTRY'
+                 AND status IN ('SUBMITTED', 'PARTIALLY_FILLED')""",
+            (plan_id,),
+        )
+        for entry_row in entry_cur.fetchall():
+            alpaca_id = entry_row["alpaca_order_id"]
+            try:
+                alpaca_client.cancel_order(alpaca_id)
+            except Exception as exc:
+                logger.warning(
+                    "ttl-sweep cancel failed alpaca=%s plan_id=%d: %s; will retry next cycle",
+                    alpaca_id,
+                    plan_id,
+                    exc,
+                )
+                continue
+            n_canceled += 1
+            logger.info(
+                "ttl-sweep cancel alpaca=%s plan_id=%d days_since=%d ttl=%d",
+                alpaca_id,
+                plan_id,
+                days_since,
+                ttl_days,
+            )
+    return n_canceled
+
+
 def reconcile_orders(
     *,
     ledger_path: Path,
@@ -214,6 +300,23 @@ def reconcile_orders(
     plans_touched: set[int] = set()
 
     with open_ledger(ledger_path) as conn:
+        # Entry-TTL sweep runs FIRST so any Alpaca cancel-acks Alpaca
+        # processes synchronously are observed by the per-order loop below
+        # in the SAME reconcile cycle (compresses TTL-cancel → ledger
+        # CANCELED → exit_manager UNFILLED into one pass instead of three).
+        # Slow Alpaca processing is fine too — the per-order loop just sees
+        # SUBMITTED for one more cycle, the next cycle catches it. Note
+        # that the same order may appear in BOTH the sweep (cancel sent to
+        # Alpaca) and the per-order loop (status re-polled) within one
+        # cycle; this is expected, not redundant — the per-order poll is
+        # what transitions ``orders.status`` to CANCELED once Alpaca acks.
+        n_entries_ttl_canceled = _sweep_expired_entries(
+            conn,
+            alpaca_client=alpaca_client,
+            account=account,
+            observed_at=observed_at,
+        )
+
         open_rows = fetch_open_orders(conn, account=account)
         for ledger_row in open_rows:
             alpaca_order_id = ledger_row["alpaca_order_id"]
@@ -286,13 +389,14 @@ def reconcile_orders(
 
     logger.info(
         "paper reconcile: %d orders checked, %d transitioned, %d fills appended, "
-        "%d exits attached, %d outcomes written, %d time-stops, gross=%.2f",
+        "%d exits attached, %d outcomes written, %d time-stops, %d ttl-cancels, gross=%.2f",
         len(outcomes),
         transitioned,
         appended,
         n_attached,
         n_outcomes,
         n_time_stops,
+        n_entries_ttl_canceled,
         gross_ratio,
     )
     return ReconcileReport(
@@ -302,6 +406,7 @@ def reconcile_orders(
         n_exits_attached=n_attached,
         n_outcomes_written=n_outcomes,
         n_time_stops_fired=n_time_stops,
+        n_entries_ttl_canceled=n_entries_ttl_canceled,
         gross_ratio=gross_ratio,
         gross_warning_emitted=gross_warning,
         outcomes=tuple(outcomes),
@@ -313,3 +418,12 @@ __all__ = [
     "ReconcileReport",
     "reconcile_orders",
 ]
+
+
+# Internal hook for the future R3 follow-up (cancel unfilled entries on TP1):
+# the same "cancel ENTRY orders for a given plan_id" code path lives inside
+# ``_sweep_expired_entries``. When R3 ships, the TP1-fill handler in
+# exit_manager will need an analogous cancel-loop scoped by plan_id rather
+# than by TTL expiry — promote the inner cancel block to a shared helper at
+# that point and call it from both spots. Not extracted today because YAGNI
+# until R3 actually starts.
