@@ -167,6 +167,50 @@ class TestShadowReasons(unittest.TestCase):
         self._plan_with([c], open_set={"NVDA"})
         self.assertIn("same_ticker_open", self._shadow_reasons())
 
+    def test_duplicate_ticker_within_same_brief_shadowed_cleanly(self):
+        """Real-world case: same ticker appears under TWO different themes in
+        one day's brief (e.g. NVDA in 'ai-infra' AND 'datacenter-buildout').
+        The ``UNIQUE(brief_date, ticker)`` constraint would crash the run
+        with IntegrityError on the second occurrence — instead the second
+        one must shadow-log cleanly so the rest of the brief still planss."""
+        nvda_ai = _make_candidate(ticker="NVDA", theme="ai-infra", setup=_setup_dict())
+        nvda_dc = _make_candidate(ticker="NVDA", theme="datacenter-buildout", setup=_setup_dict())
+        third = _make_candidate(ticker="AVGO", theme="ai-infra", setup=_setup_dict())
+
+        report = self._plan_with([nvda_ai, nvda_dc, third])
+
+        # First NVDA + AVGO planned; second NVDA shadowed cleanly.
+        self.assertEqual(report.n_planned, 2)
+        self.assertEqual(report.n_shadowed, 1)
+        self.assertIn("duplicate_ticker_in_brief", self._shadow_reasons())
+
+        # Order matters: only the FIRST occurrence got a PLANNED row.
+        outcomes_by_index = list(report.outcomes)
+        self.assertEqual(outcomes_by_index[0].status, "PLANNED")  # NVDA / ai-infra
+        self.assertEqual(outcomes_by_index[1].status, "SHADOWED")  # NVDA / datacenter
+        self.assertEqual(outcomes_by_index[1].reason, "duplicate_ticker_in_brief")
+        self.assertEqual(outcomes_by_index[2].status, "PLANNED")  # AVGO
+
+    def test_duplicate_ticker_when_first_was_shadowed_still_plans_next_if_unique(self):
+        """A duplicate must not be counted as 'already planned' if the FIRST
+        occurrence shadowed (e.g. not_verified). Otherwise we'd lose the
+        second occurrence to dedup when there's nothing to dedup against."""
+        # First NVDA: not verified → shadow
+        nvda_bad = _make_candidate(
+            ticker="NVDA", theme="ai-infra", verified=False, setup=_setup_dict()
+        )
+        # Second NVDA: verified + plannable → should PLAN (first was shadowed,
+        # not planned, so set membership skips it)
+        nvda_good = _make_candidate(
+            ticker="NVDA", theme="datacenter-buildout", verified=True, setup=_setup_dict()
+        )
+
+        report = self._plan_with([nvda_bad, nvda_good])
+        self.assertEqual(report.n_planned, 1)
+        self.assertEqual(report.n_shadowed, 1)
+        self.assertIn("not_verified", self._shadow_reasons())
+        self.assertNotIn("duplicate_ticker_in_brief", self._shadow_reasons())
+
     def test_gross_cap_block(self):
         """Gross cap binds when cumulative planned gross would exceed
         ``GROSS_SAFETY_FRAC × equity``. Forces the bind by monkey-patching

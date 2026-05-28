@@ -302,6 +302,16 @@ def plan_for_date(
     omitted, the planner falls back to ``fallback_equity`` and treats every
     ticker as having no open position (offline mode). Tests inject custom
     :class:`PositionChecker` / :class:`EquityProvider` via the explicit args.
+
+    Single-writer assumption: the SQLite ledger uses WAL journal mode, which
+    allows concurrent readers but serialises writers. A second writer
+    (e.g. an operator running ``alphalens paper plan`` while the daily cron
+    is mid-execution, or PR 3's reconciler firing concurrently) will see
+    ``database is locked`` errors. The planner is invoked sequentially today
+    — daily systemd timer + occasional manual operator runs — so the
+    assumption holds in practice. Before PR 3 adds the reconciler cron, add
+    an advisory file lock (``fcntl.flock`` on a sibling ``.lock`` file) so
+    the two write surfaces cannot race.
     """
     candidates_list = (
         list(candidates) if candidates is not None else load_brief(brief_date, briefs_dir)
@@ -316,12 +326,33 @@ def plan_for_date(
 
     outcomes: list[PlanOutcome] = []
     cumulative_gross = 0.0
+    # Track tickers that already produced a PLANNED row in THIS run. The
+    # ``UNIQUE(brief_date, ticker)`` constraint on ``plans`` would crash the
+    # whole batch with IntegrityError on the second occurrence of a ticker
+    # within one brief (same ticker can appear under different themes —
+    # e.g. NVDA in 'ai-infra' AND 'datacenter-buildout'). Shadow-log the
+    # duplicate cleanly and continue processing the remaining candidates.
+    planned_tickers_in_run: set[str] = set()
 
     with open_ledger(ledger_path) as conn:
         if force:
             _delete_existing_for_date(conn, brief_date)
 
         for candidate in candidates_list:
+            if candidate.ticker in planned_tickers_in_run:
+                outcomes.append(
+                    _shadow(
+                        conn,
+                        candidate=candidate,
+                        reason="duplicate_ticker_in_brief",
+                        details={
+                            "theme": candidate.theme,
+                            "note": "already planned earlier in this brief run under a different theme",
+                        },
+                    )
+                )
+                continue
+
             setup_plan, unplannable_reason = _try_compute(candidate, paper_equity)
             outcome, cumulative_gross = _process_candidate(
                 conn,
@@ -334,6 +365,8 @@ def plan_for_date(
                 planned_at=planned_at,
             )
             outcomes.append(outcome)
+            if outcome.status == "PLANNED":
+                planned_tickers_in_run.add(candidate.ticker)
 
     n_planned = sum(1 for o in outcomes if o.status == "PLANNED")
     n_shadowed = sum(1 for o in outcomes if o.status == "SHADOWED")
