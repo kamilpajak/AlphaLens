@@ -188,3 +188,46 @@ class TestManagementCommand:
         _write_parquet(tmp_path, "2026-05-22", _sample_rows())
         call_command("rebuild_briefs_cache", "--briefs-dir", str(tmp_path))
         assert Brief.objects.count() == 2
+
+
+class TestDefaultBriefsDirEnvOverride:
+    """Regression for the destructive container-vs-host path mismatch.
+
+    The Django container runs as `django` (HOME=/home/django). The legacy
+    ``DEFAULT_BRIEFS_DIR = Path.home() / .alphalens / thematic_briefs``
+    resolved inside the container to ``/home/django/.alphalens/...`` which
+    does not exist, so ``rebuild_briefs_cache --force`` deleted every date
+    in the DB ("rebuilt=0 deleted=N"). The compose mount target is
+    ``/var/lib/alphalens/thematic_briefs`` (see deploy/docker/django-prod/
+    docker-compose.yaml). The env var ``ALPHALENS_BRIEFS_DIR`` lets compose
+    push the right container-side path so the default matches the mount.
+    """
+
+    def test_env_var_overrides_default(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ALPHALENS_BRIEFS_DIR", str(tmp_path))
+        # Re-import to pick up the env at module-init time.
+        import importlib
+
+        from briefs.ingest import parquet as parquet_mod
+
+        importlib.reload(parquet_mod)
+        try:
+            assert parquet_mod.DEFAULT_BRIEFS_DIR == tmp_path
+        finally:
+            # Restore the original module-level default for other tests.
+            monkeypatch.delenv("ALPHALENS_BRIEFS_DIR", raising=False)
+            importlib.reload(parquet_mod)
+
+    def test_falls_back_to_home_when_env_unset(self, monkeypatch):
+        monkeypatch.delenv("ALPHALENS_BRIEFS_DIR", raising=False)
+        import importlib
+
+        from briefs.ingest import parquet as parquet_mod
+
+        importlib.reload(parquet_mod)
+        try:
+            assert parquet_mod.DEFAULT_BRIEFS_DIR == Path.home() / ".alphalens" / "thematic_briefs"
+        finally:
+            # Mirrors the override test — reload after monkeypatch teardown
+            # so any subsequent test sees the real-env DEFAULT_BRIEFS_DIR.
+            importlib.reload(parquet_mod)
