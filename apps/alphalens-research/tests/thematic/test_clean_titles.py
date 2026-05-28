@@ -72,11 +72,22 @@ class TestCleanTitlesInParquetDir(unittest.TestCase):
             mtime_before = (tmpd / "dirty.parquet").stat().st_mtime_ns
             result = clean_titles_in_parquet_dir(tmpd, dry_run=True)
             self.assertEqual(result.total_rows_cleaned, 1)
-            self.assertEqual(result.files_touched, 0)
-            # File unchanged on disk.
+            # dry-run mirrors real-run shape — files_touched reflects the
+            # set that WOULD be rewritten, so operator output matches one-for-one.
+            self.assertEqual(result.files_touched, 1)
+            # No actual write happened — mtime + contents unchanged.
             self.assertEqual((tmpd / "dirty.parquet").stat().st_mtime_ns, mtime_before)
             still_dirty = pd.read_parquet(tmpd / "dirty.parquet")
             self.assertEqual(list(still_dirty["source_event_title"]), ["weekend , citing"])
+            # No leftover temp files from the atomic-write path.
+            self.assertEqual(list(tmpd.glob(".dirty.parquet.*")), [])
+
+    def test_atomic_write_leaves_no_temp_files_on_success(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmpd = Path(tmp)
+            _write_parquet(tmpd / "x.parquet", ["weekend , citing"])
+            clean_titles_in_parquet_dir(tmpd)
+            self.assertEqual(list(tmpd.glob(".*.parquet.*")), [])
 
     def test_handles_null_titles_without_crashing(self) -> None:
         # Field is blank=True on the Django model and arrives as None for some legacy rows.

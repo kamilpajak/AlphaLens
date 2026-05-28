@@ -17,6 +17,8 @@ output (no GDELT padding pathology).
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,20 +51,44 @@ def _clean_series(s: pd.Series) -> tuple[pd.Series, int]:
     return cleaned, int(changed.sum())
 
 
+def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
+    """Write parquet via temp-file + os.replace so a crash mid-write can't
+    leave a half-written file in place of the source-of-truth original."""
+    # delete=False + manual replace: NamedTemporaryFile would unlink on close.
+    # Keep the temp file alongside the target so os.replace is intra-filesystem.
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        df.to_parquet(tmp_path)
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
 def clean_titles_in_parquet_dir(briefs_dir: Path, *, dry_run: bool = False) -> CleanResult:
     """Walk every ``*.parquet`` under ``briefs_dir`` and clean ``source_event_title``.
 
     Files that do not carry the column are skipped (older snapshots pre-date
     it). Files where no row actually changes are NOT rewritten — keeps mtime
-    intact so the ``rebuild_briefs_cache`` mtime gate stays accurate. With
-    ``dry_run=True`` the function counts what it would clean but writes
-    nothing. Idempotent: re-running on a cleaned tree is a no-op.
+    intact so the ``rebuild_briefs_cache`` mtime gate stays accurate. Writes
+    go through a temp file + ``os.replace`` so a crash mid-write can't
+    corrupt the source-of-truth parquet. A single unreadable file is logged
+    and skipped rather than aborting the whole sweep — the operator can
+    inspect the offender separately. With ``dry_run=True`` the function
+    counts what it would clean but writes nothing. Idempotent: re-running
+    on a cleaned tree is a no-op.
     """
     per_file: list[tuple[Path, int]] = []
     total = 0
     touched = 0
     for path in sorted(briefs_dir.glob("*.parquet")):
-        df = pd.read_parquet(path)
+        try:
+            df = pd.read_parquet(path)
+        except Exception as exc:  # pragma: no cover — defensive against corrupt files
+            logger.error("skip %s — unreadable parquet: %s", path.name, exc)
+            continue
         if TARGET_COLUMN not in df.columns:
             logger.info("skip %s — no %s column", path.name, TARGET_COLUMN)
             continue
@@ -71,9 +97,13 @@ def clean_titles_in_parquet_dir(briefs_dir: Path, *, dry_run: bool = False) -> C
         total += delta
         if delta == 0:
             continue
-        if not dry_run:
+        if dry_run:
+            # Reflect the "would touch" set in the summary so dry-run output
+            # matches the real-run output shape one-for-one.
+            touched += 1
+        else:
             df[TARGET_COLUMN] = cleaned
-            df.to_parquet(path)
+            _atomic_write_parquet(df, path)
             touched += 1
         logger.info(
             "%s %s: cleaned %d row(s)", "would clean" if dry_run else "cleaned", path.name, delta
