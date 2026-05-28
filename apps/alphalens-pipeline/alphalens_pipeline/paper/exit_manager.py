@@ -349,11 +349,9 @@ def _all_exits_terminal(snapshot: _PlanSnapshot) -> bool:
 
 
 def _cancel_open_exits(
-    conn: sqlite3.Connection,
     *,
     snapshot: _PlanSnapshot,
     alpaca_client: Any,
-    observed_at: dt.datetime,
 ) -> int:
     """Cancel every still-open exit (TP / SL / TIME_STOP) for the plan.
     Used both when an exit triggers (cancel the others) and on time-stop.
@@ -454,9 +452,7 @@ def _submit_time_stop(
     too-large remaining and submit a market-sell larger than our
     inventory, flipping the paper account short).
     """
-    _cancel_open_exits(
-        conn, snapshot=snapshot, alpaca_client=alpaca_client, observed_at=observed_at
-    )
+    _cancel_open_exits(snapshot=snapshot, alpaca_client=alpaca_client)
 
     try:
         position = alpaca_client.get_position(snapshot.ticker)
@@ -570,9 +566,7 @@ def process_plan_exit(
         o["order_kind"] == "SL" and int(o["filled_qty_observed"] or 0) > 0 for o in snap.exit_orders
     )
     if sl_fired:
-        _cancel_open_exits(
-            conn, snapshot=snap, alpaca_client=alpaca_client, observed_at=observed_at
-        )
+        _cancel_open_exits(snapshot=snap, alpaca_client=alpaca_client)
         snap = _snapshot(conn, plan_id) or snap
 
     if not _all_exits_terminal(snap):

@@ -89,7 +89,10 @@ class _NullPositionChecker:
     """Dry-run / no-Alpaca fallback — never reports a position open. Used
     by ``--no-alpaca`` to enable offline planning against the same brief."""
 
-    def has_open_position(self, symbol: str) -> bool:
+    # ``symbol`` is required by the :class:`PositionChecker` protocol but
+    # the null implementation never reads it — it unconditionally reports
+    # "no position" so offline planning treats every ticker as fresh.
+    def has_open_position(self, symbol: str) -> bool:  # NOSONAR
         return False
 
 

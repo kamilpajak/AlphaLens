@@ -288,7 +288,13 @@ class PlanRow:
     gross_notional: float
 
 
-def insert_planned(
+# NOSONAR S107: the kwargs-only signature mirrors the ``plans`` schema
+# 1:1 by design — each column maps to one named parameter so a schema
+# bump (v2 / v3 / v4 added rows of columns) is a mechanical add here
+# without ambiguity. Refactoring into a dataclass arg would push the
+# same column-count into the dataclass surface for no DX win and would
+# break every callsite for cosmetic parameter-count compliance.
+def insert_planned(  # NOSONAR S107
     conn: sqlite3.Connection,
     *,
     brief_date: dt.date,
@@ -463,7 +469,9 @@ def fetch_shadow_for_date(conn: sqlite3.Connection, brief_date: dt.date) -> list
 # ----- v3: orders / fills / outcomes helpers (submitter + reconciler) -----
 
 
-def insert_order(
+# NOSONAR S107: parameter count mirrors ``orders`` schema 1:1 — see
+# ``insert_planned`` rationale above.
+def insert_order(  # NOSONAR S107
     conn: sqlite3.Connection,
     *,
     plan_id: int,
