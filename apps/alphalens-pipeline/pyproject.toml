@@ -31,6 +31,11 @@ dependencies = [
     # brief_trade_setup (PR #273 design memo). Paper-only; live URL is
     # structurally rejected in alphalens_pipeline.data.alt_data.alpaca_client.
     "alpaca-py>=0.43.4",
+    # XNYS trading calendar (holidays + half-days) for paper-trade submission
+    # gating + TTL/time-stop arithmetic in trading-day units. Successor to
+    # the Quantopian trading_calendars project, maintained under gerrymanoim.
+    # Modular: importing only the XNYS calendar loads ~1 MB of holiday data.
+    "exchange-calendars>=4.5",
     # Runtime DataFrame schema validation at pipeline boundaries.
     # Shipped as a regular dep (not dev) because schemas live in pipeline.data
     # and are imported by attribution/backtest entry points at runtime.
