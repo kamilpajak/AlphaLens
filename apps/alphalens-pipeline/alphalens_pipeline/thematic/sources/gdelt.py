@@ -43,12 +43,18 @@ DEFAULT_MAXRECORDS = 100
 DEFAULT_INTER_QUERY_SLEEP_SEC = 10.0
 
 # GDELT reconstructs titles from tokenized text, leaving spaces around
-# punctuation (~25% of rows): "Alphabet ( Google )", "gas prices . ". The
-# downstream pipeline + UI render the title verbatim, so normalise at ingest.
-# Patterns match a SINGLE literal space (whitespace runs are collapsed first
-# via str.split), so there is no quantifier to backtrack — sidesteps ReDoS.
-_SPACE_BEFORE_PUNCT = re.compile(r" ([.,;:!?)\]}])")
+# punctuation (~25% of rows): "Alphabet ( Google )", "gas prices . ",
+# "D - Wave", "33 %". The downstream pipeline + UI render the title verbatim,
+# so normalise at ingest. Patterns match a SINGLE literal space (whitespace
+# runs are collapsed first via str.split), so there is no quantifier to
+# backtrack — sidesteps ReDoS.
+_SPACE_BEFORE_PUNCT = re.compile(r" ([.,;:!?)\]}%])")
 _SPACE_AFTER_OPENER = re.compile(r"([(\[{]) ")
+# Compound-word hyphen: "D - Wave" → "D-Wave", "Coca - Cola" → "Coca-Cola",
+# "2026 - 05 - 27" → "2026-05-27". Only collapses between two word characters
+# (\w = [A-Za-z0-9_]) joined by a single ASCII hyphen — sentence em-dash
+# separators use U+2014 ("—"), which doesn't match and stays untouched.
+_SPACE_AROUND_HYPHEN = re.compile(r"(\w) - (\w)")
 
 
 def clean_title(title: str) -> str:
@@ -61,6 +67,16 @@ def clean_title(title: str) -> str:
     title = " ".join(title.split())  # collapse all whitespace runs + trim
     title = _SPACE_BEFORE_PUNCT.sub(r"\1", title)
     title = _SPACE_AFTER_OPENER.sub(r"\1", title)
+    # Two passes: re.sub finds all non-overlapping matches left-to-right,
+    # consuming the second \w of each match. For a single-character chain
+    # like "A - B - C" the first pass produces "A-B - C" (B is consumed
+    # before " - C" can be matched); a second pass then catches "B - C".
+    # ISO-style chains like "2026 - 05 - 27" already converge in one pass
+    # because the consumed \w sits before the next " - " in the string.
+    # Two passes are provably sufficient for chains of any length: pass 1
+    # collapses even-indexed pairs, pass 2 the remaining odd-indexed pairs.
+    title = _SPACE_AROUND_HYPHEN.sub(r"\1-\2", title)
+    title = _SPACE_AROUND_HYPHEN.sub(r"\1-\2", title)
     return title
 
 
