@@ -267,12 +267,25 @@ docker compose -f deploy/docker/docker-compose.yml run --rm pipeline \
 The unit passes the operator's UID/GID to compose via `%U`/`%G` so files
 written into `~/.alphalens/` and `web-data/` are jacoren-owned, not root.
 
-After a successful pipeline run, `ExecStartPost=` invokes
-`docker compose --profile maintenance run --rm rebuild-cache` against the
-Django stack so the freshly written parquet files are synced into the
-Postgres-backed briefs cache. ExecStartPost fires only on ExecStart
-success, so a failed pipeline leaves the API untouched and the
-dashboard keeps serving the previous day's snapshot.
+After a successful pipeline run, two `ExecStartPost=` slots fire in
+order:
+
+1. **Gap-detection on the news cache (PR-E, epic #295 Risk A).**
+   `alphalens thematic verify-cache --days 7 --alert` (run inside the
+   same `alphalens-pipeline` image, bind-mounted on `~/.alphalens`)
+   confirms that every parquet for the past 7 days is present and
+   readable. Missing days dispatch a Telegram alert via the
+   inherited `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` env vars and
+   exit 1, which halts the systemd chain.
+2. **Django cache rebuild.** `docker compose --profile maintenance
+   run --rm rebuild-cache` syncs the freshly written parquet files
+   into the Postgres-backed briefs cache.
+
+ExecStartPost runs in declared order and a failure on any one stops
+the rest — so a corrupt or missing parquet halts the chain rather
+than silently refreshing Django from incomplete data. The dashboard
+then keeps serving the previous day's snapshot until the operator
+investigates.
 
 ### Install
 

@@ -159,15 +159,18 @@ Sunday's + Monday's briefs through the 30-day lookback.
 
 Known limitations (not in scope for PR-A; planned follow-ups):
 
-* **No gap-detection on the ingest cache (HIGH).** If Saturday's
-  systemd run fails silently, Monday's catalyst_resolver iterates
-  only the files that exist and no alert fires. Same failure mode
-  as PR #259's stale pipeline image (a day of GDELT-padded titles
-  shipped before anyone noticed). **Planned PR-E:** new
-  `alphalens thematic verify-cache --days N` command, wired as
-  `ExecStartPost=` of `alphalens-thematic-build.service` with
-  Telegram alert on missing-day detection. Distinguish "no-news-day
-  (0-row parquet)" from "missing-day (no parquet at all)".
+* **No gap-detection on the ingest cache (HIGH). PR-E SHIPPED 2026-05-29.**
+  Same failure mode as PR #259's stale pipeline image (a day of
+  GDELT-padded titles shipped before anyone noticed). Shipped:
+  `alphalens thematic verify-cache --days N [--alert]` command +
+  `alphalens_pipeline.thematic.verify_cache` module. Wired as a
+  pipeline-image `ExecStartPost=` slot in
+  `alphalens-thematic-build.service` BEFORE the Django `rebuild-cache`
+  step — a missing-day digest halts the chain so partial data never
+  hits Django. Distinguishes "no-news-day (0-row parquet)" from
+  "missing-day (no parquet at all)" — only the latter alerts. Telegram
+  digest dispatched via the existing `TelegramHandler` when both
+  `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set.
 * **Cross-day dedup not run (LOW).** Tier 1 clustering operates
   per-day inside `news_ingest`; an article published Sat then
   re-syndicated Mon shows up twice in the 30-day lookback.
