@@ -27,6 +27,47 @@ paper_app = typer.Typer(
 # command signatures in lock-step on a single source of truth.
 _LEDGER_HELP = "Override the default paper ledger location (~/.alphalens/paper_ledger.db)."
 
+_ALLOW_CLOSED_HELP = (
+    "Bypass the XNYS market-closed guard (run even on weekends / US "
+    "public holidays). Default off — protects against stale-ladder gap "
+    "risk; see docs/research/paper_trading_non_trading_day_2026_05_29.md."
+)
+
+
+def _today_utc() -> dt.date:
+    """Wall-clock UTC date the market-closed guard reads.
+
+    Indirected so the tests can patch this single call site rather
+    than freezing the whole interpreter clock. Pure stdlib — no
+    pandas / exchange_calendars import on the hot path.
+    """
+    return dt.datetime.now(dt.UTC).date()
+
+
+def _emit_market_closed_message(action: str) -> None:
+    """Print + log the deferral message for ``action`` (\"submit\" /
+    \"reconcile\"), naming the next XNYS session open.
+
+    The message format is operator-facing — short, includes the
+    next-session anchor, and stays plain-English so non-quant readers
+    of the cron logs can parse it. Operator can re-run with
+    ``--allow-closed-market`` for ad-hoc work (manual reconcile, smoke).
+    """
+    # Lazy-import the calendar module so weekday submit (the common
+    # path) doesn't pay the ~50 ms exchange_calendars XNYS load on
+    # startup. Only the closed-day branch needs ``next_trading_open``.
+    from alphalens_pipeline.paper.calendar import next_trading_open
+
+    now_utc = dt.datetime.now(dt.UTC)
+    nxt = next_trading_open(now_utc)
+    msg = (
+        f"paper {action}: market closed today; deferring until next "
+        f"XNYS session open at {nxt.isoformat()} (pass --allow-closed-market "
+        f"to override)."
+    )
+    logger.info(msg)
+    typer.echo(msg)
+
 
 @paper_app.command("plan")
 def plan(
@@ -138,6 +179,11 @@ def submit(
             "the main paper account. For PR 3 live smoke testing."
         ),
     ),
+    allow_closed_market: bool = typer.Option(
+        False,
+        "--allow-closed-market",
+        help=_ALLOW_CLOSED_HELP,
+    ),
 ) -> None:
     """Submit entry-tier limit orders to Alpaca paper for every PLANNED
     candidate on ``brief_date`` that hasn't been submitted yet.
@@ -145,7 +191,22 @@ def submit(
     Idempotent at (plan_id, tier_index) — re-running after a partial
     submit (mid-batch crash, network blip) only pushes the tiers that
     don't already have an ENTRY row in ``orders``.
+
+    Market-closed guard: when run on a non-XNYS-session day (weekend or
+    US public holiday) the command logs a deferral message and exits 0
+    without contacting Alpaca. Pass ``--allow-closed-market`` to bypass
+    (useful for ad-hoc smoke tests). Rationale: queuing GTC limits over
+    a weekend exposes the ladder to opening-gap fills at stale Fri-close
+    anchors — see docs/research/paper_trading_non_trading_day_2026_05_29.md.
     """
+    # Lazy-import the calendar gate so weekday submit doesn't pay the
+    # ~50 ms exchange_calendars XNYS load on the hot path.
+    from alphalens_pipeline.paper.calendar import is_trading_day
+
+    if not allow_closed_market and not is_trading_day(_today_utc()):
+        _emit_market_closed_message("submit")
+        return
+
     from alphalens_pipeline.data.alt_data.alpaca_client import (
         get_default_alpaca_client,
     )
@@ -194,6 +255,11 @@ def reconcile(
         "--use-test-account",
         help="Route through ALPACA_TEST_* account (dev sandbox).",
     ),
+    allow_closed_market: bool = typer.Option(
+        False,
+        "--allow-closed-market",
+        help=_ALLOW_CLOSED_HELP,
+    ),
 ) -> None:
     """Reconcile every open ledger order against Alpaca paper.
 
@@ -203,7 +269,18 @@ def reconcile(
       - Append a fill row if Alpaca reports new filled_qty
 
     Idempotent: re-running on identical Alpaca state appends no fills.
+
+    Market-closed guard: same gating as ``submit`` — non-trading days
+    skip with exit 0 (no Alpaca state can have changed since the last
+    session close). Pass ``--allow-closed-market`` for ad-hoc operator
+    runs. See docs/research/paper_trading_non_trading_day_2026_05_29.md.
     """
+    from alphalens_pipeline.paper.calendar import is_trading_day
+
+    if not allow_closed_market and not is_trading_day(_today_utc()):
+        _emit_market_closed_message("reconcile")
+        return
+
     from alphalens_pipeline.data.alt_data.alpaca_client import (
         get_default_alpaca_client,
     )
