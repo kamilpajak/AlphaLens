@@ -25,7 +25,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["config*", "briefs*", "auth_cf*", "core*"]
+include = ["config*", "briefs*", "auth_cf*", "core*", "feedback*"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.dev"
