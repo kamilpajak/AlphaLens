@@ -111,6 +111,16 @@ def auth_start(request: HttpRequest) -> HttpResponse:
         allowed_hosts=_allowed_return_hosts(),
         require_https=True,
     ):
-        logger.warning("auth_start: rejected return_to=%r", return_to)
+        # `return_to` is user-controlled — never echo it verbatim into the
+        # log stream (Sonar S5145 / CWE-117 log forging). Truncate, escape
+        # non-printable + newline chars, and emit length so operators can
+        # still spot pattern abuse (e.g. waves of long URLs) without
+        # importing attacker input.
+        truncated = (return_to or "")[:80].encode("unicode_escape").decode("ascii")
+        logger.warning(
+            "auth_start: rejected invalid return_to (len=%d, head=%s)",
+            len(return_to or ""),
+            truncated,
+        )
         return HttpResponseBadRequest("invalid return_to")
     return HttpResponseRedirect(return_to)
