@@ -15,7 +15,6 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-from alphalens_pipeline.paper.constants import TIME_STOP_DAYS
 from alphalens_pipeline.paper.exit_manager import process_plan_exit
 from alphalens_pipeline.paper.ledger import (
     fetch_orders_for_plan,
@@ -25,6 +24,17 @@ from alphalens_pipeline.paper.ledger import (
     open_ledger,
     update_order_status,
 )
+
+# Fixed XNYS anchors for time-stop tests. Fri 2026-01-02 (normal Friday
+# session) → Fri 2026-05-29 spans ~100 XNYS trading days (5 months minus
+# MLK / Presidents / Good Friday / Memorial Day) — comfortably past
+# TIME_STOP_DAYS=42. The PR-B switch to trading-day arithmetic made the
+# old ``now - timedelta(days=TIME_STOP_DAYS + 5)`` pattern fragile because
+# that converted to ~33 trading days of elapsed sessions (TIME_STOP_DAYS
+# x 7/5 + holiday density), no longer crossing the boundary. Fixed
+# anchors + explicit ``observed_at`` give deterministic semantics.
+_FIRST_FILL_AT_FIXED = dt.datetime(2026, 1, 2, 16, 0, 0, tzinfo=dt.UTC)
+_OBSERVED_AT_FIXED = dt.datetime(2026, 5, 29, 22, 0, 0, tzinfo=dt.UTC)
 
 
 @dataclass
@@ -430,7 +440,7 @@ class TestZenRegressions(_ExitTestBase):
             filled_qty=27,
             filled_price=100.0,
         )
-        ancient = dt.datetime.now(dt.UTC) - dt.timedelta(days=TIME_STOP_DAYS + 5)
+        ancient = _FIRST_FILL_AT_FIXED
         with open_ledger(self.ledger) as conn:
             conn.execute(
                 "UPDATE fills SET filled_at = ? WHERE order_id IN "
@@ -543,7 +553,7 @@ class TestZenRegressions(_ExitTestBase):
             filled_qty=27,
             filled_price=100.0,
         )
-        ancient = dt.datetime.now(dt.UTC) - dt.timedelta(days=TIME_STOP_DAYS + 5)
+        ancient = _FIRST_FILL_AT_FIXED
         with open_ledger(self.ledger) as conn:
             conn.execute(
                 "UPDATE fills SET filled_at = ? WHERE order_id IN "
@@ -579,7 +589,7 @@ class TestTimeStop(_ExitTestBase):
             filled_price=100.0,
         )
         # Backdate the entry fill so first_fill_at is older than TIME_STOP_DAYS.
-        ancient = dt.datetime.now(dt.UTC) - dt.timedelta(days=TIME_STOP_DAYS + 5)
+        ancient = _FIRST_FILL_AT_FIXED
         with open_ledger(self.ledger) as conn:
             conn.execute(
                 "UPDATE fills SET filled_at = ? WHERE order_id IN "
