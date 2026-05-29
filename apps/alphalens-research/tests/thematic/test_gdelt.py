@@ -338,6 +338,44 @@ class TestGdeltTitleCleaning(unittest.TestCase):
             "A title (with parens). Final",
         )
 
+    def test_drops_space_before_percent(self):
+        # GDELT splits "33%" into "33 %"; no legitimate headline has a space
+        # before percent (different from currency/units which keep the space).
+        self.assertEqual(
+            gdelt.clean_title("Stock rockets 33 % on $100M backing"),
+            "Stock rockets 33% on $100M backing",
+        )
+
+    def test_collapses_hyphen_inside_compound_word(self):
+        # GDELT tokenizes compound names like "D-Wave" into "D - Wave". Real
+        # text never has a space-padded hyphen between alphanumeric tokens
+        # (sentence em-dashes are typed as "—" or written with spaces around
+        # a real em-dash, NOT a hyphen).
+        self.assertEqual(
+            gdelt.clean_title("D - Wave (QBTS) Rockets 33 % as US Govt Places $100M Backing"),
+            "D-Wave (QBTS) Rockets 33% as US Govt Places $100M Backing",
+        )
+
+    def test_collapses_hyphen_in_brand_name(self):
+        self.assertEqual(
+            gdelt.clean_title("Coca - Cola tops earnings estimates"),
+            "Coca-Cola tops earnings estimates",
+        )
+
+    def test_collapses_hyphen_in_iso_date(self):
+        self.assertEqual(
+            gdelt.clean_title("Filing dated 2026 - 05 - 27 hits EDGAR"),
+            "Filing dated 2026-05-27 hits EDGAR",
+        )
+
+    def test_preserves_em_dash_separator(self):
+        # An em-dash separator (U+2014) between sentence clauses is NOT a
+        # GDELT artefact and must survive untouched.
+        self.assertEqual(
+            gdelt.clean_title("Apple unveils M5 — analysts cheer"),
+            "Apple unveils M5 — analysts cheer",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
