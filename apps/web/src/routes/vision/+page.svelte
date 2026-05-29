@@ -4,6 +4,9 @@
 
 	let { data }: { data: PageData } = $props();
 
+	let contentEl = $state<HTMLElement | null>(null);
+	let mermaidRendered = $state(false);
+
 	// Build a flat list of (level, text, slug) tuples for the TOC sidebar
 	// before handing the markdown to `marked` for full-document rendering.
 	// Slug rule: lowercase, alphanumerics + spaces collapse to '-' — matches
@@ -64,6 +67,52 @@
 		el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 		activeSlug = slug;
 	}
+
+	// Mermaid rendering. The package is ~2MB minified, so we dynamic-import
+	// it on demand once the article DOM is populated — no cost on routes
+	// that don't use diagrams. Marked emits ```mermaid blocks as
+	// <pre><code class="language-mermaid">SOURCE</code></pre>; we rewrite
+	// those into <div class="mermaid">SOURCE</div> (mermaid.run() picks up
+	// elements with that class) then invoke run() once.
+	$effect(() => {
+		if (!contentEl) return;
+		if (mermaidRendered) return;
+		if (typeof window === 'undefined') return;
+		const codes = contentEl.querySelectorAll('code.language-mermaid');
+		if (codes.length === 0) return;
+		mermaidRendered = true;
+		void (async () => {
+			const { default: mermaid } = await import('mermaid');
+			mermaid.initialize({
+				startOnLoad: false,
+				theme: 'dark',
+				securityLevel: 'loose',
+				themeVariables: {
+					primaryColor: '#11141b',
+					primaryTextColor: '#e4e7ee',
+					primaryBorderColor: '#2b3142',
+					lineColor: '#7d8498',
+					tertiaryColor: '#06070a',
+					fontFamily: 'JetBrains Mono Variable, monospace',
+					fontSize: '13px'
+				}
+			});
+			for (const code of Array.from(codes)) {
+				const pre = code.parentElement;
+				if (!pre || pre.tagName !== 'PRE') continue;
+				const source = code.textContent ?? '';
+				const div = document.createElement('div');
+				div.className = 'mermaid';
+				div.textContent = source;
+				pre.replaceWith(div);
+			}
+			try {
+				await mermaid.run({ querySelector: 'div.mermaid' });
+			} catch (err) {
+				console.error('mermaid render failed', err);
+			}
+		})();
+	});
 </script>
 
 <svelte:head>
@@ -131,6 +180,7 @@
 				prose-hr:border-grid"
 			style="animation-delay: 0.1s"
 			data-testid="vision-content"
+			bind:this={contentEl}
 		>
 			{@html html}
 		</article>

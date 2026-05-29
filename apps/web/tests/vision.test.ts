@@ -56,4 +56,18 @@ test.describe('vision route', () => {
 		await page.goto('/');
 		await expect(page.locator('header nav a[href="/vision"]')).toBeVisible();
 	});
+
+	test('mermaid blocks render as SVG diagrams', async ({ page }) => {
+		await page.goto('/vision');
+		// The doc has two mermaid blocks (§3 feedback loop + §4 timeline).
+		// Mermaid replaces each <pre><code class="language-mermaid"> with a
+		// <div class="mermaid"> that wraps an SVG once render completes.
+		// Wait for at least one SVG to appear inside a mermaid container.
+		await expect(page.locator('article div.mermaid svg').first()).toBeVisible({ timeout: 10_000 });
+		// Both diagrams should render — assert ≥2 SVGs.
+		const svgCount = await page.locator('article div.mermaid svg').count();
+		expect(svgCount).toBeGreaterThanOrEqual(2);
+		// Source pre/code blocks for mermaid should be gone (replaced).
+		await expect(page.locator('article code.language-mermaid')).toHaveCount(0);
+	});
 });

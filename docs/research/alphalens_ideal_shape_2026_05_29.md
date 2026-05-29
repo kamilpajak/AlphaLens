@@ -39,49 +39,25 @@ Buy-side narzędzie decision-support dla **dyskrecjonariusza** + małej grupy Wh
 
 ## 3. The feedback loop (heart of L3 — czemu istnieje feedback ledger)
 
-```
-┌─────────────────────────┐
-│ L2 daily brief          │
-│ candidates surfaced     │
-└────────────┬────────────┘
-             │
-             ▼
-┌─────────────────────────┐    ┌──────────────────────────┐
-│ User clicks             │───▶│ feedback.decisions       │
-│ Interested / Dismissed  │    │ (SQLite ~/.alphalens/    │
-│ (+ category + reason)   │    │  feedback.db)            │
-└────────────┬────────────┘    └────────────┬─────────────┘
-             │                              │
-             ▼                              │
-┌─────────────────────────┐                 │
-│ Paper-trade plan        │                 │
-│ (Alpaca paper)          │                 │
-└────────────┬────────────┘                 │
-             │                              │
-             ▼                              ▼
-┌─────────────────────────┐    ┌──────────────────────────┐
-│ Reconciler job          │───▶│ outcome join             │
-│ (close, PnL, exit kind) │    │ (v2 background job)      │
-└────────────┬────────────┘    └────────────┬─────────────┘
-             │                              │
-             └──────────────┬───────────────┘
-                            ▼
-              ┌──────────────────────────┐
-              │ L3 weekly review SPA     │
-              │ - win-rate per signal    │
-              │   combo                  │
-              │ - calibration curve      │
-              │   (confidence vs return) │
-              │ - theme rotation         │
-              │ - "your dismiss-other %" │
-              └────────────┬─────────────┘
-                           │
-                           ▼
-              ┌──────────────────────────┐
-              │ re-weighting             │
-              │ layer4_weighted_score    │
-              │ (after ≥50 decisions)    │
-              └──────────────────────────┘
+```mermaid
+flowchart TD
+    A[L2 daily brief<br/>candidates surfaced]
+    B[User clicks Interested / Dismissed<br/>+ category + reason]
+    C[(feedback.decisions<br/>SQLite ~/.alphalens/feedback.db)]
+    D[Paper-trade plan<br/>Alpaca paper]
+    E[Reconciler job<br/>close, PnL, exit kind]
+    F[outcome join<br/>v2 background job]
+    G[L3 weekly review SPA<br/>- win-rate per signal combo<br/>- calibration curve<br/>- theme rotation<br/>- your dismiss-other %]
+    H[re-weighting layer4_weighted_score<br/>after ≥50 decisions]
+
+    A --> B
+    B --> C
+    B --> D
+    D --> E
+    E --> F
+    C --> F
+    F --> G
+    G --> H
 ```
 
 Bez feedback ledger'a model nie wie co działa. Re-weighting bez >50 decisions = statistical noise. **Dlatego PR #292 jest critical path**.
@@ -90,19 +66,18 @@ Bez feedback ledger'a model nie wie co działa. Re-weighting bez >50 decisions =
 
 ## 4. "Done" looks like — wieczorny use-case
 
-```
- 9:00 UTC  ▌ pipeline runs (already automatic)
-10:00 UTC  ▌ Telegram pings: "🔔 NVDA Earnings surprise +12% — push catalyst"
-12:30 UTC  ▌ user opens app.alphalens.kamilpajak.pl/brief/today
-              - reviews 15 candidates (down from current 17-20 by personalization)
-              - clicks Interested on 5, Dismiss on 8 (mostly `not_my_style` or
-                `too_expensive`), 2 left as default (no action taken)
-              - candidates with `interested` flow into paper-trade ledger
-                automatically (planned VPS ExecStartPost)
-14:00 UTC  ▌ user posts shortlist to WhatsApp:
-              "z dzisiaj 5 ciekawych: NVDA AMD CRWD OKTA SNOW — co myślicie?"
-14:30 UTC  ▌ grupa dyskutuje przez 30 min, każdy decyduje sam
-21:00 UTC  ▌ Alpaca executions zatwierdzone, paper-trade plans aktywne
+```mermaid
+timeline
+    title Wieczorny use-case (czas UTC)
+    09:00 : Pipeline runs (automatic)
+    10:00 : Telegram pings — NVDA earnings surprise +12%
+    12:30 : User opens /brief/today
+          : Reviews 15 candidates
+          : Interested on 5, Dismiss on 8
+          : 'interested' → paper-trade auto
+    14:00 : Posts shortlist do WhatsApp
+    14:30 : Grupa dyskutuje 30 min
+    21:00 : Alpaca paper plans active
 ```
 
 **Weekend, niedziela 19:00:**
