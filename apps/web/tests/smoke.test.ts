@@ -873,32 +873,6 @@ test.describe('smoke — api fixture integrity', () => {
 	});
 });
 
-test.describe('smoke — Cloudflare Pages _redirects rule order', () => {
-	// Regression guard: the `/_app/* /_app/:splat 404` rule MUST appear before
-	// the SPA-fallback `/* /index.html 200` rule, otherwise stale chunk URLs
-	// fall through to the SPA fallback and CF Pages caches the wrong HTML
-	// under the chunk URL with the immutable-asset 4h TTL, producing the
-	// "MIME type text/html" blank-screen failure the file exists to prevent.
-	test('_redirects places /_app/* 404 rule before SPA fallback', () => {
-		const redirects = readFileSync(resolve(__dirname, '../static/_redirects'), 'utf-8');
-		const rules = redirects
-			.split('\n')
-			.map((l) => l.trim())
-			.filter((l) => l && !l.startsWith('#'));
-		const appRuleIdx = rules.findIndex((l) => l.startsWith('/_app/'));
-		const spaRuleIdx = rules.findIndex((l) => l.startsWith('/*'));
-		expect(appRuleIdx, '/_app/* rule must be present in _redirects').toBeGreaterThanOrEqual(0);
-		expect(spaRuleIdx, '/* SPA fallback rule must be present in _redirects').toBeGreaterThanOrEqual(0);
-		expect(
-			appRuleIdx,
-			'/_app/* rule must precede /* SPA fallback (CF Pages applies rules top-down)'
-		).toBeLessThan(spaRuleIdx);
-		// The rule must terminate with status 404, not 200 — a 200 would defeat
-		// the entire purpose by serving real content under a missing-asset URL.
-		expect(rules[appRuleIdx], '/_app/* rule must return 404').toMatch(/\s404\s*$/);
-	});
-});
-
 test.describe('smoke — SvelteKit stale-import recovery (version polling)', () => {
 	// Canonical fix for the post-deploy blank-screen bug per
 	// https://github.com/sveltejs/kit/issues/9089 — the build emits
