@@ -92,11 +92,14 @@ def _to_session_timestamp(d: DateLike) -> pd.Timestamp:
 
     ``exchange_calendars`` keys sessions on date-only naive Timestamps;
     passing a tz-aware or sub-day timestamp would raise ``ValueError``.
+
+    Note: ``pd.Timestamp`` is registered as a subclass of
+    ``datetime.datetime`` (``isinstance(pd.Timestamp(...), dt.datetime)``
+    is True), so a single ``dt.datetime`` branch handles both — a
+    separate ``isinstance(d, pd.Timestamp)`` clause would be dead code.
     """
     if isinstance(d, dt.datetime):
         # Strip time + tz; the session lookup is date-granular.
-        return pd.Timestamp(d.date())
-    if isinstance(d, pd.Timestamp):
         return pd.Timestamp(d.date())
     return pd.Timestamp(d)
 
@@ -173,13 +176,13 @@ def next_trading_open(
 
     Naive ``after`` is treated as UTC.
     """
+    # ``pd.Timestamp`` is a ``dt.datetime`` subclass, so this single
+    # branch handles both (a separate ``isinstance(after, pd.Timestamp)``
+    # clause would be unreachable). The ``pd.Timestamp(after)`` round-trip
+    # is idempotent when ``after`` is already a Timestamp.
     if isinstance(after, dt.datetime):
-        if after.tzinfo is None:
-            after_ts = pd.Timestamp(after, tz="UTC")
-        else:
-            after_ts = pd.Timestamp(after).tz_convert("UTC")
-    elif isinstance(after, pd.Timestamp):
-        after_ts = after.tz_convert("UTC") if after.tzinfo else after.tz_localize("UTC")
+        ts = pd.Timestamp(after)
+        after_ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
     else:
         # Plain date — anchor at 23:59 UTC so the lookup skips today's
         # session even if today is itself a trading day.
