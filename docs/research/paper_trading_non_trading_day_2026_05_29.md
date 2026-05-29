@@ -113,13 +113,15 @@ liquidity-floor guard — not the universal "defer to 09:45" rule.
   `--allow-closed-market` opt-out). No behaviour change to TTL or
   time-stop math; legacy `(observed.date() - planned.date()).days`
   stays in `reconciler.py` until PR-B.
-* **PR-B — switch TTL + time-stop to trading days.** Replaces
-  `.days` arithmetic in `reconciler.py::_sweep_expired_entries` and
-  `exit_manager.py::_time_stop_should_fire` with the new
-  `trading_days_elapsed` helper. Updates `constants.py`:
-  `DEFAULT_ORDER_TTL_DAYS` 10 → 7 trading days, `TIME_STOP_DAYS` 60 → 42
-  trading days. Updates `paper_trade_ladder_2026_05_27.md` to read
-  "trading days" explicitly everywhere.
+* **PR-B (#302) — switch TTL + time-stop to trading days. SHIPPED 2026-05-29.**
+  Replaced `.days` arithmetic in `reconciler.py::_sweep_expired_entries`
+  and `exit_manager.py::_time_stop_should_fire` with `trading_days_elapsed`.
+  Updated `constants.py`: `DEFAULT_ORDER_TTL_DAYS` 10 → 7 trading days,
+  `TIME_STOP_DAYS` 60 → 42 trading days. Updated
+  `thematic_trade_setup_v1_design_2026_05_27.md` and
+  `paper_trading_capital_sizing_2026_05_28.md` to read "trading days"
+  explicitly. `reconcile_orders` gained an optional `observed_at`
+  parameter for test determinism.
 * **PR-C — SPA banner.** `BriefHeader.svelte` reads a new
   `/v1/market/status` endpoint (returns `is_trading_day`,
   `is_half_day`, `next_open_iso`) and renders a persistent banner on

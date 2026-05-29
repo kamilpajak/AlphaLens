@@ -28,11 +28,16 @@ from alphalens_pipeline.paper.ledger import (
 # Fixed XNYS anchors for time-stop tests. Fri 2026-01-02 (normal Friday
 # session) → Fri 2026-05-29 spans ~100 XNYS trading days (5 months minus
 # MLK / Presidents / Good Friday / Memorial Day) — comfortably past
-# TIME_STOP_DAYS=42. The PR-B switch to trading-day arithmetic made the
-# old ``now - timedelta(days=TIME_STOP_DAYS + 5)`` pattern fragile because
-# that converted to ~33 trading days of elapsed sessions (TIME_STOP_DAYS
-# x 7/5 + holiday density), no longer crossing the boundary. Fixed
-# anchors + explicit ``observed_at`` give deterministic semantics.
+# TIME_STOP_DAYS=42.
+#
+# The PR-B switch to trading-day arithmetic also exposed a separate
+# fragility in the old ``now - timedelta(days=TIME_STOP_DAYS + 5)``
+# pattern: the anchor moved every time the test ran (depending on the
+# wall-clock day), and the elapsed trading-day count then depended on
+# which calendar-week + holiday-density the offset happened to land in.
+# Fixed past-dated anchors + an explicit ``observed_at`` threaded into
+# ``process_plan_exit`` make the trading-day arithmetic deterministic
+# regardless of when CI invokes the suite.
 _FIRST_FILL_AT_FIXED = dt.datetime(2026, 1, 2, 16, 0, 0, tzinfo=dt.UTC)
 _OBSERVED_AT_FIXED = dt.datetime(2026, 5, 29, 22, 0, 0, tzinfo=dt.UTC)
 
@@ -177,7 +182,9 @@ class TestEntryStillOpenNoOp(_ExitTestBase):
         _add_entry(self.ledger, plan_id=plan_id, alpaca_id="e1", qty=27, status="SUBMITTED")
 
         with open_ledger(self.ledger) as conn:
-            outcome = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            outcome = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
 
         self.assertEqual(outcome.action, "NOOP")
         self.assertEqual(len(self.client.submissions), 0)
@@ -189,7 +196,9 @@ class TestUnfilledOutcome(_ExitTestBase):
         _add_entry(self.ledger, plan_id=plan_id, alpaca_id="e1", qty=27, status="CANCELED")
 
         with open_ledger(self.ledger) as conn:
-            outcome = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            outcome = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
 
         self.assertEqual(outcome.action, "UNFILLED")
         self.assertEqual(outcome.exit_kind, "UNFILLED")
@@ -216,7 +225,9 @@ class TestAttachExits(_ExitTestBase):
         )
 
         with open_ledger(self.ledger) as conn:
-            outcome = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            outcome = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
 
         self.assertEqual(outcome.action, "ATTACHED")
         # 1 SL + 2 TP tranches = 3 submissions.
@@ -250,7 +261,9 @@ class TestAttachExits(_ExitTestBase):
         )
 
         with open_ledger(self.ledger) as conn:
-            process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
 
         total_exit_qty = sum(s["qty"] for s in self.client.submissions if s["kind"] == "STOP")
         self.assertEqual(total_exit_qty, 10)
@@ -270,8 +283,12 @@ class TestAttachExits(_ExitTestBase):
             filled_price=99.5,
         )
         with open_ledger(self.ledger) as conn:
-            o1 = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
-            o2 = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            o1 = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
+            o2 = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
         self.assertEqual(o1.action, "ATTACHED")
         self.assertEqual(o2.action, "NOOP")
         # Only one round of submissions.
@@ -291,7 +308,9 @@ class TestExitClosure(_ExitTestBase):
             filled_price=entry_price,
         )
         with open_ledger(self.ledger) as conn:
-            process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
             orders = fetch_orders_for_plan(conn, plan_id)
         sl_order = next(o for o in orders if o["order_kind"] == "SL")
         tp_orders = [o for o in orders if o["order_kind"] == "TP"]
@@ -320,7 +339,9 @@ class TestExitClosure(_ExitTestBase):
         self._mark_filled(tp_ids[1], qty=14, price=130.0)
 
         with open_ledger(self.ledger) as conn:
-            outcome = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            outcome = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
 
         # Phase-A simplification: SL stays open until TP-hit reconcile cancels it.
         # The exit-classifier sees TP=FILLED + SL=SUBMITTED → not all-terminal yet → NOOP.
@@ -330,7 +351,9 @@ class TestExitClosure(_ExitTestBase):
         # the all-terminal check passes and outcome is written.
         with open_ledger(self.ledger) as conn:
             update_order_status(conn, order_id=sl_id, status="CANCELED")
-            outcome2 = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            outcome2 = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
         self.assertEqual(outcome2.action, "CLOSED")
         self.assertEqual(outcome2.exit_kind, "TP_HIT")
 
@@ -367,7 +390,9 @@ class TestExitClosure(_ExitTestBase):
 
         # Pass 1: cancel requests issued, TPs still SUBMITTED → NOOP.
         with open_ledger(self.ledger) as conn:
-            o1 = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            o1 = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
         self.assertEqual(o1.action, "NOOP")
         # Both TP alpaca ids got a cancel request.
         self.assertEqual(len(self.client.canceled), 2)
@@ -379,7 +404,9 @@ class TestExitClosure(_ExitTestBase):
 
         # Pass 2: all exits now terminal → CLOSED with SL_HIT.
         with open_ledger(self.ledger) as conn:
-            o2 = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            o2 = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
         self.assertEqual(o2.action, "CLOSED")
         self.assertEqual(o2.exit_kind, "SL_HIT")
 
@@ -407,7 +434,9 @@ class TestZenRegressions(_ExitTestBase):
             filled_price=entry_price,
         )
         with open_ledger(self.ledger) as conn:
-            process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
             orders = fetch_orders_for_plan(conn, plan_id)
         sl = next(o for o in orders if o["order_kind"] == "SL")
         tps = [o for o in orders if o["order_kind"] == "TP"]
@@ -450,10 +479,14 @@ class TestZenRegressions(_ExitTestBase):
 
         # Pass 1: attach.
         with open_ledger(self.ledger) as conn:
-            process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
         # Pass 2: time-stop fires.
         with open_ledger(self.ledger) as conn:
-            o_first = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            o_first = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
         self.assertEqual(o_first.action, "TIME_STOP")
         n_market_first = len([s for s in self.client.submissions if s["kind"] == "MARKET"])
         self.assertEqual(n_market_first, 1)
@@ -461,7 +494,9 @@ class TestZenRegressions(_ExitTestBase):
         # Pass 3 (same conditions, market order still SUBMITTED) — must NOT
         # submit a second market order.
         with open_ledger(self.ledger) as conn:
-            o_second = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            o_second = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
         n_market_second = len([s for s in self.client.submissions if s["kind"] == "MARKET"])
         self.assertEqual(n_market_second, 1, "second pass duplicated the TIME_STOP order")
         # The action is NOOP (no new exit kind triggered; everything pending).
@@ -496,7 +531,9 @@ class TestZenRegressions(_ExitTestBase):
 
         # Pass: sl_fired (filled_qty > 0) triggers cancel for TP2.
         with open_ledger(self.ledger) as conn:
-            process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
             tp2_row = conn.execute(
                 "SELECT alpaca_order_id FROM orders WHERE order_id = ?", (tp_ids[1],)
             ).fetchone()
@@ -509,7 +546,9 @@ class TestZenRegressions(_ExitTestBase):
 
         # Now all exits terminal — classify SL_HIT (NOT lockup).
         with open_ledger(self.ledger) as conn:
-            o = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            o = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
         self.assertEqual(o.action, "CLOSED")
         self.assertEqual(o.exit_kind, "SL_HIT")
 
@@ -530,7 +569,9 @@ class TestZenRegressions(_ExitTestBase):
         # SL fills, triggering cancel for the TPs.
         self._mark_filled(sl_id, qty=27, price=79.5)
         with open_ledger(self.ledger) as conn:
-            process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
 
         # Local TP statuses are still SUBMITTED — the cancel went to Alpaca
         # but our ledger waits for the reconciler's poll.
@@ -567,9 +608,13 @@ class TestZenRegressions(_ExitTestBase):
 
         # Pass 1: attach. Pass 2: time-stop.
         with open_ledger(self.ledger) as conn:
-            process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
         with open_ledger(self.ledger) as conn:
-            o = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            o = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
         self.assertEqual(o.action, "TIME_STOP")
 
         market = [s for s in self.client.submissions if s["kind"] == "MARKET"]
@@ -599,12 +644,16 @@ class TestTimeStop(_ExitTestBase):
 
         # First pass attaches the exits.
         with open_ledger(self.ledger) as conn:
-            o_attach = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            o_attach = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
         self.assertEqual(o_attach.action, "ATTACHED")
 
         # Second pass — time-stop fires before any exit completes.
         with open_ledger(self.ledger) as conn:
-            o_ts = process_plan_exit(conn, plan_id=plan_id, alpaca_client=self.client)
+            o_ts = process_plan_exit(
+                conn, plan_id=plan_id, alpaca_client=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
         self.assertEqual(o_ts.action, "TIME_STOP")
 
         # Verify the market-sell + cancellations happened.
