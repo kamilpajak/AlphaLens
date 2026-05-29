@@ -1,8 +1,10 @@
-# AlphaLens v2 — Ideal-Shape Vision
+# AlphaLens — Ideal Shape
 
 **Status:** LIVING DOCUMENT (założone 2026-05-29 — zakładaj wieczystą edycję)
 **Owner:** kamilpajak
 **Audience:** future-self + sub-agents (each session should read this before scoping work in `apps/`)
+
+> To **nie** jest "v2 rewrite". To kierunek w którym AlphaLens już idzie, PR po PR, od momentu thematic-pivot'u (2026-05-16). Dokument zbiera wszystkie tracki w jedno miejsce żeby każda sesja widziała całość zamiast lokalnego kontekstu.
 
 ---
 
