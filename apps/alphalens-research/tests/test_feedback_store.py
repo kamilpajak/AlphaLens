@@ -171,7 +171,8 @@ class TestFeedbackStoreCRUD(unittest.TestCase):
     def test_insert_returns_id_and_persists_round_trip(self):
         d = _make_decision()
         with FeedbackStore.open(self.path) as fb:
-            row_id = fb.insert(d)
+            row_id, was_created = fb.insert(d)
+            self.assertTrue(was_created)
             fetched = fb.get(row_id)
             self.assertEqual(fetched.ticker, "NVDA")
             self.assertEqual(fetched.action, "interested")
@@ -189,8 +190,12 @@ class TestFeedbackStoreCRUD(unittest.TestCase):
             dismiss_reason="too_expensive",
         )
         with FeedbackStore.open(self.path) as fb:
-            fb.insert(d1)
-            fb.insert(d2)
+            _, created_first = fb.insert(d1)
+            self.assertTrue(created_first)
+            _, created_second = fb.insert(d2)
+            # Second insert hit the upsert path; was_created must be False so
+            # the Django view returns 200 instead of 201 (zen #5).
+            self.assertFalse(created_second)
             rows = fb.list_by_brief_date(dt.date(2026, 5, 28))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].action, "dismissed")
@@ -206,8 +211,12 @@ class TestFeedbackStoreCRUD(unittest.TestCase):
             dismiss_reason="wrong_theme",
         )
         with FeedbackStore.open(self.path) as fb:
-            fb.insert(d1)
-            fb.insert(d2)
+            _, created_a = fb.insert(d1)
+            _, created_b = fb.insert(d2)
+            # Both NEW rows — different theme, so the unique-key check
+            # in insert() returns no existing row for either.
+            self.assertTrue(created_a)
+            self.assertTrue(created_b)
             rows = fb.list_by_brief_date(dt.date(2026, 5, 28))
             self.assertEqual(len(rows), 2)
             themes = {r.theme for r in rows}
@@ -230,7 +239,7 @@ class TestFeedbackStoreCRUD(unittest.TestCase):
     def test_delete_by_id_removes_row(self):
         d = _make_decision()
         with FeedbackStore.open(self.path) as fb:
-            row_id = fb.insert(d)
+            row_id, _ = fb.insert(d)
             fb.delete(row_id)
             self.assertIsNone(fb.get(row_id))
 

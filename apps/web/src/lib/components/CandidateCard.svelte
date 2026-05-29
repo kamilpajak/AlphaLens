@@ -28,6 +28,11 @@
 		// from the page loader where it is authoritative.
 		briefDate?: string | null;
 		taxonomy?: FeedbackTaxonomy | null;
+		// `decisionsLoaded` distinguishes "no decisions yet" (true + empty)
+		// from "couldn't load decisions" (false) — when false we hide the
+		// controls so a POST cannot silently overwrite a prior decision
+		// that exists server-side but failed to load this session.
+		decisionsLoaded?: boolean;
 		existingDecision?: Decision | null;
 	}
 	let {
@@ -35,6 +40,7 @@
 		index,
 		briefDate = null,
 		taxonomy = null,
+		decisionsLoaded = false,
 		existingDecision = null
 	}: Props = $props();
 
@@ -326,7 +332,7 @@
 		</div>
 	</div>
 
-	{#if taxonomy && briefDate}
+	{#if taxonomy && briefDate && decisionsLoaded}
 		<FeedbackControls
 			{briefDate}
 			ticker={c.ticker}

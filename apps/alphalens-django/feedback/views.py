@@ -116,13 +116,17 @@ class DecisionsView(APIView):
             raise ValidationError({"detail": str(exc)}) from exc
 
         with FeedbackStore.open(_feedback_db_path()) as fb:
-            row_id = fb.insert(decision)
+            row_id, was_created = fb.insert(decision)
             stored = fb.get(row_id)
 
         # `stored` is non-None — we just inserted it; assertion keeps
         # pyright happy without leaking the case into the response.
         assert stored is not None  # noqa: S101 — type narrowing
-        return Response(_serialise_decision(stored), status=status.HTTP_201_CREATED)
+        # 201 only on first creation; 200 on upsert update (zen pre-merge
+        # finding #5). The SPA undo flow uses ``stored.id`` either way,
+        # so the status code is purely a REST hint to API consumers.
+        http_status = status.HTTP_201_CREATED if was_created else status.HTTP_200_OK
+        return Response(_serialise_decision(stored), status=http_status)
 
     @extend_schema(
         parameters=[

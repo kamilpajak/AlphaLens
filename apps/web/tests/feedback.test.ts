@@ -178,6 +178,29 @@ test.describe('feedback controls', () => {
 		expect(deletes.length).toBe(1);
 	});
 
+	test('hides controls when listDecisions fails (no silent overwrite)', async ({ page }) => {
+		// Zen pre-merge finding #1: if taxonomy succeeds but decisions
+		// fails, rendering the controls would let a fresh POST silently
+		// overwrite a server-side decision the user can't see. Loader
+		// returns null for decisions on failure → controls hidden.
+		await page.route('**/api/v1/days', (route) =>
+			route.fulfill({ status: 200, contentType: 'application/json', body: DAYS_INDEX_BODY })
+		);
+		await page.route(/\/api\/v1\/days\/\d{4}-\d{2}-\d{2}$/, (route) =>
+			route.fulfill({ status: 200, contentType: 'application/json', body: DAY_BODY })
+		);
+		await page.route('**/api/v1/feedback/taxonomy', (route) =>
+			route.fulfill({ status: 200, contentType: 'application/json', body: TAXONOMY_BODY })
+		);
+		await page.route('**/api/v1/feedback/decisions**', (route) =>
+			route.fulfill({ status: 500, contentType: 'application/json', body: '{}' })
+		);
+		await page.goto(`/brief/${DATE}`);
+		// Brief still renders (cards visible) but feedback controls are hidden.
+		await expect(page.locator('article[id]').first()).toBeVisible();
+		await expect(page.locator('[data-testid="feedback-controls"]')).toHaveCount(0);
+	});
+
 	test('dismiss → category → reason flow records dismissed with reason', async ({ page }) => {
 		const { posts } = await installMocks(page);
 		await page.goto(`/brief/${DATE}`);

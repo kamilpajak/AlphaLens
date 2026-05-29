@@ -12,8 +12,15 @@ export const load: PageLoad = async ({ fetch, params }) => {
 		// feedback endpoints (e.g. mid-rollout, dev VM without ALPHALENS_
 		// FEEDBACK_DB) should still render the brief. Both branches return
 		// null on failure so CandidateCard hides the FeedbackControls row.
+		//
+		// Important (zen pre-merge #1): `decisions` failure returns `null`,
+		// NOT an empty array. A `[]` would falsely report "no prior
+		// decisions" to the UI, and a subsequent POST would silently
+		// overwrite a real decision the user had recorded yesterday. With
+		// null, CandidateCard treats the load as unknown-state and hides
+		// the controls (same fail-safe as the taxonomy=null path).
 		getTaxonomy(fetch).catch((): FeedbackTaxonomy | null => null),
-		listDecisions(params.date, fetch).catch((): Decision[] => [])
+		listDecisions(params.date, fetch).catch((): Decision[] | null => null)
 	]);
 	if (!briefRes.ok) {
 		// Propagate the real status — 404 = missing brief (expected for dates
@@ -33,10 +40,10 @@ export const load: PageLoad = async ({ fetch, params }) => {
 	const indexBody: Paginated<DayIndexEntry> = await indexRes.json();
 	const brief: DayBrief = await briefRes.json();
 	// Index decisions by (ticker, theme) for O(1) lookup in the brief page.
-	// Brief_date is implicit (matches the route param).
-	const decisionsByKey: Record<string, Decision> = {};
-	for (const d of decisions) {
-		decisionsByKey[`${d.ticker}::${d.theme}`] = d;
-	}
+	// Brief_date is implicit (matches the route param). `null` propagates
+	// so the page component can distinguish "no decisions yet" (empty
+	// object) from "couldn't load decisions" (null → hide controls).
+	const decisionsByKey: Record<string, Decision> | null =
+		decisions === null ? null : Object.fromEntries(decisions.map((d) => [`${d.ticker}::${d.theme}`, d]));
 	return { days: indexBody.data, brief, taxonomy, decisionsByKey };
 };

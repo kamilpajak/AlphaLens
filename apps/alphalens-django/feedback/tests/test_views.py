@@ -115,10 +115,15 @@ class TestPostDecision:
 
     def test_upsert_flips_interested_to_dismissed(self, client, feedback_db):
         # Same (brief_date, ticker, theme) — second POST replaces first.
+        # First call creates → 201. Second call upserts → 200 per REST
+        # convention (zen pre-merge #5).
         r1 = _post_interested(client)
         assert r1.status_code == 201
         r2 = _post_dismissed_wrong_theme(client)
-        assert r2.status_code == 201  # upsert returns 201 for simplicity
+        assert r2.status_code == 200
+        # id preserved across the upsert so the SPA's local undo reference
+        # stays valid after flipping the action.
+        assert r2.json()["id"] == r1.json()["id"]
         # GET back: exactly one row, now dismissed
         rows = client.get("/v1/feedback/decisions?brief_date=2026-05-28").json()
         assert len(rows["data"]) == 1

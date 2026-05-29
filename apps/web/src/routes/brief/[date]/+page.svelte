@@ -186,7 +186,8 @@
 				index={i}
 				briefDate={data.brief.date}
 				taxonomy={data.taxonomy}
-				existingDecision={data.decisionsByKey[`${c.ticker}::${c.theme}`] ?? null}
+				decisionsLoaded={data.decisionsByKey !== null}
+				existingDecision={data.decisionsByKey?.[`${c.ticker}::${c.theme}`] ?? null}
 			/>
 		{/each}
 	</div>

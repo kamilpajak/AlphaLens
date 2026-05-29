@@ -70,7 +70,7 @@ class DecisionValidationError(ValueError):
 # ----------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(frozen=True)
 class Decision:
     """One user-authored row in the feedback ledger.
 
@@ -80,6 +80,18 @@ class Decision:
     expression — a 9-row CASE WHEN would be unreadable. Python validation
     keeps the rules co-located with the dataclass that defines the
     schema surface.
+
+    ``frozen=True`` is defensive (zen pre-merge finding #2): no callsite
+    mutates a Decision today, but freezing it prevents accidental field
+    reassignment from skipping the ``__post_init__`` rules.
+
+    Read-time validation contract (zen pre-merge finding #3): every
+    Decision constructed via the public ``__init__`` runs full
+    validation. The ``_from_row()`` classmethod used by
+    :func:`_row_to_decision` deliberately bypasses validation so that
+    tightening rules in a future v2 does not retroactively break the
+    READ path for legacy rows. WRITES go through ``__init__`` and stay
+    fully validated.
     """
 
     brief_date: dt.date
@@ -156,6 +168,25 @@ class Decision:
                 f"action={self.action!r} must not carry "
                 "position_size_usd / entry_price (live_traded only)"
             )
+
+    @classmethod
+    def _from_row(cls, **fields) -> Decision:
+        """Construct a Decision from a DB row, BYPASSING __post_init__ rules.
+
+        Use only from :func:`_row_to_decision`. Future tightening of
+        validation rules (e.g. adding a new required field) would
+        otherwise break the READ path for legacy rows persisted under
+        looser v1 rules — see class docstring "Read-time validation
+        contract". WRITE path callers use the public constructor and
+        stay fully validated.
+
+        Works with ``frozen=True`` via ``object.__setattr__`` since the
+        normal assignment path is locked.
+        """
+        instance = cls.__new__(cls)
+        for key, value in fields.items():
+            object.__setattr__(instance, key, value)
+        return instance
 
 
 # ----------------------------------------------------------------------
@@ -256,18 +287,23 @@ class FeedbackStore:
 
     # ---- writes -------------------------------------------------------
 
-    def insert(self, decision: Decision) -> str:
+    def insert(self, decision: Decision) -> tuple[str, bool]:
         """Upsert a decision keyed on (brief_date, ticker, theme).
 
         Idempotent on the unique key: a user flipping interested → dismissed
         on the same candidate replaces the prior row rather than tripping
-        a UNIQUE constraint. Returns the row id (existing if replaced,
-        the `decision.id` for new inserts).
+        a UNIQUE constraint. Returns ``(row_id, was_created)`` where
+        ``was_created=True`` means a brand-new row, ``False`` means a row
+        with the same unique-key existed and was replaced (id preserved
+        so the SPA's local undo reference stays valid). The Django POST
+        view uses ``was_created`` to pick HTTP 201 vs 200 per REST
+        convention (zen pre-merge finding #5).
         """
         existing = self.conn.execute(
             "SELECT id FROM decisions WHERE brief_date = ? AND ticker = ? AND theme = ?",
             (decision.brief_date.isoformat(), decision.ticker, decision.theme),
         ).fetchone()
+        was_created = existing is None
         target_id = existing["id"] if existing else decision.id
         self.conn.execute(
             """
@@ -296,7 +332,7 @@ class FeedbackStore:
                 decision.market_regime_at_entry,
             ),
         )
-        return target_id
+        return target_id, was_created
 
     def delete(self, decision_id: str) -> None:
         """Hard delete by id. No-op on unknown id (idempotent undo)."""
@@ -324,8 +360,13 @@ class FeedbackStore:
 
 
 def _row_to_decision(row: sqlite3.Row) -> Decision:
-    """Reconstruct a Decision from a SELECT row, parsing ISO timestamps."""
-    return Decision(
+    """Reconstruct a Decision from a SELECT row, parsing ISO timestamps.
+
+    Uses ``Decision._from_row`` so that tightening of validation rules
+    in a future v2 doesn't retroactively break READ of legacy rows.
+    See ``Decision`` class docstring "Read-time validation contract".
+    """
+    return Decision._from_row(
         id=row["id"],
         brief_date=dt.date.fromisoformat(row["brief_date"]),
         ticker=row["ticker"],
