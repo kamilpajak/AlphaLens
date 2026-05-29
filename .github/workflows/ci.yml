@@ -179,9 +179,24 @@ jobs:
       - name: Ruff lint (django)
         run: uv run ruff check apps/alphalens-django/
 
-      - name: Pytest
+      - name: Pytest with coverage
         working-directory: apps/alphalens-django
-        run: uv run pytest -q
+        # Coverage scoped to the app source dirs (core, auth_cf, briefs, config)
+        # so test files themselves don't inflate the denominator. XML is
+        # emitted at `apps/alphalens-django/coverage.xml` and uploaded as a
+        # separate artifact (`coverage-xml-django`); SonarCloud is configured
+        # in sonar-project.properties to consume both research + django paths.
+        run: |
+          uv run coverage run --source=core,auth_cf,briefs,config -m pytest -q
+          uv run coverage report
+          uv run coverage xml -o coverage.xml
+
+      - name: Upload django coverage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-xml-django
+          path: apps/alphalens-django/coverage.xml
+          retention-days: 14
 
   # -----------------------------------------------------------------------
   # Web — SvelteKit type-check + Playwright hermetic smoke. Build verifies
@@ -237,10 +252,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download coverage artifact
+      - name: Download research coverage artifact
         uses: actions/download-artifact@v8
         with:
           name: coverage-xml
+          # Land at repo root as coverage.xml (matches research source paths
+          # referenced from sonar-project.properties).
+          path: .
+
+      - name: Download django coverage artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-xml-django
+          # Land at apps/alphalens-django/coverage.xml so the relative paths
+          # inside the file (core/views.py, briefs/...) resolve under that
+          # working directory in SonarCloud.
+          path: apps/alphalens-django
 
       - name: SonarCloud scan
         uses: SonarSource/sonarqube-scan-action@v8
