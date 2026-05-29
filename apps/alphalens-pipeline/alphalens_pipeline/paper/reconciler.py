@@ -198,10 +198,18 @@ def _sweep_expired_entries(
     """Cancel ENTRY orders on plans whose ``order_ttl_days`` window elapsed.
 
     For every PLANNED row scoped to ``account`` with no plan_outcome yet,
-    compute the integer-day delta between ``planned_at`` and ``observed_at``.
-    Once the delta meets or exceeds the per-plan ``order_ttl_days`` budget,
+    compute the number of XNYS trading days elapsed between ``planned_at``
+    and ``observed_at`` (half-open, end-inclusive — same-day plan + same-day
+    observed = 0 elapsed; Fri-planned + Mon-observed = 1 elapsed). Once
+    the count meets or exceeds the per-plan ``order_ttl_days`` budget,
     request Alpaca to cancel every ENTRY order on the plan still in a
     non-terminal local state (SUBMITTED / PARTIALLY_FILLED).
+
+    The PR-B switch from calendar-day arithmetic (``.days`` on a date
+    delta) to ``trading_days_elapsed`` matches the trade-setup memo's
+    "N trading days" intent — a Fri plan observed Tue-after-Memorial-Day
+    is 1 trading day old, not 4. See
+    ``docs/research/paper_trading_non_trading_day_2026_05_29.md`` §5.
 
     The cancel REQUEST is fire-and-forget — local order.status flips on the
     NEXT reconcile poll when Alpaca reports the canonical 'canceled' state.
@@ -220,6 +228,8 @@ def _sweep_expired_entries(
     are warning-logged and the sweep continues so a single bad UUID does
     not abort handling of the rest of the basket on the same cycle.
     """
+    from alphalens_pipeline.paper.calendar import trading_days_elapsed
+
     cur = conn.execute(
         """SELECT p.plan_id, p.planned_at, p.order_ttl_days
            FROM plans p
@@ -238,10 +248,10 @@ def _sweep_expired_entries(
         if planned_at.tzinfo is None:
             planned_at = planned_at.replace(tzinfo=dt.UTC)
         ttl_days = int(row["order_ttl_days"])
-        # Calendar-day delta (not wall-clock days) so a plan submitted at
-        # 23:50 UTC and observed at 00:10 UTC the next day counts as 1 day.
-        # Mirrors how an operator reasons about "the brief is 10 days old".
-        days_since = (observed_at.date() - planned_at.date()).days
+        # Trading-day delta (XNYS sessions strictly after ``planned_at``
+        # up through ``observed_at``). Mirrors how the trade-setup memo
+        # specifies "N trading days" of fill window.
+        days_since = trading_days_elapsed(planned_at, observed_at)
         if days_since < ttl_days:
             continue
         entry_cur = conn.execute(
@@ -278,6 +288,7 @@ def reconcile_orders(
     ledger_path: Path,
     alpaca_client: Any,
     account: str = "main",
+    observed_at: dt.datetime | None = None,
 ) -> ReconcileReport:
     """Walk every open ledger order on the given ``account``, pull its
     Alpaca counterpart, append fills + transition status as needed.
@@ -290,10 +301,17 @@ def reconcile_orders(
     ``account`` (v4): scopes the open-orders sweep so a reconciler pass
     against TEST does NOT try to fetch MAIN-account UUIDs (which would
     404). The alpaca_client passed in MUST be the matching profile.
+
+    ``observed_at`` (PR-B): optional override for the timestamp the TTL
+    + time-stop sweeps treat as "now". Defaults to UTC wall-clock when
+    None. Tests pin both ``planned_at`` and ``observed_at`` to known
+    XNYS anchor dates so the trading-day arithmetic is deterministic
+    independent of which weekday CI happens to run on.
     """
     from alphalens_pipeline.paper.exit_manager import process_plan_exit
 
-    observed_at = dt.datetime.now(dt.UTC)
+    if observed_at is None:
+        observed_at = dt.datetime.now(dt.UTC)
     outcomes: list[OrderReconcileOutcome] = []
     transitioned = 0
     appended = 0

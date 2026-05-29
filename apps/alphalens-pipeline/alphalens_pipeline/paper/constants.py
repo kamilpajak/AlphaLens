@@ -44,12 +44,26 @@ GROSS_SAFETY_FRAC = 1.0
 # analogy; primary anchor for thematic candidates is Moskowitz-Ooi-
 # Pedersen 2012 time-series momentum (30-90d typical decay) +
 # Chan-Jegadeesh-Lakonishok 1996 news-momentum.
-TIME_STOP_DAYS = 60
+#
+# Unit: **trading days** (XNYS sessions, weekends and US public
+# holidays skipped) since PR-B. The literature numbers above are
+# expressed in trading days already (21d/month convention); the prior
+# 60-calendar-day value was an under-estimate that also tightened
+# erratically around long weekends and Q1 holiday clusters. 42 trading
+# days ≈ 60 calendar days at long-run US holiday density (~10
+# observances + ~104 weekend days per year).
+TIME_STOP_DAYS = 42
 
 # Entry-order TTL fallback if a candidate's brief_trade_setup omits
 # ``order_ttl_days`` (older parquet schema). Matches the trade_setup memo's
 # documented default.
-DEFAULT_ORDER_TTL_DAYS = 10
+#
+# Unit: **trading days** (XNYS) since PR-B. 7 trading days ≈ a clean
+# calendar week-and-a-half of trading exposure. The prior 10-calendar-day
+# value compressed to ~7 trading sessions in normal weeks and ~6 around
+# Memorial Day / July 4 long weekends; pinning the unit to trading days
+# removes the holiday drift.
+DEFAULT_ORDER_TTL_DAYS = 7
 
 # Default location for the paper ledger SQLite file. Operator can override
 # via CLI flag or env (analogous to ALPHALENS_BRIEFS_DIR for Django).

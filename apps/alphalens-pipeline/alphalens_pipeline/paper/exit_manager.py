@@ -424,12 +424,21 @@ def _time_stop_should_fire(snapshot: _PlanSnapshot, now: dt.datetime) -> bool:
     infinite re-fire loop when the time-stop market order doesn't fill
     immediately (e.g. submitted while market is closed) and the next
     reconcile pass would otherwise cancel-and-resubmit it endlessly.
+
+    The age metric is the number of XNYS trading days elapsed between
+    the entry fill and ``now`` (half-open, end-inclusive). The PR-B
+    switch from calendar-day arithmetic restores parity with the
+    trade-setup memo's "N trading days hold" intent — a position opened
+    Fri 16:00 ET is 1 trading day old at Mon close, 2 at Tue close, etc.
+    Weekends and US public holidays do not tick the clock.
     """
+    from alphalens_pipeline.paper.calendar import trading_days_elapsed
+
     if snapshot.first_entry_fill_at is None:
         return False
     if any(o["order_kind"] == "TIME_STOP" for o in snapshot.exit_orders):
         return False
-    age = (now - snapshot.first_entry_fill_at).days
+    age = trading_days_elapsed(snapshot.first_entry_fill_at, now)
     return age >= TIME_STOP_DAYS
 
 
