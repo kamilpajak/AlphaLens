@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { ArrowUpRight } from 'lucide-svelte';
 
 	const status = $derived(page.status);
 	// 401 is the auth-failure signal: apiFetch normalises an expired
@@ -13,6 +12,19 @@
 	// Access runs the SSO flow and refreshes the CF_Authorization cookie.
 	// Same-origin deploys (local Docker) leave this empty → no re-auth link.
 	const apiBase = (import.meta.env.VITE_API_BASE ?? '').trim().replace(/\/+$/, '');
+
+	// The trampoline endpoint on the API origin. Browser must actually visit
+	// `api.*` for the CF_Authorization cookie to land — a direct hop from the
+	// SSO endpoint back to `app.*` leaves the cookie unset (HTTP cookies are
+	// scoped to the response origin). The Django `/auth/start` view validates
+	// `return_to` against CORS_ALLOWED_ORIGINS and 302s the browser back to
+	// the URL the user was on, with a freshly-minted CF_Authorization cookie.
+	// See docs/research/cf_access_reauth_trampoline_design.md.
+	const reauthHref = $derived(
+		apiBase
+			? `${apiBase}/auth/start?return_to=${encodeURIComponent(page.url.href)}`
+			: ''
+	);
 
 	function retry() {
 		location.reload();
@@ -31,16 +43,13 @@
 				Re-authenticate, then retry — your briefs are intact.
 			</p>
 			<div class="flex flex-wrap gap-3 mt-6">
-				{#if apiBase}
+				{#if reauthHref}
 					<a
-						href={apiBase}
-						target="_blank"
-						rel="noreferrer"
-						aria-label="re-authenticate (opens in a new tab)"
+						href={reauthHref}
+						aria-label="re-authenticate"
 						class="inline-flex items-center gap-2 px-4 py-2 bg-amber text-bg font-semibold text-xs uppercase tracking-widest hover:bg-amber-dim transition-colors"
 					>
 						re-authenticate
-						<ArrowUpRight class="size-3" />
 					</a>
 				{/if}
 				<button

@@ -10,11 +10,12 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 
-from core.views import healthz, readyz
+from core.views import auth_start, healthz, readyz
 
 urlpatterns = [
     path("healthz", healthz, name="healthz"),
     path("readyz", readyz, name="readyz"),
+    path("auth/start", auth_start, name="auth-start"),
     path("admin/", admin.site.urls),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
