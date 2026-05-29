@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Candidate } from '$lib/types';
+	import type { Candidate, Decision, FeedbackTaxonomy } from '$lib/types';
 	import { fmtUsdCompact, fmtPct, fmtNum, fmtPctile, fmtDate, confidenceTone, confidenceLabel } from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
@@ -7,6 +7,7 @@
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
 	import TradeSetup from './TradeSetup.svelte';
+	import FeedbackControls from './FeedbackControls.svelte';
 	import { GLOSSARY_BY_TERM } from '$lib/data/glossary';
 
 	// Same tipProps pattern as /experiments — looks up term in shared glossary.
@@ -18,8 +19,24 @@
 	interface Props {
 		candidate: Candidate;
 		index: number;
+		// Feedback ledger plumbing. Optional so /experiments + any non-brief
+		// host can drop the card without wiring the loader. When `taxonomy`
+		// is null the FeedbackControls row is hidden (degrade gracefully if
+		// the /v1/feedback/taxonomy endpoint is unreachable).
+		// `briefDate` is the route param, NOT candidate.date — the daily-brief
+		// API does not stamp candidate.date in every fixture, so we pass it
+		// from the page loader where it is authoritative.
+		briefDate?: string | null;
+		taxonomy?: FeedbackTaxonomy | null;
+		existingDecision?: Decision | null;
 	}
-	let { candidate: c, index }: Props = $props();
+	let {
+		candidate: c,
+		index,
+		briefDate = null,
+		taxonomy = null,
+		existingDecision = null
+	}: Props = $props();
 
 	const confTone = $derived(confidenceTone(c.gemini_confidence));
 	const rank = $derived(c.rank_in_day ?? index + 1);
@@ -308,4 +325,15 @@
 			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_catalyst_failure_exit ?? '—'}</p>
 		</div>
 	</div>
+
+	{#if taxonomy && briefDate}
+		<FeedbackControls
+			{briefDate}
+			ticker={c.ticker}
+			theme={c.theme}
+			surfacedAt={c.source_event_published_at ?? briefDate}
+			{taxonomy}
+			existing={existingDecision}
+		/>
+	{/if}
 </article>
