@@ -67,17 +67,15 @@ Bez feedback ledger'a model nie wie co działa. Re-weighting bez >50 decisions =
 ## 4. "Done" looks like — wieczorny use-case
 
 ```mermaid
-timeline
-    title Wieczorny use-case (czas UTC)
-    09:00 : Pipeline runs (automatic)
-    10:00 : Telegram pings — NVDA earnings surprise +12%
-    12:30 : User opens /brief/today
-          : Reviews 15 candidates
-          : Interested on 5, Dismiss on 8
-          : 'interested' → paper-trade auto
-    14:00 : Posts shortlist do WhatsApp
-    14:30 : Grupa dyskutuje 30 min
-    21:00 : Alpaca paper plans active
+flowchart LR
+    T1["09:00 UTC<br/>Pipeline runs<br/>(automatic)"]
+    T2["10:00 UTC<br/>Telegram push<br/>NVDA +12%"]
+    T3["12:30 UTC<br/>User opens<br/>daily brief"]
+    T4["14:00 UTC<br/>Shortlist to<br/>WhatsApp"]
+    T5["14:30 UTC<br/>Group discussion<br/>30 min"]
+    T6["21:00 UTC<br/>Alpaca paper<br/>plans active"]
+
+    T1 --> T2 --> T3 --> T4 --> T5 --> T6
 ```
 
 **Weekend, niedziela 19:00:**

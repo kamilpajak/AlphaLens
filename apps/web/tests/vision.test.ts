@@ -57,17 +57,25 @@ test.describe('vision route', () => {
 		await expect(page.locator('header nav a[href="/vision"]')).toBeVisible();
 	});
 
-	test('mermaid blocks render as SVG diagrams', async ({ page }) => {
+	test('mermaid blocks render as SVG diagrams without syntax errors', async ({ page }) => {
 		await page.goto('/vision');
 		// The doc has two mermaid blocks (§3 feedback loop + §4 timeline).
 		// Mermaid replaces each <pre><code class="language-mermaid"> with a
 		// <div class="mermaid"> that wraps an SVG once render completes.
-		// Wait for at least one SVG to appear inside a mermaid container.
-		await expect(page.locator('article div.mermaid svg').first()).toBeVisible({ timeout: 10_000 });
-		// Both diagrams should render — assert ≥2 SVGs.
-		const svgCount = await page.locator('article div.mermaid svg').count();
-		expect(svgCount).toBeGreaterThanOrEqual(2);
+		// Wait for both diagrams to render. Mermaid.run() iterates the
+		// matched containers in sequence, so the second SVG may still be
+		// in flight when the first becomes visible. `toHaveCount` retries
+		// against the locator until the assertion passes or the timeout
+		// expires — avoids a race where an instant count() reads 1.
+		await expect(page.locator('article div.mermaid svg')).toHaveCount(2, { timeout: 10_000 });
 		// Source pre/code blocks for mermaid should be gone (replaced).
 		await expect(page.locator('article code.language-mermaid')).toHaveCount(0);
+		// Crucially: NO syntax-error SVG. Mermaid renders the "bomb" error
+		// picture as an SVG too, so the count-only assertion above would
+		// pass for a broken diagram. The error SVG carries an "aria-roledescription"
+		// of "error" — assert that's absent.
+		await expect(
+			page.locator('article div.mermaid svg[aria-roledescription="error"]')
+		).toHaveCount(0);
 	});
 });
