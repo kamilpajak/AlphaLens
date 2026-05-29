@@ -135,13 +135,20 @@ def is_half_day(d: DateLike, exchange: str = DEFAULT_EXCHANGE) -> bool:
         return False
     actual_close = cal.session_close(ts)
     # ``ExchangeCalendar.close_times`` is a list[(effective_date, time)]
-    # tuples giving the venue's regular close. Pick the entry in force
-    # on ``ts`` and compare against the actual close.
+    # tuples giving the venue's regular close. Walking it picks up
+    # permanent close-time changes (e.g. NYSE's historical 16:00 vs
+    # earlier-era 15:30) — the LAST entry with ``effective_date <= ts``
+    # is the schedule in force on the query date.
     regular_close_time = None
     for effective_date, close_time in cal.close_times:
         if effective_date is None or pd.Timestamp(effective_date) <= ts:
             regular_close_time = close_time
-    if regular_close_time is None:
+    # Defensive isinstance: a future ``exchange_calendars`` release that
+    # changes the ``close_times`` shape would otherwise silently return
+    # False for every half-day instead of raising. Half-day detection
+    # is opt-in (callers must explicitly invoke ``is_half_day``), so a
+    # silent False is OK at runtime but unwelcome under test.
+    if not isinstance(regular_close_time, dt.time):
         return False
     # Both ``actual_close`` and ``regular_close_time`` reference the same
     # venue-local tz; compare the time-of-day portion.
@@ -222,8 +229,11 @@ def trading_days_elapsed(
     which double-counts weekends; swapping it for this helper restores
     alignment with the trade-setup memo's "N trading days" intent.
 
-    Returns 0 (not negative) when ``end < start`` so a clock-skew or
-    caller bug cannot accidentally fire a TTL sweep.
+    Returns 0 (not a negative value or exception) when ``end < start``
+    so a clock-skew or caller bug cannot accidentally fire a TTL sweep
+    by reporting a fake "TTL exceeded by 9999 trading days". Silent
+    clamping was chosen over ``ValueError`` because a swept-but-shouldn't
+    cancellation is materially worse than a logged-and-silenced no-op.
     """
     s = _to_session_timestamp(start)
     e = _to_session_timestamp(end)
