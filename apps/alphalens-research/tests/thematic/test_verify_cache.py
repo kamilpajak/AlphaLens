@@ -196,6 +196,15 @@ class TestWindowing(_Base):
         with self.assertRaises(ValueError):
             verify_cache(cache_dir=self.cache, days=-1, today=dt.date(2026, 5, 29))
 
+    def test_far_future_today_raises(self):
+        """An accidental ``--today 2099-01-01`` during incident response
+        would silently report every day as missing → false-positive
+        alert avalanche. Guarded by a one-day-future tolerance (DST /
+        cross-tz call slack) per zen review 2026-05-29."""
+        far_future = dt.datetime.now(dt.UTC).date() + dt.timedelta(days=365)
+        with self.assertRaises(ValueError):
+            verify_cache(cache_dir=self.cache, days=7, today=far_future)
+
 
 class TestCacheDirMissing(_Base):
     def test_nonexistent_cache_dir_reports_all_missing(self):

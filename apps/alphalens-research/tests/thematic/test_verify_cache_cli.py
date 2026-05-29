@@ -131,8 +131,20 @@ class TestAlertDispatch(_CLIBase):
         # Missing day + --alert + missing env vars → exit 1 but no
         # Telegram send. Critical: fresh checkouts without secrets must
         # not crash the systemd ExecStartPost path.
+        #
+        # Scope the env wipe to ONLY the two Telegram vars rather than
+        # clearing all of ``os.environ`` — a future CLI extension that
+        # happens to read PATH / HOME would otherwise silently break
+        # under this test (zen review LOW finding 2026-05-29).
+        import os as _os
+
+        env_patch = {
+            k: v
+            for k, v in _os.environ.items()
+            if k not in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
+        }
         with (
-            mock.patch.dict("os.environ", {}, clear=True),
+            mock.patch.dict("os.environ", env_patch, clear=True),
             mock.patch(
                 "alphalens_pipeline.edgar_detector.dispatch.handlers.telegram"
                 ".TelegramHandler.send_message"

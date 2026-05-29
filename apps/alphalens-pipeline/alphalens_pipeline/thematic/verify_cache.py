@@ -95,6 +95,19 @@ def verify_cache(
     if days < 1:
         raise ValueError(f"days must be >= 1, got {days}")
     anchor = today if today is not None else dt.datetime.now(dt.UTC).date()
+    # Guard against an accidental far-future anchor (e.g. operator
+    # passes ``--today 2099-01-01`` during incident response). Without
+    # this the verifier would silently report every requested day as
+    # missing and fire a false-positive Telegram avalanche. One-day
+    # tolerance covers DST / cross-tz anchor calls; anything beyond
+    # tomorrow's UTC date is clearly a typo.
+    today_utc = dt.datetime.now(dt.UTC).date()
+    if anchor > today_utc + dt.timedelta(days=1):
+        raise ValueError(
+            f"today={anchor.isoformat()} is more than one day in the "
+            f"future (UTC today={today_utc.isoformat()}); refusing to "
+            f"generate spurious missing-day alerts."
+        )
 
     missing: list[dt.date] = []
     zero_row: list[dt.date] = []
@@ -110,11 +123,16 @@ def verify_cache(
             continue
         try:
             df = pd.read_parquet(path)
-        except Exception as exc:
-            logger.warning(
-                "verify-cache: %s exists but unreadable (%s); treating as missing",
+        except Exception:
+            # ``logger.exception`` captures the full traceback in
+            # journalctl alongside the warning message so post-mortem
+            # investigation distinguishes a real pyarrow/encoding bug
+            # from the more common truncated-write case. The bucketing
+            # decision stays the same (treat as missing → alert) — only
+            # the diagnostic depth improves.
+            logger.exception(
+                "verify-cache: %s exists but unreadable; treating as missing",
                 path,
-                exc,
             )
             missing.append(d)
             continue
