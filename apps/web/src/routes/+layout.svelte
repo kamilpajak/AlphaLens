@@ -98,6 +98,9 @@
 				<a href="/experiments" class="hover:text-amber transition-colors" class:text-amber={route === '/experiments'}>
 					<span class="hidden sm:inline">[04]&nbsp;</span>experiments
 				</a>
+				<a href="/vision" class="hover:text-amber transition-colors" class:text-amber={route === '/vision'}>
+					<span class="hidden sm:inline">[05]&nbsp;</span>vision
+				</a>
 				<a
 					href={apiDocsHref}
 					target="_blank"

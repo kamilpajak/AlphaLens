@@ -31,7 +31,9 @@ const REFERENCED = [
 	'idiosyncratic_momentum_audit_verdict_2026_05_14.md',
 	'v9d_retrospective_pre_2018_postmortem_2026_05_05.md',
 	'pc_abnormal_retrospective_pre_2018_verdict.json',
-	'insider_form4_opportunistic_slippage_stress_postmortem_2026_05_12.md'
+	'insider_form4_opportunistic_slippage_stress_postmortem_2026_05_12.md',
+	// Source for the /vision SPA route — rendered client-side via `marked`.
+	'alphalens_ideal_shape_2026_05_29.md'
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
