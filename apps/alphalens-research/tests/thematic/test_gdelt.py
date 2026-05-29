@@ -368,6 +368,17 @@ class TestGdeltTitleCleaning(unittest.TestCase):
             "Filing dated 2026-05-27 hits EDGAR",
         )
 
+    def test_collapses_single_char_hyphen_chain(self):
+        # Pins the two-pass mechanism: a single-character chain "A - B - C"
+        # needs both substitution passes. Pass 1 consumes B in the A-B
+        # match, leaving " - C" stranded; pass 2 catches B-C. ISO date
+        # already converges in one pass (different code path), so this is
+        # the canonical regression test for dropping the 2nd .sub() call.
+        self.assertEqual(
+            gdelt.clean_title("A - B - C ratings cut"),
+            "A-B-C ratings cut",
+        )
+
     def test_preserves_em_dash_separator(self):
         # An em-dash separator (U+2014) between sentence clauses is NOT a
         # GDELT artefact and must survive untouched.

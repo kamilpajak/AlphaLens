@@ -67,9 +67,14 @@ def clean_title(title: str) -> str:
     title = " ".join(title.split())  # collapse all whitespace runs + trim
     title = _SPACE_BEFORE_PUNCT.sub(r"\1", title)
     title = _SPACE_AFTER_OPENER.sub(r"\1", title)
-    # Two passes: the hyphen regex consumes the second \w in its match, so
-    # overlapping runs like "2026 - 05 - 27" need a second pass to catch the
-    # third token. Bounded by string length, no backtracking.
+    # Two passes: re.sub finds all non-overlapping matches left-to-right,
+    # consuming the second \w of each match. For a single-character chain
+    # like "A - B - C" the first pass produces "A-B - C" (B is consumed
+    # before " - C" can be matched); a second pass then catches "B - C".
+    # ISO-style chains like "2026 - 05 - 27" already converge in one pass
+    # because the consumed \w sits before the next " - " in the string.
+    # Two passes are provably sufficient for chains of any length: pass 1
+    # collapses even-indexed pairs, pass 2 the remaining odd-indexed pairs.
     title = _SPACE_AROUND_HYPHEN.sub(r"\1-\2", title)
     title = _SPACE_AROUND_HYPHEN.sub(r"\1-\2", title)
     return title
