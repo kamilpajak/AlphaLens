@@ -11,6 +11,7 @@ import pandas as pd
 import typer
 from alphalens_pipeline.thematic import clean_titles as clean_titles_mod
 from alphalens_pipeline.thematic import news_ingest
+from alphalens_pipeline.thematic import verify_cache as verify_cache_mod
 from alphalens_pipeline.thematic.argumentation import orchestrator as brief_orchestrator
 from alphalens_pipeline.thematic.extraction import gemini_flash
 from alphalens_pipeline.thematic.extraction import themes as themes_mod
@@ -335,6 +336,102 @@ def brief(
     out_parquet = output_dir / f"{target.isoformat()}.parquet"
     typer.echo(f"Wrote {len(enriched)} briefs → {out_parquet}")
     typer.echo(f"  Pro: {n_pro}, Flash: {n_flash}")
+
+
+@thematic_app.command("verify-cache")
+def verify_cache_command(
+    days: int = typer.Option(
+        7,
+        "--days",
+        help=(
+            "Window size in calendar days, inclusive of today. Defaults to "
+            "7 (a clean week of news). Use 30 to cover the full "
+            "catalyst_resolver lookback."
+        ),
+    ),
+    cache_dir: Path = typer.Option(
+        verify_cache_mod.DEFAULT_CACHE_DIR,
+        "--cache-dir",
+        help="Override the default thematic_news parquet root.",
+    ),
+    alert: bool = typer.Option(
+        False,
+        "--alert",
+        help=(
+            "On missing days, post a digest to Telegram via TELEGRAM_BOT_TOKEN "
+            "+ TELEGRAM_CHAT_ID env vars. Default off — only the systemd "
+            "ExecStartPost hook should set this."
+        ),
+    ),
+    today: str = typer.Option(
+        None,
+        "--today",
+        help=(
+            "Override the anchor date in YYYY-MM-DD format. Defaults to "
+            "UTC today. Tests pin a fixed anchor; the systemd hook leaves "
+            "this unset so wall-clock UTC drives the check."
+        ),
+    ),
+) -> None:
+    """Verify the thematic_news parquet cache has no missing days.
+
+    Exits 0 when every requested day has a parquet (regardless of row
+    count). Exits 1 when one or more days are missing — surfaces the
+    silent failure documented as Risk A in
+    ``docs/research/paper_trading_non_trading_day_2026_05_29.md`` §5.1.
+
+    "Missing" means: no parquet at the expected path, OR a non-parquet
+    file at the expected path (truncated write, foreign content).
+    "Zero-row" parquets are NOT missing — they represent a legitimately
+    quiet day and are reported separately for observability.
+    """
+    anchor = dt.date.fromisoformat(today) if today else None
+    result = verify_cache_mod.verify_cache(cache_dir=cache_dir, days=days, today=anchor)
+
+    typer.echo(
+        f"verify-cache: {result.checked_days - len(result.missing_days)}/"
+        f"{result.checked_days} dates present"
+    )
+    if result.zero_row_days:
+        z = ", ".join(d.isoformat() for d in result.zero_row_days)
+        typer.echo(f"  no-news (0-row parquet): {z}")
+    if result.missing_days:
+        m = ", ".join(d.isoformat() for d in result.missing_days)
+        typer.echo(f"  MISSING: {m}", err=True)
+        if alert:
+            _post_verify_cache_alert(result)
+        raise typer.Exit(code=1)
+
+
+def _post_verify_cache_alert(result: verify_cache_mod.VerifyResult) -> None:
+    """Post the missing-day digest to Telegram if credentials are set.
+
+    Credential absence is logged + skipped (matches the
+    ``literature_scanner._maybe_dispatch`` convention) so a fresh
+    checkout without TELEGRAM_* env vars degrades gracefully to
+    "exit 1 + stderr only".
+    """
+    from alphalens_pipeline.edgar_detector.dispatch.handlers.telegram import (
+        TelegramHandler,
+    )
+
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        logger.info(
+            "verify-cache: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing; skipping alert dispatch"
+        )
+        return
+    missing = ", ".join(d.isoformat() for d in result.missing_days)
+    digest = (
+        f"🚨 *AlphaLens news_ingest gap*\n"
+        f"Missing parquet(s): {missing}\n"
+        f"Window: {result.checked_days} days. "
+        f"`journalctl --user -u alphalens-thematic-build.service` to "
+        f"investigate."
+    )
+    handler = TelegramHandler(bot_token=bot_token, chat_id=chat_id)
+    handler.send_message(digest)
 
 
 @thematic_app.command("clean-titles")

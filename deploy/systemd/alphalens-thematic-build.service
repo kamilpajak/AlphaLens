@@ -55,10 +55,33 @@ ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
     alphalens-pipeline:latest \
     /app/deploy/docker/run_thematic_day.sh
 
+# Gap-detection on the news_ingest cache (PR-E, epic #295 Risk A).
+# Fires after the pipeline ExecStart succeeds but BEFORE the Django
+# rebuild-cache — so a corrupt or missing parquet halts the chain
+# rather than silently refreshing Django from incomplete data.
+# Telegram alert on the missing-day digest is opt-in via --alert and
+# reads TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID from the inherited env.
+# Window of 7 days covers a clean operational week + the most-recent
+# rebuild window without overshooting catalyst_resolver's 30-day
+# lookback (manual --days 30 invocation available for deep audits).
+# Runs in the same pipeline image so the alphalens CLI is on PATH; the
+# bind mount keeps it inspecting the host cache rather than the
+# container's local copy.
+ExecStartPost=/usr/bin/docker run --rm \
+    --user %U:%G \
+    -e HOME=/app/home \
+    -e TELEGRAM_BOT_TOKEN \
+    -e TELEGRAM_CHAT_ID \
+    -v %h/.alphalens:/app/home/.alphalens \
+    alphalens-pipeline:latest \
+    alphalens thematic verify-cache --days 7 --alert
+
 # Sync the parquet output the pipeline just wrote into the Django Postgres
 # cache via the maintenance one-shot. ``--profile maintenance`` opt-in
 # isolates this from the always-on ``django`` service. ExecStartPost fires
-# only on ExecStart success; pipeline failures leave the cache untouched.
+# only on ExecStart success AND the preceding verify-cache exit-0; a
+# pipeline failure OR a gap-detect alert leaves the cache untouched so
+# the operator can investigate before partial data hits Django.
 ExecStartPost=/usr/bin/docker compose \
     -f %h/AlphaLens/deploy/docker/django-prod/docker-compose.yaml \
     --profile maintenance run --rm rebuild-cache
