@@ -112,15 +112,19 @@ def auth_start(request: HttpRequest) -> HttpResponse:
         require_https=True,
     ):
         # `return_to` is user-controlled — never echo it verbatim into the
-        # log stream (Sonar S5145 / CWE-117 log forging). Truncate, escape
-        # non-printable + newline chars, and emit length so operators can
-        # still spot pattern abuse (e.g. waves of long URLs) without
-        # importing attacker input.
-        truncated = (return_to or "")[:80].encode("unicode_escape").decode("ascii")
+        # log stream (Sonar S5145 / CodeQL py/log-injection / CWE-117).
+        # Truncate, then strip the CR + LF chars that would let an attacker
+        # forge a second log entry. CodeQL's py/log-injection rule only
+        # recognises explicit `.replace("\n", ...).replace("\r", ...)` as a
+        # sanitizer — see its rule doc — so even though `unicode_escape`
+        # would also work semantically, this form is what the analyzer
+        # taint-tracks as cleaned. Emit length too so operators can spot
+        # waves of long URLs without importing the attacker input.
+        safe_head = (return_to or "")[:80].replace("\r", "").replace("\n", "")
         logger.warning(
             "auth_start: rejected invalid return_to (len=%d, head=%s)",
             len(return_to or ""),
-            truncated,
+            safe_head,
         )
         return HttpResponseBadRequest("invalid return_to")
     return HttpResponseRedirect(return_to)
