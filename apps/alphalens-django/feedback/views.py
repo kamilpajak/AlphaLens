@@ -82,7 +82,13 @@ def _serialise_decision(d: Decision) -> dict:
 
 
 class DecisionsView(APIView):
-    """POST (create/upsert) + GET (list by brief_date) collection endpoint."""
+    """POST (create/upsert) + GET (list by brief_date) collection endpoint.
+
+    HTTP status convention (zen pre-merge finding #5): POST returns 201
+    only on fresh creation; 200 on upsert update (UNIQUE-key row already
+    existed and was replaced). The id is preserved across the upsert so
+    the SPA's local undo reference stays valid either way.
+    """
 
     @extend_schema(request=DecisionRequestSerializer, responses=DecisionResponseSerializer)
     def post(self, request: Request) -> Response:

@@ -65,6 +65,12 @@
 		other: 'other'
 	};
 
+	// UI is intentionally pessimistic in v1 (zen pre-merge finding #8):
+	// button stays disabled during POST flight rather than flipping to
+	// "recorded" immediately and rolling back on error. Trade-off: a
+	// failed POST never leaves a stale "✓ interested" chip the user
+	// has to interpret. v2 may switch to optimistic + rollback once
+	// feedback-loss is well enough understood.
 	async function submit(action: FeedbackAction, dismissCategory: DismissCategory | null = null, dismissReason: string | null = null, dismissNote: string | null = null) {
 		inflight = true;
 		errorText = null;

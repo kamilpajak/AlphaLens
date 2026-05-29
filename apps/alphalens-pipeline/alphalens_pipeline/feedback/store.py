@@ -8,13 +8,31 @@ Concurrency: SQLite WAL mode allows concurrent readers while serialising
 writers. The Django prod handler is the main writer, the pipeline
 backfill jobs (paper-trade outcome join, v2) will be the second writer.
 An advisory ``fcntl.flock`` on a sibling ``.lock`` file arbitrates,
-matching the pattern in ``alphalens_pipeline.paper.ledger``.
+matching the pattern in ``alphalens_pipeline.paper.ledger``. The lock
+file is intentionally never cleaned up (zen pre-merge finding #6) —
+single zero-byte file per DB, no harm in backups, removing it on exit
+would race with a concurrent open() that's about to acquire it.
 
 The ``DISMISS_TAXONOMY`` mapping is the single source of truth for the
 2-level dismiss enum locked in the design memo. Django serializer +
 SPA dropdown both consume it; if a reason moves between categories,
 update here and the test in ``test_feedback_store.py`` fails, forcing a
 coordinated change.
+
+Schema migration story (zen pre-merge finding #4): v2 column additions
+should use ``ALTER TABLE decisions ADD COLUMN <name> <type>`` with a
+default that's compatible with existing NULL rows (typically NULL).
+The bootstrap ``_ensure_schema`` is additive — it never DROPs or
+ALTERs, so adding rows to ``_SCHEMA_DDL`` after a CREATE TABLE IF NOT
+EXISTS is enough for fresh databases, but legacy ones need an explicit
+ALTER TABLE block. Use ``PRAGMA user_version`` to track the applied
+schema generation when more than one column changes accumulate. No
+backfill required for any v1→v2 path foreseen in the roadmap.
+
+Operator monitoring (zen pre-merge finding #7): until the v2 weekly
+review SPA route ships, use ``alphalens feedback report`` CLI for
+action distribution + dismiss-reason histogram + "other" usage
+percentage. >15% other indicates a taxonomy gap (per design memo).
 """
 
 from __future__ import annotations
