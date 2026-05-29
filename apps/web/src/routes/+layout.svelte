@@ -1,6 +1,6 @@
 <script lang="ts">
 	import '../app.css';
-	import { page } from '$app/state';
+	import { page, updated } from '$app/state';
 	import { Activity, Database, Triangle } from 'lucide-svelte';
 	import favicon from '$lib/assets/favicon.svg';
 	import { GEMINI } from '$lib/models';
@@ -58,7 +58,25 @@
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
-<div class="scanlines grain min-h-screen flex flex-col">
+<!--
+	`data-sveltekit-reload` opts every in-app navigation inside this wrapper
+	into a full page reload (instead of client-side routing) once
+	`updated.current` flips to true. The flip is driven by the version
+	poll configured in svelte.config.js — when SvelteKit detects a new
+	build, the next click re-fetches the HTML so the browser pulls the
+	new chunk URLs instead of trying to import stale hashed modules.
+	Default (empty / undefined attr) is "follow SPA routing"; setting
+	the attribute to "" forces a reload, "off" keeps SPA routing.
+
+	Scoped at the outer wrapper (not <main>) so header nav links
+	(/, /briefs, /about, /experiments) are also covered — they sit in
+	<header>, not <main>, and were the primary residual blank-screen
+	risk under a child-only scope.
+-->
+<div
+	class="scanlines grain min-h-screen flex flex-col"
+	data-sveltekit-reload={updated.current ? '' : 'off'}
+>
 	<!-- Top status bar -->
 	<header class="border-b border-grid bg-bg-1 text-[11px] uppercase tracking-widest">
 		<div class="flex flex-wrap items-center gap-x-4 gap-y-1 sm:gap-x-6 px-3 sm:px-4 py-2">
