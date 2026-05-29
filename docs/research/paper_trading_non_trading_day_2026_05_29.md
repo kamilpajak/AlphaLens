@@ -155,20 +155,36 @@ So a Saturday-released M&A leak surfaces in Saturday's brief (visible
 in SPA over the weekend for cherry-picking) AND propagates into
 Sunday's + Monday's briefs through the 30-day lookback.
 
-Known limitations (not in scope for PR-A; tracked as ideas):
+Known limitations (not in scope for PR-A; planned follow-ups):
 
-* No gap-detection on the ingest cache — if Saturday's systemd
-  run fails silently, Monday's catalyst_resolver iterates only the
-  files that exist and no alert fires. Worth a follow-up
-  (probably as part of pipeline-cadence Track F).
-* Cross-day dedup is not run; same article re-published Sat then
-  Mon shows up twice in the 30-day lookback. Polygon's own per-URL
-  dedup catches most of it.
-* Ingest latency: Sat 06:30 UTC = 02:30 ET = before any Sat-morning
-  US news cycle. Sat-afternoon ET news lands in Sun's parquet, not
-  Sat's. Effectively Monday's brief sees Sat morning → Sun evening
-  spread across Sat + Sun + Mon parquets — all picked up by the
-  30-day lookback regardless.
+* **No gap-detection on the ingest cache (HIGH).** If Saturday's
+  systemd run fails silently, Monday's catalyst_resolver iterates
+  only the files that exist and no alert fires. Same failure mode
+  as PR #259's stale pipeline image (a day of GDELT-padded titles
+  shipped before anyone noticed). **Planned PR-E:** new
+  `alphalens thematic verify-cache --days N` command, wired as
+  `ExecStartPost=` of `alphalens-thematic-build.service` with
+  Telegram alert on missing-day detection. Distinguish "no-news-day
+  (0-row parquet)" from "missing-day (no parquet at all)".
+* **Cross-day dedup not run (LOW).** Tier 1 clustering operates
+  per-day inside `news_ingest`; an article published Sat then
+  re-syndicated Mon shows up twice in the 30-day lookback.
+  Polygon's per-URL dedup catches the bulk; GDELT / RSS residuals
+  are marginal noise in event counts, not brief outcomes.
+  **Defer:** re-evaluate if 2+ duplicate candidate cards observed in
+  production briefs (cross-day Tier 1 clustering would move into
+  `catalyst_resolver._load_window`).
+* **Ingest latency on weekends (MEDIUM).** Sat 06:30 UTC = 02:30 ET
+  — before any Saturday US news cycle. Sat-afternoon ET news lands
+  in Sun's parquet, not Sat's. Effectively the Saturday brief misses
+  a full ET day of news (Sat 02:30 onward). Monday's brief still
+  sees everything through the 30-day lookback, so the impact is on
+  the Saturday/Sunday SPA read-experience, not the Monday execution
+  path. **Planned PR-F:** 4×/day pipeline cadence (06:30 / 12:30 /
+  18:30 / 23:30 UTC) per Track F in
+  `project_alphalens_ideal_shape_2026_05_29.md`. Polygon Starter
+  rate limit (15 req/min, ~21.6 K/day) gates this; verify quota
+  budget before PR-F.
 
 ## 6. Multi-exchange notes (forward-looking)
 
