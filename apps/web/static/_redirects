@@ -11,30 +11,13 @@
 # rejected because it adds ~30 ms latency per request and hides CORS
 # behaviour. See apps/web/README.md for the deploy topology.
 #
-# IMPORTANT: `/_app/*` MUST be excluded from the SPA fallback. CF Pages
-# treats those URLs as immutable hashed assets and applies a long-cache
-# response header (~4h). When a stale browser tab requests an old chunk
-# hash that no longer exists in the deploy, falling back to index.html
-# means the CDN poisons that URL with cached HTML under a JS content-type
-# expectation — every subsequent request (including hard refresh) returns
-# the cached HTML, breaking the module loader with
-# "Failed to load module script: Expected a JavaScript-or-Wasm module
-# script but the server responded with a MIME type of text/html" and a
-# blank-screen SPA. Returning 404 for missing chunks lets SvelteKit's
-# stale-import recovery (handleError + auto-reload) do its job.
-# HISTORICAL: this rule was the primary stale-chunk mitigation in PRs
-# #285 + #286. It does NOT work as intended on CF Pages — per docs the
-# redirect runtime processes rules before checking asset existence, so
-# a status-404 destination that points at a missing file just falls
-# through to the next matching rule (the SPA fallback `/* /index.html`).
-# Verified empirically: stale chunk URLs returned 200 + text/html even
-# after the rule shipped.
-#
-# The PRIMARY fix is now framework-level: SvelteKit
+# NOTE on stale-chunk recovery: do NOT try to exclude `/_app/*` here
+# with a `… 404` rule. CF Pages processes _redirects before checking
+# asset existence, so a status-404 rule whose destination is missing
+# falls through to the SPA fallback — verified empirically in PR #285
+# and the hotfix attempt #286, neither of which prevented the
+# blank-screen bug. The canonical fix lives in the SvelteKit config:
 # `kit.version.pollInterval` + `data-sveltekit-reload` on the layout
-# wrapper trigger a full reload before the browser ever requests an
-# old chunk hash (see svelte.config.js + src/routes/+layout.svelte).
-# This rule is a residual no-op kept for documentation; cleanup PR
-# pending once the canonical fix is verified in production.
-/_app/*  /_chunk-404.txt  404
+# wrapper. See svelte.config.js + src/routes/+layout.svelte and the
+# memory note `reference_cf_pages_redirects_no_404_for_missing_file`.
 /*  /index.html  200

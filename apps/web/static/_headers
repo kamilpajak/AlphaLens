@@ -1,25 +1,14 @@
-# Cloudflare Pages _headers — explicit cache directives.
+# Cloudflare Pages _headers — explicit cache directives on the SPA root.
 #
-# Defensive layer against the same CDN edge-cache poisoning fixed in
-# _redirects: ensure index.html (and any HTML served as SPA fallback)
-# is never cached for more than its revalidation window. Pages already
-# sends `cache-control: public, max-age=0, must-revalidate` on the bare
-# `/` route, but the SPA fallback inherits the URL's response-class cache
-# headers, so a fallback served at a `/_app/*` URL can get the immutable
-# asset cache header (~4h). The _redirects 404 prevents that path now;
-# this file pins the convention so a future _redirects regression cannot
-# silently reintroduce the bug.
+# Defense layer for stale-chunk recovery. The blank-screen bug fixed via
+# SvelteKit version polling (see svelte.config.js) relies on the browser
+# eventually fetching a fresh index.html — pin no-long-cache on the SPA
+# entry so the new bundle hashes propagate as soon as a deploy lands.
+# Pages already sends `cache-control: public, max-age=0, must-revalidate`
+# on `/` by default; this file makes the contract explicit so a future
+# Pages-side default change cannot silently regress the recovery path.
 /index.html
   Cache-Control: public, max-age=0, must-revalidate
 
 /
   Cache-Control: public, max-age=0, must-revalidate
-
-# The 404 response served by the `_redirects` rule for missing chunk URLs
-# under /_app/*. Without this explicit pin, CF Pages can apply the same
-# immutable-asset cache policy to the 404 response itself (the URL still
-# matches the /_app/immutable/ prefix), poisoning the CDN with a sticky
-# 404 for hours. Forcing no-cache means SvelteKit's reload-on-stale-import
-# recovery always sees a fresh response on every retry.
-/_chunk-404.txt
-  Cache-Control: no-cache, must-revalidate, max-age=0
