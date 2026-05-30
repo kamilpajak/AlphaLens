@@ -4,6 +4,8 @@
 	import { Activity, Database, Triangle } from 'lucide-svelte';
 	import favicon from '$lib/assets/favicon.svg';
 	import { GEMINI } from '$lib/models';
+	import MarketStatusBanner from '$lib/components/MarketStatusBanner.svelte';
+	import { startMarketStatusPoll } from '$lib/marketStatus.svelte';
 
 	let { children } = $props();
 
@@ -15,6 +17,15 @@
 		tick();
 		const id = setInterval(tick, 1000);
 		return () => clearInterval(id);
+	});
+
+	// Single layout-level mount point for the /v1/market/status poll loop.
+	// startMarketStatusPoll is idempotent at the module level — subsequent
+	// callers (none currently exist) would get a no-op cleanup — so this
+	// remains the canonical owner.
+	$effect(() => {
+		const stop = startMarketStatusPoll();
+		return stop;
 	});
 
 	const route = $derived(page.url.pathname);
@@ -124,6 +135,11 @@
 			</div>
 		</div>
 	</header>
+
+	<!-- Closed-market banner above main content. Self-hides on trading days
+	     and during the pre-load window; non-trading days get the persistent
+	     "submission deferred until …" chrome rendered globally. -->
+	<MarketStatusBanner />
 
 	<main class="flex-1">
 		{@render children()}

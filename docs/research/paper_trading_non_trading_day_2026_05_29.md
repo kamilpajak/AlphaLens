@@ -122,11 +122,22 @@ liquidity-floor guard — not the universal "defer to 09:45" rule.
   `paper_trading_capital_sizing_2026_05_28.md` to read "trading days"
   explicitly. `reconcile_orders` gained an optional `observed_at`
   parameter for test determinism.
-* **PR-C — SPA banner.** `BriefHeader.svelte` reads a new
-  `/v1/market/status` endpoint (returns `is_trading_day`,
-  `is_half_day`, `next_open_iso`) and renders a persistent banner on
-  closed days: "Market closed. Submission deferred until Mon
-  2026-06-01 09:30 ET (in 1h 24m). Ladder based on Fri close."
+* **PR-C (#297) — SPA banner + `/v1/market/status` endpoint. SHIPPED 2026-05-30.**
+  New Django `market` app exposing `/v1/market/status` →
+  `{is_trading_day, is_half_day, next_open_iso, exchange}`. Backed by a
+  thin `market/calendar.py` wrapper over the shared `exchange_calendars`
+  library (kept Django image lean — pipeline NOT pulled in). New SPA
+  `MarketStatusBanner.svelte` + `marketStatus.svelte.ts` runes store
+  (poll every 60s + visibilitychange refresh), mounted in
+  `+layout.svelte` above `<main>` so every route inherits the closed-day
+  chrome. UX copy: "market closed · submission deferred until Mon Jun 1
+  09:30 ET · in 1h 24m · ladder anchors last close". Test plan:
+  8 pytest cases (trading / weekend / MLK holiday / Black Friday
+  half-day / malformed `as_of` / iso-with-time `as_of` / response
+  shape / default-anchor) + 7 Playwright cases (closed-day visible
+  with countdown, half-day still visible, trading-day hidden,
+  trading-half-day hidden, banner above `<main>`, banner doesn't
+  block header nav, format regex).
 * **PR-D — submit cadence + opening-cross research.** Adds VPS
   systemd timer that fires submit + reconcile on weekday market open;
   one-shot Alpaca research note documenting how `tif="gtc"`
