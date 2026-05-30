@@ -284,6 +284,124 @@ class TestScoreCLI(unittest.TestCase):
             self.assertEqual(len(round_trip), 0)
 
 
+class TestPrintScorePreviewNaNSafety(unittest.TestCase):
+    """``_print_score_preview`` is the post-score CLI summary panel that
+    iterates ``enriched.head(25).iterrows()``. Pandas missing values land
+    as ``float('nan')`` (NOT ``None``) for object-dtype string columns —
+    a defensive ``row.get("col") or "?"`` accepts NaN as truthy because
+    Python evaluates ``bool(float('nan')) is True``. The downstream
+    ``[:19]`` slice then crashes with ``TypeError: 'float' object is not
+    subscriptable``.
+
+    Bug observed on VPS 2026-05-30 (industry_name NaN halted the daily
+    pipeline before the verify-cache + rebuild-cache hooks could run).
+    These tests pin the NaN-safe contract so any future regression
+    (new str column added without a NaN guard) fails CI loud.
+    """
+
+    def setUp(self):
+        # Import here so the test surfaces in CI even if a future refactor
+        # moves the helpers to a private module — the assertion is on
+        # behaviour, not the location.
+        from alphalens_cli.commands.thematic import (
+            _fmt_str_or_dash,
+            _print_score_preview,
+        )
+
+        self._fmt_str_or_dash = _fmt_str_or_dash
+        self._print_score_preview = _print_score_preview
+
+    def _row(self, **overrides) -> dict:
+        """Minimal row schema matching what ``score_candidates`` writes
+        into ``enriched`` parquet — every column the preview reads."""
+        base = {
+            "ticker": "QUBT",
+            "industry_name": "Computer Hardware",
+            "layer4_weighted_score": 3,
+            "insider_score_usd": 1500.0,
+            "fcff_yield_pct": 8.7,
+            "valuation_composite_sector_percentile": 55.0,
+            "technicals_summary_str": "RSI 65 / MA50 +15.7%",
+        }
+        base.update(overrides)
+        return base
+
+    # ---- _fmt_str_or_dash unit cases ----
+
+    def test_fmt_str_or_dash_returns_value_when_str(self):
+        self.assertEqual(self._fmt_str_or_dash("Computer Hardware", 19), "Computer Hardware")
+
+    def test_fmt_str_or_dash_truncates_to_max_len(self):
+        self.assertEqual(
+            self._fmt_str_or_dash("Services-Prepackaged Software", 19),
+            "Services-Prepackage",
+        )
+
+    def test_fmt_str_or_dash_returns_dash_on_none(self):
+        self.assertEqual(self._fmt_str_or_dash(None, 19), "-")
+
+    def test_fmt_str_or_dash_returns_dash_on_nan(self):
+        # The motivating crash: ``float('nan')`` masquerades as a string
+        # in object-dtype pandas columns. The helper must short-circuit
+        # BEFORE the slice.
+        self.assertEqual(self._fmt_str_or_dash(float("nan"), 19), "-")
+
+    def test_fmt_str_or_dash_returns_dash_on_pandas_na(self):
+        self.assertEqual(self._fmt_str_or_dash(pd.NA, 19), "-")
+
+    def test_fmt_str_or_dash_returns_dash_on_empty_string(self):
+        # Empty string from a coalesced source is treated the same as
+        # missing — matches the visual intent of "-" in the table.
+        self.assertEqual(self._fmt_str_or_dash("", 19), "-")
+
+    # ---- _print_score_preview end-to-end NaN safety ----
+
+    def test_preview_does_not_crash_on_nan_industry_name(self):
+        df = pd.DataFrame([self._row(industry_name=float("nan"))])
+        try:
+            self._print_score_preview(df)
+        except TypeError as exc:
+            self.fail(f"_print_score_preview crashed on NaN industry_name: {exc}")
+
+    def test_preview_does_not_crash_on_nan_technicals_summary(self):
+        # Same defensive shape — ``row.get(..., '')[:50]`` has the same
+        # bug class. NaN bypasses the ``''`` default because dict.get
+        # only returns the default on a MISSING key, not on a present-
+        # but-NaN value.
+        df = pd.DataFrame([self._row(technicals_summary_str=float("nan"))])
+        try:
+            self._print_score_preview(df)
+        except TypeError as exc:
+            self.fail(f"_print_score_preview crashed on NaN technicals_summary_str: {exc}")
+
+    def test_preview_does_not_crash_on_multiple_nan_string_columns(self):
+        df = pd.DataFrame(
+            [
+                self._row(
+                    industry_name=float("nan"),
+                    technicals_summary_str=float("nan"),
+                ),
+                self._row(),  # second row to exercise iteration past a NaN
+            ]
+        )
+        try:
+            self._print_score_preview(df)
+        except TypeError as exc:
+            self.fail(f"_print_score_preview crashed on NaN-heavy frame: {exc}")
+
+    def test_preview_renders_dash_marker_for_nan_industry(self):
+        # Belt-and-suspenders: the preview should not silently turn a
+        # NaN industry into the literal string "nan" (pandas's default
+        # str-conversion). The dash placeholder makes the missing-value
+        # visible to the operator scanning the summary panel.
+        df = pd.DataFrame([self._row(industry_name=float("nan"))])
+        with patch("typer.echo") as echo:
+            self._print_score_preview(df)
+        rendered = "\n".join(call.args[0] for call in echo.call_args_list if call.args)
+        self.assertIn("QUBT", rendered, "ticker must still render alongside the dash marker")
+        self.assertNotIn(" nan ", rendered, "raw 'nan' must NOT leak into the rendered row")
+
+
 class TestBriefCLI(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
