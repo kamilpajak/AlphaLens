@@ -127,6 +127,26 @@ class TestSystemdUnits(unittest.TestCase):
             "gap-detection hook has been removed entirely.",
         )
 
+    def test_thematic_build_docker_run_passes_openrouter_api_key(self):
+        # PR-G (2026-05-30) swapped the thematic pipeline to DeepSeek v4
+        # via OpenRouter. The docker `-e KEY` flag list in ExecStart
+        # MUST forward OPENROUTER_API_KEY into the container or
+        # extract/map-themes/brief exit 2 with "OPENROUTER_API_KEY
+        # missing from environment" (caught manually post-merge:
+        # service had GOOGLE_API_KEY but not OPENROUTER_API_KEY).
+        #
+        # The `-e KEY` (no `=value`) form tells docker to copy from
+        # the calling env — which is populated from /etc/alphalens/env
+        # via EnvironmentFile. Both halves MUST agree on the key name.
+        self.assertRegex(
+            self.unit_text,
+            re.compile(r"^\s+-e OPENROUTER_API_KEY\s*\\?\s*$", re.MULTILINE),
+            "ExecStart docker invocation MUST forward OPENROUTER_API_KEY "
+            "via `-e OPENROUTER_API_KEY` or the LLM call stage exits 2. "
+            "Add the line to the `-e KEY` block in alphalens-thematic-"
+            "build.service.",
+        )
+
     def test_thematic_build_service_rebuilds_briefs_cache_post_run(self):
         # After a successful pipeline run the new parquet output must be
         # synced into the Django Postgres-backed cache. The unit invokes
