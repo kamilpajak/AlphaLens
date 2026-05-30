@@ -121,4 +121,25 @@ def emit_domain_metrics(job: str, metrics: Mapping[str, float | int]) -> Path:
         tmp_path = Path(tmp.name)
 
     os.replace(tmp_path, target)
+
+    # node_exporter's container runs as ``nobody`` (UID 65534); the
+    # textfile collector reads scrape files as that user. ``tempfile``
+    # defaults to 0o600 (owner-only) which makes node_exporter see
+    # the file but fail to open it, silently dropping the series.
+    # Promote to 0o644 (group + world readable) so any container user
+    # — including ``nobody`` — can scrape. The file still lives under
+    # the operator's home dir; the chmod only widens read access. The
+    # companion bash hook (``alphalens-emit-job-metrics``) writes via
+    # ``>`` which honors the systemd-user umask (typically 022 →
+    # 0o644), so the bash side already does the right thing. Caught
+    # during VPS cutover 2026-05-30 — node_exporter saw the bash
+    # ``alphalens_job_*.prom`` files but not the Python
+    # ``alphalens_domain_*.prom`` files until we manually chmod'd.
+    #
+    # 0o644 is the canonical mode for Prometheus textfile-collector
+    # scrape files; CodeQL's "py/overly-permissive-file" rule is a
+    # false positive for this specific use case (the file contains
+    # only counters + gauges, no secrets). The contents are designed
+    # to be world-readable.
+    os.chmod(target, 0o644)  # NOSONAR lgtm[py/overly-permissive-file]
     return target
