@@ -33,9 +33,29 @@ for (const day of DAYS_INDEX) {
 	}
 }
 
+// Trading-day mock for /v1/market/status — the layout poll fires on
+// every page load (PR-C), and the default smoke fixture wants the
+// banner OFF (closed-market banner is exercised by tests/market-status.test.ts).
+// A 404 fallback would trip the "Failed to load resource" browser console
+// error and fail every route's console-clean assertion.
+const MARKET_STATUS_TRADING_BODY = JSON.stringify({
+	is_trading_day: true,
+	is_half_day: false,
+	next_open_iso: '2099-01-01T13:30:00+00:00',
+	exchange: 'XNYS'
+});
+
 function installApiMock(page: Page) {
 	return page.route('**/api/v1/**', (route) => {
 		const url = new URL(route.request().url());
+		// /api/v1/market/status — fixed trading-day stub so the banner stays hidden.
+		if (url.pathname === '/api/v1/market/status') {
+			return route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: MARKET_STATUS_TRADING_BODY
+			});
+		}
 		// /api/v1/days[?limit=…]
 		if (url.pathname === '/api/v1/days') {
 			return route.fulfill({
