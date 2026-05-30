@@ -159,6 +159,34 @@ class TestEmitDomainMetricsRoundTrip(unittest.TestCase):
             finally:
                 os.environ.pop(ENV_VAR, None)
 
+    def test_emitted_file_is_world_readable(self) -> None:
+        # node_exporter's container runs as ``nobody`` (UID 65534) and
+        # opens textfile-collector scrape files as that user. The
+        # tempfile default mode is 0o600 (owner-only) which silently
+        # disables the scrape — the file appears in ``ls`` but the
+        # exporter cannot read it. Pin the chmod 0o644 promotion so
+        # the next "simplify the emitter" PR can't quietly drop the
+        # widened mode. Caught during VPS cutover 2026-05-30.
+        import stat as stat_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ[ENV_VAR] = tmp
+            try:
+                target = emit_domain_metrics(job="x", metrics={"a_total": 1})
+                mode = target.stat().st_mode & 0o777
+                self.assertEqual(
+                    mode,
+                    0o644,
+                    f"emitted file must be chmod 0o644 (world-readable for "
+                    f"node_exporter container user), got {oct(mode)}.",
+                )
+                # Also assert the readable bit specifically — even if
+                # someone widens the policy further (0o664 etc.), the
+                # contract is "node_exporter MUST be able to read".
+                self.assertTrue(mode & stat_mod.S_IROTH, "world-read bit missing")
+            finally:
+                os.environ.pop(ENV_VAR, None)
+
     def test_default_dir_used_when_env_var_unset(self) -> None:
         # When ALPHALENS_TEXTFILE_DIR is unset the emitter falls back to
         # ~/.alphalens/metrics — the bind-mount target node_exporter
