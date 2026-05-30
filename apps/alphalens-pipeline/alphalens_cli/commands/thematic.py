@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 import typer
+from alphalens_pipeline.observability.textfile import emit_domain_metrics
 from alphalens_pipeline.thematic import clean_titles as clean_titles_mod
 from alphalens_pipeline.thematic import news_ingest
 from alphalens_pipeline.thematic import verify_cache as verify_cache_mod
@@ -362,6 +363,21 @@ def brief(
     out_parquet = output_dir / f"{target.isoformat()}.parquet"
     typer.echo(f"Wrote {len(enriched)} briefs → {out_parquet}")
     typer.echo(f"  Pro: {n_pro}, Flash: {n_flash}")
+
+    # Domain counters for the cron-observability dashboard (PR-2 of
+    # the epic). ``briefs_total`` is the headline number Grafana
+    # surfaces on the main panel; the per-model split is a tracer
+    # for "Pro-quota burned" (Pro routing is gated on user-defined
+    # Tier-1 confidence so a sudden Pro spike or zero is worth
+    # noticing).
+    emit_domain_metrics(
+        job="thematic-build",
+        metrics={
+            "alphalens_thematic_briefs_total": len(enriched),
+            'alphalens_thematic_briefs_by_model{model="pro"}': n_pro,
+            'alphalens_thematic_briefs_by_model{model="flash"}': n_flash,
+        },
+    )
 
 
 @thematic_app.command("verify-cache")

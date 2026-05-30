@@ -1,0 +1,95 @@
+#!/bin/bash
+set -euo pipefail
+
+# Write Prometheus textfile metrics from a systemd ExecStopPost= hook.
+#
+# Called as:
+#   ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics edgar-detect
+#
+# The job name argument matches the suffix on the unit (the
+# ``alphalens-`` prefix is stripped from the systemd unit name and the
+# ``.service`` suffix is dropped — so ``alphalens-edgar-detect.service``
+# corresponds to ``edgar-detect``).
+#
+# Writes ${ALPHALENS_TEXTFILE_DIR:-$HOME/.alphalens/metrics}/
+# alphalens_job_${JOB}.prom containing:
+#
+#   alphalens_job_last_run_timestamp_seconds{job="..."} <epoch now>
+#   alphalens_job_last_duration_seconds{job="..."}      <wall seconds>
+#   alphalens_job_last_exit_code{job="..."}             <exit status>
+#
+# Plus, when the run was successful:
+#
+#   alphalens_job_last_success_timestamp_seconds{job="..."} <epoch now>
+#
+# Companion Python helper at
+# ``apps/alphalens-pipeline/alphalens_pipeline/observability/textfile.py``
+# writes domain-specific gauges (briefs count, candidates by severity,
+# etc.) into a separate ``alphalens_domain_${JOB}.prom`` file so the
+# two emitters never race each other on the same path.
+#
+# ``set -euo pipefail`` is the FIRST executable line after the shebang
+# per the convention pinned in PR #310 zen review — flags are immune
+# to comment-block reorder accidents.
+#
+# Atomic write: tempfile in the same directory + ``mv`` (rename(2) on
+# POSIX) means node_exporter's scrape only ever observes the previous
+# fully-written file or the new fully-written one — never a partial
+# read. ``mv`` defaults to ``rename(2)`` when source + dest are on the
+# same filesystem; that holds here because the tempfile lives next to
+# the target.
+
+JOB="${1:?usage: $0 <job-short-name>}"
+TEXTFILE_DIR="${ALPHALENS_TEXTFILE_DIR:-$HOME/.alphalens/metrics}"
+mkdir -p "$TEXTFILE_DIR"
+
+# systemd ExecStopPost exports these (man systemd.service §
+# "Process Exit Codes"):
+#   $SERVICE_RESULT — "success" | "exit-code" | "signal" | ...
+#   $EXIT_CODE      — "exited" | "killed" | "dumped"
+#   $EXIT_STATUS    — the numeric exit code or signal number
+# All three default to empty when this script is invoked outside
+# systemd (e.g. an operator running it by hand for testing).
+RESULT="${SERVICE_RESULT:-unknown}"
+EXIT_STATUS_NUM="${EXIT_STATUS:-0}"
+NOW=$(date +%s)
+
+# Derive the run's wall-clock duration from the unit's
+# ActiveEnterTimestamp. systemctl --user reports it in the operator's
+# locale (e.g. "Fri 2026-05-30 11:42:01 UTC"); ``date -d`` parses that
+# back to an epoch. Fall back to 0 on any parse failure so a bad
+# locale does not turn a healthy run into a unit failure.
+UNIT="alphalens-${JOB}.service"
+ACTIVE_ENTER=$(systemctl --user show "$UNIT" -p ActiveEnterTimestamp --value 2>/dev/null || true)
+if [ -n "$ACTIVE_ENTER" ]; then
+    START_EPOCH=$(date -d "$ACTIVE_ENTER" +%s 2>/dev/null || echo 0)
+else
+    START_EPOCH=0
+fi
+if [ "$START_EPOCH" -gt 0 ] && [ "$START_EPOCH" -le "$NOW" ]; then
+    DURATION=$((NOW - START_EPOCH))
+else
+    DURATION=0
+fi
+
+OUT="$TEXTFILE_DIR/alphalens_job_${JOB}.prom"
+TMP="${OUT}.tmp"
+
+{
+    echo "# HELP alphalens_job_last_run_timestamp_seconds Unix time of the last invocation (success or failure)"
+    echo "# TYPE alphalens_job_last_run_timestamp_seconds gauge"
+    echo "alphalens_job_last_run_timestamp_seconds{job=\"${JOB}\"} ${NOW}"
+    echo "# HELP alphalens_job_last_duration_seconds Wall-clock seconds for the last invocation"
+    echo "# TYPE alphalens_job_last_duration_seconds gauge"
+    echo "alphalens_job_last_duration_seconds{job=\"${JOB}\"} ${DURATION}"
+    echo "# HELP alphalens_job_last_exit_code Exit status of the last invocation (0 = success)"
+    echo "# TYPE alphalens_job_last_exit_code gauge"
+    echo "alphalens_job_last_exit_code{job=\"${JOB}\"} ${EXIT_STATUS_NUM}"
+    if [ "$RESULT" = "success" ]; then
+        echo "# HELP alphalens_job_last_success_timestamp_seconds Unix time of the last successful invocation"
+        echo "# TYPE alphalens_job_last_success_timestamp_seconds gauge"
+        echo "alphalens_job_last_success_timestamp_seconds{job=\"${JOB}\"} ${NOW}"
+    fi
+} > "$TMP"
+
+mv "$TMP" "$OUT"

@@ -36,6 +36,23 @@ LIT_MONTHLY_TIMER = SYSTEMD_DIR / "alphalens-literature-scan-monthly.timer"
 
 LIT_PUBLISH_WRAPPER = SYSTEMD_DIR / "bin" / "alphalens-literature-scan-publish"
 
+# Job-metrics ExecStopPost hook (PR-2 of the cron-observability epic).
+# Every active timer-driven service must emit Prometheus textfile
+# metrics so the dashboard + alertmanager can see "did it run, did it
+# succeed, how long did it take". The bash helper itself is at:
+EMIT_JOB_METRICS_HOOK = SYSTEMD_DIR / "bin" / "alphalens-emit-job-metrics"
+
+# All five active services that the metrics hook must be wired into.
+# Form-4 backfill is excluded — it is a long-running daemon (DONE
+# 2026-05-08, per CLAUDE.md) and would emit a single point at end-of-run.
+ACTIVE_SERVICES = (
+    EDGAR_SERVICE,
+    LIT_WEEKLY_SERVICE,
+    LIT_MONTHLY_SERVICE,
+    SYSTEMD_DIR / "alphalens-av-earnings-backfill.service",
+    SYSTEMD_DIR / "alphalens-thematic-build.service",
+)
+
 
 class TestSystemdUnits(unittest.TestCase):
     def setUp(self) -> None:
@@ -342,6 +359,85 @@ class TestLiteraturePublishWrapper(unittest.TestCase):
         text = LIT_PUBLISH_WRAPPER.read_text()
         self.assertRegex(text, re.compile(r'WINDOW="?\$\{?1\}?"?'))
         self.assertIn('--window "$WINDOW"', text)
+
+
+class TestJobMetricsHook(unittest.TestCase):
+    """All active services wire the textfile-metrics ExecStopPost hook.
+
+    A unit without the hook would still run but its cron-health
+    metrics (last_success_timestamp, duration, exit code) would never
+    update — Alertmanager would then fire a false stale-job alert.
+    Pinning the hook here forces the operator to add the line in the
+    same commit that adds a new cron-driven unit.
+    """
+
+    def test_emit_job_metrics_hook_exists_and_executable(self) -> None:
+        self.assertTrue(
+            EMIT_JOB_METRICS_HOOK.is_file(),
+            f"metrics hook missing at {EMIT_JOB_METRICS_HOOK}",
+        )
+        mode = EMIT_JOB_METRICS_HOOK.stat().st_mode
+        self.assertTrue(
+            mode & stat.S_IXUSR,
+            f"metrics hook must be chmod +x (mode={oct(mode)}).",
+        )
+
+    def test_emit_hook_strict_bash_on_line_2(self) -> None:
+        lines = EMIT_JOB_METRICS_HOOK.read_text().splitlines()
+        self.assertGreaterEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith("#!"))
+        self.assertRegex(
+            lines[1],
+            re.compile(r"^set -[eu]+o\s+pipefail\b"),
+            "set -euo pipefail must be the first executable line "
+            "(same convention as alphalens-literature-scan-publish).",
+        )
+
+    def test_emit_hook_writes_atomically_via_mv(self) -> None:
+        # Partial file reads from node_exporter would either skip the
+        # metric or report a parse error. ``mv`` of a sibling tempfile
+        # is the only POSIX-atomic primitive available in bash; pin it.
+        text = EMIT_JOB_METRICS_HOOK.read_text()
+        self.assertIn('TMP="${OUT}.tmp"', text)
+        self.assertIn('mv "$TMP" "$OUT"', text)
+
+    def test_emit_hook_only_writes_last_success_on_success(self) -> None:
+        # ``alphalens_job_last_success_timestamp_seconds`` is the
+        # alertmanager input for "job hasn't succeeded in N minutes".
+        # If the hook wrote it on every fire regardless of outcome,
+        # a failed job would still appear "recently successful" and
+        # the staleness alert would never fire.
+        text = EMIT_JOB_METRICS_HOOK.read_text()
+        self.assertRegex(
+            text,
+            re.compile(
+                r'if\s+\[\s*"?\$RESULT"?\s+=\s+"?success"?\s*\]'
+                r".*?alphalens_job_last_success_timestamp_seconds",
+                re.DOTALL,
+            ),
+            "last_success_timestamp must be guarded by RESULT=success — "
+            "otherwise failed runs falsely refresh the staleness clock.",
+        )
+
+    def test_every_active_service_wires_emit_hook(self) -> None:
+        # The hook line shape: an absolute %h-rooted path + the short
+        # job name. The job name must match the systemd unit's basename
+        # (minus the ``alphalens-`` prefix + ``.service`` suffix) so the
+        # bash hook's systemctl-show probe targets the right unit.
+        for path in ACTIVE_SERVICES:
+            text = path.read_text()
+            expected_job = path.stem.removeprefix("alphalens-")
+            self.assertRegex(
+                text,
+                re.compile(
+                    r"^ExecStopPost=%h/AlphaLens/deploy/systemd/bin/"
+                    r"alphalens-emit-job-metrics\s+" + re.escape(expected_job) + r"\s*$",
+                    re.MULTILINE,
+                ),
+                f"{path.name} must wire ExecStopPost=alphalens-emit-job-metrics "
+                f"{expected_job} — without it the cron-health metrics for this "
+                "unit never update and Alertmanager fires a false stale alert.",
+            )
 
 
 if __name__ == "__main__":

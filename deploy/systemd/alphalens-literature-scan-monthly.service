@@ -16,6 +16,10 @@ EnvironmentFile=/etc/alphalens/env
 
 ExecStart=%h/AlphaLens/deploy/systemd/bin/alphalens-literature-scan-publish monthly
 
+# Prometheus textfile metrics (see alphalens-edgar-detect.service for
+# the pattern). Runs unconditionally.
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics literature-scan-monthly
+
 StandardOutput=journal
 StandardError=journal
 

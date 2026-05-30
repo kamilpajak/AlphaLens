@@ -41,6 +41,14 @@ EnvironmentFile=/etc/alphalens/env
 
 ExecStart=%h/AlphaLens/.venv/bin/alphalens edgar detect
 
+# Prometheus textfile metrics: write last-success / duration / exit
+# code to ~/.alphalens/metrics/alphalens_job_edgar-detect.prom after
+# every fire (success or failure). node_exporter --collector.textfile
+# scrapes the directory; PR-3 wires alert rules + Grafana on top.
+# Runs unconditionally so a failed run still updates last_run + exit
+# code (Alertmanager can fire on "last_exit_code != 0").
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics edgar-detect
+
 StandardOutput=journal
 StandardError=journal
 

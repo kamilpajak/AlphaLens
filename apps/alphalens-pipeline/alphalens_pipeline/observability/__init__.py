@@ -1,0 +1,22 @@
+"""Prometheus textfile-collector emission helpers.
+
+CLI commands import :func:`emit_domain_metrics` to publish
+domain-specific counters (briefs written, candidates dispatched, AV
+tickers cached, etc.) that node_exporter's
+``--collector.textfile.directory`` scrapes on the VPS. The companion
+bash hook ``deploy/systemd/bin/alphalens-emit-job-metrics`` publishes
+the cron-health metrics (last_success_timestamp, last_duration,
+last_exit_code) from systemd ExecStopPost.
+
+The two halves agree on the textfile directory via the
+``ALPHALENS_TEXTFILE_DIR`` env var (default ``~/.alphalens/metrics/``);
+:data:`textfile.DEFAULT_DIR` is the Python side of that contract.
+"""
+
+from alphalens_pipeline.observability.textfile import (
+    DEFAULT_DIR,
+    ENV_VAR,
+    emit_domain_metrics,
+)
+
+__all__ = ["DEFAULT_DIR", "ENV_VAR", "emit_domain_metrics"]
