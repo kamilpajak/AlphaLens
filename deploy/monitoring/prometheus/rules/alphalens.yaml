@@ -87,10 +87,13 @@ groups:
 
       # thematic-build moved from 1×/day → 6×/day (every 4h at HH:30
        # UTC) in PR-F (epic #295, issue #300). 43200s = 12h = 3× the
-       # 4h interval — preserves the same "2-3× cadence" sensitivity
-       # the 1× rule had at 48h, but does not silence the alert for 12
-       # missed runs the way 48h would at 6× cadence. Tightening
-       # tracked alongside the timer + ingest-force change.
+       # 4h interval — DELIBERATELY asymmetric vs the other 4 services
+       # which use 2× cadence. Justification: a thematic run is
+       # 15-20 min wall time and each Gemini Pro/Flash stage can take
+       # 5-10 min of API latency on its own. A 2× threshold (8h) would
+       # page on one transient Gemini RPM blip; 3× gives one missed
+       # slot's worth of slack while still surfacing two consecutive
+       # misses within half a day. Pinned by PR-F zen pre-merge review.
       - alert: AlphalensJobStale
         expr: |
           (time() - alphalens_job_last_success_timestamp_seconds{job="thematic-build"} > 43200)

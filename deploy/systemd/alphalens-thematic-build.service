@@ -111,9 +111,19 @@ StandardError=journal
 MemoryMax=4G
 TasksMax=512
 
+# Type=oneshot defaults TimeoutStartSec to infinity (man systemd.service
+# §"Type=oneshot"). Without an explicit timeout, a run that wedges on a
+# Gemini quota loop, a Polygon retry storm, or a stuck rebuild-cache step
+# would block every subsequent timer fire forever — systemd queues new
+# fires behind the running unit. 45min = ~3× the typical 15-20min wall
+# time; a healthy run never trips this, a wedged one gets SIGTERM (then
+# SIGKILL after TimeoutStopSec) so the next 4h slot can fire. Pinned by
+# PR-F zen pre-merge review (epic #295 / issue #300).
+TimeoutStartSec=45min
+
 # Oneshot doesn't auto-restart on success. On real failures (Polygon 5xx,
 # Gemini quota, OOM) systemd surfaces non-zero exit in journalctl + status.
-# The timer fires daily; a one-day miss is acceptable.
+# The timer fires 6× daily (PR-F); a one-slot miss is acceptable.
 
 [Install]
 WantedBy=default.target

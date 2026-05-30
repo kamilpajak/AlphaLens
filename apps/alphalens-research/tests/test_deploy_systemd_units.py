@@ -490,6 +490,49 @@ class TestThematicBuildCadence(unittest.TestCase):
         # fires the missed run once at next boot.
         self.assertIn("Persistent=true", TIMER_PATH.read_text())
 
+    def test_timer_carries_randomized_delay_for_boot_storm(self) -> None:
+        # ``Persistent=true`` + 6 missed slots in a 24h window means a
+        # boot after a full-day outage can queue up to 6 catch-up runs
+        # all firing at boot+0. systemd serializes Type=oneshot fires
+        # for the same unit (queued, not parallel) so the pipelines
+        # themselves don't collide, but the FIRST catch-up fires
+        # simultaneously with the every-15-min EDGAR detector + any
+        # 00:05 UTC av-earnings backfill that the same boot rescues —
+        # contending for the same SEC/Polygon per-IP rate-limit
+        # buckets. A 5-min jitter keeps every fire inside its
+        # timezone-rotation window (slots are 4h apart; ±5 min still
+        # reads as "pre-XNYS open" / "pre-XTKS open" etc.) but
+        # deflects the boot-time thundering herd. Zen pre-merge
+        # review of PR-F flagged the boot-storm class.
+        self.assertRegex(
+            TIMER_PATH.read_text(),
+            re.compile(r"^RandomizedDelaySec=5min\s*$", re.MULTILINE),
+            "Timer must carry RandomizedDelaySec=5min so the catch-up "
+            "storm after a VPS reboot does not collide with the "
+            "every-15-min EDGAR detector for the per-IP rate-limit "
+            "bucket. 5min is small enough to preserve the per-exchange "
+            "timezone alignment.",
+        )
+
+    def test_service_has_start_timeout_for_hung_runs(self) -> None:
+        # ``Type=oneshot`` defaults TimeoutStartSec to infinity (man
+        # systemd.service §"Type=oneshot"). A run that wedges on a
+        # Gemini quota loop or a Polygon retry storm would block
+        # every subsequent timer fire forever — the systemd job
+        # manager queues new fires behind the running one. 45min =
+        # ~3× the typical 15-20min wall time; a healthy run never
+        # trips this, a wedged one gets SIGTERM (then SIGKILL after
+        # TimeoutStopSec) so the next slot can fire. Zen pre-merge
+        # review of PR-F flagged the hang-blocks-queue class as the
+        # real pipeline-overlap risk (the surface concern of "two
+        # runs in parallel" doesn't actually occur on Type=oneshot).
+        self.assertRegex(
+            SERVICE_PATH.read_text(),
+            re.compile(r"^TimeoutStartSec=45min\s*$", re.MULTILINE),
+            "Service must carry TimeoutStartSec=45min or a wedged run "
+            "blocks every subsequent timer fire indefinitely.",
+        )
+
     def test_run_thematic_day_passes_force_to_ingest(self) -> None:
         # Without --force, polygon_news.py:124 returns the cached
         # parquet on every same-UTC-day re-run, so the 6× cadence
