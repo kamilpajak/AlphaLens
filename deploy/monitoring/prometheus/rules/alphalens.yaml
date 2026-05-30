@@ -85,16 +85,22 @@ groups:
           summary: "av-earnings-backfill stale > 48h (expected daily cadence)"
           description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
 
+      # thematic-build moved from 1×/day → 6×/day (every 4h at HH:30
+       # UTC) in PR-F (epic #295, issue #300). 43200s = 12h = 3× the
+       # 4h interval — preserves the same "2-3× cadence" sensitivity
+       # the 1× rule had at 48h, but does not silence the alert for 12
+       # missed runs the way 48h would at 6× cadence. Tightening
+       # tracked alongside the timer + ingest-force change.
       - alert: AlphalensJobStale
         expr: |
-          (time() - alphalens_job_last_success_timestamp_seconds{job="thematic-build"} > 172800)
+          (time() - alphalens_job_last_success_timestamp_seconds{job="thematic-build"} > 43200)
           or absent(alphalens_job_last_success_timestamp_seconds{job="thematic-build"})
         for: 5m
         labels:
           severity: warning
           route: telegram
         annotations:
-          summary: "thematic-build stale > 48h (expected daily cadence)"
+          summary: "thematic-build stale > 12h (expected 4h cadence)"
           description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
 
       # ---------------------------------------------------------------

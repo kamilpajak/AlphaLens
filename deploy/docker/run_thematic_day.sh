@@ -22,7 +22,16 @@
 set -euo pipefail
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic ingest"
-alphalens thematic ingest
+# --force: the per-UTC-day read-through cache at
+# alphalens_pipeline/thematic/sources/polygon_news.py:124 would
+# otherwise short-circuit every run after the first of the day. The
+# 6× timer (every 4 hours UTC) needs each run to actually re-fetch
+# news so the SPA sees same-day catalysts the same day. Polygon
+# Stocks Basic ($0/mo) has no daily cap, only a 5 req/min rate
+# limit, so forced re-fetch is free. See
+# docs/research/polygon_quota_6x_per_day_2026_05_30.md §"What changes
+# in code".
+alphalens thematic ingest --force
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic extract"
 alphalens thematic extract

@@ -1,18 +1,38 @@
 [Unit]
-# Fires the companion alphalens-thematic-build.service once per day.
+# Fires the companion alphalens-thematic-build.service 6× per day
+# (every 4 hours at HH:30 UTC) so the SPA picks up news the same
+# calendar day it lands — critical for weekend cherry-picking when
+# Saturday-afternoon ET news would otherwise wait for Sunday's brief.
 #
-# OnCalendar: 06:30 UTC = 02:30 ET. After AV's daily 25-call quota window
-# opens (00:00 UTC) and after late press releases hit Polygon for the
-# previous trading day. Far enough from 00:00 UTC that the AV backfill
-# timer (00:05 UTC) won't contend for the same API key.
+# OnCalendar slots (HH:30 UTC) — each chosen to land "right before
+# open" or "right after close" of one of the supported exchanges:
 #
-# Persistent=true: if the VPS was off when a scheduled run was due, fire
-# the missed run at next boot rather than skipping the day silently.
-Description=Trigger AlphaLens thematic build daily
+#   00:30 UTC  pre-XTKS open                  (Tokyo  09:30 JST)
+#   04:30 UTC  mid-Asia session                (Hong Kong / Shanghai)
+#   08:30 UTC  pre-XWAR open                  (Warsaw 09:30 CET, 10:30 CEST)
+#   12:30 UTC  pre-XNYS open                  (NYSE   08:30 ET)
+#   16:30 UTC  mid-XNYS                        (NYSE   12:30 ET)
+#   20:30 UTC  pre-XNYS close / after-hours    (NYSE   16:30 ET)
+#
+# HH:30 chosen so the schedule reads cleanly in
+# `systemctl --user list-timers` and stays out of the every-15-min
+# EDGAR-detect window (XX:00, XX:15, XX:30, XX:45 — runs are ~30s,
+# no real contention, just keeps the grid tidy).
+#
+# Polygon Stocks Basic ($0/mo) limit is 5 req/min, no daily cap —
+# 6× cadence projects to 54-102 req/day total, ~1% utilisation.
+# See docs/research/polygon_quota_6x_per_day_2026_05_30.md for the
+# full empirical measurement.
+#
+# Persistent=true: if the VPS was off when a scheduled run was due,
+# fire the missed run once at next boot rather than skipping silently.
+# At 6× cadence one missed run is at most a 4h gap on a date, not a
+# full day, so the catch-up is cheaper than at 1×.
+Description=Trigger AlphaLens thematic build 6× daily
 After=network-online.target
 
 [Timer]
-OnCalendar=*-*-* 06:30:00 UTC
+OnCalendar=*-*-* 00,04,08,12,16,20:30:00 UTC
 Persistent=true
 Unit=alphalens-thematic-build.service
 

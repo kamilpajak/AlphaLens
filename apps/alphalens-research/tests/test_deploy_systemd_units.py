@@ -25,6 +25,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SYSTEMD_DIR = REPO_ROOT / "deploy" / "systemd"
 SERVICE_PATH = SYSTEMD_DIR / "alphalens-thematic-build.service"
+TIMER_PATH = SYSTEMD_DIR / "alphalens-thematic-build.timer"
+RUN_THEMATIC_SCRIPT = REPO_ROOT / "deploy" / "docker" / "run_thematic_day.sh"
 
 # Units migrated from macOS launchd in PR-1 of the observability epic.
 EDGAR_SERVICE = SYSTEMD_DIR / "alphalens-edgar-detect.service"
@@ -438,6 +440,101 @@ class TestJobMetricsHook(unittest.TestCase):
                 f"{expected_job} — without it the cron-health metrics for this "
                 "unit never update and Alertmanager fires a false stale alert.",
             )
+
+
+class TestThematicBuildCadence(unittest.TestCase):
+    """PR-F (epic #295 / issue #300) — 6×/day thematic-build cadence.
+
+    Moves from daily 06:30 UTC to 6× UTC (`00,04,08,12,16,20:30`) so the
+    weekend SPA read-experience picks up Saturday-afternoon ET news the
+    same calendar day, and pre-prepares the harness for multi-exchange
+    routing (XWAR / XTKS / XHKG / XSHG) where each session needs its own
+    "right-before-open" and "right-after-close" refresh.
+
+    Three coupled changes pinned here:
+
+    1. Timer ``OnCalendar`` lists six HH:30 hours.
+    2. ``run_thematic_day.sh`` passes ``--force`` to ``thematic ingest``
+       so the read-through cache at ``polygon_news.py:124`` does not
+       silently short-circuit every run after the first of the UTC day.
+    3. Prometheus staleness threshold for ``thematic-build`` tightens
+       from ``> 48h`` to ``> 12h`` (3× the new 4h interval) — at 6×
+       cadence, 48h would silence the alert for 12 missed runs.
+
+    See ``docs/research/polygon_quota_6x_per_day_2026_05_30.md`` for the
+    empirical quota measurement that justifies 6× over 4×.
+    """
+
+    def test_timer_fires_six_times_per_day_at_hh30(self) -> None:
+        # OnCalendar comma-list is the canonical systemd form for
+        # "multiple times per day". HH:30 chosen so each run lands
+        # outside the every-15-min EDGAR-detect window (XX:00, XX:15,
+        # XX:30, XX:45 — but EDGAR runs are ~30s, no real contention;
+        # HH:30 simply keeps the schedule readable in
+        # `systemctl --user list-timers`).
+        timer_text = TIMER_PATH.read_text()
+        self.assertRegex(
+            timer_text,
+            re.compile(
+                r"^OnCalendar=\*-\*-\* 00,04,08,12,16,20:30:00 UTC\s*$",
+                re.MULTILINE,
+            ),
+            "Expected 6× HH:30 UTC schedule (00/04/08/12/16/20). "
+            "See docs/research/polygon_quota_6x_per_day_2026_05_30.md "
+            "for the timezone-coverage rationale.",
+        )
+
+    def test_timer_keeps_persistent_true(self) -> None:
+        # Persistence survives across the 6× window the same way it
+        # did for the 1× window — a VPS that booted between two runs
+        # fires the missed run once at next boot.
+        self.assertIn("Persistent=true", TIMER_PATH.read_text())
+
+    def test_run_thematic_day_passes_force_to_ingest(self) -> None:
+        # Without --force, polygon_news.py:124 returns the cached
+        # parquet on every same-UTC-day re-run, so the 6× cadence
+        # silently degrades to 1× — the bug we are explicitly fixing.
+        # Polygon Stocks Basic has no daily cap, so the cost of
+        # forced re-fetch is zero.
+        script_text = RUN_THEMATIC_SCRIPT.read_text()
+        self.assertRegex(
+            script_text,
+            re.compile(r"^alphalens thematic ingest --force\s*$", re.MULTILINE),
+            "ingest stage must pass --force or the same-UTC-day cache "
+            "short-circuits every run after the first.",
+        )
+
+    def test_thematic_build_staleness_alert_threshold_is_12h(self) -> None:
+        # 12h = 3× the 4h interval. Loose enough that one transient
+        # miss (Gemini RPM blip, Polygon outage) does not page; tight
+        # enough that two consecutive misses surface within half a day.
+        # 48h was the 1×-cadence threshold (2× daily interval); the
+        # 12h threshold preserves the same "2-3× cadence" sensitivity.
+        rules_path = REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
+        rules_text = rules_path.read_text()
+        # 12h = 43200 seconds. Look for the threshold inside the
+        # thematic-build block (the only place this number appears).
+        self.assertRegex(
+            rules_text,
+            re.compile(
+                r'job="thematic-build"\}\s*>\s*43200\b',
+            ),
+            "thematic-build staleness threshold must be 43200 (12h) at "
+            "6× cadence; was 172800 (48h) at 1× cadence.",
+        )
+
+    def test_thematic_build_staleness_alert_summary_mentions_new_threshold(self) -> None:
+        # Summary string is the operator-facing description; out-of-sync
+        # with the threshold expression is the kind of drift that wastes
+        # an incident-response cycle. Pin both halves together.
+        rules_path = REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
+        rules_text = rules_path.read_text()
+        self.assertRegex(
+            rules_text,
+            re.compile(r'"thematic-build stale > 12h \(expected 4h cadence\)"'),
+            "Summary annotation must reflect the new 12h threshold + "
+            "4h cadence so operator-facing text matches the expression.",
+        )
 
 
 if __name__ == "__main__":
