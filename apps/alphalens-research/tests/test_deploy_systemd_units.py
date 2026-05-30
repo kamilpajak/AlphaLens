@@ -273,6 +273,23 @@ class TestLiteraturePublishWrapper(unittest.TestCase):
         # and the monitoring "last_success" timestamp updates falsely.
         self.assertRegex(text, re.compile(r"^set -[eu]+o\s+pipefail\b", re.MULTILINE))
 
+    def test_wrapper_sets_strict_mode_on_line_2(self) -> None:
+        # Zen pre-merge review of PR #310 flagged that ``set -euo pipefail``
+        # placed below a comment block can drift if someone reorders the
+        # file. Pin it to the line right after the shebang so any
+        # accidental insertion above it fails this test loud.
+        lines = LIT_PUBLISH_WRAPPER.read_text().splitlines()
+        self.assertGreaterEqual(len(lines), 2, "wrapper too short to inspect")
+        self.assertTrue(
+            lines[0].startswith("#!"),
+            f"line 1 must be the shebang, got: {lines[0]!r}",
+        )
+        self.assertRegex(
+            lines[1],
+            re.compile(r"^set -[eu]+o\s+pipefail\b"),
+            "line 2 must be `set -euo pipefail` (zen-review pinned).",
+        )
+
     def test_wrapper_skips_commit_when_clean(self) -> None:
         text = LIT_PUBLISH_WRAPPER.read_text()
         # Guard MUST short-circuit before `git add` — otherwise every
@@ -286,11 +303,36 @@ class TestLiteraturePublishWrapper(unittest.TestCase):
         # ceiling (a second race is already a different bug). Pin the
         # shape so a future "simplify the wrapper" PR can't quietly drop
         # the retry.
+        #
+        # Form is the explicit ``... && exit 0`` / ``exit 1`` per PR #310
+        # zen review — bash ``cmd1 || (cmd2 && cmd3)`` was semantically
+        # correct (set -e propagates the subshell's non-zero exit) but
+        # easier to misread than the linear flow.
+        self.assertIn("git push origin main && exit 0", text)
         self.assertRegex(
             text,
             re.compile(
-                r"git push origin main \|\|.*git pull --rebase.*git push origin main", re.DOTALL
+                r"git pull --rebase origin main\s*&&\s*git push origin main\s*&&\s*exit 0",
             ),
+        )
+        # Final explicit non-zero exit so the unit ends in ``failed``
+        # state when both attempts fail — Alertmanager (PR-3) will
+        # latch onto this.
+        self.assertRegex(text, re.compile(r"^exit 1\s*$", re.MULTILINE))
+
+    def test_wrapper_scrubs_gh_token_from_scan_subprocess(self) -> None:
+        # Zen pre-merge review of PR #310 flagged defense-in-depth: the
+        # literature scan CLI does not need GH_TOKEN and a future verbose
+        # `print(os.environ)` debug line would leak it to journald. The
+        # wrapper invokes the scan under ``env -u GH_TOKEN`` to scrub.
+        text = LIT_PUBLISH_WRAPPER.read_text()
+        self.assertRegex(
+            text,
+            re.compile(
+                r"env -u GH_TOKEN\s+\"\$HOME/AlphaLens/\.venv/bin/alphalens\"\s+literature\s+scan"
+            ),
+            "Scan subprocess must run under `env -u GH_TOKEN` so the "
+            "push token cannot reach the CLI's environment.",
         )
 
     def test_wrapper_accepts_window_argument(self) -> None:
