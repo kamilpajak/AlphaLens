@@ -1,0 +1,97 @@
+[Unit]
+# Paper-trade entry-tier submission — fires once per US trading day at
+# 13:25 UTC (= 09:25 ET, 5 min before the XNYS opening cross at 13:30
+# UTC) and pushes today's brief's PLANNED ladder rows into Alpaca
+# paper. Companion to alphalens-paper-reconcile.service which sweeps
+# fills throughout the session. Both are PR-D of epic #295 (issue
+# #298).
+#
+# **Two-layer gating** keeps the unit out of broken states:
+#
+#   1. The companion timer's ``OnCalendar=Mon..Fri ...`` filters
+#      weekends.
+#   2. ``ExecCondition=`` below runs ``alphalens paper is-trading-day``
+#      which catches US public holidays that fall on weekdays —
+#      Memorial Day Mon, Independence Day Fri (observed), Labor Day
+#      Mon, Thanksgiving Thu, Christmas (varies). ~10 days/year that
+#      ``Mon..Fri`` alone would let through.
+#
+# ExecCondition semantics: exit 0 proceeds, exit 1-254 skips silently
+# (no AlphalensJobFailed alert), exit 255 errors. The CLI raises
+# ``typer.Exit(1)`` on holidays so the journal is clean.
+#
+# The submit subcommand itself ALSO carries an internal market-closed
+# guard — belt-and-suspenders. ExecCondition makes the unit show
+# ``condition failed`` in ``systemctl --user status``, distinguishing
+# "skipped cleanly" from "ran and self-deferred" at a glance.
+#
+# Install as a *user* unit alongside the companion timer:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/systemd/alphalens-paper-submit.service ~/.config/systemd/user/
+#   cp deploy/systemd/alphalens-paper-submit.timer   ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alphalens-paper-submit.timer
+#
+# Inspect:  journalctl --user -u alphalens-paper-submit.service -f
+# Trigger manually: systemctl --user start alphalens-paper-submit.service
+Description=AlphaLens paper-trade entry submission (Mon-Fri pre-XNYS-open)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+
+# /etc/alphalens/env carries ALPACA_API_KEY + ALPACA_API_SECRET (paper-
+# main) and ALPACA_TEST_* for the dev sandbox. Both AlpacaClient
+# profiles read from env. No leading ``-``: a missing key MUST fail
+# loud — a silent skip would leave the brief's ladder un-submitted on
+# the wrong day with no alert.
+EnvironmentFile=/etc/alphalens/env
+
+# ExecCondition gates on calendar reality. Exit 0 proceeds to
+# ExecStart; exit 1 skips the unit silently (systemd marks it
+# ``condition failed`` in `systemctl --user status`, no
+# AlphalensJobFailed alert fires). The CLI default ``--exchange XNYS``
+# is correct for the current paper account; when XWAR / XTKS routing
+# lands, add a second ExecCondition with ``--exchange XWAR`` or split
+# this unit per venue.
+ExecCondition=%h/AlphaLens/.venv/bin/alphalens paper is-trading-day
+
+# Submit TODAY UTC's brief (the 12:30 UTC thematic-build run wrote it
+# ~50 min before this fire at 13:25 UTC). The bash command-
+# substitution lands the date at unit-start time, NOT at
+# daemon-reload — so re-loading the daemon at 23:59 UTC and firing at
+# 13:25 UTC the next day still picks up the next day's brief.
+#
+# Wrapped in ``/bin/sh -c '...'`` because systemd does NOT perform
+# shell substitution natively — a bare ExecStart= with ``$(date ...)``
+# would try to exec a binary literally named "$(date". The ``%%`` is
+# systemd's literal-percent escape (systemd treats single ``%`` as a
+# specifier prefix — ``%h``, ``%U`` etc.; ``%%`` passes a literal
+# ``%`` through to the sub-shell).
+ExecStart=/bin/sh -c '%h/AlphaLens/.venv/bin/alphalens paper submit --date $(date -u +%%Y-%%m-%%d)'
+
+# Prometheus textfile metrics — same pattern as the other 5 active
+# units. Runs unconditionally so a failed submit still updates the
+# last_exit_code gauge for Alertmanager.
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics paper-submit
+
+StandardOutput=journal
+StandardError=journal
+
+# Submit is a single Alpaca REST round-trip per PLANNED row in the
+# brief (~5-20 rows typical). 512M is comfortable; 1G matches the
+# project-wide unit ceiling.
+MemoryMax=1G
+TasksMax=32
+
+# Type=oneshot defaults TimeoutStartSec to infinity. A submit that
+# wedges on Alpaca's API would block tomorrow's 13:25 UTC fire (~24h
+# later). 5min = ~10× the typical wall time; the unit gets SIGTERM /
+# SIGKILL and the next session's fire takes over.
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=default.target
