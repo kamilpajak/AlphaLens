@@ -34,6 +34,7 @@ Buy-side narzędzie decision-support dla **dyskrecjonariusza** + małej grupy Wh
 | **No real-capital deployment** | `capital_deploy_clause` structurally enforced przez AlpacaClient (`paper=True` hardcoded). Reaktywacja real-capital wymaga jawnej zgody + zmiany klienta. |
 | **Keep searching screeners** | Discipline (Bonferroni ledger) bounds search; nigdy "no further prospecting". Każdy nowy layer test podnosi bar. |
 | **No passive pivot** | Mimo 14 paradigm fail'ów — aktywny quant research kontynuuje. |
+| **Cost discipline** | Production vendor stack budget cap ~$50/mo (LLM + market data + monitoring; VPS infra excluded jako osobna linia). Vendor swap uzasadniony tylko gdy equivalent-quality alternative oferuje ≥50% saving (precedent: PR-G #318 Gemini→DeepSeek v4 saved $66/mo, jakość zachowana). Żaden vendor > 60% total monthly cost (avoid single-vendor lock-in). **Nigdy nie obcinamy modelu dla cost** — to corollary `quality over speed`, nie kontradykcja. Aktualnie ~$38/mo (DeepSeek v4 via OpenRouter) + Polygon free + AV free + Perplexity ~$10/mo + CF free = ~$48/mo (excl. VPS). |
 
 ---
 
@@ -179,6 +180,7 @@ To jest cel. Wszystko inne to droga.
 | Push channel | candidates.db (logged only) | Telegram bot push | Bot infrastructure |
 | Filter | None — log everything | Multi-layer scoring → max 3-5 push/day | Alert-fatigue threshold |
 | Confirmation | Manual review next day in L2 | Inline confirm via Telegram inline button | Bot interactive UI |
+| **Resilience** | `AlphalensJobStale` Prometheus alert fires po 30 min braku success (≥ 2× 15-min cadence) → Telegram via Alertmanager (PR #312). Textfile metrics `last_success_timestamp_seconds` per-job (PR #311) | Plus per-event-class success rate (`m_and_a_detected_total`, etc.) jako leading indicator drift'u | Domain counters w EDGAR detector |
 
 ### L2 — Daily brief (obecny core)
 
@@ -189,6 +191,7 @@ To jest cel. Wszystko inne to droga.
 | Evidence panel | source_event_url + rationale + bear summary + supply chain + trade-setup | + sentence-level citations from 8-K / press release + peer-cohort overlay + filing deep links | EDGAR full-text indexing + typed facts (#143 PR-3) |
 | Feedback | None (until PR #292) | Interested/Dismissed buttons + 2-level taxonomy | **PR #292 in-flight** |
 | Position context | None | Current portfolio import + correlation overlay | Alpaca portfolio API integration |
+| **Resilience** | `AlphalensJobStale` 48h threshold (asymmetric: 3× cadence vs 2× innych, justified wall-time ~15-20min × Gemini/DeepSeek API variance). `verify-cache` ExecStartPost gap-detection halts chain przed Django rebuild jeśli parquet missing/incomplete (PR-E). `alphalens_thematic_zero_row_days` metric leading indicator | Plus per-source ingest success (Polygon vs GDELT vs RSS) z domain alert jeśli któryś źródło padnie | Per-source counters w `news_ingest` |
 
 ### L3 — Weekly review (od zera)
 
@@ -199,6 +202,7 @@ To jest cel. Wszystko inne to droga.
 | Theme rotation | None | Tygodniowe heatmap'y co działa | Aggregation queries |
 | Personalization | None | Order-by-frequency w dismiss dropdown po ≥30 decisions | Frontend re-sort logic |
 | Re-weighting | None — layer4_weighted_score hardcoded | Auto-adjust po ≥50 decisions | Bayesian update math |
+| **Resilience** | Nie istnieje — L3 jeszcze nie shipped (Track C gated na ledger fill) | Weekly aggregation timer z `AlphalensJobStale` 14d threshold; freshness check na outcome-join completeness (jeśli >5% decisions bez outcome join, alert) | Resilience design pending; landuje razem z Track C SPA stub |
 
 ---
 
@@ -339,5 +343,6 @@ To jest cel. Wszystko inne to droga.
 | 2026-05-30 | Track H rozszerzone o #143 structured event templates; near-term roadmap insert pos #6 | Foundation layer dla Tracks D + G + H. User-affirmed velocity post sesji obróciła 5+d estimate w 1-2 sesje, removing primary deferral reason. Both reviewers (DeepSeek v4 Pro zen + Perplexity Research) converged on hybrid mode + YAML+predicates. Design memo PR #320 |
 | 2026-05-30 | Dodana §3 "Big picture flow" z całościowym mermaid diagramem; sekcje §3-§10 → §4-§11 renumbered | Zsyntetyzowany view całego systemu w jednym diagramie po sesji #143 design memo — pokazuje 3 tiery wychodzące z tego samego brief'a, HUMAN gate przed paper-trade, feedback loop zamykający system, PAPER ramka jako anti-pattern boundary (`capital_deploy_clause`). §4 (feedback) i §5 (wieczorny use-case) zoom-in'ują na fragmenty tego big-picture |
 | 2026-05-30 | Drift cleanup (9 must-fix items) | Sync prozy z aktualnym stanem prod po PR-F (#315 6×/day cadence), PR-D (#317 paper timers), PR-G (#318 OpenRouterClient), PR-1 obs (#310 systemd migration), template memo (#320). Dodane status markery (✅ ▶ ⏳) per-bullet w §7 dla parytetu z §9 near-term checklist. Wszystkie cadence wzmianki 1×/4×/dzień → 6×/day; §5 use-case T1 timeline updated z linearnego 09:00 na "pipeline run #2 of 6" + kropkowana strzałka dla auto-submit non-linearity; §6 L1 launchd→systemd; §8 GeminiClient→OpenRouterClient primary +legacy note |
+| 2026-05-30 | Could-do polish: §2 dodana 9. kotwica "Cost discipline" (~$50/mo cap, vendor-share ≤ 60%, PR-G precedent); §6 dodane "Resilience" row dla L1/L2/L3 (Prometheus AlphalensJobStale + Telegram routing per PR #312) | Cost discipline kotwica utrwala PR-G doctrine (Quality > cost, ale equivalent-quality + ≥50% saving → swap allowed) jako trwałą architectural constraint. Resilience rows wiążą operational obs stack (PRs #310-#314) z business-layer per-tier description — sub-agent skopiowane do innej sesji widzi że failure handling JEST częścią design'u, nie afterthought'em. Last "could-do" item z drift analizy 2026-05-30 |
 
 Edit jest **expected** — to nie LOCKED memo. Każda istotna decyzja architektoniczna (nowy track, zmiana priorytetu, retired feature) powinna landować tutaj na końcu sesji.
