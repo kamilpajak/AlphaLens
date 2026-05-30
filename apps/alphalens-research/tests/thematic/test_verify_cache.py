@@ -74,7 +74,7 @@ class TestAllPresent(_Base):
             d = today - dt.timedelta(days=i)
             _write_parquet(self.cache / f"{d.isoformat()}.parquet", n_rows=5)
 
-        result = verify_cache(cache_dir=self.cache, days=7, today=today)
+        result = verify_cache(cache_dir=self.cache, days=7, today=today, lag_days=0)
 
         self.assertIsInstance(result, VerifyResult)
         self.assertEqual(result.missing_days, [])
@@ -93,7 +93,7 @@ class TestMissingDays(_Base):
                 continue  # leave a hole
             _write_parquet(self.cache / f"{d.isoformat()}.parquet", n_rows=3)
 
-        result = verify_cache(cache_dir=self.cache, days=7, today=today)
+        result = verify_cache(cache_dir=self.cache, days=7, today=today, lag_days=0)
 
         self.assertEqual(result.missing_days, [dt.date(2026, 5, 27)])
         self.assertEqual(result.zero_row_days, [])
@@ -108,7 +108,7 @@ class TestMissingDays(_Base):
                 continue
             _write_parquet(self.cache / f"{d.isoformat()}.parquet", n_rows=3)
 
-        result = verify_cache(cache_dir=self.cache, days=7, today=today)
+        result = verify_cache(cache_dir=self.cache, days=7, today=today, lag_days=0)
 
         self.assertEqual(
             result.missing_days,
@@ -121,7 +121,7 @@ class TestMissingDays(_Base):
         reports how many days it tried to look at)."""
         today = dt.date(2026, 5, 29)
 
-        result = verify_cache(cache_dir=self.cache, days=3, today=today)
+        result = verify_cache(cache_dir=self.cache, days=3, today=today, lag_days=0)
 
         self.assertEqual(
             result.missing_days,
@@ -141,7 +141,7 @@ class TestNoNewsVsMissing(_Base):
         _write_parquet(self.cache / "2026-05-28.parquet", n_rows=0)  # quiet day
         _write_parquet(self.cache / "2026-05-27.parquet", n_rows=4)
 
-        result = verify_cache(cache_dir=self.cache, days=3, today=today)
+        result = verify_cache(cache_dir=self.cache, days=3, today=today, lag_days=0)
 
         self.assertEqual(result.missing_days, [])
         self.assertEqual(result.zero_row_days, [dt.date(2026, 5, 28)])
@@ -154,7 +154,7 @@ class TestNoNewsVsMissing(_Base):
         today = dt.date(2026, 5, 29)
         (self.cache / "2026-05-29.parquet").write_bytes(b"NOT A PARQUET")
 
-        result = verify_cache(cache_dir=self.cache, days=1, today=today)
+        result = verify_cache(cache_dir=self.cache, days=1, today=today, lag_days=0)
 
         self.assertEqual(result.missing_days, [dt.date(2026, 5, 29)])
 
@@ -167,7 +167,7 @@ class TestWindowing(_Base):
         _write_parquet(self.cache / "2026-05-29.parquet", n_rows=5)
         _write_parquet(self.cache / "2026-05-28.parquet", n_rows=5)
 
-        result = verify_cache(cache_dir=self.cache, days=1, today=today)
+        result = verify_cache(cache_dir=self.cache, days=1, today=today, lag_days=0)
 
         self.assertEqual(result.checked_days, 1)
         self.assertEqual(result.missing_days, [])
@@ -181,7 +181,7 @@ class TestWindowing(_Base):
             d = today - dt.timedelta(days=i)
             _write_parquet(self.cache / f"{d.isoformat()}.parquet", n_rows=2)
 
-        result = verify_cache(cache_dir=self.cache, days=30, today=today)
+        result = verify_cache(cache_dir=self.cache, days=30, today=today, lag_days=0)
 
         self.assertEqual(result.checked_days, 30)
         self.assertEqual(result.missing_days, [])
@@ -190,11 +190,11 @@ class TestWindowing(_Base):
         """A 0-day window is meaningless — caller bug. Raise loud rather
         than silently returning an OK result."""
         with self.assertRaises(ValueError):
-            verify_cache(cache_dir=self.cache, days=0, today=dt.date(2026, 5, 29))
+            verify_cache(cache_dir=self.cache, days=0, today=dt.date(2026, 5, 29), lag_days=0)
 
     def test_negative_days_raises(self):
         with self.assertRaises(ValueError):
-            verify_cache(cache_dir=self.cache, days=-1, today=dt.date(2026, 5, 29))
+            verify_cache(cache_dir=self.cache, days=-1, today=dt.date(2026, 5, 29), lag_days=0)
 
     def test_far_future_today_raises(self):
         """An accidental ``--today 2099-01-01`` during incident response
@@ -203,7 +203,85 @@ class TestWindowing(_Base):
         cross-tz call slack) per zen review 2026-05-29."""
         far_future = dt.datetime.now(dt.UTC).date() + dt.timedelta(days=365)
         with self.assertRaises(ValueError):
-            verify_cache(cache_dir=self.cache, days=7, today=far_future)
+            verify_cache(cache_dir=self.cache, days=7, today=far_future, lag_days=0)
+
+
+class TestLagDays(_Base):
+    """``lag_days`` (default 1) shifts the window backwards by N days.
+
+    The default matches the ``thematic ingest`` semantic: the pipeline
+    writes a parquet keyed on ``asof = today - 1`` (the previous calendar
+    day), so the verifier's window must end on yesterday, not today.
+    PR-E shipped with ``lag_days=0`` (no shift) and the systemd hook
+    fired against an anchor for which the ingest had not yet written a
+    file — guaranteed false-positive MISSING alert + halt on the next
+    ExecStartPost. Caught by the manual fire 2026-05-30. These tests pin
+    the corrected semantic so a future regression to the no-shift
+    behaviour fails CI loud.
+    """
+
+    def test_default_lag_one_window_ends_on_yesterday(self):
+        """With ``lag_days=1`` (default), ``--days 3`` covers
+        ``[anchor-3, anchor-2, anchor-1]`` — NOT including the anchor
+        itself. Seeding only the lagged window must pass."""
+        today = dt.date(2026, 5, 30)
+        for d in (dt.date(2026, 5, 29), dt.date(2026, 5, 28), dt.date(2026, 5, 27)):
+            _write_parquet(self.cache / f"{d.isoformat()}.parquet", n_rows=4)
+
+        result = verify_cache(cache_dir=self.cache, days=3, today=today)
+
+        self.assertEqual(result.missing_days, [])
+        self.assertEqual(result.checked_days, 3)
+
+    def test_default_lag_one_excludes_anchor_from_expected_set(self):
+        """The motivating bug: an anchor-date file does NOT exist yet
+        when the daily timer runs (ingest writes T-1, not T). With
+        ``lag_days=1`` the verifier must NOT report the anchor as
+        missing even when no anchor parquet is on disk."""
+        today = dt.date(2026, 5, 30)
+        _write_parquet(self.cache / "2026-05-29.parquet", n_rows=4)
+        # Intentionally no 2026-05-30.parquet.
+
+        result = verify_cache(cache_dir=self.cache, days=1, today=today)
+
+        self.assertEqual(result.missing_days, [])
+        self.assertEqual(result.checked_days, 1)
+
+    def test_explicit_lag_zero_includes_anchor(self):
+        """Belt-and-suspenders: ``lag_days=0`` preserves the legacy
+        behaviour (window includes the anchor). Tests that pre-seed a
+        cache up to + including the anchor pass this opt-out."""
+        today = dt.date(2026, 5, 30)
+        _write_parquet(self.cache / "2026-05-30.parquet", n_rows=4)
+
+        result = verify_cache(cache_dir=self.cache, days=1, today=today, lag_days=0)
+
+        self.assertEqual(result.missing_days, [])
+
+    def test_lag_two_shifts_window_back_two_days(self):
+        """``lag_days=2`` — useful for an operator audit that wants to
+        let two ingest runs settle before flagging. Window for
+        ``days=3, today=2026-05-30, lag_days=2`` is
+        ``[05-26, 05-27, 05-28]``."""
+        today = dt.date(2026, 5, 30)
+        for d in (dt.date(2026, 5, 28), dt.date(2026, 5, 27), dt.date(2026, 5, 26)):
+            _write_parquet(self.cache / f"{d.isoformat()}.parquet", n_rows=4)
+
+        result = verify_cache(cache_dir=self.cache, days=3, today=today, lag_days=2)
+
+        self.assertEqual(result.missing_days, [])
+        self.assertEqual(result.checked_days, 3)
+
+    def test_negative_lag_raises(self):
+        """A negative lag is meaningless (would peer into the future) —
+        loud rejection avoids the false-positive avalanche class."""
+        with self.assertRaises(ValueError):
+            verify_cache(
+                cache_dir=self.cache,
+                days=3,
+                today=dt.date(2026, 5, 29),
+                lag_days=-1,
+            )
 
 
 class TestCacheDirMissing(_Base):

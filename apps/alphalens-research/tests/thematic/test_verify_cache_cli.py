@@ -60,6 +60,12 @@ class _CLIBase(unittest.TestCase):
 # Pin "today" to a fixed date so the CLI's default ``today`` (UTC now)
 # doesn't drift the expected file set in the cache. Each test seeds
 # the cache against this anchor.
+#
+# Tests below pass ``--lag-days 0`` explicitly so the window includes
+# the anchor itself — matching the seeding pattern that pre-dated the
+# PR-E bugfix. The lag=1 default is exercised by the dedicated
+# ``TestLagDaysDefault`` class at the bottom; legacy tests stay opted
+# out so a refactor that breaks the lag flag fails BOTH paths loudly.
 _ANCHOR = dt.date(2026, 5, 29)
 
 
@@ -69,6 +75,8 @@ class TestExitCodes(_CLIBase):
             d = _ANCHOR - dt.timedelta(days=i)
             _seed_parquet(self.cache / f"{d.isoformat()}.parquet", n_rows=4)
         result = self._invoke(
+            "--lag-days",
+            "0",
             "--days",
             "3",
             "--cache-dir",
@@ -85,6 +93,8 @@ class TestExitCodes(_CLIBase):
             d = _ANCHOR - dt.timedelta(days=i)
             _seed_parquet(self.cache / f"{d.isoformat()}.parquet", n_rows=4)
         result = self._invoke(
+            "--lag-days",
+            "0",
             "--days",
             "3",
             "--cache-dir",
@@ -113,6 +123,8 @@ class TestAlertDispatch(_CLIBase):
             ) as mock_send,
         ):
             result = self._invoke(
+                "--lag-days",
+                "0",
                 "--days",
                 "1",
                 "--cache-dir",
@@ -151,6 +163,8 @@ class TestAlertDispatch(_CLIBase):
             ) as mock_send,
         ):
             result = self._invoke(
+                "--lag-days",
+                "0",
                 "--days",
                 "1",
                 "--cache-dir",
@@ -174,6 +188,8 @@ class TestAlertDispatch(_CLIBase):
             ) as mock_send,
         ):
             result = self._invoke(
+                "--lag-days",
+                "0",
                 "--days",
                 "1",
                 "--cache-dir",
@@ -183,6 +199,56 @@ class TestAlertDispatch(_CLIBase):
             )
         self.assertEqual(result.exit_code, 1)
         mock_send.assert_not_called()
+
+
+class TestLagDaysDefault(_CLIBase):
+    """Pins the production-default semantic: ``--lag-days`` is 1 unless
+    overridden. PR-E shipped without the flag and the systemd hook
+    fired against an anchor for which the ingest had not yet written
+    a file — guaranteed false-positive MISSING + halt on the next
+    ExecStartPost. See ``docs/research/paper_trading_non_trading_day_2026_05_29.md``
+    §5.1 follow-up.
+    """
+
+    def test_no_lag_flag_excludes_anchor_from_expected_set(self):
+        """Anchor is 2026-05-29 (Fri); cache holds yesterday only
+        (2026-05-28). With the default ``--lag-days 1`` the window
+        ends on Thu and the verifier exits 0 — even though Fri's
+        parquet is intentionally absent (ingest writes T-1)."""
+        _seed_parquet(self.cache / "2026-05-28.parquet", n_rows=4)
+        # Intentionally no 2026-05-29.parquet.
+
+        result = self._invoke(
+            "--days",
+            "1",
+            "--cache-dir",
+            str(self.cache),
+            "--today",
+            _ANCHOR.isoformat(),
+        )
+
+        self.assertEqual(result.exit_code, 0, msg=f"stdout={result.stdout!r}")
+        self.assertIn("1/1 dates present", result.stdout)
+
+    def test_no_lag_flag_reports_missing_when_yesterday_is_absent(self):
+        """If yesterday's parquet IS missing, the verifier MUST still
+        fire (the lag default only excludes the anchor itself, not the
+        rest of the lagged window)."""
+        # Cache empty.
+
+        result = self._invoke(
+            "--days",
+            "1",
+            "--cache-dir",
+            str(self.cache),
+            "--today",
+            _ANCHOR.isoformat(),
+        )
+
+        self.assertEqual(result.exit_code, 1)
+        combined = result.stdout + (result.stderr or "")
+        # The default-lag window for days=1, today=05-29 is [05-28].
+        self.assertIn("2026-05-28", combined)
 
 
 if __name__ == "__main__":

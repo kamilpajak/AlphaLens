@@ -182,6 +182,16 @@ Known limitations (not in scope for PR-A; planned follow-ups):
   "missing-day (no parquet at all)" — only the latter alerts. Telegram
   digest dispatched via the existing `TelegramHandler` when both
   `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set.
+  **Two follow-up fixes from VPS production runs:**
+  (PR-E.1) `alphalens` arg repeated after the image name in the
+  `ExecStartPost=` — pipeline image's `ENTRYPOINT` IS the CLI, so the
+  literal `alphalens` was Typer'd as a subcommand and the hook
+  exited `No such command 'alphalens'`. Fixed in PR #305 (2026-05-30).
+  (PR-E.2) `lag_days` defaulted to 0 — verifier window included the
+  anchor date for which the ingest had not yet written a file
+  (pipeline writes T-1, anchor was T). Guaranteed false-positive
+  MISSING alert + halt on the `rebuild-cache` ExecStartPost. Added
+  `--lag-days` parameter defaulting to 1 (PR #307, 2026-05-30).
 * **Cross-day dedup not run (LOW).** Tier 1 clustering operates
   per-day inside `news_ingest`; an article published Sat then
   re-syndicated Mon shows up twice in the 30-day lookback.
