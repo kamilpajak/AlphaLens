@@ -281,6 +281,31 @@ def _fmt_num_or_dash(value, fmt: str) -> str:
     return f"{value:{fmt}}"
 
 
+def _fmt_str_or_dash(value, max_len: int) -> str:
+    """NaN-safe string truncation for CLI preview tables.
+
+    Sibling of :func:`_fmt_num_or_dash`. ``row.get("col") or "?"`` is NOT
+    safe for object-dtype string columns: pandas writes missing string
+    values as ``float('nan')`` (NOT ``None``), and ``bool(float('nan'))``
+    is ``True`` — so the ``or`` short-circuit never fires and the
+    downstream ``[:max_len]`` slice crashes with
+    ``TypeError: 'float' object is not subscriptable``. Empty strings are
+    also rendered as a dash so an explicit ``""`` from a coalesced source
+    reads the same as a true missing value in the preview panel.
+
+    Bug class observed on VPS 2026-05-30 (``industry_name`` NaN halted
+    the daily pipeline). The helper centralises the guard so every str
+    column in the preview shares the same treatment instead of each one
+    re-inventing a defensive idiom.
+    """
+    if value is None or pd.isna(value):
+        return "-"
+    text = str(value)
+    if not text:
+        return "-"
+    return text[:max_len]
+
+
 def _print_score_preview(enriched: pd.DataFrame) -> None:
     typer.echo("")
     typer.echo(
@@ -289,15 +314,16 @@ def _print_score_preview(enriched: pd.DataFrame) -> None:
     )
     typer.echo("-" * 110)
     for _, row in enriched.head(25).iterrows():
-        ind = (row.get("industry_name") or "?")[:19]
+        ind = _fmt_str_or_dash(row.get("industry_name"), 19)
         ins = row.get("insider_score_usd")
         ins_str = f"{ins / 1000:.0f}k" if ins is not None and not pd.isna(ins) else "-"
         fcff_str = _fmt_num_or_dash(row.get("fcff_yield_pct"), ".1f")
         val_str = _fmt_num_or_dash(row.get("valuation_composite_sector_percentile"), ".0f")
+        tech_str = _fmt_str_or_dash(row.get("technicals_summary_str"), 50)
         typer.echo(
             f"{row['ticker']:8s} {ind:20s} {int(row['layer4_weighted_score']):>5d} "
             f"{ins_str:>10s} {fcff_str:>6s} {val_str:>5s} "
-            f"{row.get('technicals_summary_str', '')[:50]}"
+            f"{tech_str}"
         )
 
 
