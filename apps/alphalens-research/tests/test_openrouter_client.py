@@ -98,7 +98,7 @@ class TestGenerateContentRequestShape(unittest.TestCase):
 
     def _client_with_transport(self, handler) -> OpenRouterClient:
         transport = httpx.MockTransport(handler)
-        return OpenRouterClient(api_key=_DUMMY_KEY, transport=transport)
+        return OpenRouterClient(api_key=_DUMMY_KEY, _transport=transport)
 
     def test_post_to_v1_chat_completions(self) -> None:
         captured: dict = {}
@@ -184,7 +184,7 @@ class TestGenerateContentResponseShape(unittest.TestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json=_mock_chat_response(payload))
 
-        client = OpenRouterClient(api_key=_DUMMY_KEY, transport=httpx.MockTransport(handler))
+        client = OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
         response = client.generate_content(
             model="deepseek/deepseek-v4-flash", contents="extract this"
         )
@@ -204,7 +204,7 @@ class TestGenerateContentResponseShape(unittest.TestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"id": "x", "model": "y", "choices": []})
 
-        client = OpenRouterClient(api_key=_DUMMY_KEY, transport=httpx.MockTransport(handler))
+        client = OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
         response = client.generate_content(model="deepseek/deepseek-v4-flash", contents="anything")
         self.assertEqual(response.text, "")
 
@@ -212,7 +212,7 @@ class TestGenerateContentResponseShape(unittest.TestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(503, text="upstream busy")
 
-        client = OpenRouterClient(api_key=_DUMMY_KEY, transport=httpx.MockTransport(handler))
+        client = OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
         with self.assertRaisesRegex(httpx.HTTPStatusError, "503"):
             client.generate_content(model="deepseek/deepseek-v4-flash", contents="hi")
 
@@ -287,7 +287,7 @@ class TestGenerateContentWithConfig(unittest.TestCase):
             captured["body"] = json.loads(request.content)
             return httpx.Response(200, json=_mock_chat_response("{}"))
 
-        client = OpenRouterClient(api_key=_DUMMY_KEY, transport=httpx.MockTransport(handler))
+        client = OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
         cfg = client.build_config(
             response_mime_type="application/json",
             response_schema={"type": "object"},
@@ -302,7 +302,7 @@ class TestGenerateContentWithConfig(unittest.TestCase):
             captured["body"] = json.loads(request.content)
             return httpx.Response(200, json=_mock_chat_response("{}"))
 
-        client = OpenRouterClient(api_key=_DUMMY_KEY, transport=httpx.MockTransport(handler))
+        client = OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
         cfg = client.build_config(temperature=0.0, max_output_tokens=8000)
         client.generate_content(model="deepseek/deepseek-v4-flash", contents="prompt", config=cfg)
         self.assertEqual(captured["body"]["temperature"], 0.0)
@@ -315,7 +315,7 @@ class TestGenerateContentWithConfig(unittest.TestCase):
             captured["body"] = json.loads(request.content)
             return httpx.Response(200, json=_mock_chat_response("{}"))
 
-        client = OpenRouterClient(api_key=_DUMMY_KEY, transport=httpx.MockTransport(handler))
+        client = OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
         schema = {"type": "object", "properties": {"x": {"type": "string"}}}
         cfg = client.build_config(response_mime_type="application/json", response_schema=schema)
         client.generate_content(model="deepseek/deepseek-v4-flash", contents="prompt", config=cfg)
@@ -340,7 +340,7 @@ class TestFinishReasonGeminiCompat(unittest.TestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json=payload)
 
-        return OpenRouterClient(api_key=_DUMMY_KEY, transport=httpx.MockTransport(handler))
+        return OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
 
     def test_openrouter_length_maps_to_gemini_MAX_TOKENS(self) -> None:
         payload = {
@@ -374,6 +374,28 @@ class TestFinishReasonGeminiCompat(unittest.TestCase):
             model="deepseek/deepseek-v4-pro", contents="hi"
         )
         self.assertEqual(resp.candidates[0].finish_reason.name, "SAFETY")
+
+    def test_unknown_finish_reason_maps_to_UNKNOWN_not_STOP(self) -> None:
+        # Zen pre-merge review of PR-G: if OpenRouter introduces a new
+        # status (e.g. ``"error"``, ``"safety"``), the wrapper MUST
+        # surface it as ``UNKNOWN`` so the brief generator's classifier
+        # defaults to None and the downstream unparseable-JSON path
+        # logs at WARNING. Silently degrading to ``STOP`` would mask
+        # a generation failure as a clean success.
+        payload = {
+            "choices": [
+                {"message": {"content": ""}, "finish_reason": "error"},
+            ],
+        }
+        resp = self._client(payload).generate_content(
+            model="deepseek/deepseek-v4-pro", contents="hi"
+        )
+        self.assertEqual(
+            resp.candidates[0].finish_reason.name,
+            "UNKNOWN",
+            "Unknown OpenRouter finish_reason MUST map to 'UNKNOWN', "
+            "not 'STOP' (would silently swallow a generation failure).",
+        )
 
     def test_empty_choices_synthesises_STOP_candidate(self) -> None:
         # The brief generator's classifier reads candidates[0]

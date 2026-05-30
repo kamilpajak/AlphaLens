@@ -48,10 +48,18 @@ This wrapper enforces (1) and (2) automatically when the caller
 passes Gemini-style ``response_mime_type="application/json"`` +
 ``response_schema=...`` to :meth:`build_config`. (3) is the caller's
 responsibility, same as for the Gemini client.
+
+**Pricing era (2026-05-30 PR-G snapshot)**: DeepSeek v4-pro on
+OpenRouter is mid-promo at $0.435/M input + $0.87/M output. The promo
+expires **2026-05-31 16:00 UTC**, reverting to $1.74/M + $3.48/M. v4-flash
+is $0.10/M + $0.20/M (no promo). See
+``docs/research/polygon_quota_6x_per_day_2026_05_30.md`` §Cost for the
+full projection at 6× thematic cadence.
 """
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
@@ -92,14 +100,23 @@ __all__ = [
 # ``response.candidates[0].finish_reason.name`` and switches on the
 # string. To keep that classifier backend-agnostic we synthesise the
 # same shape on top of the OpenRouter response.
+#
+# A missing key in the lookup (e.g. OpenRouter introduces ``"error"``
+# or ``"safety"`` later) MUST NOT silently degrade to ``"STOP"`` — that
+# would mask a generation failure as a clean success and skip the
+# brief-generator retry. Instead we map unknowns to ``"UNKNOWN"`` so
+# the classifier's switch defaults to ``None`` and the downstream
+# unparseable-JSON path logs at WARNING, surfacing the regression.
+# Zen pre-merge review of PR-G pinned this defence.
 _FINISH_REASON_MAP = {
     "stop": "STOP",
     "length": "MAX_TOKENS",  # brief retries on this; same retry-on-truncation policy applies
     "content_filter": "SAFETY",
     "tool_calls": "TOOL_CALLS",  # tool-calling not used today but pass through
     "function_call": "TOOL_CALLS",
-    None: "STOP",  # absent field → assume clean stop
+    None: "STOP",  # absent field → assume clean stop (most lenient)
 }
+_UNKNOWN_FINISH_REASON = "UNKNOWN"
 
 
 def _wrap_response(payload: dict[str, Any]) -> SimpleNamespace:
@@ -132,7 +149,9 @@ def _wrap_response(payload: dict[str, Any]) -> SimpleNamespace:
     choice = choices[0]
     content = choice.get("message", {}).get("content", "") or ""
     raw_reason = choice.get("finish_reason")
-    gemini_name = _FINISH_REASON_MAP.get(raw_reason, "STOP")
+    # ``.get(..., _UNKNOWN_FINISH_REASON)`` — unknown OpenRouter values
+    # land on ``"UNKNOWN"`` rather than silently degrading to ``"STOP"``.
+    gemini_name = _FINISH_REASON_MAP.get(raw_reason, _UNKNOWN_FINISH_REASON)
     candidate = SimpleNamespace(finish_reason=SimpleNamespace(name=gemini_name))
     return SimpleNamespace(text=content, candidates=[candidate], _raw=payload)
 
@@ -184,7 +203,8 @@ class OpenRouterClient:
     No throttle / retry — those are caller concerns when DeepSeek's
     per-key quota actually starts biting.
 
-    The ``transport=`` constructor arg is a test-only seam:
+    The ``_transport=`` constructor arg is a test-only seam (leading
+    underscore signals "do not pass in production"):
     ``httpx.MockTransport(handler)`` lets tests intercept requests
     without touching the network. Production callers pass nothing
     and get the default httpx transport.
@@ -194,7 +214,7 @@ class OpenRouterClient:
         self,
         api_key: str,
         *,
-        transport: httpx.BaseTransport | None = None,
+        _transport: httpx.BaseTransport | None = None,
         base_url: str = OPENROUTER_BASE_URL,
     ):
         if not api_key:
@@ -204,7 +224,7 @@ class OpenRouterClient:
         self._http = httpx.Client(
             base_url=base_url,
             timeout=_DEFAULT_TIMEOUT,
-            transport=transport,
+            transport=_transport,
             headers={
                 # Auth header lives here so every call inherits it without
                 # the caller needing to remember. Bearer NEVER goes in
@@ -322,10 +342,17 @@ def get_default_openrouter_client() -> OpenRouterClient:
     Raises ``ValueError`` if ``OPENROUTER_API_KEY`` is unset at first
     call. Subsequent calls return the same instance; the underlying
     httpx connection pool is shared across all adapters in the process.
+
+    On first construction we register an ``atexit`` hook to close the
+    ``httpx.Client`` so a long-running daemon does not leak the
+    connection pool. Cron-style processes exit immediately and Python's
+    GC handles it anyway, but the explicit close is defence-in-depth
+    (zen pre-merge review of PR-G flagged the leak surface).
     """
     global _DEFAULT_CLIENT  # noqa: PLW0603 — lazy singleton is the documented pattern
     if _DEFAULT_CLIENT is None:
         _DEFAULT_CLIENT = OpenRouterClient.from_env()
+        atexit.register(_DEFAULT_CLIENT._http.close)
     return _DEFAULT_CLIENT
 
 
