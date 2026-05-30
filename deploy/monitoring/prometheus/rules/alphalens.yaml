@@ -170,3 +170,40 @@ groups:
         annotations:
           summary: "Alpha Vantage quota almost exhausted ({{ $value }} calls left)"
           description: "Quota resets at 00:00 UTC. PEAD-v2 backfill may stall."
+
+      # ---------------------------------------------------------------
+      # Structured-event-template health (epic #321 PR-1).
+      # ---------------------------------------------------------------
+      #
+      # ``AlphalensTemplateMatchRateLow`` fires when a SPECIFIC template
+      # drops below 20% match-rate over a rolling 7-day window. The
+      # aggregate template_match_rate across all 5 dnia-jeden templates
+      # is expected to sit in the 20-35% range for the first months
+      # (design memo §1.1) — alerting on aggregate would be noisy.
+      # Per-template lets the operator catch pattern rot in one template
+      # without burning attention on the expected steady-state aggregate.
+      #
+      # ``for: 1d`` debounce — a single quiet news day on a niche
+      # template (e.g. regulatory_action when there's no FDA panel that
+      # week) should not page; sustained drift is the signal.
+      #
+      # Guard against the denominator being zero (no attempts in the
+      # window → division by zero → no series → silent disable). The
+      # numerator-only ``rate()`` would clamp to 0 in that case and
+      # the rule would fire perpetually; pinning attempts > 0 makes
+      # the alert correct for the brand-new-template case.
+      - alert: AlphalensTemplateMatchRateLow
+        expr: |
+          (sum by (template_id) (rate(alphalens_template_match_total[7d]))
+           /
+           sum by (template_id) (rate(alphalens_template_attempt_total[7d])))
+          < 0.20
+          and
+          sum by (template_id) (rate(alphalens_template_attempt_total[7d])) > 0
+        for: 1d
+        labels:
+          severity: warning
+          route: telegram
+        annotations:
+          summary: "Template {{ $labels.template_id }} match rate < 20% for 7 days"
+          description: "Per-template match-rate sustained below 20% — review pattern in templates/{{ $labels.template_id }}.yaml or accept drift via `alphalens templates evaluate`."

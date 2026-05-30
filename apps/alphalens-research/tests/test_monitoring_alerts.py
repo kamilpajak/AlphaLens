@@ -350,5 +350,70 @@ class TestGrafanaDashboard(unittest.TestCase):
         )
 
 
+class TestTemplateEngineMonitoring(unittest.TestCase):
+    """Pin the per-template alert + dashboard panel introduced in epic #321 PR-1.
+
+    The structured-event-template engine (issue #143) emits four metric
+    families: ``alphalens_template_match_total``,
+    ``alphalens_template_attempt_total``,
+    ``alphalens_template_holdout_total``,
+    ``alphalens_template_predicate_total``. If a future edit silently
+    drops the per-template alert or the panel that surfaces these,
+    Operator loses the only signal that says "a template stopped
+    matching". This file guards the contract.
+    """
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def test_template_match_rate_low_alert_exists(self) -> None:
+        rules = self._rules()
+        match_rate_alerts = [r for r in rules if r.get("alert") == "AlphalensTemplateMatchRateLow"]
+        self.assertEqual(
+            len(match_rate_alerts),
+            1,
+            "Expected exactly one AlphalensTemplateMatchRateLow alert.",
+        )
+        alert = match_rate_alerts[0]
+        # Threshold from design memo §1.1 — per-template, not aggregate.
+        self.assertIn("0.20", alert["expr"])
+        # Per-template grouping is the load-bearing part of the design.
+        self.assertIn("by (template_id)", alert["expr"])
+        # Denominator-zero guard so a brand-new template doesn't trip
+        # on the first second of life (no attempts yet → no rate series).
+        self.assertIn(
+            "alphalens_template_attempt_total",
+            alert["expr"],
+            "Alert must reference attempts so the >0 guard can fire.",
+        )
+        self.assertEqual(alert.get("for"), "1d")
+        self.assertEqual(alert.get("labels", {}).get("route"), "telegram")
+
+    def test_dashboard_includes_template_engine_panels(self) -> None:
+        dash = _load_dashboard()
+        all_exprs = []
+        for panel in dash.get("panels", []):
+            for target in panel.get("targets", []):
+                expr = target.get("expr", "")
+                if expr:
+                    all_exprs.append(expr)
+
+        # Per-template match-rate panel (the headline signal).
+        self.assertTrue(
+            any("alphalens_template_match_total" in e for e in all_exprs),
+            "Dashboard must include a per-template match-rate panel.",
+        )
+        # Holdout reason breakdown (no-black-box-scoring doctrine).
+        self.assertTrue(
+            any("alphalens_template_holdout_total" in e for e in all_exprs),
+            "Dashboard must include a holdout-by-reason panel.",
+        )
+        # Per-predicate pass/fail rate (catches regex rot).
+        self.assertTrue(
+            any("alphalens_template_predicate_total" in e for e in all_exprs),
+            "Dashboard must include a per-predicate pass/fail panel.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
