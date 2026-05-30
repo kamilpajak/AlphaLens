@@ -98,9 +98,18 @@ def scan(
     # the runner does not currently surface it through ReviewResult;
     # adding it would require touching the scanner internals and is
     # better split into a follow-up PR.
-    emit_domain_metrics(
-        job=f"literature-scan-{cadence}",
-        metrics={
-            f'alphalens_literature_last_run_trigger{{window="{cadence}"}}': int(result.has_trigger),
-        },
-    )
+    #
+    # Wrap in try/except: scan markdown is already written + Telegram
+    # digest already dispatched, so a metrics-dir failure must not
+    # turn this run into a unit failure (zen pre-merge rule, PR #311).
+    try:
+        emit_domain_metrics(
+            job=f"literature-scan-{cadence}",
+            metrics={
+                f'alphalens_literature_last_run_trigger{{window="{cadence}"}}': int(
+                    result.has_trigger
+                ),
+            },
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed; literature-scan-%s run succeeded", cadence)

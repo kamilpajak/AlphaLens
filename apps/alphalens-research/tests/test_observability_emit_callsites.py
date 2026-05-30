@@ -223,5 +223,111 @@ class TestThematicBriefEmitsDomainMetrics(unittest.TestCase):
             self.assertEqual(metrics['alphalens_thematic_briefs_by_model{model="flash"}'], 2)
 
 
+class TestEmitFailureDoesNotPoisonSuccessPath(unittest.TestCase):
+    """A transient metrics-dir failure (disk full, permission flip)
+    must NOT turn a successful cron run into a failed unit.
+
+    The actual work — Telegram alert, scan markdown, briefs parquet,
+    AV cache write — is already persisted before ``emit_domain_metrics``
+    is called. An OSError from the emitter is pure observability
+    debt, not a job failure. Without the try/except guard the unit
+    would exit non-zero, the cron-health hook would write
+    ``last_exit_code != 0`` + skip ``last_success_timestamp``, and
+    PR-3 would eventually fire a staleness alert despite the job
+    having done its work cleanly.
+
+    Pin the guard at every callsite. Zen pre-merge review of PR #311
+    flagged the absence as the single CRITICAL finding.
+    """
+
+    def test_edgar_detect_swallows_emit_oserror(self) -> None:
+        from alphalens_cli.commands import edgar
+
+        detector = MagicMock()
+        detector.run_once.return_value = {
+            "events_detected": 1,
+            "events_dispatched": 0,
+        }
+        detector.portfolio.held = []
+        detector.portfolio.watchlist = []
+
+        with (
+            patch.object(edgar, "_build_detector", return_value=detector),
+            patch.object(edgar, "emit_domain_metrics", side_effect=OSError("disk full")),
+        ):
+            # MUST NOT raise — the EDGAR poll already shipped any
+            # alerts and updated seen_events.db.
+            edgar.detect()
+
+    def test_literature_scan_swallows_emit_oserror(self) -> None:
+        from alphalens_cli.commands import literature
+
+        result = MagicMock()
+        result.path = Path("/tmp/fake.md")
+        result.has_trigger = True
+
+        with (
+            patch.object(literature, "_resolve_credentials", return_value=("k", "b", "c")),
+            patch.object(literature, "run_weekly", return_value=result),
+            patch.object(literature, "emit_domain_metrics", side_effect=OSError("perm denied")),
+        ):
+            literature.scan(
+                window=literature.ScanWindow.weekly,
+                period="2026-W22",
+                output_dir=Path("/tmp"),
+            )
+
+    def test_av_backfill_swallows_emit_oserror(self) -> None:
+        mod = importlib.import_module("scripts.av_earnings_daily_backfill")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_root = Path(tmp) / "data"
+            (data_root / "sp500_pit").mkdir(parents=True)
+            (data_root / "sp500_pit" / "2024.yaml").write_text(
+                "as_of: '2024-01-01'\nsource: test\ntickers: [AAPL]\n"
+            )
+
+            with (
+                patch.object(mod, "fetch_earnings_batch", return_value={"AAPL": "fetched"}),
+                patch.object(mod, "emit_domain_metrics", side_effect=OSError("no metrics dir")),
+            ):
+                rc = mod.main(
+                    [
+                        "--cache-dir",
+                        str(Path(tmp) / "cache"),
+                        "--data-root",
+                        str(data_root),
+                        "--throttle-seconds",
+                        "0",
+                    ]
+                )
+
+            # Backfill MUST exit 0 — AV cache write is the work and
+            # it succeeded; observability loss is acceptable.
+            self.assertEqual(rc, 0)
+
+    def test_thematic_brief_swallows_emit_oserror(self) -> None:
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        enriched = pd.DataFrame({"ticker": ["A"]})
+        enriched.attrs["n_pro"] = 0
+        enriched.attrs["n_flash"] = 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            scored_dir = Path(tmp) / "scored"
+            scored_dir.mkdir()
+            (scored_dir / "2026-05-29.parquet").touch()
+            output_dir = Path(tmp) / "briefs"
+            output_dir.mkdir()
+
+            with (
+                patch.object(thematic.pd, "read_parquet", return_value=pd.DataFrame({"x": [1]})),
+                patch.object(thematic.brief_orchestrator, "generate_briefs", return_value=enriched),
+                patch.object(thematic, "emit_domain_metrics", side_effect=OSError("ENOSPC")),
+            ):
+                thematic.brief(date="2026-05-29", scored_dir=scored_dir, output_dir=output_dir)
+
+
 if __name__ == "__main__":
     unittest.main()

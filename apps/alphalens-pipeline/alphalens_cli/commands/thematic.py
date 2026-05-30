@@ -370,14 +370,21 @@ def brief(
     # for "Pro-quota burned" (Pro routing is gated on user-defined
     # Tier-1 confidence so a sudden Pro spike or zero is worth
     # noticing).
-    emit_domain_metrics(
-        job="thematic-build",
-        metrics={
-            "alphalens_thematic_briefs_total": len(enriched),
-            'alphalens_thematic_briefs_by_model{model="pro"}': n_pro,
-            'alphalens_thematic_briefs_by_model{model="flash"}': n_flash,
-        },
-    )
+    #
+    # Wrap in try/except: briefs parquet is already written, so a
+    # metrics-dir failure must not turn this run into a unit
+    # failure (zen pre-merge rule, PR #311).
+    try:
+        emit_domain_metrics(
+            job="thematic-build",
+            metrics={
+                "alphalens_thematic_briefs_total": len(enriched),
+                'alphalens_thematic_briefs_by_model{model="pro"}': n_pro,
+                'alphalens_thematic_briefs_by_model{model="flash"}': n_flash,
+            },
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed; thematic-build run succeeded")
 
 
 @thematic_app.command("verify-cache")

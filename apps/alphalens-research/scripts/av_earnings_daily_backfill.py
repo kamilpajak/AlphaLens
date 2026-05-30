@@ -175,16 +175,24 @@ def main(argv: list[str] | None = None) -> int:
     # exhaustion. ``quota_blocked`` is 1 on the rate-limited path so
     # the dashboard can distinguish "clean exit" vs "ran out of quota
     # mid-run" without parsing journald.
-    emit_domain_metrics(
-        job="av-earnings-backfill",
-        metrics={
-            'alphalens_av_tickers_total{status="fetched"}': fetched,
-            'alphalens_av_tickers_total{status="cached"}': cached,
-            'alphalens_av_tickers_total{status="failed"}': failed,
-            "alphalens_av_quota_remaining": max(0, 25 - fetched),
-            "alphalens_av_quota_blocked": quota_blocked,
-        },
-    )
+    #
+    # Wrap in try/except: AV cache is already populated, so a
+    # metrics-dir failure must not turn this run into a unit failure
+    # — that would block tomorrow's quota window pickup (zen
+    # pre-merge rule, PR #311).
+    try:
+        emit_domain_metrics(
+            job="av-earnings-backfill",
+            metrics={
+                'alphalens_av_tickers_total{status="fetched"}': fetched,
+                'alphalens_av_tickers_total{status="cached"}': cached,
+                'alphalens_av_tickers_total{status="failed"}': failed,
+                "alphalens_av_quota_remaining": max(0, 25 - fetched),
+                "alphalens_av_quota_blocked": quota_blocked,
+            },
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed; av-earnings-backfill run succeeded")
 
     if args.rclone_remote:
         _nextcloud_sync(args.cache_dir, args.rclone_remote, args.rclone_bin)

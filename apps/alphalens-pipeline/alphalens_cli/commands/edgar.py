@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import typer
 from alphalens_pipeline.core.queue import default_queue_path
@@ -95,12 +98,24 @@ def detect() -> None:
     # ``portfolio_size`` is a sanity-check: a 0 value here means an
     # empty portfolio.yaml slipped through (would also raise above,
     # but the metric makes the misconfiguration visible on Grafana).
-    emit_domain_metrics(
-        job="edgar-detect",
-        metrics={
-            "alphalens_edgar_events_detected_total": result["events_detected"],
-            "alphalens_edgar_events_dispatched_total": result["events_dispatched"],
-            'alphalens_edgar_portfolio_size{class="held"}': len(detector.portfolio.held),
-            'alphalens_edgar_portfolio_size{class="watchlist"}': len(detector.portfolio.watchlist),
-        },
-    )
+    #
+    # Wrap in try/except so a transient metrics-dir issue (disk full,
+    # perms flip) does NOT poison the unit's success state: the EDGAR
+    # poll already shipped Telegram alerts + updated seen_events.db,
+    # so the cron work is done — losing the gauge is observability
+    # debt, not a job failure. Zen pre-merge review (PR #311) pinned
+    # this rule.
+    try:
+        emit_domain_metrics(
+            job="edgar-detect",
+            metrics={
+                "alphalens_edgar_events_detected_total": result["events_detected"],
+                "alphalens_edgar_events_dispatched_total": result["events_dispatched"],
+                'alphalens_edgar_portfolio_size{class="held"}': len(detector.portfolio.held),
+                'alphalens_edgar_portfolio_size{class="watchlist"}': len(
+                    detector.portfolio.watchlist
+                ),
+            },
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed; edgar-detect run succeeded")
