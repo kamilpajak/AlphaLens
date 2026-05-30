@@ -1,0 +1,28 @@
+[Unit]
+# Monthly literature scan — Perplexity high-context, 5-filter triage,
+# recency=month. Writes docs/research/literature_review/<YYYY-MM>.md
+# inside the VPS checkout, then the wrapper commits + pushes to main.
+# Migrated from the macOS launchd job ``com.alphalens.literature-scan-monthly``
+# (1st of month 09:00 local).
+Description=AlphaLens monthly literature scan (Perplexity)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+
+EnvironmentFile=/etc/alphalens/env
+
+ExecStart=%h/AlphaLens/deploy/systemd/bin/alphalens-literature-scan-publish monthly
+
+StandardOutput=journal
+StandardError=journal
+
+# Monthly scan triages more papers + writes a longer markdown; same
+# memory ceiling as weekly is fine.
+MemoryMax=1G
+TasksMax=32
+
+[Install]
+WantedBy=default.target

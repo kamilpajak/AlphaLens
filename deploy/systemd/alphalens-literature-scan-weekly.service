@@ -1,0 +1,30 @@
+[Unit]
+# Weekly literature scan — Perplexity medium-context, top-3 papers,
+# recency=week. Writes docs/research/literature_review/weekly/<YYYY-Www>.md
+# inside the VPS checkout, then the wrapper commits + pushes to main so
+# the Mac picks it up via ``git pull``. Migrated from the macOS launchd
+# job ``com.alphalens.literature-scan-weekly`` (Sun 18:00 local).
+Description=AlphaLens weekly literature scan (Perplexity)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+
+# Reads PERPLEXITY_API_KEY (scan), TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
+# (digest), and GH_TOKEN (push). No leading `-`: missing secrets must
+# fail loud, not silently produce empty markdown.
+EnvironmentFile=/etc/alphalens/env
+
+ExecStart=%h/AlphaLens/deploy/systemd/bin/alphalens-literature-scan-publish weekly
+
+StandardOutput=journal
+StandardError=journal
+
+# Perplexity client buffers JSON; 1G covers it comfortably.
+MemoryMax=1G
+TasksMax=32
+
+[Install]
+WantedBy=default.target
