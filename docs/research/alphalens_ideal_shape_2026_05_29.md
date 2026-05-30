@@ -48,7 +48,7 @@ flowchart TB
 
     subgraph PIPE["Pipeline — 6×/day VPS systemd"]
         direction TB
-        P1["<b>Ingest</b><br/><small>lexical clustering · cap 200/day</small>"]
+        P1["<b>Ingest</b><br/><small>lexical clustering · cap 200/run (up to 1200/day at 6× cadence)</small>"]
         P2["<b>Event extraction</b><br/><small>templates first · Flash fallback · #143 hybrid</small>"]
         P3["<b>Theme mapping</b><br/><small>DeepSeek v4 Pro</small>"]
         P4["<b>4 verification gates</b><br/><small>10-K · press · Form-4 · NPORT</small>"]
@@ -349,5 +349,6 @@ That is the goal. Everything else is the road.
 | 2026-05-30 | Could-do polish: §2 added 9th anchor "Cost discipline" (~$50/mo cap, vendor share ≤ 60%, PR-G precedent); §6 added "Resilience" row for L1/L2/L3 (Prometheus AlphalensJobStale + Telegram routing per PR #312) | The Cost discipline anchor cements PR-G doctrine (Quality > cost, but equivalent-quality + ≥50% saving → swap allowed) as a permanent architectural constraint. Resilience rows tie the operational observability stack (PRs #310-#314) to the business-layer per-tier description — a sub-agent copy-pasted into another session sees that failure handling IS part of the design, not an afterthought. Last "could-do" item from the 2026-05-30 drift analysis. |
 | 2026-05-30 | Full Polish → English translation of all prose | The doc is rendered as a public SPA route at `app.alphalens.kamilpajak.pl/vision` and therefore qualifies as UI surface, not just an internal research note. CLAUDE.md `Conventions` § enforces English-only for code + UI; `docs/research/` is normally Polish-acceptable (postmortems), but this specific file is shipped as user-facing content. Mermaid diagrams, file paths, PR numbers, code identifiers and `[[memory]]` link slugs all preserved unchanged — only Polish prose was translated. |
 | 2026-05-30 | §2 Cost discipline anchor — corrected cost snapshot | Cloudflare flagged as ~$10/mo (Pages + Tunnel + Access bundle), not free as previously noted. Total monthly spend recalibrated $48 → $58. Soft cap raised $50 → $60 to match reality while preserving the doctrine (vendor-share ≤ 60%, equivalent-quality ≥50% saving triggers swap, never downgrade for cost). |
+| 2026-05-30 | §3 P1 Ingest cap label corrected | Label said `cap 200/day` (true when pipeline was 1×/day pre-PR-F #315) but the cap is applied per `ingest_daily()` call. With 6×/day cadence the daily upper bound is 6 × 200 = 1200 unique articles. Updated label to `cap 200/run (up to 1200/day at 6× cadence)`. Verified via `news_ingest.py:213-215` `.head(max_items)` per-call enforcement and `polygon_news.py` per-UTC-day read-through cache that `--force` flag (passed by `alphalens-thematic-build.service`) defeats so each of the 6 runs re-fetches fresh from APIs. |
 
 Editing is **expected** — this is not a LOCKED memo. Every meaningful architectural decision (a new track, a priority change, a retired feature) should land here at the end of the session.
