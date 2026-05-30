@@ -66,6 +66,8 @@ Template engine attempts match
 | 40-60% | Hybrid stable; consider expanding template library |
 | < 40% | Stay hybrid; expand templates or accept gap |
 
+**Important — don't panic early on aggregate rate:** with only 5 templates dnia jeden against a 39-class event_type enum on a 200-article/day feed, the aggregate `template_match_rate` will sit in the **20-35% range** for the first several months. That is the **expected coexistence baseline**, not failure. The aggregate threshold table becomes directional only after the template library reaches ~10+ templates. The actionable alert is per-template (§2.4): `AlphalensTemplateMatchRateLow` fires when a *specific* template drops below 20% over 7d — that catches pattern rot in one template without burning attention on the expected steady-state aggregate.
+
 ### §1.2 Template DSL — **YAML + named Python predicates**
 
 **Both reviewers converged independently.**
@@ -125,6 +127,8 @@ extraction:
 - New CLI: `alphalens templates validate` — JSON Schema validation + regex compile-check + sample-text dry-run. Suitable as pre-commit hook AND analyst-iteration tool.
 
 **20% escape clause (DeepSeek-recommended):** if after writing ~10-15 templates more than 20% of them require custom Python that does not fit the named-predicate pattern, the domain has outgrown YAML and the system should migrate to Python-only templates. This is a tripwire, not a hard rule — re-examine after PR-1 telemetry.
+
+Measured as: `(templates requiring ≥ 1 custom Python predicate or post-process function) / (total templates)`. **Count-based, not line-of-code-based** — a template with a 40-line custom post-process counts the same as a template with a 2-line one. The metric is computable from the predicate registry: any predicate not in the canonical 6 (§2.3) flags its template as "custom-dependent". Templates referencing only canonical predicates contribute 0; templates referencing any ad-hoc predicate contribute 1. With 10-15 templates, 3 custom-dependent templates crosses the 20% line — bright-line trigger, not a debate.
 
 ---
 
@@ -240,9 +244,10 @@ Sequenced for review-friendly chunks. Each PR is independently mergeable.
 - `entity_resolver.py` — wraps `company_tickers.json` lookup + alias table; pre-template resolution stage
 - `holdout.py` — Prometheus counter emission for drop reasons
 
-**New CLI command:**
+**New CLI commands:**
 
 - `alphalens templates validate [path]` — JSON Schema + regex compile + sample-text dry-run. Exits non-zero on any failure; suitable as pre-commit hook.
+- `alphalens templates evaluate <corpus-parquet>` — runs the engine over an existing `~/.alphalens/thematic_news/*.parquet` corpus, emits holdout counters end-to-end, prints per-template match-rate summary to stdout. Makes PR-1 **independently demonstrable** (analyst can iterate on YAML + see effect on real corpus without waiting for PR-2 pipeline integration). Wires the telemetry path live so PR-2 inherits a known-good metric flow.
 
 **Tests** (TDD red→green):
 
@@ -280,10 +285,12 @@ Sequenced for review-friendly chunks. Each PR is independently mergeable.
 
 - `argumentation/generator.py` — generator receives `template_facts: dict | None` field; when present, prompt instructs LLM to cite facts deterministically (extends `feedback_llm_training_cutoff_numerical_data` doctrine to article-derived facts)
 - Brief schema additions: `template_facts` rendered as inline citations in SPA evidence panel
+- **Same-window dedup guard at injection time** (10-line guard, NOT a dependency on PR-4): when multiple template events exist for the same `(ticker, template_id)` within the brief's 24h window, the generator receives only the richest-fields instance. Prevents the brief from being flooded with 6 duplicate `template_facts` payloads when M&A gets reported by 6 outlets. Full multi-source dedup is PR-4's job; this guard is the minimum needed to keep PR-3 brief quality intact without reordering.
 
 **Tests:**
 
 - `test_generator_typed_facts.py` — generator never invents amounts when `template_facts` provided; Pro / Flash both respect contract
+- `test_generator_dedup_at_injection.py` — same `(ticker, template_id)` in 24h window collapses to richest-fields instance before reaching prompt
 - Playwright smoke for SPA panel rendering typed facts vs free-text fallback
 
 ### PR-4 — Multi-source dedup via template tuples
@@ -308,7 +315,12 @@ Sequenced for review-friendly chunks. Each PR is independently mergeable.
 
 **This is where Track G "validated paradigm scorer reuse" extends to news-driven compound catalysts** — Cohen-Malloy insider scorer + FCFF yield scorer + compound catalyst sequence become a 3-signal corroboration.
 
-**Decision gate:** ship PR-5 only after ≥1 month of PR-2 telemetry confirms that ≥5% of articles trigger same-ticker template matches within 30d windows. If lower, the compound-catalyst hypothesis is data-starved and PR-5 stays deferred.
+**Decision gate (revised per zen review):** ship PR-5 only after ≥ 1 month of PR-2 telemetry confirms BOTH:
+
+1. **Quantitative:** ≥ **2%** of template-extracted articles share a ticker with at least one other template-extracted article within a 30d window. (5% was too high — at 200 articles/day × 30d × ~30% template match rate, hitting 5% same-ticker co-occurrence requires ~75 events sharing tickers, which the AAPL/NVDA/TSLA concentration might satisfy but is a fragile bar.)
+2. **Qualitative:** ≥ **3 observed instances of distinct-event-type sequences** (e.g., `m_and_a → financing`, `earnings → guidance`, `guidance → analyst_action`) across ≥ 3 unique tickers within the same 30d window.
+
+The qualitative gate matters because raw same-ticker co-occurrence is mostly "popular ticker gets multiple news items" (AAPL earnings + AAPL guidance = two independent events, not a sequence). Distinct-event-type sequences are the actual signal compound catalysts target. If the qualitative gate trips but quantitative does not, the data structure exists — ship PR-5 even if rare, because the scoring impact of a confirmed M&A → financing on one ticker outweighs 50 popular-ticker co-occurrences.
 
 ---
 
@@ -325,7 +337,7 @@ Sequenced for review-friendly chunks. Each PR is independently mergeable.
 
 **Open questions to revisit at PR-5 decision:**
 
-- Does the 24h precedence window suffice, or does some event_type (e.g. financing announcements followed by analyst rerating) need a longer overlap window?
+- Should the **30d compound detection window** in PR-5 be tuned per event-type pair? E.g., financing → analyst rerating typically spans 2-3 days, while M&A → regulatory_action (antitrust review) can span 6+ months. The 24h precedence window in §1.1 is unrelated — that resolves `(ticker, event_type)` duplicates regardless of source path, and different `event_type` values never collide on it.
 - Should `template_facts` flow into the trade_setup calculation (e.g. acquisition premium → entry ladder offset)? Currently trade_setup is a pure deterministic ladder; adding template-derived bias is a separate design discussion.
 - Does NL→DSL workflow (analyst describes event in prose, DeepSeek v4 Pro generates YAML draft) add value, or is direct YAML authoring fast enough? Decision gated on template-library size growth velocity.
 
@@ -363,3 +375,4 @@ The existing 39-class event_type enum stays. The existing 4-signal scorer stays.
 | Date | Change | Reason |
 |---|---|---|
 | 2026-05-30 | Memo created + LOCKED | Replaces #143 deferral; both reviewers converged on hybrid + YAML+predicates; user-affirmed velocity supports immediate PR-1 work |
+| 2026-05-30 | Zen pre-merge review applied (5 clarifications) | (1) §1.1 added "don't panic early" note on aggregate match rate; (2) §1.2 clarified 20% rule is count-based formula; (3) PR-1 scope added `alphalens templates evaluate` CLI for standalone analyst iteration; (4) PR-3 scope added same-window dedup-at-injection guard so PR-3 doesn't need PR-4 to land first; (5) PR-5 gate revised — quantitative threshold dropped 5% → 2%, qualitative cross-event-type-sequence gate added; (6) §4 open-question reframed — 24h precedence and 30d compound are different windows |
