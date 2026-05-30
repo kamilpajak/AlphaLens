@@ -44,36 +44,36 @@ Wszystkie 8 tracków + 3 tiery + feedback loop + paper-trade harness w jednym wi
 
 ```mermaid
 flowchart TB
-    SRC["<b>Data sources (PIT)</b><br/>Polygon news · GDELT · RSS feeds<br/>SEC EDGAR · Form-4 insiders · SimFin / yfinance"]
+    SRC[/"<b>Data sources (PIT)</b><br/><small>Polygon news · GDELT · RSS feeds · SEC EDGAR<br/>Form-4 insiders · SimFin / yfinance</small>"/]
 
     subgraph PIPE["Pipeline — 6×/day VPS systemd"]
         direction TB
-        P1["Ingest + lexical clustering · cap 200/day"]
-        P2["Event extraction<br/>templates first · Flash fallback · #143 hybrid"]
-        P3["Theme mapping · DeepSeek v4 Pro"]
-        P4["4 verification gates · 10-K · press · Form-4 · NPORT"]
-        P5["4-signal scorer · insider · FCFF · valuation · technicals"]
-        P6["Brief generator · Pro for score≥4 · Flash for ≤3"]
+        P1["<b>Ingest</b><br/><small>lexical clustering · cap 200/day</small>"]
+        P2["<b>Event extraction</b><br/><small>templates first · Flash fallback · #143 hybrid</small>"]
+        P3["<b>Theme mapping</b><br/><small>DeepSeek v4 Pro</small>"]
+        P4["<b>4 verification gates</b><br/><small>10-K · press · Form-4 · NPORT</small>"]
+        P5["<b>4-signal scorer</b><br/><small>insider · FCFF · valuation · technicals</small>"]
+        P6["<b>Brief generator</b><br/><small>Pro for score≥4 · Flash for ≤3</small>"]
         P1 --> P2 --> P3 --> P4 --> P5 --> P6
     end
 
     subgraph TIERS["3 interaction tiers — AUGMENTACJA"]
         direction TB
-        T1["<b>L1 push (Telegram)</b> · minutes from source<br/>M&A leak · extreme PEAD · max 3-5/day"]
-        T2["<b>L2 daily brief (SPA)</b> · 1-4×/day<br/>full evidence · trade-setup ladder · typed facts"]
-        T3["<b>L3 weekly review (SPA)</b> · 1×/week<br/>calibration curve · theme rotation · dismiss histogram"]
+        T1(["<b>L1 push (Telegram)</b><br/><small>minutes from source · max 3-5/day<br/>M&A leak · extreme PEAD</small>"])
+        T2(["<b>L2 daily brief (SPA)</b><br/><small>1-4×/day · full evidence<br/>trade-setup ladder · typed facts</small>"])
+        T3(["<b>L3 weekly review (SPA)</b><br/><small>1×/week · calibration curve<br/>theme rotation · dismiss histogram</small>"])
     end
 
-    HUMAN["<b>Human decision — FINAL, ZAWSZE</b><br/>cherry-pick → WhatsApp group → each member decides"]
+    HUMAN{{"<b>Human decision — FINAL, ZAWSZE</b><br/><small>cherry-pick → WhatsApp group → each member decides</small>"}}
 
-    PAPER["<b>Paper-trade harness</b> — measurement instrument<br/><i>NIE execution · capital_deploy_clause</i><br/>submit 13:25 UTC · reconcile every 30 min · SL/TP/time-stop"]
+    PAPER(["<b>Paper-trade harness</b><br/><i>measurement instrument · NIE execution</i><br/><small>submit 13:25 UTC · reconcile every 30 min · SL/TP/time-stop</small>"])
 
     subgraph FEEDBACK["Feedback loop — closes the system"]
         direction LR
         F1[(decisions.db)]
         F2[(paper_ledger.db)]
-        F3["Outcome join"]
-        F4["Re-weight after ≥50<br/>Bayesian update"]
+        F3["<b>Outcome join</b>"]
+        F4{"<b>Re-weight after ≥50</b><br/><small>Bayesian update</small>"}
         F1 --> F3
         F2 --> F3
         F3 --> F4
@@ -84,11 +84,11 @@ flowchart TB
     P6 --> T2
     T1 --> HUMAN
     T2 --> HUMAN
-    HUMAN -->|interested / dismissed + rationale| F1
-    HUMAN -->|approved plan| PAPER
-    PAPER -.->|outcomes| F2
+    HUMAN -->|"<i>interested / dismissed + rationale</i>"| F1
+    HUMAN -->|"<i>approved plan</i>"| PAPER
+    PAPER -.->|"<i>outcomes</i>"| F2
     F3 --> T3
-    F4 -.->|adjusts layer4 weights| P5
+    F4 -.->|"<i>adjusts layer4 weights</i>"| P5
 
     classDef antipattern stroke:#dc2626,stroke-width:2px,stroke-dasharray:5 5
     classDef human stroke:#16a34a,stroke-width:2px
@@ -112,14 +112,14 @@ flowchart TB
 
 ```mermaid
 flowchart TD
-    A[L2 daily brief<br/>candidates surfaced]
-    B[User clicks Interested / Dismissed<br/>+ category + reason]
-    C[(feedback.decisions<br/>SQLite ~/.alphalens/feedback.db)]
-    D[Paper-trade plan<br/>Alpaca paper]
-    E[Reconciler job<br/>close, PnL, exit kind]
-    F[outcome join<br/>v2 background job]
-    G[L3 weekly review SPA<br/>- win-rate per signal combo<br/>- calibration curve<br/>- theme rotation<br/>- your dismiss-other %]
-    H[re-weighting layer4_weighted_score<br/>after ≥50 decisions]
+    A(["<b>L2 daily brief</b><br/><small>candidates surfaced</small>"])
+    B["<b>User clicks</b> Interested / Dismissed<br/><small>+ category + reason</small>"]
+    C[("<b>feedback.decisions</b><br/><small>SQLite ~/.alphalens/feedback.db</small>")]
+    D(["<b>Paper-trade plan</b><br/><small>Alpaca paper</small>"])
+    E["<b>Reconciler job</b><br/><small>close · PnL · exit kind</small>"]
+    F["<b>Outcome join</b><br/><small>v2 background job</small>"]
+    G(["<b>L3 weekly review SPA</b><br/><small>win-rate per signal combo<br/>calibration curve · theme rotation<br/>your dismiss-other %</small>"])
+    H{"<b>Re-weighting layer4_weighted_score</b><br/><small>after ≥50 decisions · Bayesian update</small>"}
 
     A --> B
     B --> C
@@ -139,15 +139,18 @@ Bez feedback ledger'a model nie wie co działa. Re-weighting bez >50 decisions =
 
 ```mermaid
 flowchart LR
-    T1["08:30 UTC<br/>Pipeline run #2 of 6<br/>(automatic, 6×/day)"]
-    T2["10:00 UTC<br/>Telegram push<br/>NVDA +12% earnings"]
-    T3["12:30 UTC<br/>User opens<br/>daily brief on SPA"]
-    T4["14:00 UTC<br/>Shortlist to<br/>WhatsApp group"]
-    T5["14:30 UTC<br/>Group discussion<br/>30 min"]
-    T6["13:25 UTC*<br/>Alpaca paper<br/>auto-submit"]
+    T1["<code>08:30 UTC</code><br/><b>Pipeline run #2 of 6</b><br/><small>automatic · 6×/day</small>"]
+    T2(["<code>10:00 UTC</code><br/><b>Telegram push</b><br/><small>NVDA +12% earnings</small>"])
+    T3(["<code>12:30 UTC</code><br/><b>User opens daily brief</b><br/><small>on SPA</small>"])
+    T4["<code>14:00 UTC</code><br/><b>Shortlist to WhatsApp group</b>"]
+    T5["<code>14:30 UTC</code><br/><b>Group discussion</b><br/><small>30 min</small>"]
+    T6(["<code>13:25 UTC</code>*<br/><b>Alpaca paper auto-submit</b>"])
 
     T1 --> T2 --> T3 --> T4 --> T5
-    T3 -.->|approved on prior day| T6
+    T3 -.->|"<i>approved on prior day</i>"| T6
+
+    classDef antipattern stroke:#dc2626,stroke-width:2px,stroke-dasharray:5 5
+    T6:::antipattern
 ```
 
 *T6 jest non-linear: paper-submit timer fires 13:25 UTC Mon-Fri (PR #317) na plans approved w poprzednich sesjach; nie czeka na today's group discussion. Dlatego strzałka kropkowana.
