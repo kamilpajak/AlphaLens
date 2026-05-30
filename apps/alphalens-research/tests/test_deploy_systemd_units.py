@@ -43,6 +43,47 @@ class TestSystemdUnits(unittest.TestCase):
     def test_thematic_build_service_keeps_oneshot_type(self):
         self.assertIn("Type=oneshot", self.unit_text)
 
+    def test_thematic_build_verify_cache_does_not_repeat_alphalens_arg(self):
+        # The pipeline image's ENTRYPOINT is ``/app/.venv/bin/alphalens``
+        # (Dockerfile.pipeline). The verify-cache ExecStartPost runs the
+        # CLI directly (no ``--entrypoint`` override), so the args after
+        # ``alphalens-pipeline:latest`` are forwarded to Typer verbatim.
+        # Passing a literal ``alphalens`` as the first arg makes Typer
+        # parse it as a subcommand and abort with
+        # ``No such command 'alphalens'`` — observed on VPS 2026-05-29.
+        # This regex pins the correct first token (``thematic``) and
+        # fails loud if the leading ``alphalens`` ever returns.
+        #
+        # Multiline-anchored so a comment containing ``alphalens thematic
+        # verify-cache`` cannot satisfy the assertion.
+        bad_pattern = re.compile(
+            r"^ExecStartPost=[^\n]*(?:\\\n[^\n]*)*"
+            r"alphalens-pipeline:latest\s*\\\s*\n\s*alphalens\s+thematic\s+verify-cache",
+            re.MULTILINE,
+        )
+        self.assertNotRegex(
+            self.unit_text,
+            bad_pattern,
+            "verify-cache ExecStartPost must NOT repeat the `alphalens` "
+            "token after the image name — the pipeline image ENTRYPOINT "
+            "already IS alphalens. Use `thematic verify-cache ...` "
+            "directly. See Dockerfile.pipeline:ENTRYPOINT.",
+        )
+
+        good_pattern = re.compile(
+            r"^ExecStartPost=[^\n]*(?:\\\n[^\n]*)*"
+            r"alphalens-pipeline:latest\s*\\\s*\n\s*thematic\s+verify-cache",
+            re.MULTILINE,
+        )
+        self.assertRegex(
+            self.unit_text,
+            good_pattern,
+            "Expected an ExecStartPost line invoking "
+            "`<image> thematic verify-cache ...` (no leading `alphalens` "
+            "arg). Found neither the broken nor the correct form — the "
+            "gap-detection hook has been removed entirely.",
+        )
+
     def test_thematic_build_service_rebuilds_briefs_cache_post_run(self):
         # After a successful pipeline run the new parquet output must be
         # synced into the Django Postgres-backed cache. The unit invokes

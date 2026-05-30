@@ -67,6 +67,15 @@ ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
 # Runs in the same pipeline image so the alphalens CLI is on PATH; the
 # bind mount keeps it inspecting the host cache rather than the
 # container's local copy.
+#
+# **No leading `alphalens` arg.** The pipeline image's ENTRYPOINT is
+# `/app/.venv/bin/alphalens` (Dockerfile.pipeline line 84), so the
+# tokens after the image name are forwarded as CLI args. Including a
+# literal `alphalens` here would make Typer parse it as the first
+# subcommand and abort with `No such command 'alphalens'` — observed
+# on VPS 2026-05-29 after PR-E rolled out the original wording. Fix:
+# args start at `thematic`. The same rule applies to any future
+# ExecStartPost using the pipeline image — entrypoint-aware.
 ExecStartPost=/usr/bin/docker run --rm \
     --user %U:%G \
     -e HOME=/app/home \
@@ -74,7 +83,7 @@ ExecStartPost=/usr/bin/docker run --rm \
     -e TELEGRAM_CHAT_ID \
     -v %h/.alphalens:/app/home/.alphalens \
     alphalens-pipeline:latest \
-    alphalens thematic verify-cache --days 7 --alert
+    thematic verify-cache --days 7 --alert
 
 # Sync the parquet output the pipeline just wrote into the Django Postgres
 # cache via the maintenance one-shot. ``--profile maintenance`` opt-in
