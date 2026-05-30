@@ -398,6 +398,17 @@ def verify_cache_command(
             "this unset so wall-clock UTC drives the check."
         ),
     ),
+    lag_days: int = typer.Option(
+        1,
+        "--lag-days",
+        help=(
+            "Offset between today and the last expected file date. "
+            "Default 1 because ``thematic ingest`` writes a parquet "
+            "keyed on yesterday's date — so the verifier window ends "
+            "on T-1, not T. Pass 0 to inspect a window that includes "
+            "the anchor itself."
+        ),
+    ),
 ) -> None:
     """Verify the thematic_news parquet cache has no missing days.
 
@@ -412,7 +423,9 @@ def verify_cache_command(
     quiet day and are reported separately for observability.
     """
     anchor = dt.date.fromisoformat(today) if today else None
-    result = verify_cache_mod.verify_cache(cache_dir=cache_dir, days=days, today=anchor)
+    result = verify_cache_mod.verify_cache(
+        cache_dir=cache_dir, days=days, today=anchor, lag_days=lag_days
+    )
 
     typer.echo(
         f"verify-cache: {result.checked_days - len(result.missing_days)}/"

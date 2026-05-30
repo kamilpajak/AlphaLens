@@ -71,21 +71,37 @@ def verify_cache(
     cache_dir: Path,
     days: int,
     today: dt.date | None = None,
+    lag_days: int = 1,
 ) -> VerifyResult:
     """Check that ``cache_dir`` has a parquet for every date in the
-    window ``[today - days + 1, today]`` (today inclusive).
+    window ``[today - lag_days - days + 1, today - lag_days]``
+    (last-expected-day inclusive).
 
     Args:
         cache_dir: Root containing ``{YYYY-MM-DD}.parquet`` files.
             Missing directory is treated as "every requested day is
             missing" — accommodates the first-ever timer run before
             the directory has been bootstrapped.
-        days: Window size in calendar days, inclusive of ``today``.
-            Must be >= 1; 0 and negative raise ``ValueError``.
-        today: Anchor date. Defaults to UTC today so the CLI's
-            ``alphalens thematic verify-cache --days 7`` covers the
-            past week including today. Tests pin a fixed anchor for
-            determinism.
+        days: Window size in calendar days, inclusive of the last
+            expected day (= ``today - lag_days``). Must be >= 1; 0 and
+            negative raise ``ValueError``.
+        today: Anchor date for "now". Defaults to UTC today. Tests pin
+            a fixed value for determinism; the systemd hook leaves it
+            unset so wall-clock UTC drives the check.
+        lag_days: Offset between the anchor and the LAST date the
+            window expects to find. The ingest pipeline writes the
+            daily news parquet keyed on ``asof = today - 1`` (the
+            previous calendar day), so the default ``lag_days=1``
+            matches: the verifier's window ends on yesterday, not
+            today. Pass ``lag_days=0`` to inspect a window that
+            includes the anchor itself (used in tests that pre-seed a
+            cache up to + including the anchor date). Must be >= 0.
+
+            Why: PR-E shipped the verifier with ``lag_days=0`` and the
+            6:30 UTC systemd timer fired against an anchor (UTC today)
+            for which the ingest had NOT yet written a file — guaranteed
+            false-positive MISSING alert + a halt on the rebuild-cache
+            ExecStartPost. Caught by the manual fire 2026-05-30.
 
     Reading a corrupted parquet (truncated write, foreign content at
     the expected path) is treated as **missing** — the next ingest run
@@ -94,6 +110,8 @@ def verify_cache(
     """
     if days < 1:
         raise ValueError(f"days must be >= 1, got {days}")
+    if lag_days < 0:
+        raise ValueError(f"lag_days must be >= 0, got {lag_days}")
     anchor = today if today is not None else dt.datetime.now(dt.UTC).date()
     # Guard against an accidental far-future anchor (e.g. operator
     # passes ``--today 2099-01-01`` during incident response). Without
@@ -112,9 +130,12 @@ def verify_cache(
     missing: list[dt.date] = []
     zero_row: list[dt.date] = []
 
-    # ``[today - days + 1, today]`` — inclusive of today. iso-sorted
-    # order so the resulting lists are also chronological.
-    expected_dates = [anchor - dt.timedelta(days=i) for i in range(days - 1, -1, -1)]
+    # Window ends on ``anchor - lag_days`` (== "the most recent date the
+    # ingest pipeline has had a chance to write"). Walks back ``days``
+    # calendar days from there. iso-sorted order so the resulting lists
+    # are also chronological.
+    last_expected = anchor - dt.timedelta(days=lag_days)
+    expected_dates = [last_expected - dt.timedelta(days=i) for i in range(days - 1, -1, -1)]
 
     for d in expected_dates:
         path = cache_dir / f"{d.isoformat()}.parquet"
