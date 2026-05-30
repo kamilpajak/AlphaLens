@@ -118,10 +118,13 @@ def validate_template_file(path: Path) -> list[str]:
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
-        # PyYAML's MarkedYAMLError carries .problem_mark with .line/.column.
+        # PyYAML's MarkedYAMLError carries .problem_mark with .line/.column
+        # and .problem with the human message. Pyright doesn't see those
+        # on the YAMLError base, so probe via getattr.
         mark = getattr(exc, "problem_mark", None)
+        problem = getattr(exc, "problem", None)
         if mark is not None:
-            return [f"{path.name}:{mark.line + 1}: yaml parse error: {exc.problem}"]
+            return [f"{path.name}:{mark.line + 1}: yaml parse error: {problem or exc}"]
         return [f"{path.name}: yaml parse error: {exc}"]
 
     if not isinstance(data, dict):

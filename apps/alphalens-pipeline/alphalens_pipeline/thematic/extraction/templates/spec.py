@@ -10,7 +10,8 @@ no YAML-shape coupling to discover.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +38,7 @@ class Article:
     body: str
     url: str
     published_at: Any  # datetime, kept loose to avoid timezone-coupling here
-    tickers_raw: list[str] = field(default_factory=list)
+    tickers_raw: list[str] = dc_field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ class PredicateRef:
     """A reference to a named predicate from the registry."""
 
     name: str
-    kwargs: dict[str, Any] = field(default_factory=dict)
+    kwargs: dict[str, Any] = dc_field(default_factory=dict)
 
 
 @dataclass
@@ -84,7 +85,7 @@ class FieldExtraction:
     field: str
     source: str | None = None  # e.g. "entity:acquirer" or "article.published_at"
     patterns: str | None = None
-    post_process: list[str] = field(default_factory=list)
+    post_process: list[str] = dc_field(default_factory=list)
 
 
 @dataclass
@@ -113,7 +114,12 @@ class TemplateSpec:
         if not isinstance(data, dict):
             raise ValueError(f"{path}: top-level YAML must be a mapping")
 
-        template_id = data.get("template_id")
+        raw_template_id = data.get("template_id")
+        if not isinstance(raw_template_id, str):
+            raise ValueError(
+                f"{path}: template_id must be a string, got {type(raw_template_id).__name__}"
+            )
+        template_id: str = raw_template_id
         if template_id != path.stem:
             raise ValueError(
                 f"{path}: filename {path.stem!r} must match template_id {template_id!r}"
