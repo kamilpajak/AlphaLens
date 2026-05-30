@@ -32,7 +32,8 @@ from alphalens_pipeline.data.alt_data.polygon_client import (
     PolygonClient,
     get_default_polygon_client,
 )
-from alphalens_pipeline.thematic.mapping import catalyst_resolver, gemini_mapper
+from alphalens_pipeline.thematic.mapping import catalyst_resolver
+from alphalens_pipeline.thematic.mapping import theme_mapper as gemini_mapper
 from alphalens_pipeline.thematic.verification import (
     insider,
     mcap_filter,
@@ -207,15 +208,18 @@ def verify_candidate(
 
 
 def _init_pro_client(api_key: str):
-    """Build Gemini Pro client once for the whole batch; ``None`` if SDK missing."""
+    """Build the OpenRouter LLM client once for the whole batch; ``None`` if
+    construction fails. The mapper will then lazy-init per call (falling
+    back to the process-wide default client).
+    """
     if not api_key:
         return None
-    from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient
+    from alphalens_pipeline.data.alt_data.openrouter_client import OpenRouterClient
 
     try:
-        return GeminiClient(api_key=api_key)
-    except RuntimeError:
-        logger.warning("google-genai SDK missing; mapper will lazy-init per call")
+        return OpenRouterClient(api_key=api_key)
+    except (RuntimeError, ValueError):
+        logger.warning("OpenRouterClient construction failed; mapper will lazy-init per call")
         return None
 
 
@@ -311,9 +315,7 @@ def _propose_and_filter_candidates(
     Returns (in-bracket candidate dicts, ticker→mcap map, search keywords).
     Empty candidates list signals "nothing further to do for this theme".
     """
-    proposal = gemini_mapper.propose_candidates(
-        theme=theme, api_key=api_key, gemini_client=pro_client
-    )
+    proposal = gemini_mapper.propose_candidates(theme=theme, api_key=api_key, llm_client=pro_client)
     candidates = proposal.get("candidates") or []
     if not candidates:
         return [], {}, []
@@ -415,7 +417,7 @@ def map_themes(
     because its mcap snapshot is stuck at training-cutoff prices. Writes a
     unified parquet to ``output_dir / {asof}.parquet`` and returns it.
     """
-    api_key = api_key or os.environ.get("GOOGLE_API_KEY") or ""
+    api_key = api_key or os.environ.get("OPENROUTER_API_KEY") or ""
     # The legacy ``polygon_api_key`` parameter is preserved for source-compat
     # with call sites that still pass it (``alphalens_cli/commands/thematic.py``,
     # ``scripts/replay_nvda_qubt.py``, several unit tests). When provided

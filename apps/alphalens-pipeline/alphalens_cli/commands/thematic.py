@@ -14,9 +14,10 @@ from alphalens_pipeline.thematic import clean_titles as clean_titles_mod
 from alphalens_pipeline.thematic import news_ingest
 from alphalens_pipeline.thematic import verify_cache as verify_cache_mod
 from alphalens_pipeline.thematic.argumentation import orchestrator as brief_orchestrator
-from alphalens_pipeline.thematic.extraction import gemini_flash
+from alphalens_pipeline.thematic.extraction import event_extractor as gemini_flash
 from alphalens_pipeline.thematic.extraction import themes as themes_mod
-from alphalens_pipeline.thematic.mapping import gemini_mapper, orchestrator
+from alphalens_pipeline.thematic.mapping import orchestrator
+from alphalens_pipeline.thematic.mapping import theme_mapper as gemini_mapper
 from alphalens_pipeline.thematic.screening import scorer as screening_scorer
 
 thematic_app = typer.Typer(
@@ -100,15 +101,15 @@ def extract(
         help="Recent/baseline ratio to flag a theme as novel.",
     ),
 ) -> None:
-    """Run Gemini Flash event extraction over one day's news, then roll up themes."""
+    """Run DeepSeek v4-flash event extraction over one day's news, then roll up themes."""
     target = (
         dt.date.fromisoformat(date)
         if date
         else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
     )
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
-        raise typer.BadParameter("GOOGLE_API_KEY missing from environment.")
+        raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
 
     events = gemini_flash.extract_daily(
         date=target,
@@ -167,8 +168,8 @@ def map_themes_cmd(
     model: str = typer.Option(
         gemini_mapper.DEFAULT_MODEL,
         "--model",
-        envvar="GEMINI_PRO_MODEL",
-        help="Gemini 3 Pro model id.",
+        envvar="ALPHALENS_MAPPER_MODEL",
+        help="OpenRouter LLM slug for theme mapping (default DeepSeek v4-pro).",
     ),
     keep_unverified: bool = typer.Option(
         False,
@@ -176,7 +177,7 @@ def map_themes_cmd(
         help="Include candidates that failed all 4 verification gates (audit/debug).",
     ),
 ) -> None:
-    """Roll up novel themes from Phase B → Gemini 3 Pro maps to candidates → verify."""
+    """Roll up novel themes from Phase B → DeepSeek v4-pro maps to candidates → verify."""
     # Default to yesterday so a same-day cron after Phase B extract sees a
     # fully-extracted day, matching `ingest` and `extract` defaults.
     target = (
@@ -184,9 +185,9 @@ def map_themes_cmd(
         if date
         else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
     )
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
-        raise typer.BadParameter("GOOGLE_API_KEY missing from environment.")
+        raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
     polygon_key = os.environ.get("POLYGON_API_KEY", "")
 
     rollup = themes_mod.roll_up(asof=target, events_dir=events_dir, window_days=window_days)

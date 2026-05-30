@@ -61,7 +61,7 @@ class TestGenerateBrief(unittest.TestCase):
 
     def test_returns_parsed_brief_on_success(self):
         fake_response = SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
-        with patch.object(generator, "_call_gemini", return_value=fake_response):
+        with patch.object(generator, "_call_llm", return_value=fake_response):
             brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
         self.assertEqual(kind, generator.BriefErrorKind.NONE)
         self.assertEqual(brief["tldr"], _SAMPLE_BRIEF["tldr"])
@@ -75,12 +75,12 @@ class TestGenerateBrief(unittest.TestCase):
             captured["model"] = model
             return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
 
-        with patch.object(generator, "_call_gemini", side_effect=fake_call):
+        with patch.object(generator, "_call_llm", side_effect=fake_call):
             generator.generate_brief(_facts(weighted_score=2), api_key="testkey")
         self.assertEqual(captured["model"], generator.FLASH_MODEL)
 
     def test_transport_exception_classified(self):
-        with patch.object(generator, "_call_gemini", side_effect=RuntimeError("rate limit")):
+        with patch.object(generator, "_call_llm", side_effect=RuntimeError("rate limit")):
             brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
         self.assertIsNone(brief)
         self.assertEqual(kind, generator.BriefErrorKind.TRANSPORT)
@@ -90,14 +90,14 @@ class TestGenerateBrief(unittest.TestCase):
             text="not json",
             candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
         )
-        with patch.object(generator, "_call_gemini", return_value=resp):
+        with patch.object(generator, "_call_llm", return_value=resp):
             brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
         self.assertIsNone(brief)
         self.assertEqual(kind, generator.BriefErrorKind.MALFORMED_JSON)
 
     def test_truncation_classified(self):
         resp = _truncated_response()
-        with patch.object(generator, "_call_gemini", return_value=resp):
+        with patch.object(generator, "_call_llm", return_value=resp):
             brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
         self.assertIsNone(brief)
         self.assertEqual(kind, generator.BriefErrorKind.TRUNCATED)
@@ -110,7 +110,7 @@ class TestGenerateBrief(unittest.TestCase):
             captured["temperature"] = temperature
             return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
 
-        with patch.object(generator, "_call_gemini", side_effect=fake_call):
+        with patch.object(generator, "_call_llm", side_effect=fake_call):
             generator.generate_brief(
                 _facts(weighted_score=2), api_key="k", max_output_tokens=4096, temperature=0.0
             )
@@ -118,16 +118,16 @@ class TestGenerateBrief(unittest.TestCase):
         self.assertEqual(captured["temperature"], 0.0)
 
     def test_reuses_passed_clients_no_handshake_per_call(self):
-        # Mirror the orchestrator hoisting pattern: pass one GeminiClient and
+        # Mirror the orchestrator hoisting pattern: pass one OpenRouterClient and
         # both Pro/Flash routes reuse it.
         fake_response = SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
         sentinel_client = object()
-        with patch.object(generator, "_call_gemini", return_value=fake_response) as mock_call:
+        with patch.object(generator, "_call_llm", return_value=fake_response) as mock_call:
             generator.generate_brief(
                 _facts(weighted_score=4),
                 api_key=None,
-                gemini_client_pro=sentinel_client,
-                gemini_client_flash=sentinel_client,
+                llm_client_pro=sentinel_client,
+                llm_client_flash=sentinel_client,
             )
         self.assertIs(mock_call.call_args.args[0], sentinel_client)
 
@@ -187,7 +187,7 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
 
     def test_no_retry_on_success(self):
         fake = SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
-        with patch.object(generator, "_call_gemini", return_value=fake) as mock_call:
+        with patch.object(generator, "_call_llm", return_value=fake) as mock_call:
             brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
         self.assertIsNotNone(brief)
         self.assertEqual(mock_call.call_count, 1)
@@ -201,7 +201,7 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
                 return _truncated_response()
             return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
 
-        with patch.object(generator, "_call_gemini", side_effect=fake_call):
+        with patch.object(generator, "_call_llm", side_effect=fake_call):
             brief = generator.generate_brief_with_retry(
                 _facts(weighted_score=2), api_key="k", base_max_output_tokens=2000
             )
@@ -219,14 +219,14 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
             text="not json",
             candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
         )
-        with patch.object(generator, "_call_gemini", return_value=resp) as mock_call:
+        with patch.object(generator, "_call_llm", return_value=resp) as mock_call:
             brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
         self.assertIsNone(brief)
         self.assertEqual(mock_call.call_count, 1)
 
     def test_no_retry_on_safety(self):
         with patch.object(
-            generator, "_call_gemini", return_value=_truncated_response("SAFETY")
+            generator, "_call_llm", return_value=_truncated_response("SAFETY")
         ) as mock_call:
             brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
         self.assertIsNone(brief)
@@ -236,7 +236,7 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
         # Network exceptions are not retried at this layer — let the operator
         # / outer cron decide on backoff.
         with patch.object(
-            generator, "_call_gemini", side_effect=RuntimeError("transport boom")
+            generator, "_call_llm", side_effect=RuntimeError("transport boom")
         ) as mock_call:
             brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
         self.assertIsNone(brief)
@@ -244,7 +244,7 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
 
     def test_two_truncations_give_up(self):
         with patch.object(
-            generator, "_call_gemini", side_effect=[_truncated_response(), _truncated_response()]
+            generator, "_call_llm", side_effect=[_truncated_response(), _truncated_response()]
         ) as mock_call:
             brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
         self.assertIsNone(brief)
@@ -269,7 +269,7 @@ class TestJsonRepairFallback(unittest.TestCase):
             text=malformed,
             candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
         )
-        with patch.object(generator, "_call_gemini", return_value=resp):
+        with patch.object(generator, "_call_llm", return_value=resp):
             with self.assertLogs(
                 "alphalens_pipeline.thematic.argumentation.generator", level="INFO"
             ) as cm:
@@ -290,7 +290,7 @@ class TestJsonRepairFallback(unittest.TestCase):
             text='{"tldr": "only this field"',  # no closing brace → repair triggers
             candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
         )
-        with patch.object(generator, "_call_gemini", return_value=resp):
+        with patch.object(generator, "_call_llm", return_value=resp):
             brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
         self.assertEqual(kind, generator.BriefErrorKind.NONE)
         self.assertEqual(brief["tldr"], "only this field")
@@ -304,7 +304,7 @@ class TestJsonRepairFallback(unittest.TestCase):
             text="{ completely unparseable garbage",
             candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
         )
-        with patch.object(generator, "_call_gemini", return_value=resp):
+        with patch.object(generator, "_call_llm", return_value=resp):
             brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
         self.assertIsNone(brief)
         self.assertEqual(kind, generator.BriefErrorKind.MALFORMED_JSON)
@@ -351,7 +351,7 @@ class TestTryJsonRepairUnit(unittest.TestCase):
             text="this is not even close to JSON, just prose ramble",
             candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
         )
-        with patch.object(generator, "_call_gemini", return_value=resp):
+        with patch.object(generator, "_call_llm", return_value=resp):
             brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
         self.assertIsNone(brief)
         self.assertEqual(kind, generator.BriefErrorKind.MALFORMED_JSON)
@@ -361,7 +361,7 @@ class TestTryJsonRepairUnit(unittest.TestCase):
         # retry wrapper can drive a fresh attempt with more tokens. json
         # _repair would produce garbled mid-sentence text on a truncated
         # response — exactly what we want to avoid.
-        with patch.object(generator, "_call_gemini", return_value=_truncated_response()):
+        with patch.object(generator, "_call_llm", return_value=_truncated_response()):
             brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
         self.assertIsNone(brief)
         self.assertEqual(kind, generator.BriefErrorKind.TRUNCATED)
@@ -369,18 +369,18 @@ class TestTryJsonRepairUnit(unittest.TestCase):
 
 class TestGenerateBriefWithRetryClient(unittest.TestCase):
     def test_client_built_once_across_retry(self):
-        """The retry path must NOT rebuild a fresh GeminiClient per attempt.
-        Verify that when only api_key is given, the underlying GeminiClient
+        """The retry path must NOT rebuild a fresh OpenRouterClient per attempt.
+        Verify that when only api_key is given, the underlying OpenRouterClient
         ctor runs once across initial + retry (was 2x in the pre-canonical
         code; zen review 2026-05-17 M1)."""
-        with patch.object(generator, "GeminiClient") as mock_ctor:
+        with patch.object(generator, "OpenRouterClient") as mock_ctor:
             mock_ctor.return_value = SimpleNamespace(
                 generate_content=lambda **kw: None,
                 build_config=lambda **kw: None,
             )
             with patch.object(
                 generator,
-                "_call_gemini",
+                "_call_llm",
                 side_effect=[
                     _truncated_response(),
                     SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF)),

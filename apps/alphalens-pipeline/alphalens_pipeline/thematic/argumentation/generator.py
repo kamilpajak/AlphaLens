@@ -1,17 +1,17 @@
-"""Gemini brief generator — single per-row LLM call with Pro/Flash routing.
+"""LLM brief generator — single per-row call with Pro/Flash routing.
 
-Selects model per ``layer4_weighted_score``: ≥4 → ``gemini-3.1-pro-preview``;
-≤3 (or missing) → ``gemini-3.5-flash``. Same response schema for both so
-the orchestrator + renderer don't need to branch.
+Selects model per ``layer4_weighted_score``: ≥4 → ``deepseek/deepseek-v4-pro``;
+≤3 (or missing) → ``deepseek/deepseek-v4-flash``. Same response schema for
+both so the orchestrator + renderer don't need to branch.
 
 ``generate_brief`` returns ``(brief | None, BriefErrorKind)`` so callers
 can branch on the exact failure mode. ``generate_brief_with_retry`` wraps
 it with the Perplexity-recommended retry policy (2026-05-17): on
-``BriefErrorKind.TRUNCATED`` (Gemini ``finish_reason == MAX_TOKENS``)
-retry once with double ``max_output_tokens`` and ``temperature=0``.
-Other failure kinds (``MALFORMED_JSON`` / ``SAFETY`` / ``TRANSPORT``)
-do not retry — they will not be helped by more tokens or different
-temperature.
+``BriefErrorKind.TRUNCATED`` (OpenRouter ``finish_reason == "length"``,
+translated to ``"MAX_TOKENS"`` by the OpenRouter client wrapper) retry
+once with double ``max_output_tokens`` and ``temperature=0``. Other
+failure kinds (``MALFORMED_JSON`` / ``SAFETY`` / ``TRANSPORT``) do not
+retry — they will not be helped by more tokens or different temperature.
 """
 
 from __future__ import annotations
@@ -22,15 +22,18 @@ from typing import Any
 
 import json_repair
 
-from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient, get_default_gemini_client
+from alphalens_pipeline.data.alt_data.openrouter_client import (
+    OpenRouterClient,
+    get_default_openrouter_client,
+)
 from alphalens_pipeline.thematic.argumentation.prompts import build_flash_prompt, build_pro_prompt
 from alphalens_pipeline.thematic.argumentation.schema import BRIEF_RESPONSE_SCHEMA
 from alphalens_pipeline.thematic.extraction.schema import parse_extraction
 
 logger = logging.getLogger(__name__)
 
-PRO_MODEL = "gemini-3.1-pro-preview"
-FLASH_MODEL = "gemini-3.5-flash"
+PRO_MODEL = "deepseek/deepseek-v4-pro"
+FLASH_MODEL = "deepseek/deepseek-v4-flash"
 
 _DEFAULT_MAX_OUTPUT_TOKENS = 2000
 _DEFAULT_TEMPERATURE = 0.2
@@ -61,19 +64,19 @@ def choose_model(*, weighted_score: int | float | None) -> str:
         return FLASH_MODEL
 
 
-def _call_gemini(
-    gemini_client: GeminiClient,
+def _call_llm(
+    llm_client: OpenRouterClient,
     prompt: str,
     *,
     model: str,
     max_output_tokens: int,
     temperature: float,
 ):
-    """Single seam for tests to patch. Returns the raw SDK response."""
-    return gemini_client.generate_content(
+    """Single seam for tests to patch. Returns the raw wrapped response."""
+    return llm_client.generate_content(
         model=model,
         contents=prompt,
-        config=gemini_client.build_config(
+        config=llm_client.build_config(
             response_mime_type="application/json",
             response_schema=BRIEF_RESPONSE_SCHEMA,
             temperature=temperature,
@@ -104,37 +107,37 @@ def _classify_finish_reason(response: Any) -> BriefErrorKind | None:
     return None
 
 
-def _resolve_gemini_client(
+def _resolve_llm_client(
     *,
     model: str,
     api_key: str | None,
-    gemini_client_pro: GeminiClient | None,
-    gemini_client_flash: GeminiClient | None,
-) -> GeminiClient:
+    llm_client_pro: OpenRouterClient | None,
+    llm_client_flash: OpenRouterClient | None,
+) -> OpenRouterClient:
     """Pick the right (pro vs flash) client, lazily building defaults.
 
     Client init lives in this helper so missing-SDK / missing-key failures
     can be caught by the per-brief try/except wrapper (TRANSPORT kind)
     rather than crashing the orchestrator loop.
     """
-    if gemini_client_pro is None and gemini_client_flash is None:
-        default = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
-        gemini_client_pro = default
-        gemini_client_flash = default
+    if llm_client_pro is None and llm_client_flash is None:
+        default = OpenRouterClient(api_key=api_key) if api_key else get_default_openrouter_client()
+        llm_client_pro = default
+        llm_client_flash = default
     else:
         # Partial hoisting — fill in the other half with the supplied one.
-        gemini_client_pro = gemini_client_pro or gemini_client_flash
-        gemini_client_flash = gemini_client_flash or gemini_client_pro
-    assert gemini_client_pro is not None and gemini_client_flash is not None
-    return gemini_client_pro if model == PRO_MODEL else gemini_client_flash
+        llm_client_pro = llm_client_pro or llm_client_flash
+        llm_client_flash = llm_client_flash or llm_client_pro
+    assert llm_client_pro is not None and llm_client_flash is not None
+    return llm_client_pro if model == PRO_MODEL else llm_client_flash
 
 
 def generate_brief(
     facts: dict,
     *,
     api_key: str | None = None,
-    gemini_client_pro: GeminiClient | None = None,
-    gemini_client_flash: GeminiClient | None = None,
+    llm_client_pro: OpenRouterClient | None = None,
+    llm_client_flash: OpenRouterClient | None = None,
     max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
     temperature: float = _DEFAULT_TEMPERATURE,
 ) -> tuple[dict | None, BriefErrorKind]:
@@ -144,8 +147,8 @@ def generate_brief(
     success, or ``(None, kind)`` describing the failure mode.
 
     Pro and Flash models can be routed through the same or different
-    :class:`GeminiClient` instances (the SDK uses one client for all
-    models). Pass either ``gemini_client_pro`` / ``gemini_client_flash``
+    :class:`OpenRouterClient` instances (the SDK uses one client for all
+    models). Pass either ``llm_client_pro`` / ``llm_client_flash``
     (orchestrator batch path) OR ``api_key=`` (ad-hoc), otherwise the
     process-wide default client is used.
     """
@@ -153,13 +156,13 @@ def generate_brief(
     prompt = build_pro_prompt(facts) if model == PRO_MODEL else build_flash_prompt(facts)
 
     try:
-        client = _resolve_gemini_client(
+        client = _resolve_llm_client(
             model=model,
             api_key=api_key,
-            gemini_client_pro=gemini_client_pro,
-            gemini_client_flash=gemini_client_flash,
+            llm_client_pro=llm_client_pro,
+            llm_client_flash=llm_client_flash,
         )
-        response = _call_gemini(
+        response = _call_llm(
             client,
             prompt,
             model=model,
@@ -243,8 +246,8 @@ def generate_brief_with_retry(
     facts: dict,
     *,
     api_key: str | None = None,
-    gemini_client_pro: GeminiClient | None = None,
-    gemini_client_flash: GeminiClient | None = None,
+    llm_client_pro: OpenRouterClient | None = None,
+    llm_client_flash: OpenRouterClient | None = None,
     base_max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
 ) -> dict | None:
     """Generate a brief, retrying once on ``BriefErrorKind.TRUNCATED``.
@@ -261,15 +264,15 @@ def generate_brief_with_retry(
     # Resolve clients ONCE so the retry path doesn't re-do lazy-singleton
     # lookup. Cheap when the caller already hoisted (orchestrator batch
     # path); meaningful when called ad-hoc with just an api_key.
-    if gemini_client_pro is None and gemini_client_flash is None:
-        default = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
-        gemini_client_pro = default
-        gemini_client_flash = default
+    if llm_client_pro is None and llm_client_flash is None:
+        default = OpenRouterClient(api_key=api_key) if api_key else get_default_openrouter_client()
+        llm_client_pro = default
+        llm_client_flash = default
 
     brief, kind = generate_brief(
         facts,
-        gemini_client_pro=gemini_client_pro,
-        gemini_client_flash=gemini_client_flash,
+        llm_client_pro=llm_client_pro,
+        llm_client_flash=llm_client_flash,
         max_output_tokens=base_max_output_tokens,
         temperature=_DEFAULT_TEMPERATURE,
     )
@@ -288,8 +291,8 @@ def generate_brief_with_retry(
     )
     brief, kind = generate_brief(
         facts,
-        gemini_client_pro=gemini_client_pro,
-        gemini_client_flash=gemini_client_flash,
+        llm_client_pro=llm_client_pro,
+        llm_client_flash=llm_client_flash,
         max_output_tokens=retry_tokens,
         temperature=_RETRY_TEMPERATURE,
     )

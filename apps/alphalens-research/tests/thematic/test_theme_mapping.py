@@ -6,7 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from alphalens_pipeline.thematic.mapping import gemini_mapper, orchestrator
+from alphalens_pipeline.thematic.mapping import orchestrator
+from alphalens_pipeline.thematic.mapping import theme_mapper as gemini_mapper
 
 SAMPLE_MAPPER_RESPONSE = {
     "candidates": [
@@ -84,7 +85,7 @@ class TestGeminiMapperPromptBuilding(unittest.TestCase):
 class TestPropose(unittest.TestCase):
     def test_propose_returns_dict_with_candidates_and_keywords(self):
         fake_response = SimpleNamespace(text=json.dumps(SAMPLE_MAPPER_RESPONSE))
-        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+        with patch.object(gemini_mapper, "_call_llm", return_value=fake_response):
             result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
         self.assertIsInstance(result, dict)
         self.assertIn("candidates", result)
@@ -113,7 +114,7 @@ class TestPropose(unittest.TestCase):
             ],
         }
         fake_response = SimpleNamespace(text=json.dumps(payload))
-        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+        with patch.object(gemini_mapper, "_call_llm", return_value=fake_response):
             result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
         kws = result["search_keywords"]
         # Dedup on case-folded form; preserves first-seen casing minus trim.
@@ -129,7 +130,7 @@ class TestPropose(unittest.TestCase):
         # *something* searchable, even if narrow.
         payload = {"candidates": SAMPLE_MAPPER_RESPONSE["candidates"]}
         fake_response = SimpleNamespace(text=json.dumps(payload))
-        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+        with patch.object(gemini_mapper, "_call_llm", return_value=fake_response):
             result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
         self.assertEqual(
             sorted(result["search_keywords"]),
@@ -137,14 +138,14 @@ class TestPropose(unittest.TestCase):
         )
 
     def test_propose_returns_empty_on_api_error(self):
-        with patch.object(gemini_mapper, "_call_gemini", side_effect=RuntimeError("boom")):
+        with patch.object(gemini_mapper, "_call_llm", side_effect=RuntimeError("boom")):
             result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
         self.assertEqual(result["candidates"], [])
         self.assertEqual(result["search_keywords"], [])
 
     def test_propose_returns_empty_on_unparseable(self):
         bad_response = SimpleNamespace(text="not json")
-        with patch.object(gemini_mapper, "_call_gemini", return_value=bad_response):
+        with patch.object(gemini_mapper, "_call_llm", return_value=bad_response):
             result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
         self.assertEqual(result["candidates"], [])
         self.assertEqual(result["search_keywords"], [])
@@ -164,7 +165,7 @@ class TestPropose(unittest.TestCase):
             "search_keywords": ["quantum"],
         }
         fake_response = SimpleNamespace(text=json.dumps(payload))
-        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+        with patch.object(gemini_mapper, "_call_llm", return_value=fake_response):
             result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
         # Only the well-formed entry survives.
         self.assertEqual(len(result["candidates"]), 1)
@@ -179,7 +180,7 @@ class TestPropose(unittest.TestCase):
             "search_keywords": ["quantum"],
         }
         fake_response = SimpleNamespace(text=json.dumps(payload))
-        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+        with patch.object(gemini_mapper, "_call_llm", return_value=fake_response):
             result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
         # Non-list candidates payload coerces to empty rather than crashing.
         self.assertEqual(result["candidates"], [])
@@ -194,7 +195,7 @@ class TestPropose(unittest.TestCase):
             "search_keywords": "quantum",  # bare string, not a list
         }
         fake_response = SimpleNamespace(text=json.dumps(payload))
-        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+        with patch.object(gemini_mapper, "_call_llm", return_value=fake_response):
             result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
         kws = result["search_keywords"]
         # Bare string must NOT explode into ['q','u','a',...]. Either wrap
@@ -217,7 +218,7 @@ class TestPropose(unittest.TestCase):
             ],
         }
         fake_response = SimpleNamespace(text=json.dumps(payload))
-        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+        with patch.object(gemini_mapper, "_call_llm", return_value=fake_response):
             result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
         self.assertEqual(
             sorted(k.lower() for k in result["search_keywords"]),
@@ -234,7 +235,7 @@ class TestPropose(unittest.TestCase):
             "search_keywords": ["A", "I", "ML", "machine learning"],
         }
         fake_response = SimpleNamespace(text=json.dumps(payload))
-        with patch.object(gemini_mapper, "_call_gemini", return_value=fake_response):
+        with patch.object(gemini_mapper, "_call_llm", return_value=fake_response):
             result = gemini_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
         kws = result["search_keywords"]
         self.assertNotIn("A", kws)
@@ -1036,7 +1037,7 @@ class TestDiversityGuardrail(unittest.TestCase):
         mcap = {c["ticker"]: 1_000_000_000 for c in (candidates_a + candidates_b)}
 
         # Mapper returns different candidates per theme call.
-        def _propose_side_effect(*, theme, api_key, gemini_client):
+        def _propose_side_effect(*, theme, api_key, llm_client):
             if theme == "theme_a":
                 return _mapper_result(candidates=candidates_a)
             return _mapper_result(candidates=candidates_b)
@@ -1095,7 +1096,7 @@ class TestSkipsThemesWithoutCatalyst(unittest.TestCase):
     def test_theme_without_catalyst_does_not_call_pro_proposal(self):
         propose_calls: list[str] = []
 
-        def _track_propose(*, theme, api_key, gemini_client):
+        def _track_propose(*, theme, api_key, llm_client):
             propose_calls.append(theme)
             return _mapper_result(
                 candidates=[{"ticker": "FOO", "rationale": "x", "confidence": 0.9}],

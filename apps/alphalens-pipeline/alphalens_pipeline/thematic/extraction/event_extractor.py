@@ -1,14 +1,19 @@
-"""Gemini 3.5 Flash batch event extraction over the unified news parquet.
+"""DeepSeek v4-flash batch event extraction over the unified news parquet.
 
-For each news row, one Gemini call returns a structured ``ThematicEvent`` JSON
+For each news row, one LLM call returns a structured ``ThematicEvent`` JSON
 object conforming to :data:`schema.EVENT_RESPONSE_SCHEMA`. Output is cached
 per-day at ``~/.alphalens/thematic_events/{YYYY-MM-DD}.parquet`` and joined to
 the source row via ``news_id``. Subsequent runs skip already-extracted IDs,
 so partial-day runs (e.g. after a rate-limit pause) resume cleanly.
 
-Cost envelope: ~200 items/day × Flash ~$0.0001/item ≈ $0.50/mo, well within
-the §14 lock-7 $30-40/mo Gemini ceiling. Free tier (1500 req/day) absorbs
-the entire batch.
+Cost envelope: ~200 items/day × DeepSeek v4-flash ~$0.00002/item ≈ $0.12/mo,
+~5× cheaper than the previous Gemini Flash baseline ($0.50/mo). Full saving
+analysis in ``docs/research/polygon_quota_6x_per_day_2026_05_30.md`` §Cost.
+
+**Module name kept as `gemini_flash.py`** for diff-locality on the LLM swap
+(PR-G). 11 call sites import the public surface (`extract_one`,
+`extract_daily`, `DEFAULT_MODEL`) — those names stay; the internals are
+backend-agnostic and the filename rename is deferred to a cleanup PR.
 """
 
 from __future__ import annotations
@@ -19,7 +24,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient, get_default_gemini_client
+from alphalens_pipeline.data.alt_data.openrouter_client import (
+    OpenRouterClient,
+    get_default_openrouter_client,
+)
 from alphalens_pipeline.thematic.extraction.schema import (
     EVENT_RESPONSE_SCHEMA,
     normalize_extraction,
@@ -30,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_NEWS_DIR = Path.home() / ".alphalens" / "thematic_news"
 DEFAULT_EVENTS_DIR = Path.home() / ".alphalens" / "thematic_events"
-DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
 
 _PROMPT_TEMPLATE = """\
 You are an analyst extracting structured events from financial news.
@@ -74,12 +82,17 @@ Be terse, ground every claim in the article content, and skip speculation past s
 """
 
 
-def _call_gemini(gemini_client: GeminiClient, prompt: str, *, model: str):
-    """Single seam for tests to patch. Returns the raw SDK response."""
-    return gemini_client.generate_content(
+def _call_llm(llm_client: OpenRouterClient, prompt: str, *, model: str):
+    """Single seam for tests to patch. Returns the raw response.
+
+    The wrapper exposes ``.text`` matching Gemini's shape so the
+    downstream parse path (``parse_extraction(response.text)``) is
+    unchanged across the LLM-backend swap (PR-G).
+    """
+    return llm_client.generate_content(
         model=model,
         contents=prompt,
-        config=gemini_client.build_config(
+        config=llm_client.build_config(
             response_mime_type="application/json",
             response_schema=EVENT_RESPONSE_SCHEMA,
             temperature=0.0,
@@ -111,33 +124,34 @@ def extract_one(
     news_row: dict | pd.Series,
     *,
     api_key: str | None = None,
-    gemini_client: GeminiClient | None = None,
+    llm_client: OpenRouterClient | None = None,
     model: str = DEFAULT_MODEL,
 ) -> dict | None:
-    """Run Gemini Flash on a single news row; return normalised event dict or ``None``.
+    """Run DeepSeek v4-flash on a single news row; return normalised event
+    dict or ``None``.
 
-    Pass ``gemini_client=`` for tests or to hoist a single client across a
+    Pass ``llm_client=`` for tests or to hoist a single client across a
     batch (see ``extract_daily``). Pass ``api_key=`` for ad-hoc one-off use.
-    Omit both to fall back to ``get_default_gemini_client()`` which reads
-    ``GOOGLE_API_KEY`` once per process.
+    Omit both to fall back to ``get_default_openrouter_client()`` which reads
+    ``OPENROUTER_API_KEY`` once per process.
     """
     prompt = build_prompt(news_row)
     try:
-        # Client init inside try so missing-SDK / missing-key failures
-        # degrade per-row rather than crashing extract_daily's loop (zen
-        # pre-merge HIGH 2026-05-20).
-        if gemini_client is None:
-            gemini_client = (
-                GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
+        # Client init inside try so missing-key failures degrade
+        # per-row rather than crashing extract_daily's loop (zen
+        # pre-merge HIGH 2026-05-20; preserved across the LLM swap).
+        if llm_client is None:
+            llm_client = (
+                OpenRouterClient(api_key=api_key) if api_key else get_default_openrouter_client()
             )
-        response = _call_gemini(gemini_client, prompt, model=model)
+        response = _call_llm(llm_client, prompt, model=model)
     except Exception as exc:
-        logger.warning("Gemini extract failed: %s", exc, exc_info=True)
+        logger.warning("LLM extract failed: %s", exc, exc_info=True)
         return None
     raw = getattr(response, "text", "") or ""
     parsed = parse_extraction(raw)
     if parsed is None:
-        logger.warning("Gemini returned unparseable JSON: %r", raw[:200])
+        logger.warning("LLM returned unparseable JSON: %r", raw[:200])
         return None
     return normalize_extraction(parsed)
 
@@ -161,7 +175,7 @@ def extract_daily(
     Idempotent per ``news_id``: items already in the events parquet are kept
     untouched and not re-sent to Gemini.
     """
-    gemini_client = GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
+    llm_client = OpenRouterClient(api_key=api_key) if api_key else get_default_openrouter_client()
 
     news_path = news_dir / f"{date.isoformat()}.parquet"
     if not news_path.exists():
@@ -185,7 +199,7 @@ def extract_daily(
 
     new_rows: list[dict] = []
     for _, row in to_extract.iterrows():
-        event = extract_one(row, gemini_client=gemini_client, model=model)
+        event = extract_one(row, llm_client=llm_client, model=model)
         if event is None:
             continue
         new_rows.append(

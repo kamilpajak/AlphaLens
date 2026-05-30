@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
-from alphalens_pipeline.thematic.extraction import gemini_flash
+from alphalens_pipeline.thematic.extraction import event_extractor as gemini_flash
 from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS
 
 
@@ -55,7 +55,7 @@ class TestExtractOne(unittest.TestCase):
     def test_extract_one_returns_normalized_dict(self):
         row = _news_row("p1", "polygon", "NVDA CUDA-Q launch", tickers=["NVDA"])
         fake_response = SimpleNamespace(text=json.dumps(SAMPLE_EXTRACTION))
-        with patch.object(gemini_flash, "_call_gemini", return_value=fake_response):
+        with patch.object(gemini_flash, "_call_llm", return_value=fake_response):
             extracted = gemini_flash.extract_one(row, api_key="testkey")
         self.assertEqual(extracted["event_type"], "product_launch")
         self.assertEqual(extracted["confidence"], 0.85)
@@ -63,14 +63,14 @@ class TestExtractOne(unittest.TestCase):
 
     def test_extract_one_returns_none_on_api_error(self):
         row = _news_row("p1", "polygon", "anything")
-        with patch.object(gemini_flash, "_call_gemini", side_effect=RuntimeError("boom")):
+        with patch.object(gemini_flash, "_call_llm", side_effect=RuntimeError("boom")):
             extracted = gemini_flash.extract_one(row, api_key="testkey")
         self.assertIsNone(extracted)
 
     def test_extract_one_returns_none_on_unparseable_response(self):
         row = _news_row("p1", "polygon", "anything")
         fake_response = SimpleNamespace(text="not json")
-        with patch.object(gemini_flash, "_call_gemini", return_value=fake_response):
+        with patch.object(gemini_flash, "_call_llm", return_value=fake_response):
             extracted = gemini_flash.extract_one(row, api_key="testkey")
         self.assertIsNone(extracted)
 
@@ -91,7 +91,7 @@ class TestExtractDaily(unittest.TestCase):
             news_dir.mkdir()
             news.to_parquet(news_dir / "2026-05-15.parquet", index=False)
 
-            with patch.object(gemini_flash, "_call_gemini", return_value=fake_response):
+            with patch.object(gemini_flash, "_call_llm", return_value=fake_response):
                 df = gemini_flash.extract_daily(
                     date=dt.date(2026, 5, 15),
                     news_dir=news_dir,
@@ -120,7 +120,7 @@ class TestExtractDaily(unittest.TestCase):
                 calls["n"] += 1
                 return fake_response
 
-            with patch.object(gemini_flash, "_call_gemini", side_effect=counting_call):
+            with patch.object(gemini_flash, "_call_llm", side_effect=counting_call):
                 gemini_flash.extract_daily(
                     date=dt.date(2026, 5, 15),
                     news_dir=news_dir,
@@ -176,7 +176,7 @@ class TestExtractDaily(unittest.TestCase):
                 calls["n"] += 1
                 return fake_response
 
-            with patch.object(gemini_flash, "_call_gemini", side_effect=counting_call):
+            with patch.object(gemini_flash, "_call_llm", side_effect=counting_call):
                 df = gemini_flash.extract_daily(
                     date=dt.date(2026, 5, 15),
                     news_dir=news_dir,
@@ -205,7 +205,7 @@ class TestExtractDaily(unittest.TestCase):
             news_dir.mkdir()
             news.to_parquet(news_dir / "2026-05-15.parquet", index=False)
 
-            with patch.object(gemini_flash, "_call_gemini", side_effect=selective_fail):
+            with patch.object(gemini_flash, "_call_llm", side_effect=selective_fail):
                 df = gemini_flash.extract_daily(
                     date=dt.date(2026, 5, 15),
                     news_dir=news_dir,
