@@ -135,5 +135,11 @@ def emit_domain_metrics(job: str, metrics: Mapping[str, float | int]) -> Path:
     # during VPS cutover 2026-05-30 — node_exporter saw the bash
     # ``alphalens_job_*.prom`` files but not the Python
     # ``alphalens_domain_*.prom`` files until we manually chmod'd.
-    os.chmod(target, 0o644)
+    #
+    # 0o644 is the canonical mode for Prometheus textfile-collector
+    # scrape files; CodeQL's "py/overly-permissive-file" rule is a
+    # false positive for this specific use case (the file contains
+    # only counters + gauges, no secrets). The contents are designed
+    # to be world-readable.
+    os.chmod(target, 0o644)  # lgtm[py/overly-permissive-file]
     return target
