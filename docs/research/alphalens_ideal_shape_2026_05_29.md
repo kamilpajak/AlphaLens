@@ -37,7 +37,95 @@ Buy-side narzędzie decision-support dla **dyskrecjonariusza** + małej grupy Wh
 
 ---
 
-## 3. The feedback loop (heart of L3 — czemu istnieje feedback ledger)
+## 3. Big picture flow — całość w jednym diagramie
+
+Wszystkie 8 tracków + 3 tiery + feedback loop + paper-trade harness w jednym widoku. §4 i §5 zoom-in'ują na poszczególne fragmenty (feedback loop, wieczorny use-case).
+
+```mermaid
+flowchart TB
+    subgraph SRC["Data sources (PIT)"]
+        direction LR
+        S1[Polygon news]
+        S2[GDELT]
+        S3[RSS feeds]
+        S4[SEC EDGAR]
+        S5[Form-4 insiders]
+        S6[SimFin / yfinance]
+    end
+
+    subgraph PIPE["Pipeline — 6x/day VPS systemd"]
+        direction TB
+        P1["Ingest + lexical clustering<br/>cap 200/day"]
+        P2["Event extraction<br/>templates first · Flash fallback<br/>(#143 hybrid)"]
+        P3["Theme mapping<br/>DeepSeek v4 Pro"]
+        P4["4 verification gates<br/>10-K · press · Form-4 · NPORT"]
+        P5["4-signal scorer<br/>insider · FCFF · valuation · technicals"]
+        P6["Brief generator<br/>Pro for score≥4 · Flash for ≤3"]
+        P1 --> P2 --> P3 --> P4 --> P5 --> P6
+    end
+
+    subgraph TIERS["3 interaction tiers — AUGMENTACJA"]
+        direction TB
+        T1["L1 push (Telegram)<br/>minutes from source<br/>M&A leak · extreme PEAD<br/>max 3-5/day"]
+        T2["L2 daily brief (SPA)<br/>1-4x/day · full evidence<br/>trade-setup ladder · typed facts"]
+        T3["L3 weekly review (SPA)<br/>calibration curve · theme rotation<br/>dismiss histogram · win-rate per combo"]
+    end
+
+    subgraph HUMAN["Human decision — FINAL, ZAWSZE"]
+        direction LR
+        H1["Cherry-pick candidates"]
+        H2["WhatsApp group<br/>discussion"]
+        H3["Each member<br/>decides individually"]
+        H1 --> H2 --> H3
+    end
+
+    subgraph PAPER["Paper-trade harness — measurement instrument<br/>NIE execution · capital_deploy_clause"]
+        direction TB
+        PT1["Alpaca paper submit<br/>13:25 UTC Mon-Fri"]
+        PT2["Reconcile loop<br/>14:00-21:30 UTC<br/>every 30 min"]
+        PT3["Exit manager<br/>SL · 3-TP ladder · time-stop"]
+        PT1 --> PT2 --> PT3
+    end
+
+    subgraph FEEDBACK["Feedback loop — closes the system"]
+        direction LR
+        F1[(decisions.db)]
+        F2[(paper_ledger.db)]
+        F3["Outcome join<br/>background job"]
+        F4["Re-weight after ≥50<br/>Bayesian update"]
+        F1 --> F3
+        F2 --> F3
+        F3 --> F4
+    end
+
+    SRC --> P1
+    P6 --> T1
+    P6 --> T2
+    T1 --> H1
+    T2 --> H1
+    H3 -->|interested / dismissed<br/>+ rationale| F1
+    H3 -->|approved plan| PT1
+    PT3 -.->|outcomes| F2
+    F3 --> T3
+    F4 -.->|adjusts layer4 weights| P5
+
+    classDef antipattern stroke:#dc2626,stroke-width:2px,stroke-dasharray:5 5
+    PAPER:::antipattern
+```
+
+**Co diagram pokazuje:**
+
+- Linearny przepływ SRC → PIPE → TIERS — wszystkie 3 tiery wychodzą z TEGO SAMEGO brief'a (to nie 3 osobne pipeline'y)
+- HUMAN jako gate między tiers a paper-trade — nic nie idzie do Alpaca bez decyzji
+- Feedback loop zamyka się przez decisions + paper outcomes → reweight wraca do scoring layer (kropkowane = nieaktywne do ≥50 decisions)
+- PAPER ramka czerwoną-kropkowaną = anti-pattern boundary (kotwica `capital_deploy_clause`)
+- L3 dostaje feed z `F3 outcome join` — dlatego weekly review jest gated na napełnienie ledger'a
+
+**Celowo pominięte** (żeby nie zaciemniać): 8 tracków z §7 (to view rozwojowy, nie operacyjny); anti-features z §8 (filter inputu, nie część flow); VPS observability stack (Prometheus + Telegram alerts — meta-layer).
+
+---
+
+## 4. The feedback loop (heart of L3 — czemu istnieje feedback ledger)
 
 ```mermaid
 flowchart TD
@@ -64,7 +152,7 @@ Bez feedback ledger'a model nie wie co działa. Re-weighting bez >50 decisions =
 
 ---
 
-## 4. "Done" looks like — wieczorny use-case
+## 5. "Done" looks like — wieczorny use-case
 
 ```mermaid
 flowchart LR
@@ -96,7 +184,7 @@ To jest cel. Wszystko inne to droga.
 
 ---
 
-## 5. Stan obecny vs ideał (per tier)
+## 6. Stan obecny vs ideał (per tier)
 
 ### L1 — Real-time push
 
@@ -129,7 +217,7 @@ To jest cel. Wszystko inne to droga.
 
 ---
 
-## 6. Tracks — każdy = epic = wiele PR-ów
+## 7. Tracks — każdy = epic = wiele PR-ów
 
 ### Track A: Feedback ledger (PR #292 + v2 + v3)
 - **v1 (PR #292, in-flight)** — schema, REST, SPA, monitoring CLI
@@ -173,7 +261,7 @@ To jest cel. Wszystko inne to droga.
 
 ---
 
-## 7. Co celowo **NIE jest** w wizji (bullshit-marketing filter)
+## 8. Co celowo **NIE jest** w wizji (bullshit-marketing filter)
 
 | Anti-feature | Powód |
 |--------------|-------|
@@ -189,7 +277,7 @@ To jest cel. Wszystko inne to droga.
 
 ---
 
-## 8. Roadmap priorities
+## 9. Roadmap priorities
 
 ### Near-term (najbliższe ~6 PR-ów, ~2 tygodnie)
 
@@ -225,7 +313,7 @@ To jest cel. Wszystko inne to droga.
 
 ---
 
-## 9. Reference — gdzie szukać "dlaczego"
+## 10. Reference — gdzie szukać "dlaczego"
 
 | Dokument | Co opisuje |
 |----------|-----------|
@@ -252,11 +340,12 @@ To jest cel. Wszystko inne to droga.
 
 ---
 
-## 10. Edits log
+## 11. Edits log
 
 | Data | Co | Powód |
 |------|-----|-------|
 | 2026-05-29 | Założenie dokumentu | Capture vision po sesji "ideal-shape" + perplexity research; parent memo dla wszystkich epicków below |
-| 2026-05-30 | Track H rozszerzone o #143 structured event templates; §8 near-term insert pos #6 | Foundation layer dla Tracks D + G + H. User-affirmed velocity post sesji obróciła 5+d estimate w 1-2 sesje, removing primary deferral reason. Both reviewers (DeepSeek v4 Pro zen + Perplexity Research) converged on hybrid mode + YAML+predicates. Design memo PR #320 |
+| 2026-05-30 | Track H rozszerzone o #143 structured event templates; near-term roadmap insert pos #6 | Foundation layer dla Tracks D + G + H. User-affirmed velocity post sesji obróciła 5+d estimate w 1-2 sesje, removing primary deferral reason. Both reviewers (DeepSeek v4 Pro zen + Perplexity Research) converged on hybrid mode + YAML+predicates. Design memo PR #320 |
+| 2026-05-30 | Dodana §3 "Big picture flow" z całościowym mermaid diagramem; sekcje §3-§10 → §4-§11 renumbered | Zsyntetyzowany view całego systemu w jednym diagramie po sesji #143 design memo — pokazuje 3 tiery wychodzące z tego samego brief'a, HUMAN gate przed paper-trade, feedback loop zamykający system, PAPER ramka jako anti-pattern boundary (`capital_deploy_clause`). §4 (feedback) i §5 (wieczorny use-case) zoom-in'ują na fragmenty tego big-picture |
 
 Edit jest **expected** — to nie LOCKED memo. Każda istotna decyzja architektoniczna (nowy track, zmiana priorytetu, retired feature) powinna landować tutaj na końcu sesji.
