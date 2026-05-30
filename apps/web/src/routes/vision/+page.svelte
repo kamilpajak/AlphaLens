@@ -151,8 +151,8 @@
 			</h1>
 			<p class="text-fg-dim text-xs sm:text-sm mt-3 max-w-2xl leading-relaxed">
 				Direction AlphaLens is already walking PR-by-PR — not a rewrite. 3-tier interaction
-				model, feedback loop, 8 tracks. Source of truth dla
-				<span class="text-amber">dlaczego</span> każdego następnego feature'a.
+				model, feedback loop, 8 tracks. Source of truth for
+				<span class="text-amber">why</span> each next feature.
 			</p>
 		</div>
 	</header>
