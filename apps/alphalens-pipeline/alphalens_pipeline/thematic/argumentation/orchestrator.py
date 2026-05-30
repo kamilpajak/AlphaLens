@@ -123,8 +123,8 @@ def _enrich_facts_with_earnings(facts: dict, asof: dt.date) -> dict:
 def _brief_for_row(
     row: pd.Series,
     *,
-    gemini_client_pro,
-    gemini_client_flash,
+    llm_client_pro,
+    llm_client_flash,
     asof: dt.date | None = None,
 ) -> tuple[dict | None, str | None]:
     """Single-row LLM call with per-row exception absorption.
@@ -147,8 +147,8 @@ def _brief_for_row(
     try:
         brief = generator.generate_brief_with_retry(
             facts,
-            gemini_client_pro=gemini_client_pro,
-            gemini_client_flash=gemini_client_flash,
+            llm_client_pro=llm_client_pro,
+            llm_client_flash=llm_client_flash,
         )
     except Exception as exc:
         logger.warning("brief generation raised for %s: %s", row.get("ticker"), exc, exc_info=True)
@@ -157,22 +157,22 @@ def _brief_for_row(
 
 
 def _build_clients(api_key: str | None):
-    """Hoist one shared GeminiClient (Pro + Flash share it). Returns
+    """Hoist one shared OpenRouterClient (Pro + Flash share it). Returns
     ``(pro_client, flash_client)`` or ``(None, None)`` when no key is
     available so the orchestrator can still write placeholder rows
     (used by tests that patch ``_brief_for_row`` wholesale)."""
-    from alphalens_pipeline.data.alt_data.gemini_client import (
-        GeminiClient,
-        get_default_gemini_client,
+    from alphalens_pipeline.data.alt_data.openrouter_client import (
+        OpenRouterClient,
+        get_default_openrouter_client,
     )
 
-    key = api_key or os.environ.get("GOOGLE_API_KEY") or ""
+    key = api_key or os.environ.get("OPENROUTER_API_KEY") or ""
     if not key:
         return None, None
     try:
-        client = GeminiClient(api_key=key) if api_key else get_default_gemini_client()
-    except RuntimeError as exc:
-        logger.warning("google-genai SDK missing; cannot generate briefs: %s", exc)
+        client = OpenRouterClient(api_key=key) if api_key else get_default_openrouter_client()
+    except (RuntimeError, ValueError) as exc:
+        logger.warning("OpenRouterClient construction failed; cannot generate briefs: %s", exc)
         return None, None
     return client, client  # Same client serves both Pro and Flash models.
 
@@ -332,8 +332,8 @@ def generate_briefs(
     for _, row in verified.iterrows():
         brief, next_earnings = _brief_for_row(
             row,
-            gemini_client_pro=client_pro,
-            gemini_client_flash=client_flash,
+            llm_client_pro=client_pro,
+            llm_client_flash=client_flash,
             asof=asof,
         )
         if brief is not None:
