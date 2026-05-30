@@ -17,7 +17,7 @@ Buy-side narzędzie decision-support dla **dyskrecjonariusza** + małej grupy Wh
 | Tier | Funkcja | Cadence | Kanał | Konsument |
 |------|---------|---------|-------|-----------|
 | **L1** | Push najwyższej-confidence catalysts | minuty od źródła | Telegram | User w czasie rzeczywistym |
-| **L2** | Daily brief — pełna analiza, evidence, trade setup | 1-4× /dzień | SPA `app.alphalens.kamilpajak.pl` | User + grupa WhatsApp |
+| **L2** | Daily brief — pełna analiza, evidence, trade setup | 6× /day (HH:30 UTC) | SPA `app.alphalens.kamilpajak.pl` | User + grupa WhatsApp |
 | **L3** | Weekly review — performance, calibration, learning loop | 1× /tydzień | SPA `/review/<week>` | User (alone) |
 
 ---
@@ -138,17 +138,20 @@ Bez feedback ledger'a model nie wie co działa. Re-weighting bez >50 decisions =
 
 ```mermaid
 flowchart LR
-    T1["09:00 UTC<br/>Pipeline runs<br/>(automatic)"]
-    T2["10:00 UTC<br/>Telegram push<br/>NVDA +12%"]
-    T3["12:30 UTC<br/>User opens<br/>daily brief"]
-    T4["14:00 UTC<br/>Shortlist to<br/>WhatsApp"]
+    T1["08:30 UTC<br/>Pipeline run #2 of 6<br/>(automatic, 6×/day)"]
+    T2["10:00 UTC<br/>Telegram push<br/>NVDA +12% earnings"]
+    T3["12:30 UTC<br/>User opens<br/>daily brief on SPA"]
+    T4["14:00 UTC<br/>Shortlist to<br/>WhatsApp group"]
     T5["14:30 UTC<br/>Group discussion<br/>30 min"]
-    T6["21:00 UTC<br/>Alpaca paper<br/>plans active"]
+    T6["13:25 UTC*<br/>Alpaca paper<br/>auto-submit"]
 
-    T1 --> T2 --> T3 --> T4 --> T5 --> T6
+    T1 --> T2 --> T3 --> T4 --> T5
+    T3 -.->|approved on prior day| T6
 ```
 
-**Weekend, niedziela 19:00:**
+*T6 jest non-linear: paper-submit timer fires 13:25 UTC Mon-Fri (PR #317) na plans approved w poprzednich sesjach; nie czeka na today's group discussion. Dlatego strzałka kropkowana.
+
+**Weekend, niedziela 19:00 (illustrative numbers from PR #292 design):**
 ```
 user opens app.alphalens.kamilpajak.pl/review/2026-W22
   - "this week: 5/12 win-rate (42%), 2 still open"
@@ -172,7 +175,7 @@ To jest cel. Wszystko inne to droga.
 
 | Element | Stan obecny | Ideał | Gap |
 |---------|-------------|-------|-----|
-| Detection | Layer 1 EDGAR detector live (launchd, every N min) | Plus M&A leak detector + earnings surprise filter | M&A pattern matcher + extreme-PEAD trigger |
+| Detection | Layer 1 EDGAR detector live (VPS systemd-user, every 15 min, PR #310) | Plus M&A leak detector + earnings surprise filter | M&A pattern matcher + extreme-PEAD trigger |
 | Push channel | candidates.db (logged only) | Telegram bot push | Bot infrastructure |
 | Filter | None — log everything | Multi-layer scoring → max 3-5 push/day | Alert-fatigue threshold |
 | Confirmation | Manual review next day in L2 | Inline confirm via Telegram inline button | Bot interactive UI |
@@ -181,9 +184,9 @@ To jest cel. Wszystko inne to droga.
 
 | Element | Stan obecny | Ideał | Gap |
 |---------|-------------|-------|-----|
-| Pipeline | Daily 06:30 UTC | 4×/dzień 06,12,18,00:30 UTC | Re-entrancy testing, dedup |
+| Pipeline | 6×/day HH:30 UTC (PR #315) — XTKS/XHKG/XSHG/XWAR/XNYS slots | Same; possible 8×/day jeśli dodamy więcej giełd | Per-exchange weekend cutoff (XNYS-safe today) |
 | Candidates | 4-signal quant + 4 verification gates | + historical analog reasoning | Embedding lookback corpus |
-| Evidence panel | source_event_url + rationale + bear summary + supply chain + trade-setup | + sentence-level citations from 8-K / press release + peer-cohort overlay + filing deep links | EDGAR full-text indexing |
+| Evidence panel | source_event_url + rationale + bear summary + supply chain + trade-setup | + sentence-level citations from 8-K / press release + peer-cohort overlay + filing deep links | EDGAR full-text indexing + typed facts (#143 PR-3) |
 | Feedback | None (until PR #292) | Interested/Dismissed buttons + 2-level taxonomy | **PR #292 in-flight** |
 | Position context | None | Current portfolio import + correlation overlay | Alpaca portfolio API integration |
 
@@ -202,44 +205,49 @@ To jest cel. Wszystko inne to droga.
 ## 7. Tracks — każdy = epic = wiele PR-ów
 
 ### Track A: Feedback ledger (PR #292 + v2 + v3)
-- **v1 (PR #292, in-flight)** — schema, REST, SPA, monitoring CLI
-- **v2 — outcome join** — background job linkujący `decisions.paper_trade_plan_id` z `paper_ledger.outcomes` po close'ie
-- **v2 — VIX server-side cache** — uwolnić `market_regime_at_entry` z "unknown"
-- **v3 — implicit telemetry** — czas patrzenia na card, kliki w evidence (gdy >100 decisions/m-c)
-- **v3 — personalization** — order-by-frequency w dropdown'ach, optional `confidence_subjective` slider
+- ▶ **v1 (PR #292, in-flight)** — schema, REST, SPA, monitoring CLI
+- ⏳ **v2 — outcome join** — background job linkujący `decisions.paper_trade_plan_id` z `paper_ledger.outcomes` po close'ie
+- ⏳ **v2 — VIX server-side cache** — uwolnić `market_regime_at_entry` z "unknown"
+- ⏳ **v3 — implicit telemetry** — czas patrzenia na card, kliki w evidence (gdy >100 decisions/m-c)
+- ⏳ **v3 — personalization** — order-by-frequency w dropdown'ach, optional `confidence_subjective` slider
 
 ### Track B: L1 Telegram bot
-- Phase F (per oryginalny thematic design memo) — odroczone
+- ⏳ Phase F (per oryginalny thematic design memo) — odroczone
 - Wymaga: integration BotAPI, secrets management, message templating, deduplication
 
 ### Track C: L3 weekly review
-- Gated on feedback ledger fill (≥30 decisions) — czekać 1-2 tygodnie po PR #292 merge
+- ⏳ Gated on feedback ledger fill (≥30 decisions) — czekać 1-2 tygodnie po PR #292 merge
 - SPA route `/review/<week>` + aggregation endpoints w Django
 
 ### Track D: Evidence panel polish (L2)
-- Sentence-level citations z 8-K — wymaga EDGAR full-text indexing
-- Peer-cohort overlay z `sector_peers` infrastruktury
-- Filing deep links (BamSEC pattern)
-- Historical analog reasoning — embedding lookup w `thematic_briefs` archive
+- ⏳ Sentence-level citations z 8-K — wymaga EDGAR full-text indexing
+- ⏳ Peer-cohort overlay z `sector_peers` infrastruktury
+- ⏳ Filing deep links (BamSEC pattern)
+- ⏳ Historical analog reasoning — embedding lookup w `thematic_briefs` archive
+- ⏳ Typed facts injection do generatora — gated na #143 template engine PR-3
 
 ### Track E: Position-context layer (L2)
-- Import paper portfolio z Alpaca API → wyświetlanie correlation z istniejącymi holdings
-- Concentration limit overlay
-- Scenario shock (factor exposure stress test)
+- ⏳ Import paper portfolio z Alpaca API → wyświetlanie correlation z istniejącymi holdings
+- ⏳ Concentration limit overlay
+- ⏳ Scenario shock (factor exposure stress test)
 
 ### Track F: Pipeline cadence + auto-submit
-- 4×/dzień cron (`OnCalendar=06,12,18,00:30`)
-- VPS auto-paper-submit ExecStartPost (po wdrożeniu ALPACA_TEST_* na /etc/alphalens/env)
-- Re-entrancy tests dla overlapping windows
+- ✅ **SHIPPED PR #315** — 6×/day cron (`OnCalendar=*-*-* *:30:00 UTC` × 6 slots) mapping na XTKS/XHKG/XSHG/XWAR/XNYS rotation
+- ✅ **SHIPPED PR #317** — VPS auto-paper-submit + auto-reconcile timers (Mon-Fri 13:25 UTC + every 30 min 14:00-21:30 UTC), three-layer holiday gating
+- ✅ Re-entrancy via `--force` flag on ingest (defeats per-UTC-day cache short-circuit)
+- ⏳ Re-evaluation: czy 6× kontra 4× faktycznie dodaje value (open Q poniżej)
 
 ### Track G: Multi-data corroboration (research)
-- Reuse validated paradigm scorers (Cohen-Malloy, FCFF yield) w multi-signal corroboration — patrz [[feedback_validated_paradigm_scorer_reuse_2026_05_16]]
-- Cross-data-class compounds (EDGAR + iVolatility) — gated na first phase-robust single-layer PASS
+- ⏳ Reuse validated paradigm scorers (Cohen-Malloy, FCFF yield) w multi-signal corroboration — patrz [[feedback_validated_paradigm_scorer_reuse_2026_05_16]]
+- ⏳ Cross-data-class compounds (EDGAR + iVolatility) — gated na first phase-robust single-layer PASS
+- ⏳ News-driven compound catalyst sequences — gated na #143 template engine PR-5 (M&A → financing → analyst)
 
 ### Track H: GDELT data pipeline ongoing improvements
-- Title cleanup edge cases (PR #259 / #271 / #291 catalogued)
-- Multi-source dedup (GDELT × Polygon news × RSS overlap)
-- **Structured event templates (#143)** — RavenPack-style YAML+predicates engine jako foundation layer dla Tracks D (typed facts → evidence panel), G (compound catalyst sequences → validated paradigm scorer reuse), H (multi-source dedup via template tuples). Hybrid mode (templates first, Flash fallback). 5-PR sequence: engine+5 templates / hybrid integration / structured facts → generator / multi-source dedup / compound catalysts (gated). Design memo: `docs/research/template_engine_design_2026_05_30.md` (LOCKED). Issue #143.
+- ✅ Title cleanup edge cases (PR #259 / #271 / #291 catalogued)
+- ⏳ Multi-source dedup (GDELT × Polygon news × RSS overlap) — gated na #143 PR-4 (template-tuple dedup)
+- ▶ **Structured event templates (#143)** — RavenPack-style YAML+predicates engine jako foundation layer dla Tracks D (typed facts → evidence panel), G (compound catalyst sequences → validated paradigm scorer reuse), H (multi-source dedup via template tuples). Hybrid mode (templates first, Flash fallback). 5-PR sequence: engine+5 templates / hybrid integration / structured facts → generator / multi-source dedup / compound catalysts (gated). Design memo: `docs/research/template_engine_design_2026_05_30.md` (LOCKED, PR #320 merged 2026-05-30). Implementation epic: #321.
+
+**Legend:** ✅ shipped · ▶ in-flight · ⏳ pending
 
 ---
 
@@ -253,7 +261,7 @@ To jest cel. Wszystko inne to droga.
 | "AI exoskeleton" rhetoric | Perplexity research ([[feedback_adversarial_reviewer_bias_2026_05_16]]) — rhetoric, nie technika. |
 | "360-degree view" | Marketing buzzword. Mamy `also_in_themes`, wystarczy. |
 | Multi-agent orchestration (AutoGPT-style) | YAGNI dla decision-support; Pro+Flash routing wystarczy. |
-| Closed-source AI | Wszystkie LLM calls przez canonical clients (`GeminiClient`). Vendor lock-in transparency. |
+| Closed-source AI | Wszystkie LLM calls przez canonical clients (`OpenRouterClient` thematic pipeline po PR-G #318; `GeminiClient` legacy research-side `llm_scorers.py`). Vendor lock-in transparency; backend swappable bez zmiany call-sites. |
 | Mandate / compliance UI | Retail single-user; no fund constraints to express. |
 | Sentiment analysis as standalone signal | Loughran-McDonald + Tetlock pokazują że sentiment is weak alpha. Combine z catalyst structure jeśli w ogóle. |
 
@@ -290,7 +298,7 @@ To jest cel. Wszystko inne to droga.
 - Czy `confidence_subjective` slider okazuje się przydatny? (Decision po ~20 decisions w PR #292)
 - Czy "other" % przekracza 15%? (Stamp z `alphalens feedback report`, akcja: rozszerzyć taksonomię)
 - Czy group flag (`flagged_for_group_discussion`) zaczyna mieć value przy current scale? (Decision po ~50 decisions)
-- Czy 4×/dzień cadence dodaje echo amplification value czy tylko cost? (A/B test na 2 tygodnie po wdrożeniu)
+- Czy 6×/day cadence (PR #315) dodaje echo amplification value czy tylko cost? (A/B test po 2 tygodniach od wdrożenia 2026-05-30)
 - Czy Telegram push CTR > 30% (Braze benchmark)? (Po deploy)
 
 ---
@@ -301,6 +309,7 @@ To jest cel. Wszystko inne to droga.
 |----------|-----------|
 | `docs/research/feedback_ledger_design_2026_05_29.md` | v1 schema + UX (LOCKED) |
 | `docs/research/thematic_event_tool_v1_design_2026_05_15.md` | Phase A-E shipped, Phase F (Telegram) deferred |
+| `docs/research/template_engine_design_2026_05_30.md` | Structured event templates (#143) — hybrid mode + YAML+predicates DSL (LOCKED PR #320) |
 | `docs/research/trade_setup_*.md` | Deterministic entry+TP ladder design |
 | `docs/research/paper_trading_capital_sizing_2026_05_28.md` | Paper-trade harness math |
 | `docs/research/paper_trading_3tier_entry_exit_playbook_2026_05_28.md` | 3-entry × 3-TP × SL × time-stop matrix |
@@ -329,5 +338,6 @@ To jest cel. Wszystko inne to droga.
 | 2026-05-29 | Założenie dokumentu | Capture vision po sesji "ideal-shape" + perplexity research; parent memo dla wszystkich epicków below |
 | 2026-05-30 | Track H rozszerzone o #143 structured event templates; near-term roadmap insert pos #6 | Foundation layer dla Tracks D + G + H. User-affirmed velocity post sesji obróciła 5+d estimate w 1-2 sesje, removing primary deferral reason. Both reviewers (DeepSeek v4 Pro zen + Perplexity Research) converged on hybrid mode + YAML+predicates. Design memo PR #320 |
 | 2026-05-30 | Dodana §3 "Big picture flow" z całościowym mermaid diagramem; sekcje §3-§10 → §4-§11 renumbered | Zsyntetyzowany view całego systemu w jednym diagramie po sesji #143 design memo — pokazuje 3 tiery wychodzące z tego samego brief'a, HUMAN gate przed paper-trade, feedback loop zamykający system, PAPER ramka jako anti-pattern boundary (`capital_deploy_clause`). §4 (feedback) i §5 (wieczorny use-case) zoom-in'ują na fragmenty tego big-picture |
+| 2026-05-30 | Drift cleanup (9 must-fix items) | Sync prozy z aktualnym stanem prod po PR-F (#315 6×/day cadence), PR-D (#317 paper timers), PR-G (#318 OpenRouterClient), PR-1 obs (#310 systemd migration), template memo (#320). Dodane status markery (✅ ▶ ⏳) per-bullet w §7 dla parytetu z §9 near-term checklist. Wszystkie cadence wzmianki 1×/4×/dzień → 6×/day; §5 use-case T1 timeline updated z linearnego 09:00 na "pipeline run #2 of 6" + kropkowana strzałka dla auto-submit non-linearity; §6 L1 launchd→systemd; §8 GeminiClient→OpenRouterClient primary +legacy note |
 
 Edit jest **expected** — to nie LOCKED memo. Każda istotna decyzja architektoniczna (nowy track, zmiana priorytetu, retired feature) powinna landować tutaj na końcu sesji.
