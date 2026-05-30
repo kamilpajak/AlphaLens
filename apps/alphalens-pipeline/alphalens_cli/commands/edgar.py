@@ -6,8 +6,6 @@ import logging
 import os
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 import typer
 from alphalens_pipeline.core.queue import default_queue_path
 from alphalens_pipeline.edgar_detector.classifier import Action, SignalClassifier
@@ -24,6 +22,8 @@ from alphalens_pipeline.edgar_detector.sources.cik_loader import CIKLoader
 from alphalens_pipeline.edgar_detector.sources.edgar import SECEdgarSource
 from alphalens_pipeline.edgar_detector.storage import SeenEventStore
 from alphalens_pipeline.observability.textfile import emit_domain_metrics
+
+logger = logging.getLogger(__name__)
 
 edgar_app = typer.Typer(
     name="edgar",
