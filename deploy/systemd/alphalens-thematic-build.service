@@ -43,6 +43,7 @@ EnvironmentFile=/etc/alphalens/env
 ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
     --user %U:%G \
     -e HOME=/app/home \
+    -e OPENROUTER_API_KEY \
     -e GOOGLE_API_KEY \
     -e ALPHA_VANTAGE_API_KEY \
     -e POLYGON_API_KEY \
