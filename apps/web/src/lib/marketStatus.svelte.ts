@@ -90,6 +90,14 @@ export const DEFAULT_POLL_INTERVAL_MS = 60_000;
  * Start the background poll. Idempotent — calling twice does NOT spawn
  * a second interval (we track a module-level handle). Returns a cleanup
  * function for SvelteKit's ``$effect`` cleanup slot.
+ *
+ * **Single-owner assumption.** The first caller's cleanup function is the
+ * only one that actually tears the interval down; subsequent callers
+ * receive a no-op cleanup. Production has exactly one mount point
+ * (``+layout.svelte``) which never unmounts, so this is safe. A future
+ * second mount (e.g. a per-route banner variant) would need to either
+ * promote this to a real ref-count or accept that only the first owner
+ * controls teardown. Flag surfaced by zen review 2026-05-30.
  */
 let _pollHandle: ReturnType<typeof setInterval> | null = null;
 let _visibilityHandler: (() => void) | null = null;

@@ -25,6 +25,11 @@ def _force_permissive_dev_rest_framework(settings):
         "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
     }
     with override_settings(REST_FRAMEWORK=permissive):
+        # IMPORTANT: import market.views INSIDE the fixture, not at module
+        # level. DRF's ``APIView`` resolves ``permission_classes`` /
+        # ``authentication_classes`` at class-definition time; a top-level
+        # import would see the un-mutated classes (briefs-side mirror tests
+        # have the same invariant). Flag surfaced by zen review 2026-05-30.
         from market import views as market_views
 
         market_views.MarketStatusView.permission_classes = api_settings.DEFAULT_PERMISSION_CLASSES

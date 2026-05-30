@@ -137,3 +137,37 @@ class TestDefaultAnchor:
         assert isinstance(body["is_trading_day"], bool)
         assert isinstance(body["is_half_day"], bool)
         assert body["exchange"] == "XNYS"
+
+
+class TestExchangeCalendarsApiContract:
+    """Pin the ``exchange_calendars`` library API shape that
+    ``market.calendar.is_half_day`` depends on.
+
+    A future major-version bump that changes ``cal.close_times`` from
+    ``list[(date, time)]`` to a different container would otherwise
+    silently misclassify every half-day as a full day (the defensive
+    ``isinstance`` guard returns False on shape mismatch — quiet wrong,
+    not loud wrong). This test fails loudly on the upgrade so the
+    operator knows to revisit the detection idiom. Flag surfaced by
+    zen review 2026-05-30.
+    """
+
+    def test_close_times_is_list_of_date_time_tuples(self):
+        import datetime as dt
+
+        from market.calendar import _calendar
+
+        cal = _calendar("XNYS")
+        ct = cal.close_times
+
+        assert hasattr(ct, "__iter__"), "close_times must be iterable"
+        items = list(ct)
+        assert len(items) >= 1, "XNYS must have at least one close_time entry"
+
+        # Each entry must be (effective_date_or_None, datetime.time).
+        for entry in items:
+            assert len(entry) == 2, f"expected 2-tuple, got {entry!r}"
+            _eff_date, close_time = entry
+            assert isinstance(close_time, dt.time), (
+                f"second tuple element must be datetime.time, got {type(close_time).__name__}"
+            )

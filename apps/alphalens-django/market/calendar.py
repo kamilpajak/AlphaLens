@@ -106,6 +106,16 @@ def next_trading_open_utc(
     anchor at 23:59 UTC of the requested date so a same-day session is
     skipped consistently regardless of how the venue's local tz lines up
     with UTC.
+
+    **Venue-scope limitation (XNYS-optimized cutoff).** The 23:59 UTC
+    cutoff is safely past close for every Mon-Fri venue we currently
+    care about (XNYS closes 20:00-21:00 UTC; XWAR 16:00-17:00 UTC;
+    XSHG/XHKG 07:00-08:00 UTC; XTKS 06:00 UTC). When future wiring adds
+    a venue with weekend sessions (e.g. XKAR, XCSE Saturday windows),
+    a per-exchange cutoff aware of the venue's weekend schedule will
+    be needed — otherwise a Friday anchor + 23:59 UTC could silently
+    skip the Saturday session and report Monday as the next open. Flag
+    surfaced by zen review 2026-05-30.
     """
     after_ts = pd.Timestamp(anchor, tz="UTC") + pd.Timedelta(hours=23, minutes=59)
     nxt = _calendar(exchange).next_open(after_ts)

@@ -38,6 +38,13 @@ for (const day of DAYS_INDEX) {
 // banner OFF (closed-market banner is exercised by tests/market-status.test.ts).
 // A 404 fallback would trip the "Failed to load resource" browser console
 // error and fail every route's console-clean assertion.
+//
+// ``next_open_iso: '2099-01-01'`` is a never-reached sentinel — the banner
+// short-circuits on ``is_trading_day: true`` and never reads it. A future
+// test that asserts on next_open date content rather than just banner
+// visibility would see the sentinel; tests/market-status.test.ts builds a
+// realistic ``next_open_iso`` from ``Date.now()`` for those assertions.
+// Flag surfaced by zen review 2026-05-30.
 const MARKET_STATUS_TRADING_BODY = JSON.stringify({
 	is_trading_day: true,
 	is_half_day: false,
