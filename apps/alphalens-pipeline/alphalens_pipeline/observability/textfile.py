@@ -141,5 +141,5 @@ def emit_domain_metrics(job: str, metrics: Mapping[str, float | int]) -> Path:
     # false positive for this specific use case (the file contains
     # only counters + gauges, no secrets). The contents are designed
     # to be world-readable.
-    os.chmod(target, 0o644)  # lgtm[py/overly-permissive-file]
+    os.chmod(target, 0o644)  # NOSONAR lgtm[py/overly-permissive-file]
     return target
