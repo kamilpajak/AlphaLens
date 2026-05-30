@@ -95,6 +95,12 @@ ExecStartPost=/usr/bin/docker compose \
     -f %h/AlphaLens/deploy/docker/django-prod/docker-compose.yaml \
     --profile maintenance run --rm rebuild-cache
 
+# Prometheus textfile metrics (see alphalens-edgar-detect.service for
+# the pattern). Runs unconditionally so a failed pipeline run or
+# verify-cache halt also updates the exit code gauge — Alertmanager
+# (PR-3) then fires on the non-zero exit.
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics thematic-build
+
 # Keep stdout/stderr in journald.
 StandardOutput=journal
 StandardError=journal

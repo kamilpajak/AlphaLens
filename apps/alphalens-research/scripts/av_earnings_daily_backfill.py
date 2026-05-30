@@ -57,6 +57,7 @@ from alphalens_pipeline.data.universes.sp1500_pit import (
     load_sp500_pit_union,
     load_sp1500_pit_union,
 )
+from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         args.cache_dir,
     )
 
+    quota_blocked = 0
     try:
         statuses = fetch_earnings_batch(
             tickers,
@@ -147,18 +149,50 @@ def main(argv: list[str] | None = None) -> int:
     except AVRateLimitError as exc:
         # Persistent rate-limit (retry exhausted) — exit clean so the cron job
         # is not treated as a failure. Tomorrow's quota window will pick up
-        # where this run left off.
+        # where this run left off. We still emit metrics so the dashboard
+        # has a tracer for "rate-limited at least once today" vs "ran clean".
         logger.warning("AV rate-limit persisted past retry, exiting clean: %s", exc)
-        return 0
+        statuses = {}
+        quota_blocked = 1
 
     counts = Counter(statuses.values())
+    fetched = counts.get("fetched", 0)
+    cached = counts.get("cached", 0)
+    failed = counts.get("failed", 0)
+    total = sum(counts.values())
+
     logger.info(
         "batch complete: cached=%d fetched=%d failed=%d (total=%d)",
-        counts.get("cached", 0),
-        counts.get("fetched", 0),
-        counts.get("failed", 0),
-        sum(counts.values()),
+        cached,
+        fetched,
+        failed,
+        total,
     )
+
+    # Domain counters for the cron-observability dashboard (PR-2 of the
+    # epic). ``quota_remaining`` is the headline number Alertmanager
+    # watches via ``alphalens_av_quota_remaining < 3`` to flag near
+    # exhaustion. ``quota_blocked`` is 1 on the rate-limited path so
+    # the dashboard can distinguish "clean exit" vs "ran out of quota
+    # mid-run" without parsing journald.
+    #
+    # Wrap in try/except: AV cache is already populated, so a
+    # metrics-dir failure must not turn this run into a unit failure
+    # — that would block tomorrow's quota window pickup (zen
+    # pre-merge rule, PR #311).
+    try:
+        emit_domain_metrics(
+            job="av-earnings-backfill",
+            metrics={
+                'alphalens_av_tickers_total{status="fetched"}': fetched,
+                'alphalens_av_tickers_total{status="cached"}': cached,
+                'alphalens_av_tickers_total{status="failed"}': failed,
+                "alphalens_av_quota_remaining": max(0, 25 - fetched),
+                "alphalens_av_quota_blocked": quota_blocked,
+            },
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed; av-earnings-backfill run succeeded")
 
     if args.rclone_remote:
         _nextcloud_sync(args.cache_dir, args.rclone_remote, args.rclone_bin)
