@@ -37,7 +37,7 @@ test.describe('vision route', () => {
 
 	test('clicking a TOC entry scrolls the matching section into view', async ({ page }) => {
 		await page.goto('/vision');
-		// Pick a known §: "8. Roadmap priorities" (h2). Click its TOC entry
+		// Pick a known §: "9. Roadmap priorities" (h2). Click its TOC entry
 		// and assert the corresponding heading is visible after the scroll.
 		const entry = page
 			.locator('[data-testid="vision-toc-entry"]')
@@ -59,15 +59,20 @@ test.describe('vision route', () => {
 
 	test('mermaid blocks render as SVG diagrams without syntax errors', async ({ page }) => {
 		await page.goto('/vision');
-		// The doc has two mermaid blocks (§3 feedback loop + §4 timeline).
-		// Mermaid replaces each <pre><code class="language-mermaid"> with a
+		// The doc currently has 3 mermaid blocks (§3 big-picture flow +
+		// §4 feedback loop + §5 wieczorny use-case timeline). Mermaid
+		// replaces each <pre><code class="language-mermaid"> with a
 		// <div class="mermaid"> that wraps an SVG once render completes.
-		// Wait for both diagrams to render. Mermaid.run() iterates the
-		// matched containers in sequence, so the second SVG may still be
-		// in flight when the first becomes visible. `toHaveCount` retries
-		// against the locator until the assertion passes or the timeout
-		// expires — avoids a race where an instant count() reads 1.
-		await expect(page.locator('article div.mermaid svg')).toHaveCount(2, { timeout: 10_000 });
+		// Wait for all diagrams to render. Mermaid.run() iterates the
+		// matched containers in sequence, so the second/third SVG may
+		// still be in flight when the first becomes visible. `toHaveCount`
+		// retries against the locator until the assertion passes or the
+		// timeout expires — avoids a race where an instant count() reads
+		// less than the target.
+		//
+		// If you add or remove diagrams from the doc, update this count
+		// — a mismatch usually means a diagram failed to render.
+		await expect(page.locator('article div.mermaid svg')).toHaveCount(3, { timeout: 10_000 });
 		// Source pre/code blocks for mermaid should be gone (replaced).
 		await expect(page.locator('article code.language-mermaid')).toHaveCount(0);
 		// Crucially: NO syntax-error SVG. Mermaid renders the "bomb" error
@@ -77,5 +82,14 @@ test.describe('vision route', () => {
 		await expect(
 			page.locator('article div.mermaid svg[aria-roledescription="error"]')
 		).toHaveCount(0);
+		// HTML typography (<b>, <small>, <code>, <i>) inside mermaid node
+		// labels renders through SVG <foreignObject> elements — a future
+		// mermaid version that strips HTML by default would silently
+		// downgrade typography without failing the count check above.
+		// Assert at least one foreignObject is attached to guarantee the
+		// HTML rendering path stays intact.
+		await expect(
+			page.locator('article div.mermaid svg foreignObject').first()
+		).toBeAttached();
 	});
 });

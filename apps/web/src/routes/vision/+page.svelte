@@ -27,12 +27,22 @@
 
 	function extractToc(md: string): TocEntry[] {
 		const toc: TocEntry[] = [];
+		// Track slug occurrences to dedupe: Svelte's `{#each ... as ... (key)}`
+		// throws on duplicate keys. Today no two headings collapse to the same
+		// slug, but the doc is LIVING and a future edit (e.g., two headings
+		// that differ only by punctuation) could silently break the page.
+		// Append a counter on collision — same convention as GitHub anchors.
+		const seen = new Map<string, number>();
 		for (const line of md.split('\n')) {
 			const m = line.match(/^(##|###)\s+(.+?)\s*$/);
 			if (!m) continue;
 			const level = m[1].length as 2 | 3;
 			const text = m[2];
-			toc.push({ level, text, slug: slugify(text) });
+			let slug = slugify(text);
+			const count = seen.get(slug) ?? 0;
+			if (count > 0) slug = `${slug}-${count}`;
+			seen.set(slug, count + 1);
+			toc.push({ level, text, slug });
 		}
 		return toc;
 	}
@@ -86,6 +96,17 @@
 			mermaid.initialize({
 				startOnLoad: false,
 				theme: 'dark',
+				// `loose` is required to render the HTML typography that the
+				// doc relies on inside mermaid nodes (`<b>`, `<small>`,
+				// `<code>`, `<i>`). It permits arbitrary HTML inside
+				// <foreignObject> elements, including `<script>` if any
+				// were present in the markdown source. Safe today because
+				// the markdown is a repo-controlled static file fetched
+				// from /docs/research/. If this route ever loads
+				// user-supplied or runtime-mutable content, tighten to
+				// `strict` AND strip HTML from the markdown before passing
+				// it to mermaid, otherwise this is an XSS vector via
+				// `<foreignObject>`.
 				securityLevel: 'loose',
 				themeVariables: {
 					primaryColor: '#11141b',

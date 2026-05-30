@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-// Copies the markdown/JSON evidence files referenced by /experiments into
-// static/docs/research/ so the in-page Evidence drawer can fetch them.
+// Copies markdown/JSON evidence files referenced by /experiments AND the
+// ideal-shape doc rendered by /vision into static/docs/research/ so the
+// SPA can fetch them at runtime (Evidence drawer for experiments,
+// markdown body for vision).
 //
 // Runs as a prebuild hook (and predev). Idempotent — silently overwrites.
-// If a referenced file is missing, prints a warning and continues (drawer
-// will show a friendly "not found" message at runtime).
+// If a referenced file is missing, the script exits non-zero (see bottom
+// of file) so CI catches the gap instead of leaving a runtime 404.
 
 import { mkdirSync, copyFileSync, existsSync, rmSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
