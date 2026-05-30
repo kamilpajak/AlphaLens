@@ -147,7 +147,11 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             "literature-scan-weekly": 1209600,  # 14d = 2× 7d cadence
             "literature-scan-monthly": 6048000,  # 70d = 2.3× 30d cadence (looser, scan is high-cost)
             "av-earnings-backfill": 172800,  # 48h = 2× 24h cadence
-            "thematic-build": 172800,  # 48h = 2× 24h cadence
+            # 12h = 3× the new 4h cadence (PR-F, epic #295 / issue
+            # #300). Was 172800 (48h) at 1× cadence; tightened
+            # alongside the 6×/day timer in
+            # docs/research/polygon_quota_6x_per_day_2026_05_30.md.
+            "thematic-build": 43200,
         }
         rules = _load_rules()["groups"][0]["rules"]
         found: dict[str, int] = {}
