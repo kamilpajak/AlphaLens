@@ -29,69 +29,88 @@ groups:
       # update lagged by the scrape interval cannot flap the alert.
       # ---------------------------------------------------------------
 
+      # Each staleness rule pairs the threshold check with an
+      # ``absent()`` guard so the alert ALSO fires when the textfile
+      # metric is missing entirely (fresh VPS that never ran the job,
+      # textfile-collector misconfigured, node_exporter unable to
+      # read the dir). Without the guard, a missing series silently
+      # disables the alert — the worst class of monitoring blind spot.
+      # Zen pre-merge review of PR #312 pinned this defence.
+
       - alert: AlphalensJobStale
         expr: |
-          time() - alphalens_job_last_success_timestamp_seconds{job="edgar-detect"} > 1800
+          (time() - alphalens_job_last_success_timestamp_seconds{job="edgar-detect"} > 1800)
+          or absent(alphalens_job_last_success_timestamp_seconds{job="edgar-detect"})
         for: 5m
         labels:
           severity: warning
           route: telegram
         annotations:
           summary: "edgar-detect stale > 30 min (expected 15-min cadence)"
-          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+          description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
 
       - alert: AlphalensJobStale
         expr: |
-          time() - alphalens_job_last_success_timestamp_seconds{job="literature-scan-weekly"} > 1209600
+          (time() - alphalens_job_last_success_timestamp_seconds{job="literature-scan-weekly"} > 1209600)
+          or absent(alphalens_job_last_success_timestamp_seconds{job="literature-scan-weekly"})
         for: 5m
         labels:
           severity: warning
           route: telegram
         annotations:
           summary: "literature-scan-weekly stale > 14 days (expected 7-day cadence)"
-          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+          description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
 
       - alert: AlphalensJobStale
         expr: |
-          time() - alphalens_job_last_success_timestamp_seconds{job="literature-scan-monthly"} > 6048000
+          (time() - alphalens_job_last_success_timestamp_seconds{job="literature-scan-monthly"} > 6048000)
+          or absent(alphalens_job_last_success_timestamp_seconds{job="literature-scan-monthly"})
         for: 5m
         labels:
           severity: warning
           route: telegram
         annotations:
           summary: "literature-scan-monthly stale > 70 days (expected 30-day cadence)"
-          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+          description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
 
       - alert: AlphalensJobStale
         expr: |
-          time() - alphalens_job_last_success_timestamp_seconds{job="av-earnings-backfill"} > 172800
+          (time() - alphalens_job_last_success_timestamp_seconds{job="av-earnings-backfill"} > 172800)
+          or absent(alphalens_job_last_success_timestamp_seconds{job="av-earnings-backfill"})
         for: 5m
         labels:
           severity: warning
           route: telegram
         annotations:
           summary: "av-earnings-backfill stale > 48h (expected daily cadence)"
-          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+          description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
 
       - alert: AlphalensJobStale
         expr: |
-          time() - alphalens_job_last_success_timestamp_seconds{job="thematic-build"} > 172800
+          (time() - alphalens_job_last_success_timestamp_seconds{job="thematic-build"} > 172800)
+          or absent(alphalens_job_last_success_timestamp_seconds{job="thematic-build"})
         for: 5m
         labels:
           severity: warning
           route: telegram
         annotations:
           summary: "thematic-build stale > 48h (expected daily cadence)"
-          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+          description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
 
       # ---------------------------------------------------------------
       # Failure — fires on any non-zero exit. Hard fail, immediate
       # debounce (1m so one cron failure does not wait 5m to page).
       # ---------------------------------------------------------------
 
+      # ``for: 5m`` matches the staleness debounce — a one-off
+      # SEC EDGAR 503 (5xx is normal background noise) flips
+      # ``last_exit_code`` to non-zero for one scrape but the next
+      # 15-min retry usually clears it. A 1m debounce would page on
+      # that transient; 5m makes us wait for sustained failure.
+      # Zen pre-merge review of PR #312 flagged this trade-off.
       - alert: AlphalensJobFailed
         expr: alphalens_job_last_exit_code != 0
-        for: 1m
+        for: 5m
         labels:
           severity: critical
           route: telegram
@@ -109,8 +128,19 @@ groups:
       # likely a portfolio.yaml regression (empty file slipped past
       # the bounds-check) than a quiet news day. ``for: 1h`` debounces
       # a quiet morning vs a real stuck portfolio.
+      #
+      # ``alphalens_edgar_events_dispatched_total`` is a GAUGE that
+      # the emitter overwrites with the current run's count on every
+      # fire (per ``observability/textfile.py`` design note). So
+      # ``increase()`` is wrong here — it is a counter function that
+      # assumes monotonic non-decreasing series; on a gauge it
+      # returns nonsense. The correct semantic for "zero candidates
+      # across every run in the last 24h" is ``max_over_time(...)
+      # == 0`` — the maximum value the gauge took on across the
+      # window. Zen pre-merge review of PR #312 caught this gauge-vs-
+      # counter mismatch.
       - alert: AlphalensEdgarNoCandidates24h
-        expr: increase(alphalens_edgar_events_dispatched_total[24h]) == 0
+        expr: max_over_time(alphalens_edgar_events_dispatched_total[24h]) == 0
         for: 1h
         labels:
           severity: info

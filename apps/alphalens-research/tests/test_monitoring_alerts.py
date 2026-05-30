@@ -137,6 +137,93 @@ class TestPrometheusRulesYaml(unittest.TestCase):
                 f"Staleness expr must end in `> <integer-seconds>`; got: {rule['expr']!r}",
             )
 
+    def test_staleness_thresholds_match_expected_cadence(self) -> None:
+        # Pin the exact per-job threshold so a future "tune this to
+        # be less noisy" PR can't silently double the staleness
+        # window without explicit review. Values are 2× the expected
+        # cadence (zen-review acceptance).
+        expected = {
+            "edgar-detect": 1800,  # 30m = 2× 15-min cadence
+            "literature-scan-weekly": 1209600,  # 14d = 2× 7d cadence
+            "literature-scan-monthly": 6048000,  # 70d = 2.3× 30d cadence (looser, scan is high-cost)
+            "av-earnings-backfill": 172800,  # 48h = 2× 24h cadence
+            "thematic-build": 172800,  # 48h = 2× 24h cadence
+        }
+        rules = _load_rules()["groups"][0]["rules"]
+        found: dict[str, int] = {}
+        for rule in rules:
+            if rule.get("alert") != "AlphalensJobStale":
+                continue
+            job_match = re.search(r'job="([^"]+)"', rule["expr"])
+            threshold_match = re.search(r"> (\d+)\b", rule["expr"])
+            if job_match and threshold_match:
+                found[job_match.group(1)] = int(threshold_match.group(1))
+
+        for job, want in expected.items():
+            self.assertEqual(
+                found.get(job),
+                want,
+                f"Staleness threshold drift for {job!r}: want {want}s, got {found.get(job)}s.",
+            )
+
+    def test_staleness_rules_pair_absent_guard(self) -> None:
+        # Per-job staleness rules MUST pair the > threshold with an
+        # ``absent()`` guard for the same metric+job. Without the
+        # guard, a missing series (fresh VPS, textfile-collector
+        # misconfigured, node_exporter scrape failure) silently
+        # disables the alert — the worst class of monitoring blind
+        # spot. Zen pre-merge review of PR #312 pinned this defence.
+        rules = _load_rules()["groups"][0]["rules"]
+        for rule in rules:
+            if rule.get("alert") != "AlphalensJobStale":
+                continue
+            expr = rule["expr"]
+            job_match = re.search(r'job="([^"]+)"', expr)
+            self.assertIsNotNone(job_match, f"Stale rule missing job filter: {expr!r}")
+            assert job_match is not None
+            job = job_match.group(1)
+            self.assertIn(
+                f'absent(alphalens_job_last_success_timestamp_seconds{{job="{job}"}})',
+                expr,
+                f"Staleness rule for {job!r} must include `absent(...)` guard.",
+            )
+
+    def test_no_counter_functions_on_gauge_metrics(self) -> None:
+        # Zen pre-merge review of PR #312 caught ``increase()`` on
+        # ``alphalens_edgar_events_dispatched_total`` (which is a
+        # GAUGE per the textfile emitter design — overwrites the
+        # file with the latest run's count each fire, not a
+        # cumulative counter). Counter functions on a gauge return
+        # nonsense; pin the prohibition statically.
+        rules = _load_rules()["groups"][0]["rules"]
+        counter_funcs = ("increase(", "rate(", "irate(")
+        gauge_prefixes = (
+            "alphalens_job_",
+            "alphalens_edgar_",
+            "alphalens_literature_",
+            "alphalens_thematic_",
+            "alphalens_av_",
+        )
+        for rule in rules:
+            expr = rule.get("expr", "")
+            for func in counter_funcs:
+                if func not in expr:
+                    continue
+                # Find the metric name inside the function call and
+                # verify it isn't one of our gauges.
+                start = expr.index(func) + len(func)
+                end_paren = expr.index(")", start)
+                inner = expr[start:end_paren]
+                for prefix in gauge_prefixes:
+                    self.assertNotIn(
+                        prefix,
+                        inner,
+                        f"{rule.get('alert')!r}: counter function {func.rstrip('(')} "
+                        f"applied to a gauge metric ({inner!r}). Gauges are "
+                        "overwritten on every emit, not monotonically counted; "
+                        "use `max_over_time(...)` or `avg_over_time(...)` instead.",
+                    )
+
     def test_all_alerts_carry_route_telegram_label(self) -> None:
         # Alertmanager routes by label; an alert missing
         # ``route: telegram`` would land on the default receiver
