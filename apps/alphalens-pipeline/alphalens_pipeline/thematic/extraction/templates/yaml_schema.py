@@ -38,7 +38,16 @@ TEMPLATE_JSON_SCHEMA: dict = {
     ],
     "additionalProperties": False,
     "properties": {
-        "template_id": {"type": "string", "minLength": 1},
+        # Snake-case lowercase identifier only — the value flows into a
+        # Prometheus label (``alphalens_template_match_total{template_id=...}``)
+        # which has no escaping in the textfile emitter; an analyst naming
+        # a template ``m&a_press_release`` would silently break the scrape.
+        # Caught by zen pre-merge review of PR #322.
+        "template_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "minLength": 1,
+        },
         "event_type": {"type": "string", "enum": list(EVENT_TYPES)},
         "description": {"type": "string"},
         "article_predicates": {

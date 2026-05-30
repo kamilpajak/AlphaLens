@@ -162,6 +162,31 @@ class TestValidateBadTemplates(unittest.TestCase):
         self.assertTrue(errors)
         self.assertTrue(any("yaml" in e.lower() or "parse" in e.lower() for e in errors))
 
+    def test_template_id_with_prometheus_unsafe_chars_fails(self):
+        # template_id flows into a Prometheus label without escaping
+        # (see holdout.flush). Regression for zen-review MEDIUM (PR #322):
+        # an analyst naming a template `m&a press release` would silently
+        # break the scrape. JSON Schema regex now rejects non-snake-case.
+        path = Path(tempfile.mkdtemp()) / "m&a_press_release.yaml"
+        path.write_text(
+            textwrap.dedent(
+                """\
+                template_id: "m&a_press_release"
+                event_type: m_and_a
+                description: ""
+                article_predicates: []
+                entity_requirements: {}
+                extraction: []
+                """
+            )
+        )
+        errors = validate_template_file(path)
+        self.assertTrue(errors)
+        self.assertTrue(
+            any("template_id" in e or "pattern" in e.lower() for e in errors),
+            f"expected template_id pattern violation, got: {errors}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

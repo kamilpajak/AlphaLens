@@ -215,13 +215,21 @@ class TemplateEngine:
         assigned: dict[str, ResolvedEntity],
     ) -> Any:
         # entity:<role> source — populated from the role assignment map.
+        #
+        # MVP convention (covers all 5 dnia-jeden ship templates): if the
+        # YAML field name ends in ``_ticker`` we return the ticker symbol,
+        # otherwise we return the resolved entity's display name. This is
+        # implicit and brittle — a new template using ``field: target``
+        # (without ``_ticker`` suffix) silently gets the company name
+        # rather than the symbol. A more robust mapping (explicit
+        # ``source_kind: ticker|name`` in YAML) is deferred to a follow-up
+        # PR once the template library grows beyond the initial five.
+        # Caught by zen pre-merge review of PR #322 (MEDIUM, deferred).
         if extr.source and extr.source.startswith("entity:"):
             role_name = extr.source.split(":", 1)[1]
             ent = assigned.get(role_name)
             if ent is None:
                 return None
-            # Convention: when a field name ends in "_ticker", return the
-            # ticker symbol. Otherwise return the role's display name.
             return ent.ticker if extr.field.endswith("_ticker") else ent.name
 
         # article.<attr> source — pull a literal column from the article.

@@ -239,6 +239,15 @@ class TestNotListicle(unittest.TestCase):
         ctx = _ctx(_article(title="Best Surfshark Coupon Codes (May 2026)"))
         self.assertFalse(evaluate(PredicateRef(name="not_listicle", kwargs={}), ctx))
 
+    def test_best_buy_corporate_headline_passes(self):
+        # Regression for zen-review HIGH finding (PR #322): `\d*` instead
+        # of `\d+` on the listicle pattern caused "Best Buy Reports Record
+        # Holiday Sales" to be classified as a listicle (because "Best "
+        # plus zero digits matched). The fix tightens to `\d+` so the
+        # digit suffix is mandatory.
+        ctx = _ctx(_article(title="Best Buy Reports Record Holiday Sales"))
+        self.assertTrue(evaluate(PredicateRef(name="not_listicle", kwargs={}), ctx))
+
 
 class TestUnknownPredicateRaises(unittest.TestCase):
     def test_evaluating_unknown_predicate_raises(self):

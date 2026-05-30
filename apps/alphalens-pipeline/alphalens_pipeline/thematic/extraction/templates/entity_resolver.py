@@ -13,6 +13,7 @@ MVP unblocks PR-2 hybrid integration without forcing a model dependency.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -21,10 +22,28 @@ from alphalens_pipeline.thematic.extraction.templates.spec import (
     ResolvedEntity,
 )
 
+# Env-var override is honoured first so container deploys (and tests)
+# can point the resolver at a non-default location without code edits.
+# Same env-name convention as ALPHALENS_TEXTFILE_DIR in observability.textfile.
+ENV_COMPANY_TICKERS_PATH = "ALPHALENS_COMPANY_TICKERS_PATH"
+
+
 # Same default the EDGAR detector writes to. Re-reading from a single
 # canonical path is the "one canonical client per vendor" doctrine
 # applied at the data-on-disk layer — see CLAUDE.md.
-DEFAULT_COMPANY_TICKERS_PATH = Path.home() / ".alphalens" / "edgar-detect" / "company_tickers.json"
+#
+# ``Path.home()`` is host-correct here (this code runs from the pipeline
+# host venv, not the Django container — see PR-G architecture). The env
+# override above keeps the door open for a future container deploy
+# without depending on $HOME == /home/jacoren.
+def _default_company_tickers_path() -> Path:
+    override = os.environ.get(ENV_COMPANY_TICKERS_PATH)
+    if override:
+        return Path(override)
+    return Path.home() / ".alphalens" / "edgar-detect" / "company_tickers.json"
+
+
+DEFAULT_COMPANY_TICKERS_PATH = _default_company_tickers_path()
 
 
 class EntityResolver:

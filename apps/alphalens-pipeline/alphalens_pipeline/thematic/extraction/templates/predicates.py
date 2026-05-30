@@ -114,11 +114,26 @@ def _is_press_release(ctx: PredicateContext) -> bool:
 
 
 # Listicle / promo title patterns — the exact concern that opened #143.
-# The pattern targets "Top N", "Best [thing]", "Cheapest", "Guide to",
-# "Coupon Codes" / "Promo Codes". Title-only matching keeps false-positive
-# risk low (a body that happens to contain "top" doesn't kill the article).
+# The pattern targets three distinct noise classes; each gets its own
+# alternation branch so we don't accidentally widen one when fixing
+# another. Title-only matching keeps false-positive risk low (a body
+# that happens to contain "top" doesn't kill the article).
+#
+# Branch 1: numbered listicles ("Top 10", "Best 20", "Cheapest 5") —
+# requires a digit. Without `\d+` the bare word `Best` would block
+# legitimate brand-prefix headlines like "Best Buy Reports Record
+# Holiday Sales". Caught by zen pre-merge review of PR #322 (HIGH).
+#
+# Branch 2: "guide to <X>" explainers — no digit required because the
+# pattern itself is the noise marker ("Guide to the Cheapest Webcams",
+# "A Guide to Buying Crypto"). These are evergreen content, not
+# corporate catalysts; the word combo is the signal.
+#
+# Branch 3: coupon / promo codes — original #143 trigger (Surfshark
+# pattern). No digit dependency; the noun phrase is the marker.
 _LISTICLE_PATTERN = re.compile(
-    r"\b(top|best|cheapest|guide\s+to)\b\s+\d*|"
+    r"\b(top|best|cheapest)\b\s+\d+|"
+    r"\bguide\s+to\b|"
     r"\b(coupon|promo)\s+codes?\b",
     re.IGNORECASE,
 )
