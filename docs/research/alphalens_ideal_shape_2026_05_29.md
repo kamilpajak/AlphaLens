@@ -169,6 +169,7 @@ To jest cel. Wszystko inne to droga.
 ### Track H: GDELT data pipeline ongoing improvements
 - Title cleanup edge cases (PR #259 / #271 / #291 catalogued)
 - Multi-source dedup (GDELT × Polygon news × RSS overlap)
+- **Structured event templates (#143)** — RavenPack-style YAML+predicates engine jako foundation layer dla Tracks D (typed facts → evidence panel), G (compound catalyst sequences → validated paradigm scorer reuse), H (multi-source dedup via template tuples). Hybrid mode (templates first, Flash fallback). 5-PR sequence: engine+5 templates / hybrid integration / structured facts → generator / multi-source dedup / compound catalysts (gated). Design memo: `docs/research/template_engine_design_2026_05_30.md` (LOCKED). Issue #143.
 
 ---
 
@@ -190,13 +191,14 @@ To jest cel. Wszystko inne to droga.
 
 ## 8. Roadmap priorities
 
-### Near-term (najbliższe ~5 PR-ów, ~2 tygodnie)
+### Near-term (najbliższe ~6 PR-ów, ~2 tygodnie)
 
 1. **PR #292 merge** (feedback ledger v1) — kiedy gotowy
-2. **VPS auto-paper-submit ExecStartPost** (Track F) — eliminuje codzienny manual Mac flow
-3. **4×/dzień pipeline cadence** (Track F) — łapie pre-market US + Asia open
+2. **VPS auto-paper-submit ExecStartPost** (Track F) — eliminuje codzienny manual Mac flow [✅ SHIPPED PR #317 / paper-submit + paper-reconcile timers]
+3. **4×/dzień pipeline cadence** (Track F) — łapie pre-market US + Asia open [✅ SHIPPED PR #315 → 6×/day pivot]
 4. **Feedback ledger v2 — outcome join** (Track A v2) — link decyzji z paper-trade PnL
 5. **L3 weekly review SPA stub** (Track C) — najprostszy widok: lista decyzji + paper-trade outcomes (bez calibration curve jeszcze)
+6. **#143 template engine PR-1** (Track H) — `alphalens_pipeline/thematic/extraction/templates/`: engine + 5 templates + 6 predicates + holdout telemetry + standalone `alphalens templates {validate,evaluate}` CLI. Foundation dla Tracks D/G/H. Design memo: `docs/research/template_engine_design_2026_05_30.md`. Velocity-affirmed insert post pre-merge zen review
 
 ### Medium-term (1-3 miesiące)
 
@@ -255,5 +257,6 @@ To jest cel. Wszystko inne to droga.
 | Data | Co | Powód |
 |------|-----|-------|
 | 2026-05-29 | Założenie dokumentu | Capture vision po sesji "ideal-shape" + perplexity research; parent memo dla wszystkich epicków below |
+| 2026-05-30 | Track H rozszerzone o #143 structured event templates; §8 near-term insert pos #6 | Foundation layer dla Tracks D + G + H. User-affirmed velocity post sesji obróciła 5+d estimate w 1-2 sesje, removing primary deferral reason. Both reviewers (DeepSeek v4 Pro zen + Perplexity Research) converged on hybrid mode + YAML+predicates. Design memo PR #320 |
 
 Edit jest **expected** — to nie LOCKED memo. Każda istotna decyzja architektoniczna (nowy track, zmiana priorytetu, retired feature) powinna landować tutaj na końcu sesji.
