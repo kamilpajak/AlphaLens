@@ -39,6 +39,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+# PIT roster YAMLs live under the pipeline workspace member per ADR 0011
+# (split pipeline/research). Pre-ADR they were checked into
+# ``apps/alphalens-research/data/`` — the systemd unit on the VPS still
+# resolved that path by default and the daily timer exited 1 on
+# ``UniverseError: data directory does not exist`` from 2026-05-26
+# onwards (caught 2026-05-30). Anchoring the default on the pipeline
+# side fixes the systemd path AND keeps the workspace-aware override
+# (``--data-root``) free for ad-hoc loaders.
+_DEFAULT_DATA_ROOT = REPO_ROOT.parent / "alphalens-pipeline" / "data"
+
 from alphalens_pipeline.data.alt_data.av_earnings_client import (
     AVRateLimitError,
     fetch_earnings_batch,
@@ -73,8 +83,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--data-root",
         type=Path,
-        default=REPO_ROOT / "data",
-        help="Repo data root (contains sp500_pit/, sp400_pit/, sp600_pit/).",
+        default=_DEFAULT_DATA_ROOT,
+        help=(
+            "Repo data root (contains sp500_pit/, sp400_pit/, sp600_pit/). "
+            "Defaults to the pipeline-side data dir per ADR 0011."
+        ),
     )
     p.add_argument(
         "--throttle-seconds",
