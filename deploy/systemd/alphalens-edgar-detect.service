@@ -1,0 +1,58 @@
+[Unit]
+# Layer 1 EDGAR detector — polls SEC EDGAR every 15 min for new filings on
+# the held + watchlist tickers in ~/.alphalens/edgar-detect/portfolio.yaml,
+# classifies them, and dispatches Telegram alerts. Migrated from the macOS
+# launchd job ``com.alphalens.edgar-detect`` (StartInterval=900) so the
+# poller survives Mac sleep + reboot. See PR-1 of the cron-observability
+# epic in CLAUDE.md ## VPS backfills.
+#
+# Install as a *user* unit alongside the companion timer:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/systemd/alphalens-edgar-detect.service ~/.config/systemd/user/
+#   cp deploy/systemd/alphalens-edgar-detect.timer   ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alphalens-edgar-detect.timer
+#
+# Inspect:  journalctl --user -u alphalens-edgar-detect.service -f
+# Trigger manually: systemctl --user start alphalens-edgar-detect.service
+#
+# Persistence (survives logout) — once, as the user:
+#   sudo loginctl enable-linger "$USER"
+#
+# Cutover prereqs (one-time rsync from Mac, see README §Cutover from launchd):
+#   ~/.alphalens/edgar-detect/portfolio.yaml      (held + watchlist tickers)
+#   ~/.alphalens/edgar-detect/seen_events.db      (sqlite dedup store)
+#   ~/.alphalens/edgar-detect/company_tickers.json (CIK cache)
+#   ~/.alphalens/edgar-detect/digest.db           (digest aggregation)
+Description=AlphaLens Layer 1 EDGAR filing detector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+
+# Shared secrets file: /etc/alphalens/env (root:<operator-group> chmod 640).
+# Reads TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID for alert delivery; other
+# keys are ignored by the detector. No leading `-`: fail loud on missing
+# secrets — a silent alert blackhole is the worst failure mode here.
+EnvironmentFile=/etc/alphalens/env
+
+ExecStart=%h/AlphaLens/.venv/bin/alphalens edgar detect
+
+StandardOutput=journal
+StandardError=journal
+
+# Detector polls a small EDGAR Atom feed + writes a few KB to sqlite per
+# fire. 512M would suffice; 1G matches the project-wide unit ceiling so a
+# future feature (e.g. enrichment via Polygon snapshot) doesn't trip OOM.
+MemoryMax=1G
+TasksMax=32
+
+# Oneshot does not auto-restart; the timer fires every 15 min so a single
+# bad poll (transient SEC 503, network hiccup) is absorbed by the next
+# fire. Real persistent failures surface via journalctl + Telegram.
+
+[Install]
+WantedBy=default.target

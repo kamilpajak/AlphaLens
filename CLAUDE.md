@@ -10,9 +10,9 @@ Guidance for Claude Code (claude.ai/code) when working in this repo.
 
 2. **Thematic event-driven research assistant** — MVP Phase A-E shipped 2026-05-17 (PRs #128-#134). Buy-side decision-support tool augmenting WhatsApp investing group workflow. Tool is **augmentation, NOT replacement** — user cherry-picks → group discusses → each member decides. Design: [`docs/research/thematic_event_tool_v1_design_2026_05_15.md`](docs/research/thematic_event_tool_v1_design_2026_05_15.md). Remaining: Telegram bot, Form-4 independent path, feedback ledger sqlite.
 
-**Live production:**
-- Layer 1 SEC EDGAR detector (launchd `edgar-detect`-only; `worker` archived per ADR 0008)
-- Literature review weekly + monthly Perplexity scan
+**Live production (all on VPS systemd-user, 2026-05-30 cutover):**
+- Layer 1 SEC EDGAR detector — `alphalens-edgar-detect.{service,timer}`, fires every 15 min (`worker` archived per ADR 0008)
+- Literature review weekly + monthly Perplexity scan — `alphalens-literature-scan-{weekly,monthly}.{service,timer}`, auto-commit scan output to `main` via the `alphalens-literature-scan-publish` wrapper
 - VPS daily thematic pipeline + API rebuild (Django pulled from GHCR per migration B); SvelteKit dashboard hosted on Cloudflare Pages, fronted by Access (Google SSO, Path A same-domain cookies). See `## VPS backfills` + `## Production topology (migration B)`.
 
 **Everything else RESEARCH_ONLY** — code remains as reusable framework. Closed paradigms were extracted (reusable scorers promoted to live packages) and the rest removed per [ADR 0010](docs/adr/0010-archive-extracted-and-removed.md), superseding ADR 0005. Methodology bundle MIT-licensed as [`kamilpajak/phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting) per [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md). Search for better screeners stays open-ended — each new test raises the Bonferroni bar via ledger discipline, but "no further prospecting" is **not** a project position.
@@ -203,18 +203,22 @@ Long-running data acquisition jobs that don't fit on the laptop run on the dedic
 | `alphalens-av-earnings-backfill.{service,timer}` | daily oneshot (`Type=oneshot` + `OnCalendar=*-*-* 00:05 UTC` + `Persistent=true`) | `apps/alphalens-research/scripts/av_earnings_daily_backfill.py` | `~/.alphalens/av_cache/earnings_<T>.json` | ~21 days (AV free-tier 25/day) | LIVE (paradigm-14 PEAD v2 backfill) |
 | `alphalens-thematic-build.{service,timer}` | daily oneshot (`Type=oneshot` + `OnCalendar=*-*-* 06:30 UTC` + `Persistent=true`) wrapping `docker run --rm alphalens-pipeline` + `compose run --rm rebuild-cache` (Django stack) | `alphalens thematic {ingest,extract,map-themes,score,brief}` + `manage.py rebuild_briefs_cache` | `~/.alphalens/thematic_briefs/` + Postgres `briefs`/`days_meta` tables | ~5-15 min | LIVE — feeds CF Pages SPA via Django API (`apps/alphalens-django/`, image pulled from GHCR, see `## Production topology (migration B)`) |
 | `alphalens-django` Docker stack | long-running (`docker compose up -d` per `deploy/docker/django-prod/`) | `ghcr.io/kamilpajak/alphalens-django:${ALPHALENS_DJANGO_TAG:-latest}` (pull-only on VPS); operator workflow: `docker compose pull && up -d` after CI publishes a new tag | Postgres `briefs`/`days_meta` (read by `rebuild-cache` from `~/.alphalens/thematic_briefs/`) | ~2-5 s downtime on `up -d` (Compose stops old container before starting new) | LIVE — origin behind cloudflared tunnel to `api.<domain>` |
+| `alphalens-edgar-detect.{service,timer}` | every 15 min (`Type=oneshot` + `OnUnitActiveSec=15min` + `Persistent=true`) | `.venv/bin/alphalens edgar detect` (host venv) | `~/.alphalens/edgar-detect/{seen_events,digest,company_tickers}.{db,json}` | ~30s/fire | LIVE 2026-05-30 — Layer 1 SEC EDGAR poller migrated from Mac launchd |
+| `alphalens-literature-scan-weekly.{service,timer}` | weekly oneshot (`OnCalendar=Sun *-*-* 18:00:00 Europe/Warsaw` + `Persistent=true`) | `deploy/systemd/bin/alphalens-literature-scan-publish weekly` → `alphalens literature scan --window weekly` + auto-commit to `main` | `docs/research/literature_review/weekly/<YYYY-Www>.md` | ~3-5 min | LIVE 2026-05-30 — Perplexity RSS scan migrated from Mac launchd |
+| `alphalens-literature-scan-monthly.{service,timer}` | monthly oneshot (`OnCalendar=*-*-01 09:00:00 Europe/Warsaw` + `Persistent=true`) | `deploy/systemd/bin/alphalens-literature-scan-publish monthly` → `alphalens literature scan --window monthly` + auto-commit to `main` | `docs/research/literature_review/<YYYY-MM>.md` | ~10-15 min | LIVE 2026-05-30 — Perplexity deep scan migrated from Mac launchd |
 
 **Why VPS, not Mac:**
-- Mac sleeps / restarts → multi-day jobs lose state; VPS is always-on
+- Mac sleeps / restarts → multi-day jobs lose state, 15-min poller silently skips every fire while the lid is closed; VPS is always-on
 - VPS is on residential ISP with different IP than Mac (SEC 10 req/s is per-IP)
 - AV daily quota resets at 00:00 UTC; cron-trigger at 00:05 UTC catches the window cleanly
+- Literature scans auto-commit to `main` via `GH_TOKEN` in `/etc/alphalens/env` (one rebase-retry on push race); Mac picks up the markdown via `git pull` next time it's online
 
 **Cache durability + sync:**
 - All caches live under `~/.alphalens/<area>/` on VPS (general-purpose, not paradigm-specific)
 - Nextcloud sync between VPS and Mac is opt-in per script (`--rclone-remote` arg). Currently OFF — VPS cache is source of truth for VPS-side consumers
 - For Mac-side use: `rsync -av jacoren@vps:.alphalens/<area>/ ~/.alphalens/<area>/`
 
-Operator recipes: `deploy/systemd/README.md` (systemd units), `deploy/docker/README.md` (Docker stack + Cloudflare wiring), `deploy/launchd/README.md` (macOS jobs), `deploy/runpod/README.md` (GPU/CPU pod bootstrap).
+Operator recipes: `deploy/systemd/README.md` (systemd units), `deploy/docker/README.md` (Docker stack + Cloudflare wiring), `deploy/launchd/README.md` (ARCHIVED — macOS jobs migrated to systemd 2026-05-30), `deploy/runpod/README.md` (GPU/CPU pod bootstrap).
 
 ## Production topology (migration B)
 

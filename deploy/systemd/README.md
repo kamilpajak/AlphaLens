@@ -3,6 +3,17 @@
 User-scoped service definitions for AlphaLens long-running tasks on Linux VPS
 hosts where launchd is unavailable.
 
+## Active units
+
+| Unit | Cadence | Source |
+|---|---|---|
+| `alphalens-edgar-detect.{service,timer}` | every 15 min | Layer 1 EDGAR poll + Telegram alert (migrated from macOS `com.alphalens.edgar-detect` on 2026-05-30) |
+| `alphalens-literature-scan-weekly.{service,timer}` | Sun 18:00 Europe/Warsaw | Perplexity weekly RSS scan + Telegram digest + auto-commit to `main` (migrated 2026-05-30) |
+| `alphalens-literature-scan-monthly.{service,timer}` | 1st of month 09:00 Europe/Warsaw | Perplexity deep scan + Telegram digest + auto-commit to `main` (migrated 2026-05-30) |
+| `alphalens-av-earnings-backfill.{service,timer}` | daily 00:05 UTC | AV EARNINGS daily 25-call quota burn into `~/.alphalens/av_cache/` |
+| `alphalens-thematic-build.{service,timer}` | daily 06:30 UTC | docker-run thematic pipeline + verify-cache + Django rebuild-cache |
+| `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) |
+
 ## Environment file setup (`/etc/alphalens/env`)
 
 All three AlphaLens systemd units load secrets via
@@ -12,6 +23,10 @@ All three AlphaLens systemd units load secrets via
   `ALPHA_VANTAGE_API_KEY`, `SEC_EDGAR_USER_AGENT`
 - `alphalens-av-earnings-backfill.service` — `ALPHA_VANTAGE_API_KEY`
 - `alphalens-form4-backfill.service` — `SEC_EDGAR_USER_AGENT`
+- `alphalens-edgar-detect.service` — `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+- `alphalens-literature-scan-{weekly,monthly}.service` — `PERPLEXITY_API_KEY`,
+  `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, **plus `GH_TOKEN`** (HTTPS push
+  back to `kamilpajak/AlphaLens`; see "Cutover from launchd" §3 below)
 
 systemd reads each `KEY=VALUE` line into the unit's process env before
 `ExecStart`; for the docker-run unit, the explicit `-e KEY` flags then
@@ -77,6 +92,165 @@ systemctl --user show alphalens-thematic-build.service \
     -p Environment 2>/dev/null | tr ' ' '\n' | grep -c '^GOOGLE_API_KEY='
 # Expect: 1
 ```
+
+## Cutover from launchd (one-time, 2026-05-30)
+
+The three units `alphalens-edgar-detect`, `alphalens-literature-scan-weekly`,
+`alphalens-literature-scan-monthly` replace the macOS `launchd` jobs
+`com.alphalens.{edgar-detect,literature-scan-weekly,literature-scan-monthly}`.
+The cutover has three steps; do them in order.
+
+### 1. Migrate state from Mac → VPS
+
+The EDGAR detector's `seen_events.db` is the SoT for "filings already
+alerted on". Starting fresh on the VPS would re-fire alerts on filings
+the user has already seen. So the cutover rsyncs the four state files:
+
+```bash
+# On the Mac:
+for f in seen_events.db portfolio.yaml company_tickers.json digest.db; do
+    rsync -av "$HOME/.alphalens/edgar-detect/$f" \
+        vault.kamilpajak.pl:.alphalens/edgar-detect/
+done
+```
+
+### 2. Add `GH_TOKEN` to `/etc/alphalens/env`
+
+The literature scan units commit + push to `main` via the
+`alphalens-literature-scan-publish` wrapper. The push uses HTTPS through
+the `gh` credential helper, which picks up `GH_TOKEN` automatically:
+
+```bash
+# On the VPS:
+sudo $EDITOR /etc/alphalens/env
+# Append: GH_TOKEN=<fine-grained PAT, scope: contents:write on kamilpajak/AlphaLens>
+
+# One-time: wire `git push` through gh's credential helper so the token
+# applies to plain ``git push origin main`` (not just ``gh`` commands).
+gh auth setup-git
+```
+
+The PAT should be **fine-grained** (not classic), scoped to the single
+repo with `contents:write`. Rotating it later is the standard
+`/etc/alphalens/env` edit recipe (see "Rotate a key" above).
+
+### 3. Install + enable the units
+
+```bash
+# On the VPS:
+mkdir -p ~/.config/systemd/user
+cp ~/AlphaLens/deploy/systemd/alphalens-edgar-detect.{service,timer}            ~/.config/systemd/user/
+cp ~/AlphaLens/deploy/systemd/alphalens-literature-scan-weekly.{service,timer}  ~/.config/systemd/user/
+cp ~/AlphaLens/deploy/systemd/alphalens-literature-scan-monthly.{service,timer} ~/.config/systemd/user/
+
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-edgar-detect.timer
+systemctl --user enable --now alphalens-literature-scan-weekly.timer
+systemctl --user enable --now alphalens-literature-scan-monthly.timer
+
+# Validate
+systemctl --user list-timers --no-pager | grep alphalens
+systemctl --user start alphalens-edgar-detect.service   # manual smoke
+journalctl --user -u alphalens-edgar-detect.service -n 50 --no-pager
+```
+
+### 4. Decommission the Mac launchd jobs (after 7 clean days)
+
+```bash
+# On the Mac:
+for unit in edgar-detect literature-scan-weekly literature-scan-monthly; do
+    launchctl unload ~/Library/LaunchAgents/com.alphalens.${unit}.plist
+    rm ~/Library/LaunchAgents/com.alphalens.${unit}.plist
+done
+launchctl list | grep alphalens   # expect: empty
+```
+
+The plist sources stay in-repo at `deploy/launchd/` as historical
+artifacts; that README is marked `ARCHIVED` so future operators don't
+re-install the legacy path.
+
+## alphalens-edgar-detect.service + .timer
+
+Layer 1 SEC EDGAR poller — runs every 15 min, reads
+`~/.alphalens/edgar-detect/portfolio.yaml`, classifies new filings on
+held + watchlist tickers, dispatches Telegram alerts on AUTO_TRIGGER /
+APPROVAL / DIGEST routes. State (`seen_events.db`, `digest.db`,
+`company_tickers.json`) lives under `~/.alphalens/edgar-detect/` and
+survives unit restarts.
+
+### Install (see "Cutover from launchd" above for the first-time path)
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/alphalens-edgar-detect.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-edgar-detect.timer
+```
+
+### Inspect
+
+```bash
+systemctl --user status alphalens-edgar-detect.timer
+journalctl --user -u alphalens-edgar-detect.service -f
+journalctl --user -u alphalens-edgar-detect.service --since today
+sqlite3 ~/.alphalens/edgar-detect/seen_events.db 'SELECT COUNT(*) FROM seen_events;'
+```
+
+### Adjust the watchlist
+
+```bash
+$EDITOR ~/.alphalens/edgar-detect/portfolio.yaml
+# Next timer fire (≤ 15 min) picks up the new ticker set automatically —
+# no daemon-reload needed, the CLI re-reads the file on every run.
+```
+
+## alphalens-literature-scan-{weekly,monthly}.service + .timer
+
+Perplexity literature scans. Weekly fires Sun 18:00 in `Europe/Warsaw`;
+monthly fires on the 1st at 09:00 same TZ. Both call the bash wrapper
+`deploy/systemd/bin/alphalens-literature-scan-publish` which:
+
+1. Pulls `main` (fast-forward only).
+2. Runs `alphalens literature scan --window {weekly|monthly}` — writes
+   `docs/research/literature_review/weekly/<period>.md` or
+   `docs/research/literature_review/<period>.md`.
+3. If the scan produced a tracked-file diff, `git commit` as
+   `alphalens-bot <bot@alphalens.kamilpajak.pl>` and `git push origin
+   main`. One rebase-retry on push race; second race fails loud.
+4. Telegram digest is dispatched inside step 2 by the CLI itself when
+   `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` are set.
+
+The commit + push lives in bash (not Python) so the unit can be
+statically linted by `apps/alphalens-research/tests/test_deploy_systemd_units.py::TestLiteraturePublishWrapper`
+without spinning up the CLI.
+
+### Install
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/alphalens-literature-scan-weekly.{service,timer}  ~/.config/systemd/user/
+cp deploy/systemd/alphalens-literature-scan-monthly.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-literature-scan-weekly.timer
+systemctl --user enable --now alphalens-literature-scan-monthly.timer
+```
+
+### Inspect
+
+```bash
+systemctl --user list-timers --no-pager | grep literature
+journalctl --user -u alphalens-literature-scan-weekly.service --since "1 week ago"
+journalctl --user -u alphalens-literature-scan-monthly.service --since "1 month ago"
+
+# Force a one-off run (skips clock-wait, picks the wrapper up):
+systemctl --user start alphalens-literature-scan-weekly.service
+```
+
+### Why a wrapper, not direct ExecStart?
+
+systemd directive substitution is awkward for chained `git` commands
+(no shell, no error handling, no rebase-retry). The wrapper keeps the
+shell logic in one file that the lint tests can inspect line-for-line.
 
 ## alphalens-form4-backfill.service
 
