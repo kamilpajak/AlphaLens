@@ -1,0 +1,36 @@
+# M&A press-release template — design memo §2.2 dnia jeden #1.
+#
+# Fires on company-issued (press_release source / IR domain / title marker)
+# announcements that contain a currency amount AND have at least two
+# resolved company entities (acquirer + target). Listicle / promo titles
+# are filtered upfront — the exact concern that opened issue #143.
+template_id: m_and_a_press_release
+event_type: m_and_a
+description: "Acquirer announces acquisition of target with stated consideration."
+
+article_predicates:
+  - is_press_release
+  - amount_mentioned
+  - not_listicle
+  - name: any_sentence_contains
+    kwargs:
+      words: ["acquire", "acquires", "acquisition", "merger", "to buy", "buyout"]
+
+entity_requirements:
+  acquirer:
+    type: company
+    required: true
+  target:
+    type: company
+    required: true
+
+extraction:
+  - field: acquirer_ticker
+    source: "entity:acquirer"
+  - field: target_ticker
+    source: "entity:target"
+  - field: announcement_date
+    source: "article.published_at"
+  - field: consideration_usd
+    patterns: '\$(?P<amount>[\d.,]+)\s*(?P<unit>billion|million|bn|mn|B|M)\b'
+    post_process: [normalize_amount_usd]

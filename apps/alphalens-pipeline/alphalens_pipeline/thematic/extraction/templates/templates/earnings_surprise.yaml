@@ -1,0 +1,40 @@
+# Earnings-surprise template — design memo §2.2 dnia jeden #2.
+#
+# Fires on reporter's own earnings statement (press release or IR feed)
+# that uses the standard beat/miss vocabulary. No amount predicate — the
+# magnitude lives in the EPS / revenue numbers, not in a dollar token
+# that ``amount_mentioned`` would match.
+template_id: earnings_surprise
+event_type: earnings
+description: "Company reports quarterly results with explicit beat / miss language."
+
+article_predicates:
+  - is_press_release
+  - not_listicle
+  - name: any_sentence_contains
+    kwargs:
+      words:
+        - "beats"
+        - "missed"
+        - "misses"
+        - "topped estimates"
+        - "tops estimates"
+        - "fell short of estimates"
+        - "earnings per share"
+        - "EPS"
+
+entity_requirements:
+  reporter:
+    type: company
+    required: true
+
+extraction:
+  - field: reporter_ticker
+    source: "entity:reporter"
+  - field: announcement_date
+    source: "article.published_at"
+  - field: eps_actual
+    patterns: 'EPS\s+of\s+\$(?P<amount>[\d.]+)'
+  - field: revenue_usd
+    patterns: 'revenue\s+of\s+\$(?P<amount>[\d.,]+)\s*(?P<unit>billion|million|bn|mn|B|M)\b'
+    post_process: [normalize_amount_usd]

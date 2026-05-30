@@ -1,0 +1,39 @@
+# Financing-announcement template — design memo §2.2 dnia jeden #3.
+#
+# Covers both equity dilution (offerings, private placements, secondary)
+# and debt raises (note issuance, credit facility upsize). Both paths
+# require a stated dollar amount; the amount magnitude is the catalyst
+# signal that downstream scoring uses.
+template_id: financing_announcement
+event_type: financing
+description: "Issuer announces equity or debt raise with stated principal amount."
+
+article_predicates:
+  - is_press_release
+  - amount_mentioned
+  - not_listicle
+  - name: any_sentence_contains
+    kwargs:
+      words:
+        - "offering"
+        - "private placement"
+        - "secondary offering"
+        - "raises"
+        - "notes due"
+        - "credit facility"
+        - "convertible notes"
+        - "registered direct"
+
+entity_requirements:
+  issuer:
+    type: company
+    required: true
+
+extraction:
+  - field: issuer_ticker
+    source: "entity:issuer"
+  - field: announcement_date
+    source: "article.published_at"
+  - field: raise_amount_usd
+    patterns: '\$(?P<amount>[\d.,]+)\s*(?P<unit>billion|million|bn|mn|B|M)\b'
+    post_process: [normalize_amount_usd]

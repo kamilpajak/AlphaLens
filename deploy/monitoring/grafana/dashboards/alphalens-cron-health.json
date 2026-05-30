@@ -264,6 +264,80 @@
           "legendFormat": "{{ status }}"
         }
       ]
+    },
+    {
+      "id": 13,
+      "type": "row",
+      "title": "Domain — structured event templates (#143 / epic #321)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 37},
+      "collapsed": false
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Per-template match rate (7d rolling)",
+      "description": "Sustained < 20% on any template fires AlphalensTemplateMatchRateLow.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 38},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "sum by (template_id) (rate(alphalens_template_match_total[7d])) / sum by (template_id) (rate(alphalens_template_attempt_total[7d]))",
+          "legendFormat": "{{ template_id }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "yellow", "value": 0.2},
+              {"color": "green", "value": 0.4}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Holdout drops by reason",
+      "description": "Counts of articles dropped to holdout, broken down by reason. Steady-state non-zero is expected (long-tail events that don't match any template); spikes in one reason indicate config drift.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 38},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "rate(alphalens_template_holdout_total[1h])",
+          "legendFormat": "{{ reason }}"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Predicate pass/fail rate",
+      "description": "Per-predicate pass rate across the matched corpus. A predicate stuck at 100% pass is potentially toothless; stuck at 0% pass is blocking everything (regex rot).",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 46},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "sum by (name) (rate(alphalens_template_predicate_total{outcome=\"pass\"}[1h])) / sum by (name) (rate(alphalens_template_predicate_total[1h]))",
+          "legendFormat": "{{ name }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      }
     }
   ]
 }
