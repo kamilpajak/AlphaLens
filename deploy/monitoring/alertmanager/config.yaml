@@ -49,9 +49,13 @@ receivers:
         # the runbook in ``deploy/monitoring/README.md`` §"Alertmanager
         # wiring" for the one-line ``sed`` to substitute the real ID.
         chat_id: -1001234567890  # OPERATOR: replace with TELEGRAM_CHAT_ID
-        # Concise message; the dashboard has the full series.
+        # Prefix the message with the alert STATUS so the operator can
+        # tell firing from resolved at a glance — the same Telegram
+        # chat carries both. Without the prefix every resolved
+        # notification reads identically to the original firing one
+        # (caught during VPS cutover 2026-05-30 smoke test).
         message: |
-          *{{ .CommonLabels.alertname }}* — {{ .CommonAnnotations.summary }}
+          {{ if eq .Status "firing" }}🔥 *[FIRING]*{{ else }}✅ *[RESOLVED]*{{ end }} *{{ .CommonLabels.alertname }}* — {{ .CommonAnnotations.summary }}
           {{ range .Alerts }}{{ .Annotations.description }}
           {{ end }}
         parse_mode: Markdown

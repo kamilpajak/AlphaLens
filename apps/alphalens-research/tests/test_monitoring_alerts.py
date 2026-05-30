@@ -276,6 +276,27 @@ class TestAlertmanagerConfig(unittest.TestCase):
         cfg = _load_alertmanager()
         self.assertEqual(cfg["route"]["receiver"], "telegram")
 
+    def test_message_template_distinguishes_firing_from_resolved(self) -> None:
+        # send_resolved: true (Alertmanager default for telegram) sends
+        # a Telegram notification both when an alert FIRES and when it
+        # RESOLVES. Without a status-aware template, both messages
+        # look identical and the operator cannot tell at a glance
+        # whether to act or relax. Pin the template to prefix the
+        # alert status. Caught during VPS cutover 2026-05-30 smoke
+        # test — first resolved notification read identically to the
+        # original firing one.
+        cfg = _load_alertmanager()
+        tg = cfg["receivers"][0]["telegram_configs"][0]
+        msg = tg.get("message", "")
+        self.assertIn(
+            'eq .Status "firing"',
+            msg,
+            "Telegram message template must branch on .Status so resolved "
+            "notifications are visually distinct from firing ones.",
+        )
+        self.assertIn("[FIRING]", msg)
+        self.assertIn("[RESOLVED]", msg)
+
     def test_group_by_includes_alertname_and_job(self) -> None:
         # Without job in group_by, two stale alerts on different jobs
         # would collapse into one Telegram message and the operator
