@@ -5,10 +5,14 @@
 # Coverage:
 #   - XNYS regular session: 13:30-20:00 UTC (09:30-16:00 ET)
 #   - First sweep 14:00 UTC catches the opening-cross fills queued by
-#     paper-submit at 13:25 UTC.
-#   - Sweeps at :00 + :30 = 15 fires per session day.
-#   - Trailing 20:30 + 21:00 UTC slots cover final-minute fills + the
-#     ~30 min post-close window where Alpaca may report late fills.
+#     paper-submit at 13:25 UTC. 35-min gap between submit-fire and
+#     this first reconcile is intentional — submit finishes in ~5-30s
+#     well before 14:00 UTC.
+#   - Sweeps at :00 + :30 from 14:00 through 21:30 UTC = 16 fires per
+#     session day.
+#   - Trailing 20:30 / 21:00 / 21:30 UTC slots cover final-minute
+#     fills + post-close late fills (Alpaca may report fills up to
+#     ~90 min after the 20:00 UTC close).
 #
 # **Why HH:00,30 not ``*:0/30``**: explicit slot list reads cleanly in
 # ``systemctl --user list-timers`` for operator scans; the terser

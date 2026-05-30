@@ -1,9 +1,10 @@
 [Unit]
-# Paper-trade order-status sweep — fires every 30 min Mon-Fri during
-# the XNYS regular session (13:30-20:00 UTC) plus a +30 / +60 min
-# trailing window so final-minute fills get picked up. Companion to
-# alphalens-paper-submit.service which queues the entry ladder pre-
-# open. Both are PR-D of epic #295 (issue #298).
+# Paper-trade order-status sweep — fires every 30 min Mon-Fri from
+# 14:00 through 21:30 UTC (16 slots/day): covers the XNYS regular
+# session (13:30-20:00 UTC) plus a trailing window through 21:30 UTC
+# for late fills (Alpaca may report fills up to ~90 min post-close).
+# Companion to alphalens-paper-submit.service which queues the entry
+# ladder pre-open. Both are PR-D of epic #295 (issue #298).
 #
 # Same two-layer gating as paper-submit: timer's ``OnCalendar=Mon..Fri``
 # handles weekends; ``ExecCondition=`` below catches US public

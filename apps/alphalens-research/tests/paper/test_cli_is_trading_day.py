@@ -117,11 +117,14 @@ class TestIsTradingDayExitCodes(unittest.TestCase):
         self.assertEqual(code, 0)
 
 
-class TestPrintsTerseStatusToStderr(unittest.TestCase):
-    """The CLI prints a one-line status to stderr so the systemd
-    journal captures it. ExecCondition fires silently in production —
-    the print is for operator debugging via ``systemctl --user start
-    --no-block`` then ``journalctl --user``.
+class TestPrintsTerseStatus(unittest.TestCase):
+    """The CLI prints a one-line status to the journal (via
+    ``typer.echo`` → stdout, captured by systemd's
+    ``StandardOutput=journal``). ExecCondition fires silently in
+    production — the print is for operator debugging via
+    ``systemctl --user start --no-block`` then ``journalctl --user``.
+    Naming-wise: ``typer.echo()`` defaults to stdout, NOT stderr
+    (zen review of PR-D flagged the earlier name as misleading).
     """
 
     def test_message_carries_date_and_exchange(self) -> None:
