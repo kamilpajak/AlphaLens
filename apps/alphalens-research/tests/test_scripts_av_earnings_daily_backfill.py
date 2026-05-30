@@ -209,5 +209,40 @@ class TestRcloneSync(unittest.TestCase):
             subproc_mock.run.assert_not_called()
 
 
+class TestDataRootDefault(unittest.TestCase):
+    """The systemd unit on the VPS runs ``av_earnings_daily_backfill.py``
+    without ``--data-root``. ADR 0011 moved the PIT roster YAMLs from
+    ``apps/alphalens-research/data/`` to ``apps/alphalens-pipeline/data/``;
+    the script's default lagged the move for ~4 days (2026-05-26 → 30)
+    and the daily timer exited 1 on ``UniverseError`` before hitting AV
+    — backfill stalled at 217/500 tickers cached. These tests pin the
+    corrected default so a future ADR-driven path move (or a workspace
+    layout refactor) fails CI rather than silently breaking the
+    production cron.
+    """
+
+    def test_default_data_root_points_at_pipeline_workspace_member(self) -> None:
+        mod = _import_script()
+        args = mod._parse_args([])
+
+        # Last two path segments must be ``alphalens-pipeline/data`` so
+        # the assertion is robust to where the repo lives on disk.
+        parts = args.data_root.resolve().parts
+        self.assertEqual(parts[-2:], ("alphalens-pipeline", "data"))
+
+    def test_default_data_root_resolves_to_existing_sp500_pit_dir(self) -> None:
+        # End-to-end: the resolved default + ``/sp500_pit`` must point at
+        # a real directory in this repo. Catches the exact failure mode
+        # the VPS hit (path resolved but directory absent).
+        mod = _import_script()
+        args = mod._parse_args([])
+
+        sp500_dir = args.data_root / "sp500_pit"
+        self.assertTrue(
+            sp500_dir.is_dir(),
+            f"sp500_pit directory missing under default data root: {sp500_dir}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
