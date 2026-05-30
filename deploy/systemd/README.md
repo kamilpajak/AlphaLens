@@ -11,7 +11,9 @@ hosts where launchd is unavailable.
 | `alphalens-literature-scan-weekly.{service,timer}` | Sun 18:00 Europe/Warsaw | Perplexity weekly RSS scan + Telegram digest + auto-commit to `main` (migrated 2026-05-30) |
 | `alphalens-literature-scan-monthly.{service,timer}` | 1st of month 09:00 Europe/Warsaw | Perplexity deep scan + Telegram digest + auto-commit to `main` (migrated 2026-05-30) |
 | `alphalens-av-earnings-backfill.{service,timer}` | daily 00:05 UTC | AV EARNINGS daily 25-call quota burn into `~/.alphalens/av_cache/` |
-| `alphalens-thematic-build.{service,timer}` | daily 06:30 UTC | docker-run thematic pipeline + verify-cache + Django rebuild-cache |
+| `alphalens-thematic-build.{service,timer}` | 6× daily at HH:30 UTC (00/04/08/12/16/20) | docker-run thematic pipeline + verify-cache + Django rebuild-cache (PR-F, epic #295 #300) |
+| `alphalens-paper-submit.{service,timer}` | Mon-Fri 13:25 UTC | host-venv `alphalens paper submit --date $(date -u +%Y-%m-%d)` — entry-tier limits pre-XNYS-open (PR-D, epic #295 #298). ExecCondition gates on `alphalens paper is-trading-day` to skip US holidays. |
+| `alphalens-paper-reconcile.{service,timer}` | Mon-Fri every 30 min 14:00-21:00 UTC | host-venv `alphalens paper reconcile` — Alpaca order-status sweep during XNYS session (PR-D, epic #295 #298). Same ExecCondition holiday gate as paper-submit. |
 | `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) |
 
 ## Environment file setup (`/etc/alphalens/env`)
@@ -27,6 +29,9 @@ All three AlphaLens systemd units load secrets via
 - `alphalens-literature-scan-{weekly,monthly}.service` — `PERPLEXITY_API_KEY`,
   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, **plus `GH_TOKEN`** (HTTPS push
   back to `kamilpajak/AlphaLens`; see "Cutover from launchd" §3 below)
+- `alphalens-paper-submit.service` + `alphalens-paper-reconcile.service` —
+  `ALPACA_API_KEY` + `ALPACA_API_SECRET` (paper-main), `ALPACA_TEST_API_KEY`
+  + `ALPACA_TEST_API_SECRET` (dev sandbox, optional)
 
 systemd reads each `KEY=VALUE` line into the unit's process env before
 `ExecStart`; for the docker-run unit, the explicit `-e KEY` flags then

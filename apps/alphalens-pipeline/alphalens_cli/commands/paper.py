@@ -431,4 +431,72 @@ def report(
         )
 
 
+@paper_app.command("is-trading-day")
+def is_trading_day_cmd(
+    date: str | None = typer.Option(
+        None,
+        "--date",
+        help=(
+            "ISO date (YYYY-MM-DD) to check instead of today UTC. "
+            "Operator-only — the systemd ExecCondition= callers do "
+            "not pass this."
+        ),
+    ),
+    exchange: str = typer.Option(
+        "XNYS",
+        "--exchange",
+        help=(
+            "ISO 10383 MIC code (XNYS / XWAR / XTKS / XHKG / XSHG). "
+            "Default XNYS. The paper harness is exchange-agnostic per "
+            "CLAUDE.md `## Conventions`; this flag is the natural "
+            "extension point for multi-venue routing."
+        ),
+    ),
+) -> None:
+    """Exit 0 if ``date`` (default today UTC) is an ``exchange`` session,
+    exit 1 otherwise.
+
+    Used as ``ExecCondition=`` in the paper-submit + paper-reconcile
+    systemd units to skip US public holidays that fall on weekdays —
+    the ``OnCalendar=Mon..Fri`` filter alone would fire on them.
+
+    Exit semantics matter — systemd ``ExecCondition=`` interprets:
+
+    * **0** → proceed with ExecStart
+    * **1-254** → skip silently (no AlphalensJobFailed alert)
+    * **255** → treat as error
+
+    So an exit-1 on a holiday MUST be a clean ``raise typer.Exit(1)``,
+    NOT a raised exception (which Typer would map to exit-1 too but
+    with traceback noise in the journal).
+
+    Prints a one-line status to stdout including date + exchange so a
+    ``journalctl --user -u alphalens-paper-submit.service`` after a
+    skip immediately tells the operator WHICH day was rejected.
+
+    Forward-compatible on ``--exchange`` per CLAUDE.md exchange-
+    agnostic policy: adding XWAR routing becomes a per-call argument,
+    not a refactor (see ``project_exchange_agnostic_calendar_2026_05_30``
+    memory).
+    """
+    # Lazy-import the calendar gate — same rationale as the
+    # market-closed guard in ``submit`` / ``reconcile``. ExecCondition
+    # fires on every Mon..Fri timer tick (15× per session for
+    # reconcile alone), so the ~50ms exchange_calendars XNYS load
+    # would add up across the day if we paid it on every tick.
+    from alphalens_pipeline.paper.calendar import is_trading_day
+
+    check_date = dt.date.fromisoformat(date) if date is not None else _today_utc()
+    trading = is_trading_day(check_date, exchange=exchange)
+
+    # One-line status to stdout (journal captures it under
+    # ``alphalens-paper-{submit,reconcile}.service`` when the operator
+    # debugs a skip). Format: ``2026-05-25 XNYS: not a trading day``
+    # so a journal grep on either the date OR the MIC code hits.
+    verdict = "trading day" if trading else "not a trading day"
+    typer.echo(f"{check_date.isoformat()} {exchange}: {verdict}")
+
+    raise typer.Exit(0 if trading else 1)
+
+
 __all__ = ["paper_app"]

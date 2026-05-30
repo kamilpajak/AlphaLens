@@ -47,12 +47,19 @@ EMIT_JOB_METRICS_HOOK = SYSTEMD_DIR / "bin" / "alphalens-emit-job-metrics"
 # All five active services that the metrics hook must be wired into.
 # Form-4 backfill is excluded — it is a long-running daemon (DONE
 # 2026-05-08, per CLAUDE.md) and would emit a single point at end-of-run.
+PAPER_SUBMIT_SERVICE = SYSTEMD_DIR / "alphalens-paper-submit.service"
+PAPER_SUBMIT_TIMER = SYSTEMD_DIR / "alphalens-paper-submit.timer"
+PAPER_RECONCILE_SERVICE = SYSTEMD_DIR / "alphalens-paper-reconcile.service"
+PAPER_RECONCILE_TIMER = SYSTEMD_DIR / "alphalens-paper-reconcile.timer"
+
 ACTIVE_SERVICES = (
     EDGAR_SERVICE,
     LIT_WEEKLY_SERVICE,
     LIT_MONTHLY_SERVICE,
     SYSTEMD_DIR / "alphalens-av-earnings-backfill.service",
     SYSTEMD_DIR / "alphalens-thematic-build.service",
+    PAPER_SUBMIT_SERVICE,
+    PAPER_RECONCILE_SERVICE,
 )
 
 
@@ -577,6 +584,205 @@ class TestThematicBuildCadence(unittest.TestCase):
             re.compile(r'"thematic-build stale > 12h \(expected 4h cadence\)"'),
             "Summary annotation must reflect the new 12h threshold + "
             "4h cadence so operator-facing text matches the expression.",
+        )
+
+
+class TestPaperSubmitUnit(unittest.TestCase):
+    """PR-D (epic #295, issue #298) — paper-submit systemd unit.
+
+    Fires once per US trading day at 13:25 UTC (= 09:25 ET, 5 min
+    before the XNYS opening cross at 13:30 UTC). The ``OnCalendar=Mon..
+    Fri`` filter handles weekends; the ``ExecCondition=`` invocation of
+    ``alphalens paper is-trading-day`` catches US public holidays
+    falling on weekdays (~10/year). Both layers are required — neither
+    alone is sufficient.
+
+    The submit command itself ALREADY carries an internal market-closed
+    guard (see ``test_cli_market_closed_guard.py``), so ExecCondition
+    is belt-and-suspenders: it makes the systemd job show ``condition
+    failed`` instead of ``deactivated (success)`` on holidays. Cleaner
+    operator observability — one glance at ``systemctl --user
+    list-timers`` distinguishes "skipped cleanly" from "ran and
+    self-deferred".
+    """
+
+    def test_submit_service_uses_host_venv_alphalens(self) -> None:
+        # Same pattern as edgar-detect: the paper subtree depends on
+        # alpaca-py + pandas which we keep in the host venv, NOT in the
+        # pipeline Docker image (image is purpose-built for the
+        # thematic build's google-genai dependency stack).
+        #
+        # ExecStart is wrapped in ``/bin/sh -c`` (needed for ``$(date)``
+        # substitution); the actual alphalens invocation lives inside
+        # the quoted argument. Match anywhere on the directive line.
+        self.assertRegex(
+            PAPER_SUBMIT_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStart=.*%h/AlphaLens/\.venv/bin/alphalens\s+paper\s+submit\b",
+                re.MULTILINE,
+            ),
+            "ExecStart must invoke the host venv `alphalens paper "
+            "submit` binary (wrapped in /bin/sh -c for shell "
+            "substitution) so the alpaca-py / pandas deps resolve "
+            "locally.",
+        )
+
+    def test_submit_service_passes_today_utc_date(self) -> None:
+        # The brief whose PLANNED rows to submit is dated to TODAY UTC
+        # — the same day the 12:30 UTC thematic-build run wrote it.
+        # Hard-code the systemd-escaped command-substitution form
+        # (``%%`` is systemd's literal-percent escape; ExecStart must
+        # be wrapped in ``/bin/sh -c`` so the substitution actually
+        # runs — systemd execs the literal command otherwise).
+        text = PAPER_SUBMIT_SERVICE.read_text()
+        self.assertRegex(
+            text,
+            re.compile(
+                r"^ExecStart=/bin/sh\s+-c\s+'.*--date \$\(date -u \+%%Y-%%m-%%d\).*'\s*$",
+                re.MULTILINE,
+            ),
+            "Submit MUST be wrapped in /bin/sh -c '... --date "
+            "$(date -u +%%Y-%%m-%%d)' so today's UTC date lands at "
+            "unit-start time. systemd does not perform shell "
+            "substitution natively; a bare ExecStart= would try to "
+            "exec a binary named '$(date'.",
+        )
+
+    def test_submit_service_gates_on_is_trading_day_via_exec_condition(self) -> None:
+        # ``ExecCondition=`` semantics: exit 0 = proceed, exit 1-254 =
+        # skip silently (no AlphalensJobFailed alert). The CLI subcommand
+        # ``alphalens paper is-trading-day`` is the only thing that
+        # knows about US public holidays falling on weekdays.
+        text = PAPER_SUBMIT_SERVICE.read_text()
+        self.assertRegex(
+            text,
+            re.compile(
+                r"^ExecCondition=%h/AlphaLens/\.venv/bin/alphalens\s+paper\s+is-trading-day\s*$",
+                re.MULTILINE,
+            ),
+            "Service must carry ExecCondition= calling "
+            "`alphalens paper is-trading-day` — without it the "
+            "OnCalendar=Mon..Fri filter would let US public holidays "
+            "(e.g. Memorial Day Monday) through.",
+        )
+
+    def test_submit_timer_fires_mon_fri_at_13_25_utc(self) -> None:
+        # 13:25 UTC = 09:25 ET = 5 min pre-XNYS open. The 5-min window
+        # is the right slot for the GTC opening-cross submission: it
+        # lands the order BEFORE the cross but with enough margin for
+        # Alpaca's order-acknowledge latency. Holidays slip through
+        # ``Mon..Fri`` and are caught by ExecCondition (above).
+        self.assertRegex(
+            PAPER_SUBMIT_TIMER.read_text(),
+            re.compile(
+                r"^OnCalendar=Mon\.\.Fri \*-\*-\* 13:25:00 UTC\s*$",
+                re.MULTILINE,
+            ),
+            "Submit timer must fire Mon..Fri at 13:25 UTC (09:25 ET, "
+            "5 min pre-XNYS open). 13:25 not 13:30 so the order is "
+            "queued before the opening cross.",
+        )
+
+    def test_submit_timer_keeps_persistent_false(self) -> None:
+        # Unlike the thematic-build timer, paper-submit MUST NOT
+        # backfill missed slots. A Saturday-boot catch-up firing
+        # "Monday's 13:25 UTC submit" on Saturday at 18:00 UTC would
+        # push entry-tier limits against a closed XNYS — the very
+        # stale-ladder gap risk PR-A (#294) fixed. The ExecCondition
+        # gate would catch it too, but defence-in-depth: timer
+        # explicitly does NOT use Persistent=true.
+        # Tight directive-line check — fuzzy substring would also fire
+        # on the unit-file COMMENT explaining why Persistent=true is
+        # rejected. Re-compile MULTILINE so ``^...$`` binds to a
+        # single directive line, not the whole file.
+        self.assertNotRegex(
+            PAPER_SUBMIT_TIMER.read_text(),
+            re.compile(r"^Persistent=true\s*$", re.MULTILINE),
+            "Paper-submit timer MUST NOT carry Persistent=true — a "
+            "backfilled fire on the wrong UTC day would submit "
+            "against a closed market. See PR-A (#294) stale-ladder "
+            "gap risk.",
+        )
+
+
+class TestPaperReconcileUnit(unittest.TestCase):
+    """PR-D — paper-reconcile systemd unit.
+
+    Sweeps Alpaca for open-order status updates every 30 min during
+    the XNYS regular session (09:30-16:00 ET = 13:30-20:00 UTC; the
+    schedule pads to 14:00-21:00 UTC to also cover the +30min slot
+    after market close so the final-minute fills get reconciled).
+    Same ExecCondition pattern as submit.
+    """
+
+    def test_reconcile_service_uses_host_venv_alphalens(self) -> None:
+        self.assertRegex(
+            PAPER_RECONCILE_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/alphalens\s+paper\s+reconcile\b",
+                re.MULTILINE,
+            ),
+        )
+
+    def test_reconcile_service_takes_no_date_arg(self) -> None:
+        # Reconcile sweeps all OPEN orders across ALL dates — adding
+        # ``--date $(date -u +%Y-%m-%d)`` would silently drop orders
+        # placed on Friday that fill on Monday. Pin the no-date shape
+        # on the ExecStart directive line only — the file-level
+        # comment explains "no --date here" and would false-positive
+        # a fuzzy substring search.
+        text = PAPER_RECONCILE_SERVICE.read_text()
+        exec_start_line = next(
+            (line for line in text.splitlines() if line.startswith("ExecStart=")),
+            None,
+        )
+        self.assertIsNotNone(exec_start_line, "ExecStart= directive missing")
+        self.assertNotIn(
+            "--date",
+            exec_start_line,
+            "Reconcile ExecStart MUST NOT carry --date — it sweeps "
+            "all OPEN orders across dates, not a single brief's "
+            "ladder.",
+        )
+
+    def test_reconcile_service_gates_on_is_trading_day_via_exec_condition(self) -> None:
+        text = PAPER_RECONCILE_SERVICE.read_text()
+        self.assertRegex(
+            text,
+            re.compile(
+                r"^ExecCondition=%h/AlphaLens/\.venv/bin/alphalens\s+paper\s+is-trading-day\s*$",
+                re.MULTILINE,
+            ),
+        )
+
+    def test_reconcile_timer_fires_every_30_min_during_et_session(self) -> None:
+        # Inclusive 14:00..21:00 UTC at every :00 + :30 = 15 fires
+        # per session day. Covers 13:30-20:00 UTC regular session
+        # plus a +30/+60 min trailing slot to reconcile final fills.
+        # systemd ``X..Y/N`` minute syntax not used here — readability
+        # of a flat HH:00,30 form beats the terser interval form for
+        # operator scans of `systemctl --user list-timers`.
+        self.assertRegex(
+            PAPER_RECONCILE_TIMER.read_text(),
+            re.compile(
+                r"^OnCalendar=Mon\.\.Fri \*-\*-\* 14\.\.21:00,30:00 UTC\s*$",
+                re.MULTILINE,
+            ),
+            "Reconcile timer must fire Mon..Fri every 30 min from "
+            "14:00 to 21:00 UTC (covers 13:30-20:00 UTC XNYS regular "
+            "session + trailing fills).",
+        )
+
+    def test_reconcile_timer_keeps_persistent_false(self) -> None:
+        # Same rationale as submit — a missed 16:00 UTC slot replayed
+        # at Saturday boot would hammer Alpaca for orders that no
+        # longer matter. The next session's first slot picks up
+        # whatever's open. MULTILINE regex pins the actual directive
+        # line (the comment block above explains "why no Persistent"
+        # and would false-positive a fuzzy substring match).
+        self.assertNotRegex(
+            PAPER_RECONCILE_TIMER.read_text(),
+            re.compile(r"^Persistent=true\s*$", re.MULTILINE),
         )
 
 
