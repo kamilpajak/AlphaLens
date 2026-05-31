@@ -22,25 +22,47 @@ Buy-side decision-support tool for the **discretionary investor** + a small What
 
 ---
 
-## 2. Philosophical anchors (immovable, firmly held)
+## 2. "Done" looks like — the evening use-case
 
-| Doctrine | What it means operationally |
-|----------|-----------------------------|
-| **Quality over speed** | Never downgrade the model (Pro→Flash) or data sources to dodge a rate limit. We cache; we wait. |
-| **Augmentation, not execution** | The tool produces signal + evidence. The human decides and clicks the button. The paper-trade harness is a **measurement instrument**, not a strategy. |
-| **Final decision = human** | The LLM does reasoning + matching over pre-computed facts. Bracket constraints and numerical filtering happen in Python post-hoc. See [[feedback_llm_training_cutoff_numerical_data_2026_05_17]]. |
-| **No black-box scoring** | Every candidate carries 4 verification gates + scorer breakdown + dismiss rationale. Algorithm aversion (Decision Lab research) = we do not trust what we cannot explain. |
-| **Buy-side, retail-flavored** | Not a fund. No mandate, compliance, or position-sizing constraints. Dismiss reasons say "not my style", not "outside mandate". |
-| **No real-capital deployment** | `capital_deploy_clause` structurally enforced by AlpacaClient (`paper=True` hard-coded). Re-activating real capital requires explicit consent + a client change. |
-| **Keep searching screeners** | Discipline (Bonferroni ledger) bounds the search; never "no further prospecting". Each new layer test raises the bar. |
-| **No passive pivot** | Despite 14 paradigm failures — active quant research continues. |
-| **Cost discipline** | Production vendor stack budget cap ~$60/mo (LLM + market data + edge/CDN + monitoring; VPS infrastructure excluded as a separate line item). A vendor swap is justified only when an equivalent-quality alternative offers ≥50% savings (precedent: PR-G #318 Gemini → DeepSeek v4 saved $66/mo while preserving quality). No single vendor should exceed 60% of total monthly cost (avoids single-vendor lock-in). **Never downgrade the model for cost** — this is a corollary of `quality over speed`, not a contradiction. Current spend ~$38/mo (DeepSeek v4 via OpenRouter) + Perplexity ~$10/mo + Cloudflare ~$10/mo (Pages + Tunnel + Access) + Polygon free + Alpha Vantage free ≈ **~$58/mo** (excluding VPS). |
+```mermaid
+flowchart LR
+    T1["<code>08:30 UTC</code><br/><b>Pipeline run #2 of 6</b><br/><small>automatic · 6×/day</small>"]
+    T2["<code>10:00 UTC</code><br/><b>Telegram push</b><br/><small>NVDA +12% earnings</small>"]
+    T3["<code>12:30 UTC</code><br/><b>User opens daily brief</b><br/><small>on SPA</small>"]
+    T4["<code>14:00 UTC</code><br/><b>Shortlist to WhatsApp group</b>"]
+    T5["<code>14:30 UTC</code><br/><b>Group discussion</b><br/><small>30 min</small>"]
+    T6["<code>13:25 UTC</code>*<br/><b>Alpaca paper auto-submit</b>"]
+
+    T1 --> T2 --> T3 --> T4 --> T5
+    T3 -.->|"<i>approved on prior day</i>"| T6
+
+    classDef antipattern stroke:#dc2626,stroke-width:2px,stroke-dasharray:5 5
+    T6:::antipattern
+```
+
+*T6 is non-linear: the paper-submit timer fires at 13:25 UTC Mon–Fri (PR #317) on plans approved during prior sessions; it does not wait for today's group discussion. Hence the dotted arrow.
+
+**Weekend, Sunday 19:00 (illustrative numbers from PR #292 design):**
+```
+user opens app.alphalens.kamilpajak.pl/review/2026-W22
+  - "this week: 5/12 win-rate (42%), 2 still open"
+  - "your top signal-combo: catalyst_strength≥3 × insider_score top-quartile
+     (n=11, hit-rate=64%, avg+9.2% / 2 weeks)"
+  - "your dismiss-reason histogram:
+     wrong_theme 22% / too_expensive 18% / bad_setup 15% /
+     dont_understand 8% / business_management 7% / other 3%"
+  - "calibration: confidence=4 → realised hit-rate=58% (well calibrated);
+     confidence=5 → realised hit-rate=46% (overconfident — system flags)"
+  - "themes that worked: AI infra / supply-chain; deteriorated: solar"
+```
+
+That is the goal. Everything else is the road.
 
 ---
 
 ## 3. Big picture flow — the whole system in one diagram
 
-All 8 tracks + 3 tiers + feedback loop + paper-trade harness in one view. §4 and §5 zoom in on specific fragments (the feedback loop, the evening use-case).
+All 8 tracks + 3 tiers + feedback loop + paper-trade harness in one view. §2 (the evening use-case, above) and §4 (the feedback loop) zoom in on specific fragments of this big picture.
 
 ```mermaid
 flowchart TB
@@ -104,7 +126,7 @@ flowchart TB
 - The PAPER box with the red dashed border = anti-pattern boundary (the `capital_deploy_clause` anchor).
 - L3 is fed by `F3 outcome join` — that is why the weekly review is gated on ledger fill.
 
-**Deliberately omitted** (to avoid noise): the 8 tracks from §7 (that's a development view, not an operational one); anti-features from §8 (input filter, not part of the flow); the VPS observability stack (Prometheus + Telegram alerts — a meta-layer).
+**Deliberately omitted** (to avoid noise): the 8 tracks from §9 (that's a development view, not an operational one); anti-features from §7 (input filter, not part of the flow); the VPS observability stack (Prometheus + Telegram alerts — a meta-layer).
 
 ---
 
@@ -135,45 +157,54 @@ Without a feedback ledger the model has no signal on what works. Re-weighting un
 
 ---
 
-## 5. "Done" looks like — the evening use-case
+## 5. Philosophical anchors (immovable, firmly held)
 
-```mermaid
-flowchart LR
-    T1["<code>08:30 UTC</code><br/><b>Pipeline run #2 of 6</b><br/><small>automatic · 6×/day</small>"]
-    T2["<code>10:00 UTC</code><br/><b>Telegram push</b><br/><small>NVDA +12% earnings</small>"]
-    T3["<code>12:30 UTC</code><br/><b>User opens daily brief</b><br/><small>on SPA</small>"]
-    T4["<code>14:00 UTC</code><br/><b>Shortlist to WhatsApp group</b>"]
-    T5["<code>14:30 UTC</code><br/><b>Group discussion</b><br/><small>30 min</small>"]
-    T6["<code>13:25 UTC</code>*<br/><b>Alpaca paper auto-submit</b>"]
-
-    T1 --> T2 --> T3 --> T4 --> T5
-    T3 -.->|"<i>approved on prior day</i>"| T6
-
-    classDef antipattern stroke:#dc2626,stroke-width:2px,stroke-dasharray:5 5
-    T6:::antipattern
-```
-
-*T6 is non-linear: the paper-submit timer fires at 13:25 UTC Mon–Fri (PR #317) on plans approved during prior sessions; it does not wait for today's group discussion. Hence the dotted arrow.
-
-**Weekend, Sunday 19:00 (illustrative numbers from PR #292 design):**
-```
-user opens app.alphalens.kamilpajak.pl/review/2026-W22
-  - "this week: 5/12 win-rate (42%), 2 still open"
-  - "your top signal-combo: catalyst_strength≥3 × insider_score top-quartile
-     (n=11, hit-rate=64%, avg+9.2% / 2 weeks)"
-  - "your dismiss-reason histogram:
-     wrong_theme 22% / too_expensive 18% / bad_setup 15% /
-     dont_understand 8% / business_management 7% / other 3%"
-  - "calibration: confidence=4 → realised hit-rate=58% (well calibrated);
-     confidence=5 → realised hit-rate=46% (overconfident — system flags)"
-  - "themes that worked: AI infra / supply-chain; deteriorated: solar"
-```
-
-That is the goal. Everything else is the road.
+| Doctrine | What it means operationally |
+|----------|-----------------------------|
+| **Quality over speed** | Never downgrade the model (Pro→Flash) or data sources to dodge a rate limit. We cache; we wait. |
+| **Augmentation, not execution** | The tool produces signal + evidence. The human decides and clicks the button. The paper-trade harness is a **measurement instrument**, not a strategy. |
+| **Final decision = human** | The LLM does reasoning + matching over pre-computed facts. Bracket constraints and numerical filtering happen in Python post-hoc. See [[feedback_llm_training_cutoff_numerical_data_2026_05_17]]. |
+| **No black-box scoring** | Every candidate carries 4 verification gates + scorer breakdown + dismiss rationale. Algorithm aversion (Decision Lab research) = we do not trust what we cannot explain. |
+| **Buy-side, retail-flavored** | Not a fund. No mandate, compliance, or position-sizing constraints. Dismiss reasons say "not my style", not "outside mandate". |
+| **No real-capital deployment** | `capital_deploy_clause` structurally enforced by AlpacaClient (`paper=True` hard-coded). Re-activating real capital requires explicit consent + a client change. |
+| **Keep searching screeners** | Discipline (Bonferroni ledger) bounds the search; never "no further prospecting". Each new layer test raises the bar. |
+| **No passive pivot** | Despite 14 paradigm failures — active quant research continues. |
+| **Cost discipline** | Production vendor stack budget cap ~$60/mo (LLM + market data + edge/CDN + monitoring; VPS infrastructure excluded as a separate line item). A vendor swap is justified only when an equivalent-quality alternative offers ≥50% savings (precedent: PR-G #318 Gemini → DeepSeek v4 saved $66/mo while preserving quality). No single vendor should exceed 60% of total monthly cost (avoids single-vendor lock-in). **Never downgrade the model for cost** — this is a corollary of `quality over speed`, not a contradiction. Current spend ~$38/mo (DeepSeek v4 via OpenRouter) + Perplexity ~$10/mo + Cloudflare ~$10/mo (Pages + Tunnel + Access) + Polygon free + Alpha Vantage free ≈ **~$58/mo** (excluding VPS). |
 
 ---
 
-## 6. Current state vs ideal (per tier)
+## 6. Realizability constraints (hard-won — immovable, like §5)
+
+A signal can carry real information (strong **gross** alpha) and still be **unrealizable net-of-cost as a standalone trade**. The project has a canonical instance: `insider_form4_opportunistic` (Cohen-Malloy opportunistic-insider buys) backtested at gross αt +2.71 / +24.4%/y, phase-robust OOS — yet the 50 bps half-spread slippage stress collapsed it to αt_net ≈ +1.3 (OOS), failing the G1 knockout (αt_net ≥ 2.0). Postmortem: `docs/research/insider_form4_opportunistic_slippage_stress_postmortem_2026_05_12.md`. A zen + Perplexity literature review (40 sources, 2026-05-31) confirmed the pattern is canonical, not idiosyncratic. These constraints bind every signal the system uses:
+
+| Constraint | Mechanism | What the vision does about it |
+|------------|-----------|-------------------------------|
+| **Gross ≠ net** | Alpha that survives gross can die after spreads/impact — and is often concentrated exactly where costs are worst. Lesmond-Schill-Zhou (2004): "the stocks that generate large momentum returns are precisely those with high trading costs." Our insider signal is EXTREME counter-cyclical: its alpha lives in panic regimes where small-cap half-spreads blow out to 200-400 bps. | A signal that fails the net-of-cost realizability gate is **never deployed standalone**. Realizability (50 bps half-spread, αt_net ≥ 2.0) is a **knockout gate, not a gap to interpret**. |
+| **Demote, don't discard** | A non-realizable standalone signal still has information content — insider data "retains predictive power even when transaction costs negate standalone profitability" (Cohen-Malloy; Alpha Architect). | Reuse it as **corroboration**, never a trade trigger: one of the 4 verification gates + one of the 4 composite-scorer inputs (`opportunistic_form4` → insider gate + `layer4_weighted_score`). See Track G + [[feedback_validated_paradigm_scorer_reuse_2026_05_16]] + §7. |
+| **No-timing-discretion execution** | Event signals (Form-4) trade when the filing appears — no entry-timing discretion. In panic, market orders cross 200-400 bps spreads; switching to limit orders just **converts slippage into non-execution / adverse selection** (market makers widen precisely because they anticipate informed flow). Neither order type rescues the edge. | The paper-trade harness uses limit entries BUT must **record fill-rate + failed executions** (not only filled PnL) and **deactivate a signal under extreme microstructure** (liquidity filter). Otherwise the feedback loop under-measures the drag by hiding it as non-fill. |
+| **Re-weighting sample size** | Adaptive re-weighting on realized PnL overfits at small n. ≥50 decisions is acceptable **pooled**, but **regime-conditional calibration at n ≈ 50 is below the statistical threshold** (overfitting risk; cf. "Overfitting in portfolio optimization"). | Feedback re-weighting (Track A v2 / L3, §4): pool first; regime-split only with **shrinkage** or a much larger sample. A regime-conditional calibration curve under ~50 observations is noise dressed as signal. |
+
+The feedback loop (§4) is the system's **empirical** realizability check: a signal whose realized (post-slippage, post-non-fill) contribution is poor gets **down-weighted** in `layer4_weighted_score` once the sample fills — re-deriving an analytically-known slippage verdict from live measurement. The paper-trade harness is the **measurement instrument** that makes this possible (§3; §5 "augmentation, not execution"). This is why a slippage-failed standalone strategy is not a dead end in this system — it is a demoted, measured, continuously re-validated input.
+
+---
+
+## 7. What deliberately **is not** in the vision (bullshit-marketing filter)
+
+| Anti-feature | Reason |
+|--------------|--------|
+| Auto-execution (algo trading) | Contradicts "augmentation, not replacement". `capital_deploy_clause` structurally blocks. |
+| LLM picking trades alone | See [[feedback_llm_training_cutoff_numerical_data_2026_05_17]] — the LLM filters through a stale training snapshot. |
+| Black-box scoring | Algorithm aversion (Decision Lab) — the analyst rejects black-box output. 4 gates + breakdown are obligatory. |
+| "AI exoskeleton" rhetoric | Perplexity research ([[feedback_adversarial_reviewer_bias_2026_05_16]]) — rhetoric, not technique. |
+| "360-degree view" | Marketing buzzword. We have `also_in_themes`; that is enough. |
+| Multi-agent orchestration (AutoGPT-style) | YAGNI for decision support; Pro+Flash routing is enough. |
+| Closed-source AI | All LLM calls go through canonical clients (`OpenRouterClient` in the thematic pipeline (PR-G #318) AND the research-side `llm_scorers.py` (PR #331); `GeminiClient` is legacy, retained only for the ad-hoc `scripts/analyze_rejections.py`). Vendor lock-in transparency; backend is swappable without touching call sites. |
+| Mandate / compliance UI | Retail single-user; no fund constraints to express. |
+| Sentiment analysis as a standalone signal | Loughran-McDonald + Tetlock show sentiment is weak alpha. Combine with catalyst structure if at all. |
+
+---
+
+## 8. Current state vs ideal (per tier)
 
 ### L1 — Real-time push
 
@@ -211,7 +242,7 @@ Two distinct L1 streams exist (the table below keeps them separate): **(a) EDGAR
 
 ---
 
-## 7. Tracks — each is an epic = many PRs
+## 9. Tracks — each is an epic = many PRs
 
 ### Track A: Feedback ledger (PR #292 + v2 + v3)
 - ▶ **v1 (PR #292, in-flight)** — schema, REST, SPA, monitoring CLI
@@ -260,23 +291,7 @@ Two distinct L1 streams exist (the table below keeps them separate): **(a) EDGAR
 
 ---
 
-## 8. What deliberately **is not** in the vision (bullshit-marketing filter)
-
-| Anti-feature | Reason |
-|--------------|--------|
-| Auto-execution (algo trading) | Contradicts "augmentation, not replacement". `capital_deploy_clause` structurally blocks. |
-| LLM picking trades alone | See [[feedback_llm_training_cutoff_numerical_data_2026_05_17]] — the LLM filters through a stale training snapshot. |
-| Black-box scoring | Algorithm aversion (Decision Lab) — the analyst rejects black-box output. 4 gates + breakdown are obligatory. |
-| "AI exoskeleton" rhetoric | Perplexity research ([[feedback_adversarial_reviewer_bias_2026_05_16]]) — rhetoric, not technique. |
-| "360-degree view" | Marketing buzzword. We have `also_in_themes`; that is enough. |
-| Multi-agent orchestration (AutoGPT-style) | YAGNI for decision support; Pro+Flash routing is enough. |
-| Closed-source AI | All LLM calls go through canonical clients (`OpenRouterClient` in the thematic pipeline (PR-G #318) AND the research-side `llm_scorers.py` (PR #331); `GeminiClient` is legacy, retained only for the ad-hoc `scripts/analyze_rejections.py`). Vendor lock-in transparency; backend is swappable without touching call sites. |
-| Mandate / compliance UI | Retail single-user; no fund constraints to express. |
-| Sentiment analysis as a standalone signal | Loughran-McDonald + Tetlock show sentiment is weak alpha. Combine with catalyst structure if at all. |
-
----
-
-## 9. Roadmap priorities
+## 10. Roadmap priorities
 
 ### Near-term (originally ~6 PRs / ~2 weeks — as of 2026-05-31 mostly shipped; outstanding: PR #292 merge, outcome join, L3 SPA stub)
 
@@ -312,7 +327,7 @@ Two distinct L1 streams exist (the table below keeps them separate): **(a) EDGAR
 
 ---
 
-## 10. Reference — where to find "why"
+## 11. Reference — where to find "why"
 
 | Document | What it covers |
 |----------|---------------|
@@ -340,21 +355,6 @@ Two distinct L1 streams exist (the table below keeps them separate): **(a) EDGAR
 
 ---
 
-## 11. Realizability constraints (hard-won — immovable, like §2)
-
-A signal can carry real information (strong **gross** alpha) and still be **unrealizable net-of-cost as a standalone trade**. The project has a canonical instance: `insider_form4_opportunistic` (Cohen-Malloy opportunistic-insider buys) backtested at gross αt +2.71 / +24.4%/y, phase-robust OOS — yet the 50 bps half-spread slippage stress collapsed it to αt_net ≈ +1.3 (OOS), failing the G1 knockout (αt_net ≥ 2.0). Postmortem: `docs/research/insider_form4_opportunistic_slippage_stress_postmortem_2026_05_12.md`. A zen + Perplexity literature review (40 sources, 2026-05-31) confirmed the pattern is canonical, not idiosyncratic. These constraints bind every signal the system uses:
-
-| Constraint | Mechanism | What the vision does about it |
-|------------|-----------|-------------------------------|
-| **Gross ≠ net** | Alpha that survives gross can die after spreads/impact — and is often concentrated exactly where costs are worst. Lesmond-Schill-Zhou (2004): "the stocks that generate large momentum returns are precisely those with high trading costs." Our insider signal is EXTREME counter-cyclical: its alpha lives in panic regimes where small-cap half-spreads blow out to 200-400 bps. | A signal that fails the net-of-cost realizability gate is **never deployed standalone**. Realizability (50 bps half-spread, αt_net ≥ 2.0) is a **knockout gate, not a gap to interpret**. |
-| **Demote, don't discard** | A non-realizable standalone signal still has information content — insider data "retains predictive power even when transaction costs negate standalone profitability" (Cohen-Malloy; Alpha Architect). | Reuse it as **corroboration**, never a trade trigger: one of the 4 verification gates + one of the 4 composite-scorer inputs (`opportunistic_form4` → insider gate + `layer4_weighted_score`). See Track G + [[feedback_validated_paradigm_scorer_reuse_2026_05_16]] + §8. |
-| **No-timing-discretion execution** | Event signals (Form-4) trade when the filing appears — no entry-timing discretion. In panic, market orders cross 200-400 bps spreads; switching to limit orders just **converts slippage into non-execution / adverse selection** (market makers widen precisely because they anticipate informed flow). Neither order type rescues the edge. | The paper-trade harness uses limit entries BUT must **record fill-rate + failed executions** (not only filled PnL) and **deactivate a signal under extreme microstructure** (liquidity filter). Otherwise the feedback loop under-measures the drag by hiding it as non-fill. |
-| **Re-weighting sample size** | Adaptive re-weighting on realized PnL overfits at small n. ≥50 decisions is acceptable **pooled**, but **regime-conditional calibration at n ≈ 50 is below the statistical threshold** (overfitting risk; cf. "Overfitting in portfolio optimization"). | Feedback re-weighting (Track A v2 / L3, §4): pool first; regime-split only with **shrinkage** or a much larger sample. A regime-conditional calibration curve under ~50 observations is noise dressed as signal. |
-
-The feedback loop (§4) is the system's **empirical** realizability check: a signal whose realized (post-slippage, post-non-fill) contribution is poor gets **down-weighted** in `layer4_weighted_score` once the sample fills — re-deriving an analytically-known slippage verdict from live measurement. The paper-trade harness is the **measurement instrument** that makes this possible (§3; §2 "augmentation, not execution"). This is why a slippage-failed standalone strategy is not a dead end in this system — it is a demoted, measured, continuously re-validated input.
-
----
-
 ## 12. Edits log
 
 | Date | Change | Reason |
@@ -369,5 +369,6 @@ The feedback loop (§4) is the system's **empirical** realizability check: a sig
 | 2026-05-30 | §3 P1 Ingest cap label corrected | Label said `cap 200/day` (true when pipeline was 1×/day pre-PR-F #315) but the cap is applied per `ingest_daily()` call. With 6×/day cadence the daily upper bound is 6 × 200 = 1200 unique articles. Updated label to `cap 200/run (up to 1200/day at 6× cadence)`. Verified via `news_ingest.py:213-215` `.head(max_items)` per-call enforcement and `polygon_news.py` per-UTC-day read-through cache that `--force` flag (passed by `alphalens-thematic-build.service`) defeats so each of the 6 runs re-fetches fresh from APIs. |
 | 2026-05-31 | Current-state sync after the 2026-05-31 merge wave (multi-agent audit vs git/gh/CLAUDE.md/MEMORY) | Template-engine epic #321 advanced fast: PR-1 (#322) + PR-2 (#323) + PR-3 (#324) + PR-4 (#325) + PR-6 (#332) all merged → §7 Track D typed-facts and Track H multi-source dedup flipped ⏳→✅; Track H structured-templates bullet now "5-of-6 shipped" (only PR-5 compound catalysts gated); §9 near-term item 6 marked shipped. §8 + §3: research-side `llm_scorers.py` swapped Gemini→DeepSeek (PR #331), so GeminiClient is legacy only for `scripts/analyze_rejections.py`; "Flash fallback" → "DeepSeek v4 Flash fallback". §6 L2 `AlphalensJobStale` threshold 48h→12h (lowered when 6×/day landed, PR #315); §6 L1 metric name fully qualified. 36 other claims verified CURRENT (cost ~$58/mo, L1/L2 infra + PR numbers, PR #292 still OPEN, model labels). |
 | 2026-05-31 | Added §11 "Realizability constraints"; renumbered Edits log §11→§12 | Codify the slippage-fail lesson (`insider_form4_opportunistic`: gross αt +2.71 but αt_net ≈ +1.3 @ 50 bps → G1 knockout) as a permanent constraint, after a zen + Perplexity literature review (40 sources). Four binding constraints: gross ≠ net (alpha concentrated where costs are worst — Lesmond-Schill-Zhou), demote-don't-discard (reuse as corroboration gate + scorer input), no-timing-discretion execution (limit orders convert slippage → non-fill, so the harness must record fill-rate + deactivate under extreme microstructure), and re-weighting sample size (≥50 pooled-only; regime-split needs shrinkage). Ties §4 feedback loop + Track A v2 / L3 to a realizability discipline. |
+| 2026-05-31 | Reordered sections for end-user reading flow (full IA reorder) | Lead with the payoff: §2 = evening use-case (was §5). Cluster the doctrine: §5 anchors / §6 realizability / §7 anti-features (believe / physically-possible / won't-do). Push the Reference appendix down to §11 so it no longer interrupts doctrine. §1/§3/§4/§12 kept their numbers. Inline §-cross-refs remapped old→new (anchors 2→5, use-case 5→2, current-state 6→8, tracks 7→9, anti-features 8→7, roadmap 9→10, reference 10→11, realizability 11→6); the §3 "zoom in" sentence reworded since the use-case now precedes the diagram. **Edits-log rows above are historical — their section numbers are deliberately NOT remapped (they describe the doc as it was at the time).** |
 
 Editing is **expected** — this is not a LOCKED memo. Every meaningful architectural decision (a new track, a priority change, a retired feature) should land here at the end of the session.
