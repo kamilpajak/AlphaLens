@@ -49,7 +49,7 @@ flowchart TB
     subgraph PIPE["Pipeline — 6×/day VPS systemd"]
         direction TB
         P1["<b>Ingest</b><br/><small>lexical clustering · cap 200/run (up to 1200/day at 6× cadence)</small>"]
-        P2["<b>Event extraction</b><br/><small>templates first · Flash fallback · #143 hybrid</small>"]
+        P2["<b>Event extraction</b><br/><small>templates first · DeepSeek v4 Flash fallback · #143 hybrid</small>"]
         P3["<b>Theme mapping</b><br/><small>DeepSeek v4 Pro</small>"]
         P4["<b>4 verification gates</b><br/><small>10-K · press · Form-4 · NPORT</small>"]
         P5["<b>4-signal scorer</b><br/><small>insider · FCFF · valuation · technicals</small>"]
@@ -183,7 +183,7 @@ That is the goal. Everything else is the road.
 | Push channel | candidates.db (logged only) | Telegram bot push | Bot infrastructure |
 | Filter | None — log everything | Multi-layer scoring → max 3-5 push/day | Alert-fatigue threshold |
 | Confirmation | Manual review next day in L2 | Inline confirm via Telegram inline button | Bot interactive UI |
-| **Resilience** | `AlphalensJobStale` Prometheus alert fires after 30 min without success (≥ 2× the 15-min cadence) → Telegram via Alertmanager (PR #312). Textfile metrics `last_success_timestamp_seconds` per-job (PR #311) | Plus per-event-class success rate (`m_and_a_detected_total`, etc.) as a leading drift indicator | Domain counters in the EDGAR detector |
+| **Resilience** | `AlphalensJobStale` Prometheus alert fires after 30 min without success (≥ 2× the 15-min cadence) → Telegram via Alertmanager (PR #312). Textfile metrics `alphalens_job_last_success_timestamp_seconds` per-job (PR #311) | Plus per-event-class success rate (`m_and_a_detected_total`, etc.) as a leading drift indicator | Domain counters in the EDGAR detector |
 
 ### L2 — Daily brief (current core)
 
@@ -194,7 +194,7 @@ That is the goal. Everything else is the road.
 | Evidence panel | source_event_url + rationale + bear summary + supply chain + trade-setup | + sentence-level citations from 8-K / press release + peer-cohort overlay + filing deep links | EDGAR full-text indexing + typed facts (#143 PR-3) |
 | Feedback | None (until PR #292) | Interested/Dismissed buttons + 2-level taxonomy | **PR #292 in-flight** |
 | Position context | None | Current portfolio import + correlation overlay | Alpaca portfolio API integration |
-| **Resilience** | `AlphalensJobStale` 48h threshold (asymmetric: 3× cadence versus 2× for other units, justified by ~15-20 min wall time × LLM API variance). `verify-cache` ExecStartPost gap-detection halts the chain before the Django rebuild if the parquet is missing/incomplete (PR-E). `alphalens_thematic_zero_row_days` metric serves as a leading indicator. | Plus per-source ingest success (Polygon vs GDELT vs RSS) with a domain alert if any source goes dark | Per-source counters in `news_ingest` |
+| **Resilience** | `AlphalensJobStale` 12h threshold (3× the 4h cadence; lowered from 48h when 6×/day landed in PR #315 — asymmetric versus 2× for other units, justified by ~15-20 min wall time × LLM API variance). `verify-cache` ExecStartPost gap-detection halts the chain before the Django rebuild if the parquet is missing/incomplete (PR-E). `alphalens_thematic_zero_row_days` metric serves as a leading indicator. | Plus per-source ingest success (Polygon vs GDELT vs RSS) with a domain alert if any source goes dark | Per-source counters in `news_ingest` |
 
 ### L3 — Weekly review (from zero)
 
@@ -231,7 +231,7 @@ That is the goal. Everything else is the road.
 - ⏳ Peer-cohort overlay using the `sector_peers` infrastructure
 - ⏳ Filing deep links (BamSEC pattern)
 - ⏳ Historical analog reasoning — embedding lookup in the `thematic_briefs` archive
-- ⏳ Typed-facts injection into the generator — gated on #143 template engine PR-3
+- ✅ Typed-facts injection into the generator — SHIPPED PR #324 (epic #321 PR-3)
 
 ### Track E: Position-context layer (L2)
 - ⏳ Import paper portfolio from Alpaca API → display correlation with existing holdings
@@ -251,8 +251,8 @@ That is the goal. Everything else is the road.
 
 ### Track H: GDELT data pipeline ongoing improvements
 - ✅ Title cleanup edge cases (PR #259 / #271 / #291 catalogued)
-- ⏳ Multi-source dedup (GDELT × Polygon news × RSS overlap) — gated on #143 PR-4 (template-tuple dedup)
-- ▶ **Structured event templates (#143)** — Ravenpack-style YAML+predicates engine as the foundation layer for Tracks D (typed facts → evidence panel), G (compound catalyst sequences → validated paradigm scorer reuse), H (multi-source dedup via template tuples). Hybrid mode (templates first, Flash fallback). 5-PR sequence: engine + 5 templates / hybrid integration / structured facts → generator / multi-source dedup / compound catalysts (gated). Design memo: `docs/research/template_engine_design_2026_05_30.md` (LOCKED, PR #320 merged 2026-05-30). Implementation epic: #321.
+- ✅ Multi-source dedup via template tuples — SHIPPED PR #325 (epic #321 PR-4); collapses GDELT × Polygon × RSS echoes of the same template-extracted event
+- ▶ **Structured event templates (#143)** — Ravenpack-style YAML+predicates engine, the foundation layer for Tracks D (typed facts → evidence panel), G (compound catalyst sequences → validated paradigm scorer reuse), H (multi-source dedup via template tuples). Hybrid mode (templates first, DeepSeek v4 Flash fallback). Epic #321 is **5-of-6 shipped**: ✅ PR-1 engine + 5 templates + 6 predicates + CLI (#322) · ✅ PR-2 hybrid integration (#323) · ✅ PR-3 structured facts → generator (#324) · ✅ PR-4 multi-source dedup (#325) · ✅ PR-6 SEC EDGAR 8-K Exhibit 99.1 press-release ingest (#332) · ⏳ PR-5 compound catalysts (gated on ≥30d telemetry). Design memo: `docs/research/template_engine_design_2026_05_30.md` (LOCKED, PR #320 merged 2026-05-30).
 
 **Legend:** ✅ shipped · ▶ in-flight · ⏳ pending
 
@@ -268,7 +268,7 @@ That is the goal. Everything else is the road.
 | "AI exoskeleton" rhetoric | Perplexity research ([[feedback_adversarial_reviewer_bias_2026_05_16]]) — rhetoric, not technique. |
 | "360-degree view" | Marketing buzzword. We have `also_in_themes`; that is enough. |
 | Multi-agent orchestration (AutoGPT-style) | YAGNI for decision support; Pro+Flash routing is enough. |
-| Closed-source AI | All LLM calls go through canonical clients (`OpenRouterClient` in the thematic pipeline after PR-G #318; `GeminiClient` is legacy on the research-side `llm_scorers.py`). Vendor lock-in transparency; backend is swappable without touching call sites. |
+| Closed-source AI | All LLM calls go through canonical clients (`OpenRouterClient` in the thematic pipeline (PR-G #318) AND the research-side `llm_scorers.py` (PR #331); `GeminiClient` is legacy, retained only for the ad-hoc `scripts/analyze_rejections.py`). Vendor lock-in transparency; backend is swappable without touching call sites. |
 | Mandate / compliance UI | Retail single-user; no fund constraints to express. |
 | Sentiment analysis as a standalone signal | Loughran-McDonald + Tetlock show sentiment is weak alpha. Combine with catalyst structure if at all. |
 
@@ -276,14 +276,14 @@ That is the goal. Everything else is the road.
 
 ## 9. Roadmap priorities
 
-### Near-term (next ~6 PRs, ~2 weeks)
+### Near-term (originally ~6 PRs / ~2 weeks — as of 2026-05-31 mostly shipped; outstanding: PR #292 merge, outcome join, L3 SPA stub)
 
 1. **PR #292 merge** (feedback ledger v1) — when ready
 2. **VPS auto-paper-submit ExecStartPost** (Track F) — eliminates the daily manual Mac flow [✅ SHIPPED PR #317 / paper-submit + paper-reconcile timers]
 3. **4×/day pipeline cadence** (Track F) — captures pre-market US + Asia open [✅ SHIPPED PR #315 → pivoted to 6×/day]
 4. **Feedback ledger v2 — outcome join** (Track A v2) — links each decision to its paper-trade PnL
 5. **L3 weekly review SPA stub** (Track C) — minimal view: list of decisions + paper-trade outcomes (no calibration curve yet)
-6. **#143 template engine PR-1** (Track H) — `alphalens_pipeline/thematic/extraction/templates/`: engine + 5 templates + 6 predicates + holdout telemetry + standalone `alphalens templates {validate,evaluate}` CLI. Foundation for Tracks D/G/H. Design memo: `docs/research/template_engine_design_2026_05_30.md`. Velocity-affirmed insert after the pre-merge zen review.
+6. **#143 template engine** (Track H) — ✅ SHIPPED: PR-1 engine + 5 templates + 6 predicates + `alphalens templates {validate,evaluate}` CLI (#322), PR-2 hybrid integration (#323), PR-3 structured facts → generator (#324), PR-4 multi-source dedup (#325), PR-6 8-K Exhibit 99.1 press-release ingest (#332). Only PR-5 (compound catalysts) outstanding, gated on ≥30d telemetry. Foundation for Tracks D/G/H. Design memo: `docs/research/template_engine_design_2026_05_30.md`.
 
 ### Medium-term (1-3 months)
 
@@ -350,5 +350,6 @@ That is the goal. Everything else is the road.
 | 2026-05-30 | Full Polish → English translation of all prose | The doc is rendered as a public SPA route at `app.alphalens.kamilpajak.pl/vision` and therefore qualifies as UI surface, not just an internal research note. CLAUDE.md `Conventions` § enforces English-only for code + UI; `docs/research/` is normally Polish-acceptable (postmortems), but this specific file is shipped as user-facing content. Mermaid diagrams, file paths, PR numbers, code identifiers and `[[memory]]` link slugs all preserved unchanged — only Polish prose was translated. |
 | 2026-05-30 | §2 Cost discipline anchor — corrected cost snapshot | Cloudflare flagged as ~$10/mo (Pages + Tunnel + Access bundle), not free as previously noted. Total monthly spend recalibrated $48 → $58. Soft cap raised $50 → $60 to match reality while preserving the doctrine (vendor-share ≤ 60%, equivalent-quality ≥50% saving triggers swap, never downgrade for cost). |
 | 2026-05-30 | §3 P1 Ingest cap label corrected | Label said `cap 200/day` (true when pipeline was 1×/day pre-PR-F #315) but the cap is applied per `ingest_daily()` call. With 6×/day cadence the daily upper bound is 6 × 200 = 1200 unique articles. Updated label to `cap 200/run (up to 1200/day at 6× cadence)`. Verified via `news_ingest.py:213-215` `.head(max_items)` per-call enforcement and `polygon_news.py` per-UTC-day read-through cache that `--force` flag (passed by `alphalens-thematic-build.service`) defeats so each of the 6 runs re-fetches fresh from APIs. |
+| 2026-05-31 | Current-state sync after the 2026-05-31 merge wave (multi-agent audit vs git/gh/CLAUDE.md/MEMORY) | Template-engine epic #321 advanced fast: PR-1 (#322) + PR-2 (#323) + PR-3 (#324) + PR-4 (#325) + PR-6 (#332) all merged → §7 Track D typed-facts and Track H multi-source dedup flipped ⏳→✅; Track H structured-templates bullet now "5-of-6 shipped" (only PR-5 compound catalysts gated); §9 near-term item 6 marked shipped. §8 + §3: research-side `llm_scorers.py` swapped Gemini→DeepSeek (PR #331), so GeminiClient is legacy only for `scripts/analyze_rejections.py`; "Flash fallback" → "DeepSeek v4 Flash fallback". §6 L2 `AlphalensJobStale` threshold 48h→12h (lowered when 6×/day landed, PR #315); §6 L1 metric name fully qualified. 36 other claims verified CURRENT (cost ~$58/mo, L1/L2 infra + PR numbers, PR #292 still OPEN, model labels). |
 
 Editing is **expected** — this is not a LOCKED memo. Every meaningful architectural decision (a new track, a priority change, a retired feature) should land here at the end of the session.
