@@ -136,6 +136,26 @@ def _resolved_pipeline_modules() -> set[str]:
             modules.update(DIST_TO_MODULE_OVERRIDES[dist])
         else:
             modules.add(dist.replace("-", "_"))
+
+    # Parser sanity check (zen pre-merge MEDIUM, PR #326 follow-up):
+    # ``uv export --format requirements-txt`` is not a formally
+    # documented stable interface. A future uv minor bump could change
+    # line-continuation or header formatting in a way that silently
+    # drops entries — which would turn this test into a false-negative
+    # gate (it'd pass even after re-introducing the jsonschema bug).
+    # These three modules are unconditionally required by the pipeline
+    # (pandas + typer + requests are top-of-file imports in dozens of
+    # files); if any is missing the parser is broken, not the deps.
+    canary_modules = {"pandas", "typer", "requests"}
+    missing_canary = canary_modules - modules
+    if missing_canary:
+        raise unittest.SkipTest(
+            f"uv export parser sanity check failed — missing {sorted(missing_canary)} "
+            "from resolved closure. Likely cause: `uv export --format "
+            "requirements-txt` output format changed and the parser needs "
+            "an update. Refusing to run the enforcement check on a stale "
+            "closure (would produce false negatives)."
+        )
     return modules
 
 
@@ -151,16 +171,34 @@ _DEFERRED_PARENT_TYPES: tuple[type, ...] = (
 )
 
 
-def _is_deferred_import(node: ast.AST, tree: ast.AST) -> bool:
-    """True if ``node`` sits inside a try block or a function body.
+def _is_type_checking_guard(parent: ast.AST) -> bool:
+    """True if ``parent`` is an ``if TYPE_CHECKING:`` block.
 
-    Both patterns mean "absence is handled at runtime" — try/except
-    catches the ImportError; function-body imports never fire until the
-    function is called, and the CLI cron path never calls audit /
-    preaudit / preregister.
+    ``from typing import TYPE_CHECKING`` is False at runtime, so any
+    import nested inside ``if TYPE_CHECKING:`` never executes — static
+    analysers parse the block but Python skips it. Common pattern for
+    forward type hints; absent in the slim Docker image is fine.
+    Caught by zen pre-merge review of PR #326 (MEDIUM).
+    """
+    if not isinstance(parent, ast.If):
+        return False
+    test = parent.test
+    if isinstance(test, ast.Name) and test.id == "TYPE_CHECKING":
+        return True
+    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+
+
+def _is_deferred_import(node: ast.AST, tree: ast.AST) -> bool:
+    """True if ``node`` sits inside a deferred-execution parent block.
+
+    Three patterns all mean "absence is handled at runtime":
+      - try/except — catches the ImportError
+      - function body — only fires when the function is called; the
+        CLI cron path never calls audit / preaudit / preregister
+      - ``if TYPE_CHECKING:`` — block is False at runtime, body skipped
     """
     for parent in ast.walk(tree):
-        if isinstance(parent, _DEFERRED_PARENT_TYPES):
+        if isinstance(parent, _DEFERRED_PARENT_TYPES) or _is_type_checking_guard(parent):
             for child in ast.walk(parent):
                 if child is node:
                     return True
@@ -250,6 +288,58 @@ class TestJsonschemaSpecificallyDeclared(unittest.TestCase):
             "yaml_schema.py imports it at module load + the CLI eagerly "
             "registers the templates subapp at startup.",
         )
+
+
+class TestDeferredImportExemptions(unittest.TestCase):
+    """Unit-test the AST-walk filter against synthetic snippets.
+
+    Pins the exemption matrix so a future refactor of the filter (e.g.
+    adding more parent types) preserves the documented contract.
+    """
+
+    def _walk_and_classify(self, src: str) -> list[tuple[str, bool]]:
+        tree = ast.parse(src)
+        out: list[tuple[str, bool]] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    name = alias.name.split(".")[0]
+                    out.append((name, _is_deferred_import(node, tree)))
+            elif (
+                isinstance(node, ast.ImportFrom)
+                and node.module
+                and not (node.level and node.level > 0)
+            ):
+                name = node.module.split(".")[0]
+                out.append((name, _is_deferred_import(node, tree)))
+        return out
+
+    def test_top_level_import_not_deferred(self):
+        out = self._walk_and_classify("import pandas")
+        self.assertEqual(out, [("pandas", False)])
+
+    def test_function_body_import_is_deferred(self):
+        src = "def f():\n    import pandas\n"
+        self.assertEqual(self._walk_and_classify(src), [("pandas", True)])
+
+    def test_try_block_import_is_deferred(self):
+        src = "try:\n    import pandas\nexcept ImportError:\n    pandas = None\n"
+        self.assertEqual(self._walk_and_classify(src), [("pandas", True)])
+
+    def test_type_checking_block_import_is_deferred(self):
+        src = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import pandas\n"
+        out = self._walk_and_classify(src)
+        # First entry is the unconditional ``from typing import …`` —
+        # NOT deferred. Second entry is the guarded pandas import —
+        # MUST be deferred (False at runtime).
+        self.assertEqual(out, [("typing", False), ("pandas", True)])
+
+    def test_typing_dot_type_checking_also_deferred(self):
+        # Variant: ``if typing.TYPE_CHECKING:`` (qualified attribute
+        # access instead of bare name). Same semantics, same skip.
+        src = "import typing\nif typing.TYPE_CHECKING:\n    import pandas\n"
+        out = self._walk_and_classify(src)
+        self.assertEqual(out, [("typing", False), ("pandas", True)])
 
 
 if __name__ == "__main__":
