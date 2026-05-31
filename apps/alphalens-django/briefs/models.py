@@ -123,7 +123,14 @@ class Brief(models.Model):
     # evidence panel. Both are NULL together — present-template-id-with-
     # NULL-facts is the malformed-JSON degradation case the resolver
     # already filters at source.
-    brief_template_id = models.CharField(max_length=64, blank=True, default="")
+    #
+    # max_length=128 is generous — the upstream JSON Schema regex
+    # ^[a-z][a-z0-9_]*$ has no length cap, so a hypothetical 80-char
+    # template_id would silently truncate at max_length=64 on bulk_create.
+    # 128 gives the analyst margin without bloating the row (Postgres
+    # VARCHAR is variable-length on disk). Bumped per zen pre-merge MEDIUM
+    # 2026-05-31. The current 5 ship templates max at 22 chars.
+    brief_template_id = models.CharField(max_length=128, blank=True, default="")
     brief_template_facts = models.JSONField(null=True, blank=True)
     brief_generated_at = models.DateTimeField(null=True, blank=True)
 

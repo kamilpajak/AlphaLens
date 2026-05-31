@@ -440,6 +440,13 @@ def generate_briefs(
         # facts above so the SPA can render typed citations without
         # re-touching the events parquet. Mirror b.get for trade_setup —
         # use json string everywhere on the orchestrator's output edge.
+        # Intentional double-serialise: scorer wrote catalyst_template_facts_json,
+        # _row_template_facts parsed it back to a dict for the prompt builder +
+        # richness counter, and now we re-emit a fresh json string keyed to the
+        # brief's column name. The roundtrip costs ~microseconds per row and
+        # keeps every consumer (parquet, Django ingest, SPA wire format) on the
+        # same canonical interop boundary. Acked as intentional by zen pre-merge
+        # MEDIUM 2026-05-31.
         tmpl_id = _row_template_id(row)
         tmpl_facts = _row_template_facts(row)
         rows.append(
