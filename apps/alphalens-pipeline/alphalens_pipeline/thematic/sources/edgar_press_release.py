@@ -207,19 +207,34 @@ def _base_dir_from_index_filename(file_name: str, cik_padded: str) -> str:
 # (unclosed <td>s, &nbsp; entities, <span> noise inside the document cell), not
 # strict XML, so an XML parser would raise on the first malformed tag. The
 # stdlib HTMLParser is tolerant and needs no third-party dependency.
+_DOCUMENT_TABLE_SUMMARY = "Document Format Files"
+# Column indices in the Document Format Files table: Seq, Description,
+# Document(<a href>), Type, Size.
+_DOC_CELL_INDEX = 2
+_TYPE_CELL_INDEX = 3
+
+
 class _DocumentTableParser(HTMLParser):
     """Walk the ``Document Format Files`` table → ``{Type -> doc basename}``.
 
     Each ``<tr>`` row carries five cells: Seq, Description, Document (with the
-    document ``<a href>``), Type, Size. We track per-row the first href seen and
-    the trailing cells' text, then on the closing ``</tr>`` map the Type cell
-    text to the href basename (with any ``/ix?doc=`` iXBRL viewer prefix and
-    directory path stripped). First occurrence of a Type wins.
+    document ``<a href>``), Type, Size. We capture the href from the Document
+    cell only (index 2) — not the first href anywhere in the row, so a footnote
+    link in the Description cell cannot hijack it — and on the closing ``</tr>``
+    map the Type cell (index 3) to that href basename (with any ``/ix?doc=``
+    iXBRL viewer prefix and directory path stripped). First occurrence of a Type
+    wins.
+
+    Parsing is scoped to the ``summary="Document Format Files"`` table so the
+    sibling ``Data Files`` table (XBRL render files, identical column layout)
+    and any third-party tables cannot contribute a colliding Type regardless of
+    their DOM order.
     """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.docs: dict[str, str] = {}
+        self._in_target_table = False
         self._in_row = False
         self._cells: list[str] = []
         self._cell_text: list[str] = []
@@ -227,6 +242,12 @@ class _DocumentTableParser(HTMLParser):
         self._in_cell = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "table":
+            if dict(attrs).get("summary") == _DOCUMENT_TABLE_SUMMARY:
+                self._in_target_table = True
+            return
+        if not self._in_target_table:
+            return
         if tag == "tr":
             self._in_row = True
             self._cells = []
@@ -235,7 +256,12 @@ class _DocumentTableParser(HTMLParser):
         elif tag in ("td", "th") and self._in_row:
             self._in_cell = True
             self._cell_text = []
-        elif tag == "a" and self._in_row and self._row_href is None:
+        elif (
+            tag == "a"
+            and self._in_row
+            and self._row_href is None
+            and len(self._cells) == _DOC_CELL_INDEX  # only the Document cell
+        ):
             for name, value in attrs:
                 if name == "href" and value:
                     self._row_href = value
@@ -246,6 +272,12 @@ class _DocumentTableParser(HTMLParser):
             self._cell_text.append(data)
 
     def handle_endtag(self, tag: str) -> None:
+        if tag == "table" and self._in_target_table:
+            self._in_target_table = False
+            self._in_row = False
+            return
+        if not self._in_target_table:
+            return
         if tag in ("td", "th") and self._in_row:
             self._cells.append("".join(self._cell_text).strip())
             self._in_cell = False
@@ -254,10 +286,9 @@ class _DocumentTableParser(HTMLParser):
             self._in_row = False
 
     def _finish_row(self) -> None:
-        if self._row_href is None or len(self._cells) < 4:
+        if self._row_href is None or len(self._cells) <= _TYPE_CELL_INDEX:
             return
-        # Layout: [Seq, Description, Document, Type, Size]; Type is index 3.
-        doc_type = self._cells[3].upper()
+        doc_type = self._cells[_TYPE_CELL_INDEX].upper()
         basename = _basename_from_href(self._row_href)
         if doc_type and basename and doc_type not in self.docs:
             self.docs[doc_type] = basename
@@ -290,10 +321,9 @@ def parse_index_documents(index_html: str) -> dict[str, str]:
     return parser.docs
 
 
-def _pick_8k_primary_name(index_html: str) -> str | None:
-    """Pick the primary 8-K document basename from the index.htm document table."""
-    docs = parse_index_documents(index_html)
-    for doc_type in _PRIMARY_8K_TYPES:
+def _pick_from_docs(docs: dict[str, str], types) -> str | None:
+    """Return the basename for the first matching Type (in preference order)."""
+    for doc_type in types:
         name = docs.get(doc_type)
         if name:
             return name
@@ -306,12 +336,7 @@ def pick_ex_991_name(index_html: str) -> str | None:
     Takes the filing's ``{accession}-index.htm`` HTML and returns the basename
     whose document Type is ``EX-99.1``, falling back to the bare ``EX-99``.
     """
-    docs = parse_index_documents(index_html)
-    for doc_type in _EX_991_TYPES:
-        name = docs.get(doc_type)
-        if name:
-            return name
-    return None
+    return _pick_from_docs(parse_index_documents(index_html), _EX_991_TYPES)
 
 
 # --- (3) per-hit enrichment: base_dir -> items + EX-99.1 body (1 index.htm) --
@@ -341,11 +366,12 @@ def _enrich_filing(row: dict, *, client: SecEdgarClient) -> dict | None:
     index_html = client.get_text(f"{base_dir}/{row['accession']}-index.htm")
     if not index_html:
         return None
-    primary = _pick_8k_primary_name(index_html)
+    docs = parse_index_documents(index_html)  # parse once, look up both Types
+    primary = _pick_from_docs(docs, _PRIMARY_8K_TYPES)
     items = extract_8k_items(_safe_text(client, f"{base_dir}/{primary}") or "") if primary else []
     if not (set(_strip_subsection(items)) & PRESS_RELEASE_ITEMS):
         return None
-    ex_name = pick_ex_991_name(index_html)
+    ex_name = _pick_from_docs(docs, _EX_991_TYPES)
     if not ex_name:
         # No press-release exhibit -> not our signal.
         return None

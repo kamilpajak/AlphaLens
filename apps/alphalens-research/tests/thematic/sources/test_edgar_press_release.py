@@ -263,6 +263,43 @@ class TestParseIndexDocuments(unittest.TestCase):
     def test_malformed_html_yields_empty_map(self):
         self.assertEqual(epr.parse_index_documents(""), {})
 
+    def test_data_files_table_cannot_collide_on_type(self):
+        # The page also carries a sibling "Data Files" table with the SAME
+        # column layout. Even when it appears FIRST and carries a row whose
+        # Type is "8-K", the parser must ignore it and only read the
+        # "Document Format Files" table.
+        html = """
+        <table class="tableFile" summary="Data Files">
+          <tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>
+          <tr><td>1</td><td>decoy</td><td><a href="/Archives/edgar/data/1/2/decoy.htm">decoy.htm</a></td><td>8-K</td><td>1</td></tr>
+        </table>
+        <table class="tableFile" summary="Document Format Files">
+          <tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>
+          <tr><td>1</td><td>8-K</td><td><a href="/Archives/edgar/data/1/2/real_8k.htm">real_8k.htm</a></td><td>8-K</td><td>2</td></tr>
+        </table>
+        """
+        docs = epr.parse_index_documents(html)
+        self.assertEqual(docs["8-K"], "real_8k.htm")  # decoy ignored
+        self.assertNotIn("decoy.htm", docs.values())
+
+    def test_description_cell_anchor_does_not_hijack_href(self):
+        # A footnote <a> in the Description cell (index 1) must NOT be captured
+        # as the document href — only the Document cell (index 2) counts.
+        html = """
+        <table class="tableFile" summary="Document Format Files">
+          <tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>
+          <tr>
+            <td>2</td>
+            <td>EXHIBIT 99.1 <a href="/footnote.htm">note</a></td>
+            <td><a href="/Archives/edgar/data/1/2/the_real_ex991.htm">the_real_ex991.htm</a></td>
+            <td>EX-99.1</td>
+            <td>3</td>
+          </tr>
+        </table>
+        """
+        docs = epr.parse_index_documents(html)
+        self.assertEqual(docs["EX-99.1"], "the_real_ex991.htm")
+
 
 class TestPickEx991(unittest.TestCase):
     def test_ex_991_picked_from_index_table(self):
@@ -392,22 +429,17 @@ class TestFetchDailyNews(unittest.TestCase):
             self.assertEqual(set(df["tickers"].iloc[0]), {"AAPL"})
             self.assertEqual(set(df["source"]), {"edgar_press_release"})
 
-    def test_exhibit_found_even_with_filingsummary_lacking_ex991(self):
-        # Regression for issue #337: a FilingSummary.xml WITHOUT any EX-99.1
-        # doctype is present (the real SEC behaviour), yet exhibit discovery
-        # from index.htm still finds ef..._ex99-1.htm and the row survives.
-        fs_no_991 = (
-            "<FilingSummary><FilingSummaryList>"
-            '<File doctype="8-K" original="primary.htm"/>'
-            '<File doctype="EX-101.INS"/>'
-            "</FilingSummaryList></FilingSummary>"
-        )
-
+    def test_exhibit_discovery_sourced_from_index_htm(self):
+        # Regression for issue #337: exhibit discovery must come from the
+        # index.htm document table, NOT FilingSummary.xml (which never carries
+        # an EX-99.1 doctype). The router below deliberately raises if the
+        # adapter ever fetches FilingSummary.xml — proving the dead dependency
+        # is gone and the EX-99.1 still resolves end-to-end.
         def route(url: str) -> str:
             if url.endswith(".idx"):
                 return SAMPLE_IDX
             if url.endswith("FilingSummary.xml"):
-                return fs_no_991
+                raise AssertionError("adapter must not fetch FilingSummary.xml (issue #337)")
             if url.endswith("-index.htm"):
                 return SAMPLE_INDEX_991
             if url.endswith("primary.htm"):
