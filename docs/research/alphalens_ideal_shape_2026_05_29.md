@@ -177,12 +177,14 @@ That is the goal. Everything else is the road.
 
 ### L1 — Real-time push
 
+Two distinct L1 streams exist (the table below keeps them separate): **(a) EDGAR portfolio-alert stream** — held + watchlist 8-K / Form-4, severity-classified, **already pushing to Telegram**; **(b) thematic-candidate push** — daily-brief candidates, **not yet pushed** (Track B deferred).
+
 | Element | Current state | Ideal | Gap |
 |---------|---------------|-------|-----|
-| Detection | Layer 1 EDGAR detector live (VPS systemd-user, every 15 min, PR #310) | Plus M&A leak detector + earnings surprise filter | M&A pattern matcher + extreme-PEAD trigger |
-| Push channel | candidates.db (logged only) | Telegram bot push | Bot infrastructure |
-| Filter | None — log everything | Multi-layer scoring → max 3-5 push/day | Alert-fatigue threshold |
-| Confirmation | Manual review next day in L2 | Inline confirm via Telegram inline button | Bot interactive UI |
+| Detection | EDGAR detector live (VPS systemd-user, every 15 min, PR #310) — classifies 8-K items by empirical-CAR severity × portfolio relevance + Form-4 insider buys | Plus market-wide M&A leak detector + earnings-surprise filter (beyond held/watchlist) | M&A pattern matcher + extreme-PEAD trigger — today M&A item 2.01 = generic MEDIUM and earnings 2.02 = LOW/digest, no dedicated leak/PEAD push trigger |
+| Push channel | **(a)** EDGAR stream pushes to Telegram (`TelegramHandler` live, gated on `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`); **(b)** thematic candidates → `candidates.db` (log-only queue, no live drain) | Both streams push via Telegram | Thematic-candidate Telegram push (Track B) — the EDGAR-stream bot infra already exists |
+| Filter | `SignalClassifier` severity × relevance → `AUTO_TRIGGER` / `APPROVAL` / `DIGEST` / `IGNORE` routing (high-severity → push, rest → batched digest) | Same + explicit max 3-5 push/day cap | Alert-fatigue day-cap (no hard 3-5/day limit yet) |
+| Confirmation | `APPROVAL` action → Telegram message (`sendMessage`); manual review next day in L2 | Inline confirm via Telegram inline button | Bot interactive UI (inline buttons) |
 | **Resilience** | `AlphalensJobStale` Prometheus alert fires after 30 min without success (≥ 2× the 15-min cadence) → Telegram via Alertmanager (PR #312). Textfile metrics `alphalens_job_last_success_timestamp_seconds` per-job (PR #311) | Plus per-event-class success rate (`m_and_a_detected_total`, etc.) as a leading drift indicator | Domain counters in the EDGAR detector |
 
 ### L2 — Daily brief (current core)

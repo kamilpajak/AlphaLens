@@ -185,7 +185,7 @@
 
 		<!-- Rendered markdown -->
 		<article
-			class="lg:col-span-9 border border-grid bg-bg-1 px-5 sm:px-8 py-6 fade-up
+			class="vision-article lg:col-span-9 border border-grid bg-bg-1 px-5 sm:px-8 py-6 fade-up
 				prose prose-invert max-w-none
 				prose-headings:font-display prose-headings:text-amber prose-headings:tracking-tight
 				prose-h1:text-3xl prose-h2:text-2xl prose-h2:mt-10 prose-h2:mb-4 prose-h2:border-b prose-h2:border-grid prose-h2:pb-2
@@ -207,3 +207,18 @@
 		</article>
 	</div>
 </div>
+
+<style>
+	/* Mermaid diagrams are injected into {@html} content as <div class="mermaid">,
+	   so Svelte's scoped styles can't reach them — :global under the
+	   component-owned .vision-article element centres them without leaking. */
+	.vision-article :global(.mermaid) {
+		display: flex;
+		justify-content: center;
+		margin: 1.5rem 0;
+	}
+	.vision-article :global(.mermaid svg) {
+		max-width: 100%;
+		height: auto;
+	}
+</style>
