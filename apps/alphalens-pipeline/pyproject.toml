@@ -44,6 +44,17 @@ dependencies = [
     # for SEC EDGAR Atom feeds + Form-4 XML + FilingSummary.xml parsing
     # (B314 fix). defusedxml is a drop-in for xml.etree.ElementTree.
     "defusedxml>=0.7.1",
+    # Template YAML schema validation (PR #322 — epic #321 PR-1). Loaded
+    # eagerly at `alphalens` CLI startup via `alphalens_cli/main.py`
+    # registering the `templates` subapp, so a missing dep crashes EVERY
+    # invocation of the CLI inside the pipeline image — not just
+    # `alphalens templates {validate,evaluate}`. Listed explicitly here
+    # because the only workspace-transitive supplier was drf-spectacular
+    # (Django side), and `uv sync --frozen --no-dev --package
+    # alphalens-pipeline` strips that branch. Caught when the pipeline
+    # image was first rebuilt post-PR-1 (2026-05-31) — see
+    # feedback_pipeline_image_manual_rebuild_after_merge.
+    "jsonschema>=4.0.0",
 ]
 
 [project.scripts]
