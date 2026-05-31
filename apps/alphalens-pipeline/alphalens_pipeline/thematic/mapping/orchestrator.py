@@ -1,7 +1,7 @@
-"""Layer 3 orchestrator: propose candidates with Gemini 3 Pro, verify via 4 gates.
+"""Layer 3 orchestrator: propose candidates with DeepSeek v4-pro, verify via 4 gates.
 
 For each input theme, the orchestrator (a) asks the LLM for 5-15 candidate
-small/mid-cap beneficiaries (see :mod:`gemini_mapper`) and (b) verifies each
+small/mid-cap beneficiaries (see :mod:`theme_mapper`) and (b) verifies each
 candidate against four independent gates:
 
 1. **ETF holdings** — is the ticker a constituent of any thematic ETF mapped
@@ -32,8 +32,7 @@ from alphalens_pipeline.data.alt_data.polygon_client import (
     PolygonClient,
     get_default_polygon_client,
 )
-from alphalens_pipeline.thematic.mapping import catalyst_resolver
-from alphalens_pipeline.thematic.mapping import theme_mapper as gemini_mapper
+from alphalens_pipeline.thematic.mapping import catalyst_resolver, theme_mapper
 from alphalens_pipeline.thematic.verification import (
     insider,
     mcap_filter,
@@ -258,7 +257,7 @@ def _build_row(
         "ticker": cand["ticker"],
         "company_name": cand.get("company_name", ""),
         "rationale": cand.get("rationale", ""),
-        "gemini_confidence": cand.get("confidence", 0.0),
+        "llm_confidence": cand.get("confidence", 0.0),
         "market_cap": market_cap,
         "gates_passed": verdict["gates_passed"],
         "gates_passed_str": ",".join(verdict["gates_passed"]),
@@ -282,7 +281,7 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
     "ticker",
     "company_name",
     "rationale",
-    "gemini_confidence",
+    "llm_confidence",
     "market_cap",
     "gates_passed",
     "gates_passed_str",
@@ -315,7 +314,7 @@ def _propose_and_filter_candidates(
     Returns (in-bracket candidate dicts, ticker→mcap map, search keywords).
     Empty candidates list signals "nothing further to do for this theme".
     """
-    proposal = gemini_mapper.propose_candidates(theme=theme, api_key=api_key, llm_client=pro_client)
+    proposal = theme_mapper.propose_candidates(theme=theme, api_key=api_key, llm_client=pro_client)
     candidates = proposal.get("candidates") or []
     if not candidates:
         return [], {}, []
@@ -348,7 +347,7 @@ def _verify_candidates_for_theme(
 ) -> tuple[list[dict], int, int]:
     """Run the 4-gate verify on each candidate with diversity cap + backfill.
 
-    Candidates arrive sorted by ``gemini_confidence`` desc. The loop keeps up
+    Candidates arrive sorted by ``llm_confidence`` desc. The loop keeps up
     to ``_MAX_CANDIDATES_PER_THEME`` rows per theme; on hard-fail, it pulls
     the next-highest-confidence candidate (backfill), capped at
     ``_MAX_VERIFY_ATTEMPTS_PER_THEME`` total verify calls. Without the
@@ -409,7 +408,7 @@ def map_themes(
 ) -> pd.DataFrame:
     """For each theme, propose candidates, post-filter by real-time mcap, then verify.
 
-    The Gemini Pro client is built ONCE for the whole batch (avoid per-theme
+    The DeepSeek v4-pro client is built ONCE for the whole batch (avoid per-theme
     handshake), and the Polygon news window is fetched ONCE for all
     candidates (avoid per-candidate 5-req/min rate-limit sleep). After Pro
     returns candidates, ``mcap_filter.filter_by_mcap`` drops anything outside
@@ -487,11 +486,11 @@ def map_themes(
         df = (
             pd.DataFrame(rows)
             # ``ticker`` is the deterministic tie-break so ties on
-            # (n_gates_passed, gemini_confidence) don't produce
+            # (n_gates_passed, llm_confidence) don't produce
             # run-to-run ordering jitter (e.g. when Pro returns two
             # candidates at the same confidence).
             .sort_values(
-                ["theme", "n_gates_passed", "gemini_confidence", "ticker"],
+                ["theme", "n_gates_passed", "llm_confidence", "ticker"],
                 ascending=[True, False, False, True],
             )
             .reset_index(drop=True)

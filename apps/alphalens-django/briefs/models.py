@@ -36,7 +36,7 @@ class Brief(models.Model):
     theme = models.CharField(max_length=128, db_index=True)
     company_name = models.CharField(max_length=256)
     rationale = models.TextField(blank=True)
-    gemini_confidence = models.FloatField(null=True, blank=True)
+    llm_confidence = models.FloatField(null=True, blank=True)
     market_cap = models.FloatField(null=True, blank=True)
 
     gates_passed = models.JSONField(default=list, blank=True)

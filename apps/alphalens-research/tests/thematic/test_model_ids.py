@@ -21,8 +21,8 @@ from __future__ import annotations
 import unittest
 
 from alphalens_pipeline.thematic.argumentation import generator
-from alphalens_pipeline.thematic.extraction import event_extractor as gemini_flash
-from alphalens_pipeline.thematic.mapping import theme_mapper as gemini_mapper
+from alphalens_pipeline.thematic.extraction import event_extractor
+from alphalens_pipeline.thematic.mapping import theme_mapper
 
 # Models retired upstream (Gemini ids no longer routable under the new
 # OpenRouter-backed pipeline; any prod constant pointing at these would
@@ -41,19 +41,19 @@ CURRENT_FLASH_MODEL = "deepseek/deepseek-v4-flash"
 
 class TestThematicModelIds(unittest.TestCase):
     def test_pro_model_ids_are_current(self) -> None:
-        self.assertEqual(gemini_mapper.DEFAULT_MODEL, CURRENT_PRO_MODEL)
+        self.assertEqual(theme_mapper.DEFAULT_MODEL, CURRENT_PRO_MODEL)
         self.assertEqual(generator.PRO_MODEL, CURRENT_PRO_MODEL)
 
     def test_flash_model_ids_are_current(self) -> None:
         self.assertEqual(generator.FLASH_MODEL, CURRENT_FLASH_MODEL)
-        self.assertEqual(gemini_flash.DEFAULT_MODEL, CURRENT_FLASH_MODEL)
+        self.assertEqual(event_extractor.DEFAULT_MODEL, CURRENT_FLASH_MODEL)
 
     def test_no_prod_constant_points_at_a_retired_model(self) -> None:
         in_use = {
-            "gemini_mapper.DEFAULT_MODEL": gemini_mapper.DEFAULT_MODEL,
+            "theme_mapper.DEFAULT_MODEL": theme_mapper.DEFAULT_MODEL,
             "generator.PRO_MODEL": generator.PRO_MODEL,
             "generator.FLASH_MODEL": generator.FLASH_MODEL,
-            "gemini_flash.DEFAULT_MODEL": gemini_flash.DEFAULT_MODEL,
+            "event_extractor.DEFAULT_MODEL": event_extractor.DEFAULT_MODEL,
         }
         for name, model in in_use.items():
             self.assertNotIn(

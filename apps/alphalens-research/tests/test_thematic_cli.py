@@ -19,7 +19,7 @@ _FAKE_CANDIDATES = pd.DataFrame(
             "ticker": "QUBT",
             "company_name": "Quantum Computing Inc",
             "rationale": "Pure-play quantum hardware",
-            "gemini_confidence": 0.85,
+            "llm_confidence": 0.85,
             "market_cap": 1_780_000_000.0,
             "gates_passed": ["tenk", "press"],
             "gates_passed_str": "tenk,press",
@@ -154,6 +154,60 @@ class TestMapThemesCLI(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
 
 
+class TestExtractCLIModelEnvVar(unittest.TestCase):
+    """`extract --model` reads the post-DeepSeek env var, not the retired GEMINI_MODEL."""
+
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def test_extract_model_default_comes_from_alphalens_extract_model_env(self):
+        # A sentinel distinct from event_extractor.DEFAULT_MODEL so the test proves
+        # the env var (not the hard-coded default) supplied the value.
+        sentinel = "deepseek/deepseek-v4-flash-envtest"
+        captured = {}
+
+        def fake_extract_daily(*, date, news_dir, events_dir, api_key, model):
+            captured["model"] = model
+            return pd.DataFrame()
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
+                os.environ,
+                {"OPENROUTER_API_KEY": "fake", "ALPHALENS_EXTRACT_MODEL": sentinel},
+                clear=False,
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.event_extractor.extract_daily",
+                side_effect=fake_extract_daily,
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.roll_up",
+                return_value=pd.DataFrame(),
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.flag_novel",
+                return_value=pd.DataFrame(),
+            ),
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "thematic",
+                    "extract",
+                    "--date",
+                    "2026-05-15",
+                    "--news-dir",
+                    tmpdir,
+                    "--events-dir",
+                    tmpdir,
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(captured["model"], sentinel)
+
+
 class TestScoreCLI(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
@@ -166,7 +220,7 @@ class TestScoreCLI(unittest.TestCase):
                     "ticker": "QUBT",
                     "company_name": "Quantum Computing Inc",
                     "rationale": "x",
-                    "gemini_confidence": 0.85,
+                    "llm_confidence": 0.85,
                     "market_cap": 1.78e9,
                     "gates_passed": ["tenk"],
                     "gates_passed_str": "tenk",
@@ -423,7 +477,7 @@ class TestBriefCLI(unittest.TestCase):
                     "ticker": "QUBT",
                     "company_name": "Quantum Computing Inc",
                     "rationale": "Pure-play",
-                    "gemini_confidence": 0.85,
+                    "llm_confidence": 0.85,
                     "market_cap": 1.78e9,
                     "gates_passed_str": "tenk,press",
                     "verified": True,

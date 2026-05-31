@@ -3,7 +3,7 @@
 	import { page, updated } from '$app/state';
 	import { Activity, Database, Triangle } from 'lucide-svelte';
 	import favicon from '$lib/assets/favicon.svg';
-	import { GEMINI } from '$lib/models';
+	import { MODELS } from '$lib/models';
 	import MarketStatusBanner from '$lib/components/MarketStatusBanner.svelte';
 	import { startMarketStatusPoll } from '$lib/marketStatus.svelte';
 
@@ -37,7 +37,7 @@
 
 	// Footer ticker chips — context-switch per route so the slogans match
 	// the page the user is reading. Dashboard / briefs / brief / about all
-	// concern the thematic-tool pipeline (Polygon news + Gemini Pro/Flash +
+	// concern the thematic-tool pipeline (Polygon news + DeepSeek V4 Pro/Flash +
 	// verification gates), while /experiments concerns the active-alpha
 	// research ledger (αt thresholds, Bonferroni, multi-phase audit, PIT
 	// discipline). Same component, two vocabularies.
@@ -46,8 +46,8 @@
 		{ label: 'PRESS-GATE', value: 'tri-state ok' },
 		{ label: 'CATALYST-FLOOR', value: '0.55' },
 		{ label: 'MAGIC-FORMULA', value: 'cohort' },
-		{ label: 'PRO-MODEL', value: GEMINI.PRO },
-		{ label: 'FLASH-MODEL', value: GEMINI.FLASH },
+		{ label: 'PRO-MODEL', value: MODELS.PRO },
+		{ label: 'FLASH-MODEL', value: MODELS.FLASH },
 		{ label: 'PRESS-WINDOW', value: '30d' },
 		{ label: 'SLIPPAGE', value: '50bps' },
 		{ label: 'LIMIT', value: 'polygon 5rpm' }

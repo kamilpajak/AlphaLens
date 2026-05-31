@@ -27,7 +27,7 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     "ticker",
     "company_name",
     "rationale",
-    "gemini_confidence",
+    "llm_confidence",  # renamed from gemini_confidence 2026-05-31 (Gemini→DeepSeek); edit legacy.json alongside
     "market_cap",
     "gates_passed",
     "gates_passed_str",

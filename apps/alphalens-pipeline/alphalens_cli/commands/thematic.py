@@ -14,10 +14,9 @@ from alphalens_pipeline.thematic import clean_titles as clean_titles_mod
 from alphalens_pipeline.thematic import news_ingest
 from alphalens_pipeline.thematic import verify_cache as verify_cache_mod
 from alphalens_pipeline.thematic.argumentation import orchestrator as brief_orchestrator
-from alphalens_pipeline.thematic.extraction import event_extractor as gemini_flash
+from alphalens_pipeline.thematic.extraction import event_extractor
 from alphalens_pipeline.thematic.extraction import themes as themes_mod
-from alphalens_pipeline.thematic.mapping import orchestrator
-from alphalens_pipeline.thematic.mapping import theme_mapper as gemini_mapper
+from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
 from alphalens_pipeline.thematic.screening import scorer as screening_scorer
 
 thematic_app = typer.Typer(
@@ -77,18 +76,19 @@ def ingest(
 def extract(
     date: str = typer.Option(None, "--date", help=_DATE_OPTION_HELP),
     news_dir: Path = typer.Option(
-        gemini_flash.DEFAULT_NEWS_DIR, "--news-dir", help="Unified-news parquet root."
+        event_extractor.DEFAULT_NEWS_DIR, "--news-dir", help="Unified-news parquet root."
     ),
     events_dir: Path = typer.Option(
-        gemini_flash.DEFAULT_EVENTS_DIR,
+        event_extractor.DEFAULT_EVENTS_DIR,
         "--events-dir",
         help="Extracted-events parquet root.",
     ),
     model: str = typer.Option(
-        gemini_flash.DEFAULT_MODEL,
+        event_extractor.DEFAULT_MODEL,
         "--model",
-        envvar="GEMINI_MODEL",
-        help="Gemini model id (env GEMINI_MODEL as default; --model overrides).",
+        envvar="ALPHALENS_EXTRACT_MODEL",
+        help="OpenRouter LLM slug for event extraction (default DeepSeek v4-flash; "
+        "env ALPHALENS_EXTRACT_MODEL as default, --model overrides).",
     ),
     window_days: int = typer.Option(
         themes_mod.DEFAULT_WINDOW_DAYS,
@@ -111,7 +111,7 @@ def extract(
     if not api_key:
         raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
 
-    events = gemini_flash.extract_daily(
+    events = event_extractor.extract_daily(
         date=target,
         news_dir=news_dir,
         events_dir=events_dir,
@@ -143,7 +143,7 @@ def extract(
 def map_themes_cmd(
     date: str = typer.Option(None, "--date", help=_DATE_OPTION_HELP),
     events_dir: Path = typer.Option(
-        gemini_flash.DEFAULT_EVENTS_DIR,
+        event_extractor.DEFAULT_EVENTS_DIR,
         "--events-dir",
         help="Phase B extracted-events parquet root.",
     ),
@@ -163,10 +163,10 @@ def map_themes_cmd(
     max_themes: int = typer.Option(
         10,
         "--max-themes",
-        help="Cap on novel themes mapped per run (Gemini 3 Pro spend control).",
+        help="Cap on novel themes mapped per run (DeepSeek v4-pro spend control).",
     ),
     model: str = typer.Option(
-        gemini_mapper.DEFAULT_MODEL,
+        theme_mapper.DEFAULT_MODEL,
         "--model",
         envvar="ALPHALENS_MAPPER_MODEL",
         help="OpenRouter LLM slug for theme mapping (default DeepSeek v4-pro).",
@@ -200,7 +200,7 @@ def map_themes_cmd(
         )
         return
 
-    typer.echo(f"Mapping {len(novel)} novel themes via Gemini 3 Pro ({model})...")
+    typer.echo(f"Mapping {len(novel)} novel themes via DeepSeek v4-pro ({model})...")
     themes = list(novel["theme"])
 
     df = orchestrator.map_themes(
@@ -229,7 +229,7 @@ def map_themes_cmd(
             unknown = ",".join(row.get("gates_unknown", []) or []) or "-"
             typer.echo(
                 f"{row['theme'][:27]:28s} {row['ticker']:8s} "
-                f"{passed:20s} {unknown:16s} {row['gemini_confidence']:.2f}  "
+                f"{passed:20s} {unknown:16s} {row['llm_confidence']:.2f}  "
                 f"{row['rationale'][:40]}"
             )
 

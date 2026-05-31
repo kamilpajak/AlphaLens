@@ -99,7 +99,7 @@ class TestRootSourceWinsEndToEnd(unittest.TestCase):
             self.assertEqual(survivor["id"], "polygon_root")
 
             # --- Stage 2: Tier 2 story-arc resolver ---
-            # In the real pipeline, gemini_flash extracts events from each
+            # In the real pipeline, event_extractor extracts events from each
             # surviving news row. Here we seed the events parquet directly.
             _seed_events_parquet(
                 events_dir,

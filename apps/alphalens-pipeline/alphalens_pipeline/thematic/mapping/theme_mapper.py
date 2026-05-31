@@ -8,10 +8,9 @@ verified by the orchestrator (4 verification gates: ETF holdings,
 
 Output is a list of dicts: ``{ticker, company_name, rationale, confidence}``.
 
-**Module name kept as `gemini_mapper.py`** for diff-locality on the LLM
-swap (PR-G). Public surface (`DEFAULT_MODEL`, `build_prompt`,
-`propose_candidates`) imported by 11 sites — names stay; internals are
-backend-agnostic; filename rename deferred to a cleanup PR.
+The public surface (`DEFAULT_MODEL`, `build_prompt`, `propose_candidates`)
+is backend-agnostic: the LLM-backend swap to DeepSeek v4-pro (PR-G) left
+these names unchanged.
 """
 
 from __future__ import annotations
