@@ -48,6 +48,13 @@ groups:
       # run 1s ago" (real incident: monthly job before its first VPS
       # run, 2026-05-31). Splitting lets each failure mode carry an
       # honest, distinct message.
+      #
+      # Note on grouping: ``absent(metric{job="X"})`` propagates the
+      # equality matcher ``job="X"`` onto its 1-element output (only
+      # regex matchers get dropped), so the MetricMissing alerts still
+      # carry the ``job`` label and group per-job under Alertmanager's
+      # ``group_by: [alertname, job]``. Do not "fix" this by adding a
+      # label_replace — it is not missing.
 
       - alert: AlphalensJobStale
         expr: time() - alphalens_job_last_success_timestamp_seconds{job="edgar-detect"} > 1800

@@ -265,13 +265,16 @@ class TestPrometheusRulesYaml(unittest.TestCase):
         for rule in rules:
             ann = rule.get("annotations", {})
             if rule.get("alert") == "AlphalensJobMetricMissing":
-                blob = ann.get("description", "") + ann.get("summary", "")
-                self.assertNotIn(
-                    "humanizeDuration",
-                    blob,
-                    "Missing-metric alert must not render a duration "
-                    "(absent() value is 1 -> misleading '1s ago').",
-                )
+                # Check each field independently — a duration token
+                # smuggled into either summary or description would be
+                # wrong, so don't let concatenation mask a single field.
+                for field in ("summary", "description"):
+                    self.assertNotIn(
+                        "humanizeDuration",
+                        ann.get(field, ""),
+                        f"Missing-metric alert {field} must not render a "
+                        "duration (absent() value is 1 -> misleading '1s ago').",
+                    )
             elif rule.get("alert") == "AlphalensJobStale":
                 self.assertIn(
                     "humanizeDuration",
