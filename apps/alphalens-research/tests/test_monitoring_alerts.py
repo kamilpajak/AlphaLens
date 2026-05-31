@@ -389,6 +389,18 @@ class TestTemplateEngineMonitoring(unittest.TestCase):
         self.assertEqual(alert.get("for"), "1d")
         self.assertEqual(alert.get("labels", {}).get("route"), "telegram")
 
+    def test_template_match_rate_low_has_min_sample_guard(self) -> None:
+        # A single low-volume template (e.g. 1 attempt / 0 match in 7 days)
+        # must not page on a 7-day low-match-rate alert. The denominator
+        # guard is an absolute min-sample count via increase(), not just
+        # rate(...) > 0 (which a single attempt already satisfies).
+        rules = self._rules()
+        match_rate_alerts = [r for r in rules if r.get("alert") == "AlphalensTemplateMatchRateLow"]
+        self.assertEqual(len(match_rate_alerts), 1)
+        expr = match_rate_alerts[0]["expr"]
+        self.assertIn("increase(alphalens_template_attempt_total[7d])", expr)
+        self.assertIn(">= 50", expr)
+
     def test_dashboard_includes_template_engine_panels(self) -> None:
         dash = _load_dashboard()
         all_exprs = []

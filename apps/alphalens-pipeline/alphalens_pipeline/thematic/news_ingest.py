@@ -1,14 +1,16 @@
-"""Daily unified news ingest — orchestrates Polygon / GDELT / RSS sources.
+"""Daily unified news ingest — orchestrates EDGAR / Polygon / GDELT / RSS sources.
 
 Output: one parquet per day at ``~/.alphalens/thematic_news/{YYYY-MM-DD}.parquet``
 conforming to the shared ``NEWS_COLUMNS`` schema, capped at ``max_items``
 per the §14 lock-7 LLM-budget envelope (~200 items/day → DeepSeek v4-flash
 budget).
 
-EDGAR signal lives in ``alphalens_pipeline/edgar_detector/`` Layer 1 (dedicated 8-K parsers).
-Raw filing headers carry too little body content for thematic DeepSeek v4-flash
-extraction to score them confidently (mean conf 0.36 vs 0.91 for Polygon/RSS),
-so they are deliberately excluded here.
+Issuer press releases enter via the ``edgar_press_release`` source (PR-6):
+8-K Exhibit 99.1 narratives for items 1.01 / 2.01 / 2.02 / 7.01 / 8.01, with
+tickers tagged from the filer CIK (not title NER). The old exclusion rationale
+(raw 8-K headers carry too little body — mean conf 0.36) no longer applies,
+because EX-99.1 carries the full press-release body. The Layer 1 detector in
+``alphalens_pipeline/edgar_detector/`` remains a separate concern (push alerts).
 
 Two-stage dedup runs between fetch and cap:
 1. URL canonicalisation collapses cross-source rows that differ only by
@@ -33,7 +35,7 @@ from pathlib import Path
 import pandas as pd
 
 from alphalens_pipeline.thematic import text_similarity
-from alphalens_pipeline.thematic.sources import gdelt, polygon_news, rss
+from alphalens_pipeline.thematic.sources import edgar_press_release, gdelt, polygon_news, rss
 from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS, empty_news_frame
 
 logger = logging.getLogger(__name__)
@@ -44,7 +46,15 @@ DEFAULT_MAX_ITEMS = 200
 # Lower number = higher priority. Used both at URL-canonical dedup (richer
 # source wins) and at Tier 1 cluster-representative selection (tie-break when
 # two cluster members share a timestamp).
-_SOURCE_PRIORITY = {"polygon": 0, "gdelt": 1, "rss": 2}
+# Issuer-direct (8-K EX-99.1) is the richest source — it outranks the
+# aggregators at URL-canonical dedup and cluster-representative tie-break.
+_SOURCE_PRIORITY = {"edgar_press_release": 0, "polygon": 1, "gdelt": 2, "rss": 3}
+
+
+def _fetch_edgar_press_release(*, date: dt.date) -> pd.DataFrame:
+    # SecEdgarClient handles UA + 10 req/s throttle + retry via the canonical
+    # client; the adapter discovers 8-Ks through the SEC daily index.
+    return edgar_press_release.fetch_daily_news(date=date)
 
 
 def _fetch_polygon(*, date: dt.date) -> pd.DataFrame:
@@ -191,11 +201,12 @@ def ingest_daily(
     # from the environment directly. Passing it explicitly is now a no-op
     # — kept so older callers don't blow up at the kwarg boundary.
     del polygon_api_key
+    edgar_df = _safe_call("edgar_press_release", _fetch_edgar_press_release, date=date)
     polygon_df = _safe_call("polygon", _fetch_polygon, date=date)
     gdelt_df = _safe_call("gdelt", _fetch_gdelt, date=date)
     rss_df = _safe_call("rss", _fetch_rss, date=date)
 
-    frames = [df for df in (polygon_df, gdelt_df, rss_df) if len(df) > 0]
+    frames = [df for df in (edgar_df, polygon_df, gdelt_df, rss_df) if len(df) > 0]
     if not frames:
         merged = empty_news_frame()
     else:

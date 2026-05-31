@@ -197,6 +197,13 @@ class TestIsPressRelease(unittest.TestCase):
         ctx = _ctx(_article(source="businesswire"))
         self.assertTrue(evaluate(PredicateRef(name="is_press_release", kwargs={}), ctx))
 
+    def test_edgar_press_release_source_matches(self):
+        # 8-K Exhibit 99.1 issuer press releases enter via the
+        # edgar_press_release source (PR-6) — issuer-direct, so they qualify
+        # as a press release for the template engine's is_press_release gate.
+        ctx = _ctx(_article(source="edgar_press_release"))
+        self.assertTrue(evaluate(PredicateRef(name="is_press_release", kwargs={}), ctx))
+
     def test_title_with_press_release_marker_matches(self):
         ctx = _ctx(_article(source="generic", title="NVDA announces buyback (press release)"))
         self.assertTrue(evaluate(PredicateRef(name="is_press_release", kwargs={}), ctx))
