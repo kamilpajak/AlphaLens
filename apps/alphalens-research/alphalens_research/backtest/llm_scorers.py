@@ -3,19 +3,19 @@
 
 Available implementations:
 
-1. `gemini_flash_tractability_scorer` — a single Gemini 2.5 Flash call,
+1. `llm_tractability_scorer` — a single DeepSeek v4-flash call,
    ~$0.01-0.03 per ticker. Asks the model whether a name is "analysis-tractable":
    coherent business model, reasonable size, not a zombie/fraud.
 
-2. `rule_and_gemini_hybrid_scorer` — deterministic rule first; Gemini only when
+2. `rule_and_llm_hybrid_scorer` — deterministic rule first; the LLM only when
    the rule returns 'uncertain'. Cheapest because most picks land on the rule.
 
 Both return an `LLMVerdict` matching the interface in `historical_validation.py`.
 
 **Look-ahead bias**: LLMs are trained up to a fixed cutoff. If you test on
-dates beyond the cutoff (e.g. 2026 with a Gemini 2.5 Pro early-2025 cutoff),
-the model effectively "knows" the post-event outcome. For rigorous validation,
-use a 2022-2023 window (pre-cutoff for all mainstream models).
+dates beyond the model's training cutoff, the model effectively "knows" the
+post-event outcome. For rigorous validation, use a 2022-2023 window
+(pre-cutoff for all mainstream models).
 """
 
 from __future__ import annotations
@@ -27,7 +27,10 @@ from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
-from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient, get_default_gemini_client
+from alphalens_pipeline.data.alt_data.openrouter_client import (
+    OpenRouterClient,
+    get_default_openrouter_client,
+)
 
 from .historical_validation import LLMVerdict
 
@@ -62,8 +65,8 @@ and one-sentence reasoning explaining tractability.
 """
 
 
-def _parse_gemini_response(raw: str) -> dict[str, Any] | None:
-    """Parse JSON from Gemini text. Falls back to greedy `{...}` extraction on preamble."""
+def _parse_llm_response(raw: str) -> dict[str, Any] | None:
+    """Parse JSON from LLM text. Falls back to greedy `{...}` extraction on preamble."""
     try:
         return json.loads(raw)
     except (json.JSONDecodeError, TypeError):
@@ -78,8 +81,9 @@ def _parse_gemini_response(raw: str) -> dict[str, Any] | None:
     return None
 
 
-# Approximate Flash cost: input ~300 tokens @ $0.075/1M + output ~50 tokens @ $0.30/1M
-_GEMINI_FLASH_APPROX_COST_USD = (300 * 0.075 + 50 * 0.30) / 1_000_000
+# Approximate Flash cost: DeepSeek v4-flash $0.10/M in + $0.20/M out
+# (input ~300 tokens @ $0.10/1M + output ~50 tokens @ $0.20/1M)
+_FLASH_APPROX_COST_USD = (300 * 0.10 + 50 * 0.20) / 1_000_000
 
 _TRACTABILITY_RESPONSE_SCHEMA = {
     "type": "object",
@@ -92,21 +96,21 @@ _TRACTABILITY_RESPONSE_SCHEMA = {
 }
 
 
-def gemini_flash_tractability_scorer(
+def llm_tractability_scorer(
     ticker: str,
     asof: date,
     context: Mapping[str, Any],
-    model_name: str = "gemini-2.5-flash",
+    model_name: str = "deepseek/deepseek-v4-flash",
     api_key: str | None = None,
-    gemini_client: GeminiClient | None = None,
+    llm_client: OpenRouterClient | None = None,
 ) -> LLMVerdict:
-    """Single Gemini Flash call ~$0.01-0.03 per ticker.
+    """Single DeepSeek v4-flash call ~$0.01-0.03 per ticker.
 
     Routes through the canonical
-    :class:`alphalens_pipeline.data.alt_data.gemini_client.GeminiClient`. Pass
-    ``gemini_client=`` for tests; pass ``api_key=`` for ad-hoc one-off
-    use; omit both to fall back to ``get_default_gemini_client()`` which
-    reads ``GOOGLE_API_KEY`` once per process.
+    :class:`alphalens_pipeline.data.alt_data.openrouter_client.OpenRouterClient`. Pass
+    ``llm_client=`` for tests; pass ``api_key=`` for ad-hoc one-off
+    use; omit both to fall back to ``get_default_openrouter_client()`` which
+    reads ``OPENROUTER_API_KEY`` once per process.
 
     `context` must include: rank, momentum_score, themes.
     """
@@ -123,14 +127,14 @@ def gemini_flash_tractability_scorer(
         # Client init inside try so missing-SDK / missing-key failures
         # degrade to LLMVerdict('uncertain') rather than crashing the
         # historical_validation loop (zen pre-merge HIGH 2026-05-20).
-        if gemini_client is None:
-            gemini_client = (
-                GeminiClient(api_key=api_key) if api_key else get_default_gemini_client()
+        if llm_client is None:
+            llm_client = (
+                OpenRouterClient(api_key=api_key) if api_key else get_default_openrouter_client()
             )
-        response = gemini_client.generate_content(
+        response = llm_client.generate_content(
             model=model_name,
             contents=prompt,
-            config=gemini_client.build_config(
+            config=llm_client.build_config(
                 response_mime_type="application/json",
                 response_schema=_TRACTABILITY_RESPONSE_SCHEMA,
                 temperature=0.0,
@@ -141,14 +145,14 @@ def gemini_flash_tractability_scorer(
         return LLMVerdict(
             verdict="uncertain",
             confidence=0.0,
-            reasoning=f"Gemini API error: {exc}",
+            reasoning=f"LLM API error: {exc}",
             latency_sec=time.perf_counter() - t0,
             cost_usd=0.0,
         )
     latency = time.perf_counter() - t0
 
     raw = response.text if response else ""
-    parsed = _parse_gemini_response(raw)
+    parsed = _parse_llm_response(raw)
     if parsed is None:
         return LLMVerdict(
             verdict="uncertain",
@@ -167,16 +171,16 @@ def gemini_flash_tractability_scorer(
         confidence=float(parsed.get("confidence", 0.0)),
         reasoning=str(parsed.get("reasoning", ""))[:280],
         latency_sec=latency,
-        cost_usd=_GEMINI_FLASH_APPROX_COST_USD,
+        cost_usd=_FLASH_APPROX_COST_USD,
     )
 
 
-def rule_and_gemini_hybrid_scorer(
+def rule_and_llm_hybrid_scorer(
     ticker: str,
     asof: date,
     context: Mapping[str, Any],
 ) -> LLMVerdict:
-    """Hybrid: rules first, Gemini only when the rule returns 'uncertain'.
+    """Hybrid: rules first, the LLM only when the rule returns 'uncertain'.
 
     Cheap (most picks land on the deterministic rule); LLM fallback only for
     borderline cases.
@@ -187,8 +191,8 @@ def rule_and_gemini_hybrid_scorer(
     if rule_verdict.verdict != "uncertain":
         return rule_verdict
 
-    # Fallback to Gemini
+    # Fallback to LLM
     try:
-        return gemini_flash_tractability_scorer(ticker, asof, context)
+        return llm_tractability_scorer(ticker, asof, context)
     except RuntimeError:
         return rule_verdict
