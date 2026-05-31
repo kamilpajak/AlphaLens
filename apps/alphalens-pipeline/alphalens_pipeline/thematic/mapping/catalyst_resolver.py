@@ -29,7 +29,7 @@ from typing import Any
 
 import pandas as pd
 
-from alphalens_pipeline.thematic import text_similarity
+from alphalens_pipeline.thematic import dedup, text_similarity
 from alphalens_pipeline.thematic.extraction.schema import NOISE_EVENT_TYPES
 from alphalens_pipeline.thematic.extraction.templates.holdout import (
     HOLDOUT_SUPERSEDED_BY_TEMPLATE,
@@ -429,6 +429,17 @@ def find_trigger_event(
         return None
     joined[time_col] = pd.to_datetime(joined[time_col], errors="coerce", utc=True)
     joined = joined.dropna(subset=[time_col])
+    if joined.empty:
+        return None
+
+    # PR-4 multi-source dedup: collapse multi-outlet echoes of the same
+    # template-extracted event ((template_id, entity_set, 24h-window)
+    # tuple) BEFORE the precedence pass. Without this, ten outlets
+    # reporting the same M&A would each run through supersession-window
+    # arithmetic + theme-arc traversal as if they were ten distinct
+    # events. Flash rows pass through untouched (Flash dedup is the
+    # existing PR #141/#142 ingest-time Jaccard's job).
+    joined = dedup.dedup_template_events(joined, time_col=time_col)
     if joined.empty:
         return None
 
