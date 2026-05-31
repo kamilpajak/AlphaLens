@@ -68,6 +68,34 @@ Template engine attempts match
 
 **Important — don't panic early on aggregate rate:** with only 5 templates dnia jeden against a 39-class event_type enum on a 200-article/day feed, the aggregate `template_match_rate` will sit in the **20-35% range** for the first several months. That is the **expected coexistence baseline**, not failure. The aggregate threshold table becomes directional only after the template library reaches ~10+ templates. The actionable alert is per-template (§2.4): `AlphalensTemplateMatchRateLow` fires when a *specific* template drops below 20% over 7d — that catches pattern rot in one template without burning attention on the expected steady-state aggregate.
 
+---
+
+**EMPIRICAL CORRECTION (2026-05-31) — corpus assumption falsified.**
+
+The 20-35% projection above rested on an **implicit assumption** that the existing news ingestion stream (GDELT + RSS + Polygon News API) would carry direct issuer press releases at a meaningful rate. First production deploy of the full epic (PRs #322 / #323 / #324 / #325) + a cache-bust re-extraction of the 2026-05-30 corpus measured:
+
+- **200 articles ingested** (gdelt: 77, rss: 75, polygon: 48)
+- **0/200 matched any template** (vs 20-35% projected)
+- **0 articles from press-wire sources** (businesswire, prnewswire, globenewswire, accesswire)
+- **0 IR-domain URLs** (`/investors/`, `/ir/`)
+- **0 titles containing "press release"**
+- **6 URLs cited a press-wire domain** as a link inside the article body (not the source itself)
+
+Direct TemplateEngine trace on the two `event_type="m_and_a"` rows in this corpus confirmed the engine itself works correctly — it loaded all 5 ship YAMLs, EntityResolver resolved the named tickers (BRK.B/GOOG/GOOGL on a Motley Fool listicle), `match()` returned `None` *for the right reason* (the `is_press_release` predicate rightly rejects third-party commentary on M&A activity, which is the surface the predicate was designed to gate).
+
+**Root cause:** the current ingest stream is composed entirely of *news aggregators* (GDELT indexes Reuters/Bloomberg/AP type sites; RSS pulls general financial news like Fool / MarketWatch; Polygon News API redistributes that same aggregator content). None of the three sources pull *direct issuer press releases*. The template engine is architecturally correct and production-deployed but **dormant** because of an upstream corpus gap, not an engine defect.
+
+**Resolution path (LOCKED post-review):** ingest SEC EDGAR 8-K Exhibit 99.1 as the press-release source. Rationale:
+
+1. Every materially important US public-company press release is *legally required* to be filed as Exhibit 99.1 to an 8-K under Items 1.01 / 2.01 / 2.02 / 7.01 / 8.01. Coverage of M&A / earnings / financing / regulatory_action events for the S&P 1500 + Russell 2000 universe is ~92-95% per cross-source survey.
+2. The `edgar_detector` layer (live in production via `alphalens-edgar-detect.{service,timer}`) already polls EDGAR every 15 min for filing detection — zero new vendor surface, zero marginal cost, zero ToS risk (vs commercial press-wire RSS at >$3,000/yr minimum).
+3. Press releases filed as 8-K exhibits are the issuer's own verbatim text, which is exactly the authoritative-source contract the template engine + `<template_facts>` prompt block was designed to enforce.
+4. Both reviewers (zen `deepseek/deepseek-v4-pro` thinking=high + Perplexity Research sonar deep with 50 cited sources) converged independently on this path. Both explicitly rejected relaxing `is_press_release` to accept third-party financial commentary (would recreate the #143 Surfshark-listicle origin bug).
+
+**Implementation slot:** new follow-up issue, scoped as `apps/alphalens-pipeline/alphalens_pipeline/thematic/sources/edgar_press_release.py` adapter emitting `Article` records with `source="edgar_press_release"`, plus a one-line extension to `is_press_release` allowlist treating that source as equivalent to the press-wire allowlist. Volume estimate: 35-45 earnings releases + 5-15 M&A announcements per day during active periods, well within existing ingestion capacity.
+
+**Updated forecast:** after the EDGAR 8-K source lands, measure the new aggregate match rate over 7d. The 20-35% projection is provisionally retained as the target band, but with the understanding it is now a *post-EDGAR-integration* forecast, not an as-shipped baseline. The current 0% measurement is the correct as-shipped baseline given the ingest gap. Per-template `AlphalensTemplateMatchRateLow` alert (§2.4) is intentionally NOT firing today, because every template's denominator (articles that passed `is_press_release`) is zero — the alert is gated on receiving any press-release input at all.
+
 ### §1.2 Template DSL — **YAML + named Python predicates**
 
 **Both reviewers converged independently.**
@@ -376,3 +404,4 @@ The existing 39-class event_type enum stays. The existing 4-signal scorer stays.
 |---|---|---|
 | 2026-05-30 | Memo created + LOCKED | Replaces #143 deferral; both reviewers converged on hybrid + YAML+predicates; user-affirmed velocity supports immediate PR-1 work |
 | 2026-05-30 | Zen pre-merge review applied (5 clarifications) | (1) §1.1 added "don't panic early" note on aggregate match rate; (2) §1.2 clarified 20% rule is count-based formula; (3) PR-1 scope added `alphalens templates evaluate` CLI for standalone analyst iteration; (4) PR-3 scope added same-window dedup-at-injection guard so PR-3 doesn't need PR-4 to land first; (5) PR-5 gate revised — quantitative threshold dropped 5% → 2%, qualitative cross-event-type-sequence gate added; (6) §4 open-question reframed — 24h precedence and 30d compound are different windows |
+| 2026-05-31 | §1.1 EMPIRICAL CORRECTION block added — corpus assumption falsified | First production deploy of all 4 PRs (#322/#323/#324/#325) + cache-bust re-extraction measured 0/200 template matches on 2026-05-30 corpus (vs 20-35% projected). Direct TemplateEngine trace confirmed the engine works correctly; root cause is upstream ingest gap (GDELT + RSS + Polygon News carry zero press releases). Both reviewers (zen deepseek-v4-pro thinking=high + Perplexity Research with 50 cited sources) converged on SEC EDGAR 8-K Exhibit 99.1 as resolution path — leverages existing `edgar_detector` infrastructure, zero marginal cost, ~92-95% coverage of M&A/earnings/financing/regulatory events for S&P 1500 + R2000. Both reviewers explicitly rejected relaxing `is_press_release` (recreates #143 Surfshark-listicle origin bug). Follow-up implementation scope locked: new `thematic/sources/edgar_press_release.py` adapter + one-line `is_press_release` extension. Updated forecast: 20-35% target band is now *post-EDGAR-integration*, not as-shipped baseline. |
