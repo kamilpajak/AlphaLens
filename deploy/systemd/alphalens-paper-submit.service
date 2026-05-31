@@ -71,7 +71,14 @@ ExecCondition=%h/AlphaLens/.venv/bin/alphalens paper is-trading-day
 # systemd's literal-percent escape (systemd treats single ``%`` as a
 # specifier prefix — ``%h``, ``%U`` etc.; ``%%`` passes a literal
 # ``%`` through to the sub-shell).
-ExecStart=/bin/sh -c '%h/AlphaLens/.venv/bin/alphalens paper submit --date $(date -u +%%Y-%%m-%%d)'
+#
+# ``--use-test-account`` routes to the Alpaca TEST paper account during
+# the testing phase (we are still validating the harness on the VPS,
+# not just the Mac). The companion reconcile unit MUST carry the same
+# flag — account-scoped order lookup means a main-account reconcile
+# would never see test-account orders. Drop both flags together to go
+# live on the main paper account.
+ExecStart=/bin/sh -c '%h/AlphaLens/.venv/bin/alphalens paper submit --use-test-account --date $(date -u +%%Y-%%m-%%d)'
 
 # Prometheus textfile metrics — same pattern as the other 5 active
 # units. Runs unconditionally so a failed submit still updates the

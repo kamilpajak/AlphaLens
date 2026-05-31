@@ -668,6 +668,27 @@ class TestPaperSubmitUnit(unittest.TestCase):
             "exec a binary named '$(date'.",
         )
 
+    def test_submit_service_routes_to_test_alpaca_account(self) -> None:
+        # Testing phase: the VPS paper timers route to the Alpaca TEST
+        # paper account (--use-test-account), not the main paper account.
+        # Pinned so a future "go live on main" is an explicit, reviewed
+        # flag removal — not silent drift. The CLI flag is shared by
+        # plan / submit / reconcile (commands/paper.py).
+        text = PAPER_SUBMIT_SERVICE.read_text()
+        exec_start_line = next(
+            (line for line in text.splitlines() if line.startswith("ExecStart=")),
+            None,
+        )
+        self.assertIsNotNone(exec_start_line, "ExecStart= directive missing")
+        assert exec_start_line is not None
+        self.assertIn(
+            "--use-test-account",
+            exec_start_line,
+            "Submit ExecStart must carry --use-test-account during the "
+            "testing phase so the VPS routes to the Alpaca test paper "
+            "account, not main.",
+        )
+
     def test_submit_service_gates_on_is_trading_day_via_exec_condition(self) -> None:
         # ``ExecCondition=`` semantics: exit 0 = proceed, exit 1-254 =
         # skip silently (no AlphalensJobFailed alert). The CLI subcommand
@@ -763,6 +784,25 @@ class TestPaperReconcileUnit(unittest.TestCase):
             "Reconcile ExecStart MUST NOT carry --date — it sweeps "
             "all OPEN orders across dates, not a single brief's "
             "ladder.",
+        )
+
+    def test_reconcile_service_routes_to_test_alpaca_account(self) -> None:
+        # Mirror of the submit test: the reconciler must target the SAME
+        # Alpaca account its orders were submitted to. account-scoped
+        # fetch_open_orders means a main-account reconcile would never
+        # see the test-account orders. Pin --use-test-account here too.
+        text = PAPER_RECONCILE_SERVICE.read_text()
+        exec_start_line = next(
+            (line for line in text.splitlines() if line.startswith("ExecStart=")),
+            None,
+        )
+        self.assertIsNotNone(exec_start_line, "ExecStart= directive missing")
+        assert exec_start_line is not None
+        self.assertIn(
+            "--use-test-account",
+            exec_start_line,
+            "Reconcile ExecStart must carry --use-test-account so it "
+            "reconciles the same test paper account submit routes to.",
         )
 
     def test_reconcile_service_gates_on_is_trading_day_via_exec_condition(self) -> None:
