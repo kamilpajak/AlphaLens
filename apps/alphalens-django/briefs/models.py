@@ -116,6 +116,15 @@ class Brief(models.Model):
     # position_pct / time_exit / disaster_stop / entry_price_note fields
     # (2026-05-27). Consumers must check the JSON's schema_version.
     brief_trade_setup = models.JSONField(null=True, blank=True)
+    # PR-3 (epic #321): typed-fact citation surface. ``brief_template_id``
+    # is the source template (``m_and_a_press_release``, …); NULL for
+    # Flash-extracted catalysts + no-catalyst rows. ``brief_template_facts``
+    # is the deserialised typed-fields dict the SPA renders inline in the
+    # evidence panel. Both are NULL together — present-template-id-with-
+    # NULL-facts is the malformed-JSON degradation case the resolver
+    # already filters at source.
+    brief_template_id = models.CharField(max_length=64, blank=True, default="")
+    brief_template_facts = models.JSONField(null=True, blank=True)
     brief_generated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:

@@ -7,6 +7,7 @@
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
 	import TradeSetup from './TradeSetup.svelte';
+	import TemplateFacts from './TemplateFacts.svelte';
 	import { GLOSSARY_BY_TERM } from '$lib/data/glossary';
 
 	// Same tipProps pattern as /experiments — looks up term in shared glossary.
@@ -290,6 +291,18 @@
 			<div class="px-4 sm:px-5 py-4">
 				<TradeSetup setup={c.brief_trade_setup} />
 			</div>
+			<!-- Typed facts panel — PR-3 epic #321. Hidden when the catalyst
+			     came from the flash path (brief_template_id is empty); shown
+			     above the analyst narrative so the deterministic citations
+			     anchor the supply_chain / bear / exit prose below. -->
+			{#if c.brief_template_id}
+				<div class="px-4 sm:px-5 pb-4 border-t border-grid pt-4">
+					<TemplateFacts
+						templateId={c.brief_template_id}
+						facts={c.brief_template_facts}
+					/>
+				</div>
+			{/if}
 		</div>
 	</div>
 

@@ -78,6 +78,16 @@ export interface Candidate {
 	brief_bear_summary_md: string | null;
 	brief_catalyst_failure_exit: string | null;
 	brief_trade_setup: TradeSetup | null;
+	/**
+	 * PR-3 of epic #321 — typed facts from the template engine.
+	 * `brief_template_id` is the source template (`m_and_a_press_release`,
+	 * `earnings_surprise`, …) or empty string for flash-extracted catalysts.
+	 * `brief_template_facts` is the deserialised key/value dict the SPA
+	 * evidence panel renders inline. Both are null/empty together; a
+	 * present id with null facts is the corrupt-JSON degradation case.
+	 */
+	brief_template_id: string | null;
+	brief_template_facts: Record<string, unknown> | null;
 	brief_generated_at: string | null;
 }
 

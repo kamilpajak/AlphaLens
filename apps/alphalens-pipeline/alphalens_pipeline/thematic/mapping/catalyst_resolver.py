@@ -19,6 +19,7 @@ omits the catalyst line).
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import re
 import textwrap
@@ -284,6 +285,38 @@ def _entity_set(row: pd.Series) -> set[str]:
         return set()
 
 
+def _coerce_template_facts(raw: Any) -> dict | None:
+    """Best-effort deserialisation of the ``template_fields_json`` column.
+
+    Returns the parsed dict when ``raw`` is a non-empty JSON object
+    string; ``None`` on missing column / NaN / malformed JSON / non-dict
+    payload. The brief generator's absent-block branch fires on None
+    instead of crashing — a corrupt row is degenerate but should not
+    take down the day's brief.
+    """
+    if raw is None:
+        return None
+    try:
+        if pd.isna(raw):
+            return None
+    except (TypeError, ValueError):
+        # pd.isna raises on some pandas-typed sequences; treat as not-NaN.
+        pass
+    if not isinstance(raw, str):
+        return None
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return None
+    try:
+        decoded = json.loads(raw_stripped)
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("template_fields_json failed to parse: %s", exc)
+        return None
+    if not isinstance(decoded, dict) or not decoded:
+        return None
+    return decoded
+
+
 def _build_catalyst_payload_v2(
     catalyst: pd.Series,
     trigger: pd.Series,
@@ -298,10 +331,28 @@ def _build_catalyst_payload_v2(
     When ``echo_count == 1`` the resolver degraded to single-event mode and
     ``catalyst is trigger``; in that case the trigger-* fields equal the
     primary fields and ``is_amplified`` is False.
+
+    PR-3: surfaces ``template_id`` + ``template_facts`` when the catalyst
+    row is a template-extracted event (PR-2 ``extraction_method`` column).
+    Flash rows surface both as ``None`` so the orchestrator's projection
+    has a predictable shape on both paths. The fields are read from the
+    ``catalyst`` (not ``trigger``) row because the catalyst is the
+    earliest entity-overlapping event — the typed facts authored there
+    are what the brief should cite.
     """
     title = str(catalyst.get("title", "") or "")
     if len(title) > _TITLE_MAX_LEN:
         title = textwrap.shorten(title, width=_TITLE_MAX_LEN, placeholder="…")
+    template_id_raw = catalyst.get("template_id") if "template_id" in catalyst.index else None
+    template_id = (
+        str(template_id_raw)
+        if template_id_raw is not None
+        and not (isinstance(template_id_raw, float) and pd.isna(template_id_raw))
+        else None
+    )
+    template_fields_raw = (
+        catalyst.get("template_fields_json") if "template_fields_json" in catalyst.index else None
+    )
     return {
         "url": str(catalyst.get("url", "") or ""),
         "title": title,
@@ -315,6 +366,9 @@ def _build_catalyst_payload_v2(
         "trigger_url": str(trigger.get("url", "") or ""),
         "trigger_published_at": trigger[time_col].date().isoformat(),
         "is_amplified": int(echo_count) > 1,
+        # PR-3: typed-fact provenance.
+        "template_id": template_id,
+        "template_facts": _coerce_template_facts(template_fields_raw),
     }
 
 
