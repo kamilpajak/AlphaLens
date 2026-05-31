@@ -47,6 +47,8 @@ EMIT_JOB_METRICS_HOOK = SYSTEMD_DIR / "bin" / "alphalens-emit-job-metrics"
 # All five active services that the metrics hook must be wired into.
 # Form-4 backfill is excluded — it is a long-running daemon (DONE
 # 2026-05-08, per CLAUDE.md) and would emit a single point at end-of-run.
+PAPER_PLAN_SERVICE = SYSTEMD_DIR / "alphalens-paper-plan.service"
+PAPER_PLAN_TIMER = SYSTEMD_DIR / "alphalens-paper-plan.timer"
 PAPER_SUBMIT_SERVICE = SYSTEMD_DIR / "alphalens-paper-submit.service"
 PAPER_SUBMIT_TIMER = SYSTEMD_DIR / "alphalens-paper-submit.timer"
 PAPER_RECONCILE_SERVICE = SYSTEMD_DIR / "alphalens-paper-reconcile.service"
@@ -58,6 +60,7 @@ ACTIVE_SERVICES = (
     LIT_MONTHLY_SERVICE,
     SYSTEMD_DIR / "alphalens-av-earnings-backfill.service",
     SYSTEMD_DIR / "alphalens-thematic-build.service",
+    PAPER_PLAN_SERVICE,
     PAPER_SUBMIT_SERVICE,
     PAPER_RECONCILE_SERVICE,
 )
@@ -647,9 +650,14 @@ class TestPaperSubmitUnit(unittest.TestCase):
             "locally.",
         )
 
-    def test_submit_service_passes_today_utc_date(self) -> None:
-        # The brief whose PLANNED rows to submit is dated to TODAY UTC
-        # — the same day the 12:30 UTC thematic-build run wrote it.
+    def test_submit_service_passes_yesterday_utc_date(self) -> None:
+        # The brief the morning thematic-build wrote is dated YESTERDAY
+        # UTC: ``alphalens thematic brief`` defaults to (today-1) and
+        # run_thematic_day.sh runs it with no --date, so the 12:30 UTC
+        # build on day D writes ``(D-1).parquet``. plan reads that
+        # parquet by date and submit re-reads the ledger rows keyed on
+        # the SAME brief_date, so both MUST pass --date yesterday or
+        # plan FileNotFoundErrors / submit finds zero PLANNED rows.
         # Hard-code the systemd-escaped command-substitution form
         # (``%%`` is systemd's literal-percent escape; ExecStart must
         # be wrapped in ``/bin/sh -c`` so the substitution actually
@@ -658,14 +666,14 @@ class TestPaperSubmitUnit(unittest.TestCase):
         self.assertRegex(
             text,
             re.compile(
-                r"^ExecStart=/bin/sh\s+-c\s+'.*--date \$\(date -u \+%%Y-%%m-%%d\).*'\s*$",
+                r"^ExecStart=/bin/sh\s+-c\s+'.*--date \$\(date -u -d yesterday \+%%Y-%%m-%%d\).*'\s*$",
                 re.MULTILINE,
             ),
             "Submit MUST be wrapped in /bin/sh -c '... --date "
-            "$(date -u +%%Y-%%m-%%d)' so today's UTC date lands at "
-            "unit-start time. systemd does not perform shell "
-            "substitution natively; a bare ExecStart= would try to "
-            "exec a binary named '$(date'.",
+            "$(date -u -d yesterday +%%Y-%%m-%%d)' so it consumes the "
+            "(D-1)-dated brief the morning build wrote. systemd does "
+            "not perform shell substitution natively; a bare ExecStart= "
+            "would try to exec a binary named '$(date'.",
         )
 
     def test_submit_service_routes_to_test_alpaca_account(self) -> None:
@@ -844,6 +852,138 @@ class TestPaperReconcileUnit(unittest.TestCase):
             PAPER_RECONCILE_TIMER.read_text(),
             re.compile(r"^Persistent=true\s*$", re.MULTILINE),
         )
+
+
+class TestPaperPlanUnit(unittest.TestCase):
+    """paper-plan systemd unit — the missing first link in the chain.
+
+    Runs ``alphalens paper plan`` once per US trading day at 13:05 UTC,
+    AFTER the 12:30 UTC thematic-build wrote that morning's (D-1) brief
+    parquet and BEFORE paper-submit fires at 13:25 UTC. Without this
+    unit the ledger has no PLANNED rows and submit pushes nothing.
+
+    Date contract (the load-bearing subtlety): ``thematic brief``
+    defaults to (today-1) and run_thematic_day.sh passes no --date, so
+    the build on day D writes ``(D-1).parquet``. plan reads that file
+    by date and submit re-reads the ledger keyed on the same
+    brief_date, so plan AND submit MUST pass --date yesterday — see
+    test_submit_service_passes_yesterday_utc_date.
+    """
+
+    def test_plan_service_uses_host_venv_alphalens(self) -> None:
+        self.assertRegex(
+            PAPER_PLAN_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStart=.*%h/AlphaLens/\.venv/bin/alphalens\s+paper\s+plan\b",
+                re.MULTILINE,
+            ),
+            "Plan ExecStart must invoke the host venv `alphalens paper plan` "
+            "(wrapped in /bin/sh -c for the $(date) substitution).",
+        )
+
+    def test_plan_service_passes_yesterday_utc_date(self) -> None:
+        # MUST match the submit unit's date token (both consume the
+        # (D-1) brief the morning build wrote); a mismatch means submit
+        # reads a brief_date plan never wrote -> zero PLANNED rows.
+        self.assertRegex(
+            PAPER_PLAN_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStart=/bin/sh\s+-c\s+'.*--date \$\(date -u -d yesterday \+%%Y-%%m-%%d\).*'\s*$",
+                re.MULTILINE,
+            ),
+            "Plan MUST pass --date $(date -u -d yesterday +%%Y-%%m-%%d), "
+            "matching the submit unit, so it reads the (D-1).parquet the "
+            "morning thematic-build wrote.",
+        )
+
+    def test_plan_service_routes_to_test_alpaca_account(self) -> None:
+        exec_start_line = next(
+            (
+                line
+                for line in PAPER_PLAN_SERVICE.read_text().splitlines()
+                if line.startswith("ExecStart=")
+            ),
+            None,
+        )
+        self.assertIsNotNone(exec_start_line, "ExecStart= directive missing")
+        assert exec_start_line is not None
+        self.assertIn(
+            "--use-test-account",
+            exec_start_line,
+            "Plan must route to the test account (matching submit/reconcile): "
+            "plan tags PLANNED rows with its account and submit re-reads by "
+            "(brief_date, account), so the two MUST agree.",
+        )
+
+    def test_plan_service_does_not_force(self) -> None:
+        # --force deletes existing plans + shadow_log rows for the
+        # brief_date. A timer re-fire (or manual + timer overlap) with
+        # --force would wipe operator state right before submit reads
+        # it. Omitting --force makes a duplicate run crash loud on the
+        # UNIQUE(brief_date,ticker,account) constraint instead.
+        exec_start_line = next(
+            (
+                line
+                for line in PAPER_PLAN_SERVICE.read_text().splitlines()
+                if line.startswith("ExecStart=")
+            ),
+            None,
+        )
+        self.assertIsNotNone(exec_start_line, "ExecStart= directive missing")
+        assert exec_start_line is not None
+        self.assertNotIn(
+            "--force",
+            exec_start_line,
+            "Plan ExecStart MUST NOT carry --force — a re-fire would wipe "
+            "the PLANNED rows submit is about to read.",
+        )
+
+    def test_plan_service_gates_on_is_trading_day_via_exec_condition(self) -> None:
+        # plan has NO internal market-closed guard (only submit/reconcile
+        # do), so ExecCondition is the ONLY holiday filter for plan.
+        self.assertRegex(
+            PAPER_PLAN_SERVICE.read_text(),
+            re.compile(
+                r"^ExecCondition=%h/AlphaLens/\.venv/bin/alphalens\s+paper\s+is-trading-day\s*$",
+                re.MULTILINE,
+            ),
+            "Plan must carry ExecCondition=`alphalens paper is-trading-day` "
+            "— it is the only holiday filter for the plan stage.",
+        )
+
+    def test_plan_service_no_doubled_alphalens_token(self) -> None:
+        self.assertNotRegex(
+            PAPER_PLAN_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStart(?:Post)?=[^\n]*\.venv/bin/alphalens\s+alphalens\b", re.MULTILINE
+            ),
+            "`.venv/bin/alphalens alphalens ...` is a doubled-token bug.",
+        )
+
+    def test_plan_timer_fires_mon_fri_at_13_05_utc(self) -> None:
+        # 13:05 UTC = after the 12:30 UTC build's normal ~12:45-12:58
+        # finish, 20 min before submit at 13:25 UTC.
+        self.assertRegex(
+            PAPER_PLAN_TIMER.read_text(),
+            re.compile(r"^OnCalendar=Mon\.\.Fri \*-\*-\* 13:05:00 UTC\s*$", re.MULTILINE),
+            "Plan timer must fire Mon..Fri at 13:05 UTC (after the morning "
+            "build, before the 13:25 UTC submit).",
+        )
+
+    def test_plan_timer_keeps_persistent_false(self) -> None:
+        # Same rationale as submit/reconcile: a weekend/holiday catch-up
+        # would plan against a stale brief. MULTILINE pins the directive
+        # line (a comment may explain the rejection).
+        self.assertNotRegex(
+            PAPER_PLAN_TIMER.read_text(),
+            re.compile(r"^Persistent=true\s*$", re.MULTILINE),
+            "Paper-plan timer MUST NOT carry Persistent=true.",
+        )
+
+    def test_plan_timer_carries_install_section(self) -> None:
+        text = PAPER_PLAN_TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
 
 
 if __name__ == "__main__":

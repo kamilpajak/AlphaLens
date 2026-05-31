@@ -59,11 +59,14 @@ EnvironmentFile=/etc/alphalens/env
 # this unit per venue.
 ExecCondition=%h/AlphaLens/.venv/bin/alphalens paper is-trading-day
 
-# Submit TODAY UTC's brief (the 12:30 UTC thematic-build run wrote it
-# ~50 min before this fire at 13:25 UTC). The bash command-
-# substitution lands the date at unit-start time, NOT at
-# daemon-reload — so re-loading the daemon at 23:59 UTC and firing at
-# 13:25 UTC the next day still picks up the next day's brief.
+# Submit YESTERDAY UTC's brief. `alphalens thematic brief` defaults to
+# (today-1) and run_thematic_day.sh runs it with no --date, so the
+# 12:30 UTC build on day D writes (D-1).parquet — that is the freshest
+# complete brief at this 13:25 UTC fire. The companion paper-plan unit
+# (13:05 UTC) reads the same (D-1).parquet and writes PLANNED rows
+# keyed brief_date=(D-1); submit re-reads that exact key, so plan and
+# submit MUST share the identical --date token. The bash command-
+# substitution lands the date at unit-start time, NOT at daemon-reload.
 #
 # Wrapped in ``/bin/sh -c '...'`` because systemd does NOT perform
 # shell substitution natively — a bare ExecStart= with ``$(date ...)``
@@ -78,7 +81,7 @@ ExecCondition=%h/AlphaLens/.venv/bin/alphalens paper is-trading-day
 # flag — account-scoped order lookup means a main-account reconcile
 # would never see test-account orders. Drop both flags together to go
 # live on the main paper account.
-ExecStart=/bin/sh -c '%h/AlphaLens/.venv/bin/alphalens paper submit --use-test-account --date $(date -u +%%Y-%%m-%%d)'
+ExecStart=/bin/sh -c '%h/AlphaLens/.venv/bin/alphalens paper submit --use-test-account --date $(date -u -d yesterday +%%Y-%%m-%%d)'
 
 # Prometheus textfile metrics — same pattern as the other 5 active
 # units. Runs unconditionally so a failed submit still updates the

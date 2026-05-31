@@ -12,8 +12,9 @@ hosts where launchd is unavailable.
 | `alphalens-literature-scan-monthly.{service,timer}` | 1st of month 09:00 Europe/Warsaw | Perplexity deep scan + Telegram digest + auto-commit to `main` (migrated 2026-05-30) |
 | `alphalens-av-earnings-backfill.{service,timer}` | daily 00:05 UTC | AV EARNINGS daily 25-call quota burn into `~/.alphalens/av_cache/` |
 | `alphalens-thematic-build.{service,timer}` | 6× daily at HH:30 UTC (00/04/08/12/16/20) | docker-run thematic pipeline + verify-cache + Django rebuild-cache (PR-F, epic #295 #300) |
-| `alphalens-paper-submit.{service,timer}` | Mon-Fri 13:25 UTC | host-venv `alphalens paper submit --date $(date -u +%Y-%m-%d)` — entry-tier limits pre-XNYS-open (PR-D, epic #295 #298). ExecCondition gates on `alphalens paper is-trading-day` to skip US holidays. |
-| `alphalens-paper-reconcile.{service,timer}` | Mon-Fri every 30 min 14:00-21:00 UTC | host-venv `alphalens paper reconcile` — Alpaca order-status sweep during XNYS session (PR-D, epic #295 #298). Same ExecCondition holiday gate as paper-submit. |
+| `alphalens-paper-plan.{service,timer}` | Mon-Fri 13:05 UTC | host-venv `alphalens paper plan --use-test-account --date $(date -u -d yesterday +%Y-%m-%d)` — reads that morning's `(D-1)` brief parquet, writes PLANNED ladder rows for submit (PR-D follow-up, epic #295 #298). ExecCondition holiday gate (the only one — plan has no internal market-closed guard). |
+| `alphalens-paper-submit.{service,timer}` | Mon-Fri 13:25 UTC | host-venv `alphalens paper submit --use-test-account --date $(date -u -d yesterday +%Y-%m-%d)` — submits the PLANNED rows plan wrote (same `(D-1)` brief) as entry-tier limits pre-XNYS-open (PR-D, epic #295 #298). ExecCondition gates on `alphalens paper is-trading-day` to skip US holidays. |
+| `alphalens-paper-reconcile.{service,timer}` | Mon-Fri every 30 min 14:00-21:00 UTC | host-venv `alphalens paper reconcile --use-test-account` — Alpaca order-status sweep during XNYS session (PR-D, epic #295 #298). Same ExecCondition holiday gate as paper-submit. |
 | `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) |
 
 ## Environment file setup (`/etc/alphalens/env`)
