@@ -18,6 +18,12 @@ Why the daily index instead of per-ticker submissions polling:
 
 All SEC HTTP goes through the canonical :class:`SecEdgarClient` (User-Agent +
 10 req/s throttle + 429/5xx retry). No raw ``requests``/``urllib`` here.
+
+Known limitation — the SEC daily index ``Date Filed`` column is date-only, so
+every row lands at 00:00 UTC of its filing date (no intraday granularity).
+Cross-source dedup tie-breaks on ``_SOURCE_PRIORITY`` (where this source is
+rank 0), not timestamp, so this does not affect which row survives; it only
+means EDGAR rows sort to the bottom of a same-day recency ordering.
 """
 
 from __future__ import annotations
@@ -49,6 +55,9 @@ ARCHIVES_BASE = "https://www.sec.gov"
 # 8-K items that carry a real issuer press release worth thematic extraction.
 PRESS_RELEASE_ITEMS = frozenset({"1.01", "2.01", "2.02", "7.01", "8.01"})
 # FilingSummary ``<File doctype=...>`` values that hold an Exhibit 99.1 narrative.
+# EX-99.2 (a second press-release/presentation exhibit on multi-item 8-Ks) is
+# deliberately excluded in v1: EX-99.1 is the overwhelming norm for the primary
+# press release, and EX-99.2 is frequently a slide deck rather than narrative.
 _EX_991_DOCTYPES = frozenset({"EX-99.1", "EX-99"})
 # Form-type column values we keep from the daily index (mirror of edgar.py's
 # primary-doc set); the press-release ITEM gate further narrows these later.
@@ -67,7 +76,16 @@ def _load_cik_to_ticker() -> dict[str, str]:
     from alphalens_pipeline.edgar_detector.sources.cik_loader import default_cik_cache_path
 
     path = default_cik_cache_path()
-    payload = json.loads(path.read_text())
+    try:
+        payload = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        # A missing or truncated company_tickers.json (CIKLoader write race,
+        # disk issue) must not raise through the whole thematic ingest. Treat
+        # it as an empty universe — nothing matches this run. Each ingest run
+        # is a fresh process (fresh lru_cache), so the next run recovers once
+        # the file is whole.
+        logger.warning("edgar CIK->ticker map load failed (%s): %s", path, exc)
+        return {}
     out: dict[str, str] = {}
     for entry in payload.values():
         if not isinstance(entry, dict):
@@ -248,9 +266,18 @@ def _enrich_filing(row: dict, *, client: SecEdgarClient) -> dict | None:
 
 
 # --- (4) pure transform: enriched hits -> NEWS_COLUMNS frame -----------------
+_BLOCK_TAG_RE = re.compile(r"</?(?:p|div|br|h[1-6]|li|tr)\s*/?>", re.IGNORECASE)
+
+
 def _title_from_body(body: str) -> str:
-    """First non-empty stripped text line from the EX-99.1 narrative."""
-    stripped = body.replace("<p>", "\n").replace("</p>", "\n")
+    """First non-empty stripped text line from the EX-99.1 narrative.
+
+    EX-99.1 exhibits are HTML with varied block structure (``<div>``,
+    ``<h1>``-``<h6>``, ``<br>``, tables), not just ``<p>``. Convert every
+    block-level boundary to a newline first so a headline wrapped in any of
+    them becomes the first line, then strip the remaining inline tags.
+    """
+    stripped = _BLOCK_TAG_RE.sub("\n", body)
     text = re.sub(r"<[^>]+>", " ", stripped)
     for line in text.splitlines():
         candidate = line.strip()
@@ -327,13 +354,14 @@ def fetch_daily_news(
     try:
         idx = fetch_form_index(date=date, client=sec)
     except Exception as exc:
-        # Index failure must not raise — the unified ingest's _safe_call would
-        # swallow it anyway, but caching an empty frame here avoids re-hitting
-        # SEC on every retry within the same UTC day.
+        # Index failure must not raise — the unified ingest's _safe_call
+        # degrades it to an empty source. Crucially, do NOT persist an empty
+        # parquet here: SEC index failures are overwhelmingly transient
+        # (429/5xx backoff), and the production cadence runs 6x/day. Caching
+        # empty would poison every later run that UTC day (they would read the
+        # empty cache instead of retrying), silently dropping EDGAR for the day.
         logger.warning("edgar daily-index fetch failed for %s: %s", date, exc, exc_info=True)
-        empty = empty_news_frame()
-        empty.to_parquet(cache_path, index=False)
-        return empty
+        return empty_news_frame()
 
     rows = parse_form_index_8k(idx)
     # Pre-filter to in-universe CIKs BEFORE any per-filing HTTP (cuts ~3500 -> tens).

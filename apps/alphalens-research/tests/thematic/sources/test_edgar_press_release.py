@@ -80,6 +80,54 @@ def _route_get_text(url: str) -> str:
     raise AssertionError(f"unexpected URL: {url}")
 
 
+class TestLoadCikToTicker(unittest.TestCase):
+    def setUp(self):
+        epr._load_cik_to_ticker.cache_clear()
+        self.addCleanup(epr._load_cik_to_ticker.cache_clear)
+
+    def test_corrupt_json_returns_empty_map_without_raising(self):
+        # A truncated company_tickers.json (CIKLoader write race) must not
+        # crash the whole thematic ingest — degrade to an empty universe so
+        # the day survives and the next run recovers once the file is whole.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad = Path(tmpdir) / "company_tickers.json"
+            bad.write_text('{"0": {"ticker": "AAPL", "cik_str": 320193')  # truncated
+            # default_cik_cache_path is imported lazily inside the function, so
+            # patch the source-module symbol it resolves at call time.
+            with patch(
+                "alphalens_pipeline.edgar_detector.sources.cik_loader.default_cik_cache_path",
+                return_value=bad,
+            ):
+                self.assertEqual(epr._load_cik_to_ticker(), {})
+
+    def test_well_formed_json_inverts_to_cik_padded_map(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            good = Path(tmpdir) / "company_tickers.json"
+            good.write_text(json.dumps({"0": {"ticker": "aapl", "cik_str": 320193}}))
+            with patch(
+                "alphalens_pipeline.edgar_detector.sources.cik_loader.default_cik_cache_path",
+                return_value=good,
+            ):
+                self.assertEqual(epr._load_cik_to_ticker(), {"0000320193": "AAPL"})
+
+
+class TestTitleFromBody(unittest.TestCase):
+    def test_headline_in_h1_becomes_title(self):
+        body = "<html><body><h1>Apple Reports Q3 Earnings</h1><p>Details...</p></body></html>"
+        self.assertEqual(epr._title_from_body(body), "Apple Reports Q3 Earnings")
+
+    def test_headline_split_by_br(self):
+        body = "Acme Corp<br/>announces merger with Beta Inc"
+        self.assertEqual(epr._title_from_body(body), "Acme Corp")
+
+    def test_headline_in_div(self):
+        body = "<div>Gamma Ltd Completes Financing</div><div>The company...</div>"
+        self.assertEqual(epr._title_from_body(body), "Gamma Ltd Completes Financing")
+
+    def test_empty_body_returns_empty_string(self):
+        self.assertEqual(epr._title_from_body(""), "")
+
+
 class TestParseFormIndex(unittest.TestCase):
     def test_only_8k_rows_returned(self):
         rows = epr.parse_form_index_8k(SAMPLE_IDX)
@@ -336,6 +384,10 @@ class TestFetchDailyNews(unittest.TestCase):
                 )
             self.assertEqual(len(df), 0)
             self.assertEqual(list(df.columns), NEWS_COLUMNS)
+            # Must NOT persist an empty parquet on transient index failure —
+            # otherwise the 6x/day cadence is poisoned for the rest of the UTC
+            # day (later runs would read the empty cache instead of retrying).
+            self.assertFalse((Path(tmpdir) / "2026-05-30.parquet").exists())
 
     def test_per_filing_enrich_failure_skips_only_that_filing(self):
         # FilingSummary for the first APPLE accession raises; the 8-K/A accession
