@@ -45,6 +45,7 @@ groups:
         labels:
           severity: warning
           route: telegram
+          unit: edgar-detect
         annotations:
           summary: "edgar-detect stale > 30 min (expected 15-min cadence)"
           description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
@@ -57,6 +58,7 @@ groups:
         labels:
           severity: warning
           route: telegram
+          unit: literature-scan-weekly
         annotations:
           summary: "literature-scan-weekly stale > 14 days (expected 7-day cadence)"
           description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
@@ -69,6 +71,7 @@ groups:
         labels:
           severity: warning
           route: telegram
+          unit: literature-scan-monthly
         annotations:
           summary: "literature-scan-monthly stale > 70 days (expected 30-day cadence)"
           description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
@@ -81,6 +84,7 @@ groups:
         labels:
           severity: warning
           route: telegram
+          unit: av-earnings-backfill
         annotations:
           summary: "av-earnings-backfill stale > 48h (expected daily cadence)"
           description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
@@ -102,6 +106,7 @@ groups:
         labels:
           severity: warning
           route: telegram
+          unit: thematic-build
         annotations:
           summary: "thematic-build stale > 12h (expected 4h cadence)"
           description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
