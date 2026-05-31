@@ -182,7 +182,7 @@ jobs:
       - name: Pytest with coverage
         working-directory: apps/alphalens-django
         # Coverage scoped to the app source dirs (core, auth_cf, briefs, config,
-        # market) so test files themselves don't inflate the denominator.
+        # feedback, market) so test files themselves don't inflate the denominator.
         # New Django apps MUST be added here — otherwise SonarCloud reports
         # "0% coverage on new code" even when pytest exercises every line.
         # XML is emitted at `apps/alphalens-django/coverage.xml` and uploaded
@@ -190,7 +190,7 @@ jobs:
         # configured in sonar-project.properties to consume both research +
         # django paths.
         run: |
-          uv run coverage run --source=core,auth_cf,briefs,config,market -m pytest -q
+          uv run coverage run --source=core,auth_cf,briefs,config,feedback,market -m pytest -q
           uv run coverage report
           uv run coverage xml -o coverage.xml
 
