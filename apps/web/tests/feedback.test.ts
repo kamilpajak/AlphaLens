@@ -183,17 +183,21 @@ test.describe('feedback controls', () => {
 		// fails, rendering the controls would let a fresh POST silently
 		// overwrite a server-side decision the user can't see. Loader
 		// returns null for decisions on failure → controls hidden.
-		await page.route('**/api/v1/days', (route) =>
-			route.fulfill({ status: 200, contentType: 'application/json', body: DAYS_INDEX_BODY })
-		);
-		await page.route(/\/api\/v1\/days\/\d{4}-\d{2}-\d{2}$/, (route) =>
-			route.fulfill({ status: 200, contentType: 'application/json', body: DAY_BODY })
-		);
-		await page.route('**/api/v1/feedback/taxonomy', (route) =>
-			route.fulfill({ status: 200, contentType: 'application/json', body: TAXONOMY_BODY })
-		);
-		await page.route('**/api/v1/feedback/decisions**', (route) =>
-			route.fulfill({ status: 500, contentType: 'application/json', body: '{}' })
+		// Use the shared pathname-based mocks (query-tolerant: they match
+		// `/v1/days?limit=200`, the day, and the taxonomy regardless of the
+		// query string) so the brief renders, then override ONLY the decisions
+		// GET to fail. The override is registered AFTER installMocks so it wins
+		// — Playwright matches the most-recently-added route first. This keeps
+		// the test independent of the dev mock-api proxy (a bare
+		// `**/api/v1/days` glob misses the `?limit=200` query and falls through
+		// to the proxy, which made this case flaky).
+		await installMocks(page);
+		await page.route(
+			'**/api/v1/feedback/decisions**',
+			(route) =>
+				route.request().method() === 'GET'
+					? route.fulfill({ status: 500, contentType: 'application/json', body: '{}' })
+					: route.fallback() // let POST/DELETE fall through to installMocks
 		);
 		await page.goto(`/brief/${DATE}`);
 		// Brief still renders (cards visible) but feedback controls are hidden.
