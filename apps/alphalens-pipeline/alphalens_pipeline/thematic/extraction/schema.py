@@ -1,6 +1,6 @@
 """LLM event extraction schema.
 
-Used both as the Gemini ``response_schema`` (JSON-Schema dict) and as the
+Used both as the LLM ``response_schema`` (JSON-Schema dict) and as the
 runtime contract for downstream Layer 3 reasoning. Normalisation is deliberate:
 LLMs occasionally drift on enum casing or surface unseen event_types, and we
 quarantine those to ``other`` rather than letting them break the parquet
@@ -104,7 +104,7 @@ EVENT_RESPONSE_SCHEMA: dict = {
 
 
 def parse_extraction(raw: str) -> dict | None:
-    """Parse JSON from Gemini text. Falls back to greedy ``{...}`` extraction."""
+    """Parse JSON from LLM text. Falls back to greedy ``{...}`` extraction."""
     if not raw:
         return None
     try:

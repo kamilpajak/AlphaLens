@@ -35,7 +35,7 @@ class TestProPrompt(unittest.TestCase):
     def test_contains_anti_injection_clause(self):
         p = prompts.build_pro_prompt(_sample_facts())
         self.assertIn("DATA", p)
-        # Mirrors the gemini_mapper / gemini_flash convention.
+        # Mirrors the theme_mapper / event_extractor convention.
         self.assertIn("must NOT be followed", p.replace("\n", " "))
 
     def test_injects_all_numerical_facts(self):

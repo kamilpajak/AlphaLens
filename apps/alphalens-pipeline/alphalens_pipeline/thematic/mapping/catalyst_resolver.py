@@ -19,6 +19,7 @@ omits the catalyst line).
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import re
 import textwrap
@@ -28,8 +29,12 @@ from typing import Any
 
 import pandas as pd
 
-from alphalens_pipeline.thematic import text_similarity
+from alphalens_pipeline.thematic import dedup, text_similarity
 from alphalens_pipeline.thematic.extraction.schema import NOISE_EVENT_TYPES
+from alphalens_pipeline.thematic.extraction.templates.holdout import (
+    HOLDOUT_SUPERSEDED_BY_TEMPLATE,
+    TemplateMetrics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +50,14 @@ _NOISE_FILTERS_PATH = Path(__file__).parent.parent / "config" / "catalyst_noise_
 # unrelated newsletters happening to mention the same ticker.
 ENTITY_JACCARD_THRESHOLD = text_similarity.ENTITY_JACCARD_THRESHOLD
 MIN_TRIGGER_ENTITIES = 2
+
+# PR-2 precedence rule: when both a template event AND a Flash event exist
+# for the same (primary_entity_ticker, event_type) within this window, the
+# template event wins and the Flash event is dropped to holdout. 24h is the
+# design-memo §1.1 value — keeps duplicate-reporting collisions clustered
+# while letting separate corporate actions on the same ticker (e.g. a
+# Tuesday acquisition + a Friday earnings call) coexist.
+SUPERSESSION_WINDOW = dt.timedelta(hours=24)
 
 
 @lru_cache(maxsize=1)
@@ -127,6 +140,101 @@ def _apply_noise_and_blocklist_filters(joined: pd.DataFrame) -> pd.DataFrame:
     return joined
 
 
+def _primary_ticker(value: Any) -> str | None:
+    """Pick the FIRST resolved entity ticker for the supersession key.
+
+    The precedence rule keys on a single ticker per event because the
+    typical duplicate-reporting case ("six outlets cover the same M&A")
+    always shares the acquirer + the target; pinning on the first
+    primary_entity gives a stable key without requiring the templates +
+    the LLM to agree on entity ordering. Multi-ticker corporate actions
+    where the FIRST entity differs across outlets are rare enough that
+    the dedup miss is acceptable for PR-2; PR-4 (multi-source dedup
+    via template tuples) handles the full set-overlap case.
+
+    Defensive shape coercion mirrors ``_entity_set`` — pandas-typed
+    cells can land as numpy scalars (float NaN), so we narrow to the
+    iterable cases explicitly.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip().upper()
+        return stripped or None
+    if not isinstance(value, list | tuple | set | frozenset) and not hasattr(value, "__iter__"):
+        return None
+    try:
+        for e in value:
+            s = str(e).strip().upper()
+            if s:
+                return s
+    except TypeError:
+        return None
+    return None
+
+
+def _apply_template_precedence(
+    joined: pd.DataFrame,
+    time_col: str,
+    *,
+    metrics: TemplateMetrics | None,
+) -> pd.DataFrame:
+    """Drop Flash events superseded by a template event in the same 24h slot.
+
+    Design memo §1.1 precedence rule. Operates on the post-join frame so
+    each row already has its news ``timestamp``. The pass is a no-op
+    when ``extraction_method`` is absent (pre-PR-2 parquet) — those rows
+    are treated as flash and pass through unchanged.
+    """
+    if "extraction_method" not in joined.columns:
+        return joined
+    if joined.empty:
+        return joined
+
+    # Project the supersession key per row. Rows whose ticker can't be
+    # determined skip the dedup pass — keeping them is safer than
+    # dropping a potentially-real catalyst on a missing key.
+    keys = joined.apply(
+        lambda r: (_primary_ticker(r.get("primary_entities")), r.get("event_type")),
+        axis=1,
+    )
+    joined = joined.assign(_super_key=keys)
+
+    keep_mask = pd.Series(True, index=joined.index)
+    superseded_count = 0
+    for key, group in joined.groupby("_super_key", sort=False):
+        # pandas types ``key`` as Hashable, but the underlying column was
+        # built from a 2-tuple per row above. Explicit unpack with a
+        # length check keeps pyright happy and guards against future
+        # changes to the key shape.
+        if not isinstance(key, tuple) or len(key) != 2:
+            continue
+        ticker, _event_type = key
+        if ticker is None or len(group) < 2:
+            continue
+        templates = group[group["extraction_method"] == "template"]
+        if templates.empty:
+            continue
+        # Each template row asserts a 24h window — Flash rows whose
+        # timestamp falls inside any of those windows are dropped.
+        for _, tmpl_row in templates.iterrows():
+            tmpl_ts = tmpl_row[time_col]
+            lo = tmpl_ts - SUPERSESSION_WINDOW
+            hi = tmpl_ts + SUPERSESSION_WINDOW
+            in_window = (group[time_col] >= lo) & (group[time_col] <= hi)
+            flash_in_window = group[in_window & (group["extraction_method"] == "flash")]
+            if flash_in_window.empty:
+                continue
+            keep_mask.loc[flash_in_window.index] = False
+            superseded_count += len(flash_in_window)
+
+    if superseded_count and metrics is not None:
+        for _ in range(superseded_count):
+            metrics.record_drop(HOLDOUT_SUPERSEDED_BY_TEMPLATE)
+
+    return joined[keep_mask].drop(columns="_super_key")
+
+
 def _resolve_time_column(joined: pd.DataFrame) -> str | None:
     """Canonical schema uses ``timestamp``; older parquets carry ``published_at``."""
     if "timestamp" in joined.columns:
@@ -177,6 +285,38 @@ def _entity_set(row: pd.Series) -> set[str]:
         return set()
 
 
+def _coerce_template_facts(raw: Any) -> dict | None:
+    """Best-effort deserialisation of the ``template_fields_json`` column.
+
+    Returns the parsed dict when ``raw`` is a non-empty JSON object
+    string; ``None`` on missing column / NaN / malformed JSON / non-dict
+    payload. The brief generator's absent-block branch fires on None
+    instead of crashing — a corrupt row is degenerate but should not
+    take down the day's brief.
+    """
+    if raw is None:
+        return None
+    try:
+        if pd.isna(raw):
+            return None
+    except (TypeError, ValueError):
+        # pd.isna raises on some pandas-typed sequences; treat as not-NaN.
+        pass
+    if not isinstance(raw, str):
+        return None
+    raw_stripped = raw.strip()
+    if not raw_stripped:
+        return None
+    try:
+        decoded = json.loads(raw_stripped)
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("template_fields_json failed to parse: %s", exc)
+        return None
+    if not isinstance(decoded, dict) or not decoded:
+        return None
+    return decoded
+
+
 def _build_catalyst_payload_v2(
     catalyst: pd.Series,
     trigger: pd.Series,
@@ -191,10 +331,28 @@ def _build_catalyst_payload_v2(
     When ``echo_count == 1`` the resolver degraded to single-event mode and
     ``catalyst is trigger``; in that case the trigger-* fields equal the
     primary fields and ``is_amplified`` is False.
+
+    PR-3: surfaces ``template_id`` + ``template_facts`` when the catalyst
+    row is a template-extracted event (PR-2 ``extraction_method`` column).
+    Flash rows surface both as ``None`` so the orchestrator's projection
+    has a predictable shape on both paths. The fields are read from the
+    ``catalyst`` (not ``trigger``) row because the catalyst is the
+    earliest entity-overlapping event — the typed facts authored there
+    are what the brief should cite.
     """
     title = str(catalyst.get("title", "") or "")
     if len(title) > _TITLE_MAX_LEN:
         title = textwrap.shorten(title, width=_TITLE_MAX_LEN, placeholder="…")
+    template_id_raw = catalyst.get("template_id") if "template_id" in catalyst.index else None
+    template_id = (
+        str(template_id_raw)
+        if template_id_raw is not None
+        and not (isinstance(template_id_raw, float) and pd.isna(template_id_raw))
+        else None
+    )
+    template_fields_raw = (
+        catalyst.get("template_fields_json") if "template_fields_json" in catalyst.index else None
+    )
     return {
         "url": str(catalyst.get("url", "") or ""),
         "title": title,
@@ -208,6 +366,9 @@ def _build_catalyst_payload_v2(
         "trigger_url": str(trigger.get("url", "") or ""),
         "trigger_published_at": trigger[time_col].date().isoformat(),
         "is_amplified": int(echo_count) > 1,
+        # PR-3: typed-fact provenance.
+        "template_id": template_id,
+        "template_facts": _coerce_template_facts(template_fields_raw),
     }
 
 
@@ -223,6 +384,7 @@ def find_trigger_event(
     events_dir: Path = DEFAULT_EVENTS_DIR,
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    metrics: TemplateMetrics | None = None,
 ) -> dict | None:
     """Return the catalyst payload for a theme.
 
@@ -267,6 +429,25 @@ def find_trigger_event(
         return None
     joined[time_col] = pd.to_datetime(joined[time_col], errors="coerce", utc=True)
     joined = joined.dropna(subset=[time_col])
+    if joined.empty:
+        return None
+
+    # PR-4 multi-source dedup: collapse multi-outlet echoes of the same
+    # template-extracted event ((template_id, entity_set, 24h-window)
+    # tuple) BEFORE the precedence pass. Without this, ten outlets
+    # reporting the same M&A would each run through supersession-window
+    # arithmetic + theme-arc traversal as if they were ten distinct
+    # events. Flash rows pass through untouched (Flash dedup is the
+    # existing PR #141/#142 ingest-time Jaccard's job).
+    joined = dedup.dedup_template_events(joined, time_col=time_col)
+    if joined.empty:
+        return None
+
+    # PR-2 precedence rule: drop Flash events superseded by a template
+    # event in the same (ticker, event_type, 24h) slot. Runs AFTER the
+    # time-column coercion so the window arithmetic uses pandas datetime
+    # rather than strings.
+    joined = _apply_template_precedence(joined, time_col, metrics=metrics)
     if joined.empty:
         return None
 

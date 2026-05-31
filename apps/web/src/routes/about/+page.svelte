@@ -1,17 +1,20 @@
 <script lang="ts">
-	import { GEMINI } from '$lib/models';
+	import { MODELS } from '$lib/models';
 
 	// Layer model labels use brand-style names imported from $lib/models
 	// (single source of truth across the SPA). Exact preview IDs rot on
 	// every model bump — see reference_gemini_model_retirement_silent_failure.md.
+	// That lesson is model-agnostic: it first bit the Gemini IDs, and the
+	// pipeline has since migrated to DeepSeek V4 (PR-G #318), so the same
+	// brand-label discipline now applies to the DeepSeek labels.
 	// The pipeline source carries exact IDs; the SPA shows brand names.
 	const layers = [
 		{ id: 'L1', name: 'EDGAR Watchdog', what: 'detects S&P 100 filings + macro news', model: 'rule-based + launchd' },
-		{ id: 'L2', name: 'Theme Extraction', what: 'distills news → tradeable thematic narrative', model: GEMINI.FLASH },
-		{ id: 'L3', name: 'Beneficiary Mapping', what: 'theme → 5-15 small-cap second-order beneficiaries (≤3 shipped per theme)', model: GEMINI.PRO },
+		{ id: 'L2', name: 'Theme Extraction', what: 'distills news → tradeable thematic narrative', model: MODELS.FLASH },
+		{ id: 'L3', name: 'Beneficiary Mapping', what: 'theme → 5-15 small-cap second-order beneficiaries (≤3 shipped per theme)', model: MODELS.PRO },
 		{ id: 'V', name: 'Verification Gates', what: 'press · insider · 10-K (tri-state, post-PR #150; ETF dropped #185)', model: 'polygon + form-4 parquet + EDGAR' },
 		{ id: 'L4', name: 'Quant Scorer', what: 'insider × FCFF × Magic Formula × technicals × catalyst-floor', model: 'reused paradigm #11 + #13 scorers' },
-		{ id: 'L5', name: 'Brief Generator', what: 'per-candidate WhatsApp-format markdown', model: GEMINI.PRO_OR_FLASH }
+		{ id: 'L5', name: 'Brief Generator', what: 'per-candidate WhatsApp-format markdown', model: MODELS.PRO_OR_FLASH }
 	];
 
 	// Doctrine 03 used to claim Pro-supplied keywords replaced "hand-curated

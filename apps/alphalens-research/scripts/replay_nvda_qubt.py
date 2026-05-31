@@ -25,8 +25,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from alphalens_pipeline.thematic.extraction import gemini_flash
-from alphalens_pipeline.thematic.mapping import gemini_mapper, orchestrator
+from alphalens_pipeline.thematic.extraction import event_extractor
+from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
 
 REPLAY_DIR = Path.home() / ".alphalens" / "replay" / "nvda_qubt"
 REPLAY_DIR.mkdir(parents=True, exist_ok=True)
@@ -89,7 +89,7 @@ def banner(msg: str) -> None:
 def step_layer2() -> dict:
     banner("Layer 2 — Gemini Flash event extraction")
     api_key = os.environ["GOOGLE_API_KEY"]
-    event = gemini_flash.extract_one(NEWS_ROW, api_key=api_key)
+    event = event_extractor.extract_one(NEWS_ROW, api_key=api_key)
     if event is None:
         raise RuntimeError("Layer 2 returned None")
     (REPLAY_DIR / "layer2_event.json").write_text(json.dumps(event, indent=2, default=str))
@@ -102,7 +102,7 @@ def step_layer3_propose(themes: list[str]) -> dict[str, list[dict]]:
     api_key = os.environ["GOOGLE_API_KEY"]
     all_by_theme: dict[str, list[dict]] = {}
     for theme in themes:
-        cands = gemini_mapper.propose_candidates(theme=theme, api_key=api_key)
+        cands = theme_mapper.propose_candidates(theme=theme, api_key=api_key)
         all_by_theme[theme] = cands
         print(f"\n--- theme={theme!r}: {len(cands)} candidates ---")
         for c in cands:

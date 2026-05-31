@@ -318,7 +318,7 @@
             ],
             "title": "Gates Unknown Str"
           },
-          "gemini_confidence": {
+          "llm_confidence": {
             "anyOf": [
               {
                 "type": "number"
@@ -327,7 +327,7 @@
                 "type": "null"
               }
             ],
-            "title": "Gemini Confidence"
+            "title": "Llm Confidence"
           },
           "industry_id": {
             "anyOf": [

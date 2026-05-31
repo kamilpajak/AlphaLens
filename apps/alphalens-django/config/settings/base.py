@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "briefs.apps.BriefsConfig",
     "auth_cf.apps.AuthCfConfig",
     "core.apps.CoreConfig",
+    "market.apps.MarketConfig",
 ]
 
 MIDDLEWARE = [

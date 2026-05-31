@@ -1,0 +1,17 @@
+[Unit]
+# Fires the monthly literature scan on the 1st of every month at
+# 09:00 Europe/Warsaw — matches the Mac launchd
+# ``Day=1 Hour=9`` calendar.
+#
+# Persistent=true: if the VPS was off on the 1st, fire the missed
+# scan at next boot rather than skipping a month silently.
+Description=Trigger AlphaLens monthly literature scan
+After=network-online.target
+
+[Timer]
+OnCalendar=*-*-01 09:00:00 Europe/Warsaw
+Persistent=true
+Unit=alphalens-literature-scan-monthly.service
+
+[Install]
+WantedBy=timers.target

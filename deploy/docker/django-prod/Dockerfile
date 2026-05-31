@@ -45,6 +45,7 @@ COPY apps/alphalens-django/config/ apps/alphalens-django/config/
 COPY apps/alphalens-django/briefs/ apps/alphalens-django/briefs/
 COPY apps/alphalens-django/auth_cf/ apps/alphalens-django/auth_cf/
 COPY apps/alphalens-django/core/ apps/alphalens-django/core/
+COPY apps/alphalens-django/market/ apps/alphalens-django/market/
 
 # Install the django workspace member itself (no deps re-resolution —
 # already locked into .venv above). --no-editable so site-packages owns
