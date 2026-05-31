@@ -100,6 +100,11 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     # (entry/TP ladder + structural stop) that replaced the 5 numeric/entry
     # fields above. Contract bump paired with the brief_trade_setup field.
     "brief_trade_setup",
+    # Post-legacy extension (2026-05-31, PR-3 of epic #321): typed-fact
+    # citation surface from the template engine. NULL on flash-extracted
+    # catalysts; the SPA evidence panel renders the dict inline when present.
+    "brief_template_id",
+    "brief_template_facts",
 )
 
 # Columns the legacy contract exposed that Django deliberately does not model.

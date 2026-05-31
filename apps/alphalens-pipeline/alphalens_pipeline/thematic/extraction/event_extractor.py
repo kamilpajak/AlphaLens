@@ -31,6 +31,7 @@ backend-agnostic and the filename rename is deferred to a cleanup PR.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 from pathlib import Path
 
@@ -120,6 +121,19 @@ def _news_row_to_article(row: dict | pd.Series) -> Article:
         published_at=src.get("timestamp"),
         tickers_raw=tickers_list,
     )
+
+
+def _serialise_fields(fields: dict) -> str:
+    """JSON-serialise the typed template fields with a stable shape.
+
+    ``TemplateEvent.fields`` is a plain dict whose values are strings,
+    ints, floats, or datetime/date objects (the latter from
+    ``source: article.published_at`` extractions). ``default=str`` keeps
+    the serialiser total on datetime-like values without forcing every
+    template to predict the type set — the brief generator + SPA both
+    consume the result as opaque key/value pairs anyway.
+    """
+    return json.dumps(fields, default=str, sort_keys=True)
 
 
 def _template_event_to_dict(
@@ -274,6 +288,13 @@ def extract_one(
         out = _template_event_to_dict(template_event, article=article)
         out["extraction_method"] = "template"
         out["template_id"] = template_event.template_id
+        # PR-3: persist the typed fields as JSON so the catalyst resolver
+        # + brief generator can cite them deterministically. JSON over a
+        # native dict column because pandas list/dict columns are fragile
+        # across parquet round-trips (Arrow type inference can collapse
+        # heterogeneous values to ``object``) — JSON string is the same
+        # interop boundary brief_trade_setup uses (orchestrator.py).
+        out["template_fields_json"] = _serialise_fields(template_event.fields)
         return out
 
     # --- Flash fallback (LLM, billable, non-deterministic) ---
@@ -298,6 +319,9 @@ def extract_one(
     out = normalize_extraction(parsed)
     out["extraction_method"] = "flash"
     out["template_id"] = None
+    # PR-3: Flash path has no typed fields — brief generator's absent-
+    # block branch fires when this is None.
+    out["template_fields_json"] = None
     return out
 
 
@@ -322,6 +346,10 @@ def _backfill_legacy_columns(df: pd.DataFrame) -> pd.DataFrame:
         df = df.assign(extraction_method="flash")
     if "template_id" not in df.columns:
         df = df.assign(template_id=None)
+    # PR-3: typed fields column. Pre-PR-3 parquets carry None — neither
+    # path produced them.
+    if "template_fields_json" not in df.columns:
+        df = df.assign(template_fields_json=None)
     return df
 
 
