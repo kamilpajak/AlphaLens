@@ -77,6 +77,12 @@ def _entity_key(value: Any) -> frozenset[str]:
     and uppercase + strip every element for cross-outlet consistency.
     Returns an empty frozenset on un-iterable input so the caller can
     treat "no resolved entities" as its own (degenerate) cluster bucket.
+
+    NaN guard: a stray ``float('nan')`` inside ``primary_entities`` is
+    silently dropped rather than stringified to ``"NAN"`` — otherwise it
+    could collide with a legitimate ticker symbol "NAN" or produce a
+    confusing cluster key. Caught by zen pre-merge review of PR #325
+    (LOW).
     """
     if value is None:
         return frozenset()
@@ -84,7 +90,13 @@ def _entity_key(value: Any) -> frozenset[str]:
         s = value.strip().upper()
         return frozenset({s}) if s else frozenset()
     try:
-        cleaned = {str(e).strip().upper() for e in value if str(e).strip()}
+        cleaned: set[str] = set()
+        for e in value:
+            if isinstance(e, float) and pd.isna(e):
+                continue
+            s = str(e).strip().upper()
+            if s:
+                cleaned.add(s)
     except TypeError:
         return frozenset()
     return frozenset(cleaned)
@@ -170,11 +182,18 @@ def _collapse_cluster(cluster: pd.DataFrame, *, time_col: str) -> pd.Series:
         ordered["_richness"] = ordered["template_fields_json"].apply(_fields_richness)
     else:
         ordered["_richness"] = 0
-    ordered = ordered.sort_values(
-        by=["_richness", time_col, "news_id"],
-        ascending=[False, True, True],
-        kind="mergesort",
-    )
+    # Defensive: ``news_id`` is the documented join key from
+    # ``event_extractor.extract_daily`` and should always be present, but
+    # if an upstream schema change drops it the sort would raise KeyError.
+    # Fall through to row-index order as the last tie-breaker instead.
+    # Caught by zen pre-merge review of PR #325 (MEDIUM).
+    if "news_id" in ordered.columns:
+        sort_cols = ["_richness", time_col, "news_id"]
+        ascending = [False, True, True]
+    else:
+        sort_cols = ["_richness", time_col]
+        ascending = [False, True]
+    ordered = ordered.sort_values(by=sort_cols, ascending=ascending, kind="mergesort")
     survivor = ordered.iloc[0].drop(labels=["_richness", "_dedup_cluster"])
 
     count = len(cluster)
@@ -187,8 +206,10 @@ def _collapse_cluster(cluster: pd.DataFrame, *, time_col: str) -> pd.Series:
         survivor[DEDUP_SOURCE_URLS_COL] = json.dumps(
             [str(u) for u in chronological["url"].tolist()]
         )
-        survivor[DEDUP_NEWS_IDS_COL] = json.dumps(
-            [str(n) for n in chronological["news_id"].tolist()]
+        survivor[DEDUP_NEWS_IDS_COL] = (
+            json.dumps([str(n) for n in chronological["news_id"].tolist()])
+            if "news_id" in chronological.columns
+            else None
         )
     else:
         survivor[DEDUP_SOURCE_URLS_COL] = None

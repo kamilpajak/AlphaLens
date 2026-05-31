@@ -495,5 +495,138 @@ class TestMixedBatch(unittest.TestCase):
         self.assertEqual(m_and_a_rows.iloc[0]["dedup_count"], 3)
 
 
+class TestZenReviewHardening(unittest.TestCase):
+    """Defensive cases surfaced by the PR #325 zen pre-merge review.
+
+    Track these explicitly so a future schema change or upstream-shape
+    drift produces a sharp test failure rather than a silent miscluster.
+    """
+
+    def test_nan_in_primary_entities_does_not_stringify_to_nan_token(self):
+        # A stray ``float('nan')`` inside primary_entities must NOT
+        # become the cluster-key string "NAN" — that would either
+        # collide with a legitimate ticker NAN or build a misleading
+        # composite key. Both rows below share entity_set={NVDA, XYZ}
+        # post-NaN-guard, so they collapse cleanly.
+        import math
+
+        fields = {"acquirer_ticker": "NVDA", "target_ticker": "XYZ"}
+        rows = [
+            _row(
+                "a",
+                timestamp="2026-05-31T08:00:00Z",
+                template_id="m_and_a_press_release",
+                primary_entities=["NVDA", "XYZ", math.nan],
+                fields=fields,
+                url="https://bw.example.com/a",
+            ),
+            _row(
+                "b",
+                timestamp="2026-05-31T08:05:00Z",
+                template_id="m_and_a_press_release",
+                primary_entities=["NVDA", "XYZ"],
+                fields=fields,
+                url="https://reuters.example.com/b",
+            ),
+        ]
+        out = dedup.dedup_template_events(_frame(rows), time_col="published_at")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out.iloc[0]["dedup_count"], 2)
+
+    def test_exact_24h_boundary_clusters_together(self):
+        # The sliding-anchor rule uses strict ``>`` against the window —
+        # rows landing EXACTLY 24h after the anchor are inside the
+        # cluster, not outside. Pins the inclusive boundary so a future
+        # refactor to ``>=`` breaks loudly.
+        fields = {"acquirer_ticker": "NVDA", "target_ticker": "XYZ"}
+        rows = [
+            _row(
+                "anchor",
+                timestamp="2026-05-30T08:00:00Z",
+                template_id="m_and_a_press_release",
+                primary_entities=["NVDA", "XYZ"],
+                fields=fields,
+                url="https://bw.example.com/anchor",
+            ),
+            _row(
+                "exactly_24h",
+                timestamp="2026-05-31T08:00:00Z",
+                template_id="m_and_a_press_release",
+                primary_entities=["NVDA", "XYZ"],
+                fields=fields,
+                url="https://reuters.example.com/exact",
+            ),
+        ]
+        out = dedup.dedup_template_events(_frame(rows), time_col="published_at")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out.iloc[0]["dedup_count"], 2)
+
+    def test_just_past_24h_boundary_splits(self):
+        # One second past the anchor + 24h must split into two clusters.
+        # Complement to the exact-boundary test above.
+        fields = {"acquirer_ticker": "NVDA", "target_ticker": "XYZ"}
+        rows = [
+            _row(
+                "anchor",
+                timestamp="2026-05-30T08:00:00Z",
+                template_id="m_and_a_press_release",
+                primary_entities=["NVDA", "XYZ"],
+                fields=fields,
+                url="https://bw.example.com/anchor",
+            ),
+            _row(
+                "past",
+                timestamp="2026-05-31T08:00:01Z",
+                template_id="m_and_a_press_release",
+                primary_entities=["NVDA", "XYZ"],
+                fields=fields,
+                url="https://reuters.example.com/past",
+            ),
+        ]
+        out = dedup.dedup_template_events(_frame(rows), time_col="published_at")
+        self.assertEqual(len(out), 2)
+
+    def test_missing_news_id_column_does_not_raise(self):
+        # An upstream schema regression dropping ``news_id`` from the
+        # post-join frame must not crash dedup — the sort falls through
+        # to (richness, timestamp) and the news_ids audit column lands
+        # null. Pre-PR-2 frames + speculative future direct callers
+        # both benefit.
+        rows = [
+            {
+                "event_type": "m_and_a",
+                "primary_entities": ["NVDA", "XYZ"],
+                "template_id": "m_and_a_press_release",
+                "template_fields_json": json.dumps(
+                    {"acquirer_ticker": "NVDA", "target_ticker": "XYZ"}, sort_keys=True
+                ),
+                "extraction_method": "template",
+                "url": "https://bw.example.com/a",
+                "source": "businesswire",
+                "published_at": pd.Timestamp("2026-05-31T08:00:00Z"),
+            },
+            {
+                "event_type": "m_and_a",
+                "primary_entities": ["NVDA", "XYZ"],
+                "template_id": "m_and_a_press_release",
+                "template_fields_json": json.dumps(
+                    {"acquirer_ticker": "NVDA", "target_ticker": "XYZ"}, sort_keys=True
+                ),
+                "extraction_method": "template",
+                "url": "https://reuters.example.com/b",
+                "source": "reuters",
+                "published_at": pd.Timestamp("2026-05-31T08:05:00Z"),
+            },
+        ]
+        out = dedup.dedup_template_events(_frame(rows), time_col="published_at")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out.iloc[0]["dedup_count"], 2)
+        # No news_id column → no news_id audit list, but the URL audit
+        # list still surfaces (chronological order).
+        self.assertIsNone(out.iloc[0]["dedup_news_ids_json"])
+        urls = json.loads(out.iloc[0]["dedup_source_urls_json"])
+        self.assertEqual(urls, ["https://bw.example.com/a", "https://reuters.example.com/b"])
+
+
 if __name__ == "__main__":
     unittest.main()
