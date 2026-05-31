@@ -28,9 +28,14 @@ from alphalens_pipeline.thematic.extraction.templates.holdout import (
 
 class TestReasonEnumeration(unittest.TestCase):
     def test_reason_set_matches_design_memo(self):
-        # The 4 reasons in design memo §2.4 are load-bearing for the
-        # Grafana panel's by-reason breakdown. Adding/removing one
-        # requires updating Prometheus rule + panel JSON in lockstep.
+        # Reasons are load-bearing for the Grafana panel's by-reason
+        # breakdown. Adding/removing one requires updating Prometheus
+        # rule + panel JSON in lockstep. PR-2 added superseded_by_template
+        # (design memo §1.1 precedence rule).
+        from alphalens_pipeline.thematic.extraction.templates.holdout import (
+            HOLDOUT_SUPERSEDED_BY_TEMPLATE,
+        )
+
         self.assertEqual(
             ALL_HOLDOUT_REASONS,
             frozenset(
@@ -39,6 +44,7 @@ class TestReasonEnumeration(unittest.TestCase):
                     HOLDOUT_ENTITY_UNRESOLVED,
                     HOLDOUT_ALL_PREDICATES_FAILED,
                     HOLDOUT_LOW_CONFIDENCE_NO_TEMPLATE,
+                    HOLDOUT_SUPERSEDED_BY_TEMPLATE,
                 }
             ),
         )

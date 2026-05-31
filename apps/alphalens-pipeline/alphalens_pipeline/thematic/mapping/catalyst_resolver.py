@@ -30,6 +30,10 @@ import pandas as pd
 
 from alphalens_pipeline.thematic import text_similarity
 from alphalens_pipeline.thematic.extraction.schema import NOISE_EVENT_TYPES
+from alphalens_pipeline.thematic.extraction.templates.holdout import (
+    HOLDOUT_SUPERSEDED_BY_TEMPLATE,
+    TemplateMetrics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,14 @@ _NOISE_FILTERS_PATH = Path(__file__).parent.parent / "config" / "catalyst_noise_
 # unrelated newsletters happening to mention the same ticker.
 ENTITY_JACCARD_THRESHOLD = text_similarity.ENTITY_JACCARD_THRESHOLD
 MIN_TRIGGER_ENTITIES = 2
+
+# PR-2 precedence rule: when both a template event AND a Flash event exist
+# for the same (primary_entity_ticker, event_type) within this window, the
+# template event wins and the Flash event is dropped to holdout. 24h is the
+# design-memo §1.1 value — keeps duplicate-reporting collisions clustered
+# while letting separate corporate actions on the same ticker (e.g. a
+# Tuesday acquisition + a Friday earnings call) coexist.
+SUPERSESSION_WINDOW = dt.timedelta(hours=24)
 
 
 @lru_cache(maxsize=1)
@@ -125,6 +137,101 @@ def _apply_noise_and_blocklist_filters(joined: pd.DataFrame) -> pd.DataFrame:
             ~joined["url"].astype(str).apply(lambda u: _url_matches_blocklist(u, blocklist))
         ]
     return joined
+
+
+def _primary_ticker(value: Any) -> str | None:
+    """Pick the FIRST resolved entity ticker for the supersession key.
+
+    The precedence rule keys on a single ticker per event because the
+    typical duplicate-reporting case ("six outlets cover the same M&A")
+    always shares the acquirer + the target; pinning on the first
+    primary_entity gives a stable key without requiring the templates +
+    the LLM to agree on entity ordering. Multi-ticker corporate actions
+    where the FIRST entity differs across outlets are rare enough that
+    the dedup miss is acceptable for PR-2; PR-4 (multi-source dedup
+    via template tuples) handles the full set-overlap case.
+
+    Defensive shape coercion mirrors ``_entity_set`` — pandas-typed
+    cells can land as numpy scalars (float NaN), so we narrow to the
+    iterable cases explicitly.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip().upper()
+        return stripped or None
+    if not isinstance(value, list | tuple | set | frozenset) and not hasattr(value, "__iter__"):
+        return None
+    try:
+        for e in value:
+            s = str(e).strip().upper()
+            if s:
+                return s
+    except TypeError:
+        return None
+    return None
+
+
+def _apply_template_precedence(
+    joined: pd.DataFrame,
+    time_col: str,
+    *,
+    metrics: TemplateMetrics | None,
+) -> pd.DataFrame:
+    """Drop Flash events superseded by a template event in the same 24h slot.
+
+    Design memo §1.1 precedence rule. Operates on the post-join frame so
+    each row already has its news ``timestamp``. The pass is a no-op
+    when ``extraction_method`` is absent (pre-PR-2 parquet) — those rows
+    are treated as flash and pass through unchanged.
+    """
+    if "extraction_method" not in joined.columns:
+        return joined
+    if joined.empty:
+        return joined
+
+    # Project the supersession key per row. Rows whose ticker can't be
+    # determined skip the dedup pass — keeping them is safer than
+    # dropping a potentially-real catalyst on a missing key.
+    keys = joined.apply(
+        lambda r: (_primary_ticker(r.get("primary_entities")), r.get("event_type")),
+        axis=1,
+    )
+    joined = joined.assign(_super_key=keys)
+
+    keep_mask = pd.Series(True, index=joined.index)
+    superseded_count = 0
+    for key, group in joined.groupby("_super_key", sort=False):
+        # pandas types ``key`` as Hashable, but the underlying column was
+        # built from a 2-tuple per row above. Explicit unpack with a
+        # length check keeps pyright happy and guards against future
+        # changes to the key shape.
+        if not isinstance(key, tuple) or len(key) != 2:
+            continue
+        ticker, _event_type = key
+        if ticker is None or len(group) < 2:
+            continue
+        templates = group[group["extraction_method"] == "template"]
+        if templates.empty:
+            continue
+        # Each template row asserts a 24h window — Flash rows whose
+        # timestamp falls inside any of those windows are dropped.
+        for _, tmpl_row in templates.iterrows():
+            tmpl_ts = tmpl_row[time_col]
+            lo = tmpl_ts - SUPERSESSION_WINDOW
+            hi = tmpl_ts + SUPERSESSION_WINDOW
+            in_window = (group[time_col] >= lo) & (group[time_col] <= hi)
+            flash_in_window = group[in_window & (group["extraction_method"] == "flash")]
+            if flash_in_window.empty:
+                continue
+            keep_mask.loc[flash_in_window.index] = False
+            superseded_count += len(flash_in_window)
+
+    if superseded_count and metrics is not None:
+        for _ in range(superseded_count):
+            metrics.record_drop(HOLDOUT_SUPERSEDED_BY_TEMPLATE)
+
+    return joined[keep_mask].drop(columns="_super_key")
 
 
 def _resolve_time_column(joined: pd.DataFrame) -> str | None:
@@ -223,6 +330,7 @@ def find_trigger_event(
     events_dir: Path = DEFAULT_EVENTS_DIR,
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    metrics: TemplateMetrics | None = None,
 ) -> dict | None:
     """Return the catalyst payload for a theme.
 
@@ -267,6 +375,14 @@ def find_trigger_event(
         return None
     joined[time_col] = pd.to_datetime(joined[time_col], errors="coerce", utc=True)
     joined = joined.dropna(subset=[time_col])
+    if joined.empty:
+        return None
+
+    # PR-2 precedence rule: drop Flash events superseded by a template
+    # event in the same (ticker, event_type, 24h) slot. Runs AFTER the
+    # time-column coercion so the window arithmetic uses pandas datetime
+    # rather than strings.
+    joined = _apply_template_precedence(joined, time_col, metrics=metrics)
     if joined.empty:
         return None
 
