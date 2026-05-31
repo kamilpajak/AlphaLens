@@ -154,6 +154,60 @@ class TestMapThemesCLI(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
 
 
+class TestExtractCLIModelEnvVar(unittest.TestCase):
+    """`extract --model` reads the post-DeepSeek env var, not the retired GEMINI_MODEL."""
+
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def test_extract_model_default_comes_from_alphalens_extract_model_env(self):
+        # A sentinel distinct from gemini_flash.DEFAULT_MODEL so the test proves
+        # the env var (not the hard-coded default) supplied the value.
+        sentinel = "deepseek/deepseek-v4-flash-envtest"
+        captured = {}
+
+        def fake_extract_daily(*, date, news_dir, events_dir, api_key, model):
+            captured["model"] = model
+            return pd.DataFrame()
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(
+                os.environ,
+                {"OPENROUTER_API_KEY": "fake", "ALPHALENS_EXTRACT_MODEL": sentinel},
+                clear=False,
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.gemini_flash.extract_daily",
+                side_effect=fake_extract_daily,
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.roll_up",
+                return_value=pd.DataFrame(),
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.flag_novel",
+                return_value=pd.DataFrame(),
+            ),
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "thematic",
+                    "extract",
+                    "--date",
+                    "2026-05-15",
+                    "--news-dir",
+                    tmpdir,
+                    "--events-dir",
+                    tmpdir,
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(captured["model"], sentinel)
+
+
 class TestScoreCLI(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()

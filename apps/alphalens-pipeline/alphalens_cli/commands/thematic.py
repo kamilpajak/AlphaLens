@@ -87,8 +87,9 @@ def extract(
     model: str = typer.Option(
         gemini_flash.DEFAULT_MODEL,
         "--model",
-        envvar="GEMINI_MODEL",
-        help="Gemini model id (env GEMINI_MODEL as default; --model overrides).",
+        envvar="ALPHALENS_EXTRACT_MODEL",
+        help="OpenRouter LLM slug for event extraction (default DeepSeek v4-flash; "
+        "env ALPHALENS_EXTRACT_MODEL as default, --model overrides).",
     ),
     window_days: int = typer.Option(
         themes_mod.DEFAULT_WINDOW_DAYS,
@@ -163,7 +164,7 @@ def map_themes_cmd(
     max_themes: int = typer.Option(
         10,
         "--max-themes",
-        help="Cap on novel themes mapped per run (Gemini 3 Pro spend control).",
+        help="Cap on novel themes mapped per run (DeepSeek v4-pro spend control).",
     ),
     model: str = typer.Option(
         gemini_mapper.DEFAULT_MODEL,
@@ -200,7 +201,7 @@ def map_themes_cmd(
         )
         return
 
-    typer.echo(f"Mapping {len(novel)} novel themes via Gemini 3 Pro ({model})...")
+    typer.echo(f"Mapping {len(novel)} novel themes via DeepSeek v4-pro ({model})...")
     themes = list(novel["theme"])
 
     df = orchestrator.map_themes(
