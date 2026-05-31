@@ -79,6 +79,13 @@ def _get_default_engine() -> TemplateEngine:
     ``data.alt_data.openrouter_client.get_default_openrouter_client`` —
     keeps import time cheap (template YAMLs only read on first call) +
     avoids passing the engine through every CLI command body.
+
+    Not thread-safe. The thematic-build cron + ``alphalens`` CLI are
+    both single-threaded; if a future caller invokes ``extract_one`` /
+    ``extract_daily`` from multiple threads, the worst case is two
+    engine instances racing to init then one wiping the other — benign
+    in terms of correctness but wasteful. Add ``threading.Lock`` here
+    if the pipeline ever goes multi-threaded.
     """
     global _default_engine  # noqa: PLW0603 — documented singleton pattern
     if _default_engine is None:
@@ -87,7 +94,10 @@ def _get_default_engine() -> TemplateEngine:
 
 
 def _get_default_resolver() -> EntityResolver:
-    """Lazy-load the entity resolver once per process. See _get_default_engine."""
+    """Lazy-load the entity resolver once per process.
+
+    Same single-threaded assumption as :func:`_get_default_engine`.
+    """
     global _default_resolver  # noqa: PLW0603 — documented singleton pattern
     if _default_resolver is None:
         _default_resolver = EntityResolver()
@@ -126,6 +136,17 @@ def _template_event_to_dict(
     is what actually uses ``template_id`` to cite ``event.fields`` as
     deterministic facts (see design memo §3 PR-3).
     """
+    # Entity fallback: a template match guarantees at least one resolved
+    # entity was assigned to a required role (engine drops a template
+    # otherwise), but the assigned-set can still be EMPTY when the
+    # template declares only optional roles + the resolver picked up
+    # zero entities. That branch is degenerate for the 5 ship templates
+    # (all declare a required role) but reachable for future templates;
+    # falling back to the feed-tagged ``tickers_raw`` keeps the audit
+    # trail honest rather than letting downstream consumers (catalyst
+    # resolver, PR-3 brief generator) see an empty entity list on what
+    # was nonetheless a deterministic template match. Caught by zen
+    # pre-merge review of PR #323 (MEDIUM, documentation only).
     return {
         "event_type": event.event_type,
         "primary_entities": [e.ticker for e in event.entities.values()] or article.tickers_raw,
