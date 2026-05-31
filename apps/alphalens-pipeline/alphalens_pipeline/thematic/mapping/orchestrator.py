@@ -258,7 +258,7 @@ def _build_row(
         "ticker": cand["ticker"],
         "company_name": cand.get("company_name", ""),
         "rationale": cand.get("rationale", ""),
-        "gemini_confidence": cand.get("confidence", 0.0),
+        "llm_confidence": cand.get("confidence", 0.0),
         "market_cap": market_cap,
         "gates_passed": verdict["gates_passed"],
         "gates_passed_str": ",".join(verdict["gates_passed"]),
@@ -282,7 +282,7 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
     "ticker",
     "company_name",
     "rationale",
-    "gemini_confidence",
+    "llm_confidence",
     "market_cap",
     "gates_passed",
     "gates_passed_str",
@@ -348,7 +348,7 @@ def _verify_candidates_for_theme(
 ) -> tuple[list[dict], int, int]:
     """Run the 4-gate verify on each candidate with diversity cap + backfill.
 
-    Candidates arrive sorted by ``gemini_confidence`` desc. The loop keeps up
+    Candidates arrive sorted by ``llm_confidence`` desc. The loop keeps up
     to ``_MAX_CANDIDATES_PER_THEME`` rows per theme; on hard-fail, it pulls
     the next-highest-confidence candidate (backfill), capped at
     ``_MAX_VERIFY_ATTEMPTS_PER_THEME`` total verify calls. Without the
@@ -487,11 +487,11 @@ def map_themes(
         df = (
             pd.DataFrame(rows)
             # ``ticker`` is the deterministic tie-break so ties on
-            # (n_gates_passed, gemini_confidence) don't produce
+            # (n_gates_passed, llm_confidence) don't produce
             # run-to-run ordering jitter (e.g. when Pro returns two
             # candidates at the same confidence).
             .sort_values(
-                ["theme", "n_gates_passed", "gemini_confidence", "ticker"],
+                ["theme", "n_gates_passed", "llm_confidence", "ticker"],
                 ascending=[True, False, False, True],
             )
             .reset_index(drop=True)

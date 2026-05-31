@@ -229,7 +229,7 @@ def map_themes_cmd(
             unknown = ",".join(row.get("gates_unknown", []) or []) or "-"
             typer.echo(
                 f"{row['theme'][:27]:28s} {row['ticker']:8s} "
-                f"{passed:20s} {unknown:16s} {row['gemini_confidence']:.2f}  "
+                f"{passed:20s} {unknown:16s} {row['llm_confidence']:.2f}  "
                 f"{row['rationale'][:40]}"
             )
 

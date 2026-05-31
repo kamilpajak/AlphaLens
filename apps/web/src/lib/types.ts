@@ -14,7 +14,7 @@ export interface Candidate {
 	ticker: string;
 	company_name: string;
 	rationale: string;
-	gemini_confidence: number;
+	llm_confidence: number;
 	market_cap: number | null;
 	gates_passed: string[];
 	n_gates_passed: number;

@@ -290,7 +290,7 @@ _BRIEF_SORT_KEYS: tuple[tuple[str, bool, float | int | bool], ...] = (
     # missing rank sorts to the absolute bottom rather than the top.
     ("magic_formula_rank", True, float("inf")),
     ("n_gates_passed", False, 0),
-    ("gemini_confidence", False, 0.0),
+    ("llm_confidence", False, 0.0),
     # PR-3 same-window dedup-at-injection guard: when two rows tie on
     # every higher-priority key AND share (ticker, template_id), the
     # one with MORE non-null template_facts survives the drop_duplicates

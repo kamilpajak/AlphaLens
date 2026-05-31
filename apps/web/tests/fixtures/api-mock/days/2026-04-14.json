@@ -13,7 +13,7 @@
       "ticker": "RGTI",
       "company_name": "Rigetti Computing, Inc.",
       "rationale": "Rigetti builds superconducting quantum processors and provides full-stack quantum computing access through its Quantum Cloud Services platform.",
-      "gemini_confidence": 0.95,
+      "llm_confidence": 0.95,
       "market_cap": 5603380175.341841,
       "gates_passed": [
         "etf",
@@ -118,7 +118,7 @@
       "ticker": "QBTS",
       "company_name": "D-Wave Quantum Inc.",
       "rationale": "D-Wave specializes in quantum annealing technology and provides quantum hardware and software solutions for complex optimization problems.",
-      "gemini_confidence": 0.95,
+      "llm_confidence": 0.95,
       "market_cap": 6277435184.090422,
       "gates_passed": [
         "etf",
@@ -221,7 +221,7 @@
       "ticker": "QUBT",
       "company_name": "Quantum Computing Inc.",
       "rationale": "Quantum Computing Inc. develops photonic quantum computing hardware and ready-to-run quantum software for optimization and supply chain problems.",
-      "gemini_confidence": 0.9,
+      "llm_confidence": 0.9,
       "market_cap": 1821005162.8509083,
       "gates_passed": [
         "tenk",
@@ -324,7 +324,7 @@
       "ticker": "AI",
       "company_name": "C3.ai, Inc.",
       "rationale": "Delivers a suite of enterprise AI applications and a generative AI platform that orchestrates multiple foundational models for business use cases.",
-      "gemini_confidence": 0.75,
+      "llm_confidence": 0.75,
       "market_cap": 1220446209.3757973,
       "gates_passed": [
         "press"
@@ -428,7 +428,7 @@
       "ticker": "SOUN",
       "company_name": "SoundHound AI, Inc.",
       "rationale": "Builds and deploys proprietary voice-enabled artificial intelligence models for automotive, restaurant, and customer service applications.",
-      "gemini_confidence": 0.7,
+      "llm_confidence": 0.7,
       "market_cap": 2970683993.927572,
       "gates_passed": [
         "press"
@@ -532,7 +532,7 @@
       "ticker": "FORM",
       "company_name": "FormFactor, Inc.",
       "rationale": "FormFactor manufactures cryogenic probe stations and measurement systems that are critical for testing and characterizing superconducting qubits at sub-Kelvin temperatures.",
-      "gemini_confidence": 0.85,
+      "llm_confidence": 0.85,
       "market_cap": 9999995468.040771,
       "gates_passed": [
         "tenk"

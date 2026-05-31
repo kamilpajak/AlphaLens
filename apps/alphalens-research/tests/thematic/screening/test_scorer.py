@@ -14,7 +14,7 @@ def _candidates_df(tickers: list[str]) -> pd.DataFrame:
             "ticker": tickers,
             "company_name": [f"{t} Corp" for t in tickers],
             "rationale": ["x"] * len(tickers),
-            "gemini_confidence": [0.9] * len(tickers),
+            "llm_confidence": [0.9] * len(tickers),
             "market_cap": [1e9] * len(tickers),
             "gates_passed": [["tenk"]] * len(tickers),
             "gates_passed_str": ["tenk"] * len(tickers),

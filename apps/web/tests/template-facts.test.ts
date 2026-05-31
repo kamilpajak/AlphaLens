@@ -40,7 +40,7 @@ function buildDayBody(date: string, candidates: CandidateOverrides[]): string {
 			ticker: c.ticker,
 			company_name: `${c.ticker} Inc`,
 			rationale: 'test',
-			gemini_confidence: 0.9,
+			llm_confidence: 0.9,
 			market_cap: 1e10,
 			gates_passed: ['tenk', 'press'],
 			gates_passed_str: 'tenk,press',

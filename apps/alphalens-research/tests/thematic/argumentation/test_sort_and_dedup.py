@@ -7,7 +7,7 @@ Sort priorities (DESC unless noted):
 4. deep_drawdown_reversal       — True > False (binary setup)
 5. magic_formula_rank ASC       — cohort value+quality (1 = best)
 6. n_gates_passed               — verification breadth
-7. gemini_confidence            — LLM fallback tiebreaker
+7. llm_confidence            — LLM fallback tiebreaker
 
 Dedup happens AFTER sort so the strongest-context row per ticker wins
 (critical when a ticker hits 2 themes with different catalysts). Cross-
@@ -36,7 +36,7 @@ def _row(**overrides) -> dict:
         "magic_formula_rank": 5,
         "magic_formula_cohort_n": 10,
         "n_gates_passed": 2,
-        "gemini_confidence": 0.85,
+        "llm_confidence": 0.85,
     }
     base.update(overrides)
     return base
@@ -134,11 +134,11 @@ class TestSortAndDedupForBrief(unittest.TestCase):
         out = orchestrator._sort_and_dedup_for_brief(df)
         self.assertEqual(list(out["ticker"]), ["THREE_GATES", "ONE_GATE"])
 
-    def test_gemini_confidence_is_final_tiebreaker(self):
+    def test_llm_confidence_is_final_tiebreaker(self):
         df = pd.DataFrame(
             [
-                _row(ticker="LOW_CONF", gemini_confidence=0.50),
-                _row(ticker="HIGH_CONF", gemini_confidence=0.95),
+                _row(ticker="LOW_CONF", llm_confidence=0.50),
+                _row(ticker="HIGH_CONF", llm_confidence=0.95),
             ]
         )
         out = orchestrator._sort_and_dedup_for_brief(df)

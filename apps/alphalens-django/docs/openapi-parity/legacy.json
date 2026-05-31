@@ -318,7 +318,7 @@
             ],
             "title": "Gates Unknown Str"
           },
-          "gemini_confidence": {
+          "llm_confidence": {
             "anyOf": [
               {
                 "type": "number"

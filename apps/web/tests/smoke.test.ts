@@ -286,12 +286,17 @@ test.describe('smoke — about page accuracy', () => {
 	// reference_gemini_model_retirement_silent_failure.md: retired Gemini
 	// model IDs in user-facing copy advertise a state the pipeline left
 	// behind, and the copy quietly rots every time a model is bumped. The
-	// about page now uses brand-style names ("Gemini 3 Flash", "Gemini 3
-	// Pro") so it survives a model bump without re-staling, and the test
-	// hard-fails if a retired exact ID ever reappears.
+	// about page now uses brand-style names ("DeepSeek V4 Flash", "DeepSeek
+	// V4 Pro") so it survives a model bump without re-staling, and the test
+	// hard-fails if a retired exact ID or retired brand label ever reappears.
 	const RETIRED_MODEL_IDS = [
 		'gemini-2.5-flash',
-		'gemini-3-pro-preview' // dropped the "-3-" preview line; current is gemini-3.1-pro-preview
+		'gemini-3-pro-preview', // dropped the "-3-" preview line; current is gemini-3.1-pro-preview
+		// Retired brand labels — the thematic pipeline migrated Gemini → DeepSeek
+		// V4 (PR-G #318), so the SPA must no longer display the old Gemini brand
+		// names anywhere.
+		'Gemini 3 Pro',
+		'Gemini 3 Flash'
 	];
 
 	test('lists every pipeline layer with current model labels', async ({ page }) => {
@@ -306,8 +311,8 @@ test.describe('smoke — about page accuracy', () => {
 		}
 
 		// Current model labels (brand-style, not version-pinned).
-		await expect(layers).toContainText(/Gemini 3 Flash/);
-		await expect(layers).toContainText(/Gemini 3 Pro/);
+		await expect(layers).toContainText(/DeepSeek V4 Flash/);
+		await expect(layers).toContainText(/DeepSeek V4 Pro/);
 
 		// L3 candidate-range matches the actual prompt + diversity cap.
 		await expect(layers).toContainText(/5-15/);

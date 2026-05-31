@@ -47,7 +47,7 @@ def _scored_row(
         "ticker": ticker,
         "company_name": f"{ticker} Inc",
         "rationale": "x",
-        "gemini_confidence": 0.9,
+        "llm_confidence": 0.9,
         "market_cap": 1.0e9,
         "gates_passed_str": "tenk,press",
         "verified": True,

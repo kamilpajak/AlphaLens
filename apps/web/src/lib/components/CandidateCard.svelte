@@ -22,7 +22,7 @@
 	}
 	let { candidate: c, index }: Props = $props();
 
-	const confTone = $derived(confidenceTone(c.gemini_confidence));
+	const confTone = $derived(confidenceTone(c.llm_confidence));
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
 </script>
@@ -103,7 +103,7 @@
 					class:text-green={confTone === 'green'}
 					class:text-amber={confTone === 'amber'}
 					class:text-cyan={confTone === 'cyan'}
-					class:text-fg-muted={confTone === 'muted'}>{confidenceLabel(c.gemini_confidence)}</span
+					class:text-fg-muted={confTone === 'muted'}>{confidenceLabel(c.llm_confidence)}</span
 				>
 			</span>
 			<span class="text-fg-muted whitespace-nowrap">
