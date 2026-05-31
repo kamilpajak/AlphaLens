@@ -228,6 +228,46 @@ class TestPrometheusRulesYaml(unittest.TestCase):
                         "use `max_over_time(...)` or `avg_over_time(...)` instead.",
                     )
 
+    def test_stale_rules_carry_unit_label_matching_job(self) -> None:
+        # promtool's duplicate-rule lint compares (alert name + static
+        # label set). All 5 AlphalensJobStale rules share the same
+        # name and the same {severity: warning, route: telegram} block,
+        # so they collide. A distinguishing ``unit: <job>`` static
+        # label (matching the job filter in the expr) makes each
+        # signature unique and improves Alertmanager grouping. (#333)
+        rules = _load_rules()["groups"][0]["rules"]
+        for rule in rules:
+            if rule.get("alert") != "AlphalensJobStale":
+                continue
+            job_match = re.search(r'job="([^"]+)"', rule["expr"])
+            self.assertIsNotNone(job_match, f"Stale rule missing job filter: {rule['expr']!r}")
+            assert job_match is not None
+            job = job_match.group(1)
+            self.assertEqual(
+                rule.get("labels", {}).get("unit"),
+                job,
+                f"AlphalensJobStale rule for job {job!r} must carry a `unit: {job}` static label.",
+            )
+
+    def test_stale_rules_have_distinct_static_label_sets(self) -> None:
+        # promtool rejects two rules that share both an identical alert
+        # name and an identical static-label set. Assert the 5
+        # AlphalensJobStale label blocks are pairwise distinct so the
+        # duplicate-rule lint passes. (#333)
+        rules = _load_rules()["groups"][0]["rules"]
+        label_sets = [
+            frozenset(rule.get("labels", {}).items())
+            for rule in rules
+            if rule.get("alert") == "AlphalensJobStale"
+        ]
+        self.assertEqual(len(label_sets), 5)
+        self.assertEqual(
+            len(set(label_sets)),
+            len(label_sets),
+            "AlphalensJobStale rules must have pairwise-distinct static "
+            "label sets so promtool's duplicate-rule lint passes.",
+        )
+
     def test_all_alerts_carry_route_telegram_label(self) -> None:
         # Alertmanager routes by label; an alert missing
         # ``route: telegram`` would land on the default receiver
