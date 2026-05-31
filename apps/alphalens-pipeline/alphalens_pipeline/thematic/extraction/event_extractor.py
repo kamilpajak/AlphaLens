@@ -22,10 +22,9 @@ Legacy events parquets (pre-PR-2 schema) are backfilled on read with
 ``extraction_method="flash"`` + ``template_id=None`` so the catalyst
 resolver + PR-3 brief generator can always rely on the new columns.
 
-**Module name kept as `gemini_flash.py`** for diff-locality on the LLM swap
-(PR-G). 11 call sites import the public surface (`extract_one`,
-`extract_daily`, `DEFAULT_MODEL`) — those names stay; the internals are
-backend-agnostic and the filename rename is deferred to a cleanup PR.
+The public surface (`extract_one`, `extract_daily`, `DEFAULT_MODEL`) is
+backend-agnostic: the LLM-backend swap to DeepSeek v4-flash (PR-G) left
+these names unchanged.
 """
 
 from __future__ import annotations
@@ -219,9 +218,9 @@ Be terse, ground every claim in the article content, and skip speculation past s
 def _call_llm(llm_client: OpenRouterClient, prompt: str, *, model: str):
     """Single seam for tests to patch. Returns the raw response.
 
-    The wrapper exposes ``.text`` matching Gemini's shape so the
-    downstream parse path (``parse_extraction(response.text)``) is
-    unchanged across the LLM-backend swap (PR-G).
+    The wrapper exposes ``.text`` so the downstream parse path
+    (``parse_extraction(response.text)``) is unchanged across the
+    LLM-backend swap (PR-G).
     """
     return llm_client.generate_content(
         model=model,
@@ -364,7 +363,7 @@ def extract_daily(
     """Extract events for one day's unified news parquet; cache results.
 
     Idempotent per ``news_id``: items already in the events parquet are kept
-    untouched and not re-sent to Gemini.
+    untouched and not re-sent to the LLM.
     """
     llm_client = OpenRouterClient(api_key=api_key) if api_key else get_default_openrouter_client()
 

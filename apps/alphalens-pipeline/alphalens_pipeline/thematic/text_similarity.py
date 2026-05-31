@@ -5,7 +5,7 @@ Tier 1 — ingest-time lexical clustering of same-day news headlines:
 the original story.
 
 Tier 2 — resolver-time semantic clustering of cross-day events:
-``entity_jaccard(set_a, set_b)`` uses Gemini-extracted ``primary_entities`` to
+``entity_jaccard(set_a, set_b)`` uses LLM-extracted ``primary_entities`` to
 trace a brief's triggering event back to the root source of the story arc.
 
 Both helpers are designed so the cap-200 cap-by-recency and the

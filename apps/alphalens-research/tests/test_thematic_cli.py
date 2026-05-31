@@ -161,7 +161,7 @@ class TestExtractCLIModelEnvVar(unittest.TestCase):
         self.runner = CliRunner()
 
     def test_extract_model_default_comes_from_alphalens_extract_model_env(self):
-        # A sentinel distinct from gemini_flash.DEFAULT_MODEL so the test proves
+        # A sentinel distinct from event_extractor.DEFAULT_MODEL so the test proves
         # the env var (not the hard-coded default) supplied the value.
         sentinel = "deepseek/deepseek-v4-flash-envtest"
         captured = {}
@@ -178,7 +178,7 @@ class TestExtractCLIModelEnvVar(unittest.TestCase):
                 clear=False,
             ),
             patch(
-                "alphalens_cli.commands.thematic.gemini_flash.extract_daily",
+                "alphalens_cli.commands.thematic.event_extractor.extract_daily",
                 side_effect=fake_extract_daily,
             ),
             patch(

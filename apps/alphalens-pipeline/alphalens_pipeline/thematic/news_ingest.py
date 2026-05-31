@@ -2,11 +2,11 @@
 
 Output: one parquet per day at ``~/.alphalens/thematic_news/{YYYY-MM-DD}.parquet``
 conforming to the shared ``NEWS_COLUMNS`` schema, capped at ``max_items``
-per the §14 lock-7 LLM-budget envelope (~200 items/day → Gemini Flash free
-tier).
+per the §14 lock-7 LLM-budget envelope (~200 items/day → DeepSeek v4-flash
+budget).
 
 EDGAR signal lives in ``alphalens_pipeline/edgar_detector/`` Layer 1 (dedicated 8-K parsers).
-Raw filing headers carry too little body content for thematic Gemini Flash
+Raw filing headers carry too little body content for thematic DeepSeek v4-flash
 extraction to score them confidently (mean conf 0.36 vs 0.91 for Polygon/RSS),
 so they are deliberately excluded here.
 

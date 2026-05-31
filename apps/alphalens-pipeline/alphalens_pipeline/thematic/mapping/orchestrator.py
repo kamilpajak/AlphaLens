@@ -1,7 +1,7 @@
-"""Layer 3 orchestrator: propose candidates with Gemini 3 Pro, verify via 4 gates.
+"""Layer 3 orchestrator: propose candidates with DeepSeek v4-pro, verify via 4 gates.
 
 For each input theme, the orchestrator (a) asks the LLM for 5-15 candidate
-small/mid-cap beneficiaries (see :mod:`gemini_mapper`) and (b) verifies each
+small/mid-cap beneficiaries (see :mod:`theme_mapper`) and (b) verifies each
 candidate against four independent gates:
 
 1. **ETF holdings** — is the ticker a constituent of any thematic ETF mapped
@@ -32,8 +32,7 @@ from alphalens_pipeline.data.alt_data.polygon_client import (
     PolygonClient,
     get_default_polygon_client,
 )
-from alphalens_pipeline.thematic.mapping import catalyst_resolver
-from alphalens_pipeline.thematic.mapping import theme_mapper as gemini_mapper
+from alphalens_pipeline.thematic.mapping import catalyst_resolver, theme_mapper
 from alphalens_pipeline.thematic.verification import (
     insider,
     mcap_filter,
@@ -315,7 +314,7 @@ def _propose_and_filter_candidates(
     Returns (in-bracket candidate dicts, ticker→mcap map, search keywords).
     Empty candidates list signals "nothing further to do for this theme".
     """
-    proposal = gemini_mapper.propose_candidates(theme=theme, api_key=api_key, llm_client=pro_client)
+    proposal = theme_mapper.propose_candidates(theme=theme, api_key=api_key, llm_client=pro_client)
     candidates = proposal.get("candidates") or []
     if not candidates:
         return [], {}, []
@@ -409,7 +408,7 @@ def map_themes(
 ) -> pd.DataFrame:
     """For each theme, propose candidates, post-filter by real-time mcap, then verify.
 
-    The Gemini Pro client is built ONCE for the whole batch (avoid per-theme
+    The DeepSeek v4-pro client is built ONCE for the whole batch (avoid per-theme
     handshake), and the Polygon news window is fetched ONCE for all
     candidates (avoid per-candidate 5-req/min rate-limit sleep). After Pro
     returns candidates, ``mcap_filter.filter_by_mcap`` drops anything outside
