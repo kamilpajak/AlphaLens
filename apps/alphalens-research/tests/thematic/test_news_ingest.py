@@ -30,6 +30,16 @@ def _frame(rows):
 
 
 class TestNewsIngestOrchestration(unittest.TestCase):
+    def setUp(self):
+        # PR-6 added a 4th source. Default it to empty so the legacy
+        # three-source assertions stay unchanged; tests that exercise the
+        # EDGAR path re-patch it inside their own ``with`` block.
+        patcher = patch.object(
+            news_ingest, "_fetch_edgar_press_release", return_value=news_ingest.empty_news_frame()
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_aggregates_from_three_sources(self):
         polygon_df = _frame(
             [_row("p1", "polygon", "2026-05-15T10:00:00Z", ["NVDA"], "Polygon piece")]
@@ -51,10 +61,75 @@ class TestNewsIngestOrchestration(unittest.TestCase):
             self.assertEqual(len(df), 3)
             self.assertEqual(set(df["source"]), {"polygon", "gdelt", "rss"})
 
-    def test_edgar_excluded_from_ingest(self):
-        """EDGAR signal stays in Layer 1 detector; thematic ingest skips it."""
-        self.assertFalse(hasattr(news_ingest, "_fetch_edgar"))
-        self.assertNotIn("edgar", news_ingest._SOURCE_PRIORITY)
+    def test_edgar_press_release_included_in_ingest(self):
+        """EDGAR issuer press releases (8-K EX-99.1) now enter via PR-6 source."""
+        self.assertTrue(hasattr(news_ingest, "_fetch_edgar_press_release"))
+        self.assertIn("edgar_press_release", news_ingest._SOURCE_PRIORITY)
+        # Issuer-direct is the richest source — must outrank the aggregators.
+        self.assertLess(
+            news_ingest._SOURCE_PRIORITY["edgar_press_release"],
+            news_ingest._SOURCE_PRIORITY["polygon"],
+        )
+
+    def test_edgar_press_release_wins_url_canonical_dedup(self):
+        """When EDGAR and Polygon share a canonical URL, EDGAR survives (richer)."""
+        edgar_row = _row(
+            "e1",
+            "edgar_press_release",
+            "2026-05-15T10:00:00Z",
+            ["NVDA"],
+            "NVDA reports record revenue",
+        )
+        edgar_row["url"] = "https://www.sec.gov/Archives/edgar/data/1/acc-index.htm"
+        polygon_row = _row(
+            "p1",
+            "polygon",
+            "2026-05-15T10:30:00Z",
+            ["NVDA"],
+            "NVDA reports record revenue",
+        )
+        polygon_row["url"] = "https://www.sec.gov/Archives/edgar/data/1/acc-index.htm?utm=feed"
+        empty_df = news_ingest.empty_news_frame()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    news_ingest, "_fetch_edgar_press_release", return_value=_frame([edgar_row])
+                ),
+                patch.object(news_ingest, "_fetch_polygon", return_value=_frame([polygon_row])),
+                patch.object(news_ingest, "_fetch_gdelt", return_value=empty_df),
+                patch.object(news_ingest, "_fetch_rss", return_value=empty_df),
+            ):
+                df = news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                )
+
+            self.assertEqual(len(df), 1)
+            self.assertEqual(df.iloc[0]["source"], "edgar_press_release")
+
+    def test_edgar_source_failure_does_not_abort_ingest(self):
+        polygon_df = _frame([_row("p1", "polygon", "2026-05-15T10:00:00Z", ["NVDA"], "OK")])
+        empty_df = news_ingest.empty_news_frame()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    news_ingest,
+                    "_fetch_edgar_press_release",
+                    side_effect=RuntimeError("SEC 503"),
+                ),
+                patch.object(news_ingest, "_fetch_polygon", return_value=polygon_df),
+                patch.object(news_ingest, "_fetch_gdelt", return_value=empty_df),
+                patch.object(news_ingest, "_fetch_rss", return_value=empty_df),
+            ):
+                df = news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                )
+
+            self.assertEqual(len(df), 1)
+            self.assertEqual(df.iloc[0]["source"], "polygon")
 
     def test_caps_at_max_items(self):
         # Single unique token per title so Tier 1 lexical clustering keeps them apart
@@ -210,6 +285,13 @@ class TestNewsIngestOrchestration(unittest.TestCase):
 class TestTier1LexicalClustering(unittest.TestCase):
     """Same-day syndication: collapse echoes into clusters before cap-200."""
 
+    def setUp(self):
+        patcher = patch.object(
+            news_ingest, "_fetch_edgar_press_release", return_value=news_ingest.empty_news_frame()
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_clusters_lexical_echoes_keeps_earliest_root(self):
         # Three rows with high title overlap (5 content tokens, 4 shared) and
         # distinct URLs (so URL-dedup does NOT collapse them — only Tier 1 can).
@@ -234,7 +316,6 @@ class TestTier1LexicalClustering(unittest.TestCase):
             [],
             "SpaceX IPO filing lands approval breaking",
         )
-        empty_df = news_ingest.empty_news_frame()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with (

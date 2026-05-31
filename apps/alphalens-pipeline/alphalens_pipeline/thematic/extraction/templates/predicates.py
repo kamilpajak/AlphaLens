@@ -100,6 +100,10 @@ _PRESS_RELEASE_SOURCES: frozenset[str] = frozenset(
         "businesswire",
         "globenewswire",
         "pr-newswire",
+        # 8-K Exhibit 99.1 issuer press releases ingested via the
+        # edgar_press_release source (PR-6) — issuer-direct, so they count
+        # as a press release here. Exact lowercase token the adapter stamps.
+        "edgar_press_release",
     }
 )
 

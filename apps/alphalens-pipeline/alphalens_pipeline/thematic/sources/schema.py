@@ -1,4 +1,4 @@
-"""Unified news-item schema shared by Polygon / GDELT / RSS / EDGAR adapters."""
+"""Unified news-item schema shared by Polygon / GDELT / RSS / EDGAR press-release adapters."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import pandas as pd
 
 NEWS_COLUMNS = [
     "id",  # str, source-stable unique identifier
-    "source",  # str, one of: polygon | gdelt | rss | edgar
+    "source",  # str, one of: polygon | gdelt | rss | edgar_press_release
     "timestamp",  # pd.Timestamp, UTC, tz-aware
     "tickers",  # list[str], filtered to input universe
     "title",  # str

@@ -187,11 +187,15 @@ groups:
       # template (e.g. regulatory_action when there's no FDA panel that
       # week) should not page; sustained drift is the signal.
       #
-      # Guard against the denominator being zero (no attempts in the
-      # window → division by zero → no series → silent disable). The
-      # numerator-only ``rate()`` would clamp to 0 in that case and
-      # the rule would fire perpetually; pinning attempts > 0 makes
-      # the alert correct for the brand-new-template case.
+      # Guard against judging the match rate on too few attempts. A
+      # brand-new or low-traffic template (e.g. 1 attempt / 0 match over
+      # the window) would otherwise trip a 7-day low-match-rate page on
+      # statistically meaningless volume. Require an absolute minimum of
+      # 50 attempts over the 7-day window before the rate clause counts;
+      # ``increase()`` gives the total count (not the per-second rate, so
+      # a single attempt no longer satisfies the old ``rate(...) > 0``
+      # guard). This also keeps the zero-denominator division safe — no
+      # series is produced until the min-sample clause passes.
       - alert: AlphalensTemplateMatchRateLow
         expr: |
           (sum by (template_id) (rate(alphalens_template_match_total[7d]))
@@ -199,7 +203,7 @@ groups:
            sum by (template_id) (rate(alphalens_template_attempt_total[7d])))
           < 0.20
           and
-          sum by (template_id) (rate(alphalens_template_attempt_total[7d])) > 0
+          sum by (template_id) (increase(alphalens_template_attempt_total[7d])) >= 50
         for: 1d
         labels:
           severity: warning
