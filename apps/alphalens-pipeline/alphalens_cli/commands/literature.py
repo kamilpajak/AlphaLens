@@ -14,6 +14,7 @@ from alphalens_pipeline.literature_scanner.runner import (
     run_monthly,
     run_weekly,
 )
+from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
 literature_app = typer.Typer(
     name="literature",
@@ -89,3 +90,26 @@ def scan(
         period=resolved_period,
     )
     logger.info("Wrote %s; trigger=%s", result.path, result.has_trigger)
+
+    # Domain counters for the cron-observability dashboard (PR-2 of
+    # the epic). ``has_trigger`` is exposed as 0/1 so Grafana can
+    # plot "weeks with at least one trigger" without a separate
+    # boolean datatype. Paper count is deliberately not emitted —
+    # the runner does not currently surface it through ReviewResult;
+    # adding it would require touching the scanner internals and is
+    # better split into a follow-up PR.
+    #
+    # Wrap in try/except: scan markdown is already written + Telegram
+    # digest already dispatched, so a metrics-dir failure must not
+    # turn this run into a unit failure (zen pre-merge rule, PR #311).
+    try:
+        emit_domain_metrics(
+            job=f"literature-scan-{cadence}",
+            metrics={
+                f'alphalens_literature_last_run_trigger{{window="{cadence}"}}': int(
+                    result.has_trigger
+                ),
+            },
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed; literature-scan-%s run succeeded", cadence)

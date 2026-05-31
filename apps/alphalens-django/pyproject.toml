@@ -21,11 +21,16 @@ dependencies = [
     "pandas>=2.3",
     "pyjwt[crypto]>=2.9",
     "httpx>=0.28",
+    # XNYS trading calendar — backs the /v1/market/status endpoint that
+    # the SPA polls to render its closed-market banner. Same library the
+    # pipeline uses for paper-trade submission gating, so half-day +
+    # next-open semantics line up by construction.
+    "exchange-calendars>=4.5",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["config*", "briefs*", "auth_cf*", "core*", "feedback*"]
+include = ["config*", "briefs*", "auth_cf*", "core*", "feedback*", "market*"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.dev"

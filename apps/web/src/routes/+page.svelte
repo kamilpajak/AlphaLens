@@ -13,7 +13,7 @@
 	const totalCandidates = $derived(data.days.reduce((s, d) => s + d.n_candidates, 0));
 	const avgConf = $derived(
 		data.latestBrief && data.latestBrief.candidates.length
-			? data.latestBrief.candidates.reduce((s, c) => s + c.gemini_confidence, 0) /
+			? data.latestBrief.candidates.reduce((s, c) => s + c.llm_confidence, 0) /
 				data.latestBrief.candidates.length
 			: 0
 	);
@@ -196,7 +196,7 @@
 			</div>
 			<div class="divide-y divide-grid">
 				{#each topCandidates as c, i}
-					{@const ct = confidenceTone(c.gemini_confidence)}
+					{@const ct = confidenceTone(c.llm_confidence)}
 					<a
 						href="/brief/{data.latestBrief!.date}#{c.ticker}"
 						class="flex items-center gap-3 px-3 sm:px-4 py-3 hover:bg-bg-2 group transition-colors"
@@ -225,7 +225,7 @@
 								class:text-cyan={ct === 'cyan'}
 								class:text-fg-muted={ct === 'muted'}
 							>
-								{Math.round(c.gemini_confidence * 5)}/5
+								{Math.round(c.llm_confidence * 5)}/5
 							</div>
 						</div>
 						<div class="hidden md:block shrink-0 text-right text-[11px] w-16">

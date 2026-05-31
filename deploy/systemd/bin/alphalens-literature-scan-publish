@@ -1,0 +1,97 @@
+#!/bin/bash
+set -euo pipefail
+
+# Run the literature scan and publish its markdown output to main.
+#
+# ``set -euo pipefail`` is the FIRST executable line after the shebang so
+# the wrapper can never enter a degraded mode where one of the safety
+# flags is unset (e.g. someone reorders the comment block + accidentally
+# pushes the ``set`` line below a command). Zen pre-merge review of
+# PR #310 called this out specifically.
+#
+# Fired by alphalens-literature-scan-{weekly,monthly}.service. Owns
+# the contract between "scan wrote a file inside the repo working
+# tree" and "main on origin has it". Splitting the wrapper out of the
+# systemd ExecStart keeps the shell logic (rebase + commit + push
+# with one race-retry) in a place where it can be linted statically by
+# apps/alphalens-research/tests/test_deploy_systemd_units.py.
+#
+# Usage:
+#   alphalens-literature-scan-publish weekly
+#   alphalens-literature-scan-publish monthly
+#
+# Required env (sourced from /etc/alphalens/env by the systemd unit):
+#   PERPLEXITY_API_KEY     — the scan itself
+#   TELEGRAM_BOT_TOKEN     — digest dispatch
+#   TELEGRAM_CHAT_ID       — digest dispatch
+#   GH_TOKEN               — `git push origin main` over HTTPS via gh
+#                            credential helper (one-time setup:
+#                            ``gh auth setup-git`` on the VPS).
+#                            Scrubbed from the scan subprocess env (the
+#                            scan does not need it; defense-in-depth so
+#                            a future debug ``print(os.environ)`` cannot
+#                            leak the token to journald).
+#
+# Exit codes:
+#   0 — scan ran AND (no change OR change pushed). systemd records
+#       a successful run; PR-2's textfile_collector picks it up.
+#   non-zero — anything failed (scan, git, push). systemd records
+#       failure; Alertmanager fires via PR-3.
+
+WINDOW="${1:-}"
+case "$WINDOW" in
+    weekly|monthly) ;;
+    *)
+        echo "usage: $0 {weekly|monthly}" >&2
+        exit 64    # EX_USAGE
+        ;;
+esac
+
+cd "$HOME/AlphaLens"
+
+# Refresh local main so the scan output lands on top of any commit the
+# user just pushed from the Mac. ``--ff-only`` after fetch keeps the
+# semantics obvious; the wrapper is not supposed to handle merge
+# conflicts (a real conflict means humans intervened mid-window and
+# the operator should investigate the failed unit run).
+git fetch --quiet origin main
+git checkout --quiet main
+git pull --quiet --ff-only origin main
+
+# Run the scan with GH_TOKEN scrubbed from the subprocess env. The CLI
+# does not need it and we don't want it reaching Perplexity error logs
+# or a future verbose env dump. ``env -u`` is POSIX-portable; the parent
+# shell still has GH_TOKEN for the git push below.
+#
+# The CLI writes docs/research/literature_review/<period>.md (monthly)
+# or docs/research/literature_review/weekly/<period>.md (weekly). It
+# also dispatches the Telegram digest when TELEGRAM_BOT_TOKEN +
+# TELEGRAM_CHAT_ID are set (silently skips otherwise).
+env -u GH_TOKEN "$HOME/AlphaLens/.venv/bin/alphalens" literature scan --window "$WINDOW"
+
+# Skip the commit + push round-trip on a clean tree. The scan is
+# idempotent — a manual re-fire on the same period overwrites the
+# existing markdown byte-for-byte and produces no diff. Committing
+# anyway would pollute main with empty "docs(literature)" markers.
+if git diff --quiet -- docs/research/literature_review/; then
+    echo "literature-scan-publish: no change to docs/research/literature_review/, skipping commit"
+    exit 0
+fi
+
+git add docs/research/literature_review/
+git \
+    -c user.name="alphalens-bot" \
+    -c user.email="bot@alphalens.kamilpajak.pl" \
+    commit -m "docs(literature): ${WINDOW} scan $(date -u +%Y-%m-%d)"
+
+# Push with one rebase-retry on push race. The previous form was
+# ``git push || (git pull --rebase && git push)`` — semantically
+# correct (set -e propagates the subshell's non-zero exit), but the
+# explicit-and-loud version below makes the failure path obvious to
+# anyone reading the wrapper without thinking about bash subshell
+# error semantics. Zen pre-merge review flagged the readability cost.
+git push origin main && exit 0
+echo "literature-scan-publish: first push failed, retrying after rebase" >&2
+git pull --rebase origin main && git push origin main && exit 0
+echo "literature-scan-publish: rebase-retry push failed, see journalctl" >&2
+exit 1

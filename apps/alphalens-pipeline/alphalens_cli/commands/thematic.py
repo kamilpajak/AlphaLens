@@ -9,12 +9,14 @@ from pathlib import Path
 
 import pandas as pd
 import typer
+from alphalens_pipeline.observability.textfile import emit_domain_metrics
 from alphalens_pipeline.thematic import clean_titles as clean_titles_mod
 from alphalens_pipeline.thematic import news_ingest
+from alphalens_pipeline.thematic import verify_cache as verify_cache_mod
 from alphalens_pipeline.thematic.argumentation import orchestrator as brief_orchestrator
-from alphalens_pipeline.thematic.extraction import gemini_flash
+from alphalens_pipeline.thematic.extraction import event_extractor
 from alphalens_pipeline.thematic.extraction import themes as themes_mod
-from alphalens_pipeline.thematic.mapping import gemini_mapper, orchestrator
+from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
 from alphalens_pipeline.thematic.screening import scorer as screening_scorer
 
 thematic_app = typer.Typer(
@@ -74,18 +76,19 @@ def ingest(
 def extract(
     date: str = typer.Option(None, "--date", help=_DATE_OPTION_HELP),
     news_dir: Path = typer.Option(
-        gemini_flash.DEFAULT_NEWS_DIR, "--news-dir", help="Unified-news parquet root."
+        event_extractor.DEFAULT_NEWS_DIR, "--news-dir", help="Unified-news parquet root."
     ),
     events_dir: Path = typer.Option(
-        gemini_flash.DEFAULT_EVENTS_DIR,
+        event_extractor.DEFAULT_EVENTS_DIR,
         "--events-dir",
         help="Extracted-events parquet root.",
     ),
     model: str = typer.Option(
-        gemini_flash.DEFAULT_MODEL,
+        event_extractor.DEFAULT_MODEL,
         "--model",
-        envvar="GEMINI_MODEL",
-        help="Gemini model id (env GEMINI_MODEL as default; --model overrides).",
+        envvar="ALPHALENS_EXTRACT_MODEL",
+        help="OpenRouter LLM slug for event extraction (default DeepSeek v4-flash; "
+        "env ALPHALENS_EXTRACT_MODEL as default, --model overrides).",
     ),
     window_days: int = typer.Option(
         themes_mod.DEFAULT_WINDOW_DAYS,
@@ -98,17 +101,17 @@ def extract(
         help="Recent/baseline ratio to flag a theme as novel.",
     ),
 ) -> None:
-    """Run Gemini Flash event extraction over one day's news, then roll up themes."""
+    """Run DeepSeek v4-flash event extraction over one day's news, then roll up themes."""
     target = (
         dt.date.fromisoformat(date)
         if date
         else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
     )
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
-        raise typer.BadParameter("GOOGLE_API_KEY missing from environment.")
+        raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
 
-    events = gemini_flash.extract_daily(
+    events = event_extractor.extract_daily(
         date=target,
         news_dir=news_dir,
         events_dir=events_dir,
@@ -140,7 +143,7 @@ def extract(
 def map_themes_cmd(
     date: str = typer.Option(None, "--date", help=_DATE_OPTION_HELP),
     events_dir: Path = typer.Option(
-        gemini_flash.DEFAULT_EVENTS_DIR,
+        event_extractor.DEFAULT_EVENTS_DIR,
         "--events-dir",
         help="Phase B extracted-events parquet root.",
     ),
@@ -160,13 +163,13 @@ def map_themes_cmd(
     max_themes: int = typer.Option(
         10,
         "--max-themes",
-        help="Cap on novel themes mapped per run (Gemini 3 Pro spend control).",
+        help="Cap on novel themes mapped per run (DeepSeek v4-pro spend control).",
     ),
     model: str = typer.Option(
-        gemini_mapper.DEFAULT_MODEL,
+        theme_mapper.DEFAULT_MODEL,
         "--model",
-        envvar="GEMINI_PRO_MODEL",
-        help="Gemini 3 Pro model id.",
+        envvar="ALPHALENS_MAPPER_MODEL",
+        help="OpenRouter LLM slug for theme mapping (default DeepSeek v4-pro).",
     ),
     keep_unverified: bool = typer.Option(
         False,
@@ -174,7 +177,7 @@ def map_themes_cmd(
         help="Include candidates that failed all 4 verification gates (audit/debug).",
     ),
 ) -> None:
-    """Roll up novel themes from Phase B → Gemini 3 Pro maps to candidates → verify."""
+    """Roll up novel themes from Phase B → DeepSeek v4-pro maps to candidates → verify."""
     # Default to yesterday so a same-day cron after Phase B extract sees a
     # fully-extracted day, matching `ingest` and `extract` defaults.
     target = (
@@ -182,9 +185,9 @@ def map_themes_cmd(
         if date
         else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
     )
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
-        raise typer.BadParameter("GOOGLE_API_KEY missing from environment.")
+        raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
     polygon_key = os.environ.get("POLYGON_API_KEY", "")
 
     rollup = themes_mod.roll_up(asof=target, events_dir=events_dir, window_days=window_days)
@@ -197,7 +200,7 @@ def map_themes_cmd(
         )
         return
 
-    typer.echo(f"Mapping {len(novel)} novel themes via Gemini 3 Pro ({model})...")
+    typer.echo(f"Mapping {len(novel)} novel themes via DeepSeek v4-pro ({model})...")
     themes = list(novel["theme"])
 
     df = orchestrator.map_themes(
@@ -226,7 +229,7 @@ def map_themes_cmd(
             unknown = ",".join(row.get("gates_unknown", []) or []) or "-"
             typer.echo(
                 f"{row['theme'][:27]:28s} {row['ticker']:8s} "
-                f"{passed:20s} {unknown:16s} {row['gemini_confidence']:.2f}  "
+                f"{passed:20s} {unknown:16s} {row['llm_confidence']:.2f}  "
                 f"{row['rationale'][:40]}"
             )
 
@@ -280,6 +283,31 @@ def _fmt_num_or_dash(value, fmt: str) -> str:
     return f"{value:{fmt}}"
 
 
+def _fmt_str_or_dash(value, max_len: int) -> str:
+    """NaN-safe string truncation for CLI preview tables.
+
+    Sibling of :func:`_fmt_num_or_dash`. ``row.get("col") or "?"`` is NOT
+    safe for object-dtype string columns: pandas writes missing string
+    values as ``float('nan')`` (NOT ``None``), and ``bool(float('nan'))``
+    is ``True`` — so the ``or`` short-circuit never fires and the
+    downstream ``[:max_len]`` slice crashes with
+    ``TypeError: 'float' object is not subscriptable``. Empty strings are
+    also rendered as a dash so an explicit ``""`` from a coalesced source
+    reads the same as a true missing value in the preview panel.
+
+    Bug class observed on VPS 2026-05-30 (``industry_name`` NaN halted
+    the daily pipeline). The helper centralises the guard so every str
+    column in the preview shares the same treatment instead of each one
+    re-inventing a defensive idiom.
+    """
+    if value is None or pd.isna(value):
+        return "-"
+    text = str(value)
+    if not text:
+        return "-"
+    return text[:max_len]
+
+
 def _print_score_preview(enriched: pd.DataFrame) -> None:
     typer.echo("")
     typer.echo(
@@ -288,15 +316,16 @@ def _print_score_preview(enriched: pd.DataFrame) -> None:
     )
     typer.echo("-" * 110)
     for _, row in enriched.head(25).iterrows():
-        ind = (row.get("industry_name") or "?")[:19]
+        ind = _fmt_str_or_dash(row.get("industry_name"), 19)
         ins = row.get("insider_score_usd")
         ins_str = f"{ins / 1000:.0f}k" if ins is not None and not pd.isna(ins) else "-"
         fcff_str = _fmt_num_or_dash(row.get("fcff_yield_pct"), ".1f")
         val_str = _fmt_num_or_dash(row.get("valuation_composite_sector_percentile"), ".0f")
+        tech_str = _fmt_str_or_dash(row.get("technicals_summary_str"), 50)
         typer.echo(
             f"{row['ticker']:8s} {ind:20s} {int(row['layer4_weighted_score']):>5d} "
             f"{ins_str:>10s} {fcff_str:>6s} {val_str:>5s} "
-            f"{row.get('technicals_summary_str', '')[:50]}"
+            f"{tech_str}"
         )
 
 
@@ -335,6 +364,137 @@ def brief(
     out_parquet = output_dir / f"{target.isoformat()}.parquet"
     typer.echo(f"Wrote {len(enriched)} briefs → {out_parquet}")
     typer.echo(f"  Pro: {n_pro}, Flash: {n_flash}")
+
+    # Domain counters for the cron-observability dashboard (PR-2 of
+    # the epic). ``briefs_total`` is the headline number Grafana
+    # surfaces on the main panel; the per-model split is a tracer
+    # for "Pro-quota burned" (Pro routing is gated on user-defined
+    # Tier-1 confidence so a sudden Pro spike or zero is worth
+    # noticing).
+    #
+    # Wrap in try/except: briefs parquet is already written, so a
+    # metrics-dir failure must not turn this run into a unit
+    # failure (zen pre-merge rule, PR #311).
+    try:
+        emit_domain_metrics(
+            job="thematic-build",
+            metrics={
+                "alphalens_thematic_briefs_total": len(enriched),
+                'alphalens_thematic_briefs_by_model{model="pro"}': n_pro,
+                'alphalens_thematic_briefs_by_model{model="flash"}': n_flash,
+            },
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed; thematic-build run succeeded")
+
+
+@thematic_app.command("verify-cache")
+def verify_cache_command(
+    days: int = typer.Option(
+        7,
+        "--days",
+        help=(
+            "Window size in calendar days, inclusive of today. Defaults to "
+            "7 (a clean week of news). Use 30 to cover the full "
+            "catalyst_resolver lookback."
+        ),
+    ),
+    cache_dir: Path = typer.Option(
+        verify_cache_mod.DEFAULT_CACHE_DIR,
+        "--cache-dir",
+        help="Override the default thematic_news parquet root.",
+    ),
+    alert: bool = typer.Option(
+        False,
+        "--alert",
+        help=(
+            "On missing days, post a digest to Telegram via TELEGRAM_BOT_TOKEN "
+            "+ TELEGRAM_CHAT_ID env vars. Default off — only the systemd "
+            "ExecStartPost hook should set this."
+        ),
+    ),
+    today: str = typer.Option(
+        None,
+        "--today",
+        help=(
+            "Override the anchor date in YYYY-MM-DD format. Defaults to "
+            "UTC today. Tests pin a fixed anchor; the systemd hook leaves "
+            "this unset so wall-clock UTC drives the check."
+        ),
+    ),
+    lag_days: int = typer.Option(
+        1,
+        "--lag-days",
+        help=(
+            "Offset between today and the last expected file date. "
+            "Default 1 because ``thematic ingest`` writes a parquet "
+            "keyed on yesterday's date — so the verifier window ends "
+            "on T-1, not T. Pass 0 to inspect a window that includes "
+            "the anchor itself."
+        ),
+    ),
+) -> None:
+    """Verify the thematic_news parquet cache has no missing days.
+
+    Exits 0 when every requested day has a parquet (regardless of row
+    count). Exits 1 when one or more days are missing — surfaces the
+    silent failure documented as Risk A in
+    ``docs/research/paper_trading_non_trading_day_2026_05_29.md`` §5.1.
+
+    "Missing" means: no parquet at the expected path, OR a non-parquet
+    file at the expected path (truncated write, foreign content).
+    "Zero-row" parquets are NOT missing — they represent a legitimately
+    quiet day and are reported separately for observability.
+    """
+    anchor = dt.date.fromisoformat(today) if today else None
+    result = verify_cache_mod.verify_cache(
+        cache_dir=cache_dir, days=days, today=anchor, lag_days=lag_days
+    )
+
+    typer.echo(
+        f"verify-cache: {result.checked_days - len(result.missing_days)}/"
+        f"{result.checked_days} dates present"
+    )
+    if result.zero_row_days:
+        z = ", ".join(d.isoformat() for d in result.zero_row_days)
+        typer.echo(f"  no-news (0-row parquet): {z}")
+    if result.missing_days:
+        m = ", ".join(d.isoformat() for d in result.missing_days)
+        typer.echo(f"  MISSING: {m}", err=True)
+        if alert:
+            _post_verify_cache_alert(result)
+        raise typer.Exit(code=1)
+
+
+def _post_verify_cache_alert(result: verify_cache_mod.VerifyResult) -> None:
+    """Post the missing-day digest to Telegram if credentials are set.
+
+    Credential absence is logged + skipped (matches the
+    ``literature_scanner._maybe_dispatch`` convention) so a fresh
+    checkout without TELEGRAM_* env vars degrades gracefully to
+    "exit 1 + stderr only".
+    """
+    from alphalens_pipeline.edgar_detector.dispatch.handlers.telegram import (
+        TelegramHandler,
+    )
+
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        logger.info(
+            "verify-cache: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing; skipping alert dispatch"
+        )
+        return
+    missing = ", ".join(d.isoformat() for d in result.missing_days)
+    digest = (
+        f"🚨 *AlphaLens news_ingest gap*\n"
+        f"Missing parquet(s): {missing}\n"
+        f"Window: {result.checked_days} days. "
+        f"`journalctl --user -u alphalens-thematic-build.service` to "
+        f"investigate."
+    )
+    handler = TelegramHandler(bot_token=bot_token, chat_id=chat_id)
+    handler.send_message(digest)
 
 
 @thematic_app.command("clean-titles")

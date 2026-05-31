@@ -79,6 +79,65 @@ _BRIEF_NUMERIC_FIELDS = (
 )
 
 
+def _template_facts_richness(row: pd.Series) -> int:
+    """Count non-null keys in a row's deserialised template_facts dict.
+
+    Powers the same-window dedup-at-injection guard (design memo §3): when
+    two rows tie on every higher-priority sort key AND share a ticker,
+    the row with MORE extracted fields survives the keep="first"
+    drop_duplicates pass. Rows with no template_facts get 0 (no
+    preference between flash-extracted rows on this tier).
+    """
+    facts = _row_template_facts(row)
+    if not facts:
+        return 0
+    return sum(1 for v in facts.values() if v is not None)
+
+
+def _row_template_id(row: pd.Series) -> str | None:
+    """Project ``catalyst_template_id`` → facts['template_id'] (None-safe)."""
+    value = row.get("catalyst_template_id")
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    return text or None
+
+
+def _row_template_facts(row: pd.Series) -> dict | None:
+    """Deserialise ``catalyst_template_facts_json`` → facts['template_facts'].
+
+    Returns None on missing column / NaN / empty / malformed JSON / non-
+    dict payload. A corrupt row degrades to the absent-block prompt
+    branch rather than crashing the brief loop.
+    """
+    raw = row.get("catalyst_template_facts_json")
+    if raw is None:
+        return None
+    try:
+        if pd.isna(raw):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        decoded = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning(
+            "catalyst_template_facts_json failed to parse for %s",
+            row.get("ticker"),
+        )
+        return None
+    if not isinstance(decoded, dict) or not decoded:
+        return None
+    return decoded
+
+
 def _row_to_facts(row: pd.Series) -> dict:
     """Project Phase D row → flat facts dict for the prompt template."""
     weighted = row.get("layer4_weighted_score")
@@ -101,6 +160,13 @@ def _row_to_facts(row: pd.Series) -> dict:
         # Earnings calendar lookup (Z3) — done at orchestrator level so the
         # row_to_facts doesn't need to know about yfinance.
         "next_earnings_date": None,
+        # PR-3: structured-fact provenance (extends the
+        # feedback_llm_training_cutoff_numerical_data doctrine to
+        # article-derived facts). Both default to None so the prompt's
+        # absent-block branch fires on flash-extracted catalysts +
+        # rows that had no template match.
+        "template_id": _row_template_id(row),
+        "template_facts": _row_template_facts(row),
     }
     for field in _BRIEF_NUMERIC_FIELDS:
         value = row.get(field)
@@ -123,8 +189,8 @@ def _enrich_facts_with_earnings(facts: dict, asof: dt.date) -> dict:
 def _brief_for_row(
     row: pd.Series,
     *,
-    gemini_client_pro,
-    gemini_client_flash,
+    llm_client_pro,
+    llm_client_flash,
     asof: dt.date | None = None,
 ) -> tuple[dict | None, str | None]:
     """Single-row LLM call with per-row exception absorption.
@@ -147,8 +213,8 @@ def _brief_for_row(
     try:
         brief = generator.generate_brief_with_retry(
             facts,
-            gemini_client_pro=gemini_client_pro,
-            gemini_client_flash=gemini_client_flash,
+            llm_client_pro=llm_client_pro,
+            llm_client_flash=llm_client_flash,
         )
     except Exception as exc:
         logger.warning("brief generation raised for %s: %s", row.get("ticker"), exc, exc_info=True)
@@ -157,22 +223,22 @@ def _brief_for_row(
 
 
 def _build_clients(api_key: str | None):
-    """Hoist one shared GeminiClient (Pro + Flash share it). Returns
+    """Hoist one shared OpenRouterClient (Pro + Flash share it). Returns
     ``(pro_client, flash_client)`` or ``(None, None)`` when no key is
     available so the orchestrator can still write placeholder rows
     (used by tests that patch ``_brief_for_row`` wholesale)."""
-    from alphalens_pipeline.data.alt_data.gemini_client import (
-        GeminiClient,
-        get_default_gemini_client,
+    from alphalens_pipeline.data.alt_data.openrouter_client import (
+        OpenRouterClient,
+        get_default_openrouter_client,
     )
 
-    key = api_key or os.environ.get("GOOGLE_API_KEY") or ""
+    key = api_key or os.environ.get("OPENROUTER_API_KEY") or ""
     if not key:
         return None, None
     try:
-        client = GeminiClient(api_key=key) if api_key else get_default_gemini_client()
-    except RuntimeError as exc:
-        logger.warning("google-genai SDK missing; cannot generate briefs: %s", exc)
+        client = OpenRouterClient(api_key=key) if api_key else get_default_openrouter_client()
+    except (RuntimeError, ValueError) as exc:
+        logger.warning("OpenRouterClient construction failed; cannot generate briefs: %s", exc)
         return None, None
     return client, client  # Same client serves both Pro and Flash models.
 
@@ -188,6 +254,11 @@ _EMPTY_OUT_COLUMNS = (
     "brief_bear_summary_md",
     "brief_catalyst_failure_exit",
     "brief_trade_setup",
+    # PR-3: typed-fact citation surface for the SPA evidence panel.
+    # JSON string so the parquet → Django serializer → SPA wire format
+    # mirrors brief_trade_setup's already-shipped pattern.
+    "brief_template_id",
+    "brief_template_facts_json",
     "brief_generated_at",
 )
 
@@ -219,7 +290,13 @@ _BRIEF_SORT_KEYS: tuple[tuple[str, bool, float | int | bool], ...] = (
     # missing rank sorts to the absolute bottom rather than the top.
     ("magic_formula_rank", True, float("inf")),
     ("n_gates_passed", False, 0),
-    ("gemini_confidence", False, 0.0),
+    ("llm_confidence", False, 0.0),
+    # PR-3 same-window dedup-at-injection guard: when two rows tie on
+    # every higher-priority key AND share (ticker, template_id), the
+    # one with MORE non-null template_facts survives the drop_duplicates
+    # pass. Synthetic column populated in _sort_and_dedup_for_brief —
+    # not read from the scored frame directly.
+    ("_template_facts_richness", False, 0),
 )
 
 
@@ -247,6 +324,11 @@ def _sort_and_dedup_for_brief(verified: pd.DataFrame) -> pd.DataFrame:
     # original NaN values — otherwise ``int(rank)`` crashes with
     # OverflowError (empirical 2026-05-18 incident on first dogfooding).
     work = verified.copy()
+    # PR-3 synthetic richness column — populated here so _BRIEF_SORT_KEYS
+    # can name it like any other sort key. Counts non-null keys in each
+    # row's decoded template_facts dict; rows with NO template_facts get
+    # 0 (no preference between them on this tier).
+    work["_template_facts_richness"] = work.apply(_template_facts_richness, axis=1)
     sort_keys: list[str] = []
     ascending: list[bool] = []
     for col, asc, default in _BRIEF_SORT_KEYS:
@@ -260,7 +342,7 @@ def _sort_and_dedup_for_brief(verified: pd.DataFrame) -> pd.DataFrame:
 
     work = (
         work.sort_values(sort_keys, ascending=ascending, kind="mergesort")
-        .drop(columns=sort_keys)
+        .drop(columns=[*sort_keys, "_template_facts_richness"])
         .reset_index(drop=True)
     )
 
@@ -332,8 +414,8 @@ def generate_briefs(
     for _, row in verified.iterrows():
         brief, next_earnings = _brief_for_row(
             row,
-            gemini_client_pro=client_pro,
-            gemini_client_flash=client_flash,
+            llm_client_pro=client_pro,
+            llm_client_flash=client_flash,
             asof=asof,
         )
         if brief is not None:
@@ -354,6 +436,19 @@ def generate_briefs(
             ticker=str(row["ticker"]), asof=asof, loader=ohlcv_loader
         )
         b = brief or {}
+        # PR-3: serialise the template_facts dict we already projected into
+        # facts above so the SPA can render typed citations without
+        # re-touching the events parquet. Mirror b.get for trade_setup —
+        # use json string everywhere on the orchestrator's output edge.
+        # Intentional double-serialise: scorer wrote catalyst_template_facts_json,
+        # _row_template_facts parsed it back to a dict for the prompt builder +
+        # richness counter, and now we re-emit a fresh json string keyed to the
+        # brief's column name. The roundtrip costs ~microseconds per row and
+        # keeps every consumer (parquet, Django ingest, SPA wire format) on the
+        # same canonical interop boundary. Acked as intentional by zen pre-merge
+        # MEDIUM 2026-05-31.
+        tmpl_id = _row_template_id(row)
+        tmpl_facts = _row_template_facts(row)
         rows.append(
             {
                 "ticker": row["ticker"],
@@ -364,6 +459,10 @@ def generate_briefs(
                 "brief_bear_summary_md": b.get("bear_summary"),
                 "brief_catalyst_failure_exit": b.get("catalyst_failure_exit"),
                 "brief_trade_setup": json.dumps(setup.to_dict()),
+                "brief_template_id": tmpl_id,
+                "brief_template_facts_json": (
+                    json.dumps(tmpl_facts, sort_keys=True) if tmpl_facts else None
+                ),
                 "brief_generated_at": pd.Timestamp.now(tz="UTC"),
             }
         )

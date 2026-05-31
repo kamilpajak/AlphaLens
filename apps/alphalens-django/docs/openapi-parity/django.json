@@ -528,7 +528,7 @@
                     "rationale": {
                         "type": "string"
                     },
-                    "gemini_confidence": {
+                    "llm_confidence": {
                         "type": "number",
                         "format": "double",
                         "nullable": true

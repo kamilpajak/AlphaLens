@@ -43,6 +43,7 @@ EnvironmentFile=/etc/alphalens/env
 ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
     --user %U:%G \
     -e HOME=/app/home \
+    -e OPENROUTER_API_KEY \
     -e GOOGLE_API_KEY \
     -e ALPHA_VANTAGE_API_KEY \
     -e POLYGON_API_KEY \
@@ -55,13 +56,51 @@ ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
     alphalens-pipeline:latest \
     /app/deploy/docker/run_thematic_day.sh
 
+# Gap-detection on the news_ingest cache (PR-E, epic #295 Risk A).
+# Fires after the pipeline ExecStart succeeds but BEFORE the Django
+# rebuild-cache — so a corrupt or missing parquet halts the chain
+# rather than silently refreshing Django from incomplete data.
+# Telegram alert on the missing-day digest is opt-in via --alert and
+# reads TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID from the inherited env.
+# Window of 7 days covers a clean operational week + the most-recent
+# rebuild window without overshooting catalyst_resolver's 30-day
+# lookback (manual --days 30 invocation available for deep audits).
+# Runs in the same pipeline image so the alphalens CLI is on PATH; the
+# bind mount keeps it inspecting the host cache rather than the
+# container's local copy.
+#
+# **No leading `alphalens` arg.** The pipeline image's ENTRYPOINT is
+# `/app/.venv/bin/alphalens` (Dockerfile.pipeline line 84), so the
+# tokens after the image name are forwarded as CLI args. Including a
+# literal `alphalens` here would make Typer parse it as the first
+# subcommand and abort with `No such command 'alphalens'` — observed
+# on VPS 2026-05-29 after PR-E rolled out the original wording. Fix:
+# args start at `thematic`. The same rule applies to any future
+# ExecStartPost using the pipeline image — entrypoint-aware.
+ExecStartPost=/usr/bin/docker run --rm \
+    --user %U:%G \
+    -e HOME=/app/home \
+    -e TELEGRAM_BOT_TOKEN \
+    -e TELEGRAM_CHAT_ID \
+    -v %h/.alphalens:/app/home/.alphalens \
+    alphalens-pipeline:latest \
+    thematic verify-cache --days 7 --alert
+
 # Sync the parquet output the pipeline just wrote into the Django Postgres
 # cache via the maintenance one-shot. ``--profile maintenance`` opt-in
 # isolates this from the always-on ``django`` service. ExecStartPost fires
-# only on ExecStart success; pipeline failures leave the cache untouched.
+# only on ExecStart success AND the preceding verify-cache exit-0; a
+# pipeline failure OR a gap-detect alert leaves the cache untouched so
+# the operator can investigate before partial data hits Django.
 ExecStartPost=/usr/bin/docker compose \
     -f %h/AlphaLens/deploy/docker/django-prod/docker-compose.yaml \
     --profile maintenance run --rm rebuild-cache
+
+# Prometheus textfile metrics (see alphalens-edgar-detect.service for
+# the pattern). Runs unconditionally so a failed pipeline run or
+# verify-cache halt also updates the exit code gauge — Alertmanager
+# (PR-3) then fires on the non-zero exit.
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics thematic-build
 
 # Keep stdout/stderr in journald.
 StandardOutput=journal
@@ -73,9 +112,19 @@ StandardError=journal
 MemoryMax=4G
 TasksMax=512
 
+# Type=oneshot defaults TimeoutStartSec to infinity (man systemd.service
+# §"Type=oneshot"). Without an explicit timeout, a run that wedges on a
+# Gemini quota loop, a Polygon retry storm, or a stuck rebuild-cache step
+# would block every subsequent timer fire forever — systemd queues new
+# fires behind the running unit. 45min = ~3× the typical 15-20min wall
+# time; a healthy run never trips this, a wedged one gets SIGTERM (then
+# SIGKILL after TimeoutStopSec) so the next 4h slot can fire. Pinned by
+# PR-F zen pre-merge review (epic #295 / issue #300).
+TimeoutStartSec=45min
+
 # Oneshot doesn't auto-restart on success. On real failures (Polygon 5xx,
 # Gemini quota, OOM) systemd surfaces non-zero exit in journalctl + status.
-# The timer fires daily; a one-day miss is acceptable.
+# The timer fires 6× daily (PR-F); a one-slot miss is acceptable.
 
 [Install]
 WantedBy=default.target

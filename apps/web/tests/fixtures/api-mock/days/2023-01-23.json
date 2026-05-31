@@ -12,7 +12,7 @@
       "ticker": "AI",
       "company_name": "C3.ai, Inc.",
       "rationale": "C3.ai provides a suite of pre-built enterprise AI applications and a development platform for predictive maintenance, fraud detection, and supply chain optimization.",
-      "gemini_confidence": 0.9,
+      "llm_confidence": 0.9,
       "market_cap": 1603049535.794258,
       "gates_passed": [
         "press"
@@ -109,7 +109,7 @@
       "ticker": "ESTC",
       "company_name": "Elastic N.V.",
       "rationale": "Elastic provides vector search capabilities within its Elasticsearch platform, a critical component for enterprises building Retrieval-Augmented Generation (RAG) AI applications.",
-      "gemini_confidence": 0.8,
+      "llm_confidence": 0.8,
       "market_cap": 5479139645.053894,
       "gates_passed": [
         "press"
@@ -206,7 +206,7 @@
       "ticker": "PSTG",
       "company_name": "Pure Storage, Inc.",
       "rationale": "Pure Storage delivers high-performance, all-flash storage arrays that provide the data throughput required for enterprise AI model training and inference workloads.",
-      "gemini_confidence": 0.75,
+      "llm_confidence": 0.75,
       "market_cap": 8184950636.345215,
       "gates_passed": [
         "press"

@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "auth_cf.apps.AuthCfConfig",
     "core.apps.CoreConfig",
     "feedback.apps.FeedbackConfig",
+    "market.apps.MarketConfig",
 ]
 
 MIDDLEWARE = [

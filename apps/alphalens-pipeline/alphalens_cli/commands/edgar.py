@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -20,6 +21,9 @@ from alphalens_pipeline.edgar_detector.portfolio import PortfolioState, default_
 from alphalens_pipeline.edgar_detector.sources.cik_loader import CIKLoader
 from alphalens_pipeline.edgar_detector.sources.edgar import SECEdgarSource
 from alphalens_pipeline.edgar_detector.storage import SeenEventStore
+from alphalens_pipeline.observability.textfile import emit_domain_metrics
+
+logger = logging.getLogger(__name__)
 
 edgar_app = typer.Typer(
     name="edgar",
@@ -87,3 +91,31 @@ def detect() -> None:
     detector = _build_detector()
     result = detector.run_once()
     typer.echo(f"detected={result['events_detected']} dispatched={result['events_dispatched']}")
+
+    # Domain counters for the cron-observability dashboard (PR-2 of
+    # the epic). Numbers are gauges, not Prometheus counters — they
+    # describe THIS run's outcome, not cumulative since process start.
+    # ``portfolio_size`` is a sanity-check: a 0 value here means an
+    # empty portfolio.yaml slipped through (would also raise above,
+    # but the metric makes the misconfiguration visible on Grafana).
+    #
+    # Wrap in try/except so a transient metrics-dir issue (disk full,
+    # perms flip) does NOT poison the unit's success state: the EDGAR
+    # poll already shipped Telegram alerts + updated seen_events.db,
+    # so the cron work is done — losing the gauge is observability
+    # debt, not a job failure. Zen pre-merge review (PR #311) pinned
+    # this rule.
+    try:
+        emit_domain_metrics(
+            job="edgar-detect",
+            metrics={
+                "alphalens_edgar_events_detected_total": result["events_detected"],
+                "alphalens_edgar_events_dispatched_total": result["events_dispatched"],
+                'alphalens_edgar_portfolio_size{class="held"}': len(detector.portfolio.held),
+                'alphalens_edgar_portfolio_size{class="watchlist"}': len(
+                    detector.portfolio.watchlist
+                ),
+            },
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed; edgar-detect run succeeded")

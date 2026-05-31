@@ -1,0 +1,61 @@
+---
+# Alertmanager configuration for AlphaLens cron-observability epic.
+#
+# Routes the ``route: telegram`` label set by every alert in
+# ``prometheus/rules/alphalens.yaml`` to the existing Telegram bot
+# that the EDGAR detector + verify-cache already use.
+#
+# Operator runbook in ``deploy/monitoring/README.md`` §"Alertmanager
+# wiring" — boils down to: bind-mount this file into the existing
+# Alertmanager container + drop the bot token into
+# ``/etc/alphalens/telegram_bot_token`` (chmod 640, root:operator).
+#
+# Lint locally:
+#     amtool check-config deploy/monitoring/alertmanager/config.yaml
+#
+# Pre-merge test coverage at
+# ``apps/alphalens-research/tests/test_monitoring_alerts.py`` —
+# YAML well-formed, telegram_configs present, bot_token sourced from
+# file (not inline).
+
+global:
+  resolve_timeout: 5m
+
+route:
+  # Default receiver — every alert lands here. Group by job so a
+  # single multi-rule fire (e.g. edgar-detect stale + edgar-detect
+  # failed) produces ONE Telegram message, not two.
+  receiver: telegram
+  group_by: [alertname, job]
+  group_wait: 30s
+  group_interval: 5m
+  # 24h between repeat notifications for a still-firing alert. Stale
+  # job alerts would otherwise spam Telegram every 5m until the
+  # operator restarts the unit.
+  repeat_interval: 24h
+
+receivers:
+  - name: telegram
+    telegram_configs:
+      - api_url: https://api.telegram.org
+        # bot_token_file is bind-mounted from
+        # /etc/alphalens/telegram_bot_token on the VPS host so the
+        # token never lives in the container's env (where a future
+        # ``docker inspect`` would leak it).
+        bot_token_file: /etc/alertmanager/telegram_bot_token
+        # chat_id is an int64; Alertmanager has no ``_file`` variant
+        # so the operator edits this value in-place. NOT a secret —
+        # leaking a chat_id without the bot_token is harmless. See
+        # the runbook in ``deploy/monitoring/README.md`` §"Alertmanager
+        # wiring" for the one-line ``sed`` to substitute the real ID.
+        chat_id: -1001234567890  # OPERATOR: replace with TELEGRAM_CHAT_ID
+        # Prefix the message with the alert STATUS so the operator can
+        # tell firing from resolved at a glance — the same Telegram
+        # chat carries both. Without the prefix every resolved
+        # notification reads identically to the original firing one
+        # (caught during VPS cutover 2026-05-30 smoke test).
+        message: |
+          {{ if eq .Status "firing" }}🔥 *[FIRING]*{{ else }}✅ *[RESOLVED]*{{ end }} *{{ .CommonLabels.alertname }}* — {{ .CommonAnnotations.summary }}
+          {{ range .Alerts }}{{ .Annotations.description }}
+          {{ end }}
+        parse_mode: Markdown

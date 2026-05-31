@@ -1,0 +1,38 @@
+# Guidance-update template — design memo §2.2 dnia jeden #4.
+#
+# Forward-looking asymmetric catalyst: raise / lower / withdraw / update.
+# Lower predicate threshold than earnings (no amount required) because
+# guidance updates frequently arrive without a number in the title
+# (the number lives in the press release body's table; that's PR-3's
+# job to lift via template_facts).
+template_id: guidance_update
+event_type: guidance
+description: "Issuer raises, lowers, withdraws, or updates forward guidance."
+
+article_predicates:
+  - is_press_release
+  - not_listicle
+  - name: any_sentence_contains
+    kwargs:
+      words:
+        - "raises guidance"
+        - "raises full-year guidance"
+        - "lowers guidance"
+        - "cuts guidance"
+        - "withdraws guidance"
+        - "updates guidance"
+        - "full-year outlook"
+        - "FY guidance"
+        - "raises outlook"
+        - "lowers outlook"
+
+entity_requirements:
+  issuer:
+    type: company
+    required: true
+
+extraction:
+  - field: issuer_ticker
+    source: "entity:issuer"
+  - field: announcement_date
+    source: "article.published_at"

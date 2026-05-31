@@ -1,0 +1,18 @@
+[Unit]
+# Fires the weekly literature scan Sunday 18:00 in Europe/Warsaw —
+# matches the Mac launchd ``Weekday=0 Hour=18`` calendar. The TZ tail
+# on OnCalendar makes systemd track DST automatically; without it, the
+# fire time would drift by 1 hour twice a year.
+#
+# Persistent=true: if the VPS was off Sunday evening, fire the missed
+# scan at next boot rather than skipping a week silently.
+Description=Trigger AlphaLens weekly literature scan
+After=network-online.target
+
+[Timer]
+OnCalendar=Sun *-*-* 18:00:00 Europe/Warsaw
+Persistent=true
+Unit=alphalens-literature-scan-weekly.service
+
+[Install]
+WantedBy=timers.target

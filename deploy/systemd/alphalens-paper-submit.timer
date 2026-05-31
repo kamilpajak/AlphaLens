@@ -1,0 +1,29 @@
+[Unit]
+# Fires the companion alphalens-paper-submit.service Mon-Fri at 13:25
+# UTC (= 09:25 ET, 5 min pre-XNYS open).
+#
+# **Why 13:25 not 13:30**: the order MUST be queued BEFORE the
+# opening cross at 13:30 UTC so it participates in the cross price
+# (memo §4 — limits don't pay the spread; the wicks ARE the entry).
+# 5 min margin covers Alpaca's order-acknowledge latency + our own
+# REST round-trip.
+#
+# **Why Mon..Fri not daily**: weekend ladders against stale Friday
+# close anchors expose the entry to opening-gap fills (memo §3
+# stale-ladder gap risk). The companion ExecCondition catches the
+# remaining US public holidays that slip through Mon..Fri (~10/year).
+#
+# **Why NOT Persistent=true**: a Saturday-boot catch-up of Friday's
+# 13:25 UTC slot would push entry limits against a closed XNYS — the
+# very stale-ladder risk PR-A (#294) introduced the calendar guard
+# for. The ExecCondition + internal market-closed guard would catch
+# it too; defence-in-depth: no catch-up, ever.
+Description=Trigger AlphaLens paper-trade submit Mon-Fri pre-XNYS-open
+After=network-online.target
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 13:25:00 UTC
+Unit=alphalens-paper-submit.service
+
+[Install]
+WantedBy=timers.target

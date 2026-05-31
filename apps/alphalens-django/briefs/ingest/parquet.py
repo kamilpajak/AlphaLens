@@ -62,7 +62,15 @@ REQUIRED_PARQUET_COLUMNS: frozenset[str] = frozenset({"ticker", "theme"})
 
 # JSONFields that hold a dict (parsed from a json.dumps string), NOT a list[str].
 # Anything not listed here is coerced as a list of strings.
-_OBJECT_JSON_FIELDS: frozenset[str] = frozenset({"brief_trade_setup"})
+_OBJECT_JSON_FIELDS: frozenset[str] = frozenset({"brief_trade_setup", "brief_template_facts"})
+
+# Parquet → model field renames. Pipeline persists ``brief_template_facts_json``
+# (matching the source ``catalyst_template_facts_json`` column shape) but the
+# Django field is named ``brief_template_facts`` since the JSON is parsed at
+# ingest. Listing the rename here keeps both sides documented in one place.
+_PARQUET_COLUMN_ALIASES: dict[str, str] = {
+    "brief_template_facts": "brief_template_facts_json",
+}
 
 # Mtime equality tolerance: float seconds, sub-microsecond stability across
 # filesystems is not guaranteed.
@@ -140,7 +148,11 @@ def _payload_fields() -> list[django_models.Field]:
 def _row_to_brief(date: dt.date, row: pd.Series, fields: Iterable[django_models.Field]) -> Brief:
     kwargs: dict[str, object] = {"date": date}
     for field in fields:
-        raw = row.get(field.name) if field.name in row.index else None
+        # Honour the parquet → model rename table so the source column
+        # name can differ from the Django field name (e.g. PR-3 ingests
+        # parquet's brief_template_facts_json into model's brief_template_facts).
+        parquet_col = _PARQUET_COLUMN_ALIASES.get(field.name, field.name)
+        raw = row.get(parquet_col) if parquet_col in row.index else None
         kwargs[field.name] = _coerce_for_field(field, raw)
     return Brief(**kwargs)
 

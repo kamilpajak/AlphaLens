@@ -113,7 +113,7 @@ Perplexity's correlation-0.85 argument is statistically correct in general event
 | Paper venue | `paper-api.alpaca.markets` | Alpaca sandbox; live URL structurally rejected |
 | Target paper equity | $1,000,000 | Alpaca paper grant request; default $100k acceptable interim with scaled positions |
 | Universe filter | verified-only (4-gate pass) | matches what a user would seriously consider |
-| Time-stop W (max hold) | **60 days from first fill** | §4 decision |
+| Time-stop W (max hold) | **42 XNYS trading days from first fill** (≈ 60 calendar) | §4 decision; PR-B 2026-05-29 switched unit to trading days |
 | Expected avg hold (`EXPECTED_AVG_HOLD_DAYS`) | **30 days** | TP / SL typically exits before time-stop; revisit after first month |
 | **`STEADY_STATE_GROSS_FRAC`** | **0.667** | matches paradigm-14 Little's Law target (peak concurrent 240 × 1/N_FIXED) |
 | Per-candidate sizing | `final = suggested × scale_factor` (see §2.3) | global daily scaling preserves ratios |
@@ -123,14 +123,16 @@ Perplexity's correlation-0.85 argument is statistically correct in general event
 | Same-ticker policy | **skip new candidate if open position exists; shadow-log** | §2.4 |
 | Intra-run duplicate ticker policy | **skip second occurrence in same brief; shadow-log with `duplicate_ticker_in_brief`** | post-zen 2026-05-28 fix |
 | Entry order type | limit-GTC at each tier price | matches `brief_trade_setup.entry_tiers[].limit` |
-| Entry order TTL | `order_ttl_days` from `brief_trade_setup` (default 10) | cancel unfilled limits after TTL |
+| Entry order TTL | `order_ttl_days` from `brief_trade_setup` (default 7 **XNYS trading days**) | cancel unfilled limits after TTL; PR-B 2026-05-29 switched unit + default 10 cal → 7 trading |
 | Exit order plumbing | per-tranche limit-sells + single stop-loss at `disaster_stop` | multi-tranche TP ladder doesn't fit Alpaca's single-leg BRACKET; reconciler orchestrates |
 | Position selection bias | **no hard cap, no skip-when-full** | §2.1 |
 | Shadow-log reasons | Complete enumeration: `not_verified`, `no_trade_setup`, `unplannable_setup`, `same_ticker_open`, `gross_cap_block`, `duplicate_ticker_in_brief` | every reason has a structured `details_json` blob; query with `SELECT reason, COUNT(*) FROM shadow_log GROUP BY reason` |
 
-## §4. Time-stop = 60 days — rationale
+## §4. Time-stop = 42 trading days (≈ 60 calendar) — rationale
 
-`brief_trade_setup` ships **no position time-stop** (only entry-limit TTL `order_ttl_days = 10`). The design (§3 of trade_setup memo) treats positions as TP-or-SL exits indefinitely. For paper-trade observation that is structurally problematic — without a backstop, `W → ∞` in Little's Law and L diverges; zombie positions accumulate forever.
+> **Unit (PR-B 2026-05-29):** `TIME_STOP_DAYS` is **XNYS trading days** since PR-B; the original 60-calendar-day decision below remains the substantive horizon anchor. The trading-day re-expression is `42` because that is the count of XNYS sessions in ~60 calendar days at long-run US holiday density (~10 observances + ~104 weekend days per year). Same horizon, more honest unit — weekends and US public holidays no longer compress the effective hold around long weekends. See `docs/research/paper_trading_non_trading_day_2026_05_29.md` §3.
+
+`brief_trade_setup` ships **no position time-stop** (only entry-limit TTL `order_ttl_days`, now defaulting to 7 trading days). The design (§3 of trade_setup memo) treats positions as TP-or-SL exits indefinitely. For paper-trade observation that is structurally problematic — without a backstop, `W → ∞` in Little's Law and L diverges; zombie positions accumulate forever.
 
 Three options were considered:
 

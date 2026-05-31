@@ -1,0 +1,39 @@
+# Regulatory-action template — design memo §2.2 dnia jeden #5.
+#
+# High-impact binary outcomes: FDA approval / rejection, SEC / DOJ
+# enforcement actions, antitrust review verdicts. Does NOT require a
+# press_release source because the agency itself (FDA.gov, SEC.gov) is
+# often the primary source and surfaces via RSS / EDGAR, not via
+# prnewswire / businesswire.
+template_id: regulatory_action
+event_type: regulatory
+description: "Regulator (FDA / SEC / DOJ / FTC) issues approval, rejection, or enforcement."
+
+article_predicates:
+  - not_listicle
+  - name: any_sentence_contains
+    kwargs:
+      words:
+        - "FDA approves"
+        - "FDA rejects"
+        - "FDA grants"
+        - "complete response letter"
+        - "SEC charges"
+        - "SEC settles"
+        - "DOJ files"
+        - "DOJ settles"
+        - "antitrust"
+        - "FTC files"
+        - "consent decree"
+        - "enforcement action"
+
+entity_requirements:
+  subject:
+    type: company
+    required: true
+
+extraction:
+  - field: subject_ticker
+    source: "entity:subject"
+  - field: announcement_date
+    source: "article.published_at"

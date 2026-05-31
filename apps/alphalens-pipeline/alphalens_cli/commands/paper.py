@@ -27,6 +27,47 @@ paper_app = typer.Typer(
 # command signatures in lock-step on a single source of truth.
 _LEDGER_HELP = "Override the default paper ledger location (~/.alphalens/paper_ledger.db)."
 
+_ALLOW_CLOSED_HELP = (
+    "Bypass the XNYS market-closed guard (run even on weekends / US "
+    "public holidays). Default off — protects against stale-ladder gap "
+    "risk; see docs/research/paper_trading_non_trading_day_2026_05_29.md."
+)
+
+
+def _today_utc() -> dt.date:
+    """Wall-clock UTC date the market-closed guard reads.
+
+    Indirected so the tests can patch this single call site rather
+    than freezing the whole interpreter clock. Pure stdlib — no
+    pandas / exchange_calendars import on the hot path.
+    """
+    return dt.datetime.now(dt.UTC).date()
+
+
+def _emit_market_closed_message(action: str) -> None:
+    """Print + log the deferral message for ``action`` (\"submit\" /
+    \"reconcile\"), naming the next XNYS session open.
+
+    The message format is operator-facing — short, includes the
+    next-session anchor, and stays plain-English so non-quant readers
+    of the cron logs can parse it. Operator can re-run with
+    ``--allow-closed-market`` for ad-hoc work (manual reconcile, smoke).
+    """
+    # Lazy-import the calendar module so weekday submit (the common
+    # path) doesn't pay the ~50 ms exchange_calendars XNYS load on
+    # startup. Only the closed-day branch needs ``next_trading_open``.
+    from alphalens_pipeline.paper.calendar import next_trading_open
+
+    now_utc = dt.datetime.now(dt.UTC)
+    nxt = next_trading_open(now_utc)
+    msg = (
+        f"paper {action}: market closed today; deferring until next "
+        f"XNYS session open at {nxt.isoformat()} (pass --allow-closed-market "
+        f"to override)."
+    )
+    logger.info(msg)
+    typer.echo(msg)
+
 
 @paper_app.command("plan")
 def plan(
@@ -138,6 +179,11 @@ def submit(
             "the main paper account. For PR 3 live smoke testing."
         ),
     ),
+    allow_closed_market: bool = typer.Option(
+        False,
+        "--allow-closed-market",
+        help=_ALLOW_CLOSED_HELP,
+    ),
 ) -> None:
     """Submit entry-tier limit orders to Alpaca paper for every PLANNED
     candidate on ``brief_date`` that hasn't been submitted yet.
@@ -145,7 +191,22 @@ def submit(
     Idempotent at (plan_id, tier_index) — re-running after a partial
     submit (mid-batch crash, network blip) only pushes the tiers that
     don't already have an ENTRY row in ``orders``.
+
+    Market-closed guard: when run on a non-XNYS-session day (weekend or
+    US public holiday) the command logs a deferral message and exits 0
+    without contacting Alpaca. Pass ``--allow-closed-market`` to bypass
+    (useful for ad-hoc smoke tests). Rationale: queuing GTC limits over
+    a weekend exposes the ladder to opening-gap fills at stale Fri-close
+    anchors — see docs/research/paper_trading_non_trading_day_2026_05_29.md.
     """
+    # Lazy-import the calendar gate so weekday submit doesn't pay the
+    # ~50 ms exchange_calendars XNYS load on the hot path.
+    from alphalens_pipeline.paper.calendar import is_trading_day
+
+    if not allow_closed_market and not is_trading_day(_today_utc()):
+        _emit_market_closed_message("submit")
+        return
+
     from alphalens_pipeline.data.alt_data.alpaca_client import (
         get_default_alpaca_client,
     )
@@ -194,6 +255,11 @@ def reconcile(
         "--use-test-account",
         help="Route through ALPACA_TEST_* account (dev sandbox).",
     ),
+    allow_closed_market: bool = typer.Option(
+        False,
+        "--allow-closed-market",
+        help=_ALLOW_CLOSED_HELP,
+    ),
 ) -> None:
     """Reconcile every open ledger order against Alpaca paper.
 
@@ -203,7 +269,18 @@ def reconcile(
       - Append a fill row if Alpaca reports new filled_qty
 
     Idempotent: re-running on identical Alpaca state appends no fills.
+
+    Market-closed guard: same gating as ``submit`` — non-trading days
+    skip with exit 0 (no Alpaca state can have changed since the last
+    session close). Pass ``--allow-closed-market`` for ad-hoc operator
+    runs. See docs/research/paper_trading_non_trading_day_2026_05_29.md.
     """
+    from alphalens_pipeline.paper.calendar import is_trading_day
+
+    if not allow_closed_market and not is_trading_day(_today_utc()):
+        _emit_market_closed_message("reconcile")
+        return
+
     from alphalens_pipeline.data.alt_data.alpaca_client import (
         get_default_alpaca_client,
     )
@@ -352,6 +429,74 @@ def report(
             f"  {cand.brief_date:<10} {cand.ticker:<6} {cand.account:<4} "
             f"{cand.status:<8} {fill_str:<8} {entry_str:>8} {kind_str:<10} {r_str:>6}"
         )
+
+
+@paper_app.command("is-trading-day")
+def is_trading_day_cmd(
+    date: str | None = typer.Option(
+        None,
+        "--date",
+        help=(
+            "ISO date (YYYY-MM-DD) to check instead of today UTC. "
+            "Operator-only — the systemd ExecCondition= callers do "
+            "not pass this."
+        ),
+    ),
+    exchange: str = typer.Option(
+        "XNYS",
+        "--exchange",
+        help=(
+            "ISO 10383 MIC code (XNYS / XWAR / XTKS / XHKG / XSHG). "
+            "Default XNYS. The paper harness is exchange-agnostic per "
+            "CLAUDE.md `## Conventions`; this flag is the natural "
+            "extension point for multi-venue routing."
+        ),
+    ),
+) -> None:
+    """Exit 0 if ``date`` (default today UTC) is an ``exchange`` session,
+    exit 1 otherwise.
+
+    Used as ``ExecCondition=`` in the paper-submit + paper-reconcile
+    systemd units to skip US public holidays that fall on weekdays —
+    the ``OnCalendar=Mon..Fri`` filter alone would fire on them.
+
+    Exit semantics matter — systemd ``ExecCondition=`` interprets:
+
+    * **0** → proceed with ExecStart
+    * **1-254** → skip silently (no AlphalensJobFailed alert)
+    * **255** → treat as error
+
+    So an exit-1 on a holiday MUST be a clean ``raise typer.Exit(1)``,
+    NOT a raised exception (which Typer would map to exit-1 too but
+    with traceback noise in the journal).
+
+    Prints a one-line status to stdout including date + exchange so a
+    ``journalctl --user -u alphalens-paper-submit.service`` after a
+    skip immediately tells the operator WHICH day was rejected.
+
+    Forward-compatible on ``--exchange`` per CLAUDE.md exchange-
+    agnostic policy: adding XWAR routing becomes a per-call argument,
+    not a refactor (see ``project_exchange_agnostic_calendar_2026_05_30``
+    memory).
+    """
+    # Lazy-import the calendar gate — same rationale as the
+    # market-closed guard in ``submit`` / ``reconcile``. ExecCondition
+    # fires on every Mon..Fri timer tick (15× per session for
+    # reconcile alone), so the ~50ms exchange_calendars XNYS load
+    # would add up across the day if we paid it on every tick.
+    from alphalens_pipeline.paper.calendar import is_trading_day
+
+    check_date = dt.date.fromisoformat(date) if date is not None else _today_utc()
+    trading = is_trading_day(check_date, exchange=exchange)
+
+    # One-line status to stdout (journal captures it under
+    # ``alphalens-paper-{submit,reconcile}.service`` when the operator
+    # debugs a skip). Format: ``2026-05-25 XNYS: not a trading day``
+    # so a journal grep on either the date OR the MIC code hits.
+    verdict = "trading day" if trading else "not a trading day"
+    typer.echo(f"{check_date.isoformat()} {exchange}: {verdict}")
+
+    raise typer.Exit(0 if trading else 1)
 
 
 __all__ = ["paper_app"]

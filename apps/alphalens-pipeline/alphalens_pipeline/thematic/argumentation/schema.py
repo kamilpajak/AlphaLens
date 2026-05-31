@@ -1,4 +1,4 @@
-"""JSON response schema for the Gemini brief generator.
+"""JSON response schema for the LLM brief generator.
 
 Shared by Pro and Flash routes — same 4 fields, both models return identical
 shape so the orchestrator + renderer don't need to branch on model.

@@ -19,7 +19,7 @@
       "ticker": "FOUR",
       "company_name": "Shift4 Payments, Inc.",
       "rationale": "Shift4 Payments delivers integrated payment processing and point-of-sale software solutions tailored for retail merchants and hospitality venues.",
-      "gemini_confidence": 0.8,
+      "llm_confidence": 0.8,
       "market_cap": 3403210960.646332,
       "gates_passed": [
         "tenk"
@@ -115,7 +115,7 @@
       "ticker": "DFIN",
       "company_name": "Donnelley Financial Solutions, Inc.",
       "rationale": "Provides ActiveDisclosure and other SEC filing software essential for drafting and submitting Form S-1 registration statements.",
-      "gemini_confidence": 0.85,
+      "llm_confidence": 0.85,
       "market_cap": 986803812.5,
       "gates_passed": [
         "tenk"
@@ -201,7 +201,7 @@
       "ticker": "PIPR",
       "company_name": "Piper Sandler Companies",
       "rationale": "A middle-market investment bank that relies heavily on equity underwriting fees from healthcare and technology IPOs.",
-      "gemini_confidence": 0.8,
+      "llm_confidence": 0.8,
       "market_cap": 5391327203.128021,
       "gates_passed": [
         "tenk"
@@ -305,7 +305,7 @@
       "ticker": "CRL",
       "company_name": "Charles River Laboratories International, Inc.",
       "rationale": "Provides essential in-vivo and in-vitro research models and pre-clinical testing services required for pharmaceutical drug discovery and development.",
-      "gemini_confidence": 0.9,
+      "llm_confidence": 0.9,
       "market_cap": 7425777772.058258,
       "gates_passed": [
         "tenk",
@@ -409,7 +409,7 @@
       "ticker": "MANH",
       "company_name": "Manhattan Associates, Inc.",
       "rationale": "Manhattan Associates provides supply chain commerce software, including warehouse management and omnichannel order routing systems, heavily utilized by major retail chains.",
-      "gemini_confidence": 0.9,
+      "llm_confidence": 0.9,
       "market_cap": 8072122329.425171,
       "gates_passed": [
         "tenk"
@@ -513,7 +513,7 @@
       "ticker": "SYM",
       "company_name": "Symbotic Inc.",
       "rationale": "Symbotic designs and operates AI-powered robotic warehouse automation systems that optimize supply chain logistics for large retail networks like Walmart and Target.",
-      "gemini_confidence": 0.85,
+      "llm_confidence": 0.85,
       "market_cap": 5999491380.843761,
       "gates_passed": [
         "tenk"
@@ -617,7 +617,7 @@
       "ticker": "NVAX",
       "company_name": "Novavax, Inc.",
       "rationale": "Focuses exclusively on the discovery, development, and commercialization of vaccines to prevent serious infectious diseases.",
-      "gemini_confidence": 0.9,
+      "llm_confidence": 0.9,
       "market_cap": 1502142254.7018986,
       "gates_passed": [
         "tenk",
@@ -723,7 +723,7 @@
       "ticker": "OTEX",
       "company_name": "Open Text Corporation",
       "rationale": "Headquartered in Waterloo, OpenText is a major enterprise information management software company and a foundational anchor of the Toronto-Waterloo tech corridor.",
-      "gemini_confidence": 0.85,
+      "llm_confidence": 0.85,
       "market_cap": 5717125072.004318,
       "gates_passed": [
         "tenk"
@@ -827,7 +827,7 @@
       "ticker": "BRZE",
       "company_name": "Braze, Inc.",
       "rationale": "Braze provides a customer engagement platform that enables brands to orchestrate cross-channel promotional messaging, push notifications, and personalized offers.",
-      "gemini_confidence": 0.8,
+      "llm_confidence": 0.8,
       "market_cap": 2430071205.495449,
       "gates_passed": [
         "tenk"
@@ -931,7 +931,7 @@
       "ticker": "WK",
       "company_name": "Workiva Inc.",
       "rationale": "Its Wdesk platform is widely adopted by pre-IPO companies to establish SOX compliance and draft initial SEC registration filings.",
-      "gemini_confidence": 0.8,
+      "llm_confidence": 0.8,
       "market_cap": 2785202705.6219177,
       "gates_passed": [
         "tenk"
@@ -1035,7 +1035,7 @@
       "ticker": "QDEL",
       "company_name": "QuidelOrtho Corporation",
       "rationale": "QuidelOrtho manufactures rapid diagnostic testing solutions for infectious diseases, facilitating early detection and containment of public health threats at the point of care.",
-      "gemini_confidence": 0.85,
+      "llm_confidence": 0.85,
       "market_cap": 711232036.0802383,
       "gates_passed": [
         "tenk"
@@ -1141,7 +1141,7 @@
       "ticker": "OLLI",
       "company_name": "Ollie's Bargain Outlet Holdings, Inc.",
       "rationale": "Specializes in the sale of closeout merchandise and excess inventory, offering extreme bargains on brand-name products across various categories.",
-      "gemini_confidence": 0.9,
+      "llm_confidence": 0.9,
       "market_cap": 4929943159.744064,
       "gates_passed": [
         "tenk"
@@ -1245,7 +1245,7 @@
       "ticker": "IBTA",
       "company_name": "Ibotta, Inc.",
       "rationale": "Ibotta operates a digital promotions network that delivers cash-back offers and digital coupons to consumers on behalf of consumer packaged goods brands.",
-      "gemini_confidence": 0.95,
+      "llm_confidence": 0.95,
       "market_cap": 743402522.2901745,
       "gates_passed": [
         "tenk"
@@ -1349,7 +1349,7 @@
       "ticker": "GO",
       "company_name": "Grocery Outlet Holding Corp.",
       "rationale": "Operates an extreme-value grocery retail network, sourcing opportunistic buys and closeout products to offer significant discounts on name-brand consumables.",
-      "gemini_confidence": 0.9,
+      "llm_confidence": 0.9,
       "market_cap": 732522406.9148026,
       "gates_passed": [
         "tenk"
@@ -1453,7 +1453,7 @@
       "ticker": "CMPR",
       "company_name": "Cimpress plc",
       "rationale": "Cimpress operates mass-customization businesses like Vistaprint and National Pen, which manufacture and distribute promotional products and marketing materials.",
-      "gemini_confidence": 0.85,
+      "llm_confidence": 0.85,
       "market_cap": 2391707209.04953,
       "gates_passed": [
         "tenk"
@@ -1557,7 +1557,7 @@
       "ticker": "PAR",
       "company_name": "PAR Technology Corporation",
       "rationale": "PAR Technology's Punchh division is a leading provider of loyalty and promotional offer management software for enterprise restaurant chains.",
-      "gemini_confidence": 0.75,
+      "llm_confidence": 0.75,
       "market_cap": 588170807.1805058,
       "gates_passed": [
         "tenk"

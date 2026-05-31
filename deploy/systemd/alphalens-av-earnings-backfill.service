@@ -36,6 +36,12 @@ EnvironmentFile=/etc/alphalens/env
 ExecStart=%h/AlphaLens/.venv/bin/python apps/alphalens-research/scripts/av_earnings_daily_backfill.py \
     --universe sp500_union
 
+# Prometheus textfile metrics (see alphalens-edgar-detect.service for
+# the pattern). The AVRateLimitError exit-clean path counts as a
+# successful run for cron-health purposes — the quota window resets
+# tomorrow.
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics av-earnings-backfill
+
 # Keep stdout/stderr in journald (no /var/log file needed).
 StandardOutput=journal
 StandardError=journal

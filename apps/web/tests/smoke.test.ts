@@ -33,9 +33,36 @@ for (const day of DAYS_INDEX) {
 	}
 }
 
+// Trading-day mock for /v1/market/status — the layout poll fires on
+// every page load (PR-C), and the default smoke fixture wants the
+// banner OFF (closed-market banner is exercised by tests/market-status.test.ts).
+// A 404 fallback would trip the "Failed to load resource" browser console
+// error and fail every route's console-clean assertion.
+//
+// ``next_open_iso: '2099-01-01'`` is a never-reached sentinel — the banner
+// short-circuits on ``is_trading_day: true`` and never reads it. A future
+// test that asserts on next_open date content rather than just banner
+// visibility would see the sentinel; tests/market-status.test.ts builds a
+// realistic ``next_open_iso`` from ``Date.now()`` for those assertions.
+// Flag surfaced by zen review 2026-05-30.
+const MARKET_STATUS_TRADING_BODY = JSON.stringify({
+	is_trading_day: true,
+	is_half_day: false,
+	next_open_iso: '2099-01-01T13:30:00+00:00',
+	exchange: 'XNYS'
+});
+
 function installApiMock(page: Page) {
 	return page.route('**/api/v1/**', (route) => {
 		const url = new URL(route.request().url());
+		// /api/v1/market/status — fixed trading-day stub so the banner stays hidden.
+		if (url.pathname === '/api/v1/market/status') {
+			return route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: MARKET_STATUS_TRADING_BODY
+			});
+		}
 		// /api/v1/days[?limit=…]
 		if (url.pathname === '/api/v1/days') {
 			return route.fulfill({
@@ -278,12 +305,17 @@ test.describe('smoke — about page accuracy', () => {
 	// reference_gemini_model_retirement_silent_failure.md: retired Gemini
 	// model IDs in user-facing copy advertise a state the pipeline left
 	// behind, and the copy quietly rots every time a model is bumped. The
-	// about page now uses brand-style names ("Gemini 3 Flash", "Gemini 3
-	// Pro") so it survives a model bump without re-staling, and the test
-	// hard-fails if a retired exact ID ever reappears.
+	// about page now uses brand-style names ("DeepSeek V4 Flash", "DeepSeek
+	// V4 Pro") so it survives a model bump without re-staling, and the test
+	// hard-fails if a retired exact ID or retired brand label ever reappears.
 	const RETIRED_MODEL_IDS = [
 		'gemini-2.5-flash',
-		'gemini-3-pro-preview' // dropped the "-3-" preview line; current is gemini-3.1-pro-preview
+		'gemini-3-pro-preview', // dropped the "-3-" preview line; current is gemini-3.1-pro-preview
+		// Retired brand labels — the thematic pipeline migrated Gemini → DeepSeek
+		// V4 (PR-G #318), so the SPA must no longer display the old Gemini brand
+		// names anywhere.
+		'Gemini 3 Pro',
+		'Gemini 3 Flash'
 	];
 
 	test('lists every pipeline layer with current model labels', async ({ page }) => {
@@ -298,8 +330,8 @@ test.describe('smoke — about page accuracy', () => {
 		}
 
 		// Current model labels (brand-style, not version-pinned).
-		await expect(layers).toContainText(/Gemini 3 Flash/);
-		await expect(layers).toContainText(/Gemini 3 Pro/);
+		await expect(layers).toContainText(/DeepSeek V4 Flash/);
+		await expect(layers).toContainText(/DeepSeek V4 Pro/);
 
 		// L3 candidate-range matches the actual prompt + diversity cap.
 		await expect(layers).toContainText(/5-15/);

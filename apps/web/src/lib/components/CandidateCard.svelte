@@ -8,6 +8,7 @@
 	import ChipTip from './ChipTip.svelte';
 	import TradeSetup from './TradeSetup.svelte';
 	import FeedbackControls from './FeedbackControls.svelte';
+	import TemplateFacts from './TemplateFacts.svelte';
 	import { GLOSSARY_BY_TERM } from '$lib/data/glossary';
 
 	// Same tipProps pattern as /experiments — looks up term in shared glossary.
@@ -44,7 +45,7 @@
 		existingDecision = null
 	}: Props = $props();
 
-	const confTone = $derived(confidenceTone(c.gemini_confidence));
+	const confTone = $derived(confidenceTone(c.llm_confidence));
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
 </script>
@@ -125,7 +126,7 @@
 					class:text-green={confTone === 'green'}
 					class:text-amber={confTone === 'amber'}
 					class:text-cyan={confTone === 'cyan'}
-					class:text-fg-muted={confTone === 'muted'}>{confidenceLabel(c.gemini_confidence)}</span
+					class:text-fg-muted={confTone === 'muted'}>{confidenceLabel(c.llm_confidence)}</span
 				>
 			</span>
 			<span class="text-fg-muted whitespace-nowrap">
@@ -313,6 +314,18 @@
 			<div class="px-4 sm:px-5 py-4">
 				<TradeSetup setup={c.brief_trade_setup} />
 			</div>
+			<!-- Typed facts panel — PR-3 epic #321. Hidden when the catalyst
+			     came from the flash path (brief_template_id is empty); shown
+			     above the analyst narrative so the deterministic citations
+			     anchor the supply_chain / bear / exit prose below. -->
+			{#if c.brief_template_id}
+				<div class="px-4 sm:px-5 pb-4 border-t border-grid pt-4">
+					<TemplateFacts
+						templateId={c.brief_template_id}
+						facts={c.brief_template_facts}
+					/>
+				</div>
+			{/if}
 		</div>
 	</div>
 

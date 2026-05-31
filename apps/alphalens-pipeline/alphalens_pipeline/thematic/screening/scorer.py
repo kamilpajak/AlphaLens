@@ -13,6 +13,7 @@ are not re-fetched across candidates that share an industry.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -420,6 +421,16 @@ def _build_candidate_row(
         "catalyst_strength": cs_val,
         "catalyst_event_type": (catalyst_event or {}).get("event_type"),
         "catalyst_confidence": (catalyst_event or {}).get("confidence"),
+        # PR-3: typed-fact provenance from the template engine. The
+        # orchestrator's _row_to_facts deserialises the JSON column back
+        # to a dict; brief generator's prompt-rendering branch fires on
+        # presence. None on Flash-extracted catalysts + no-catalyst rows.
+        "catalyst_template_id": (catalyst_event or {}).get("template_id"),
+        "catalyst_template_facts_json": (
+            json.dumps((catalyst_event or {}).get("template_facts"), sort_keys=True)
+            if (catalyst_event or {}).get("template_facts")
+            else None
+        ),
         # Stashed for the reversal detector (source_event_url is
         # in candidates.parquet, merged AFTER this frame). Dropped
         # before the public DataFrame is built.

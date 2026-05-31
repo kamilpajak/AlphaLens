@@ -3,7 +3,9 @@
 	import { page, updated } from '$app/state';
 	import { Activity, Database, Triangle } from 'lucide-svelte';
 	import favicon from '$lib/assets/favicon.svg';
-	import { GEMINI } from '$lib/models';
+	import { MODELS } from '$lib/models';
+	import MarketStatusBanner from '$lib/components/MarketStatusBanner.svelte';
+	import { startMarketStatusPoll } from '$lib/marketStatus.svelte';
 
 	let { children } = $props();
 
@@ -17,6 +19,15 @@
 		return () => clearInterval(id);
 	});
 
+	// Single layout-level mount point for the /v1/market/status poll loop.
+	// startMarketStatusPoll is idempotent at the module level — subsequent
+	// callers (none currently exist) would get a no-op cleanup — so this
+	// remains the canonical owner.
+	$effect(() => {
+		const stop = startMarketStatusPoll();
+		return stop;
+	});
+
 	const route = $derived(page.url.pathname);
 
 	// Swagger UI lives on the Django origin (cross-origin in production).
@@ -26,7 +37,7 @@
 
 	// Footer ticker chips — context-switch per route so the slogans match
 	// the page the user is reading. Dashboard / briefs / brief / about all
-	// concern the thematic-tool pipeline (Polygon news + Gemini Pro/Flash +
+	// concern the thematic-tool pipeline (Polygon news + DeepSeek V4 Pro/Flash +
 	// verification gates), while /experiments concerns the active-alpha
 	// research ledger (αt thresholds, Bonferroni, multi-phase audit, PIT
 	// discipline). Same component, two vocabularies.
@@ -35,8 +46,8 @@
 		{ label: 'PRESS-GATE', value: 'tri-state ok' },
 		{ label: 'CATALYST-FLOOR', value: '0.55' },
 		{ label: 'MAGIC-FORMULA', value: 'cohort' },
-		{ label: 'PRO-MODEL', value: GEMINI.PRO },
-		{ label: 'FLASH-MODEL', value: GEMINI.FLASH },
+		{ label: 'PRO-MODEL', value: MODELS.PRO },
+		{ label: 'FLASH-MODEL', value: MODELS.FLASH },
 		{ label: 'PRESS-WINDOW', value: '30d' },
 		{ label: 'SLIPPAGE', value: '50bps' },
 		{ label: 'LIMIT', value: 'polygon 5rpm' }
@@ -124,6 +135,11 @@
 			</div>
 		</div>
 	</header>
+
+	<!-- Closed-market banner above main content. Self-hides on trading days
+	     and during the pre-load window; non-trading days get the persistent
+	     "submission deferred until …" chrome rendered globally. -->
+	<MarketStatusBanner />
 
 	<main class="flex-1">
 		{@render children()}
