@@ -5,6 +5,11 @@ index, filters to in-universe CIKs, keeps only filings whose items intersect
 the press-release item set, fetches the Exhibit 99.1 narrative as the article
 body, and tags tickers from the filer CIK (not title NER).
 
+Exhibit discovery walks the Document Format Files table of the filing's
+``{accession}-index.htm`` page (the authoritative exhibit-type listing) — NOT
+FilingSummary.xml, which never carries an EX-99.1 doctype (it lists only the
+XBRL render files + the primary 8-K). That wrong assumption was issue #337.
+
 All SEC HTTP is mocked at the ``SecEdgarClient.get_text`` boundary (mirrors
 test_polygon_news.py client-boundary mocking) — no network. The CIK->ticker
 inverse map loader is patched so tests never touch ``~/.alphalens``.
@@ -35,29 +40,106 @@ Form Type   Company Name                CIK         Date Filed  File Name
 8-K/A       APPLE INC                   320193      2026-05-30  edgar/data/320193/0000320193-26-000051-index.htm
 """
 
-# FilingSummary with both the primary 8-K and an EX-99.1 exhibit.
-SAMPLE_FS_991 = (
-    "<FilingSummary><FilingSummaryList>"
-    '<File doctype="8-K" original="primary.htm"/>'
-    '<File doctype="EX-99.1" original="ex991.htm"/>'
-    "</FilingSummaryList></FilingSummary>"
-)
+# REAL captured fixture: the Document Format Files table of a live filing's
+# {accession}-index.htm page (ACMR 8-K, CIK 1680062). Note that the primary
+# 8-K row's <a href> is wrapped in the iXBRL viewer prefix ``/ix?doc=`` while
+# the EX-99.1 row links directly. This is the authoritative exhibit-type table;
+# FilingSummary.xml carries NO EX-99.1 doctype (issue #337).
+ACMR_INDEX_HTML = """<table class="tableFile" summary="Document Format Files">
+         <tr>
+            <th scope="col" style="width: 5%;"><acronym title="Sequence Number">Seq</acronym></th>
+            <th scope="col" style="width: 40%;">Description</th>
+            <th scope="col" style="width: 20%;">Document</th>
+            <th scope="col" style="width: 10%;">Type</th>
+            <th scope="col">Size</th>
+         </tr>
+         <tr>
+            <td scope="row">1</td>
+            <td scope="row">8-K</td>
+            <td scope="row"><a href="/ix?doc=/Archives/edgar/data/1680062/000114036126023310/ef20075131_8k.htm">ef20075131_8k.htm</a> &nbsp;&nbsp;<span style="color: green">iXBRL</span></td>
+            <td scope="row">8-K</td>
+            <td scope="row">35628</td>
+         </tr>
+         <tr class="evenRow">
+            <td scope="row">2</td>
+            <td scope="row">EXHIBIT 99.1</td>
+            <td scope="row"><a href="/Archives/edgar/data/1680062/000114036126023310/ef20075131_ex99-1.htm">ef20075131_ex99-1.htm</a></td>
+            <td scope="row">EX-99.1</td>
+            <td scope="row">146082</td>
+         </tr>
+         <tr>
+            <td scope="row">&nbsp;</td>
+            <td scope="row">Complete submission text file</td>
+            <td scope="row"><a href="/Archives/edgar/data/1680062/000114036126023310/0001140361-26-023310.txt">0001140361-26-023310.txt</a></td>
+            <td scope="row">&nbsp;</td>
+            <td scope="row">338342</td>
+         </tr>
+      </table>
+"""
 
-# FilingSummary whose 8-K items are out of the press-release set (5.02, 9.01)
-# but which DOES carry an EX-99.1 (e.g. an officer bio) — must be dropped.
-SAMPLE_FS_502 = (
-    "<FilingSummary><FilingSummaryList>"
-    '<File doctype="8-K" original="primary502.htm"/>'
-    '<File doctype="EX-99.1" original="ex991bio.htm"/>'
-    "</FilingSummaryList></FilingSummary>"
-)
+# An index.htm table whose only exhibit is a 10.1 material agreement — NO
+# EX-99.1 row. A qualifying-item 8-K with this index must be dropped (no body).
+INDEX_HTML_NO_EX991 = """<table class="tableFile" summary="Document Format Files">
+         <tr>
+            <th scope="col">Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th>
+         </tr>
+         <tr>
+            <td scope="row">1</td>
+            <td scope="row">8-K</td>
+            <td scope="row"><a href="/ix?doc=/Archives/edgar/data/320193/000032019326000050/primary.htm">primary.htm</a></td>
+            <td scope="row">8-K</td>
+            <td scope="row">12345</td>
+         </tr>
+         <tr class="evenRow">
+            <td scope="row">2</td>
+            <td scope="row">EXHIBIT 10.1</td>
+            <td scope="row"><a href="/Archives/edgar/data/320193/000032019326000050/ex10-1.htm">ex10-1.htm</a></td>
+            <td scope="row">EX-10.1</td>
+            <td scope="row">54321</td>
+         </tr>
+      </table>
+"""
 
-# FilingSummary with a qualifying item but NO EX-99.1 exhibit — must be dropped.
-SAMPLE_FS_NO_EX = (
-    "<FilingSummary><FilingSummaryList>"
-    '<File doctype="8-K" original="primary.htm"/>'
-    "</FilingSummaryList></FilingSummary>"
-)
+# Index.htm for the SAMPLE_IDX APPLE filings: primary 8-K + EX-99.1.
+SAMPLE_INDEX_991 = """<table class="tableFile" summary="Document Format Files">
+         <tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>
+         <tr>
+            <td scope="row">1</td>
+            <td scope="row">8-K</td>
+            <td scope="row"><a href="/ix?doc=/Archives/edgar/data/320193/000032019326000050/primary.htm">primary.htm</a></td>
+            <td scope="row">8-K</td>
+            <td scope="row">12345</td>
+         </tr>
+         <tr class="evenRow">
+            <td scope="row">2</td>
+            <td scope="row">EXHIBIT 99.1</td>
+            <td scope="row"><a href="/Archives/edgar/data/320193/000032019326000050/ex991.htm">ex991.htm</a></td>
+            <td scope="row">EX-99.1</td>
+            <td scope="row">99999</td>
+         </tr>
+      </table>
+"""
+
+# Index.htm for the out-of-press-release-item case (items 5.02/9.01): primary
+# 8-K + an EX-99.1 officer bio. Item gate must drop it despite the EX-99.1.
+SAMPLE_INDEX_991_502 = """<table class="tableFile" summary="Document Format Files">
+         <tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>
+         <tr>
+            <td scope="row">1</td>
+            <td scope="row">8-K</td>
+            <td scope="row"><a href="/ix?doc=/Archives/edgar/data/320193/000032019326000050/primary502.htm">primary502.htm</a></td>
+            <td scope="row">8-K</td>
+            <td scope="row">12345</td>
+         </tr>
+         <tr class="evenRow">
+            <td scope="row">2</td>
+            <td scope="row">EXHIBIT 99.1</td>
+            <td scope="row"><a href="/Archives/edgar/data/320193/000032019326000050/ex991bio.htm">ex991bio.htm</a></td>
+            <td scope="row">EX-99.1</td>
+            <td scope="row">99999</td>
+         </tr>
+      </table>
+"""
 
 SAMPLE_8K_HTML = "<p>Item 2.02 Results of Operations and Financial Condition.</p>"
 SAMPLE_8K_HTML_502 = "<p>Item 5.02 Departure of Directors. Item 9.01 Financial Statements.</p>"
@@ -71,8 +153,8 @@ def _route_get_text(url: str) -> str:
     """Substring URL router used as ``client.get_text.side_effect`` in tests."""
     if url.endswith(".idx"):
         return SAMPLE_IDX
-    if url.endswith("FilingSummary.xml"):
-        return SAMPLE_FS_991
+    if url.endswith("-index.htm"):
+        return SAMPLE_INDEX_991
     if url.endswith("primary.htm"):
         return SAMPLE_8K_HTML
     if url.endswith("ex991.htm"):
@@ -158,31 +240,105 @@ class TestParseFormIndex(unittest.TestCase):
         self.assertEqual(epr.parse_form_index_8k("no separator at all\njust prose\n"), [])
 
 
+class TestParseIndexDocuments(unittest.TestCase):
+    """The Document Format Files table parser (Type -> basename map)."""
+
+    def test_real_fixture_yields_ex991_basename(self):
+        docs = epr.parse_index_documents(ACMR_INDEX_HTML)
+        self.assertEqual(docs["EX-99.1"], "ef20075131_ex99-1.htm")
+
+    def test_real_fixture_strips_ix_doc_prefix_on_primary_8k(self):
+        # The primary 8-K href is wrapped in the iXBRL viewer prefix
+        # ``/ix?doc=/Archives/...`` — the parser must strip it and take the
+        # basename, not the viewer URL.
+        docs = epr.parse_index_documents(ACMR_INDEX_HTML)
+        self.assertEqual(docs["8-K"], "ef20075131_8k.htm")
+
+    def test_no_ex991_row_absent_from_map(self):
+        docs = epr.parse_index_documents(INDEX_HTML_NO_EX991)
+        self.assertNotIn("EX-99.1", docs)
+        # The 10.1 agreement IS present (proves we parse non-99.1 rows too).
+        self.assertEqual(docs["EX-10.1"], "ex10-1.htm")
+
+    def test_malformed_html_yields_empty_map(self):
+        self.assertEqual(epr.parse_index_documents(""), {})
+
+    def test_data_files_table_cannot_collide_on_type(self):
+        # The page also carries a sibling "Data Files" table with the SAME
+        # column layout. Even when it appears FIRST and carries a row whose
+        # Type is "8-K", the parser must ignore it and only read the
+        # "Document Format Files" table.
+        html = """
+        <table class="tableFile" summary="Data Files">
+          <tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>
+          <tr><td>1</td><td>decoy</td><td><a href="/Archives/edgar/data/1/2/decoy.htm">decoy.htm</a></td><td>8-K</td><td>1</td></tr>
+        </table>
+        <table class="tableFile" summary="Document Format Files">
+          <tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>
+          <tr><td>1</td><td>8-K</td><td><a href="/Archives/edgar/data/1/2/real_8k.htm">real_8k.htm</a></td><td>8-K</td><td>2</td></tr>
+        </table>
+        """
+        docs = epr.parse_index_documents(html)
+        self.assertEqual(docs["8-K"], "real_8k.htm")  # decoy ignored
+        self.assertNotIn("decoy.htm", docs.values())
+
+    def test_description_cell_anchor_does_not_hijack_href(self):
+        # A footnote <a> in the Description cell (index 1) must NOT be captured
+        # as the document href — only the Document cell (index 2) counts.
+        html = """
+        <table class="tableFile" summary="Document Format Files">
+          <tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>
+          <tr>
+            <td>2</td>
+            <td>EXHIBIT 99.1 <a href="/footnote.htm">note</a></td>
+            <td><a href="/Archives/edgar/data/1/2/the_real_ex991.htm">the_real_ex991.htm</a></td>
+            <td>EX-99.1</td>
+            <td>3</td>
+          </tr>
+        </table>
+        """
+        docs = epr.parse_index_documents(html)
+        self.assertEqual(docs["EX-99.1"], "the_real_ex991.htm")
+
+
 class TestPickEx991(unittest.TestCase):
-    def test_ex_991_doctype_returns_original(self):
-        self.assertEqual(epr.pick_ex_991_name(SAMPLE_FS_991), "ex991.htm")
+    def test_ex_991_picked_from_index_table(self):
+        self.assertEqual(epr.pick_ex_991_name(ACMR_INDEX_HTML), "ef20075131_ex99-1.htm")
 
     def test_ex_99_fallback(self):
-        fs = (
-            "<FilingSummary><FilingSummaryList>"
-            '<File doctype="EX-99" original="ex99.htm"/>'
-            "</FilingSummaryList></FilingSummary>"
-        )
-        self.assertEqual(epr.pick_ex_991_name(fs), "ex99.htm")
+        # A filing whose exhibit Type is the bare ``EX-99`` (no .1 suffix).
+        html = """<table class="tableFile" summary="Document Format Files">
+            <tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>
+            <tr>
+              <td scope="row">1</td><td scope="row">EXHIBIT 99</td>
+              <td scope="row"><a href="/Archives/edgar/data/1/2/ex99.htm">ex99.htm</a></td>
+              <td scope="row">EX-99</td><td scope="row">1</td>
+            </tr>
+          </table>"""
+        self.assertEqual(epr.pick_ex_991_name(html), "ex99.htm")
 
-    def test_no_ex_file_returns_none(self):
-        self.assertIsNone(epr.pick_ex_991_name(SAMPLE_FS_NO_EX))
+    def test_ex_991_preferred_over_ex_99(self):
+        # When both are present, EX-99.1 wins over the bare EX-99 fallback.
+        html = """<table class="tableFile" summary="Document Format Files">
+            <tr><th>Seq</th><th>Description</th><th>Document</th><th>Type</th><th>Size</th></tr>
+            <tr>
+              <td scope="row">1</td><td scope="row">EXHIBIT 99</td>
+              <td scope="row"><a href="/Archives/edgar/data/1/2/ex99.htm">ex99.htm</a></td>
+              <td scope="row">EX-99</td><td scope="row">1</td>
+            </tr>
+            <tr>
+              <td scope="row">2</td><td scope="row">EXHIBIT 99.1</td>
+              <td scope="row"><a href="/Archives/edgar/data/1/2/ex991.htm">ex991.htm</a></td>
+              <td scope="row">EX-99.1</td><td scope="row">1</td>
+            </tr>
+          </table>"""
+        self.assertEqual(epr.pick_ex_991_name(html), "ex991.htm")
 
-    def test_malformed_xml_returns_none(self):
-        self.assertIsNone(epr.pick_ex_991_name("<not valid xml <<<"))
+    def test_no_ex_row_returns_none(self):
+        self.assertIsNone(epr.pick_ex_991_name(INDEX_HTML_NO_EX991))
 
-
-class TestPick8kPrimary(unittest.TestCase):
-    def test_primary_8k_picked(self):
-        self.assertEqual(epr._pick_8k_primary_name(SAMPLE_FS_991), "primary.htm")
-
-    def test_malformed_xml_returns_none(self):
-        self.assertIsNone(epr._pick_8k_primary_name("<<<bad"))
+    def test_malformed_html_returns_none(self):
+        self.assertIsNone(epr.pick_ex_991_name("<not a table <<<"))
 
 
 class TestTransform(unittest.TestCase):
@@ -273,12 +429,41 @@ class TestFetchDailyNews(unittest.TestCase):
             self.assertEqual(set(df["tickers"].iloc[0]), {"AAPL"})
             self.assertEqual(set(df["source"]), {"edgar_press_release"})
 
-    def test_item_gate_drops_non_press_release_items(self):
+    def test_exhibit_discovery_sourced_from_index_htm(self):
+        # Regression for issue #337: exhibit discovery must come from the
+        # index.htm document table, NOT FilingSummary.xml (which never carries
+        # an EX-99.1 doctype). The router below deliberately raises if the
+        # adapter ever fetches FilingSummary.xml — proving the dead dependency
+        # is gone and the EX-99.1 still resolves end-to-end.
         def route(url: str) -> str:
             if url.endswith(".idx"):
                 return SAMPLE_IDX
             if url.endswith("FilingSummary.xml"):
-                return SAMPLE_FS_502
+                raise AssertionError("adapter must not fetch FilingSummary.xml (issue #337)")
+            if url.endswith("-index.htm"):
+                return SAMPLE_INDEX_991
+            if url.endswith("primary.htm"):
+                return SAMPLE_8K_HTML
+            if url.endswith("ex991.htm"):
+                return SAMPLE_EX991
+            raise AssertionError(f"unexpected URL: {url}")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(epr, "_load_cik_to_ticker", return_value={"0000320193": "AAPL"}):
+                df = epr.fetch_daily_news(
+                    date=dt.date(2026, 5, 30),
+                    client=self._client(side_effect=route),
+                    cache_dir=Path(tmpdir),
+                )
+            self.assertGreaterEqual(len(df), 1)
+            self.assertEqual(set(df["tickers"].iloc[0]), {"AAPL"})
+
+    def test_item_gate_drops_non_press_release_items(self):
+        def route(url: str) -> str:
+            if url.endswith(".idx"):
+                return SAMPLE_IDX
+            if url.endswith("-index.htm"):
+                return SAMPLE_INDEX_991_502
             if url.endswith("primary502.htm"):
                 return SAMPLE_8K_HTML_502
             if url.endswith("ex991bio.htm"):
@@ -305,11 +490,12 @@ class TestFetchDailyNews(unittest.TestCase):
             self.assertTrue((df["tickers"].apply(lambda t: "AAPL" in t)).any())
 
     def test_filing_without_ex991_dropped(self):
+        # index.htm has only a 10.1 agreement (no EX-99.1) -> dropped.
         def route(url: str) -> str:
             if url.endswith(".idx"):
                 return SAMPLE_IDX
-            if url.endswith("FilingSummary.xml"):
-                return SAMPLE_FS_NO_EX
+            if url.endswith("-index.htm"):
+                return INDEX_HTML_NO_EX991
             if url.endswith("primary.htm"):
                 return SAMPLE_8K_HTML
             raise AssertionError(f"unexpected URL: {url}")
@@ -390,17 +576,17 @@ class TestFetchDailyNews(unittest.TestCase):
             self.assertFalse((Path(tmpdir) / "2026-05-30.parquet").exists())
 
     def test_per_filing_enrich_failure_skips_only_that_filing(self):
-        # FilingSummary for the first APPLE accession raises; the 8-K/A accession
-        # succeeds. The day must still yield the surviving filing.
+        # The index.htm fetch for the first APPLE accession raises; the 8-K/A
+        # accession succeeds. The day must still yield the surviving filing.
         bad_accession_dir = "000032019326000050"
 
         def route(url: str) -> str:
             if url.endswith(".idx"):
                 return SAMPLE_IDX
-            if bad_accession_dir in url and url.endswith("FilingSummary.xml"):
-                raise RuntimeError("bad summary")
-            if url.endswith("FilingSummary.xml"):
-                return SAMPLE_FS_991
+            if bad_accession_dir in url and url.endswith("-index.htm"):
+                raise RuntimeError("bad index")
+            if url.endswith("-index.htm"):
+                return SAMPLE_INDEX_991
             if url.endswith("primary.htm"):
                 return SAMPLE_8K_HTML
             if url.endswith("ex991.htm"):

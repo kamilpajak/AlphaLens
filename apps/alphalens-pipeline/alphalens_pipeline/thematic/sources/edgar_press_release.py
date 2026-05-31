@@ -7,6 +7,14 @@ Exhibit 99.1 narrative as the article body, and tags tickers from the filer
 CIK (not title NER). Output cache lives at
 ``~/.alphalens/thematic_news/edgar_press_release/{YYYY-MM-DD}.parquet``.
 
+Exhibit discovery reads the Document Format Files table of the filing's
+``{accession}-index.htm`` page — the authoritative listing of every document's
+exhibit Type. We deliberately do NOT use FilingSummary.xml: it lists only the
+XBRL render files plus the primary 8-K and NEVER carries an ``EX-99.1`` doctype,
+so an XML scan for one always returns nothing (issue #337). One index.htm fetch
+yields both the primary 8-K (for item extraction) and the EX-99.1 (for the
+body), replacing the previous two FilingSummary-derived fetches.
+
 Why the daily index instead of per-ticker submissions polling:
 - COVERAGE: one ``.idx`` lists every 8-K filed that day, so we never miss an
   in-universe filer absent from a stale local roster.
@@ -33,11 +41,10 @@ import json
 import logging
 import re
 from functools import lru_cache
+from html.parser import HTMLParser
 from pathlib import Path
-from xml.etree.ElementTree import ParseError
 
 import pandas as pd
-from defusedxml.ElementTree import fromstring as _defused_fromstring
 
 from alphalens_pipeline.data.alt_data.sec_edgar_client import (
     SecEdgarClient,
@@ -54,14 +61,20 @@ ARCHIVES_BASE = "https://www.sec.gov"
 
 # 8-K items that carry a real issuer press release worth thematic extraction.
 PRESS_RELEASE_ITEMS = frozenset({"1.01", "2.01", "2.02", "7.01", "8.01"})
-# FilingSummary ``<File doctype=...>`` values that hold an Exhibit 99.1 narrative.
+# index.htm Document Format Files ``Type`` values that hold an Exhibit 99.1
+# narrative, in preference order (``EX-99.1`` wins over the bare ``EX-99``).
 # EX-99.2 (a second press-release/presentation exhibit on multi-item 8-Ks) is
 # deliberately excluded in v1: EX-99.1 is the overwhelming norm for the primary
 # press release, and EX-99.2 is frequently a slide deck rather than narrative.
-_EX_991_DOCTYPES = frozenset({"EX-99.1", "EX-99"})
+_EX_991_TYPES = ("EX-99.1", "EX-99")
+# index.htm Document Format Files ``Type`` values for the primary 8-K document.
+_PRIMARY_8K_TYPES = frozenset({"8-K", "8-K/A"})
 # Form-type column values we keep from the daily index (mirror of edgar.py's
 # primary-doc set); the press-release ITEM gate further narrows these later.
 _KEPT_FORM_TYPES = frozenset({"8-K", "8-K/A"})
+# iXBRL viewer prefix wrapping a document href in the index.htm table; the real
+# document path follows the ``doc=`` query parameter.
+_IXBRL_VIEWER_PREFIX = "/ix?doc="
 
 
 # --- universe / CIK->ticker inverse map (mirror of CIKLoader, inverted) -----
@@ -189,42 +202,144 @@ def _base_dir_from_index_filename(file_name: str, cik_padded: str) -> str:
     return f"{ARCHIVES_BASE}/Archives/edgar/data/{cik_no_zeros}/{acc_no_dashes}"
 
 
-# --- (2) FilingSummary doctype pickers (defused XML, mirror of edgar.py) -----
-def _pick_8k_primary_name(filing_summary_xml: str) -> str | None:
-    """Pick the primary 8-K document filename from FilingSummary.xml."""
+# --- (2) index.htm Document Format Files parser (Type -> doc basename) -------
+# Why html.parser, not defusedxml: the filing index page is real-world HTML
+# (unclosed <td>s, &nbsp; entities, <span> noise inside the document cell), not
+# strict XML, so an XML parser would raise on the first malformed tag. The
+# stdlib HTMLParser is tolerant and needs no third-party dependency.
+_DOCUMENT_TABLE_SUMMARY = "Document Format Files"
+# Column indices in the Document Format Files table: Seq, Description,
+# Document(<a href>), Type, Size.
+_DOC_CELL_INDEX = 2
+_TYPE_CELL_INDEX = 3
+
+
+class _DocumentTableParser(HTMLParser):
+    """Walk the ``Document Format Files`` table → ``{Type -> doc basename}``.
+
+    Each ``<tr>`` row carries five cells: Seq, Description, Document (with the
+    document ``<a href>``), Type, Size. We capture the href from the Document
+    cell only (index 2) — not the first href anywhere in the row, so a footnote
+    link in the Description cell cannot hijack it — and on the closing ``</tr>``
+    map the Type cell (index 3) to that href basename (with any ``/ix?doc=``
+    iXBRL viewer prefix and directory path stripped). First occurrence of a Type
+    wins.
+
+    Parsing is scoped to the ``summary="Document Format Files"`` table so the
+    sibling ``Data Files`` table (XBRL render files, identical column layout)
+    and any third-party tables cannot contribute a colliding Type regardless of
+    their DOM order.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.docs: dict[str, str] = {}
+        self._in_target_table = False
+        self._in_row = False
+        self._cells: list[str] = []
+        self._cell_text: list[str] = []
+        self._row_href: str | None = None
+        self._in_cell = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "table":
+            if dict(attrs).get("summary") == _DOCUMENT_TABLE_SUMMARY:
+                self._in_target_table = True
+            return
+        if not self._in_target_table:
+            return
+        if tag == "tr":
+            self._in_row = True
+            self._cells = []
+            self._cell_text = []
+            self._row_href = None
+        elif tag in ("td", "th") and self._in_row:
+            self._in_cell = True
+            self._cell_text = []
+        elif (
+            tag == "a"
+            and self._in_row
+            and self._row_href is None
+            and len(self._cells) == _DOC_CELL_INDEX  # only the Document cell
+        ):
+            for name, value in attrs:
+                if name == "href" and value:
+                    self._row_href = value
+                    break
+
+    def handle_data(self, data: str) -> None:
+        if self._in_cell:
+            self._cell_text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "table" and self._in_target_table:
+            self._in_target_table = False
+            self._in_row = False
+            return
+        if not self._in_target_table:
+            return
+        if tag in ("td", "th") and self._in_row:
+            self._cells.append("".join(self._cell_text).strip())
+            self._in_cell = False
+        elif tag == "tr" and self._in_row:
+            self._finish_row()
+            self._in_row = False
+
+    def _finish_row(self) -> None:
+        if self._row_href is None or len(self._cells) <= _TYPE_CELL_INDEX:
+            return
+        doc_type = self._cells[_TYPE_CELL_INDEX].upper()
+        basename = _basename_from_href(self._row_href)
+        if doc_type and basename and doc_type not in self.docs:
+            self.docs[doc_type] = basename
+
+
+def _basename_from_href(href: str) -> str:
+    """Resolve a document ``<a href>`` to its bare filename.
+
+    Strips a leading ``/ix?doc=`` iXBRL viewer prefix (which wraps the primary
+    8-K) and any directory path, e.g.
+    ``/ix?doc=/Archives/edgar/data/1/2/ef_8k.htm`` -> ``ef_8k.htm``.
+    """
+    if href.startswith(_IXBRL_VIEWER_PREFIX):
+        href = href[len(_IXBRL_VIEWER_PREFIX) :]
+    return href.rsplit("/", 1)[-1]
+
+
+def parse_index_documents(index_html: str) -> dict[str, str]:
+    """Parse a filing's ``{accession}-index.htm`` → ``{doc Type -> basename}``.
+
+    Returns an empty map on any parse error (mirrors the source-wide
+    degrade-gracefully contract).
+    """
+    parser = _DocumentTableParser()
     try:
-        root = _defused_fromstring(filing_summary_xml)
-    except ParseError:
-        return None
-    for file_el in root.iter("File"):
-        doctype = (file_el.get("doctype") or "").upper()
-        if doctype in _KEPT_FORM_TYPES:
-            original = file_el.get("original")
-            if original:
-                return original
-            text = (file_el.text or "").strip()
-            return text or None
+        parser.feed(index_html)
+    except Exception as exc:  # malformed markup must not raise through ingest
+        logger.warning("edgar index.htm parse failed: %s", exc, exc_info=True)
+        return {}
+    return parser.docs
+
+
+def _pick_from_docs(docs: dict[str, str], types) -> str | None:
+    """Return the basename for the first matching Type (in preference order)."""
+    for doc_type in types:
+        name = docs.get(doc_type)
+        if name:
+            return name
     return None
 
 
-def pick_ex_991_name(filing_summary_xml: str) -> str | None:
-    """Pick the Exhibit 99.1 (or EX-99) document filename from FilingSummary.xml."""
-    try:
-        root = _defused_fromstring(filing_summary_xml)
-    except ParseError:
-        return None
-    for file_el in root.iter("File"):
-        doctype = (file_el.get("doctype") or "").upper()
-        if doctype in _EX_991_DOCTYPES:
-            original = file_el.get("original")
-            if original:
-                return original
-            text = (file_el.text or "").strip()
-            return text or None
-    return None
+def pick_ex_991_name(index_html: str) -> str | None:
+    """Pick the Exhibit 99.1 (or bare EX-99) document basename from the index table.
+
+    Takes the filing's ``{accession}-index.htm`` HTML and returns the basename
+    whose document Type is ``EX-99.1``, falling back to the bare ``EX-99``.
+    """
+    return _pick_from_docs(parse_index_documents(index_html), _EX_991_TYPES)
 
 
-# --- (3) per-hit enrichment: base_dir -> items + EX-99.1 body ----------------
+# --- (3) per-hit enrichment: base_dir -> items + EX-99.1 body (1 index.htm) --
 def _safe_text(client: SecEdgarClient, url: str) -> str | None:
     """Best-effort text fetch; returns None on any client error (mirror of edgar.py)."""
     try:
@@ -241,16 +356,22 @@ def _strip_subsection(items: list[str]) -> list[str]:
 
 
 def _enrich_filing(row: dict, *, client: SecEdgarClient) -> dict | None:
-    """Resolve one daily-index hit to its items + EX-99.1 body, or None to skip."""
+    """Resolve one daily-index hit to its items + EX-99.1 body, or None to skip.
+
+    One ``{accession}-index.htm`` fetch yields the document-Type table that
+    locates both the primary 8-K (for item extraction) and the EX-99.1 (for the
+    body), so no separate FilingSummary.xml round-trip is needed.
+    """
     base_dir = row["base_dir"]
-    fs = client.get_text(f"{base_dir}/FilingSummary.xml")
-    if not fs:
+    index_html = client.get_text(f"{base_dir}/{row['accession']}-index.htm")
+    if not index_html:
         return None
-    primary = _pick_8k_primary_name(fs)
+    docs = parse_index_documents(index_html)  # parse once, look up both Types
+    primary = _pick_from_docs(docs, _PRIMARY_8K_TYPES)
     items = extract_8k_items(_safe_text(client, f"{base_dir}/{primary}") or "") if primary else []
     if not (set(_strip_subsection(items)) & PRESS_RELEASE_ITEMS):
         return None
-    ex_name = pick_ex_991_name(fs)
+    ex_name = _pick_from_docs(docs, _EX_991_TYPES)
     if not ex_name:
         # No press-release exhibit -> not our signal.
         return None
