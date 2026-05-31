@@ -42,7 +42,12 @@ EnvironmentFile=/etc/alphalens/env
 ExecCondition=%h/AlphaLens/.venv/bin/alphalens paper is-trading-day
 
 # NO --date flag — see top-of-file comment.
-ExecStart=%h/AlphaLens/.venv/bin/alphalens paper reconcile
+#
+# ``--use-test-account`` MUST match the companion submit unit: orders
+# are account-scoped, so reconciling on main would never see the
+# test-account orders submit placed. Drop both flags together to go
+# live on the main paper account.
+ExecStart=%h/AlphaLens/.venv/bin/alphalens paper reconcile --use-test-account
 
 # Prometheus textfile metrics — same pattern as paper-submit.
 ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics paper-reconcile
