@@ -1,14 +1,26 @@
-"""DeepSeek v4-flash batch event extraction over the unified news parquet.
+"""Hybrid event extraction (PR-2): template engine first, DeepSeek Flash fallback.
 
-For each news row, one LLM call returns a structured ``ThematicEvent`` JSON
-object conforming to :data:`schema.EVENT_RESPONSE_SCHEMA`. Output is cached
-per-day at ``~/.alphalens/thematic_events/{YYYY-MM-DD}.parquet`` and joined to
-the source row via ``news_id``. Subsequent runs skip already-extracted IDs,
-so partial-day runs (e.g. after a rate-limit pause) resume cleanly.
+For each news row:
+  1. Pre-template entity resolution against the feed-tagged ticker set
+  2. ``TemplateEngine.match`` — if a YAML template matches, emit a typed
+     event (``extraction_method="template"``, ``template_id="..."``) and
+     SKIP the LLM call. Deterministic, free, replay-safe.
+  3. On no-match, fall back to the DeepSeek Flash LLM extract path
+     (``extraction_method="flash"``, ``template_id=None``).
 
-Cost envelope: ~200 items/day × DeepSeek v4-flash ~$0.00002/item ≈ $0.12/mo,
-~5× cheaper than the previous Gemini Flash baseline ($0.50/mo). Full saving
-analysis in ``docs/research/polygon_quota_6x_per_day_2026_05_30.md`` §Cost.
+Output is cached per-day at ``~/.alphalens/thematic_events/{YYYY-MM-DD}.parquet``
+and joined to the source row via ``news_id``. Subsequent runs skip already-
+extracted IDs, so partial-day runs (e.g. after a rate-limit pause) resume
+cleanly.
+
+Cost envelope: ~200 items/day × DeepSeek v4-flash ~$0.00002/item ≈ $0.12/mo
+when EVERY row hits Flash; template hits drive that proportionally lower as
+the library grows. Full saving analysis in
+``docs/research/polygon_quota_6x_per_day_2026_05_30.md`` §Cost.
+
+Legacy events parquets (pre-PR-2 schema) are backfilled on read with
+``extraction_method="flash"`` + ``template_id=None`` so the catalyst
+resolver + PR-3 brief generator can always rely on the new columns.
 
 **Module name kept as `gemini_flash.py`** for diff-locality on the LLM swap
 (PR-G). 11 call sites import the public surface (`extract_one`,
@@ -33,12 +45,99 @@ from alphalens_pipeline.thematic.extraction.schema import (
     normalize_extraction,
     parse_extraction,
 )
+from alphalens_pipeline.thematic.extraction.templates.engine import TemplateEngine
+from alphalens_pipeline.thematic.extraction.templates.entity_resolver import (
+    EntityResolver,
+)
+from alphalens_pipeline.thematic.extraction.templates.spec import (
+    Article,
+    TemplateEvent,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_NEWS_DIR = Path.home() / ".alphalens" / "thematic_news"
 DEFAULT_EVENTS_DIR = Path.home() / ".alphalens" / "thematic_events"
 DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
+
+# Path to the shipped template library — same resolution rule as
+# alphalens_cli.commands.templates.DEFAULT_TEMPLATES_DIR. Resolved at
+# module import so the engine loader runs once per process, not once
+# per article. The engine itself is lazy-initialised via
+# _get_default_engine to keep import time cheap.
+DEFAULT_TEMPLATES_DIR = Path(__file__).parent / "templates" / "templates"
+
+
+_default_engine: TemplateEngine | None = None
+_default_resolver: EntityResolver | None = None
+
+
+def _get_default_engine() -> TemplateEngine:
+    """Lazy-load the ship template library once per process.
+
+    Module-level singleton mirrors the convention already used by
+    ``data.alt_data.openrouter_client.get_default_openrouter_client`` —
+    keeps import time cheap (template YAMLs only read on first call) +
+    avoids passing the engine through every CLI command body.
+    """
+    global _default_engine  # noqa: PLW0603 — documented singleton pattern
+    if _default_engine is None:
+        _default_engine = TemplateEngine.from_dir(DEFAULT_TEMPLATES_DIR)
+    return _default_engine
+
+
+def _get_default_resolver() -> EntityResolver:
+    """Lazy-load the entity resolver once per process. See _get_default_engine."""
+    global _default_resolver  # noqa: PLW0603 — documented singleton pattern
+    if _default_resolver is None:
+        _default_resolver = EntityResolver()
+    return _default_resolver
+
+
+def _news_row_to_article(row: dict | pd.Series) -> Article:
+    """Adapt a unified-news row to the engine's Article dataclass."""
+    src = dict(row) if not isinstance(row, dict) else row
+    # ``row.get("tickers")`` returns a numpy array for list-typed parquet
+    # columns; bare ``or []`` raises "truth value ambiguous" on arrays.
+    raw_tickers = src.get("tickers")
+    tickers_list = list(raw_tickers) if raw_tickers is not None else []
+    return Article(
+        id=str(src.get("id", "")),
+        source=str(src.get("source", "")),
+        title=str(src.get("title", "")),
+        body=str(src.get("body", "")),
+        url=str(src.get("url", "")),
+        published_at=src.get("timestamp"),
+        tickers_raw=tickers_list,
+    )
+
+
+def _template_event_to_dict(
+    event: TemplateEvent,
+    *,
+    article: Article,
+) -> dict:
+    """Project a ``TemplateEvent`` into the same dict shape Flash returns.
+
+    The template path doesn't extract themes / sentiment / second-order
+    implications — those are LLM strengths. Defaults are empty lists +
+    "neutral" so downstream consumers (catalyst_resolver, theme mapper)
+    don't have to special-case the template branch. PR-3 brief generator
+    is what actually uses ``template_id`` to cite ``event.fields`` as
+    deterministic facts (see design memo §3 PR-3).
+    """
+    return {
+        "event_type": event.event_type,
+        "primary_entities": [e.ticker for e in event.entities.values()] or article.tickers_raw,
+        "themes": [],
+        "sentiment": "neutral",
+        "second_order_implications": [],
+        # 1.0 because a template match is deterministic — every predicate
+        # passed and every required role was filled. Distinct from Flash's
+        # self-reported confidence (which clamps to [0, 1] but rarely 1.0).
+        "confidence": 1.0,
+    }
+
 
 _PROMPT_TEMPLATE = """\
 You are an analyst extracting structured events from financial news.
@@ -126,15 +225,37 @@ def extract_one(
     api_key: str | None = None,
     llm_client: OpenRouterClient | None = None,
     model: str = DEFAULT_MODEL,
+    engine: TemplateEngine | None = None,
+    resolver: EntityResolver | None = None,
 ) -> dict | None:
-    """Run DeepSeek v4-flash on a single news row; return normalised event
-    dict or ``None``.
+    """Hybrid extract: template engine first, DeepSeek Flash on no-match.
 
     Pass ``llm_client=`` for tests or to hoist a single client across a
     batch (see ``extract_daily``). Pass ``api_key=`` for ad-hoc one-off use.
     Omit both to fall back to ``get_default_openrouter_client()`` which reads
     ``OPENROUTER_API_KEY`` once per process.
+
+    Pass ``engine=`` / ``resolver=`` to inject test doubles or share
+    instances across a batch. Defaults are lazily loaded once per process.
+
+    Returns a dict with the canonical Flash-shape keys
+    (``event_type, primary_entities, themes, sentiment,
+    second_order_implications, confidence``) plus the PR-2 audit columns
+    (``extraction_method, template_id``). ``None`` on both paths failing.
     """
+    # --- Template path (deterministic, free) ---
+    eng = engine if engine is not None else _get_default_engine()
+    res = resolver if resolver is not None else _get_default_resolver()
+    article = _news_row_to_article(news_row)
+    entities = res.resolve(article)
+    template_event = eng.match(article, entities)
+    if template_event is not None:
+        out = _template_event_to_dict(template_event, article=article)
+        out["extraction_method"] = "template"
+        out["template_id"] = template_event.template_id
+        return out
+
+    # --- Flash fallback (LLM, billable, non-deterministic) ---
     prompt = build_prompt(news_row)
     try:
         # Client init inside try so missing-key failures degrade
@@ -153,13 +274,34 @@ def extract_one(
     if parsed is None:
         logger.warning("LLM returned unparseable JSON: %r", raw[:200])
         return None
-    return normalize_extraction(parsed)
+    out = normalize_extraction(parsed)
+    out["extraction_method"] = "flash"
+    out["template_id"] = None
+    return out
 
 
 def _load_cached_events(events_path: Path) -> pd.DataFrame:
-    if events_path.exists():
-        return pd.read_parquet(events_path)
-    return pd.DataFrame()
+    if not events_path.exists():
+        return pd.DataFrame()
+    df = pd.read_parquet(events_path)
+    return _backfill_legacy_columns(df)
+
+
+def _backfill_legacy_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add the PR-2 audit columns to a legacy parquet with safe defaults.
+
+    Pre-PR-2 parquets only ever recorded the LLM path, so missing rows
+    default to ``extraction_method="flash"`` + ``template_id=None``. This
+    keeps the catalyst-resolver + brief generator's column access safe
+    across the schema bump without a one-shot migration script.
+    """
+    if df.empty:
+        return df
+    if "extraction_method" not in df.columns:
+        df = df.assign(extraction_method="flash")
+    if "template_id" not in df.columns:
+        df = df.assign(template_id=None)
+    return df
 
 
 def extract_daily(

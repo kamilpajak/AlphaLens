@@ -32,6 +32,13 @@ HOLDOUT_ALL_PREDICATES_FAILED = "all_predicates_failed"
 # wired in PR-1 with the final reason set (avoids a panel JSON edit
 # at PR-2 review time).
 HOLDOUT_LOW_CONFIDENCE_NO_TEMPLATE = "low_confidence_no_template"
+# Fires when a Flash event is dropped from the catalyst-resolver's working
+# set because a template event exists for the same (primary_entity_ticker,
+# event_type) within a 24h window (PR-2 precedence rule, design memo §1.1).
+# The Flash event is NOT deleted from the events parquet — only filtered
+# from the resolver pass so the "two truths" problem doesn't propagate to
+# brief generation.
+HOLDOUT_SUPERSEDED_BY_TEMPLATE = "superseded_by_template"
 
 ALL_HOLDOUT_REASONS: frozenset[str] = frozenset(
     {
@@ -39,6 +46,7 @@ ALL_HOLDOUT_REASONS: frozenset[str] = frozenset(
         HOLDOUT_ENTITY_UNRESOLVED,
         HOLDOUT_ALL_PREDICATES_FAILED,
         HOLDOUT_LOW_CONFIDENCE_NO_TEMPLATE,
+        HOLDOUT_SUPERSEDED_BY_TEMPLATE,
     }
 )
 
