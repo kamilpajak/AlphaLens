@@ -99,6 +99,26 @@ class TestPostDecision:
         )
         assert resp.status_code == 400
 
+    def test_dismiss_note_over_200_chars_returns_400(self, client, feedback_db):
+        # Server-side max_length mirrors the SPA's maxlength=200 so an
+        # oversized note is rejected symmetrically rather than persisted.
+        resp = _post_dismissed_wrong_theme(
+            client,
+            dismiss_category="other",
+            dismiss_reason="other",
+            dismiss_note="x" * 201,
+        )
+        assert resp.status_code == 400
+
+    def test_dismiss_note_at_200_chars_accepted(self, client, feedback_db):
+        resp = _post_dismissed_wrong_theme(
+            client,
+            dismiss_category="other",
+            dismiss_reason="other",
+            dismiss_note="x" * 200,
+        )
+        assert resp.status_code == 201
+
     def test_watching_action_accepted(self, client, feedback_db):
         resp = _post_interested(client, action="watching")
         assert resp.status_code == 201

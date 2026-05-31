@@ -27,7 +27,12 @@ class DecisionRequestSerializer(serializers.Serializer):
     action_at = serializers.DateTimeField(required=False, allow_null=True)
     dismiss_category = serializers.CharField(required=False, allow_null=True, max_length=30)
     dismiss_reason = serializers.CharField(required=False, allow_null=True, max_length=30)
-    dismiss_note = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    # max_length mirrors the SPA's <input maxlength="200"> so an oversized
+    # note is rejected server-side instead of silently persisted (zen
+    # pre-merge: SPA/server cap symmetry).
+    dismiss_note = serializers.CharField(
+        required=False, allow_null=True, allow_blank=True, max_length=200
+    )
     confidence_subjective = serializers.IntegerField(required=False, allow_null=True)
     paper_trade_plan_id = serializers.CharField(required=False, allow_null=True, max_length=64)
     position_size_usd = serializers.FloatField(required=False, allow_null=True)
