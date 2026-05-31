@@ -29,18 +29,35 @@ groups:
       # update lagged by the scrape interval cannot flap the alert.
       # ---------------------------------------------------------------
 
-      # Each staleness rule pairs the threshold check with an
-      # ``absent()`` guard so the alert ALSO fires when the textfile
-      # metric is missing entirely (fresh VPS that never ran the job,
-      # textfile-collector misconfigured, node_exporter unable to
-      # read the dir). Without the guard, a missing series silently
-      # disables the alert — the worst class of monitoring blind spot.
-      # Zen pre-merge review of PR #312 pinned this defence.
+      # Two paired alerts per job, deliberately split (2026-05-31):
+      #
+      #   * AlphalensJobStale         — fires when the metric EXISTS but
+      #     is older than ~2× its cadence. Reports the real staleness
+      #     duration via ``humanizeDuration``.
+      #   * AlphalensJobMetricMissing — fires when the series is ABSENT
+      #     (fresh VPS that never ran the job, textfile-collector
+      #     misconfigured, node_exporter unable to read the dir).
+      #     Without this guard a missing series silently disables the
+      #     staleness alert — the worst class of monitoring blind spot.
+      #     Zen pre-merge review of PR #312 pinned the guard.
+      #
+      # They were a single ``(threshold) or absent()`` rule until a
+      # missing metric produced a self-contradictory page: ``absent()``
+      # fires with the literal value 1, so the shared
+      # ``humanizeDuration`` annotation rendered "stale > 70 days / last
+      # run 1s ago" (real incident: monthly job before its first VPS
+      # run, 2026-05-31). Splitting lets each failure mode carry an
+      # honest, distinct message.
+      #
+      # Note on grouping: ``absent(metric{job="X"})`` propagates the
+      # equality matcher ``job="X"`` onto its 1-element output (only
+      # regex matchers get dropped), so the MetricMissing alerts still
+      # carry the ``job`` label and group per-job under Alertmanager's
+      # ``group_by: [alertname, job]``. Do not "fix" this by adding a
+      # label_replace — it is not missing.
 
       - alert: AlphalensJobStale
-        expr: |
-          (time() - alphalens_job_last_success_timestamp_seconds{job="edgar-detect"} > 1800)
-          or absent(alphalens_job_last_success_timestamp_seconds{job="edgar-detect"})
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="edgar-detect"} > 1800
         for: 5m
         labels:
           severity: warning
@@ -48,12 +65,21 @@ groups:
           unit: edgar-detect
         annotations:
           summary: "edgar-detect stale > 30 min (expected 15-min cadence)"
-          description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
+          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="edgar-detect"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: edgar-detect
+        annotations:
+          summary: "edgar-detect success metric missing"
+          description: "No success metric for edgar-detect. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
 
       - alert: AlphalensJobStale
-        expr: |
-          (time() - alphalens_job_last_success_timestamp_seconds{job="literature-scan-weekly"} > 1209600)
-          or absent(alphalens_job_last_success_timestamp_seconds{job="literature-scan-weekly"})
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="literature-scan-weekly"} > 1209600
         for: 5m
         labels:
           severity: warning
@@ -61,12 +87,21 @@ groups:
           unit: literature-scan-weekly
         annotations:
           summary: "literature-scan-weekly stale > 14 days (expected 7-day cadence)"
-          description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
+          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="literature-scan-weekly"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: literature-scan-weekly
+        annotations:
+          summary: "literature-scan-weekly success metric missing"
+          description: "No success metric for literature-scan-weekly. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
 
       - alert: AlphalensJobStale
-        expr: |
-          (time() - alphalens_job_last_success_timestamp_seconds{job="literature-scan-monthly"} > 6048000)
-          or absent(alphalens_job_last_success_timestamp_seconds{job="literature-scan-monthly"})
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="literature-scan-monthly"} > 6048000
         for: 5m
         labels:
           severity: warning
@@ -74,12 +109,21 @@ groups:
           unit: literature-scan-monthly
         annotations:
           summary: "literature-scan-monthly stale > 70 days (expected 30-day cadence)"
-          description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
+          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="literature-scan-monthly"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: literature-scan-monthly
+        annotations:
+          summary: "literature-scan-monthly success metric missing"
+          description: "No success metric for literature-scan-monthly. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
 
       - alert: AlphalensJobStale
-        expr: |
-          (time() - alphalens_job_last_success_timestamp_seconds{job="av-earnings-backfill"} > 172800)
-          or absent(alphalens_job_last_success_timestamp_seconds{job="av-earnings-backfill"})
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="av-earnings-backfill"} > 172800
         for: 5m
         labels:
           severity: warning
@@ -87,21 +131,30 @@ groups:
           unit: av-earnings-backfill
         annotations:
           summary: "av-earnings-backfill stale > 48h (expected daily cadence)"
-          description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
+          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="av-earnings-backfill"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: av-earnings-backfill
+        annotations:
+          summary: "av-earnings-backfill success metric missing"
+          description: "No success metric for av-earnings-backfill. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
 
       # thematic-build moved from 1×/day → 6×/day (every 4h at HH:30
-       # UTC) in PR-F (epic #295, issue #300). 43200s = 12h = 3× the
-       # 4h interval — DELIBERATELY asymmetric vs the other 4 services
-       # which use 2× cadence. Justification: a thematic run is
-       # 15-20 min wall time and each Gemini Pro/Flash stage can take
-       # 5-10 min of API latency on its own. A 2× threshold (8h) would
-       # page on one transient Gemini RPM blip; 3× gives one missed
-       # slot's worth of slack while still surfacing two consecutive
-       # misses within half a day. Pinned by PR-F zen pre-merge review.
+      # UTC) in PR-F (epic #295, issue #300). 43200s = 12h = 3× the
+      # 4h interval — DELIBERATELY asymmetric vs the other 4 services
+      # which use 2× cadence. Justification: a thematic run is
+      # 15-20 min wall time and each Gemini Pro/Flash stage can take
+      # 5-10 min of API latency on its own. A 2× threshold (8h) would
+      # page on one transient Gemini RPM blip; 3× gives one missed
+      # slot's worth of slack while still surfacing two consecutive
+      # misses within half a day. Pinned by PR-F zen pre-merge review.
       - alert: AlphalensJobStale
-        expr: |
-          (time() - alphalens_job_last_success_timestamp_seconds{job="thematic-build"} > 43200)
-          or absent(alphalens_job_last_success_timestamp_seconds{job="thematic-build"})
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="thematic-build"} > 43200
         for: 5m
         labels:
           severity: warning
@@ -109,7 +162,18 @@ groups:
           unit: thematic-build
         annotations:
           summary: "thematic-build stale > 12h (expected 4h cadence)"
-          description: "Last successful run was {{ $value | humanizeDuration }} ago, or metric is missing."
+          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="thematic-build"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-build
+        annotations:
+          summary: "thematic-build success metric missing"
+          description: "No success metric for thematic-build. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
 
       # ---------------------------------------------------------------
       # Failure — fires on any non-zero exit. Hard fail, immediate

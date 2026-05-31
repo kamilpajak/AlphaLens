@@ -170,27 +170,117 @@ class TestPrometheusRulesYaml(unittest.TestCase):
                 f"Staleness threshold drift for {job!r}: want {want}s, got {found.get(job)}s.",
             )
 
-    def test_staleness_rules_pair_absent_guard(self) -> None:
-        # Per-job staleness rules MUST pair the > threshold with an
-        # ``absent()`` guard for the same metric+job. Without the
-        # guard, a missing series (fresh VPS, textfile-collector
-        # misconfigured, node_exporter scrape failure) silently
-        # disables the alert — the worst class of monitoring blind
-        # spot. Zen pre-merge review of PR #312 pinned this defence.
+    def test_stale_rules_are_threshold_only(self) -> None:
+        # The ``absent()`` guard used to be OR-ed into every
+        # ``AlphalensJobStale`` rule. That conflated two distinct
+        # failure modes into one alert: when the metric was missing,
+        # ``absent()`` returns the literal value ``1`` and the shared
+        # ``humanizeDuration`` annotation rendered a self-contradictory
+        # "stale > 70 days / last run 1s ago" message (real incident
+        # 2026-05-31, monthly job before its first VPS run). The guard
+        # now lives in a dedicated ``AlphalensJobMetricMissing`` alert,
+        # so ``AlphalensJobStale`` must be threshold-only.
         rules = _load_rules()["groups"][0]["rules"]
         for rule in rules:
             if rule.get("alert") != "AlphalensJobStale":
                 continue
+            self.assertNotIn(
+                "absent(",
+                rule["expr"],
+                "AlphalensJobStale must be threshold-only; the absent() guard "
+                "belongs in the paired AlphalensJobMetricMissing alert.",
+            )
+
+    def test_every_active_job_has_a_metric_missing_rule(self) -> None:
+        # The ``absent()`` guard (zen-pinned in PR #312) must still
+        # cover every job: a missing series (fresh VPS, textfile
+        # collector misconfigured, node_exporter scrape failure)
+        # silently disabling the staleness alert is the worst class of
+        # monitoring blind spot. After the split (2026-05-31) the guard
+        # lives in a dedicated per-job AlphalensJobMetricMissing alert.
+        rules = _load_rules()["groups"][0]["rules"]
+        missing_rule_jobs = set()
+        for rule in rules:
+            if rule.get("alert") != "AlphalensJobMetricMissing":
+                continue
             expr = rule["expr"]
             job_match = re.search(r'job="([^"]+)"', expr)
-            self.assertIsNotNone(job_match, f"Stale rule missing job filter: {expr!r}")
+            self.assertIsNotNone(job_match, f"Missing-metric rule lacks job filter: {expr!r}")
             assert job_match is not None
             job = job_match.group(1)
             self.assertIn(
                 f'absent(alphalens_job_last_success_timestamp_seconds{{job="{job}"}})',
                 expr,
-                f"Staleness rule for {job!r} must include `absent(...)` guard.",
+                f"AlphalensJobMetricMissing rule for {job!r} must wrap absent(...).",
             )
+            missing_rule_jobs.add(job)
+
+        gaps = set(ACTIVE_JOBS) - missing_rule_jobs
+        self.assertEqual(
+            gaps,
+            set(),
+            f"Missing AlphalensJobMetricMissing rule for: {sorted(gaps)}.",
+        )
+
+    def test_metric_missing_rules_carry_unit_label(self) -> None:
+        # Same promtool duplicate-rule constraint as the stale rules:
+        # all 5 share the alertname + {severity, route} block, so each
+        # needs a distinguishing unit: <job> static label matching its
+        # expr filter.
+        rules = _load_rules()["groups"][0]["rules"]
+        for rule in rules:
+            if rule.get("alert") != "AlphalensJobMetricMissing":
+                continue
+            job_match = re.search(r'job="([^"]+)"', rule["expr"])
+            self.assertIsNotNone(job_match, f"Missing-metric rule lacks job: {rule['expr']!r}")
+            assert job_match is not None
+            job = job_match.group(1)
+            self.assertEqual(
+                rule.get("labels", {}).get("unit"),
+                job,
+                f"AlphalensJobMetricMissing rule for {job!r} must carry unit: {job}.",
+            )
+
+    def test_missing_rules_have_distinct_static_label_sets(self) -> None:
+        # promtool rejects two rules sharing an identical alertname AND
+        # static-label set. Assert the 5 AlphalensJobMetricMissing label
+        # blocks are pairwise distinct (via the unit label).
+        rules = _load_rules()["groups"][0]["rules"]
+        label_sets = [
+            frozenset(rule.get("labels", {}).items())
+            for rule in rules
+            if rule.get("alert") == "AlphalensJobMetricMissing"
+        ]
+        self.assertEqual(len(label_sets), 5)
+        self.assertEqual(len(set(label_sets)), len(label_sets))
+
+    def test_missing_metric_message_claims_no_duration(self) -> None:
+        # The whole point of the split: a missing-metric alert must NOT
+        # render a duration. ``absent()`` fires with value 1, so any
+        # ``humanizeDuration`` in its annotation would print the
+        # misleading "1s ago". Conversely, the stale alert MUST keep
+        # ``humanizeDuration`` (the real staleness duration is the
+        # actionable signal there).
+        rules = _load_rules()["groups"][0]["rules"]
+        for rule in rules:
+            ann = rule.get("annotations", {})
+            if rule.get("alert") == "AlphalensJobMetricMissing":
+                # Check each field independently — a duration token
+                # smuggled into either summary or description would be
+                # wrong, so don't let concatenation mask a single field.
+                for field in ("summary", "description"):
+                    self.assertNotIn(
+                        "humanizeDuration",
+                        ann.get(field, ""),
+                        f"Missing-metric alert {field} must not render a "
+                        "duration (absent() value is 1 -> misleading '1s ago').",
+                    )
+            elif rule.get("alert") == "AlphalensJobStale":
+                self.assertIn(
+                    "humanizeDuration",
+                    ann.get("description", ""),
+                    "Stale alert must report the real staleness duration.",
+                )
 
     def test_no_counter_functions_on_gauge_metrics(self) -> None:
         # Zen pre-merge review of PR #312 caught ``increase()`` on
