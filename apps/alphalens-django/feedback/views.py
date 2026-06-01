@@ -13,11 +13,12 @@ cross-field validation rules live in ``Decision.__post_init__``
 (pipeline package) so the SPA, the Telegram bot (deferred), and any
 future CLI all hit the same invariants.
 
-VIX market regime stamping uses ``regime.classify_vix`` with a
-``None`` input until a server-side VIX cache lands (deferred to v2 per
-locked memo Q6). The row is still persisted; ``market_regime_at_entry``
-stamps as ``"unknown"`` so we never block a decision on a missing
-regime stamp.
+VIX market regime stamping reads a server-side VIX cache (v2 PR-2) via
+``regime.get_cached_vix`` — ONE local file read, zero network on the POST
+hot path. A missing / stale / unreadable cache returns ``None`` so
+``classify_vix`` stamps ``"unknown"`` and the decision row is never blocked
+on a regime stamp. The cache is refreshed out-of-band by
+``alphalens cache refresh-vix`` on the daily thematic build.
 """
 
 from __future__ import annotations
@@ -106,10 +107,10 @@ class DecisionsView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        # `unknown` until the server-side VIX cache lands (memo Q6 / v2).
-        # Better to lose the regime stamp than block a user decision on
-        # a network blip in the hot path.
-        regime_label = regime.classify_vix(None)
+        # Read the server-side VIX cache (v2 PR-2): one local file read, no
+        # network. A miss / stale / unreadable cache -> None -> "unknown", so
+        # a dead refresher or a network blip never blocks a user decision.
+        regime_label = regime.classify_vix(regime.get_cached_vix(settings.ALPHALENS_VIX_CACHE))
 
         try:
             decision = Decision(

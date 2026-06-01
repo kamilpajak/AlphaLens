@@ -23,7 +23,10 @@ All three AlphaLens systemd units load secrets via
 `EnvironmentFile=/etc/alphalens/env`:
 - `alphalens-thematic-build.service` — `GOOGLE_API_KEY`, `POLYGON_API_KEY`,
   `PERPLEXITY_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
-  `ALPHA_VANTAGE_API_KEY`, `SEC_EDGAR_USER_AGENT`
+  `ALPHA_VANTAGE_API_KEY`, `SEC_EDGAR_USER_AGENT`, **plus `FRED_API_KEY`**
+  (the `cache refresh-vix` step at the end of `run_thematic_day.sh` pulls
+  VIXCLS so the feedback POST path can stamp a real market regime; the step
+  is best-effort, so a missing key only degrades regime stamps to "unknown")
 - `alphalens-av-earnings-backfill.service` — `ALPHA_VANTAGE_API_KEY`
 - `alphalens-form4-backfill.service` — `SEC_EDGAR_USER_AGENT`
 - `alphalens-edgar-detect.service` — `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
