@@ -120,6 +120,12 @@ def _shrink(cell_val: float | None, pool_val: float | None, n_eff: int, k: float
         return None
     if not _finite(pool_val):
         return cell_val
+    if n_eff <= 0 or k <= 0:
+        # Degenerate shrinkage (no backing sample or non-positive K) → no shrink,
+        # keep the cell value. Cannot occur under the shipped defaults (K=20 and a
+        # finite cell stat implies n_eff>0); defensive against a custom caller and
+        # guards the n_eff/(n_eff+k) divide.
+        return cell_val
     w = n_eff / (n_eff + k)
     return w * cell_val + (1.0 - w) * pool_val
 
