@@ -76,7 +76,8 @@ class TestPostdeployCheckPathsParity(unittest.TestCase):
 
     def test_positive_control_extra_path_is_detected(self) -> None:
         # A fabricated divergence MUST be flagged, or the parity check is a no-op.
-        script = _script_paths() | {"deploy/ghost/path"}
+        # Sentinel is deliberately impossible as a real trigger path.
+        script = _script_paths() | {"__never_a_django_trigger_path__"}
         self.assertNotEqual(
             script, _workflow_trigger_paths(), "positive control: divergence not detected"
         )

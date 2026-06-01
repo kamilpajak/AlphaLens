@@ -71,32 +71,48 @@ else
 fi
 
 echo "== Check 2/3: running Django image == current main django build =="
-git -C "$REPO" fetch -q origin main 2>/dev/null || warn "git fetch origin main failed — using local refs (may be stale)"
-REF="origin/main"
-git -C "$REPO" rev-parse --verify --quiet "$REF" >/dev/null 2>&1 || REF="HEAD"
-EXPECTED_SHA="$(git -C "$REPO" log -1 --format=%H "$REF" -- "${DJANGO_TRIGGER_PATHS[@]}" 2>/dev/null)"
-SHORT="$(git -C "$REPO" rev-parse --short "$EXPECTED_SHA" 2>/dev/null)"
-RUN_REV="$(docker inspect "$CONTAINER" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)"
-if [ -z "$EXPECTED_SHA" ]; then
-  bad "could not resolve the expected django commit from $REF — bad repo path?"
-elif [ "$RUN_REV" = "$EXPECTED_SHA" ]; then
-  ok "running image revision matches latest main django build (sha-$SHORT)"
+# Resolve the EXPECTED commit from origin/main. A fetch failure or a missing
+# origin/main is a HARD FAIL — NOT a fall-back to local HEAD: if HEAD is behind
+# origin/main, the wrong EXPECTED_SHA could match an old container and silently
+# PASS a real image drift (false-pass is worse than false-fail for a gate).
+EXPECTED_SHA=""
+SHORT=""
+if ! git -C "$REPO" fetch -q origin main 2>/dev/null; then
+  bad "git fetch origin main failed — cannot resolve the expected image commit (network/remote?); image-drift check skipped"
+elif ! git -C "$REPO" rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+  bad "origin/main missing after fetch — cannot resolve the expected image commit; image-drift check skipped"
 else
-  bad "running revision '${RUN_REV:-<none>}' != expected '$EXPECTED_SHA' (sha-$SHORT) — VPS has not pulled the current main image: 'docker compose pull && docker compose up -d'"
+  EXPECTED_SHA="$(git -C "$REPO" log -1 --format=%H origin/main -- "${DJANGO_TRIGGER_PATHS[@]}" 2>/dev/null)"
+  SHORT="$(git -C "$REPO" rev-parse --short "$EXPECTED_SHA" 2>/dev/null)"
+  if [ -z "$EXPECTED_SHA" ] || [ -z "$SHORT" ]; then
+    bad "could not resolve a django build commit on origin/main from the trigger paths"
+    EXPECTED_SHA=""
+  fi
 fi
-# Registry cross-check (best-effort). RepoDigest is the pullable digest; .Image
-# is the LOCAL config-blob id and must NOT be compared to the registry.
-RUN_IMGID="$(docker inspect "$CONTAINER" --format '{{.Image}}' 2>/dev/null)"
-RUN_DIGEST="$(docker image inspect "$RUN_IMGID" --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' 2>/dev/null | sed 's/.*@//')"
-EXP_DIGEST="$(docker buildx imagetools inspect "$IMAGE:sha-$SHORT" 2>/dev/null | awk '/^Digest:/{print $2; exit}')"
-if [ -z "$EXP_DIGEST" ]; then
-  warn "could not resolve GHCR digest for $IMAGE:sha-$SHORT (registry unreachable or image not built) — relied on the revision-label check above"
-elif [ -z "$RUN_DIGEST" ]; then
-  warn "running image has no RepoDigest (built locally, never pulled?) — relied on the revision-label check above"
-elif [ "$RUN_DIGEST" = "$EXP_DIGEST" ]; then
-  ok "running image digest matches GHCR sha-$SHORT"
-else
-  bad "running digest $RUN_DIGEST != GHCR $EXP_DIGEST for sha-$SHORT"
+
+if [ -n "$EXPECTED_SHA" ]; then
+  RUN_REV="$(docker inspect "$CONTAINER" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)"
+  if [ "$RUN_REV" = "$EXPECTED_SHA" ]; then
+    ok "running image revision matches latest main django build (sha-$SHORT)"
+  else
+    bad "running revision '${RUN_REV:-<none>}' != expected '$EXPECTED_SHA' (sha-$SHORT) — VPS has not pulled the current main image: 'docker compose pull && docker compose up -d'"
+  fi
+  # Registry cross-check (best-effort). RepoDigest is the pullable digest; .Image
+  # is the LOCAL config-blob id and must NOT be compared to the registry. A
+  # registry blip degrades to WARN — the revision-label check above is the
+  # registry-free authority that already FAILs on real drift.
+  RUN_IMGID="$(docker inspect "$CONTAINER" --format '{{.Image}}' 2>/dev/null)"
+  RUN_DIGEST="$(docker image inspect "$RUN_IMGID" --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' 2>/dev/null | sed 's/.*@//')"
+  EXP_DIGEST="$(docker buildx imagetools inspect "$IMAGE:sha-$SHORT" 2>/dev/null | awk '/^Digest:/{print $2; exit}')"
+  if [ -z "$EXP_DIGEST" ]; then
+    warn "could not resolve GHCR digest for $IMAGE:sha-$SHORT (registry unreachable or image not built) — relied on the revision-label check above"
+  elif [ -z "$RUN_DIGEST" ]; then
+    warn "running image has no RepoDigest (built locally, never pulled?) — relied on the revision-label check above"
+  elif [ "$RUN_DIGEST" = "$EXP_DIGEST" ]; then
+    ok "running image digest matches GHCR sha-$SHORT"
+  else
+    bad "running digest $RUN_DIGEST != GHCR $EXP_DIGEST for sha-$SHORT"
+  fi
 fi
 
 if [ "${1:-}" = "--with-migrate" ]; then
