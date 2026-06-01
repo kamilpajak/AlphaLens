@@ -406,6 +406,96 @@ class TestOutcomeColumnsSchema(unittest.TestCase):
                 self.assertIsNone(fb.get("g1-1").realized_return)
 
 
+def _normalized_table_info(conn) -> dict[str, tuple]:
+    """Map each ``decisions`` column → (type, notnull, dflt_value, pk).
+
+    Keyed by name (NOT cid) because the contract is an identical column SET +
+    per-column type/nullability, not a positional order — the store reads/writes
+    by name, so order is immaterial. CHECK / UNIQUE constraints are not in
+    ``PRAGMA table_info`` and are intentionally out of scope here.
+    """
+    return {
+        row[1]: (row[2], row[3], row[4], row[5])
+        for row in conn.execute("PRAGMA table_info(decisions)")
+    }
+
+
+class TestMigrationStateConvergence(unittest.TestCase):
+    """L2 contract (test-strategy Phase 2): a fresh-v2 DB and a DB upgraded
+    from an older schema MUST converge to an identical ``decisions`` table.
+
+    Pins the #351 seam — the ``ALTER TABLE`` migration path and the
+    ``CREATE TABLE`` fresh path are two separate schema definitions that can
+    drift. The existing ``TestOutcomeColumnsSchema`` checks each path in
+    isolation; this asserts the two AGREE, with a positive control proving the
+    convergence assertion bites.
+    """
+
+    def _open_fresh(self, td: str) -> dict[str, tuple]:
+        path = Path(td) / "fresh.db"
+        with FeedbackStore.open(path) as fb:
+            return _normalized_table_info(fb.conn)
+
+    def _open_upgraded(self, td: str, base_ddl: str, *, user_version: int) -> dict[str, tuple]:
+        import sqlite3
+
+        path = Path(td) / "upgraded.db"
+        raw = sqlite3.connect(str(path))
+        raw.executescript(base_ddl)
+        raw.execute(f"PRAGMA user_version = {user_version}")
+        raw.commit()
+        raw.close()
+        with FeedbackStore.open(path) as fb:
+            return _normalized_table_info(fb.conn)
+
+    def test_fresh_v2_and_upgraded_v1_table_info_identical(self):
+        with tempfile.TemporaryDirectory() as td:
+            fresh = self._open_fresh(td)
+            upgraded = self._open_upgraded(td, _V1_DECISIONS_DDL, user_version=0)
+        self.assertEqual(
+            set(fresh), set(upgraded), "fresh-v2 and upgraded-v1 have different column SETS"
+        )
+        for col in fresh:
+            self.assertEqual(
+                fresh[col], upgraded[col], f"column {col!r} diverges (type/notnull/default/pk)"
+            )
+
+    def test_fresh_v2_and_upgraded_gen1_table_info_identical(self):
+        # gen-1 carries ``realized_pnl``; the rename to ``realized_return`` must
+        # bring it into line with the fresh column set (no leftover, no dupe).
+        with tempfile.TemporaryDirectory() as td:
+            fresh = self._open_fresh(td)
+            upgraded = self._open_upgraded(td, _GEN1_DECISIONS_DDL, user_version=1)
+        self.assertEqual(set(fresh), set(upgraded))
+        self.assertNotIn("realized_pnl", upgraded)
+        self.assertIn("realized_return", upgraded)
+        for col in fresh:
+            self.assertEqual(fresh[col], upgraded[col], f"column {col!r} diverges")
+
+    def test_divergent_migration_is_caught(self):
+        # positive control: simulate a broken migration that forgets one outcome
+        # column (exit_kind). The convergence assertion above MUST be able to
+        # flag this — otherwise it asserts nothing.
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as td:
+            fresh = self._open_fresh(td)
+
+            broken_path = Path(td) / "broken.db"
+            raw = sqlite3.connect(str(broken_path))
+            raw.executescript(_V1_DECISIONS_DDL)
+            # Apply every outcome column EXCEPT exit_kind (the simulated bug).
+            for name in _OUTCOME_COLUMN_NAMES - {"exit_kind"}:
+                raw.execute(f"ALTER TABLE decisions ADD COLUMN {name} TEXT")
+            raw.commit()
+            broken = _normalized_table_info(raw)
+            raw.close()
+
+        self.assertIn("exit_kind", fresh)
+        self.assertNotIn("exit_kind", broken)
+        self.assertNotEqual(set(fresh), set(broken))
+
+
 class TestOutcomeRoundTrip(unittest.TestCase):
     """Outcome fields default to None and survive a round-trip."""
 
