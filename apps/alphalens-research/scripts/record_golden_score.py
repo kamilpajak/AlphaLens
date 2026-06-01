@@ -55,6 +55,9 @@ _ALPHALENS = Path.home() / ".alphalens"
 
 
 def _json_default(obj):
+    # NaN/inf round-trip natively via json's allow_nan (write "NaN", read back
+    # float('nan')) — preserved deliberately for fidelity, not coerced to null.
+    # This default only fires for non-float types (numpy scalars/arrays).
     if isinstance(obj, np.floating):
         return float(obj)
     if isinstance(obj, np.integer):
@@ -89,11 +92,15 @@ def main() -> None:
     )
     cand.to_parquet(_FIXTURES / "candidates.parquet", index=False)
 
-    # Reuse the brief OHLCV (same tickers/asof) + map catalyst window.
+    # Reuse the brief OHLCV (same tickers/asof) + map catalyst window. Fail
+    # loud on a missing OHLCV fixture: a silent skip would feed the scorer an
+    # empty frame and freeze a non-reproducible golden (the replay couldn't
+    # tell "missing file" from "empty data").
     for t in SLICE_TICKERS:
         src = _BRIEF / "ohlcv" / f"{t}_{ASOF.isoformat()}.parquet"
-        if src.exists():
-            shutil.copyfile(src, ohlcv_dir / src.name)
+        if not src.exists():
+            raise SystemExit(f"OHLCV fixture missing for {t} ({src}) — record_golden_brief first?")
+        shutil.copyfile(src, ohlcv_dir / src.name)
     for area, dest in (("events", events_dir), ("news", news_dir)):
         for p in (_MAP / area).glob("*.parquet"):
             shutil.copyfile(p, dest / p.name)
