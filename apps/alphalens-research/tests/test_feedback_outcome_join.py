@@ -200,6 +200,34 @@ class TestOutcomeJoin(unittest.TestCase):
         self.assertEqual(report.n_plans, 0)
         self.assertIsNone(self._fetch(row_id).fill_status)
 
+    def test_ticker_case_insensitive_match(self):
+        # Decisions are stored uppercase; a plan persisted with a lowercase
+        # ticker must still join (zen pre-merge: ticker-casing miss).
+        row_id = _seed_decision(self.fb_path, ticker="NVDA")
+        _seed_plan(self.ledger_path, ticker="nvda", exit_kind="TP_HIT")
+        report = self._join()
+        self.assertEqual(report.n_matched, 1)
+        self.assertEqual(self._fetch(row_id).fill_status, "FILLED")
+
+    def test_unmapped_exit_kind_is_skipped_not_fatal(self):
+        # A future paper exit_kind not yet in the fill-status map must skip
+        # the decision (with a warning), not KeyError-halt mid-sweep and
+        # leave the day partially joined (zen pre-merge MEDIUM).
+        from unittest import mock
+
+        from alphalens_pipeline.feedback import outcome_join as oj
+
+        row_id = _seed_decision(self.fb_path)
+        _seed_plan(self.ledger_path, exit_kind="TP_HIT")
+        # Simulate TP_HIT being absent from the map (stand-in for a new kind).
+        patched = {k: v for k, v in oj._EXIT_KIND_TO_FILL_STATUS.items() if k != "TP_HIT"}
+        with mock.patch.object(oj, "_EXIT_KIND_TO_FILL_STATUS", patched):
+            with self.assertLogs("alphalens_pipeline.feedback.outcome_join", level="WARNING") as cm:
+                report = self._join()
+        self.assertEqual(report.n_matched, 0)
+        self.assertTrue(any("unmapped exit_kind" in m for m in cm.output))
+        self.assertIsNone(self._fetch(row_id).fill_status)
+
     def test_warns_when_decisions_exist_but_no_plans(self):
         # Misconfigured account / dead paper chain = all-NULL outcomes with
         # zero error. Surface a WARNING rather than failing silently.

@@ -100,7 +100,10 @@ def join_decision_outcomes(
             outcome = paper_ledger.fetch_outcome_for_plan(conn, plan["plan_id"])
             if outcome is None:
                 continue  # plan still open — leave the decision NULL for now
-            ticker_to_outcome[plan["ticker"]] = (plan["plan_id"], outcome["exit_kind"])
+            # Normalise ticker case: decisions are stored uppercase (Django
+            # forces ``.upper()`` on POST) but the planner persists the ticker
+            # verbatim, so match case-insensitively to avoid a silent miss.
+            ticker_to_outcome[plan["ticker"].upper()] = (plan["plan_id"], outcome["exit_kind"])
 
     # 2. Stamp each decision whose ticker has a matured outcome.
     n_matched = 0
@@ -108,13 +111,26 @@ def join_decision_outcomes(
         decisions = fb.list_by_brief_date(brief_date)
         n_decisions = len(decisions)
         for decision in decisions:
-            match = ticker_to_outcome.get(decision.ticker)
+            match = ticker_to_outcome.get(decision.ticker.upper())
             if match is None:
                 continue
             plan_id, exit_kind = match
+            fill_status = _EXIT_KIND_TO_FILL_STATUS.get(exit_kind)
+            if fill_status is None:
+                # Defensive against a future paper-reconciler exit kind not yet
+                # mapped here: skip + warn rather than KeyError-halt mid-sweep
+                # (which would leave the day partially joined).
+                logger.warning(
+                    "outcome-join: unmapped exit_kind=%r (plan_id=%s) — "
+                    "skipping decision %s; extend _EXIT_KIND_TO_FILL_STATUS.",
+                    exit_kind,
+                    plan_id,
+                    decision.id,
+                )
+                continue
             fb.stamp_outcome(
                 decision.id,
-                fill_status=_EXIT_KIND_TO_FILL_STATUS[exit_kind],
+                fill_status=fill_status,
                 exit_kind=exit_kind,
                 outcome_plan_id=str(plan_id),
                 outcome_computed_at=now,
