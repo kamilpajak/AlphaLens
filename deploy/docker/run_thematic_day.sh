@@ -50,6 +50,12 @@ alphalens thematic brief
 # feedback POST path degrades to a "unknown" regime stamp if this cache goes
 # stale, so `|| true` under `set -e` keeps a transient FRED error non-fatal.
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] cache refresh-vix"
-alphalens cache refresh-vix || echo "WARN: vix refresh failed; regime stamps degrade to unknown"
+# Warn to stderr so the failure is visible in journald (StandardError=journal)
+# even though the step is non-fatal. A persistently dead refresher ages the
+# cache past 96h and the feedback POST path degrades to "unknown" — a
+# Prometheus staleness alert on the cache's fetched_at is a tracked follow-up
+# (live alert rules are hand-synced on the VPS, outside this repo).
+alphalens cache refresh-vix \
+    || echo "WARN: vix refresh failed; regime stamps degrade to unknown" >&2
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] DONE"

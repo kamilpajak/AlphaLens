@@ -61,11 +61,13 @@ def get_cached_vix(
     decision row is never blocked on a regime stamp).
     """
     path = Path(cache_path) if cache_path is not None else default_vix_cache_path()
+    # Resolve `now` BEFORE the read so the staleness window is measured from a
+    # single timestamp, not one that drifts past the (tiny) file read.
+    now = now or dt.datetime.now(dt.UTC)
     try:
         payload = json.loads(path.read_text())
         fetched_at = dt.datetime.fromisoformat(payload["fetched_at"])
         vix = float(payload["vix"])
-        now = now or dt.datetime.now(dt.UTC)
         if (now - fetched_at).total_seconds() > _VIX_MAX_AGE_SECONDS:
             logger.warning(
                 "VIX cache at %s is stale (fetched_at=%s) — stamping unknown.",

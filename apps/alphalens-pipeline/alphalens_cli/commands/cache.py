@@ -74,6 +74,9 @@ def refresh_vix_cache(
     now = now or dt.datetime.now(dt.UTC)
     path = Path(cache_path) if cache_path is not None else default_vix_cache_path()
 
+    # ``dropna()`` removes FRED's missing-observation rows; the empty-check
+    # then guarantees the series has at least one real value, so the last
+    # element is a non-NaN float by construction (no extra NaN guard needed).
     series = fetch().dropna()
     if series.empty:
         raise ValueError(f"FRED returned no usable {_VIX_SERIES} observations")

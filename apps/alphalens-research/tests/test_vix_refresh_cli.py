@@ -66,6 +66,14 @@ class TestRefreshVixCache(unittest.TestCase):
         self.assertEqual(regime.get_cached_vix(self.path, now=_NOW), 22.0)
         self.assertEqual(regime.classify_vix(regime.get_cached_vix(self.path, now=_NOW)), "mid")
 
+    def test_written_cache_is_stale_after_96h(self):
+        # Round-trip the writer + reader across the staleness boundary: a cache
+        # written now reads back None once 96h have elapsed (-> "unknown").
+        series = _series([("2026-05-29", 22.0)])
+        cache_cmd.refresh_vix_cache(self.path, fred_fetch=lambda: series, now=_NOW)
+        stale_now = _NOW + dt.timedelta(seconds=96 * 3600 + 1)
+        self.assertIsNone(regime.get_cached_vix(self.path, now=stale_now))
+
     def test_atomic_write_leaves_no_tmp_file(self):
         series = _series([("2026-05-29", 18.0)])
         cache_cmd.refresh_vix_cache(self.path, fred_fetch=lambda: series, now=_NOW)
