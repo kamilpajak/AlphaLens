@@ -183,6 +183,86 @@ class TestSchemaTolerance:
 
 
 @pytest.mark.django_db
+class TestTemplateFactsRoundTrip:
+    """L2 contract (test-strategy Phase 2): the typed template_facts seam.
+
+    Producer: ``thematic.argumentation.orchestrator`` serialises the dict via
+    ``json.dumps(..., sort_keys=True)`` into the parquet column
+    ``brief_template_facts_json``. Consumer: ``ingest.parquet`` renames it to
+    the model field ``brief_template_facts`` (a JSONField in
+    ``_OBJECT_JSON_FIELDS``) and ``coerce_json_obj`` parses it back to a dict.
+    The SPA renders the dict by iterating its keys, so a list/scalar would
+    break the renderer — the positive control pins that non-dict JSON coerces
+    to None, not a wrong shape. Failure class: seam-contract (field rename /
+    JSON-interop corruption).
+    """
+
+    def test_template_facts_json_string_round_trips_to_dict(self, tmp_path: Path):
+        facts = {
+            "acquirer_name": "Example Corp",
+            "target_name": "Target Inc",
+            "deal_value_usd": "1500000000",
+            "announced_date": "2026-05-20",
+            "premium_pct": None,  # null value preserved inside the dict
+        }
+        _write_parquet(
+            tmp_path,
+            "2026-05-22",
+            [
+                {
+                    "ticker": "EXMP",
+                    "theme": "ma-activity",
+                    "brief_template_id": "m_and_a_press_release",
+                    # producer column name (aliased to brief_template_facts on ingest)
+                    "brief_template_facts_json": json.dumps(facts, sort_keys=True),
+                }
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        brief = Brief.objects.get(ticker="EXMP")
+        assert isinstance(brief.brief_template_facts, dict)
+        assert brief.brief_template_facts == facts
+        assert brief.brief_template_facts["premium_pct"] is None
+        assert brief.brief_template_id == "m_and_a_press_release"
+
+    def test_non_dict_json_coerces_to_none(self, tmp_path: Path):
+        # Positive control: a JSON array or scalar must NOT silently coerce to
+        # a list/scalar (which the SPA dict-iterator can't render) — it must
+        # become None. If this rotted, brief_template_facts would hold [1,2,3].
+        _write_parquet(
+            tmp_path,
+            "2026-05-22",
+            [
+                {"ticker": "ARR", "theme": "t", "brief_template_facts_json": "[1, 2, 3]"},
+                {"ticker": "SCA", "theme": "t", "brief_template_facts_json": "42"},
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        assert Brief.objects.get(ticker="ARR").brief_template_facts is None
+        assert Brief.objects.get(ticker="SCA").brief_template_facts is None
+
+    def test_missing_template_facts_column_is_null(self, tmp_path: Path):
+        # Legacy parquet without the column → NULL facts, empty template id.
+        _write_parquet(tmp_path, "2026-05-22", [{"ticker": "OLD", "theme": "legacy"}])
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        old = Brief.objects.get(ticker="OLD")
+        assert old.brief_template_facts is None
+        assert old.brief_template_id == ""
+
+    def test_brief_template_facts_is_in_object_json_fields(self):
+        # Guard: a dict-shaped JSONField MUST be listed in _OBJECT_JSON_FIELDS,
+        # else _coerce_for_field routes it through coerce_list_str and iterates
+        # the dict's keys into a list[str] — the exact corruption this seam test
+        # exists to prevent. (No django_db needed — pure config assertion.)
+        from briefs.ingest.parquet import _OBJECT_JSON_FIELDS
+
+        assert "brief_template_facts" in _OBJECT_JSON_FIELDS
+
+
+@pytest.mark.django_db
 class TestManagementCommand:
     def test_command_runs(self, tmp_path: Path):
         _write_parquet(tmp_path, "2026-05-22", _sample_rows())
