@@ -122,8 +122,10 @@ jobs:
           push: false
           load: true
           tags: alphalens-django:ci-smoke
-          cache-from: type=gha,scope=django-image
-          cache-to: type=gha,scope=django-image,mode=max
+          # Share the GHA cache scope with django-image.yml's publish build so
+          # the PR gate reuses the production image's layers (and vice versa).
+          cache-from: type=gha,scope=django-build
+          cache-to: type=gha,scope=django-build,mode=max
 
       - name: import-smoke (runtime deps + shared feedback ledger)
         run: |

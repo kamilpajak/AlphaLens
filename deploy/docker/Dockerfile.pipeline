@@ -81,6 +81,11 @@ COPY apps/alphalens-feedback/alphalens_feedback ./apps/alphalens-feedback/alphal
 COPY apps/alphalens-pipeline/alphalens_pipeline ./apps/alphalens-pipeline/alphalens_pipeline
 COPY apps/alphalens-pipeline/alphalens_cli ./apps/alphalens-pipeline/alphalens_cli
 COPY deploy/docker/run_thematic_day.sh /app/deploy/docker/run_thematic_day.sh
+# EDITABLE install is intentional here (NOT --no-editable like the django
+# image): the `templates` CLI reads its YAML files from the source tree at
+# apps/alphalens-pipeline/.../thematic/extraction/templates/*.yaml, and those
+# YAMLs are NOT declared as setuptools package-data — so --no-editable drops
+# them from site-packages and `alphalens templates validate` fails (verified).
 RUN chmod +x /app/deploy/docker/run_thematic_day.sh \
     && uv sync --frozen --no-dev --package alphalens-pipeline
 # Bind-mount target for the operator's ~/.alphalens cache. The compose file
