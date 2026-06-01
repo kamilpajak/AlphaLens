@@ -42,10 +42,18 @@ class _MigrationLike(Protocol):
     name: str
 
 
-# Apps whose schema this guard protects. Restricted to first-party ``briefs``:
-# contrib / third-party apps squash and replace migrations, so their
-# "recorded-but-unknown-to-graph" set is legitimately non-empty and would
-# false-positive the ahead check.
+# Apps whose schema this guard protects. Deliberately just ``briefs``:
+#  * this command writes only Brief / DayMeta (the briefs app), and
+#  * briefs is the ONLY first-party app with migrations on the default
+#    (Postgres) connection — core / auth_cf / market have no migrations, and
+#    feedback lives on a SEPARATE DB behind a router, so guarding it against
+#    the default connection would BEHIND-false-positive (its migrations are
+#    recorded on a different connection than the one this guard reads).
+#  * contrib / third-party apps squash and replace migrations, so their
+#    "recorded-but-unknown-to-graph" set is legitimately non-empty and would
+#    AHEAD-false-positive.
+# The anti-rot positive control in test_migration_guard.py pins that emptying
+# this set blinds the guard, so a future narrowing can't pass silently.
 _GUARDED_APPS: tuple[str, ...] = ("briefs",)
 
 
@@ -69,7 +77,10 @@ def detect_skew(
     ``applied``      — (app_label, name) pairs recorded in ``django_migrations``.
     ``graph_nodes``  — (app_label, name) pairs the running code's loader knows.
     ``behind_plan``  — ``MigrationExecutor.migration_plan`` output: (Migration,
-                       backward) tuples still to apply to reach head.
+                       backward) tuples still to apply to reach head. The
+                       reported ``behind`` list is the leaf nodes of that
+                       pending chain (Django applies the full path; an
+                       intermediate non-leaf migration may not be named).
     ``app_labels``   — apps to guard; everything else is ignored.
 
     Returns ``(behind, ahead)`` as sorted ``"app.name"`` string lists.

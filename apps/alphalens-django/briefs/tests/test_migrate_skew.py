@@ -63,7 +63,12 @@ def _write_two_rows(directory: Path, iso_date: str) -> None:
 def _briefs_rolled_back_to_0006():
     """DB schema at 0006 (pre-rename) for the test; restored to head after.
 
-    The in-process ``Brief`` model stays at head — this IS the skew.
+    The in-process ``Brief`` model stays at head — this IS the skew. The
+    ``finally`` restores head even when the test assertion fails, so no schema
+    state leaks. Teardown safety also relies on this running in the DEDICATED
+    Postgres skew step (ci.yml) — no other test runs after it on this
+    connection. If that isolation ever changes, the restore must be hardened
+    against a mid-migration crash.
     """
     _migrate_briefs_to(_PRE_RENAME)
     try:
@@ -89,7 +94,12 @@ class TestMigrateSkew:
         assert cause is not None and getattr(cause, "sqlstate", None) == "42703"
 
         # Anti-silent-failure: the atomic per-date block rolled back, so the
-        # skew aborted the whole date — no partial / truncated cache.
+        # skew aborted the whole date — no partial / truncated cache. This
+        # count() executing cleanly (not "current transaction is aborted")
+        # depends on rebuild_from_parquet's per-date @transaction.atomic
+        # rolling the failed INSERT back. If that ever raises an aborted-
+        # transaction error here, the regression is in rebuild_from_parquet's
+        # transaction handling — fix it there, not by wrapping this test.
         assert Brief.objects.count() == 0
 
     def test_control_at_head_writes_rows(self, tmp_path: Path):

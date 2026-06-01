@@ -152,6 +152,39 @@ class TestAssertSchemaCurrent:
         with pytest.raises(SchemaSkewError, match=r"image older than DB.*briefs\.0007"):
             guard.assert_schema_current()
 
+    def test_empty_app_labels_blinds_the_guard(self, monkeypatch):
+        # Positive control (per the no-rot convention): with a REAL skew in
+        # place, an empty app_labels set must make the guard a no-op, while the
+        # real ("briefs",) scope catches it. If _GUARDED_APPS were ever emptied
+        # or the app filter broke, this proves the guard would silently stop
+        # detecting — so the assertion can't degrade to checking nothing.
+        import briefs.migration_guard as guard
+
+        class _FakeLoader:
+            applied_migrations = {("briefs", "0006"), ("briefs", "0007")}
+
+            class graph:  # noqa: N801
+                @staticmethod
+                def leaf_nodes():
+                    return [("briefs", "0006")]
+
+                nodes = {("briefs", "0006")}
+
+        class _FakeExecutor:
+            def __init__(self, _conn):
+                self.loader = _FakeLoader()
+
+            def migration_plan(self, _targets):
+                return []
+
+        monkeypatch.setattr(guard, "MigrationExecutor", _FakeExecutor)
+
+        # Blind: no guarded app -> the real skew goes undetected.
+        assert guard.assert_schema_current(app_labels=()) is None
+        # Scoped: the same skew is caught.
+        with pytest.raises(SchemaSkewError, match=r"briefs\.0007"):
+            guard.assert_schema_current(app_labels=("briefs",))
+
 
 @pytest.mark.django_db
 class TestCommandWiring:
