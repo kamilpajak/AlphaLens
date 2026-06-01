@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from briefs.ingest.parquet import DEFAULT_BRIEFS_DIR, rebuild_from_parquet
+from briefs.migration_guard import SchemaSkewError, assert_schema_current
 
 
 class Command(BaseCommand):
@@ -33,6 +34,15 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options) -> None:
+        # Refuse to run if this image's migration graph disagrees with the DB
+        # schema (the #331/#340 deploy-env-drift incident). Without this the
+        # mismatch surfaces as a late per-row UndefinedColumn and the 6x/day
+        # rebuild dies silently. Run BEFORE touching the DB.
+        try:
+            assert_schema_current()
+        except SchemaSkewError as exc:
+            raise CommandError(str(exc)) from exc
+
         result = rebuild_from_parquet(briefs_dir=options["briefs_dir"], force=options["force"])
         self.stdout.write(
             self.style.SUCCESS(
