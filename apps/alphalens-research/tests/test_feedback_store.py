@@ -249,6 +249,202 @@ class TestFeedbackStoreCRUD(unittest.TestCase):
             fb.delete("00000000-0000-0000-0000-000000000000")
 
 
+# v1 schema (15 columns, no outcome columns) — used to fabricate a legacy
+# database so the v1->v2 ALTER migration path is exercised, not just the
+# fresh-DB CREATE path.
+_V1_DECISIONS_DDL = """
+    CREATE TABLE decisions (
+        id TEXT PRIMARY KEY,
+        brief_date TEXT NOT NULL,
+        ticker TEXT NOT NULL,
+        theme TEXT NOT NULL,
+        surfaced_at TEXT NOT NULL,
+        action TEXT NOT NULL,
+        action_at TEXT NOT NULL,
+        dismiss_category TEXT,
+        dismiss_reason TEXT,
+        dismiss_note TEXT,
+        confidence_subjective INTEGER,
+        paper_trade_plan_id TEXT,
+        position_size_usd REAL,
+        entry_price REAL,
+        market_regime_at_entry TEXT,
+        UNIQUE(brief_date, ticker, theme)
+    )
+"""
+
+_OUTCOME_COLUMN_NAMES = {
+    "outcome_plan_id",
+    "fill_status",
+    "exit_kind",
+    "shadow_return",
+    "realized_pnl",
+    "outcome_computed_at",
+}
+
+
+class TestOutcomeColumnsSchema(unittest.TestCase):
+    """v2 outcome-join columns + the PRAGMA user_version ALTER migration."""
+
+    def test_fresh_db_has_outcome_columns(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "feedback.db"
+            with FeedbackStore.open(path) as fb:
+                cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
+                self.assertTrue(_OUTCOME_COLUMN_NAMES.issubset(cols))
+
+    def test_fresh_db_sets_user_version(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "feedback.db"
+            with FeedbackStore.open(path) as fb:
+                user_version = fb.conn.execute("PRAGMA user_version").fetchone()[0]
+                self.assertEqual(user_version, 1)
+
+    def test_fresh_db_open_twice_does_not_raise_duplicate_column(self):
+        # Migration must be idempotent: a fresh DB already carries the
+        # columns from the CREATE block AND has user_version=0 on first
+        # open, so a naive `ALTER TABLE ADD COLUMN` would raise
+        # "duplicate column name" on the second open. The table_info guard
+        # must skip already-present columns.
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "feedback.db"
+            with FeedbackStore.open(path):
+                pass
+            with FeedbackStore.open(path) as fb:  # must not raise
+                cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
+                self.assertTrue(_OUTCOME_COLUMN_NAMES.issubset(cols))
+
+    def test_legacy_v1_db_gets_columns_via_alter_and_bumps_user_version(self):
+        # Hand-roll a v1 DB (15 columns, user_version=0) then open through
+        # FeedbackStore. The ALTER block must add the 6 outcome columns and
+        # set user_version=1 — pins the documented legacy migration path.
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "feedback.db"
+            raw = sqlite3.connect(str(path))
+            raw.execute(_V1_DECISIONS_DDL)
+            raw.execute(
+                """INSERT INTO decisions(id, brief_date, ticker, theme, surfaced_at,
+                                          action, action_at)
+                   VALUES ('legacy-1', '2026-05-20', 'NVDA', 'ai',
+                           '2026-05-20T06:30:00+00:00', 'interested',
+                           '2026-05-20T08:00:00+00:00')"""
+            )
+            raw.commit()
+            self.assertEqual(raw.execute("PRAGMA user_version").fetchone()[0], 0)
+            raw.close()
+
+            with FeedbackStore.open(path) as fb:
+                cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
+                self.assertTrue(_OUTCOME_COLUMN_NAMES.issubset(cols))
+                self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 1)
+                # legacy row still readable, outcome fields default NULL
+                legacy = fb.get("legacy-1")
+                self.assertIsNotNone(legacy)
+                self.assertIsNone(legacy.fill_status)
+                self.assertIsNone(legacy.outcome_plan_id)
+
+
+class TestOutcomeRoundTrip(unittest.TestCase):
+    """Outcome fields default to None and survive a round-trip."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.path = Path(self._td.name) / "feedback.db"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_outcome_fields_default_none_on_insert(self):
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(_make_decision())
+            fetched = fb.get(row_id)
+            self.assertIsNone(fetched.outcome_plan_id)
+            self.assertIsNone(fetched.fill_status)
+            self.assertIsNone(fetched.exit_kind)
+            self.assertIsNone(fetched.shadow_return)
+            self.assertIsNone(fetched.realized_pnl)
+            self.assertIsNone(fetched.outcome_computed_at)
+
+    def test_stamp_outcome_persists_join_fields(self):
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(_make_decision())
+            stamped_at = dt.datetime(2026, 6, 1, 21, 30, tzinfo=UTC)
+            fb.stamp_outcome(
+                row_id,
+                fill_status="FILLED",
+                exit_kind="TP_HIT",
+                outcome_plan_id="42",
+                outcome_computed_at=stamped_at,
+            )
+            fetched = fb.get(row_id)
+            self.assertEqual(fetched.fill_status, "FILLED")
+            self.assertEqual(fetched.exit_kind, "TP_HIT")
+            self.assertEqual(fetched.outcome_plan_id, "42")
+            self.assertEqual(fetched.outcome_computed_at, stamped_at)
+            # PR-1 leaves the return columns for the deferred PR-3 computation
+            self.assertIsNone(fetched.shadow_return)
+            self.assertIsNone(fetched.realized_pnl)
+
+    def test_stamp_outcome_does_not_revalidate_decision(self):
+        # The write path is a targeted UPDATE, not a Decision rebuild, so a
+        # legacy row that would fail tightened __post_init__ rules is still
+        # stampable. Seed a dismissed/other row WITHOUT the required note via
+        # the read-bypass path, then stamp it — must not raise.
+        import sqlite3
+
+        raw = sqlite3.connect(str(self.path))
+        # ensure schema first by opening once
+        raw.close()
+        with FeedbackStore.open(self.path) as fb:
+            fb.conn.execute(
+                """INSERT INTO decisions(id, brief_date, ticker, theme, surfaced_at,
+                                          action, action_at, dismiss_category, dismiss_reason)
+                   VALUES ('odd-1', '2026-05-20', 'NVDA', 'ai',
+                           '2026-05-20T06:30:00+00:00', 'dismissed',
+                           '2026-05-20T08:00:00+00:00', 'other', 'other')"""
+            )
+            # No DecisionValidationError even though 'other' lacks a note.
+            fb.stamp_outcome(
+                "odd-1",
+                fill_status="UNFILLED",
+                exit_kind="UNFILLED",
+                outcome_plan_id="7",
+                outcome_computed_at=dt.datetime(2026, 6, 1, tzinfo=UTC),
+            )
+            fetched = fb.get("odd-1")
+            self.assertEqual(fetched.fill_status, "UNFILLED")
+
+    def test_upsert_preserves_existing_outcome_columns(self):
+        # A user flipping interested -> dismissed re-POSTs through insert()
+        # AFTER the join job stamped an outcome. The upsert must NOT wipe the
+        # outcome columns back to NULL (they are job-set, never user-set).
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(_make_decision(action="interested"))
+            fb.stamp_outcome(
+                row_id,
+                fill_status="FILLED",
+                exit_kind="TP_HIT",
+                outcome_plan_id="99",
+                outcome_computed_at=dt.datetime(2026, 6, 1, tzinfo=UTC),
+            )
+            # user flips to dismissed (same brief_date, ticker, theme)
+            fb.insert(
+                _make_decision(
+                    action="dismissed",
+                    dismiss_category="thesis_setup",
+                    dismiss_reason="too_expensive",
+                )
+            )
+            fetched = fb.get(row_id)
+            self.assertEqual(fetched.action, "dismissed")
+            # outcome survived the upsert
+            self.assertEqual(fetched.fill_status, "FILLED")
+            self.assertEqual(fetched.exit_kind, "TP_HIT")
+            self.assertEqual(fetched.outcome_plan_id, "99")
+
+
 class TestMarketRegime(unittest.TestCase):
     """Pure VIX bucket classifier — no network."""
 

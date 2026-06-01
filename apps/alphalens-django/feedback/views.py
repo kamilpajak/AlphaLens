@@ -78,6 +78,16 @@ def _serialise_decision(d: Decision) -> dict:
         "position_size_usd": d.position_size_usd,
         "entry_price": d.entry_price,
         "market_regime_at_entry": d.market_regime_at_entry,
+        # v2 outcome-join (read-only; job-set by `alphalens feedback
+        # join-outcomes`, never user-writable). NULL until the join runs.
+        "outcome_plan_id": d.outcome_plan_id,
+        "fill_status": d.fill_status,
+        "exit_kind": d.exit_kind,
+        "shadow_return": d.shadow_return,
+        "realized_pnl": d.realized_pnl,
+        "outcome_computed_at": (
+            d.outcome_computed_at.isoformat() if d.outcome_computed_at else None
+        ),
     }
 
 

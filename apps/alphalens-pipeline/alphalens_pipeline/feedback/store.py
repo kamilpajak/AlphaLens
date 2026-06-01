@@ -127,6 +127,23 @@ class Decision:
     position_size_usd: float | None = None
     entry_price: float | None = None
     market_regime_at_entry: str | None = None
+    # ---- v2 outcome-join columns (Track A v2; design memo §4 + §8 L3) ----
+    # All job-set by the post-hoc decision<->paper outcome-join (see
+    # ``outcome_join.join_decision_outcomes``), NEVER user-writable. The
+    # paper harness auto-submits every verified candidate independent of any
+    # click, so a decision is linked to its plan outcome by (brief_date,
+    # ticker, account) after the plan closes. ``fill_status`` carries the §4
+    # FILLED / UNFILLED / PARTIAL distinction so never-filled candidates are
+    # recorded, not dropped (Glosten/Linnainmaa fill-only adverse selection).
+    # ``shadow_return`` (arrival-price counterfactual) + ``realized_pnl`` are
+    # captured-now / computed-later: PR-1 leaves them NULL because no
+    # minute-bar arrival-price source exists yet (deferred to PR-3).
+    outcome_plan_id: str | None = None
+    fill_status: str | None = None
+    exit_kind: str | None = None
+    shadow_return: float | None = None
+    realized_pnl: float | None = None
+    outcome_computed_at: dt.datetime | None = None
 
     def __post_init__(self) -> None:
         self._validate_action()
@@ -233,12 +250,36 @@ _SCHEMA_DDL = (
         position_size_usd REAL,
         entry_price REAL,
         market_regime_at_entry TEXT,
+        outcome_plan_id TEXT,
+        fill_status TEXT,
+        exit_kind TEXT,
+        shadow_return REAL,
+        realized_pnl REAL,
+        outcome_computed_at TEXT,
         UNIQUE(brief_date, ticker, theme)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_decisions_brief_date ON decisions(brief_date)",
     "CREATE INDEX IF NOT EXISTS idx_decisions_ticker ON decisions(ticker)",
     "CREATE INDEX IF NOT EXISTS idx_decisions_action ON decisions(action)",
+)
+
+# Schema generation tracked via ``PRAGMA user_version`` (zen pre-merge
+# finding #4). 0 = v1 (15 columns). 1 = v2 outcome-join columns added.
+_SCHEMA_GENERATION = 1
+
+# v2 outcome-join columns, as (name, sqlite_type). Present in ``_SCHEMA_DDL``
+# above for fresh databases AND added to legacy v1 databases by
+# ``_migrate_schema`` via ``ALTER TABLE ADD COLUMN`` (NULL-compatible with
+# existing rows). Kept as a single source so the CREATE block and the ALTER
+# block cannot drift.
+_OUTCOME_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("outcome_plan_id", "TEXT"),
+    ("fill_status", "TEXT"),
+    ("exit_kind", "TEXT"),
+    ("shadow_return", "REAL"),
+    ("realized_pnl", "REAL"),
+    ("outcome_computed_at", "TEXT"),
 )
 
 
@@ -252,9 +293,30 @@ def _connect(path: Path) -> sqlite3.Connection:
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
-    """Apply DDL idempotently."""
+    """Apply DDL idempotently, then run the additive column migration."""
     for ddl in _SCHEMA_DDL:
         conn.execute(ddl)
+    _migrate_schema(conn)
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Add v2 outcome columns to legacy databases (zen pre-merge finding #4).
+
+    The bootstrap CREATE TABLE IF NOT EXISTS does NOT alter an existing
+    table, so a v1 database (15 columns) never gains the v2 columns from
+    the DDL loop alone. This guards on ``PRAGMA table_info`` (NOT on
+    ``user_version`` alone): a freshly-created v2 database already carries
+    the columns from the CREATE block yet still has ``user_version = 0`` on
+    first open, so a blind ``ALTER TABLE ADD COLUMN`` would raise
+    "duplicate column name". Skipping already-present columns makes the
+    migration idempotent for both fresh and legacy databases.
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
+    for name, sql_type in _OUTCOME_COLUMNS:
+        if name not in existing:
+            # Identifiers are module constants, not user input — safe to inline.
+            conn.execute(f"ALTER TABLE decisions ADD COLUMN {name} {sql_type}")
+    conn.execute(f"PRAGMA user_version = {_SCHEMA_GENERATION}")
 
 
 # ----------------------------------------------------------------------
@@ -318,19 +380,39 @@ class FeedbackStore:
         convention (zen pre-merge finding #5).
         """
         existing = self.conn.execute(
-            "SELECT id FROM decisions WHERE brief_date = ? AND ticker = ? AND theme = ?",
+            """SELECT id, outcome_plan_id, fill_status, exit_kind,
+                      shadow_return, realized_pnl, outcome_computed_at
+               FROM decisions WHERE brief_date = ? AND ticker = ? AND theme = ?""",
             (decision.brief_date.isoformat(), decision.ticker, decision.theme),
         ).fetchone()
         was_created = existing is None
         target_id = existing["id"] if existing else decision.id
+        # Outcome columns are job-set by the post-hoc outcome-join, never by
+        # the user POST path. On upsert (a user flipping interested ->
+        # dismissed) INSERT OR REPLACE rewrites the whole row, so carry the
+        # existing outcome values forward rather than letting them revert to
+        # NULL. A brand-new row has no outcome yet (all NULL).
+        if existing is not None:
+            outcome_values = (
+                existing["outcome_plan_id"],
+                existing["fill_status"],
+                existing["exit_kind"],
+                existing["shadow_return"],
+                existing["realized_pnl"],
+                existing["outcome_computed_at"],
+            )
+        else:
+            outcome_values = (None, None, None, None, None, None)
         self.conn.execute(
             """
             INSERT OR REPLACE INTO decisions (
                 id, brief_date, ticker, theme, surfaced_at, action, action_at,
                 dismiss_category, dismiss_reason, dismiss_note,
                 confidence_subjective, paper_trade_plan_id,
-                position_size_usd, entry_price, market_regime_at_entry
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                position_size_usd, entry_price, market_regime_at_entry,
+                outcome_plan_id, fill_status, exit_kind,
+                shadow_return, realized_pnl, outcome_computed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 target_id,
@@ -348,9 +430,44 @@ class FeedbackStore:
                 decision.position_size_usd,
                 decision.entry_price,
                 decision.market_regime_at_entry,
+                *outcome_values,
             ),
         )
         return target_id, was_created
+
+    def stamp_outcome(
+        self,
+        decision_id: str,
+        *,
+        fill_status: str,
+        exit_kind: str,
+        outcome_plan_id: str,
+        outcome_computed_at: dt.datetime,
+    ) -> None:
+        """Stamp the paper-trade outcome onto a decision (job-set, v2).
+
+        A targeted ``UPDATE`` rather than an :meth:`insert` rebuild: it does
+        not reconstruct a frozen ``Decision`` (so ``__post_init__`` does NOT
+        re-run — a legacy row that would fail tightened write-time rules is
+        still stampable, consistent with the read-time bypass contract), it
+        holds the lock only per-decision, and it is naturally idempotent.
+        ``shadow_return`` + ``realized_pnl`` are deliberately untouched here
+        — they are filled by the deferred PR-3 arrival-price computation, not
+        the fill-status join.
+        """
+        self.conn.execute(
+            """UPDATE decisions
+               SET fill_status = ?, exit_kind = ?, outcome_plan_id = ?,
+                   outcome_computed_at = ?
+               WHERE id = ?""",
+            (
+                fill_status,
+                exit_kind,
+                outcome_plan_id,
+                outcome_computed_at.isoformat(),
+                decision_id,
+            ),
+        )
 
     def delete(self, decision_id: str) -> None:
         """Hard delete by id. No-op on unknown id (idempotent undo)."""
@@ -400,4 +517,14 @@ def _row_to_decision(row: sqlite3.Row) -> Decision:
         position_size_usd=row["position_size_usd"],
         entry_price=row["entry_price"],
         market_regime_at_entry=row["market_regime_at_entry"],
+        outcome_plan_id=row["outcome_plan_id"],
+        fill_status=row["fill_status"],
+        exit_kind=row["exit_kind"],
+        shadow_return=row["shadow_return"],
+        realized_pnl=row["realized_pnl"],
+        outcome_computed_at=(
+            dt.datetime.fromisoformat(row["outcome_computed_at"])
+            if row["outcome_computed_at"]
+            else None
+        ),
     )
