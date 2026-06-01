@@ -169,7 +169,6 @@ def main() -> None:
     real_htirp = recent_press.has_theme_in_recent_press
     real_mcap = mcap_filter.fetch_mcap
 
-    press_tmp = Path(tempfile.mkdtemp(prefix="press_record_"))
     mcap_capture: dict[str, float | None] = {}
 
     def _teed_mcap(ticker: str, *, asof: dt.date | None = None):
@@ -183,34 +182,40 @@ def main() -> None:
     rec_poly = RecordingVendor(PolygonClient(os.environ["POLYGON_API_KEY"]), vendor_dir)
     rec_sec = RecordingVendor(get_default_sec_client(), vendor_dir)
 
-    with (
-        mock.patch.object(orchestrator, "_init_pro_client", lambda api_key: rec_pro),
-        mock.patch.object(orchestrator, "PolygonClient", lambda *a, **k: rec_poly),
-        mock.patch.object(orchestrator, "get_default_polygon_client", lambda: rec_poly),
-        mock.patch.object(tenk_grep, "get_default_sec_client", lambda: rec_sec),
-        mock.patch.object(
-            catalyst_resolver,
-            "find_trigger_event",
-            functools.partial(real_find, events_dir=events_fix, news_dir=news_fix),
-        ),
-        mock.patch.object(
-            recent_press, "fetch_window_universe", functools.partial(real_fwu, cache_dir=press_tmp)
-        ),
-        mock.patch.object(
-            recent_press,
-            "has_theme_in_recent_press",
-            functools.partial(real_htirp, cache_dir=press_tmp),
-        ),
-        mock.patch.object(mcap_filter, "fetch_mcap", _teed_mcap),
-    ):
-        df = orchestrator.map_themes(
-            themes=[THEME],
-            asof=ASOF,
-            api_key=os.environ["OPENROUTER_API_KEY"],
-            polygon_api_key="dummy",  # forces the `if polygon_api_key:` branch -> patched PolygonClient
-            output_dir=golden_dir,
-            market_cap_range=orchestrator.DEFAULT_MCAP_RANGE,
-        )
+    # Fresh empty press cache so the Polygon firehose actually fires (gets
+    # recorded); TemporaryDirectory cleans it on exit (no /tmp leak).
+    with tempfile.TemporaryDirectory(prefix="press_record_") as press_tmp_str:
+        press_tmp = Path(press_tmp_str)
+        with (
+            mock.patch.object(orchestrator, "_init_pro_client", lambda api_key: rec_pro),
+            mock.patch.object(orchestrator, "PolygonClient", lambda *a, **k: rec_poly),
+            mock.patch.object(orchestrator, "get_default_polygon_client", lambda: rec_poly),
+            mock.patch.object(tenk_grep, "get_default_sec_client", lambda: rec_sec),
+            mock.patch.object(
+                catalyst_resolver,
+                "find_trigger_event",
+                functools.partial(real_find, events_dir=events_fix, news_dir=news_fix),
+            ),
+            mock.patch.object(
+                recent_press,
+                "fetch_window_universe",
+                functools.partial(real_fwu, cache_dir=press_tmp),
+            ),
+            mock.patch.object(
+                recent_press,
+                "has_theme_in_recent_press",
+                functools.partial(real_htirp, cache_dir=press_tmp),
+            ),
+            mock.patch.object(mcap_filter, "fetch_mcap", _teed_mcap),
+        ):
+            df = orchestrator.map_themes(
+                themes=[THEME],
+                asof=ASOF,
+                api_key=os.environ["OPENROUTER_API_KEY"],
+                polygon_api_key="dummy",  # forces the `if polygon_api_key:` branch
+                output_dir=golden_dir,
+                market_cap_range=orchestrator.DEFAULT_MCAP_RANGE,
+            )
 
     # Form-4 fixture: trim to every ticker an mcap lookup touched (= every
     # proposed candidate that survived to the verify stage and beyond).

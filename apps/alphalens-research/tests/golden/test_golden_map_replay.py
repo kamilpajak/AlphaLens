@@ -60,49 +60,55 @@ def _replay_map(out_dir: Path) -> pd.DataFrame:
     pro = ReplayOpenRouter(_FIXTURES / "cassettes_llm")
     vendor = VendorCassette(_FIXTURES / "cassettes_vendor")
     mcap_map = {k.upper(): v for k, v in json.loads((_FIXTURES / "mcap.json").read_text()).items()}
-    press_tmp = Path(tempfile.mkdtemp(prefix="press_replay_"))
 
-    with (
-        mock.patch.object(orchestrator, "_init_pro_client", lambda api_key: pro),
-        mock.patch.object(orchestrator, "PolygonClient", lambda *a, **k: vendor),
-        mock.patch.object(orchestrator, "get_default_polygon_client", lambda: vendor),
-        mock.patch.object(
-            catalyst_resolver,
-            "find_trigger_event",
-            functools.partial(
-                _REAL_FIND, events_dir=_FIXTURES / "events", news_dir=_FIXTURES / "news"
+    # Fresh empty press cache so the Polygon get_news_range call fires (served
+    # by the cassette) and no write lands in ~/.alphalens; TemporaryDirectory
+    # cleans it on exit (no /tmp leak across runs).
+    with tempfile.TemporaryDirectory(prefix="press_replay_") as press_tmp_str:
+        press_tmp = Path(press_tmp_str)
+        with (
+            mock.patch.object(orchestrator, "_init_pro_client", lambda api_key: pro),
+            mock.patch.object(orchestrator, "PolygonClient", lambda *a, **k: vendor),
+            mock.patch.object(orchestrator, "get_default_polygon_client", lambda: vendor),
+            mock.patch.object(
+                catalyst_resolver,
+                "find_trigger_event",
+                functools.partial(
+                    _REAL_FIND, events_dir=_FIXTURES / "events", news_dir=_FIXTURES / "news"
+                ),
             ),
-        ),
-        mock.patch.object(
-            recent_press, "fetch_window_universe", functools.partial(_REAL_FWU, cache_dir=press_tmp)
-        ),
-        mock.patch.object(
-            recent_press,
-            "has_theme_in_recent_press",
-            functools.partial(_REAL_HTIRP, cache_dir=press_tmp),
-        ),
-        mock.patch.object(
-            tenk_grep,
-            "has_theme_keywords_in_10k",
-            functools.partial(_REAL_TENK, cache_dir=_FIXTURES / "tenk_cache"),
-        ),
-        mock.patch.object(
-            insider,
-            "has_opportunistic_buy",
-            functools.partial(_REAL_INSIDER, form4_root=_FIXTURES / "form4_parquet"),
-        ),
-        mock.patch.object(
-            mcap_filter, "fetch_mcap", lambda ticker, *, asof=None: mcap_map.get(ticker.upper())
-        ),
-    ):
-        return orchestrator.map_themes(
-            themes=[_THEME],
-            asof=_ASOF,
-            api_key="replay",
-            polygon_api_key="replay",  # forces the patched PolygonClient branch
-            output_dir=out_dir,
-            market_cap_range=orchestrator.DEFAULT_MCAP_RANGE,
-        )
+            mock.patch.object(
+                recent_press,
+                "fetch_window_universe",
+                functools.partial(_REAL_FWU, cache_dir=press_tmp),
+            ),
+            mock.patch.object(
+                recent_press,
+                "has_theme_in_recent_press",
+                functools.partial(_REAL_HTIRP, cache_dir=press_tmp),
+            ),
+            mock.patch.object(
+                tenk_grep,
+                "has_theme_keywords_in_10k",
+                functools.partial(_REAL_TENK, cache_dir=_FIXTURES / "tenk_cache"),
+            ),
+            mock.patch.object(
+                insider,
+                "has_opportunistic_buy",
+                functools.partial(_REAL_INSIDER, form4_root=_FIXTURES / "form4_parquet"),
+            ),
+            mock.patch.object(
+                mcap_filter, "fetch_mcap", lambda ticker, *, asof=None: mcap_map.get(ticker.upper())
+            ),
+        ):
+            return orchestrator.map_themes(
+                themes=[_THEME],
+                asof=_ASOF,
+                api_key="replay",
+                polygon_api_key="replay",  # forces the patched PolygonClient branch
+                output_dir=out_dir,
+                market_cap_range=orchestrator.DEFAULT_MCAP_RANGE,
+            )
 
 
 class TestGoldenMapReplay(unittest.TestCase):
