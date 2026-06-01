@@ -67,6 +67,8 @@ class RecordingUrlJson:
     def __call__(self, url: str, **kwargs: Any) -> dict[str, Any]:
         resp = self._real(url, **kwargs)
         self._store[url] = resp
+        # One-shot recorder: rewrites the whole store each call — fine at the
+        # handful of buckets a capture queries.
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps(self._store, indent=2, sort_keys=True, ensure_ascii=False))
         return resp
@@ -111,7 +113,9 @@ def _rehydrate_feed(record: dict[str, Any]) -> SimpleNamespace:
         )
         for e in record.get("entries", [])
     ]
-    # bozo_exception is only logged, never inspected for content — None is safe.
+    # bozo_exception is only logged by rss.fetch_feed, never inspected for
+    # content, so dropping it (replay sets None) is intentional + safe. If a
+    # future consumer reads it, re-record to capture it.
     return SimpleNamespace(bozo=record.get("bozo", 0), bozo_exception=None, entries=entries)
 
 
