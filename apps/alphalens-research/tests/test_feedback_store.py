@@ -681,5 +681,77 @@ class TestVixCacheReader(unittest.TestCase):
             )
 
 
+class TestIterMaturedDecisions(unittest.TestCase):
+    """Projection feeding the PR-4 execution-mode estimator.
+
+    Two contracts that protect the ≥50 pooled gate from inflating below the true
+    priced sample: maturity == ``shadow_return IS NOT NULL`` (not
+    ``outcome_computed_at``), and dedup to one row per ``(brief_date, ticker)``.
+    """
+
+    def _stamp_priced(self, fb, decision_id, *, fill_status, shadow, realized):
+        fb.stamp_outcome(
+            decision_id,
+            fill_status=fill_status,
+            exit_kind="TP_HIT" if fill_status == "FILLED" else "UNFILLED",
+            outcome_plan_id="p1",
+            outcome_computed_at=dt.datetime(2026, 5, 30, 2, 0, tzinfo=UTC),
+            shadow_return=shadow,
+            realized_return=realized,
+        )
+
+    def test_unpriced_cheap_pass_row_is_excluded(self):
+        # The CRITICAL fix: a row stamped by the cheap fill-status join only
+        # (outcome_computed_at set, shadow_return still NULL) must NOT appear —
+        # else it would count toward the 50-gate while carrying no signal.
+        with tempfile.TemporaryDirectory() as td:
+            with FeedbackStore.open(Path(td) / "feedback.db") as fb:
+                row_id, _ = fb.insert(_make_decision())
+                fb.stamp_outcome(
+                    row_id,
+                    fill_status="UNFILLED",
+                    exit_kind="UNFILLED",
+                    outcome_plan_id="p1",
+                    outcome_computed_at=dt.datetime(2026, 5, 30, 2, 0, tzinfo=UTC),
+                    # shadow_return omitted → stays NULL (cheap pass only)
+                )
+                self.assertEqual(fb.iter_matured_decisions(), [])
+
+    def test_priced_row_is_included_with_projection(self):
+        with tempfile.TemporaryDirectory() as td:
+            with FeedbackStore.open(Path(td) / "feedback.db") as fb:
+                row_id, _ = fb.insert(_make_decision(market_regime_at_entry="mid"))
+                self._stamp_priced(fb, row_id, fill_status="FILLED", shadow=0.05, realized=0.03)
+                self.assertEqual(fb.iter_matured_decisions(), [("mid", "FILLED", 0.05, 0.03)])
+
+    def test_null_regime_coalesced_to_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            with FeedbackStore.open(Path(td) / "feedback.db") as fb:
+                row_id, _ = fb.insert(_make_decision())  # no market_regime_at_entry
+                self._stamp_priced(fb, row_id, fill_status="UNFILLED", shadow=0.08, realized=None)
+                rows = fb.iter_matured_decisions()
+                self.assertEqual(rows, [("unknown", "UNFILLED", 0.08, None)])
+
+    def test_multi_theme_ticker_day_counts_once(self):
+        # The CRITICAL dedup fix: the ticker-day outcome join stamps the SAME
+        # outcome onto every same-day multi-theme decision, so the rows are
+        # identical; counting decision rows would double-count one economic
+        # outcome at the n≈50 scale.
+        with tempfile.TemporaryDirectory() as td:
+            with FeedbackStore.open(Path(td) / "feedback.db") as fb:
+                id_a, _ = fb.insert(
+                    _make_decision(theme="ai_infrastructure", market_regime_at_entry="mid")
+                )
+                id_b, _ = fb.insert(
+                    _make_decision(theme="data_center", market_regime_at_entry="mid")
+                )
+                # Same plan outcome stamped onto both (same brief_date+ticker).
+                self._stamp_priced(fb, id_a, fill_status="FILLED", shadow=0.05, realized=0.03)
+                self._stamp_priced(fb, id_b, fill_status="FILLED", shadow=0.05, realized=0.03)
+                rows = fb.iter_matured_decisions()
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0], ("mid", "FILLED", 0.05, 0.03))
+
+
 if __name__ == "__main__":
     unittest.main()

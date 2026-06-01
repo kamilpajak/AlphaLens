@@ -239,3 +239,73 @@ def backfill_shadow_returns_command(
         f"{n_priced_total} priced across {len(matured)} matured dates, "
         f"{len(pending)} dates not yet matured."
     )
+
+
+def _fmt(value: float | None) -> str:
+    """Format a possibly-None decimal-fraction statistic for the report."""
+    return "n/a" if value is None else f"{value:+.4f}"
+
+
+@feedback_app.command(name="execution-modes")
+def execution_modes_command(
+    ledger: Path = typer.Option(
+        Path.home() / ".alphalens" / "feedback.db",
+        "--ledger",
+        help="Override the default feedback ledger location.",
+    ),
+) -> None:
+    """Per-regime LIMIT→MARKET recommendation from the matured ledger (Track A v2 PR-4).
+
+    READ-ONLY. Never mutates the ledger and never touches the paper submitter —
+    it prints what the §6 break-even WOULD recommend once the ≥50-decision gate
+    clears. Today it is inert (matured n far below 50), so every cell reads
+    LIMIT; the report exists so the human sees the evidence shape building up.
+    The recommendation rests on tiny denominators at the floor, so the per-stat
+    backing counts (unfilled for MO, gap for the execution drag) are printed next
+    to every line.
+    """
+    from alphalens_pipeline.feedback.execution_modes import (
+        DEFAULT_POOLED_GATE_N,
+        POOLED_KEY,
+        SWITCHABLE_REGIMES,
+        UNKNOWN_REGIME,
+        recommend_execution_modes,
+    )
+    from alphalens_pipeline.feedback.store import FeedbackStore
+
+    if not ledger.exists():
+        typer.echo(f"no ledger at {ledger} — no matured decisions yet (all LIMIT).")
+        raise typer.Exit(code=0)
+
+    with FeedbackStore.open(ledger) as fb:
+        rows = fb.iter_matured_decisions()
+
+    recs = recommend_execution_modes(rows)
+    pooled = recs[POOLED_KEY]
+    total = sum(r.n for key, r in recs.items() if key != POOLED_KEY)
+    unknown_n = recs[UNKNOWN_REGIME].n if UNKNOWN_REGIME in recs else 0
+
+    typer.echo(f"execution-mode recommendations (ledger={ledger})")
+    typer.echo(
+        f"  matured priced outcomes: {total}  "
+        f"({unknown_n} unknown-regime excluded from the gate, "
+        f"{pooled.n} labelled in the pool)"
+    )
+    if pooled.n < DEFAULT_POOLED_GATE_N:
+        typer.echo(
+            f"  ⚠ GATE INERT — pooled n={pooled.n}/{DEFAULT_POOLED_GATE_N}; all cells LIMIT "
+            "(design-now build-later, vision §8). The break-even is not evaluated."
+        )
+
+    def _emit(rec) -> None:
+        typer.echo(
+            f"    {rec.regime:<7} n={rec.n:<3} (unfilled={rec.n_unfilled}, gap={rec.n_gap})  "
+            f"fill_rate={_fmt(rec.fill_rate)}  MO*={_fmt(rec.missed_opportunity_shrunk)}  "
+            f"MI*={_fmt(rec.expected_market_impact)}  margin={_fmt(rec.switch_margin)}  "
+            f"-> {rec.recommended_mode.upper()}  ({rec.gated_reason})"
+        )
+
+    _emit(pooled)
+    for regime in (*SWITCHABLE_REGIMES, UNKNOWN_REGIME):
+        if regime in recs:
+            _emit(recs[regime])
