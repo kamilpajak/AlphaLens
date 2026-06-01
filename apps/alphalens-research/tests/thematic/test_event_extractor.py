@@ -188,6 +188,78 @@ class TestExtractDaily(unittest.TestCase):
             self.assertEqual(len(df), 2)  # both a1 (cached) and a2 (new)
             self.assertEqual(set(df["news_id"]), {"a1", "a2"})
 
+    def test_extract_daily_threads_injected_engine_resolver_llm_client(self):
+        # PR 3b-1: extract_daily must thread llm_client / engine / resolver
+        # down to extract_one so the L3 golden-replay test can inject a
+        # ReplayOpenRouter + a fixture-pointed resolver + the shipped engine
+        # without monkeypatching module singletons. Before this change
+        # extract_daily dropped engine/resolver on the floor (only llm_client
+        # was threaded). A stub engine that matches every row proves the
+        # template path is reached AND that the injected LLM client is never
+        # called (template match short-circuits the Flash fallback).
+        from alphalens_pipeline.thematic.extraction.templates.spec import (
+            ResolvedEntity,
+            TemplateEvent,
+        )
+
+        news = _news_frame([_news_row("a1", "polygon", "anything", tickers=["NVDA"])])
+
+        entity = ResolvedEntity(ticker="NVDA", name="NVIDIA Corp", role="company")
+
+        class StubResolver:
+            def __init__(self):
+                self.calls = 0
+
+            def resolve(self, article):
+                self.calls += 1
+                return [entity]
+
+        class StubEngine:
+            def __init__(self):
+                self.calls = 0
+
+            def match(self, article, entities):
+                self.calls += 1
+                return TemplateEvent(
+                    template_id="m_and_a_press_release",
+                    event_type="m_and_a",
+                    entities={"acquirer": entity},
+                    fields={"acquirer_ticker": "NVDA"},
+                    source_article_id=article.id,
+                    matched_predicates=["is_press_release"],
+                )
+
+        class ExplodingLLM:
+            def build_config(self, **kwargs):
+                raise AssertionError("LLM client must not be built on a template hit")
+
+            def generate_content(self, **kwargs):
+                raise AssertionError("LLM client must not be called on a template hit")
+
+        stub_resolver = StubResolver()
+        stub_engine = StubEngine()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            news_dir = Path(tmpdir) / "news"
+            events_dir = Path(tmpdir) / "events"
+            news_dir.mkdir()
+            news.to_parquet(news_dir / "2026-05-15.parquet", index=False)
+
+            df = event_extractor.extract_daily(
+                date=dt.date(2026, 5, 15),
+                news_dir=news_dir,
+                events_dir=events_dir,
+                llm_client=ExplodingLLM(),
+                engine=stub_engine,
+                resolver=stub_resolver,
+            )
+
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]["extraction_method"], "template")
+        self.assertEqual(df.iloc[0]["template_id"], "m_and_a_press_release")
+        self.assertEqual(stub_resolver.calls, 1)
+        self.assertEqual(stub_engine.calls, 1)
+
     def test_extract_daily_logs_and_skips_per_item_failure(self):
         news = _news_frame(
             [_news_row("a1", "polygon", "Good"), _news_row("a2", "rss", "Will fail")]
