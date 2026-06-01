@@ -1,0 +1,1837 @@
+{
+  "args": {
+    "end": "2026-05-25T00:00:00+00:00",
+    "limit": 1000,
+    "order": "desc",
+    "sort": "published_utc",
+    "start": "2026-04-24T00:00:00+00:00",
+    "ticker": null
+  },
+  "key": "6182cfb7b515c5d54609a5c9122bae0c99a0ea60abd9deff5efd4a78ed7a56a6",
+  "method": "get_news_range",
+  "payload": [
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/23/prediction-quantum-computing-is-2026s-most-underra/?source=iedfolrf0000001",
+      "author": "Leo Sun",
+      "description": "The U.S. Department of Commerce announced $2.01 billion in federal incentives under the CHIPS and Science Act to support nine quantum computing companies. IBM receives $1 billion and GlobalFoundries $375 million to build quantum foundries, while six other companies receive up to $100 million each. The global quantum computing market is expected to expand at 20.5% CAGR from 2025-2030, with applications in AI, supply chains, drug development, and cybersecurity.",
+      "id": "2bb29bab9205316f46dffdac11716c040abdf1f3232ceb14f569737fed7a6fe8",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F867866%2Fgettyimages-2211414345.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Receiving $1 billion in federal funding to build quantum computing foundries, supporting its diversification strategy in hybrid cloud and AI businesses with already 85+ deployed quantum systems.",
+          "ticker": "IBM"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Allocated $375 million to establish a quantum foundry, providing business diversification away from mature markets and competitive pressure from TSMC and Samsung.",
+          "ticker": "GFS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Eligible for up to $100 million in federal funding to support quantum computing development.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Eligible for up to $100 million in federal funding as part of the government's quantum computing investment portfolio.",
+          "ticker": "INFQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Eligible for up to $100 million in federal funding as part of the government's quantum computing investment portfolio.",
+          "ticker": "INFQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Eligible for up to $100 million in federal funding to support quantum computing development.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Eligible for up to $100 million in federal funding to support quantum computing development.",
+          "ticker": "RGTIW"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "federal investment",
+        "CHIPS and Science Act",
+        "market expansion",
+        "technology sector"
+      ],
+      "published_utc": "2026-05-23T17:29:36Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "IBM",
+        "GFS",
+        "QBTS",
+        "INFQ",
+        "INFQ.WS",
+        "RGTI",
+        "RGTIW"
+      ],
+      "title": "Prediction: Quantum Computing Is 2026's Most Underrated Tech Trend"
+    },
+    {
+      "article_url": "https://www.fool.com/coverage/stock-market-today/2026/05/22/stock-market-today-may-22-s-and-p-500-reaches-eighth-straight-week-of-gains/?source=iedfolrf0000001",
+      "author": "Emma Newbery",
+      "description": "The S&P 500, Nasdaq, and Dow all posted gains on May 22, 2026, with the Dow reaching fresh record highs as Treasury yields eased. The market achieved its eighth consecutive week of gains despite consumer sentiment hitting new lows due to concerns about gas prices and inflation. Goldman Sachs warned of potential correction risks from rising yields and inflation.",
+      "id": "5e3e3c0d26edbc5bbb0f04bd55b49a1b3232bf760894b8b163d4aa8d6bd2fa08",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fcdn.content.foolcdn.com%2Fimages%2F1umn9qeh%2Fproduction%2Fe7dd8b70435a213a06dcc8bea55f01f7acf42b48-1401x1251.png%3Fw%3D800%26q%3D75%26fit%3Dmax%26auto%3Dformat&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Jumped by double-digit percentages on upbeat earnings expectations ahead of next week's report",
+          "ticker": "DELL"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Jumped by double-digit percentages on upbeat earnings expectations ahead of next week's report",
+          "ticker": "HPQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Advanced following an analyst upgrade tied to data-center power demand",
+          "ticker": "TXN"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Soared on partnership news",
+          "ticker": "QCOM"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Climbed following a well-received quarterly report",
+          "ticker": "WDAY"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Extended multi-day gains as quantum-computing names show strong speculative interest",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Extended multi-day gains as quantum-computing names show strong speculative interest",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Extended multi-day gains as quantum-computing names show strong speculative interest in next-generation computing",
+          "ticker": "QBTS"
+        }
+      ],
+      "keywords": [
+        "stock market",
+        "S&P 500",
+        "Dow Jones",
+        "Nasdaq",
+        "Treasury yields",
+        "consumer sentiment",
+        "inflation",
+        "market correction"
+      ],
+      "published_utc": "2026-05-22T21:10:42Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "DELL",
+        "HPQ",
+        "TXN",
+        "QCOM",
+        "WDAY",
+        "RGTI",
+        "RGTIW",
+        "QBTS"
+      ],
+      "title": "Stock Market Today, May 22: S&P 500 Posts Eighth Straight Week of Gains"
+    },
+    {
+      "article_url": "https://www.benzinga.com/markets/equities/26/05/52755165/sp-500-eighth-weekly-gain-hawkish-fed-consumer-sentiment?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel",
+      "author": "Piero Cingari",
+      "description": "The S&P 500 achieved its eighth consecutive weekly gain despite a hawkish Federal Reserve signaling potential rate hikes if inflation remains sticky. Markets now price in an 82% probability of a rate hike by year-end. While manufacturing PMI hit a 48-month high driven by AI infrastructure spending, consumer sentiment plummeted to a historic low of 44.8, creating a disconnect between record stock markets and depressed Main Street conditions. Nvidia delivered record earnings with $81.62B revenue and $91B Q2 guidance, along with an $80B buyback.",
+      "id": "2d161909c33bc65dd1f17e104ef49c29162ff68d836b693e1b93cc2dd7260aa0",
+      "image_url": "https://cdn.benzinga.com/cdn-cgi/image/width=1200,height=800,fit=crop/files/images/story/2026/05/22/Economic-Inflation-Rise-In-Interest-Rate.jpeg",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Achieved eighth consecutive weekly gain, longest winning streak since December 2023, demonstrating strong market momentum despite hawkish Fed signals.",
+          "ticker": "SPY"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Delivered record quarterly revenue of $81.62B exceeding consensus, data center sales nearly doubled to $75.2B, provided strong Q2 guidance of $91B, announced $80B buyback and dividend increase.",
+          "ticker": "NVDA"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Received $1B in CHIPS Act quantum computing funding (largest recipient), posted best week since October 2002.",
+          "ticker": "IBM"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Received $375M in CHIPS Act quantum computing funding, supporting growth in quantum computing sector.",
+          "ticker": "GFS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Received CHIPS Act quantum computing funding, benefiting from government support for quantum technology development.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Received CHIPS Act quantum computing funding, supporting expansion in quantum computing sector.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Received CHIPS Act quantum computing funding, supporting expansion in quantum computing sector.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Consumer sentiment index hit historic low of 44.8, down from 49.8 in April, driven by cost of living concerns and rising inflation expectations (3.9% long-run expectations).",
+          "ticker": "IEDI"
+        }
+      ],
+      "keywords": [
+        "S&P 500",
+        "Federal Reserve",
+        "rate hikes",
+        "AI infrastructure",
+        "manufacturing PMI",
+        "consumer sentiment",
+        "inflation expectations",
+        "earnings",
+        "quantum computing"
+      ],
+      "published_utc": "2026-05-22T19:00:52Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/benzinga.ico",
+        "homepage_url": "https://www.benzinga.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/benzinga.svg",
+        "name": "Benzinga"
+      },
+      "tickers": [
+        "SPY",
+        "NVDA",
+        "IBM",
+        "GFS",
+        "QBTS",
+        "RGTI",
+        "RGTIW",
+        "IEDI"
+      ],
+      "title": "Eight Weeks Up, And Even A Hawkish Fed Can't Stop It: This Week On Wall Street"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/22/d-wave-quantum-is-skyrocketing-today-is-the-stock/?source=iedfolrf0000001",
+      "author": "Keith Noonan",
+      "description": "D-Wave Quantum's stock surged 17.2% following news of a $100 million funding commitment from the U.S. Department of Commerce under the CHIPS and Science Act. TD Cowen named D-Wave one of the top three beneficiaries of the government's quantum computing investment initiative. However, the funding will involve stock dilution as D-Wave creates new shares to sell to the government. While the investment signals confidence in the company, D-Wave remains a highly speculative investment trading at 263x expected sales.",
+      "id": "73413b88f3faf1bc2d9928da461dad673f4a2cd03809a972fdcde87de803c533",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F871390%2Fgettyimages-1366942177-copy.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Stock surged 17.2% on $100 million government funding announcement and recognition as a top beneficiary of U.S. quantum computing investments, signaling industry validation and growth potential despite high valuation and dilution concerns.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Named by TD Cowen as one of the top three beneficiaries of government quantum computing investments, but no specific funding details or stock performance mentioned in the article.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Named by TD Cowen as one of the top three beneficiaries of government quantum computing investments, but no specific funding details or stock performance mentioned in the article.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Named by TD Cowen as one of the top three beneficiaries of government quantum computing investments, but no specific funding details or stock performance mentioned in the article.",
+          "ticker": "GFS"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "government funding",
+        "CHIPS and Science Act",
+        "stock dilution",
+        "valuation",
+        "speculative investment"
+      ],
+      "published_utc": "2026-05-22T17:38:42Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "QBTS",
+        "RGTI",
+        "RGTIW",
+        "GFS"
+      ],
+      "title": "D-Wave Quantum Is Skyrocketing Today -- Is the Stock a Buy Right Now?"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/22/why-rigetti-computing-stock-is-skyrocketing-today/?source=iedfolrf0000001",
+      "author": "Keith Noonan",
+      "description": "Rigetti Computing stock surged 22.8% on news that it will receive up to $100 million in funding from the U.S. Department of Commerce through the CHIPS and Science Act. TD Cowen identified Rigetti as one of the three biggest beneficiaries of the government's quantum computing investment push, alongside D-Wave Quantum and GlobalFoundries.",
+      "id": "8411838369047d57778c316125c0d9cc9908f7396252b105cbcc0d7b8ac8e585",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F871389%2Fgettyimages-1352607170.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Company announced $100 million government investment over three years to accelerate quantum technology development, recognized by analysts as a major beneficiary of U.S. quantum computing initiatives, driving significant stock price gains.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Company announced $100 million government investment over three years to accelerate quantum technology development, recognized by analysts as a major beneficiary of U.S. quantum computing initiatives, driving significant stock price gains.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Named by TD Cowen as one of the three biggest beneficiaries of U.S. Department of Commerce quantum computing investments, indicating strong positioning in the government's strategic quantum computing push.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Identified by TD Cowen as one of the three biggest beneficiaries of U.S. quantum computing investments, suggesting favorable outlook from government support for the quantum industry.",
+          "ticker": "GFS"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "government funding",
+        "CHIPS and Science Act",
+        "stock surge",
+        "quantum technology"
+      ],
+      "published_utc": "2026-05-22T17:04:35Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW",
+        "QBTS",
+        "GFS"
+      ],
+      "title": "Why Rigetti Computing Stock Is Skyrocketing Today"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/22/why-does-quantum-computing-stock-keep-going-up/?source=iedfolrf0000001",
+      "author": "Rich Smith",
+      "description": "The Trump Administration announced $2 billion in grants to nine quantum computing companies through the Department of Commerce under the CHIPS and Science Act. Notably, Quantum Computing Inc. (QUBT) was not among the grant recipients, yet its stock surged 44% in three days. The article questions this counterintuitive rally, noting that without a grant, QUBT must continue burning cash at over $42 million annually, making the stock surge illogical.",
+      "id": "be26c7fa1c290513c7c61eb3ff170d8008017f3dad1a3d1e15a78507f59ca761",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F871410%2Fspherical-quantum-computing-chip.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Despite a 44% stock surge in three days, the company was excluded from the $2 billion grant program and must continue burning $42+ million annually without government support, making the stock appreciation unsustainable and illogical.",
+          "ticker": "QUBT"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Received a $100 million quantum technology contract from the Department of Commerce, providing two years of operational runway and validating its technology.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Awarded a quantum technology contract under the CHIPS and Science Act, providing government support and validation for its quantum computing efforts.",
+          "ticker": "INFQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Awarded a quantum technology contract under the CHIPS and Science Act, providing government support and validation for its quantum computing efforts.",
+          "ticker": "INFQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Received a quantum technology contract from the Department of Commerce, securing government funding and support for its quantum computing development.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Received a quantum technology contract from the Department of Commerce, securing government funding and support for its quantum computing development.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Awarded a foundry contract under the CHIPS and Science Act to support quantum ecosystem manufacturing, providing significant government backing.",
+          "ticker": "GFS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Awarded a foundry contract under the CHIPS and Science Act to support quantum ecosystem manufacturing and research.",
+          "ticker": "IBM"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "government grants",
+        "CHIPS and Science Act",
+        "stock rally",
+        "cash burn"
+      ],
+      "published_utc": "2026-05-22T16:05:17Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "QUBT",
+        "QBTS",
+        "INFQ",
+        "INFQ.WS",
+        "RGTI",
+        "RGTIW",
+        "GFS",
+        "IBM"
+      ],
+      "title": "Why Does Quantum Computing Stock Keep Going Up?"
+    },
+    {
+      "amp_url": "https://m.investing.com/analysis/sp-500-rally-defies-weak-sentiment-and-hawkish-fed-signals-200680810?ampMode=1",
+      "article_url": "https://www.investing.com/analysis/sp-500-rally-defies-weak-sentiment-and-hawkish-fed-signals-200680810",
+      "author": "Itai Smidt",
+      "description": "The S&P 500 rallied to new highs despite record-low consumer sentiment, hawkish Fed signals, and geopolitical tensions. The market is experiencing a broad rotation from mega-cap AI stocks to semiconductor suppliers, quantum computing names, and space-launch companies. Quantum computing stocks surged following a $2 billion Commerce Department investment, while chip suppliers and AI infrastructure plays outperformed. Yields retreated from recent highs, providing relief to equity multiples and enabling the rally to extend.",
+      "id": "f26f1d22373834198144cacdaee3511c59807a11667d2efff8b6ed7c37d4569b",
+      "image_url": "https://i-invdn-com.investing.com/redesign/images/seo/investingcom_analysis_og.jpg",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 19.46% on Commerce Department's $2 billion quantum computing investment announcement with direct equity stakes in nine companies under CHIPS Act framework",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 19.46% on Commerce Department's $2 billion quantum computing investment announcement with direct equity stakes in nine companies under CHIPS Act framework",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Climbing 15.79% as beneficiary of federal quantum computing investment and broader sector enthusiasm",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 14.98% on quantum computing sector momentum from government investment announcement",
+          "ticker": "QUBT"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Adding 8.74% as part of quantum computing sector rally driven by federal investment",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Adding 8.74% as part of quantum computing sector rally driven by federal investment",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 21.43% as top performer in quantum computing basket following Commerce Department investment",
+          "ticker": "INFQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 21.43% as top performer in quantum computing basket following Commerce Department investment",
+          "ticker": "INFQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up roughly 17.5% on the week, largest weekly gain since April 2001, benefiting from quantum computing sector momentum and AI infrastructure buildout",
+          "ticker": "IBM"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Exploding 14.54% higher on AI-server momentum heading into earnings, breaking through prior all-time high with 125.49% twelve-month return",
+          "ticker": "DELL"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 14.86% as market finally rewards PC refresh cycle that had been previously ignored",
+          "ticker": "HPQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 12.81% after Melius Research raised target, citing ownership of edge silicon and power-management franchises needed for next AI infrastructure leg",
+          "ticker": "QCOM"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 11.74% as storage infrastructure play benefiting from AI data center buildout",
+          "ticker": "NTAP"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Climbing 9.41% as compute hardware beneficiary of AI infrastructure expansion",
+          "ticker": "HPE"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Climbing 9.41% as compute hardware beneficiary of AI infrastructure expansion",
+          "ticker": "HPEpC"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 11.11% as semiconductor supplier benefiting from AI infrastructure and power delivery requirements",
+          "ticker": "WOLF"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Gaining 4.61% on analog upgrade tying company to power-delivery requirements of AI data centers",
+          "ticker": "TXN"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Down 0.92% despite clean earnings print and rosy guidance, as market rotates to second-derivative AI plays and away from flagship mega-cap name",
+          "ticker": "NVDA"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 11.36% on SpaceX IPO halo effect, with 52-week gain of roughly 299% as satellite services complex benefits from space-launch narrative",
+          "ticker": "ASTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Adding 9.18% as space-launch complex rallies on SpaceX S-1 filing and $75 billion IPO plans",
+          "ticker": "RKLB"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 13.26% as space-launch and satellite services complex benefits from SpaceX IPO momentum",
+          "ticker": "FLY"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 14.27% as satellite services beneficiary of space-launch sector halo trade",
+          "ticker": "RDW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up more than 9% as space-launch complex rallies on SpaceX IPO narrative",
+          "ticker": "SPCE"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 4-5% after surging 11% in after-hours on Q1 revenue and EPS beats with raised full-year margin guidance, reversing AI-disruption discount",
+          "ticker": "WDAY"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Rallying 11.61% after lifting FY27 outlook on 184% jump in paid AI user growth, flipping AI-casualty narrative",
+          "ticker": "ZM"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Climbing 6.46% after Q1 sales jumped 21% and management raised both comp and full-year EPS guidance",
+          "ticker": "ROST"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up roughly 4.8% after lung cancer combination therapy cut tumor progression risk by 65% in Phase 3 study with survival benefit",
+          "ticker": "MRK"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Down 5.29% despite record net bookings and GTA VI launch confirmation, classic sell-the-news reaction as only catalyst already priced in",
+          "ticker": "TTWO"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Down 8% despite beating EPS and comp sales expectations, penalized for merely reaffirming full-year guidance rather than raising in a tape where peers are lifting outlooks",
+          "ticker": "BJ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 9.49% after confirming termination of Puig merger talks, rewarding management for walking away from luxury-slump acquisition and re-rating beaten-down name",
+          "ticker": "EL"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 13.16% on reports exploring sale through intermediaries with Netflix, Apple, Sony, and PE firms as plausible bidders",
+          "ticker": "IMAX"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up more than 3% after Jefferies upgrade to buy on data-center buildout thesis not fully priced",
+          "ticker": "GNRC"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Down 36% after Beijing announced crackdown on illegal cross-border securities flows with penalties for brokerages accused of illegally moving money to foreign markets",
+          "ticker": "FUTU"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Surged 15% in Hong Kong on March-quarter revenue up 27% year-over-year with explicit $100 billion revenue target within two years driven by AI",
+          "ticker": "LNVGY"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Climbed 11.89% on OpenAI IPO chatter and gains in Arm Holdings stake, adding to prior 20% rally",
+          "ticker": "SFTBY"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Up 4.06% in U.S. trading after gaining more than 16% overnight and 15% in prior session on SoftBank momentum",
+          "ticker": "ARM"
+        }
+      ],
+      "keywords": [
+        "S&P 500",
+        "quantum computing",
+        "semiconductor stocks",
+        "AI infrastructure",
+        "Fed hawkish signals",
+        "consumer sentiment",
+        "yield retreat",
+        "space-launch stocks",
+        "earnings season",
+        "market rotation"
+      ],
+      "published_utc": "2026-05-22T16:04:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/investing.ico",
+        "homepage_url": "https://www.investing.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/investing.png",
+        "name": "Investing.com"
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW",
+        "QBTS",
+        "QUBT",
+        "IONQ",
+        "IONQ.WS",
+        "INFQ",
+        "INFQ.WS",
+        "IBM",
+        "DELL",
+        "HPQ",
+        "QCOM",
+        "NTAP",
+        "HPE",
+        "HPEpC",
+        "WOLF",
+        "TXN",
+        "NVDA",
+        "ASTS",
+        "RKLB",
+        "FLY",
+        "RDW",
+        "SPCE",
+        "WDAY",
+        "ZM",
+        "ROST",
+        "MRK",
+        "TTWO",
+        "BJ",
+        "EL",
+        "IMAX",
+        "GNRC",
+        "FUTU",
+        "LNVGY",
+        "SFTBY",
+        "ARM"
+      ],
+      "title": "S&P 500 Rally Defies Weak Sentiment and Hawkish Fed Signals"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/22/why-rigetti-computing-stock-keeps-going-up/?source=iedfolrf0000001",
+      "author": "Rich Smith",
+      "description": "Rigetti Computing stock surged 63% in three days after the U.S. Department of Commerce announced a $2 billion quantum computing initiative, with Rigetti receiving $100 million in grants. However, the company burns over $80 million annually, meaning the funding extends its runway by only about 15 months, raising questions about long-term viability.",
+      "id": "32d28d9058804343e5058094031a35246ad3868351c0ac4ace13f89959830e3f",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F871395%2Fquantum-particles-traped-in-an-electromagnetic-field-between-two-golden-discs.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "While the stock experienced a dramatic 63% surge due to $100 million in government funding, the article highlights a critical concern: the company's annual burn rate of $80+ million means the grant only extends its lifespan by approximately 15 months, suggesting the funding is insufficient for long-term sustainability.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "While the stock experienced a dramatic 63% surge due to $100 million in government funding, the article highlights a critical concern: the company's annual burn rate of $80+ million means the grant only extends its lifespan by approximately 15 months, suggesting the funding is insufficient for long-term sustainability.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Receiving $375 million in government grants under the CHIPS and Science Act as one of two quantum foundries, positioning it as a major beneficiary of the quantum computing initiative.",
+          "ticker": "GFS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Awarded $1 billion in government grants as a quantum foundry, making it the largest recipient in the Commerce Department's quantum computing support program.",
+          "ticker": "IBM"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "government grants",
+        "CHIPS and Science Act",
+        "stock surge",
+        "cash burn",
+        "miniaturization",
+        "cryostat devices"
+      ],
+      "published_utc": "2026-05-22T15:17:14Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW",
+        "GFS",
+        "IBM"
+      ],
+      "title": "Why Rigetti Computing Stock Keeps Going Up"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/22/why-the-smartest-ai-money-is-quietly-moving-into-q/?source=iedfolrf0000001",
+      "author": "Micah Zimmerman",
+      "description": "Institutional investors are beginning to shift capital toward quantum computing as the technology moves from theoretical research into practical commercial applications. Companies like Nvidia, IonQ, and Rigetti are demonstrating concrete technical milestones and early revenue traction, signaling that quantum computing may play a meaningful role in future AI infrastructure. However, the sector remains highly speculative with volatile valuations and uncertain timelines.",
+      "id": "0804d5637c6d2611a3eee8a22cd7a476513cae14592f9a29dd11cbf3d0307d1e",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F870049%2Fgettyimages-1453664340.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Nvidia is strategically positioning itself as an enabler of quantum computing integration through software (CUDA-Q Realtime) that allows quantum processors to work alongside GPUs in data centers, demonstrating commitment to the emerging technology ecosystem.",
+          "ticker": "NVDA"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "IonQ reported strong Q1 revenue of $64.7M, raised 2026 guidance to $260-270M, and achieved a foundational technical milestone by interconnecting two independent quantum systems, demonstrating both financial progress and technological advancement.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "IonQ reported strong Q1 revenue of $64.7M, raised 2026 guidance to $260-270M, and achieved a foundational technical milestone by interconnecting two independent quantum systems, demonstrating both financial progress and technological advancement.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Rigetti reported Q1 results with technical milestones for its multichip system, following the expected progression from technology breakthroughs to partner integrations and eventual revenue generation.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Rigetti reported Q1 results with technical milestones for its multichip system, following the expected progression from technology breakthroughs to partner integrations and eventual revenue generation.",
+          "ticker": "RGTIW"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "AI infrastructure",
+        "institutional investment",
+        "technical milestones",
+        "commercial traction",
+        "quantum hardware",
+        "software integration"
+      ],
+      "published_utc": "2026-05-22T13:31:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "NVDA",
+        "IONQ",
+        "IONQ.WS",
+        "RGTI",
+        "RGTIW"
+      ],
+      "title": "Why the Smartest AI Money Is Quietly Moving Into Quantum Computing Right Now"
+    },
+    {
+      "article_url": "https://www.benzinga.com/markets/equities/26/05/52737569/quantum-computing-qubt-stock-is-trending-overnight-heres-why?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel",
+      "author": "Tanya Rawat",
+      "description": "Quantum Computing Inc. (QUBT) shares surged 19.35% following reports that the Trump administration plans to award approximately $2 billion to quantum computing companies under the CHIPS and Science Act. IBM is expected to receive $1 billion, while GlobalFoundries could receive $375 million. D-Wave Quantum, Rigetti Computing, and Infleqtion are each reportedly set to receive $100 million. The funding aims to strengthen domestic quantum computing capabilities and reduce dependence on foreign supply chains.",
+      "id": "ad53dceb91b18ce9d4c2d3ef32ea80ec6b792ab39abe79ec1214eee24e314c86",
+      "image_url": "https://cdn.benzinga.com/cdn-cgi/image/width=1200,height=800,fit=crop/files/images/story/2026/05/22/Quantum-Computing-Inc.jpeg",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Stock surged 19.35% in regular trading and 5.78% in after-hours trading following broad sector enthusiasm from the $2 billion quantum computing funding announcement, despite QUBT not being explicitly named as a direct recipient.",
+          "ticker": "QUBT"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Expected to receive $1 billion in CHIPS and Science Act funding, the largest allocation among quantum computing companies mentioned.",
+          "ticker": "IBM"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Expected to receive $375 million in CHIPS and Science Act funding for quantum computing development.",
+          "ticker": "GFS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Reportedly set to receive $100 million in CHIPS and Science Act funding for quantum hardware infrastructure.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Reportedly set to receive $100 million in CHIPS and Science Act funding for quantum computing development.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Reportedly set to receive $100 million in CHIPS and Science Act funding for quantum computing development.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Reportedly set to receive $100 million in CHIPS and Science Act funding for quantum computing advancement.",
+          "ticker": "INFQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Reportedly set to receive $100 million in CHIPS and Science Act funding for quantum computing advancement.",
+          "ticker": "INFQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "In advanced discussions with a top-five quantum computing company regarding a potential strategic collaboration for quantum hardware infrastructure.",
+          "ticker": "QTEX"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "CHIPS and Science Act",
+        "government funding",
+        "domestic technology",
+        "quantum hardware"
+      ],
+      "published_utc": "2026-05-22T05:32:35Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/benzinga.ico",
+        "homepage_url": "https://www.benzinga.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/benzinga.svg",
+        "name": "Benzinga"
+      },
+      "tickers": [
+        "QUBT",
+        "IBM",
+        "GFS",
+        "QBTS",
+        "RGTI",
+        "RGTIW",
+        "INFQ",
+        "INFQ.WS",
+        "QTEX"
+      ],
+      "title": "Quantum Computing (QUBT) Stock Is Trending Overnight: Here's Why"
+    },
+    {
+      "article_url": "https://www.benzinga.com/trading-ideas/movers/26/05/52720222/trump-admin-to-take-quantum-stakes-d-wave-rigetti-ionq-stocks-pop?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel",
+      "author": "Erica Kollmann",
+      "description": "The Trump administration awarded $2 billion in CHIPS and Science Act funding to nine quantum computing companies while taking equity stakes in them. D-Wave confirmed a $100 million award, with IBM receiving $1 billion and GlobalFoundries $375 million. The move aims to strengthen U.S. quantum capabilities and reduce reliance on foreign supply chains, causing quantum stocks to rally.",
+      "id": "a34bd9aaefab6eda4a0e5e93b968e7921024c17200ee4f50b27f224d2b9f516d",
+      "image_url": "https://cdn.benzinga.com/cdn-cgi/image/width=1200,height=800,fit=crop/files/images/story/2026/05/21/Quantum-stocks.jpeg",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Confirmed $100 million in non-dilutive funding from CHIPS Act, providing capital, validation, and policy support for the smaller quantum company. Stock climbed 24.1%.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Expected to receive $100 million in federal funding, providing strategic support and validation for the emerging quantum computing company. Stock climbed 24.6%.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Expected to receive $100 million in federal funding, providing strategic support and validation for the emerging quantum computing company. Stock climbed 24.6%.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Beneficiary of the $2 billion quantum computing investment initiative, with stock climbing 10.8% on the announcement.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Beneficiary of the $2 billion quantum computing investment initiative, with stock climbing 10.8% on the announcement.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Awarded $1 billion in CHIPS Act funding, the largest recipient, reinforcing its role as a major incumbent in quantum computing. Stock climbed 6.50%.",
+          "ticker": "IBM"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Awarded $375 million in federal funding to support semiconductor and quantum technology development. Stock climbed 11.3%.",
+          "ticker": "GFS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Expected to receive $100 million in CHIPS Act funding for quantum computing development. Stock climbed 35.0%.",
+          "ticker": "INFQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Expected to receive $100 million in CHIPS Act funding for quantum computing development. Stock climbed 35.0%.",
+          "ticker": "INFQ.WS"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a prior recipient of Trump administration equity stakes but not included in this quantum computing funding round. Stock declined 4.08%.",
+          "ticker": "INTC"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "CHIPS and Science Act",
+        "government funding",
+        "equity stakes",
+        "domestic semiconductor production",
+        "China competition"
+      ],
+      "published_utc": "2026-05-21T14:38:27Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/benzinga.ico",
+        "homepage_url": "https://www.benzinga.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/benzinga.svg",
+        "name": "Benzinga"
+      },
+      "tickers": [
+        "QBTS",
+        "RGTI",
+        "RGTIW",
+        "IONQ",
+        "IONQ.WS",
+        "IBM",
+        "GFS",
+        "INFQ",
+        "INFQ.WS",
+        "INTC"
+      ],
+      "title": "Trump Admin To Take Quantum Stakes — D-Wave, Rigetti, IonQ Stocks Pop"
+    },
+    {
+      "article_url": "https://www.benzinga.com/markets/tech/26/05/52713327/why-are-infleqtion-d-wave-quantum-rigetti-computing-shares-surging-in-thursday-pre-market?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel",
+      "author": "Namrata Sen",
+      "description": "The Trump administration announced a $2 billion investment in nine quantum computing companies, sourced from the 2022 Chips and Science Act. IBM will receive $1 billion, GlobalFoundries $375 million, while D-Wave Quantum, Rigetti Computing, and Infleqtion each receive $100 million. The government will take minority equity stakes in each company. Quantum computing stocks surged in pre-market trading on the announcement.",
+      "id": "1f8f81a6f82722f0459ec1d2a5d07cff979b60d9796117a4c188a94ba87fca15",
+      "image_url": "https://cdn.benzinga.com/cdn-cgi/image/width=1200,height=800,fit=crop/files/images/story/2026/05/21/New-York-City--New-York---August-5-2025-.jpeg",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Receiving $1 billion (half of total $2 billion investment), the largest allocation among all companies, demonstrating strong government confidence in its quantum computing capabilities",
+          "ticker": "IBM"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Receiving $375 million in federal funding and taking a minority equity stake, with shares climbing 13.4% in pre-market trading",
+          "ticker": "GFS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Receiving $100 million in government funding with minority equity stake; shares surged 15.8% in pre-market trading",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Receiving $100 million in federal funding with government equity stake; shares surged 14.58% in pre-market trading",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Receiving $100 million in federal funding with government equity stake; shares surged 14.58% in pre-market trading",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Receiving $100 million in government funding with minority equity stake; shares surged 25.4% in pre-market trading, the largest gain among beneficiaries",
+          "ticker": "INFQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Receiving $100 million in government funding with minority equity stake; shares surged 25.4% in pre-market trading, the largest gain among beneficiaries",
+          "ticker": "INFQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Receiving funding as part of the $2 billion quantum computing investment; shares climbed 13.49% in pre-market trading",
+          "ticker": "QUBT"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Receiving funding as part of the government's quantum computing initiative; shares climbed 7.67% in pre-market trading",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Receiving funding as part of the government's quantum computing initiative; shares climbed 7.67% in pre-market trading",
+          "ticker": "IONQ.WS"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "government funding",
+        "Chips and Science Act",
+        "equity stakes",
+        "pre-market surge",
+        "Trump administration"
+      ],
+      "published_utc": "2026-05-21T11:52:17Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/benzinga.ico",
+        "homepage_url": "https://www.benzinga.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/benzinga.svg",
+        "name": "Benzinga"
+      },
+      "tickers": [
+        "IBM",
+        "GFS",
+        "QBTS",
+        "RGTI",
+        "RGTIW",
+        "INFQ",
+        "INFQ.WS",
+        "QUBT",
+        "IONQ",
+        "IONQ.WS"
+      ],
+      "title": "Why Are Infleqtion, D-Wave Quantum, Rigetti Computing Shares Surging In Thursday Pre-Market?"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/19/prediction-this-will-be-rigetti-computings-stock-p/?source=iedfolrf0000001",
+      "author": "Leo Sun",
+      "description": "Rigetti Computing's stock has plummeted 71% from its $56.34 peak to $16, as the quantum computing company struggles with competition, unprofitability, and uneven revenue growth. Despite analyst expectations for revenue to triple to $23.6M in 2026 and reach $44M in 2027, the stock remains overvalued at 126x 2027 sales. The author predicts the stock will stagnate or decline further over the next 12 months due to intense competition from IonQ and IBM, and difficulty justifying its high valuation.",
+      "id": "438d79656d0c588af656e5b35f4aa81d3084fd128773075566874ecca9388d0f",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F869851%2Fgettyimages-2211412680.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Stock has declined 71% from peak, faces stiff competition, remains deeply unprofitable with lumpy revenue, and is overvalued at 126x 2027 sales. Author predicts stagnation or further decline over next 12 months.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Stock has declined 71% from peak, faces stiff competition, remains deeply unprofitable with lumpy revenue, and is overvalued at 126x 2027 sales. Author predicts stagnation or further decline over next 12 months.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Mentioned as a rapidly growing quantum computing competitor with stronger market position relative to Rigetti, implying competitive advantage.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Mentioned as a rapidly growing quantum computing competitor with stronger market position relative to Rigetti, implying competitive advantage.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a tech giant expanding quantum computing business, representing competitive threat to Rigetti but not the focus of analysis.",
+          "ticker": "IBM"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "stock valuation",
+        "revenue growth",
+        "competition",
+        "profitability",
+        "QPU systems"
+      ],
+      "published_utc": "2026-05-19T16:05:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW",
+        "IONQ",
+        "IONQ.WS",
+        "IBM"
+      ],
+      "title": "Prediction: This Will Be Rigetti Computing's Stock Price in 1 Year"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/15/rigetti-computing-vs-ionq-which-quantum-computing/?source=iedfolrf0000001",
+      "author": "Leo Sun",
+      "description": "Rigetti Computing and IonQ are both early-stage quantum computing companies with strong stock performance over the past year. While Rigetti expects explosive revenue growth from $7M to $100M by 2028, IonQ is projected to grow from $130M to $638M in the same period. Both companies remain unprofitable and richly valued, but IonQ's higher revenues, innovative trapped-ion technology, and robust government contracts make it a better investment choice than Rigetti.",
+      "id": "ae00e3eb0ffc21bcd722880e8673b37a4e91ac840363d232c71b12348bc1db6a",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F869814%2Fquantum.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "While Rigetti shows impressive projected revenue growth (14x increase by 2028) and recent stock gains of 70%, the company remains unprofitable, is richly valued at 28x 2028 sales, and still needs to prove it can scale its business and compete with newer rivals like IonQ.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "While Rigetti shows impressive projected revenue growth (14x increase by 2028) and recent stock gains of 70%, the company remains unprofitable, is richly valued at 28x 2028 sales, and still needs to prove it can scale its business and compete with newer rivals like IonQ.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "IonQ is rated as the better investment choice due to higher current revenues ($130M vs $7M), stronger projected growth (5x by 2028), more innovative trapped-ion technology with superior accuracy and stability, robust government contracts through IonQ Federal division, and better competitive positioning despite being richly valued at 32x 2028 sales.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "IonQ is rated as the better investment choice due to higher current revenues ($130M vs $7M), stronger projected growth (5x by 2028), more innovative trapped-ion technology with superior accuracy and stability, robust government contracts through IonQ Federal division, and better competitive positioning despite being richly valued at 32x 2028 sales.",
+          "ticker": "IONQ.WS"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "revenue growth",
+        "quantum chips",
+        "government contracts",
+        "unprofitable companies",
+        "technology stocks",
+        "trapped-ion systems",
+        "superconducting systems"
+      ],
+      "published_utc": "2026-05-15T12:05:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW",
+        "IONQ",
+        "IONQ.WS"
+      ],
+      "title": "Rigetti Computing vs. IonQ: Which Quantum Computing Stock Has Better Revenue Momentum?"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/14/down-66-should-you-buy-the-dip-in-rigetti/?source=iedfolrf0000001",
+      "author": "Adam Spatacco",
+      "description": "Rigetti Computing stock has plummeted 66% from all-time highs after a speculative surge in 2025. Despite the pullback, the company's valuation remains unjustified with only $7.1 million in 2025 revenue against $216 million in net losses. With a P/S ratio of 607, structural operating losses of ~$100 million annually, and insider selling, the article warns investors that this falling stock may not represent a buying opportunity without significant commercial breakthroughs.",
+      "id": "6cef56ce423d551c1f57b185fb12795b63b03f982eb560b95e1526b6b513b32c",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F869654%2Fgettyimages-1167797024-1.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "The company faces severe financial challenges with minimal revenue ($7.1M in 2025), massive operating losses ($216M), an unjustified P/S multiple of 607, structural cash burn of ~$100M annually, and insider selling near peak valuations. The article explicitly warns against buying the dip, characterizing the stock as a 'speculative falling knife.'",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "The company faces severe financial challenges with minimal revenue ($7.1M in 2025), massive operating losses ($216M), an unjustified P/S multiple of 607, structural cash burn of ~$100M annually, and insider selling near peak valuations. The article explicitly warns against buying the dip, characterizing the stock as a 'speculative falling knife.'",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned only as the catalyst for the quantum computing sector frenzy through its Willow quantum chip announcement. No direct criticism or praise; serves as contextual background for Rigetti's speculative surge.",
+          "ticker": "GOOG"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned only as the catalyst for the quantum computing sector frenzy through its Willow quantum chip announcement. No direct criticism or praise; serves as contextual background for Rigetti's speculative surge.",
+          "ticker": "GOOGL"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "stock valuation",
+        "speculative bubble",
+        "insider selling",
+        "operating losses",
+        "revenue growth"
+      ],
+      "published_utc": "2026-05-14T17:15:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW",
+        "GOOG",
+        "GOOGL"
+      ],
+      "title": "Down 66%, Should You Buy the Dip in Rigetti Computing?"
+    },
+    {
+      "amp_url": "https://m.investing.com/analysis/dwave-earnings-looked-weak-but-investors-may-be-missing-this-200680304?ampMode=1",
+      "article_url": "https://www.investing.com/analysis/dwave-earnings-looked-weak-but-investors-may-be-missing-this-200680304",
+      "author": "Nathan Reiff",
+      "description": "D-Wave Quantum reported record Q1 2026 bookings of $33.4 million (up 2,000% YOY) and strong QCaaS revenue growth, but the stock fell 7% post-earnings due to revenue of $2.9 million (down 80% YOY) and widening losses. Despite weak top-line performance, the company maintains $588 million in cash and shows progress toward sustainable profitability through recurring revenue streams.",
+      "id": "88f0c22338815762811e5da8b05efcb31b83bcf0ec18f3f6e7626059d49435e6",
+      "image_url": "https://i-invdn-com.investing.com/redesign/images/seo/investingcom_analysis_og.jpg",
+      "insights": [
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mixed results with strong bookings growth (2,000% YOY) and QCaaS momentum, but offset by significant revenue decline (80% YOY), widening losses, and missed revenue expectations. Strong cash position ($588M) and technological progress provide some optimism, but execution challenges remain.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Reported promising Q1 2026 results with strong revenue growth, raised full-year guidance, and strong partnerships and system sales, though profitability remains elusive.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Reported promising Q1 2026 results with strong revenue growth, raised full-year guidance, and strong partnerships and system sales, though profitability remains elusive.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Q1 2026 revenue roughly tripled YOY to $4.4 million, outperforming D-Wave's revenue performance on the same reporting day.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Q1 2026 revenue roughly tripled YOY to $4.4 million, outperforming D-Wave's revenue performance on the same reporting day.",
+          "ticker": "RGTIW"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "earnings",
+        "bookings",
+        "QCaaS",
+        "revenue",
+        "profitability",
+        "cash position",
+        "logical qubits"
+      ],
+      "published_utc": "2026-05-14T10:41:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/investing.ico",
+        "homepage_url": "https://www.investing.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/investing.png",
+        "name": "Investing.com"
+      },
+      "tickers": [
+        "QBTS",
+        "IONQ",
+        "IONQ.WS",
+        "RGTI",
+        "RGTIW"
+      ],
+      "title": "D-Wave Earnings Looked Weak, But Investors May Be Missing This"
+    },
+    {
+      "article_url": "https://www.globenewswire.com/news-release/2026/05/14/3294677/0/en/The-Post-Quantum-Migration-Window-Just-Got-a-Lot-More-Practical-QPA-v2-Lands-at-the-Enterprise-Tier.html",
+      "author": "American News Group",
+      "description": "QSE launched QPA v2, an enterprise post-quantum cryptographic migration platform designed to help organizations transition to quantum-safe cryptography ahead of regulatory deadlines. The platform offers AI-enhanced assessment, inventory analysis, and real-time visibility into quantum readiness. This comes as NIST finalized post-quantum cryptography standards and the NSA's CNSA 2.0 framework requires quantum-safe implementations by 2027-2035.",
+      "id": "c11956226a7f82bdfab62bf503e5b0e39f4526754c32c44e4a6196e64280da09",
+      "image_url": "https://ml.globenewswire.com/Resource/Download/134c155d-474f-4885-ac65-3b8adb6fb783",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Advancing Ankaa-class superconducting quantum systems with modular chip approach toward scalable quantum performance, indicating continued technical progress.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Advancing Ankaa-class superconducting quantum systems with modular chip approach toward scalable quantum performance, indicating continued technical progress.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Operating commercial quantum annealing systems with deployments across optimization use cases, demonstrating practical quantum computing adoption.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as expanding cybersecurity platform with potential adjacency to post-quantum migration tooling, but no specific developments or sentiment drivers disclosed.",
+          "ticker": "S"
+        }
+      ],
+      "keywords": [
+        "post-quantum cryptography",
+        "QPA v2",
+        "quantum-safe migration",
+        "NIST standards",
+        "NSA CNSA 2.0",
+        "enterprise security",
+        "cryptographic infrastructure",
+        "regulatory compliance"
+      ],
+      "published_utc": "2026-05-14T09:55:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/globenewswire.ico",
+        "homepage_url": "https://www.globenewswire.com",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/globenewswire.svg",
+        "name": "GlobeNewswire Inc."
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW",
+        "QBTS",
+        "S"
+      ],
+      "title": "The Post-Quantum Migration Window Just Got a Lot More Practical: QPA v2 Lands at the Enterprise Tier"
+    },
+    {
+      "article_url": "https://www.benzinga.com/markets/earnings/26/05/52489625/whats-going-on-with-rigetti-computing-on-tuesday?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel",
+      "author": "Vandana Singh",
+      "description": "Rigetti Computing shares rose on Tuesday following strong first-quarter results, with revenue of $4.4 million exceeding expectations by 10.86%. The company launched its 108-qubit Cepheus-1-108Q system and announced plans to invest up to $100 million in the U.K. for a quantum computing system with over 1,000 qubits within three to four years. Analysts maintain a bullish outlook with an average price target of $34.86.",
+      "id": "78da4b0769c2607b017c2e82646fe1992383999c9e86bbdcf6359c1d01ab9f0b",
+      "image_url": "https://cdn.benzinga.com/files/images/story/2026/05/12/Rigetti-Computing--Inc-.jpeg?width=1200&height=800&fit=crop",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Company exceeded revenue expectations by 10.86%, launched advanced 108-qubit quantum computing system, announced significant $100 million U.K. investment, and maintains bullish analyst consensus with $34.86 average price target. Stock trading activity was positive on the news.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Company exceeded revenue expectations by 10.86%, launched advanced 108-qubit quantum computing system, announced significant $100 million U.K. investment, and maintains bullish analyst consensus with $34.86 average price target. Stock trading activity was positive on the news.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "This leveraged ETF tracking RGTI benefits from positive sentiment and upward movement in Rigetti Computing stock.",
+          "ticker": "RGTX"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Broad quantum computing fund with exposure to multiple companies; Rigetti's positive news provides some support but sentiment is neutral as the fund's overall performance depends on multiple holdings.",
+          "ticker": "WQTM"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "first-quarter earnings",
+        "Cepheus-1-108Q system",
+        "U.K. investment",
+        "analyst ratings",
+        "chiplet-based architecture"
+      ],
+      "published_utc": "2026-05-12T14:23:35Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/benzinga.ico",
+        "homepage_url": "https://www.benzinga.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/benzinga.svg",
+        "name": "Benzinga"
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW",
+        "RGTX",
+        "WQTM"
+      ],
+      "title": "What's Going On With Rigetti Computing On Tuesday?"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/12/quantum-computing-stocks-ionq-qbts-have-doubled/?source=iedfolrf0000001",
+      "author": "Sean Williams",
+      "description": "IonQ and D-Wave Quantum have surged 98% and 84% respectively since March 30, driven by excitement over quantum computing's growth prospects. However, the author warns investors against chasing this rally, citing concerns about unsustainable valuations (P/S ratios of 116 and 311), the technology's early adoption stage, and potential competition from larger tech companies with stronger balance sheets.",
+      "id": "6ffa2f5669e6e411d7506357121dd5461dccb19ee9404325fedc5a6761982291",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F869197%2Fquantum-computer-digital-data-calculations-artificial-intelligence-getty.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Despite strong Q1 revenue growth (755% YoY) and record $64.7M revenue, the stock is overvalued with a P/S ratio of 116. The technology remains unproven at scale, and the company lacks defensible competitive advantages against larger tech competitors. Author explicitly warns against investing.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Despite strong Q1 revenue growth (755% YoY) and record $64.7M revenue, the stock is overvalued with a P/S ratio of 116. The technology remains unproven at scale, and the company lacks defensible competitive advantages against larger tech competitors. Author explicitly warns against investing.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "While the company has a strong balance sheet ($884.5M in cash) and completed a $550M acquisition, its extreme P/S ratio of 311 is unsustainable. The technology is early-stage and vulnerable to competition from established tech giants. Author cautions investors not to take the bait.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Though mentioned as having a 56% gain, Rigetti faces the same fundamental issues as other pure-play quantum computing stocks: early-stage technology, lack of proven profitability, and vulnerability to competition from larger, better-capitalized competitors.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Though mentioned as having a 56% gain, Rigetti faces the same fundamental issues as other pure-play quantum computing stocks: early-stage technology, lack of proven profitability, and vulnerability to competition from larger, better-capitalized competitors.",
+          "ticker": "RGTIW"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "stock rally",
+        "valuation concerns",
+        "technology bubble",
+        "first-mover advantage",
+        "competitive risk"
+      ],
+      "published_utc": "2026-05-12T09:06:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "IONQ",
+        "IONQ.WS",
+        "QBTS",
+        "RGTI",
+        "RGTIW"
+      ],
+      "title": "Quantum Computing Stocks IonQ and D-Wave Quantum Have Nearly Doubled in 5 Weeks -- Don't Take the Bait"
+    },
+    {
+      "article_url": "https://www.fool.com/coverage/stock-market-today/2026/05/11/stock-market-today-may-11-ionq-rises-as-skywater-vote-advances-semiconductor-manufacturing-deal/?source=iedfolrf0000001",
+      "author": "Eric Trie",
+      "description": "IonQ stock surged 15.75% after SkyWater Technology shareholders approved their merger agreement. The acquisition is expected to close in Q2-Q3 2026 and will give IonQ greater control over semiconductor fabrication and packaging capabilities through SkyWater's facilities in Minnesota, Florida, and Texas. Quantum computing peers D-Wave and Rigetti also gained on broader sector enthusiasm.",
+      "id": "c8f14630b687f35ec64c2d46f0155a62d655848d52fa32d2df6c962999428c9f",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fcdn.content.foolcdn.com%2Fimages%2F1umn9qeh%2Fproduction%2Fe3bcbb36c955ac33b4d67641805fcca8e9fca941-1401x1251.png%3Fw%3D800%26q%3D75%26fit%3Dmax%26auto%3Dformat&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Stock rose 15.75% following SkyWater shareholder approval of merger agreement. The acquisition provides strategic vertical integration of semiconductor manufacturing and packaging capabilities, supporting IonQ's quantum system scaling roadmap.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Stock rose 15.75% following SkyWater shareholder approval of merger agreement. The acquisition provides strategic vertical integration of semiconductor manufacturing and packaging capabilities, supporting IonQ's quantum system scaling roadmap.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Shareholder approval of merger agreement represents a significant milestone. The acquisition provides SkyWater's facilities with a clear growth pathway through IonQ's quantum computing expansion plans.",
+          "ticker": "SKYT"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Stock gained 6.47% as part of broader quantum computing sector enthusiasm driven by IonQ's acquisition news and industry momentum.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Stock gained 8.29% reflecting broader positive sentiment in the quantum computing sector following IonQ's merger approval.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Stock gained 8.29% reflecting broader positive sentiment in the quantum computing sector following IonQ's merger approval.",
+          "ticker": "RGTIW"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "semiconductor manufacturing",
+        "merger acquisition",
+        "IonQ",
+        "SkyWater Technology",
+        "stock market",
+        "fabrication",
+        "packaging capabilities"
+      ],
+      "published_utc": "2026-05-11T21:19:34Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "IONQ",
+        "IONQ.WS",
+        "SKYT",
+        "QBTS",
+        "RGTI",
+        "RGTIW"
+      ],
+      "title": "Stock Market Today, May 11: IonQ Rises as SkyWater Vote Advances Semiconductor Manufacturing Deal"
+    },
+    {
+      "article_url": "https://www.benzinga.com/markets/earnings/26/05/52471831/quantum-computing-stock-spikes-on-q1-results-what-to-know?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel",
+      "author": "Erica Kollmann",
+      "description": "Quantum Computing Inc. (QUBT) beat Street estimates in Q1 2026, reporting losses of $0.02 per share versus expected $0.05 loss, and revenue of $3.69 million exceeding the $3.28 million consensus by 12.7%. The strong year-over-year revenue growth was driven by acquisitions of LSI and NuCrypt. The stock surged 16.40% to $11.85 in extended trading.",
+      "id": "5016b19035bf134bb1b3a0041e7e9f0a1247499973ef8e068229768f4fd5819a",
+      "image_url": "https://cdn.benzinga.com/files/images/story/2026/05/11/Quantum-Computing-Concept-Revolutionizin.jpeg?width=1200&height=800&fit=crop",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Company beat both earnings and revenue estimates, demonstrated significant year-over-year revenue growth (from $39k to $3.69M), made strategic acquisitions to drive growth, and stock price surged 16.40% following results announcement. CEO commentary highlights operational progress and market demand for their photonic solutions.",
+          "ticker": "QUBT"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "Q1 earnings",
+        "earnings beat",
+        "revenue growth",
+        "acquisitions",
+        "photonics",
+        "stock surge"
+      ],
+      "published_utc": "2026-05-11T21:05:36Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/benzinga.ico",
+        "homepage_url": "https://www.benzinga.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/benzinga.svg",
+        "name": "Benzinga"
+      },
+      "tickers": [
+        "QUBT"
+      ],
+      "title": "Quantum Computing Stock Spikes On Q1 Results: What To Know"
+    },
+    {
+      "article_url": "https://www.benzinga.com/markets/earnings/26/05/52469555/rigetti-stock-slips-after-posting-q1-results-details?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel",
+      "author": "Erica Kollmann",
+      "description": "Rigetti Computing reported Q1 earnings with a loss of $0.04 per share (meeting consensus) and revenue of $4.4 million (beating estimates by 10.86%). The company announced its 108-qubit Cepheus-1-108Q quantum computer is now generally available on multiple platforms. Despite beating revenue expectations, RGTI stock declined 1.95% to $20.11 in after-hours trading.",
+      "id": "ee6baee508b6c2139fbdc02e0602a6d97090a39c40d2ca12a3fdecf83ed19ac6",
+      "image_url": "https://cdn.benzinga.com/files/images/story/2026/05/11/Los-Angeles--California---August-3-2025-_0.jpeg?width=1200&height=800&fit=crop",
+      "insights": [
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "While the company beat revenue expectations and announced a significant product milestone (Cepheus-1-108Q in general availability), the stock declined 1.95% in after-hours trading. The company also reported a substantial non-GAAP net loss of $14.7 million for the quarter, indicating ongoing profitability challenges despite revenue growth.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "While the company beat revenue expectations and announced a significant product milestone (Cepheus-1-108Q in general availability), the stock declined 1.95% in after-hours trading. The company also reported a substantial non-GAAP net loss of $14.7 million for the quarter, indicating ongoing profitability challenges despite revenue growth.",
+          "ticker": "RGTIW"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "Q1 earnings",
+        "Cepheus-1-108Q",
+        "revenue beat",
+        "after-hours decline"
+      ],
+      "published_utc": "2026-05-11T20:24:13Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/benzinga.ico",
+        "homepage_url": "https://www.benzinga.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/benzinga.svg",
+        "name": "Benzinga"
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW"
+      ],
+      "title": "Rigetti Stock Slips After Posting Q1 Results: Details"
+    },
+    {
+      "article_url": "https://www.benzinga.com/pressreleases/26/05/n52467800/quantum-computing-inc-reports-first-quarter-2026-financial-results?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel",
+      "author": "Prnewswire",
+      "description": "Quantum Computing Inc. (NASDAQ:QUBT) reported Q1 2026 revenues of $3.7 million, up significantly from $39 thousand in Q1 2025, driven by acquisitions of Luminar Semiconductor and NuCrypt. The company reported a net loss of $4.1 million compared to net income of $17.0 million in the prior year, primarily due to lower derivative liability gains and higher operating expenses. QCi ended the quarter with $1.4 billion in cash and investments and a $16 million contract backlog.",
+      "id": "1217a1d7381e9e0938e6eec1278acba61e16b8acb2fdf3171ff848c3ec49119f",
+      "image_url": "https://cdn.benzinga.com/files/imagecache/bz2_opengraph_meta_image_400x300/sites/all/themes/bz2/images/bz-icon.png",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Strong revenue growth (94x increase YoY), successful strategic acquisitions expanding product portfolio and manufacturing capabilities, solid cash position of $1.4 billion, and growing commercial momentum with contract backlog of $16 million. Despite net loss in Q1, the operational progress and strategic positioning in high-growth quantum and photonics markets support positive outlook.",
+          "ticker": "QUBT"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "photonics",
+        "Q1 2026 earnings",
+        "acquisitions",
+        "Luminar Semiconductor",
+        "NuCrypt",
+        "quantum optimization",
+        "integrated photonics"
+      ],
+      "published_utc": "2026-05-11T20:05:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/benzinga.ico",
+        "homepage_url": "https://www.benzinga.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/benzinga.svg",
+        "name": "Benzinga"
+      },
+      "tickers": [
+        "QUBT"
+      ],
+      "title": "Quantum Computing Inc. Reports First Quarter 2026 Financial Results"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/08/is-quantum-computing-a-buy-right-now/?source=iedfolrf0000001",
+      "author": "Catie Hogan",
+      "description": "Quantum Computing (QUBT) has had a volatile 2026, down 8% year-to-date despite launching NeuraWave, a promising photonics-based AI platform. While the technology shows commercial potential and revenue is expected to grow, the company faces significant competition from established giants like Nvidia. With profitability still distant and an important earnings report upcoming, analysts recommend a cautious 'wait and see' approach due to substantial risk and volatility.",
+      "id": "0fdabbeaca93175fd2773e3c5f197225f2df675e3f6b1ad1d2ac24f01835261c",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F868807%2Ftwo-employees-with-laptop-in-data-center.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "While NeuraWave launch is commercially promising and revenue is growing, the stock remains volatile and down significantly over six months. The company faces intense competition from established players, profitability is far off, and the analyst recommends waiting for earnings results before investing. The sentiment reflects both opportunity and substantial risk.",
+          "ticker": "QUBT"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Nvidia is mentioned as a well-established giant with a stronghold on the AI infrastructure market, positioning it as a dominant competitor in the space that Quantum Computing must compete against.",
+          "ticker": "NVDA"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "NeuraWave",
+        "photonics",
+        "edge AI",
+        "earnings report",
+        "stock volatility",
+        "AI infrastructure"
+      ],
+      "published_utc": "2026-05-08T13:15:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "QUBT",
+        "NVDA"
+      ],
+      "title": "Is Quantum Computing a Buy Right Now?"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/05/is-rigetti-computing-a-buy/?source=iedfolrf0000001",
+      "author": "Keithen Drury",
+      "description": "Rigetti Computing, a quantum computing pure-play stock, is falling behind competitors and is not recommended as a buy. The company failed to advance in DARPA's Quantum Benchmarking Initiative, experienced declining revenues ($1.9M in Q4 2025 vs $2.3M in Q4 2024), and faces stiff competition from better-funded rivals using the same superconducting qubit technology. Alternatives like IonQ, quantum computing ETFs, or legacy tech companies are better investment options.",
+      "id": "5d43f0e4313c40015c8cc4332ad67eb8da7a33b6e11bbca4404c3ac03983bfa5",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F867617%2Fimage-of-quantum-computing.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Failed to advance in DARPA's QBI evaluation, declining year-over-year revenues, significantly behind competitors like IonQ in growth (IonQ: $61.9M revenue vs Rigetti: $1.9M), and using the same technology as better-funded competitors, making success unlikely.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Failed to advance in DARPA's QBI evaluation, declining year-over-year revenues, significantly behind competitors like IonQ in growth (IonQ: $61.9M revenue vs Rigetti: $1.9M), and using the same technology as better-funded competitors, making success unlikely.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Demonstrated strong revenue growth of 429% year-over-year with Q4 revenue of $61.9M, successfully advancing in DARPA's QBI initiative, and positioned as a leading competitor in the quantum computing space.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Demonstrated strong revenue growth of 429% year-over-year with Q4 revenue of $61.9M, successfully advancing in DARPA's QBI initiative, and positioned as a leading competitor in the quantum computing space.",
+          "ticker": "IONQ.WS"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "DARPA",
+        "Quantum Benchmarking Initiative",
+        "superconducting qubits",
+        "revenue decline",
+        "competitive disadvantage"
+      ],
+      "published_utc": "2026-05-05T07:31:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW",
+        "IONQ",
+        "IONQ.WS"
+      ],
+      "title": "Is Rigetti Computing a Buy?"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/05/03/jensen-huang-just-announced-something-big-heres-wh/?source=iedfolrf0000001",
+      "author": "John Bromels",
+      "description": "Nvidia CEO Jensen Huang announced Nvidia Ising, an open-source quantum AI model platform designed to help quantum processors run practical applications at scale. Rather than competing directly in quantum computing hardware, Nvidia is positioning itself as the essential software layer for quantum systems, leveraging AI as the operating system for quantum machines.",
+      "id": "c6c307049e8313bbf73f702fb59f48e64f1214b50345b23bef3afab6cba8da49",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F866651%2Fnvidia-headquarters-outside-with-black-nvidia-sign-with-nvidia-logo.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Nvidia is strategically entering the quantum computing space with a practical software solution (Ising) that positions it as an essential layer in quantum systems. Rather than competing in hardware, the company is securing a valuable seat at the table in the next computing revolution, which should benefit shareholders long-term.",
+          "ticker": "NVDA"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a competitor working on quantum computing speed and accuracy improvements, but no specific news or impact assessment provided in the article.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a competitor working on quantum computing speed and accuracy improvements, but no specific news or impact assessment provided in the article.",
+          "ticker": "RGTIW"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "artificial intelligence",
+        "Nvidia Ising",
+        "quantum AI models",
+        "GPU processors",
+        "quantum processors"
+      ],
+      "published_utc": "2026-05-03T16:27:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "NVDA",
+        "RGTI",
+        "RGTIW"
+      ],
+      "title": "Jensen Huang Just Announced Something Big. Here's What It Means for Nvidia Stock."
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/04/27/rigetti-computing-down-70-from-high-time-to-buy/?source=iedfolrf0000001",
+      "author": "Will Healy",
+      "description": "Rigetti Computing stock has fallen 70% from its peak but shows promise in quantum computing technology through its unique chiplet-tiling approach. However, the company faces significant financial challenges including a 34% revenue decline in 2025, a $216 million operating loss, and an extremely elevated valuation (P/S ratio over 730). While analysts forecast strong revenue growth recovery in 2026-2027, near-term profitability remains unlikely. The article recommends only speculative positions until financial conditions improve significantly.",
+      "id": "357f534e37f49eebc7486d3100fc3625488978622544e72b665f667245698d4d",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F867099%2Frigetti-logo-on-smartphone-with-stock-chart-background-rgti.jpeg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Despite innovative quantum computing technology and forecasted revenue growth, the company faces severe financial headwinds including 34% revenue decline in 2025, $216 million operating loss, negative free cash flow, and extremely elevated valuation metrics (P/S ratio >730). The article explicitly recommends limiting to speculative positions or avoiding the stock entirely until financial conditions improve significantly.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Despite innovative quantum computing technology and forecasted revenue growth, the company faces severe financial headwinds including 34% revenue decline in 2025, $216 million operating loss, negative free cash flow, and extremely elevated valuation metrics (P/S ratio >730). The article explicitly recommends limiting to speculative positions or avoiding the stock entirely until financial conditions improve significantly.",
+          "ticker": "RGTIW"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "chiplet technology",
+        "revenue decline",
+        "operating losses",
+        "valuation concerns",
+        "speculative investment",
+        "product delays"
+      ],
+      "published_utc": "2026-04-27T06:30:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW"
+      ],
+      "title": "Rigetti Computing Is Down 70% From Its High. Time to Buy?"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/04/24/quantum-computing-stocks-ionq-rgti-qbts-soar-72/?source=iedfolrf0000001",
+      "author": "Sean Williams",
+      "description": "Quantum computing stocks IonQ, Rigetti, and D-Wave surged 72%, 37%, and 56% respectively over seven trading days, driven by an $850 billion addressable market and partnerships with Amazon. However, the article warns investors against chasing this rally, citing historical patterns of bubbles in game-changing technologies, extreme valuation multiples (P/S ratios of 106-870 vs. historical ceiling of 30-45), and the threat posed by well-capitalized competitors like Microsoft and Alphabet who have already launched quantum processing units.",
+      "id": "b02b162daedb8936e8ef31db792924d2dfac55d6068b7b8a065d6724f085db6c",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F866709%2Fquantum-computer-digital-data-calculations-artificial-intelligence-getty.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Trading at an extreme P/S ratio of 106, losing money, reliant on dilutive share issuances, and faces competition from well-capitalized tech giants. Article explicitly warns against chasing the rally.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Trading at an extreme P/S ratio of 106, losing money, reliant on dilutive share issuances, and faces competition from well-capitalized tech giants. Article explicitly warns against chasing the rally.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Highest P/S ratio at 870, unprofitable, dependent on dilutive financing, and lacks competitive moat against established players entering the quantum space.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Highest P/S ratio at 870, unprofitable, dependent on dilutive financing, and lacks competitive moat against established players entering the quantum space.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "P/S ratio of 283 indicates bubble territory, unprofitable operations, and vulnerable to competition from Microsoft and Alphabet who have already deployed quantum processing units.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Established profitable company with fortress balance sheet that has already debuted quantum processing units, positioning it as a credible competitor with first-mover advantage in quantum technology.",
+          "ticker": "MSFT"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Well-capitalized, highly profitable company that has already launched quantum processing units, providing competitive threat to pure-play quantum stocks while maintaining financial strength.",
+          "ticker": "GOOG"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Well-capitalized, highly profitable company that has already launched quantum processing units, providing competitive threat to pure-play quantum stocks while maintaining financial strength.",
+          "ticker": "GOOGL"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as providing Braket quantum cloud service access to IonQ, Rigetti, and D-Wave, but no direct sentiment expressed regarding its quantum strategy or investments.",
+          "ticker": "AMZN"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "stock rally",
+        "bubble risk",
+        "valuation concerns",
+        "technology adoption",
+        "market competition"
+      ],
+      "published_utc": "2026-04-24T09:06:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "IONQ",
+        "IONQ.WS",
+        "RGTI",
+        "RGTIW",
+        "QBTS",
+        "MSFT",
+        "GOOG",
+        "GOOGL",
+        "AMZN"
+      ],
+      "title": "Quantum Computing Stocks IonQ, Rigetti, and D-Wave Have Soared Up to 72% in 7 Trading Sessions -- and You'll Likely Regret Chasing This Rally"
+    }
+  ],
+  "payload_kind": "json",
+  "vendor": "polygon"
+}

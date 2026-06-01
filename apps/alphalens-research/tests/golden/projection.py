@@ -82,3 +82,57 @@ def extract_projection(events: pd.DataFrame) -> dict[str, Any]:
         "columns": sorted(events.columns),
         "rows": rows,
     }
+
+
+def _mcap_bucket(value: Any) -> str | None:
+    # Bucket the raw market_cap float so the golden locks the bracket-filter
+    # decision without pinning a 9-digit snapshot number that invites rot.
+    if value is None or pd.isna(value):
+        return None
+    v = float(value)
+    if v < 500e6:
+        return "<500M"
+    if v < 1e9:
+        return "500M-1B"
+    if v < 3e9:
+        return "1B-3B"
+    if v < 10e9:
+        return "3B-10B"
+    return ">10B"
+
+
+def map_themes_projection(candidates: pd.DataFrame) -> dict[str, Any]:
+    """Golden projection for the map-themes stage (Phase 3b).
+
+    Locks the schema + per-row gate decision (which of tenk/press/insider
+    passed) + verified status + an mcap bucket + whether a catalyst was
+    resolved. EXCLUDES the volatile/churny fields: LLM prose (``rationale``,
+    ``company_name``), ``llm_confidence`` (deterministic under replay but pure
+    float churn; row order is already pinned by the ticker tie-break in
+    ``map_themes``), the raw ``market_cap`` float (→ bucket), and the catalyst
+    prose (``source_event_*`` → the ``has_catalyst`` boolean). The gate verdicts
+    are what a verification regression would flip.
+    """
+    rows = []
+    for _, r in candidates.sort_values("ticker").iterrows():
+        rows.append(
+            {
+                "ticker": str(r["ticker"]),
+                "theme": str(r["theme"]),
+                "verified": bool(r["verified"]),
+                "n_gates_passed": int(r["n_gates_passed"]),
+                "gates_passed_str": str(r.get("gates_passed_str", "")),
+                "n_gates_failed": int(r["n_gates_failed"]),
+                "n_gates_unknown": int(r["n_gates_unknown"]),
+                "mcap_bucket": _mcap_bucket(r.get("market_cap")),
+                "has_catalyst": bool(
+                    pd.notna(r.get("source_event_url")) and r.get("source_event_url")
+                ),
+            }
+        )
+    return {
+        "row_count": len(candidates),
+        "columns": sorted(candidates.columns),
+        "tickers": sorted(candidates["ticker"].astype(str)) if len(candidates) else [],
+        "rows": rows,
+    }
