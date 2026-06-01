@@ -71,7 +71,10 @@ def extract_projection(events: pd.DataFrame) -> dict[str, Any]:
                 "event_type": str(r["event_type"]),
                 "has_template_fields": isinstance(tfj, str) and bool(tfj),
                 "themes_nonempty": _themes_nonempty(r.get("themes")),
-                "confidence": round(float(r["confidence"]), 4),
+                # 6dp (not 4dp): deterministic under cassette replay, so the
+                # only source of churn is a normalisation change in the code —
+                # 6dp catches sub-percent drift a coarser round would mask.
+                "confidence": round(float(r["confidence"]), 6),
             }
         )
     return {

@@ -165,6 +165,11 @@ def main() -> None:
     recorder = RecordingOpenRouter(OpenRouterClient(api_key=api_key), cassettes)
     resolver = EntityResolver(company_tickers_path=company_tickers_path)
 
+    # events_dir=golden_dir writes golden/{asof}.parquet as a side effect. The
+    # replay test asserts against projection.json (below), NOT this parquet —
+    # it is kept only as a human-readable golden artifact so a reviewer can see
+    # the full extracted rows (themes, second-order implications, typed fields)
+    # behind the projection. The replay test writes to its own temp dir.
     events = event_extractor.extract_daily(
         date=ASOF,
         news_dir=_FIXTURES,
