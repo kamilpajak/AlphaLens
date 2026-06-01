@@ -285,5 +285,130 @@ class TestComputeShadowReturns(unittest.TestCase):
         self.assertIsNone(self._fetch(row_id).shadow_return)
 
 
+class TestComputeShadowReturnsWindow(unittest.TestCase):
+    """The nightly back-window sweep (PR-T) — a thin loop over single dates.
+
+    It exists so the systemd timer runs with no date arithmetic: it sweeps a
+    fixed look-back window and lets the per-date maturity guard + idempotency do
+    the work. The sweep iterates NEWEST -> OLDEST so a rate-limit timeout never
+    starves the freshest just-matured dates (the ones that actually need
+    first-time pricing).
+    """
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.fb_path = Path(self._td.name) / "feedback.db"
+        self.ledger_path = Path(self._td.name) / "paper_ledger.db"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _fetch_decision(self, row_id: str) -> Decision:
+        with FeedbackStore.open(self.fb_path) as fb:
+            return fb.get(row_id)
+
+    @staticmethod
+    def _matured_date_fetch(arrival_vwap: float, horizon_vwap: float):
+        """A fetch keyed to the _BRIEF_DATE arrival/horizon windows; [] elsewhere."""
+        from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_on_or_after
+
+        a_day = session_on_or_after(_BRIEF_DATE)
+        h_day = advance_trading_sessions(_BRIEF_DATE, sr.HOLDING_HORIZON_TRADING_DAYS)
+
+        def fetch(ticker, start, end):
+            if start.date() == a_day:
+                return _bars([(arrival_vwap, 100.0)], start)
+            if start.date() == h_day:
+                return _bars([(horizon_vwap, 100.0)], start)
+            return []
+
+        return fetch
+
+    def test_sweeps_inclusive_date_range_newest_first(self):
+        # lookback_days=3 -> 4 inclusive calendar dates, newest first.
+        reports = sr.compute_shadow_returns_window(
+            self.fb_path,
+            self.ledger_path,
+            end_date=dt.date(2026, 5, 20),
+            lookback_days=3,
+            bar_fetch=lambda *_: [],
+            now=_NOW,
+        )
+        self.assertEqual(
+            [r.brief_date for r in reports],
+            [
+                dt.date(2026, 5, 20),
+                dt.date(2026, 5, 19),
+                dt.date(2026, 5, 18),
+                dt.date(2026, 5, 17),
+            ],
+        )
+
+    def test_skips_unmatured_dates_without_aborting(self):
+        # now mid-window: the newest dates' horizon has NOT matured, _BRIEF_DATE has.
+        _seed_decision(self.fb_path)
+        _seed_plan(self.ledger_path, exit_kind="TP_HIT")
+        reports = sr.compute_shadow_returns_window(
+            self.fb_path,
+            self.ledger_path,
+            end_date=dt.date(2026, 5, 24),
+            lookback_days=14,
+            bar_fetch=self._matured_date_fetch(100.0, 110.0),
+            now=dt.datetime(2026, 5, 25, 2, 0, tzinfo=UTC),
+        )
+        matured = [r for r in reports if r.matured]
+        pending = [r for r in reports if not r.matured]
+        self.assertTrue(pending, "newest dates should be not-yet-matured")
+        self.assertTrue(matured, "older dates should be matured")
+        self.assertEqual(sum(r.n_priced for r in matured), 1)
+
+    def test_idempotent_restamp_same_value(self):
+        row_id = _seed_decision(self.fb_path)
+        _seed_plan(self.ledger_path, exit_kind="TP_HIT")
+        kwargs = {
+            "end_date": dt.date(2026, 5, 20),
+            "lookback_days": 14,
+            "bar_fetch": self._matured_date_fetch(100.0, 110.0),
+            "now": _NOW,
+        }
+        sr.compute_shadow_returns_window(self.fb_path, self.ledger_path, **kwargs)
+        first = self._fetch_decision(row_id).shadow_return
+        sr.compute_shadow_returns_window(self.fb_path, self.ledger_path, **kwargs)
+        self.assertIsNotNone(first)
+        self.assertAlmostEqual(self._fetch_decision(row_id).shadow_return, first)
+
+    def test_empty_ledger_prices_nothing_no_raise(self):
+        reports = sr.compute_shadow_returns_window(
+            self.fb_path,
+            self.ledger_path,
+            end_date=dt.date(2026, 5, 20),
+            lookback_days=14,
+            bar_fetch=lambda *_: [],
+            now=_NOW,
+        )
+        self.assertEqual(sum(r.n_priced for r in reports), 0)
+
+    def test_default_lookback_is_14(self):
+        import inspect
+
+        sig = inspect.signature(sr.compute_shadow_returns_window)
+        self.assertEqual(sig.parameters["lookback_days"].default, sr.DEFAULT_LOOKBACK_DAYS)
+        self.assertEqual(sr.DEFAULT_LOOKBACK_DAYS, 14)
+
+    def test_default_lookback_sweeps_15_inclusive_dates(self):
+        # Pin that the DEFAULT (omitted lookback_days) actually drives the loop —
+        # 14 inclusive both ends = 15 dates — not just that the constant exists.
+        reports = sr.compute_shadow_returns_window(
+            self.fb_path,
+            self.ledger_path,
+            end_date=dt.date(2026, 5, 20),
+            bar_fetch=lambda *_: [],
+            now=_NOW,
+        )
+        self.assertEqual(len(reports), 15)
+        self.assertEqual(reports[0].brief_date, dt.date(2026, 5, 20))  # newest
+        self.assertEqual(reports[-1].brief_date, dt.date(2026, 5, 6))  # oldest (20 - 14)
+
+
 if __name__ == "__main__":
     unittest.main()

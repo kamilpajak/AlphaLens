@@ -1,0 +1,65 @@
+[Unit]
+# Nightly shadow-return backfill (Track A v2 PR-T). Sweeps the last 14
+# calendar days of brief dates and prices every one whose +5-trading-session
+# holding horizon has matured, stamping shadow_return + realized_return onto
+# the feedback ledger. A SEPARATE pass from the cheap fill-status join
+# (`alphalens feedback join-outcomes`) because the Polygon minute-bar pull is
+# rate-limited and the horizon must have closed (Polygon Basic serves only
+# closed sessions).
+#
+# Install as a *user* unit alongside the companion timer:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/systemd/alphalens-feedback-shadow-returns.service ~/.config/systemd/user/
+#   cp deploy/systemd/alphalens-feedback-shadow-returns.timer   ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alphalens-feedback-shadow-returns.timer
+#
+# Inspect:  journalctl --user -u alphalens-feedback-shadow-returns.service -f
+# Trigger manually: systemctl --user start alphalens-feedback-shadow-returns.service
+#
+# Persistence (survives logout) — once, as the user:
+#   sudo loginctl enable-linger "$USER"
+Description=AlphaLens nightly shadow-return backfill (Track A v2)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+
+# Shared secrets file: /etc/alphalens/env (root:root chmod 600). This job
+# needs POLYGON_API_KEY (the minute-bar pricing leg). No leading `-`: fail
+# loud on a missing/typoed path. A missing POLYGON_API_KEY does NOT hard-fail
+# the run — every ticker fetch is skipped and the sweep reports "0 priced"
+# (looks like a quiet night), so the loud-on-missing-file guard is the only
+# protection against a silently mis-pointed env. See deploy/systemd/README.md
+# "Environment file setup".
+EnvironmentFile=/etc/alphalens/env
+
+# Sweep mode (NOT the single-date `compute-shadow-returns`, which would always
+# price 0 — today's brief never matured). No --date arithmetic: the back
+# window + per-date maturity guard pick the dates that need pricing.
+ExecStart=%h/AlphaLens/.venv/bin/alphalens feedback backfill-shadow-returns --account test
+
+# Prometheus textfile metrics (see alphalens-edgar-detect.service for the
+# pattern). A clean run that prices 0 matured dates still counts as success
+# for cron-health — last_success refreshes nightly so the AlphalensJobStale
+# rule (48h) only fires when the sweep actually stops running.
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics feedback-shadow-returns
+
+# Keep stdout/stderr in journald.
+StandardOutput=journal
+StandardError=journal
+
+# The 14-day sweep x Polygon free-tier throttle (~5 req/min, 2 fetches per
+# matured ticker) can run long after a VPS-downtime backlog — Persistent=true
+# replay makes the first post-downtime run the largest. 45min gives headroom;
+# a timeout-kill is self-healing (idempotent re-stamp, next nightly fire
+# re-covers). Memory-light (minute-bar dicts), 1G is comfortable.
+TimeoutStartSec=45min
+MemoryMax=1G
+TasksMax=32
+
+[Install]
+WantedBy=default.target

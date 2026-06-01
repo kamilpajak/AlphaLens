@@ -90,6 +90,14 @@ HOLDING_HORIZON_TRADING_DAYS = 5
 # and flag rather than stamp a corrupted value.
 IMPLAUSIBLE_RETURN_THRESHOLD = 0.60
 
+# Default look-back window (calendar days) for the nightly sweep. A brief matures
+# ~6-8 calendar days after its build (5 trading sessions + the (D-1) dating), so
+# 14 days gives margin to re-price after VPS downtime or a rate-limit timeout.
+# Duplicated CLI-side as ``_DEFAULT_LOOKBACK_DAYS`` (typer evaluates Option
+# defaults at import time and the CLI lazy-imports this module) — parity pinned
+# by ``test_cli_lookback_default_in_sync_with_module``.
+DEFAULT_LOOKBACK_DAYS = 14
+
 # A bar (dict) → ticker, window start, window end → list of Polygon agg bars.
 BarFetch = Callable[[str, dt.datetime, dt.datetime], Sequence[dict[str, Any]]]
 
@@ -296,10 +304,69 @@ def compute_shadow_returns(
     )
 
 
+def compute_shadow_returns_window(
+    feedback_path: Path,
+    ledger_path: Path,
+    *,
+    end_date: dt.date | None = None,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    account: str = "test",
+    bar_fetch: BarFetch | None = None,
+    now: dt.datetime | None = None,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> list[ShadowReturnReport]:
+    """Sweep a back-window of brief dates, pricing each whose horizon has matured.
+
+    The nightly VPS timer's entrypoint. It calls :func:`compute_shadow_returns`
+    once per calendar date in ``[end_date - lookback_days, end_date]`` (inclusive
+    both ends) so the systemd unit needs no date arithmetic — the per-date
+    maturity guard and per-ticker resilience already live in the single-date
+    function. ``end_date`` defaults to ``now.date()`` (UTC today).
+
+    Iteration order is NEWEST -> OLDEST on purpose: the freshest just-matured
+    dates are the ones that need first-time pricing, so if a rate-limit run is
+    killed by ``TimeoutStartSec`` it has already priced them; only the older,
+    already-priced dates (a cheap idempotent re-stamp) are dropped, and the next
+    nightly fire re-covers them. ``Persistent=true`` catch-up after VPS downtime
+    is safe for the same reason — re-stamping a matured date writes the same
+    deterministic value.
+
+    Efficiency note: a steady-state run re-fetches Polygon bars for already-priced
+    dates inside the window (only the ~1 newest just-matured date needs real
+    work). The free Polygon tier has no daily cap (a ~5 req/min throttle), so this
+    costs wall-time, not quota, and the window is bounded at ``lookback_days``. A
+    skip-already-priced optimisation is a possible follow-up — it would need to
+    peek inside the single-date pricing path, which this wrapper deliberately
+    does not, to keep :func:`compute_shadow_returns`'s contract intact.
+
+    Returns the per-date reports (newest first) so the caller can print an
+    aggregate.
+    """
+    now = now or dt.datetime.now(dt.UTC)
+    end = end_date or now.date()
+    reports: list[ShadowReturnReport] = []
+    for offset in range(lookback_days + 1):  # inclusive both ends; newest -> oldest
+        target = end - dt.timedelta(days=offset)
+        reports.append(
+            compute_shadow_returns(
+                feedback_path,
+                ledger_path,
+                brief_date=target,
+                account=account,
+                bar_fetch=bar_fetch,
+                now=now,
+                exchange=exchange,
+            )
+        )
+    return reports
+
+
 __all__ = [
     "ARRIVAL_VWAP_WINDOW_MIN",
+    "DEFAULT_LOOKBACK_DAYS",
     "HOLDING_HORIZON_TRADING_DAYS",
     "IMPLAUSIBLE_RETURN_THRESHOLD",
     "ShadowReturnReport",
     "compute_shadow_returns",
+    "compute_shadow_returns_window",
 ]

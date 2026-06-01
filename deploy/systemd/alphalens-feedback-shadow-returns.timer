@@ -1,0 +1,21 @@
+[Unit]
+# Fires the companion alphalens-feedback-shadow-returns.service once per day.
+#
+# OnCalendar: 06:30 UTC. XNYS closes ~20:00-21:00 UTC, so by 06:30 UTC the
+# prior trading day's session (and the opening windows the shadow metric
+# samples) are fully closed — Polygon Basic will serve those aggregates.
+#
+# Persistent=true: if the VPS was off when a scheduled run was due, fire the
+# missed run at next boot. The 14-day back window makes the catch-up cheap +
+# idempotent (re-stamping a matured date writes the same deterministic value),
+# so a replayed run is safe and re-covers any dates skipped during downtime.
+Description=Trigger AlphaLens nightly shadow-return backfill
+After=network-online.target
+
+[Timer]
+OnCalendar=*-*-* 06:30:00 UTC
+Persistent=true
+Unit=alphalens-feedback-shadow-returns.service
+
+[Install]
+WantedBy=timers.target

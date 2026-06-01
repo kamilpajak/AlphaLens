@@ -292,5 +292,122 @@ class TestFeedbackComputeShadowReturnsCommand(unittest.TestCase):
             self.assertAlmostEqual(row.realized_return, 0.20)
 
 
+class TestFeedbackBackfillShadowReturnsCommand(unittest.TestCase):
+    """`alphalens feedback backfill-shadow-returns` is the nightly timer's entrypoint.
+
+    It sweeps a fixed look-back window and prices every matured date, so the
+    systemd unit needs no date arithmetic. The seed date is anchored relative to
+    *today* so it always lands inside the default 14-day window regardless of
+    when the suite runs.
+    """
+
+    def setUp(self):
+        self.runner = CliRunner()
+        self._td = tempfile.TemporaryDirectory()
+        self.fb_path = Path(self._td.name) / "feedback.db"
+        self.ledger_path = Path(self._td.name) / "paper_ledger.db"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_backfill_prices_matured_date_and_prints_aggregate(self):
+        from alphalens_pipeline.feedback import shadow_return as sr
+        from alphalens_pipeline.paper import ledger as paper_ledger
+        from alphalens_pipeline.paper.calendar import (
+            advance_trading_sessions,
+            session_on_or_after,
+            session_open_utc,
+        )
+
+        # 12 calendar days back: the +5-session horizon has matured AND the date
+        # is inside the default 14-day window (no fixed-date drift as time passes).
+        brief = dt.datetime.now(UTC).date() - dt.timedelta(days=12)
+        with FeedbackStore.open(self.fb_path) as fb:
+            fb.insert(
+                Decision(
+                    brief_date=brief,
+                    ticker="NVDA",
+                    theme="ai",
+                    surfaced_at=dt.datetime.now(UTC),
+                    action="interested",
+                    action_at=dt.datetime.now(UTC),
+                )
+            )
+        with paper_ledger.open_ledger(self.ledger_path) as conn:
+            plan = paper_ledger.insert_planned(
+                conn,
+                brief_date=brief,
+                ticker="NVDA",
+                theme="ai",
+                planned_at=dt.datetime.now(UTC),
+                suggested_size_pct=2.0,
+                scale_factor=1.0,
+                final_size_pct=2.0,
+                paper_equity=100_000.0,
+                total_notional=2_000.0,
+                gross_notional=2_000.0,
+                disaster_stop=90.0,
+                order_ttl_days=2,
+                tiers=[(0, 100.0, 20, 100.0, "entry")],
+                tp_tranches=[(0, 120.0, 100.0, 2.0, "tp")],
+                account="test",
+            )
+            paper_ledger.insert_plan_outcome(
+                conn,
+                plan_id=plan.plan_id,
+                exit_kind="TP_HIT",
+                closed_at=dt.datetime.now(UTC),
+                blended_entry_price=100.0,
+                blended_exit_price=120.0,
+            )
+
+        arrival_open = session_open_utc(session_on_or_after(brief))
+        horizon_open = session_open_utc(
+            advance_trading_sessions(brief, sr.HOLDING_HORIZON_TRADING_DAYS)
+        )
+
+        def fake_fetch(ticker, start, end):
+            close = 100.0 if start == arrival_open else 110.0 if start == horizon_open else None
+            if close is None:
+                return []
+            return [{"t": int(start.timestamp() * 1000), "c": close, "v": 100.0}]
+
+        orig = sr._default_bar_fetch
+        sr._default_bar_fetch = fake_fetch
+        try:
+            result = self.runner.invoke(
+                app,
+                [
+                    "feedback",
+                    "backfill-shadow-returns",
+                    "--account",
+                    "test",
+                    "--ledger",
+                    str(self.fb_path),
+                    "--paper-ledger",
+                    str(self.ledger_path),
+                ],
+            )
+        finally:
+            sr._default_bar_fetch = orig
+
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("backfill", result.stdout)
+        self.assertIn("1 priced", result.stdout)
+        with FeedbackStore.open(self.fb_path) as fb:
+            row = fb.list_by_brief_date(brief)[0]
+            self.assertAlmostEqual(row.shadow_return, 0.10)
+
+    def test_cli_lookback_default_in_sync_with_module(self):
+        from alphalens_cli.commands.feedback import _DEFAULT_LOOKBACK_DAYS
+        from alphalens_pipeline.feedback.shadow_return import DEFAULT_LOOKBACK_DAYS
+
+        # typer.Option evaluates its default at import time and the CLI lazy-imports
+        # the feedback module inside the command body, so the literal is duplicated
+        # CLI-side. Pin parity (same hazard as preaudit _DEFAULT_SMOKE_TIMEOUT_S).
+        self.assertEqual(_DEFAULT_LOOKBACK_DAYS, DEFAULT_LOOKBACK_DAYS)
+        self.assertEqual(_DEFAULT_LOOKBACK_DAYS, 14)
+
+
 if __name__ == "__main__":
     unittest.main()
