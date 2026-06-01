@@ -207,8 +207,13 @@ class TestThematicBriefEmitsDomainMetrics(unittest.TestCase):
             output_dir = Path(tmp) / "briefs"
             output_dir.mkdir()
 
+            # 5 scored rows in -> 3 briefs out: the input/output stage gauges
+            # must capture both so the zero-output-with-nonempty-input alert
+            # can distinguish a real silent failure from a quiet day.
+            scored_frame = pd.DataFrame({"x": [1, 2, 3, 4, 5]})
+
             with (
-                patch.object(thematic.pd, "read_parquet", return_value=pd.DataFrame({"x": [1]})),
+                patch.object(thematic.pd, "read_parquet", return_value=scored_frame),
                 patch.object(thematic.brief_orchestrator, "generate_briefs", return_value=enriched),
                 patch.object(thematic, "emit_domain_metrics") as emit,
             ):
@@ -218,9 +223,175 @@ class TestThematicBriefEmitsDomainMetrics(unittest.TestCase):
             kwargs = emit.call_args.kwargs
             self.assertEqual(kwargs["job"], "thematic-build")
             metrics = kwargs["metrics"]
+            # Legacy Grafana panel metrics (unchanged).
             self.assertEqual(metrics["alphalens_thematic_briefs_total"], 3)
             self.assertEqual(metrics['alphalens_thematic_briefs_by_model{model="pro"}'], 1)
             self.assertEqual(metrics['alphalens_thematic_briefs_by_model{model="flash"}'], 2)
+            # Phase 4 uniform stage gauges (brief is stage 5).
+            self.assertEqual(metrics['alphalens_thematic_stage_output_rows{stage="brief"}'], 3)
+            self.assertEqual(metrics['alphalens_thematic_stage_input_rows{stage="brief"}'], 5)
+
+
+class TestThematicStageVolumeEmits(unittest.TestCase):
+    """Phase 4 dead-man-switch: each upstream stage emits an input/output
+    row-count gauge pair so a silent mid-pipeline failure (e.g. an LLM model
+    retiring -> 0 events from 200 news, run still exits 0) trips the
+    ``AlphalensThematicStageZeroOutput`` alert. Each stage writes its own
+    ``alphalens_domain_thematic-<stage>.prom`` file (the 5 stages are 5
+    separate processes in run_thematic_day.sh; a shared job name would have
+    each clobber the prior stage's file).
+    """
+
+    def _df(self, n: int, **cols):
+        import pandas as pd
+
+        if cols:
+            return pd.DataFrame(cols)
+        return pd.DataFrame({"_": list(range(n))})
+
+    def test_ingest_emits_stage_volume(self) -> None:
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        df = pd.DataFrame({"source": ["polygon", "rss"], "tickers": [["AAPL"], ["MSFT"]]})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(thematic.news_ingest, "ingest_daily", return_value=df),
+                patch.object(thematic, "emit_domain_metrics") as emit,
+            ):
+                thematic.ingest(date="2026-05-29", cache_dir=Path(tmp))
+
+            emit.assert_called_once()
+            kwargs = emit.call_args.kwargs
+            self.assertEqual(kwargs["job"], "thematic-ingest")
+            metrics = kwargs["metrics"]
+            # Source stage: input == output (no upstream to silently fail).
+            self.assertEqual(metrics['alphalens_thematic_stage_output_rows{stage="ingest"}'], 2)
+            self.assertEqual(metrics['alphalens_thematic_stage_input_rows{stage="ingest"}'], 2)
+
+    def test_extract_emits_stage_volume_with_news_input(self) -> None:
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        events = pd.DataFrame(
+            {"event_type": ["m_and_a", "guidance", "earnings"], "sentiment": ["+", "-", "+"]}
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            news_dir = Path(tmp) / "news"
+            events_dir = Path(tmp) / "events"
+            news_dir.mkdir()
+            events_dir.mkdir()
+            # 5 news rows the extract stage consumed -> input gauge = 5.
+            pd.DataFrame({"news_id": [1, 2, 3, 4, 5]}).to_parquet(
+                news_dir / "2026-05-29.parquet", index=False
+            )
+
+            with (
+                patch.dict("os.environ", {"OPENROUTER_API_KEY": "k"}),
+                patch.object(thematic.event_extractor, "extract_daily", return_value=events),
+                patch.object(thematic.themes_mod, "roll_up", return_value=self._df(0)),
+                patch.object(thematic.themes_mod, "flag_novel", return_value=self._df(0)),
+                patch.object(thematic, "emit_domain_metrics") as emit,
+            ):
+                thematic.extract(date="2026-05-29", news_dir=news_dir, events_dir=events_dir)
+
+            emit.assert_called_once()
+            kwargs = emit.call_args.kwargs
+            self.assertEqual(kwargs["job"], "thematic-extract")
+            metrics = kwargs["metrics"]
+            self.assertEqual(metrics['alphalens_thematic_stage_output_rows{stage="extract"}'], 3)
+            self.assertEqual(metrics['alphalens_thematic_stage_input_rows{stage="extract"}'], 5)
+
+    def test_map_themes_emits_stage_volume(self) -> None:
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        novel = pd.DataFrame({"theme": ["quantum", "fusion"]})
+        # Columns the map-themes display loop reads after the emit.
+        candidates = pd.DataFrame(
+            {
+                "theme": ["quantum", "quantum", "fusion"],
+                "ticker": ["RGTI", "QUBT", "OKLO"],
+                "gates_passed": [["press"], ["press"], []],
+                "llm_confidence": [0.8, 0.7, 0.6],
+                "rationale": ["a", "b", "c"],
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.dict("os.environ", {"OPENROUTER_API_KEY": "k", "POLYGON_API_KEY": "p"}),
+                patch.object(thematic.themes_mod, "roll_up", return_value=self._df(2)),
+                patch.object(thematic.themes_mod, "flag_novel", return_value=novel),
+                patch.object(thematic.orchestrator, "map_themes", return_value=candidates),
+                patch.object(thematic, "emit_domain_metrics") as emit,
+            ):
+                # max_themes/novelty_threshold/window_days must be passed
+                # explicitly: a direct call (not via typer) leaves OptionInfo
+                # sentinels that break novel.head(max_themes).
+                thematic.map_themes_cmd(
+                    date="2026-05-29",
+                    output_dir=Path(tmp),
+                    max_themes=10,
+                    novelty_threshold=2.0,
+                    window_days=30,
+                )
+
+            emit.assert_called_once()
+            kwargs = emit.call_args.kwargs
+            self.assertEqual(kwargs["job"], "thematic-map-themes")
+            metrics = kwargs["metrics"]
+            # input = novel themes fed to the mapper; output = candidate rows.
+            self.assertEqual(metrics['alphalens_thematic_stage_output_rows{stage="map-themes"}'], 3)
+            self.assertEqual(metrics['alphalens_thematic_stage_input_rows{stage="map-themes"}'], 2)
+
+    def test_parquet_num_rows_degrades_to_zero(self) -> None:
+        # The extract input gauge reads a parquet footer as an ARGUMENT to
+        # _emit_stage_volume (outside its try/except). A missing OR corrupt
+        # file must degrade to 0, never raise — a metric read cannot be
+        # allowed to crash a stage whose real output is already written.
+        from alphalens_cli.commands import thematic
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "nope.parquet"
+            self.assertEqual(thematic._parquet_num_rows(missing), 0)
+
+            corrupt = Path(tmp) / "corrupt.parquet"
+            corrupt.write_bytes(b"not a parquet file")
+            self.assertEqual(thematic._parquet_num_rows(corrupt), 0)
+
+    def test_score_emits_stage_volume(self) -> None:
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        candidates = pd.DataFrame({"ticker": ["A", "B", "C", "D"]})
+        enriched = pd.DataFrame(
+            {"ticker": ["A", "B", "C", "D"], "layer4_weighted_score": [1, 2, 3, 4]}
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            candidates_dir = Path(tmp) / "candidates"
+            output_dir = Path(tmp) / "scored"
+            candidates_dir.mkdir()
+            (candidates_dir / "2026-05-29.parquet").touch()
+
+            with (
+                patch.object(thematic.pd, "read_parquet", return_value=candidates),
+                patch.object(thematic.screening_scorer, "score_candidates", return_value=enriched),
+                patch.object(thematic, "emit_domain_metrics") as emit,
+            ):
+                thematic.score(
+                    date="2026-05-29", candidates_dir=candidates_dir, output_dir=output_dir
+                )
+
+            emit.assert_called_once()
+            kwargs = emit.call_args.kwargs
+            self.assertEqual(kwargs["job"], "thematic-score")
+            metrics = kwargs["metrics"]
+            self.assertEqual(metrics['alphalens_thematic_stage_output_rows{stage="score"}'], 4)
+            self.assertEqual(metrics['alphalens_thematic_stage_input_rows{stage="score"}'], 4)
 
 
 class TestEmitFailureDoesNotPoisonSuccessPath(unittest.TestCase):
@@ -305,6 +476,22 @@ class TestEmitFailureDoesNotPoisonSuccessPath(unittest.TestCase):
             # Backfill MUST exit 0 — AV cache write is the work and
             # it succeeded; observability loss is acceptable.
             self.assertEqual(rc, 0)
+
+    def test_thematic_ingest_swallows_emit_oserror(self) -> None:
+        # Representative upstream stage: the news parquet is already written
+        # by ingest_daily; an emit failure must not fail the unit (same guard
+        # as the brief site, applied to every Phase 4 stage emit).
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        df = pd.DataFrame({"source": ["polygon"], "tickers": [["AAPL"]]})
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(thematic.news_ingest, "ingest_daily", return_value=df),
+                patch.object(thematic, "emit_domain_metrics", side_effect=OSError("disk full")),
+            ):
+                # MUST NOT raise.
+                thematic.ingest(date="2026-05-29", cache_dir=Path(tmp))
 
     def test_thematic_brief_swallows_emit_oserror(self) -> None:
         import pandas as pd
