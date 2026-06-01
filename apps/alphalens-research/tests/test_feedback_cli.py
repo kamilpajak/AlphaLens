@@ -186,5 +186,111 @@ class TestFeedbackJoinOutcomesCommand(unittest.TestCase):
             self.assertEqual(row.exit_kind, "TP_HIT")
 
 
+class TestFeedbackComputeShadowReturnsCommand(unittest.TestCase):
+    """`alphalens feedback compute-shadow-returns` drives the Polygon shadow pass."""
+
+    def setUp(self):
+        self.runner = CliRunner()
+        self._td = tempfile.TemporaryDirectory()
+        self.fb_path = Path(self._td.name) / "feedback.db"
+        self.ledger_path = Path(self._td.name) / "paper_ledger.db"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_compute_shadow_returns_stamps_shadow(self):
+        from alphalens_pipeline.feedback import shadow_return as sr
+        from alphalens_pipeline.paper import ledger as paper_ledger
+        from alphalens_pipeline.paper.calendar import (
+            advance_trading_sessions,
+            session_on_or_after,
+            session_open_utc,
+        )
+
+        # brief_date in the past so the +5-session horizon has matured.
+        brief = dt.date(2026, 5, 15)
+
+        def _seed_decision_for(brief_date):
+            with FeedbackStore.open(self.fb_path) as fb:
+                fb.insert(
+                    Decision(
+                        brief_date=brief_date,
+                        ticker="NVDA",
+                        theme="ai",
+                        surfaced_at=dt.datetime(2026, 5, 15, 6, 30, tzinfo=UTC),
+                        action="interested",
+                        action_at=dt.datetime(2026, 5, 15, 8, 0, tzinfo=UTC),
+                    )
+                )
+
+        _seed_decision_for(brief)
+        with paper_ledger.open_ledger(self.ledger_path) as conn:
+            plan = paper_ledger.insert_planned(
+                conn,
+                brief_date=brief,
+                ticker="NVDA",
+                theme="ai",
+                planned_at=dt.datetime(2026, 5, 15, 13, 5, tzinfo=UTC),
+                suggested_size_pct=2.0,
+                scale_factor=1.0,
+                final_size_pct=2.0,
+                paper_equity=100_000.0,
+                total_notional=2_000.0,
+                gross_notional=2_000.0,
+                disaster_stop=90.0,
+                order_ttl_days=2,
+                tiers=[(0, 100.0, 20, 100.0, "entry")],
+                tp_tranches=[(0, 120.0, 100.0, 2.0, "tp")],
+                account="test",
+            )
+            paper_ledger.insert_plan_outcome(
+                conn,
+                plan_id=plan.plan_id,
+                exit_kind="TP_HIT",
+                closed_at=dt.datetime(2026, 5, 22, 20, 0, tzinfo=UTC),
+                blended_entry_price=100.0,
+                blended_exit_price=120.0,
+            )
+
+        arrival_open = session_open_utc(session_on_or_after(brief))
+        horizon_open = session_open_utc(
+            advance_trading_sessions(brief, sr.HOLDING_HORIZON_TRADING_DAYS)
+        )
+
+        def fake_fetch(ticker, start, end):
+            close = 100.0 if start == arrival_open else 110.0 if start == horizon_open else None
+            if close is None:
+                return []
+            return [{"t": int(start.timestamp() * 1000), "c": close, "v": 100.0}]
+
+        orig = sr._default_bar_fetch
+        sr._default_bar_fetch = fake_fetch
+        try:
+            result = self.runner.invoke(
+                app,
+                [
+                    "feedback",
+                    "compute-shadow-returns",
+                    "--date",
+                    "2026-05-15",
+                    "--account",
+                    "test",
+                    "--ledger",
+                    str(self.fb_path),
+                    "--paper-ledger",
+                    str(self.ledger_path),
+                ],
+            )
+        finally:
+            sr._default_bar_fetch = orig
+
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("1 priced", result.stdout)
+        with FeedbackStore.open(self.fb_path) as fb:
+            row = fb.list_by_brief_date(brief)[0]
+            self.assertAlmostEqual(row.shadow_return, 0.10)
+            self.assertAlmostEqual(row.realized_return, 0.20)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23,9 +23,9 @@ never-filled candidates are recorded, not dropped — fill-only learning is
 adversely selected per Glosten/Linnainmaa), ``exit_kind`` (verbatim paper
 disposition), ``outcome_plan_id`` (the joined ``plans.plan_id``) and
 ``outcome_computed_at`` (last-joined-at provenance). ``shadow_return`` +
-``realized_pnl`` are deliberately left NULL in PR-1 — no minute-bar
-arrival-price source exists yet, so the §4 counterfactual computation is
-deferred to a later PR.
+``realized_return`` are deliberately left untouched here — they are filled by
+the separate PR-3 ``shadow_return.compute_shadow_returns`` pass (minute-bar
+arrival-price counterfactual), which this cheap fill-status join never reads.
 
 Decoupled no-match is normal
 ----------------------------
@@ -51,8 +51,9 @@ logger = logging.getLogger(__name__)
 
 # Paper ``plan_outcomes.exit_kind`` -> feedback ``fill_status``. Every
 # terminal exit other than UNFILLED implies the entry filled; PARTIAL_TP is
-# a partial fill (some tranches hit).
-_EXIT_KIND_TO_FILL_STATUS: dict[str, str] = {
+# a partial fill (some tranches hit). Public so the shadow-return pass shares
+# the single mapping rather than coupling to a private name (zen pre-merge).
+EXIT_KIND_TO_FILL_STATUS: dict[str, str] = {
     "TP_HIT": "FILLED",
     "SL_HIT": "FILLED",
     "TIME_STOP_HIT": "FILLED",
@@ -115,14 +116,14 @@ def join_decision_outcomes(
             if match is None:
                 continue
             plan_id, exit_kind = match
-            fill_status = _EXIT_KIND_TO_FILL_STATUS.get(exit_kind)
+            fill_status = EXIT_KIND_TO_FILL_STATUS.get(exit_kind)
             if fill_status is None:
                 # Defensive against a future paper-reconciler exit kind not yet
                 # mapped here: skip + warn rather than KeyError-halt mid-sweep
                 # (which would leave the day partially joined).
                 logger.warning(
                     "outcome-join: unmapped exit_kind=%r (plan_id=%s) — "
-                    "skipping decision %s; extend _EXIT_KIND_TO_FILL_STATUS.",
+                    "skipping decision %s; extend EXIT_KIND_TO_FILL_STATUS.",
                     exit_kind,
                     plan_id,
                     decision.id,
@@ -156,4 +157,4 @@ def join_decision_outcomes(
     )
 
 
-__all__ = ["JoinReport", "join_decision_outcomes"]
+__all__ = ["EXIT_KIND_TO_FILL_STATUS", "JoinReport", "join_decision_outcomes"]

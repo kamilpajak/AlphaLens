@@ -211,6 +211,68 @@ def previous_trading_day(
     return prev.date()
 
 
+def session_on_or_after(
+    d: DateLike,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> dt.date:
+    """The first ``exchange`` session date on-or-after ``d``.
+
+    Unlike :func:`next_trading_open` (which anchors a plain date at 23:59
+    UTC and therefore SKIPS ``d``'s own session), this returns ``d`` itself
+    when ``d`` is a session, and rolls forward to the next session only when
+    ``d`` is a weekend / holiday. Used by the feedback shadow-return anchor:
+    "the first day the candidate was tradable" is on-or-after its brief date.
+    """
+    ts = _to_session_timestamp(d)
+    cal = _calendar(exchange)
+    session = ts if cal.is_session(ts) else cal.date_to_session(ts, direction="next")
+    return session.date()
+
+
+def advance_trading_sessions(
+    d: DateLike,
+    n: int,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> dt.date:
+    """The session ``n`` sessions after the session on-or-after ``d``.
+
+    ``n == 0`` returns :func:`session_on_or_after` of ``d``; ``n == 5`` from
+    a Friday lands on the following Friday in a clean week, or later if a
+    holiday falls inside the span (weekends + holidays are skipped because
+    advancement walks the session index, not calendar days). Raises
+    ``ValueError`` on negative ``n`` — the shadow-return horizon is strictly
+    forward, so a negative advance signals a caller bug rather than a
+    silently-clamped no-op.
+    """
+    if n < 0:
+        raise ValueError(f"n must be >= 0, got {n}")
+    cal = _calendar(exchange)
+    ts = _to_session_timestamp(d)
+    session = ts if cal.is_session(ts) else cal.date_to_session(ts, direction="next")
+    for _ in range(n):
+        session = cal.next_session(session)
+    return session.date()
+
+
+def session_open_utc(
+    d: DateLike,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> dt.datetime:
+    """UTC datetime of ``exchange``'s opening auction on session date ``d``.
+
+    Requires ``d`` to be an EXACT session (raises ``ValueError`` otherwise) so
+    a caller cannot silently anchor an intraday window to a non-trading day —
+    resolve the session first via :func:`session_on_or_after` /
+    :func:`advance_trading_sessions`, then read its open. For XNYS in summer
+    (EDT) the open is 13:30 UTC (09:30 ET).
+    """
+    ts = _to_session_timestamp(d)
+    cal = _calendar(exchange)
+    if not cal.is_session(ts):
+        raise ValueError(f"{d!r} is not a session on {exchange}; resolve it first")
+    return cal.session_open(ts).to_pydatetime().astimezone(dt.UTC)
+
+
 def trading_days_elapsed(
     start: DateLike,
     end: DateLike,

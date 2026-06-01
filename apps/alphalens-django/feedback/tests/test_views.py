@@ -205,7 +205,7 @@ class TestOutcomeFields:
         "fill_status",
         "exit_kind",
         "shadow_return",
-        "realized_pnl",
+        "realized_return",
         "outcome_computed_at",
     }
 

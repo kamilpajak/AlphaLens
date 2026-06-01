@@ -46,8 +46,15 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Sentinel distinguishing "argument omitted" from an explicit None in
+# stamp_outcome — so the cheap fill-status pass leaves shadow/realized columns
+# untouched while the shadow pass can write an explicit NULL. Typed Any so the
+# parameter default stays assignable to ``float | None``.
+_UNSET: Any = object()
 
 
 # ----------------------------------------------------------------------
@@ -135,14 +142,16 @@ class Decision:
     # ticker, account) after the plan closes. ``fill_status`` carries the §4
     # FILLED / UNFILLED / PARTIAL distinction so never-filled candidates are
     # recorded, not dropped (Glosten/Linnainmaa fill-only adverse selection).
-    # ``shadow_return`` (arrival-price counterfactual) + ``realized_pnl`` are
-    # captured-now / computed-later: PR-1 leaves them NULL because no
-    # minute-bar arrival-price source exists yet (deferred to PR-3).
+    # ``shadow_return`` (arrival-price counterfactual, decimal fraction) +
+    # ``realized_return`` ((blended_exit − blended_entry)/blended_entry, also a
+    # fraction so the §6 execution gap ``realized_return − shadow_return`` is
+    # unit-consistent) are computed by the PR-3 shadow-return pass; PR-1's
+    # fill-status join leaves them untouched.
     outcome_plan_id: str | None = None
     fill_status: str | None = None
     exit_kind: str | None = None
     shadow_return: float | None = None
-    realized_pnl: float | None = None
+    realized_return: float | None = None
     outcome_computed_at: dt.datetime | None = None
 
     def __post_init__(self) -> None:
@@ -254,7 +263,7 @@ _SCHEMA_DDL = (
         fill_status TEXT,
         exit_kind TEXT,
         shadow_return REAL,
-        realized_pnl REAL,
+        realized_return REAL,
         outcome_computed_at TEXT,
         UNIQUE(brief_date, ticker, theme)
     )
@@ -264,9 +273,11 @@ _SCHEMA_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_decisions_action ON decisions(action)",
 )
 
-# Schema generation tracked via ``PRAGMA user_version`` (zen pre-merge
-# finding #4). 0 = v1 (15 columns). 1 = v2 outcome-join columns added.
-_SCHEMA_GENERATION = 1
+# Schema generation tracked via ``PRAGMA user_version``. 0 = v1 (15 columns).
+# 1 = v2 outcome-join columns added (PR-1). 2 = ``realized_pnl`` renamed to
+# ``realized_return`` (PR-3) so it is a decimal fraction unit-consistent with
+# ``shadow_return`` for the §6 execution-gap subtraction.
+_SCHEMA_GENERATION = 2
 
 # v2 outcome-join columns, as (name, sqlite_type). Present in ``_SCHEMA_DDL``
 # above for fresh databases AND added to legacy v1 databases by
@@ -278,7 +289,7 @@ _OUTCOME_COLUMNS: tuple[tuple[str, str], ...] = (
     ("fill_status", "TEXT"),
     ("exit_kind", "TEXT"),
     ("shadow_return", "REAL"),
-    ("realized_pnl", "REAL"),
+    ("realized_return", "REAL"),
     ("outcome_computed_at", "TEXT"),
 )
 
@@ -310,8 +321,20 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     first open, so a blind ``ALTER TABLE ADD COLUMN`` would raise
     "duplicate column name". Skipping already-present columns makes the
     migration idempotent for both fresh and legacy databases.
+
+    Generation 2 (PR-3) renames the gen-1 ``realized_pnl`` column to
+    ``realized_return``. The rename runs BEFORE the additive ADD COLUMN loop
+    so a gen-1 database carries its (always-NULL — PR-1 never populated it)
+    column over rather than gaining a second empty ``realized_return``.
     """
     existing = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
+    # gen 1 -> gen 2: realized_pnl (dollars, never populated) -> realized_return
+    # (decimal fraction). Only when the legacy name is present and the new one
+    # is absent — idempotent for fresh gen-2 databases.
+    if "realized_pnl" in existing and "realized_return" not in existing:
+        conn.execute("ALTER TABLE decisions RENAME COLUMN realized_pnl TO realized_return")
+        existing.discard("realized_pnl")
+        existing.add("realized_return")
     for name, sql_type in _OUTCOME_COLUMNS:
         if name not in existing:
             # Identifiers are module constants, not user input — safe to inline.
@@ -381,7 +404,7 @@ class FeedbackStore:
         """
         existing = self.conn.execute(
             """SELECT id, outcome_plan_id, fill_status, exit_kind,
-                      shadow_return, realized_pnl, outcome_computed_at
+                      shadow_return, realized_return, outcome_computed_at
                FROM decisions WHERE brief_date = ? AND ticker = ? AND theme = ?""",
             (decision.brief_date.isoformat(), decision.ticker, decision.theme),
         ).fetchone()
@@ -398,7 +421,7 @@ class FeedbackStore:
                 existing["fill_status"],
                 existing["exit_kind"],
                 existing["shadow_return"],
-                existing["realized_pnl"],
+                existing["realized_return"],
                 existing["outcome_computed_at"],
             )
         else:
@@ -411,7 +434,7 @@ class FeedbackStore:
                 confidence_subjective, paper_trade_plan_id,
                 position_size_usd, entry_price, market_regime_at_entry,
                 outcome_plan_id, fill_status, exit_kind,
-                shadow_return, realized_pnl, outcome_computed_at
+                shadow_return, realized_return, outcome_computed_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -443,6 +466,8 @@ class FeedbackStore:
         exit_kind: str,
         outcome_plan_id: str,
         outcome_computed_at: dt.datetime,
+        shadow_return: float | None = _UNSET,
+        realized_return: float | None = _UNSET,
     ) -> None:
         """Stamp the paper-trade outcome onto a decision (job-set, v2).
 
@@ -451,22 +476,43 @@ class FeedbackStore:
         re-run — a legacy row that would fail tightened write-time rules is
         still stampable, consistent with the read-time bypass contract), it
         holds the lock only per-decision, and it is naturally idempotent.
-        ``shadow_return`` + ``realized_pnl`` are deliberately untouched here
-        — they are filled by the deferred PR-3 arrival-price computation, not
-        the fill-status join.
+
+        Two-pass safety (PR-3): ``shadow_return`` / ``realized_return`` use a
+        sentinel default, NOT ``None``. The cheap fill-status pass
+        (``outcome_join.join_decision_outcomes``) omits them, so they are left
+        out of the ``SET`` clause and a previously-computed value SURVIVES. The
+        rate-limited shadow pass (``shadow_return.compute_shadow_returns``)
+        passes them explicitly — even an explicit ``None`` is then written
+        (e.g. an UNFILLED row gets ``realized_return = NULL``). A blind
+        always-write would let the daily fill-status re-run wipe the nightly
+        shadow value back to NULL.
         """
+        set_clauses = [
+            "fill_status = ?",
+            "exit_kind = ?",
+            "outcome_plan_id = ?",
+            "outcome_computed_at = ?",
+        ]
+        params: list[object] = [
+            fill_status,
+            exit_kind,
+            outcome_plan_id,
+            outcome_computed_at.isoformat(),
+        ]
+        # Column names are module-fixed identifiers, not user input — safe to
+        # inline; only the VALUES are parameterised.
+        if shadow_return is not _UNSET:
+            set_clauses.append("shadow_return = ?")
+            params.append(shadow_return)
+        if realized_return is not _UNSET:
+            set_clauses.append("realized_return = ?")
+            params.append(realized_return)
+        params.append(decision_id)
         self.conn.execute(
-            """UPDATE decisions
-               SET fill_status = ?, exit_kind = ?, outcome_plan_id = ?,
-                   outcome_computed_at = ?
-               WHERE id = ?""",
-            (
-                fill_status,
-                exit_kind,
-                outcome_plan_id,
-                outcome_computed_at.isoformat(),
-                decision_id,
-            ),
+            # set_clauses are module-fixed identifiers, never user input; only
+            # the VALUES are parameterised (? placeholders).
+            f"UPDATE decisions SET {', '.join(set_clauses)} WHERE id = ?",  # nosec B608
+            params,
         )
 
     def delete(self, decision_id: str) -> None:
@@ -521,7 +567,7 @@ def _row_to_decision(row: sqlite3.Row) -> Decision:
         fill_status=row["fill_status"],
         exit_kind=row["exit_kind"],
         shadow_return=row["shadow_return"],
-        realized_pnl=row["realized_pnl"],
+        realized_return=row["realized_return"],
         outcome_computed_at=(
             dt.datetime.fromisoformat(row["outcome_computed_at"])
             if row["outcome_computed_at"]

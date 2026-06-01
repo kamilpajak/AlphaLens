@@ -4,8 +4,8 @@ The paper harness auto-submits every verified candidate independent of
 any user click (decoupled), so a decision is linked to its paper plan
 outcome POST-HOC by ``(brief_date, ticker, account)``. The join stamps
 ``fill_status`` / ``exit_kind`` / ``outcome_plan_id`` / ``outcome_computed_at``
-onto the decision row. ``shadow_return`` + ``realized_pnl`` are left for
-the deferred PR-3 (no minute-bar arrival-price source exists yet).
+onto the decision row. ``shadow_return`` + ``realized_return`` are left for
+the separate PR-3 shadow-return pass (minute-bar arrival-price counterfactual).
 
 Design intent: ``docs/research/alphalens_ideal_shape_2026_05_29.md`` §4 +
 §8 L3; issue #165 v2 scope comment.
@@ -108,9 +108,9 @@ class TestOutcomeJoin(unittest.TestCase):
         self.assertEqual(d.exit_kind, "TP_HIT")
         self.assertEqual(d.outcome_plan_id, str(plan_id))
         self.assertEqual(d.outcome_computed_at, _NOW)
-        # PR-1 defers return computation
+        # the cheap fill-status join leaves return columns for the shadow pass
         self.assertIsNone(d.shadow_return)
-        self.assertIsNone(d.realized_pnl)
+        self.assertIsNone(d.realized_return)
 
     def test_unfilled_plan_stamps_unfilled(self):
         # The §4 never-filled candidate (limit never reached) must be
@@ -220,8 +220,8 @@ class TestOutcomeJoin(unittest.TestCase):
         row_id = _seed_decision(self.fb_path)
         _seed_plan(self.ledger_path, exit_kind="TP_HIT")
         # Simulate TP_HIT being absent from the map (stand-in for a new kind).
-        patched = {k: v for k, v in oj._EXIT_KIND_TO_FILL_STATUS.items() if k != "TP_HIT"}
-        with mock.patch.object(oj, "_EXIT_KIND_TO_FILL_STATUS", patched):
+        patched = {k: v for k, v in oj.EXIT_KIND_TO_FILL_STATUS.items() if k != "TP_HIT"}
+        with mock.patch.object(oj, "EXIT_KIND_TO_FILL_STATUS", patched):
             with self.assertLogs("alphalens_pipeline.feedback.outcome_join", level="WARNING") as cm:
                 report = self._join()
         self.assertEqual(report.n_matched, 0)
