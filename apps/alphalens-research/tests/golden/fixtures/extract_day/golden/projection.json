@@ -1,0 +1,73 @@
+{
+  "columns": [
+    "confidence",
+    "event_type",
+    "extracted_at",
+    "extraction_method",
+    "model",
+    "news_id",
+    "primary_entities",
+    "second_order_implications",
+    "sentiment",
+    "template_fields_json",
+    "template_id",
+    "themes"
+  ],
+  "row_count": 6,
+  "rows": [
+    {
+      "confidence": 0.9,
+      "event_type": "geopolitical",
+      "extraction_method": "flash",
+      "has_template_fields": false,
+      "news_id": "54920a60fee4231ee5650ccbf0b73c18b1c1c3ceeaf393778952720e750e2ec9",
+      "template_id": null,
+      "themes_nonempty": true
+    },
+    {
+      "confidence": 0.85,
+      "event_type": "price_target",
+      "extraction_method": "flash",
+      "has_template_fields": false,
+      "news_id": "590fda05083a0878dbac928677d286db00d6e1266205ca0d8c181f55af551d00",
+      "template_id": null,
+      "themes_nonempty": true
+    },
+    {
+      "confidence": 0.95,
+      "event_type": "earnings",
+      "extraction_method": "flash",
+      "has_template_fields": false,
+      "news_id": "d72a7180febbe7b99db5ff442302f18a1bdc543b10902fa34e44a5b735f7f088",
+      "template_id": null,
+      "themes_nonempty": true
+    },
+    {
+      "confidence": 1.0,
+      "event_type": "earnings",
+      "extraction_method": "template",
+      "has_template_fields": true,
+      "news_id": "syn_earn",
+      "template_id": "earnings_surprise",
+      "themes_nonempty": false
+    },
+    {
+      "confidence": 1.0,
+      "event_type": "guidance",
+      "extraction_method": "template",
+      "has_template_fields": true,
+      "news_id": "syn_guid",
+      "template_id": "guidance_update",
+      "themes_nonempty": false
+    },
+    {
+      "confidence": 1.0,
+      "event_type": "m_and_a",
+      "extraction_method": "template",
+      "has_template_fields": true,
+      "news_id": "syn_mna",
+      "template_id": "m_and_a_press_release",
+      "themes_nonempty": false
+    }
+  ]
+}

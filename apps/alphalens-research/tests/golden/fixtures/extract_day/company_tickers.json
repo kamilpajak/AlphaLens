@@ -1,0 +1,37 @@
+{
+  "0": {
+    "cik_str": 1,
+    "ticker": "ACQR",
+    "title": "Acquirer Corp"
+  },
+  "1": {
+    "cik_str": 2,
+    "ticker": "TGTC",
+    "title": "Target Systems Inc"
+  },
+  "2": {
+    "cik_str": 3,
+    "ticker": "ERNG",
+    "title": "Earnings Inc"
+  },
+  "3": {
+    "cik_str": 4,
+    "ticker": "GUID",
+    "title": "Guidance Co"
+  },
+  "4": {
+    "cik_str": 5,
+    "ticker": "INTU",
+    "title": "Intuit Inc."
+  },
+  "5": {
+    "cik_str": 6,
+    "ticker": "MU",
+    "title": "Micron Technology Inc."
+  },
+  "6": {
+    "cik_str": 7,
+    "ticker": "RTX",
+    "title": "RTX Corporation"
+  }
+}

@@ -358,14 +358,27 @@ def extract_daily(
     news_dir: Path = DEFAULT_NEWS_DIR,
     events_dir: Path = DEFAULT_EVENTS_DIR,
     api_key: str | None = None,
+    llm_client: OpenRouterClient | None = None,
     model: str = DEFAULT_MODEL,
+    engine: TemplateEngine | None = None,
+    resolver: EntityResolver | None = None,
 ) -> pd.DataFrame:
     """Extract events for one day's unified news parquet; cache results.
 
     Idempotent per ``news_id``: items already in the events parquet are kept
     untouched and not re-sent to the LLM.
+
+    ``llm_client`` / ``engine`` / ``resolver`` are threaded straight through to
+    :func:`extract_one` so a caller (notably the L3 golden-replay test) can
+    inject a ``ReplayOpenRouter`` + a fixture-pointed ``EntityResolver`` + the
+    shipped ``TemplateEngine`` without monkeypatching the module singletons.
+    Omit ``llm_client`` to build one from ``api_key`` (or the default client);
+    omit ``engine`` / ``resolver`` to lazily load the process-wide defaults.
     """
-    llm_client = OpenRouterClient(api_key=api_key) if api_key else get_default_openrouter_client()
+    if llm_client is None:
+        llm_client = (
+            OpenRouterClient(api_key=api_key) if api_key else get_default_openrouter_client()
+        )
 
     news_path = news_dir / f"{date.isoformat()}.parquet"
     if not news_path.exists():
@@ -389,7 +402,13 @@ def extract_daily(
 
     new_rows: list[dict] = []
     for _, row in to_extract.iterrows():
-        event = extract_one(row, llm_client=llm_client, model=model)
+        event = extract_one(
+            row,
+            llm_client=llm_client,
+            model=model,
+            engine=engine,
+            resolver=resolver,
+        )
         if event is None:
             continue
         new_rows.append(
