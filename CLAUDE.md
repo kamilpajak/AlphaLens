@@ -193,6 +193,12 @@ Sites with an injected client (edgar_detector `SECEdgarSource`, `CIKLoader`; the
 
 - **Prescreener (Layer 2a) unvalidated** — 45% fundamentals weight requires PIT historicals that Polygon Starter ($29/mo) does not provide. Manual ad-hoc only, no performance guarantee.
 - **GDELT theme YAML — multi-word quoted phrases only** — `alphalens_pipeline/thematic/config/gdelt_themes.yaml` queries must use multi-word phrases in quotes (e.g. `"CUDA toolkit"`, NOT `"CUDA"`). GDELT DOC API rejects single-word quoted tokens with `HTTP 200 + "The specified phrase is too short."` — `_http_get_json` raises this immediately as `GdeltQueryError` (no retry, no rate-limit burn). Static lint in `apps/alphalens-research/tests/thematic/test_gdelt.py::TestGdeltThemesYamlWellFormed` guards against regression. Live smoke per-bucket: `GDELT_LIVE_TEST=1 .venv/bin/python -m unittest tests.thematic.test_gdelt_live -v` (~90s wall, opt-in).
+- **L4 live vendor probes — opt-in, per-vendor env flags** — `apps/alphalens-research/tests/live/` holds shape-only probes that hit REAL services (assert non-emptiness + keys/finish_reason/schema, NEVER values) and share one transient(429/timeout)/permanent(shape/404/empty) classifier (`run_probes`, generalising the GDELT pattern). They `skipUnless` their flag, so the default `unittest discover` collects-but-skips them — they NEVER block PRs. Run all four at once with `just probe-live`, or one at a time:
+  - `SEC_LIVE_TEST=1 .venv/bin/python -m unittest tests.live.test_sec_live -v` — pins #2/#338; discovers a real EX-99.1 from Apple's live recent-8-K feed (no pinned accession to age out).
+  - `OPENROUTER_LIVE_TEST=1 .venv/bin/python -m unittest tests.live.test_openrouter_live -v` — pins #3; COSTS REAL MONEY (no v4-pro free tier), one tiny call per model.
+  - `POLYGON_LIVE_TEST=1 .venv/bin/python -m unittest tests.live.test_polygon_live -v`
+  - `YFINANCE_LIVE_TEST=1 .venv/bin/python -m unittest tests.live.test_yfinance_live -v`
+  Weekly CI `live-probes` job (schedule + `workflow_dispatch`, never push/PR) runs all four from repo secrets (`OPENROUTER_API_KEY`, `POLYGON_API_KEY`, `SEC_EDGAR_USER_AGENT`) and opens a GitHub issue on failure. Design: `docs/research/integration_e2e_test_strategy_2026_06_01.md` §3 L4 / Phase 5.
 
 Issues regarding CLOSED layers (Lean Docker setup, Layer 2d backtest workflow, themed gate Phase 2) → see `docs/research/paradigm_failures_postmortem.md` and ADR 0010.
 
