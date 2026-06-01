@@ -15,6 +15,7 @@ hosts where launchd is unavailable.
 | `alphalens-paper-plan.{service,timer}` | Mon-Fri 13:05 UTC | host-venv `alphalens paper plan --use-test-account --date $(date -u -d yesterday +%Y-%m-%d)` — reads that morning's `(D-1)` brief parquet, writes PLANNED ladder rows for submit (PR-D follow-up, epic #295 #298). ExecCondition holiday gate (the only one — plan has no internal market-closed guard). |
 | `alphalens-paper-submit.{service,timer}` | Mon-Fri 13:25 UTC | host-venv `alphalens paper submit --use-test-account --date $(date -u -d yesterday +%Y-%m-%d)` — submits the PLANNED rows plan wrote (same `(D-1)` brief) as entry-tier limits pre-XNYS-open (PR-D, epic #295 #298). ExecCondition gates on `alphalens paper is-trading-day` to skip US holidays. |
 | `alphalens-paper-reconcile.{service,timer}` | Mon-Fri every 30 min 14:00-21:00 UTC | host-venv `alphalens paper reconcile --use-test-account` — Alpaca order-status sweep during XNYS session (PR-D, epic #295 #298). Same ExecCondition holiday gate as paper-submit. |
+| `alphalens-feedback-shadow-returns.{service,timer}` | daily 06:30 UTC | host-venv `alphalens feedback backfill-shadow-returns --account test` — sweeps the last 14 brief dates, prices each whose +5-session horizon matured (Polygon minute bars → `shadow_return` + `realized_return`). `Persistent=true` catch-up; idempotent re-stamp. Track A v2 PR-T. Needs `POLYGON_API_KEY`. NOT trading-day-gated (the per-date maturity guard handles non-trading dates). |
 | `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) |
 
 ## Environment file setup (`/etc/alphalens/env`)
@@ -36,6 +37,11 @@ All three AlphaLens systemd units load secrets via
 - `alphalens-paper-submit.service` + `alphalens-paper-reconcile.service` —
   `ALPACA_API_KEY` + `ALPACA_API_SECRET` (paper-main), `ALPACA_TEST_API_KEY`
   + `ALPACA_TEST_API_SECRET` (dev sandbox, optional)
+- `alphalens-feedback-shadow-returns.service` — `POLYGON_API_KEY` (the
+  minute-bar pricing leg). A missing key does not hard-fail the run — every
+  ticker fetch is skipped and the sweep reports "0 priced" (looks like a
+  quiet night), so the fail-loud-on-missing-file `EnvironmentFile=` guard is
+  the only protection against a silently mis-pointed env.
 
 systemd reads each `KEY=VALUE` line into the unit's process env before
 `ExecStart`; for the docker-run unit, the explicit `-e KEY` flags then

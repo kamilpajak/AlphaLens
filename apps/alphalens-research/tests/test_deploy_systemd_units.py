@@ -54,6 +54,10 @@ PAPER_SUBMIT_TIMER = SYSTEMD_DIR / "alphalens-paper-submit.timer"
 PAPER_RECONCILE_SERVICE = SYSTEMD_DIR / "alphalens-paper-reconcile.service"
 PAPER_RECONCILE_TIMER = SYSTEMD_DIR / "alphalens-paper-reconcile.timer"
 
+# Nightly shadow-return backfill (Track A v2 PR-T).
+SHADOW_SERVICE = SYSTEMD_DIR / "alphalens-feedback-shadow-returns.service"
+SHADOW_TIMER = SYSTEMD_DIR / "alphalens-feedback-shadow-returns.timer"
+
 ACTIVE_SERVICES = (
     EDGAR_SERVICE,
     LIT_WEEKLY_SERVICE,
@@ -63,6 +67,7 @@ ACTIVE_SERVICES = (
     PAPER_PLAN_SERVICE,
     PAPER_SUBMIT_SERVICE,
     PAPER_RECONCILE_SERVICE,
+    SHADOW_SERVICE,
 )
 
 
@@ -1025,6 +1030,85 @@ class TestPaperPlanUnit(unittest.TestCase):
 
     def test_plan_timer_carries_install_section(self) -> None:
         text = PAPER_PLAN_TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
+
+
+class TestShadowReturnsUnit(unittest.TestCase):
+    """Nightly shadow-return backfill unit (Track A v2 PR-T).
+
+    Pins the directives the cron-health + parity tests can't infer: the
+    06:30 UTC daily slot (all of the prior day's +5-session horizons + their
+    opening windows are closed — Polygon Basic serves only closed sessions),
+    ``Persistent=true`` (a missed nightly sweep should replay; the 14-day
+    window makes the catch-up cheap + idempotent), the host-venv backfill
+    subcommand (NOT the single-date ``compute-shadow-returns``, which is
+    always inert on today's brief), and the ``POLYGON_API_KEY`` env the
+    pricing leg needs. The emit-hook + staleness-rule are pinned by the
+    glob-derived sibling suites.
+    """
+
+    def test_service_is_oneshot_with_working_dir(self) -> None:
+        text = SHADOW_SERVICE.read_text()
+        self.assertIn("Type=oneshot", text)
+        self.assertIn("WorkingDirectory=%h/AlphaLens", text)
+
+    def test_service_invokes_backfill_subcommand_on_host_venv(self) -> None:
+        # The sweep subcommand, not single-date compute-shadow-returns (which
+        # would always price 0 — today's brief never matured). One token, no
+        # doubled `alphalens`.
+        self.assertRegex(
+            SHADOW_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/alphalens\s+feedback\s+"
+                r"backfill-shadow-returns\b",
+                re.MULTILINE,
+            ),
+            "ExecStart must run `feedback backfill-shadow-returns` on the host "
+            "venv binary (sweep mode), not the single-date command.",
+        )
+
+    def test_service_loads_etc_alphalens_env_fail_loud(self) -> None:
+        self.assertRegex(
+            SHADOW_SERVICE.read_text(),
+            re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE),
+            "Must load /etc/alphalens/env without a leading dash (fail loud on "
+            "missing POLYGON_API_KEY rather than silently pricing nothing).",
+        )
+
+    def test_service_documents_polygon_api_key_requirement(self) -> None:
+        # POLYGON_API_KEY is the one secret this job needs (the pricing leg).
+        # A missing key surfaces as an all-skipped sweep, not a hard failure,
+        # so the requirement must be visible in the unit for the operator.
+        self.assertIn("POLYGON_API_KEY", SHADOW_SERVICE.read_text())
+
+    def test_service_wires_emit_hook_with_own_job_name(self) -> None:
+        self.assertRegex(
+            SHADOW_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStopPost=%h/AlphaLens/deploy/systemd/bin/"
+                r"alphalens-emit-job-metrics\s+feedback-shadow-returns\s*$",
+                re.MULTILINE,
+            ),
+        )
+
+    def test_service_sets_generous_timeout_for_rate_limited_sweep(self) -> None:
+        # The 14-day sweep × Polygon ~5 req/min throttle can run long after a
+        # VPS-downtime backlog (Persistent replay = the largest run). 45min
+        # gives headroom; a timeout-kill is self-healing (next nightly fire
+        # re-covers via idempotency).
+        self.assertRegex(
+            SHADOW_SERVICE.read_text(),
+            re.compile(r"^TimeoutStartSec=45min\s*$", re.MULTILINE),
+        )
+
+    def test_timer_fires_daily_at_0630_utc_persistent(self) -> None:
+        text = SHADOW_TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^OnCalendar=\*-\*-\* 06:30:00 UTC\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^Persistent=true\s*$", re.MULTILINE))
+
+    def test_timer_carries_install_section(self) -> None:
+        text = SHADOW_TIMER.read_text()
         self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
         self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
 

@@ -33,6 +33,13 @@ feedback_app = typer.Typer(
 # stay in sync via reference.
 _OTHER_WARN_THRESHOLD = 0.15
 
+# Duplicates ``shadow_return.DEFAULT_LOOKBACK_DAYS`` because typer.Option
+# evaluates its default at import time and this CLI lazy-imports the feedback
+# module inside command bodies (keeps the pipeline → research direction clean +
+# the CLI startup cheap). Parity pinned by
+# ``test_cli_lookback_default_in_sync_with_module``.
+_DEFAULT_LOOKBACK_DAYS = 14
+
 
 @feedback_app.command(name="report")
 def report_command(
@@ -179,4 +186,53 @@ def compute_shadow_returns_command(
         f"shadow-returns {brief_date} account={account}: {report.n_priced} priced, "
         f"{report.n_skipped} skipped, {report.n_no_bars} no-bars "
         f"({report.n_outcomes} matured outcomes)."
+    )
+
+
+@feedback_app.command(name="backfill-shadow-returns")
+def backfill_shadow_returns_command(
+    lookback_days: int = typer.Option(
+        _DEFAULT_LOOKBACK_DAYS,
+        "--lookback-days",
+        help="Calendar days to sweep back from today (inclusive).",
+    ),
+    account: str = typer.Option(
+        "test",
+        "--account",
+        help="Alpaca paper account the live chain runs on ('test').",
+    ),
+    ledger: Path = typer.Option(
+        Path.home() / ".alphalens" / "feedback.db",
+        "--ledger",
+        help="Override the default feedback ledger location.",
+    ),
+    paper_ledger: Path = typer.Option(
+        Path.home() / ".alphalens" / "paper_ledger.db",
+        "--paper-ledger",
+        help="Override the default paper-trade ledger location.",
+    ),
+) -> None:
+    """Sweep recent brief dates, pricing each whose holding horizon has matured.
+
+    The nightly VPS timer's entrypoint — it runs with NO ``--date`` so it needs
+    no date arithmetic. It sweeps ``[today - lookback_days, today]`` newest-first
+    and prices every matured date; not-yet-matured dates are skipped per-date.
+    Idempotent (re-stamps the same deterministic value), so a ``Persistent=true``
+    catch-up after VPS downtime is safe. Per-ticker fetch failures skip + warn;
+    one bad ticker never aborts the sweep.
+    """
+    from alphalens_pipeline.feedback.shadow_return import compute_shadow_returns_window
+
+    reports = compute_shadow_returns_window(
+        ledger, paper_ledger, lookback_days=lookback_days, account=account
+    )
+    matured = [r for r in reports if r.matured]
+    pending = [r for r in reports if not r.matured]
+    n_priced_total = sum(r.n_priced for r in matured)
+    # reports are newest-first: [0] is today, [-1] is the oldest swept date.
+    start, end = reports[-1].brief_date, reports[0].brief_date
+    typer.echo(
+        f"shadow-returns backfill {start}..{end} account={account}: "
+        f"{n_priced_total} priced across {len(matured)} matured dates, "
+        f"{len(pending)} dates not yet matured."
     )

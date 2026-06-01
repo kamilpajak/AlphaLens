@@ -50,6 +50,7 @@ ACTIVE_JOBS = (
     "literature-scan-monthly",
     "av-earnings-backfill",
     "thematic-build",
+    "feedback-shadow-returns",
 )
 
 
@@ -152,6 +153,12 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             # alongside the 6×/day timer in
             # docs/research/polygon_quota_6x_per_day_2026_05_30.md.
             "thematic-build": 43200,
+            # 48h = 2× the nightly cadence (Track A v2 PR-T). The job runs
+            # every night at 06:30 UTC and exits 0 even on nights that price
+            # 0 dates (per-ticker resilience), so last_success refreshes
+            # nightly — staleness cleanly catches "the nightly sweep stopped
+            # running", which AlphalensJobFailed (non-zero exit) cannot.
+            "feedback-shadow-returns": 172800,
         }
         rules = _load_rules()["groups"][0]["rules"]
         found: dict[str, int] = {}
@@ -243,7 +250,7 @@ class TestPrometheusRulesYaml(unittest.TestCase):
 
     def test_missing_rules_have_distinct_static_label_sets(self) -> None:
         # promtool rejects two rules sharing an identical alertname AND
-        # static-label set. Assert the 5 AlphalensJobMetricMissing label
+        # static-label set. Assert the 6 AlphalensJobMetricMissing label
         # blocks are pairwise distinct (via the unit label).
         rules = _load_rules()["groups"][0]["rules"]
         label_sets = [
@@ -251,7 +258,7 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             for rule in rules
             if rule.get("alert") == "AlphalensJobMetricMissing"
         ]
-        self.assertEqual(len(label_sets), 5)
+        self.assertEqual(len(label_sets), 6)
         self.assertEqual(len(set(label_sets)), len(label_sets))
 
     def test_missing_metric_message_claims_no_duration(self) -> None:
@@ -350,7 +357,7 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             for rule in rules
             if rule.get("alert") == "AlphalensJobStale"
         ]
-        self.assertEqual(len(label_sets), 5)
+        self.assertEqual(len(label_sets), 6)
         self.assertEqual(
             len(set(label_sets)),
             len(label_sets),

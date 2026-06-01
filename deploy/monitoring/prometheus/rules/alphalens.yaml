@@ -175,6 +175,36 @@ groups:
           summary: "thematic-build success metric missing"
           description: "No success metric for thematic-build. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
 
+      # feedback-shadow-returns runs nightly at 06:30 UTC (Track A v2
+      # PR-T). 172800s = 48h = 2× the daily cadence, matching
+      # av-earnings-backfill. The sweep exits 0 even on nights that price
+      # 0 matured dates (per-ticker resilience), so last_success refreshes
+      # every night — staleness here cleanly catches "the nightly sweep
+      # stopped running", which the exit-code AlphalensJobFailed cannot.
+      # NOT trading-day-gated (unlike the paper jobs), so no weekend
+      # false-page concern.
+      - alert: AlphalensJobStale
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="feedback-shadow-returns"} > 172800
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: feedback-shadow-returns
+        annotations:
+          summary: "feedback-shadow-returns stale > 48h (expected daily cadence)"
+          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="feedback-shadow-returns"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: feedback-shadow-returns
+        annotations:
+          summary: "feedback-shadow-returns success metric missing"
+          description: "No success metric for feedback-shadow-returns. The job has not run since metrics were enabled (e.g. a freshly installed unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
+
       # ---------------------------------------------------------------
       # Failure — fires on any non-zero exit. Hard fail, immediate
       # debounce (1m so one cron failure does not wait 5m to page).
