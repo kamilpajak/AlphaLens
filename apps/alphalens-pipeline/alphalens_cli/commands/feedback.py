@@ -194,7 +194,10 @@ def backfill_shadow_returns_command(
     lookback_days: int = typer.Option(
         _DEFAULT_LOOKBACK_DAYS,
         "--lookback-days",
-        help="Calendar days to sweep back from today (inclusive).",
+        help=(
+            "Calendar days to sweep back from today. The window is inclusive at "
+            "both ends, so N yields N+1 dates (default 14 → 15 dates)."
+        ),
     ),
     account: str = typer.Option(
         "test",

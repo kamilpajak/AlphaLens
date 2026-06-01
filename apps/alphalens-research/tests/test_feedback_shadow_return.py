@@ -395,6 +395,20 @@ class TestComputeShadowReturnsWindow(unittest.TestCase):
         self.assertEqual(sig.parameters["lookback_days"].default, sr.DEFAULT_LOOKBACK_DAYS)
         self.assertEqual(sr.DEFAULT_LOOKBACK_DAYS, 14)
 
+    def test_default_lookback_sweeps_15_inclusive_dates(self):
+        # Pin that the DEFAULT (omitted lookback_days) actually drives the loop —
+        # 14 inclusive both ends = 15 dates — not just that the constant exists.
+        reports = sr.compute_shadow_returns_window(
+            self.fb_path,
+            self.ledger_path,
+            end_date=dt.date(2026, 5, 20),
+            bar_fetch=lambda *_: [],
+            now=_NOW,
+        )
+        self.assertEqual(len(reports), 15)
+        self.assertEqual(reports[0].brief_date, dt.date(2026, 5, 20))  # newest
+        self.assertEqual(reports[-1].brief_date, dt.date(2026, 5, 6))  # oldest (20 - 14)
+
 
 if __name__ == "__main__":
     unittest.main()
