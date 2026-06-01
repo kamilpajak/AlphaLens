@@ -57,7 +57,7 @@ def report_command(
     """
     from collections import Counter
 
-    from alphalens_pipeline.feedback.store import FeedbackStore
+    from alphalens_feedback.store import FeedbackStore
 
     if not ledger.exists():
         typer.echo(f"no ledger at {ledger} — nothing to report yet.")
@@ -264,6 +264,7 @@ def execution_modes_command(
     backing counts (unfilled for MO, gap for the execution drag) are printed next
     to every line.
     """
+    from alphalens_feedback.store import FeedbackStore
     from alphalens_pipeline.feedback.execution_modes import (
         DEFAULT_POOLED_GATE_N,
         POOLED_KEY,
@@ -271,7 +272,6 @@ def execution_modes_command(
         UNKNOWN_REGIME,
         recommend_execution_modes,
     )
-    from alphalens_pipeline.feedback.store import FeedbackStore
 
     if not ledger.exists():
         typer.echo(f"no ledger at {ledger} — no matured decisions yet (all LIMIT).")

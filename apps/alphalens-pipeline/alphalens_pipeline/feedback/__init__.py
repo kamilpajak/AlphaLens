@@ -1,36 +1,22 @@
-"""User feedback ledger — explicit accept/dismiss decisions on briefed candidates.
+"""Pipeline-side feedback analytics — consumes the shared ledger.
 
-Single SQLite file at ``~/.alphalens/feedback.db``, same lifecycle as the
-Layer 1 candidate queue (``candidates.db``) and the paper-trade ledger
-(``paper_ledger.db``): user-authored, NOT regenerable from parquet, lives
-on host disk so it survives Docker rebuilds + git ops.
+The dependency-free CORE of the feedback ledger (the SQLite ``Decision``
+store + VIX ``regime``) was extracted to the standalone ``alphalens-feedback``
+workspace package so the slim Django image can read/write the shared
+``~/.alphalens/feedback.db`` without the heavy pipeline dependency tree
+(prod incident 2026-06-01 — the Django image failed to build because it
+imported the store but could not install ``alphalens_pipeline``). Import the
+store/regime from ``alphalens_feedback`` now, NOT from here.
 
-5-action enum (``interested`` / ``watching`` / ``dismissed`` /
-``paper_traded`` / ``live_traded``) plus a 2-level dismiss taxonomy
-(4 high-level categories × 3 specific reasons + ``other``) per the locked
-design memo at ``docs/research/feedback_ledger_design_2026_05_29.md``.
+What stays here (pipeline-coupled, NOT needed by Django):
+- ``outcome_join`` — joins ``Decision`` rows to paper-trade ledger fills.
+- ``shadow_return`` — arrival-price counterfactual return from Polygon bars.
+- ``execution_modes`` — Perold break-even LIMIT-vs-MARKET classification.
 
-Why feedback ledger:
-    Without explicit dismiss / interested data the model has no signal on
-    which surfaced candidates were worth showing. L3 weekly review,
-    per-signal-combo win-rate, and the eventual learned re-weighting of
-    ``layer4_weighted_score`` all consume this ledger. Paper-trade ledger
-    is a separate stream that only captures explicit planning; ``decisions``
-    here covers the much larger surface of "saw the candidate, made a call".
-
-Storage choice — SQLite over Postgres:
-    Feedback is user-authored and NOT regenerable. Briefs cache (Postgres)
-    is regenerable from parquet; mixing the two needs separate backup
-    discipline. SQLite at ``~/.alphalens/feedback.db`` keeps the
-    user-authored data on the same host-volume backup path as the other
-    permanent ledgers.
-
-Django + pipeline access:
-    Django opens this DB as a secondary database (``DATABASES['feedback']``
-    in ``apps/alphalens-django/config/settings.py``) and routes the
-    ``Decision`` model to it via a DB router. Pipeline-side helpers
-    (this package) and Django share the same on-disk file via the
-    ``~/.alphalens`` Docker volume mount.
+These import ``alphalens_pipeline.paper`` (ledger + calendar) and the shared
+store from ``alphalens_feedback`` — which is exactly why they cannot live in
+the leaf ``alphalens-feedback`` package (that would re-introduce the heavy
+dependency into the Django image).
 """
 
 __status__ = "ACTIVE"

@@ -62,8 +62,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from alphalens_feedback.store import FeedbackStore
+
 from alphalens_pipeline.feedback.outcome_join import EXIT_KIND_TO_FILL_STATUS
-from alphalens_pipeline.feedback.store import FeedbackStore
 from alphalens_pipeline.paper import ledger as paper_ledger
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,

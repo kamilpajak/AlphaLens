@@ -2,7 +2,7 @@
 
 v2 PR-2 ships ``refresh-vix`` only — pulls VIXCLS from FRED and writes the
 tiny JSON VIX regime cache that the Django feedback POST path reads on the
-hot path (see ``alphalens_pipeline.feedback.regime.get_cached_vix``). Wired
+hot path (see ``alphalens_feedback.regime.get_cached_vix``). Wired
 into the daily thematic build (``deploy/docker/run_thematic_day.sh``) so a
 fresh VIX value lands ~6x/day; the reader degrades to "unknown" if this
 refresh dies and the cache ages past 96h.
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import typer
-from alphalens_pipeline.feedback.regime import default_vix_cache_path
+from alphalens_feedback.regime import default_vix_cache_path
 
 if TYPE_CHECKING:
     import pandas as pd

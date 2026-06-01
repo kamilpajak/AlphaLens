@@ -18,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 from alphalens_cli.commands import cache as cache_cmd
 from alphalens_cli.main import app
-from alphalens_pipeline.feedback import regime
+from alphalens_feedback import regime
 from typer.testing import CliRunner
 
 UTC = dt.UTC

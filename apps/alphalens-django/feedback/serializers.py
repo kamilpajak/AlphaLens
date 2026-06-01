@@ -3,7 +3,7 @@
 These deliberately stop at type coercion (date/datetime parsing,
 field-level type validation). Cross-field invariants (action enum,
 dismiss pair-integrity, position-size only for live_traded) are
-authoritative in ``alphalens_pipeline.feedback.store.Decision`` and
+authoritative in ``alphalens_feedback.store.Decision`` and
 re-raised as DRF ``ValidationError`` by the view so the rules live in
 one place and the SPA + Telegram bot eventually share the same error
 surface.

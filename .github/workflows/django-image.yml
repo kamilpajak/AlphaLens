@@ -106,3 +106,42 @@ jobs:
           subject-name: ghcr.io/kamilpajak/alphalens-django
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+  # Alert on a failed build. This workflow only runs on push-to-main, so a
+  # broken Dockerfile here means NO new image reaches GHCR and the VPS silently
+  # keeps running the last good image — exactly the failure that went unnoticed
+  # for ~20h after #292. Opening a GitHub issue makes the operator's standard
+  # notifications fire. Deduped by title so a repeated break doesn't spam.
+  notify-failure:
+    name: alert on build failure
+    needs: build
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open a GitHub issue (skip if one is already open)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          open_count=$(gh issue list --repo "$REPO" --state open \
+            --search '"django-image build failed" in:title' --json number --jq 'length')
+          if [ "${open_count:-0}" -gt 0 ]; then
+            echo "An open 'django-image build failed' issue already exists — not duplicating."
+            exit 0
+          fi
+          gh issue create --repo "$REPO" \
+            --title "django-image build failed on ${SHA:0:7}" \
+            --body "The \`build-django-image\` workflow failed on \`${REF_NAME}\` (\`${SHA}\`).
+
+          No new Django image was published to GHCR — the VPS keeps running the
+          last good image until this is fixed (so freshly-merged Django changes
+          are NOT deployed). Build log: ${RUN_URL}
+
+          The \`image-smoke\` workflow gates PRs; if this fired on a direct main
+          push, fix the Dockerfile / deps and re-run."

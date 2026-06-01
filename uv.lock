@@ -13,6 +13,7 @@ resolution-markers = [
 [manifest]
 members = [
     "alphalens-django",
+    "alphalens-feedback",
     "alphalens-pipeline",
     "alphalens-research",
 ]
@@ -56,6 +57,7 @@ name = "alphalens-django"
 version = "0.1.0"
 source = { editable = "apps/alphalens-django" }
 dependencies = [
+    { name = "alphalens-feedback" },
     { name = "django" },
     { name = "django-cors-headers" },
     { name = "django-environ" },
@@ -73,6 +75,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "alphalens-feedback", editable = "apps/alphalens-feedback" },
     { name = "django", specifier = "==6.0.5" },
     { name = "django-cors-headers", specifier = ">=4.9" },
     { name = "django-environ", specifier = ">=0.13" },
@@ -89,11 +92,17 @@ requires-dist = [
 ]
 
 [[package]]
+name = "alphalens-feedback"
+version = "0.1.0"
+source = { editable = "apps/alphalens-feedback" }
+
+[[package]]
 name = "alphalens-pipeline"
 version = "0.1.0"
 source = { editable = "apps/alphalens-pipeline" }
 dependencies = [
     { name = "alpaca-py" },
+    { name = "alphalens-feedback" },
     { name = "defusedxml" },
     { name = "exchange-calendars" },
     { name = "feedparser" },
@@ -116,6 +125,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "alpaca-py", specifier = ">=0.43.4" },
+    { name = "alphalens-feedback", editable = "apps/alphalens-feedback" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "exchange-calendars", specifier = ">=4.5" },
     { name = "feedparser", specifier = ">=6.0.11" },

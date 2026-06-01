@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from alphalens_cli.main import app
-from alphalens_pipeline.feedback.store import Decision, FeedbackStore
+from alphalens_feedback.store import Decision, FeedbackStore
 from typer.testing import CliRunner
 
 UTC = dt.UTC

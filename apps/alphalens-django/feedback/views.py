@@ -34,8 +34,8 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from alphalens_pipeline.feedback import regime
-from alphalens_pipeline.feedback.store import (
+from alphalens_feedback import regime
+from alphalens_feedback.store import (
     ACTIONS,
     DISMISS_TAXONOMY,
     Decision,
@@ -192,7 +192,7 @@ class TaxonomyView(APIView):
     The SPA fetches this once on app boot to build the dropdowns
     without hard-coding the labels client-side. Pipeline + Django + SPA
     therefore share one source of truth (the taxonomy constant in
-    ``alphalens_pipeline.feedback.store``).
+    ``alphalens_feedback.store``).
     """
 
     @extend_schema(responses=TaxonomyResponseSerializer)

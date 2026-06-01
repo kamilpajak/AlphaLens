@@ -20,8 +20,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from alphalens_feedback.store import Decision, FeedbackStore
 from alphalens_pipeline.feedback import shadow_return as sr
-from alphalens_pipeline.feedback.store import Decision, FeedbackStore
 from alphalens_pipeline.paper import ledger as paper_ledger
 
 UTC = dt.UTC

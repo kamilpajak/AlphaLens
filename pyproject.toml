@@ -14,7 +14,7 @@
 #   uv pip install -e apps/alphalens-django
 
 [tool.uv.workspace]
-members = ["apps/alphalens-pipeline", "apps/alphalens-research", "apps/alphalens-django"]
+members = ["apps/alphalens-feedback", "apps/alphalens-pipeline", "apps/alphalens-research", "apps/alphalens-django"]
 
 [dependency-groups]
 # Shared dev tools — installed for every workspace member by `uv sync --group dev`.

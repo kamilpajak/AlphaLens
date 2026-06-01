@@ -55,10 +55,18 @@ dependencies = [
     # image was first rebuilt post-PR-1 (2026-05-31) — see
     # feedback_pipeline_image_manual_rebuild_after_merge.
     "jsonschema>=4.0.0",
+    # Shared feedback-ledger primitives (SQLite Decision store + VIX regime),
+    # pure stdlib. outcome_join + shadow_return (this package's feedback/)
+    # import the store from here. Same leaf package the slim Django image
+    # depends on, so the ledger schema has a single owner across both images.
+    "alphalens-feedback",
 ]
 
 [project.scripts]
 alphalens = "alphalens_cli.main:app"
+
+[tool.uv.sources]
+alphalens-feedback = { workspace = true }
 
 [tool.setuptools.packages.find]
 include = ["alphalens_pipeline*", "alphalens_cli*"]
