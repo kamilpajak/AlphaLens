@@ -1,0 +1,1558 @@
+{
+  "by_source": {
+    "gdelt": 3,
+    "polygon": 72,
+    "rss": 87
+  },
+  "columns": [
+    "body",
+    "extra",
+    "id",
+    "keywords",
+    "source",
+    "tickers",
+    "timestamp",
+    "title",
+    "url"
+  ],
+  "n_tickers_total": 168,
+  "row_count": 162,
+  "rows": [
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "02f2a89e801b1595",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "035f70e69ad478a6",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "0392e323f5173217",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "0727e7fe2b987b07e3d642e26aa1d75b9d80acbce655d986bca878c7f3b25870",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "TSLA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "0a8670a0a5112db9",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "0b7452d0bccf2fd627e652a7ff764eceb16f782f6c9f31102efae05c253f609c",
+      "n_tickers": 8,
+      "source": "polygon",
+      "tickers": [
+        "AVGO",
+        "COST",
+        "MSFT",
+        "MU",
+        "ORCL",
+        "QCOM",
+        "SMCI",
+        "WDAY"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "0cbf08452e1c77e2332b9197c3237712721ac621c9378fbf53bb729a2c977362",
+      "n_tickers": 3,
+      "source": "polygon",
+      "tickers": [
+        "GM",
+        "NVDA",
+        "TSM"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "0dd547bbcbcd5bd41439febc531bda3fabfabe4933b2d9853250f94ce650bc0b",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "AVGO",
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "103cfe9a8fd4b0565ae5d336f5eac245d7dc32ebb61e3a338165d16fd55d014e",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "COST",
+        "SNOW"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "1585574d85f8f607d72543c2f69cc8a9f08be4e0f982559df9206566bd9659dc",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "INTU"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "15a2916b109059dd",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "15c630a21b82e53b",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "16274115b6790757",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "162873f766d21717",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "18c5ad3db2bd33d3",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "18ea5c0ec610a6d9db5e67eb84a84569b568ac6159d84aea86a073f2fd5c1735",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "NOW",
+        "PLTR"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "1939531b33eb1797",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "1a155bb25e8c367e",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "1c000c0f6341af81",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "1c472456cdf59ff247c45ed31bb73ddf030e6579e7f1c5132f65647520d30995",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "AMZN"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "1e59e284a503a0ef",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "2276f10a30532fcd",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "229979aeb0b1ae46",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "23c3523552d8e7656c138a1d8ed4af15a3b7b1649a23e8db22960730dbc65b24",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "LMT",
+        "RTX"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "23d6bb4cf8fbc75f75373953f8f98b8a6d30737c53a02ffca46b9e9cfd8f5823",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "GOOG",
+        "GOOGL"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "23ef871ee3407faadc0caa7f3ff704048cd923babbc5a9ce5e7cdbe0c5b0bc5e",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "2575e7e5ec797eaa",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "27886b4336d43b6845c96bb3dc12b6073afb454e440f58872dc326a92aef69bc",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "NFLX"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "27aa4b232819a1c5",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": false,
+      "id": "282f0b42a8647065",
+      "n_tickers": 0,
+      "source": "gdelt",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "2a46f829c7253208",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "2b7bfc612d87a8501cccdaaa09daab9386da2bc11fab01d186a84d0aa7a59e99",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "DIS"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "2f9401eb74a9d1917633cbc1d811b4f0d63aa35c499e973a16128391104ce583",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "INTC",
+        "MSFT"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "353718eeb2502613250172ff6e8697b554ffef0a13846247cff2fe2898603ce4",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "COST"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "376ccf496b59160e118a6b7347b8158117b3af36e61ea27a2b20a27cd2de3fe1",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "NVDA",
+        "SMCI"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "381be700bcabc3c2",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "3963be5e741b6412",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "39b4a7ede54c136fc8a3580b7f018fccb486d7295878518cb1af56bb3c51fc6b",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "LOW"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "3ad682626902c5a9",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "3f07fef2813af3792365ea13fd04212ef060d81cfeb7274b70981128fd4b8717",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "3f285bc7a100fe56",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "411dfbe28039fcf5",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "41df00c13273409e",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "4370ddece44bdeb7",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "45a0d794f83f926d3ef44ab5779341055674009a054a7bc71e925c9183b13ae7",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "MSFT"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "463d84a726c81a0599a3ee3a3b2148ba2bca355fd48848fd1a4cb5d10ec63302",
+      "n_tickers": 7,
+      "source": "polygon",
+      "tickers": [
+        "AMAT",
+        "AVGO",
+        "GOOG",
+        "GOOGL",
+        "META",
+        "NVDA",
+        "TSM"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "48a43ac10486fb0a",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "4904ae6eb93aa17d",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "4f2f22e713746a2f",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "4fec876dbb67b879",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "5305b6fd0de44d103bd4adf964228b2001b1723431296ec46e6028aed79d8192",
+      "n_tickers": 5,
+      "source": "polygon",
+      "tickers": [
+        "AMZN",
+        "GOOG",
+        "GOOGL",
+        "META",
+        "MSFT"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "5443e4e734dcc280",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "58c2aa4a1f90a71a86d669657fb282559014b3f01524fe2fb3d196d3f50ccfec",
+      "n_tickers": 3,
+      "source": "polygon",
+      "tickers": [
+        "INTC",
+        "NVDA",
+        "QCOM"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "58ffc601b6f82f03b16a80020ea376897b40a275de845474ac81f02924112854",
+      "n_tickers": 4,
+      "source": "polygon",
+      "tickers": [
+        "AXP",
+        "MA",
+        "PYPL",
+        "V"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "5977c1f3a164ab8e",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "5a034d0123d44de2",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "5c6fb3f249aec745",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "5dfe1097955e9469",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "5e7c45625d7f4790f7c961393404d8e167b8c9d914d3335a7adb616c6733e406",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "TSLA",
+        "UBER"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "5eeae8179015e344",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "60f080a4d062b43d",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "61ca23c77d16a99c",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "61fed03182221cc4",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "624ac4a689d0c951115b178e02bff7d4731e3dca80a1bfa31a4d6c403f4ff0f5",
+      "n_tickers": 4,
+      "source": "polygon",
+      "tickers": [
+        "C",
+        "CRM",
+        "JPM",
+        "MSFT"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "62aeda31f48ffded5701b424e5b17a3f97fa9eaeefb7ac9f1c0c7fe1832a8c87",
+      "n_tickers": 6,
+      "source": "polygon",
+      "tickers": [
+        "AAPL",
+        "AMD",
+        "GOOG",
+        "GOOGL",
+        "MSFT",
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "65f8ea0e11c20ce7",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "6c098d0df2db6631",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "6e16372767dc110d",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "6e399f2f94a330981194a3d87dfcccb67fde115a7e8bfd551cca5d184adf8dd9",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "COST"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "6f76eccfa5598910",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "71291bc64a9c6e1d1d4894b238bc06087d63497b39f6bb9ba3323c0c5376ca03",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "AMD",
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "71e4053d677dcff4",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "7288c5a75b848448779a5b89980a248b3d364a3965f1a999886fa84841390c4c",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "MRNA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "740e340e355d18ae",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "763a034425152430",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "7666b66f50e3c972",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "770bea84e45e840b",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "78e2aaffcb23567e52f9a99fdf506ce99a0e103f72fb3a88dfcdf72eebb03638",
+      "n_tickers": 3,
+      "source": "polygon",
+      "tickers": [
+        "IBM",
+        "JPM",
+        "SNOW"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "7a2ef22d7ef2836a",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "7dbe59973509af9a",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "7fd359f3aa30658a",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "838b0baacc37aaafb75745d2081fe13b95cf89e168a9e69a8c7881dc96851973",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "GOOG",
+        "GOOGL"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "85d4e652fef1c0d31928a5e7c07114cf8daa0165c98c9e6f556b45cb9dc091db",
+      "n_tickers": 5,
+      "source": "polygon",
+      "tickers": [
+        "AMZN",
+        "GOOG",
+        "GOOGL",
+        "MRVL",
+        "MSFT"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "87100c8667141167",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "885e4885112434bf3c614bf59edbab8441513a1a447ba12fc052ca6ad5c46be3",
+      "n_tickers": 5,
+      "source": "polygon",
+      "tickers": [
+        "AAPL",
+        "AMZN",
+        "MSFT",
+        "MU",
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "8964ec60c35910fc571ec74b58d1dc6576e2355e1e5f9672fc149564a61ee67e",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "ENPH",
+        "TSLA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "89c9f01021c37a3f",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "8bd9d13309365b26",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "90fb3cf4dabe229e",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "933f76473f363b7b",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "94aceeb597bc77e4",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "954f601ca4e6c59ac048290020ca40f38c84dab11cefc9b2def4b532fd828551",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "IBM",
+        "MSFT"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "959153c1d7f50fbd",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "96dc5faa11d5f00a5009d30f7ca4df5b36d26995f420625432cb8e67a1b62894",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "GS"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "971ae18f2c44e3d8",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "99e0fb0646e0df6e5ac96232d8d7905ce9bd75aeba7a0296494d64d60cd4179b",
+      "n_tickers": 3,
+      "source": "polygon",
+      "tickers": [
+        "COST",
+        "DDOG",
+        "NOW"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "9bfecbc816ebfcd6b42f1d34608c50b285fb034b9359c60142e1403480f49adb",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "COST",
+        "WMT"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "9d046b68f7c5455f",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "9d3fbe3906b283fe526dbec8185e85d54790aeecf20325517c5628a7c2092706",
+      "n_tickers": 3,
+      "source": "polygon",
+      "tickers": [
+        "GOOG",
+        "GOOGL",
+        "META"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "9f88d2a5101ba502",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": false,
+      "id": "a1b99d86ae23b373",
+      "n_tickers": 0,
+      "source": "gdelt",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "a320efaaf3bbb05ed767da46587dee72f67729d5ed4758bc1fb33472d80fc276",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "BRK.B"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "a65206cc3ddbcf3f6cdc69597749d20c911cd56876d325746359834d22d67196",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "SNOW"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "a96bd8dadbaf4dd77cb6a0bba7684310d41235fff146b706f2fc6a9cef20e203",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "BA",
+        "GE"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "ab0b0a041b630cdb",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "ab6baf709aefc980ffcbbf3d8d27f13120e514613bc8d73caa3ad583f21e3a64",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "SMCI"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "ad72f01b40a1224063f612eeb3915164730372f1ba0b1c0cebfff7c6fb144788",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "CRWD",
+        "PANW"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "ad8d453d0906c7c8549e3d8ac1e1425aebffb359bba46dc239d2ab2454618a97",
+      "n_tickers": 3,
+      "source": "polygon",
+      "tickers": [
+        "AMD",
+        "AVGO",
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "aec13d3b6b24623c52b3fa69273638d234e67725f82c69d99f7ea4eaae9d9316",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "HON"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "afb68a405687f1ac8b28b8c31cedea78366b81fb65d316b253ec461ef451888f",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "PLTR"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "b2445d2752033aed",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "b3258eed79d4ad873df7ceb03a1466b7217a8317fb593abe064bef0ccd2ee231",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "b347c142103be5607f223ef59fa26342cfb3ee95bffb549a6f20920ba7c5b046",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "CRM",
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "b520a0e1497fe471",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "b74c35eb6acb404c",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "b972c33f46a7da95",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "bd443ac89993ed834e7d98fea8ee28008bd8224b21715628e3e938659a289f13",
+      "n_tickers": 5,
+      "source": "polygon",
+      "tickers": [
+        "AAPL",
+        "AXP",
+        "GOOG",
+        "GOOGL",
+        "KO"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "be2e408b311322c4",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "c08c4c2aec0b2524865b2e4448cd33610f017666a092880516c815a978af0d4e",
+      "n_tickers": 9,
+      "source": "polygon",
+      "tickers": [
+        "AAPL",
+        "AMD",
+        "AMZN",
+        "GOOG",
+        "GOOGL",
+        "META",
+        "MSFT",
+        "MU",
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "c1ccf2b72ebe8e84c4a8493b2ee8e9ae1176a685270a80815be7ec592a99c619",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "MU",
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "c2c53b0d33ffddbd",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "c4ce0f0836f4bc86",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "c6839260e2515652",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "c8fe8fc096d9c54f",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "ca1a60369095ce4aea64c88118c2eec4f1b4678cac0f9e4f1a2f532052bfb0fc",
+      "n_tickers": 3,
+      "source": "polygon",
+      "tickers": [
+        "BA",
+        "GE",
+        "RTX"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "caf6fe8e38c65cb2",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "cb45acc305d0a3ef",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "cb552da9d1108e0799b52a3e17bbb377b6817c5a48b3e297a138cebeefa8efa6",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "MU"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "cdb521093388946fdb9802f16005bb6a782bd4bbaae95af9c8ef9aa8f7f527c2",
+      "n_tickers": 4,
+      "source": "polygon",
+      "tickers": [
+        "AAPL",
+        "GOOG",
+        "GOOGL",
+        "MSFT"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "cf9c32d288c6cbce",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "d28066627ad9f64e",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "d87bbb85d4ffbdaa",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "da7eb7f6fe97cb33d43253f70e78e59f83cda018851d5b8b0b99666fad5d3761",
+      "n_tickers": 3,
+      "source": "polygon",
+      "tickers": [
+        "AAPL",
+        "NVDA",
+        "TSLA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e03a9ebf8c3dbfc8b9b4d8467b1c20c1c7becec050741cbfaa9a93aae4ac1c79",
+      "n_tickers": 4,
+      "source": "polygon",
+      "tickers": [
+        "AAPL",
+        "AVGO",
+        "MSFT",
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e10e225b009ec3a1",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e14a196334b29d8d34d4f0147dd8de3e9120853f296c7044fd4cb279c521f93d",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "JPM"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e269c7c1c5d7df6b",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e28bcdd516baed61ef71997c1dd4bf8d0bf6f0c15ba42973db6dbe7674c1568e",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "CRM"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e3134f05ee80a321",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e38d9ce7323be4d7",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e3cc28910645803b8f0c2846e3887ba82a50bda76ebb88e5bcde67b917f3ef56",
+      "n_tickers": 4,
+      "source": "polygon",
+      "tickers": [
+        "F",
+        "MU",
+        "QCOM",
+        "SNOW"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e4154da8bef52e04b7ff7744c226b2f683583be78f2ee1a2f901978c5e2036d7",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "META"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e49d1d1817c16644497751f8a7c86451a72b02abb1844c7e37b18931d75dfe51",
+      "n_tickers": 2,
+      "source": "polygon",
+      "tickers": [
+        "CVX",
+        "XOM"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e56250bb82010dd5707ba3e4ce01c17b2cc8d13065474ad09f49ad26360f1af5",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "BRK.B"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e6baa97c1ba9cc2b3a12cf51f97cf08bf385651392239e278223ecd23c7535c4",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e90311e1ed8a5097",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "e948c41020de3440777edb585e5418193b88c1c33e67c1ea372d3ded305cf9b8",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "eaa070140d1c9b8445b7f46bc5ac6dcea6604ee883c200354d5db69e8dbafe7c",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "ead1389fcf308452",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "ebbdf21696b0483aa3da4bd5a09579051c1182954e4f05fd69feb86556ada8d9",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "KLAC"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "ebe12db7cb917598fc220573d3b94e48d264982cba5d5ca8998e9524e48ad560",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "AMZN"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "efdba9b97e3acb37dfa42467ef974eb46a54f7c0425b96b4ac93630b775c4f61",
+      "n_tickers": 4,
+      "source": "polygon",
+      "tickers": [
+        "AMD",
+        "INTC",
+        "MSFT",
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": false,
+      "id": "f1ab4b722f5e4532",
+      "n_tickers": 0,
+      "source": "gdelt",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "f1f498d524b6d99e",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "f322e221078e43155a2c8ebeed5abec3f426556a90a32aa03fba382f8f0032ee",
+      "n_tickers": 3,
+      "source": "polygon",
+      "tickers": [
+        "AMZN",
+        "META",
+        "NVDA"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "f754db972e5ded6e",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "fbdfe9866a57426b70652f6a7538493a1f86a5a62aab907f0f411a35c44690d7",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "AMZN"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "fcf386b22e243024",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "fd4e59ad913f16c5",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "fe2ec096bd3bee3d",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "fe45b571463f38ad38bf7277009eee01b2a2aae3384d126a24ed7102c39c47e2",
+      "n_tickers": 1,
+      "source": "polygon",
+      "tickers": [
+        "NFLX"
+      ]
+    },
+    {
+      "cluster_size": 1,
+      "has_body": true,
+      "id": "ff58e5ff47d28022",
+      "n_tickers": 0,
+      "source": "rss",
+      "tickers": []
+    }
+  ]
+}
