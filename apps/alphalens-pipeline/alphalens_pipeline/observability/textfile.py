@@ -67,9 +67,13 @@ def _resolve_dir() -> Path:
     # ``Path.home()`` evaluates ``$HOME``, which container-side defaults
     # of ``Path.home() / ".alphalens" / ...`` have tripped on before
     # (see ``feedback_pathhome_in_container_trap_2026_05_28`` memory).
-    # The emitter only runs from the host venv on the VPS, not inside
-    # the Docker stack, so this code path is safe — but we re-evaluate
-    # here so a test that swaps ``$HOME`` is honored.
+    # This emitter runs BOTH from the host venv (cron ExecStopPost hooks)
+    # AND inside the pipeline Docker container (the Phase 4 per-stage
+    # thematic volume gauges): the thematic-build unit sets
+    # ``HOME=/app/home`` and bind-mounts ``%h/.alphalens`` there, so
+    # ``Path.home()/.alphalens/metrics`` resolves to the SAME host
+    # directory node_exporter scrapes. We re-evaluate ``$HOME`` on every
+    # call so a test that swaps it is honored.
     return Path.home() / ".alphalens" / "metrics"
 
 

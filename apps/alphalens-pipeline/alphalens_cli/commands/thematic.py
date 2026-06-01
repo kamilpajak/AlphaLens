@@ -30,6 +30,53 @@ logger = logging.getLogger(__name__)
 _DATE_OPTION_HELP = "UTC date in YYYY-MM-DD (default: yesterday)."
 
 
+def _stage_volume_metrics(stage: str, *, output_rows: int, input_rows: int) -> dict[str, int]:
+    """The Phase 4 per-stage input/output row-count gauge pair.
+
+    One canonical metric-name pair across all 5 stages (distinguished by the
+    ``stage`` label) so a single PromQL rule covers the whole pipeline. The
+    ``input``/``output`` split lets the ``AlphalensThematicStageZeroOutput``
+    alert assert "consumed input but produced nothing" — the silent
+    model-retirement signature — instead of false-paging on a quiet day.
+    """
+    return {
+        f'alphalens_thematic_stage_output_rows{{stage="{stage}"}}': output_rows,
+        f'alphalens_thematic_stage_input_rows{{stage="{stage}"}}': input_rows,
+    }
+
+
+def _emit_stage_volume(stage: str, *, output_rows: int, input_rows: int) -> None:
+    """Emit a stage's volume gauges to its own ``thematic-<stage>`` file.
+
+    Each stage is a separate process in ``run_thematic_day.sh`` and the
+    textfile name is keyed on ``job`` — a shared job would have each stage
+    clobber the prior one's file, so every stage gets a distinct job name.
+    Wrapped in try/except (zen PR #311 rule): the stage's parquet is already
+    written, so a metrics-dir failure must not turn a good run into a unit
+    failure.
+    """
+    try:
+        emit_domain_metrics(
+            job=f"thematic-{stage}",
+            metrics=_stage_volume_metrics(stage, output_rows=output_rows, input_rows=input_rows),
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed for stage %s; the run succeeded", stage)
+
+
+def _parquet_num_rows(path: Path) -> int:
+    """Row count of a parquet via its footer metadata (no full read).
+
+    Returns 0 if the file is absent — an upstream stage that produced nothing
+    leaves no file, which is exactly the "zero input" the alert must see.
+    """
+    if not path.exists():
+        return 0
+    import pyarrow.parquet as pq
+
+    return pq.ParquetFile(path).metadata.num_rows
+
+
 @thematic_app.callback()
 def _thematic_callback() -> None:
     """Force multi-command behaviour even when only one command is registered."""
@@ -70,6 +117,11 @@ def ingest(
         typer.echo(f"  by source: {by_src}")
         unique_tickers = sorted({t for row in df["tickers"] for t in row})
         typer.echo(f"  unique tickers tagged: {len(unique_tickers)}")
+
+    # Source stage: no upstream, so input == output (a zero day is a quiet
+    # news day / source outage, caught by the volume-anomaly rule, not the
+    # zero-output-with-nonempty-input rule).
+    _emit_stage_volume("ingest", output_rows=len(df), input_rows=len(df))
 
 
 @thematic_app.command("extract")
@@ -124,6 +176,15 @@ def extract(
         typer.echo(f"  by event_type: {ev_counts}")
         sent_counts = events["sentiment"].value_counts().to_dict()
         typer.echo(f"  by sentiment: {sent_counts}")
+
+    # THE primary model-retirement catch: news in (input) vs events out
+    # (output). A DeepSeek Flash 404 yields 0 events from a non-empty news
+    # day while the run still exits 0.
+    _emit_stage_volume(
+        "extract",
+        output_rows=len(events),
+        input_rows=_parquet_num_rows(news_dir / f"{target.isoformat()}.parquet"),
+    )
 
     rollup = themes_mod.roll_up(asof=target, events_dir=events_dir, window_days=window_days)
     typer.echo(f"Theme rollup ({window_days}d window): {len(rollup)} themes")
@@ -211,6 +272,12 @@ def map_themes_cmd(
         output_dir=output_dir,
         keep_unverified=keep_unverified,
     )
+    # input = novel themes fed to the mapper; output = verified candidate
+    # rows. 0 candidates from N novel themes = a DeepSeek Pro mapping /
+    # verification failure (the early `return` above handles the legitimate
+    # "no novel themes" case, which emits nothing — no false alert).
+    _emit_stage_volume("map-themes", output_rows=len(df), input_rows=len(novel))
+
     out_path = output_dir / f"{target.isoformat()}.parquet"
     dropped = int(df.attrs.get("dropped_total", 0))
     all_unknown = int(df.attrs.get("dropped_all_unknown", 0))
@@ -268,6 +335,10 @@ def score(
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{target.isoformat()}.parquet"
     enriched.to_parquet(out_path, index=False)
+
+    # Left-merge enrich: input == output in the normal case; a divergence
+    # would flag a merge bug. Kept for uniform per-stage coverage.
+    _emit_stage_volume("score", output_rows=len(enriched), input_rows=len(candidates))
 
     typer.echo(f"Wrote {len(enriched)} scored rows → {out_path}")
     if enriched.empty:
@@ -382,6 +453,12 @@ def brief(
                 "alphalens_thematic_briefs_total": len(enriched),
                 'alphalens_thematic_briefs_by_model{model="pro"}': n_pro,
                 'alphalens_thematic_briefs_by_model{model="flash"}': n_flash,
+                # Phase 4: brief is stage 5 of the uniform volume series.
+                # Folded into the existing thematic-build file (the brief is
+                # the same process) rather than a 6th job. scored rows in ->
+                # briefs out; 0 briefs from non-empty scored = a Layer 5
+                # generator / LLM failure.
+                **_stage_volume_metrics("brief", output_rows=len(enriched), input_rows=len(scored)),
             },
         )
     except Exception:

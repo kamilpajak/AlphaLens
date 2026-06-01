@@ -564,5 +564,73 @@ class TestTemplateEngineMonitoring(unittest.TestCase):
         )
 
 
+class TestThematicVolumeRules(unittest.TestCase):
+    """Phase 4 output-volume dead-man-switch rules.
+
+    The L3 golden-replay tests catch a pipeline regression in CI; these
+    rules catch the failure no hermetic test can — a live LLM model retiring
+    NEXT month so a stage produces 0 rows from non-empty input while the run
+    still exits 0. Two rules:
+      * AlphalensThematicStageZeroOutput — per-stage zero-output-with-
+        nonempty-input (needs BOTH the input and output gauges to compare);
+      * AlphalensThematicBriefVolumeAnomaly — brief output collapsed vs its
+        own multi-day baseline (partial degradation, not just zero).
+    """
+
+    ZERO_OUTPUT = "AlphalensThematicStageZeroOutput"
+    ANOMALY = "AlphalensThematicBriefVolumeAnomaly"
+
+    def _rule(self, name: str) -> dict:
+        rules = _load_rules()["groups"][0]["rules"]
+        for rule in rules:
+            if rule.get("alert") == name:
+                return rule
+        self.fail(f"alert {name} not found in alphalens.yaml")
+
+    def test_both_volume_rules_present(self) -> None:
+        for name in (self.ZERO_OUTPUT, self.ANOMALY):
+            self._rule(name)  # fails if absent
+
+    def test_zero_output_rule_references_both_input_and_output(self) -> None:
+        # The "needs both metrics" invariant: a zero-output rule that only
+        # looked at output cannot tell a silent failure from a quiet day.
+        # Pin both halves so a future edit can't drop the input guard.
+        expr = self._rule(self.ZERO_OUTPUT)["expr"]
+        self.assertIn("alphalens_thematic_stage_output_rows", expr)
+        self.assertIn("alphalens_thematic_stage_input_rows", expr)
+        self.assertIn("== 0", expr)
+        self.assertIn("> 0", expr)
+
+    def test_zero_output_rule_uses_gauge_correct_aggregation(self) -> None:
+        # The stage gauges are overwritten each run; increase()/rate() return
+        # nonsense on a gauge (the AlphalensEdgarNoCandidates24h lesson,
+        # PR #312). The correct "nothing across the window" operator is
+        # max_over_time.
+        expr = self._rule(self.ZERO_OUTPUT)["expr"]
+        self.assertIn("max_over_time", expr)
+        self.assertNotIn("increase(", expr)
+        self.assertNotIn("rate(", expr)
+
+    def test_anomaly_rule_targets_brief_stage(self) -> None:
+        expr = self._rule(self.ANOMALY)["expr"]
+        self.assertIn('alphalens_thematic_stage_output_rows{stage="brief"}', expr)
+        # Baseline median over a multi-day window (not a fixed threshold).
+        self.assertIn("quantile_over_time", expr)
+
+    def test_volume_rules_route_to_telegram(self) -> None:
+        for name in (self.ZERO_OUTPUT, self.ANOMALY):
+            labels = self._rule(name).get("labels", {})
+            self.assertEqual(
+                labels.get("route"),
+                "telegram",
+                f"{name} must route to telegram like the other domain alerts.",
+            )
+
+    def test_volume_rules_have_for_debounce(self) -> None:
+        # A single quiet fire must not page; require a debounce window.
+        for name in (self.ZERO_OUTPUT, self.ANOMALY):
+            self.assertIn("for", self._rule(name), f"{name} needs a `for:` debounce clause.")
+
+
 if __name__ == "__main__":
     unittest.main()

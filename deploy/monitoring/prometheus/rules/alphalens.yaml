@@ -271,6 +271,72 @@ groups:
           description: "Quota resets at 00:00 UTC. PEAD-v2 backfill may stall."
 
       # ---------------------------------------------------------------
+      # Thematic output-volume dead-man-switch (test-strategy Phase 4).
+      # ---------------------------------------------------------------
+      #
+      # The L3 golden-replay tests catch a pipeline regression in CI.
+      # These rules catch what no hermetic test can: a LIVE LLM model
+      # retiring next month (DeepSeek Flash 404 per news item) so a stage
+      # produces 0 rows from non-empty input while the run still exits 0
+      # — the silent-success-noop class (incident #3, the retired-Gemini
+      # empty brief). Each thematic stage emits an input/output gauge pair
+      # ``alphalens_thematic_stage_{input,output}_rows{stage="..."}`` from
+      # inside the pipeline container (the bind-mounted HOME lands the
+      # textfile on the host node_exporter dir).
+      #
+      # Gauge-correct aggregation: the stage gauges are OVERWRITTEN each
+      # run, so increase()/rate() return nonsense (the
+      # AlphalensEdgarNoCandidates24h lesson, PR #312). The right operator
+      # for "produced nothing across every run in the window" is
+      # ``max_over_time``. After max_over_time strips ``__name__``, the
+      # input and output vectors share only ``{stage}`` so the ``and``
+      # matches per-stage — which is exactly why the gauges are
+      # co-located on the same stage label rather than inferred across a
+      # cross-series join.
+      #
+      # ``for: 1h`` debounce — one quiet fire (a stage legitimately empty
+      # for a single 4-hourly run) must not page; a stage that is empty
+      # across the whole 24h window despite non-empty input is the signal.
+      - alert: AlphalensThematicStageZeroOutput
+        expr: |
+          max_over_time(alphalens_thematic_stage_output_rows[24h]) == 0
+          and
+          max_over_time(alphalens_thematic_stage_input_rows[24h]) > 0
+        for: 1h
+        labels:
+          severity: critical
+          route: telegram
+          unit: thematic-build
+        annotations:
+          summary: "thematic stage {{ $labels.stage }} produced 0 rows from non-empty input (24h)"
+          description: "Silent-success noop: input present, output empty across every run in 24h. Likely an LLM model retirement / API contract break. Check `journalctl --user -u alphalens-thematic-build.service` on the VPS."
+
+      # Partial-degradation catch: today's brief output collapsed to <34%
+      # (~3x drop) of its own 7-day median. Distinct from the zero-output
+      # rule — catches a quota throttle / partial model failure that still
+      # produces *some* briefs. The ``>= 3`` median guard suppresses
+      # cold-start false pages until a real baseline accrues (the series
+      # is brand-new, so it stays quiet ~7 days). Thresholds are
+      # first-guess; tune after 2-3 weeks of real baseline. Brief-only:
+      # the user-visible terminal output; per-stage anomaly would add
+      # cold-start noise for little gain.
+      - alert: AlphalensThematicBriefVolumeAnomaly
+        expr: |
+          alphalens_thematic_stage_output_rows{stage="brief"}
+          <
+          0.34 * quantile_over_time(0.5, alphalens_thematic_stage_output_rows{stage="brief"}[7d] offset 1h)
+          and
+          quantile_over_time(0.5, alphalens_thematic_stage_output_rows{stage="brief"}[7d] offset 1h) >= 3
+        for: 6h
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-build
+        annotations:
+          summary: "thematic brief volume {{ $value }} is <34% of 7-day median"
+          description: "Brief output collapsed vs baseline (not zero). Possible partial LLM / quota degradation. Check the daily thematic-build logs."
+
+      # ---------------------------------------------------------------
       # Structured-event-template health (epic #321 PR-1).
       # ---------------------------------------------------------------
       #
