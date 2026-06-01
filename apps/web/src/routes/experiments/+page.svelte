@@ -295,8 +295,8 @@
 	];
 
 	const live: Live[] = [
-		{ id: 'L1', name: 'EDGAR watchdog', what: 'detects S&P 100 EDGAR filings → classifies → writes candidates.db. Worker archived per ADR 0008.', status: 'LIVE', deploy: 'launchd `detect` daily', date: 'continuous' },
-		{ id: 'L2', name: 'Literature review', what: 'weekly RSS scan (arXiv quant-fin + selected blogs) + monthly Perplexity deep scan with reasoning effort = high.', status: 'LIVE', deploy: 'launchd weekly + monthly timers', date: 'continuous' },
+		{ id: 'L1', name: 'EDGAR watchdog', what: 'detects S&P 100 EDGAR filings → classifies → writes candidates.db. Worker archived per ADR 0008.', status: 'LIVE', deploy: 'systemd `detect` every 15 min', date: 'continuous' },
+		{ id: 'L2', name: 'Literature review', what: 'weekly RSS scan (arXiv quant-fin + selected blogs) + monthly Perplexity deep scan with reasoning effort = high.', status: 'LIVE', deploy: 'systemd weekly + monthly timers', date: 'continuous' },
 		{ id: 'L3', name: 'Thematic tool MVP (Phase A–E)', what: 'news ingest → Flash extraction → Pro theme→beneficiary mapping → 4 verification gates → Layer 4 quant screen → Layer 5 brief generator. NVDA→QUBT replay end-to-end green.', status: 'SHIPPED', deploy: 'PRs #128–#152 merged', date: '2026-05-17' },
 		{ id: 'L4', name: 'VPS backfills', what: 'Form-4 cross-shard merge DONE (37 MB tar.zst, 2.66M rows). AV EARNINGS daily systemd timer LIVE — ~21d backfill window at free-tier 25/day quota.', status: 'LIVE', deploy: 'jacoren@ VPS systemd-user units', date: '2026-05-08 / running' }
 	];

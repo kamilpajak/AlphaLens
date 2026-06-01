@@ -87,7 +87,7 @@
 					that's where this pipeline looks.
 				</p>
 				<p>
-					Every morning at <span class="text-amber">06:30 UTC</span> it scans S&amp;P 100 news,
+					Six times a day (every 4h, at <span class="text-amber whitespace-nowrap">HH:30 UTC</span>) it scans S&amp;P 100 news,
 					distills thematic narratives, and surfaces a ranked watchlist of small-cap
 					beneficiaries.
 				</p>
@@ -112,7 +112,7 @@
 					<div
 						class="inline-flex items-center gap-2 px-4 py-2 border border-grid-strong text-fg-dim text-xs uppercase tracking-widest"
 					>
-						no briefs yet — pipeline fires daily at 06:30 UTC
+						no briefs yet — pipeline fires six times a day (every 4h, at <span class="whitespace-nowrap">HH:30 UTC</span>)
 					</div>
 				{/if}
 			</div>
@@ -150,7 +150,7 @@
 		{#if data.days.length === 0}
 			<div class="border border-dashed border-grid bg-bg-1/40 p-8 text-center text-fg-dim text-sm">
 				<div class="text-[10px] uppercase tracking-widest text-fg-muted mb-2">// no captured sessions yet</div>
-				The daily pipeline writes briefs at 06:30 UTC. After the first run completes,
+				The pipeline writes briefs six times a day (every 4h, at <span class="whitespace-nowrap">HH:30 UTC</span>). After the first run completes,
 				captured sessions and analytics appear here.
 			</div>
 		{/if}
