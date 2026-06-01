@@ -409,5 +409,57 @@ class TestFeedbackBackfillShadowReturnsCommand(unittest.TestCase):
         self.assertEqual(_DEFAULT_LOOKBACK_DAYS, 14)
 
 
+class TestFeedbackExecutionModesCommand(unittest.TestCase):
+    """`alphalens feedback execution-modes` — read-only inert recommendation."""
+
+    def setUp(self):
+        self.runner = CliRunner()
+        self._td = tempfile.TemporaryDirectory()
+        self.path = Path(self._td.name) / "feedback.db"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_missing_ledger_prints_friendly_message(self):
+        result = self.runner.invoke(
+            app, ["feedback", "execution-modes", "--ledger", str(self.path)]
+        )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("no matured decisions yet", result.stdout)
+
+    def test_inert_banner_below_gate(self):
+        # A handful of priced decisions (far below the 50 gate) → GATE INERT,
+        # every cell LIMIT, ledger untouched (read-only).
+        with FeedbackStore.open(self.path) as fb:
+            for i in range(3):
+                rid, _ = fb.insert(
+                    Decision(
+                        brief_date=dt.date(2026, 5, 20),
+                        ticker=f"AAA{i}",
+                        theme="ai",
+                        surfaced_at=dt.datetime(2026, 5, 20, 6, 30, tzinfo=UTC),
+                        action="interested",
+                        action_at=dt.datetime(2026, 5, 20, 8, 0, tzinfo=UTC),
+                        market_regime_at_entry="mid",
+                    )
+                )
+                fb.stamp_outcome(
+                    rid,
+                    fill_status="FILLED",
+                    exit_kind="TP_HIT",
+                    outcome_plan_id="p1",
+                    outcome_computed_at=dt.datetime(2026, 5, 27, 2, 0, tzinfo=UTC),
+                    shadow_return=0.05,
+                    realized_return=0.03,
+                )
+        result = self.runner.invoke(
+            app, ["feedback", "execution-modes", "--ledger", str(self.path)]
+        )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("GATE INERT", result.stdout)
+        self.assertIn("LIMIT", result.stdout)
+        self.assertNotIn("MARKET", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

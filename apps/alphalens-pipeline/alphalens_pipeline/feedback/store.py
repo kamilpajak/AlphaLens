@@ -539,6 +539,46 @@ class FeedbackStore:
         ).fetchall()
         return [_row_to_decision(r) for r in rows]
 
+    def iter_matured_decisions(self) -> list[tuple[str, str, float | None, float | None]]:
+        """Project ``(regime, fill_status, shadow_return, realized_return)`` for the
+        execution-mode estimator (Track A v2 PR-4).
+
+        Two contracts that matter for the ≥50 gate:
+
+        * **Maturity = ``shadow_return IS NOT NULL``**, NOT ``outcome_computed_at``.
+          The cheap fill-status join (``join_decision_outcomes``) stamps
+          ``outcome_computed_at`` WITHOUT pricing ``shadow_return`` (the
+          rate-limited shadow pass does that later). Using ``outcome_computed_at``
+          as the maturity signal would count un-priced rows toward the pooled
+          gate and could flip it active below the true priced sample. The shadow
+          pass is the real maturity event.
+        * **De-duplicated to one row per ``(brief_date, ticker)``.** The ticker-day
+          outcome join stamps the SAME plan outcome onto every same-day
+          multi-theme decision, so the rows are identical on
+          ``(regime, fill_status, shadow_return, realized_return)``; counting
+          decision rows would double-count one independent economic outcome and
+          corrupt n / fill_rate / MO / g at the n≈50 scale where it matters.
+
+        NULL ``market_regime_at_entry`` is coalesced to ``"unknown"`` so the
+        estimator's non-actionable-regime rule fires.
+        """
+        rows = self.conn.execute(
+            "SELECT brief_date, ticker, "
+            "COALESCE(market_regime_at_entry, 'unknown') AS regime, "
+            "fill_status, shadow_return, realized_return "
+            "FROM decisions WHERE shadow_return IS NOT NULL "
+            "ORDER BY brief_date, ticker"
+        ).fetchall()
+        seen: set[tuple[str, str]] = set()
+        out: list[tuple[str, str, float | None, float | None]] = []
+        for r in rows:
+            key = (r["brief_date"], r["ticker"].upper())
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((r["regime"], r["fill_status"], r["shadow_return"], r["realized_return"]))
+        return out
+
 
 def _row_to_decision(row: sqlite3.Row) -> Decision:
     """Reconstruct a Decision from a SELECT row, parsing ISO timestamps.
