@@ -10,7 +10,7 @@ unit-consistent (both decimal fractions) so ``realized_return − shadow_return`
 is the §6 execution gap.
 
 All bar fetches are injected, so these tests never hit the network. The live
-Polygon probe lives in ``test_polygon_live`` (opt-in).
+Polygon probe lives in ``tests.live.test_polygon_live`` (opt-in).
 """
 
 from __future__ import annotations

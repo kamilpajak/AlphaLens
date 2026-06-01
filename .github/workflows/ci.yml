@@ -316,3 +316,56 @@ jobs:
           args: >-
             ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '-Dsonar.branch.name=main' || '' }}
         continue-on-error: true
+
+  # -----------------------------------------------------------------------
+  # L4 live vendor probes (test-strategy Phase 5) — hit REAL services,
+  # shape-only, never values. WEEKLY ONLY (`schedule` trigger); the
+  # `if: schedule` guard keeps them off every push/PR so real-data variance,
+  # vendor rate limits, and OpenRouter cost cannot flake a merge. On failure
+  # the job opens a GitHub issue (a vendor changed shape, a DeepSeek model
+  # retired with a 404, or the SEC index.htm format moved) so the operator
+  # notices without a CI red on the PR path.
+  # -----------------------------------------------------------------------
+  live-probes:
+    name: live-probes (weekly)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python via uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install workspace
+        run: uv sync --group dev --frozen
+
+      - name: Run live probes (shape-only — asserts non-emptiness, never values)
+        env:
+          SEC_LIVE_TEST: "1"
+          OPENROUTER_LIVE_TEST: "1"
+          POLYGON_LIVE_TEST: "1"
+          YFINANCE_LIVE_TEST: "1"
+          SEC_EDGAR_USER_AGENT: ${{ secrets.SEC_EDGAR_USER_AGENT }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+        run: |
+          uv run python -m unittest discover \
+            -s apps/alphalens-research/tests/live \
+            -t apps/alphalens-research -v
+
+      - name: Open an issue if a probe failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Weekly live-probes failed ($(date -u +%Y-%m-%d))" \
+            --label "live-probe-failure" \
+            --body "The weekly L4 live-probes job failed. Likely causes: a vendor changed response shape, a DeepSeek model retired (404 -> silent empty brief, incident #3), the SEC EX-99.1 index.htm format moved (incident #2), or a liquid ticker returned empty. Run log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

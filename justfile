@@ -67,6 +67,31 @@ test-golden:
 test: test-python test-django test-web
 
 # -------------------------------------------------------------------------
+# Live probes (L4) + deploy shape (test-strategy Phase 5)
+# -------------------------------------------------------------------------
+
+# Opt-in live vendor probes (SEC, OpenRouter, Polygon, yfinance). Shape-only,
+# NEVER in the blocking PR path — OpenRouter costs real money (no free tier on
+# v4-pro) + SEC/Polygon rate-limit budget. Sets all four per-vendor flags and
+# runs only the tests/live/ suite; drop a flag to skip that vendor. Needs
+# POLYGON_API_KEY + OPENROUTER_API_KEY (and SEC_EDGAR_USER_AGENT) in the env.
+# The hermetic helper test runs here too; the four probes skip without flags.
+probe-live:
+    SEC_LIVE_TEST=1 OPENROUTER_LIVE_TEST=1 POLYGON_LIVE_TEST=1 YFINANCE_LIVE_TEST=1 \
+        uv run python -m unittest discover \
+            -s apps/alphalens-research/tests/live \
+            -t apps/alphalens-research -v
+
+# Print the VPS post-deploy drift gate recipe. The real check runs ON THE VPS
+# (it inspects the running container + the live Prometheus rules, neither of
+# which exists locally), so this prints the command rather than producing false
+# fails on a laptop.
+test-deploy-shape:
+    @echo "Run ON THE VPS after 'docker compose pull && up -d':"
+    @echo "  bash deploy/scripts/postdeploy_check.sh              # rules + image-SHA"
+    @echo "  bash deploy/scripts/postdeploy_check.sh --with-migrate  # + migration state"
+
+# -------------------------------------------------------------------------
 # Dev servers
 # -------------------------------------------------------------------------
 
