@@ -45,7 +45,13 @@ def _ohlcv_loader(ticker: str, asof: dt.date) -> pd.DataFrame:
 
 def _replay_briefs(out_dir: Path) -> pd.DataFrame:
     """Run generate_briefs off the frozen fixtures with the LLM replayed."""
-    scored = pd.read_parquet(_FIXTURES / "scored.parquet")
+    scored_path = _FIXTURES / "scored.parquet"
+    if not scored_path.exists() or not any(_CASSETTES.glob("*.json")):
+        raise FileNotFoundError(
+            f"golden fixtures missing under {_FIXTURES} — run "
+            "scripts/record_golden_brief.py (one-time live capture) to record them"
+        )
+    scored = pd.read_parquet(scored_path)
     replay = ReplayOpenRouter(_CASSETTES)
     with (
         mock.patch.object(brief_orch, "_build_clients", return_value=(replay, replay)),

@@ -42,6 +42,12 @@ _GOLDEN_PARQUET = (
 
 @pytest.fixture
 def golden_briefs_dir(tmp_path: Path) -> Path:
+    if not _GOLDEN_PARQUET.exists():
+        raise FileNotFoundError(
+            f"golden brief parquet missing: {_GOLDEN_PARQUET} — run "
+            "apps/alphalens-research/scripts/record_golden_brief.py (live capture) "
+            "or check the cross-app relative path"
+        )
     shutil.copyfile(_GOLDEN_PARQUET, tmp_path / f"{_ASOF.isoformat()}.parquet")
     return tmp_path
 
