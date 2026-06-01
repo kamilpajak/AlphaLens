@@ -51,18 +51,35 @@ cp .env.example .env
 # load the local-dev override.
 echo $GHCR_PAT | docker login ghcr.io -u kamilpajak --password-stdin
 
-# Deploy / re-deploy
+# Deploy / re-deploy — pin the immutable sha of the merged commit, then bring up.
+# Resolve the sha-<short> CI just published (the manifest also tagged `latest`):
+gh api /users/kamilpajak/packages/container/alphalens-django/versions \
+  --jq 'map(select(.metadata.container.tags | index("latest")))[0].metadata.container.tags[]' \
+  | grep '^sha-'                                  # e.g. sha-da21050
+sed -i 's/^ALPHALENS_DJANGO_TAG=.*/ALPHALENS_DJANGO_TAG=sha-<short>/' .env
 docker compose pull
 docker compose up -d
 docker compose ps
 curl -fsS http://127.0.0.1:8000/healthz
+# Verify running image == intended commit + rules synced + migrations applied:
+bash ~/AlphaLens/deploy/scripts/postdeploy_check.sh --with-migrate
 ```
 
-**Rollback** — edit `ALPHALENS_DJANGO_TAG` in `.env` (e.g. `sha-883574d`)
-and re-run `docker compose up -d`. Do NOT pin inline
+**Rollback** — edit `ALPHALENS_DJANGO_TAG` in `.env` to a prior `sha-<short>`
+(e.g. `sha-883574d`) and re-run `docker compose up -d`. Do NOT pin inline
 (`ALPHALENS_DJANGO_TAG=... docker compose up -d`) — the next `up -d`
 without it would silently roll forward to `:latest`. The `.env` file is
 the single source of truth.
+
+> **Irreversible-migration caveat:** rolling the TAG back ALONE crashes if the
+> newer image applied a non-reversible migration (e.g. a column RENAME like
+> `0007`) — the old code wants the old column. Reverse the migration FIRST on
+> the CURRENT (new) image, THEN pin the old tag:
+> ```bash
+> docker compose run --rm django python manage.py migrate briefs <prior_number>
+> sed -i 's/^ALPHALENS_DJANGO_TAG=.*/ALPHALENS_DJANGO_TAG=sha-883574d/' .env
+> docker compose up -d
+> ```
 
 Downtime during `up -d`: ~2-5 s of 502 from cloudflared while gunicorn
 boots the new container. Compose stops the old container before
