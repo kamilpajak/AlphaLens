@@ -1,0 +1,4146 @@
+{
+  "https://feeds.arstechnica.com/arstechnica/index": {
+    "bozo": 0,
+    "entries": [
+      {
+        "link": "https://arstechnica.com/gadgets/2026/06/amd-extends-socket-am5-support-through-at-least-2029-am4-refuses-to-die/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          2,
+          22,
+          0,
+          152,
+          0
+        ],
+        "summary": "The 5800X3D returns at $349, while the 7700X3D debuts at $329.",
+        "title": "AMD extends Socket AM5 support through at least 2029; AM4 refuses to die",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          2,
+          22,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/gaming/2026/06/asus-gives-the-rox-xbox-ally-the-oled-screen-it-deserves/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          4,
+          45,
+          0,
+          152,
+          0
+        ],
+        "summary": "But the hardware refresh is tethered to a bundle with pricey AR glasses.",
+        "title": "ROG Xbox Ally X20 adds OLED screen, control upgrades",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          4,
+          45,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/gadgets/2026/06/nvidia-gets-into-the-arm-pc-business-with-new-high-end-rtx-spark-processor/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          47,
+          22,
+          0,
+          152,
+          0
+        ],
+        "summary": "Nvidia's new chips will power laptop workstations and mini desktop PCs at first.",
+        "title": "Nvidia RTX Spark comes to Windows PCs with Arm CPU, RTX GPU, and unified memory",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          47,
+          22,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/ai/2026/06/intel-our-upcoming-ai-chip-will-be-cheaper-run-cooler-than-nvidia-amd-options/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          13,
+          32,
+          16,
+          0,
+          152,
+          0
+        ],
+        "summary": "Crescent Island is an air-cooled chip that uses LPDDR5 memory.",
+        "title": "Intel: Our upcoming AI chip will be cheaper, run cooler than Nvidia, AMD options",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          13,
+          32,
+          16,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/ai/2026/06/openais-math-breakthrough-played-to-ais-strengths/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          11,
+          0,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "I tried to explain OpenAI’s solution more clearly than OpenAI did.",
+        "title": "An OpenAI model solved a famous math problem that stumped humans for 80 years",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          11,
+          0,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/culture/2026/05/on-its-40th-anniversary-we-reassess-1986s-spacecamp/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          11,
+          15,
+          12,
+          6,
+          151,
+          0
+        ],
+        "summary": "Is it a hidden gem, a cult classic, or hopelessly dumb? We vote \"all of the above.\"",
+        "title": "On its 40th anniversary, we reassess 1986's SpaceCamp",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          11,
+          15,
+          12,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/science/2026/05/they-call-it-stupid-hot-for-a-reason-heat-muddles-animal-brains/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          10,
+          0,
+          7,
+          6,
+          151,
+          0
+        ],
+        "summary": "As temperatures rise, some creatures pick fights while others struggle to learn.",
+        "title": "They call it stupid hot for a reason: Heat muddles animal brains",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          10,
+          0,
+          7,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/science/2026/05/grifters-cynics-and-true-believers-the-family-tree-of-vaccine-opponents/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          11,
+          0,
+          5,
+          5,
+          150,
+          0
+        ],
+        "summary": "A new book looks into the long history of people who have opposed vaccines.",
+        "title": "Grifters, cynics, and true believers: The family tree of vaccine opponents",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          11,
+          0,
+          5,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/tech-policy/2026/05/environmentalists-turn-out-in-force-to-oppose-trump-coal-ash-rollbacks/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          10,
+          0,
+          38,
+          5,
+          150,
+          0
+        ],
+        "summary": "Trump admin wants to rely on states for coal ash monitoring, enforcement, allow them to bypass national standards.",
+        "title": "Environmentalists turn out in force to oppose Trump coal ash rollbacks",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          10,
+          0,
+          38,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/science/2026/05/the-office-of-management-and-budget-tries-again-to-cripple-us-science/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          22,
+          58,
+          29,
+          4,
+          149,
+          0
+        ],
+        "summary": "Peer review now optional, political staff would screen grants for forbidden topics.",
+        "title": "Proposed new US funding rules: We can cancel any grant at any time",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          22,
+          58,
+          29,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/health/2026/05/kenyan-court-blocks-trump-admin-from-dumping-ebola-exposed-americans-there/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          21,
+          17,
+          9,
+          4,
+          149,
+          0
+        ],
+        "summary": "The US has previously built specialized facilities just for this purpose.",
+        "title": "Kenyan court blocks Trump admin from dumping Ebola-exposed Americans there",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          21,
+          17,
+          9,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/security/2026/05/botnet-of-more-than-17-million-devices-dismantled/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          18,
+          46,
+          33,
+          4,
+          149,
+          0
+        ],
+        "summary": "The botnet was reportedly tied to a Russia-based residential proxy network.",
+        "title": "Botnet of more than 17 million devices dismantled",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          18,
+          46,
+          33,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/health/2026/05/analysis-of-texas-measles-outbreak-shows-just-how-dangerous-virus-is/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          18,
+          35,
+          38,
+          4,
+          149,
+          0
+        ],
+        "summary": "About 1 in 5 cases were hospitalized and most of those developed complications.",
+        "title": "Analysis of Texas measles outbreak shows just how dangerous virus is",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          18,
+          35,
+          38,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/culture/2026/05/house-of-the-dragon-s3-trailer-revels-in-dragons-fire-and-blood/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          18,
+          21,
+          44,
+          4,
+          149,
+          0
+        ],
+        "summary": "\"The crown is a weight that crushes. You'll do things that spell death for all involved.\"",
+        "title": "House of the Dragon S3 trailer revels in dragons, fire, and blood",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          18,
+          21,
+          44,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/tech-policy/2026/05/trump-fcc-warns-all-broadcasters-to-follow-orders-or-be-punished-like-abc/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          18,
+          9,
+          43,
+          4,
+          149,
+          0
+        ],
+        "summary": "ABC says early renewal for all stations is unprecedented, has no legitimate purpose.",
+        "title": "Trump FCC warns all broadcasters to follow orders or be punished like ABC",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          18,
+          9,
+          43,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/tech-policy/2026/05/doj-sues-states-that-rejected-ice-requests-for-undercover-license-plates/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          17,
+          41,
+          56,
+          4,
+          149,
+          0
+        ],
+        "summary": "DOJ keeps accusing ICE monitoring sites of doxing, but evidence remains scarce.",
+        "title": "DOJ sues states that rejected ICE requests for undercover license plates",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          17,
+          41,
+          56,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/ai/2026/05/robot-training-startup-will-send-humans-wearing-cameras-to-clean-your-home/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          16,
+          16,
+          14,
+          4,
+          149,
+          0
+        ],
+        "summary": "The latest twist in paying humans to wear head cameras for robot training data.",
+        "title": "Startup offers free home cleaning—if it can record it all for robot training",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          16,
+          16,
+          14,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/cars/2026/05/f1-in-2026-to-finish-first-first-you-have-to-finish/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          16,
+          3,
+          28,
+          4,
+          149,
+          0
+        ],
+        "summary": "Until recently, a driver had maybe a six in ten chance of finishing a race.",
+        "title": "After years of stability, F1 reliability can no longer be taken for granted",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          16,
+          3,
+          28,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/science/2026/05/severed-sea-cucumber-appendages-dont-seem-to-die/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          15,
+          10,
+          29,
+          4,
+          149,
+          0
+        ],
+        "summary": "They seem to reorganize their tissues and then just keep living.",
+        "title": "Severed sea cucumber appendages don't seem to die",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          15,
+          10,
+          29,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://arstechnica.com/space/2026/05/rocket-report-blue-origin-suffers-setback-spacexs-falcon-9-wins-new-business/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          13,
+          3,
+          46,
+          4,
+          149,
+          0
+        ],
+        "summary": "A new crew launched to China's Tiangong space station, and one of the astronauts will stay for a year.",
+        "title": "Rocket Report: A dark day for Blue Origin; Pentagon eyes new launch site",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          13,
+          3,
+          46,
+          4,
+          149,
+          0
+        ]
+      }
+    ]
+  },
+  "https://feeds.content.dowjones.io/public/rss/mw_topstories": {
+    "bozo": 0,
+    "entries": [
+      {
+        "link": "https://www.marketwatch.com/story/microsofts-stock-chart-just-flashed-a-bullish-signal-for-a-software-comeback-f6a889a9?mod=mw_rss_topstories",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          4,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "Software stocks are shaking off AI jitters as Microsoft shares break above their 200-day moving average.",
+        "title": "Microsoft’s stock chart just flashed a bullish signal for a software comeback",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          4,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.marketwatch.com/story/i-am-71-and-comfortable-should-i-sell-10-000-in-stock-to-visit-my-grandkids-in-thailand-or-dip-into-my-50-000-savings-16230c6a?mod=mw_rss_topstories",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          52,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "“I am comfortable living on my Social Security and pension income.”",
+        "title": "I am 71. Would it be foolish to sell $10,000 in shares to visit my grandchildren in Thailand?",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          52,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.marketwatch.com/story/youtube-is-now-hollywoods-horror-film-pipeline-and-the-new-model-for-movie-making-da8c72b6?mod=mw_rss_topstories",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          36,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "The box-office bonanza over the weekend of YouTube-generated horror films “Backrooms” and “Obsession” is being viewed as a possible sea-change moment for Tinseltown.",
+        "title": "YouTube is now Hollywood’s horror-film pipeline — and the new model for moviemaking",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          36,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.marketwatch.com/story/anthropic-just-set-the-stage-for-a-blockbuster-ipo-beating-openai-to-the-punch-4cde9d9f?mod=mw_rss_topstories",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          35,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "SpaceX is gearing up for its listing, and OpenAI is expected to soon file confidentially for its own IPO.",
+        "title": "Anthropic just set the stage for a blockbuster IPO — beating OpenAI to the punch",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          35,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.marketwatch.com/story/strategys-stock-drops-after-rare-bitcoin-sale-tests-never-sell-narrative-6aac9200?mod=mw_rss_topstories",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          31,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "Strategy’s stock slid Monday after the company disclosed a rare bitcoin sale, rattling investors who have long treated the company as a one-way bet on the cryptocurrency.",
+        "title": "Strategy’s stock drops after rare bitcoin sale tests ‘never sell’ narrative",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          31,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.marketwatch.com/story/oil-prices-rise-after-fresh-wave-of-attacks-between-u-s-and-iran-fbcdd5ed?mod=mw_rss_topstories",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          43,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "U.S. and global oil prices were surging Monday after Iran reportedly suspended talks with the U.S. and closed the Strait of Hormuz in response to Israeli military operations in Lebanon.",
+        "title": "Global oil prices jump 7% to top $97 a barrel after Iran reportedly suspends talks with U.S. and fully closes Strait of Hormuz",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          43,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.marketwatch.com/story/spacex-says-it-will-reserve-5-of-its-ipo-shares-for-staff-friends-and-family-d248d1ae?mod=mw_rss_topstories",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          15,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "In a new filing, the company also clarified the nature of its multibillion-dollar deal with rival Anthropic.",
+        "title": "SpaceX says it will reserve 5% of its IPO shares for staff, friends and family",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          15,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.marketwatch.com/story/intel-and-amd-shares-fall-more-than-nvidia-rises-on-new-pc-superchip-08b2411f?mod=mw_rss_topstories",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          0,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "Nvidia’s new PC CPU changes the competitive landscape, an analyst says, but the company still has a ways to go before it gains serious traction.",
+        "title": "Intel and AMD shares fall as Nvidia sets its sights on a new market",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          0,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.marketwatch.com/story/another-dire-problem-for-social-security-trustees-may-be-calculating-the-birth-rate-wrong-955d1930?mod=mw_rss_topstories",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          29,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "Don’t expect a baby boom to save Social Security.",
+        "title": "Another dire problem for Social Security: Trustees may be calculating the birth rate wrong",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          29,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.marketwatch.com/story/big-tech-hates-californias-billionaire-tax-but-loves-taxpayers-money-c143ecac?mod=mw_rss_topstories",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          20,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "“Cyberselfish” author says tech elite believe that taxes are for “little people.”",
+        "title": "Silicon Valley was built on public money — now it’s fighting California’s billionaire tax",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          20,
+          0,
+          0,
+          152,
+          0
+        ]
+      }
+    ]
+  },
+  "https://seekingalpha.com/market_currents.xml": {
+    "bozo": 0,
+    "entries": [
+      {
+        "link": "https://seekingalpha.com/news/4599252-spdr-msci-emerging-markets-fossil-fuel-reserves-free-etf-declares-semi-annual-distribution-of-01189?utm_source=feed_news_all&utm_medium=referral&feed_item_type=news",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          10,
+          54,
+          0,
+          152,
+          0
+        ],
+        "summary": null,
+        "title": "SPDR MSCI Emerging Markets Fossil Fuel Reserves Free ETF declares semi-annual distribution of $0.1189",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          10,
+          54,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://seekingalpha.com/news/4599251-tcw-senior-loan-etf-declares-monthly-distribution-of-02800?utm_source=feed_news_all&utm_medium=referral&feed_item_type=news",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          9,
+          55,
+          0,
+          152,
+          0
+        ],
+        "summary": null,
+        "title": "TCW Senior Loan ETF declares monthly distribution of $0.2800",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          9,
+          55,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://seekingalpha.com/news/4599250-spdr-msci-eafe-fossil-fuel-reserves-free-etf-declares-semi-annual-distribution-of-08032?utm_source=feed_news_all&utm_medium=referral&feed_item_type=news",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          9,
+          51,
+          0,
+          152,
+          0
+        ],
+        "summary": null,
+        "title": "SPDR MSCI EAFE Fossil Fuel Reserves Free ETF declares semi-annual distribution of $0.8032",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          9,
+          51,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://seekingalpha.com/news/4599249-spdr-msci-acwi-ex-us-etf-declares-semi-annual-distribution-of-04739?utm_source=feed_news_all&utm_medium=referral&feed_item_type=news",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          9,
+          29,
+          0,
+          152,
+          0
+        ],
+        "summary": null,
+        "title": "SPDR MSCI ACWI ex-US ETF declares semi-annual distribution of $0.4739",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          9,
+          29,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://seekingalpha.com/news/4599136-goldman-sees-upside-in-timeshare-industry-views-tnl-vac-as-compelling-investments?utm_source=feed_news_all&utm_medium=referral&feed_item_type=news",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          8,
+          9,
+          0,
+          152,
+          0
+        ],
+        "summary": null,
+        "title": "Goldman sees upside in timeshare industry, views TNL, VAC as compelling investments",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          8,
+          9,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://seekingalpha.com/news/4599248-spdr-ssga-gender-diversity-index-etf-declares-quarterly-distribution-of-04539?utm_source=feed_news_all&utm_medium=referral&feed_item_type=news",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          5,
+          34,
+          0,
+          152,
+          0
+        ],
+        "summary": null,
+        "title": "SPDR SSGA Gender Diversity Index ETF declares quarterly distribution of $0.4539",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          5,
+          34,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://seekingalpha.com/news/4599089-amazon-five-below-burlington-among-top-consumer-discretionary-stocks-by-eps-revisions?utm_source=feed_news_all&utm_medium=referral&feed_item_type=news",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          5,
+          29,
+          0,
+          152,
+          0
+        ],
+        "summary": null,
+        "title": "Amazon, Five Below, Burlington among top consumer discretionary stocks by EPS revisions",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          5,
+          29,
+          0,
+          152,
+          0
+        ]
+      }
+    ]
+  },
+  "https://techcrunch.com/feed/": {
+    "bozo": 0,
+    "entries": [
+      {
+        "link": "https://techcrunch.com/2026/06/01/zigging-when-most-are-zagging-ex-meta-cto-raises-250m-climate-fund/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          42,
+          22,
+          0,
+          152,
+          0
+        ],
+        "summary": "Mike Schroepfer's Gigascale Capital has raised a large fund to back founders building climate-friendly solutions for the world's energy and material shortages.",
+        "title": "Zigging when most are zagging, ex-Meta CTO raises $250M climate fund",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          42,
+          22,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/06/01/anthropic-files-to-go-public/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          36,
+          55,
+          0,
+          152,
+          0
+        ],
+        "summary": "The company said Monday it has filed confidentially for an IPO.",
+        "title": "Anthropic files to go public",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          36,
+          55,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/06/01/spacex-says-it-may-issue-significant-equity-in-future-transactions/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          9,
+          56,
+          0,
+          152,
+          0
+        ],
+        "summary": "The company added a warning to prospective investors that a major dilution could be in the cards after it goes public.",
+        "title": "SpaceX says it may issue ‘significant’ equity in ‘future transactions’",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          9,
+          56,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/06/01/this-ai-weather-startup-is-out-forecasting-government-agencies/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          0,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "Windborne Systems' newest weather forecasting model beats the best government predictions by days.",
+        "title": "This AI weather startup is out-forecasting government agencies",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          0,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/06/01/duckduckgo-makes-its-no-ai-search-engine-easier-to-access-as-its-traffic-booms/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          49,
+          10,
+          0,
+          152,
+          0
+        ],
+        "summary": "Alternative search engine DuckDuckGo launches 'no AI' web extensions for Chrome and Firefox users.",
+        "title": "DuckDuckGo makes its ‘no-AI’ search engine easier to access as its traffic booms",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          49,
+          10,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/06/01/revolut-rolls-out-services-to-thousands-of-users-in-india-ahead-of-broader-launch/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          46,
+          8,
+          0,
+          152,
+          0
+        ],
+        "summary": "The British fintech has built a waitlist of about 450,000 users in India as it prepares for a broader launch.",
+        "title": "Revolut rolls out services to thousands of users in India ahead of broader launch",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          46,
+          8,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/06/01/strava-declares-war-on-scrapers-ahead-of-ipo/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          12,
+          0,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "Strava will charge a flat monthly fee from developers to access its API.",
+        "title": "Strava declares war on scrapers ahead of IPO",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          12,
+          0,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/06/01/unastella-a-south-korean-rocket-startup-that-launched-from-home-raises-24m/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          10,
+          0,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "The Seoul-based rocket startup is developing its own launch vehicles and engines.",
+        "title": "Unastella, a South Korean rocket startup that launched from home, raises $24M",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          10,
+          0,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/05/31/erin-brockovich-takes-aim-at-data-center-secrecy/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          21,
+          5,
+          14,
+          6,
+          151,
+          0
+        ],
+        "summary": "Environmental activist Erin Brockovich has a new mission.",
+        "title": "Erin Brockovich takes aim at data center secrecy",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          21,
+          5,
+          14,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/05/31/this-weekends-two-biggest-movies-were-both-directed-by-youtubers/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          18,
+          34,
+          58,
+          6,
+          151,
+          0
+        ],
+        "summary": "The YouTube-to-prestige-horror pipeline is looking very strong.",
+        "title": "This weekend’s two biggest movies were both directed by YouTubers",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          18,
+          34,
+          58,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/05/31/this-is-fine-artist-kc-green-reaches-agreement-with-ai-startup-artisan/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          18,
+          28,
+          17,
+          6,
+          151,
+          0
+        ],
+        "summary": "The startup has apparently taken down the ads using KC Green's \"This is fine\" meme.",
+        "title": "‘This is fine’ artist KC Green reaches agreement with AI startup Artisan",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          18,
+          28,
+          17,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/05/31/techcrunch-mobility-it-doesnt-matter-that-people-hate-the-ferrari-luce/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          16,
+          5,
+          0,
+          6,
+          151,
+          0
+        ],
+        "summary": "Welcome back to TechCrunch Mobility, your hub for the future of transportation and now, more than ever, how AI is playing a part.",
+        "title": "TechCrunch Mobility: It doesn’t matter that people hate the Ferrari Luce",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          16,
+          5,
+          0,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/05/31/making-sense-of-the-debate-over-ai-psychosis/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          15,
+          30,
+          0,
+          6,
+          151,
+          0
+        ],
+        "summary": "On the latest episode of Equity, we debate whether tech CEOs are \"uniquely prone to AI psychosis.\"",
+        "title": "Making sense of the debate over AI psychosis",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          15,
+          30,
+          0,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/05/31/black-founders-raise-highest-amount-of-quarterly-funding-since-2022-but-theres-a-catch/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          15,
+          0,
+          0,
+          6,
+          151,
+          0
+        ],
+        "summary": "Speaking to TechCrunch, Crunchbase’s head of research Gené Teare, said the factors holding back Black founders include “access to networks, relationships, and early introductions.\"",
+        "title": "Black founders raise highest amount of quarterly funding since 2022, but there’s a catch",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          15,
+          0,
+          0,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/05/31/i-went-to-the-so-called-steroid-olympics-to-understand-why-silicon-valley-is-obsessed-with-peptides/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          13,
+          0,
+          0,
+          6,
+          151,
+          0
+        ],
+        "summary": "The Enhanced Games — a singular sporting competition where a majority of the athletes were on performance enhancing drugs — may herald a new business model that the tech industry is ready to embrace.",
+        "title": "What happens in Vega$: steroids, swimmers, and a billion-dollar hustle",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          13,
+          0,
+          0,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/05/30/softbank-says-it-will-invest-up-to-e75-billion-to-build-french-data-centers/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          21,
+          45,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "The goal, the firm said, is to develop and operate up to 5 gigawatts of additional data center capacity.",
+        "title": "SoftBank says it will invest up to €75 billion to build French data centers",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          21,
+          45,
+          0,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/05/30/snap-alums-unveil-ghost-angels-fund/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          17,
+          0,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "A group of 20 Snap alumni has come together to launch a fund called Ghost Angels to back the next generation of social media.",
+        "title": "Snap alums unveil Ghost Angels fund",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          17,
+          0,
+          0,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/05/30/what-a-joke-github-copilots-new-token-based-billing-spurs-consternation-among-devs/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          16,
+          30,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "The golden age of Microsoft's Github Copilot appears to be at an end.",
+        "title": "‘What a joke’: Github Copilot’s new token-based billing spurs consternation among devs",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          16,
+          30,
+          0,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/05/30/meta-is-reportedly-developing-an-ai-pendant/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          15,
+          59,
+          58,
+          5,
+          150,
+          0
+        ],
+        "summary": "Meta seems to be making big bets on AI-powered hardware.",
+        "title": "Meta is reportedly developing an AI pendant",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          15,
+          59,
+          58,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://techcrunch.com/2026/05/30/i-put-googles-24-7-ai-assistant-gemini-spark-to-work-and-its-actually-pretty-useful/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          15,
+          30,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "Gemini Spark helps automate everyday tasks, from inbox summaries to local event planning, but it’s unclear why Google made it a separate product.",
+        "title": "I put Google’s 24/7 AI assistant Gemini Spark to work, and it’s actually pretty useful",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          15,
+          30,
+          0,
+          5,
+          150,
+          0
+        ]
+      }
+    ]
+  },
+  "https://www.ft.com/technology?format=rss": {
+    "bozo": 0,
+    "entries": [
+      {
+        "link": "https://www.ft.com/content/4f82f41c-24e7-4323-899a-17a04badd29e",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          11,
+          12,
+          0,
+          152,
+          0
+        ],
+        "summary": "Move sets up three-way race with OpenAI and SpaceX, testing Wall Street’s appetite for the AI boom",
+        "title": "Anthropic files for blockbuster initial public offering",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          17,
+          11,
+          12,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/7998db0a-22d1-4b80-b861-2e8b2448e97f",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          59,
+          50,
+          0,
+          152,
+          0
+        ],
+        "summary": "State files lawsuit over ‘litany of harms’ it claims the company’s chatbots have caused",
+        "title": "Florida sues OpenAI and Altman for ‘hurting’ children",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          59,
+          50,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/2793d548-0535-4f0c-9959-14bf9554b8d0",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          11,
+          33,
+          0,
+          152,
+          0
+        ],
+        "summary": "Casino resort group’s shares jump 15% after media veteran’s company People Inc makes take-private bid",
+        "title": "Barry Diller launches $18bn takeover offer for MGM Resorts",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          11,
+          33,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/899ca2a9-9991-45e0-a521-9819353be6ae",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          13,
+          10,
+          41,
+          0,
+          152,
+          0
+        ],
+        "summary": "Investment group held talks with other shareholders in bid to strengthen bargaining position over takeover",
+        "title": "Uber faces Prosus challenge in Delivery Hero pursuit",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          13,
+          10,
+          41,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/f88d62e3-5b67-4aed-ad69-6f38b62559b3",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          12,
+          11,
+          32,
+          0,
+          152,
+          0
+        ],
+        "summary": "Bloc in talks to use American AI model in first expansion outside US and UK",
+        "title": "Anthropic offers EU access to Mythos",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          12,
+          11,
+          32,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/eef96fb0-5a56-4ce2-9a69-5f8eca754995",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          7,
+          14,
+          53,
+          0,
+          152,
+          0
+        ],
+        "summary": "Demand for AI stocks powers tech giant’s shares as it takes top spot by market capitalisation",
+        "title": "SoftBank overtakes Toyota after over 20 years to become Japan’s largest company",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          7,
+          14,
+          53,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/6756ca48-212a-40f6-bf8f-c07d21bd856c",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          7,
+          0,
+          8,
+          0,
+          152,
+          0
+        ],
+        "summary": "Data centre and research facility to be built as Europe seeks to create ‘digital backbone for the future’",
+        "title": "French private equity group Ardian backs €5bn AI ‘gigafactory’ outside Paris",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          7,
+          0,
+          8,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/e9079a98-fcdb-4041-960c-cf84cf3e1b7c",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          5,
+          30,
+          8,
+          0,
+          152,
+          0
+        ],
+        "summary": "Plus more on the chip cycle",
+        "title": "AI and real GDP: how big and how fast?",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          5,
+          30,
+          8,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/58f984fd-d90b-4e8e-95b0-987a97c4a522",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          4,
+          49,
+          4,
+          0,
+          152,
+          0
+        ],
+        "summary": "Semiconductor paired with Microsoft Windows will allow computers to run AI apps",
+        "title": "Nvidia unveils PC ‘superchip’ in challenge to Apple and Intel",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          4,
+          49,
+          4,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/19330d92-fee6-4ddf-95f5-98f005061c0b",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          4,
+          0,
+          27,
+          0,
+          152,
+          0
+        ],
+        "summary": "Hardware reseller’s trick will be to convince investors artificial intelligence can augment its services rather than replace them",
+        "title": "FTSE 100’s likely new entrant puts a British spin on the AI boom",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          4,
+          0,
+          27,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/73fc962e-ce68-4521-9c5d-841a666eed10",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          4,
+          0,
+          21,
+          0,
+          152,
+          0
+        ],
+        "summary": "Gen Z uses the technology more than anyone, but many fear it is weakening their job prospects and creativity",
+        "title": "‘More harmful than helpful’: young people sour on AI",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          4,
+          0,
+          21,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/362ccc0a-d6e5-40df-817f-64aea4717cc8",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          4,
+          0,
+          20,
+          0,
+          152,
+          0
+        ],
+        "summary": "It’s not much stronger now than it was during the dotcom boom",
+        "title": "The truth about the American profit machine",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          4,
+          0,
+          20,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/2395f026-5f23-4bb0-a9f3-139e68e0b28c",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          4,
+          0,
+          20,
+          0,
+          152,
+          0
+        ],
+        "summary": "… and other vinyl essentials",
+        "title": "A record player that spins on air",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          4,
+          0,
+          20,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/1f12cfe2-d1b8-4987-bc39-83aa4e04b6f4",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          4,
+          0,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "Leader of data centre unit says company aims to release a new graphics processing unit as shares rally more than 200% this year",
+        "title": "Intel looks to level up in AI race",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          4,
+          0,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/103137ee-af1e-436a-b62e-f704e3498a21",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          3,
+          0,
+          6,
+          0,
+          152,
+          0
+        ],
+        "summary": "A behind-the-scenes look at the work of Rutherford Hall, critical communications strategist",
+        "title": "We need lifetime bans for clean athletes. This is the steroid Olympics, remember",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          3,
+          0,
+          6,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/3ca15070-c1c7-4ec2-9598-e36b7de47bc0",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          3,
+          0,
+          6,
+          0,
+          152,
+          0
+        ],
+        "summary": "Leader of data centre unit says company aims to release ‘inference’ GPU as shares rally more than 200% this year",
+        "title": "Intel targets new AI data centre chip by year end",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          3,
+          0,
+          6,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/1699e348-02d5-491a-9924-1d5914d540f7",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          16,
+          50,
+          21,
+          6,
+          151,
+          0
+        ],
+        "summary": "Defence companies join with Army personnel in hackathon to apply AI to ‘interoperability’ puzzle",
+        "title": "Operation Jailbreak: lessons from Ukraine on making weapons talk to each other",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          16,
+          50,
+          21,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/90dbca8c-fb63-4fa5-a5d6-e6d6d9f6d10e",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          12,
+          0,
+          10,
+          6,
+          151,
+          0
+        ],
+        "summary": "Investors and strategists shrug off worries that markets could be overheating by betting on huge gains for AI-linked shares",
+        "title": "Wall Street bulls bet US stocks rally will defy bubble fears",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          12,
+          0,
+          10,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/4f18256e-a58f-4411-97e4-ac5e5eb055aa",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          4,
+          0,
+          9,
+          6,
+          151,
+          0
+        ],
+        "summary": "Western AI models are turbocharging Tehran’s cyber operations, helping it develop malware and launch attacks",
+        "title": "How Iran’s military harnesses western AI",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          4,
+          0,
+          9,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/b971947c-3ff3-49aa-99e5-ec0c3c0d0705",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          4,
+          0,
+          9,
+          6,
+          151,
+          0
+        ],
+        "summary": "Ukraine war has underlined importance of long-range data links that cannot be disrupted or intercepted",
+        "title": "Jamming-resistant radio maker seeks $3bn-plus sale",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          4,
+          0,
+          9,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/da80e72b-31e5-42ca-995c-5fc7d457915e",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          4,
+          0,
+          8,
+          6,
+          151,
+          0
+        ],
+        "summary": "The technology’s development belongs to everyone — share your vision with us",
+        "title": "AI is here. What do you want from it?",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          4,
+          0,
+          8,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/video/96833ee7-0d4e-4223-9edf-d093fcdd3212",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          4,
+          0,
+          0,
+          6,
+          151,
+          0
+        ],
+        "summary": "Three examples of how AI could work for good - join the conversation",
+        "title": "Three examples of how AI could work for good - join the conversation",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          4,
+          0,
+          0,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/1022f9bd-5b6d-44a5-9303-c8b05b8c6463",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          18,
+          39,
+          31,
+          5,
+          150,
+          0
+        ],
+        "summary": "Masayoshi Son places France at the centre of his global AI ambitions",
+        "title": "SoftBank pledges €75bn to build Europe’s biggest AI facility in France",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          18,
+          39,
+          31,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/0bbf19ff-ce9d-4e6a-8e0a-82fae6e59559",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          9,
+          30,
+          8,
+          5,
+          150,
+          0
+        ],
+        "summary": "Lessons for boomtime investing",
+        "title": "Dotcom bubble IPOs",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          9,
+          30,
+          8,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://www.ft.com/content/a21607ce-c25b-40ab-bd9c-e0262d344c8c",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          4,
+          0,
+          40,
+          5,
+          150,
+          0
+        ],
+        "summary": "Officials push for machines to make autonomous decisions on targets in exceptional circumstances",
+        "title": "UK military looks at allowing lethal strikes without human approval",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          4,
+          0,
+          40,
+          5,
+          150,
+          0
+        ]
+      }
+    ]
+  },
+  "https://www.technologyreview.com/feed/": {
+    "bozo": 0,
+    "entries": [
+      {
+        "link": "https://www.technologyreview.com/2026/06/01/1138207/the-download-china-bci-brain-implant-nvidia-ai-chips-laptops/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          12,
+          10,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "This is today&#8217;s edition of The Download, our weekday newsletter that provides a daily dose of what&#8217;s going on in the world of technology. China has approved the world’s first invasive brain-computer chip—here’s what’s next Sitting in the courtyard of his house in China’s Henan province last October, Dong Hui decided to try holding a&#8230;",
+        "title": "The Download: China’s brain implant ambitions",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          12,
+          10,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.technologyreview.com/2026/06/01/1138133/china-world-first-brain-chip/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          9,
+          9,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "One day last October, sitting in the courtyard of his house in China’s Henan province, Dong Hui decided to see if he could hold a pen to write.&#160; Dong, 39, had sustained spinal cord injuries in a car accident six years earlier that left him paralyzed from the neck down. Slowly but determinedly, he wrote&#8230;",
+        "title": "China has approved the world’s first invasive brain-computer chip—here’s what’s next",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          9,
+          9,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.technologyreview.com/2026/05/29/1138110/the-download-lithium-extraction-ebola-ai-pope/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          12,
+          10,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "This is today&#8217;s edition of The Download, our weekday newsletter that provides a daily dose of what&#8217;s going on in the world of technology. How a new extraction process could unlock the world’s lithium A new method for extracting lithium could cut costs and emissions from one of the world’s most important materials for EVs&#8230;",
+        "title": "The Download: unlocking lithium and controlling Ebola",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          12,
+          10,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.technologyreview.com/2026/05/29/1138093/the-deadly-ebola-outbreak-is-proving-difficult-to-control/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          11,
+          19,
+          52,
+          4,
+          149,
+          0
+        ],
+        "summary": "The alert was raised on May 5. Four health-care workers in the Ituri Province of the Democratic Republic of the Congo had died from an unknown illness within four days. Rapid response teams were sent to investigate, and tests at a research center in Kinshasa revealed the culprit: the Bundibugyo virus, one of the viruses&#8230;",
+        "title": "The deadly Ebola outbreak is proving difficult to control",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          11,
+          19,
+          52,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.technologyreview.com/2026/05/29/1138107/how-the-popes-magnifica-humanitas-offers-a-template-for-individuals-to-meet-the-ai-moment/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          10,
+          0,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "Pope Leo XIV’s new encyclical on artificial intelligence includes a statement that warrants serious attention from technologists and policymakers: “Technology is never neutral.” Magnifica Humanitas (“Magnificent Humanity”) is a clarion call to all people to act with courage and solidarity as we enter an age already being transformed by artificial intelligence, the greatest change in&#8230;",
+        "title": "How the Pope’s Magnifica Humanitas offers a template for individuals to meet the AI moment",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          10,
+          0,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.technologyreview.com/2026/05/28/1138096/lithium-extraction-rock-zero/",
+        "published_parsed": [
+          2026,
+          5,
+          28,
+          18,
+          1,
+          0,
+          3,
+          148,
+          0
+        ],
+        "summary": "Researchers say they’ve found a new way to extract lithium, a crucial metal used in the lithium-ion batteries that power electric vehicles and energy storage arrays. This new technique could be more environmentally friendly and cheaper than existing ones.&#160; The research was published today in Science, and a startup called Rock Zero is working to&#8230;",
+        "title": "How a new extraction process could unlock the world’s lithium",
+        "updated_parsed": [
+          2026,
+          5,
+          28,
+          18,
+          1,
+          0,
+          3,
+          148,
+          0
+        ]
+      },
+      {
+        "link": "https://www.technologyreview.com/2026/05/28/1138085/the-download-climate-tech-ipos-ai-hype-index/",
+        "published_parsed": [
+          2026,
+          5,
+          28,
+          12,
+          10,
+          0,
+          3,
+          148,
+          0
+        ],
+        "summary": "This is today&#8217;s edition of The Download, our weekday newsletter that provides a daily dose of what&#8217;s going on in the world of technology. Climate tech companies are going public. What’s next? Solar and battery company Solv Energy went public in February, hitting a $6 billion valuation. X-energy, which builds small modular nuclear reactors, followed&#8230;",
+        "title": "The Download: climate tech goes public and the AI Hype Index returns",
+        "updated_parsed": [
+          2026,
+          5,
+          28,
+          12,
+          10,
+          0,
+          3,
+          148,
+          0
+        ]
+      },
+      {
+        "link": "https://www.technologyreview.com/2026/05/28/1138067/climate-tech-ipos/",
+        "published_parsed": [
+          2026,
+          5,
+          28,
+          10,
+          0,
+          0,
+          3,
+          148,
+          0
+        ],
+        "summary": "This year, there’s been a wave of notable energy companies going public via IPO in the US. The solar and battery company Solv Energy went public in February, to the tune of $6 billion. X-energy, which is building small modular nuclear reactors, did the same in April, and its stocks surged on its first day&#8230;",
+        "title": "Climate tech companies are going public. What’s next?",
+        "updated_parsed": [
+          2026,
+          5,
+          28,
+          10,
+          0,
+          0,
+          3,
+          148,
+          0
+        ]
+      },
+      {
+        "link": "https://www.technologyreview.com/2026/05/28/1138053/the-ai-hype-index-ai-gets-booed-in-graduation-season/",
+        "published_parsed": [
+          2026,
+          5,
+          28,
+          9,
+          51,
+          11,
+          3,
+          148,
+          0
+        ],
+        "summary": "It is one thing to say AI will change the world. It is another to expect the class of 2026 to applaud it. In fact, when former Google CEO Eric Schmidt told University of Arizona graduates that their task is to help shape AI, he was met with a resounding chorus of boos. “I can&#8230;",
+        "title": "The AI Hype Index: AI gets booed in graduation season",
+        "updated_parsed": [
+          2026,
+          5,
+          28,
+          9,
+          51,
+          11,
+          3,
+          148,
+          0
+        ]
+      },
+      {
+        "link": "https://www.technologyreview.com/2026/05/27/1138048/the-download-ai-future-ivf-technology/",
+        "published_parsed": [
+          2026,
+          5,
+          27,
+          12,
+          10,
+          0,
+          2,
+          147,
+          0
+        ],
+        "summary": "This is today&#8217;s edition of The Download, our weekday newsletter that provides a daily dose of what&#8217;s going on in the world of technology. Stay on top of what’s going on in AI this summer Here at MIT Technology Review, we understand exactly how relentless the pace of news from the world of artificial intelligence&#8230;",
+        "title": "The Download: keeping up with AI, and the future of IVF",
+        "updated_parsed": [
+          2026,
+          5,
+          27,
+          12,
+          10,
+          0,
+          2,
+          147,
+          0
+        ]
+      }
+    ]
+  },
+  "https://www.theverge.com/rss/index.xml": {
+    "bozo": 0,
+    "entries": [
+      {
+        "link": "https://www.theverge.com/ai-artificial-intelligence/941016/anthropic-has-officially-filed-to-go-public",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          40,
+          38,
+          0,
+          152,
+          0
+        ],
+        "summary": "After months of speculation about whether OpenAI or Anthropic would be first in their race to IPO, Anthropic on Monday reached a key milestone: filing to kick off the process with the U.S. Securities and Exchange Commission. The filing sets the stage for what's sure to be a massive IPO. As of its fundraise last [&#8230;]",
+        "title": "Anthropic has officially filed to go public",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          40,
+          38,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.theverge.com/games/941031/sony-playstation-flexstrike-fight-stick-gaming-monitor-pulse-elevate-speakers-launch-date-price",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          36,
+          18,
+          0,
+          152,
+          0
+        ],
+        "summary": "Sony is sharing new details about some of its upcoming gaming-focused hardware, including pricing and August launch dates for its FlexStrike fight stick and its 27-inch monitor. The FlexStrike fight stick will be available starting August 6th - the same day as the new PlayStation-published fighting game Marvel T&#333;kon: Fighting Souls - and will cost [&#8230;]",
+        "title": "Sony’s new fight stick and gaming monitor launch in August",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          36,
+          18,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.theverge.com/games/939206/summer-game-fest-playstation-xbox-gaming-events-2026",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          30,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "Get ready for some gaming news. It&#8217;s officially June, which means splashy new events from PlayStation, Xbox, and gaming hype man Geoff Keighley. But this season doesn&#8217;t just feature the big tentpole shows; there will be a bunch of smaller events, too, and they might feature some promising games as well. But this year&#8217;s events [&#8230;]",
+        "title": "Summer Game Fest 2026: All the news from gaming&#8217;s busiest week",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          56,
+          35,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.theverge.com/gadgets/940830/find-my-bluetooth-tracker-bose-qc-ultra-google-pixel-buds-deal-sale",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          24,
+          32,
+          0,
+          152,
+          0
+        ],
+        "summary": "There are many solid Bluetooth trackers for iPhones that tap into Apple’s expansive Find My network. Some are thin, some are a bit chunkier. And, evidently, some look like tiny soccer balls. Ugreen’s FineTrack 2 glows in the dark, and it has a loud 110-decibel alarm when you need to find it. It’s just $14.99 [&#8230;]",
+        "title": "An affordable, long-lasting AirTag alternative is $15 right now",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          24,
+          32,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.theverge.com/entertainment/940869/quinn-erotica-rent-free-ember-and-ice-heated-rivalry-off-campus",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          0,
+          12,
+          0,
+          152,
+          0
+        ],
+        "summary": "Though Gen Z has developed a reputation for being so disinterested in sex that they don't even want to see it on TV, the popularity of series like Heated Rivalry and The Summer I Turned Pretty has made it very clear that more than a few young people do, in fact, like their entertainment a [&#8230;]",
+        "title": "The next big career move for young Hollywood? Reading audio smut",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          0,
+          12,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.theverge.com/games/939238/video-game-gaming-events-summer-game-fest-schedule-2026",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          0,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "It's early June, which means it's video game event season once again. Now that E3 has been gone for a few years, a bunch of showcases and presentations have started to fill the void, including big productions like Summer Game Fest Live and smaller affairs like Wholesome Games Direct. If you love following gaming news, [&#8230;]",
+        "title": "Your guide to June’s biggest gaming events",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          20,
+          14,
+          49,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.theverge.com/report/940861/microsoft-build-ai-models-windows-dev-mode-what-to-expect",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          39,
+          3,
+          0,
+          152,
+          0
+        ],
+        "summary": "Microsoft is heading to San Francisco this week in a bid to win back developers at its Build conference. I've been attending Build since the days when Microsoft called it the Professional Developers Conference, and I can't remember a more pivotal moment. As Microsoft continues to reshuffle its entire business around AI, it's moving Build [&#8230;]",
+        "title": "Microsoft to unveil new AI models and Windows improvements at Build",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          39,
+          3,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.theverge.com/tech/940844/computex-2026",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          33,
+          2,
+          0,
+          152,
+          0
+        ],
+        "summary": "Computex 2026 is kicking off in Taipei, Taiwan this week, where Nvidia, AMD, Qualcomm, Intel, and other tech brands are announcing new laptops, handhelds, chips, and more.&#160; Nvidia unveiled RTX Spark, its first family of consumer PC chips, arriving in laptops and mini PCs starting this fall. Intel is launching two new custom chips made [&#8230;]",
+        "title": "Computex 2026: All the news and announcements",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          6,
+          24,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.theverge.com/podcast/940831/ai-grammys-music-recording-harvey-mason",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          30,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "Today I’m talking with Harvey Mason Jr., who is CEO of the Recording Academy — that’s the outfit that puts on the Grammy Awards. I last talked to Harvey in 2024, when it was obvious that generative AI would upend the music industry, but still not exactly clear how that would happen.&#160; Well, it’s been [&#8230;]",
+        "title": "AI is blowing up music. How should the Grammys handle it?",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          16,
+          49,
+          43,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.theverge.com/gadgets/940854/strava-restricts-api-access-ai-apps",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          14,
+          6,
+          44,
+          0,
+          152,
+          0
+        ],
+        "summary": "The popular fitness-tracking platform, Strava, is restricting access to its API as part of efforts to clamp down on AI scraping, as reported earlier by TechCrunch. Developers who want to build an app using Strava's data now need to pay for a flat $11.99 / month subscription. In an update on its developer hub, Strava [&#8230;]",
+        "title": "Strava blames zero-code AI apps and scrapers as it tightens API access",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          15,
+          6,
+          40,
+          0,
+          152,
+          0
+        ]
+      }
+    ]
+  },
+  "https://www.wired.com/feed/rss": {
+    "bozo": 0,
+    "entries": [
+      {
+        "link": "https://www.wired.com/story/best-sleep-trackers/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          13,
+          2,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "I tested the top sleep wearables for every type of sleeper, including devices from Oura, Whoop, and Eight Sleep.",
+        "title": "Best Sleep Trackers of 2026: Oura, Whoop, and Eight Sleep",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          13,
+          2,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/review/universal-audio-volt-876-usb-audio-interface/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          11,
+          6,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "With true plug-and-play support, versatile connectivity, and excellent sound, Universal Audio’s Volt 876 makes recording simple.",
+        "title": "Universal Audio Volt 876 USB Audio Interface Review: Pro-Level Polish",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          11,
+          6,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/norse-airlines-ftc-complaints-ai-scams/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          11,
+          0,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "Dozens of people have complained to the Federal Trade Commission about Norse Atlantic Airways’ tech-first customer service operation. Some said they lost thousands of dollars.",
+        "title": "Norse Atlantic Airways Offers Dirt-Cheap Tickets. There’s a Catch",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          11,
+          0,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/sexual-chocolate-recalls-fda-undisclosed-viagra/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          10,
+          30,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "Sellers of products with names like Boner Bears and DTF have voluntarily recalled their products after testing positive for the active ingredients in Viagra and Cialis.",
+        "title": "‘Sexual Chocolate’ Faces Recalls After FDA Tests Reveal Undisclosed Viagra",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          10,
+          30,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/wired-book-club-excerpt-the-yahoo-boys-carlos-barragan/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          10,
+          30,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "In this excerpt from WIRED Book Club pick The Yahoo Boys, journalist Carlos Barragán traces one scammer’s journey from flop to fortune.",
+        "title": "The Romance Scammer Who Made a Small Fortune Posing as a WWE Superstar",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          10,
+          30,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/the-painful-truth-about-long-covid/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          10,
+          0,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "There might finally be a way forward for long Covid treatment—if only you were allowed to talk about it.",
+        "title": "The Painful Truth About Long Covid",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          10,
+          0,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/websites-can-now-spy-on-you-through-your-hard-drive/",
+        "published_parsed": [
+          2026,
+          6,
+          1,
+          9,
+          30,
+          0,
+          0,
+          152,
+          0
+        ],
+        "summary": "Thanks to the newly detailed FROST technique, telltale SSD activity can be measured in the browser using simple JavaScript.",
+        "title": "Websites Can Now Spy on You Through Your Hard Drive",
+        "updated_parsed": [
+          2026,
+          6,
+          1,
+          9,
+          30,
+          0,
+          0,
+          152,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/everyone-has-their-targets-set-on-the-macbook-neo/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          23,
+          0,
+          0,
+          6,
+          151,
+          0
+        ],
+        "summary": "Dell, Microsoft, and others are unveiling new laptops to compete directly with the Neo, but not all are learning the right lessons from Apple.",
+        "title": "Everyone Has Their Targets Set on the MacBook Neo",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          23,
+          0,
+          0,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/review/m-audio-m-track-duo-hd-audio-interface-bundle/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          11,
+          1,
+          0,
+          6,
+          151,
+          0
+        ],
+        "summary": "The M-Track Duo HD Producer Pack removes the last remaining excuse for terrible audio and potentially terrible opinions.",
+        "title": "M-Audio M Track Duo HD Producer Pack Review: Hot Takes, Cold Opens",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          11,
+          1,
+          0,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/mesh-system-vs-wi-fi-router/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          10,
+          34,
+          0,
+          6,
+          151,
+          0
+        ],
+        "summary": "Find out whether a single Wi-Fi router or a mesh system makes the most sense for your home network.",
+        "title": "Wi-Fi Router vs. Mesh System: Which Is Best for You?",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          10,
+          34,
+          0,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/gallery/best-prepaid-phone-plans/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          10,
+          1,
+          0,
+          6,
+          151,
+          0
+        ],
+        "summary": "Forget the pricey, postpaid cell plans and two-year contracts. Save with one of these WIRED-tested options from US Mobile, Boost, and Google Fi.",
+        "title": "6 Best Prepaid Phone Plans (2026): Tello, Boost, Google Fi, More",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          10,
+          1,
+          0,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/best-unlimited-phone-plans/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          9,
+          31,
+          0,
+          6,
+          151,
+          0
+        ],
+        "summary": "I sifted through the fine print and figured out how to score the best deal right now on all the major carriers.",
+        "title": "Best Unlimited Phone Plan: T-Mobile, AT&T, Verizon Compared",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          9,
+          31,
+          0,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/how-turkey-hacked-the-hair-transplant-industry/",
+        "published_parsed": [
+          2026,
+          5,
+          31,
+          9,
+          0,
+          0,
+          6,
+          151,
+          0
+        ],
+        "summary": "From specialized motors to the use of machine learning algorithms, Turkey’s billion-dollar hair-transplant industry is the result of a constant process of innovation.",
+        "title": "How Turkey Hacked the Hair Transplant Industry",
+        "updated_parsed": [
+          2026,
+          5,
+          31,
+          9,
+          0,
+          0,
+          6,
+          151,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/review/keychron-k2-he-concrete-edition/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          11,
+          0,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "Keychron’s K2 HE Concrete Edition sounds like a cute gimmick, but as I discovered, there’s a really solid keyboard beyond the absurd choice of materials.",
+        "title": "Keychron K2 HE Concrete Edition Review: Rock-Solid Typing",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          11,
+          0,
+          0,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/backrooms-movie-kane-parsons-interview/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          11,
+          0,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "Kane Parsons was just 16 years old when he created a viral YouTube horror series based on a 4chan meme. Now he’s ready to conquer the big screen.",
+        "title": "‘Backrooms’ Takes You Deeper Inside the Internet’s Most Uncanny Horror Myth",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          11,
+          0,
+          0,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/review/tello-mobile-custom-plans/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          10,
+          39,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "With inflation and gas prices rising, I’m trying to save money wherever I can. I tested Tello’s budget cell phone plan, and for me, it turns out prepaid can be just as good.",
+        "title": "Tello Mobile Plan Review (2026): Low Cost, Reliable Service",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          10,
+          39,
+          0,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/security-news-this-week-cybercrime-crew-claims-it-hacked-mike-lindells-mypillow/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          10,
+          30,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "Plus: A ransomware group is now stealing data in person, BusPatrol wants to hand its license plate surveillance data to the cops, and more.",
+        "title": "Cybercrime Crew Claims It Hacked Mike Lindell’s MyPillow",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          10,
+          30,
+          0,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/quilts-are-better-than-sleeping-bags/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          10,
+          4,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "Tired of sleeping like a mummy in a bag? Improve your backcountry sleep and carry less weight with an ultralight quilt.",
+        "title": "Quilts Are Better Than Sleeping Bags",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          10,
+          4,
+          0,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/millions-of-bees-have-thrived-under-a-new-york-cemetery-for-more-than-a-century/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          10,
+          0,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "A walk in the cemetery led to Cornell researchers discovering an underground colony of bees with an estimated population of 5.5 million—one of the largest ever recorded.",
+        "title": "Millions of Bees Have Thrived Under a New York Cemetery for More Than a Century",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          10,
+          0,
+          0,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/do-you-actually-need-to-pay-for-transcription-software/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          9,
+          30,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "I tested Wispr Flow and various AI-powered transcription software to see whether you should bother subscribing or stick with free services.",
+        "title": "Do You Actually Need to Pay for Transcription Software?",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          9,
+          30,
+          0,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/is-the-ferrari-luce-design-really-bad-we-ask-3-italian-auto-experts/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          9,
+          0,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "The first electric Ferrari is already this year’s most divisive car. We asked three Italian auto industry professionals to explain where the EV’s design makes sense, and where it doesn’t add up.",
+        "title": "Is the Ferrari Luce’s Design Really That Bad? 3 Italian Auto Experts Weigh In",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          9,
+          0,
+          0,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/nike-recycled-world-cup-uniforms/",
+        "published_parsed": [
+          2026,
+          5,
+          30,
+          8,
+          30,
+          0,
+          5,
+          150,
+          0
+        ],
+        "summary": "The activewear giant has used chemical recycling to make jersey for 16 teams competing in the tournament. But the technique is unlikely to help solve fashion’s waste issue.",
+        "title": "Nike World Cup Uniforms Made of Recycled Textiles Won’t Solve Fashion Waste",
+        "updated_parsed": [
+          2026,
+          5,
+          30,
+          8,
+          30,
+          0,
+          5,
+          150,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/the-best-gifts-for-dads-2026/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          22,
+          44,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "Dads are traditionally tough to shop for—let me help with these handpicked gift ideas for fathers with great taste.",
+        "title": "24 Best Father’s Day Gifts for Dads (2026)",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          22,
+          44,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/story/amazon-is-making-an-ai-animated-good-advice-cupcake-tv-show-its-original-creator-is-furious/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          20,
+          56,
+          59,
+          4,
+          149,
+          0
+        ],
+        "summary": "Loryn Brantz created The Good Advice Cupcake for BuzzFeed years ago. The company licensed the character for a new Amazon series—made with AI—without her consent.",
+        "title": "Amazon Is Making an AI-Animated ‘Good Advice Cupcake’ TV Show. Its Original Creator Is Furious",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          20,
+          56,
+          59,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/white-house-aliens-gov-us-citizens-arrested/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          20,
+          53,
+          9,
+          4,
+          149,
+          0
+        ],
+        "summary": "The website, which compares human beings to extraterrestrials, touts arrest numbers from the Trump administration’s sweeping immigration crackdown. But some of its details are really out there.",
+        "title": "The White House’s Aliens.gov Site Brags That ICE Arrested More Than 700 US Citizens",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          20,
+          53,
+          9,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/meta-covalen-protest-strike-dublin/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          20,
+          18,
+          1,
+          4,
+          149,
+          0
+        ],
+        "summary": "Soon-to-be-laid-off Meta contractors say they’re being treated differently than Mark Zuckerberg’s full-time employees, who stand to receive more generous severance packages.",
+        "title": "‘We’re Just Getting the Crumbs Here’: Contractors Protest Layoffs at Meta’s European Headquarters",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          20,
+          18,
+          1,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/google-gemini-spark-ai-agent-hands-on/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          19,
+          7,
+          46,
+          4,
+          149,
+          0
+        ],
+        "summary": "Google’s new AI agent combed through my emails, documents, and calendar to plan a birthday party and still didn’t clock the person most important to me.",
+        "title": "Hands-On With Gemini Spark: I Gave It Access to My Life and It Friend-Zoned My Boyfriend",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          19,
+          7,
+          46,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/best-pool-cleaning-robots/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          17,
+          39,
+          4,
+          4,
+          149,
+          0
+        ],
+        "summary": "Send the pool guy packing. Let one of these robotic buddies maintain your water quality instead.",
+        "title": "The Best Robotic Pool Cleaners of 2026: Beatbot, iGarden, Dreame",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          17,
+          39,
+          4,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/future-of-truth-ai-interview/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          16,
+          30,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "A book about how AI shapes perceptions of reality came under fire for using AI-generated quotes. Its problems go beyond that.",
+        "title": "We Asked the ‘Future of Truth’ Author to Explain How He Used AI. It Didn’t Go Well",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          16,
+          30,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/review/samsung-movingstyle-32-m7/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          15,
+          52,
+          17,
+          4,
+          149,
+          0
+        ],
+        "summary": "Made for those who hate having a TV in the home, Samsung’s Movingstyle monitor-on-wheels brings the entertainment when you need it and hides away in a closet when you don’t.",
+        "title": "Samsung Movingstyle Essential Review: A Screen on Wheels",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          15,
+          52,
+          17,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/the-vaticans-man-inside-anthropic/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          15,
+          0,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "Pope Leo XIV may not be able to disarm AI, but he’s got the attention of the industry.",
+        "title": "The Vatican’s Man Inside Anthropic",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          15,
+          0,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/blue-origin-rocket-explodes-in-major-setback/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          13,
+          22,
+          27,
+          4,
+          149,
+          0
+        ],
+        "summary": "The detonation of the New Glenn rocket resulted in a huge fireball in Florida and may have long-term implications for the company's ambitions.",
+        "title": "Blue Origin Rocket Explodes in Fiery Setback",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          13,
+          22,
+          27,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/gallery/best-wireless-chargers/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          12,
+          3,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "Stop fumbling for cables in the dark. These WIRED-tested stands and pads will take the hassle out of refueling your phone, wireless earbuds, and watch.",
+        "title": "15 Best Wireless Chargers, All Tested and Reviewed (2026)",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          12,
+          3,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/targus-privacy-screen-travel/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          11,
+          1,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "I'm one of those people who enjoys working on planes and in public spaces in general. But the issue of privacy was always a hurdle.",
+        "title": "This MacBook Privacy Screen Totally Changed How I Work in Public",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          11,
+          1,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/review/hp-omnibook-3/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          10,
+          32,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "To get to $600, Apple and HP made different compromises. If you demand more power and performance, the HP Omnibook 3 delivers.",
+        "title": "HP Omnibook 3 Review: Redefining the Budget Laptop",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          10,
+          32,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/physical-media-is-having-a-comeback-the-next-console-generation-may-kill-it/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          10,
+          30,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "Consoles with disc drives are the easiest way to enjoy all kinds of physical media, but that could end with the next-gen PlayStation 6 and Microsoft's Project Helix.",
+        "title": "Physical Media Is Making a Comeback. The Next Console Generation Might Kill It",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          10,
+          30,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/the-goruck-gr1-is-a-rucking-great-pack/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          10,
+          2,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "Built like a tank, the endlessly capable GoRuck GR1 is as close to a do-it-all bag as you can get.",
+        "title": "GoRuck GR1 Review: Great For Travel, Rucking, the Gym, and More",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          10,
+          2,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/streamers-like-clavicular-are-humiliating-onlyfans-girls-for-clout/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          10,
+          0,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "Sex workers appear on the livestreams of famous manosphere influencers to boost their followings—but often end up being degraded.",
+        "title": "Streamers Like Clavicular Are Humiliating OnlyFans Girls For Clout",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          10,
+          0,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/best-espresso-accessories-for-home-baristas/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          9,
+          36,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "A longtime pro barista’s favorite tools for dialing in the perfect shot at home.",
+        "title": "The Best Espresso Accessories for Home Baristas (2026)",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          9,
+          36,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/airdoctor-coupon-code/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          5,
+          0,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "Save up to $400 on top air purifiers and filters with verified AirDoctor promo codes and special offers for May 2026.",
+        "title": "AirDoctor Coupon Codes: 40% Off | June 2026",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          5,
+          0,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/meta-quest-promo-code/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          5,
+          0,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "Experience cutting-edge VR and save up to 20% with coupons for the latest games, Meta Quest 3, Ray-Ban AI glasses, and more deals.",
+        "title": "Meta Quest Promo Codes and Coupons for June 2026",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          5,
+          0,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/target-promo-code/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          5,
+          0,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "Get $50 off your next order or up to 50% off site wide with Target coupon codes and Circle deals.",
+        "title": "Target Promo Code: $50 Off | June 2026",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          5,
+          0,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/ebay-coupon-code/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          5,
+          0,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "Save up to 60% on a selection of items at eBay, including electronics, home products, card games, car parts and more.",
+        "title": "eBay Coupons: 20% Off in June 2026",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          5,
+          0,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/bartesian-discount-code/",
+        "published_parsed": [
+          2026,
+          5,
+          29,
+          5,
+          0,
+          0,
+          4,
+          149,
+          0
+        ],
+        "summary": "Upgrade your home bar with the latest Bartesian coupon codes and discounts. Save on the Professional Cocktail Maker, enjoy subscription discounts, and get free shipping on your favorite capsules.",
+        "title": "Bartesian Discount Codes: 35% Off",
+        "updated_parsed": [
+          2026,
+          5,
+          29,
+          5,
+          0,
+          0,
+          4,
+          149,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/gop-attacks-on-james-talarico-incel-handbook/",
+        "published_parsed": [
+          2026,
+          5,
+          28,
+          23,
+          49,
+          53,
+          3,
+          148,
+          0
+        ],
+        "summary": "Claims about low testosterone and false accusations of veganism might play well to the online far right, but will they win an election?",
+        "title": "The GOP’s Attacks on James Talarico Are Straight Out of the Incel Handbook",
+        "updated_parsed": [
+          2026,
+          5,
+          28,
+          23,
+          49,
+          53,
+          3,
+          148,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/made-in-china-the-dollar6-billion-chinese-startup-making-hands-for-humanoids/",
+        "published_parsed": [
+          2026,
+          5,
+          28,
+          19,
+          14,
+          31,
+          3,
+          148,
+          0
+        ],
+        "summary": "LinkerBot makes dexterous robotic hands for as little as $600. It wants to become the standard for humanoids and automated factories—and eventually replace human labor altogether.",
+        "title": "The $6 Billion Chinese Startup Trying to Build Hands for Every Robot",
+        "updated_parsed": [
+          2026,
+          5,
+          28,
+          19,
+          14,
+          31,
+          3,
+          148,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/meta-copies-snapchats-homework-again/",
+        "published_parsed": [
+          2026,
+          5,
+          28,
+          19,
+          9,
+          17,
+          3,
+          148,
+          0
+        ],
+        "summary": "Meta’s upcoming Instagram Plus and Facebook Plus subscriptions are the latest example of the company seeing what works elsewhere and mimicking it.",
+        "title": "Meta Copies Snapchat’s Homework Again With ‘Plus’ Features for Instagram and Facebook",
+        "updated_parsed": [
+          2026,
+          5,
+          28,
+          19,
+          9,
+          17,
+          3,
+          148,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/the-pentagon-knew-enemies-could-track-troops-phones-for-years-now-they-are/",
+        "published_parsed": [
+          2026,
+          5,
+          28,
+          16,
+          59,
+          33,
+          3,
+          148,
+          0
+        ],
+        "summary": "The US military has long known that cheap fixes could stop location data from exposing its troops. It adopted almost none—and now says adversaries are using the data to target soldiers during a war.",
+        "title": "The Pentagon Knew Enemies Could Track Troops’ Phones for Years. Now They Are",
+        "updated_parsed": [
+          2026,
+          5,
+          28,
+          16,
+          59,
+          33,
+          3,
+          148,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/here-comes-ojai-waymos-new-chinese-made-robotaxi/",
+        "published_parsed": [
+          2026,
+          5,
+          28,
+          15,
+          0,
+          0,
+          3,
+          148,
+          0
+        ],
+        "summary": "The pale-blue Ojai vehicles will start picking up members of the public in California and Arizona in the next few weeks.",
+        "title": "Here Comes Ojai, Waymo’s New Chinese-Made Robotaxi",
+        "updated_parsed": [
+          2026,
+          5,
+          28,
+          15,
+          0,
+          0,
+          3,
+          148,
+          0
+        ]
+      },
+      {
+        "link": "https://www.wired.com/story/oura-ring-5/",
+        "published_parsed": [
+          2026,
+          5,
+          28,
+          12,
+          0,
+          0,
+          3,
+          148,
+          0
+        ],
+        "summary": "It’s slimmer, lighter, and more durable. But the real upgrade is Oura’s push into AI-powered health insights and proactive monitoring.",
+        "title": "Oura’s New Ring 5 Is Smaller and Lighter—and Adds an AI Health Coach",
+        "updated_parsed": [
+          2026,
+          5,
+          28,
+          12,
+          0,
+          0,
+          3,
+          148,
+          0
+        ]
+      }
+    ]
+  }
+}

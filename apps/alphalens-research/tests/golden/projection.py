@@ -13,6 +13,7 @@ this one function so the captured golden and the asserted projection cannot drif
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pandas as pd
@@ -134,5 +135,64 @@ def map_themes_projection(candidates: pd.DataFrame) -> dict[str, Any]:
         "row_count": len(candidates),
         "columns": sorted(candidates.columns),
         "tickers": sorted(candidates["ticker"].astype(str)) if len(candidates) else [],
+        "rows": rows,
+    }
+
+
+def _ticker_list(value: Any) -> list[str]:
+    # ``tickers`` round-trips from parquet as a list OR ndarray under pandas-3.0
+    # infer_string; NaN floats can appear in empty cells. Length-guard, never
+    # truthiness (ndarray bool is ambiguous).
+    if value is None:
+        return []
+    if isinstance(value, float):  # NaN sentinel
+        return []
+    return sorted(str(t) for t in value)
+
+
+def _cluster_size(extra: Any) -> int:
+    # ``extra`` is a JSON string; cluster_size is the cross-source merge marker
+    # stamped by news_ingest. Absent (un-clustered row) → 1.
+    if not isinstance(extra, str) or not extra:
+        return 1
+    try:
+        return int(json.loads(extra).get("cluster_size", 1))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return 1
+
+
+def ingest_projection(news: pd.DataFrame) -> dict[str, Any]:
+    """Golden projection for the news-ingest stage (Phase 3b).
+
+    Locks the cross-source MERGE outcome: per-source row counts, total count,
+    schema, and a per-row exemplar (id / source / ticker tagging / body
+    presence / cluster_size). A source parser breaking drops that source from
+    ``by_source``; dedup collapsing too much drops ``row_count`` + inflates
+    ``cluster_size``; a ``_SOURCE_PRIORITY`` regression flips the surviving
+    ``source`` for a deduped URL; a ticker-tagging regression moves
+    ``n_tickers_total``. Sorted by ``id`` (content-addressed, stable) — NOT by
+    timestamp (EDGAR rows all land at 00:00 UTC → ties). Excludes title/body
+    prose, url, keywords, raw timestamp.
+    """
+    by_source = news.groupby("source").size().to_dict() if len(news) else {}
+    rows = []
+    for _, r in news.sort_values("id").iterrows():
+        tickers = _ticker_list(r.get("tickers"))
+        body = r.get("body")
+        rows.append(
+            {
+                "id": str(r["id"]),
+                "source": str(r["source"]),
+                "n_tickers": len(tickers),
+                "tickers": tickers,
+                "has_body": isinstance(body, str) and bool(body.strip()),
+                "cluster_size": _cluster_size(r.get("extra")),
+            }
+        )
+    return {
+        "row_count": len(news),
+        "columns": sorted(news.columns),
+        "by_source": {str(k): int(v) for k, v in sorted(by_source.items())},
+        "n_tickers_total": sum(len(_ticker_list(t)) for t in news.get("tickers", [])),
         "rows": rows,
     }

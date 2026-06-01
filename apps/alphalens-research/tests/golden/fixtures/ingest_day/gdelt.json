@@ -1,0 +1,37 @@
+{
+  "https://api.gdeltproject.org/api/v2/doc/doc?query=%28%22quantum+computing%22+OR+%22AI+accelerator%22%29&mode=artlist&format=json&maxrecords=100&timespan=1d&sort=datedesc": {
+    "articles": [
+      {
+        "domain": "example.com",
+        "language": "English",
+        "seendate": "20260529T130000Z",
+        "socialimage": "",
+        "sourcecountry": "US",
+        "title": "Quantum computing startup reports error-correction milestone",
+        "url": "https://example.com/news/quantum-milestone"
+      },
+      {
+        "domain": "example.com",
+        "language": "English",
+        "seendate": "20260529T150000Z",
+        "socialimage": "",
+        "sourcecountry": "US",
+        "title": "New AI accelerator chip targets inference workloads",
+        "url": "https://example.com/news/ai-accelerator-launch"
+      }
+    ]
+  },
+  "https://api.gdeltproject.org/api/v2/doc/doc?query=%28%22semiconductor%22+OR+%22chip+foundry%22%29&mode=artlist&format=json&maxrecords=100&timespan=1d&sort=datedesc": {
+    "articles": [
+      {
+        "domain": "example.com",
+        "language": "English",
+        "seendate": "20260529T140000Z",
+        "socialimage": "",
+        "sourcecountry": "US",
+        "title": "Chip foundry expands advanced-node capacity",
+        "url": "https://example.com/news/foundry-capacity"
+      }
+    ]
+  }
+}
