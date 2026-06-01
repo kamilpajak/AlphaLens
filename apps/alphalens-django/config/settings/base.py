@@ -87,6 +87,15 @@ ALPHALENS_FEEDBACK_DB = env(
     default=str(Path.home() / ".alphalens" / "feedback.db"),
 )
 
+# Server-side VIX regime cache (v2 PR-2). Read-only on the feedback POST hot
+# path via regime.get_cached_vix; refreshed out-of-band by
+# `alphalens cache refresh-vix`. Same host ``~/.alphalens`` mount + container
+# HOME trap as ALPHALENS_FEEDBACK_DB above.
+ALPHALENS_VIX_CACHE = env(
+    "ALPHALENS_VIX_CACHE",
+    default=str(Path.home() / ".alphalens" / "macro" / "vix_regime_cache.json"),
+)
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 LANGUAGE_CODE = "en-us"

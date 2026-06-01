@@ -22,7 +22,13 @@ def client() -> APIClient:
 @pytest.fixture
 def feedback_db(tmp_path: Path):
     path = tmp_path / "feedback.db"
-    with override_settings(ALPHALENS_FEEDBACK_DB=str(path)):
+    # Also pin ALPHALENS_VIX_CACHE to a (by-default absent) tmp path so the
+    # POST regime stamp is deterministically "unknown" unless a test seeds it
+    # — never reads a real ~/.alphalens VIX cache on the dev machine.
+    with override_settings(
+        ALPHALENS_FEEDBACK_DB=str(path),
+        ALPHALENS_VIX_CACHE=str(tmp_path / "vix_regime_cache.json"),
+    ):
         yield path
 
 
@@ -245,6 +251,54 @@ class TestOutcomeFields:
         wire_keys = set(_serialise_decision(d).keys())
         schema_keys = set(DecisionResponseSerializer().fields.keys())
         assert wire_keys == schema_keys
+
+
+class TestPostDecisionWithVixCache:
+    """v2 PR-2: market_regime_at_entry is stamped from the server-side VIX cache.
+
+    The hot path reads a local JSON cache (no network) and degrades to
+    "unknown" on any miss/stale/unreadable case — never blocking the decision.
+    """
+
+    def _seed_vix(self, tmp_path: Path, *, vix, age_hours: float = 0.0):
+        import datetime as dt
+        import json
+
+        fetched_at = dt.datetime.now(dt.UTC) - dt.timedelta(hours=age_hours)
+        (tmp_path / "vix_regime_cache.json").write_text(
+            json.dumps(
+                {
+                    "observation_date": "2026-05-29",
+                    "vix": vix,
+                    "fetched_at": fetched_at.isoformat(),
+                    "series": "VIXCLS",
+                }
+            )
+        )
+
+    def test_stamps_unknown_when_cache_absent(self, client, feedback_db, tmp_path):
+        resp = _post_interested(client)
+        assert resp.status_code == 201
+        assert resp.json()["market_regime_at_entry"] == "unknown"
+
+    def test_stamps_bucket_from_fresh_cache(self, client, feedback_db, tmp_path):
+        self._seed_vix(tmp_path, vix=22.0)
+        resp = _post_interested(client)
+        assert resp.status_code == 201
+        assert resp.json()["market_regime_at_entry"] == "mid"
+
+    def test_stamps_unknown_when_cache_stale(self, client, feedback_db, tmp_path):
+        self._seed_vix(tmp_path, vix=22.0, age_hours=97)
+        resp = _post_interested(client)
+        assert resp.status_code == 201
+        assert resp.json()["market_regime_at_entry"] == "unknown"
+
+    def test_does_not_block_on_unreadable_cache(self, client, feedback_db, tmp_path):
+        (tmp_path / "vix_regime_cache.json").write_text("not json {")
+        resp = _post_interested(client)
+        # Never 500 — the decision still persists, regime degrades to unknown.
+        assert resp.status_code == 201
+        assert resp.json()["market_regime_at_entry"] == "unknown"
 
 
 class TestTaxonomyEndpoint:
