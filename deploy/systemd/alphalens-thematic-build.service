@@ -51,6 +51,7 @@ ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
     -e TELEGRAM_BOT_TOKEN \
     -e TELEGRAM_CHAT_ID \
     -e SEC_EDGAR_USER_AGENT \
+    -e FRED_API_KEY \
     -v %h/.alphalens:/app/home/.alphalens \
     --entrypoint /bin/bash \
     alphalens-pipeline:latest \

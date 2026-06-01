@@ -45,4 +45,17 @@ alphalens thematic score
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic brief"
 alphalens thematic brief
 
+# VIX regime cache refresh (Track A v2 PR-2). Best-effort: a FRED blip must
+# NOT fail the whole thematic build (the brief is already written above). The
+# feedback POST path degrades to a "unknown" regime stamp if this cache goes
+# stale, so `|| true` under `set -e` keeps a transient FRED error non-fatal.
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] cache refresh-vix"
+# Warn to stderr so the failure is visible in journald (StandardError=journal)
+# even though the step is non-fatal. A persistently dead refresher ages the
+# cache past 96h and the feedback POST path degrades to "unknown" — a
+# Prometheus staleness alert on the cache's fetched_at is a tracked follow-up
+# (live alert rules are hand-synced on the VPS, outside this repo).
+alphalens cache refresh-vix \
+    || echo "WARN: vix refresh failed; regime stamps degrade to unknown" >&2
+
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] DONE"
