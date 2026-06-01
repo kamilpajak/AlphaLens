@@ -162,6 +162,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    # Postgres mirrors the prod engine (deploy/docker/django-prod uses
+    # postgres:16-alpine). Only the migration-skew step opts into it via
+    # DATABASE_URL; the main pytest step leaves DATABASE_URL unset and stays
+    # on SQLite so the default suite is fast and the local `pytest` run needs
+    # no DB. The skew reproduction (#331/#340 UndefinedColumn) is
+    # Postgres-specific — SQLite RenameField rebuilds the table and can't
+    # raise it — so it is skipped everywhere the engine isn't Postgres.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: alphalens
+          POSTGRES_PASSWORD: alphalens
+          POSTGRES_DB: alphalens_skew_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alphalens"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -193,6 +215,19 @@ jobs:
           uv run coverage run --source=core,auth_cf,briefs,config,feedback,market -m pytest -q
           uv run coverage report
           uv run coverage xml -o coverage.xml
+
+      - name: Migration-skew reproduction (Postgres)
+        working-directory: apps/alphalens-django
+        # Pins the #331/#340 deploy-env-drift incident against the REAL engine:
+        # a stale rebuild-cache image whose Brief model disagrees with the
+        # migrated schema must FAIL LOUD (UndefinedColumn) and write zero rows,
+        # never a silent partial cache. DATABASE_URL flips this run to the
+        # Postgres service; test_migrate_skew.py self-skips on any non-Postgres
+        # engine, so it only executes here. Separate step (not the coverage
+        # run) keeps the default suite on SQLite.
+        env:
+          DATABASE_URL: postgres://alphalens:alphalens@localhost:5432/alphalens_skew_test
+        run: uv run pytest briefs/tests/test_migrate_skew.py -v
 
       - name: Upload django coverage artifact
         uses: actions/upload-artifact@v7
