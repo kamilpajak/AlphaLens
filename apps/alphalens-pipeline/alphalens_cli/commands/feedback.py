@@ -129,3 +129,54 @@ def join_outcomes_command(
         f"{report.n_matched}/{report.n_decisions} decisions stamped "
         f"({report.n_plans} plans, {report.n_unmatched} left NULL)."
     )
+
+
+@feedback_app.command(name="compute-shadow-returns")
+def compute_shadow_returns_command(
+    date: str = typer.Option(
+        None,
+        "--date",
+        help="Brief date YYYY-MM-DD to price (default: today UTC).",
+    ),
+    account: str = typer.Option(
+        "test",
+        "--account",
+        help="Alpaca paper account the live chain runs on ('test').",
+    ),
+    ledger: Path = typer.Option(
+        Path.home() / ".alphalens" / "feedback.db",
+        "--ledger",
+        help="Override the default feedback ledger location.",
+    ),
+    paper_ledger: Path = typer.Option(
+        Path.home() / ".alphalens" / "paper_ledger.db",
+        "--paper-ledger",
+        help="Override the default paper-trade ledger location.",
+    ),
+) -> None:
+    """Stamp shadow_return + realized_return onto decisions (Track A v2 PR-3).
+
+    Pulls Polygon minute bars for the arrival + horizon opening windows and
+    stamps the arrival-price counterfactual. A SEPARATE pass from join-outcomes
+    (kept apart because Polygon is rate-limited and the horizon must have
+    matured) — schedule it nightly, after the holding horizon has closed. The
+    run is skipped with a loud warning if the horizon is not yet in the past.
+    Per-ticker fetch failures skip + warn; one bad ticker never aborts the run.
+    """
+    import datetime as dt
+
+    from alphalens_pipeline.feedback.shadow_return import compute_shadow_returns
+
+    brief_date = dt.date.fromisoformat(date) if date else dt.datetime.now(dt.UTC).date()
+    report = compute_shadow_returns(ledger, paper_ledger, brief_date=brief_date, account=account)
+    if not report.matured:
+        typer.echo(
+            f"shadow-returns {brief_date} account={account}: horizon not matured — "
+            "skipped (0 priced). Re-run after the holding horizon closes."
+        )
+        return
+    typer.echo(
+        f"shadow-returns {brief_date} account={account}: {report.n_priced} priced, "
+        f"{report.n_skipped} skipped, {report.n_no_bars} no-bars "
+        f"({report.n_outcomes} matured outcomes)."
+    )

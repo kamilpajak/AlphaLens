@@ -454,6 +454,87 @@ class PolygonClientOptionsContractsTests(unittest.TestCase):
         self.assertEqual(params["limit"], 100)
 
 
+class PolygonClientGetAggRangeTests(unittest.TestCase):
+    """``get_agg_range`` minute-bar aggregates (Track A v2 PR-3 shadow return)."""
+
+    _START = dt.datetime(2026, 5, 29, 13, 30, tzinfo=dt.UTC)
+    _END = dt.datetime(2026, 5, 29, 14, 0, tzinfo=dt.UTC)
+
+    def test_builds_path_with_ms_epoch_and_uppercases_ticker(self):
+        session = mock.Mock()
+        session.get.return_value = _ok({"results": [{"t": 1, "c": 100.0, "v": 10}]})
+        client = _make_client(session=session)
+
+        bars = client.get_agg_range(ticker="aapl", start=self._START, end=self._END)
+
+        self.assertEqual(bars, [{"t": 1, "c": 100.0, "v": 10}])
+        url = session.get.call_args_list[0].args[0]
+        # Ticker upper-cased; from/to are millisecond epochs in the path.
+        from_ms = int(self._START.timestamp() * 1000)
+        to_ms = int(self._END.timestamp() * 1000)
+        self.assertIn(f"/v2/aggs/ticker/AAPL/range/1/minute/{from_ms}/{to_ms}", url)
+
+    def test_default_query_params(self):
+        session = mock.Mock()
+        session.get.return_value = _ok({"results": []})
+        client = _make_client(session=session)
+
+        client.get_agg_range(ticker="AAPL", start=self._START, end=self._END)
+
+        params = session.get.call_args_list[0].kwargs.get("params") or {}
+        # adjusted=false (raw intraday fidelity), ascending, max page size.
+        self.assertEqual(params["adjusted"], "false")
+        self.assertEqual(params["sort"], "asc")
+        self.assertEqual(params["limit"], 50000)
+
+    def test_naive_datetime_rejected(self):
+        client = _make_client(session=mock.Mock())
+        with self.assertRaises(ValueError):
+            client.get_agg_range(
+                ticker="AAPL", start=dt.datetime(2026, 5, 29, 13, 30), end=self._END
+            )
+
+    def test_empty_results_returns_empty_list_not_raise(self):
+        # A name with no bars in the window is a legitimate skip handled by the
+        # caller — must NOT raise.
+        session = mock.Mock()
+        session.get.return_value = _ok({"resultsCount": 0})  # no "results" key
+        client = _make_client(session=session)
+        self.assertEqual(client.get_agg_range(ticker="AAPL", start=self._START, end=self._END), [])
+
+    def test_follows_next_url_and_strips_apikey(self):
+        session = mock.Mock()
+        session.get.side_effect = [
+            _ok(
+                {
+                    "results": [{"t": 1, "c": 100.0, "v": 10}],
+                    "next_url": "https://api.polygon.io/v2/aggs/ticker/AAPL/range/1/minute/1/2?cursor=c2&apiKey=leaked",
+                }
+            ),
+            _ok({"results": [{"t": 2, "c": 101.0, "v": 20}]}),
+        ]
+        client = _make_client(session=session)
+
+        bars = client.get_agg_range(ticker="AAPL", start=self._START, end=self._END, max_pages=10)
+        self.assertEqual(len(bars), 2)
+        second_url = session.get.call_args_list[1].args[0]
+        self.assertNotIn("apiKey", second_url)
+        self.assertNotIn("leaked", second_url)
+
+    def test_max_pages_terminates_pagination(self):
+        session = mock.Mock()
+        session.get.return_value = _ok(
+            {
+                "results": [{"t": 1, "c": 100.0, "v": 10}],
+                "next_url": "https://api.polygon.io/v2/aggs/ticker/AAPL/range/1/minute/1/2?cursor=loop",
+            }
+        )
+        client = _make_client(session=session)
+        bars = client.get_agg_range(ticker="AAPL", start=self._START, end=self._END, max_pages=3)
+        self.assertEqual(len(session.get.call_args_list), 3)
+        self.assertEqual(len(bars), 3)
+
+
 class PolygonClientGetJsonEscapeHatchTests(unittest.TestCase):
     def test_get_json_returns_raw_payload(self):
         session = mock.Mock()

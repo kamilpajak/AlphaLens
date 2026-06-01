@@ -85,7 +85,7 @@ def _serialise_decision(d: Decision) -> dict:
         "fill_status": d.fill_status,
         "exit_kind": d.exit_kind,
         "shadow_return": d.shadow_return,
-        "realized_pnl": d.realized_pnl,
+        "realized_return": d.realized_return,
         "outcome_computed_at": (
             d.outcome_computed_at.isoformat() if d.outcome_computed_at else None
         ),

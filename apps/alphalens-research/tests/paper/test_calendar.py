@@ -27,10 +27,13 @@ import unittest
 
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
+    advance_trading_sessions,
     is_half_day,
     is_trading_day,
     next_trading_open,
     previous_trading_day,
+    session_on_or_after,
+    session_open_utc,
     trading_days_elapsed,
 )
 
@@ -235,6 +238,78 @@ class TestTradingDaysElapsed(unittest.TestCase):
         self.assertEqual(
             trading_days_elapsed(dt.date(2026, 6, 6), dt.date(2026, 6, 13)),
             5,
+        )
+
+
+# ---------------------------------------------------------------- session_on_or_after
+
+
+class TestSessionOnOrAfterXNYS(unittest.TestCase):
+    def test_trading_day_returns_itself(self):
+        # 2026-05-29 is a normal Friday session — on-or-after is the day itself
+        # (unlike next_trading_open, which would skip to the following session).
+        self.assertEqual(session_on_or_after(dt.date(2026, 5, 29)), dt.date(2026, 5, 29))
+
+    def test_saturday_rolls_to_monday(self):
+        self.assertEqual(session_on_or_after(dt.date(2026, 5, 30)), dt.date(2026, 6, 1))
+
+    def test_holiday_rolls_forward(self):
+        # Memorial Day Monday 2026-05-25 closed -> next session Tue 2026-05-26.
+        self.assertEqual(session_on_or_after(dt.date(2026, 5, 25)), dt.date(2026, 5, 26))
+
+
+# ---------------------------------------------------------------- advance_trading_sessions
+
+
+class TestAdvanceTradingSessionsXNYS(unittest.TestCase):
+    def test_zero_returns_session_on_or_after(self):
+        self.assertEqual(advance_trading_sessions(dt.date(2026, 5, 30), 0), dt.date(2026, 6, 1))
+
+    def test_one_session_after_friday_skips_weekend(self):
+        self.assertEqual(advance_trading_sessions(dt.date(2026, 5, 29), 1), dt.date(2026, 6, 1))
+
+    def test_five_sessions_spanning_memorial_day(self):
+        # Base Fri 2026-05-22; +1 Tue 5-26 (Mon 5-25 holiday skipped), +2 Wed,
+        # +3 Thu, +4 Fri 5-29, +5 Mon 2026-06-01. Calendar-day math would land
+        # on 5-27; trading-session advance lands on 6-01.
+        self.assertEqual(advance_trading_sessions(dt.date(2026, 5, 22), 5), dt.date(2026, 6, 1))
+
+    def test_negative_n_rejected(self):
+        with self.assertRaises(ValueError):
+            advance_trading_sessions(dt.date(2026, 5, 29), -1)
+
+
+# ---------------------------------------------------------------- session_open_utc
+
+
+class TestSessionOpenUtcXNYS(unittest.TestCase):
+    def test_summer_session_opens_1330_utc(self):
+        # 2026-05-29 is EDT: 09:30 ET == 13:30 UTC.
+        open_utc = session_open_utc(dt.date(2026, 5, 29))
+        self.assertEqual(open_utc.tzinfo, dt.UTC)
+        self.assertEqual((open_utc.hour, open_utc.minute), (13, 30))
+        self.assertEqual(open_utc.date(), dt.date(2026, 5, 29))
+
+    def test_non_session_date_raises(self):
+        # Unlike session_on_or_after, this requires an EXACT session date so a
+        # caller can't silently anchor a window to the wrong day.
+        with self.assertRaises(ValueError):
+            session_open_utc(dt.date(2026, 5, 30))  # Saturday
+
+
+# ---------------------------------------------------------------- XWAR parity
+
+
+class TestSessionHelpersXWAR(unittest.TestCase):
+    def test_session_on_or_after_xwar_holiday(self):
+        # Three Kings Day 2025-01-06 closed on GPW -> next session 2025-01-07.
+        self.assertEqual(
+            session_on_or_after(dt.date(2025, 1, 6), exchange="XWAR"), dt.date(2025, 1, 7)
+        )
+
+    def test_advance_one_session_xwar(self):
+        self.assertEqual(
+            advance_trading_sessions(dt.date(2025, 1, 6), 1, exchange="XWAR"), dt.date(2025, 1, 8)
         )
 
 

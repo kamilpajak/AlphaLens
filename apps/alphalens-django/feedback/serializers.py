@@ -68,7 +68,7 @@ class DecisionResponseSerializer(serializers.Serializer):
     fill_status = serializers.CharField(allow_null=True)
     exit_kind = serializers.CharField(allow_null=True)
     shadow_return = serializers.FloatField(allow_null=True)
-    realized_pnl = serializers.FloatField(allow_null=True)
+    realized_return = serializers.FloatField(allow_null=True)
     outcome_computed_at = serializers.DateTimeField(allow_null=True)
 
 

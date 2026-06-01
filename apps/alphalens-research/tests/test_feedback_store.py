@@ -273,12 +273,41 @@ _V1_DECISIONS_DDL = """
     )
 """
 
+# gen-1 schema (PR-1: 21 columns incl. the original ``realized_pnl``) — used
+# to exercise the gen-1 -> gen-2 column rename to ``realized_return``.
+_GEN1_DECISIONS_DDL = """
+    CREATE TABLE decisions (
+        id TEXT PRIMARY KEY,
+        brief_date TEXT NOT NULL,
+        ticker TEXT NOT NULL,
+        theme TEXT NOT NULL,
+        surfaced_at TEXT NOT NULL,
+        action TEXT NOT NULL,
+        action_at TEXT NOT NULL,
+        dismiss_category TEXT,
+        dismiss_reason TEXT,
+        dismiss_note TEXT,
+        confidence_subjective INTEGER,
+        paper_trade_plan_id TEXT,
+        position_size_usd REAL,
+        entry_price REAL,
+        market_regime_at_entry TEXT,
+        outcome_plan_id TEXT,
+        fill_status TEXT,
+        exit_kind TEXT,
+        shadow_return REAL,
+        realized_pnl REAL,
+        outcome_computed_at TEXT,
+        UNIQUE(brief_date, ticker, theme)
+    );
+"""
+
 _OUTCOME_COLUMN_NAMES = {
     "outcome_plan_id",
     "fill_status",
     "exit_kind",
     "shadow_return",
-    "realized_pnl",
+    "realized_return",
     "outcome_computed_at",
 }
 
@@ -298,7 +327,7 @@ class TestOutcomeColumnsSchema(unittest.TestCase):
             path = Path(td) / "feedback.db"
             with FeedbackStore.open(path) as fb:
                 user_version = fb.conn.execute("PRAGMA user_version").fetchone()[0]
-                self.assertEqual(user_version, 1)
+                self.assertEqual(user_version, 2)
 
     def test_fresh_db_open_twice_does_not_raise_duplicate_column(self):
         # Migration must be idempotent: a fresh DB already carries the
@@ -317,7 +346,8 @@ class TestOutcomeColumnsSchema(unittest.TestCase):
     def test_legacy_v1_db_gets_columns_via_alter_and_bumps_user_version(self):
         # Hand-roll a v1 DB (15 columns, user_version=0) then open through
         # FeedbackStore. The ALTER block must add the 6 outcome columns and
-        # set user_version=1 — pins the documented legacy migration path.
+        # set user_version to the current generation — pins the documented
+        # legacy migration path.
         import sqlite3
 
         with tempfile.TemporaryDirectory() as td:
@@ -338,12 +368,42 @@ class TestOutcomeColumnsSchema(unittest.TestCase):
             with FeedbackStore.open(path) as fb:
                 cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
                 self.assertTrue(_OUTCOME_COLUMN_NAMES.issubset(cols))
-                self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 1)
+                self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 2)
                 # legacy row still readable, outcome fields default NULL
                 legacy = fb.get("legacy-1")
                 self.assertIsNotNone(legacy)
                 self.assertIsNone(legacy.fill_status)
                 self.assertIsNone(legacy.outcome_plan_id)
+
+    def test_gen1_db_renames_realized_pnl_to_realized_return(self):
+        # gen-1 (PR-1) shipped a ``realized_pnl`` column (dollars, never
+        # populated). gen-2 (PR-3) renames it to ``realized_return`` (a decimal
+        # fraction). The rename must fire on a gen-1 DB, drop the old name, keep
+        # the new one, and NOT create a duplicate empty ``realized_return``.
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "feedback.db"
+            raw = sqlite3.connect(str(path))
+            raw.executescript(_GEN1_DECISIONS_DDL)
+            raw.execute("PRAGMA user_version = 1")
+            raw.execute(
+                """INSERT INTO decisions(id, brief_date, ticker, theme, surfaced_at,
+                                          action, action_at)
+                   VALUES ('g1-1', '2026-05-20', 'NVDA', 'ai',
+                           '2026-05-20T06:30:00+00:00', 'interested',
+                           '2026-05-20T08:00:00+00:00')"""
+            )
+            raw.commit()
+            raw.close()
+
+            with FeedbackStore.open(path) as fb:
+                cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
+                self.assertIn("realized_return", cols)
+                self.assertNotIn("realized_pnl", cols)
+                self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 2)
+                # legacy row still reads, realized_return defaults NULL
+                self.assertIsNone(fb.get("g1-1").realized_return)
 
 
 class TestOutcomeRoundTrip(unittest.TestCase):
@@ -364,7 +424,7 @@ class TestOutcomeRoundTrip(unittest.TestCase):
             self.assertIsNone(fetched.fill_status)
             self.assertIsNone(fetched.exit_kind)
             self.assertIsNone(fetched.shadow_return)
-            self.assertIsNone(fetched.realized_pnl)
+            self.assertIsNone(fetched.realized_return)
             self.assertIsNone(fetched.outcome_computed_at)
 
     def test_stamp_outcome_persists_join_fields(self):
@@ -383,9 +443,75 @@ class TestOutcomeRoundTrip(unittest.TestCase):
             self.assertEqual(fetched.exit_kind, "TP_HIT")
             self.assertEqual(fetched.outcome_plan_id, "42")
             self.assertEqual(fetched.outcome_computed_at, stamped_at)
-            # PR-1 leaves the return columns for the deferred PR-3 computation
+            # The fill-status pass leaves the return columns untouched (the
+            # shadow pass fills them) — the sentinel default keeps them NULL.
             self.assertIsNone(fetched.shadow_return)
-            self.assertIsNone(fetched.realized_pnl)
+            self.assertIsNone(fetched.realized_return)
+
+    def test_stamp_outcome_persists_shadow_and_realized_return(self):
+        # The PR-3 shadow pass passes the return kwargs explicitly — they
+        # round-trip as decimal fractions.
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(_make_decision())
+            fb.stamp_outcome(
+                row_id,
+                fill_status="FILLED",
+                exit_kind="TP_HIT",
+                outcome_plan_id="42",
+                outcome_computed_at=dt.datetime(2026, 6, 1, 21, 30, tzinfo=UTC),
+                shadow_return=0.042,
+                realized_return=0.031,
+            )
+            fetched = fb.get(row_id)
+            self.assertEqual(fetched.shadow_return, 0.042)
+            self.assertEqual(fetched.realized_return, 0.031)
+
+    def test_fill_status_pass_preserves_existing_shadow_return(self):
+        # Two-pass safety: the nightly shadow pass stamps shadow_return, then a
+        # later cheap fill-status re-run (omitting the return kwargs) must NOT
+        # wipe it back to NULL. The sentinel default keeps it out of the SET.
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(_make_decision())
+            now = dt.datetime(2026, 6, 1, 21, 30, tzinfo=UTC)
+            fb.stamp_outcome(
+                row_id,
+                fill_status="FILLED",
+                exit_kind="TP_HIT",
+                outcome_plan_id="42",
+                outcome_computed_at=now,
+                shadow_return=0.05,
+                realized_return=0.04,
+            )
+            # cheap fill-status re-run — no shadow/realized kwargs
+            fb.stamp_outcome(
+                row_id,
+                fill_status="FILLED",
+                exit_kind="TP_HIT",
+                outcome_plan_id="42",
+                outcome_computed_at=now + dt.timedelta(hours=1),
+            )
+            fetched = fb.get(row_id)
+            self.assertEqual(fetched.shadow_return, 0.05)
+            self.assertEqual(fetched.realized_return, 0.04)
+
+    def test_stamp_outcome_writes_explicit_none_for_unfilled(self):
+        # An UNFILLED row has no realised price, so the shadow pass passes
+        # realized_return=None explicitly — which IS written (distinct from
+        # "omitted"). shadow_return for an unfilled row is still populated.
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(_make_decision())
+            fb.stamp_outcome(
+                row_id,
+                fill_status="UNFILLED",
+                exit_kind="UNFILLED",
+                outcome_plan_id="42",
+                outcome_computed_at=dt.datetime(2026, 6, 1, 21, 30, tzinfo=UTC),
+                shadow_return=-0.012,
+                realized_return=None,
+            )
+            fetched = fb.get(row_id)
+            self.assertEqual(fetched.shadow_return, -0.012)
+            self.assertIsNone(fetched.realized_return)
 
     def test_stamp_outcome_does_not_revalidate_decision(self):
         # The write path is a targeted UPDATE, not a Decision rebuild, so a

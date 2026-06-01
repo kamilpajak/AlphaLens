@@ -193,6 +193,65 @@ class PolygonClient:
             pages += 1
         return rows
 
+    def get_agg_range(
+        self,
+        *,
+        ticker: str,
+        start: dt.datetime,
+        end: dt.datetime,
+        multiplier: int = 1,
+        timespan: str = "minute",
+        adjusted: bool = False,
+        sort: str = "asc",
+        limit: int = 50000,
+        max_pages: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Polygon ``/v2/aggs/ticker/{ticker}/range/...`` OHLCV aggregate bars.
+
+        Used by the feedback shadow-return computation (Track A v2 PR-3) to
+        pull minute bars for the arrival + horizon opening windows. Each
+        returned dict is a raw Polygon agg bar: ``t`` (ms epoch, bar START),
+        ``o``/``h``/``l``/``c`` (OHLC), ``v`` (volume), ``vw`` (per-bar VWAP),
+        ``n`` (txn count).
+
+        ``start`` / ``end`` MUST be tz-aware; they are converted to
+        millisecond-since-epoch for the path (unambiguous for minute bars).
+        ``adjusted=False`` returns raw (split/dividend-unadjusted) bars — the
+        shadow-return horizon is short (days) so the caller accepts the rare
+        corporate-action distortion and guards against it separately.
+
+        Empty windows return ``[]`` (NOT an error): a name with no bars in the
+        window is a legitimate skip the caller handles. Pagination follows
+        ``next_url`` with the ``apiKey`` query param stripped, identical to
+        :meth:`get_news_range`.
+
+        NOTE (operational): Polygon's free / Basic plan serves only PAST-day
+        minute aggregates, not the current session. Callers must request
+        windows that have fully closed — the feedback shadow-return job gates
+        on a matured horizon before calling this.
+        """
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("start and end must be timezone-aware")
+        from_ms = int(start.timestamp() * 1000)
+        to_ms = int(end.timestamp() * 1000)
+        path = f"/v2/aggs/ticker/{ticker.upper()}/range/{multiplier}/{timespan}/{from_ms}/{to_ms}"
+        params: dict[str, Any] = {
+            "adjusted": "true" if adjusted else "false",
+            "sort": sort,
+            "limit": limit,
+        }
+        bars: list[dict[str, Any]] = []
+        url: str | None = f"{_BASE_URL}{path}"
+        pages = 0
+        while url and pages < max_pages:
+            payload = self._get_json(url, params=params if pages == 0 else None)
+            results = payload.get("results") or []
+            bars.extend(results)
+            next_url = payload.get("next_url")
+            url = _strip_apikey_from_url(next_url) if next_url else None
+            pages += 1
+        return bars
+
     def get_options_contracts(
         self,
         *,

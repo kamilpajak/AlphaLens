@@ -23,9 +23,9 @@ never-filled candidates are recorded, not dropped — fill-only learning is
 adversely selected per Glosten/Linnainmaa), ``exit_kind`` (verbatim paper
 disposition), ``outcome_plan_id`` (the joined ``plans.plan_id``) and
 ``outcome_computed_at`` (last-joined-at provenance). ``shadow_return`` +
-``realized_pnl`` are deliberately left NULL in PR-1 — no minute-bar
-arrival-price source exists yet, so the §4 counterfactual computation is
-deferred to a later PR.
+``realized_return`` are deliberately left untouched here — they are filled by
+the separate PR-3 ``shadow_return.compute_shadow_returns`` pass (minute-bar
+arrival-price counterfactual), which this cheap fill-status join never reads.
 
 Decoupled no-match is normal
 ----------------------------
