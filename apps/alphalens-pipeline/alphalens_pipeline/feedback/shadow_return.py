@@ -62,7 +62,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from alphalens_pipeline.feedback.outcome_join import _EXIT_KIND_TO_FILL_STATUS
+from alphalens_pipeline.feedback.outcome_join import EXIT_KIND_TO_FILL_STATUS
 from alphalens_pipeline.feedback.store import FeedbackStore
 from alphalens_pipeline.paper import ledger as paper_ledger
 from alphalens_pipeline.paper.calendar import (
@@ -220,11 +220,11 @@ def compute_shadow_returns(
             outcome = paper_ledger.fetch_outcome_for_plan(conn, plan["plan_id"])
             if outcome is None:
                 continue  # plan still open — nothing to price yet
-            fill_status = _EXIT_KIND_TO_FILL_STATUS.get(outcome["exit_kind"])
+            fill_status = EXIT_KIND_TO_FILL_STATUS.get(outcome["exit_kind"])
             if fill_status is None:
                 logger.warning(
                     "shadow-return: unmapped exit_kind=%r (plan_id=%s) — skipping; "
-                    "extend _EXIT_KIND_TO_FILL_STATUS.",
+                    "extend EXIT_KIND_TO_FILL_STATUS.",
                     outcome["exit_kind"],
                     plan["plan_id"],
                 )

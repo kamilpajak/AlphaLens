@@ -220,8 +220,8 @@ class TestOutcomeJoin(unittest.TestCase):
         row_id = _seed_decision(self.fb_path)
         _seed_plan(self.ledger_path, exit_kind="TP_HIT")
         # Simulate TP_HIT being absent from the map (stand-in for a new kind).
-        patched = {k: v for k, v in oj._EXIT_KIND_TO_FILL_STATUS.items() if k != "TP_HIT"}
-        with mock.patch.object(oj, "_EXIT_KIND_TO_FILL_STATUS", patched):
+        patched = {k: v for k, v in oj.EXIT_KIND_TO_FILL_STATUS.items() if k != "TP_HIT"}
+        with mock.patch.object(oj, "EXIT_KIND_TO_FILL_STATUS", patched):
             with self.assertLogs("alphalens_pipeline.feedback.outcome_join", level="WARNING") as cm:
                 report = self._join()
         self.assertEqual(report.n_matched, 0)
