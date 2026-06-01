@@ -138,8 +138,8 @@ flowchart TD
     B["<b>User clicks</b> Interested / Dismissed<br/><small>+ category + reason</small>"]
     C[("<b>feedback.decisions</b><br/><small>SQLite ~/.alphalens/feedback.db</small>")]
     D["<b>Paper-trade plan</b><br/><small>Alpaca paper</small>"]
-    E["<b>Reconciler job</b><br/><small>close · PnL · exit kind</small>"]
-    F["<b>Outcome join</b><br/><small>v2 background job</small>"]
+    E["<b>Reconciler job</b><br/><small>close · PnL · exit kind · fill-status</small>"]
+    F["<b>Outcome join</b><br/><small>v2 background job<br/>shadow_return + fill overlay</small>"]
     G["<b>L3 weekly review SPA</b><br/><small>win-rate per signal combo<br/>calibration curve · theme rotation<br/>your dismiss-other %</small>"]
     H["<b>Re-weighting layer4_weighted_score</b><br/><small>after ≥50 decisions · Bayesian update</small>"]
 
