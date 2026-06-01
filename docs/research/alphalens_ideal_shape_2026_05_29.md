@@ -145,13 +145,15 @@ flowchart TD
 
     A --> B
     B --> C
-    B --> D
+    A -->|"auto-submit · all verified candidates · independent of the click"| D
     D --> E
     E --> F
     C --> F
     F --> G
     G --> H
 ```
+
+**The paper-trade plan branches off the brief (`A → D`), not off the user click.** The harness auto-submits every verified candidate on its own schedule (plan 13:05 / submit 13:25 UTC, PR #317/#343) — it never consults the feedback ledger. That keeps the measurement instrument unbiased: it shadow-trades names the user never clicked, which is exactly what an honest feedback signal needs (§4 non-fills below; §6). The user's decision (`B → C`) and the paper outcomes (`D → E`) are **parallel** inputs that rejoin only at the outcome-join (`F`) via `paper_trade_plan_id`.
 
 Without a feedback ledger the model has no signal on what works. Re-weighting under 50 decisions is statistical noise. **That is why PR #292 is on the critical path.**
 
@@ -383,6 +385,7 @@ Two distinct L1 streams exist (the table below keeps them separate): **(a) EDGAR
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-06-01 | §4 diagram — paper plan branches off the brief (`A → D`), not the user click (`B → D`) | Verified against code: `paper/planner.py` reads verified candidates straight from the thematic-brief parquet and never consults the feedback ledger (grep `feedback\|decision\|interested` in `paper/` is empty). The harness auto-submits ALL verified candidates (plan 13:05 / submit 13:25 UTC) independent of any Interested/Dismissed click — correct for an unbiased measurement instrument (it must shadow-trade unclicked names; ties to the §4 non-fill discussion). The old `B → D` edge implied user-gated submission, contradicting both code and design. Fixed edge + added a note: decision (`B → C`) and paper outcomes (`D → E`) are parallel, rejoining only at the outcome-join (`F`). |
 | 2026-06-01 | §4 + §8 L3 — non-fill capture in the outcome-join (shadow-return + execution overlay) | After a zen (DeepSeek v4 Pro) + Perplexity (execution-microstructure literature) review of whether paper candidates that NEVER FILLED (limit never touched, price ran away) belong in the feedback ledger. Verdict: yes, required — fill-only learning is adversely-selected toward weak/mean-reverting setups (Glosten/Linnainmaa winner's-curse of limit fills) and blind to runaway catalyst winners. §4 gains the decomposition: every candidate carries a `shadow_return` (entry at arrival-price VWAP, exit at horizon, no TP — the Perold/Almgren-Chriss "missed-trade opportunity cost", NOT a look-ahead oracle); fill becomes an execution overlay (`realized_pnl − shadow_return` = execution efficiency); scorer re-weights on `shadow_return`. Distinguish genuine momentum from TTL-censoring. limit→market gated on breakeven-fill-probability (slippage re-introduction = the §6 villain). §8 L3 adds an "Execution calibration" row + notes re-weighting must use shadow_return. Design-now (capture columns) / build-later (gating at ≥50). Corrected my first framing, which was oracle-tainted (post-hoc window). |
 | 2026-06-01 | Feedback ledger v1 status sync — PR #292 merged | PR #292 squash-merged to main (`214a77f`). §8 L2 Feedback row flipped from "in-flight" to ✅ SHIPPED (Interested/Dismissed + 2-level taxonomy + `/v1/feedback/*` REST + monitoring CLI live; Gap now lists the v2 deferrals: outcome-join, VIX-cache regime stamp, `layer4_weighted_score` re-weighting ≥50 decisions). §9 Track A v1 ▶→✅; §10 near-term dropped "PR #292 merge" from outstanding + item 1 marked shipped. Track A v2/v3 + Track C (L3, gated ≥30 decisions) still pending. |
 | 2026-05-29 | Document created | Capture vision after the "ideal-shape" session + Perplexity research; parent memo for all the epics below |
