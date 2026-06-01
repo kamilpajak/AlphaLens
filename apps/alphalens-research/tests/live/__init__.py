@@ -81,6 +81,13 @@ def run_probes(
          transient failures dominate, the vendor / network is too degraded
          for the probe to prove anything, so it fails loudly rather than
          passing on near-empty data.
+
+    Single-item probes (e.g. SEC, Polygon) have ``len(items) // 2 == 0``, so a
+    lone TRANSIENT failure passes (``0 >= 0``). That is deliberate: on a WEEKLY
+    schedule a single 429 / timeout is inconclusive, not a signal — paging on
+    every transient network blip is the flaky-red the strategy memo warns
+    against. A genuine shape break still raises PermanentProbeError, which fails
+    via gate (1) regardless of item count.
     """
     out = ProbeOutcome()
     for name, fn in items.items():

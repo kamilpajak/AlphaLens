@@ -35,6 +35,16 @@ _MAX_8K_SCAN = 15
 _EXHIBIT_SUFFIXES = (".htm", ".html", ".txt")
 
 
+def _classify(exc: Exception) -> Exception:
+    """Network / rate-limit -> transient; everything else (e.g. a malformed
+    JSON body = a real shape break) -> permanent. A blanket transient would
+    hide exactly the format change this probe exists to catch."""
+    msg = str(exc).lower()
+    if "429" in msg or "timeout" in msg or "timed out" in msg or "connection" in msg:
+        return TransientProbeError(str(exc))
+    return PermanentProbeError(str(exc))
+
+
 def _index_url(cik: str, accession: str) -> str:
     """Mirror edgar_press_release._base_dir_from_index_filename URL layout."""
     cik_no_zeros = str(int(cik))
@@ -55,8 +65,8 @@ class TestSecEx991Live(unittest.TestCase):
             client = get_default_sec_client()
             try:
                 submissions = client.fetch_submissions(_CIK)
-            except Exception as exc:  # network error reaching submissions -> transient
-                raise TransientProbeError(f"submissions fetch failed: {exc}") from exc
+            except Exception as exc:  # classify: network -> transient, shape -> permanent
+                raise _classify(exc) from exc
 
             recent = submissions.get("filings", {}).get("recent", {})
             forms = recent.get("form", [])

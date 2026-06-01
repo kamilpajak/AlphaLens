@@ -7,6 +7,7 @@ on:
     branches: [main]
   schedule:
     - cron: "0 2 * * 1"  # Weekly Monday 02:00 UTC — detect dependency drift
+  workflow_dispatch: {}  # manual trigger (e.g. re-run live-probes after fixing a vendor)
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -328,7 +329,9 @@ jobs:
   # -----------------------------------------------------------------------
   live-probes:
     name: live-probes (weekly)
-    if: github.event_name == 'schedule'
+    # Weekly cron OR an explicit manual dispatch — NEVER push/PR (cost +
+    # rate-limit + real-data variance must not flake a merge).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

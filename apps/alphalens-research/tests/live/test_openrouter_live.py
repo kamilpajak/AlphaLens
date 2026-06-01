@@ -8,9 +8,10 @@ makes the model-id contract LOUD: each model the pipeline depends on must answer
 ``EVENT_RESPONSE_SCHEMA``. A 404 is a PERMANENT failure (the exact retirement
 signal), so it fails even though it is a single model.
 
-COSTS REAL MONEY (no free tier on v4-pro) — one tiny ``max_output_tokens=512``
-call per model, two models total (fractions of a cent/run). That is why it is
-opt-in + weekly, NEVER per-PR.
+COSTS REAL MONEY (no free tier on v4-pro) — one small extraction call per model,
+two models total (fractions of a cent/run; the JSON is tiny even though the
+token cap mirrors the production 8000 budget). That is why it is opt-in +
+weekly, NEVER per-PR.
 
     OPENROUTER_LIVE_TEST=1 .venv/bin/python -m unittest tests.live.test_openrouter_live -v
 """
@@ -57,7 +58,11 @@ class TestOpenRouterLive(unittest.TestCase):
         config = client.build_config(
             response_mime_type="application/json",
             response_schema=EVENT_RESPONSE_SCHEMA,
-            max_output_tokens=512,
+            # Mirror the production extractor budget (event_extractor uses 8000):
+            # v4-pro is a reasoning model, so a tight cap truncates (MAX_TOKENS)
+            # even on a trivial extraction. The JSON itself is tiny, so real
+            # cost stays a fraction of a cent — the cap only bounds the worst case.
+            max_output_tokens=8000,
         )
 
         def _make(model: str):
@@ -70,8 +75,11 @@ class TestOpenRouterLive(unittest.TestCase):
                         raise PermanentProbeError(
                             f"model {model} returned 404 — retired? (the #3 signal)"
                         ) from exc
-                    if code == 429:
-                        raise TransientProbeError(f"{model} rate-limited (429)") from exc
+                    # 429 + any 5xx are server-side / rate-limit glitches ->
+                    # transient; only a 4xx (other than 404) is a real shape /
+                    # contract break -> permanent.
+                    if code == 429 or 500 <= code < 600:
+                        raise TransientProbeError(f"{model} HTTP {code}") from exc
                     raise PermanentProbeError(f"{model} HTTP {code}: {exc}") from exc
                 except (httpx.TimeoutException, httpx.TransportError) as exc:
                     raise TransientProbeError(f"{model} network error: {exc}") from exc
