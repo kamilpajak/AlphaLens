@@ -65,7 +65,7 @@ STALENESS_ALERT_NAME = "AlphalensJobStale"
 # test_every_active_service_wires_emit_hook. The trailing token is the
 # short job name that becomes the ``job=`` Prometheus label.
 EMIT_HOOK_RE = re.compile(
-    r"^ExecStopPost=%h/AlphaLens/deploy/systemd/bin/"
+    r"^-?ExecStopPost=%h/AlphaLens/deploy/systemd/bin/"
     r"alphalens-emit-job-metrics\s+(?P<job>\S+)\s*$",
     re.MULTILINE,
 )
@@ -94,8 +94,16 @@ def _emitting_jobs() -> set[str]:
 
 
 def _staleness_rule_jobs() -> set[str]:
-    """``job=`` labels referenced by AlphalensJobStale rules in the YAML."""
-    rules = yaml.safe_load(RULES_PATH.read_text())["groups"][0]["rules"]
+    """``job=`` labels referenced by AlphalensJobStale rules in the YAML.
+
+    Flattens rules across ALL groups, not just ``groups[0]`` — the rules
+    file already carries several alert families (AlphalensJobStale,
+    AlphalensJobFailed, AlphalensJobMetricMissing), and a future split of
+    staleness rules into a second group must not silently escape the parity
+    check.
+    """
+    doc = yaml.safe_load(RULES_PATH.read_text())
+    rules = [rule for group in doc["groups"] for rule in group.get("rules", [])]
     return _staleness_jobs_from_rules(rules)
 
 
@@ -109,7 +117,8 @@ def _staleness_jobs_from_rules(rules: list[dict]) -> set[str]:
     for rule in rules:
         if rule.get("alert") != STALENESS_ALERT_NAME:
             continue
-        match = re.search(r'job="([^"]+)"', rule.get("expr", ""))
+        # PromQL accepts both double- and single-quoted label values.
+        match = re.search(r"""job=["']([^"']+)["']""", rule.get("expr", ""))
         if match:
             jobs.add(match.group(1))
     return jobs

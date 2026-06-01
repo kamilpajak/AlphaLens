@@ -58,8 +58,9 @@ SYSTEMD_DIR = DEPLOY_DIR / "systemd"
 
 # A ``KEY=value`` line in a dotenv-style file. The value half is optional
 # (``.env.example`` ships ``KEY=`` placeholders). Anchored to a line start so
-# a commented ``# KEY=`` line is ignored.
-ENV_EXAMPLE_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=", re.MULTILINE)
+# a commented ``# KEY=`` line is ignored. Optional whitespace around ``=``
+# tolerates a hand-edited ``KEY = value`` line.
+ENV_EXAMPLE_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=", re.MULTILINE)
 
 # A docker pass-through env flag with NO inline value: ``-e KEY`` or
 # ``--env KEY`` where the next token is NOT ``KEY=value``. Matched on a

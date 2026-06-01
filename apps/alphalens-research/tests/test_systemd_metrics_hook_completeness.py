@@ -88,7 +88,10 @@ def _emit_hook_regex(job: str) -> re.Pattern[str]:
     args after the job name.
     """
     return re.compile(
-        r"^ExecStopPost=%h/AlphaLens/"
+        # Optional leading ``-`` tolerates the failure-tolerant
+        # ``ExecStopPost=-...`` form (systemd ignores the exit code); unused
+        # today but a unit author could adopt it.
+        r"^-?ExecStopPost=%h/AlphaLens/"
         + re.escape(EMIT_HOOK_REL)
         + r"\s+"
         + re.escape(job)
