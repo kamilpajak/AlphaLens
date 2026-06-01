@@ -341,9 +341,52 @@ class TestLiteraturePublishWrapper(unittest.TestCase):
 
     def test_wrapper_skips_commit_when_clean(self) -> None:
         text = LIT_PUBLISH_WRAPPER.read_text()
-        # Guard MUST short-circuit before `git add` — otherwise every
-        # idempotent re-run commits "no change" markdown noise.
-        self.assertIn("git diff --quiet", text)
+        # Guard MUST gate on the STAGED diff (`git diff --cached --quiet`)
+        # AFTER `git add` — so a brand-new untracked file (new ISO-week /
+        # new month) is staged and seen, while a byte-for-byte idempotent
+        # re-fire stages nothing and still skips with no empty commit.
+        self.assertIn("git diff --cached --quiet", text)
+        # The plain `git diff --quiet` form (no --cached) must be GONE: it
+        # only inspects tracked modifications and silently skipped every
+        # new-period file (regression confirmed on VPS: 2026-06.md +
+        # 2026-W22.md untracked, never committed).
+        self.assertNotRegex(text, re.compile(r"git diff --quiet(?!\S)"))
+
+    def test_wrapper_stages_before_gate_so_untracked_file_is_committed(self) -> None:
+        # Regression for the silent new-period drop: the skip-gate MUST run
+        # `git add` BEFORE testing the diff, or an untracked new-period file
+        # is invisible to the gate and never committed. Pin the order.
+        # Anchor on the actual DIRECTIVE lines (not substrings that also
+        # appear in the explanatory comment) so the order check is robust.
+        lines = LIT_PUBLISH_WRAPPER.read_text().splitlines()
+        add_line = next(
+            (
+                i
+                for i, ln in enumerate(lines)
+                if ln.strip().startswith("git add docs/research/literature_review/")
+            ),
+            None,
+        )
+        gate_line = next(
+            (
+                i
+                for i, ln in enumerate(lines)
+                if ln.strip().startswith("if git diff --cached --quiet")
+            ),
+            None,
+        )
+        self.assertIsNotNone(
+            add_line, "`git add docs/research/literature_review/` directive line missing"
+        )
+        self.assertIsNotNone(gate_line, "`if git diff --cached --quiet` directive line missing")
+        assert add_line is not None and gate_line is not None
+        self.assertLess(
+            add_line,
+            gate_line,
+            "`git add` must precede the `git diff --cached --quiet` skip-gate "
+            "so a new untracked period file is staged and committed (not "
+            "silently skipped).",
+        )
 
     def test_wrapper_retries_push_on_race(self) -> None:
         text = LIT_PUBLISH_WRAPPER.read_text()
