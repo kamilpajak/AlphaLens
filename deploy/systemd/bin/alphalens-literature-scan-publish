@@ -73,12 +73,23 @@ env -u GH_TOKEN "$HOME/AlphaLens/.venv/bin/alphalens" literature scan --window "
 # idempotent — a manual re-fire on the same period overwrites the
 # existing markdown byte-for-byte and produces no diff. Committing
 # anyway would pollute main with empty "docs(literature)" markers.
-if git diff --quiet -- docs/research/literature_review/; then
+#
+# Stage FIRST, then gate on the STAGED diff. The previous form gated on
+# ``git diff --quiet`` BEFORE ``git add`` — but that inspects only
+# TRACKED working-tree modifications, so a brand-new untracked file
+# (every new ISO-week weekly/<YYYY-Www>.md, every new month
+# <YYYY-MM>.md) was invisible and the commit was silently skipped
+# (confirmed: 2026-06.md + 2026-W22.md sat untracked on the VPS, never
+# committed). ``git add`` then ``git diff --cached --quiet`` sees the
+# new file. On a truly clean tree nothing stages, the cached diff is
+# empty, and we still exit 0 with no empty commit. The ``if`` consumes
+# the exit code so ``set -e`` does not abort when there ARE changes.
+git add docs/research/literature_review/
+if git diff --cached --quiet -- docs/research/literature_review/; then
     echo "literature-scan-publish: no change to docs/research/literature_review/, skipping commit"
     exit 0
 fi
 
-git add docs/research/literature_review/
 git \
     -c user.name="alphalens-bot" \
     -c user.email="bot@alphalens.kamilpajak.pl" \
