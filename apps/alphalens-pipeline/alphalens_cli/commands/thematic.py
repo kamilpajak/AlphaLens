@@ -56,10 +56,8 @@ def _emit_stage_volume(stage: str, *, output_rows: int, input_rows: int) -> None
     failure.
     """
     try:
-        emit_domain_metrics(
-            job=f"thematic-{stage}",
-            metrics=_stage_volume_metrics(stage, output_rows=output_rows, input_rows=input_rows),
-        )
+        metrics = _stage_volume_metrics(stage, output_rows=output_rows, input_rows=input_rows)
+        emit_domain_metrics(job=f"thematic-{stage}", metrics=metrics)
     except Exception:
         logger.exception("emit_domain_metrics failed for stage %s; the run succeeded", stage)
 
@@ -69,12 +67,26 @@ def _parquet_num_rows(path: Path) -> int:
 
     Returns 0 if the file is absent — an upstream stage that produced nothing
     leaves no file, which is exactly the "zero input" the alert must see.
+
+    A corrupt / unreadable footer also degrades to 0 rather than raising:
+    this is called as an ARGUMENT to ``_emit_stage_volume`` (outside its
+    try/except), and a metric read must never crash a stage whose real
+    output is already written — so any read failure is observability debt,
+    logged and treated as zero.
     """
     if not path.exists():
         return 0
     import pyarrow.parquet as pq
 
-    return pq.ParquetFile(path).metadata.num_rows
+    try:
+        pf = pq.ParquetFile(path)
+        try:
+            return pf.metadata.num_rows
+        finally:
+            pf.close()
+    except Exception:
+        logger.exception("failed to read parquet footer for %s; treating as 0 rows", path)
+        return 0
 
 
 @thematic_app.callback()

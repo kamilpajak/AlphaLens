@@ -617,6 +617,17 @@ class TestThematicVolumeRules(unittest.TestCase):
         # Baseline median over a multi-day window (not a fixed threshold).
         self.assertIn("quantile_over_time", expr)
 
+    def test_anomaly_rule_pins_offset_guard_and_debounce(self) -> None:
+        # Pin the load-bearing fragments so a future edit can't silently
+        # drop the offset (baseline would include today), relax the
+        # cold-start guard (would false-page before a baseline exists), or
+        # shorten the debounce.
+        rule = self._rule(self.ANOMALY)
+        expr = rule["expr"]
+        self.assertIn("offset 1h", expr)
+        self.assertIn(">= 3", expr)
+        self.assertEqual(rule.get("for"), "6h")
+
     def test_volume_rules_route_to_telegram(self) -> None:
         for name in (self.ZERO_OUTPUT, self.ANOMALY):
             labels = self._rule(name).get("labels", {})

@@ -347,6 +347,21 @@ class TestThematicStageVolumeEmits(unittest.TestCase):
             self.assertEqual(metrics['alphalens_thematic_stage_output_rows{stage="map-themes"}'], 3)
             self.assertEqual(metrics['alphalens_thematic_stage_input_rows{stage="map-themes"}'], 2)
 
+    def test_parquet_num_rows_degrades_to_zero(self) -> None:
+        # The extract input gauge reads a parquet footer as an ARGUMENT to
+        # _emit_stage_volume (outside its try/except). A missing OR corrupt
+        # file must degrade to 0, never raise — a metric read cannot be
+        # allowed to crash a stage whose real output is already written.
+        from alphalens_cli.commands import thematic
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "nope.parquet"
+            self.assertEqual(thematic._parquet_num_rows(missing), 0)
+
+            corrupt = Path(tmp) / "corrupt.parquet"
+            corrupt.write_bytes(b"not a parquet file")
+            self.assertEqual(thematic._parquet_num_rows(corrupt), 0)
+
     def test_score_emits_stage_volume(self) -> None:
         import pandas as pd
         from alphalens_cli.commands import thematic
