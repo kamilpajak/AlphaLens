@@ -124,10 +124,18 @@ class TestNewsFrameSchema(unittest.TestCase):
         with self.assertRaises(SchemaError):
             NEWS_FRAME_SCHEMA.validate(bad)
 
-    def test_scalar_string_tickers_fails(self):
-        # positive control: tickers as a scalar string, not a list → fail.
+    def test_tickers_column_with_scalar_string_cells_fails(self):
+        # positive control: each tickers cell is a scalar string, not a list → fail.
         bad = _valid_news_frame()
         bad["tickers"] = ["NVDA", "AAPL"]
+        with self.assertRaises(SchemaError):
+            NEWS_FRAME_SCHEMA.validate(bad)
+
+    def test_non_string_id_fails(self):
+        # positive control: a numeric id where the consumer expects a string →
+        # fail (the dtype=None content guard, not a storage-dtype pin).
+        bad = _valid_news_frame()
+        bad["id"] = [1, 2]
         with self.assertRaises(SchemaError):
             NEWS_FRAME_SCHEMA.validate(bad)
 
@@ -135,6 +143,24 @@ class TestNewsFrameSchema(unittest.TestCase):
 class TestThematicEventsSchema(unittest.TestCase):
     def test_valid_frame_passes(self):
         validate_thematic_events(_valid_events_frame())
+
+    def test_survives_parquet_roundtrip(self):
+        # Proves the string + list element-wise checks accept the REAL on-disk
+        # read shape (pandas 3.0 yields str cells + ndarray list cells), so the
+        # _STR_CHECK guard cannot false-red on a genuine events parquet.
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "events.parquet"
+            _valid_events_frame().to_parquet(path, index=False)
+            read = pd.read_parquet(path)
+            self.assertIsInstance(read.loc[0, "primary_entities"], np.ndarray)
+            validate_thematic_events(read)
+
+    def test_non_string_news_id_fails(self):
+        # positive control: numeric news_id where the join key must be a string.
+        bad = _valid_events_frame()
+        bad["news_id"] = [1, 2]
+        with self.assertRaises(SchemaError):
+            validate_thematic_events(bad)
 
     def test_missing_join_key_fails(self):
         # positive control: drop the news_id join key → fail (catalyst_resolver

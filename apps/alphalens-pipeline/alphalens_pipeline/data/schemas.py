@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+import numpy as np
 import pandas as pd
 import pandera.pandas as pa
 from pandera.errors import SchemaError
@@ -113,16 +114,30 @@ _UTC_TS_CHECK = pa.Check(
 def _is_listlike(value: object) -> bool:
     """True for list / tuple / numpy-array cells (parquet deserialises list
     columns to numpy arrays), False for a scalar string — the
-    ``primary_entities='NVDA'`` corruption class the schema must reject."""
-    return isinstance(value, (list, tuple)) or (
-        hasattr(value, "tolist") and not isinstance(value, str)
-    )
+    ``primary_entities='NVDA'`` corruption class the schema must reject.
+
+    Restricted to the concrete list-like types parquet actually yields; a bare
+    ``hasattr(value, "tolist")`` would also accept a pandas Series or any custom
+    object exposing ``tolist``, which is not the contract.
+    """
+    return isinstance(value, (list, tuple, np.ndarray))
 
 
 _LISTLIKE_CHECK = pa.Check(
     _is_listlike,
     element_wise=True,
     error="cell must be list-like (list/tuple/ndarray), not a scalar",
+)
+
+# Logical-type guard for text columns. We keep ``dtype=None`` (pandas 3.0
+# infer_string makes the storage dtype unstable — see module note), but a
+# content check still rejects an ``int``/``float`` cell where the consumer
+# expects a string. nullable=True drops None/NaN before this runs, so optional
+# string columns (template_id, …) accept missing values.
+_STR_CHECK = pa.Check(
+    lambda v: isinstance(v, str),
+    element_wise=True,
+    error="cell must be a string",
 )
 
 # JSON columns hold a *serialised string*, never a native dict/list. A dict cell
@@ -138,12 +153,12 @@ _JSON_STRING_CHECK = pa.Check(
 # Hop 0 → 1: news_ingest writes ``NEWS_COLUMNS``; extract_daily reads it.
 NEWS_FRAME_SCHEMA = pa.DataFrameSchema(
     columns={
-        "id": pa.Column(None, nullable=False),
-        "source": pa.Column(None, nullable=False),
+        "id": pa.Column(None, nullable=False, checks=_STR_CHECK),
+        "source": pa.Column(None, nullable=False, checks=_STR_CHECK),
         "timestamp": pa.Column(None, nullable=False, checks=_UTC_TS_CHECK),
         "tickers": pa.Column(None, nullable=False, checks=_LISTLIKE_CHECK),
-        "title": pa.Column(None, nullable=False),
-        "url": pa.Column(None, nullable=False),
+        "title": pa.Column(None, nullable=False, checks=_STR_CHECK),
+        "url": pa.Column(None, nullable=False, checks=_STR_CHECK),
     },
     strict=False,
     coerce=False,
@@ -153,8 +168,8 @@ NEWS_FRAME_SCHEMA = pa.DataFrameSchema(
 # Hop 1 → 2: event_extractor writes events; catalyst_resolver reads them.
 THEMATIC_EVENTS_SCHEMA = pa.DataFrameSchema(
     columns={
-        "news_id": pa.Column(None, nullable=False),
-        "event_type": pa.Column(None, nullable=False),
+        "news_id": pa.Column(None, nullable=False, checks=_STR_CHECK),
+        "event_type": pa.Column(None, nullable=False, checks=_STR_CHECK),
         "confidence": pa.Column(float, nullable=False, checks=_CONFIDENCE_RANGE),
         "themes": pa.Column(None, nullable=False, checks=_LISTLIKE_CHECK),
         "primary_entities": pa.Column(None, nullable=False, checks=_LISTLIKE_CHECK),
@@ -165,7 +180,7 @@ THEMATIC_EVENTS_SCHEMA = pa.DataFrameSchema(
             required=False,
             checks=pa.Check.isin(("template", "flash")),
         ),
-        "template_id": pa.Column(None, nullable=True, required=False),
+        "template_id": pa.Column(None, nullable=True, required=False, checks=_STR_CHECK),
         "template_fields_json": pa.Column(
             None, nullable=True, required=False, checks=_JSON_STRING_CHECK
         ),
@@ -178,8 +193,8 @@ THEMATIC_EVENTS_SCHEMA = pa.DataFrameSchema(
 # Hop 2 → 3: mapping.orchestrator writes candidates; scorer reads them.
 THEMATIC_CANDIDATES_SCHEMA = pa.DataFrameSchema(
     columns={
-        "ticker": pa.Column(None, nullable=False),
-        "theme": pa.Column(None, nullable=False),
+        "ticker": pa.Column(None, nullable=False, checks=_STR_CHECK),
+        "theme": pa.Column(None, nullable=False, checks=_STR_CHECK),
         "verified": pa.Column(bool, nullable=False),
     },
     strict=False,
@@ -192,11 +207,11 @@ THEMATIC_CANDIDATES_SCHEMA = pa.DataFrameSchema(
 # coercer parses it; storing a dict here would break the parquet round-trip.
 THEMATIC_SCORED_SCHEMA = pa.DataFrameSchema(
     columns={
-        "ticker": pa.Column(None, nullable=False),
-        "theme": pa.Column(None, nullable=False),
+        "ticker": pa.Column(None, nullable=False, checks=_STR_CHECK),
+        "theme": pa.Column(None, nullable=False, checks=_STR_CHECK),
         "verified": pa.Column(bool, nullable=False),
         "layer4_weighted_score": pa.Column(float, nullable=True, required=False),
-        "catalyst_template_id": pa.Column(None, nullable=True, required=False),
+        "catalyst_template_id": pa.Column(None, nullable=True, required=False, checks=_STR_CHECK),
         "catalyst_template_facts_json": pa.Column(
             None, nullable=True, required=False, checks=_JSON_STRING_CHECK
         ),
@@ -231,10 +246,14 @@ def validate_portfolio_returns(returns: pd.Series) -> pd.Series:
 def validate_thematic_events(events: pd.DataFrame) -> pd.DataFrame:
     """Validate an events frame at the extract→catalyst hop.
 
-    Pass a frame AFTER ``event_extractor._backfill_legacy_columns`` so the
-    PR-2/PR-3 audit columns are present; the required core (``news_id`` join
-    key, ``themes``, ``event_type``, ``confidence``, ``primary_entities``) is
-    enforced regardless. Raises pandera ``SchemaError`` on contract violation.
+    The required core (``news_id`` join key, ``themes``, ``event_type``,
+    ``confidence``, ``primary_entities``) is always enforced. The PR-2/PR-3
+    audit columns (``extraction_method``, ``template_id``,
+    ``template_fields_json``) are ``required=False``, so a legacy frame that
+    predates them validates WITHOUT calling
+    ``event_extractor._backfill_legacy_columns`` first — the backfill is what
+    the catalyst-resolver consumer needs, not what the schema requires. Raises
+    pandera ``SchemaError`` on contract violation.
     """
     return THEMATIC_EVENTS_SCHEMA.validate(events)
 
