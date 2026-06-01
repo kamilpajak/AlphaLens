@@ -237,7 +237,7 @@ class TestOutcomeFields:
 
         from feedback.serializers import DecisionResponseSerializer
 
-        from alphalens_pipeline.feedback.store import Decision
+        from alphalens_feedback.store import Decision
         from feedback.views import _serialise_decision
 
         d = Decision(

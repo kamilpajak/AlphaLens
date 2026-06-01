@@ -1,0 +1,172 @@
+name: image-smoke
+
+# Pre-merge gate that BUILDS both Docker images and runs an import-smoke + a
+# minimal real flow + a HOME/ALPHALENS_BRIEFS_DIR cache-path assertion against
+# the built image — BEFORE anything is published. This is the test-strategy
+# memo's Phase 1a (docs/research/integration_e2e_test_strategy_2026_06_01.md).
+#
+# Why it exists: the django prod image build silently broke for ~20h (#292 —
+# collectstatic ImportError, the feedback app + alphalens_pipeline import not
+# in the slim image) because `django-image.yml` only runs on push-to-main, so
+# no PR ever built the image. This gate runs on PRs too, so a build break is
+# caught before merge. It also covers the pipeline image, which has NO other
+# CI (it is a manual VPS build) — catching the jsonschema-style transitive-dep
+# strip (#326) and the Path.home()-in-container cache trap (#6).
+#
+# Neither job pushes anything: `push: false, load: true` loads the image into
+# the local daemon for the smoke steps. Publishing stays in django-image.yml.
+
+on:
+  pull_request:
+    paths:
+      - 'apps/alphalens-feedback/**'
+      - 'apps/alphalens-pipeline/**'
+      - 'apps/alphalens-django/**'
+      - 'deploy/docker/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/image-smoke.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/alphalens-feedback/**'
+      - 'apps/alphalens-pipeline/**'
+      - 'apps/alphalens-django/**'
+      - 'deploy/docker/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/image-smoke.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  pipeline-image-smoke:
+    name: pipeline image — build + smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build pipeline image (no push, load into daemon)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.pipeline
+          platforms: linux/amd64   # load: true is single-platform only
+          push: false
+          load: true
+          tags: alphalens-pipeline:ci-smoke
+          cache-from: type=gha,scope=pipeline-image
+          cache-to: type=gha,scope=pipeline-image,mode=max
+
+      # Every direct + critical-indirect runtime import, INCLUDING the shared
+      # alphalens_feedback package and `from alphalens_cli.main import app`
+      # (which eagerly imports the templates subapp -> jsonschema, the #326
+      # guard). NOTE: lxml is deliberately absent — the apt -dev headers are
+      # precautionary; the wheel is not installed and not imported.
+      - name: import-smoke (every runtime dep is reachable in the image)
+        run: |
+          docker run --rm --entrypoint python alphalens-pipeline:ci-smoke -c "
+          import jsonschema, pandera, pandas, numpy, scipy, pyarrow, defusedxml, typer
+          import yfinance, feedparser, alpaca, exchange_calendars, ivolatility
+          import google.genai, langchain_google_genai, json_repair, quiverquant
+          import alphalens_feedback.store, alphalens_feedback.regime
+          from alphalens_pipeline.feedback import outcome_join, shadow_return, execution_modes
+          from alphalens_cli.main import app
+          print('pipeline import-smoke OK')
+          "
+
+      # Real offline flow (NOT --help): loads the full typer app then JSON-Schema
+      # validates the 5 shipped template YAMLs. Direct #326 regression guard.
+      - name: real flow — templates validate
+        run: docker run --rm alphalens-pipeline:ci-smoke templates validate
+
+      # #6 guard: every cache dir is Path.home()/.alphalens/...; the systemd unit
+      # sets -e HOME=/app/home + bind-mounts the host cache there. Assert HOME
+      # drives Path.home() into the mount (negative control: no HOME -> /root).
+      - name: HOME drives Path.home() into the mounted cache
+        run: |
+          mkdir -p "$PWD/op-home/.alphalens/thematic_briefs"
+          docker run --rm -e HOME=/mnt/operator-home -v "$PWD/op-home":/mnt/operator-home \
+            --entrypoint python alphalens-pipeline:ci-smoke -c "
+          from pathlib import Path
+          h = Path.home(); r = h / '.alphalens' / 'thematic_briefs'
+          assert str(h) == '/mnt/operator-home', h
+          assert r.is_dir(), r
+          assert not str(r).startswith(('/root', '/app/home')), r
+          print('PASS: HOME drives Path.home() into the mount')
+          "
+
+  django-image-smoke:
+    name: django image — build + smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build django image (no push, load into daemon)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/docker/django-prod/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: alphalens-django:ci-smoke
+          # Share the GHA cache scope with django-image.yml's publish build so
+          # the PR gate reuses the production image's layers (and vice versa).
+          cache-from: type=gha,scope=django-build
+          cache-to: type=gha,scope=django-build,mode=max
+
+      - name: import-smoke (runtime deps + shared feedback ledger)
+        run: |
+          docker run --rm alphalens-django:ci-smoke python -c "
+          import django, rest_framework, drf_spectacular, corsheaders, environ
+          import psycopg, gunicorn, uvicorn, pyarrow, pandas, jwt, httpx, exchange_calendars
+          import alphalens_feedback.store, alphalens_feedback.regime
+          print('django import-smoke OK', django.get_version())
+          "
+
+      # Real flow: full settings load + system checks. Catches the collectstatic
+      # -era import/URLconf break (#292) at the deepest level short of a request.
+      - name: real flow — manage.py check
+        run: |
+          docker run --rm \
+            -e DJANGO_SETTINGS_MODULE=config.settings.prod \
+            -e SECRET_KEY=ci-smoke-not-a-real-secret \
+            -e ALLOWED_HOSTS=localhost \
+            -e DATABASE_URL=sqlite:////tmp/smoke.db \
+            alphalens-django:ci-smoke python manage.py check
+
+      # #6 guard (Django side): the orphan-drop cache-destruction bug. Assert
+      # ALPHALENS_BRIEFS_DIR overrides Path.home() (negative control: no env ->
+      # /home/django/.alphalens/...). django.setup() required before the import.
+      - name: ALPHALENS_BRIEFS_DIR overrides Path.home()
+        run: |
+          mkdir -p "$PWD/smoke-briefs" && touch "$PWD/smoke-briefs/marker.txt"
+          docker run --rm \
+            -e ALPHALENS_BRIEFS_DIR=/var/lib/alphalens/thematic_briefs \
+            -v "$PWD/smoke-briefs":/var/lib/alphalens/thematic_briefs:ro \
+            -e DJANGO_SETTINGS_MODULE=config.settings.prod \
+            -e SECRET_KEY=ci-smoke-not-a-real-secret \
+            -e ALLOWED_HOSTS=localhost \
+            -e DATABASE_URL=sqlite:////tmp/smoke.db \
+            alphalens-django:ci-smoke python -c "
+          import django; django.setup()
+          from pathlib import Path
+          from briefs.ingest.parquet import DEFAULT_BRIEFS_DIR
+          exp = Path('/var/lib/alphalens/thematic_briefs')
+          assert DEFAULT_BRIEFS_DIR == exp, DEFAULT_BRIEFS_DIR
+          assert DEFAULT_BRIEFS_DIR != Path.home() / '.alphalens' / 'thematic_briefs'
+          assert (DEFAULT_BRIEFS_DIR / 'marker.txt').exists()
+          print('PASS: ALPHALENS_BRIEFS_DIR overrides Path.home()')
+          "

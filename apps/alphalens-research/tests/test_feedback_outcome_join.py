@@ -18,8 +18,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from alphalens_feedback.store import Decision, FeedbackStore
 from alphalens_pipeline.feedback.outcome_join import join_decision_outcomes
-from alphalens_pipeline.feedback.store import Decision, FeedbackStore
 from alphalens_pipeline.paper import ledger as paper_ledger
 
 UTC = dt.UTC

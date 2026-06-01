@@ -44,7 +44,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from alphalens_pipeline.feedback.store import FeedbackStore
+from alphalens_feedback.store import FeedbackStore
+
 from alphalens_pipeline.paper import ledger as paper_ledger
 
 logger = logging.getLogger(__name__)

@@ -61,10 +61,17 @@ STDLIB_MODULES: frozenset[str] = frozenset(sys.stdlib_module_names)
 # to import from research — those imports are reachable in dev but not
 # inside the pipeline Docker image. They never execute at CLI startup,
 # so an absent module is fine for the cron path; treat as first-party.
+# ``alphalens_feedback`` is a DIFFERENT case: it is a declared workspace
+# dependency of alphalens-pipeline (see its pyproject) that the pipeline
+# image installs for real — outcome_join/shadow_return import it at module
+# top level. It is skipped here because it comes from the workspace, not
+# PyPI; its actual presence inside the image is proven by the image-smoke
+# CI job (build + import), not by this closure check.
 FIRST_PARTY_PREFIXES: tuple[str, ...] = (
     "alphalens_pipeline",
     "alphalens_cli",
     "alphalens_research",
+    "alphalens_feedback",
 )
 
 # Distribution name → top-level import-module names. Most are identical

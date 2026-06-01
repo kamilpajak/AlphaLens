@@ -26,6 +26,8 @@ WORKDIR /app
 # member's pyproject.toml to validate the workspace dependency graph,
 # even when --package narrows the install to a single member.
 COPY pyproject.toml uv.lock ./
+COPY apps/alphalens-feedback/pyproject.toml apps/alphalens-feedback/pyproject.toml
+COPY apps/alphalens-feedback/README.md apps/alphalens-feedback/README.md
 COPY apps/alphalens-pipeline/pyproject.toml apps/alphalens-pipeline/pyproject.toml
 COPY apps/alphalens-research/pyproject.toml apps/alphalens-research/pyproject.toml
 COPY apps/alphalens-django/pyproject.toml apps/alphalens-django/pyproject.toml
@@ -46,6 +48,14 @@ COPY apps/alphalens-django/briefs/ apps/alphalens-django/briefs/
 COPY apps/alphalens-django/auth_cf/ apps/alphalens-django/auth_cf/
 COPY apps/alphalens-django/core/ apps/alphalens-django/core/
 COPY apps/alphalens-django/market/ apps/alphalens-django/market/
+# feedback app (PR #292) — previously NOT copied, which broke the build at
+# collectstatic (config/urls.py includes feedback.urls -> feedback/views.py).
+COPY apps/alphalens-django/feedback/ apps/alphalens-django/feedback/
+# Shared feedback-ledger primitives (pure stdlib) — declared workspace dep of
+# alphalens-django; feedback/views.py imports `alphalens_feedback.{store,regime}`.
+# This is what replaces the broken top-level `alphalens_pipeline` import: the
+# slim image gets the ledger WITHOUT the heavy pipeline dependency tree.
+COPY apps/alphalens-feedback/alphalens_feedback apps/alphalens-feedback/alphalens_feedback
 
 # Install the django workspace member itself (no deps re-resolution —
 # already locked into .venv above). --no-editable so site-packages owns

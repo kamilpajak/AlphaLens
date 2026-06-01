@@ -47,6 +47,8 @@ WORKDIR /app
 # Cache layer for deps — copy workspace root + every member's manifest first.
 # uv needs all member pyproject.toml files present to resolve the lockfile.
 COPY pyproject.toml uv.lock README.md ./
+COPY apps/alphalens-feedback/pyproject.toml ./apps/alphalens-feedback/pyproject.toml
+COPY apps/alphalens-feedback/README.md ./apps/alphalens-feedback/README.md
 COPY apps/alphalens-pipeline/pyproject.toml ./apps/alphalens-pipeline/pyproject.toml
 COPY apps/alphalens-pipeline/README.md ./apps/alphalens-pipeline/README.md
 COPY apps/alphalens-research/pyproject.toml ./apps/alphalens-research/pyproject.toml
@@ -61,15 +63,29 @@ COPY apps/alphalens-django/README.md ./apps/alphalens-django/README.md
 # inside the thematic daily container). alphalens-django is not needed.
 # UV_CONCURRENT_BUILDS=UV_CONCURRENT_INSTALLS=1 caps RAM during any source
 # build on a small VPS.
-RUN uv sync --frozen --no-dev --no-install-project --package alphalens-pipeline
+# --no-install-workspace (NOT --no-install-project): skip ALL workspace
+# members in this deps-only layer, not just the root project. The shared
+# workspace dep alphalens-feedback would otherwise be installed editable here
+# — before its source is copied below — baking an EMPTY editable MAPPING that
+# --frozen never rebuilds (silent ModuleNotFoundError at runtime). Members are
+# installed source-present in the second sync. Mirrors the django image.
+RUN uv sync --frozen --no-dev --no-install-workspace --package alphalens-pipeline
 # Now copy the project source and install it on top of the prepared venv.
 # Note: SP1500 PIT yamls under apps/alphalens-pipeline/data/ are used by
 # paradigm audits run on the laptop / runpod, not by the thematic daily
 # pipeline — intentionally omitted from this image. Mount via volume +
 # $ALPHALENS_DATA_ROOT if needed.
+# Shared feedback-ledger primitives (pure stdlib) — a declared workspace
+# dependency of alphalens-pipeline; outcome_join/shadow_return import it.
+COPY apps/alphalens-feedback/alphalens_feedback ./apps/alphalens-feedback/alphalens_feedback
 COPY apps/alphalens-pipeline/alphalens_pipeline ./apps/alphalens-pipeline/alphalens_pipeline
 COPY apps/alphalens-pipeline/alphalens_cli ./apps/alphalens-pipeline/alphalens_cli
 COPY deploy/docker/run_thematic_day.sh /app/deploy/docker/run_thematic_day.sh
+# EDITABLE install is intentional here (NOT --no-editable like the django
+# image): the `templates` CLI reads its YAML files from the source tree at
+# apps/alphalens-pipeline/.../thematic/extraction/templates/*.yaml, and those
+# YAMLs are NOT declared as setuptools package-data — so --no-editable drops
+# them from site-packages and `alphalens templates validate` fails (verified).
 RUN chmod +x /app/deploy/docker/run_thematic_day.sh \
     && uv sync --frozen --no-dev --package alphalens-pipeline
 # Bind-mount target for the operator's ~/.alphalens cache. The compose file

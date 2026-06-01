@@ -13,8 +13,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from alphalens_pipeline.feedback import regime
-from alphalens_pipeline.feedback.store import (
+from alphalens_feedback import regime
+from alphalens_feedback.store import (
     DISMISS_TAXONOMY,
     Decision,
     DecisionValidationError,
