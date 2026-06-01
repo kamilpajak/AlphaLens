@@ -196,3 +196,73 @@ def ingest_projection(news: pd.DataFrame) -> dict[str, Any]:
         "n_tickers_total": sum(len(_ticker_list(t)) for t in news.get("tickers", [])),
         "rows": rows,
     }
+
+
+def _pctl_bucket(value: Any) -> str | None:
+    # Coarse percentile bucket so the golden locks the gate decision without
+    # pinning a raw percentile float that invites snapshot rot.
+    if value is None or pd.isna(value):
+        return None
+    v = float(value)
+    if v < 25.0:
+        return "<25"
+    if v < 50.0:
+        return "25-50"
+    if v < 75.0:
+        return "50-75"
+    return ">=75"
+
+
+def _int_or_none(value: Any) -> int | None:
+    return None if pd.isna(value) else int(value)
+
+
+def _str_or_none(value: Any) -> str | None:
+    return None if pd.isna(value) else str(value)
+
+
+def score_projection(scored: pd.DataFrame) -> dict[str, Any]:
+    """Golden projection for the score stage (Phase 3b).
+
+    Locks the headline ``layer4_weighted_score`` (the integer the whole stage
+    composes), the industry-cohort resolution, the magic-formula + drawdown
+    decisions, the catalyst event type, and coarse percentile buckets for the
+    insider / fcff / valuation signals. EXCLUDES the raw signal floats
+    (``insider_score_usd``, ``fcff_yield_pct``, ``valuation_*``, ``roic/roe``,
+    ``technical_*`` raw, ``valuation_financials_*``, ``catalyst_confidence``) —
+    deterministic under frozen inputs but pure float churn (memo §3/§8). A
+    scoring regression flips the integer score; a cohort regression flips
+    ``peer_cohort_level``/``industry_id``; a magic-formula change flips the rank.
+    """
+    rows = []
+    for _, r in scored.sort_values("ticker").iterrows():
+        rows.append(
+            {
+                "ticker": str(r["ticker"]),
+                "theme": str(r.get("theme", "")),
+                "layer4_weighted_score": int(r["layer4_weighted_score"]),
+                "industry_id": _int_or_none(r.get("industry_id")),
+                "industry_name": _str_or_none(r.get("industry_name")),
+                "sector_name": _str_or_none(r.get("sector_name")),
+                "peer_cohort_level": str(r["peer_cohort_level"]),
+                "insider_pctl_bucket": _pctl_bucket(r.get("insider_score_sector_percentile")),
+                "fcff_pctl_bucket": _pctl_bucket(r.get("fcff_yield_sector_percentile")),
+                "valuation_pctl_bucket": _pctl_bucket(
+                    r.get("valuation_composite_sector_percentile")
+                ),
+                "magic_formula_rank": _int_or_none(r.get("magic_formula_rank")),
+                "magic_formula_health_pass": bool(r["magic_formula_health_pass"]),
+                "magic_formula_cohort_n": _int_or_none(r.get("magic_formula_cohort_n")),
+                "deep_drawdown_reversal": bool(r["deep_drawdown_reversal"]),
+                "catalyst_event_type": _str_or_none(r.get("catalyst_event_type")),
+                "catalyst_strength": round(float(r["catalyst_strength"]), 4)
+                if pd.notna(r.get("catalyst_strength"))
+                else None,
+            }
+        )
+    return {
+        "row_count": len(scored),
+        "columns": sorted(scored.columns),
+        "tickers": sorted(scored["ticker"].astype(str)),
+        "rows": rows,
+    }
