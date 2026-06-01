@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "briefs.apps.BriefsConfig",
     "auth_cf.apps.AuthCfConfig",
     "core.apps.CoreConfig",
+    "feedback.apps.FeedbackConfig",
     "market.apps.MarketConfig",
 ]
 
@@ -74,6 +75,17 @@ WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
 DATABASES = {"default": env.db("DATABASE_URL", default="sqlite:///" + str(BASE_DIR / "db.sqlite3"))}
+
+# Feedback ledger SQLite path. Pipeline-side ``FeedbackStore`` is the schema
+# authority; Django views open the same on-disk file via the ``~/.alphalens``
+# host-volume mount. Env override is REQUIRED in containers because
+# ``Path.home()`` resolves to the container user (``/home/django``), not the
+# host ``~/.alphalens`` mount — see feedback_pathhome_in_container_trap_2026_05_28.
+# Compose exports the env at startup; dev falls back to the host path.
+ALPHALENS_FEEDBACK_DB = env(
+    "ALPHALENS_FEEDBACK_DB",
+    default=str(Path.home() / ".alphalens" / "feedback.db"),
+)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

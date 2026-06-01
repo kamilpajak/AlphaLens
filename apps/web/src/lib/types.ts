@@ -149,3 +149,40 @@ export interface Paginated<T> {
 		offset: number;
 	};
 }
+
+// Feedback ledger — mirrors apps/alphalens-pipeline/.../feedback/store.py
+// dataclass. Action + dismiss enums match the locked 2026-05-29 design
+// memo; the SPA fetches the taxonomy from /v1/feedback/taxonomy at boot
+// instead of hard-coding the literals so a backend update is picked up
+// without a frontend redeploy.
+export type FeedbackAction =
+	| 'interested'
+	| 'watching'
+	| 'dismissed'
+	| 'paper_traded'
+	| 'live_traded';
+
+export type DismissCategory = 'thesis_setup' | 'risk_quality' | 'portfolio_style' | 'other';
+
+export interface Decision {
+	id: string;
+	brief_date: string;
+	ticker: string;
+	theme: string;
+	surfaced_at: string;
+	action: FeedbackAction;
+	action_at: string;
+	dismiss_category: DismissCategory | null;
+	dismiss_reason: string | null;
+	dismiss_note: string | null;
+	confidence_subjective: number | null;
+	paper_trade_plan_id: string | null;
+	position_size_usd: number | null;
+	entry_price: number | null;
+	market_regime_at_entry: string | null;
+}
+
+export interface FeedbackTaxonomy {
+	actions: FeedbackAction[];
+	categories: Record<DismissCategory, string[]>;
+}

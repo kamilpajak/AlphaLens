@@ -181,7 +181,14 @@
 	<!-- Candidates -->
 	<div class="space-y-4">
 		{#each filtered as c, i (c.ticker)}
-			<CandidateCard candidate={c} index={i} />
+			<CandidateCard
+				candidate={c}
+				index={i}
+				briefDate={data.brief.date}
+				taxonomy={data.taxonomy}
+				decisionsLoaded={data.decisionsByKey !== null}
+				existingDecision={data.decisionsByKey?.[`${c.ticker}::${c.theme}`] ?? null}
+			/>
 		{/each}
 	</div>
 
