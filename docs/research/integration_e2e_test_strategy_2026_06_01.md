@@ -1,8 +1,8 @@
 # Integration / E2E test strategy for AlphaLens
 
-**Status:** DRAFT (proposal — Phase 1 ready to implement)
+**Status:** DRAFT (proposal — review-hardened; Phase 1 ready to implement)
 **Date:** 2026-06-01
-**Author:** research session (workflow-assisted: 4 understanding agents + 3 design philosophies synthesised)
+**Author:** research session (workflow-assisted: 4 understanding agents + 3 design philosophies synthesised; adversarially reviewed by zen `deepseek-v4-pro` + Perplexity — see §10)
 
 ---
 
@@ -120,16 +120,30 @@ weapon against silent-success-noop.
 
 Seams are already injectable: every LLM call goes through an injected
 `OpenRouterClient`; every cross-stage hand-off is a parquet under
-`~/.alphalens/thematic_*`. So: point caches at `tmp_path`, inject a
-`ReplayOpenRouter` (canned by `sha256(model+prompt)`, **raises on miss** so a prompt
-change is loud), patch yfinance/EDGAR/Polygon at `get_default_*_client` to read
+`~/.alphalens/thematic_*`. So: point caches at `tmp_path`, inject a VCR-style
+`ReplayOpenRouter`, patch yfinance/EDGAR/Polygon at `get_default_*_client` to read
 captured `raw/` fixtures, freeze `asof`, run the real `generate_briefs` +
 `rebuild_from_parquet` + DRF view.
 
-Catches: empty/zero-row output that exits 0 (`assert len(df) > 0` + parquet byte
-band); in-pipeline contract regressions (column rename, dedup tiebreaker,
+**LLM replay keying (revised per review §10):** do NOT key on `sha256(model+prompt)`
+alone — that misses the sampling params and model version that change output.
+Use a **VCR-style cassette** keyed on the canonical JSON of the full request
+descriptor (`model` + model/API version + full prompt *including system + context*
++ `temperature`/`top_p`/`max_tokens` + `response_format`/tool config), stored under
+a **human-readable scenario name**, with dynamic response fields (timestamps, ids)
+normalized. **Fail loud on a cache miss** (a changed prompt or param is a behaviour
+change — re-record deliberately, never fall back to a live call).
+
+**Golden scope (revised per review §10):** the golden is NOT a full-row content
+dump (snapshot rot + diff fatigue kill those, especially solo). Capture
+**schema + row-count + per-column aggregates + a small stable exemplar subset**
+(e.g. 2-3 rows), with volatile fields excluded. Structural/aggregate assertions
+over verbatim snapshots.
+
+Catches: empty/zero-row output that exits 0 (`assert len(df) > 0` + row-count band);
+in-pipeline contract regressions (column rename, dedup tiebreaker,
 template-supersedes-flash precedence, `extraction_method`/`template_id` audit cols)
-as a **reviewable snapshot diff**; the Django ingest-drop seam
+as a **reviewable diff**; the Django ingest-drop seam
 (`/v1/days.n_candidates == len(parquet rows)` — the Path.home orphan-drop class);
 DRF envelope / ISO-date / nested-JSON drift the SPA depends on; (D-1) date-keying
 off-by-one. Regenerate with `JUST_GOLDEN_UPDATE=1`, review the diff in the PR.
@@ -172,8 +186,10 @@ what L2 hermetic tests provably can't reach (they run in the dev venv from sourc
   Playwright+`svelte-check` for web — unchanged.
 - **Golden fixtures** = real captured bytes checked into
   `apps/alphalens-research/tests/fixtures/golden_day/{raw,llm,golden}/`, regenerated
-  with `JUST_GOLDEN_UPDATE=1`, reviewed as a diff. LLM replay keyed by
-  `sha256(model+prompt)`, miss raises (forces re-record on prompt change).
+  with `JUST_GOLDEN_UPDATE=1`, reviewed as a diff. LLM replay = VCR-style cassettes
+  keyed on the full request descriptor (model + version + system+prompt + sampling
+  params + tool config), human-named, dynamic fields normalized, miss fails loud
+  (see L3 + §10).
 - **Live-vs-hermetic gating** = per-vendor env flags (`SEC_LIVE_TEST`,
   `OPENROUTER_LIVE_TEST`, `POLYGON_LIVE_TEST`, `YFINANCE_LIVE_TEST`), exactly like
   `GDELT_LIVE_TEST`. **Live probes never run in the blocking PR path.**
@@ -215,13 +231,23 @@ what L2 hermetic tests provably can't reach (they run in the dev venv from sourc
 
 ## 6. Rollout
 
+> **Sequencing revised per review §10.** Both reviewers argued deploy-env-drift is
+> the dominant class (5/13) and that the highest-leverage first investment is the
+> deploy path (immutable digest-pinned image + a real-flow smoke gate), not the
+> hermetic scanners alone. So **Phase 1 now blends the cheapest L2 scanners WITH the
+> L5 image-smoke + digest-deploy** — the two together kill the three recurring
+> deploy escapes (#5 stale image, #7 jsonschema, #6 Path.home) plus the silent-noop
+> wrapper bug, for modest infra cost.
+
 | Phase | Deliverable |
 |-------|-------------|
-| **1 — L2 deploy-shape & config-parity scanners** (highest leverage, zero infra, all hermetic) | `test_lit_wrapper_git_ordering`, `test_env_key_tri_source_parity`, `test_ci_coverage_app_parity`, `test_systemd_metrics_hook_completeness` (glob-derived, replaces hardcoded `ACTIVE_SERVICES`), `test_prometheus_rule_unit_parity`. All in existing `research` job. |
-| **2 — L2 cross-process contracts** | `test_template_facts_roundtrip` + alias-map strengthening; pandera schema constants for events/candidates/scored/briefs in `data/schemas.py` + `test_parquet_hop_schemas` (with legacy-column tolerance); `test_paper_date_key_contract`; `test_migration_both_states`. |
-| **3 — L3 golden-master replay** | `scripts/record_golden_day.py` one-time real capture; `ReplayOpenRouter` + `raw/llm/golden` fixtures for one day; `test_golden_replay` (Python) + `test_golden_api` (Django) with side-effect invariants; `just test-golden`. |
-| **4 — L5 image-smoke CI job** | path-filtered `image-smoke.yml`: build pipeline + django images, import-smoke every dep, `alphalens thematic ingest --help`, Path.home-vs-`ALPHALENS_BRIEFS_DIR` assertion; runs before GHCR push. |
-| **5 — L4 live probes + VPS gate** | `tests/live/{sec,openrouter,polygon,yfinance}` with per-vendor flags + transient/permanent classification; weekly scheduled CI `live-probes` job; `just probe-live`; `deploy/scripts/postdeploy_check.sh` wired into the runbook. |
+| **1a — L5 image-smoke + digest-pinned deploy** (dominant-class, modest CI infra) | path-filtered `image-smoke.yml`: build pipeline + django images once per commit, **import-smoke every runtime dep + run a MINIMAL real flow** (`alphalens templates validate` / a 1-item pipeline step + one DRF endpoint via compose, NOT just `--help`), assert `ALPHALENS_BRIEFS_DIR` overrides `Path.home()`; **push by immutable digest, deploy the same digest, post-deploy verify the running digest == tested digest** (kills tag-rollback drift #4/#5). |
+| **1b — L2 cheapest scanners** (zero infra, all hermetic) | `test_lit_wrapper_git_ordering`, `test_env_key_tri_source_parity`, `test_ci_coverage_app_parity`, `test_systemd_metrics_hook_completeness` (glob-derived, replaces hardcoded `ACTIVE_SERVICES`), `test_prometheus_rule_unit_parity`. All in existing `research` job. |
+| **2 — L2 cross-process contracts** | `test_template_facts_roundtrip` + alias-map strengthening (assert **consumer-relevant fields only**, per Pact over-specification lesson §10); pandera schema constants for events/candidates/scored/briefs in `data/schemas.py` + `test_parquet_hop_schemas` (legacy-column tolerance); `test_paper_date_key_contract`; `test_migration_both_states`. |
+| **2b — migrate-skew compose test** (fills a gap no layer covered, §10) | testcontainers/compose test reproducing #331/#340: long-running `django` on image-N + one-shot `rebuild-cache` on image-N+1 (migration skew) → assert it fails loud, not silent `UndefinedColumn`. Consider a migration advisory-lock as the durable fix. |
+| **3 — L3 golden-master replay** | `scripts/record_golden_day.py` one-time real capture; VCR-style `ReplayOpenRouter` cassettes + `raw/golden` fixtures for one day; golden = schema+row-count+aggregates+small subset; `test_golden_replay` (Python) + `test_golden_api` (Django) with side-effect invariants; `just test-golden`. |
+| **4 — runtime output-volume metrics** (silent-noop, leverages existing observability epic, §10) | emit `alphalens_thematic_candidates_count` / brief-row-count textfile metrics from the daily build; Prometheus alert on **zero-output-with-nonempty-input** + a freshness/row-count anomaly rule. The real-world catch for a model retiring *next* month is a production dead-man-switch, not a test. |
+| **5 — L4 live probes + VPS gate** | `tests/live/{sec,openrouter,polygon,yfinance}` with per-vendor flags + transient/permanent classification; weekly scheduled CI `live-probes` job; `just probe-live`; `deploy/scripts/postdeploy_check.sh` (promtool + repo↔live rule diff + digest check) wired into the runbook. |
 
 ---
 
@@ -297,3 +323,54 @@ The layout is designed so reading it bottom-up teaches AlphaLens:
 6. Who **refreshes the L4 SEC probe's pinned 8-K accession** when it ages out — a
    dated constant with a comment, or a helper that discovers a recent EX-99.1 filing
    dynamically?
+
+---
+
+## 10. External review (zen `deepseek-v4-pro` thinking=high + Perplexity research high, 2026-06-01)
+
+Both reviewers were run adversarially on the v1 memo. They **converged** strongly;
+the deltas below are folded into §3–§6 above. (Per project doctrine on
+adversarial-reviewer bias: technical warnings kept, go/no-go meta-conclusions
+weighted against project reality.)
+
+**Where they pushed back on the v1 plan (changed):**
+
+1. **Rollout order.** v1 put hermetic L2 scanners first. Both argued
+   deploy-env-drift is the dominant class (5/13) and the deploy path is the
+   highest-ROI first investment. → **Phase 1 now blends L5 image-smoke +
+   digest-pinned deploy with the cheapest L2 scanners** (§6). Industry norm both
+   cited: build one image per commit, smoke it on the *real artifact*, promote by
+   **immutable digest** (not tag), post-deploy verify the running digest.
+2. **`sha256(model+prompt)` replay key is too narrow.** Misses sampling params +
+   model version → silent divergence. → **VCR-style cassettes** keyed on the full
+   request descriptor, human-named, dynamic fields normalized, fail-loud on miss (§3 L3).
+3. **Golden-master scope.** Full-row snapshots rot → diff fatigue → mechanical
+   "accept" (worse solo). → golden = **schema + row-count + aggregates + small stable
+   subset**, structural over verbatim (§3 L3).
+4. **Underpowered smoke.** `--help`-only misses config/dep issues. → Phase 1a smoke
+   **runs a minimal real flow + one DRF endpoint** (§6).
+5. **Contract over-specification (Pact lesson).** → L2 asserts **consumer-relevant
+   fields only**, not provider internals (§6 Phase 2).
+
+**Gaps they found that NO v1 layer covered (added):**
+
+6. **migrate-on-start version-skew race (#331/#340)** needs a **two-container compose
+   test** (long-running on image-N + one-shot on image-N+1) — added as Phase 2b; the
+   durable fix is a migration advisory-lock.
+7. **Silent-success-noop is partly a *production* problem, not just a test problem.**
+   SOTA = assertion-rich tests **+** pipeline row-count/freshness/anomaly metrics **+**
+   dead-man-switch. AlphaLens already built the dead-man-switch infra (the
+   observability epic: Prometheus staleness alerts + Telegram). The gap is
+   **output-volume metrics** (alert on zero-output-with-nonempty-input), not
+   last-success-time. → added as Phase 4, leveraging existing infra.
+
+**Where they VALIDATED v1 (no change):** the seam-centric thesis; positive-control
+convention (prevents assertion-rot — both endorsed); one-frozen-day discipline;
+fail-loud on replay miss; never gating CI on live probes; assert side-effects not
+exit codes; the suite-as-documentation framing.
+
+**Meta-conclusion deliberately NOT adopted:** Perplexity's framing that L5 should be
+*the* first and dominant layer with L2/L3 deferred. Weighed against project reality:
+the cheap L2 scanners are near-zero-cost and three of them pin already-recurring
+incidents (#345, #292, env-key), so deferring them buys nothing. Hence the
+**blended** Phase 1 rather than an L5-only first phase.
