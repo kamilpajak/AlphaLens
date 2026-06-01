@@ -58,7 +58,14 @@ def _emit_market_closed_message(action: str) -> None:
     # startup. Only the closed-day branch needs ``next_trading_open``.
     from alphalens_pipeline.paper.calendar import next_trading_open
 
-    now_utc = dt.datetime.now(dt.UTC)
+    # Anchor the next-session lookup to the SAME date the guard decided on
+    # (``_today_utc()``), not a second independent ``datetime.now()`` read.
+    # Two clock reads can straddle a UTC midnight, and tests patch only
+    # ``_today_utc`` — a real ``now()`` here made the message name a different
+    # session than the guard's closed day (it leaked the wall-clock date into
+    # the deferral anchor). Midnight-of-today is safe because the guard only
+    # fires on a fully closed day, so there is no earlier same-day open.
+    now_utc = dt.datetime.combine(_today_utc(), dt.time.min, tzinfo=dt.UTC)
     nxt = next_trading_open(now_utc)
     msg = (
         f"paper {action}: market closed today; deferring until next "
