@@ -239,7 +239,7 @@ Two distinct L1 streams exist (the table below keeps them separate): **(a) EDGAR
 | Pipeline | 6×/day HH:30 UTC (PR #315) — XTKS/XHKG/XSHG/XWAR/XNYS slots | Same; possibly 8×/day if more exchanges are added | Per-exchange weekend cutoff (XNYS-safe today) |
 | Candidates | 4-signal quant + 4 verification gates | + historical analog reasoning | Embedding lookback corpus |
 | Evidence panel | source_event_url + rationale + bear summary + supply chain + trade-setup | + sentence-level citations from 8-K / press release + peer-cohort overlay + filing deep links | EDGAR full-text indexing + typed facts (#143 PR-3) |
-| Feedback | None (until PR #292) | Interested/Dismissed buttons + 2-level taxonomy | **PR #292 in-flight** |
+| Feedback | ✅ Interested/Dismissed + 2-level dismiss taxonomy live — SQLite ledger, `/v1/feedback/*` REST, monitoring CLI (SHIPPED PR #292, 2026-06-01) | + outcome-join → realised PnL → signal re-weighting | v2: outcome join, VIX-cache regime stamp, `layer4_weighted_score` re-weighting after ≥50 decisions |
 | Position context | None | **Annotate, never filter.** Held/watchlist badges + correlation overlay arrive as a **private per-member DM supplement** generated against per-person profiles — the shared group brief stays universe-wide and un-personalised (anchoring a group to one member's positions degrades collective decisions; see §7). Plus a watchlist-**revisit** sub-panel: aging + updated signal + realised P&L for names flagged earlier (not a filter on the candidate set) | Alpaca portfolio import + per-member overlay profiles + DM delivery path |
 | **Resilience** | `AlphalensJobStale` 12h threshold (3× the 4h cadence; lowered from 48h when 6×/day landed in PR #315 — asymmetric versus 2× for other units, justified by ~15-20 min wall time × LLM API variance). `verify-cache` ExecStartPost gap-detection halts the chain before the Django rebuild if the parquet is missing/incomplete (PR-E). `alphalens_thematic_zero_row_days` metric serves as a leading indicator. | Plus per-source ingest success (Polygon vs GDELT vs RSS) with a domain alert if any source goes dark | Per-source counters in `news_ingest` |
 
@@ -259,7 +259,7 @@ Two distinct L1 streams exist (the table below keeps them separate): **(a) EDGAR
 ## 9. Tracks — each is an epic = many PRs
 
 ### Track A: Feedback ledger (PR #292 + v2 + v3)
-- ▶ **v1 (PR #292, in-flight)** — schema, REST, SPA, monitoring CLI
+- ✅ **v1 (PR #292, SHIPPED 2026-06-01)** — schema, REST, SPA, monitoring CLI
 - ⏳ **v2 — outcome join** — background job linking `decisions.paper_trade_plan_id` to `paper_ledger.outcomes` after close
 - ⏳ **v2 — VIX server-side cache** — frees `market_regime_at_entry` from the "unknown" bucket
 - ⏳ **v3 — implicit telemetry** — time spent on a card, clicks on evidence (when >100 decisions/month)
@@ -307,9 +307,9 @@ Two distinct L1 streams exist (the table below keeps them separate): **(a) EDGAR
 
 ## 10. Roadmap priorities
 
-### Near-term (originally ~6 PRs / ~2 weeks — as of 2026-05-31 mostly shipped; outstanding: PR #292 merge, outcome join, L3 SPA stub)
+### Near-term (originally ~6 PRs / ~2 weeks — as of 2026-06-01 mostly shipped; outstanding: outcome join, L3 SPA stub)
 
-1. **PR #292 merge** (feedback ledger v1) — when ready
+1. **Feedback ledger v1** (PR #292) — ✅ SHIPPED 2026-06-01
 2. **VPS auto-paper-submit ExecStartPost** (Track F) — eliminates the daily manual Mac flow [✅ SHIPPED PR #317 / paper-submit + paper-reconcile timers]
 3. **4×/day pipeline cadence** (Track F) — captures pre-market US + Asia open [✅ SHIPPED PR #315 → pivoted to 6×/day]
 4. **Feedback ledger v2 — outcome join** (Track A v2) — links each decision to its paper-trade PnL
@@ -373,6 +373,7 @@ Two distinct L1 streams exist (the table below keeps them separate): **(a) EDGAR
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-06-01 | Feedback ledger v1 status sync — PR #292 merged | PR #292 squash-merged to main (`214a77f`). §8 L2 Feedback row flipped from "in-flight" to ✅ SHIPPED (Interested/Dismissed + 2-level taxonomy + `/v1/feedback/*` REST + monitoring CLI live; Gap now lists the v2 deferrals: outcome-join, VIX-cache regime stamp, `layer4_weighted_score` re-weighting ≥50 decisions). §9 Track A v1 ▶→✅; §10 near-term dropped "PR #292 merge" from outstanding + item 1 marked shipped. Track A v2/v3 + Track C (L3, gated ≥30 decisions) still pending. |
 | 2026-05-29 | Document created | Capture vision after the "ideal-shape" session + Perplexity research; parent memo for all the epics below |
 | 2026-05-30 | Track H extended with #143 structured event templates; near-term roadmap insert at position #6 | Foundation layer for Tracks D + G + H. User-affirmed velocity post-session turned the 5+d estimate into 1-2 sessions, removing the primary deferral reason. Both reviewers (DeepSeek v4 Pro zen + Perplexity Research) converged on hybrid mode + YAML+predicates. Design memo PR #320. |
 | 2026-05-30 | Added §3 "Big picture flow" with a whole-system mermaid diagram; sections §3-§10 renumbered to §4-§11 | Synthesised a one-diagram view of the whole system after the #143 design-memo session — shows all 3 tiers exiting the same brief, the HUMAN gate before paper-trade, the feedback loop closing the system, and the PAPER box as an anti-pattern boundary (`capital_deploy_clause`). §4 (feedback) and §5 (evening use-case) zoom in on fragments of this big picture. |
