@@ -1,0 +1,53 @@
+{
+  "columns": [
+    "company_name",
+    "gates_failed",
+    "gates_failed_str",
+    "gates_passed",
+    "gates_passed_str",
+    "gates_unknown",
+    "gates_unknown_str",
+    "llm_confidence",
+    "market_cap",
+    "n_gates_failed",
+    "n_gates_passed",
+    "n_gates_unknown",
+    "rationale",
+    "source_event_published_at",
+    "source_event_title",
+    "source_event_url",
+    "theme",
+    "theme_search_keywords",
+    "ticker",
+    "verified"
+  ],
+  "row_count": 2,
+  "rows": [
+    {
+      "gates_passed_str": "tenk,press",
+      "has_catalyst": true,
+      "mcap_bucket": "1B-3B",
+      "n_gates_failed": 1,
+      "n_gates_passed": 2,
+      "n_gates_unknown": 0,
+      "theme": "quantum_computing",
+      "ticker": "QUBT",
+      "verified": true
+    },
+    {
+      "gates_passed_str": "tenk,press",
+      "has_catalyst": true,
+      "mcap_bucket": "3B-10B",
+      "n_gates_failed": 1,
+      "n_gates_passed": 2,
+      "n_gates_unknown": 0,
+      "theme": "quantum_computing",
+      "ticker": "RGTI",
+      "verified": true
+    }
+  ],
+  "tickers": [
+    "QUBT",
+    "RGTI"
+  ]
+}
