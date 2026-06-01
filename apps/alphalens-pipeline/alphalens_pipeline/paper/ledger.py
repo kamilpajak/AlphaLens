@@ -659,6 +659,20 @@ def fetch_open_orders(
     return list(cur.fetchall())
 
 
+def fetch_outcome_for_plan(conn: sqlite3.Connection, plan_id: int) -> sqlite3.Row | None:
+    """The final disposition row for a plan, or None if it has not closed.
+
+    Consumed by the feedback outcome-join (Track A v2): a NULL return means
+    the plan is still open / unfilled-but-not-yet-cancelled, so the joined
+    decision is left with NULL outcome columns until a later sweep finds the
+    matured row (``plan_outcomes`` has UNIQUE(plan_id), so at most one)."""
+    cur = conn.execute(
+        "SELECT * FROM plan_outcomes WHERE plan_id = ?",
+        (plan_id,),
+    )
+    return cur.fetchone()
+
+
 def fetch_fills_for_order(conn: sqlite3.Connection, order_id: int) -> list[sqlite3.Row]:
     cur = conn.execute(
         "SELECT * FROM fills WHERE order_id = ? ORDER BY filled_at, fill_id",
@@ -676,6 +690,7 @@ __all__ = [
     "fetch_fills_for_order",
     "fetch_open_orders",
     "fetch_orders_for_plan",
+    "fetch_outcome_for_plan",
     "fetch_plans_for_date",
     "fetch_shadow_for_date",
     "init_ledger",

@@ -61,6 +61,15 @@ class DecisionResponseSerializer(serializers.Serializer):
     position_size_usd = serializers.FloatField(allow_null=True)
     entry_price = serializers.FloatField(allow_null=True)
     market_regime_at_entry = serializers.CharField(allow_null=True)
+    # v2 outcome-join fields — read-only, NULL until the join job stamps
+    # them. NOT present on DecisionRequestSerializer: they are job-set, never
+    # user-writable.
+    outcome_plan_id = serializers.CharField(allow_null=True)
+    fill_status = serializers.CharField(allow_null=True)
+    exit_kind = serializers.CharField(allow_null=True)
+    shadow_return = serializers.FloatField(allow_null=True)
+    realized_pnl = serializers.FloatField(allow_null=True)
+    outcome_computed_at = serializers.DateTimeField(allow_null=True)
 
 
 class DecisionListResponseSerializer(serializers.Serializer):

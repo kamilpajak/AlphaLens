@@ -191,6 +191,62 @@ class TestDeleteDecision:
         assert resp.status_code == 204
 
 
+class TestOutcomeFields:
+    """v2 outcome-join read-only fields on the decision envelope."""
+
+    _OUTCOME_KEYS = {
+        "outcome_plan_id",
+        "fill_status",
+        "exit_kind",
+        "shadow_return",
+        "realized_pnl",
+        "outcome_computed_at",
+    }
+
+    def test_get_carries_nullable_outcome_fields(self, client, feedback_db):
+        # A freshly-POSTed (not-yet-joined) decision exposes all outcome
+        # fields as null so the SPA can render "outcome pending".
+        _post_interested(client)
+        rows = client.get("/v1/feedback/decisions?brief_date=2026-05-28").json()["data"]
+        assert len(rows) == 1
+        for key in self._OUTCOME_KEYS:
+            assert key in rows[0], f"missing outcome key {key}"
+            assert rows[0][key] is None
+
+    def test_post_ignores_user_supplied_outcome_fields(self, client, feedback_db):
+        # Outcome fields are job-set, never user-writable. A POST body
+        # carrying fill_status must NOT persist it (the request serializer
+        # has no such field, so it is dropped).
+        resp = _post_interested(client, fill_status="FILLED", outcome_plan_id="hack-1")
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["fill_status"] is None
+        assert body["outcome_plan_id"] is None
+
+    def test_serialiser_and_response_serializer_field_parity(self):
+        # _serialise_decision (the actual JSON) and DecisionResponseSerializer
+        # (the OpenAPI contract) are hand-mirrored; pin them so drf-spectacular
+        # never emits a schema that disagrees with the wire output.
+        import datetime as dt
+
+        from feedback.serializers import DecisionResponseSerializer
+
+        from alphalens_pipeline.feedback.store import Decision
+        from feedback.views import _serialise_decision
+
+        d = Decision(
+            brief_date=dt.date(2026, 5, 28),
+            ticker="NVDA",
+            theme="ai",
+            surfaced_at=dt.datetime(2026, 5, 28, 6, 30, tzinfo=dt.UTC),
+            action="interested",
+            action_at=dt.datetime(2026, 5, 28, 8, 0, tzinfo=dt.UTC),
+        )
+        wire_keys = set(_serialise_decision(d).keys())
+        schema_keys = set(DecisionResponseSerializer().fields.keys())
+        assert wire_keys == schema_keys
+
+
 class TestTaxonomyEndpoint:
     """GET /v1/feedback/taxonomy — exposes the locked dismiss taxonomy."""
 

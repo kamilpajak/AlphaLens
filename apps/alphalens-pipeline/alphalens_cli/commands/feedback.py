@@ -85,3 +85,47 @@ def report_command(
                 f"  ⚠ other usage = {other_pct:.1%} (>{_OTHER_WARN_THRESHOLD:.0%}) "
                 "— taxonomy may have a gap; review free-text notes."
             )
+
+
+@feedback_app.command(name="join-outcomes")
+def join_outcomes_command(
+    date: str = typer.Option(
+        None,
+        "--date",
+        help="Brief date YYYY-MM-DD to join (default: today UTC).",
+    ),
+    account: str = typer.Option(
+        "test",
+        "--account",
+        help="Alpaca paper account the live chain runs on ('test').",
+    ),
+    ledger: Path = typer.Option(
+        Path.home() / ".alphalens" / "feedback.db",
+        "--ledger",
+        help="Override the default feedback ledger location.",
+    ),
+    paper_ledger: Path = typer.Option(
+        Path.home() / ".alphalens" / "paper_ledger.db",
+        "--paper-ledger",
+        help="Override the default paper-trade ledger location.",
+    ),
+) -> None:
+    """Stamp paper-trade outcomes onto decisions for a brief date (Track A v2).
+
+    Links each decision to its paper plan outcome by (brief_date, ticker,
+    account) and stamps fill_status / exit_kind / outcome_plan_id. The paper
+    harness is decoupled from clicks, so a decision with no matching plan (or
+    a plan that has not closed) is left with NULL outcomes — that is normal.
+    Idempotent: safe to re-run from cron as outcomes mature.
+    """
+    import datetime as dt
+
+    from alphalens_pipeline.feedback.outcome_join import join_decision_outcomes
+
+    brief_date = dt.date.fromisoformat(date) if date else dt.datetime.now(dt.UTC).date()
+    report = join_decision_outcomes(ledger, paper_ledger, brief_date=brief_date, account=account)
+    typer.echo(
+        f"outcome-join {brief_date} account={account}: "
+        f"{report.n_matched}/{report.n_decisions} decisions stamped "
+        f"({report.n_plans} plans, {report.n_unmatched} left NULL)."
+    )

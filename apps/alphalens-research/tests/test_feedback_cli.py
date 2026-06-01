@@ -119,5 +119,72 @@ class TestFeedbackReportCommand(unittest.TestCase):
         self.assertNotIn("⚠", result.stdout)
 
 
+class TestFeedbackJoinOutcomesCommand(unittest.TestCase):
+    """`alphalens feedback join-outcomes` drives the decision<->paper join."""
+
+    def setUp(self):
+        self.runner = CliRunner()
+        self._td = tempfile.TemporaryDirectory()
+        self.fb_path = Path(self._td.name) / "feedback.db"
+        self.ledger_path = Path(self._td.name) / "paper_ledger.db"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_join_stamps_decision_from_paper_outcome(self):
+        from alphalens_pipeline.paper import ledger as paper_ledger
+
+        # seed a clicked decision
+        _seed_decisions(self.fb_path, [_interested("NVDA", "ai")])
+        # seed a matching paper plan + outcome on the 'test' account
+        with paper_ledger.open_ledger(self.ledger_path) as conn:
+            plan = paper_ledger.insert_planned(
+                conn,
+                brief_date=dt.date(2026, 5, 28),
+                ticker="NVDA",
+                theme="ai",
+                planned_at=dt.datetime(2026, 5, 28, 13, 5, tzinfo=UTC),
+                suggested_size_pct=2.0,
+                scale_factor=1.0,
+                final_size_pct=2.0,
+                paper_equity=100_000.0,
+                total_notional=2_000.0,
+                gross_notional=2_000.0,
+                disaster_stop=90.0,
+                order_ttl_days=2,
+                tiers=[(0, 100.0, 20, 100.0, "entry")],
+                tp_tranches=[(0, 120.0, 100.0, 2.0, "tp")],
+                account="test",
+            )
+            paper_ledger.insert_plan_outcome(
+                conn,
+                plan_id=plan.plan_id,
+                exit_kind="TP_HIT",
+                closed_at=dt.datetime(2026, 5, 30, 20, 0, tzinfo=UTC),
+            )
+
+        result = self.runner.invoke(
+            app,
+            [
+                "feedback",
+                "join-outcomes",
+                "--date",
+                "2026-05-28",
+                "--account",
+                "test",
+                "--ledger",
+                str(self.fb_path),
+                "--paper-ledger",
+                str(self.ledger_path),
+            ],
+        )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("1/1", result.stdout)
+        with FeedbackStore.open(self.fb_path) as fb:
+            row = fb.list_by_brief_date(dt.date(2026, 5, 28))[0]
+            self.assertEqual(row.fill_status, "FILLED")
+            self.assertEqual(row.exit_kind, "TP_HIT")
+
+
 if __name__ == "__main__":
     unittest.main()
