@@ -7,6 +7,7 @@ on:
     branches: [main]
   schedule:
     - cron: "0 2 * * 1"  # Weekly Monday 02:00 UTC — detect dependency drift
+  workflow_dispatch: {}  # manual trigger (e.g. re-run live-probes after fixing a vendor)
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -140,11 +141,20 @@ jobs:
         # coverage. The total-coverage figure stays informational; we
         # don't enforce a repo-wide threshold (research code is hard to
         # cover beyond ~70% without simulating real backtest data).
+        #
+        # `--exclude tests/live/test_*_live.py`: the L4 live vendor probes
+        # (test-strategy Phase 5) are env-gated (skipUnless) and run ONLY in
+        # the weekly `live-probes` job against real services — their bodies are
+        # unreachable in hermetic CI BY DESIGN, so they cannot earn diff
+        # coverage here. The shared classifier (`tests/live/__init__.py`) and
+        # its hermetic test (`test_live_probe_helper.py`) are NOT excluded —
+        # they run in this job and stay measured.
         run: |
           uv run diff-cover coverage.xml \
             --compare-branch origin/${{ github.base_ref }} \
             --fail-under 80 \
-            --diff-range-notation "..."
+            --diff-range-notation "..." \
+            --exclude "*/tests/live/test_*_live.py"
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7
@@ -316,3 +326,58 @@ jobs:
           args: >-
             ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '-Dsonar.branch.name=main' || '' }}
         continue-on-error: true
+
+  # -----------------------------------------------------------------------
+  # L4 live vendor probes (test-strategy Phase 5) — hit REAL services,
+  # shape-only, never values. WEEKLY ONLY (`schedule` trigger); the
+  # `if: schedule` guard keeps them off every push/PR so real-data variance,
+  # vendor rate limits, and OpenRouter cost cannot flake a merge. On failure
+  # the job opens a GitHub issue (a vendor changed shape, a DeepSeek model
+  # retired with a 404, or the SEC index.htm format moved) so the operator
+  # notices without a CI red on the PR path.
+  # -----------------------------------------------------------------------
+  live-probes:
+    name: live-probes (weekly)
+    # Weekly cron OR an explicit manual dispatch — NEVER push/PR (cost +
+    # rate-limit + real-data variance must not flake a merge).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python via uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install workspace
+        run: uv sync --group dev --frozen
+
+      - name: Run live probes (shape-only — asserts non-emptiness, never values)
+        env:
+          SEC_LIVE_TEST: "1"
+          OPENROUTER_LIVE_TEST: "1"
+          POLYGON_LIVE_TEST: "1"
+          YFINANCE_LIVE_TEST: "1"
+          SEC_EDGAR_USER_AGENT: ${{ secrets.SEC_EDGAR_USER_AGENT }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+        run: |
+          uv run python -m unittest discover \
+            -s apps/alphalens-research/tests/live \
+            -t apps/alphalens-research -v
+
+      - name: Open an issue if a probe failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Weekly live-probes failed ($(date -u +%Y-%m-%d))" \
+            --label "live-probe-failure" \
+            --body "The weekly L4 live-probes job failed. Likely causes: a vendor changed response shape, a DeepSeek model retired (404 -> silent empty brief, incident #3), the SEC EX-99.1 index.htm format moved (incident #2), or a liquid ticker returned empty. Run log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
