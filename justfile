@@ -53,6 +53,16 @@ test-django:
 test-web:
     cd apps/web && pnpm test
 
+# L3 golden-master replay (test-strategy Phase 3): the VCR cassette infra +
+# brief-stage replay (research) + the ingest→DRF golden (Django). Hermetic —
+# runs off frozen fixtures, no network. Refresh fixtures with
+# apps/alphalens-research/scripts/record_golden_brief.py (needs OPENROUTER_API_KEY).
+test-golden:
+    uv run python -m unittest discover \
+        -s apps/alphalens-research/tests/golden \
+        -t apps/alphalens-research -v
+    cd apps/alphalens-django && uv run pytest briefs/tests/test_golden_api.py -q
+
 # Everything in series — same order as CI
 test: test-python test-django test-web
 
