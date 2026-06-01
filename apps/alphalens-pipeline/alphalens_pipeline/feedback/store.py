@@ -509,7 +509,9 @@ class FeedbackStore:
             params.append(realized_return)
         params.append(decision_id)
         self.conn.execute(
-            f"UPDATE decisions SET {', '.join(set_clauses)} WHERE id = ?",
+            # set_clauses are module-fixed identifiers, never user input; only
+            # the VALUES are parameterised (? placeholders).
+            f"UPDATE decisions SET {', '.join(set_clauses)} WHERE id = ?",  # nosec B608
             params,
         )
 
