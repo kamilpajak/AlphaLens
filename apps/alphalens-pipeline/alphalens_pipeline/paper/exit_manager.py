@@ -60,8 +60,17 @@ Behaviour notes / Known issues (PR-body markers):
       machinery is gone — the OCO group owns the coupling).
   (b) The ladder is attached ONCE on the filled aggregate. Because entry policy
       is cancel-on-first-fill the aggregate never grows, so there is no gap-fill
-      re-size case (the convergence-era concern). A partial TP simply shrinks
-      the held position; the remaining OCO stop legs still cover it.
+      re-size case (the convergence-era concern). A PARTIAL take-profit fill
+      does NOT leave the unfilled remainder stop-less: per Alpaca's official
+      docs (docs.alpaca.markets/docs/orders-at-alpaca, "Bracket Orders"), "if a
+      take-profit order is partially filled, the stop-loss order quantity is
+      automatically ADJUSTED to reflect the remaining position" — the SAME
+      OCO group's stop leg shrinks to cover the remainder, the broker (not this
+      module) owns that adjustment. This is doc-validated, not yet exercised by
+      a live partial-fill probe (paper fills are partial ~10% of the time per
+      Alpaca's paper-trading docs) — see PR Known-issues for the follow-up
+      probe + a partial-coverage monitoring net to catch the case if the
+      broker ever deviates from the documented adjust-not-cancel behavior.
   (c) The account label is a closed enum {main, test}. Anything that turns it
       into a Prometheus / gauge label needs only simple sanitization of those
       two known values — there is no free-form account string to defend
@@ -479,24 +488,50 @@ def _attach_fallback_stop(
             exc,
         )
         return 0, 1
-    insert_order(
-        conn,
-        plan_id=snapshot.plan_id,
-        alpaca_order_id=str(sl_order.id),
-        side="SELL",
-        order_kind="SL",
-        order_type="STOP",
-        qty=qty,
-        stop_price=snapshot.disaster_stop,
-        time_in_force="gtc",
-        submitted_at=submitted_at,
-        account=snapshot.account,
-        platform=snapshot.platform,
-        # Non-NULL exit_group_id so has_exit_ladder is True next pass (the
-        # fallback is attach-once like the OCO ladder). The stop's own id is
-        # the stable per-group key (mirrors record_exit_ladder's tp-id key).
-        exit_group_id=str(sl_order.id),
-    )
+    try:
+        insert_order(
+            conn,
+            plan_id=snapshot.plan_id,
+            alpaca_order_id=str(sl_order.id),
+            side="SELL",
+            order_kind="SL",
+            order_type="STOP",
+            qty=qty,
+            stop_price=snapshot.disaster_stop,
+            time_in_force="gtc",
+            submitted_at=submitted_at,
+            account=snapshot.account,
+            platform=snapshot.platform,
+            # Non-NULL exit_group_id so has_exit_ladder is True next pass (the
+            # fallback is attach-once like the OCO ladder). The stop's own id is
+            # the stable per-group key (mirrors record_exit_ladder's tp-id key).
+            exit_group_id=str(sl_order.id),
+        )
+    except Exception as exc:
+        # Broker-success / ledger-failure window (mirrors the OCO-ladder
+        # orphan-cancel): the stop is LIVE at the broker but the ledger write
+        # failed, so has_exit_ladder stays False and the next pass would submit
+        # a SECOND full-size stop (held_for_orders reject loop, or two live
+        # stops → over-sell to short). Cancel the just-placed stop so a failed
+        # persist leaves NOTHING live, then count it failed and retry next pass.
+        logger.warning(
+            "exit_manager FALLBACK SL ledger write FAILED plan_id=%d ticker=%s "
+            "alpaca=%s: %s; cancelling the orphaned live stop, will retry next cycle",
+            snapshot.plan_id,
+            snapshot.ticker,
+            sl_order.id,
+            exc,
+        )
+        try:
+            broker.cancel_order(str(sl_order.id))
+        except Exception as cancel_exc:
+            logger.warning(
+                "exit_manager FALLBACK SL orphan-cancel FAILED plan_id=%d alpaca=%s: %s",
+                snapshot.plan_id,
+                sl_order.id,
+                cancel_exc,
+            )
+        return 0, 1
     logger.info(
         "exit_manager attach FALLBACK SL plan_id=%d ticker=%s qty=%d stop=%.2f alpaca=%s",
         snapshot.plan_id,

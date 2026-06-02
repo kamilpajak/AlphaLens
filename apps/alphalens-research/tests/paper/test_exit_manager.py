@@ -507,6 +507,64 @@ class TestNoStructureFallbackStop(_ExitTestBase):
         self.assertEqual(o2.action, "NOOP")
         self.assertEqual(len([s for s in self.client.submissions if s["kind"] == "STOP"]), 1)
 
+    def test_fallback_stop_ledger_fail_cancels_orphan_no_double_stop(self):
+        """Broker-success / ledger-failure window for the FALLBACK path:
+        submit_stop_order SUCCEEDS (a full-size stop is LIVE) but the ledger
+        insert RAISES (duplicate alpaca_order_id → orders UNIQUE). The fallback
+        MUST cancel the orphaned live stop so nothing is left live AND nothing
+        persisted — mirrors the OCO-ladder orphan-cancel. Otherwise the next
+        pass re-submits a SECOND full-size stop (held_for_orders reject loop /
+        two live stops → over-sell to short)."""
+
+        class _DupStopBroker(_StubBrokerClient):
+            """submit_stop_order returns a fixed id that collides with a
+            pre-seeded order row, so the fallback insert_order hits the
+            alpaca_order_id UNIQUE constraint and raises."""
+
+            def submit_stop_order(self, **kwargs):
+                self.submissions.append({"kind": "STOP", **kwargs})
+                return _StubOrder(id="dup-stop")
+
+        plan_id = _seed_plan(self.ledger, tp_tranches=[])
+        # Pre-seed an order whose id collides with the fallback stop's id so the
+        # fallback's single insert_order raises (broker-OK / ledger-fails).
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="dup-stop",
+            qty=1,
+            status="FILLED",
+            filled_qty=0,
+            filled_price=0.0,
+        )
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=27,
+            status="FILLED",
+            filled_qty=27,
+            filled_price=99.5,
+        )
+        broker = _DupStopBroker()
+        with open_ledger(self.ledger) as conn:
+            with self.assertLogs("alphalens_pipeline.paper.exit_manager", level="WARNING"):
+                o = process_plan_exit(
+                    conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
+                )
+        # Failure caught + counted, not raised.
+        self.assertEqual(o.action, "ATTACHED")
+        self.assertEqual(o.n_exits_submitted, 0)
+        self.assertEqual(o.n_exits_failed, 1)
+        # The orphaned LIVE stop was cancel-requested.
+        self.assertIn("dup-stop", broker.canceled)
+        # No SL row persisted (the colliding insert rolled back).
+        with open_ledger(self.ledger) as conn:
+            sl_rows = [r for r in fetch_orders_for_plan(conn, plan_id) if r["order_kind"] == "SL"]
+        self.assertEqual(sl_rows, [])
+        # Dead-man signal: still no protective stop this pass.
+        self.assertEqual(o.n_filled_without_sl, 1)
+
 
 class TestExitOrdersInheritPlatformFromSnapshot(_ExitTestBase):
     """Mirror of TestExitManagerThreadsAccountFromSnapshot for the v5
