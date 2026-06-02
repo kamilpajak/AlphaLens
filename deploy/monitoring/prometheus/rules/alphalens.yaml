@@ -228,23 +228,30 @@ groups:
       # renders a duration (``absent()`` fires with value 1 → a misleading
       # "1s ago" if humanizeDuration were on the missing-metric alert).
       #
-      # 432000s = 120h = 1.25× the 96h reader ceiling, so the alert fires a bit
-      # AFTER the reader has already begun degrading stamps to "unknown" rather
-      # than racing it. GAUGE → threshold on ``time() - metric`` / ``absent()``,
-      # never increase()/rate() (the AlphalensEdgarNoCandidates24h lesson).
+      # 259200s = 72h = 0.75× the 96h reader ceiling, so the alert fires ~24h
+      # BEFORE the reader starts degrading stamps to "unknown" — giving the
+      # operator a day of runway to fix a dead FRED refresher while the cache is
+      # still fresh enough to stamp a real regime, rather than paging only after
+      # the damage is done. The refresh runs ~6×/day, so 72h = 18 consecutive
+      # missed runs — unambiguously a dead refresher, no transient-miss false
+      # page. fetched_at is rewritten every successful run (even when FRED has
+      # no new observation), so weekends do not age it. ``{series="VIXCLS"}``
+      # scopes both rules to the one series we depend on. GAUGE → threshold on
+      # ``time() - metric`` / ``absent()``, never increase()/rate() (the
+      # AlphalensEdgarNoCandidates24h lesson).
       - alert: AlphalensVixCacheStale
-        expr: time() - alphalens_vix_cache_fetched_at_timestamp_seconds > 432000
+        expr: time() - alphalens_vix_cache_fetched_at_timestamp_seconds{series="VIXCLS"} > 259200
         for: 5m
         labels:
           severity: warning
           route: telegram
           unit: vix-cache-refresh
         annotations:
-          summary: "VIX regime cache stale > 120h (refreshed ~6x/day)"
-          description: "Last VIX cache refresh was {{ $value | humanizeDuration }} ago. New feedback decisions are stamping market_regime_at_entry='unknown'. Check the refresh-vix step in `journalctl --user -u alphalens-thematic-build.service` on the VPS (FRED_API_KEY / FRED outage)."
+          summary: "VIX regime cache stale > 72h (refreshed ~6x/day)"
+          description: "Last VIX cache refresh was {{ $value | humanizeDuration }} ago. Fix before 96h or new feedback decisions start stamping market_regime_at_entry='unknown'. Check the refresh-vix step in `journalctl --user -u alphalens-thematic-build.service` on the VPS (FRED_API_KEY / FRED outage)."
 
       - alert: AlphalensVixCacheMetricMissing
-        expr: absent(alphalens_vix_cache_fetched_at_timestamp_seconds)
+        expr: absent(alphalens_vix_cache_fetched_at_timestamp_seconds{series="VIXCLS"})
         for: 5m
         labels:
           severity: warning

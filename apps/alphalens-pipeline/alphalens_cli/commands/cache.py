@@ -111,16 +111,18 @@ def refresh_vix_cache(
     # refresher silently ages the cache past the 96h reader ceiling, degrading
     # every new decision's ``market_regime_at_entry`` to "unknown" with no
     # other signal — this gauge is what the staleness alert watches. The write
-    # above is the real work; an emit OSError (full/unwriteable metrics dir) is
-    # pure observability debt and must not raise, so the best-effort
-    # ``|| echo WARN`` step in run_thematic_day.sh keeps the fresh VIX value.
+    # above is the real work; any emit failure is pure observability debt and
+    # must not raise, so the best-effort ``|| echo WARN`` step in
+    # run_thematic_day.sh keeps the fresh VIX value. Catch broad ``Exception``
+    # (not just OSError) to match the other emit callsites — a malformed
+    # metrics dict must never abort a successful refresh either.
     try:
         emit_domain_metrics(
             job=_VIX_JOB,
             metrics={f'{_VIX_METRIC}{{series="{_VIX_SERIES}"}}': int(now.timestamp())},
         )
-    except OSError:
-        logger.warning("VIX cache freshness metric emit failed", exc_info=True)
+    except Exception:
+        logger.exception("emit_domain_metrics failed; vix-cache-refresh run succeeded")
     return payload
 
 

@@ -557,11 +557,13 @@ class TestEmitFailureDoesNotPoisonSuccessPath(unittest.TestCase):
             ):
                 thematic.brief(date="2026-05-29", scored_dir=scored_dir, output_dir=output_dir)
 
-    def test_refresh_vix_swallows_emit_oserror(self) -> None:
-        # The VIX cache JSON is os.replace'd to disk before the emit; an
-        # OSError from the metrics dir must not raise, so the best-effort
-        # `|| echo WARN` contract in run_thematic_day.sh still holds and the
-        # fresh VIX value is not lost just because observability failed.
+    def test_refresh_vix_swallows_emit_error(self) -> None:
+        # The VIX cache JSON is os.replace'd to disk before the emit; ANY emit
+        # error must not raise, so the best-effort `|| echo WARN` contract in
+        # run_thematic_day.sh still holds and the fresh VIX value is not lost
+        # just because observability failed. Use a non-OSError (RuntimeError,
+        # e.g. a malformed metrics dict) to pin the broad `except Exception`
+        # guard — matching the other emit callsites, not just OSError.
         import datetime as dt
 
         import pandas as pd
@@ -571,7 +573,9 @@ class TestEmitFailureDoesNotPoisonSuccessPath(unittest.TestCase):
         now = dt.datetime(2026, 6, 1, 6, 30, tzinfo=dt.UTC)
         with tempfile.TemporaryDirectory() as tmp:
             cache_path = Path(tmp) / "vix_regime_cache.json"
-            with patch.object(cache, "emit_domain_metrics", side_effect=OSError("no metrics dir")):
+            with patch.object(
+                cache, "emit_domain_metrics", side_effect=RuntimeError("bad metrics dict")
+            ):
                 payload = cache.refresh_vix_cache(cache_path, fred_fetch=lambda: series, now=now)
             # MUST NOT raise; the cache write succeeded.
             self.assertEqual(payload["vix"], 18.4)

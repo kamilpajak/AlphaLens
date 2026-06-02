@@ -670,10 +670,11 @@ class TestVixCacheStaleness(unittest.TestCase):
     METRIC = "alphalens_vix_cache_fetched_at_timestamp_seconds"
     STALE = "AlphalensVixCacheStale"
     MISSING = "AlphalensVixCacheMetricMissing"
-    # 432000s = 120h = 1.25x the 96h reader ceiling in
-    # alphalens_feedback.regime._VIX_MAX_AGE_SECONDS, so the alert fires a bit
-    # AFTER the reader has already started degrading stamps to "unknown".
-    THRESHOLD = 432000
+    # 259200s = 72h = 0.75x the 96h reader ceiling in
+    # alphalens_feedback.regime._VIX_MAX_AGE_SECONDS, so the alert fires ~24h
+    # BEFORE the reader starts degrading stamps to "unknown" — a day of runway
+    # to fix a dead refresher rather than paging after the damage is done.
+    THRESHOLD = 259200
 
     def _rules(self) -> list[dict]:
         return _load_rules()["groups"][0]["rules"]
@@ -697,10 +698,13 @@ class TestVixCacheStaleness(unittest.TestCase):
         # Pin the literal threshold: the cron staleness-threshold dict keys on
         # AlphalensJobStale only, so a differently-named VIX rule escapes it —
         # this is its sole regression pin against a silent threshold widen.
+        # Allow an optional {label} selector between the metric and `>` —
+        # the rule scopes to {series="VIXCLS"} so it stays correct if a second
+        # macro series ever emits the same metric name.
         self.assertRegex(
             expr,
-            rf"time\(\)\s*-\s*{re.escape(self.METRIC)}\s*>\s*{self.THRESHOLD}\b",
-            f"Stale expr must be `time() - {self.METRIC} > {self.THRESHOLD}`.",
+            rf"time\(\)\s*-\s*{re.escape(self.METRIC)}(\{{[^}}]*\}})?\s*>\s*{self.THRESHOLD}\b",
+            f"Stale expr must be `time() - {self.METRIC}[{{...}}] > {self.THRESHOLD}`.",
         )
 
     def test_stale_alert_reports_duration_and_routes_to_telegram(self) -> None:
