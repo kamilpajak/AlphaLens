@@ -6,6 +6,7 @@ import datetime as dt
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import typer
@@ -63,7 +64,7 @@ def _source_volume_metrics(counts: dict[str, int]) -> dict[str, int]:
     }
 
 
-def _is_filled_template_id(v: object) -> bool:
+def _is_filled_template_id(v: Any) -> bool:
     """True when ``v`` is a non-empty, non-sentinel brief_template_id.
 
     Guards ``pd.isna`` BEFORE ``bool(v)``: a pandas nullable ``pd.NA`` (possible
