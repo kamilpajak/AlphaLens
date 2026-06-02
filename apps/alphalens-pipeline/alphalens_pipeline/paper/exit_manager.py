@@ -602,23 +602,61 @@ def _attach_tps(
 
 
 def _classify_exit_kind(snapshot: _PlanSnapshot) -> str:
-    """Pick the canonical exit_kind from how the exit orders ended.
+    """Pick the canonical exit_kind by which side retired the MAJORITY of
+    the exited shares (quantity-weighted), called only once every exit order
+    is terminal so the observed fill counts are final.
 
-    Uses ``filled_qty_observed > 0`` rather than ``status == 'FILLED'``
-    because the Phase-A SL-not-resized simplification means Alpaca may
-    PARTIAL-fill the SL up to remaining inventory (when partial TPs
-    already executed) and then transition the order to CANCELED rather
-    than FILLED. Looking at the observed fill count avoids that lockup.
+    WHY quantity-weighted: an OCO ladder (PR-1/PR-2) produces MULTIPLE TP rows
+    and MULTIPLE SL rows sharing one exit_group_id. With that, mixed fills are
+    realistic — several tranches take profit while a price gap fills one stop
+    slice. The legacy any-SL-fill rule returned SL_HIT the moment a single SL
+    slice caught a dip, mislabeling a mostly-take-profit exit as a stop-out
+    (the R2 bug). Summing fills per side and labeling by the majority fixes it.
+
+    Uses ``filled_qty_observed`` (NOT ``status == 'FILLED'``) for the per-side
+    counts: the Phase-A SL-not-resized simplification means Alpaca may
+    PARTIAL-fill the SL up to remaining inventory (when partial TPs already
+    executed) and then transition the order to CANCELED rather than FILLED.
+    Looking at the observed fill count avoids that lockup.
+
+    This labels ONLY the categorical exit_kind. The realized-R math in
+    ``_write_outcome`` blends fills across all sides and is unchanged.
+
+    Ordered rules (returns one of the plan_outcomes CHECK values
+    TP_HIT / SL_HIT / TIME_STOP_HIT / PARTIAL_TP):
+      1. qty_ts > 0           → TIME_STOP_HIT (the time-stop liquidation
+         dominates regardless of any TP/SL fills — unchanged precedence).
+      2. qty_tp == 0 and qty_sl == 0 → PARTIAL_TP (no exit fills observed —
+         the catch-all default).
+      3. qty_sl >= qty_tp     → SL_HIT (the stop retired at least half the
+         exited shares; a tie goes to SL = conservative; this still yields
+         SL_HIT for the legacy pure-stop case qty_tp == 0).
+      4. qty_sl == 0 and (qty_tp >= total_entry OR all TP terminal-FILLED)
+         → TP_HIT (a clean full take-profit with no stop fill — the legacy
+         full-TP case + the all-tranches-took-profit OCO case).
+      5. otherwise            → PARTIAL_TP (TP retired the majority but it is
+         not a clean full take-profit — some shares remain or a minority stop
+         slice also filled; this is the R2 fix).
     """
     sl_orders = [o for o in snapshot.exit_orders if o["order_kind"] == "SL"]
     tp_orders = [o for o in snapshot.exit_orders if o["order_kind"] == "TP"]
     time_stop_orders = [o for o in snapshot.exit_orders if o["order_kind"] == "TIME_STOP"]
 
-    if any(int(o["filled_qty_observed"] or 0) > 0 for o in time_stop_orders):
+    qty_ts = sum(int(o["filled_qty_observed"] or 0) for o in time_stop_orders)
+    qty_tp = sum(int(o["filled_qty_observed"] or 0) for o in tp_orders)
+    qty_sl = sum(int(o["filled_qty_observed"] or 0) for o in sl_orders)
+    total_entry = snapshot.total_entry_filled_qty
+
+    if qty_ts > 0:
         return "TIME_STOP_HIT"
-    if any(int(o["filled_qty_observed"] or 0) > 0 for o in sl_orders):
+    if qty_tp == 0 and qty_sl == 0:
+        return "PARTIAL_TP"
+    if qty_sl >= qty_tp:
         return "SL_HIT"
-    if tp_orders and all(o["status"] == "FILLED" for o in tp_orders):
+    # Here qty_tp > qty_sl.
+    if qty_sl == 0 and (
+        qty_tp >= total_entry or (tp_orders and all(o["status"] == "FILLED" for o in tp_orders))
+    ):
         return "TP_HIT"
     return "PARTIAL_TP"
 
