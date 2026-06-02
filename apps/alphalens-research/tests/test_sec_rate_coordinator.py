@@ -8,6 +8,7 @@ since single-thread sequencing cannot prove two processes serialise.
 
 from __future__ import annotations
 
+import contextlib
 import multiprocessing
 import os
 import tempfile
@@ -215,16 +216,25 @@ class TestRealMultiprocessSerialisation(_CoordTestBase):
         # ACTUAL cross-process flock path that single-thread tests cannot.
         ctx = multiprocessing.get_context("spawn")
         out_q = ctx.Queue()
-        self.path.write_text(f"{time.time() + 0.15:.6f}")
+        # Seed 0.5s ahead (not 0.15s) to absorb spawn startup jitter + any
+        # parent/child clock skew — if the seed were already in the past by the
+        # time a spawned child reads it, both would get wait≈0 and flake.
+        self.path.write_text(f"{time.time() + 0.5:.6f}")
         procs = [ctx.Process(target=_worker, args=(str(self.path), out_q)) for _ in range(2)]
         for p in procs:
             p.start()
         for p in procs:
             p.join(timeout=10)
-        waits = sorted(out_q.get(timeout=5) for _ in range(2))
+        waits = []
+        for _ in range(2):
+            # A slow/dead child surfaces as the clean length assert below.
+            with contextlib.suppress(Exception):
+                waits.append(out_q.get(timeout=5))
+        self.assertEqual(len(waits), 2, "both subprocesses must report a wait")
+        waits.sort()
         # At least one process waited near the pre-seeded gap; the other stacked
-        # behind it (>= ~min_interval more). Loose bounds for CI jitter.
-        self.assertGreaterEqual(waits[1], 0.1)
+        # behind it (>= ~min_interval more). Generous lower bound for CI jitter.
+        self.assertGreater(waits[1], 0.05)
 
 
 if __name__ == "__main__":

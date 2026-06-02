@@ -123,11 +123,23 @@ class SecRateCoordinator:
             return 0.0
         try:
             wait_s = self._reserve_slot()
-        except (_LockUnavailableError, OSError) as exc:
+        except _LockUnavailableError as exc:
+            # A holder is stuck; the path itself is fine. Skip the gate for THIS
+            # call only (transient) and retry next time. Warn once to avoid spam.
+            if not self._warned_io:
+                logger.warning("sec rate coordinator lock busy (%s); skipping gate", exc)
+                self._warned_io = True
+            return 0.0
+        except OSError as exc:
+            # The lock dir may have gone unwritable mid-run (remount ro, perms,
+            # container restart). Re-probe so a recovered filesystem RE-ENGAGES
+            # the gate instead of silently running unthrottled forever — that
+            # silent state is exactly the #379 403-storm condition this exists to
+            # prevent. Warn once to avoid spam; recovery is silent.
+            self._enabled = self._probe_enabled()
             if not self._warned_io:
                 logger.warning(
-                    "sec rate coordinator degraded (%s); skipping cross-process gate for this call",
-                    exc,
+                    "sec rate coordinator degraded (%s); re-enabled=%s", exc, self._enabled
                 )
                 self._warned_io = True
             return 0.0
@@ -157,6 +169,11 @@ class SecRateCoordinator:
         """Critical section: read prior reservation, reserve the next slot,
         release. Returns seconds to sleep AFTER lock release.
         """
+        # `now` is snapped BEFORE the lock. Safe: max(now, prior) below collapses
+        # any inter-call delay — `prior` is >= the previous holder's reservation
+        # (written while it held the lock), and this `now` is >= that holder's
+        # clock, so the TOCTOU window between open() and flock() cannot grant two
+        # processes the same slot.
         now = self._clock()
         fd = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o644)
         try:
@@ -176,6 +193,14 @@ class SecRateCoordinator:
         raw = os.read(fd, 64).strip()
         if not raw:
             return now  # first-ever call: empty file
+        # A truncated token (short write under memory pressure, torn page) would
+        # parse to an EARLIER time and let two processes overlap a slot — silently
+        # re-opening the #379 bug. The write format is a full epoch with 6
+        # decimals (>= 17 chars today); anything implausibly short is treated as
+        # corrupt and reset to `now` (safe: max(now, prior)=now -> no overlap).
+        if len(raw) < 10:
+            logger.warning("sec rate coordinator: short read %r; resetting", raw)
+            return now
         try:
             value = float(raw)
         except ValueError:
@@ -193,7 +218,18 @@ class SecRateCoordinator:
     def _write_reservation(self, fd: int, value: float) -> None:
         os.lseek(fd, 0, os.SEEK_SET)
         os.ftruncate(fd, 0)
-        os.write(fd, f"{value:.6f}".encode("ascii"))
+        data = f"{value:.6f}".encode("ascii")
+        written = os.write(fd, data)
+        if written != len(data):
+            # A short write (memory pressure, overlayfs) leaves a truncated
+            # reservation that a reader would parse as an earlier slot. Warn so
+            # the operator sees it; the short-read guard in _read_reservation is
+            # the safety net that resets such a torn value to `now`.
+            logger.warning(
+                "sec rate coordinator: partial write %d/%d bytes; reservation may be torn",
+                written,
+                len(data),
+            )
         # No fsync: see module docstring (#381 review) — visibility to live
         # concurrent processes is via flock + page cache; restart durability is
         # not needed because stale past values collapse to `now`.

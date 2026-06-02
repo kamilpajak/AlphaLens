@@ -230,11 +230,12 @@ class TestPermanent4xx(unittest.TestCase):
         self.assertEqual(len(session.calls), 1)
 
     def test_403_raises_immediately(self):
-        # 403 typically means User-Agent rejected — also permanent.
+        # 403 is permanent within one process (UA-reject OR shared-IP traffic
+        # threshold) — raised as SecForbiddenError, no retry budget spent.
         session = _FakeSession([_FakeResponse(403, text="forbidden")])
         client = _make_client(session, _SleepRecorder())
 
-        with self.assertRaises(SecEdgarError):
+        with self.assertRaises(SecForbiddenError):
             client.fetch_submissions("0000320193")
         self.assertEqual(len(session.calls), 1)
 

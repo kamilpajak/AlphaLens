@@ -370,6 +370,12 @@ def _enrich_filing(row: dict, *, client: SecEdgarClient) -> dict | None:
     One ``{accession}-index.htm`` fetch yields the document-Type table that
     locates both the primary 8-K (for item extraction) and the EX-99.1 (for the
     body), so no separate FilingSummary.xml round-trip is needed.
+
+    Raises ``SecForbiddenError`` if any of the per-filing fetches (index.htm /
+    primary / EX-99.1) 403s under shared-IP load — the caller MUST classify this
+    as a transient error so an all-403 day does not cache an empty/empty-body
+    frame that poisons later runs (#382/#383). Do NOT wrap the body fetch in a
+    blanket ``except Exception`` that would re-swallow it.
     """
     base_dir = row["base_dir"]
     index_html = client.get_text(f"{base_dir}/{row['accession']}-index.htm")
