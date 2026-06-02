@@ -582,5 +582,112 @@ class TestEmitFailureDoesNotPoisonSuccessPath(unittest.TestCase):
             self.assertTrue(cache_path.exists())
 
 
+class TestThematicIngestEmitsSourceRows(unittest.TestCase):
+    """#384 EX-99.1 dead-man-switch: ``thematic ingest`` emits a RAW per-source
+    row-count gauge ``alphalens_thematic_source_rows{source=...}`` folded into
+    the SAME single thematic-ingest emit as the stage-volume gauges (one
+    textfile, one atomic write). A sustained ``edgar_press_release=0`` trips
+    ``AlphalensEdgarPressReleaseDark``. The count is the RAW pre-dedup out-param
+    value, NOT the post-dedup aggregate (which undercounts edgar).
+    """
+
+    def test_ingest_folds_per_source_raw_counts_into_single_emit(self) -> None:
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        df = pd.DataFrame({"source": ["polygon", "rss"], "tickers": [["AAPL"], ["MSFT"]]})
+
+        def fake_ingest(*args, source_row_counts=None, **kwargs):
+            if source_row_counts is not None:
+                source_row_counts.update(
+                    {"edgar_press_release": 0, "polygon": 1, "gdelt": 0, "rss": 1}
+                )
+            return df
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(thematic.news_ingest, "ingest_daily", side_effect=fake_ingest),
+                patch.object(thematic, "emit_domain_metrics") as emit,
+            ):
+                thematic.ingest(date="2026-05-29", cache_dir=Path(tmp))
+
+            emit.assert_called_once()
+            kwargs = emit.call_args.kwargs
+            self.assertEqual(kwargs["job"], "thematic-ingest")
+            metrics = kwargs["metrics"]
+            # Stage gauges still present (folded, not replaced).
+            self.assertEqual(metrics['alphalens_thematic_stage_output_rows{stage="ingest"}'], 2)
+            # Per-source raw gauges — edgar=0 is the load-bearing signal.
+            self.assertEqual(
+                metrics['alphalens_thematic_source_rows{source="edgar_press_release"}'], 0
+            )
+            self.assertEqual(metrics['alphalens_thematic_source_rows{source="polygon"}'], 1)
+            self.assertEqual(metrics['alphalens_thematic_source_rows{source="gdelt"}'], 0)
+            self.assertEqual(metrics['alphalens_thematic_source_rows{source="rss"}'], 1)
+
+    def test_ingest_passes_a_dict_to_ingest_daily(self) -> None:
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(
+                    thematic.news_ingest,
+                    "ingest_daily",
+                    return_value=pd.DataFrame({"source": [], "tickers": []}),
+                ) as ingest_daily,
+                patch.object(thematic, "emit_domain_metrics"),
+            ):
+                thematic.ingest(date="2026-05-29", cache_dir=Path(tmp))
+
+            kwargs = ingest_daily.call_args.kwargs
+            self.assertIn("source_row_counts", kwargs)
+            self.assertIsInstance(kwargs["source_row_counts"], dict)
+
+    def test_source_rows_land_in_prom_file_with_edgar_label(self) -> None:
+        # End-to-end through the REAL emitter so the exposition-format label
+        # string is exercised (the mock tests never serialize). edgar=0 must be
+        # written, not skipped.
+        import os
+
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        df = pd.DataFrame({"source": ["polygon"], "tickers": [["AAPL"]]})
+
+        def fake_ingest(*args, source_row_counts=None, **kwargs):
+            if source_row_counts is not None:
+                source_row_counts.update(
+                    {"edgar_press_release": 0, "polygon": 1, "gdelt": 0, "rss": 0}
+                )
+            return df
+
+        with tempfile.TemporaryDirectory() as tmp:
+            metrics_dir = Path(tmp) / "metrics"
+            with (
+                patch.dict(os.environ, {"ALPHALENS_TEXTFILE_DIR": str(metrics_dir)}),
+                patch.object(thematic.news_ingest, "ingest_daily", side_effect=fake_ingest),
+            ):
+                thematic.ingest(date="2026-05-29", cache_dir=Path(tmp) / "news")
+
+            prom = (metrics_dir / "alphalens_domain_thematic-ingest.prom").read_text()
+            self.assertIn('alphalens_thematic_source_rows{source="edgar_press_release"} 0', prom)
+            self.assertIn('alphalens_thematic_source_rows{source="polygon"} 1', prom)
+
+    def test_emit_failure_does_not_crash_ingest(self) -> None:
+        # PR #311 rule: the parquet is already written; an emit failure must not
+        # fail the unit (the folded emit shares the same try/except).
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        df = pd.DataFrame({"source": ["polygon"], "tickers": [["AAPL"]]})
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(thematic.news_ingest, "ingest_daily", return_value=df),
+                patch.object(thematic, "emit_domain_metrics", side_effect=OSError("disk full")),
+            ):
+                thematic.ingest(date="2026-05-29", cache_dir=Path(tmp))  # MUST NOT raise
+
+
 if __name__ == "__main__":
     unittest.main()

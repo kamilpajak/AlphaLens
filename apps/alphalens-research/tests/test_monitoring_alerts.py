@@ -740,5 +740,121 @@ class TestVixCacheStaleness(unittest.TestCase):
             )
 
 
+class TestEdgarPressReleaseDark(unittest.TestCase):
+    """#384 per-source dead-man-switch for the EDGAR EX-99.1 ingest.
+
+    Epic #379: the EX-99.1 daily-index ingest was 403'd under concurrent per-IP
+    SEC load and produced ZERO edgar_press_release rows for ~6 consecutive days,
+    silently (the empty frame was swallowed by _safe_call). No hermetic /
+    single-shot / L4-live test can catch a load-dependent failure. This rule is
+    the backstop: alert when the RAW edgar_press_release source count
+    (alphalens_thematic_source_rows{source="edgar_press_release"}, emitted
+    UNCONDITIONALLY pre-dedup by `thematic ingest`) stays 0 for a sustained
+    window. Distinct alertname + NO job= label (like the VIX-cache rules) keep
+    it out of the cron-keyed enumerations, so it needs its OWN pins here.
+    """
+
+    METRIC = 'alphalens_thematic_source_rows{source="edgar_press_release"}'
+    DARK = "AlphalensEdgarPressReleaseDark"
+    MISSING = "AlphalensEdgarPressReleaseMetricMissing"
+    # 5d, NOT 4d: max_over_time(...[Nd]) == 0 fires the instant the window holds
+    # only zeros, so tolerating the worst legit 4-zero-day cluster (pessimistic
+    # Thanksgiving Thu-Sun) needs a window STRICTLY longer than 4d. A future edit
+    # that shrinks this to 4d (or below a 3-day holiday weekend) is a false page;
+    # growing it past 5d delays the real incident.
+    WINDOW = "5d"
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def _one(self, alertname: str) -> dict:
+        matches = [r for r in self._rules() if r.get("alert") == alertname]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {alertname}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_dark_alert_exists(self) -> None:
+        self._one(self.DARK)
+
+    def test_dark_expr_is_gauge_correct_max_over_time_zero(self) -> None:
+        expr = self._one(self.DARK)["expr"]
+        self.assertIn(self.METRIC, expr)
+        self.assertIn("max_over_time", expr)
+        self.assertIn("== 0", expr)
+        self.assertNotIn("increase(", expr)
+        self.assertNotIn("rate(", expr)
+
+    def test_dark_expr_window_is_five_days(self) -> None:
+        # Pin the literal window so a noise-reduction edit can't silently shrink
+        # it below the worst holiday cluster (false page) or grow it so the
+        # 6-day 403 starvation slips through.
+        expr = self._one(self.DARK)["expr"]
+        self.assertIn(f"max_over_time({self.METRIC}[{self.WINDOW}])", expr)
+
+    def test_dark_has_for_debounce(self) -> None:
+        self.assertIn("for", self._one(self.DARK))
+
+    def test_dark_routes_to_telegram(self) -> None:
+        self.assertEqual(self._one(self.DARK).get("labels", {}).get("route"), "telegram")
+
+    def test_dark_severity_is_warning_not_critical(self) -> None:
+        # A degraded data source is not a wake-up outage; critical breeds alert
+        # fatigue (the AlphalensEdgarNoCandidates24h / brief-anomaly precedent).
+        self.assertEqual(self._one(self.DARK).get("labels", {}).get("severity"), "warning")
+
+    def test_missing_alert_wraps_absent(self) -> None:
+        expr = self._one(self.MISSING)["expr"]
+        self.assertIn(f"absent({self.METRIC}", expr)
+        self.assertEqual(self._one(self.MISSING).get("labels", {}).get("route"), "telegram")
+
+    def test_production_ingest_uses_force_so_the_gauge_is_always_fresh(self) -> None:
+        # The Dark rule's whole window analysis assumes the source gauge is
+        # OVERWRITTEN with a fresh sample every thematic-build run. On a cache
+        # hit ingest_daily skips the fetches and leaves source_row_counts empty,
+        # so the CLI emits no source gauge and node_exporter re-serves the last
+        # (possibly nonzero) value — silencing the alert. The production
+        # invocation passes --force precisely to bypass the per-UTC-day cache, so
+        # pin it here: a future edit that drops --force from run_thematic_day.sh
+        # would quietly break this backstop.
+        script = (REPO_ROOT / "deploy" / "docker" / "run_thematic_day.sh").read_text()
+        self.assertRegex(script, r"thematic\s+ingest\s+--force")
+
+
+class TestEdgarPressReleaseDoesNotCollideWithCronEnums(unittest.TestCase):
+    """Regression pin: the #384 alerts stay isolated from the cron-keyed
+    AlphalensJobStale / AlphalensJobMetricMissing machinery — same contract the
+    VIX-cache rules hold.
+    """
+
+    DARK = "AlphalensEdgarPressReleaseDark"
+    MISSING = "AlphalensEdgarPressReleaseMetricMissing"
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def test_alertnames_are_distinct_from_cron_alertnames(self) -> None:
+        cron = {"AlphalensJobStale", "AlphalensJobMetricMissing", "AlphalensJobFailed"}
+        self.assertNotIn(self.DARK, cron)
+        self.assertNotIn(self.MISSING, cron)
+
+    def test_rules_carry_no_job_label(self) -> None:
+        # A job= label would falsely register these in the job-keyed parity test
+        # and demand a phantom systemd unit. The distinct alertname is the real
+        # isolation; this is the belt-pin (the metric is a per-source slice of
+        # thematic-ingest, not a systemd unit's last_success).
+        for name in (self.DARK, self.MISSING):
+            matches = [r for r in self._rules() if r.get("alert") == name]
+            self.assertEqual(len(matches), 1)
+            self.assertNotIn("job", matches[0].get("labels", {}))
+            self.assertIsNone(re.search(r'job="[^"]+"', matches[0].get("expr", "")))
+
+    def test_active_jobs_not_inflated_by_this_alert(self) -> None:
+        # The switch is per-SOURCE, not a new cron unit — it must not be added to
+        # ACTIVE_JOBS (which would demand a staleness rule + emitting unit).
+        self.assertNotIn("thematic-ingest", ACTIVE_JOBS)
+        self.assertNotIn("edgar-press-release", ACTIVE_JOBS)
+
+
 if __name__ == "__main__":
     unittest.main()

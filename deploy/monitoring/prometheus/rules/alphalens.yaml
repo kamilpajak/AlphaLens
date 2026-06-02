@@ -432,3 +432,76 @@ groups:
         annotations:
           summary: "Template {{ $labels.template_id }} match rate < 20% for 7 days"
           description: "Per-template match-rate sustained below 20% — review pattern in templates/{{ $labels.template_id }}.yaml or accept drift via `alphalens templates evaluate`."
+
+      # ---------------------------------------------------------------
+      # EDGAR EX-99.1 press-release dead-man-switch (epic #379 / #384).
+      # ---------------------------------------------------------------
+      #
+      # The SEC EX-99.1 daily-index ingest (#332) went dark for ~6
+      # consecutive days under concurrent per-IP 403 load (edgar-detect +
+      # thematic-build + companyfacts burst > 10 req/s); the 403 was not
+      # retried and ``_safe_call`` swallowed the empty frame -> 0
+      # edgar_press_release rows -> 0 template matches -> empty
+      # brief_template_id. PR #386 fixed the CAUSE (cross-process rate
+      # coordinator); this is the BACKSTOP. The ingest STAGE gauge cannot
+      # catch it: the lexical-cluster representative is chosen timestamp-
+      # first, so a non-earliest edgar row loses its source label, and the
+      # cap drops rows -> the post-dedup count is not edgar-specific. The
+      # CLI emits the RAW pre-dedup per-source count
+      # (``alphalens_thematic_source_rows{source=...}``), written
+      # UNCONDITIONALLY (edgar=0 on a swallowed 403 IS the signal), so this
+      # rule can alert on edgar going dark.
+      #
+      # No single-shot / hermetic / L4-live-probe test can catch a
+      # LOAD-dependent 403 (the probe tests ONE fetch in isolation = the
+      # always-worked manual case). This rule also catches the #383
+      # partial-frame-cache trade-off (a 1-survivor 403 day caches + short-
+      # circuits).
+      #
+      # WINDOW = 5d, NOT 4d. ``max_over_time(...[Nd]) == 0`` fires the
+      # instant the trailing window holds only zeros, so to TOLERATE an
+      # N-zero-day cluster the window must be STRICTLY LONGER than the
+      # cluster. The worst legitimate all-zero run is the pessimistic
+      # Thanksgiving cluster (Thu closed + Fri thin + Sat + Sun = 4 zero-
+      # days). 5d = worst-legit (4d) + 1 tolerates it; the 6-day 403
+      # starvation still trips a 5d window on ~day 5 + the for:6h debounce,
+      # ~1 day of headroom. thematic-build is NOT trading-day-gated
+      # (OnCalendar HH:30 UTC every day), so weekend runs overwrite the
+      # gauge with fresh samples — this window analysis holds ONLY while the
+      # timer stays non-gated. If a future PR adds
+      # ExecCondition=is-trading-day the weekend gauge goes stale and this
+      # window must be re-derived.
+      #
+      # GAUGE (overwritten each run) -> max_over_time, never
+      # increase()/rate() (the PR #312 lesson). DISTINCT alertname + NO
+      # ``job=`` label (like the VIX-cache rules) keeps it out of the
+      # per-job cron enumerations. Severity warning, not critical: a
+      # degraded data source is not a wake-up outage (over-escalation breeds
+      # alert fatigue — the AlphalensEdgarNoCandidates24h precedent).
+      - alert: AlphalensEdgarPressReleaseDark
+        expr: max_over_time(alphalens_thematic_source_rows{source="edgar_press_release"}[5d]) == 0
+        for: 6h
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-build
+        annotations:
+          summary: "EDGAR EX-99.1 press-release ingest produced 0 rows for 5 days"
+          description: "The edgar_press_release source has been dark across every thematic-build run for the last 5 days — longer than any normal weekend or the worst holiday cluster (Thanksgiving). Likely a per-IP SEC 403 starvation under concurrent load (epic #379) that _safe_call swallowed: empty press-release rows -> 0 template matches -> empty brief_template_id. Check the ingest step in `journalctl --user -u alphalens-thematic-build.service` and the SEC daily-index fetch / sec_rate_coord.lock. The aggregate ingest stage gauge will NOT show this; it undercounts edgar after dedup/cap."
+
+      # absent() companion for the cold-start / emit-step-broken blind spot.
+      # During a real 403 starvation the series is PRESENT at 0 (the Dark
+      # rule's job), so this only fires when the source-volume emit step
+      # itself never landed since metrics were enabled (fresh deploy, or a
+      # broken textfile collector / node_exporter scrape). Clears on the
+      # first successful ingest.
+      - alert: AlphalensEdgarPressReleaseMetricMissing
+        expr: absent(alphalens_thematic_source_rows{source="edgar_press_release"})
+        for: 1h
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-build
+        annotations:
+          summary: "EDGAR press-release source-volume metric missing"
+          description: "No alphalens_thematic_source_rows{source=edgar_press_release} series. The ingest source-volume emit step has not succeeded since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Expected once on a fresh deploy; clears after the first successful `alphalens thematic ingest` run."
