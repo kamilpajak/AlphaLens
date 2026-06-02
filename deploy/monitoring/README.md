@@ -7,16 +7,20 @@ rules + Alertmanager Telegram routing + a Grafana dashboard on top.
 
 ## What this PR delivers
 
+   (Output dir = `$ALPHALENS_TEXTFILE_DIR`; in prod
+   `/var/lib/node_exporter/textfile`, see the wiring section below. The
+   `~/.alphalens/metrics` path mentioned below is the dev/test fallback only.)
+
 1. **Bash hook** `deploy/systemd/bin/alphalens-emit-job-metrics` —
    called as `ExecStopPost=` from every active service. Writes
-   `~/.alphalens/metrics/alphalens_job_<job>.prom` with cron-health
+   `$ALPHALENS_TEXTFILE_DIR/alphalens_job_<job>.prom` with cron-health
    gauges (last_run, last_duration, last_exit_code, last_success).
    Atomic via tempfile + `mv`.
 
 2. **Python helper**
    `alphalens_pipeline/observability/textfile.py::emit_domain_metrics` —
    called from each CLI success-path. Writes
-   `~/.alphalens/metrics/alphalens_domain_<job>.prom` with
+   `$ALPHALENS_TEXTFILE_DIR/alphalens_domain_<job>.prom` with
    domain-specific gauges (events detected, briefs written, AV
    quota remaining, etc.). Atomic via `os.replace`.
 
@@ -31,48 +35,54 @@ rules + Alertmanager Telegram routing + a Grafana dashboard on top.
    long-running daemon that completed its bulk run on 2026-05-08
    and would produce a single end-of-run point.
 
-## node_exporter wiring (one-time operator step on the VPS)
+## node_exporter wiring (LIVE VPS config)
 
-The existing node_exporter docker container needs the textfile
-collector enabled + the metrics dir bind-mounted. The metrics dir
-ownership is the operator UID (the systemd-user units run as that
-UID) and the read mode is `:ro` for node_exporter.
+> **The scrape dir is `/var/lib/node_exporter/textfile`, NOT
+> `~/.alphalens/metrics`.** The live VPS node_exporter container runs
+> `--collector.textfile.directory=/var/lib/node_exporter/textfile` with an
+> identity bind mount of that path, and `/etc/alphalens/env` sets
+> `ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile` so **every**
+> emitter writes there. This section was originally written against
+> `~/.alphalens/metrics` (the Python `DEFAULT_DIR` fallback); the live
+> wiring moved to a dedicated system dir and the docs are kept in sync here.
+
+Both halves of the metric stream must land in the one scraped dir:
+
+- **Host emitters** (the bash `ExecStopPost` hook + the host-venv CLI
+  commands like `feedback backfill-shadow-returns`) read
+  `ALPHALENS_TEXTFILE_DIR` from `/etc/alphalens/env` → write to
+  `/var/lib/node_exporter/textfile`.
+- **Container emitter** (the thematic-build pipeline image, which emits the
+  5 stage gauges + the VIX freshness gauge from inside `docker run`) gets an
+  explicit `-e ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile` plus an
+  identity `-v /var/lib/node_exporter/textfile:/var/lib/node_exporter/textfile`
+  mount in `alphalens-thematic-build.service`. Without both, the container
+  falls back to `Path.home()/.alphalens/metrics` (the unscraped `~/.alphalens`
+  bind mount) and its gauges never reach Prometheus.
+
+The live node_exporter container (recreate to match):
 
 ```bash
-# Stop the existing node-exporter container.
-docker stop node-exporter
-
-# Recreate with the textfile collector flag + bind mount.
-# (Real change is the two new args at the bottom of `docker run`.)
 docker run -d --name node-exporter \
     --restart always \
     --net host \
     --pid host \
-    -v /:/host:ro,rslave \
-    -v /home/jacoren/.alphalens/metrics:/host/textfile:ro \
+    -v /:/rootfs:ro,rslave \
+    -v /var/lib/node_exporter/textfile:/var/lib/node_exporter/textfile \
     prom/node-exporter:latest \
-    --path.rootfs=/host \
-    --collector.textfile.directory=/host/textfile
+    --path.rootfs=/rootfs \
+    --collector.textfile.directory=/var/lib/node_exporter/textfile
 ```
 
-If the existing node_exporter command lives in a docker-compose
-stack outside the repo, add:
-
-```yaml
-services:
-  node-exporter:
-    volumes:
-      - /home/jacoren/.alphalens/metrics:/host/textfile:ro
-    command:
-      - "--collector.textfile.directory=/host/textfile"
-```
+The scrape dir must be writable by the operator UID (the systemd-user units +
+the `--user %U:%G` pipeline container both write there as the operator).
 
 Verify after restart:
 
 ```bash
-mkdir -p ~/.alphalens/metrics
+sudo mkdir -p /var/lib/node_exporter/textfile && sudo chown "$USER" /var/lib/node_exporter/textfile
 systemctl --user start alphalens-edgar-detect.service
-ls -la ~/.alphalens/metrics/         # alphalens_{job,domain}_edgar-detect.prom
+ls -la /var/lib/node_exporter/textfile/   # alphalens_{job,domain}_edgar-detect.prom
 curl -s localhost:9100/metrics | grep '^alphalens_'
 ```
 
@@ -172,7 +182,7 @@ docker exec alertmanager kill -HUP 1
 # Force-fire an alert by stopping the edgar-detect timer for >30 min,
 # or by editing the textfile to backdate last_success:
 echo "alphalens_job_last_success_timestamp_seconds{job=\"edgar-detect\"} 0" \
-    > ~/.alphalens/metrics/alphalens_job_edgar-detect.prom
+    > /var/lib/node_exporter/textfile/alphalens_job_edgar-detect.prom
 
 # Within ~5 minutes the `AlphalensJobStale` alert fires and lands in
 # Telegram. Restore by running the unit:

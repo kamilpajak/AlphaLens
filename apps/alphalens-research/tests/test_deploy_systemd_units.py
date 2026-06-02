@@ -155,6 +155,52 @@ class TestSystemdUnits(unittest.TestCase):
             "build.service.",
         )
 
+    def test_thematic_build_docker_run_routes_textfile_dir_to_node_exporter(self):
+        # The 5 thematic stages + `alphalens cache refresh-vix` all run as
+        # subprocesses INSIDE this one container and emit Prometheus textfile
+        # gauges (alphalens_thematic_stage_* #373/#374, alphalens_vix_cache_
+        # fetched_at_timestamp_seconds #376) via emit_domain_metrics. Without
+        # an explicit ALPHALENS_TEXTFILE_DIR the container's _resolve_dir()
+        # falls back to Path.home()/.alphalens/metrics (= the bind-mounted
+        # host ~/.alphalens/metrics), which node_exporter does NOT scrape
+        # (live --collector.textfile.directory=/var/lib/node_exporter/textfile).
+        # The series then never reach Prometheus and the dead-man-switch +
+        # VIX-staleness alerts have no input (AlphalensVixCacheMetricMissing
+        # would false-fire on absent() forever). Pin the explicit-value form
+        # (NOT bare `-e KEY`): the path is non-secret infra config, so
+        # hardcoding it is correct + robust whether or not /etc/alphalens/env
+        # defines the var. NOTE: this regex is a regression-guard against the
+        # flag being dropped — the real acceptance gate is the live
+        # `curl localhost:9100/metrics | grep alphalens_(thematic|vix)`.
+        self.assertRegex(
+            self.unit_text,
+            re.compile(
+                r"^\s+-e ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile\s*\\?\s*$",
+                re.MULTILINE,
+            ),
+            "ExecStart docker invocation MUST set "
+            "`-e ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile` so "
+            "container-side emit_domain_metrics writes to the scraped dir.",
+        )
+
+    def test_thematic_build_docker_run_mounts_node_exporter_textfile_dir(self):
+        # The -e above only picks the dir; the container must also be able to
+        # WRITE to the host's real scrape dir. An identity bind mount maps the
+        # host /var/lib/node_exporter/textfile (jacoren-writable; host hooks
+        # already write there) to the same path inside the --user %U:%G
+        # container. Without it the .prom files land in an ephemeral in-
+        # container dir that vanishes with --rm.
+        self.assertRegex(
+            self.unit_text,
+            re.compile(
+                r"^\s+-v /var/lib/node_exporter/textfile:/var/lib/node_exporter/textfile\s*\\?\s*$",
+                re.MULTILINE,
+            ),
+            "ExecStart docker invocation MUST bind-mount "
+            "`/var/lib/node_exporter/textfile` (identity) so container emits "
+            "land on the host dir node_exporter scrapes.",
+        )
+
     def test_thematic_build_service_rebuilds_briefs_cache_post_run(self):
         # After a successful pipeline run the new parquet output must be
         # synced into the Django Postgres-backed cache. The unit invokes
