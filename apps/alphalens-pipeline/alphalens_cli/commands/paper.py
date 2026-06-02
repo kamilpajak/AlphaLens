@@ -513,6 +513,198 @@ def report(
         )
 
 
+@paper_app.command("reset")
+def reset(
+    account: str = typer.Option(
+        "test",
+        "--account",
+        help="Paper account profile to reset ('main' / 'test'). Default test.",
+    ),
+    platform: str = typer.Option(
+        "alpaca",
+        "--platform",
+        help="Paper-trading platform to reset. Only 'alpaca' today.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print what WOULD be cancelled / flattened / cleared, then exit 0.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        help=(
+            "REQUIRED to actually mutate. Without it (and without --dry-run) "
+            "the command prints the plan + counts and exits 0 WITHOUT "
+            "cancelling, flattening, or clearing anything."
+        ),
+    ),
+    keep_ledger: bool = typer.Option(
+        False,
+        "--keep-ledger",
+        help="Reset the broker only; do NOT clear the ledger paper-chain.",
+    ),
+    ledger_path: Path | None = typer.Option(
+        None,
+        "--ledger",
+        help=_LEDGER_HELP,
+    ),
+) -> None:
+    """Safely reset a paper account: cancel all open orders, flatten all
+    positions, and clear the ledger paper-chain.
+
+    DESTRUCTIVE. The reset is guarded two ways: ``--yes`` is REQUIRED to
+    mutate anything, and the default behaviour (no ``--yes``) only previews
+    the plan. ``--dry-run`` forces preview-only even if ``--yes`` is passed.
+
+    Broker-agnostic: cancellation + flattening go through the
+    :class:`BrokerClient` enumerate primitives + cancel_order +
+    submit_market_order, never a vendor bulk-close endpoint. Flattening
+    sells exactly the held long qty / covers exactly the short qty
+    (abs(qty), correct side) — it never flips a long to short.
+
+    After issuing the cancels + flattens it POLLS the broker until both
+    open-orders and positions report empty (re-issuing each sweep to
+    absorb the paper-state lag), then clears the ledger unless
+    ``--keep-ledger``. Backs the ledger file up to a timestamped
+    ``.bak`` sibling first.
+
+    Run during market hours: flattening uses MARKET orders, which Alpaca
+    rejects outside regular trading hours. Run while the market is closed
+    and the flattens are rejected, positions linger, and the 'NOT fully
+    flat' WARNING is expected (a 'broker rejected N flatten' line in the
+    summary flags this case).
+
+    The ledger clear is account-scoped — ``--account test`` clears ONLY
+    the test account's rows; the shared ledger's ``main`` rows survive.
+    """
+    import shutil
+
+    from alphalens_pipeline.paper.broker import get_default_broker_client
+    from alphalens_pipeline.paper.constants import DEFAULT_LEDGER_RELPATH
+    from alphalens_pipeline.paper.ledger import open_ledger, reset_paper_chain
+    from alphalens_pipeline.paper.reset import (
+        execute_reset,
+        snapshot_reset,
+    )
+
+    resolved_ledger = (
+        ledger_path if ledger_path is not None else Path.home() / DEFAULT_LEDGER_RELPATH
+    )
+
+    # SAFETY: refuse to run if the broker can't be resolved. A reset that
+    # can't reach the broker is meaningless and the operator must fix the
+    # credentials first — fail loud (non-zero), never silently no-op.
+    try:
+        broker = get_default_broker_client(platform=platform, profile=account)
+    except Exception as exc:
+        typer.echo(
+            f"paper reset: cannot resolve broker (platform={platform}, account={account}): {exc}"
+        )
+        raise typer.Exit(2) from exc
+
+    mutate = yes and not dry_run
+
+    # (a) Back up the ledger file FIRST (before any mutation), so a
+    # mis-fire is always recoverable. A normal datetime read is fine in
+    # the live CLI body.
+    ledger_backup: Path | None = None
+    if mutate and not keep_ledger and resolved_ledger.exists():
+        stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+        ledger_backup = resolved_ledger.with_name(f"{resolved_ledger.name}.{stamp}.bak")
+        shutil.copy2(resolved_ledger, ledger_backup)
+        typer.echo(f"paper reset: backed up ledger -> {ledger_backup}")
+
+    # (b) Snapshot current broker + ledger state. The ledger counts are
+    # scoped to the (account, platform) being reset so the printed plan
+    # matches what reset_paper_chain will actually delete — not the
+    # combined main+test total in the shared ledger file.
+    snap = snapshot_reset(broker)
+    ledger_orders = 0
+    ledger_plans = 0
+    if resolved_ledger.exists():
+        with open_ledger(resolved_ledger) as conn:
+            ledger_plans = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM plans WHERE account = ? AND platform = ?",
+                    (account, platform),
+                ).fetchone()[0]
+            )
+            ledger_orders = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM orders WHERE account = ? AND platform = ?",
+                    (account, platform),
+                ).fetchone()[0]
+            )
+
+    typer.echo(
+        f"paper reset (account={account}, platform={platform}): "
+        f"open_orders={snap.n_open_orders} positions={snap.n_positions} "
+        f"ledger_plans={ledger_plans} ledger_orders={ledger_orders}"
+    )
+    for instr in snap.flatten_plan:
+        typer.echo(f"  flatten {instr.symbol:<6s} {instr.side} {instr.qty}")
+    for oid in snap.order_ids:
+        typer.echo(f"  cancel  {oid}")
+
+    # (c) Preview-only path: --dry-run OR missing --yes. No mutation.
+    if not mutate:
+        typer.echo(
+            "paper reset: PREVIEW ONLY (no changes made). "
+            "Re-run with --yes to cancel orders, flatten positions"
+            f"{'' if keep_ledger else ', and clear the ledger'}."
+        )
+        return
+
+    # (d) Live sweep: cancel + flatten + poll-until-flat.
+    result = execute_reset(broker)
+
+    # (e) Clear THIS account's ledger paper-chain unless --keep-ledger.
+    # If the resolved ledger file does not exist, do NOT let open_ledger
+    # silently CREATE a fresh empty schema and "clear" it (a mistyped
+    # --ledger would otherwise no-op against the wrong target without a
+    # backup). Skip with an informational message instead — same fail-
+    # loud-never-silent-on-wrong-target property as the broker guard.
+    cleared: dict[str, int] = {}
+    ledger_missing = not keep_ledger and not resolved_ledger.exists()
+    if ledger_missing:
+        typer.echo(f"paper reset: ledger not found at {resolved_ledger}; nothing to clear.")
+    elif not keep_ledger:
+        with open_ledger(resolved_ledger) as conn:
+            cleared = reset_paper_chain(conn, account=account, platform=platform)
+
+    # (f) Final verification + loud WARNING if not flat.
+    typer.echo(
+        f"paper reset done (sweeps={result.sweeps_used}): "
+        f"cancels={result.n_cancel_calls} flattens={result.n_flatten_calls}"
+    )
+    typer.echo(
+        f"  verify: positions={result.final_positions} open orders={result.final_open_orders}"
+    )
+    if cleared:
+        cleared_str = ", ".join(f"{k}={v}" for k, v in sorted(cleared.items()))
+        typer.echo(f"  ledger cleared: {cleared_str}")
+    elif keep_ledger:
+        typer.echo("  ledger: kept (--keep-ledger)")
+    if result.n_flatten_rejected > 0:
+        # A non-zero rejected count almost always means the market was
+        # closed: Alpaca rejects market orders outside RTH. Surface it so
+        # the operator can tell a closed-market run from a stuck position.
+        typer.echo(
+            f"  broker rejected {result.n_flatten_rejected} flatten order(s) "
+            f"(market closed? Alpaca rejects market orders outside RTH)."
+        )
+    if not result.is_flat:
+        typer.echo(
+            f"  ! WARNING: account NOT fully flat after {result.sweeps_used} "
+            f"sweeps (positions={result.final_positions}, "
+            f"open orders={result.final_open_orders}). Re-run `alphalens paper "
+            f"reset --account {account} --yes` or inspect the broker manually. "
+            f"If run while the market is closed this is EXPECTED — Alpaca "
+            f"rejects the flatten market orders outside RTH."
+        )
+
+
 @paper_app.command("is-trading-day")
 def is_trading_day_cmd(
     date: str | None = typer.Option(

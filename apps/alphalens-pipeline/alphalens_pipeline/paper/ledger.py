@@ -729,6 +729,115 @@ def fetch_fills_for_order(conn: sqlite3.Connection, order_id: int) -> list[sqlit
     return list(cur.fetchall())
 
 
+# Per-table scoped DELETE statements for the reset, in child-before-parent
+# order so each subselect against ``plans`` / ``orders`` still resolves
+# before the parent rows are deleted. ``plan_outcomes`` is KEPT (the
+# closed-position history is the whole point of the ledger and must survive
+# an orphan-chain reset); ``meta`` (schema_version) is KEPT; ``shadow_log``
+# is KEPT (it is per-brief-date diagnostics, not open broker state).
+#
+# Scoping is account+platform aware so a ``--account test`` reset NEVER
+# touches the ``main`` account's rows (the ledger is a single shared DB
+# holding both accounts; every read path filters ``AND account = ?``):
+#   * ``plans`` / ``orders`` carry their own ``account`` + ``platform``
+#     columns (v4 / v5) -> filter directly.
+#   * ``fills`` joins to ``orders`` by ``order_id`` -> scope via subselect.
+#   * ``plan_entries`` / ``plan_exits`` join to ``plans`` by ``plan_id`` ->
+#     scope via subselect.
+# The two ``?`` placeholders in every statement bind to ``(account,
+# platform)`` — fixed SQL text, never an injection surface.
+_SCOPED_RESET_STATEMENTS: tuple[tuple[str, str], ...] = (
+    (
+        "fills",
+        "DELETE FROM fills WHERE order_id IN "
+        "(SELECT order_id FROM orders WHERE account = ? AND platform = ?)",
+    ),
+    (
+        "plan_entries",
+        "DELETE FROM plan_entries WHERE plan_id IN "
+        "(SELECT plan_id FROM plans WHERE account = ? AND platform = ?)",
+    ),
+    (
+        "plan_exits",
+        "DELETE FROM plan_exits WHERE plan_id IN "
+        "(SELECT plan_id FROM plans WHERE account = ? AND platform = ?)",
+    ),
+    ("orders", "DELETE FROM orders WHERE account = ? AND platform = ?"),
+    ("plans", "DELETE FROM plans WHERE account = ? AND platform = ?"),
+)
+
+
+def reset_paper_chain(
+    conn: sqlite3.Connection,
+    *,
+    account: str = "main",
+    platform: str = "alpaca",
+) -> dict[str, int]:
+    """Clear ONE account's OPEN paper-chain state so the reconciler stops
+    tracking it.
+
+    Deletes only the ``(account, platform)`` rows from ``fills`` /
+    ``orders`` / ``plan_entries`` / ``plan_exits`` / ``plans`` (child-
+    before-parent so each subselect against ``plans`` / ``orders`` still
+    resolves). A ``--account test`` reset leaves every ``main`` row intact
+    (the ledger is a single shared DB hosting both accounts). KEEPS:
+      * ``plan_outcomes`` — the closed-position history (the record we are
+        accumulating; an orphan-chain reset must never destroy it),
+      * ``meta`` — the ``schema_version`` row,
+      * ``shadow_log`` — per-brief-date diagnostics, not open broker state,
+      * the schema itself (no DROP / ALTER; the v5 ``platform`` column and
+        every CHECK survive),
+      * every OTHER account's paper-chain rows.
+
+    Idempotent — a second call on an already-cleared account returns all
+    zeros. Returns the per-table deleted-row counts (keyed by table name).
+
+    Used by ``alphalens paper reset`` after the broker side is flat, to
+    detach the ledger from orphaned orders/positions placed during a
+    broken-migration window. All deletes run in one transaction so a
+    partial-clear state is never visible to a concurrent reader.
+
+    FK note: ``plan_outcomes`` references ``plans(plan_id) ON DELETE
+    CASCADE``, so deleting ``plans`` with ``PRAGMA foreign_keys = ON``
+    (the ``_connect`` default) would CASCADE-delete the closed-position
+    history we must keep. The reset disables FK enforcement for the
+    delete so ``plan_outcomes`` rows survive (their ``plan_id`` becomes a
+    dangling reference, which is fine — outcomes are read by
+    ``plan_id`` join only for OPEN plans, and a reset only ever runs
+    against an orphaned chain). ``PRAGMA foreign_keys`` is a no-op inside
+    an open transaction, so it is toggled OUTSIDE the explicit BEGIN.
+    """
+    if account not in VALID_ACCOUNTS:
+        raise ValueError(f"unknown account={account!r}, expected one of {sorted(VALID_ACCOUNTS)}")
+    if platform not in VALID_PLATFORMS:
+        raise ValueError(
+            f"unknown platform={platform!r}, expected one of {sorted(VALID_PLATFORMS)}"
+        )
+    counts: dict[str, int] = {}
+    # Snapshot + disable FK enforcement so the CASCADE on plans -> {orders,
+    # fills, plan_entries, plan_exits, plan_outcomes} does not delete the
+    # plan_outcomes history we intend to keep. Must happen before BEGIN.
+    fk_was_on = bool(conn.execute("PRAGMA foreign_keys").fetchone()[0])
+    if fk_was_on:
+        conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        try:
+            for table, stmt in _SCOPED_RESET_STATEMENTS:
+                # ``stmt`` is fixed SQL text; (account, platform) bind as
+                # parameters — never an injection surface.
+                cur = conn.execute(stmt, (account, platform))
+                counts[table] = cur.rowcount if cur.rowcount is not None else 0
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        if fk_was_on:
+            conn.execute("PRAGMA foreign_keys = ON")
+    return counts
+
+
 __all__ = [
     "LEDGER_SCHEMA_VERSION",
     "VALID_ACCOUNTS",
@@ -749,5 +858,6 @@ __all__ = [
     "insert_planned",
     "insert_shadow",
     "open_ledger",
+    "reset_paper_chain",
     "update_order_status",
 ]

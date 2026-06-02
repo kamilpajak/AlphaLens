@@ -685,6 +685,27 @@ class TestPortfolioReads(_FakeAlpacaTestCase):
         client.cancel_order("order-id-123")
         self._trading_instance().cancel_order_by_id.assert_called_once_with("order-id-123")
 
+    def test_list_open_orders_filters_status_open(self):
+        """``list_open_orders`` (reset enumerate primitive) routes through
+        ``get_orders(status='open')`` so it goes via the cached SDK handle's
+        GetOrdersRequest — no second raw HTTP path."""
+        self._trading_instance().get_orders.return_value = [MagicMock(), MagicMock()]
+        client = self._build_client()
+        result = client.list_open_orders()
+        self.assertEqual(len(result), 2)
+        self.fake_requests_mod.GetOrdersRequest.assert_called_once_with(status="open")
+        self._trading_instance().get_orders.assert_called_once_with(
+            filter=self.fake_requests_mod.GetOrdersRequest.return_value
+        )
+
+    def test_list_positions_passes_through(self):
+        """``list_positions`` (reset enumerate primitive) is the protocol-
+        named alias of ``get_all_positions``."""
+        self._trading_instance().get_all_positions.return_value = [MagicMock()]
+        client = self._build_client()
+        self.assertEqual(len(client.list_positions()), 1)
+        self._trading_instance().get_all_positions.assert_called_once_with()
+
 
 class TestSdkMissingImport(unittest.TestCase):
     """If alpaca-py is not installed, the wrapper must raise an actionable

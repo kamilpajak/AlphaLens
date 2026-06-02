@@ -457,6 +457,34 @@ class AlpacaClient:
         """Cancel an open order. SDK returns no payload."""
         self._trading.cancel_order_by_id(order_id)
 
+    # ----- BrokerClient enumerate primitives (reset support) -----
+
+    def list_open_orders(self) -> list[Any]:
+        """All currently-open Alpaca orders (GET /v2/orders?status=open).
+
+        Wraps :meth:`get_orders` with ``status='open'`` under the
+        BrokerClient protocol name so ``alphalens paper reset`` can sweep
+        orphan orders without reaching into the vendor surface. Each
+        element duck-types ``.id`` / ``.symbol`` / ``.status`` like the
+        objects the reconciler already reads. The SDK caps a single
+        ``status='open'`` page generously (paper accounts never approach
+        the implicit 500 limit), so no pagination loop is needed for the
+        paper-harness sizes; revisit if a future venue needs >500 open
+        orders in one sweep.
+        """
+        return self.get_orders(status="open")
+
+    def list_positions(self) -> list[Any]:
+        """All open Alpaca positions (GET /v2/positions).
+
+        Alias of :meth:`get_all_positions` under the BrokerClient
+        protocol name. Each element duck-types ``.symbol`` / ``.qty``
+        (signed string, negative for shorts) / ``.side``
+        (PositionSide.LONG / SHORT) — the same fields the exit_manager
+        time-stop reads.
+        """
+        return self.get_all_positions()
+
 
 # Module-level lazy singleton — one AlpacaClient shared by every adapter that
 # does not have its own injected client. First call reads keys from the

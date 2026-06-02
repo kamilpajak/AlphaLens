@@ -6,7 +6,7 @@ gross_guard) talks to a *broker* only through the small structural
 vendor SDK type. Alpaca is the sole implementation today
 (:class:`alphalens_pipeline.data.alt_data.alpaca_client.AlpacaClient`
 satisfies the protocol structurally, no subclassing); a second paper
-platform drops in by satisfying the same 7 methods.
+platform drops in by satisfying the same 9 methods.
 
 Why a protocol, not a base class: every harness call site already took
 ``alpaca_client: Any`` and duck-typed it. This just names the duck and
@@ -38,11 +38,22 @@ _DEFAULT_PLATFORM = "alpaca"
 class BrokerClient(Protocol):
     """Structural surface the paper harness needs from a broker.
 
-    EXACTLY the 7 methods paper/ calls. Returns are ``Any`` — call sites
-    duck-type the order / account / position objects (`.id`, `.status`,
-    `.filled_qty`, `.filled_avg_price`, `.equity`, `.long_market_value`,
-    `.qty`). Deliberately EXCLUDES submit_bracket_order / get_orders /
-    get_all_positions / trading_client (unused by the harness).
+    The 7 order/account/position primitives the planner / submitter /
+    reconciler / exit_manager call, PLUS 2 READ-only enumerate primitives
+    (9 methods total): ``list_open_orders`` / ``list_positions`` — the
+    ``alphalens paper reset`` tool uses these to sweep + verify-flat
+    without any vendor-specific
+    bulk-close endpoint. Reset orchestrates cancellation + flattening from
+    these enumerate reads + the existing ``cancel_order`` +
+    ``submit_market_order`` — the protocol stays minimal + broker-agnostic
+    (no Alpaca ``DELETE /v2/positions?cancel_orders=true`` leaks in here).
+
+    Returns are ``Any`` — call sites duck-type the order / account /
+    position objects (`.id`, `.status`, `.filled_qty`, `.filled_avg_price`,
+    `.equity`, `.long_market_value`, `.qty`, `.symbol`, `.side`). The
+    enumerate primitives return ``list`` of those same broker-native
+    objects. Deliberately EXCLUDES submit_bracket_order / get_orders /
+    trading_client (unused by the harness).
 
     NOTE: ``@runtime_checkable`` isinstance() validates method NAMES only,
     never signatures — conformance tests assert via ``inspect.signature``.
@@ -84,6 +95,10 @@ class BrokerClient(Protocol):
     def get_order(self, order_id: str) -> Any: ...
 
     def cancel_order(self, order_id: str) -> None: ...
+
+    def list_open_orders(self) -> list: ...
+
+    def list_positions(self) -> list: ...
 
 
 def get_default_broker_client(
