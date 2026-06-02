@@ -423,9 +423,11 @@ def reconcile_orders(
                     exc,
                 )
                 continue
-            # ATTACHED kept for back-compat; CONVERGE_SL is the hardened action
-            # that attaches / re-sizes the protective SL (+ TP ladder).
-            if exit_outcome.action in ("ATTACHED", "CONVERGE_SL"):
+            # ATTACHED is the attach-once OCO-ladder action: it attaches the
+            # protective exit ladder (M TP legs + M stop legs) OR the
+            # defense-in-depth single fallback stop. n_exits_submitted counts
+            # the exit rows persisted this pass.
+            if exit_outcome.action == "ATTACHED":
                 n_attached += exit_outcome.n_exits_submitted
             elif exit_outcome.action in ("CLOSED", "UNFILLED"):
                 n_outcomes += 1

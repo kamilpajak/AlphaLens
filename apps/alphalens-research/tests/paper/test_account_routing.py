@@ -218,6 +218,25 @@ class TestExitManagerThreadsAccountFromSnapshot(unittest.TestCase):
             def submit_market_order(self, **kwargs):
                 return self._emit()
 
+            def attach_exit_ladder(self, *, symbol, tranches, stop_price, time_in_force="gtc"):
+                from alphalens_pipeline.paper.broker import ExitLadderLeg
+
+                legs = []
+                for i, tr in enumerate(tranches):
+                    o = self._emit()
+                    o2 = self._emit()
+                    legs.append(
+                        ExitLadderLeg(
+                            tranche_index=i,
+                            qty=tr.qty,
+                            take_profit_limit=tr.take_profit_limit,
+                            stop_price=stop_price,
+                            tp_order_id=o.id,
+                            sl_order_id=o2.id,
+                        )
+                    )
+                return legs
+
             def cancel_order(self, _id):
                 return None
 
@@ -268,13 +287,13 @@ class TestExitManagerThreadsAccountFromSnapshot(unittest.TestCase):
 
                 outcome = process_plan_exit(conn, plan_id=plan_id, broker=_StubClient())
 
-                self.assertEqual(outcome.action, "CONVERGE_SL")
+                self.assertEqual(outcome.action, "ATTACHED")
                 self.assertGreater(outcome.n_exits_submitted, 0)
 
                 # All non-entry orders (SL + TP) for this plan must be
-                # tagged account='test'. The SL-convergence branch routes
-                # through _attach_sl / _attach_tps which call insert_order
-                # with account=snapshot.account.
+                # tagged account='test'. The attach-once branch routes through
+                # record_exit_ladder (and the fallback _attach_fallback_stop)
+                # which thread account=snapshot.account onto every insert_order.
                 orders = fetch_orders_for_plan(conn, plan_id)
                 exit_orders = [o for o in orders if o["order_kind"] in ("SL", "TP")]
                 self.assertGreater(len(exit_orders), 0)
