@@ -27,11 +27,16 @@ Why the daily index instead of per-ticker submissions polling:
 All SEC HTTP goes through the canonical :class:`SecEdgarClient` (User-Agent +
 10 req/s throttle + 429/5xx retry). No raw ``requests``/``urllib`` here.
 
-Known limitation — the SEC daily index ``Date Filed`` column is date-only, so
-every row lands at 00:00 UTC of its filing date (no intraday granularity).
-Cross-source dedup tie-breaks on ``_SOURCE_PRIORITY`` (where this source is
-rank 0), not timestamp, so this does not affect which row survives; it only
-means EDGAR rows sort to the bottom of a same-day recency ordering.
+EX-99.1 rows are timestamped at the SEC acceptance instant — the moment the
+filing became publicly visible on EDGAR — parsed from the ``Accepted`` field of
+the same ``{accession}-index.htm`` already fetched for exhibit discovery and
+converted ET->UTC (issue #391). No extra HTTP. When that field is absent or
+unparseable we fall back to the daily-index ``Date Filed`` column, which is
+date-only (00:00 UTC) and, for after-5:30pm-ET filings, rolls to the next
+calendar day. Cross-source URL dedup still tie-breaks on ``_SOURCE_PRIORITY``
+(this source is rank 0), not timestamp, so the acceptance instant changes only
+the recency ORDERING (which previously sank every EX-99.1 row to 00:00 and out
+of the news_ingest recency cap), not which row survives URL dedup.
 """
 
 from __future__ import annotations
@@ -43,6 +48,7 @@ import re
 from functools import lru_cache
 from html.parser import HTMLParser
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -76,6 +82,29 @@ _KEPT_FORM_TYPES = frozenset({"8-K", "8-K/A"})
 # iXBRL viewer prefix wrapping a document href in the index.htm table; the real
 # document path follows the ``doc=`` query parameter.
 _IXBRL_VIEWER_PREFIX = "/ix?doc="
+
+# --- acceptance-datetime parse (issue #391) ---------------------------------
+# The {accession}-index.htm header (already fetched for exhibit discovery)
+# carries the SEC acceptance instant:
+#   <div class="infoHead">Accepted</div>
+#   <div class="info">2026-04-30 16:30:41</div>
+# This is the moment the filing became publicly visible on EDGAR (when the
+# market could first act on it), distinct from the daily-index "Date Filed"
+# column, which is DATE-ONLY and rolls to the NEXT calendar day for
+# after-5:30pm-ET filings. We anchor on the literal "Accepted</div>" label,
+# tolerate whitespace/newlines, and capture the second-precision value (NO tz
+# suffix in the markup) from the following <div class="info"> cell.
+_ACCEPTED_RE = re.compile(
+    r'Accepted</div>\s*<div class="info">\s*'
+    r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
+)
+_ACCEPTED_FORMAT = "%Y-%m-%d %H:%M:%S"
+# EDGAR stamps acceptance in US Eastern (EST/EDT). A real tz database is
+# REQUIRED (not a fixed -4/-5 offset) so the DST boundary converts correctly.
+# Ambiguous (fall-back) / non-existent (spring-forward) wall-clock instants
+# resolve with zoneinfo's default fold=0; both windows (01:00-03:00 ET) are
+# outside EDGAR's filing hours, so this is a documented no-op, not a guarantee.
+_EDGAR_TZ = ZoneInfo("America/New_York")
 
 
 # --- universe / CIK->ticker inverse map (mirror of CIKLoader, inverted) -----
@@ -364,6 +393,39 @@ def _strip_subsection(items: list[str]) -> list[str]:
     return [item.split("(", 1)[0] for item in items]
 
 
+def parse_accepted_utc(index_html: str) -> pd.Timestamp | None:
+    """Parse the ``Accepted`` ET datetime from a filing's index.htm -> UTC Timestamp.
+
+    The ``{accession}-index.htm`` header carries ``Accepted`` as
+    ``YYYY-MM-DD HH:MM:SS`` in America/New_York (the instant the filing became
+    publicly visible on EDGAR). We localise it ET->UTC, DST-correct via the tz
+    database (EDT -4h in summer, EST -5h in winter), and return a tz-aware UTC
+    ``pd.Timestamp``.
+
+    Returns ``None`` when the field is absent or unparseable so the caller falls
+    back to the daily-index date-only filing date (00:00 UTC). This NEVER raises
+    and NEVER touches HTTP: by the time it runs the index.htm was already fetched
+    successfully, so a parse miss can never be confused with the SEC-403
+    re-raise path (#379 / #382 / #383) that ``_enrich_filing`` must surface. The
+    anchor-miss path logs at DEBUG so fallback frequency stays greppable if the
+    SEC ``formGrouping`` markup ever drifts (issue #391 RISK 1).
+    """
+    if not index_html:
+        return None
+    match = _ACCEPTED_RE.search(index_html)
+    if not match:
+        logger.debug("edgar acceptance-datetime anchor not found; falling back to filing_date")
+        return None
+    try:
+        naive = dt.datetime.strptime(match.group(1), _ACCEPTED_FORMAT)
+    except ValueError as exc:
+        # Anchor matched but the value is not a real datetime (e.g. month 13);
+        # degrade to the date-only fallback rather than crash the day.
+        logger.warning("edgar acceptance-datetime parse failed: %s", exc)
+        return None
+    return pd.Timestamp(naive.replace(tzinfo=_EDGAR_TZ)).tz_convert("UTC")
+
+
 def _enrich_filing(row: dict, *, client: SecEdgarClient) -> dict | None:
     """Resolve one daily-index hit to its items + EX-99.1 body, or None to skip.
 
@@ -395,6 +457,10 @@ def _enrich_filing(row: dict, *, client: SecEdgarClient) -> dict | None:
         "cik_padded": row["cik_padded"],
         "accession": row["accession"],
         "filing_date": row["filing_date"],
+        # Real publish instant from the already-fetched index.htm header (no
+        # extra HTTP); None when absent/unparseable -> transform falls back to
+        # the date-only filing_date timestamp (#391).
+        "accepted_utc": parse_accepted_utc(index_html),
         "base_dir": base_dir,
         "items": items,
         "body": body,
@@ -442,11 +508,19 @@ def transform(
             "exhibit": "99.1",
         }
         title = _title_from_body(hit["body"]) or f"{ticker} 8-K Item {','.join(hit['items'])}"
+        accepted = hit.get("accepted_utc")
+        # Acceptance instant is the real publish moment (issue #391). Fall back
+        # to the daily-index date-only filing date (00:00 UTC) only on parse
+        # miss. For after-close filings whose filing_date rolled to the next day,
+        # this deliberately stamps the row on the prior UTC day (the moment the
+        # market could act); the per-day parquet cache is keyed by the discovery
+        # date, not the row timestamp, so this never mis-routes the cache.
+        timestamp = accepted if accepted is not None else pd.Timestamp(hit["filing_date"], tz="UTC")
         rows.append(
             {
                 "id": hit["accession"],  # SEC-stable, dashed form
                 "source": SOURCE,
-                "timestamp": pd.Timestamp(hit["filing_date"], tz="UTC"),
+                "timestamp": timestamp,
                 "tickers": [ticker],  # from filer CIK, NOT title NER
                 "title": title,
                 "body": hit["body"] or "",
