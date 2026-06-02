@@ -31,6 +31,9 @@ _EXPECTED = {
     # Reset-support enumerate primitives (broker-agnostic state sweep).
     "list_open_orders": [],
     "list_positions": [],
+    # Intent-level OCO-ladder exit primitive (broker-neutral; adapter
+    # decomposes the M-TP + one-disaster-stop intent its own way).
+    "attach_exit_ladder": ["symbol", "tranches", "stop_price", "time_in_force"],
 }
 
 

@@ -23,6 +23,8 @@ credential set WITHIN a platform. The ledger tags rows with both.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 # Recognised paper-trading platforms. Application-level enforcement at the
@@ -34,26 +36,103 @@ VALID_PLATFORMS = frozenset({"alpaca"})
 _DEFAULT_PLATFORM = "alpaca"
 
 
+@dataclass(frozen=True)
+class ExitTranche:
+    """One take-profit tranche to attach to an open position.
+
+    Broker-neutral INTENT, not a broker order: "sell ``qty`` shares of the
+    held position if price reaches ``take_profit_limit``". A caller hands the
+    adapter a sequence of these (the TP ladder) plus a single disaster stop;
+    the adapter decides how to realize the structure on its venue.
+
+    ``qty`` is WHOLE shares — Alpaca OCO/bracket legs reject fractional qty,
+    and a broker-neutral intent should not assume any venue supports them.
+    The whole-share + positivity invariant is venue-independent, so it is
+    enforced HERE at the intent layer (``__post_init__``) rather than deferred
+    to a broker 422 — a fractional / zero / negative ``qty`` is a caller bug,
+    not a venue quirk.
+    """
+
+    qty: int
+    take_profit_limit: float
+
+    def __post_init__(self) -> None:
+        # bool is an int subclass; reject it explicitly so True/False can't
+        # masquerade as a 1-share / 0-share tranche.
+        if isinstance(self.qty, bool) or not isinstance(self.qty, int):
+            raise TypeError(
+                f"ExitTranche.qty must be a whole-share int, got {self.qty!r} "
+                f"({type(self.qty).__name__}); fractional qty is rejected by "
+                "Alpaca OCO/bracket legs and unsupported by the intent."
+            )
+        if self.qty <= 0:
+            raise ValueError(
+                f"ExitTranche.qty must be > 0, got {self.qty!r}; a zero/negative "
+                "tranche cannot sell shares and would create an invalid order."
+            )
+
+
+@dataclass(frozen=True)
+class ExitLadderLeg:
+    """Broker-neutral handle for ONE attached take-profit + stop-loss pair.
+
+    Carries BOTH broker order ids on purpose. A broker's open-orders
+    enumeration may surface only the PARENT of an attached pair — Alpaca's
+    ``list_open_orders`` returns the take-profit limit but NOT the sibling
+    stop-loss leg (it is reachable only via the parent's ``legs`` at submit
+    time). So the caller MUST persist + poll both ids captured here rather
+    than rediscover them later: ``tp_order_id`` is the take-profit order,
+    ``sl_order_id`` is the stop-loss order. ``stop_price`` is the single
+    disaster stop shared by every tranche in the ladder (see
+    :meth:`BrokerClient.attach_exit_ladder`).
+
+    ``take_profit_limit`` / ``stop_price`` are the prices ACTUALLY SUBMITTED
+    to the broker (e.g. already venue-tick-rounded), not the caller's raw
+    intent — so a future reconciler can compare a leg directly against the
+    broker's order/fill price with no spurious sub-tick drift.
+
+    For Alpaca each tranche carries its OWN ``sl_order_id`` (M OCO groups → M
+    distinct stop legs at the same ``stop_price``). A future broker with a
+    native one-stop-many-targets / reduce-only primitive would repeat its
+    single shared stop id across every leg's ``sl_order_id``, so a reconciler
+    that cancels stops MUST dedup ``sl_order_id`` across legs before issuing
+    cancels.
+    """
+
+    tranche_index: int
+    qty: int
+    take_profit_limit: float
+    stop_price: float
+    tp_order_id: str
+    sl_order_id: str
+
+
 @runtime_checkable
 class BrokerClient(Protocol):
     """Structural surface the paper harness needs from a broker.
 
     The 7 order/account/position primitives the planner / submitter /
     reconciler / exit_manager call, PLUS 2 READ-only enumerate primitives
-    (9 methods total): ``list_open_orders`` / ``list_positions`` — the
+    and 1 intent-level exit-ladder primitive (10 methods total):
+    ``list_open_orders`` / ``list_positions`` — the
     ``alphalens paper reset`` tool uses these to sweep + verify-flat
     without any vendor-specific
     bulk-close endpoint. Reset orchestrates cancellation + flattening from
     these enumerate reads + the existing ``cancel_order`` +
     ``submit_market_order`` — the protocol stays minimal + broker-agnostic
     (no Alpaca ``DELETE /v2/positions?cancel_orders=true`` leaks in here).
+    ``attach_exit_ladder`` is the broker-neutral OCO-ladder exit intent: the
+    harness expresses M take-profit tranches + one disaster stop and each
+    adapter decomposes it its own way (no OCO/bracket mechanics leak here).
 
     Returns are ``Any`` — call sites duck-type the order / account /
     position objects (`.id`, `.status`, `.filled_qty`, `.filled_avg_price`,
     `.equity`, `.long_market_value`, `.qty`, `.symbol`, `.side`). The
     enumerate primitives return ``list`` of those same broker-native
-    objects. Deliberately EXCLUDES submit_bracket_order / get_orders /
-    trading_client (unused by the harness).
+    objects; ``attach_exit_ladder`` returns broker-neutral
+    :class:`ExitLadderLeg` handles, not raw vendor orders. Deliberately
+    EXCLUDES submit_bracket_order / get_orders / trading_client (unused by
+    the harness).
 
     NOTE: ``@runtime_checkable`` isinstance() validates method NAMES only,
     never signatures — conformance tests assert via ``inspect.signature``.
@@ -117,6 +196,44 @@ class BrokerClient(Protocol):
     def list_open_orders(self) -> list: ...
 
     def list_positions(self) -> list: ...
+
+    def attach_exit_ladder(
+        self,
+        *,
+        symbol: str,
+        tranches: Sequence[ExitTranche],
+        stop_price: float,
+        time_in_force: str = "gtc",
+    ) -> list[ExitLadderLeg]:
+        """Attach M take-profit tranches + ONE disaster stop to an open
+        position, as a broker-neutral INTENT.
+
+        Contract (intent level, NOT a venue order shape): for each
+        :class:`ExitTranche` the caller wants to sell ``tranche.qty`` shares
+        if price reaches ``tranche.take_profit_limit``; if instead price
+        falls to ``stop_price`` the WHOLE aggregate position should exit.
+        Every tranche becomes an ATOMIC take-profit / stop-loss pair sharing
+        the SAME ``stop_price`` — when either side of a pair fills the broker
+        auto-cancels the sibling. The single disaster stop is therefore
+        realized as M stop legs at one price (so the held position is fully
+        protected regardless of which tranche fills first), never as one
+        independent full-size stop (which would block the take-profit legs).
+
+        BROKER-NEUTRAL BOUNDARY: the reconciler / ledger must NOT learn how a
+        venue implements this. The Alpaca adapter submits M OCO orders; a
+        richer broker may use a native one-stop-many-targets / reduce-only
+        primitive. Both return the same :class:`ExitLadderLeg` list — one per
+        tranche, carrying BOTH order ids so the caller can persist + poll the
+        take-profit AND the stop-loss leg independently (a broker open-orders
+        enumeration may surface only the parent — see :class:`ExitLadderLeg`).
+
+        ``tranches`` MUST be non-empty: a ladder with no take-profit tranches
+        attaches NO protective stop, which is the exact "silently drop the
+        stop" failure the empty-``legs`` guard defends against, only at the
+        input boundary. An empty sequence is a caller bug — the adapter raises
+        rather than returning a no-op ``[]``.
+        """
+        ...
 
 
 def get_default_broker_client(
