@@ -16,6 +16,11 @@ from typing import Any
 
 import requests
 
+from alphalens_pipeline.data.alt_data.sec_rate_coordinator import (
+    SecRateCoordinator,
+    default_coord_path,
+)
+
 logger = logging.getLogger(__name__)
 
 _DATA_BASE = "https://data.sec.gov"
@@ -32,6 +37,16 @@ ALPHALENS_DEFAULT_USER_AGENT = "AlphaLens pajakkamil@gmail.com"
 
 class SecEdgarError(RuntimeError):
     """Non-transient SEC EDGAR failure (auth, schema, permanent 4xx/5xx)."""
+
+
+class SecForbiddenError(SecEdgarError):
+    """SEC 403 — auth/UA-reject OR traffic-threshold (shared-IP rate).
+
+    Raised immediately (a shared-IP traffic-403 will not clear inside one
+    process's 3 attempts, so retrying it just burns budget). Downstream ingest
+    classifies it as a transient cache-poison signal so an all-403 day does not
+    persist an empty parquet that poisons later same-UTC-day runs (#379/#382/#383).
+    """
 
 
 def _evict_to_capacity(cache: dict, max_size: int) -> None:
@@ -53,6 +68,7 @@ class SecEdgarClient:
         rate_limit_per_sec: int = 10,
         session: requests.Session | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        coordinator: SecRateCoordinator | None = None,
     ):
         if not user_agent:
             raise ValueError("SEC EDGAR requires a non-empty User-Agent")
@@ -62,6 +78,7 @@ class SecEdgarClient:
         self._min_interval_s = 1.0 / max(rate_limit_per_sec, 1)
         self._session = session or requests.Session()
         self._sleep = sleep
+        self._coordinator = coordinator  # cross-process IP-wide gate (opt-in)
         self._last_call_ts: float = 0.0
         # Per-process in-memory cache: submissions JSON and Form 4 XML payloads
         # are content-addressable and static — once fetched they never change
@@ -167,6 +184,9 @@ class SecEdgarClient:
     _TRANSIENT_NET_EXCEPTIONS = (requests.RequestException,)
 
     def _throttle(self) -> None:
+        # Per-process smoothing only (monotonic). The cross-process IP-wide gate
+        # runs once per logical request in _request (NOT per retry attempt), so a
+        # 429/5xx retry sequence does not multiply the shared reservation.
         elapsed = time.monotonic() - self._last_call_ts
         if elapsed < self._min_interval_s:
             self._sleep(self._min_interval_s - elapsed)
@@ -189,6 +209,12 @@ class SecEdgarClient:
     _MAX_REQUEST_ATTEMPTS = 3
 
     def _request(self, url: str) -> requests.Response:
+        # Cross-process IP-wide gate ONCE per logical request (not per retry
+        # attempt). No-op when no coordinator is wired or the lock dir is
+        # unwritable. Uses wall time (shared across processes); the per-process
+        # smoothing in _throttle stays on monotonic.
+        if self._coordinator is not None:
+            self._coordinator.wait_for_slot()
         resp: requests.Response | None = None
         for attempt in range(self._MAX_REQUEST_ATTEMPTS):
             self._throttle()
@@ -220,8 +246,23 @@ class SecEdgarClient:
             break
         assert resp is not None
         if resp.status_code >= 400:
-            raise SecEdgarError(f"{resp.status_code} {resp.text[:200]}")
+            self._raise_for_4xx(url, resp)
         return resp
+
+    # SEC throttle-403 carries a body like "Request Rate Threshold Exceeded" and
+    # may set Retry-After; a UA-reject 403 carries a different body. Surface the
+    # FULL body + the triage headers (truncating at 200 chars hid the epic #379
+    # 403 root cause). 403 stays a non-retried immediate raise.
+    _DIAGNOSTIC_HEADERS = ("Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining")
+
+    def _raise_for_4xx(self, url: str, resp: requests.Response) -> None:
+        headers = getattr(resp, "headers", {}) or {}
+        diag = {k: headers[k] for k in self._DIAGNOSTIC_HEADERS if k in headers}
+        detail = f"{resp.status_code} {url} headers={diag} body={resp.text}"
+        if resp.status_code == 403:
+            logger.warning("sec edgar 403 forbidden: %s", detail)
+            raise SecForbiddenError(detail)
+        raise SecEdgarError(detail)
 
     def _request_with_retry(self, url: str):
         """Up to 3 attempts with 5s, 15s backoff on transient network failures."""
@@ -265,7 +306,16 @@ def get_default_sec_client() -> SecEdgarClient:
     global _DEFAULT_CLIENT  # noqa: PLW0603 — lazy singleton is the documented pattern
     if _DEFAULT_CLIENT is None:
         user_agent = os.environ.get(USER_AGENT_ENV) or ALPHALENS_DEFAULT_USER_AGENT
-        _DEFAULT_CLIENT = SecEdgarClient(user_agent=user_agent)
+        rate_limit = 10
+        coordinator = SecRateCoordinator(
+            path=default_coord_path(),
+            min_interval_s=1.0 / rate_limit,
+        )
+        _DEFAULT_CLIENT = SecEdgarClient(
+            user_agent=user_agent,
+            rate_limit_per_sec=rate_limit,
+            coordinator=coordinator,
+        )
     return _DEFAULT_CLIENT
 
 

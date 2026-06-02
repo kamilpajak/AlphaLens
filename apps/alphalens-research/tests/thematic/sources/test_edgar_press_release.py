@@ -24,6 +24,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from alphalens_pipeline.data.alt_data.sec_edgar_client import SecForbiddenError
 from alphalens_pipeline.thematic.sources import edgar_press_release as epr
 from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS
 
@@ -603,6 +604,140 @@ class TestFetchDailyNews(unittest.TestCase):
             # Only the 8-K/A (accession ...051) survives.
             self.assertEqual(len(df), 1)
             self.assertEqual(df.iloc[0]["id"], "0000320193-26-000051")
+
+    def test_genuine_empty_day_is_cached(self):
+        # #383 — no transient errors, nothing survives the EX-99.1 filter. A
+        # genuine empty day STILL caches (transient_errors==0 -> to_parquet runs)
+        # so the immutable daily index is not re-fetched 5 more times.
+        def route(url: str) -> str:
+            if url.endswith(".idx"):
+                return SAMPLE_IDX
+            if url.endswith("-index.htm"):
+                return INDEX_HTML_NO_EX991  # no EX-99.1 -> clean drop
+            if url.endswith("primary.htm"):
+                return SAMPLE_8K_HTML
+            raise AssertionError(f"unexpected URL: {url}")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(epr, "_load_cik_to_ticker", return_value={"0000320193": "AAPL"}):
+                df = epr.fetch_daily_news(
+                    date=dt.date(2026, 5, 30),
+                    client=self._client(side_effect=route),
+                    cache_dir=Path(tmpdir),
+                )
+            self.assertEqual(len(df), 0)
+            self.assertTrue((Path(tmpdir) / "2026-05-30.parquet").exists())
+
+    def test_all_index_403_does_not_cache(self):
+        # #382/#383 — every index.htm 403s (SecForbiddenError) -> hits empty
+        # ONLY because of transient errors -> must NOT persist empty parquet, so
+        # later same-UTC-day runs retry instead of reading a poisoned cache.
+        def route(url: str) -> str:
+            if url.endswith(".idx"):
+                return SAMPLE_IDX
+            if url.endswith("-index.htm"):
+                raise SecForbiddenError("403 Request Rate Threshold Exceeded")
+            raise AssertionError(f"unexpected URL: {url}")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(epr, "_load_cik_to_ticker", return_value={"0000320193": "AAPL"}):
+                df = epr.fetch_daily_news(
+                    date=dt.date(2026, 5, 30),
+                    client=self._client(side_effect=route),
+                    cache_dir=Path(tmpdir),
+                )
+            self.assertEqual(len(df), 0)
+            self.assertFalse((Path(tmpdir) / "2026-05-30.parquet").exists())
+
+    def test_403_on_ex991_body_does_not_cache_empty(self):
+        # #382/#383 — THE refutation gap: index.htm + primary.htm succeed (item
+        # gate passes) but ex991.htm 403s. _safe_text must re-raise the 403 so
+        # the single in-universe filing drops to 0 hits via transient_errors,
+        # and the empty frame is NOT cached (rather than caching an empty-body
+        # row that breaks template matching).
+        single_idx = (
+            "Form Type   Company Name   CIK      Date Filed  File Name\n"
+            "------------------------------------------------------------\n"
+            "8-K         APPLE INC      320193   2026-05-30  "
+            "edgar/data/320193/0000320193-26-000050-index.htm\n"
+        )
+
+        def route(url: str) -> str:
+            if url.endswith(".idx"):
+                return single_idx
+            if url.endswith("-index.htm"):
+                return SAMPLE_INDEX_991
+            if url.endswith("primary.htm"):
+                return SAMPLE_8K_HTML
+            if url.endswith("ex991.htm"):
+                raise SecForbiddenError("403 Request Rate Threshold Exceeded")
+            raise AssertionError(f"unexpected URL: {url}")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(epr, "_load_cik_to_ticker", return_value={"0000320193": "AAPL"}):
+                df = epr.fetch_daily_news(
+                    date=dt.date(2026, 5, 30),
+                    client=self._client(side_effect=route),
+                    cache_dir=Path(tmpdir),
+                )
+            self.assertEqual(len(df), 0)
+            self.assertFalse((Path(tmpdir) / "2026-05-30.parquet").exists())
+
+    def test_403_storm_then_recovery_caches_without_force(self):
+        # #383 — end-to-end: run 1 all-403 (no cache), run 2 same date healthy
+        # client succeeds and caches, with NO --force (nothing to short-circuit).
+        def failing(url: str) -> str:
+            if url.endswith(".idx"):
+                return SAMPLE_IDX
+            if url.endswith("-index.htm"):
+                raise SecForbiddenError("403")
+            raise AssertionError(f"unexpected URL: {url}")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(epr, "_load_cik_to_ticker", return_value={"0000320193": "AAPL"}):
+                df1 = epr.fetch_daily_news(
+                    date=dt.date(2026, 5, 30),
+                    client=self._client(side_effect=failing),
+                    cache_dir=Path(tmpdir),
+                )
+                self.assertEqual(len(df1), 0)
+                self.assertFalse((Path(tmpdir) / "2026-05-30.parquet").exists())
+                df2 = epr.fetch_daily_news(
+                    date=dt.date(2026, 5, 30),
+                    client=self._client(),  # healthy _route_get_text
+                    cache_dir=Path(tmpdir),
+                )
+            self.assertGreaterEqual(len(df2), 1)
+            self.assertTrue((Path(tmpdir) / "2026-05-30.parquet").exists())
+
+    def test_partial_403_still_caches_nonempty(self):
+        # #383 — one filing 403s on index.htm, the other resolves. A non-empty
+        # frame is always cached (refusing would re-enrich survivors on all 6
+        # runs, amplifying the per-IP load that causes the 403s).
+        bad_dir = "000032019326000051"  # the 8-K/A accession dir
+
+        def route(url: str) -> str:
+            if url.endswith(".idx"):
+                return SAMPLE_IDX
+            if bad_dir in url and url.endswith("-index.htm"):
+                raise SecForbiddenError("403")
+            if url.endswith("-index.htm"):
+                return SAMPLE_INDEX_991
+            if url.endswith("primary.htm"):
+                return SAMPLE_8K_HTML
+            if url.endswith("ex991.htm"):
+                return SAMPLE_EX991
+            raise AssertionError(f"unexpected URL: {url}")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(epr, "_load_cik_to_ticker", return_value={"0000320193": "AAPL"}):
+                df = epr.fetch_daily_news(
+                    date=dt.date(2026, 5, 30),
+                    client=self._client(side_effect=route),
+                    cache_dir=Path(tmpdir),
+                )
+            self.assertGreaterEqual(len(df), 1)
+            self.assertTrue((Path(tmpdir) / "2026-05-30.parquet").exists())
 
 
 if __name__ == "__main__":
