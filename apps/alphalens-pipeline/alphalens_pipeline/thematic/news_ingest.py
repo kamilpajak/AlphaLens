@@ -228,10 +228,17 @@ def ingest_daily(
 
     if source_row_counts is not None:
         # RAW, pre-dedup, unconditional (0 on a swallowed 403 IS the #384 signal).
-        source_row_counts["edgar_press_release"] = len(edgar_df)
-        source_row_counts["polygon"] = len(polygon_df)
-        source_row_counts["gdelt"] = len(gdelt_df)
-        source_row_counts["rss"] = len(rss_df)
+        # Loop over _SOURCE_PRIORITY so a future 5th source can't be silently
+        # omitted from the gauge (it would then fire AlphalensEdgarPress... only
+        # by absence, never by darkness).
+        source_frames = {
+            "edgar_press_release": edgar_df,
+            "polygon": polygon_df,
+            "gdelt": gdelt_df,
+            "rss": rss_df,
+        }
+        for name in _SOURCE_PRIORITY:
+            source_row_counts[name] = len(source_frames[name])
 
     frames = [df for df in (edgar_df, polygon_df, gdelt_df, rss_df) if len(df) > 0]
     if not frames:

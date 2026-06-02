@@ -808,6 +808,18 @@ class TestEdgarPressReleaseDark(unittest.TestCase):
         self.assertIn(f"absent({self.METRIC}", expr)
         self.assertEqual(self._one(self.MISSING).get("labels", {}).get("route"), "telegram")
 
+    def test_production_ingest_uses_force_so_the_gauge_is_always_fresh(self) -> None:
+        # The Dark rule's whole window analysis assumes the source gauge is
+        # OVERWRITTEN with a fresh sample every thematic-build run. On a cache
+        # hit ingest_daily skips the fetches and leaves source_row_counts empty,
+        # so the CLI emits no source gauge and node_exporter re-serves the last
+        # (possibly nonzero) value — silencing the alert. The production
+        # invocation passes --force precisely to bypass the per-UTC-day cache, so
+        # pin it here: a future edit that drops --force from run_thematic_day.sh
+        # would quietly break this backstop.
+        script = (REPO_ROOT / "deploy" / "docker" / "run_thematic_day.sh").read_text()
+        self.assertRegex(script, r"thematic\s+ingest\s+--force")
+
 
 class TestEdgarPressReleaseDoesNotCollideWithCronEnums(unittest.TestCase):
     """Regression pin: the #384 alerts stay isolated from the cron-keyed
