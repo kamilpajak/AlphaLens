@@ -51,8 +51,8 @@ def _seed_plan(conn, *, brief_date: dt.date, ticker: str, account: str) -> int:
 
 
 class TestSchemaVersion(unittest.TestCase):
-    def test_schema_version_is_5(self):
-        self.assertEqual(LEDGER_SCHEMA_VERSION, 5)
+    def test_schema_version_is_6(self):
+        self.assertEqual(LEDGER_SCHEMA_VERSION, 6)
 
     def test_valid_accounts_enum(self):
         self.assertEqual(VALID_ACCOUNTS, frozenset({"main", "test"}))

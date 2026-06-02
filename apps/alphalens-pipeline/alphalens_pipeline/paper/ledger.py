@@ -29,7 +29,12 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime import edge
+    from collections.abc import Sequence
+
+    from alphalens_pipeline.paper.broker import ExitLadderLeg
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +57,12 @@ logger = logging.getLogger(__name__)
 # platform. Separate axis from account. Runbook-only migration (ALTER
 # TABLE ... ADD COLUMN platform) per the v4 precedent — no migration
 # code here.
-LEDGER_SCHEMA_VERSION = 5
+# v6: nullable orders.exit_group_id correlation id linking the TP + SL
+# legs of ONE OCO group (the OCO-ladder exit structure). NULL for ENTRY
+# orders and for legacy single-leg TP/SL/TIME_STOP exits. Runbook-only
+# migration (ALTER TABLE orders ADD COLUMN exit_group_id TEXT) per the
+# v4/v5 precedent — no migration code here.
+LEDGER_SCHEMA_VERSION = 6
 
 # Valid values for the per-row ``account`` column. Mirrors the Alpaca-
 # client profile names so the planner / submitter / reconciler can pass
@@ -168,6 +178,10 @@ _SCHEMA_DDL = (
         account TEXT NOT NULL DEFAULT 'main' CHECK(account IN ('main', 'test')),
         -- v5: paper-trading platform (issue #388). See plans.platform.
         platform TEXT NOT NULL DEFAULT 'alpaca' CHECK(platform IN ('alpaca')),
+        -- v6: OCO exit-group correlation id — links the TP and SL legs of
+        -- ONE OCO group (the OCO-ladder exit structure); NULL for ENTRY
+        -- orders and for legacy single-leg TP/SL/TIME_STOP exits.
+        exit_group_id TEXT,
         FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
     )
     """,
@@ -217,6 +231,7 @@ _SCHEMA_DDL = (
     "CREATE INDEX IF NOT EXISTS ix_orders_status ON orders(status)",
     "CREATE INDEX IF NOT EXISTS ix_orders_kind_status ON orders(order_kind, status)",
     "CREATE INDEX IF NOT EXISTS ix_orders_account_status ON orders(account, status)",
+    "CREATE INDEX IF NOT EXISTS ix_orders_exit_group ON orders(exit_group_id)",
     "CREATE INDEX IF NOT EXISTS ix_plans_account_brief ON plans(account, brief_date)",
     "CREATE INDEX IF NOT EXISTS ix_fills_order_id ON fills(order_id)",
 )
@@ -255,21 +270,51 @@ def _assert_v5_platform_columns(conn: sqlite3.Connection) -> None:
             )
 
 
+def _assert_v6_exit_group_column(conn: sqlite3.Connection) -> None:
+    """Fail-fast if an operator-migrated ledger predates the v6
+    ``exit_group_id`` column (runbook ALTER not yet run). Mirrors
+    :func:`_assert_v5_platform_columns`: turns a cryptic OperationalError
+    mid-insert into a clear deploy-guard. The column is nullable so the
+    runbook ALTER carries no DEFAULT."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
+    if "exit_group_id" not in cols:
+        raise RuntimeError(
+            "ledger schema v6: 'orders' is missing the 'exit_group_id' column. "
+            "Run the v5->v6 runbook migration before deploying: "
+            "ALTER TABLE orders ADD COLUMN exit_group_id TEXT"
+        )
+
+
 def init_ledger(path: Path) -> None:
     """Create the schema (idempotent). Called by every public function that
     opens the ledger so a freshly-deleted file self-heals on the next run.
     """
     with _connect(path) as conn:
+        # Run table-creating DDL first, then the deploy-ordering guards,
+        # THEN the index DDL. ``CREATE TABLE IF NOT EXISTS`` does NOT widen
+        # an already-existing table, so on an operator-migrated pre-v6 file
+        # the orders table still lacks ``exit_group_id`` after this loop.
+        # Running ``_assert_v6_exit_group_column`` BEFORE the index DDL
+        # turns that into a clear RuntimeError instead of letting the
+        # ``ix_orders_exit_group`` CREATE INDEX fail with a cryptic
+        # OperationalError ("no such column: exit_group_id").
+        index_stmts = []
         for stmt in _SCHEMA_DDL:
+            if stmt.lstrip().upper().startswith("CREATE INDEX"):
+                index_stmts.append(stmt)
+            else:
+                conn.execute(stmt)
+        # Deploy-ordering guards: a fresh DB passes (CREATE TABLE just made
+        # the columns); only an operator-migrated file where the runbook
+        # ALTER has not yet run fails here, with a clear instruction.
+        _assert_v5_platform_columns(conn)
+        _assert_v6_exit_group_column(conn)
+        for stmt in index_stmts:
             conn.execute(stmt)
         conn.execute(
             "INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)",
             ("schema_version", str(LEDGER_SCHEMA_VERSION)),
         )
-        # Deploy-ordering guard: a fresh DB passes (CREATE TABLE just made
-        # the column); only an operator-migrated v4 file where the runbook
-        # ALTER has not yet run fails here, with a clear instruction.
-        _assert_v5_platform_columns(conn)
 
 
 @contextmanager
@@ -535,6 +580,7 @@ def insert_order(  # NOSONAR S107
     status: str = "SUBMITTED",
     account: str = "main",
     platform: str = "alpaca",
+    exit_group_id: str | None = None,
 ) -> int:
     """Persist a freshly submitted Alpaca order. Returns the local ``order_id``.
 
@@ -546,6 +592,10 @@ def insert_order(  # NOSONAR S107
     ``account`` (v4): the paper account the SDK call routed to. Reconciler
     + exit_manager MUST filter on this when picking which Alpaca client
     to poll; cross-account UUID lookups would 404.
+
+    ``exit_group_id`` (v6): OCO exit-group correlation id linking the TP +
+    SL legs of one OCO group. NULL for ENTRY orders and for legacy
+    single-leg TP/SL/TIME_STOP exits. See :func:`record_exit_ladder`.
     """
     if account not in VALID_ACCOUNTS:
         raise ValueError(f"unknown account={account!r}, expected one of {sorted(VALID_ACCOUNTS)}")
@@ -557,8 +607,9 @@ def insert_order(  # NOSONAR S107
         """INSERT INTO orders(plan_id, alpaca_order_id, side, order_kind,
                               tier_index, tranche_index, order_type, qty,
                               limit_price, stop_price, time_in_force, status,
-                              submitted_at, last_updated_at, account, platform)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              submitted_at, last_updated_at, account, platform,
+                              exit_group_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             plan_id,
             alpaca_order_id,
@@ -576,12 +627,120 @@ def insert_order(  # NOSONAR S107
             submitted_at.isoformat(),
             account,
             platform,
+            exit_group_id,
         ),
     )
     last = cur.lastrowid
     if last is None:  # pragma: no cover - defensive against SDK contract drift
         raise RuntimeError("sqlite returned no lastrowid after INSERT into orders")
     return int(last)
+
+
+def record_exit_ladder(
+    conn: sqlite3.Connection,
+    *,
+    plan_id: int,
+    legs: Sequence[ExitLadderLeg],
+    submitted_at: dt.datetime,
+    account: str = "main",
+    platform: str = "alpaca",
+) -> list[int]:
+    """Persist a broker-neutral attached exit-ladder (v6).
+
+    For EACH :class:`~alphalens_pipeline.paper.broker.ExitLadderLeg` this
+    inserts TWO ``orders`` rows via :func:`insert_order`, both carrying
+    ``exit_group_id = leg.tp_order_id`` (the OCO parent id is the stable
+    per-group key, so a ``WHERE exit_group_id = ?`` query returns the
+    TP + SL pair of one tranche):
+      * the take-profit row — ``side='SELL'``, ``order_kind='TP'``,
+        ``order_type='LIMIT'``, ``limit_price=leg.take_profit_limit``,
+        ``alpaca_order_id=leg.tp_order_id``;
+      * the stop-loss row — ``side='SELL'``, ``order_kind='SL'``,
+        ``order_type='STOP'``, ``stop_price=leg.stop_price``,
+        ``alpaca_order_id=leg.sl_order_id``.
+    Returns the inserted local ``order_id`` list in submit order (TP, SL,
+    TP, SL, ... — one TP+SL pair per leg).
+
+    The SAME disaster stop price is repeated across tranches (M stop legs =
+    one disaster stop). For Alpaca each tranche owns its OWN
+    ``sl_order_id``; a future shared-stop broker would repeat one
+    ``sl_order_id`` across legs, so a stop-cancelling caller MUST dedup on
+    ``sl_order_id`` (see the :class:`ExitLadderLeg` docstring).
+
+    ``legs`` is duck-typed — only the documented attributes are read, no
+    runtime import of the dataclass.
+
+    An empty ``legs`` sequence is a caller bug and raises ``ValueError``: an
+    empty ladder persists NO protective exit rows, the same "silently drop the
+    stop" failure the broker-side ``attach_exit_ladder`` guard refuses at the
+    input boundary. The persistence mirror refuses rather than no-op ``[]``.
+
+    ATOMIC: the whole ladder (every TP + SL row) is written in ONE transaction
+    — a failure partway (e.g. a duplicate ``alpaca_order_id`` hitting the
+    UNIQUE constraint) rolls back ALL rows from this call, never leaving a
+    half-persisted ladder (a TP recorded with no protective SL). The
+    connection runs in autocommit mode (``isolation_level=None``), so this
+    helper opens its OWN ``BEGIN``/``COMMIT`` only when the caller is not
+    already inside a transaction; when a caller wraps several writes in one
+    unit of work, that outer transaction owns the boundary (and its rollback
+    covers these rows too).
+    """
+    legs = list(legs)
+    if not legs:
+        raise ValueError(
+            f"record_exit_ladder for plan_id={plan_id} got an empty legs "
+            "sequence; refusing to persist a ladder with no take-profit / "
+            "stop-loss rows (the held position would be left with no "
+            "protective exit recorded)."
+        )
+    # Own the transaction only if the caller has not already opened one
+    # (nesting BEGIN raises "cannot start a transaction within a transaction").
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN")
+    order_ids: list[int] = []
+    try:
+        for leg in legs:
+            tp_id = insert_order(
+                conn,
+                plan_id=plan_id,
+                alpaca_order_id=leg.tp_order_id,
+                side="SELL",
+                order_kind="TP",
+                order_type="LIMIT",
+                qty=leg.qty,
+                time_in_force="gtc",
+                submitted_at=submitted_at,
+                tranche_index=leg.tranche_index,
+                limit_price=leg.take_profit_limit,
+                account=account,
+                platform=platform,
+                exit_group_id=leg.tp_order_id,
+            )
+            sl_id = insert_order(
+                conn,
+                plan_id=plan_id,
+                alpaca_order_id=leg.sl_order_id,
+                side="SELL",
+                order_kind="SL",
+                order_type="STOP",
+                qty=leg.qty,
+                time_in_force="gtc",
+                submitted_at=submitted_at,
+                tranche_index=leg.tranche_index,
+                stop_price=leg.stop_price,
+                account=account,
+                platform=platform,
+                exit_group_id=leg.tp_order_id,
+            )
+            order_ids.extend((tp_id, sl_id))
+    except Exception:
+        if own_txn:
+            conn.rollback()
+        raise
+    if own_txn:
+        conn.commit()
+    return order_ids
 
 
 def update_order_status(
@@ -862,6 +1021,7 @@ __all__ = [
     "insert_planned",
     "insert_shadow",
     "open_ledger",
+    "record_exit_ladder",
     "reset_paper_chain",
     "update_order_status",
 ]
