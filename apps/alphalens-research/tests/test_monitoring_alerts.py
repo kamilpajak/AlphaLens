@@ -304,6 +304,7 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             "alphalens_literature_",
             "alphalens_thematic_",
             "alphalens_av_",
+            "alphalens_vix_",
         )
         for rule in rules:
             expr = rule.get("expr", "")
@@ -641,6 +642,98 @@ class TestThematicVolumeRules(unittest.TestCase):
         # A single quiet fire must not page; require a debounce window.
         for name in (self.ZERO_OUTPUT, self.ANOMALY):
             self.assertIn("for", self._rule(name), f"{name} needs a `for:` debounce clause.")
+
+
+class TestVixCacheStaleness(unittest.TestCase):
+    """Pin the VIX-cache staleness alert pair (Track A v2 PR-2 follow-up).
+
+    ``market_regime_at_entry`` is stamped on the Django feedback POST path
+    from ``alphalens_feedback.regime.get_cached_vix``, which silently returns
+    ``None`` (-> regime degrades to ``unknown``) once the cache ages past
+    ``_VIX_MAX_AGE_SECONDS`` (96h). The refresh step in run_thematic_day.sh is
+    best-effort (``|| echo WARN``), so a persistently dead FRED refresher emits
+    NO signal — every new decision quietly loses its regime label and the
+    per-regime execution-mode cells (PR-4/PR-5) are poisoned at the source.
+    ``alphalens cache refresh-vix`` now emits
+    ``alphalens_vix_cache_fetched_at_timestamp_seconds`` so these rules can
+    alert when it stops landing fresh.
+
+    The VIX cache is refreshed INLINE inside run_thematic_day.sh (not via a
+    systemd unit with an ``ExecStopPost`` emit hook), so it is deliberately
+    NOT a cron ``job=`` and must stay out of every cron enumeration
+    (ACTIVE_JOBS, the staleness-threshold dict, the emit-hook parity test). A
+    DISTINCT alertname is what keeps it invisible to those job-keyed tests, so
+    this family carries its OWN regression pins below — the cron-keyed asserts
+    will never cover it.
+    """
+
+    METRIC = "alphalens_vix_cache_fetched_at_timestamp_seconds"
+    STALE = "AlphalensVixCacheStale"
+    MISSING = "AlphalensVixCacheMetricMissing"
+    # 432000s = 120h = 1.25x the 96h reader ceiling in
+    # alphalens_feedback.regime._VIX_MAX_AGE_SECONDS, so the alert fires a bit
+    # AFTER the reader has already started degrading stamps to "unknown".
+    THRESHOLD = 432000
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def _one(self, alertname: str) -> dict:
+        matches = [r for r in self._rules() if r.get("alert") == alertname]
+        self.assertEqual(
+            len(matches),
+            1,
+            f"Expected exactly one {alertname} alert, found {len(matches)}.",
+        )
+        return matches[0]
+
+    def test_stale_alert_is_threshold_only_on_the_vix_gauge(self) -> None:
+        rule = self._one(self.STALE)
+        expr = rule["expr"]
+        self.assertIn(self.METRIC, expr)
+        # Threshold-only — the absent() guard belongs in the paired
+        # MetricMissing alert (same split contract as the job alerts).
+        self.assertNotIn("absent(", expr)
+        # Pin the literal threshold: the cron staleness-threshold dict keys on
+        # AlphalensJobStale only, so a differently-named VIX rule escapes it —
+        # this is its sole regression pin against a silent threshold widen.
+        self.assertRegex(
+            expr,
+            rf"time\(\)\s*-\s*{re.escape(self.METRIC)}\s*>\s*{self.THRESHOLD}\b",
+            f"Stale expr must be `time() - {self.METRIC} > {self.THRESHOLD}`.",
+        )
+
+    def test_stale_alert_reports_duration_and_routes_to_telegram(self) -> None:
+        rule = self._one(self.STALE)
+        self.assertIn(
+            "humanizeDuration",
+            rule.get("annotations", {}).get("description", ""),
+            "Stale alert must report the real staleness duration.",
+        )
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+
+    def test_metric_missing_alert_wraps_absent_with_no_duration(self) -> None:
+        rule = self._one(self.MISSING)
+        expr = rule["expr"]
+        self.assertIn(f"absent({self.METRIC}", expr)
+        # absent() fires with value 1, so any humanizeDuration renders a
+        # misleading "1s ago" — must be absent from BOTH annotation fields.
+        ann = rule.get("annotations", {})
+        for field in ("summary", "description"):
+            self.assertNotIn("humanizeDuration", ann.get(field, ""))
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+
+    def test_vix_rules_carry_no_job_label_so_they_stay_out_of_cron_enums(self) -> None:
+        # Cheap belt-pin (not load-bearing — the distinct alertname already
+        # isolates it): the VIX cache has no systemd unit / ExecStopPost emit
+        # hook, so a job= label would falsely register it as an orphan cron
+        # rule in the job-keyed parity tests.
+        for alertname in (self.STALE, self.MISSING):
+            expr = self._one(alertname)["expr"]
+            self.assertIsNone(
+                re.search(r'job="[^"]+"', expr),
+                f"{alertname} must not carry a job= label (it is not a cron job).",
+            )
 
 
 if __name__ == "__main__":

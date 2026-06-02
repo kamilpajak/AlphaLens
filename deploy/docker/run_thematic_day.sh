@@ -52,9 +52,12 @@ alphalens thematic brief
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] cache refresh-vix"
 # Warn to stderr so the failure is visible in journald (StandardError=journal)
 # even though the step is non-fatal. A persistently dead refresher ages the
-# cache past 96h and the feedback POST path degrades to "unknown" — a
-# Prometheus staleness alert on the cache's fetched_at is a tracked follow-up
-# (live alert rules are hand-synced on the VPS, outside this repo).
+# cache past 96h and the feedback POST path degrades to "unknown". On success
+# this command emits alphalens_vix_cache_fetched_at_timestamp_seconds, which
+# the AlphalensVixCache{Stale,MetricMissing} rules in
+# deploy/monitoring/prometheus/rules/alphalens.yaml alert on (live rules are
+# hand-synced on the VPS, outside this repo) — so a silently-dead refresher
+# now pages instead of degrading stamps unnoticed.
 alphalens cache refresh-vix \
     || echo "WARN: vix refresh failed; regime stamps degrade to unknown" >&2
 

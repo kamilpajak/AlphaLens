@@ -394,6 +394,48 @@ class TestThematicStageVolumeEmits(unittest.TestCase):
             self.assertEqual(metrics['alphalens_thematic_stage_input_rows{stage="score"}'], 4)
 
 
+class TestCacheRefreshVixEmitsDomainMetrics(unittest.TestCase):
+    """``alphalens cache refresh-vix`` emits a freshness gauge (Track A v2
+    PR-2 follow-up).
+
+    The metric is a GAUGE carrying the epoch the cache was written, so the
+    paired AlphalensVixCache{Stale,MetricMissing} rules can alert when the
+    best-effort refresh in run_thematic_day.sh stops landing fresh values
+    (which silently degrades ``market_regime_at_entry`` to ``unknown``). The
+    emit lives inside ``refresh_vix_cache`` itself — the single place that
+    knows ``now`` and has just durably written the cache — so it is exercised
+    by a direct call here, no typer round-trip.
+    """
+
+    def _series(self):
+        import pandas as pd
+
+        # One real observation; refresh_vix_cache takes the last non-null.
+        return pd.Series([18.4], index=pd.to_datetime(["2026-06-01"]))
+
+    def test_refresh_vix_emits_fetched_at_gauge(self) -> None:
+        import datetime as dt
+
+        from alphalens_cli.commands import cache
+
+        now = dt.datetime(2026, 6, 1, 6, 30, tzinfo=dt.UTC)
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "vix_regime_cache.json"
+            with patch.object(cache, "emit_domain_metrics") as emit:
+                payload = cache.refresh_vix_cache(cache_path, fred_fetch=self._series, now=now)
+
+            # The cache write is the work; it must still produce the payload.
+            self.assertEqual(payload["vix"], 18.4)
+            emit.assert_called_once()
+            kwargs = emit.call_args.kwargs
+            self.assertEqual(kwargs["job"], "vix-cache-refresh")
+            metrics = kwargs["metrics"]
+            self.assertEqual(
+                metrics['alphalens_vix_cache_fetched_at_timestamp_seconds{series="VIXCLS"}'],
+                int(now.timestamp()),
+            )
+
+
 class TestEmitFailureDoesNotPoisonSuccessPath(unittest.TestCase):
     """A transient metrics-dir failure (disk full, permission flip)
     must NOT turn a successful cron run into a failed unit.
@@ -514,6 +556,26 @@ class TestEmitFailureDoesNotPoisonSuccessPath(unittest.TestCase):
                 patch.object(thematic, "emit_domain_metrics", side_effect=OSError("ENOSPC")),
             ):
                 thematic.brief(date="2026-05-29", scored_dir=scored_dir, output_dir=output_dir)
+
+    def test_refresh_vix_swallows_emit_oserror(self) -> None:
+        # The VIX cache JSON is os.replace'd to disk before the emit; an
+        # OSError from the metrics dir must not raise, so the best-effort
+        # `|| echo WARN` contract in run_thematic_day.sh still holds and the
+        # fresh VIX value is not lost just because observability failed.
+        import datetime as dt
+
+        import pandas as pd
+        from alphalens_cli.commands import cache
+
+        series = pd.Series([18.4], index=pd.to_datetime(["2026-06-01"]))
+        now = dt.datetime(2026, 6, 1, 6, 30, tzinfo=dt.UTC)
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "vix_regime_cache.json"
+            with patch.object(cache, "emit_domain_metrics", side_effect=OSError("no metrics dir")):
+                payload = cache.refresh_vix_cache(cache_path, fred_fetch=lambda: series, now=now)
+            # MUST NOT raise; the cache write succeeded.
+            self.assertEqual(payload["vix"], 18.4)
+            self.assertTrue(cache_path.exists())
 
 
 if __name__ == "__main__":
