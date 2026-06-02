@@ -20,6 +20,7 @@ from alphalens_pipeline.paper.ledger import (
     fetch_open_orders,
     fetch_orders_for_plan,
     fetch_plans_for_date,
+    init_ledger,
     insert_fill,
     insert_order,
     insert_planned,
@@ -483,6 +484,73 @@ class TestRunbookAlterMigration(unittest.TestCase):
                 self.assertNotIn("UNIQUE(brief_date, ticker, account, platform)", ddl)
             finally:
                 conn.close()
+
+
+class TestV5SchemaGuard(unittest.TestCase):
+    """Pins the deploy-before-ALTER fail-fast (ZEN HIGH, issue #388).
+
+    The v5 ``platform`` column lands on an operator-migrated ledger via a
+    runbook ``ALTER TABLE ... ADD COLUMN`` step, NOT in-code. If the new
+    code is deployed BEFORE the operator runs that ALTER, inserts would
+    emit ``platform`` into a table that lacks it and SQLite would raise a
+    cryptic ``OperationalError: table plans has no column named platform``
+    mid-insert. ``init_ledger`` calls ``_assert_v5_platform_columns`` after
+    the idempotent ``CREATE TABLE IF NOT EXISTS`` loop — which does NOT add
+    a column to an already-existing table — so a stale v4 file fails here
+    with a clear instruction instead.
+    """
+
+    _OLD_V4_PLANS_DDL = """
+        CREATE TABLE plans (
+            plan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            brief_date TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            account TEXT NOT NULL DEFAULT 'main' CHECK(account IN ('main', 'test')),
+            UNIQUE(brief_date, ticker, account)
+        )
+    """
+
+    # Columns referenced by the v5 CREATE INDEX DDL (status, order_kind)
+    # must exist so the idempotent index-creation step doesn't fail before
+    # the guard runs — but NO platform column (the whole point).
+    _OLD_V4_ORDERS_DDL = """
+        CREATE TABLE orders (
+            order_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id INTEGER NOT NULL,
+            alpaca_order_id TEXT NOT NULL UNIQUE,
+            order_kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            account TEXT NOT NULL DEFAULT 'main' CHECK(account IN ('main', 'test'))
+        )
+    """
+
+    _META_DDL = """
+        CREATE TABLE meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """
+
+    def test_init_ledger_fails_fast_on_pre_alter_v4_file(self):
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "v4_ledger.db"
+            conn = sqlite3.connect(ledger)
+            try:
+                conn.execute(self._META_DDL)
+                conn.execute(self._OLD_V4_PLANS_DDL)
+                conn.execute(self._OLD_V4_ORDERS_DDL)
+                conn.commit()
+            finally:
+                conn.close()
+
+            with self.assertRaises(RuntimeError) as ctx:
+                init_ledger(ledger)
+
+            message = str(ctx.exception)
+            self.assertIn("platform", message)
+            self.assertIn("ALTER TABLE", message)
 
 
 if __name__ == "__main__":

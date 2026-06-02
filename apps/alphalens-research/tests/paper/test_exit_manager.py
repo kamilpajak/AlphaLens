@@ -295,6 +295,44 @@ class TestAttachExits(_ExitTestBase):
         self.assertEqual(len([s for s in self.client.submissions if s["kind"] == "STOP"]), 1)
 
 
+class TestExitOrdersInheritPlatformFromSnapshot(_ExitTestBase):
+    """Mirror of TestExitManagerThreadsAccountFromSnapshot for the v5
+    ``platform`` axis: a plan seeded with the default platform produces
+    exit orders (SL + TPs) all persisted with platform='alpaca' threaded
+    from ``_PlanSnapshot.platform`` (NOT merely the orders.platform column
+    DEFAULT). Threading is proven by reading the persisted orders rows back.
+    """
+
+    def test_exit_orders_inherit_platform_from_snapshot(self):
+        plan_id = _seed_plan(self.ledger)
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=27,
+            status="FILLED",
+            filled_qty=27,
+            filled_price=99.5,
+        )
+
+        with open_ledger(self.ledger) as conn:
+            outcome = process_plan_exit(
+                conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
+            orders = fetch_orders_for_plan(conn, plan_id)
+
+        self.assertEqual(outcome.action, "ATTACHED")
+        exit_orders = [o for o in orders if o["order_kind"] in ("SL", "TP")]
+        self.assertGreater(len(exit_orders), 0)
+        for o in exit_orders:
+            self.assertEqual(
+                o["platform"],
+                "alpaca",
+                f"exit order kind={o['order_kind']} leaked platform="
+                f"{o['platform']!r}, expected 'alpaca'",
+            )
+
+
 class TestExitClosure(_ExitTestBase):
     def _attach_and_simulate_exits(self, *, plan_id: int, entry_qty: int, entry_price: float):
         """Attach the exits, then look them up + return (sl_id, tp_ids)."""

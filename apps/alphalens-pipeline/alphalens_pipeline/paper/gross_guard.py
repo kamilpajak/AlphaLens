@@ -40,7 +40,7 @@ def check_live_gross(broker: BrokerClient) -> GrossGuardReport:
     """Pull the account snapshot and check live gross against equity.
 
     Args:
-        broker: an :class:`AlpacaClient` already wired to the
+        broker: a :class:`BrokerClient` (e.g. an :class:`AlpacaClient`) already wired to the
             same profile the reconciler used (main / test).
 
     Logs a WARNING if ``long_market_value / equity > 1.0``. The check is

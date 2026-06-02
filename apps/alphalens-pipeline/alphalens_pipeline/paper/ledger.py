@@ -236,6 +236,21 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _assert_v5_platform_columns(conn: sqlite3.Connection) -> None:
+    """Fail-fast if an operator-migrated ledger predates the v5 platform
+    column (runbook ALTER not yet run). Turns a cryptic OperationalError
+    mid-insert into a clear deploy-guard. See issue #388 + the v4->v5
+    runbook in the PR description."""
+    for table in ("plans", "orders"):
+        cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if "platform" not in cols:
+            raise RuntimeError(
+                f"ledger schema v5: '{table}' is missing the 'platform' column. "
+                "Run the v4->v5 runbook migration before deploying: "
+                f"ALTER TABLE {table} ADD COLUMN platform TEXT NOT NULL DEFAULT 'alpaca'"
+            )
+
+
 def init_ledger(path: Path) -> None:
     """Create the schema (idempotent). Called by every public function that
     opens the ledger so a freshly-deleted file self-heals on the next run.
@@ -247,6 +262,10 @@ def init_ledger(path: Path) -> None:
             "INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)",
             ("schema_version", str(LEDGER_SCHEMA_VERSION)),
         )
+        # Deploy-ordering guard: a fresh DB passes (CREATE TABLE just made
+        # the column); only an operator-migrated v4 file where the runbook
+        # ALTER has not yet run fails here, with a clear instruction.
+        _assert_v5_platform_columns(conn)
 
 
 @contextmanager
@@ -647,10 +666,10 @@ def fetch_orders_for_plan(conn: sqlite3.Connection, plan_id: int) -> list[sqlite
     reconciler to compute blended entry/exit prices.
 
     No account filter — a plan_id is unique across accounts (the
-    plans-side ``UNIQUE(brief_date, ticker, account)`` constraint means
-    one ticker on one day can produce two plan rows, one per account,
-    each with its own plan_id; all orders for a given plan_id are by
-    construction routed to the plan's account)."""
+    plans-side ``UNIQUE(brief_date, ticker, account, platform)`` constraint
+    means one ticker on one day can produce one plan row per (account,
+    platform) pair, each with its own plan_id; all orders for a given
+    plan_id are by construction routed to the plan's account)."""
     cur = conn.execute(
         "SELECT * FROM orders WHERE plan_id = ? ORDER BY submitted_at, order_id",
         (plan_id,),
