@@ -1,19 +1,22 @@
-"""Layer 3 orchestrator: propose candidates with DeepSeek v4-pro, verify via 4 gates.
+"""Layer 3 orchestrator: propose candidates with DeepSeek v4-pro, verify via 3 gates.
 
 For each input theme, the orchestrator (a) asks the LLM for 5-15 candidate
 small/mid-cap beneficiaries (see :mod:`theme_mapper`) and (b) verifies each
-candidate against four independent gates:
+candidate against three independent gates (the ETF/NPORT gate is designed but
+not wired — see ``GATE_NAMES``):
 
-1. **ETF holdings** — is the ticker a constituent of any thematic ETF mapped
-   to this theme? (NPORT-P parser, paradigm-independent.)
-2. **10-K keyword grep** — does the company's most recent 10-K mention the
+1. **10-K keyword grep** — does the company's most recent 10-K mention the
    theme keywords?
-3. **Recent press** — has Polygon news in the last 30 days carried the theme
+2. **Recent press** — has Polygon news in the last 30 days carried the theme
    keywords for this ticker?
-4. **Form-4 insider activity** — net opportunistic buys above threshold over
+3. **Form-4 insider activity** — net opportunistic buys above threshold over
    the last 90 days (paradigm #11 Cohen-Malloy reuse, αt +2.71 OOS validated).
 
-A candidate is ``verified=True`` if **any** of the four gates passes. Output
+An **ETF holdings** gate (is the ticker a constituent of any thematic ETF
+mapped to this theme, via an NPORT-P parser) is described in the original
+design but is **not wired** into ``GATE_NAMES`` / the verify loop today.
+
+A candidate is ``verified=True`` if **any** of the three wired gates passes. Output
 is a parquet at ``~/.alphalens/thematic_candidates/{date}.parquet`` with one
 row per (theme, ticker).
 """

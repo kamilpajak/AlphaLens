@@ -134,6 +134,12 @@ class Decision:
     position_size_usd: float | None = None
     entry_price: float | None = None
     market_regime_at_entry: str | None = None
+    # ---- v3 brief-metadata columns (click-time, stamped from Brief; design memo Variant A) ----
+    layer4_score: int | None = None
+    rank_in_day: int | None = None
+    cohort_size_in_day: int | None = None
+    gate_verdict_json: str | None = None
+    brief_model_used: str | None = None
     # ---- v2 outcome-join columns (Track A v2; design memo §4 + §8 L3) ----
     # All job-set by the post-hoc decision<->paper outcome-join (see
     # ``outcome_join.join_decision_outcomes``), NEVER user-writable. The
@@ -259,6 +265,11 @@ _SCHEMA_DDL = (
         position_size_usd REAL,
         entry_price REAL,
         market_regime_at_entry TEXT,
+        layer4_score INTEGER,
+        rank_in_day INTEGER,
+        cohort_size_in_day INTEGER,
+        gate_verdict_json TEXT,
+        brief_model_used TEXT,
         outcome_plan_id TEXT,
         fill_status TEXT,
         exit_kind TEXT,
@@ -276,8 +287,10 @@ _SCHEMA_DDL = (
 # Schema generation tracked via ``PRAGMA user_version``. 0 = v1 (15 columns).
 # 1 = v2 outcome-join columns added (PR-1). 2 = ``realized_pnl`` renamed to
 # ``realized_return`` (PR-3) so it is a decimal fraction unit-consistent with
-# ``shadow_return`` for the §6 execution-gap subtraction.
-_SCHEMA_GENERATION = 2
+# ``shadow_return`` for the §6 execution-gap subtraction. 3 = v3 click-time
+# brief-metadata columns added (Variant A) — stamped from the Brief on every
+# insert (NOT carried-forward like the job-set outcome columns).
+_SCHEMA_GENERATION = 3
 
 # v2 outcome-join columns, as (name, sqlite_type). Present in ``_SCHEMA_DDL``
 # above for fresh databases AND added to legacy v1 databases by
@@ -291,6 +304,19 @@ _OUTCOME_COLUMNS: tuple[tuple[str, str], ...] = (
     ("shadow_return", "REAL"),
     ("realized_return", "REAL"),
     ("outcome_computed_at", "TEXT"),
+)
+
+# v3 click-time brief-metadata columns, as (name, sqlite_type). Same single-
+# source-of-truth role as ``_OUTCOME_COLUMNS``: present in ``_SCHEMA_DDL`` for
+# fresh databases AND added to gen-2 databases by ``_migrate_schema`` via
+# ``ALTER TABLE ADD COLUMN``. UNLIKE the outcome columns these are written
+# DIRECTLY from the Decision on every insert (click-time, not carried-forward).
+_BRIEF_METADATA_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("layer4_score", "INTEGER"),
+    ("rank_in_day", "INTEGER"),
+    ("cohort_size_in_day", "INTEGER"),
+    ("gate_verdict_json", "TEXT"),
+    ("brief_model_used", "TEXT"),
 )
 
 
@@ -326,6 +352,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     ``realized_return``. The rename runs BEFORE the additive ADD COLUMN loop
     so a gen-1 database carries its (always-NULL — PR-1 never populated it)
     column over rather than gaining a second empty ``realized_return``.
+
+    Generation 3 (v3 Variant A) adds the click-time brief-metadata columns
+    (``_BRIEF_METADATA_COLUMNS``) via the same idempotent table_info-guarded
+    ADD COLUMN loop as the outcome columns.
     """
     existing = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
     # gen 1 -> gen 2: realized_pnl (dollars, never populated) -> realized_return
@@ -336,6 +366,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         existing.discard("realized_pnl")
         existing.add("realized_return")
     for name, sql_type in _OUTCOME_COLUMNS:
+        if name not in existing:
+            # Identifiers are module constants, not user input — safe to inline.
+            conn.execute(f"ALTER TABLE decisions ADD COLUMN {name} {sql_type}")
+    # gen 2 -> gen 3: v3 click-time brief-metadata columns. Same idempotent
+    # table_info-guarded ADD COLUMN pattern as the outcome loop above.
+    for name, sql_type in _BRIEF_METADATA_COLUMNS:
         if name not in existing:
             # Identifiers are module constants, not user input — safe to inline.
             conn.execute(f"ALTER TABLE decisions ADD COLUMN {name} {sql_type}")
@@ -433,9 +469,11 @@ class FeedbackStore:
                 dismiss_category, dismiss_reason, dismiss_note,
                 confidence_subjective, paper_trade_plan_id,
                 position_size_usd, entry_price, market_regime_at_entry,
+                layer4_score, rank_in_day, cohort_size_in_day,
+                gate_verdict_json, brief_model_used,
                 outcome_plan_id, fill_status, exit_kind,
                 shadow_return, realized_return, outcome_computed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 target_id,
@@ -453,6 +491,13 @@ class FeedbackStore:
                 decision.position_size_usd,
                 decision.entry_price,
                 decision.market_regime_at_entry,
+                # v3 brief-metadata: written DIRECTLY from the Decision on every
+                # insert (click-time), NOT carried-forward like outcome_values.
+                decision.layer4_score,
+                decision.rank_in_day,
+                decision.cohort_size_in_day,
+                decision.gate_verdict_json,
+                decision.brief_model_used,
                 *outcome_values,
             ),
         )
@@ -603,6 +648,11 @@ def _row_to_decision(row: sqlite3.Row) -> Decision:
         position_size_usd=row["position_size_usd"],
         entry_price=row["entry_price"],
         market_regime_at_entry=row["market_regime_at_entry"],
+        layer4_score=row["layer4_score"],
+        rank_in_day=row["rank_in_day"],
+        cohort_size_in_day=row["cohort_size_in_day"],
+        gate_verdict_json=row["gate_verdict_json"],
+        brief_model_used=row["brief_model_used"],
         outcome_plan_id=row["outcome_plan_id"],
         fill_status=row["fill_status"],
         exit_kind=row["exit_kind"],

@@ -311,6 +311,43 @@ _OUTCOME_COLUMN_NAMES = {
     "outcome_computed_at",
 }
 
+# gen-2 schema (PR-3: 21 columns, ``realized_return`` named, NO v3 brief-metadata
+# columns) — used to exercise the gen-2 -> gen-3 ADD COLUMN migration path.
+_GEN2_DECISIONS_DDL = """
+    CREATE TABLE decisions (
+        id TEXT PRIMARY KEY,
+        brief_date TEXT NOT NULL,
+        ticker TEXT NOT NULL,
+        theme TEXT NOT NULL,
+        surfaced_at TEXT NOT NULL,
+        action TEXT NOT NULL,
+        action_at TEXT NOT NULL,
+        dismiss_category TEXT,
+        dismiss_reason TEXT,
+        dismiss_note TEXT,
+        confidence_subjective INTEGER,
+        paper_trade_plan_id TEXT,
+        position_size_usd REAL,
+        entry_price REAL,
+        market_regime_at_entry TEXT,
+        outcome_plan_id TEXT,
+        fill_status TEXT,
+        exit_kind TEXT,
+        shadow_return REAL,
+        realized_return REAL,
+        outcome_computed_at TEXT,
+        UNIQUE(brief_date, ticker, theme)
+    );
+"""
+
+_BRIEF_METADATA_COLUMN_NAMES = {
+    "layer4_score",
+    "rank_in_day",
+    "cohort_size_in_day",
+    "gate_verdict_json",
+    "brief_model_used",
+}
+
 
 class TestOutcomeColumnsSchema(unittest.TestCase):
     """v2 outcome-join columns + the PRAGMA user_version ALTER migration."""
@@ -327,7 +364,7 @@ class TestOutcomeColumnsSchema(unittest.TestCase):
             path = Path(td) / "feedback.db"
             with FeedbackStore.open(path) as fb:
                 user_version = fb.conn.execute("PRAGMA user_version").fetchone()[0]
-                self.assertEqual(user_version, 2)
+                self.assertEqual(user_version, 3)
 
     def test_fresh_db_open_twice_does_not_raise_duplicate_column(self):
         # Migration must be idempotent: a fresh DB already carries the
@@ -368,7 +405,7 @@ class TestOutcomeColumnsSchema(unittest.TestCase):
             with FeedbackStore.open(path) as fb:
                 cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
                 self.assertTrue(_OUTCOME_COLUMN_NAMES.issubset(cols))
-                self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 2)
+                self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 3)
                 # legacy row still readable, outcome fields default NULL
                 legacy = fb.get("legacy-1")
                 self.assertIsNotNone(legacy)
@@ -401,7 +438,7 @@ class TestOutcomeColumnsSchema(unittest.TestCase):
                 cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
                 self.assertIn("realized_return", cols)
                 self.assertNotIn("realized_pnl", cols)
-                self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 2)
+                self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 3)
                 # legacy row still reads, realized_return defaults NULL
                 self.assertIsNone(fb.get("g1-1").realized_return)
 
@@ -494,6 +531,141 @@ class TestMigrationStateConvergence(unittest.TestCase):
         self.assertIn("exit_kind", fresh)
         self.assertNotIn("exit_kind", broken)
         self.assertNotEqual(set(fresh), set(broken))
+
+
+class TestBriefMetadataColumns(unittest.TestCase):
+    """v3 click-time brief-metadata columns (Variant A): schema migration,
+    CREATE/ALTER parity, round-trip, and click-time re-write on upsert.
+
+    UNLIKE the v2 outcome columns these are stamped DIRECTLY from the Decision
+    on every insert (not carried-forward), so an upsert must re-write — never
+    NULL — them.
+    """
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.path = Path(self._td.name) / "feedback.db"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_gen2_db_gets_v3_columns_via_alter_and_bumps_user_version(self):
+        # Hand-roll a gen-2 DB (21 cols, NO v3 brief-metadata, user_version=2)
+        # then open through FeedbackStore. The gen 2 -> gen 3 ALTER loop must add
+        # all 5 v3 columns and bump user_version to 3; a pre-existing row gains
+        # them as NULL.
+        import sqlite3
+
+        raw = sqlite3.connect(str(self.path))
+        raw.executescript(_GEN2_DECISIONS_DDL)
+        raw.execute("PRAGMA user_version = 2")
+        raw.execute(
+            """INSERT INTO decisions(id, brief_date, ticker, theme, surfaced_at,
+                                      action, action_at)
+               VALUES ('g2-1', '2026-05-20', 'NVDA', 'ai',
+                       '2026-05-20T06:30:00+00:00', 'interested',
+                       '2026-05-20T08:00:00+00:00')"""
+        )
+        raw.commit()
+        self.assertEqual(raw.execute("PRAGMA user_version").fetchone()[0], 2)
+        raw.close()
+
+        with FeedbackStore.open(self.path) as fb:
+            cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
+            self.assertTrue(_BRIEF_METADATA_COLUMN_NAMES.issubset(cols))
+            self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 3)
+            # pre-existing row now carries the v3 columns as NULL
+            legacy = fb.get("g2-1")
+            self.assertIsNotNone(legacy)
+            self.assertIsNone(legacy.layer4_score)
+            self.assertIsNone(legacy.rank_in_day)
+            self.assertIsNone(legacy.cohort_size_in_day)
+            self.assertIsNone(legacy.gate_verdict_json)
+            self.assertIsNone(legacy.brief_model_used)
+
+    def test_fresh_db_and_upgraded_gen2_table_info_identical(self):
+        # CREATE/ALTER parity: a fresh DB must have the IDENTICAL decisions
+        # column set as a gen-2 DB migrated to gen-3.
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as td:
+            fresh_path = Path(td) / "fresh.db"
+            with FeedbackStore.open(fresh_path) as fb:
+                fresh = _normalized_table_info(fb.conn)
+
+            upgraded_path = Path(td) / "upgraded.db"
+            raw = sqlite3.connect(str(upgraded_path))
+            raw.executescript(_GEN2_DECISIONS_DDL)
+            raw.execute("PRAGMA user_version = 2")
+            raw.commit()
+            raw.close()
+            with FeedbackStore.open(upgraded_path) as fb:
+                upgraded = _normalized_table_info(fb.conn)
+
+        self.assertEqual(set(fresh), set(upgraded))
+        self.assertTrue(_BRIEF_METADATA_COLUMN_NAMES.issubset(set(fresh)))
+        for col in fresh:
+            self.assertEqual(fresh[col], upgraded[col], f"column {col!r} diverges")
+
+    def test_brief_metadata_round_trip(self):
+        d = _make_decision(
+            layer4_score=4,
+            rank_in_day=2,
+            cohort_size_in_day=12,
+            gate_verdict_json='{"passed": ["liquidity"], "failed": [], "unknown": ["pead"]}',
+            brief_model_used="deepseek-v4-pro",
+        )
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(d)
+            fetched = fb.get(row_id)
+            self.assertEqual(fetched.layer4_score, 4)
+            self.assertEqual(fetched.rank_in_day, 2)
+            self.assertEqual(fetched.cohort_size_in_day, 12)
+            self.assertEqual(
+                fetched.gate_verdict_json,
+                '{"passed": ["liquidity"], "failed": [], "unknown": ["pead"]}',
+            )
+            self.assertEqual(fetched.brief_model_used, "deepseek-v4-pro")
+
+    def test_upsert_rewrites_brief_metadata_not_carried_forward(self):
+        # Click-time: re-inserting the same (brief_date, ticker, theme) with the
+        # 5 fields set again must WRITE the new values, not preserve/NULL them.
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(
+                _make_decision(
+                    action="interested",
+                    layer4_score=3,
+                    rank_in_day=5,
+                    cohort_size_in_day=10,
+                    gate_verdict_json='{"passed": [], "failed": [], "unknown": []}',
+                    brief_model_used="deepseek-v4-flash",
+                )
+            )
+            # user flips to dismissed; the SPA re-stamps the (possibly changed)
+            # brief metadata on the same click.
+            fb.insert(
+                _make_decision(
+                    action="dismissed",
+                    dismiss_category="thesis_setup",
+                    dismiss_reason="too_expensive",
+                    layer4_score=4,
+                    rank_in_day=1,
+                    cohort_size_in_day=11,
+                    gate_verdict_json='{"passed": ["liquidity"], "failed": [], "unknown": []}',
+                    brief_model_used="deepseek-v4-pro",
+                )
+            )
+            fetched = fb.get(row_id)
+            self.assertEqual(fetched.action, "dismissed")
+            # new values written, NOT lost / NULLed
+            self.assertEqual(fetched.layer4_score, 4)
+            self.assertEqual(fetched.rank_in_day, 1)
+            self.assertEqual(fetched.cohort_size_in_day, 11)
+            self.assertEqual(
+                fetched.gate_verdict_json,
+                '{"passed": ["liquidity"], "failed": [], "unknown": []}',
+            )
+            self.assertEqual(fetched.brief_model_used, "deepseek-v4-pro")
 
 
 class TestOutcomeRoundTrip(unittest.TestCase):
