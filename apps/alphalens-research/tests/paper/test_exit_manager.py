@@ -1667,23 +1667,29 @@ class _PositionReadFailsBroker(_StubBrokerClient):
         raise RuntimeError("stub APIError: position read timed out")
 
 
-class _PositionReadNoneBroker(_StubBrokerClient):
-    """Stub broker whose ``get_position`` returns None (no live broker position
-    reported). Same fallback path as :class:`_PositionReadFailsBroker`."""
+class _PositionFlatBroker(_StubBrokerClient):
+    """Stub broker whose ``get_position`` returns None = a DEFINITIVE
+    broker-confirmed flat / absent position (the 404 / "does not exist" case).
+    Per the BrokerClient contract this is a POSITIVE assertion of flatness,
+    not an unknown — so a ledger that believes the plan is filled is a
+    ledger<->broker DESYNC, not a sizing-fallback case."""
 
     def get_position(self, symbol: str):
         return None
 
 
 class TestPositionQtyFallbackUsesNetOpen(_ExitTestBase):
-    """HIGH (oversell risk): when the live broker position read fails / returns
-    None, the SL fallback size MUST be ``net_open_qty`` (entry fills minus exit
-    fills already SOLD), NOT the gross ``total_entry_filled_qty``. Sizing to
-    gross entry fills after a partial TP already sold shares oversizes the SL ->
-    persistent insufficient_qty rejection + oversell-to-short risk.
+    """HIGH (oversell risk): when the live broker position read genuinely
+    ERRORS (transient), the SL fallback size MUST be ``net_open_qty`` (entry
+    fills minus exit fills already SOLD), NOT the gross
+    ``total_entry_filled_qty``. Sizing to gross entry fills after a partial TP
+    already sold shares oversizes the SL -> persistent insufficient_qty
+    rejection + oversell-to-short risk.
 
     Scenario: 27 shares entered, a 13-share TP already FILLED -> 14 net held.
-    The broker position read fails, so the convergence SL must size to 14.
+    The broker position read fails (transient), so the convergence SL must
+    size to 14 — and must NOT treat the transient blip as a desync (that would
+    mask a real 14-share position and DROP its disaster-stop).
     """
 
     def _seed_filled_with_partial_tp_sold(self) -> int:
@@ -1739,6 +1745,9 @@ class TestPositionQtyFallbackUsesNetOpen(_ExitTestBase):
                     conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
                 )
         self.assertEqual(o.action, "CONVERGE_SL")
+        # A TRANSIENT read error is NOT a desync — must not write a terminal
+        # outcome that masks the real 14-share position.
+        self.assertEqual(o.n_ledger_broker_desync, 0)
         # SL sized to net_open (27 - 13 = 14), NOT the gross 27 entry fills.
         self.assertEqual(
             self._live_sl_qty(plan_id),
@@ -1746,19 +1755,151 @@ class TestPositionQtyFallbackUsesNetOpen(_ExitTestBase):
             "SL fallback oversized to gross entry fills (oversell-to-short risk)",
         )
 
-    def test_fallback_on_none_position_sizes_sl_to_net_open_not_gross(self):
-        plan_id = self._seed_filled_with_partial_tp_sold()
-        broker = _PositionReadNoneBroker()
+
+class TestLedgerBrokerDesync(_ExitTestBase):
+    """PHANTOM-position guard: the broker is the SOURCE OF TRUTH for whether a
+    position exists. When the broker CONFIRMS flat/absent (definitive None, not
+    a transient error) WHILE the ledger believes the plan is filled
+    (net_open_qty > 0, no outcome yet), that is a ledger<->broker DESYNC.
+
+    The harness must STOP chasing the phantom: submit NO protective order
+    (there is nothing to protect), write a TERMINAL outcome so the plan is not
+    reprocessed every pass, and SIGNAL the desync so it self-surfaces.
+    """
+
+    def _seed_filled_plan(self) -> int:
+        plan_id = _seed_plan(self.ledger)
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=27,
+            status="FILLED",
+            filled_qty=27,
+            filled_price=100.0,
+        )
+        return plan_id
+
+    def _outcome_kind(self, plan_id: int) -> str | None:
+        with open_ledger(self.ledger) as conn:
+            row = conn.execute(
+                "SELECT exit_kind FROM plan_outcomes WHERE plan_id = ?", (plan_id,)
+            ).fetchone()
+        return row["exit_kind"] if row else None
+
+    def test_broker_flat_while_ledger_filled_is_desync(self):
+        plan_id = self._seed_filled_plan()
+        broker = _PositionFlatBroker()
         with open_ledger(self.ledger) as conn:
             o = process_plan_exit(
                 conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
             )
+        self.assertEqual(o.action, "DESYNC_FLAT")
+        # NO protective order submitted into the void.
+        self.assertEqual(len(broker.submissions), 0)
+        # Desync signalled.
+        self.assertEqual(o.n_ledger_broker_desync, 1)
+        # A terminal outcome was written so the plan is not reprocessed.
+        self.assertEqual(self._outcome_kind(plan_id), "RECONCILED_FLAT")
+
+    def test_desync_outcome_is_idempotent_not_reprocessed(self):
+        plan_id = self._seed_filled_plan()
+        broker = _PositionFlatBroker()
+        with open_ledger(self.ledger) as conn:
+            process_plan_exit(conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED)
+        # Second pass: the plan already has the terminal DESYNC outcome.
+        broker2 = _PositionFlatBroker()
+        with open_ledger(self.ledger) as conn:
+            o2 = process_plan_exit(
+                conn, plan_id=plan_id, broker=broker2, observed_at=_OBSERVED_AT_FIXED
+            )
+        self.assertEqual(o2.action, "NOOP")
+        self.assertEqual(o2.n_ledger_broker_desync, 0)
+        self.assertEqual(len(broker2.submissions), 0)
+
+    def test_flat_broker_and_flat_ledger_stays_unfilled_not_desync(self):
+        # Entry CANCELED with zero fills -> net_open_qty == 0. A flat broker
+        # here is NOT a desync (the ledger agrees there is no position); the
+        # plan settles to UNFILLED exactly as today.
+        plan_id = _seed_plan(self.ledger)
+        _add_entry(self.ledger, plan_id=plan_id, alpaca_id="e1", qty=27, status="CANCELED")
+        broker = _PositionFlatBroker()
+        with open_ledger(self.ledger) as conn:
+            o = process_plan_exit(
+                conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
+            )
+        self.assertEqual(o.action, "UNFILLED")
+        self.assertEqual(o.n_ledger_broker_desync, 0)
+        self.assertEqual(len(broker.submissions), 0)
+        self.assertEqual(self._outcome_kind(plan_id), "UNFILLED")
+
+    def test_real_position_keeps_normal_convergence_no_desync(self):
+        # A broker that returns a REAL position keeps the normal SL-first
+        # convergence (the #401/#402 path), no desync.
+        plan_id = self._seed_filled_plan()
+        client = _StubBrokerClient()  # default get_position returns qty 27
+        with open_ledger(self.ledger) as conn:
+            o = process_plan_exit(
+                conn, plan_id=plan_id, broker=client, observed_at=_OBSERVED_AT_FIXED
+            )
         self.assertEqual(o.action, "CONVERGE_SL")
-        self.assertEqual(
-            self._live_sl_qty(plan_id),
-            [14],
-            "SL fallback oversized to gross entry fills (oversell-to-short risk)",
-        )
+        self.assertEqual(o.n_ledger_broker_desync, 0)
+        kinds = [s["kind"] for s in client.submissions]
+        self.assertEqual(kinds.count("STOP"), 1)
+        self.assertIsNone(self._outcome_kind(plan_id))
+
+    def test_transient_read_error_writes_no_terminal_outcome(self):
+        # A transient read error must NEVER write the terminal DESYNC outcome
+        # (that would mask a real position behind a blip). It falls back to the
+        # ledger sizing + retries next pass.
+        plan_id = self._seed_filled_plan()
+        broker = _PositionReadFailsBroker()
+        with open_ledger(self.ledger) as conn:
+            with self.assertLogs("alphalens_pipeline.paper.exit_manager", level="WARNING"):
+                o = process_plan_exit(
+                    conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
+                )
+        self.assertEqual(o.action, "CONVERGE_SL")
+        self.assertEqual(o.n_ledger_broker_desync, 0)
+        self.assertIsNone(self._outcome_kind(plan_id))
+
+    def test_flat_broker_with_live_exit_order_is_not_desync_preserves_outcome(self):
+        # DATA-LOSS GUARD: a flat broker while the ledger believes filled is
+        # ONLY a desync when NO exit order was ever submitted. When an exit
+        # (SL / TP) IS live, a flat broker most plausibly means that exit
+        # FIRED — its fill may simply not be polled into the ledger yet (a
+        # get_order blip during the same pass). Declaring desync here would
+        # write a terminal RECONCILED_FLAT with null R and PERMANENTLY lose the
+        # realized SL_HIT / TP_HIT outcome. The guard must instead defer to the
+        # normal exit path (NOOP-retry until the exit fill is observable).
+        plan_id = self._seed_filled_plan()
+        with open_ledger(self.ledger) as conn:
+            insert_order(
+                conn,
+                plan_id=plan_id,
+                alpaca_order_id="sl1",
+                side="SELL",
+                order_kind="SL",
+                tier_index=0,
+                order_type="STOP",
+                qty=27,
+                limit_price=90.0,
+                time_in_force="gtc",
+                submitted_at=dt.datetime.now(dt.UTC),
+                status="SUBMITTED",  # broker filled it; ledger has not polled the fill yet
+            )
+        broker = _PositionFlatBroker()
+        with open_ledger(self.ledger) as conn:
+            o = process_plan_exit(
+                conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
+            )
+        # NOT misclassified as a desync.
+        self.assertNotEqual(o.action, "DESYNC_FLAT")
+        self.assertEqual(o.n_ledger_broker_desync, 0)
+        # NO terminal RECONCILED_FLAT swallowing the real exit outcome.
+        self.assertNotEqual(self._outcome_kind(plan_id), "RECONCILED_FLAT")
+        # Nothing submitted into the void (broker is flat -> size 0).
+        self.assertEqual(len(broker.submissions), 0)
 
 
 class TestRejectedTimeStopRetriesNoOscillation(_ExitTestBase):

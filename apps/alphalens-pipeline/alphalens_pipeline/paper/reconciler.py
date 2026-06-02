@@ -109,9 +109,17 @@ class ReconcileReport:
     #                          NO live protective SL. The dead-man: > 0 means
     #                          an unprotected live position. Emitted as a
     #                          Prometheus gauge so an alert can page on it.
+    #   n_ledger_broker_desync — plans where the broker CONFIRMED the position
+    #                          flat while the ledger believed it filled (a
+    #                          ledger<->broker desync). The harness stopped
+    #                          chasing the phantom + wrote RECONCILED_FLAT. > 0
+    #                          means the ledger and broker disagree about
+    #                          reality — emitted as a Prometheus gauge + a loud
+    #                          CLI WARNING.
     n_exits_failed: int = 0
     n_entries_canceled: int = 0
     n_filled_without_sl: int = 0
+    n_ledger_broker_desync: int = 0
 
 
 def _existing_fill_ids(conn: sqlite3.Connection, order_id: int) -> set[str]:
@@ -394,6 +402,7 @@ def reconcile_orders(
         n_exits_failed = 0
         n_entries_canceled = 0
         n_filled_without_sl = 0
+        n_ledger_broker_desync = 0
         for plan_id in sorted(plans_touched):
             # Defensive wrap: process_plan_exit already catches per-broker-call
             # errors internally (exit submits + cancels are best-effort), but a
@@ -425,6 +434,7 @@ def reconcile_orders(
             n_exits_failed += exit_outcome.n_exits_failed
             n_entries_canceled += exit_outcome.n_entries_canceled
             n_filled_without_sl += exit_outcome.n_filled_without_sl
+            n_ledger_broker_desync += exit_outcome.n_ledger_broker_desync
 
     # Memo §6.1 Path B — closed-loop live-gross check post-reconcile.
     from alphalens_pipeline.paper.gross_guard import check_live_gross
@@ -441,7 +451,7 @@ def reconcile_orders(
     logger.info(
         "paper reconcile: %d orders checked, %d transitioned, %d fills appended, "
         "%d exits attached, %d outcomes written, %d time-stops, %d ttl-cancels, "
-        "%d exits failed, %d entries canceled, %d filled-without-SL, gross=%.2f",
+        "%d exits failed, %d entries canceled, %d filled-without-SL, %d desync, gross=%.2f",
         len(outcomes),
         transitioned,
         appended,
@@ -452,8 +462,21 @@ def reconcile_orders(
         n_exits_failed,
         n_entries_canceled,
         n_filled_without_sl,
+        n_ledger_broker_desync,
         gross_ratio,
     )
+    if n_ledger_broker_desync > 0:
+        # The ledger and broker disagree about reality: the broker confirmed a
+        # position flat while the ledger believed it filled. The harness wrote
+        # RECONCILED_FLAT + stopped chasing the phantom, but a desync means a
+        # broken-migration / manual-edit window left the ledger ahead of the
+        # broker — worth surfacing loudly so an operator investigates.
+        logger.warning(
+            "paper reconcile: %d plan(s) hit a LEDGER<->BROKER DESYNC (account=%s) — "
+            "broker confirmed flat while ledger believed filled; wrote RECONCILED_FLAT",
+            n_ledger_broker_desync,
+            account,
+        )
     if n_filled_without_sl > 0:
         # The dead-man condition: a filled position ended the pass with no
         # live disaster-stop. This is the single most operationally dangerous
@@ -479,6 +502,7 @@ def reconcile_orders(
         n_exits_failed=n_exits_failed,
         n_entries_canceled=n_entries_canceled,
         n_filled_without_sl=n_filled_without_sl,
+        n_ledger_broker_desync=n_ledger_broker_desync,
     )
 
 

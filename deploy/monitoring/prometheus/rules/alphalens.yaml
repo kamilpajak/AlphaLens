@@ -550,3 +550,44 @@ groups:
         annotations:
           summary: "paper account {{ $labels.account }} has a filled position with NO live SL"
           description: "alphalens_paper_filled_without_sl has stayed > 0 across more than one reconcile pass — a filled paper position is not converging to a live protective stop-loss (the convergence retry is not clearing, e.g. a persistent held_for_orders / insufficient-qty rejection). Check `journalctl --user -u alphalens-paper-reconcile.service` on the VPS and the ledger SL orders for the account. Until cleared the position sits without a disaster stop."
+
+      # ---------------------------------------------------------------
+      # Paper ledger<->broker desync guard (phantom-position protection).
+      # ---------------------------------------------------------------
+      #
+      # The broker is the SOURCE OF TRUTH for whether a position exists. The
+      # reconciler emits ``alphalens_paper_ledger_broker_desync{account=...}`` —
+      # a GAUGE of plans where the broker DEFINITIVELY confirmed the position
+      # flat/absent (a clean read returning no-position, NOT a transient error)
+      # while the ledger believed the plan was still filled. That disagreement
+      # means a broken-migration / manual-edit window left the ledger AHEAD of
+      # the broker; the harness stopped chasing the phantom (it submits no
+      # protective order for shares that do not exist) and wrote a terminal
+      # RECONCILED_FLAT outcome, but the operator should investigate why the two
+      # diverged. A transient read error is explicitly NOT counted here (it is
+      # retried, never treated as flat) so this gauge is a true desync signal.
+      #
+      # ONE-SHOT-SPIKE lifecycle (NOT a sustained gauge like FilledWithoutSl):
+      # detecting a desync writes a TERMINAL RECONCILED_FLAT, so the plan is
+      # never reprocessed -> the gauge reads 1 on ONLY the single reconcile
+      # pass that detects it, then 0 again the next pass (~30 min later). A
+      # narrow window + ``for:`` (the FilledWithoutSl shape) would NEVER fire:
+      # the lone spike ages out of a 40m window long before any ``for: 1h``
+      # debounce is satisfied. So instead: a WIDE 6h lookback keeps the single
+      # spike visible long enough to page + be seen via Telegram (then it
+      # auto-resolves), and NO ``for:`` (the harness already deduped the event
+      # to a single terminal write — there is nothing to debounce). Still a
+      # GAUGE read via max_over_time, never increase()/rate() (the PR #312
+      # lesson). DISTINCT alertname + NO ``job=`` label (like FilledWithoutSl /
+      # VIX-cache / EDGAR-dark) keeps it OUT of the per-job cron staleness
+      # enumerations — the paper jobs are deliberately staleness-rule-exempt
+      # (weekend false-page), and this is a per-account domain gauge.
+      - alert: AlphalensPaperLedgerBrokerDesync
+        expr: max_over_time(alphalens_paper_ledger_broker_desync[6h]) > 0
+        labels:
+          severity: warning
+          route: telegram
+          unit: paper-reconcile
+        annotations:
+          summary: "paper account {{ $labels.account }} ledger and broker disagree about a position"
+          description: "alphalens_paper_ledger_broker_desync went > 0 in the last 6h — a reconcile pass found the broker confirming a position flat while the ledger believed it filled (a ledger<->broker desync, e.g. after a broken-migration window that left the ledger ahead of the broker). The harness stopped chasing the phantom and wrote RECONCILED_FLAT, but check `journalctl --user -u alphalens-paper-reconcile.service` on the VPS and reconcile the ledger plan rows against the broker positions for the account."

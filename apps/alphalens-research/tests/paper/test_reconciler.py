@@ -737,6 +737,10 @@ class TestTtlSweep(_ReconcilerTestBase):
                 filled_at=self._STALE_PLANNED,
             )
 
+        # The broker confirms the matching real 27-share position so the
+        # convergence path (not the ledger<->broker desync guard) runs.
+        self.client.position_qty_for["NVDA"] = 27
+
         report = reconcile_orders(
             ledger_path=self.ledger, broker=self.client, observed_at=self._STALE_OBSERVED
         )
@@ -839,6 +843,10 @@ class TestReconcileExitResilience(_ReconcilerTestBase):
         # Both entry orders already FILLED locally → no open orders to poll;
         # exit_manager drives attachment for both touched plans.
         broker = _ExitFailingBroker(fail_stop_for={"BADX"})
+        # Both plans hold a real 27-share broker position, so the convergence
+        # path runs (not the ledger<->broker desync guard).
+        broker.position_qty_for["BADX"] = 27
+        broker.position_qty_for["GOODX"] = 27
 
         # Must NOT raise even though BADX's SL submit errors.
         report = reconcile_orders(ledger_path=self.ledger, broker=broker)

@@ -100,6 +100,10 @@ def _emit_reconcile_metrics(report: ReconcileReport, *, account: str) -> None:
         unprotected live position; the alert rule pages on it.
       * ``alphalens_paper_exits_failed`` — exit submits the broker rejected
         this pass (held_for_orders / insufficient qty / APIError).
+      * ``alphalens_paper_ledger_broker_desync`` — plans where the broker
+        confirmed the position flat while the ledger believed it filled. A
+        sustained value > 0 means the ledger and broker disagree about reality;
+        the alert rule pages on it.
 
     The reconcile work is already persisted before this call; an emit failure
     is pure observability debt and must NEVER fail the unit (PR #311 rule —
@@ -115,6 +119,9 @@ def _emit_reconcile_metrics(report: ReconcileReport, *, account: str) -> None:
                 f'alphalens_paper_exits_failed{{account="{acct}"}}': report.n_exits_failed,
                 f'alphalens_paper_entries_canceled{{account="{acct}"}}': report.n_entries_canceled,
                 f'alphalens_paper_exits_attached{{account="{acct}"}}': report.n_exits_attached,
+                f'alphalens_paper_ledger_broker_desync{{account="{acct}"}}': (
+                    report.n_ledger_broker_desync
+                ),
             },
         )
     except Exception:
@@ -370,8 +377,21 @@ def reconcile(
         f"exits_attached={report.n_exits_attached} "
         f"exits_failed={report.n_exits_failed} "
         f"entries_canceled={report.n_entries_canceled} "
-        f"filled_without_sl={report.n_filled_without_sl}"
+        f"filled_without_sl={report.n_filled_without_sl} "
+        f"ledger_broker_desync={report.n_ledger_broker_desync}"
     )
+    if report.n_ledger_broker_desync > 0:
+        # The ledger and broker disagree about reality: the broker confirmed a
+        # position flat while the ledger believed it filled. The harness stopped
+        # chasing the phantom (no protective order into the void) + wrote
+        # RECONCILED_FLAT, but a desync points at a broken-migration / manual-
+        # edit window that left the ledger ahead of the broker — tell the
+        # operator to investigate.
+        typer.echo(
+            f"  ! WARNING: {report.n_ledger_broker_desync} plan(s) hit a "
+            f"LEDGER<->BROKER DESYNC — broker confirmed flat while ledger believed "
+            f"filled; wrote RECONCILED_FLAT, stopped chasing the phantom."
+        )
     if report.n_filled_without_sl > 0:
         # Surface the dead-man condition loudly on the operator console too —
         # a filled position with no live disaster-stop is the single most

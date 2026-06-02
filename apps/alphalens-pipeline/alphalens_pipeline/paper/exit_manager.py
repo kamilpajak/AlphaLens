@@ -236,7 +236,8 @@ class ExitOutcome:
     """One plan's exit-phase outcome from a reconcile pass."""
 
     plan_id: int
-    # 'ATTACHED' | 'CLOSED' | 'TIME_STOP' | 'UNFILLED' | 'CONVERGE_SL' | 'NOOP'
+    # 'ATTACHED' | 'CLOSED' | 'TIME_STOP' | 'UNFILLED' | 'CONVERGE_SL'
+    #   | 'DESYNC_FLAT' | 'NOOP'
     action: str
     n_exits_submitted: int = 0
     exit_kind: str | None = None
@@ -249,6 +250,12 @@ class ExitOutcome:
     # protective SL (a transient unprotected position the next pass retries);
     # 0 otherwise. The dead-man signal the reconciler accumulates + emits.
     n_filled_without_sl: int = 0
+    # 1 when the broker CONFIRMED the position flat/absent (definitive
+    # no-position, NOT a transient read error) while the ledger believed the
+    # plan was filled (net_open_qty > 0, no outcome). A ledger<->broker DESYNC:
+    # the harness stops chasing the phantom (submits nothing), writes a
+    # terminal RECONCILED_FLAT outcome, and signals here. 0 otherwise.
+    n_ledger_broker_desync: int = 0
 
 
 def _fetch_plan_meta(conn: sqlite3.Connection, plan_id: int) -> sqlite3.Row | None:
@@ -377,9 +384,35 @@ class _RowLike:
 # ----- exit attacher -----
 
 
-def _position_qty(snapshot: _PlanSnapshot, broker: BrokerClient) -> int:
-    """The qty every protective order is sized to: the LIVE broker position
-    when a clean read is available, else the observed ledger filled qty.
+# Broker-position read states. The desync guard hinges on distinguishing a
+# DEFINITIVE broker-confirmed flat position (``FLAT``) from a TRANSIENT read
+# error (``ERROR``): a flat read while the ledger thinks the plan is filled is
+# a ledger<->broker desync, whereas a transient error must NOT be treated as a
+# desync (that would mask a real position and drop its disaster-stop).
+_POS_REAL = "REAL"  # broker reported a live position with qty > 0
+_POS_FLAT = "FLAT"  # broker DEFINITIVELY confirmed no position (None, per contract)
+_POS_ERROR = "ERROR"  # transient read failure — get_position raised
+
+
+@dataclass(frozen=True)
+class _PositionRead:
+    """Outcome of a single ``broker.get_position`` call for sizing + desync.
+
+    ``state`` is one of ``_POS_REAL`` / ``_POS_FLAT`` / ``_POS_ERROR``.
+    ``qty`` is the sizing quantity every protective order is sized to:
+      * REAL  -> the live broker position qty (authoritative inventory),
+      * FLAT  -> 0 (there is nothing to size against — confirmed flat),
+      * ERROR -> the net-open LEDGER qty fallback (entry fills minus exit
+                 fills), so a not-yet-reconciled real position is still
+                 protected without over-counting shares already sold.
+    """
+
+    state: str
+    qty: int
+
+
+def _read_position(snapshot: _PlanSnapshot, broker: BrokerClient) -> _PositionRead:
+    """Read the live broker position, classifying flat-vs-error per contract.
 
     The same-ticker policy guarantees one active plan per ticker, so the
     broker-side position is the authoritative count. We PREFER it over the
@@ -387,16 +420,17 @@ def _position_qty(snapshot: _PlanSnapshot, broker: BrokerClient) -> int:
     that the reconciler has not observed yet — sizing the SL to a stale ledger
     total would over-state inventory and risk an insufficient-qty rejection.
 
-    On any read error / None we fall back to ``net_open_qty`` (entry fills
-    MINUS exit fills = the true live ledger-side position) rather than the
-    GROSS ``total_entry_filled_qty``. Sizing the fallback to gross entry fills
-    ignores shares already SOLD by exits, oversizing the protective sell ->
-    persistent insufficient_qty rejection AND, if the over-sized SL ever lands,
-    oversell-to-short. ``net_open_qty`` is the safe fallback: it never exceeds
-    the shares actually held. Returns 0 when neither source reports a positive
-    position.
+    Per the :class:`BrokerClient.get_position` contract, ``None`` is a POSITIVE
+    assertion of a flat / absent position (``_POS_FLAT``); only a transient /
+    non-definitive failure raises (``_POS_ERROR``). On ``_POS_ERROR`` the
+    sizing falls back to ``net_open_qty`` (the true live ledger-side position)
+    rather than the GROSS ``total_entry_filled_qty`` — sizing the fallback to
+    gross entry fills ignores shares already SOLD by exits, oversizing the
+    protective sell -> persistent insufficient_qty rejection AND, if the
+    over-sized SL ever lands, oversell-to-short. ``net_open_qty`` never exceeds
+    the shares actually held.
     """
-    ledger_qty = snapshot.net_open_qty
+    ledger_qty = max(snapshot.net_open_qty, 0)
     try:
         position = broker.get_position(snapshot.ticker)
     except Exception as exc:
@@ -406,14 +440,22 @@ def _position_qty(snapshot: _PlanSnapshot, broker: BrokerClient) -> int:
             exc,
             ledger_qty,
         )
-        return max(ledger_qty, 0)
+        return _PositionRead(state=_POS_ERROR, qty=ledger_qty)
     if position is None:
-        # No live broker position reported — fall back to the net-open ledger
-        # qty (entry fills minus exit fills) so a not-yet-reconciled fresh fill
-        # is still covered without over-counting shares already sold.
-        return max(ledger_qty, 0)
-    pos_qty = int(float(getattr(position, "qty", 0) or 0))
-    return max(pos_qty, 0)
+        # The broker DEFINITIVELY confirms there is no open position. This is
+        # NOT a sizing fallback — it is authoritative truth used by the desync
+        # guard. Sizing qty is 0 (nothing to protect).
+        return _PositionRead(state=_POS_FLAT, qty=0)
+    pos_qty = max(int(float(getattr(position, "qty", 0) or 0)), 0)
+    return _PositionRead(state=_POS_REAL, qty=pos_qty)
+
+
+def _position_qty(snapshot: _PlanSnapshot, broker: BrokerClient) -> int:
+    """The qty every protective order is sized to. Thin wrapper over
+    :func:`_read_position` for call sites (re-snapshot dead-man recompute,
+    time-stop) that only need the sizing number, not the flat-vs-error state.
+    """
+    return _read_position(snapshot, broker).qty
 
 
 def _attach_sl(
@@ -889,10 +931,70 @@ def process_plan_exit(
     # the time-stop branch below so the skip and the fire stay consistent.
     # The time-stop IS the liquidation; nothing protective should be re-armed
     # against a position that is being market-liquidated.
-    size_qty = _position_qty(snap, broker)
+    pos = _read_position(snap, broker)
+    size_qty = pos.qty
     if snap.has_live_time_stop:
         return ExitOutcome(plan_id=plan_id, action="NOOP")
     should_fire_time_stop = _time_stop_should_fire(snap, observed_at)
+    # LEDGER<->BROKER DESYNC guard (broker is the SOURCE OF TRUTH for the
+    # position). When the broker DEFINITIVELY confirms the position is
+    # flat/absent (``_POS_FLAT`` — a clean read returning None, NOT a transient
+    # error) WHILE the ledger still believes the plan is filled
+    # (net_open_qty > 0, no outcome yet), there is NO position to protect.
+    # Falling back to the ledger qty here would size a protective SL for shares
+    # that do not exist -> perpetual insufficient-qty rejection + a false
+    # filled_without_sl. Instead stop chasing the phantom: submit / cancel
+    # NOTHING, write a TERMINAL RECONCILED_FLAT outcome so the plan is not
+    # reprocessed every pass, and signal the desync so it self-surfaces.
+    #
+    # Gated by ``not should_fire_time_stop`` for the same reason as the
+    # convergence branch below: once the plan is in time-stop territory the
+    # time-stop branch owns the (already-flat) liquidation. A TRANSIENT read
+    # error (``_POS_ERROR``) is deliberately NOT a desync — it falls through to
+    # the convergence branch and retries next pass, so a real position is never
+    # masked behind a blip.
+    #
+    # CRITICAL data-loss gate (``not snap.exit_orders``): the desync verdict
+    # only holds when NO exit order was ever submitted. If an exit (SL / TP /
+    # time-stop) IS present, a flat broker most plausibly means THAT EXIT
+    # FIRED — its fill may simply not be polled into the ledger yet (a
+    # get_order blip on this pass). Writing a terminal RECONCILED_FLAT here
+    # would discard the real SL_HIT / TP_HIT outcome with null R, PERMANENTLY.
+    # Checking ``total_exit_filled_qty == 0`` is NOT enough — the dangerous
+    # case is exactly the one where the exit fill was not recorded (so that
+    # count is still 0). When an exit order exists we defer to the normal exit
+    # path below (NOOP-retry until the fill is observable, then classify).
+    if (
+        not should_fire_time_stop
+        and pos.state == _POS_FLAT
+        and snap.net_open_qty > 0
+        and not snap.exit_orders
+    ):
+        logger.warning(
+            "exit_manager LEDGER<->BROKER DESYNC plan_id=%d ticker=%s: broker confirms "
+            "FLAT but ledger net_open_qty=%d (plan believed filled). Submitting no "
+            "protective order; writing terminal RECONCILED_FLAT.",
+            snap.plan_id,
+            snap.ticker,
+            snap.net_open_qty,
+        )
+        insert_plan_outcome(
+            conn,
+            plan_id=plan_id,
+            exit_kind="RECONCILED_FLAT",
+            first_fill_at=snap.first_entry_fill_at,
+            last_exit_at=None,
+            blended_entry_price=None,
+            blended_exit_price=None,
+            realized_r_multiple=None,
+            closed_at=observed_at,
+        )
+        return ExitOutcome(
+            plan_id=plan_id,
+            action="DESYNC_FLAT",
+            exit_kind="RECONCILED_FLAT",
+            n_ledger_broker_desync=1,
+        )
     if not should_fire_time_stop and snap.net_open_qty > 0 and snap.sl_coverage_qty < size_qty:
         n_canceled = _cancel_unfilled_entries(snapshot=snap, broker=broker)
         # CANCEL-FIRST: cancel the under-sized live SL BEFORE submitting the

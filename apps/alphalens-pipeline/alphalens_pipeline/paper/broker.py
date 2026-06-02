@@ -90,7 +90,25 @@ class BrokerClient(Protocol):
 
     def get_account(self) -> Any: ...
 
-    def get_position(self, symbol: str) -> Any | None: ...
+    def get_position(self, symbol: str) -> Any | None:
+        """Return the live open position for ``symbol``, or ``None``.
+
+        CONTRACT (relied on by exit_manager's ledger<->broker desync guard):
+          * Return ``None`` ONLY when the broker DEFINITIVELY confirms there
+            is no open position (the flat / absent state — e.g. a 404 / "does
+            not exist" / "position not found" response). ``None`` is a
+            POSITIVE assertion that the position is flat, never an "unknown".
+          * RAISE on any transient / non-definitive failure (timeout, 401,
+            5xx, connection error). A transient read is NOT flat.
+
+        The harness treats ``None`` as authoritative truth: a broker-confirmed
+        flat position while the ledger believes the plan is filled is a
+        DESYNC the harness surfaces (it stops submitting protective orders for
+        shares that do not exist). Conflating a transient error with ``None``
+        would mask a real position as flat and DROP its disaster-stop, so an
+        implementation MUST keep the two distinct.
+        """
+        ...
 
     def get_order(self, order_id: str) -> Any: ...
 
