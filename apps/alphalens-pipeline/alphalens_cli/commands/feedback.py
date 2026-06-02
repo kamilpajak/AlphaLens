@@ -239,11 +239,49 @@ def backfill_shadow_returns_command(
         f"{n_priced_total} priced across {len(matured)} matured dates, "
         f"{len(pending)} dates not yet matured."
     )
+    # Nightly auto-refresh: the sweep is the maturity event that feeds the
+    # execution-quality gauges, so re-emit them here. Never raises (helper
+    # swallows + logs), so it cannot change this command's exit behaviour.
+    _refresh_execution_telemetry(ledger)
 
 
 def _fmt(value: float | None) -> str:
     """Format a possibly-None decimal-fraction statistic for the report."""
     return "n/a" if value is None else f"{value:+.4f}"
+
+
+def _emit_execution_telemetry(gauges: dict[str, float | int]) -> Path | None:
+    """Emit a pre-built execution-quality gauge mapping. Never raises.
+
+    Intentionally swallow-all: a textfile-emit failure must NOT change the exit
+    behaviour of the command it hangs off, exactly like the other CLI emit
+    call-sites. The ``telemetry`` command uses this directly on the gauges built
+    from rows it already loaded (no second ledger read).
+    """
+    try:
+        from alphalens_pipeline.feedback.execution_telemetry import TELEMETRY_JOB
+        from alphalens_pipeline.observability.textfile import emit_domain_metrics
+
+        return emit_domain_metrics(job=TELEMETRY_JOB, metrics=gauges)
+    except Exception:
+        logger.exception("execution-telemetry emit failed; continuing")
+        return None
+
+
+def _refresh_execution_telemetry(ledger: Path) -> Path | None:
+    """Re-read the ledger and emit fresh execution-quality gauges. Never raises.
+
+    Used by the nightly ``backfill-shadow-returns`` tail, which has no rows in
+    hand — the sweep is the maturity event that feeds the gauges, so it re-reads.
+    """
+    try:
+        from alphalens_pipeline.feedback.execution_telemetry import execution_gauges_for_ledger
+
+        gauges = execution_gauges_for_ledger(ledger)
+    except Exception:
+        logger.exception("execution-telemetry build failed; continuing")
+        return None
+    return _emit_execution_telemetry(gauges)
 
 
 @feedback_app.command(name="execution-modes")
@@ -309,3 +347,77 @@ def execution_modes_command(
     for regime in (*SWITCHABLE_REGIMES, UNKNOWN_REGIME):
         if regime in recs:
             _emit(recs[regime])
+
+
+@feedback_app.command(name="telemetry")
+def telemetry_command(
+    ledger: Path = typer.Option(
+        Path.home() / ".alphalens" / "feedback.db",
+        "--ledger",
+        help="Override the default feedback ledger location.",
+    ),
+    emit: bool = typer.Option(
+        True,
+        "--emit/--no-emit",
+        help="Emit Prometheus gauges (default on).",
+    ),
+) -> None:
+    """Read-only execution-quality telemetry from the matured ledger (v3 PR-3).
+
+    Reuses the per-regime aggregation behind ``execution-modes`` and surfaces it
+    as Prometheus gauges + a compact table: per-regime + pooled fill_rate,
+    execution gap (mean shadow − realized, POSITIVE = real fill did worse than the
+    frictionless arrival-price shadow), missed opportunity, and pooled PnL (mean
+    realized over filled rows).
+
+    Reads ONLY ``(regime, fill_status, shadow_return, realized_return)`` — NEVER
+    the ``action`` column or any click data (orthogonality). This is OBSERVATION:
+    it never mutates the ledger, never touches the submitter, and is not a
+    re-weighting loop.
+    """
+    from alphalens_feedback.store import FeedbackStore
+    from alphalens_pipeline.feedback.execution_modes import (
+        DEFAULT_POOLED_GATE_N,
+        POOLED_KEY,
+        SWITCHABLE_REGIMES,
+        UNKNOWN_REGIME,
+        recommend_execution_modes,
+    )
+    from alphalens_pipeline.feedback.execution_telemetry import (
+        build_execution_gauges,
+        realized_means,
+    )
+
+    if not ledger.exists():
+        typer.echo(f"no ledger at {ledger} — no matured decisions yet.")
+        raise typer.Exit(code=0)
+
+    with FeedbackStore.open(ledger) as fb:
+        rows = fb.iter_matured_decisions()
+
+    recs = recommend_execution_modes(rows)
+    realized = realized_means(rows)
+    pooled = recs[POOLED_KEY]
+
+    typer.echo(f"execution-quality telemetry (ledger={ledger})")
+    typer.echo(
+        f"  pooled gate progress: {pooled.n}/{DEFAULT_POOLED_GATE_N} labelled matured decisions"
+    )
+
+    def _row(rec) -> None:
+        typer.echo(
+            f"    {rec.regime:<7} n={rec.n:<3} (filled={rec.n_filled}, unfilled={rec.n_unfilled})  "
+            f"fill_rate={_fmt(rec.fill_rate)}  gap_mean={_fmt(rec.observed_execution_gap)}  "
+            f"missed_opp={_fmt(rec.missed_opportunity)}  "
+            f"realized_mean={_fmt(realized.get(rec.regime))}"
+        )
+
+    _row(pooled)
+    for regime in (*SWITCHABLE_REGIMES, UNKNOWN_REGIME):
+        if regime in recs:
+            _row(recs[regime])
+
+    if emit:
+        # Emit from the rows already loaded above — no second ledger read, and the
+        # printed table and the emitted gauges are guaranteed to agree.
+        _emit_execution_telemetry(build_execution_gauges(rows))
