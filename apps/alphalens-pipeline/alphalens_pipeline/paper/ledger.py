@@ -674,6 +674,16 @@ def record_exit_ladder(
     empty ladder persists NO protective exit rows, the same "silently drop the
     stop" failure the broker-side ``attach_exit_ladder`` guard refuses at the
     input boundary. The persistence mirror refuses rather than no-op ``[]``.
+
+    ATOMIC: the whole ladder (every TP + SL row) is written in ONE transaction
+    — a failure partway (e.g. a duplicate ``alpaca_order_id`` hitting the
+    UNIQUE constraint) rolls back ALL rows from this call, never leaving a
+    half-persisted ladder (a TP recorded with no protective SL). The
+    connection runs in autocommit mode (``isolation_level=None``), so this
+    helper opens its OWN ``BEGIN``/``COMMIT`` only when the caller is not
+    already inside a transaction; when a caller wraps several writes in one
+    unit of work, that outer transaction owns the boundary (and its rollback
+    covers these rows too).
     """
     legs = list(legs)
     if not legs:
@@ -683,41 +693,53 @@ def record_exit_ladder(
             "stop-loss rows (the held position would be left with no "
             "protective exit recorded)."
         )
+    # Own the transaction only if the caller has not already opened one
+    # (nesting BEGIN raises "cannot start a transaction within a transaction").
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN")
     order_ids: list[int] = []
-    for leg in legs:
-        tp_id = insert_order(
-            conn,
-            plan_id=plan_id,
-            alpaca_order_id=leg.tp_order_id,
-            side="SELL",
-            order_kind="TP",
-            order_type="LIMIT",
-            qty=leg.qty,
-            time_in_force="gtc",
-            submitted_at=submitted_at,
-            tranche_index=leg.tranche_index,
-            limit_price=leg.take_profit_limit,
-            account=account,
-            platform=platform,
-            exit_group_id=leg.tp_order_id,
-        )
-        sl_id = insert_order(
-            conn,
-            plan_id=plan_id,
-            alpaca_order_id=leg.sl_order_id,
-            side="SELL",
-            order_kind="SL",
-            order_type="STOP",
-            qty=leg.qty,
-            time_in_force="gtc",
-            submitted_at=submitted_at,
-            tranche_index=leg.tranche_index,
-            stop_price=leg.stop_price,
-            account=account,
-            platform=platform,
-            exit_group_id=leg.tp_order_id,
-        )
-        order_ids.extend((tp_id, sl_id))
+    try:
+        for leg in legs:
+            tp_id = insert_order(
+                conn,
+                plan_id=plan_id,
+                alpaca_order_id=leg.tp_order_id,
+                side="SELL",
+                order_kind="TP",
+                order_type="LIMIT",
+                qty=leg.qty,
+                time_in_force="gtc",
+                submitted_at=submitted_at,
+                tranche_index=leg.tranche_index,
+                limit_price=leg.take_profit_limit,
+                account=account,
+                platform=platform,
+                exit_group_id=leg.tp_order_id,
+            )
+            sl_id = insert_order(
+                conn,
+                plan_id=plan_id,
+                alpaca_order_id=leg.sl_order_id,
+                side="SELL",
+                order_kind="SL",
+                order_type="STOP",
+                qty=leg.qty,
+                time_in_force="gtc",
+                submitted_at=submitted_at,
+                tranche_index=leg.tranche_index,
+                stop_price=leg.stop_price,
+                account=account,
+                platform=platform,
+                exit_group_id=leg.tp_order_id,
+            )
+            order_ids.extend((tp_id, sl_id))
+    except Exception:
+        if own_txn:
+            conn.rollback()
+        raise
+    if own_txn:
+        conn.commit()
     return order_ids
 
 

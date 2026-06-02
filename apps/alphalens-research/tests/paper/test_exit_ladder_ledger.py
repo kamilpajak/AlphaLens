@@ -338,6 +338,40 @@ class TestRecordExitLadder(unittest.TestCase):
             rows = fetch_orders_for_plan(conn, self.plan_id)
         self.assertEqual([r for r in rows if r["order_kind"] in ("TP", "SL")], [])
 
+    def test_given_midladder_failure_when_recorded_then_whole_ladder_rolls_back(self):
+        # Given a 2-leg ladder whose SECOND leg reuses the FIRST leg's
+        # tp_order_id — its TP insert violates orders.alpaca_order_id UNIQUE
+        # mid-loop, AFTER leg-0's TP+SL rows were already inserted in the txn.
+        import sqlite3
+
+        legs = [
+            ExitLadderLeg(
+                tranche_index=0,
+                qty=10,
+                take_profit_limit=110.0,
+                stop_price=85.0,
+                tp_order_id="dup",
+                sl_order_id="sl-0",
+            ),
+            ExitLadderLeg(
+                tranche_index=1,
+                qty=10,
+                take_profit_limit=120.0,
+                stop_price=85.0,
+                tp_order_id="dup",
+                sl_order_id="sl-1",  # duplicate tp id -> UNIQUE fail
+            ),
+        ]
+        with open_ledger(self.db_path) as conn:
+            # When: the mid-ladder insert raises.
+            with self.assertRaises(sqlite3.IntegrityError):
+                record_exit_ladder(conn, plan_id=self.plan_id, legs=legs, submitted_at=self.ts)
+            # Then: the WHOLE ladder rolled back — leg-0's already-inserted
+            # TP+SL rows are gone too (no half-persisted ladder = no TP without
+            # its protective SL).
+            rows = fetch_orders_for_plan(conn, self.plan_id)
+        self.assertEqual([r for r in rows if r["order_kind"] in ("TP", "SL")], [])
+
     def test_given_test_account_when_recorded_then_both_legs_route_to_it(self):
         # Given a non-default account/platform threaded through record_exit_ladder.
         leg = self._three_leg_ladder()[0]
