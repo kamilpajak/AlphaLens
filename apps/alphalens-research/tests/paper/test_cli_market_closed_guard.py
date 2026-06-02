@@ -225,6 +225,7 @@ def _stub_reconcile_report():
         n_exits_failed = 0
         n_entries_canceled = 0
         n_filled_without_sl = 0
+        n_ledger_broker_desync = 0
         outcomes: list = []
 
     return _Report()

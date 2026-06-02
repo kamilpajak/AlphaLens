@@ -914,5 +914,78 @@ class TestPaperFilledWithoutSl(unittest.TestCase):
         self.assertNotIn(self.ALERT, cron)
 
 
+class TestPaperLedgerBrokerDesync(unittest.TestCase):
+    """phantom-position guard: the broker is the source of truth for whether a
+    position exists. A sustained ``alphalens_paper_ledger_broker_desync`` > 0
+    (broker confirms flat while the ledger believes filled) must page. Distinct
+    alertname + NO job= label keep it out of the cron-keyed enumerations (the
+    paper jobs are deliberately staleness-rule-exempt), so it needs its OWN
+    pins here — mirrors TestPaperFilledWithoutSl.
+    """
+
+    METRIC = "alphalens_paper_ledger_broker_desync"
+    ALERT = "AlphalensPaperLedgerBrokerDesync"
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def _one(self) -> dict:
+        matches = [r for r in self._rules() if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_alert_exists(self) -> None:
+        self._one()
+
+    def test_expr_is_gauge_correct_max_over_time_gt_zero(self) -> None:
+        expr = self._one()["expr"]
+        self.assertIn(self.METRIC, expr)
+        self.assertIn("max_over_time", expr)
+        self.assertIn("> 0", expr)
+        # GAUGE — never counter functions (the PR #312 increase()/rate() lesson).
+        self.assertNotIn("increase(", expr)
+        self.assertNotIn("rate(", expr)
+
+    def test_lookback_window_outlasts_one_shot_spike(self) -> None:
+        # ONE-SHOT-SPIKE lifecycle: a desync writes a TERMINAL RECONCILED_FLAT,
+        # so the plan is never reprocessed -> the gauge is set to 1 only on the
+        # single reconcile pass that detects it, then drops to 0 the next pass.
+        # The lookback window MUST be wide enough that this lone spike stays
+        # visible across several reconcile cycles (30-min cadence) so the alert
+        # actually reaches the operator before it auto-resolves. A narrow
+        # window (e.g. 40m, as the FilledWithoutSl SUSTAINED gauge uses) would
+        # let the spike age out before it could page. Pin >= 2h.
+        m = re.search(r"max_over_time\([^\[]+\[(\d+)([smhd])\]\)", self._one()["expr"])
+        self.assertIsNotNone(m, "expr must be max_over_time(metric[<window>]) > 0")
+        value, unit = int(m.group(1)), m.group(2)  # type: ignore[union-attr]
+        seconds = value * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+        self.assertGreaterEqual(
+            seconds, 2 * 3600, "one-shot desync spike needs a >= 2h lookback to stay visible"
+        )
+
+    def test_no_for_debounce_would_suppress_the_one_shot_spike(self) -> None:
+        # A ``for:`` debounce requires the alert expr to be CONTINUOUSLY true
+        # across that whole duration. The desync gauge spikes for a single
+        # pass; with a ``for:`` longer than (window - cadence) the alert would
+        # NEVER satisfy it and silently never fire. The wide lookback IS the
+        # debounce here (a stray sample is already terminal-deduped by the
+        # harness), so this rule must carry NO ``for:``.
+        self.assertNotIn("for", self._one())
+
+    def test_routes_to_telegram(self) -> None:
+        self.assertEqual(self._one().get("labels", {}).get("route"), "telegram")
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        rule = self._one()
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+    def test_alertname_distinct_from_cron_alertnames(self) -> None:
+        cron = {"AlphalensJobStale", "AlphalensJobMetricMissing", "AlphalensJobFailed"}
+        self.assertNotIn(self.ALERT, cron)
+
+
 if __name__ == "__main__":
     unittest.main()

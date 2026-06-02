@@ -222,7 +222,14 @@ class TestExitManagerThreadsAccountFromSnapshot(unittest.TestCase):
                 return None
 
             def get_position(self, _symbol):
-                return None
+                # The broker confirms the real 10-share position so the
+                # convergence path runs (not the ledger<->broker desync guard,
+                # which fires only on a broker-confirmed FLAT read).
+                @dataclass
+                class _Pos:
+                    qty: int
+
+                return _Pos(qty=10)
 
         with tempfile.TemporaryDirectory() as tmp:
             ledger = Path(tmp) / "ledger.db"

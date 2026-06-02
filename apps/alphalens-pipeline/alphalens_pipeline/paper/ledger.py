@@ -188,14 +188,18 @@ _SCHEMA_DDL = (
     """,
     # v3: position lifecycle exits — a single row per plan summarising
     # how it left the harness. ``exit_kind`` mirrors the design memo §3
-    # ('TP_HIT', 'SL_HIT', 'TIME_STOP_HIT', 'UNFILLED'). Written by the
-    # reconciler when the position closes; one row per plan_id ever.
+    # ('TP_HIT', 'SL_HIT', 'TIME_STOP_HIT', 'UNFILLED', 'PARTIAL_TP') plus
+    # 'RECONCILED_FLAT' (ledger<->broker desync: the broker confirmed the
+    # position flat while the ledger believed it filled — see exit_manager
+    # process_plan_exit). Written by the reconciler when the position closes;
+    # one row per plan_id ever.
     """
     CREATE TABLE IF NOT EXISTS plan_outcomes (
         outcome_id INTEGER PRIMARY KEY AUTOINCREMENT,
         plan_id INTEGER NOT NULL UNIQUE,
         exit_kind TEXT NOT NULL CHECK(
-            exit_kind IN ('TP_HIT', 'SL_HIT', 'TIME_STOP_HIT', 'UNFILLED', 'PARTIAL_TP')
+            exit_kind IN ('TP_HIT', 'SL_HIT', 'TIME_STOP_HIT', 'UNFILLED', 'PARTIAL_TP',
+                          'RECONCILED_FLAT')
         ),
         first_fill_at TEXT,                  -- earliest fill timestamp; NULL if never filled
         last_exit_at TEXT,                   -- latest exit timestamp; NULL if still open / unfilled
