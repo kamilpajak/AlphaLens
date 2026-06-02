@@ -436,7 +436,11 @@ def _build_candidate_row(
         # fields (PR-3) when there is no subject match. AUGMENT-ONLY -- this
         # touches ONLY the two template columns; catalyst_event_type /
         # _confidence / _strength / _url below still read from the theme
-        # catalyst, so scores and rankings are unchanged.
+        # catalyst, so SCORES are unchanged. (Second-order: the orchestrator's
+        # _sort_and_dedup_for_brief uses _template_facts_richness as its LAST
+        # per-ticker drop_duplicates tie-break, so a now-richer subject-stamped
+        # row can win that tie over an equally-scored theme row for the same
+        # ticker -- intended; layer4_weighted_score / rankings are untouched.)
         "catalyst_template_id": (template_source or {}).get("template_id"),
         "catalyst_template_facts_json": (
             json.dumps((template_source or {}).get("template_facts"), sort_keys=True)

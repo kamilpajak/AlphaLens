@@ -672,5 +672,43 @@ class TestEndToEndSubjectMatchPopulatesBriefTemplateId(unittest.TestCase):
         self.assertTrue(row["brief_template_id"] is None or pd.isna(row["brief_template_id"]))
 
 
+class TestOrchestratorRichnessTiebreakActivatedBySubjectMatch(unittest.TestCase):
+    """Pins the documented second-order effect (zen MEDIUM): subject-match
+    makes some rows carry template facts, so the orchestrator's pre-existing
+    _template_facts_richness tie-break (last key in _BRIEF_SORT_KEYS) now
+    becomes ACTIVE -- when two same-ticker rows tie on every higher-priority
+    key, the one carrying typed facts survives the per-ticker drop_duplicates.
+    layer4_weighted_score / rankings are untouched; only WHICH theme-row
+    survives for a multi-theme ticker can flip (intended: richer row wins).
+    """
+
+    def test_richer_template_facts_row_wins_per_ticker_dedup(self):
+        # Two rows, same ticker, two themes, identical on every scored key;
+        # only the "beverages" row carries subject-match template facts.
+        rows = [
+            {
+                "ticker": "CELH",
+                "theme": "no_facts_theme",
+                "catalyst_template_id": None,
+                "catalyst_template_facts_json": None,
+            },
+            {
+                "ticker": "CELH",
+                "theme": "beverages",
+                "catalyst_template_id": "earnings_surprise",
+                "catalyst_template_facts_json": json.dumps(
+                    {"reporting_ticker": "CELH", "eps_surprise_pct": 12.5}
+                ),
+            },
+        ]
+        out = orchestrator._sort_and_dedup_for_brief(pd.DataFrame(rows))
+        self.assertEqual(len(out), 1)
+        survivor = out.iloc[0]
+        self.assertEqual(survivor["ticker"], "CELH")
+        # The facts-bearing row won the tie (theme + template_id came with it).
+        self.assertEqual(survivor["theme"], "beverages")
+        self.assertEqual(survivor["catalyst_template_id"], "earnings_surprise")
+
+
 if __name__ == "__main__":
     unittest.main()
