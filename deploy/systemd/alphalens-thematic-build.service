@@ -40,6 +40,16 @@ EnvironmentFile=/etc/alphalens/env
 # to copy the value from the calling env — that's where systemd's
 # EnvironmentFile vars live. Adding a new pipeline secret means: update
 # /etc/alphalens/env on the host AND add a `-e NEW_KEY` line below.
+#
+# ALPHALENS_TEXTFILE_DIR is the one exception that carries an explicit
+# `=value`: it is a non-secret infra path (the node_exporter textfile
+# scrape dir), and the container's emit_domain_metrics must write the
+# thematic stage gauges (#373/#374) + the VIX freshness gauge (#376) THERE,
+# not into the `~/.alphalens` bind mount (which node_exporter does NOT
+# scrape — live --collector.textfile.directory=/var/lib/node_exporter/
+# textfile). The identity `-v` mount makes that container path the host's
+# real scrape dir; the explicit value (vs bare `-e KEY`) keeps the routing
+# correct even if /etc/alphalens/env never defines the var.
 ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
     --user %U:%G \
     -e HOME=/app/home \
@@ -52,7 +62,9 @@ ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
     -e TELEGRAM_CHAT_ID \
     -e SEC_EDGAR_USER_AGENT \
     -e FRED_API_KEY \
+    -e ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile \
     -v %h/.alphalens:/app/home/.alphalens \
+    -v /var/lib/node_exporter/textfile:/var/lib/node_exporter/textfile \
     --entrypoint /bin/bash \
     alphalens-pipeline:latest \
     /app/deploy/docker/run_thematic_day.sh

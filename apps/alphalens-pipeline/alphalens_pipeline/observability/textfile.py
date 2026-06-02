@@ -64,16 +64,19 @@ def _resolve_dir() -> Path:
     override = os.environ.get(ENV_VAR)
     if override:
         return Path(override)
-    # ``Path.home()`` evaluates ``$HOME``, which container-side defaults
-    # of ``Path.home() / ".alphalens" / ...`` have tripped on before
-    # (see ``feedback_pathhome_in_container_trap_2026_05_28`` memory).
-    # This emitter runs BOTH from the host venv (cron ExecStopPost hooks)
-    # AND inside the pipeline Docker container (the Phase 4 per-stage
-    # thematic volume gauges): the thematic-build unit sets
-    # ``HOME=/app/home`` and bind-mounts ``%h/.alphalens`` there, so
-    # ``Path.home()/.alphalens/metrics`` resolves to the SAME host
-    # directory node_exporter scrapes. We re-evaluate ``$HOME`` on every
-    # call so a test that swaps it is honored.
+    # PROD ALWAYS sets ``ALPHALENS_TEXTFILE_DIR`` (the branch above), so this
+    # ``Path.home()`` fallback is the dev/test default ONLY — it is NOT the
+    # scraped dir in prod. The live VPS node_exporter scrapes
+    # ``/var/lib/node_exporter/textfile`` (--collector.textfile.directory), and
+    # BOTH halves of the metric stream route there via the env var: the host
+    # cron ExecStopPost hooks read it from ``/etc/alphalens/env``, and the
+    # pipeline Docker container gets an explicit
+    # ``-e ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile`` + identity
+    # bind mount in ``alphalens-thematic-build.service`` (so the Phase-4 stage
+    # gauges + the VIX freshness gauge land on the scraped dir, not the
+    # unscraped ``~/.alphalens/metrics`` bind mount). Do NOT assume
+    # ``Path.home()/.alphalens/metrics`` is scraped — it is not. We re-evaluate
+    # the env on every call so a test that swaps it is honored.
     return Path.home() / ".alphalens" / "metrics"
 
 
