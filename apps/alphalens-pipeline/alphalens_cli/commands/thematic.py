@@ -45,6 +45,24 @@ def _stage_volume_metrics(stage: str, *, output_rows: int, input_rows: int) -> d
     }
 
 
+def _source_volume_metrics(counts: dict[str, int]) -> dict[str, int]:
+    """Per-source RAW row-count gauges for the ingest dead-man-switch (#384).
+
+    One metric name + a ``source`` label per source, mirroring the Phase-4
+    ``alphalens_thematic_stage_*_rows{stage=...}`` convention. The edgar series
+    is load-bearing: it catches the epic-#379 case where the SEC EX-99.1
+    daily-index ingest goes dark under concurrent per-IP 403 load and the empty
+    frame is swallowed by ``_safe_call``. Emitted UNCONDITIONALLY for every
+    source present in ``counts`` (edgar=0 is the signal — a skipped emit lets
+    node_exporter re-serve the last nonzero forever and silences the alert). An
+    empty ``counts`` (cache-hit path) yields no entries.
+    """
+    return {
+        f'alphalens_thematic_source_rows{{source="{source}"}}': count
+        for source, count in counts.items()
+    }
+
+
 def _emit_stage_volume(stage: str, *, output_rows: int, input_rows: int) -> None:
     """Emit a stage's volume gauges to its own ``thematic-<stage>`` file.
 
@@ -115,12 +133,14 @@ def ingest(
     if not polygon_api_key:
         logger.warning("POLYGON_API_KEY missing — Polygon source will be skipped.")
 
+    source_row_counts: dict[str, int] = {}
     df = news_ingest.ingest_daily(
         date=target,
         cache_dir=cache_dir,
         max_items=max_items,
         polygon_api_key=polygon_api_key,
         force=force,
+        source_row_counts=source_row_counts,
     )
     cache_path = cache_dir / f"{target.isoformat()}.parquet"
     typer.echo(f"Ingested {len(df)} items for {target.isoformat()} → {cache_path}")
@@ -130,10 +150,22 @@ def ingest(
         unique_tickers = sorted({t for row in df["tickers"] for t in row})
         typer.echo(f"  unique tickers tagged: {len(unique_tickers)}")
 
-    # Source stage: no upstream, so input == output (a zero day is a quiet
-    # news day / source outage, caught by the volume-anomaly rule, not the
-    # zero-output-with-nonempty-input rule).
-    _emit_stage_volume("ingest", output_rows=len(df), input_rows=len(df))
+    # The Phase-4 stage gauge (input==output, no upstream) folded with the #384
+    # per-source RAW row-count gauges into ONE emit so they share the single
+    # thematic-ingest textfile + one atomic write. The per-source gauges carry
+    # the edgar_press_release dead-man-switch signal that the aggregate stage
+    # gauge cannot (it undercounts edgar after dedup/cap). Wrapped in try/except
+    # (PR #311 rule): the parquet is already persisted, so a metrics-dir failure
+    # must never fail a good ingest. On a cache hit source_row_counts is empty,
+    # so only the stage gauges are emitted.
+    metrics: dict[str, int] = _stage_volume_metrics(
+        "ingest", output_rows=len(df), input_rows=len(df)
+    )
+    metrics.update(_source_volume_metrics(source_row_counts))
+    try:
+        emit_domain_metrics(job="thematic-ingest", metrics=metrics)
+    except Exception:
+        logger.exception("emit_domain_metrics failed for stage ingest; the run succeeded")
 
 
 @thematic_app.command("extract")

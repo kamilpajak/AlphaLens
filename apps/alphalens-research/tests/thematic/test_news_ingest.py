@@ -457,5 +457,168 @@ class TestTier1LexicalClustering(unittest.TestCase):
         self.assertEqual(df.iloc[0]["timestamp"], pd.Timestamp("2026-05-15T01:00:00Z"))
 
 
+class TestSourceRowCountsOutParam(unittest.TestCase):
+    """RAW per-source counts feed the #384 EX-99.1 dead-man-switch.
+
+    The aggregate ingest gauge is POST-dedup/cap and undercounts edgar (the
+    lexical-cluster representative is timestamp-first, so a non-earliest edgar
+    row loses its source label; the cap drops rows). The switch needs the count
+    captured right after _safe_call("edgar_press_release", ...), BEFORE
+    dedup/cap. ingest_daily populates a caller-supplied dict so existing callers
+    (which pass nothing) keep the unchanged behavior.
+    """
+
+    def setUp(self):
+        patcher = patch.object(
+            news_ingest,
+            "_fetch_edgar_press_release",
+            return_value=news_ingest.empty_news_frame(),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_out_param_carries_one_entry_per_source_including_zero(self):
+        polygon_df = _frame(
+            [_row("p1", "polygon", "2026-05-15T10:00:00Z", ["NVDA"], "Polygon piece")]
+        )
+        gdelt_df = _frame([_row("g1", "gdelt", "2026-05-15T11:00:00Z", [], "GDELT piece")])
+        empty_df = news_ingest.empty_news_frame()
+
+        counts: dict[str, int] = {}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(news_ingest, "_fetch_polygon", return_value=polygon_df),
+                patch.object(news_ingest, "_fetch_gdelt", return_value=gdelt_df),
+                patch.object(news_ingest, "_fetch_rss", return_value=empty_df),
+            ):
+                news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                    force=True,
+                    source_row_counts=counts,
+                )
+
+        self.assertEqual(set(counts), set(news_ingest._SOURCE_PRIORITY))
+        self.assertEqual(counts["polygon"], 1)
+        self.assertEqual(counts["gdelt"], 1)
+        self.assertEqual(counts["edgar_press_release"], 0)
+        self.assertEqual(counts["rss"], 0)
+
+    def test_edgar_count_is_raw_pre_dedup_not_post(self):
+        # THE load-bearing pin: 2 edgar rows that the URL-canon dedup collapses
+        # to 1 (same index.htm, one carries a ?utm tracking param) must still
+        # count as 2. A post-dedup count would read 1, masking a half-starved
+        # fetch.
+        edgar_a = _row(
+            "e1",
+            "edgar_press_release",
+            "2026-05-15T10:00:00Z",
+            ["NVDA"],
+            "NVDA reports record revenue",
+        )
+        edgar_b = _row(
+            "e2",
+            "edgar_press_release",
+            "2026-05-15T10:05:00Z",
+            ["NVDA"],
+            "NVDA reports record revenue",
+        )
+        edgar_a["url"] = "https://www.sec.gov/Archives/edgar/data/1/acc-index.htm"
+        edgar_b["url"] = "https://www.sec.gov/Archives/edgar/data/1/acc-index.htm?utm=x"
+        empty_df = news_ingest.empty_news_frame()
+
+        counts: dict[str, int] = {}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    news_ingest,
+                    "_fetch_edgar_press_release",
+                    return_value=_frame([edgar_a, edgar_b]),
+                ),
+                patch.object(news_ingest, "_fetch_polygon", return_value=empty_df),
+                patch.object(news_ingest, "_fetch_gdelt", return_value=empty_df),
+                patch.object(news_ingest, "_fetch_rss", return_value=empty_df),
+            ):
+                df = news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                    force=True,
+                    source_row_counts=counts,
+                )
+
+        self.assertEqual(counts["edgar_press_release"], 2)  # RAW
+        self.assertEqual(len(df), 1)  # dedup actually fired
+
+    def test_edgar_count_is_zero_when_source_swallows_exception(self):
+        # _safe_call swallows the SEC 403 → empty frame → the count MUST be an
+        # explicit 0 (this IS the starvation signal; a skipped emit would let
+        # node_exporter re-serve the last nonzero forever and silence the alert).
+        empty_df = news_ingest.empty_news_frame()
+        counts: dict[str, int] = {}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(
+                    news_ingest,
+                    "_fetch_edgar_press_release",
+                    side_effect=RuntimeError("SEC 403"),
+                ),
+                patch.object(
+                    news_ingest,
+                    "_fetch_polygon",
+                    return_value=_frame(
+                        [_row("p1", "polygon", "2026-05-15T10:00:00Z", ["NVDA"], "OK")]
+                    ),
+                ),
+                patch.object(news_ingest, "_fetch_gdelt", return_value=empty_df),
+                patch.object(news_ingest, "_fetch_rss", return_value=empty_df),
+            ):
+                news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                    force=True,
+                    source_row_counts=counts,
+                )
+
+        self.assertEqual(counts["edgar_press_release"], 0)
+        self.assertEqual(counts["polygon"], 1)
+
+    def test_out_param_omitted_is_backwards_compatible(self):
+        polygon_df = _frame([_row("p1", "polygon", "2026-05-15T10:00:00Z", ["NVDA"], "Piece")])
+        empty_df = news_ingest.empty_news_frame()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(news_ingest, "_fetch_polygon", return_value=polygon_df),
+                patch.object(news_ingest, "_fetch_gdelt", return_value=empty_df),
+                patch.object(news_ingest, "_fetch_rss", return_value=empty_df),
+            ):
+                df = news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                    force=True,
+                )  # NO source_row_counts kwarg
+            self.assertEqual(len(df), 1)
+            self.assertTrue((Path(tmpdir) / "2026-05-15.parquet").exists())
+
+    def test_out_param_not_populated_on_cache_hit(self):
+        polygon_df = _frame([_row("p1", "polygon", "2026-05-15T10:00:00Z", ["NVDA"], "Piece")])
+        empty_df = news_ingest.empty_news_frame()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(news_ingest, "_fetch_polygon", return_value=polygon_df),
+                patch.object(news_ingest, "_fetch_gdelt", return_value=empty_df),
+                patch.object(news_ingest, "_fetch_rss", return_value=empty_df),
+            ):
+                news_ingest.ingest_daily(date=dt.date(2026, 5, 15), cache_dir=Path(tmpdir))
+
+            counts: dict[str, int] = {}
+            with patch.object(news_ingest, "_fetch_polygon", side_effect=AssertionError("no call")):
+                news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                    source_row_counts=counts,
+                )
+        self.assertEqual(counts, {})
+
+
 if __name__ == "__main__":
     unittest.main()

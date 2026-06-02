@@ -189,8 +189,28 @@ def ingest_daily(
     max_items: int = DEFAULT_MAX_ITEMS,
     polygon_api_key: str | None = None,
     force: bool = False,
+    source_row_counts: dict[str, int] | None = None,
 ) -> pd.DataFrame:
-    """Aggregate Polygon/GDELT/RSS for one UTC day, dedupe, cluster, cap, persist, return."""
+    """Aggregate EDGAR/Polygon/GDELT/RSS for one UTC day, dedupe, cluster, cap, persist, return.
+
+    ``source_row_counts``: optional caller-supplied dict, populated IN PLACE with
+    the RAW per-source row count captured immediately after each ``_safe_call``,
+    BEFORE dedup/cap (keyed by the :data:`_SOURCE_PRIORITY` names). The CLI emits
+    these as the per-source dead-man-switch gauge (#384): the post-dedup return
+    frame undercounts edgar (the lexical-cluster representative is timestamp-first,
+    so a non-earliest edgar row loses its ``source`` label, and the cap drops
+    rows), so the raw count is the only honest "did the SEC daily index return
+    EX-99.1 rows today" signal.
+
+    The count is written UNCONDITIONALLY for every source, including 0:
+    ``_safe_call`` returns ``empty_news_frame()`` (len 0) on a swallowed SEC 403,
+    so the swallow path records an explicit ``0`` — the load-bearing starvation
+    signal (epic #379). A skipped emit would let node_exporter re-serve the last
+    nonzero value forever and silence the alert. ``None`` (default) = byte-
+    identical behavior; existing callers stay untouched. NOTE: on a cache hit the
+    fetches never run, so the dict is left empty and the CLI emits nothing (the
+    live VPS ingest always passes ``--force``, so this is dev/replay only).
+    """
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / f"{date.isoformat()}.parquet"
     if cache_path.exists() and not force:
@@ -205,6 +225,13 @@ def ingest_daily(
     polygon_df = _safe_call("polygon", _fetch_polygon, date=date)
     gdelt_df = _safe_call("gdelt", _fetch_gdelt, date=date)
     rss_df = _safe_call("rss", _fetch_rss, date=date)
+
+    if source_row_counts is not None:
+        # RAW, pre-dedup, unconditional (0 on a swallowed 403 IS the #384 signal).
+        source_row_counts["edgar_press_release"] = len(edgar_df)
+        source_row_counts["polygon"] = len(polygon_df)
+        source_row_counts["gdelt"] = len(gdelt_df)
+        source_row_counts["rss"] = len(rss_df)
 
     frames = [df for df in (edgar_df, polygon_df, gdelt_df, rss_df) if len(df) > 0]
     if not frames:
