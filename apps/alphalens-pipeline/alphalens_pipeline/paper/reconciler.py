@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from alphalens_pipeline.paper.broker import BrokerClient
 from alphalens_pipeline.paper.ledger import (
     fetch_fills_for_order,
     fetch_open_orders,
@@ -191,7 +192,7 @@ def _process_one_order(
 def _sweep_expired_entries(
     conn: sqlite3.Connection,
     *,
-    alpaca_client: Any,
+    broker: BrokerClient,
     account: str,
     observed_at: dt.datetime,
 ) -> int:
@@ -263,7 +264,7 @@ def _sweep_expired_entries(
         for entry_row in entry_cur.fetchall():
             alpaca_id = entry_row["alpaca_order_id"]
             try:
-                alpaca_client.cancel_order(alpaca_id)
+                broker.cancel_order(alpaca_id)
             except Exception as exc:
                 logger.warning(
                     "ttl-sweep cancel failed alpaca=%s plan_id=%d: %s; will retry next cycle",
@@ -286,7 +287,7 @@ def _sweep_expired_entries(
 def reconcile_orders(
     *,
     ledger_path: Path,
-    alpaca_client: Any,
+    broker: BrokerClient,
     account: str = "main",
     observed_at: dt.datetime | None = None,
 ) -> ReconcileReport:
@@ -300,7 +301,7 @@ def reconcile_orders(
 
     ``account`` (v4): scopes the open-orders sweep so a reconciler pass
     against TEST does NOT try to fetch MAIN-account UUIDs (which would
-    404). The alpaca_client passed in MUST be the matching profile.
+    404). The broker passed in MUST be the matching profile.
 
     ``observed_at`` (PR-B): optional override for the timestamp the TTL
     + time-stop sweeps treat as "now". Defaults to UTC wall-clock when
@@ -330,7 +331,7 @@ def reconcile_orders(
         # what transitions ``orders.status`` to CANCELED once Alpaca acks.
         n_entries_ttl_canceled = _sweep_expired_entries(
             conn,
-            alpaca_client=alpaca_client,
+            broker=broker,
             account=account,
             observed_at=observed_at,
         )
@@ -339,7 +340,7 @@ def reconcile_orders(
         for ledger_row in open_rows:
             alpaca_order_id = ledger_row["alpaca_order_id"]
             try:
-                alpaca_order = alpaca_client.get_order(alpaca_order_id)
+                alpaca_order = broker.get_order(alpaca_order_id)
             except Exception as exc:
                 logger.warning(
                     "reconcile failed to fetch Alpaca order %s: %s; will retry next cycle",
@@ -383,7 +384,7 @@ def reconcile_orders(
             exit_outcome = process_plan_exit(
                 conn,
                 plan_id=plan_id,
-                alpaca_client=alpaca_client,
+                broker=broker,
                 observed_at=observed_at,
             )
             if exit_outcome.action == "ATTACHED":
@@ -397,7 +398,7 @@ def reconcile_orders(
     from alphalens_pipeline.paper.gross_guard import check_live_gross
 
     try:
-        guard = check_live_gross(alpaca_client)
+        guard = check_live_gross(broker)
         gross_ratio = guard.gross_ratio
         gross_warning = guard.warning_emitted
     except Exception as exc:

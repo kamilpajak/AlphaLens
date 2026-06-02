@@ -47,7 +47,12 @@ logger = logging.getLogger(__name__)
 # the reconciler queries Alpaca by order_id. Per "no backward compat"
 # doctrine no migration code lives here — dev DB regenerated; existing
 # operator ledger files migrated via the runbook in PR #279 description.
-LEDGER_SCHEMA_VERSION = 4
+# v5: per-row platform column on plans + orders (issue #388) so a
+# single canonical ledger can host orders from >1 paper-trading
+# platform. Separate axis from account. Runbook-only migration (ALTER
+# TABLE ... ADD COLUMN platform) per the v4 precedent — no migration
+# code here.
+LEDGER_SCHEMA_VERSION = 5
 
 # Valid values for the per-row ``account`` column. Mirrors the Alpaca-
 # client profile names so the planner / submitter / reconciler can pass
@@ -55,6 +60,12 @@ LEDGER_SCHEMA_VERSION = 4
 # CHECK constraint on the schema is informational (SQLite's ALTER TABLE
 # can't add CHECK retroactively so operator-migrated DBs may lack it).
 VALID_ACCOUNTS = frozenset({"main", "test"})
+
+# Valid values for the per-row `platform` column. SEPARATE axis from
+# `account` (credential profile WITHIN a platform). Only 'alpaca' today.
+# Application-level enforcement; the CHECK is informational (see
+# VALID_ACCOUNTS note). Mirrors paper.broker.VALID_PLATFORMS.
+VALID_PLATFORMS = frozenset({"alpaca"})
 
 
 _SCHEMA_DDL = (
@@ -84,7 +95,11 @@ _SCHEMA_DDL = (
         -- v4: which Alpaca paper account this plan was sized + submitted
         -- against. 'main' = ALPACA_API_KEY/SECRET; 'test' = ALPACA_TEST_*.
         account TEXT NOT NULL DEFAULT 'main' CHECK(account IN ('main', 'test')),
-        UNIQUE(brief_date, ticker, account)
+        -- v5: paper-trading platform (issue #388). Separate axis from
+        -- account. Only 'alpaca' today; CHECK informational, real
+        -- enforcement is app-level (VALID_PLATFORMS at insert).
+        platform TEXT NOT NULL DEFAULT 'alpaca' CHECK(platform IN ('alpaca')),
+        UNIQUE(brief_date, ticker, account, platform)
     )
     """,
     """
@@ -151,6 +166,8 @@ _SCHEMA_DDL = (
         -- v4: routing tag. Reconciler MUST filter on this when polling
         -- Alpaca — TEST account UUIDs would 404 against MAIN client.
         account TEXT NOT NULL DEFAULT 'main' CHECK(account IN ('main', 'test')),
+        -- v5: paper-trading platform (issue #388). See plans.platform.
+        platform TEXT NOT NULL DEFAULT 'alpaca' CHECK(platform IN ('alpaca')),
         FOREIGN KEY (plan_id) REFERENCES plans(plan_id) ON DELETE CASCADE
     )
     """,
@@ -312,6 +329,7 @@ def insert_planned(  # NOSONAR S107
     tiers: Iterable[tuple[int, float, int, float, str]],
     tp_tranches: Iterable[tuple[int, float, float, float, str]],
     account: str = "main",
+    platform: str = "alpaca",
 ) -> PlanRow:
     """Insert a fully-planned candidate + its tier rows + TP-tranche rows.
 
@@ -325,6 +343,10 @@ def insert_planned(  # NOSONAR S107
     """
     if account not in VALID_ACCOUNTS:
         raise ValueError(f"unknown account={account!r}, expected one of {sorted(VALID_ACCOUNTS)}")
+    if platform not in VALID_PLATFORMS:
+        raise ValueError(
+            f"unknown platform={platform!r}, expected one of {sorted(VALID_PLATFORMS)}"
+        )
     conn.execute("BEGIN")
     try:
         cur = conn.execute(
@@ -333,8 +355,8 @@ def insert_planned(  # NOSONAR S107
                 brief_date, ticker, theme, planned_at,
                 suggested_size_pct, scale_factor, final_size_pct, paper_equity,
                 total_notional, gross_notional, disaster_stop,
-                order_ttl_days, status, block_reason, account
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PLANNED', NULL, ?)
+                order_ttl_days, status, block_reason, account, platform
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PLANNED', NULL, ?, ?)
             """,
             (
                 brief_date.isoformat(),
@@ -350,6 +372,7 @@ def insert_planned(  # NOSONAR S107
                 disaster_stop,
                 order_ttl_days,
                 account,
+                platform,
             ),
         )
         # ``lastrowid`` is typed Optional[int] by the stdlib stubs, but
@@ -488,6 +511,7 @@ def insert_order(  # NOSONAR S107
     stop_price: float | None = None,
     status: str = "SUBMITTED",
     account: str = "main",
+    platform: str = "alpaca",
 ) -> int:
     """Persist a freshly submitted Alpaca order. Returns the local ``order_id``.
 
@@ -502,12 +526,16 @@ def insert_order(  # NOSONAR S107
     """
     if account not in VALID_ACCOUNTS:
         raise ValueError(f"unknown account={account!r}, expected one of {sorted(VALID_ACCOUNTS)}")
+    if platform not in VALID_PLATFORMS:
+        raise ValueError(
+            f"unknown platform={platform!r}, expected one of {sorted(VALID_PLATFORMS)}"
+        )
     cur = conn.execute(
         """INSERT INTO orders(plan_id, alpaca_order_id, side, order_kind,
                               tier_index, tranche_index, order_type, qty,
                               limit_price, stop_price, time_in_force, status,
-                              submitted_at, last_updated_at, account)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              submitted_at, last_updated_at, account, platform)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             plan_id,
             alpaca_order_id,
@@ -524,6 +552,7 @@ def insert_order(  # NOSONAR S107
             submitted_at.isoformat(),
             submitted_at.isoformat(),
             account,
+            platform,
         ),
     )
     last = cur.lastrowid
@@ -684,6 +713,7 @@ def fetch_fills_for_order(conn: sqlite3.Connection, order_id: int) -> list[sqlit
 __all__ = [
     "LEDGER_SCHEMA_VERSION",
     "VALID_ACCOUNTS",
+    "VALID_PLATFORMS",
     "PlanRow",
     "count_plans_for_date",
     "count_shadow_for_date",

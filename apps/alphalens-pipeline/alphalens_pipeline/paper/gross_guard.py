@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+
+from alphalens_pipeline.paper.broker import BrokerClient
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +36,11 @@ class GrossGuardReport:
     warning_emitted: bool
 
 
-def check_live_gross(alpaca_client: Any) -> GrossGuardReport:
+def check_live_gross(broker: BrokerClient) -> GrossGuardReport:
     """Pull the account snapshot and check live gross against equity.
 
     Args:
-        alpaca_client: an :class:`AlpacaClient` already wired to the
+        broker: an :class:`AlpacaClient` already wired to the
             same profile the reconciler used (main / test).
 
     Logs a WARNING if ``long_market_value / equity > 1.0``. The check is
@@ -50,7 +51,7 @@ def check_live_gross(alpaca_client: Any) -> GrossGuardReport:
     Returns a :class:`GrossGuardReport` so the caller (CLI) can surface
     the numbers even when no warning fires.
     """
-    account = alpaca_client.get_account()
+    account = broker.get_account()
     try:
         equity = float(account.equity)
     except (TypeError, ValueError):

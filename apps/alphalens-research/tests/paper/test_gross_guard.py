@@ -14,7 +14,7 @@ class _StubAccount:
     long_market_value: float = 0.0
 
 
-class _StubAlpacaClient:
+class _StubBrokerClient:
     def __init__(self, account: _StubAccount) -> None:
         self._account = account
 
@@ -24,14 +24,14 @@ class _StubAlpacaClient:
 
 class TestUnderEquity(unittest.TestCase):
     def test_zero_long_market_value_no_warning(self):
-        client = _StubAlpacaClient(_StubAccount())
+        client = _StubBrokerClient(_StubAccount())
         report = check_live_gross(client)
         self.assertEqual(report.gross_ratio, 0.0)
         self.assertFalse(report.warning_emitted)
 
     def test_within_equity_no_warning(self):
         """Steady-state operation: long_market_value < equity → no warning."""
-        client = _StubAlpacaClient(_StubAccount(long_market_value=666_000.0))
+        client = _StubBrokerClient(_StubAccount(long_market_value=666_000.0))
         report = check_live_gross(client)
         self.assertAlmostEqual(report.gross_ratio, 0.666, places=3)
         self.assertFalse(report.warning_emitted)
@@ -39,7 +39,7 @@ class TestUnderEquity(unittest.TestCase):
     def test_exactly_at_equity_no_warning(self):
         """Boundary: gross_ratio == 1.0 is NOT a warning (strict >). The
         memo's escalation triggers above 100%."""
-        client = _StubAlpacaClient(_StubAccount(long_market_value=1_000_000.0))
+        client = _StubBrokerClient(_StubAccount(long_market_value=1_000_000.0))
         report = check_live_gross(client)
         self.assertAlmostEqual(report.gross_ratio, 1.0)
         self.assertFalse(report.warning_emitted)
@@ -47,7 +47,7 @@ class TestUnderEquity(unittest.TestCase):
 
 class TestOverEquityWarns(unittest.TestCase):
     def test_above_equity_emits_warning(self):
-        client = _StubAlpacaClient(_StubAccount(equity=1_000_000.0, long_market_value=1_200_000.0))
+        client = _StubBrokerClient(_StubAccount(equity=1_000_000.0, long_market_value=1_200_000.0))
         with self.assertLogs("alphalens_pipeline.paper.gross_guard", level="WARNING") as cm:
             report = check_live_gross(client)
         self.assertAlmostEqual(report.gross_ratio, 1.2)
@@ -66,7 +66,7 @@ class TestDefensiveDecoding(unittest.TestCase):
             equity: str = "not-a-number"
             long_market_value: float = 0.0
 
-        client = _StubAlpacaClient(_BadAccount())  # type: ignore[arg-type]
+        client = _StubBrokerClient(_BadAccount())  # type: ignore[arg-type]
         with self.assertLogs("alphalens_pipeline.paper.gross_guard", level="WARNING") as cm:
             report = check_live_gross(client)
         self.assertFalse(report.warning_emitted)
@@ -78,7 +78,7 @@ class TestDefensiveDecoding(unittest.TestCase):
             equity: float = 1_000_000.0
             long_market_value: None = None
 
-        client = _StubAlpacaClient(_NoMarketValueAccount())  # type: ignore[arg-type]
+        client = _StubBrokerClient(_NoMarketValueAccount())  # type: ignore[arg-type]
         report = check_live_gross(client)
         self.assertEqual(report.long_market_value, 0.0)
         self.assertFalse(report.warning_emitted)

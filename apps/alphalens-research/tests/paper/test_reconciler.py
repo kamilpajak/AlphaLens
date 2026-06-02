@@ -53,7 +53,7 @@ class _StubAccount:
     long_market_value: float = 0.0
 
 
-class _StubAlpacaClient:
+class _StubBrokerClient:
     def __init__(self) -> None:
         self.orders_by_id: dict[str, _StubAlpacaOrder] = {}
         self.get_order_calls: list[str] = []
@@ -163,7 +163,7 @@ class _ReconcilerTestBase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.tmpdir = Path(self._tmp.name)
         self.ledger = self.tmpdir / "ledger.db"
-        self.client = _StubAlpacaClient()
+        self.client = _StubBrokerClient()
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -174,7 +174,7 @@ class TestStatusTransitions(_ReconcilerTestBase):
         _make_plan_with_order(self.ledger, alpaca_order_id="aaa")
         self.client.add(_StubAlpacaOrder(id="aaa", status="new"))
 
-        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+        report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
 
         self.assertEqual(report.n_orders_checked, 1)
         self.assertEqual(report.n_orders_transitioned, 0)
@@ -186,7 +186,7 @@ class TestStatusTransitions(_ReconcilerTestBase):
             _StubAlpacaOrder(id="bbb", status="filled", filled_qty=27, filled_avg_price=99.5)
         )
 
-        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+        report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
         self.assertEqual(report.n_orders_transitioned, 1)
         self.assertEqual(report.outcomes[0].prev_status, "SUBMITTED")
         self.assertEqual(report.outcomes[0].new_status, "FILLED")
@@ -202,7 +202,7 @@ class TestStatusTransitions(_ReconcilerTestBase):
         _make_plan_with_order(self.ledger, alpaca_order_id="ccc")
         self.client.add(_StubAlpacaOrder(id="ccc", status="canceled"))
 
-        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+        report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
         self.assertEqual(report.outcomes[0].new_status, "CANCELED")
         self.assertEqual(report.n_fills_appended, 0)
 
@@ -217,7 +217,7 @@ class TestStatusTransitions(_ReconcilerTestBase):
         self.client.add(_StubAlpacaOrder(id="ddd", status="wat"))
 
         with self.assertLogs("alphalens_pipeline.paper.reconciler", level="WARNING") as cm:
-            report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+            report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
         self.assertEqual(report.outcomes[0].new_status, "SUBMITTED")
         self.assertTrue(any("unknown Alpaca status" in m for m in cm.output))
 
@@ -231,7 +231,7 @@ class TestPartialFills(_ReconcilerTestBase):
             )
         )
 
-        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+        report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
         self.assertEqual(report.n_fills_appended, 1)
         self.assertEqual(report.outcomes[0].new_status, "PARTIALLY_FILLED")
 
@@ -251,13 +251,13 @@ class TestPartialFills(_ReconcilerTestBase):
                 id="fff", status="partially_filled", filled_qty=10, filled_avg_price=99.0
             )
         )
-        reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+        reconcile_orders(ledger_path=self.ledger, broker=self.client)
 
         # Poll 2: now 27 filled (full)
         self.client.orders_by_id["fff"] = _StubAlpacaOrder(
             id="fff", status="filled", filled_qty=27, filled_avg_price=99.4
         )
-        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+        report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
 
         self.assertEqual(report.n_fills_appended, 1)
         with open_ledger(self.ledger) as conn:
@@ -273,8 +273,8 @@ class TestPartialFills(_ReconcilerTestBase):
         self.client.add(
             _StubAlpacaOrder(id="ggg", status="filled", filled_qty=27, filled_avg_price=99.5)
         )
-        r1 = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
-        r2 = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+        r1 = reconcile_orders(ledger_path=self.ledger, broker=self.client)
+        r2 = reconcile_orders(ledger_path=self.ledger, broker=self.client)
         self.assertEqual(r1.n_fills_appended, 1)
         self.assertEqual(r2.n_fills_appended, 0)
         # Second pass also reports zero transitions — order already terminal.
@@ -311,7 +311,7 @@ class TestSdkFailureGracefullyContinues(_ReconcilerTestBase):
         )
 
         with self.assertLogs("alphalens_pipeline.paper.reconciler", level="WARNING") as cm:
-            report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+            report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
 
         self.assertEqual(report.n_orders_checked, 1)
         self.assertEqual(report.outcomes[0].alpaca_order_id, "good")
@@ -320,7 +320,7 @@ class TestSdkFailureGracefullyContinues(_ReconcilerTestBase):
 
 class TestNoOpenOrders(_ReconcilerTestBase):
     def test_empty_ledger_runs_clean(self):
-        report = reconcile_orders(ledger_path=self.ledger, alpaca_client=self.client)
+        report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
         self.assertEqual(report.n_orders_checked, 0)
         self.assertEqual(report.n_orders_transitioned, 0)
         self.assertEqual(report.n_fills_appended, 0)
@@ -368,7 +368,7 @@ class TestTtlSweep(_ReconcilerTestBase):
 
         report = reconcile_orders(
             ledger_path=self.ledger,
-            alpaca_client=self.client,
+            broker=self.client,
             observed_at=observed,
         )
 
@@ -391,7 +391,7 @@ class TestTtlSweep(_ReconcilerTestBase):
 
         report = reconcile_orders(
             ledger_path=self.ledger,
-            alpaca_client=self.client,
+            broker=self.client,
             observed_at=observed,
         )
 
@@ -419,7 +419,7 @@ class TestTtlSweep(_ReconcilerTestBase):
 
         report = reconcile_orders(
             ledger_path=self.ledger,
-            alpaca_client=self.client,
+            broker=self.client,
             observed_at=observed,
         )
 
@@ -441,7 +441,7 @@ class TestTtlSweep(_ReconcilerTestBase):
 
         report = reconcile_orders(
             ledger_path=self.ledger,
-            alpaca_client=self.client,
+            broker=self.client,
             observed_at=observed,
         )
 
@@ -474,7 +474,7 @@ class TestTtlSweep(_ReconcilerTestBase):
 
         report = reconcile_orders(
             ledger_path=self.ledger,
-            alpaca_client=self.client,
+            broker=self.client,
             observed_at=observed,
         )
 
@@ -510,7 +510,7 @@ class TestTtlSweep(_ReconcilerTestBase):
 
         report = reconcile_orders(
             ledger_path=self.ledger,
-            alpaca_client=self.client,
+            broker=self.client,
             observed_at=observed,
         )
 
@@ -550,7 +550,7 @@ class TestTtlSweep(_ReconcilerTestBase):
         self.client.add(_StubAlpacaOrder(id="t1-open", status="new"))
 
         report = reconcile_orders(
-            ledger_path=self.ledger, alpaca_client=self.client, observed_at=self._STALE_OBSERVED
+            ledger_path=self.ledger, broker=self.client, observed_at=self._STALE_OBSERVED
         )
 
         self.assertEqual(self.client.canceled_orders, ["t1-open"])
@@ -582,7 +582,7 @@ class TestTtlSweep(_ReconcilerTestBase):
         # account=main pass: only main-stale gets cancelled
         report_main = reconcile_orders(
             ledger_path=self.ledger,
-            alpaca_client=self.client,
+            broker=self.client,
             account="main",
             observed_at=self._STALE_OBSERVED,
         )
@@ -592,7 +592,7 @@ class TestTtlSweep(_ReconcilerTestBase):
         # account=test pass: now test-stale gets cancelled too
         report_test = reconcile_orders(
             ledger_path=self.ledger,
-            alpaca_client=self.client,
+            broker=self.client,
             account="test",
             observed_at=self._STALE_OBSERVED,
         )
@@ -637,7 +637,7 @@ class TestTtlSweep(_ReconcilerTestBase):
 
         with self.assertLogs("alphalens_pipeline.paper.reconciler", level="WARNING") as cm:
             report = reconcile_orders(
-                ledger_path=self.ledger, alpaca_client=self.client, observed_at=self._STALE_OBSERVED
+                ledger_path=self.ledger, broker=self.client, observed_at=self._STALE_OBSERVED
             )
 
         self.assertEqual(self.client.canceled_orders, ["good-cancel"])
@@ -663,7 +663,7 @@ class TestTtlSweep(_ReconcilerTestBase):
         self.client.add(_StubAlpacaOrder(id="stale-e2e", status="canceled"))
 
         report = reconcile_orders(
-            ledger_path=self.ledger, alpaca_client=self.client, observed_at=self._STALE_OBSERVED
+            ledger_path=self.ledger, broker=self.client, observed_at=self._STALE_OBSERVED
         )
 
         self.assertEqual(report.n_entries_ttl_canceled, 1)
@@ -715,7 +715,7 @@ class TestTtlSweep(_ReconcilerTestBase):
             )
 
         report = reconcile_orders(
-            ledger_path=self.ledger, alpaca_client=self.client, observed_at=self._STALE_OBSERVED
+            ledger_path=self.ledger, broker=self.client, observed_at=self._STALE_OBSERVED
         )
 
         # Sweep is a no-op (no SUBMITTED/PARTIALLY_FILLED entry to cancel).
@@ -761,7 +761,7 @@ class TestTtlSweep(_ReconcilerTestBase):
             )
 
         report = reconcile_orders(
-            ledger_path=self.ledger, alpaca_client=self.client, observed_at=self._STALE_OBSERVED
+            ledger_path=self.ledger, broker=self.client, observed_at=self._STALE_OBSERVED
         )
 
         self.assertEqual(report.n_entries_ttl_canceled, 0)

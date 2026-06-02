@@ -1,0 +1,116 @@
+"""Broker-agnostic paper-trading client protocol (issue #388).
+
+The paper harness (planner / submitter / reconciler / exit_manager /
+gross_guard) talks to a *broker* only through the small structural
+:class:`BrokerClient` protocol declared here — never against a concrete
+vendor SDK type. Alpaca is the sole implementation today
+(:class:`alphalens_pipeline.data.alt_data.alpaca_client.AlpacaClient`
+satisfies the protocol structurally, no subclassing); a second paper
+platform drops in by satisfying the same 7 methods.
+
+Why a protocol, not a base class: every harness call site already took
+``alpaca_client: Any`` and duck-typed it. This just names the duck and
+makes conformance testable. ``shadow_return`` (Polygon) is
+broker-independent, so swapping the broker only moves execution stats —
+see docs/research/feedback_ledger_counterfactual_design_2026_06_02.md
+(a broker switch is an EXECUTION-REGIME break; never pool execution
+stats across platforms).
+
+``platform`` is a SEPARATE axis from ``account``: platform selects the
+broker ('alpaca'); account/profile ('main' / 'test') selects the
+credential set WITHIN a platform. The ledger tags rows with both.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Protocol, runtime_checkable
+
+# Recognised paper-trading platforms. Application-level enforcement at the
+# factory + at ledger insert time (mirrors VALID_ACCOUNTS in paper.ledger);
+# the schema CHECK is informational only (SQLite ALTER can't add CHECK
+# retroactively, so operator-migrated DBs may lack it).
+VALID_PLATFORMS = frozenset({"alpaca"})
+
+_DEFAULT_PLATFORM = "alpaca"
+
+
+@runtime_checkable
+class BrokerClient(Protocol):
+    """Structural surface the paper harness needs from a broker.
+
+    EXACTLY the 7 methods paper/ calls. Returns are ``Any`` — call sites
+    duck-type the order / account / position objects (`.id`, `.status`,
+    `.filled_qty`, `.filled_avg_price`, `.equity`, `.long_market_value`,
+    `.qty`). Deliberately EXCLUDES submit_bracket_order / get_orders /
+    get_all_positions / trading_client (unused by the harness).
+
+    NOTE: ``@runtime_checkable`` isinstance() validates method NAMES only,
+    never signatures — conformance tests assert via ``inspect.signature``.
+    """
+
+    def submit_limit_order(
+        self,
+        *,
+        symbol: str,
+        qty: int | float,
+        limit_price: float,
+        side: str = "buy",
+        time_in_force: str = "gtc",
+    ) -> Any: ...
+
+    def submit_stop_order(
+        self,
+        *,
+        symbol: str,
+        qty: int | float,
+        stop_price: float,
+        side: str = "sell",
+        time_in_force: str = "gtc",
+    ) -> Any: ...
+
+    def submit_market_order(
+        self,
+        *,
+        symbol: str,
+        qty: int | float,
+        side: str = "sell",
+        time_in_force: str = "day",
+    ) -> Any: ...
+
+    def get_account(self) -> Any: ...
+
+    def get_position(self, symbol: str) -> Any | None: ...
+
+    def get_order(self, order_id: str) -> Any: ...
+
+    def cancel_order(self, order_id: str) -> None: ...
+
+
+def get_default_broker_client(
+    *, platform: str = _DEFAULT_PLATFORM, profile: str = "main"
+) -> BrokerClient:
+    """Return the process-wide default :class:`BrokerClient` for the given
+    platform + credential profile.
+
+    ``platform`` selects the broker (only 'alpaca' today); ``profile``
+    selects the credential set within it ('main' vs 'test') — the same
+    account axis the ledger tags rows with. The factory owns the
+    platform->client mapping so the vendor client never needs to know its
+    own platform string.
+
+    The alpaca import is lazy to keep CLI startup fast and avoid a
+    top-level pipeline -> vendor-SDK import edge.
+    """
+    if platform not in VALID_PLATFORMS:
+        raise ValueError(f"platform={platform!r} not in {sorted(VALID_PLATFORMS)}")
+    if platform == "alpaca":
+        from alphalens_pipeline.data.alt_data.alpaca_client import (
+            get_default_alpaca_client,
+        )
+
+        return get_default_alpaca_client(profile=profile)
+    # Unreachable while VALID_PLATFORMS == {"alpaca"}; guards a future
+    # platform string added to the set without a dispatch arm here.
+    raise ValueError(  # pragma: no cover
+        f"no broker client wired for platform={platform!r}"
+    )

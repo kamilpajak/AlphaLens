@@ -114,6 +114,11 @@ def plan(
             "from the test client + tags every plans row with account='test'."
         ),
     ),
+    platform: str = typer.Option(
+        "alpaca",
+        "--platform",
+        help="Paper-trading platform to route orders to. Only 'alpaca' today.",
+    ),
 ) -> None:
     """Plan one day's verified candidates and persist to the SQLite ledger.
 
@@ -135,23 +140,22 @@ def plan(
     resolved_ledger = ledger_path if ledger_path is not None else home / DEFAULT_LEDGER_RELPATH
 
     profile = "test" if use_test_account else "main"
-    alpaca_client = None
+    broker = None
     if not no_alpaca:
         # Lazy-import the client so --no-alpaca + a fresh checkout without an
         # ALPACA_API_KEY can still dry-run the planner end-to-end.
-        from alphalens_pipeline.data.alt_data.alpaca_client import (
-            get_default_alpaca_client,
-        )
+        from alphalens_pipeline.paper.broker import get_default_broker_client
 
-        alpaca_client = get_default_alpaca_client(profile=profile)
+        broker = get_default_broker_client(platform=platform, profile=profile)
 
     report = plan_for_date(
         brief_date=brief_date,
         briefs_dir=resolved_briefs,
         ledger_path=resolved_ledger,
-        alpaca_client=alpaca_client,
+        broker=broker,
         force=force,
         account=profile,
+        platform=platform,
     )
 
     typer.echo(
@@ -186,6 +190,11 @@ def submit(
             "the main paper account. For PR 3 live smoke testing."
         ),
     ),
+    platform: str = typer.Option(
+        "alpaca",
+        "--platform",
+        help="Paper-trading platform to route orders to. Only 'alpaca' today.",
+    ),
     allow_closed_market: bool = typer.Option(
         False,
         "--allow-closed-market",
@@ -214,9 +223,7 @@ def submit(
         _emit_market_closed_message("submit")
         return
 
-    from alphalens_pipeline.data.alt_data.alpaca_client import (
-        get_default_alpaca_client,
-    )
+    from alphalens_pipeline.paper.broker import get_default_broker_client
     from alphalens_pipeline.paper.constants import DEFAULT_LEDGER_RELPATH
     from alphalens_pipeline.paper.submitter import submit_for_date
 
@@ -226,13 +233,14 @@ def submit(
     )
 
     profile = "test" if use_test_account else "main"
-    alpaca_client = get_default_alpaca_client(profile=profile)
+    broker = get_default_broker_client(platform=platform, profile=profile)
 
     report = submit_for_date(
         brief_date=brief_date,
         ledger_path=resolved_ledger,
-        alpaca_client=alpaca_client,
+        broker=broker,
         account=profile,
+        platform=platform,
     )
 
     typer.echo(
@@ -262,6 +270,11 @@ def reconcile(
         "--use-test-account",
         help="Route through ALPACA_TEST_* account (dev sandbox).",
     ),
+    platform: str = typer.Option(
+        "alpaca",
+        "--platform",
+        help="Paper-trading platform to route orders to. Only 'alpaca' today.",
+    ),
     allow_closed_market: bool = typer.Option(
         False,
         "--allow-closed-market",
@@ -288,9 +301,7 @@ def reconcile(
         _emit_market_closed_message("reconcile")
         return
 
-    from alphalens_pipeline.data.alt_data.alpaca_client import (
-        get_default_alpaca_client,
-    )
+    from alphalens_pipeline.paper.broker import get_default_broker_client
     from alphalens_pipeline.paper.constants import DEFAULT_LEDGER_RELPATH
     from alphalens_pipeline.paper.reconciler import reconcile_orders
 
@@ -298,11 +309,11 @@ def reconcile(
         ledger_path if ledger_path is not None else Path.home() / DEFAULT_LEDGER_RELPATH
     )
     profile = "test" if use_test_account else "main"
-    alpaca_client = get_default_alpaca_client(profile=profile)
+    broker = get_default_broker_client(platform=platform, profile=profile)
 
     report = reconcile_orders(
         ledger_path=resolved_ledger,
-        alpaca_client=alpaca_client,
+        broker=broker,
         account=profile,
     )
 

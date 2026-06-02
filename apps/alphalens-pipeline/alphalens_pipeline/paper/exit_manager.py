@@ -34,6 +34,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from alphalens_pipeline.paper.broker import BrokerClient
 from alphalens_pipeline.paper.constants import TIME_STOP_DAYS
 from alphalens_pipeline.paper.ledger import (
     fetch_orders_for_plan,
@@ -228,7 +229,7 @@ def _attach_exits(
     conn: sqlite3.Connection,
     *,
     snapshot: _PlanSnapshot,
-    alpaca_client: Any,
+    broker: BrokerClient,
     submitted_at: dt.datetime,
 ) -> int:
     """Submit TPs + SL for the just-settled entry phase. Returns the number
@@ -240,7 +241,7 @@ def _attach_exits(
     submitted = 0
 
     # Submit one stop-sell for the full entry-filled position.
-    sl_order = alpaca_client.submit_stop_order(
+    sl_order = broker.submit_stop_order(
         symbol=snapshot.ticker,
         qty=total_filled,
         stop_price=snapshot.disaster_stop,
@@ -281,7 +282,7 @@ def _attach_exits(
         if qty <= 0:
             continue
         target_price = float(tranche["target_price"])
-        tp_order = alpaca_client.submit_limit_order(
+        tp_order = broker.submit_limit_order(
             symbol=snapshot.ticker,
             qty=qty,
             limit_price=target_price,
@@ -351,7 +352,7 @@ def _all_exits_terminal(snapshot: _PlanSnapshot) -> bool:
 def _cancel_open_exits(
     *,
     snapshot: _PlanSnapshot,
-    alpaca_client: Any,
+    broker: BrokerClient,
 ) -> int:
     """Cancel every still-open exit (TP / SL / TIME_STOP) for the plan.
     Used both when an exit triggers (cancel the others) and on time-stop.
@@ -370,7 +371,7 @@ def _cancel_open_exits(
     for o in snapshot.exit_orders:
         if o["status"] in ("SUBMITTED", "PARTIALLY_FILLED"):
             try:
-                alpaca_client.cancel_order(o["alpaca_order_id"])
+                broker.cancel_order(o["alpaca_order_id"])
             except Exception as exc:
                 logger.warning(
                     "exit_manager cancel failed alpaca=%s: %s; will retry next cycle",
@@ -446,7 +447,7 @@ def _submit_time_stop(
     conn: sqlite3.Connection,
     *,
     snapshot: _PlanSnapshot,
-    alpaca_client: Any,
+    broker: BrokerClient,
     observed_at: dt.datetime,
 ) -> int:
     """Cancel open exits + submit a market sell for the remaining open
@@ -461,10 +462,10 @@ def _submit_time_stop(
     too-large remaining and submit a market-sell larger than our
     inventory, flipping the paper account short).
     """
-    _cancel_open_exits(snapshot=snapshot, alpaca_client=alpaca_client)
+    _cancel_open_exits(snapshot=snapshot, broker=broker)
 
     try:
-        position = alpaca_client.get_position(snapshot.ticker)
+        position = broker.get_position(snapshot.ticker)
     except Exception as exc:
         logger.warning(
             "exit_manager time-stop failed to fetch position for %s: %s; will retry",
@@ -476,7 +477,7 @@ def _submit_time_stop(
     if remaining <= 0:
         return 0
 
-    mkt_order = alpaca_client.submit_market_order(
+    mkt_order = broker.submit_market_order(
         symbol=snapshot.ticker,
         qty=remaining,
         side="sell",
@@ -511,7 +512,7 @@ def process_plan_exit(
     conn: sqlite3.Connection,
     *,
     plan_id: int,
-    alpaca_client: Any,
+    broker: BrokerClient,
     observed_at: dt.datetime | None = None,
 ) -> ExitOutcome:
     """Drive one plan through its exit-phase state machine.
@@ -552,14 +553,14 @@ def process_plan_exit(
         n = _attach_exits(
             conn,
             snapshot=snap,
-            alpaca_client=alpaca_client,
+            broker=broker,
             submitted_at=observed_at,
         )
         return ExitOutcome(plan_id=plan_id, action="ATTACHED", n_exits_submitted=n)
 
     # Exit phase active. Check for time-stop first.
     if _time_stop_should_fire(snap, observed_at):
-        _submit_time_stop(conn, snapshot=snap, alpaca_client=alpaca_client, observed_at=observed_at)
+        _submit_time_stop(conn, snapshot=snap, broker=broker, observed_at=observed_at)
         # Re-snapshot so the outcome write sees the just-canceled exits + new TIME_STOP order.
         snap = _snapshot(conn, plan_id) or snap
         # Don't write outcome yet — wait for the market-sell to fill in a
@@ -575,7 +576,7 @@ def process_plan_exit(
         o["order_kind"] == "SL" and int(o["filled_qty_observed"] or 0) > 0 for o in snap.exit_orders
     )
     if sl_fired:
-        _cancel_open_exits(snapshot=snap, alpaca_client=alpaca_client)
+        _cancel_open_exits(snapshot=snap, broker=broker)
         snap = _snapshot(conn, plan_id) or snap
 
     if not _all_exits_terminal(snap):

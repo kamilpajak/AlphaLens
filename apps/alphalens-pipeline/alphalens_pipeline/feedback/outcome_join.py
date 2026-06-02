@@ -112,6 +112,15 @@ def join_decision_outcomes(
     with FeedbackStore.open(Path(feedback_path)) as fb:
         decisions = fb.list_by_brief_date(brief_date)
         n_decisions = len(decisions)
+        # TODO(#388, NON-OPTIONAL before a 2nd broker or n>=50 decisions):
+        # the feedback ledger has no `platform` column yet. A broker switch is
+        # an EXECUTION-REGIME break — realized_return / fill-rate must NEVER be
+        # pooled across platforms (see
+        # docs/research/feedback_ledger_counterfactual_design_2026_06_02.md).
+        # Wire a platform column + stratify execution_modes by it when the 2nd
+        # paper platform lands OR n reaches 50. Plans-side platform (this PR)
+        # is sufficient until then because feedback.db is empty + execution_modes
+        # is INERT below n=50.
         for decision in decisions:
             match = ticker_to_outcome.get(decision.ticker.upper())
             if match is None:
