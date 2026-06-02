@@ -487,6 +487,89 @@ class TestCacheRefreshVixEmitsDomainMetrics(unittest.TestCase):
             )
 
 
+class TestPaperReconcileEmitsDomainMetrics(unittest.TestCase):
+    """paper-exit hardening: ``alphalens paper reconcile`` emits the
+    protection dead-man gauges (filled_without_sl / exits_failed) so the
+    AlphalensPaperFilledWithoutSl alert has an input. The emit IS the
+    contract — a refactor that drops it silently removes the alert input
+    for an unprotected live position.
+    """
+
+    def _report(self, **overrides):
+        from alphalens_pipeline.paper.reconciler import ReconcileReport
+
+        defaults = {
+            "n_orders_checked": 1,
+            "n_orders_transitioned": 0,
+            "n_fills_appended": 0,
+            "n_exits_attached": 2,
+            "n_outcomes_written": 0,
+            "n_time_stops_fired": 0,
+            "n_entries_ttl_canceled": 0,
+            "gross_ratio": 0.0,
+            "gross_warning_emitted": False,
+            "outcomes": (),
+            "n_exits_failed": 1,
+            "n_entries_canceled": 1,
+            "n_filled_without_sl": 1,
+        }
+        defaults.update(overrides)
+        return ReconcileReport(**defaults)
+
+    def test_emit_helper_writes_protection_gauges(self) -> None:
+        from alphalens_cli.commands import paper
+
+        report = self._report()
+        with patch.object(paper, "emit_domain_metrics") as emit:
+            paper._emit_reconcile_metrics(report, account="test")
+
+        emit.assert_called_once()
+        kwargs = emit.call_args.kwargs
+        self.assertEqual(kwargs["job"], "paper-reconcile")
+        metrics = kwargs["metrics"]
+        self.assertEqual(metrics['alphalens_paper_filled_without_sl{account="test"}'], 1)
+        self.assertEqual(metrics['alphalens_paper_exits_failed{account="test"}'], 1)
+        self.assertEqual(metrics['alphalens_paper_entries_canceled{account="test"}'], 1)
+        self.assertEqual(metrics['alphalens_paper_exits_attached{account="test"}'], 2)
+
+    def test_emit_helper_swallows_emit_error(self) -> None:
+        # The reconcile work is already persisted before the emit; an emit
+        # failure must NOT raise (PR #311 callsite rule), so a metrics-dir
+        # problem cannot flip the cron-health exit code.
+        from alphalens_cli.commands import paper
+
+        report = self._report()
+        with patch.object(
+            paper, "emit_domain_metrics", side_effect=RuntimeError("bad metrics dir")
+        ):
+            paper._emit_reconcile_metrics(report, account="main")  # MUST NOT raise
+
+    def test_reconcile_command_emits_via_helper(self) -> None:
+        # End-to-end wiring: the reconcile command reaches the emit callsite.
+        import datetime as dt
+
+        from alphalens_cli.commands import paper
+
+        report = self._report()
+        with (
+            patch.object(paper, "_today_utc", return_value=dt.date(2026, 5, 29)),
+            patch("alphalens_pipeline.paper.calendar.is_trading_day", return_value=True),
+            patch(
+                "alphalens_pipeline.paper.broker.get_default_broker_client",
+                return_value=object(),
+            ),
+            patch(
+                "alphalens_pipeline.paper.reconciler.reconcile_orders",
+                return_value=report,
+            ),
+            patch.object(paper, "emit_domain_metrics") as emit,
+        ):
+            paper.reconcile(use_test_account=True)
+
+        emit.assert_called_once()
+        self.assertEqual(emit.call_args.kwargs["job"], "paper-reconcile")
+
+
 class TestEmitFailureDoesNotPoisonSuccessPath(unittest.TestCase):
     """A transient metrics-dir failure (disk full, permission flip)
     must NOT turn a successful cron run into a failed unit.

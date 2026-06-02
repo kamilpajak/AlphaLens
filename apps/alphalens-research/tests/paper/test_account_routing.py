@@ -261,13 +261,13 @@ class TestExitManagerThreadsAccountFromSnapshot(unittest.TestCase):
 
                 outcome = process_plan_exit(conn, plan_id=plan_id, broker=_StubClient())
 
-                self.assertEqual(outcome.action, "ATTACHED")
+                self.assertEqual(outcome.action, "CONVERGE_SL")
                 self.assertGreater(outcome.n_exits_submitted, 0)
 
                 # All non-entry orders (SL + TP) for this plan must be
-                # tagged account='test'. The exit-attach branch routes
-                # through _attach_exits which calls insert_order with
-                # account=snapshot.account.
+                # tagged account='test'. The SL-convergence branch routes
+                # through _attach_sl / _attach_tps which call insert_order
+                # with account=snapshot.account.
                 orders = fetch_orders_for_plan(conn, plan_id)
                 exit_orders = [o for o in orders if o["order_kind"] in ("SL", "TP")]
                 self.assertGreater(len(exit_orders), 0)

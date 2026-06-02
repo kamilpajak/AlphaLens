@@ -505,3 +505,48 @@ groups:
         annotations:
           summary: "EDGAR press-release source-volume metric missing"
           description: "No alphalens_thematic_source_rows{source=edgar_press_release} series. The ingest source-volume emit step has not succeeded since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Expected once on a fresh deploy; clears after the first successful `alphalens thematic ingest` run."
+
+      # ---------------------------------------------------------------
+      # Paper unprotected-position dead-man-switch (paper-exit hardening).
+      # ---------------------------------------------------------------
+      #
+      # The paper harness guarantees a filled position converges to a LIVE
+      # protective stop-loss within a bounded number of reconcile passes. The
+      # reconciler emits ``alphalens_paper_filled_without_sl{account=...}`` — a
+      # GAUGE of filled positions that ENDED a pass with no live disaster-stop
+      # (a transient state the next pass retries: cancel the reserved-share
+      # hold, then submit / re-size the SL). A SUSTAINED non-zero value means
+      # the convergence is NOT clearing — an unprotected live position, the
+      # single most dangerous state in the harness (it would otherwise sit
+      # naked until the 7d entry TTL). No exit-code or staleness check catches
+      # it: the reconcile run exits 0 and refreshes its last_success even while
+      # a position is unprotected.
+      #
+      # GAUGE (overwritten each reconcile run) -> threshold on the raw value
+      # with a ``for:`` debounce, never increase()/rate() (the PR #312 lesson).
+      # ``for: 1h`` = ~2 reconcile slots (the unit fires every 30 min on
+      # trading days); a single pass that ends unprotected because a transient
+      # held_for_orders has not cleared yet must not page — only a value that
+      # stays > 0 across more than one slot is the real signal. The
+      # max_over_time keeps the alert honest across the 30-min scrape gaps
+      # within the debounce window (the gauge is only rewritten on a reconcile
+      # run, every 30 min, so a plain instant compare could read a stale
+      # sample; max_over_time over a window slightly longer than the run
+      # interval reads the worst recent sample).
+      #
+      # DISTINCT alertname + NO ``job=`` label (like the VIX-cache / EDGAR-dark
+      # rules) keeps it out of the per-job cron staleness enumerations — the
+      # paper jobs are deliberately staleness-rule-exempt (weekend false-page),
+      # and this is a per-account domain gauge, not a unit last_success.
+      # severity critical: a naked live position IS a wake-up condition (unlike
+      # a merely degraded data source).
+      - alert: AlphalensPaperFilledWithoutSl
+        expr: max_over_time(alphalens_paper_filled_without_sl[40m]) > 0
+        for: 1h
+        labels:
+          severity: critical
+          route: telegram
+          unit: paper-reconcile
+        annotations:
+          summary: "paper account {{ $labels.account }} has a filled position with NO live SL"
+          description: "alphalens_paper_filled_without_sl has stayed > 0 across more than one reconcile pass — a filled paper position is not converging to a live protective stop-loss (the convergence retry is not clearing, e.g. a persistent held_for_orders / insufficient-qty rejection). Check `journalctl --user -u alphalens-paper-reconcile.service` on the VPS and the ledger SL orders for the account. Until cleared the position sits without a disaster stop."

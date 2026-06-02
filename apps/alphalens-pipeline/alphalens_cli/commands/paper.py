@@ -11,10 +11,25 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 
+# Pure-stdlib emitter (os / tempfile / pathlib) — cheap enough to import at
+# module top, unlike the alpaca-py + pandas deps the command bodies lazy-load.
+# Imported here so the CLI emit-callsite tests can patch it as
+# ``paper.emit_domain_metrics`` (same pattern as edgar / cache / thematic).
+from alphalens_pipeline.observability.textfile import emit_domain_metrics
+
+if TYPE_CHECKING:
+    from alphalens_pipeline.paper.reconciler import ReconcileReport
+
 logger = logging.getLogger(__name__)
+
+# Domain-metric job id for the reconcile gauges. Matches the
+# ``alphalens-emit-job-metrics paper-reconcile`` bash hook on the systemd
+# unit so both halves of the metric stream land in the same textfile dir.
+_RECONCILE_JOB = "paper-reconcile"
 
 paper_app = typer.Typer(
     name="paper",
@@ -74,6 +89,36 @@ def _emit_market_closed_message(action: str) -> None:
     )
     logger.info(msg)
     typer.echo(msg)
+
+
+def _emit_reconcile_metrics(report: ReconcileReport, *, account: str) -> None:
+    """Emit reconcile telemetry as Prometheus gauges, labelled by account.
+
+    Key gauges (the LIVE-account protection dead-man signals):
+      * ``alphalens_paper_filled_without_sl`` — filled positions that ended
+        the pass with NO live protective SL. A sustained value > 0 means an
+        unprotected live position; the alert rule pages on it.
+      * ``alphalens_paper_exits_failed`` — exit submits the broker rejected
+        this pass (held_for_orders / insufficient qty / APIError).
+
+    The reconcile work is already persisted before this call; an emit failure
+    is pure observability debt and must NEVER fail the unit (PR #311 rule —
+    a malformed dict or unwriteable metrics dir would otherwise flip the
+    cron-health exit code and eventually false-page a staleness alert).
+    """
+    acct = account.replace("\\", "").replace('"', "")
+    try:
+        emit_domain_metrics(
+            job=_RECONCILE_JOB,
+            metrics={
+                f'alphalens_paper_filled_without_sl{{account="{acct}"}}': report.n_filled_without_sl,
+                f'alphalens_paper_exits_failed{{account="{acct}"}}': report.n_exits_failed,
+                f'alphalens_paper_entries_canceled{{account="{acct}"}}': report.n_entries_canceled,
+                f'alphalens_paper_exits_attached{{account="{acct}"}}': report.n_exits_attached,
+            },
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed; paper reconcile run succeeded")
 
 
 @paper_app.command("plan")
@@ -321,8 +366,27 @@ def reconcile(
         f"paper reconcile (profile={profile}): "
         f"checked={report.n_orders_checked} "
         f"transitioned={report.n_orders_transitioned} "
-        f"fills+={report.n_fills_appended}"
+        f"fills+={report.n_fills_appended} "
+        f"exits_attached={report.n_exits_attached} "
+        f"exits_failed={report.n_exits_failed} "
+        f"entries_canceled={report.n_entries_canceled} "
+        f"filled_without_sl={report.n_filled_without_sl}"
     )
+    if report.n_filled_without_sl > 0:
+        # Surface the dead-man condition loudly on the operator console too —
+        # a filled position with no live disaster-stop is the single most
+        # dangerous state in the harness. The next reconcile pass retries the
+        # SL convergence; this line tells the operator to watch it.
+        typer.echo(
+            f"  ! WARNING: {report.n_filled_without_sl} filled position(s) have "
+            f"NO live protective SL — convergence retries next pass."
+        )
+
+    # Emit Prometheus gauges so an alert can page on an unprotected live
+    # position (filled_without_sl) or a run of exit-submit rejections. The
+    # reconcile work above is already persisted; an emit failure is pure
+    # observability debt and must NOT fail the unit (PR #311 callsite rule).
+    _emit_reconcile_metrics(report, account=profile)
     for outcome in report.outcomes:
         if outcome.new_status == outcome.prev_status and outcome.n_new_fills == 0:
             continue
