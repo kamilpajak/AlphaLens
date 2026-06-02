@@ -453,6 +453,100 @@ class AlpacaClient:
         )
         return self._trading.submit_order(order_data=req)
 
+    def attach_exit_ladder(
+        self,
+        *,
+        symbol: str,
+        tranches: Any,
+        stop_price: float,
+        time_in_force: str = "gtc",
+    ) -> list[Any]:
+        """Alpaca decomposition of the broker-neutral OCO-ladder exit intent.
+
+        For each take-profit tranche this submits ONE Alpaca ``OCO`` order:
+        a SELL limit at the tranche's take-profit price bracketed by a
+        stop-loss at the shared ``stop_price``. Alpaca's OCO returns a PARENT
+        object that IS the take-profit limit (``parent.id``), carrying the
+        stop-loss STOP order in ``parent.legs[0]`` (``parent.legs[0].id``).
+        BOTH ids are present synchronously at submit and independently
+        pollable, so the wrapper captures them into an
+        :class:`~alphalens_pipeline.paper.broker.ExitLadderLeg` per tranche.
+
+        Why M separate OCO groups rather than one full-size stop + M
+        take-profits: a bare full-size stop would block every take-profit
+        (Alpaca ``held_for_orders``); OCO/bracket legs are NOT additive within
+        a group, but multiple OCO groups whose qtys sum to the held position
+        coexist. The single disaster stop is therefore realized as M stop
+        legs at one ``stop_price`` — one per group.
+
+        ``parent.legs`` empty/missing means the stop-loss id is uncapturable;
+        the wrapper raises :class:`AlpacaClientError` rather than silently
+        dropping the protective stop. An empty ``tranches`` input is likewise
+        rejected (no take-profit tranches = no protective stop attached). The
+        recorded :class:`ExitLadderLeg` prices are the tick-rounded values
+        actually submitted, not the caller's raw intent. OCO requires WHOLE
+        shares.
+        """
+        # Lazy import to avoid a top-level data -> paper import edge (mirrors
+        # the lazy import in broker.get_default_broker_client). The paper
+        # package depends on this client; importing ExitLadderLeg at module
+        # scope would invert that direction.
+        from alphalens_pipeline.paper.broker import ExitLadderLeg
+
+        # An empty ladder attaches no protective stop — the same "silently
+        # drop the stop" failure the empty-legs guard below defends against,
+        # but at the input boundary. Refuse the no-op rather than leave the
+        # held position unprotected (the docstring promises M >= 1 tranches).
+        tranches = list(tranches)
+        if not tranches:
+            raise AlpacaClientError(
+                f"attach_exit_ladder for {symbol} got an empty tranche list; "
+                "refusing to attach a disaster stop with no take-profit "
+                "tranches (the held position would be left unprotected)."
+            )
+
+        rounded_stop = _round_to_alpaca_tick(stop_price)
+        tif = _tif(time_in_force, self._sdk)
+        legs: list[Any] = []
+        for index, tranche in enumerate(tranches):
+            rounded_tp = _round_to_alpaca_tick(tranche.take_profit_limit)
+            req = self._sdk.LimitOrderRequest(
+                symbol=symbol,
+                qty=tranche.qty,
+                side=self._sdk.OrderSide.SELL,
+                time_in_force=tif,
+                order_class=self._sdk.OrderClass.OCO,
+                take_profit=self._sdk.TakeProfitRequest(limit_price=rounded_tp),
+                stop_loss=self._sdk.StopLossRequest(stop_price=rounded_stop),
+            )
+            parent = self._trading.submit_order(order_data=req)
+            parent_legs = getattr(parent, "legs", None)
+            if not parent_legs:
+                raise AlpacaClientError(
+                    f"OCO submit for {symbol} tranche #{index} returned no "
+                    "child legs; cannot capture the stop-loss order id. "
+                    "Refusing to attach a take-profit without its protective "
+                    "stop-loss (the disaster stop would be silently dropped)."
+                )
+            # Record the prices ACTUALLY SUBMITTED (tick-rounded), not the raw
+            # intent — the order ids point at the rounded orders, so a future
+            # reconciler comparing a leg to the broker order sees no sub-tick
+            # drift (see ExitLadderLeg docstring).
+            legs.append(
+                ExitLadderLeg(
+                    tranche_index=index,
+                    qty=tranche.qty,
+                    take_profit_limit=rounded_tp,
+                    stop_price=rounded_stop,
+                    # str() — Alpaca order ids are UUID objects; ExitLadderLeg
+                    # types them as str and the ledger persists them as TEXT
+                    # (matches the str(order.id) convention elsewhere).
+                    tp_order_id=str(parent.id),
+                    sl_order_id=str(parent_legs[0].id),
+                )
+            )
+        return legs
+
     def cancel_order(self, order_id: str) -> None:
         """Cancel an open order. SDK returns no payload."""
         self._trading.cancel_order_by_id(order_id)
