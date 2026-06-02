@@ -474,4 +474,168 @@ def find_trigger_event(
     return _build_catalyst_payload_v2(catalyst, trigger, time_col, echo_count=len(arc))
 
 
-__all__ = ["DEFAULT_EVENTS_DIR", "DEFAULT_NEWS_DIR", "find_trigger_event"]
+def _normalize_symbol(sym: str) -> str:
+    """Fold a ticker to a comparison key: strip, upper-case, unify ``.`` / ``-``.
+
+    Many news feeds emit class shares as ``BRK.B`` while SEC / our universe use
+    ``BRK-B``. Subject-match (issue #395) must not silently miss on that
+    separator difference, so both the index keys and the lookup key route
+    through this. Empty input maps to ``""`` (caller treats as no-match).
+    """
+    return sym.strip().upper().replace(".", "-")
+
+
+def _template_catalyst_sort_key(payload: dict) -> tuple[int, int, str]:
+    """Best-first ordering for >=2 template events on one ticker (#395).
+
+    Mirrors the ``dedup`` survivor rule so a multi-event ticker resolves the
+    SAME survivor whether duplicates were collapsed by PR-4 dedup or by this
+    index. Ascending sort yields best-first:
+      1. richest ``template_facts`` (most non-null values) -- DESC (negated)
+      2. most-recent ``published_at`` -- DESC (negated ordinal)
+      3. lexical ``url`` -- ASC (deterministic final tiebreak)
+
+    Richness counts the already-coerced ``template_facts`` dict (the payload
+    shape), matching ``orchestrator._template_facts_richness``; ``dedup``
+    counts the raw JSON string. The two agree for well-formed rows -- they are
+    separate implementations because each runs on a different stage's shape.
+    """
+    facts = payload.get("template_facts") or {}
+    richness = sum(1 for v in facts.values() if v is not None)
+    try:
+        published_ord = dt.date.fromisoformat(payload.get("published_at") or "").toordinal()
+    except (ValueError, TypeError):
+        published_ord = dt.date.min.toordinal()
+    return (-richness, -published_ord, payload.get("url") or "")
+
+
+def build_template_entity_index(
+    *,
+    asof: dt.date,
+    events_dir: Path = DEFAULT_EVENTS_DIR,
+    news_dir: Path = DEFAULT_NEWS_DIR,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    metrics: TemplateMetrics | None = None,
+) -> dict[str, list[dict]]:
+    """Index template-extracted events by EACH primary-entity ticker (#395).
+
+    Built ONCE per scoring batch so the per-candidate lookup is O(1). Returns
+    ``{NORMALIZED_TICKER: [payload, ...]}`` where each payload is a
+    :func:`_build_catalyst_payload_v2` dict and the per-ticker list is
+    pre-sorted best-first by :func:`_template_catalyst_sort_key` (lookup takes
+    ``[0]``).
+
+    Subject-match contract (option b): a ticker maps to a payload iff it is a
+    member of the event's ``primary_entities`` -- the filing SUBJECT (M&A
+    acquirer/target, regulated party, earnings name). Theme is irrelevant;
+    ``themes=[]`` template rows still get indexed. ``metrics`` is accepted for
+    signature parity with :func:`find_trigger_event` but unused (no Flash rows
+    to supersede in a template-only frame).
+
+    Only ``extraction_method == "template"`` rows are indexed -- Flash rows are
+    the theme-keyed :func:`find_trigger_event` path's job. The SAME
+    noise/blocklist filter, time coercion, and PR-4 dedup as the theme path run
+    first, so subject-match cannot surface an event the theme path would drop.
+
+    DELIBERATE divergence from ``_apply_template_precedence`` (which keys
+    supersession on the first primary entity only): this index maps a payload to
+    EVERY primary entity, so for a multi-entity event (acquirer NVDA + target
+    ARM) BOTH legitimately get the typed facts -- the subject-match intent.
+
+    Returns ``{}`` on any missing dir / empty window / absent
+    ``extraction_method`` column, so the scorer degrades to the theme-only path.
+    """
+    del metrics  # signature parity only; template-only frame has nothing to supersede
+    events = _load_window(events_dir, asof, lookback_days)
+    if events.empty or "extraction_method" not in events.columns:
+        return {}
+    events = events[events["extraction_method"] == "template"]
+    if events.empty:
+        return {}
+
+    news = _load_window(news_dir, asof, lookback_days)
+    if news.empty:
+        return {}
+
+    joined = events.merge(news, left_on="news_id", right_on="id", how="inner")
+    if joined.empty:
+        return {}
+
+    joined = _apply_noise_and_blocklist_filters(joined)
+    if joined.empty:
+        return {}
+
+    time_col = _resolve_time_column(joined)
+    if time_col is None:
+        return {}
+    joined[time_col] = pd.to_datetime(joined[time_col], errors="coerce", utc=True)
+    joined = joined.dropna(subset=[time_col])
+    if joined.empty:
+        return {}
+
+    # Collapse multi-outlet echoes of the SAME template event before indexing
+    # (one payload per (template_id, entity_set, 24h) cluster).
+    joined = dedup.dedup_template_events(joined, time_col=time_col)
+    if joined.empty:
+        return {}
+
+    joined = joined.reset_index(drop=True)
+    index: dict[str, list[dict]] = {}
+    for _, row in joined.iterrows():
+        payload = _build_catalyst_payload_v2(row, row, time_col, echo_count=1)
+        if payload.get("template_id") is None:
+            # Defensive: the extraction_method filter should guarantee a
+            # template_id; a corrupt row without one is not a usable catalyst.
+            continue
+        for sym in _entity_set(row):
+            index.setdefault(_normalize_symbol(sym), []).append(payload)
+
+    for payloads in index.values():
+        payloads.sort(key=_template_catalyst_sort_key)
+    return index
+
+
+def find_template_catalyst_for_ticker(
+    *,
+    ticker: str,
+    asof: dt.date,
+    events_dir: Path = DEFAULT_EVENTS_DIR,
+    news_dir: Path = DEFAULT_NEWS_DIR,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    metrics: TemplateMetrics | None = None,
+    entity_index: dict[str, list[dict]] | None = None,
+) -> dict | None:
+    """Best subject-match template catalyst for ``ticker`` (option b, #395).
+
+    Fires iff ``ticker`` is a ``primary_entities`` member of a
+    template-extracted event in the window -- independent of theme. Returns the
+    same payload shape as :func:`find_trigger_event` (carries ``template_id`` +
+    ``template_facts``) so the scorer consumes it unchanged. ``None`` when no
+    such event exists.
+
+    ``entity_index`` is the per-batch index from
+    :func:`build_template_entity_index`. When the scorer passes it, this is an
+    O(1) lookup. When ``None`` (isolated / test path) the index is built for the
+    single window -- the ``_load_window`` LRU cache keeps the disk read cheap.
+    """
+    if entity_index is None:
+        entity_index = build_template_entity_index(
+            asof=asof,
+            events_dir=events_dir,
+            news_dir=news_dir,
+            lookback_days=lookback_days,
+            metrics=metrics,
+        )
+    payloads = entity_index.get(_normalize_symbol(ticker))
+    if not payloads:
+        return None
+    return payloads[0]
+
+
+__all__ = [
+    "DEFAULT_EVENTS_DIR",
+    "DEFAULT_NEWS_DIR",
+    "build_template_entity_index",
+    "find_template_catalyst_for_ticker",
+    "find_trigger_event",
+]

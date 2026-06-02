@@ -372,6 +372,7 @@ def _build_candidate_row(
     tech: dict,
     magic_formula_inputs: MagicFormulaInputs,
     catalyst_event: dict | None,
+    subject_catalyst: dict | None,
     cs_val: float,
 ) -> dict:
     """Assemble one candidate's enrichment row (deferred Magic-Formula rank
@@ -388,6 +389,9 @@ def _build_candidate_row(
     insider_pctl = None if is_thin else ins["sector_percentile"]
     fcff_pctl = None if is_thin else fcff["sector_percentile"]
     val_pctl = None if is_thin else val["composite_sector_percentile"]
+    # Option (b) #395: subject-match template event wins as the template-fact
+    # source; else fall back to the theme catalyst's own template fields.
+    template_source = subject_catalyst or catalyst_event
     return {
         "ticker": ticker,
         "industry_id": cohort.industry_id if cohort.industry_id is not None else np.nan,
@@ -425,10 +429,18 @@ def _build_candidate_row(
         # orchestrator's _row_to_facts deserialises the JSON column back
         # to a dict; brief generator's prompt-rendering branch fires on
         # presence. None on Flash-extracted catalysts + no-catalyst rows.
-        "catalyst_template_id": (catalyst_event or {}).get("template_id"),
+        #
+        # Option (b) #395: a subject-match template event (this ticker IS the
+        # filing subject) is the preferred fact source over a theme-path
+        # template catalyst; falls back to the theme catalyst's own template
+        # fields (PR-3) when there is no subject match. AUGMENT-ONLY -- this
+        # touches ONLY the two template columns; catalyst_event_type /
+        # _confidence / _strength / _url below still read from the theme
+        # catalyst, so scores and rankings are unchanged.
+        "catalyst_template_id": (template_source or {}).get("template_id"),
         "catalyst_template_facts_json": (
-            json.dumps((catalyst_event or {}).get("template_facts"), sort_keys=True)
-            if (catalyst_event or {}).get("template_facts")
+            json.dumps((template_source or {}).get("template_facts"), sort_keys=True)
+            if (template_source or {}).get("template_facts")
             else None
         ),
         # Stashed for the reversal detector (source_event_url is
@@ -470,6 +482,19 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
     from alphalens_pipeline.thematic.mapping import catalyst_resolver
 
     catalyst_cache: dict[str, dict | None] = {}
+
+    # Option (b) #395: subject-match template catalysts. Index template-
+    # extracted events by primary-entity ticker ONCE per batch so a candidate
+    # that is ITSELF the subject of a template filing (M&A target, regulated
+    # party, earnings name) gets its template_id + facts stamped, independent of
+    # theme (template events carry themes=[], so the theme-keyed path never
+    # reaches them). O(events) build, O(1) per-candidate lookup. Degrades to the
+    # theme-only path on any failure.
+    try:
+        template_entity_index = catalyst_resolver.build_template_entity_index(asof=asof)
+    except Exception as exc:
+        logger.warning("template entity index build failed: %s", exc)
+        template_entity_index = {}
 
     def _tradeable_filter(peers_to_check: list[str]) -> list[str]:
         return filter_peers_by_mcap_price(
@@ -532,6 +557,17 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
         # implications). None when no theme-tagged event survives noise filter.
         catalyst_event = _resolve_catalyst_event(str(cand.get("theme", "")))
         cs_val = catalyst_signals.compute_catalyst_strength(catalyst_event)
+        # Option (b) #395: if THIS ticker is the subject of a template filing in
+        # the window, that event supplies the typed template facts (stamps
+        # template_id/facts ONLY -- does NOT override catalyst_strength /
+        # event_type). O(1) lookup against the per-batch index.
+        try:
+            subject_catalyst = catalyst_resolver.find_template_catalyst_for_ticker(
+                ticker=ticker, asof=asof, entity_index=template_entity_index
+            )
+        except Exception as exc:
+            logger.warning("subject-match catalyst lookup failed for %r: %s", ticker, exc)
+            subject_catalyst = None
         cohort = IndustryCohort(
             industry_id=industry_id,
             industry_name=industry_name,
@@ -548,6 +584,7 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
                 tech=tech,
                 magic_formula_inputs=magic_formula_inputs,
                 catalyst_event=catalyst_event,
+                subject_catalyst=subject_catalyst,
                 cs_val=cs_val,
             )
         )
