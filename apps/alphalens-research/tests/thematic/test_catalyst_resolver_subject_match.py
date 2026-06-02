@@ -420,6 +420,116 @@ class TestFindTemplateCatalystForTicker(unittest.TestCase):
             )
             self.assertIsNone(_find("CELH", ed, nd))
 
+    def test_template_row_without_template_id_not_indexed(self):
+        # Defensive: an extraction_method="template" row whose template_id is
+        # None is not a usable subject catalyst -> skipped (no index entry).
+        events = pd.DataFrame(
+            [
+                _events_row(
+                    "bw:1",
+                    event_type="earnings",
+                    primary_entities=["CELH"],
+                    themes=[],
+                    extraction_method="template",
+                    template_id=None,
+                    template_fields_json=json.dumps({"reporting_ticker": "CELH"}),
+                ),
+            ]
+        )
+        news = pd.DataFrame(
+            [
+                _news_row(
+                    "bw:1", "2026-05-30T08:00:00Z", "x", "https://www.businesswire.com/x", ["CELH"]
+                ),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            ed, nd = _write_window(events, news, tmp, "2026-05-30")
+            index = catalyst_resolver.build_template_entity_index(
+                asof=dt.date(2026, 5, 30), events_dir=ed, news_dir=nd, lookback_days=1
+            )
+            self.assertEqual(index, {})
+            self.assertIsNone(_find("CELH", ed, nd))
+
+    def test_events_present_but_news_window_empty_returns_empty_index(self):
+        # Template events exist but the news window is empty -> {} (the join
+        # would have nothing to attach a payload's url/published_at to).
+        events = pd.DataFrame(
+            [
+                _events_row(
+                    "bw:1",
+                    event_type="earnings",
+                    primary_entities=["CELH"],
+                    themes=[],
+                    extraction_method="template",
+                    template_id="earnings_surprise",
+                    template_fields_json=json.dumps({"reporting_ticker": "CELH"}),
+                ),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            events_dir = Path(tmp) / "events"
+            news_dir = Path(tmp) / "news"
+            events_dir.mkdir()
+            news_dir.mkdir()  # no news parquet -> empty window
+            events.to_parquet(events_dir / "2026-05-30.parquet", index=False)
+            self.assertEqual(
+                catalyst_resolver.build_template_entity_index(
+                    asof=dt.date(2026, 5, 30),
+                    events_dir=events_dir,
+                    news_dir=news_dir,
+                    lookback_days=1,
+                ),
+                {},
+            )
+
+    def test_template_event_with_no_matching_news_returns_empty_index(self):
+        # The events<->news merge yields nothing (news_id has no match) -> {}.
+        events = pd.DataFrame(
+            [
+                _events_row(
+                    "bw:1",
+                    event_type="earnings",
+                    primary_entities=["CELH"],
+                    themes=[],
+                    extraction_method="template",
+                    template_id="earnings_surprise",
+                    template_fields_json=json.dumps({"reporting_ticker": "CELH"}),
+                ),
+            ]
+        )
+        news = pd.DataFrame(
+            [
+                _news_row(
+                    "OTHER:99",
+                    "2026-05-30T08:00:00Z",
+                    "x",
+                    "https://www.businesswire.com/x",
+                    ["ZZZ"],
+                ),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            ed, nd = _write_window(events, news, tmp, "2026-05-30")
+            self.assertEqual(
+                catalyst_resolver.build_template_entity_index(
+                    asof=dt.date(2026, 5, 30), events_dir=ed, news_dir=nd, lookback_days=1
+                ),
+                {},
+            )
+
+    def test_sort_key_falls_back_on_unparseable_published_at(self):
+        # An empty / unparseable published_at sorts to oldest (date.min ordinal)
+        # rather than crashing the sort.
+        rich = catalyst_resolver._template_catalyst_sort_key(
+            {"template_facts": {"a": 1, "b": 2}, "published_at": "", "url": "z"}
+        )
+        sparse = catalyst_resolver._template_catalyst_sort_key(
+            {"template_facts": {"a": 1}, "published_at": "not-a-date", "url": "a"}
+        )
+        # Richer facts sort first regardless of the unparseable dates.
+        self.assertLess(rich, sparse)
+
 
 # --------------------------------------------------------------------------- #
 # Provenance guard -- option-b / #394 boundary
@@ -597,6 +707,54 @@ class TestScorerWiresSubjectMatchLookup(unittest.TestCase):
         self.assertEqual(row["catalyst_template_id"], "earnings_surprise")
         # ... but event_type stays the theme catalyst's (NOT overridden).
         self.assertEqual(row["catalyst_event_type"], "partnership")
+
+    def test_scorer_degrades_when_index_build_raises(self):
+        # Failure isolation: a build_template_entity_index exception degrades to
+        # the theme-only path -- scoring still completes, no template facts.
+        candidates = pd.DataFrame(
+            [{"ticker": "CELH", "theme": "beverages", "company_name": "Celsius"}]
+        )
+        sig = self._empty_signal()
+        with (
+            patch.object(
+                catalyst_resolver,
+                "build_template_entity_index",
+                side_effect=RuntimeError("index boom"),
+            ),
+            patch.object(catalyst_resolver, "find_trigger_event", return_value=None),
+            patch.object(scorer, "_score_signals", return_value=(sig, sig, sig, sig)),
+            patch.object(scorer, "_build_feature_fetcher", return_value=lambda *_a, **_k: {}),
+            patch.object(scorer, "_build_ohlcv_loader", return_value=lambda *_a, **_k: None),
+            patch.object(scorer.sector_peers, "get_industry_id", return_value=None),
+        ):
+            out = scorer.score_candidates(candidates, asof=dt.date(2026, 5, 30))
+        self.assertEqual(len(out), 1)
+        row = out.iloc[0]
+        self.assertTrue(row["catalyst_template_id"] is None or pd.isna(row["catalyst_template_id"]))
+
+    def test_scorer_degrades_when_subject_lookup_raises(self):
+        # Failure isolation: a per-candidate lookup exception degrades to None.
+        candidates = pd.DataFrame(
+            [{"ticker": "CELH", "theme": "beverages", "company_name": "Celsius"}]
+        )
+        sig = self._empty_signal()
+        with (
+            patch.object(catalyst_resolver, "build_template_entity_index", return_value={}),
+            patch.object(
+                catalyst_resolver,
+                "find_template_catalyst_for_ticker",
+                side_effect=RuntimeError("lookup boom"),
+            ),
+            patch.object(catalyst_resolver, "find_trigger_event", return_value=None),
+            patch.object(scorer, "_score_signals", return_value=(sig, sig, sig, sig)),
+            patch.object(scorer, "_build_feature_fetcher", return_value=lambda *_a, **_k: {}),
+            patch.object(scorer, "_build_ohlcv_loader", return_value=lambda *_a, **_k: None),
+            patch.object(scorer.sector_peers, "get_industry_id", return_value=None),
+        ):
+            out = scorer.score_candidates(candidates, asof=dt.date(2026, 5, 30))
+        self.assertEqual(len(out), 1)
+        row = out.iloc[0]
+        self.assertTrue(row["catalyst_template_id"] is None or pd.isna(row["catalyst_template_id"]))
 
 
 # --------------------------------------------------------------------------- #
