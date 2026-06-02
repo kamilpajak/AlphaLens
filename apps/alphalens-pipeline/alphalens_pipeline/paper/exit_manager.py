@@ -17,10 +17,17 @@ State machine per plan:
              filled qty (scale-in tiers are intentionally abandoned),
          (b) cancel any UNDER-sized live SL so the re-submit does not stack,
              then
-         (c) attempt the disaster-stop SL sized to the CURRENT position qty,
-             and the TP ladder if it isn't attached yet.
-       If the SL submit is rejected (held_for_orders / insufficient qty /
-       any APIError) NOTHING SL-shaped is persisted, so the SAME branch
+         (c) attempt the disaster-stop SL sized to the CURRENT position qty.
+       SL-PRIORITY invariant: the protective disaster-stop must ALWAYS win the
+       shares; the opportunistic take-profit is strictly secondary. The TP
+       ladder is attached ONLY once the SL is live this pass — never while the
+       SL is missing. If the SL submit is rejected because the plan's OWN live
+       TP order(s) reserve the shares (the live DLB / S state: a resting TP
+       holds the position while no SL covers it), those TPs are CANCELLED
+       best-effort and the SL is re-attempted the same pass (Alpaca releases
+       the hold immediately on cancel). If the SL submit is rejected for any
+       other reason (held_for_orders / wash-trade 403 / any APIError) NOTHING
+       SL-shaped is persisted and NO TP is submitted, so the SAME branch
        re-enters next pass and retries. This is NOT gated on
        entry_phase_settled and is NOT skipped just because a TP order
        already exists — a TP-without-SL state is transient, never terminal.
@@ -196,6 +203,17 @@ class _PlanSnapshot:
     @property
     def has_tp_orders(self) -> bool:
         return any(o["order_kind"] == "TP" for o in self.exit_orders)
+
+    @property
+    def live_tp_orders(self) -> tuple[_RowProto, ...]:
+        """The non-terminal TP orders. The SL-priority rule cancels these when
+        an opportunistic TP is resting on a position that has no live disaster-
+        stop, so the protective SL can take the shares (the TP yields)."""
+        return tuple(
+            o
+            for o in self.exit_orders
+            if o["order_kind"] == "TP" and o["status"] not in _TERMINAL_ENTRY_STATUSES
+        )
 
     @property
     def has_live_time_stop(self) -> bool:
@@ -826,8 +844,13 @@ def process_plan_exit(
     #       and collapses the ladder to the filled qty (scale-in abandoned),
     #   (b) cancel any UNDER-sized live SL (a gap fill on the cheaper tier
     #       landed after a smaller SL — re-size up to the full position), then
-    #   (c) attempt the SL sized to the CURRENT position qty, plus the TP
-    #       ladder if it is not attached yet.
+    #   (c) attempt the SL sized to the CURRENT position qty FIRST. SL-PRIORITY:
+    #       the TP ladder is attached ONLY once the SL is live this pass; if the
+    #       SL submit fails NO TP is submitted (a wash-trade-exempt TP limit
+    #       would reserve the shares and block the SL forever — the live defect).
+    #       If the SL is blocked by the plan's OWN live TP reserving the shares,
+    #       those TPs are cancelled best-effort and the SL is re-attempted the
+    #       same pass (the TP yields the shares to the protective SL).
     # If the SL submit is rejected nothing SL-shaped is persisted, so this
     # branch re-enters next pass and retries until the SL lands. Guards:
     #   - ``net_open_qty > 0``: a zero-fill plan is NOT a position, and a plan
@@ -898,9 +921,48 @@ def process_plan_exit(
             qty=size_qty,
             submitted_at=observed_at,
         )
+        # SL-PRIORITY invariant: the protective disaster-stop must always win
+        # the shares; the opportunistic take-profit is strictly secondary.
+        # If the SL submit was REJECTED this pass and the plan's OWN live TP
+        # order(s) are reserving the shares (the live DLB / S state: a resting
+        # TP limit holds the position while no SL covers it), cancel those TPs
+        # best-effort so the SL can land — then re-attempt the SL ONCE this
+        # pass (the probe shows Alpaca releases the hold ~immediately on cancel,
+        # so the re-submit lands same-pass). The safety SL takes the shares; the
+        # yielded TP is DROPPED and is NOT re-armed while the SL covers the
+        # position (a Phase-A limitation: the convergence block only runs while
+        # under-covered, so once the SL is live it does not re-enter to re-attach
+        # the TP). The position keeps its disaster-stop; the take-profit is the
+        # opportunistic secondary leg, so dropping it is a non-safety trade-off.
+        if sl_submitted == 0 and snap.live_tp_orders:
+            for tp in snap.live_tp_orders:
+                try:
+                    broker.cancel_order(tp["alpaca_order_id"])
+                except Exception as exc:
+                    logger.warning(
+                        "exit_manager cancel TP to free shares for SL failed alpaca=%s "
+                        "plan_id=%d: %s; will retry next cycle",
+                        tp["alpaca_order_id"],
+                        snap.plan_id,
+                        exc,
+                    )
+            sl_submitted, sl_failed = _attach_sl(
+                conn,
+                snapshot=snap,
+                broker=broker,
+                qty=size_qty,
+                submitted_at=observed_at,
+            )
+        # Attach the TP ladder ONLY when the SL is now live and no TP exists
+        # yet. "SL live" means it was just submitted successfully this pass
+        # (``sl_submitted == 1``) — the gate guarantees no adequate pre-existing
+        # SL reached here. If the SL submit FAILED, submit NO TP: a TP limit is
+        # wash-trade-EXEMPT and would be accepted, reserving the shares and
+        # blocking the disaster-stop forever (the live defect). The SL retries
+        # next pass; the TP waits until it is live.
         tp_submitted = 0
         tp_failed = 0
-        if not snap.has_tp_orders:
+        if sl_submitted == 1 and not snap.live_tp_orders:
             tp_submitted, tp_failed = _attach_tps(
                 conn,
                 snapshot=snap,
