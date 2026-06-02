@@ -9,24 +9,39 @@ in milliseconds.
 
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
 from collections.abc import Callable
+from pathlib import Path
 from unittest import mock
 
 import requests
 from alphalens_pipeline.data.alt_data.sec_edgar_client import (
     SecEdgarClient,
     SecEdgarError,
+    SecForbiddenError,
+    SecRateCoordinator,
     _evict_to_capacity,
+    _reset_default_client_for_tests,
+    get_default_sec_client,
 )
+from alphalens_pipeline.data.alt_data.sec_rate_coordinator import SEC_COORD_PATH_ENV
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, json_payload: dict | None = None, text: str = ""):
+    def __init__(
+        self,
+        status_code: int,
+        json_payload: dict | None = None,
+        text: str = "",
+        headers: dict | None = None,
+    ):
         self.status_code = status_code
         self._json = json_payload or {}
         self.text = text
         self.content = text.encode("utf-8") if text else b""
+        self.headers = headers or {}
 
     def json(self) -> dict:
         return self._json
@@ -215,11 +230,12 @@ class TestPermanent4xx(unittest.TestCase):
         self.assertEqual(len(session.calls), 1)
 
     def test_403_raises_immediately(self):
-        # 403 typically means User-Agent rejected — also permanent.
+        # 403 is permanent within one process (UA-reject OR shared-IP traffic
+        # threshold) — raised as SecForbiddenError, no retry budget spent.
         session = _FakeSession([_FakeResponse(403, text="forbidden")])
         client = _make_client(session, _SleepRecorder())
 
-        with self.assertRaises(SecEdgarError):
+        with self.assertRaises(SecForbiddenError):
             client.fetch_submissions("0000320193")
         self.assertEqual(len(session.calls), 1)
 
@@ -337,6 +353,139 @@ class TestEvictToCapacity(unittest.TestCase):
         cache = {}
         _evict_to_capacity(cache, max_size=10)
         self.assertEqual(cache, {})
+
+
+class TestForbiddenErrorDetail(unittest.TestCase):
+    """#380 — a 403 stays a non-retried immediate raise but now carries the FULL
+    body + triage headers (truncating at 200 chars hid the epic #379 root cause)
+    and logs at WARNING.
+    """
+
+    def test_403_still_raises_immediately_without_retry(self):
+        session = _FakeSession([_FakeResponse(403, text="Request Rate Threshold Exceeded")])
+        client = _make_client(session, _SleepRecorder())
+        with self.assertRaises(SecForbiddenError):
+            client.fetch_submissions("0000320193")
+        self.assertEqual(len(session.calls), 1)
+
+    def test_403_message_includes_full_body_not_truncated(self):
+        long_body = "Request Rate Threshold Exceeded. " + ("X" * 500)
+        session = _FakeSession([_FakeResponse(403, text=long_body)])
+        client = _make_client(session, _SleepRecorder())
+        with self.assertRaises(SecForbiddenError) as ctx:
+            client.fetch_submissions("0000320193")
+        self.assertIn("X" * 500, str(ctx.exception))
+
+    def test_403_message_includes_retry_after_header_labeled(self):
+        session = _FakeSession([_FakeResponse(403, text="rate", headers={"Retry-After": "600"})])
+        client = _make_client(session, _SleepRecorder())
+        with self.assertRaises(SecForbiddenError) as ctx:
+            client.fetch_submissions("0000320193")
+        msg = str(ctx.exception)
+        self.assertIn("Retry-After", msg)
+        self.assertIn("'Retry-After': '600'", msg)  # labeled dict repr, not bare 600
+
+    def test_403_logs_full_body_and_headers_at_warning(self):
+        long_body = "Undeclared Automated Tool. " + ("Y" * 400)
+        session = _FakeSession([_FakeResponse(403, text=long_body, headers={"Retry-After": "120"})])
+        client = _make_client(session, _SleepRecorder())
+        with self.assertLogs(
+            "alphalens_pipeline.data.alt_data.sec_edgar_client", level="WARNING"
+        ) as cm:
+            with self.assertRaises(SecForbiddenError):
+                client.fetch_submissions("0000320193")
+        logged = "\n".join(cm.output)
+        self.assertIn("403", logged)
+        self.assertIn("Y" * 400, logged)
+        self.assertIn("Retry-After", logged)
+
+    def test_404_still_raises_secedgarerror_not_forbidden(self):
+        session = _FakeSession([_FakeResponse(404, text="not found")])
+        client = _make_client(session, _SleepRecorder())
+        with self.assertRaises(SecEdgarError) as ctx:
+            client.fetch_submissions("9999999999")
+        self.assertNotIsInstance(ctx.exception, SecForbiddenError)
+        self.assertEqual(len(session.calls), 1)
+
+
+class _FakeCoordinator:
+    """Records wait_for_slot calls. The client only calls wait_for_slot() and
+    ignores its return, so we just count invocations.
+    """
+
+    def __init__(self):
+        self.calls = 0
+
+    def wait_for_slot(self) -> float:
+        self.calls += 1
+        return 0.0
+
+
+class TestThrottleCoordinatorIntegration(unittest.TestCase):
+    """#381 — the coordinator gate fires ONCE per logical request (not per retry
+    attempt), and a client with no coordinator behaves exactly as before.
+    """
+
+    def test_coordinator_called_once_per_request(self):
+        coord = _FakeCoordinator()
+        session = _FakeSession(
+            [
+                _FakeResponse(200, json_payload={"a": 1}),
+                _FakeResponse(200, json_payload={"b": 2}),
+            ]
+        )
+        client = SecEdgarClient(
+            user_agent="X x@example.com",
+            session=session,
+            sleep=_SleepRecorder(),
+            coordinator=coord,
+        )
+        client.fetch_submissions("0000320193")
+        client.fetch_submissions_overflow("CIK0000320193-submissions-001.json")
+        self.assertEqual(coord.calls, 2)
+
+    def test_coordinator_not_recharged_on_retry(self):
+        # If the gate were inside the retry loop, one logical request that retries
+        # once (429 -> 200) would call it twice. It sits in _request before the
+        # loop, so it is ONE gate call.
+        coord = _FakeCoordinator()
+        session = _FakeSession(
+            [_FakeResponse(429, text="rl"), _FakeResponse(200, json_payload={"ok": True})]
+        )
+        client = SecEdgarClient(
+            user_agent="X x@example.com",
+            session=session,
+            sleep=_SleepRecorder(),
+            coordinator=coord,
+        )
+        client.fetch_submissions("0000320193")
+        self.assertEqual(coord.calls, 1)
+
+    def test_no_coordinator_no_change_in_behaviour(self):
+        session = _FakeSession([_FakeResponse(200, json_payload={"a": 1})])
+        client = _make_client(session, _SleepRecorder())
+        self.assertIsNone(client._coordinator)
+        client.fetch_submissions("0000320193")  # no raise
+
+
+class TestCoordinatorWiring(unittest.TestCase):
+    """#381 — get_default_sec_client wires a coordinator at the shared path."""
+
+    def setUp(self):
+        _reset_default_client_for_tests()
+        self.addCleanup(_reset_default_client_for_tests)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_default_client_has_coordinator_at_override_path(self):
+        # Env must be set BEFORE the first call (lazy-singleton reads env once).
+        coord_path = Path(self._tmp.name) / "coord.lock"
+        with mock.patch.dict(os.environ, {SEC_COORD_PATH_ENV: str(coord_path)}):
+            client = get_default_sec_client()
+            self.assertIsInstance(client._coordinator, SecRateCoordinator)
+            self.assertEqual(client._coordinator._path, coord_path)
+            # singleton: same instance + same coordinator on a second call.
+            self.assertIs(get_default_sec_client(), client)
 
 
 if __name__ == "__main__":

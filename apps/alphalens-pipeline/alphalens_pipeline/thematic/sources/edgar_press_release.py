@@ -48,6 +48,7 @@ import pandas as pd
 
 from alphalens_pipeline.data.alt_data.sec_edgar_client import (
     SecEdgarClient,
+    SecForbiddenError,
     get_default_sec_client,
 )
 from alphalens_pipeline.edgar_detector.sources.eightk import extract_8k_items
@@ -341,9 +342,17 @@ def pick_ex_991_name(index_html: str) -> str | None:
 
 # --- (3) per-hit enrichment: base_dir -> items + EX-99.1 body (1 index.htm) --
 def _safe_text(client: SecEdgarClient, url: str) -> str | None:
-    """Best-effort text fetch; returns None on any client error (mirror of edgar.py)."""
+    """Best-effort text fetch; returns None on a CLEAN miss (404, parse, empty).
+
+    A transient SEC failure (403 traffic-threshold / UA-reject) is RE-RAISED so
+    the caller can distinguish "document genuinely absent" from "we were rate-
+    limited". The latter must NOT be silently swallowed into an empty body, or a
+    403 storm caches empty-body rows and poisons the day (#379 / #382 / #383).
+    """
     try:
         return client.get_text(url)
+    except SecForbiddenError:
+        raise  # transient under shared-IP load — propagate to the enrich guard
     except Exception as exc:
         # One bad document must not kill the day (mirror of edgar.py::_get).
         logger.warning("edgar press-release fetch failed (%s): %s", url, exc, exc_info=True)
@@ -361,6 +370,12 @@ def _enrich_filing(row: dict, *, client: SecEdgarClient) -> dict | None:
     One ``{accession}-index.htm`` fetch yields the document-Type table that
     locates both the primary 8-K (for item extraction) and the EX-99.1 (for the
     body), so no separate FilingSummary.xml round-trip is needed.
+
+    Raises ``SecForbiddenError`` if any of the per-filing fetches (index.htm /
+    primary / EX-99.1) 403s under shared-IP load — the caller MUST classify this
+    as a transient error so an all-403 day does not cache an empty/empty-body
+    frame that poisons later runs (#382/#383). Do NOT wrap the body fetch in a
+    blanket ``except Exception`` that would re-swallow it.
     """
     base_dir = row["base_dir"]
     index_html = client.get_text(f"{base_dir}/{row['accession']}-index.htm")
@@ -489,11 +504,22 @@ def fetch_daily_news(
     rows = [r for r in rows if r["cik_padded"] in cik_to_ticker]
 
     hits: list[dict] = []
+    transient_errors = 0  # 403 (traffic / UA-reject) — distinct from clean skips
+    other_errors = 0
     for row in rows:
         try:
             hit = _enrich_filing(row, client=sec)
+        except SecForbiddenError as exc:
+            # Shared-IP traffic 403 (or UA-reject) on ANY of the per-filing
+            # fetches (index.htm / primary / ex991). This is the #379 vector: an
+            # empty result here is an artifact of rate-limiting, not a quiet day.
+            # Count it so the poison guard below refuses to cache.
+            transient_errors += 1
+            logger.warning("edgar 8-K enrich 403 %s: %s", row.get("accession"), exc)
+            continue
         except Exception as exc:
-            # One bad filing must not kill the day.
+            # Genuinely bad filing (malformed, 404). One must not kill the day.
+            other_errors += 1
             logger.warning(
                 "edgar 8-K enrich failed %s: %s", row.get("accession"), exc, exc_info=True
             )
@@ -502,5 +528,23 @@ def fetch_daily_news(
             hits.append(hit)
 
     df = transform(hits, cik_to_ticker=cik_to_ticker, date=date)
+    # Cache-poison guard (#379 / #382 / #383). Skip the empty-parquet write ONLY
+    # when the frame is empty AND at least one transient (403) error occurred —
+    # that empty is an artifact of rate-limiting, and caching it would poison the
+    # 5 later same-UTC-day runs (they read the empty cache instead of retrying).
+    # A genuinely empty day (transient_errors == 0) is still cached: the daily
+    # index is immutable, so re-fetching is guaranteed-empty wasted SEC budget. A
+    # non-empty (incl. partial) frame is always cached: refusing to cache partials
+    # would re-enrich every surviving filing on all 6 daily runs, multiplying the
+    # per-IP load that causes the 403s.
+    if df.empty and transient_errors > 0:
+        logger.warning(
+            "edgar press-release: %d transient (403) error(s), %d other error(s), "
+            "0 hits for %s; skipping empty-parquet write so later runs retry",
+            transient_errors,
+            other_errors,
+            date,
+        )
+        return df
     df.to_parquet(cache_path, index=False)
     return df
