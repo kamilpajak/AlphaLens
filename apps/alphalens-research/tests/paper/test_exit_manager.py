@@ -15,7 +15,13 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-from alphalens_pipeline.paper.exit_manager import _snapshot, process_plan_exit
+from alphalens_pipeline.paper.exit_manager import (
+    _classify_exit_kind,
+    _PlanSnapshot,
+    _RowLike,
+    _snapshot,
+    process_plan_exit,
+)
 from alphalens_pipeline.paper.ledger import (
     fetch_orders_for_plan,
     insert_fill,
@@ -2316,6 +2322,163 @@ class TestHappyPathSlBeforeTp(_ExitTestBase):
             "SL must be submitted before any TP on the happy path",
         )
         self.assertEqual(o.n_filled_without_sl, 0)
+
+
+class TestClassifyExitKindQuantityWeighted(unittest.TestCase):
+    """Quantity-weighted exit-kind classification (PR-3 of the OCO-ladder track).
+
+    The classifier picks the canonical label from how the FINAL exit fills
+    split across sides. The legacy any-SL-fill rule (R2 bug) mislabeled a
+    mostly-take-profit OCO-ladder exit as SL_HIT when one minority stop slice
+    caught a dip; these tests pin the majority-of-exited-shares contract.
+    """
+
+    @staticmethod
+    def _exit(kind: str, filled: int, status: str = "FILLED") -> _RowLike:
+        return _RowLike(
+            {
+                "order_kind": kind,
+                "status": status,
+                "filled_qty_observed": filled,
+            }
+        )
+
+    @staticmethod
+    def _entry(filled: int) -> _RowLike:
+        return _RowLike(
+            {
+                "order_kind": "ENTRY",
+                "status": "FILLED",
+                "filled_qty_observed": filled,
+            }
+        )
+
+    def _snapshot(self, *, entry_qty: int, exit_orders: list[_RowLike]) -> _PlanSnapshot:
+        return _PlanSnapshot(
+            plan_id=1,
+            ticker="NVDA",
+            disaster_stop=80.0,
+            tp_tranches=(),
+            first_entry_fill_at=None,
+            entry_orders=(self._entry(entry_qty),) if entry_qty else (),
+            exit_orders=tuple(exit_orders),
+            has_outcome=False,
+            account="test",
+            platform="alpaca",
+        )
+
+    def test_given_single_full_tp_no_sl_when_classify_then_tp_hit(self):
+        # Given: legacy single TP fully filled, no SL fill.
+        snap = self._snapshot(
+            entry_qty=27,
+            exit_orders=[
+                self._exit("TP", 27, status="FILLED"),
+                self._exit("SL", 0, status="CANCELED"),
+            ],
+        )
+        # When / Then.
+        self.assertEqual(_classify_exit_kind(snap), "TP_HIT")
+
+    def test_given_single_sl_no_tp_when_classify_then_sl_hit(self):
+        # Given: legacy single SL filled, no TP fill.
+        snap = self._snapshot(
+            entry_qty=27,
+            exit_orders=[
+                self._exit("TP", 0, status="CANCELED"),
+                self._exit("SL", 27, status="FILLED"),
+            ],
+        )
+        self.assertEqual(_classify_exit_kind(snap), "SL_HIT")
+
+    def test_given_time_stop_filled_when_classify_then_time_stop_hit_even_with_tp(self):
+        # Given: a time-stop liquidation fired alongside a TP fill — precedence.
+        snap = self._snapshot(
+            entry_qty=27,
+            exit_orders=[
+                self._exit("TP", 13, status="FILLED"),
+                self._exit("TIME_STOP", 14, status="FILLED"),
+            ],
+        )
+        self.assertEqual(_classify_exit_kind(snap), "TIME_STOP_HIT")
+
+    def test_given_mostly_tp_one_small_sl_slice_when_classify_then_not_sl_hit(self):
+        # Given (THE R2 FIX): 3 TP tranches mostly filled (qty_tp=24) plus one
+        # small SL slice (qty_sl=3); qty_tp > qty_sl. The old any-SL-fill rule
+        # would have wrongly returned SL_HIT.
+        snap = self._snapshot(
+            entry_qty=30,
+            exit_orders=[
+                self._exit("TP", 9, status="FILLED"),
+                self._exit("TP", 9, status="FILLED"),
+                self._exit("TP", 6, status="PARTIALLY_FILLED"),
+                self._exit("SL", 3, status="FILLED"),
+            ],
+        )
+        kind = _classify_exit_kind(snap)
+        self.assertNotEqual(kind, "SL_HIT", "mostly-TP exit must not be labeled SL_HIT (R2 fix)")
+        self.assertEqual(kind, "PARTIAL_TP")
+
+    def test_given_mostly_stopped_both_sides_filled_when_classify_then_sl_hit(self):
+        # Given: qty_sl >= qty_tp with both > 0 (stop retired the majority).
+        snap = self._snapshot(
+            entry_qty=27,
+            exit_orders=[
+                self._exit("TP", 9, status="FILLED"),
+                self._exit("SL", 18, status="FILLED"),
+            ],
+        )
+        self.assertEqual(_classify_exit_kind(snap), "SL_HIT")
+
+    def test_given_all_tranches_took_profit_when_classify_then_tp_hit(self):
+        # Given: every TP tranche FILLED, no SL fill, qty_tp == total_entry.
+        snap = self._snapshot(
+            entry_qty=27,
+            exit_orders=[
+                self._exit("TP", 13, status="FILLED"),
+                self._exit("TP", 14, status="FILLED"),
+                self._exit("SL", 0, status="CANCELED"),
+            ],
+        )
+        self.assertEqual(_classify_exit_kind(snap), "TP_HIT")
+
+    def test_given_no_exit_fills_when_classify_then_partial_tp_catch_all(self):
+        # Given: every exit order terminal with zero observed fill.
+        snap = self._snapshot(
+            entry_qty=27,
+            exit_orders=[
+                self._exit("TP", 0, status="CANCELED"),
+                self._exit("SL", 0, status="CANCELED"),
+            ],
+        )
+        self.assertEqual(_classify_exit_kind(snap), "PARTIAL_TP")
+
+    def test_given_tie_qty_sl_equals_qty_tp_both_positive_when_classify_then_sl_hit(self):
+        # Given: qty_sl == qty_tp > 0 — a tie resolves to SL (conservative).
+        snap = self._snapshot(
+            entry_qty=24,
+            exit_orders=[
+                self._exit("TP", 12, status="FILLED"),
+                self._exit("SL", 12, status="FILLED"),
+            ],
+        )
+        self.assertEqual(_classify_exit_kind(snap), "SL_HIT")
+
+    def test_given_all_tp_filled_but_observed_underfill_when_classify_then_tp_hit(self):
+        # Isolates rule-4's SECOND disjunct: every TP order is terminal-FILLED
+        # and no SL filled, but the summed observed fills (qty_tp=24) are BELOW
+        # total_entry (27) — so the qty_tp >= total_entry disjunct does NOT
+        # apply and the all-FILLED disjunct alone must yield TP_HIT (the
+        # intended "all tranches took profit" semantics under observed
+        # under-count).
+        snap = self._snapshot(
+            entry_qty=27,
+            exit_orders=[
+                self._exit("TP", 12, status="FILLED"),
+                self._exit("TP", 12, status="FILLED"),
+                self._exit("SL", 0, status="CANCELED"),
+            ],
+        )
+        self.assertEqual(_classify_exit_kind(snap), "TP_HIT")
 
 
 if __name__ == "__main__":
