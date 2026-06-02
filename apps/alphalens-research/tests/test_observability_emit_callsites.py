@@ -689,5 +689,69 @@ class TestThematicIngestEmitsSourceRows(unittest.TestCase):
                 thematic.ingest(date="2026-05-29", cache_dir=Path(tmp))  # MUST NOT raise
 
 
+class TestBackfillRefreshesExecutionTelemetry(unittest.TestCase):
+    """v3 PR-3: the nightly ``backfill-shadow-returns`` tail re-emits the
+    execution-quality gauges via ``_refresh_execution_telemetry(ledger)``.
+
+    A future refactor that drops the tail call would silently freeze the
+    telemetry at its last value (no test failure, stale dashboard). The call
+    IS the contract. The pricing sweep is stubbed to a no-op so no Polygon /
+    network call happens — the test isolates the wiring, not the sweep.
+    """
+
+    def test_backfill_tail_refreshes_telemetry_with_ledger_path(self) -> None:
+        from types import SimpleNamespace
+
+        from alphalens_cli.commands import feedback
+        from alphalens_cli.main import app
+        from typer.testing import CliRunner
+
+        runner = CliRunner()
+        recorded: list[Path] = []
+
+        def fake_refresh(ledger: Path):
+            recorded.append(ledger)
+
+        # No matured/pending dates → the sweep does no pricing at all; the
+        # command still reaches its tail. One stub report keeps the summary
+        # echo's start/end indexing valid.
+        import datetime as dt
+
+        report = SimpleNamespace(
+            matured=False,
+            n_priced=0,
+            brief_date=dt.date(2026, 5, 20),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "feedback.db"
+            paper_ledger = Path(tmp) / "paper_ledger.db"
+            with (
+                patch.object(
+                    feedback,
+                    "_refresh_execution_telemetry",
+                    side_effect=fake_refresh,
+                ),
+                patch(
+                    "alphalens_pipeline.feedback.shadow_return.compute_shadow_returns_window",
+                    return_value=[report],
+                ),
+            ):
+                result = runner.invoke(
+                    app,
+                    [
+                        "feedback",
+                        "backfill-shadow-returns",
+                        "--ledger",
+                        str(ledger),
+                        "--paper-ledger",
+                        str(paper_ledger),
+                    ],
+                )
+
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertEqual(recorded, [ledger])
+
+
 if __name__ == "__main__":
     unittest.main()

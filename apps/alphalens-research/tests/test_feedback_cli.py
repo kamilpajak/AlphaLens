@@ -461,5 +461,77 @@ class TestFeedbackExecutionModesCommand(unittest.TestCase):
         self.assertNotIn("MARKET", result.stdout)
 
 
+class TestFeedbackTelemetryCommand(unittest.TestCase):
+    """`alphalens feedback telemetry` — read-only execution-quality gauges."""
+
+    PROM_FILE = "alphalens_domain_feedback-execution-telemetry.prom"
+
+    def setUp(self):
+        self.runner = CliRunner()
+        self._td = tempfile.TemporaryDirectory()
+        self.path = Path(self._td.name) / "feedback.db"
+        self._metrics = tempfile.TemporaryDirectory()
+        self.metrics_dir = Path(self._metrics.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+        self._metrics.cleanup()
+
+    def _seed_matured(self) -> None:
+        with FeedbackStore.open(self.path) as fb:
+            for i, regime in enumerate(("low", "high", "mid")):
+                rid, _ = fb.insert(
+                    Decision(
+                        brief_date=dt.date(2026, 5, 20),
+                        ticker=f"AAA{i}",
+                        theme="ai",
+                        surfaced_at=dt.datetime(2026, 5, 20, 6, 30, tzinfo=UTC),
+                        action="interested",
+                        action_at=dt.datetime(2026, 5, 20, 8, 0, tzinfo=UTC),
+                        market_regime_at_entry=regime,
+                    )
+                )
+                fb.stamp_outcome(
+                    rid,
+                    fill_status="FILLED" if i % 2 == 0 else "UNFILLED",
+                    exit_kind="TP_HIT",
+                    outcome_plan_id=f"p{i}",
+                    outcome_computed_at=dt.datetime(2026, 5, 27, 2, 0, tzinfo=UTC),
+                    shadow_return=0.05,
+                    realized_return=0.03 if i % 2 == 0 else None,
+                )
+
+    def test_missing_ledger_prints_friendly_message(self):
+        result = self.runner.invoke(app, ["feedback", "telemetry", "--ledger", str(self.path)])
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("no matured decisions yet", result.stdout)
+
+    def test_emits_prom_file_and_prints_table(self):
+        self._seed_matured()
+        result = self.runner.invoke(
+            app,
+            ["feedback", "telemetry", "--ledger", str(self.path)],
+            env={"ALPHALENS_TEXTFILE_DIR": str(self.metrics_dir)},
+        )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("pooled", result.stdout)
+        self.assertIn("low", result.stdout)
+        prom = self.metrics_dir / self.PROM_FILE
+        self.assertTrue(prom.exists(), list(self.metrics_dir.iterdir()))
+        text = prom.read_text()
+        self.assertIn("alphalens_feedback_execution_matured_decisions", text)
+        self.assertIn("alphalens_feedback_execution_gate_n_threshold", text)
+
+    def test_no_emit_writes_no_prom_file(self):
+        self._seed_matured()
+        result = self.runner.invoke(
+            app,
+            ["feedback", "telemetry", "--ledger", str(self.path), "--no-emit"],
+            env={"ALPHALENS_TEXTFILE_DIR": str(self.metrics_dir)},
+        )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertFalse((self.metrics_dir / self.PROM_FILE).exists())
+
+
 if __name__ == "__main__":
     unittest.main()
