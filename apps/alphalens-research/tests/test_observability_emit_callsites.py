@@ -267,6 +267,21 @@ class TestThematicBriefEmitsDomainMetrics(unittest.TestCase):
             self.assertEqual(metrics["alphalens_thematic_brief_template_id_total"], 0)
             self.assertEqual(metrics["alphalens_thematic_brief_template_id_fill_ratio"], 0.0)
 
+    def test_brief_fill_metrics_handles_pd_na_dtype_without_crashing(self) -> None:
+        # Nullable string dtype surfaces pd.NA, not None -> bool(pd.NA) would
+        # raise TypeError through .apply. The pd.isna guard must count it as
+        # unfilled, not crash (zen MEDIUM).
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        col = pd.array(["earnings_surprise", pd.NA, "m_and_a_press_release"], dtype="string")
+        enriched = pd.DataFrame({"ticker": ["A", "B", "C"], "brief_template_id": col})
+        out = thematic._brief_template_fill_metrics(enriched)
+        self.assertEqual(out["alphalens_thematic_brief_template_id_total"], 2)
+        self.assertAlmostEqual(
+            out["alphalens_thematic_brief_template_id_fill_ratio"], 0.6667, places=4
+        )
+
 
 class TestThematicStageVolumeEmits(unittest.TestCase):
     """Phase 4 dead-man-switch: each upstream stage emits an input/output

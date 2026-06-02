@@ -63,6 +63,26 @@ def _source_volume_metrics(counts: dict[str, int]) -> dict[str, int]:
     }
 
 
+def _is_filled_template_id(v: object) -> bool:
+    """True when ``v`` is a non-empty, non-sentinel brief_template_id.
+
+    Guards ``pd.isna`` BEFORE ``bool(v)``: a pandas nullable ``pd.NA`` (possible
+    if the column reads back as a pyarrow/string dtype) makes ``bool(v)`` raise
+    ``TypeError``, which would propagate through ``.apply`` and silently drop the
+    gauge for that run. Excludes None / NaN / NA and the string sentinels
+    ("", "None", "nan").
+    """
+    if v is None:
+        return False
+    try:
+        if pd.isna(v):
+            return False
+    except (TypeError, ValueError):
+        # pd.isna raises on some array-likes; a non-NA scalar falls through.
+        pass
+    return str(v) not in ("", "None", "nan")
+
+
 def _brief_template_fill_metrics(enriched: pd.DataFrame) -> dict[str, float | int]:
     """Fill-rate of `brief_template_id` across a day's briefs (#399 gate instrument).
 
@@ -81,11 +101,7 @@ def _brief_template_fill_metrics(enriched: pd.DataFrame) -> dict[str, float | in
     if total == 0 or "brief_template_id" not in enriched.columns:
         filled = 0
     else:
-        filled = int(
-            enriched["brief_template_id"]
-            .apply(lambda v: bool(v) and str(v) not in ("", "None", "nan"))
-            .sum()
-        )
+        filled = int(enriched["brief_template_id"].apply(_is_filled_template_id).sum())
     ratio = round(filled / total, 4) if total else 0.0
     return {
         "alphalens_thematic_brief_template_id_total": filled,
