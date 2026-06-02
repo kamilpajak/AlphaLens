@@ -945,12 +945,15 @@ class TestAttachExitsCrashResilience(_ExitTestBase):
                     conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
                 )
         self.assertEqual(o.action, "CONVERGE_SL")
-        # SL failed; both TPs succeeded.
-        self.assertEqual(o.n_exits_submitted, 2)
+        # SL-PRIORITY: the SL failed, so NO TP is submitted (a TP would reserve
+        # the shares and block the disaster-stop). Nothing submitted, one fail.
+        self.assertEqual(o.n_exits_submitted, 0)
         self.assertEqual(o.n_exits_failed, 1)
         kinds = [s["kind"] for s in broker.submissions]
         self.assertEqual(kinds.count("STOP"), 0)
-        self.assertEqual(kinds.count("LIMIT"), 2)
+        self.assertEqual(kinds.count("LIMIT"), 0)
+        # The dead-man signal: filled shares with no live SL.
+        self.assertEqual(o.n_filled_without_sl, 1)
 
     def test_sl_submit_real_alpaca_wash_trade_403_is_caught_and_counted(self):
         """Fidelity: model the ACTUAL production rejection (HTTP 403, code
@@ -977,13 +980,20 @@ class TestAttachExitsCrashResilience(_ExitTestBase):
                     conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
                 )
         self.assertEqual(o.action, "CONVERGE_SL")
-        # SL rejected by the wash-trade 403; counted, not raised. TPs landed.
+        # SL rejected by the wash-trade 403; counted, not raised. SL-PRIORITY:
+        # NO TP is submitted while the SL is missing (a TP limit is wash-trade-
+        # exempt and would reserve the shares, blocking the SL forever).
         self.assertEqual(o.n_exits_failed, 1)
-        self.assertEqual(o.n_exits_submitted, 2)
-        # No SL persisted -> retryable next pass once the hold clears.
+        self.assertEqual(o.n_exits_submitted, 0)
+        # No SL or TP persisted -> retryable next pass once the hold clears.
         with open_ledger(self.ledger) as conn:
-            sl_rows = [r for r in fetch_orders_for_plan(conn, plan_id) if r["order_kind"] == "SL"]
-        self.assertEqual(sl_rows, [])
+            kinds = [
+                r["order_kind"]
+                for r in fetch_orders_for_plan(conn, plan_id)
+                if r["order_kind"] in ("SL", "TP")
+            ]
+        self.assertEqual(kinds, [])
+        self.assertEqual(o.n_filled_without_sl, 1)
 
     def test_all_submits_fail_nothing_attached_retryable_next_pass(self):
         """When every exit submit fails, no exit_orders are persisted, so the
@@ -1334,15 +1344,18 @@ class TestSlConvergenceDecoupledFromSettlement(_ExitTestBase):
 
 
 class TestTpWithoutSlClosed(_ExitTestBase):
-    """HARDENING: a TP landing while the SL submit was rejected must NOT leave
-    the position permanently with a take-profit but no disaster stop. The next
-    pass re-attempts and lands the SL.
+    """SL-PRIORITY invariant: the protective disaster-stop must always win the
+    shares; the opportunistic TP is strictly secondary. When the SL submit is
+    rejected this pass, NO TP may be submitted (an accepted TP limit would
+    reserve the shares and block the SL forever). Only once the SL is live does
+    the TP ladder attach.
 
-    On the base implementation the presence of ANY exit_orders (the TP) blocks
-    the attach branch forever -> TP-without-SL indefinitely.
+    On the base implementation the SL and TP were submitted together regardless
+    of whether the SL succeeded, so a rejected SL + accepted TP left the
+    position with a take-profit and no disaster stop indefinitely.
     """
 
-    def test_sl_rejected_once_but_tp_lands_then_sl_converges_next_pass(self):
+    def test_sl_rejected_holds_back_tp_then_both_land_sl_first_next_pass(self):
         plan_id = _seed_plan(self.ledger)
         _add_entry(
             self.ledger,
@@ -1353,7 +1366,8 @@ class TestTpWithoutSlClosed(_ExitTestBase):
             filled_qty=27,
             filled_price=99.5,
         )
-        # Pass 1: SL submit fails (held_for_orders) but both TPs land.
+        # Pass 1: SL submit fails (held_for_orders). The TP ladder is HELD BACK
+        # so it cannot grab the shares while the SL is missing.
         broker = _FailingExitBroker(fail_first_n_stop=1)
         with open_ledger(self.ledger) as conn:
             with self.assertLogs("alphalens_pipeline.paper.exit_manager", level="WARNING"):
@@ -1361,30 +1375,42 @@ class TestTpWithoutSlClosed(_ExitTestBase):
                     conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
                 )
         self.assertEqual(o1.n_exits_failed, 1)
-        # TPs landed but no SL persisted yet.
+        # No TP submitted (SL-priority invariant), no SL persisted.
+        self.assertEqual(o1.n_exits_submitted, 0)
         with open_ledger(self.ledger) as conn:
             kinds = [
                 r["order_kind"]
                 for r in fetch_orders_for_plan(conn, plan_id)
                 if r["order_kind"] in ("SL", "TP")
             ]
-        self.assertEqual(kinds.count("TP"), 2)
+        self.assertEqual(kinds.count("TP"), 0)
         self.assertEqual(kinds.count("SL"), 0)
+        self.assertEqual(len([s for s in broker.submissions if s["kind"] == "LIMIT"]), 0)
+        # The dead-man signal fires: filled shares, no live SL.
+        self.assertEqual(o1.n_filled_without_sl, 1)
 
-        # Pass 2: the SL submit now succeeds — convergence lands the SL even
-        # though the TPs already exist.
+        # Pass 2: the SL submit now succeeds — convergence lands the SL FIRST,
+        # then attaches the TP ladder (both live, SL is the priority leg).
         with open_ledger(self.ledger) as conn:
             o2 = process_plan_exit(
                 conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
             )
-        self.assertEqual(o2.n_exits_submitted, 1)
+        # 1 SL + 2 TP = 3 submits this pass.
+        self.assertEqual(o2.n_exits_submitted, 3)
         with open_ledger(self.ledger) as conn:
             sl_rows = [r for r in fetch_orders_for_plan(conn, plan_id) if r["order_kind"] == "SL"]
+            tp_rows = [r for r in fetch_orders_for_plan(conn, plan_id) if r["order_kind"] == "TP"]
         self.assertEqual(len(sl_rows), 1)
         self.assertEqual(sl_rows[0]["qty"], 27)
-        # TPs were NOT re-submitted on pass 2 (only the missing SL).
-        n_tp_submits = len([s for s in broker.submissions if s["kind"] == "LIMIT"])
-        self.assertEqual(n_tp_submits, 2)
+        self.assertEqual(len(tp_rows), 2)
+        self.assertEqual(o2.n_filled_without_sl, 0)
+        # The SL was submitted BEFORE any TP on this pass (priority ordering).
+        pass2_kinds = [s["kind"] for s in broker.submissions]
+        self.assertLess(
+            pass2_kinds.index("STOP"),
+            pass2_kinds.index("LIMIT"),
+            "SL must be submitted before any TP",
+        )
 
 
 class TestGapFillSlSizing(_ExitTestBase):
@@ -1520,14 +1546,18 @@ class TestFilledWithoutSlVisibility(_ExitTestBase):
                 o = process_plan_exit(
                     conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
                 )
-        # SL rejected -> counted, did not raise.
+        # SL rejected -> counted, did not raise. SL-PRIORITY: no TP submitted.
         self.assertEqual(o.n_exits_failed, 1)
-        # No SL persisted -> retryable. A healthy broker lands it next pass.
+        self.assertEqual(o.n_exits_submitted, 0)
+        self.assertEqual(o.n_filled_without_sl, 1)
+        # Nothing persisted -> retryable. A healthy broker lands the SL FIRST
+        # then the TP ladder next pass (1 SL + 2 TP = 3 submits).
         with open_ledger(self.ledger) as conn:
             o2 = process_plan_exit(
                 conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
             )
-        self.assertEqual(o2.n_exits_submitted, 1)
+        self.assertEqual(o2.n_exits_submitted, 3)
+        self.assertEqual(o2.n_filled_without_sl, 0)
         with open_ledger(self.ledger) as conn:
             sl = [r for r in fetch_orders_for_plan(conn, plan_id) if r["order_kind"] == "SL"]
         self.assertEqual(len(sl), 1)
@@ -1869,6 +1899,282 @@ class TestRejectedTimeStopRetriesNoOscillation(_ExitTestBase):
         self.assertEqual(
             len(sl_rows), 1, "convergence armed a fresh SL past the time-stop deadline"
         )
+
+
+class _ShareReservingBroker(_StubBrokerClient):
+    """Faithful model of the two probed Alpaca paper rejections (memory
+    ``reference_alpaca_paper_order_behavior_2026_06_02``) that the old stub did
+    NOT model, so the TP-blocks-SL defect could never reproduce hermetically.
+
+      WASH-TRADE guard (always modelled): a BARE STOP sell submitted while an
+      opposite-side limit BUY is open (symbol in ``open_buy_symbols``) is
+      rejected — HTTP 403, code 40310000, "potential wash trade detected ...
+      opposite side limit order exists". A LIMIT sell is EXEMPT (it coexists
+      with the open BUY). This is the real cause of the prod SL rejection.
+      Cancelling the entry tier (``cancel_order``) clears the hold immediately
+      (probe: re-submit accepted ~0.30 s after the cancel → same-pass).
+
+      SHARE RESERVATION (opt-in via ``reserve_shares=True``): a resting
+      (non-terminal) SELL reserves the position shares, so a SECOND sell whose
+      cumulative qty would exceed the live position is rejected with
+      ``held_for_orders`` / insufficient-qty until an earlier resting sell is
+      canceled. Used to reproduce the live DLB / S state where a resting TP
+      limit holds the shares and blocks a fresh disaster-stop SL. Defaults OFF
+      so an SL + TP ladder coexist on the happy path (matches the bare-order
+      harness, where the protective SL and the TP ladder both rest live).
+
+    ``position_qty_for`` (inherited) bounds the reservable shares.
+    """
+
+    def __init__(self, *, reserve_shares: bool = False) -> None:
+        super().__init__()
+        # Symbols with an open opposite-side limit BUY (unfilled entry tier).
+        # While present, a bare STOP sell on that symbol is wash-trade-rejected.
+        self.open_buy_symbols: set[str] = set()
+        self._reserve_shares = reserve_shares
+        # alpaca_order_id -> (symbol, qty) for every resting (non-terminal)
+        # SELL order this stub accepted. Cleared on cancel_order.
+        self._resting_sells: dict[str, tuple[str, int]] = {}
+
+    def _reserved_qty(self, symbol: str) -> int:
+        return sum(q for (s, q) in self._resting_sells.values() if s == symbol)
+
+    def _check_and_reserve(self, *, symbol: str, qty: int, is_stop: bool) -> None:
+        """Raise the faithful Alpaca rejection if this sell cannot rest."""
+        if is_stop and symbol in self.open_buy_symbols:
+            raise RuntimeError(
+                '403 Client Error: {"code":40310000,"message":'
+                '"potential wash trade detected. opposite side limit order '
+                'exists. use complex orders"}'
+            )
+        if self._reserve_shares:
+            position = self.position_qty_for.get(symbol, 27)
+            if self._reserved_qty(symbol) + qty > position:
+                raise RuntimeError(
+                    "stub APIError: held_for_orders insufficient qty available "
+                    f"for {symbol} (code 40310000)"
+                )
+
+    def submit_stop_order(self, **kwargs):
+        symbol = kwargs["symbol"]
+        qty = int(kwargs["qty"])
+        self._check_and_reserve(symbol=symbol, qty=qty, is_stop=True)
+        order = super().submit_stop_order(**kwargs)
+        self._resting_sells[order.id] = (symbol, qty)
+        return order
+
+    def submit_limit_order(self, **kwargs):
+        symbol = kwargs["symbol"]
+        qty = int(kwargs["qty"])
+        # The exit manager only ever submits SELL limits (TP); a limit sell is
+        # exempt from the wash-trade rule but still reserves shares (rule 2).
+        self._check_and_reserve(symbol=symbol, qty=qty, is_stop=False)
+        order = super().submit_limit_order(**kwargs)
+        self._resting_sells[order.id] = (symbol, qty)
+        return order
+
+    def cancel_order(self, alpaca_order_id: str) -> None:
+        super().cancel_order(alpaca_order_id)
+        # Cancelling a resting sell frees its reserved shares immediately
+        # (faithful: the broker releases the hold on cancel-ack).
+        self._resting_sells.pop(alpaca_order_id, None)
+
+
+class TestTpBlocksSlReproduction(_ExitTestBase):
+    """SL-PRIORITY reproduction of the LIVE defect (DLB / S had a TP and 0 SL,
+    never self-healing). With faithful share reservation: a position whose
+    entry tiers are still open has its bare STOP SL wash-trade-rejected, while
+    a TP limit is exempt and would reserve the shares — permanently blocking
+    the SL.
+
+    RED on base: the TP lands, reserves the shares, and the SL is blocked
+    forever. GREEN after: NO TP is left live without an SL.
+    """
+
+    def _seed_open_entry_with_fill(self) -> tuple[int, str]:
+        """A plan with a FILLED tier 0 + a still-open tier 1 (opposite-side
+        limit BUY) so the bare STOP SL is wash-trade-rejected."""
+        plan_id = _seed_plan(self.ledger)
+        _add_entry_tier(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e0",
+            tier_index=0,
+            qty=14,
+            limit=100.0,
+            status="FILLED",
+            filled_qty=14,
+            filled_price=99.5,
+        )
+        _add_entry_tier(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            tier_index=1,
+            qty=13,
+            limit=95.0,
+            status="SUBMITTED",
+        )
+        return plan_id, "e1"
+
+    def test_open_entry_blocks_sl_but_no_tp_left_without_sl(self):
+        plan_id, _open_id = self._seed_open_entry_with_fill()
+        broker = _ShareReservingBroker()
+        broker.position_qty_for["NVDA"] = 14
+        # The cancel for the open entry tier does NOT ack this pass (broker
+        # never transitions it), so the opposite-side hold persists and the
+        # bare STOP SL is wash-trade-rejected on this pass.
+        broker.open_buy_symbols.add("NVDA")
+
+        with open_ledger(self.ledger) as conn:
+            with self.assertLogs("alphalens_pipeline.paper.exit_manager", level="WARNING"):
+                o1 = process_plan_exit(
+                    conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
+                )
+
+        # The SL was rejected (wash trade) and NO TP was submitted to grab the
+        # shares while the SL is missing — the invariant.
+        self.assertEqual(o1.n_exits_failed, 1)
+        self.assertEqual(o1.n_exits_submitted, 0)
+        with open_ledger(self.ledger) as conn:
+            rows = [
+                r["order_kind"]
+                for r in fetch_orders_for_plan(conn, plan_id)
+                if r["order_kind"] in ("SL", "TP")
+            ]
+        self.assertEqual(rows.count("TP"), 0, "a TP was left live without an SL")
+        self.assertEqual(rows.count("SL"), 0)
+        self.assertEqual(o1.n_filled_without_sl, 1)
+
+        # Next pass: the cancel has now freed the opposite-side hold (entry
+        # tier acked CANCELED + the wash-trade condition cleared). The SL lands
+        # FIRST, then the TP ladder attaches.
+        with open_ledger(self.ledger) as conn:
+            for r in fetch_orders_for_plan(conn, plan_id):
+                if r["order_kind"] == "ENTRY" and r["status"] == "SUBMITTED":
+                    update_order_status(conn, order_id=int(r["order_id"]), status="CANCELED")
+        broker.open_buy_symbols.discard("NVDA")
+
+        with open_ledger(self.ledger) as conn:
+            o2 = process_plan_exit(
+                conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
+            )
+        with open_ledger(self.ledger) as conn:
+            sl_rows = [r for r in fetch_orders_for_plan(conn, plan_id) if r["order_kind"] == "SL"]
+            tp_rows = [r for r in fetch_orders_for_plan(conn, plan_id) if r["order_kind"] == "TP"]
+        self.assertEqual(len(sl_rows), 1)
+        self.assertEqual(sl_rows[0]["qty"], 14)
+        self.assertGreaterEqual(len(tp_rows), 1)
+        self.assertEqual(o2.n_filled_without_sl, 0)
+
+
+class TestTpYieldsToSl(_ExitTestBase):
+    """SL-PRIORITY: a position that already has a LIVE TP but NO SL (the live
+    DLB / S state) must converge by CANCELLING the TP so the protective SL can
+    land. End state: a live SL, and the invariant (no TP-without-SL) restored.
+
+    With faithful share reservation the resting TP holds all the shares, so the
+    SL is rejected with held_for_orders until the TP is canceled first.
+    """
+
+    def _seed_filled_with_live_tp_no_sl(self) -> int:
+        """Seed a plan with 27 filled shares and NO SL. The caller seeds the
+        live TP limits inline (the broken live DLB/S state: a resting TP holds
+        the position while no SL covers it)."""
+        plan_id = _seed_plan(self.ledger)
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=27,
+            status="FILLED",
+            filled_qty=27,
+            filled_price=100.0,
+        )
+        return plan_id
+
+    def test_live_tp_without_sl_is_canceled_so_sl_can_land(self):
+        plan_id = self._seed_filled_with_live_tp_no_sl()
+        broker = _ShareReservingBroker(reserve_shares=True)
+        broker.position_qty_for["NVDA"] = 27
+        # Pre-seed two LIVE TP limits at the broker AND in the ledger (the
+        # broken live state: a TP holds all 27 shares, no SL).
+        ts = dt.datetime.now(dt.UTC)
+        with open_ledger(self.ledger) as conn:
+            for idx, (q, px) in enumerate([(13, 110.0), (14, 130.0)]):
+                tp = broker.submit_limit_order(
+                    symbol="NVDA", qty=q, limit_price=px, side="sell", time_in_force="gtc"
+                )
+                insert_order(
+                    conn,
+                    plan_id=plan_id,
+                    alpaca_order_id=str(tp.id),
+                    side="SELL",
+                    order_kind="TP",
+                    tranche_index=idx,
+                    order_type="LIMIT",
+                    qty=q,
+                    limit_price=px,
+                    time_in_force="gtc",
+                    submitted_at=ts,
+                    status="SUBMITTED",
+                )
+        # Sanity: all 27 shares are reserved by the resting TPs, so a fresh SL
+        # would be rejected without cancelling them first.
+        self.assertEqual(broker._reserved_qty("NVDA"), 27)
+
+        # Pass 1: convergence must cancel the live TP(s) so the SL can land.
+        with open_ledger(self.ledger) as conn:
+            o1 = process_plan_exit(
+                conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
+            )
+        self.assertEqual(o1.action, "CONVERGE_SL")
+        # The two live TPs were requested for cancel (yielding the shares).
+        self.assertEqual(len(broker.canceled), 2)
+        # Cancelling the TPs freed the shares, so the SL landed THIS pass.
+        with open_ledger(self.ledger) as conn:
+            sl_rows = [r for r in fetch_orders_for_plan(conn, plan_id) if r["order_kind"] == "SL"]
+        self.assertEqual(len(sl_rows), 1)
+        self.assertEqual(sl_rows[0]["qty"], 27)
+        self.assertEqual(o1.n_filled_without_sl, 0)
+
+
+class TestHappyPathSlBeforeTp(_ExitTestBase):
+    """SL-PRIORITY happy path: with freed shares (fully-filled ladder, no
+    opposite-side hold), the SL lands FIRST and the TP ladder attaches after,
+    both live, in that order."""
+
+    def test_freed_shares_sl_lands_first_then_tp(self):
+        plan_id = _seed_plan(self.ledger)
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=27,
+            status="FILLED",
+            filled_qty=27,
+            filled_price=99.5,
+        )
+        broker = _ShareReservingBroker()
+        broker.position_qty_for["NVDA"] = 27
+        # No open opposite-side BUY — shares are freed.
+
+        with open_ledger(self.ledger) as conn:
+            o = process_plan_exit(
+                conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
+            )
+        self.assertEqual(o.action, "CONVERGE_SL")
+        self.assertEqual(o.n_exits_submitted, 3)  # 1 SL + 2 TP
+        kinds = [s["kind"] for s in broker.submissions]
+        self.assertEqual(kinds.count("STOP"), 1)
+        self.assertEqual(kinds.count("LIMIT"), 2)
+        # SL submitted before any TP.
+        self.assertLess(
+            kinds.index("STOP"),
+            kinds.index("LIMIT"),
+            "SL must be submitted before any TP on the happy path",
+        )
+        self.assertEqual(o.n_filled_without_sl, 0)
 
 
 if __name__ == "__main__":
