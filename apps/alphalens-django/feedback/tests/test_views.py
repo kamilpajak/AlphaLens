@@ -7,6 +7,8 @@ Each test overrides ``ALPHALENS_FEEDBACK_DB`` to a tmp path so the real
 
 from __future__ import annotations
 
+import datetime as dt
+import json
 from pathlib import Path
 
 import pytest
@@ -58,6 +60,7 @@ def _post_dismissed_wrong_theme(client: APIClient, **overrides):
     return client.post("/v1/feedback/decisions", body, format="json")
 
 
+@pytest.mark.django_db
 class TestPostDecision:
     """POST /v1/feedback/decisions — create + upsert + validation."""
 
@@ -156,6 +159,7 @@ class TestPostDecision:
         assert rows["data"][0]["action"] == "dismissed"
 
 
+@pytest.mark.django_db
 class TestGetDecisions:
     """GET /v1/feedback/decisions — list by brief_date."""
 
@@ -181,6 +185,7 @@ class TestGetDecisions:
         assert resp.status_code == 400
 
 
+@pytest.mark.django_db
 class TestDeleteDecision:
     """DELETE /v1/feedback/decisions/<id> — idempotent undo."""
 
@@ -197,6 +202,7 @@ class TestDeleteDecision:
         assert resp.status_code == 204
 
 
+@pytest.mark.django_db
 class TestOutcomeFields:
     """v2 outcome-join read-only fields on the decision envelope."""
 
@@ -253,6 +259,7 @@ class TestOutcomeFields:
         assert wire_keys == schema_keys
 
 
+@pytest.mark.django_db
 class TestPostDecisionWithVixCache:
     """v2 PR-2: market_regime_at_entry is stamped from the server-side VIX cache.
 
@@ -299,6 +306,96 @@ class TestPostDecisionWithVixCache:
         # Never 500 — the decision still persists, regime degrades to unknown.
         assert resp.status_code == 201
         assert resp.json()["market_regime_at_entry"] == "unknown"
+
+
+@pytest.mark.django_db
+class TestPostDecisionStampsBriefMetadata:
+    """v3 Variant A: POST stamps click-time brief-metadata from the Brief.
+
+    The five fields (layer4_score / rank_in_day / cohort_size_in_day /
+    gate_verdict_json / brief_model_used) are handler-set server-side by
+    looking up the Brief for (brief_date, ticker) — same trust model as
+    market_regime_at_entry. They are NEVER client-writable.
+    """
+
+    _BRIEF_KEYS = {
+        "layer4_score",
+        "rank_in_day",
+        "cohort_size_in_day",
+        "gate_verdict_json",
+        "brief_model_used",
+    }
+
+    def _make_brief(self, **overrides):
+        from briefs.models import Brief
+
+        fields = {
+            "date": dt.date(2026, 5, 28),
+            "ticker": "NVDA",
+            "theme": "ai_infrastructure",
+            "company_name": "NVIDIA Corp",
+            "layer4_weighted_score": 14,
+            "rank_in_day": 2,
+            "cohort_size_in_day": 9,
+            "gates_passed": ["pe", "fcff"],
+            "gates_failed": ["liquidity"],
+            "gates_unknown": ["insider"],
+            "brief_model_used": "deepseek/deepseek-v4-pro",
+        }
+        fields.update(overrides)
+        return Brief.objects.create(**fields)
+
+    def test_post_with_matching_brief_stamps_fields(self, client, feedback_db):
+        self._make_brief()
+        resp = _post_interested(client)
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["layer4_score"] == 14
+        assert body["rank_in_day"] == 2
+        assert body["cohort_size_in_day"] == 9
+        assert body["brief_model_used"] == "deepseek/deepseek-v4-pro"
+        verdict = json.loads(body["gate_verdict_json"])
+        assert verdict == {
+            "passed": ["pe", "fcff"],
+            "failed": ["liquidity"],
+            "unknown": ["insider"],
+        }
+
+    def test_post_without_matching_brief_leaves_fields_null(self, client, feedback_db):
+        # No Brief row for (2026-05-28, NVDA) -> 201, all 5 fields null, no 500.
+        resp = _post_interested(client)
+        assert resp.status_code == 201
+        body = resp.json()
+        for key in self._BRIEF_KEYS:
+            assert key in body, f"missing brief-metadata key {key}"
+            assert body[key] is None
+
+    def test_post_ignores_client_supplied_brief_fields(self, client, feedback_db):
+        # The five fields are handler-set; a client trying to inject them is
+        # ignored — the request serializer has no such fields, and the handler
+        # derives them solely from the Brief (here: no Brief -> all None).
+        resp = _post_interested(
+            client,
+            layer4_score=999,
+            rank_in_day=1,
+            cohort_size_in_day=100,
+            gate_verdict_json='{"passed": ["hack"]}',
+            brief_model_used="attacker/model",
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        for key in self._BRIEF_KEYS:
+            assert body[key] is None
+
+    def test_post_with_brief_overrides_client_supplied_fields(self, client, feedback_db):
+        # Even when a Brief exists, the client values are ignored and the
+        # Brief-derived values win.
+        self._make_brief(layer4_weighted_score=7)
+        resp = _post_interested(client, layer4_score=999, brief_model_used="attacker/model")
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["layer4_score"] == 7
+        assert body["brief_model_used"] == "deepseek/deepseek-v4-pro"
 
 
 class TestTaxonomyEndpoint:

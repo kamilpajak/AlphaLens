@@ -61,6 +61,14 @@ class DecisionResponseSerializer(serializers.Serializer):
     position_size_usd = serializers.FloatField(allow_null=True)
     entry_price = serializers.FloatField(allow_null=True)
     market_regime_at_entry = serializers.CharField(allow_null=True)
+    # v3 click-time brief-metadata — read-only, handler-set from the Brief on
+    # POST (never present on DecisionRequestSerializer: they are server-stamped,
+    # never client-writable). NULL when the Brief is older/uncached.
+    layer4_score = serializers.IntegerField(required=False, allow_null=True)
+    rank_in_day = serializers.IntegerField(required=False, allow_null=True)
+    cohort_size_in_day = serializers.IntegerField(required=False, allow_null=True)
+    gate_verdict_json = serializers.CharField(required=False, allow_null=True)
+    brief_model_used = serializers.CharField(required=False, allow_null=True)
     # v2 outcome-join fields — read-only, NULL until the join job stamps
     # them. NOT present on DecisionRequestSerializer: they are job-set, never
     # user-writable.

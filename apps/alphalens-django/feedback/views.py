@@ -24,8 +24,10 @@ on a regime stamp. The cache is refreshed out-of-band by
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 
+from briefs.models import Brief
 from django.conf import settings
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status
@@ -79,6 +81,14 @@ def _serialise_decision(d: Decision) -> dict:
         "position_size_usd": d.position_size_usd,
         "entry_price": d.entry_price,
         "market_regime_at_entry": d.market_regime_at_entry,
+        # v3 click-time brief-metadata (read-only; handler-set from the Brief
+        # for that (brief_date, ticker), never user-supplied). NULL when the
+        # Brief is older/uncached so the lookup misses.
+        "layer4_score": d.layer4_score,
+        "rank_in_day": d.rank_in_day,
+        "cohort_size_in_day": d.cohort_size_in_day,
+        "gate_verdict_json": d.gate_verdict_json,
+        "brief_model_used": d.brief_model_used,
         # v2 outcome-join (read-only; job-set by `alphalens feedback
         # join-outcomes`, never user-writable). NULL until the join runs.
         "outcome_plan_id": d.outcome_plan_id,
@@ -112,6 +122,31 @@ class DecisionsView(APIView):
         # a dead refresher or a network blip never blocks a user decision.
         regime_label = regime.classify_vix(regime.get_cached_vix(settings.ALPHALENS_VIX_CACHE))
 
+        # v3 click-time brief-metadata: stamp the model's score / rank / cohort
+        # / gate verdict / generator model from the Brief for this
+        # (brief_date, ticker), SERVER-SIDE. These are handler-set on the same
+        # trust model as ``market_regime_at_entry`` — never client-supplied.
+        # A miss (older / uncached brief) leaves all five None and never 500s.
+        brief = Brief.objects.filter(date=data["brief_date"], ticker=data["ticker"].upper()).first()
+        if brief is not None:
+            layer4_score = brief.layer4_weighted_score
+            rank_in_day = brief.rank_in_day
+            cohort_size_in_day = brief.cohort_size_in_day
+            brief_model_used = brief.brief_model_used
+            gate_verdict_json = json.dumps(
+                {
+                    "passed": brief.gates_passed,
+                    "failed": brief.gates_failed,
+                    "unknown": brief.gates_unknown,
+                }
+            )
+        else:
+            layer4_score = None
+            rank_in_day = None
+            cohort_size_in_day = None
+            brief_model_used = None
+            gate_verdict_json = None
+
         try:
             decision = Decision(
                 brief_date=data["brief_date"],
@@ -128,6 +163,11 @@ class DecisionsView(APIView):
                 position_size_usd=data.get("position_size_usd"),
                 entry_price=data.get("entry_price"),
                 market_regime_at_entry=regime_label,
+                layer4_score=layer4_score,
+                rank_in_day=rank_in_day,
+                cohort_size_in_day=cohort_size_in_day,
+                gate_verdict_json=gate_verdict_json,
+                brief_model_used=brief_model_used,
             )
         except DecisionValidationError as exc:
             raise ValidationError({"detail": str(exc)}) from exc

@@ -7,6 +7,70 @@ and factor-zoo overfitting literature, mapped onto the AlphaLens thematic ledger
 
 Companion: `alphalens_ideal_shape_2026_05_29.md` §4/§8 Track A; epic #301; issue #165.
 
+## RESOLVED 2026-06-02 — premise correction + Variant A (conditional-support OPE)
+
+**Premise correction.** The original draft below assumed the scorer ranks a large
+universe and takes the top-N, so it proposed ε-exploration over a "low-ranked tail"
+sampled with "small π". That framing is **wrong**. The pipeline is a
+**generate-and-verify funnel**, not a rank-and-take-top-N. For each theme the LLM
+proposes 5-15 candidate beneficiaries → an mcap-bracket filter drops out-of-range names
+→ three independent verification gates run (`tenk` / `press` / `insider`; the
+designed ETF/NPORT gate is **not wired**) → a per-theme diversity cap
+(`_MAX_CANDIDATES_PER_THEME = 3`) trims the survivors → the rest are surfaced. A name
+that never surfaced was therefore either **never proposed by the LLM** (its selection
+probability is structurally **exactly 0** — a hard positivity violation, NOT a small-π
+tail) or it **hard-failed a gate**. There is no low-ranked tail with tiny-but-positive π
+to sample from.
+
+**Resolution = Variant A (conditional-support OPE).** Two independent expert tracks
+converged on this — a Perplexity literature pass (cascade / examination-click-ratio
+models; Sachdeva's "restrict the policy space" result) and a zen `deepseek-v4-pro`
+review. The never-proposed region is **structurally decision-irrelevant** to any
+gate-weight estimand: re-weighting the gates only ever changes decisions *within* the
+proposed-and-gated set, so restricting the estimand to the LLM-proposal support is the
+**correct** estimand, not a compromise. Variant B — building a real cross-sectional
+universe score and asking "should the generator have proposed differently" — is a
+separate proposal-stage track and is **out of scope** here.
+
+**Estimand.** `V(π_w) = E[outcome | LLM-proposed AND in mcap-bracket AND reached verify,
+under gate/score weighting π_w]`. Conditioning on "LLM-proposed" is a **pre-treatment
+inclusion criterion** (it cancels in any policy-vs-policy contrast), not a collider — so
+the conditioning introduces no selection bias into a policy comparison.
+
+**ε-injection point.** The per-theme diversity cap in `orchestrator.py` (~lines 367-369).
+Lift the *verify* cap so rank-4+ in-bracket names also get gate-checked, producing a pool
+of **verified-but-cap-excluded** names. An ε-sampler must then **own the
+surface-vs-cap decision** and **log a selection propensity π for every verified name**,
+**replacing** the current deterministic confidence-descending + ticker tie-break (ticker
+correlates with sector / exchange, which correlate with outcome — so keeping a
+ticker-ordered deterministic cut leaves an unlogged, non-ignorable selection step).
+ε = 0.10, stratified by theme × score-tier; cap ≤ 2 per theme, ≤ 5 extra names surfaced
+per day.
+
+**Estimator.** Doubly-robust / IPW over the **conditional support** — NOT raw IPS. The
+1-5 integer score is coarse and tie-heavy, which gives high IPS variance; the continuous
+tiebreak fields (`catalyst_strength`, `insider_score_usd`) give a near-continuous
+within-theme propensity that the DR / IPW estimator can use.
+
+**Claim boundary.**
+- **Allowed:** "among names the LLM proposed and that reached the gates, changing the gate
+  weighting from g to g′ shifts `E[return]` by θ̂ (CI …), **conditional on the
+  LLM-proposed pool**."
+- **Forbidden:** "we should have surfaced [some never-proposed name]"; any full-universe
+  claim; any hidden point estimate over not-yet-explored cells. For unexplored cells,
+  report **coverage %** plus **partial-identification bounds**, never a point estimate.
+
+**Honest limits.** This design **cannot** evaluate the generator / proposal step at all;
+a positivity hole remains until the ε-arm accrues data; model autophagy is therefore only
+**partially** broken until that ε-arm has enough observations.
+
+**Roadmap impact.** The design spike is done — PR2 / PR4 / PR6 / PR7 are unblocked and
+**no PR is killed**. PR1b must persist gate verdicts and score components for **all
+verified candidates**, not just the surfaced ones, so the cap-excluded pool is
+recoverable for OPE.
+
+---
+
 ## 1. The hazard this design exists to prevent
 
 The thematic scorer is **deterministic** and surfaces only its top-N (~5-15/day). The
