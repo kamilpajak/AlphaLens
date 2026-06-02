@@ -196,7 +196,13 @@ class TestThematicBriefEmitsDomainMetrics(unittest.TestCase):
         import pandas as pd
         from alphalens_cli.commands import thematic
 
-        enriched = pd.DataFrame({"ticker": ["A", "B", "C"]})
+        # 2 of 3 briefs carry a template_id (#399 fill-rate gate instrument).
+        enriched = pd.DataFrame(
+            {
+                "ticker": ["A", "B", "C"],
+                "brief_template_id": ["earnings_surprise", None, "m_and_a_press_release"],
+            }
+        )
         enriched.attrs["n_pro"] = 1
         enriched.attrs["n_flash"] = 2
 
@@ -230,6 +236,51 @@ class TestThematicBriefEmitsDomainMetrics(unittest.TestCase):
             # Phase 4 uniform stage gauges (brief is stage 5).
             self.assertEqual(metrics['alphalens_thematic_stage_output_rows{stage="brief"}'], 3)
             self.assertEqual(metrics['alphalens_thematic_stage_input_rows{stage="brief"}'], 5)
+            # #399 gate instrument: 2 of 3 briefs carry a template_id -> 0.6667.
+            self.assertEqual(metrics["alphalens_thematic_brief_template_id_total"], 2)
+            self.assertAlmostEqual(
+                metrics["alphalens_thematic_brief_template_id_fill_ratio"], 0.6667, places=4
+            )
+
+    def test_brief_fill_ratio_zero_when_no_template_ids(self) -> None:
+        # No brief carries a template_id (the current prod baseline before the
+        # subject-match minority lands) -> ratio 0.0, no div-by-zero on counts.
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        enriched = pd.DataFrame({"ticker": ["A", "B"], "brief_template_id": [None, ""]})
+        enriched.attrs["n_pro"] = 0
+        enriched.attrs["n_flash"] = 2
+        with tempfile.TemporaryDirectory() as tmp:
+            scored_dir = Path(tmp) / "scored"
+            scored_dir.mkdir()
+            (scored_dir / "2026-05-29.parquet").touch()
+            output_dir = Path(tmp) / "briefs"
+            output_dir.mkdir()
+            with (
+                patch.object(thematic.pd, "read_parquet", return_value=pd.DataFrame({"x": [1, 2]})),
+                patch.object(thematic.brief_orchestrator, "generate_briefs", return_value=enriched),
+                patch.object(thematic, "emit_domain_metrics") as emit,
+            ):
+                thematic.brief(date="2026-05-29", scored_dir=scored_dir, output_dir=output_dir)
+            metrics = emit.call_args.kwargs["metrics"]
+            self.assertEqual(metrics["alphalens_thematic_brief_template_id_total"], 0)
+            self.assertEqual(metrics["alphalens_thematic_brief_template_id_fill_ratio"], 0.0)
+
+    def test_brief_fill_metrics_handles_pd_na_dtype_without_crashing(self) -> None:
+        # Nullable string dtype surfaces pd.NA, not None -> bool(pd.NA) would
+        # raise TypeError through .apply. The pd.isna guard must count it as
+        # unfilled, not crash (zen MEDIUM).
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        col = pd.array(["earnings_surprise", pd.NA, "m_and_a_press_release"], dtype="string")
+        enriched = pd.DataFrame({"ticker": ["A", "B", "C"], "brief_template_id": col})
+        out = thematic._brief_template_fill_metrics(enriched)
+        self.assertEqual(out["alphalens_thematic_brief_template_id_total"], 2)
+        self.assertAlmostEqual(
+            out["alphalens_thematic_brief_template_id_fill_ratio"], 0.6667, places=4
+        )
 
 
 class TestThematicStageVolumeEmits(unittest.TestCase):
