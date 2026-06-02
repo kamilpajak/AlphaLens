@@ -24,6 +24,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 from alphalens_pipeline.data.alt_data.sec_edgar_client import SecForbiddenError
 from alphalens_pipeline.thematic.sources import edgar_press_release as epr
 from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS
@@ -148,6 +149,49 @@ SAMPLE_EX991 = (
     "<p>Apple Reports Record Q2 Revenue</p>"
     "<p>CUPERTINO, Calif. -- Apple today announced financial results ...</p>"
 )
+
+# --- acceptance-datetime fixtures (issue #391) ------------------------------
+# Real captured header (AAPL Q2 8-K, acc 0000320193-26-000011, fetched
+# 2026-06-02). "Accepted" is ET (EDT here, UTC-4), YYYY-MM-DD HH:MM:SS, no tz
+# suffix; whitespace+newline between the label and value as on the live page.
+# 16:30:41 EDT -> 20:30:41 UTC.
+SAMPLE_INDEX_HEADER_ACCEPTED = """<div class="formGrouping">
+         <div class="infoHead">Filing Date</div>
+         <div class="info">2026-04-30</div>
+         <div class="infoHead">Accepted</div>
+         <div class="info">2026-04-30 16:30:41</div>
+         <div class="infoHead">Documents</div>
+         <div class="info">2</div>
+      </div>
+"""
+
+# Winter (EST, UTC-5): 09:05:00 EST on 2026-01-15 -> 14:05:00 UTC. Paired with
+# the summer case to prove the offset is NOT hard-coded.
+SAMPLE_INDEX_HEADER_ACCEPTED_WINTER = """<div class="formGrouping">
+         <div class="infoHead">Accepted</div>
+         <div class="info">2026-01-15 09:05:00</div>
+      </div>
+"""
+
+# Summer after-close (EDT, UTC-4): 16:05:00 EDT on 2026-07-31 -> 20:05:00 UTC.
+# The #391 failure mode: an intraday instant that must compete in recency, not
+# a 00:00 sink.
+SAMPLE_INDEX_HEADER_ACCEPTED_SUMMER = """<div class="formGrouping">
+         <div class="infoHead">Accepted</div>
+         <div class="info">2026-07-31 16:05:00</div>
+      </div>
+"""
+
+# Header with NO "Accepted" cell -> exercises the date-only fallback.
+SAMPLE_INDEX_HEADER_NO_ACCEPTED = """<div class="formGrouping">
+         <div class="infoHead">Filing Date</div>
+         <div class="info">2026-05-30</div>
+      </div>
+"""
+
+# Full index.htm = header (with Accepted) + the existing Document Format Files
+# table, for the end-to-end enrich test.
+SAMPLE_INDEX_991_WITH_ACCEPTED = SAMPLE_INDEX_HEADER_ACCEPTED + SAMPLE_INDEX_991
 
 
 def _route_get_text(url: str) -> str:
@@ -738,6 +782,321 @@ class TestFetchDailyNews(unittest.TestCase):
                 )
             self.assertGreaterEqual(len(df), 1)
             self.assertTrue((Path(tmpdir) / "2026-05-30.parquet").exists())
+
+
+class TestParseAcceptedUtc(unittest.TestCase):
+    """The 'Accepted' ET-datetime parser (index.htm header -> UTC Timestamp).
+
+    Regression for #391: EX-99.1 rows must carry the real SEC acceptance instant,
+    not the date-only filing date (00:00 UTC) that sinks them to the bottom of
+    the news_ingest recency cap.
+    """
+
+    def test_edt_summer_offset_is_utc_minus_4(self):
+        # 16:30:41 EDT on 2026-04-30 -> 20:30:41 UTC (DST active, UTC-4).
+        ts = epr.parse_accepted_utc(SAMPLE_INDEX_HEADER_ACCEPTED)
+        self.assertEqual(ts, pd.Timestamp("2026-04-30 20:30:41", tz="UTC"))
+        self.assertNotEqual(ts, pd.Timestamp("2026-04-30", tz="UTC"))
+
+    def test_est_winter_offset_is_utc_minus_5(self):
+        # 09:05:00 EST on 2026-01-15 -> 14:05:00 UTC (DST inactive, UTC-5).
+        ts = epr.parse_accepted_utc(SAMPLE_INDEX_HEADER_ACCEPTED_WINTER)
+        self.assertEqual(ts, pd.Timestamp("2026-01-15 14:05:00", tz="UTC"))
+
+    def test_dst_pair_offsets_differ_by_one_hour(self):
+        # Same 09:05:00 wall-clock maps to a UTC hour one apart across the DST
+        # boundary (EDT UTC-4 vs EST UTC-5); a hard-coded fixed offset would make
+        # them identical. Compare the UTC hour-of-day, not the full timestamp
+        # (the two are on different calendar dates, so a full-timestamp delta
+        # would fold in the months between them).
+        summer = epr.parse_accepted_utc(
+            '<div class="infoHead">Accepted</div><div class="info">2026-07-15 09:05:00</div>'
+        )
+        winter = epr.parse_accepted_utc(SAMPLE_INDEX_HEADER_ACCEPTED_WINTER)
+        self.assertEqual(summer.hour, 13)  # 09:05 EDT -> 13:05 UTC
+        self.assertEqual(winter.hour, 14)  # 09:05 EST -> 14:05 UTC
+
+    def test_after_close_earnings_instant(self):
+        # The #391 payoff: 16:05 ET earnings -> 20:05 UTC, an intraday instant
+        # that competes in recency, NOT a 00:00 sink.
+        ts = epr.parse_accepted_utc(SAMPLE_INDEX_HEADER_ACCEPTED_SUMMER)
+        self.assertEqual(ts, pd.Timestamp("2026-07-31 20:05:00", tz="UTC"))
+
+    def test_no_accepted_cell_returns_none(self):
+        self.assertIsNone(epr.parse_accepted_utc(SAMPLE_INDEX_HEADER_NO_ACCEPTED))
+
+    def test_table_only_index_returns_none(self):
+        # The bare Document Format Files table (no header block) -> fallback.
+        self.assertIsNone(epr.parse_accepted_utc(SAMPLE_INDEX_991))
+
+    def test_empty_html_returns_none(self):
+        self.assertIsNone(epr.parse_accepted_utc(""))
+
+    def test_malformed_accepted_value_returns_none(self):
+        # Anchor + digit-shaped value but not a real datetime -> None, not crash.
+        html = '<div class="infoHead">Accepted</div><div class="info">2026-13-99 99:99:99</div>'
+        self.assertIsNone(epr.parse_accepted_utc(html))
+
+    def test_date_only_value_not_matched(self):
+        # No HH:MM:SS -> regex miss -> None (guards a future header drift from
+        # silently producing a wrong-precision value).
+        html = '<div class="infoHead">Accepted</div><div class="info">2026-04-30</div>'
+        self.assertIsNone(epr.parse_accepted_utc(html))
+
+    def test_whitespace_tolerance(self):
+        # Newline + indent between label and value (the live HTML shape) parses.
+        ts = epr.parse_accepted_utc(SAMPLE_INDEX_HEADER_ACCEPTED)
+        self.assertIsNotNone(ts)
+
+    def test_value_is_tz_aware_utc(self):
+        ts = epr.parse_accepted_utc(SAMPLE_INDEX_HEADER_ACCEPTED)
+        self.assertIsNotNone(ts.tzinfo)
+        self.assertEqual(str(ts.tz), "UTC")
+
+    def test_tolerates_extra_attributes_on_info_div(self):
+        # SEC markup drift: an added attribute on the value cell must NOT break
+        # the parse (the regex tolerates extra attrs around class="info").
+        html = (
+            '<div class="infoHead">Accepted</div>'
+            '<div class="info" id="accepted-cell">2026-04-30 16:30:41</div>'
+        )
+        self.assertEqual(
+            epr.parse_accepted_utc(html), pd.Timestamp("2026-04-30 20:30:41", tz="UTC")
+        )
+
+    def test_bare_accepted_without_infohead_label_not_matched(self):
+        # A stray "Accepted</div>" NOT in an infoHead cell must not false-match
+        # (the regex is scoped to the header label).
+        html = '<td>Accepted</div><div class="info">2026-04-30 16:30:41</div>'
+        self.assertIsNone(epr.parse_accepted_utc(html))
+
+
+class TestTransformAcceptanceTimestamp(unittest.TestCase):
+    """transform() uses the acceptance UTC when present, else date-only 00:00."""
+
+    def _hit(self, **overrides):
+        hit = {
+            "cik_padded": "0000320193",
+            "accession": "0000320193-26-000050",
+            "filing_date": "2026-05-30",
+            "items": ["2.02"],
+            "body": SAMPLE_EX991,
+            "base_dir": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000050",
+        }
+        hit.update(overrides)
+        return hit
+
+    def test_uses_acceptance_utc_when_present(self):
+        accepted = pd.Timestamp("2026-05-30 20:30:41", tz="UTC")
+        df = epr.transform(
+            [self._hit(accepted_utc=accepted)],
+            cik_to_ticker={"0000320193": "AAPL"},
+            date=dt.date(2026, 5, 30),
+        )
+        self.assertEqual(df.iloc[0]["timestamp"], accepted)
+
+    def test_falls_back_to_date_only_when_key_absent(self):
+        # No accepted_utc key -> current behaviour: 00:00 UTC of filing_date.
+        df = epr.transform(
+            [self._hit()],
+            cik_to_ticker={"0000320193": "AAPL"},
+            date=dt.date(2026, 5, 30),
+        )
+        self.assertEqual(df.iloc[0]["timestamp"], pd.Timestamp("2026-05-30", tz="UTC"))
+
+    def test_falls_back_when_acceptance_is_none(self):
+        df = epr.transform(
+            [self._hit(accepted_utc=None)],
+            cik_to_ticker={"0000320193": "AAPL"},
+            date=dt.date(2026, 5, 30),
+        )
+        self.assertEqual(df.iloc[0]["timestamp"], pd.Timestamp("2026-05-30", tz="UTC"))
+
+    def test_acceptance_can_precede_filing_date_day(self):
+        # After-close filing: filing_date rolled to the next day, but the
+        # acceptance instant is the prior evening. transform honours the instant.
+        accepted = pd.Timestamp("2026-04-30 23:51:52", tz="UTC")  # 19:51 EDT
+        df = epr.transform(
+            [self._hit(filing_date="2026-05-01", accepted_utc=accepted)],
+            cik_to_ticker={"0000320193": "AAPL"},
+            date=dt.date(2026, 5, 1),
+        )
+        self.assertEqual(df.iloc[0]["timestamp"], accepted)
+        self.assertEqual(df.iloc[0]["timestamp"].date(), dt.date(2026, 4, 30))
+
+    def test_mixed_frame_stays_tz_aware_utc(self):
+        # One intraday-acceptance row + one date-only-fallback row -> single
+        # tz-aware UTC dtype after the pd.to_datetime(..., utc=True) normalise.
+        df = epr.transform(
+            [
+                self._hit(accepted_utc=pd.Timestamp("2026-05-30 20:30:41", tz="UTC")),
+                self._hit(accession="0000320193-26-000051"),  # no accepted_utc
+            ],
+            cik_to_ticker={"0000320193": "AAPL"},
+            date=dt.date(2026, 5, 30),
+        )
+        self.assertEqual(str(df["timestamp"].dt.tz), "UTC")
+
+
+class TestEnrichFilingAcceptance(unittest.TestCase):
+    """_enrich_filing reads acceptance from the already-fetched index.htm and
+    issues NO extra SEC HTTP for it."""
+
+    def _client(self, route):
+        client = MagicMock()
+        client.get_text.side_effect = route
+        return client
+
+    def _row(self):
+        base = "https://www.sec.gov/Archives/edgar/data/320193/000032019326000050"
+        return {
+            "form_type": "8-K",
+            "cik_padded": "0000320193",
+            "accession": "0000320193-26-000050",
+            "filing_date": "2026-05-30",
+            "base_dir": base,
+        }
+
+    def test_acceptance_parsed_from_index_htm(self):
+        def route(url):
+            if url.endswith("-index.htm"):
+                return SAMPLE_INDEX_991_WITH_ACCEPTED
+            if url.endswith("primary.htm"):
+                return SAMPLE_8K_HTML
+            if url.endswith("ex991.htm"):
+                return SAMPLE_EX991
+            raise AssertionError(f"unexpected URL: {url}")
+
+        hit = epr._enrich_filing(self._row(), client=self._client(route))
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit["accepted_utc"], pd.Timestamp("2026-04-30 20:30:41", tz="UTC"))
+
+    def test_no_extra_http_for_acceptance_time(self):
+        calls = []
+
+        def route(url):
+            calls.append(url)
+            if url.endswith("-index.htm"):
+                return SAMPLE_INDEX_991_WITH_ACCEPTED
+            if url.endswith("primary.htm"):
+                return SAMPLE_8K_HTML
+            if url.endswith("ex991.htm"):
+                return SAMPLE_EX991
+            raise AssertionError(f"unexpected URL: {url}")
+
+        client = self._client(route)
+        epr._enrich_filing(self._row(), client=client)
+        # Exactly the three pre-#391 fetches: index.htm + primary 8-K + EX-99.1.
+        self.assertEqual(client.get_text.call_count, 3)
+        self.assertEqual(sum(u.endswith("-index.htm") for u in calls), 1)
+        self.assertFalse(any(u.endswith(".txt") for u in calls))
+
+    def test_missing_acceptance_yields_none_not_crash(self):
+        def route(url):
+            if url.endswith("-index.htm"):
+                return SAMPLE_INDEX_991  # bare table, no header block
+            if url.endswith("primary.htm"):
+                return SAMPLE_8K_HTML
+            if url.endswith("ex991.htm"):
+                return SAMPLE_EX991
+            raise AssertionError(f"unexpected URL: {url}")
+
+        hit = epr._enrich_filing(self._row(), client=self._client(route))
+        self.assertIsNotNone(hit)
+        self.assertIsNone(hit["accepted_utc"])
+
+
+class TestAcceptanceTimestampSurvivesRecencyCap(unittest.TestCase):
+    """The #391 payoff, end-to-end through news_ingest.ingest_daily: an EX-99.1
+    row with a real intraday acceptance instant survives the recency cap, where a
+    00:00-UTC row is dropped. The midnight control pins that the intraday
+    timestamp is the load-bearing change."""
+
+    def setUp(self):
+        from alphalens_pipeline.thematic import news_ingest as ni
+
+        self.ni = ni
+        self.date = dt.date(2026, 5, 30)
+
+    def _edgar_frame(self, *, ts):
+        return pd.DataFrame(
+            [
+                {
+                    "id": "0000320193-26-000050",
+                    "source": "edgar_press_release",
+                    "timestamp": ts,
+                    "tickers": ["AAPL"],
+                    "title": "Apple Reports Record Q2 Revenue",
+                    "body": "Apple today announced ...",
+                    "url": "https://www.sec.gov/Archives/edgar/data/320193/x/idx-index.htm",
+                    "keywords": [],
+                    "extra": json.dumps({"accession": "0000320193-26-000050"}),
+                }
+            ],
+            columns=NEWS_COLUMNS,
+        )
+
+    def _polygon_fillers(self, *, n, base_ts):
+        # n distinct headlines that must NOT lexically cluster: a single unique
+        # token each (|∩|=0 < MIN_TOKEN_OVERLAP, mirroring test_caps_at_max_items),
+        # so each is its own cluster. Each is strictly EARLIER than the EDGAR
+        # acceptance instant but LATER than 00:00 UTC, so under the buggy 00:00
+        # stamp EDGAR loses the cap tie.
+        rows = []
+        for i in range(n):
+            rows.append(
+                {
+                    "id": f"poly-{i}",
+                    "source": "polygon",
+                    "timestamp": base_ts - pd.Timedelta(minutes=i + 1),
+                    "tickers": [f"FILL{i}"],
+                    "title": f"uniquefiller{i:04d}",
+                    "body": f"Body {i}",
+                    "url": f"https://example.com/poly/{i}",
+                    "keywords": [],
+                    "extra": "{}",
+                }
+            )
+        return pd.DataFrame(rows, columns=NEWS_COLUMNS)
+
+    def _run(self, *, edgar_ts, max_items, n_fillers):
+        edgar_df = self._edgar_frame(ts=edgar_ts)
+        polygon_df = self._polygon_fillers(
+            n=n_fillers, base_ts=pd.Timestamp("2026-05-30 20:00:00", tz="UTC")
+        )
+        empty = self.ni.empty_news_frame()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(self.ni, "_fetch_edgar_press_release", return_value=edgar_df),
+                patch.object(self.ni, "_fetch_polygon", return_value=polygon_df),
+                patch.object(self.ni, "_fetch_gdelt", return_value=empty),
+                patch.object(self.ni, "_fetch_rss", return_value=empty),
+            ):
+                return self.ni.ingest_daily(
+                    date=self.date,
+                    cache_dir=Path(tmpdir),
+                    max_items=max_items,
+                    force=True,
+                )
+
+    def test_intraday_acceptance_row_survives_cap(self):
+        out = self._run(
+            edgar_ts=pd.Timestamp("2026-05-30 20:05:00", tz="UTC"),
+            max_items=3,
+            n_fillers=5,
+        )
+        self.assertIn("0000320193-26-000050", set(out["id"]))
+        self.assertIn("edgar_press_release", set(out["source"]))
+
+    def test_midnight_row_is_dropped_proving_the_bug(self):
+        # Control: the OLD 00:00 stamp sorts the EDGAR row to the bottom; the
+        # same cap-3 drops it. Pins that the intraday timestamp is what saves it.
+        out = self._run(
+            edgar_ts=pd.Timestamp("2026-05-30 00:00:00", tz="UTC"),
+            max_items=3,
+            n_fillers=5,
+        )
+        self.assertNotIn("0000320193-26-000050", set(out["id"]))
 
 
 if __name__ == "__main__":
