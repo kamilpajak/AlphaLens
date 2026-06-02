@@ -344,13 +344,15 @@ def reads_click_data(path: Path) -> bool:
 
 
 def _strip_function_docstring(source: str) -> str:
-    """Return ``source`` with the function's own docstring removed.
+    """Return ``source`` (dedented) with the function's own docstring removed.
 
     ``inspect.getsource`` of a method includes its docstring. If a future author
     documents the orthogonality invariant in the method docstring (e.g. "never
-    selects the action column"), a naive click-column regex over the full source
-    would false-FAIL. We parse the single function and drop its leading docstring
-    Expr so only executable lines are scanned.
+    selects the action column"), a click-column regex over the full source would
+    false-FAIL. We locate the leading-docstring ``Expr`` by line number and drop
+    exactly those lines, so only executable lines are scanned. Line-based removal
+    (not ``str.replace(doc, ...)``) avoids accidentally deleting a same-text
+    fragment that appears elsewhere in the body.
     """
     try:
         # A method source is indented; dedent so the def parses standalone.
@@ -362,11 +364,20 @@ def _strip_function_docstring(source: str) -> str:
         (n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))),
         None,
     )
-    doc = ast.get_docstring(func, clean=False) if func is not None else None
-    if not doc:
-        return source
-    # Remove the exact docstring text from the original source.
-    return source.replace(doc, "", 1)
+    if func is None or not func.body:
+        return normalized
+    first = func.body[0]
+    is_docstring = (
+        isinstance(first, ast.Expr)
+        and isinstance(first.value, ast.Constant)
+        and isinstance(first.value.value, str)
+    )
+    if not is_docstring:
+        return normalized
+    # ``lineno``/``end_lineno`` are 1-based and inclusive; drop those exact lines.
+    lines = normalized.splitlines(keepends=True)
+    del lines[first.lineno - 1 : first.end_lineno]
+    return "".join(lines)
 
 
 class TestChokepointIsClickFree(unittest.TestCase):
