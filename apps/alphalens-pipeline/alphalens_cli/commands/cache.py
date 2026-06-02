@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 
 import typer
 from alphalens_feedback.regime import default_vix_cache_path
+from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -39,6 +40,12 @@ cache_app = typer.Typer(
 )
 
 _VIX_SERIES = "VIXCLS"
+# Freshness gauge consumed by the AlphalensVixCache{Stale,MetricMissing}
+# Prometheus rules. Domain job name (not a cron systemd unit — the refresh
+# runs inline in run_thematic_day.sh), so it has no ExecStopPost emit hook
+# and must stay out of the cron job enumerations.
+_VIX_METRIC = "alphalens_vix_cache_fetched_at_timestamp_seconds"
+_VIX_JOB = "vix-cache-refresh"
 
 
 def _fetch_vixcls() -> pd.Series:
@@ -99,6 +106,23 @@ def refresh_vix_cache(
         with contextlib.suppress(OSError):
             os.unlink(tmp_name)
         raise
+
+    # Emit a freshness gauge AFTER the cache is durably written. A dead
+    # refresher silently ages the cache past the 96h reader ceiling, degrading
+    # every new decision's ``market_regime_at_entry`` to "unknown" with no
+    # other signal — this gauge is what the staleness alert watches. The write
+    # above is the real work; any emit failure is pure observability debt and
+    # must not raise, so the best-effort ``|| echo WARN`` step in
+    # run_thematic_day.sh keeps the fresh VIX value. Catch broad ``Exception``
+    # (not just OSError) to match the other emit callsites — a malformed
+    # metrics dict must never abort a successful refresh either.
+    try:
+        emit_domain_metrics(
+            job=_VIX_JOB,
+            metrics={f'{_VIX_METRIC}{{series="{_VIX_SERIES}"}}': int(now.timestamp())},
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed; vix-cache-refresh run succeeded")
     return payload
 
 

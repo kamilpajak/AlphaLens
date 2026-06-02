@@ -206,6 +206,62 @@ groups:
           description: "No success metric for feedback-shadow-returns. The job has not run since metrics were enabled (e.g. a freshly installed unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
 
       # ---------------------------------------------------------------
+      # VIX regime-cache freshness (Track A v2 PR-2 follow-up).
+      # ---------------------------------------------------------------
+      #
+      # The Django feedback POST path stamps ``market_regime_at_entry`` from
+      # ``alphalens_feedback.regime.get_cached_vix``, which silently returns
+      # ``None`` (→ regime degrades to "unknown") once the cache ages past the
+      # 96h reader ceiling (``_VIX_MAX_AGE_SECONDS``). The refresh step in
+      # run_thematic_day.sh is best-effort (``|| echo WARN``), so a persistently
+      # dead FRED refresher produces NO signal on its own — every new decision
+      # quietly loses its regime label and the per-regime execution-mode cells
+      # (PR-4/PR-5) get poisoned at the source. ``alphalens cache refresh-vix``
+      # now emits ``alphalens_vix_cache_fetched_at_timestamp_seconds`` (a GAUGE:
+      # the epoch the cache was written) so these two rules can alert.
+      #
+      # This is NOT a cron systemd unit — the refresh runs INLINE in the
+      # thematic build — so the rules carry a DISTINCT alertname and NO
+      # ``job=`` label, keeping them out of the per-job cron enumerations
+      # (ACTIVE_JOBS / staleness-threshold dict / ExecStopPost emit-hook
+      # parity). Same Stale/MetricMissing split as the job alerts: only Stale
+      # renders a duration (``absent()`` fires with value 1 → a misleading
+      # "1s ago" if humanizeDuration were on the missing-metric alert).
+      #
+      # 259200s = 72h = 0.75× the 96h reader ceiling, so the alert fires ~24h
+      # BEFORE the reader starts degrading stamps to "unknown" — giving the
+      # operator a day of runway to fix a dead FRED refresher while the cache is
+      # still fresh enough to stamp a real regime, rather than paging only after
+      # the damage is done. The refresh runs ~6×/day, so 72h = 18 consecutive
+      # missed runs — unambiguously a dead refresher, no transient-miss false
+      # page. fetched_at is rewritten every successful run (even when FRED has
+      # no new observation), so weekends do not age it. ``{series="VIXCLS"}``
+      # scopes both rules to the one series we depend on. GAUGE → threshold on
+      # ``time() - metric`` / ``absent()``, never increase()/rate() (the
+      # AlphalensEdgarNoCandidates24h lesson).
+      - alert: AlphalensVixCacheStale
+        expr: time() - alphalens_vix_cache_fetched_at_timestamp_seconds{series="VIXCLS"} > 259200
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: vix-cache-refresh
+        annotations:
+          summary: "VIX regime cache stale > 72h (refreshed ~6x/day)"
+          description: "Last VIX cache refresh was {{ $value | humanizeDuration }} ago. Fix before 96h or new feedback decisions start stamping market_regime_at_entry='unknown'. Check the refresh-vix step in `journalctl --user -u alphalens-thematic-build.service` on the VPS (FRED_API_KEY / FRED outage)."
+
+      - alert: AlphalensVixCacheMetricMissing
+        expr: absent(alphalens_vix_cache_fetched_at_timestamp_seconds{series="VIXCLS"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: vix-cache-refresh
+        annotations:
+          summary: "VIX regime cache freshness metric missing"
+          description: "No VIX cache freshness metric. The refresh-vix step has not succeeded since metrics were enabled, or the textfile collector / node_exporter scrape is broken. New feedback decisions risk stamping market_regime_at_entry='unknown'. Clears after the first successful refresh."
+
+      # ---------------------------------------------------------------
       # Failure — fires on any non-zero exit. Hard fail, immediate
       # debounce (1m so one cron failure does not wait 5m to page).
       # ---------------------------------------------------------------
