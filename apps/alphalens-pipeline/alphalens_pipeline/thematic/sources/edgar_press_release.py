@@ -91,11 +91,15 @@ _IXBRL_VIEWER_PREFIX = "/ix?doc="
 # This is the moment the filing became publicly visible on EDGAR (when the
 # market could first act on it), distinct from the daily-index "Date Filed"
 # column, which is DATE-ONLY and rolls to the NEXT calendar day for
-# after-5:30pm-ET filings. We anchor on the literal "Accepted</div>" label,
-# tolerate whitespace/newlines, and capture the second-precision value (NO tz
-# suffix in the markup) from the following <div class="info"> cell.
+# after-5:30pm-ET filings. We anchor on the ``class="infoHead">Accepted</div>``
+# label (scoping to the header block so a stray "Accepted</div>" elsewhere on
+# the page can't false-match) and tolerate extra attributes / reordering on the
+# following ``class="info"`` value cell (so an SEC markup tweak like
+# ``<div class="info" id="...">`` doesn't silently break the parse). Captures
+# the second-precision value (NO tz suffix in the markup).
 _ACCEPTED_RE = re.compile(
-    r'Accepted</div>\s*<div class="info">\s*'
+    r'class="infoHead">\s*Accepted\s*</div>\s*'
+    r'<div[^>]*class="info"[^>]*>\s*'
     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"
 )
 _ACCEPTED_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -418,12 +422,14 @@ def parse_accepted_utc(index_html: str) -> pd.Timestamp | None:
         return None
     try:
         naive = dt.datetime.strptime(match.group(1), _ACCEPTED_FORMAT)
-    except ValueError as exc:
-        # Anchor matched but the value is not a real datetime (e.g. month 13);
-        # degrade to the date-only fallback rather than crash the day.
-        logger.warning("edgar acceptance-datetime parse failed: %s", exc)
+        return pd.Timestamp(naive.replace(tzinfo=_EDGAR_TZ)).tz_convert("UTC")
+    except (ValueError, OverflowError) as exc:
+        # Anchor matched but the value is not a usable datetime (month 13, an
+        # out-of-bounds year — pandas' OutOfBoundsDatetime is a ValueError, so
+        # it is covered here). Honour the "never raises" contract: degrade to the
+        # date-only fallback rather than crash the day.
+        logger.warning("edgar acceptance-datetime parse failed (%r): %s", match.group(1), exc)
         return None
-    return pd.Timestamp(naive.replace(tzinfo=_EDGAR_TZ)).tz_convert("UTC")
 
 
 def _enrich_filing(row: dict, *, client: SecEdgarClient) -> dict | None:
@@ -515,7 +521,16 @@ def transform(
         # this deliberately stamps the row on the prior UTC day (the moment the
         # market could act); the per-day parquet cache is keyed by the discovery
         # date, not the row timestamp, so this never mis-routes the cache.
-        timestamp = accepted if accepted is not None else pd.Timestamp(hit["filing_date"], tz="UTC")
+        if accepted is None:
+            # Per-row breadcrumb so the silent-revert-to-00:00 frequency stays
+            # greppable if the SEC header markup ever drifts (#391 RISK 1).
+            logger.debug(
+                "edgar row %s: no parsed acceptance, using filing_date fallback",
+                hit["accession"],
+            )
+            timestamp = pd.Timestamp(hit["filing_date"], tz="UTC")
+        else:
+            timestamp = accepted
         rows.append(
             {
                 "id": hit["accession"],  # SEC-stable, dashed form

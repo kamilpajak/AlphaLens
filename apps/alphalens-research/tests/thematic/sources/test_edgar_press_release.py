@@ -853,6 +853,23 @@ class TestParseAcceptedUtc(unittest.TestCase):
         self.assertIsNotNone(ts.tzinfo)
         self.assertEqual(str(ts.tz), "UTC")
 
+    def test_tolerates_extra_attributes_on_info_div(self):
+        # SEC markup drift: an added attribute on the value cell must NOT break
+        # the parse (the regex tolerates extra attrs around class="info").
+        html = (
+            '<div class="infoHead">Accepted</div>'
+            '<div class="info" id="accepted-cell">2026-04-30 16:30:41</div>'
+        )
+        self.assertEqual(
+            epr.parse_accepted_utc(html), pd.Timestamp("2026-04-30 20:30:41", tz="UTC")
+        )
+
+    def test_bare_accepted_without_infohead_label_not_matched(self):
+        # A stray "Accepted</div>" NOT in an infoHead cell must not false-match
+        # (the regex is scoped to the header label).
+        html = '<td>Accepted</div><div class="info">2026-04-30 16:30:41</div>'
+        self.assertIsNone(epr.parse_accepted_utc(html))
+
 
 class TestTransformAcceptanceTimestamp(unittest.TestCase):
     """transform() uses the acceptance UTC when present, else date-only 00:00."""
