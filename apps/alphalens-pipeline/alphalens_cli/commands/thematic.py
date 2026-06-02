@@ -63,6 +63,36 @@ def _source_volume_metrics(counts: dict[str, int]) -> dict[str, int]:
     }
 
 
+def _brief_template_fill_metrics(enriched: pd.DataFrame) -> dict[str, float | int]:
+    """Fill-rate of `brief_template_id` across a day's briefs (#399 gate instrument).
+
+    Decides #394 (whether to build the option-c beneficiary catalyst-provenance
+    bridge): measures whether the shipped option-b (#397, candidate==subject)
+    actually delivers a typed-fact template_id at a useful rate. Pure read of the
+    brief frame -- no schema/UI/pipeline change. Emits the count + the ratio so a
+    Grafana panel can show the trend; a sustained low ratio (with group demand)
+    is the gate signal. Denominator is the same `alphalens_thematic_briefs_total`
+    already emitted; we add the numerator + the precomputed ratio.
+
+    "Filled" = a non-empty, non-sentinel brief_template_id. Missing column
+    (legacy frame) or zero briefs -> 0 filled / ratio 0.0 (no div-by-zero).
+    """
+    total = len(enriched)
+    if total == 0 or "brief_template_id" not in enriched.columns:
+        filled = 0
+    else:
+        filled = int(
+            enriched["brief_template_id"]
+            .apply(lambda v: bool(v) and str(v) not in ("", "None", "nan"))
+            .sum()
+        )
+    ratio = round(filled / total, 4) if total else 0.0
+    return {
+        "alphalens_thematic_brief_template_id_total": filled,
+        "alphalens_thematic_brief_template_id_fill_ratio": ratio,
+    }
+
+
 def _emit_stage_volume(stage: str, *, output_rows: int, input_rows: int) -> None:
     """Emit a stage's volume gauges to its own ``thematic-<stage>`` file.
 
@@ -503,6 +533,11 @@ def brief(
                 # briefs out; 0 briefs from non-empty scored = a Layer 5
                 # generator / LLM failure.
                 **_stage_volume_metrics("brief", output_rows=len(enriched), input_rows=len(scored)),
+                # #399 gate instrument for #394: fraction of briefs carrying a
+                # template_id (option-b subject-match fill-rate). Folded into the
+                # same thematic-build file; a recording gauge for the dashboard,
+                # no alert rule.
+                **_brief_template_fill_metrics(enriched),
             },
         )
     except Exception:
