@@ -1,22 +1,51 @@
-"""Attach TP / SL exits after entry phase settles + write plan_outcome.
+"""Attach TP / SL exits + write plan_outcome.
+
+The protective stop-loss (SL) is a SAFETY-CRITICAL leg: any filled position
+MUST converge to a LIVE disaster-stop, and it must do so independently of
+whether the entry ladder ever settles. This module enforces that as a
+self-healing convergence rule rather than a one-shot settlement-gated attach.
 
 State machine per plan:
 
-  ENTRY phase (multi-tier ladder)
-    -> ALL entry orders terminal (FILLED / CANCELED / EXPIRED / REJECTED)
-       AND total filled qty > 0:
-         -> ATTACH exits (multi-tranche TP limit-sells + single SL stop)
-       AND total filled qty == 0:
-         -> WRITE plan_outcome(UNFILLED), no exits
+  CONVERGENCE rule (runs EVERY pass, before the settlement gate):
+    -> the position (entry fills minus exit fills) is open AND its live
+       disaster-stop coverage is LESS than the current position qty (no SL,
+       a canceled-zero-fill SL, or a too-small SL after a gap fill):
+         (a) best-effort cancel any still-open ENTRY tiers — frees the
+             reserved-share / opposite-side hold that makes Alpaca reject
+             the SL with held_for_orders, and collapses the ladder to the
+             filled qty (scale-in tiers are intentionally abandoned),
+         (b) cancel any UNDER-sized live SL so the re-submit does not stack,
+             then
+         (c) attempt the disaster-stop SL sized to the CURRENT position qty,
+             and the TP ladder if it isn't attached yet.
+       If the SL submit is rejected (held_for_orders / insufficient qty /
+       any APIError) NOTHING SL-shaped is persisted, so the SAME branch
+       re-enters next pass and retries. This is NOT gated on
+       entry_phase_settled and is NOT skipped just because a TP order
+       already exists — a TP-without-SL state is transient, never terminal.
+       A partial TP that shrinks the position below an over-covering SL does
+       NOT re-converge (the Phase-A SL-not-resized-down simplification stands).
 
-  EXIT phase (TPs + SL open)
+  ENTRY phase (no fills yet)
+    -> ALL entry orders terminal AND total filled qty == 0:
+         -> WRITE plan_outcome(UNFILLED), no exits
+    -> otherwise wait (NOOP).
+
+  EXIT phase (TPs + SL live)
     -> TPs / SL flow through reconciler.reconcile_orders() like any other
        order (statuses + fills synthesized from Alpaca polls).
     -> When all SELL orders reach terminal state:
          -> WRITE plan_outcome(TP_HIT / SL_HIT / PARTIAL_TP / TIME_STOP_HIT)
             with blended_entry/exit + realized R-multiple.
     -> Time-stop: if first fill > TIME_STOP_DAYS ago and exit phase still
-       open, cancel pending exits + submit market-sell for remaining qty.
+       open, cancel pending exits + submit market-sell for the LIVE broker
+       position (never the planned qty — a planned-qty time-stop over-sells
+       after a partial TP).
+
+Sizing: every protective order (SL, each TP tranche, TIME_STOP) is sized to
+the CURRENT observed filled / live broker position qty, never the planned
+qty. The TIME_STOP reads the live Alpaca position directly.
 
 Phase A simplification: a partial TP fill does NOT shrink the SL qty.
 The SL stays sized for the full filled quantity, so if SL fires after
@@ -24,6 +53,25 @@ partial TP execution the stop sells slightly less than intended (only
 remaining position size). This is a small directional bias — flagged as
 Known Issue in the design memo follow-up — and acceptable in exchange
 for not needing a cancel-and-resize loop on every TP fill.
+
+Behaviour notes / Known issues (PR-body markers):
+  (a) Transient double-SL OVER-coverage during a gap-fill SL resize. When a
+      cheaper tier fills in the race after its cancel request, the convergence
+      rule cancels the old under-sized SL and submits a correctly-sized one
+      before the cancel has acked. For one poll both SLs are live (protect-
+      first bias — we ADD coverage then drop the stale one), so coverage
+      briefly exceeds the position. It clears on the next reconcile poll and
+      NEVER under-covers. We accept brief over-protection, never under-
+      protection.
+  (b) The TP ladder is NOT re-sized up after a gap fill. The SL always covers
+      the full position, but the TP tranches stay sized to the FIRST observed
+      fill (the Phase-A simplification). Some upside shares may sit without a
+      take-profit limit until manual / later handling — not a safety risk
+      (the SL covers them), only a missed-TP-coverage nicety.
+  (c) The account label is a closed enum {main, test}. Anything that turns it
+      into a Prometheus / gauge label needs only simple sanitization of those
+      two known values — there is no free-form account string to defend
+      against.
 """
 
 from __future__ import annotations
@@ -90,15 +138,91 @@ class _PlanSnapshot:
             for o in self.entry_orders
         )
 
+    @property
+    def total_exit_filled_qty(self) -> int:
+        """Observed filled qty across ALL exit orders (TP / SL / TIME_STOP)."""
+        return sum(
+            int(o["filled_qty_observed"] or 0) if "filled_qty_observed" in o else 0
+            for o in self.exit_orders
+        )
+
+    @property
+    def net_open_qty(self) -> int:
+        """Ledger-side estimate of shares still held: entry fills minus exit
+        fills. Used as the convergence GATE — a position whose exits have
+        fully sold it (net 0) is closed and must NOT re-arm an SL. The
+        protective-order SIZE still comes from the live broker position
+        (``_position_qty``), which is authoritative for a not-yet-reconciled
+        fill; this is only the gate.
+        """
+        return self.total_entry_filled_qty - self.total_exit_filled_qty
+
+    @property
+    def sl_coverage_qty(self) -> int:
+        """Shares currently covered by a disaster-stop: the qty on every LIVE
+        (non-terminal) SL order plus the observed fills of any SL that already
+        FIRED. A terminal SL CANCELED with zero fill contributes nothing, so a
+        position with only such an SL is unprotected and must re-converge.
+        """
+        total = 0
+        for o in self.exit_orders:
+            if o["order_kind"] != "SL":
+                continue
+            filled = int(o["filled_qty_observed"] or 0) if "filled_qty_observed" in o else 0
+            if o["status"] not in _TERMINAL_ENTRY_STATUSES:
+                total += int(o["qty"] or 0)
+            elif filled > 0:
+                total += filled
+        return total
+
+    @property
+    def live_sl_orders(self) -> tuple[_RowProto, ...]:
+        """The non-terminal SL orders (used to cancel an under-sized SL before
+        re-submitting a correctly-sized one during a gap-fill re-size)."""
+        return tuple(
+            o
+            for o in self.exit_orders
+            if o["order_kind"] == "SL" and o["status"] not in _TERMINAL_ENTRY_STATUSES
+        )
+
+    @property
+    def has_tp_orders(self) -> bool:
+        return any(o["order_kind"] == "TP" for o in self.exit_orders)
+
+    @property
+    def has_live_time_stop(self) -> bool:
+        """True when a TIME_STOP market-sell is in flight (submitted but not
+        yet terminal). A live time-stop IS the liquidation for the whole
+        position, so the SL-convergence rule must stand down: re-arming an SL
+        (or re-attaching the TP ladder) against a position that is being
+        market-liquidated stacks a second live sell on the same shares and
+        over-sells to a short when both fill. See the guard in
+        ``process_plan_exit`` (TIME_STOP-vs-SL-convergence collision).
+        """
+        return any(
+            o["order_kind"] == "TIME_STOP" and o["status"] not in _TERMINAL_ENTRY_STATUSES
+            for o in self.exit_orders
+        )
+
 
 @dataclass(frozen=True)
 class ExitOutcome:
     """One plan's exit-phase outcome from a reconcile pass."""
 
     plan_id: int
-    action: str  # 'ATTACHED' | 'CLOSED' | 'TIME_STOP' | 'UNFILLED' | 'NOOP'
+    # 'ATTACHED' | 'CLOSED' | 'TIME_STOP' | 'UNFILLED' | 'CONVERGE_SL' | 'NOOP'
+    action: str
     n_exits_submitted: int = 0
     exit_kind: str | None = None
+    # Count of exit submits that the broker rejected this pass (e.g. Alpaca
+    # held_for_orders / insufficient qty). Caught + counted, never raised.
+    n_exits_failed: int = 0
+    # Count of still-open entry tiers cancelled by the convergence rule.
+    n_entries_canceled: int = 0
+    # 1 when this plan ends the pass with filled shares but NO live
+    # protective SL (a transient unprotected position the next pass retries);
+    # 0 otherwise. The dead-man signal the reconciler accumulates + emits.
+    n_filled_without_sl: int = 0
 
 
 def _fetch_plan_meta(conn: sqlite3.Connection, plan_id: int) -> sqlite3.Row | None:
@@ -227,29 +351,76 @@ class _RowLike:
 # ----- exit attacher -----
 
 
-def _attach_exits(
+def _position_qty(snapshot: _PlanSnapshot, broker: BrokerClient) -> int:
+    """The qty every protective order is sized to: the LIVE broker position
+    when a clean read is available, else the observed ledger filled qty.
+
+    The same-ticker policy guarantees one active plan per ticker, so the
+    broker-side position is the authoritative count. We PREFER it over the
+    ledger filled total because an exit fill (a partial TP) may have landed
+    at Alpaca that the reconciler has not observed yet — sizing the SL to the
+    stale ledger total would over-state inventory and risk an
+    insufficient-qty rejection. On any read error we fall back to the
+    already-observed ledger total rather than expanding the BrokerClient
+    protocol. Returns 0 when neither source reports a positive position.
+    """
+    ledger_qty = snapshot.total_entry_filled_qty
+    try:
+        position = broker.get_position(snapshot.ticker)
+    except Exception as exc:
+        logger.warning(
+            "exit_manager position read failed for %s: %s; sizing to ledger qty %d",
+            snapshot.ticker,
+            exc,
+            ledger_qty,
+        )
+        return max(ledger_qty, 0)
+    if position is None:
+        # No live broker position (e.g. fully exited) — fall back to the
+        # ledger total so a not-yet-reconciled fresh fill is still covered.
+        return max(ledger_qty, 0)
+    pos_qty = int(float(getattr(position, "qty", 0) or 0))
+    return max(pos_qty, 0)
+
+
+def _attach_sl(
     conn: sqlite3.Connection,
     *,
     snapshot: _PlanSnapshot,
     broker: BrokerClient,
+    qty: int,
     submitted_at: dt.datetime,
-) -> int:
-    """Submit TPs + SL for the just-settled entry phase. Returns the number
-    of exit orders successfully submitted (typically 1 SL + N TP tranches)."""
-    total_filled = snapshot.total_entry_filled_qty
-    if total_filled <= 0:
-        return 0
+) -> tuple[int, int]:
+    """Submit the single disaster-stop SL sized to ``qty``. Returns
+    ``(n_submitted, n_failed)`` (each 0 or 1).
 
-    submitted = 0
-
-    # Submit one stop-sell for the full entry-filled position.
-    sl_order = broker.submit_stop_order(
-        symbol=snapshot.ticker,
-        qty=total_filled,
-        stop_price=snapshot.disaster_stop,
-        side="sell",
-        time_in_force="gtc",
-    )
+    Crash-resilience: the broker submit is wrapped in try/except so a broker
+    error (Alpaca APIError held_for_orders / insufficient qty / wash-trade /
+    any submit failure) is caught, logged, counted — it does NOT propagate.
+    When the submit fails NOTHING is persisted, so the convergence rule in
+    ``process_plan_exit`` re-enters next pass and retries until the SL lands.
+    """
+    if qty <= 0:
+        return 0, 0
+    try:
+        sl_order = broker.submit_stop_order(
+            symbol=snapshot.ticker,
+            qty=qty,
+            stop_price=snapshot.disaster_stop,
+            side="sell",
+            time_in_force="gtc",
+        )
+    except Exception as exc:
+        logger.warning(
+            "exit_manager attach SL FAILED plan_id=%d ticker=%s qty=%d stop=%.2f: %s; "
+            "will retry next cycle",
+            snapshot.plan_id,
+            snapshot.ticker,
+            qty,
+            snapshot.disaster_stop,
+            exc,
+        )
+        return 0, 1
     insert_order(
         conn,
         plan_id=snapshot.plan_id,
@@ -257,23 +428,39 @@ def _attach_exits(
         side="SELL",
         order_kind="SL",
         order_type="STOP",
-        qty=total_filled,
+        qty=qty,
         stop_price=snapshot.disaster_stop,
         time_in_force="gtc",
         submitted_at=submitted_at,
         account=snapshot.account,
         platform=snapshot.platform,
     )
-    submitted += 1
     logger.info(
         "exit_manager attach SL plan_id=%d ticker=%s qty=%d stop=%.2f alpaca=%s",
         snapshot.plan_id,
         snapshot.ticker,
-        total_filled,
+        qty,
         snapshot.disaster_stop,
         sl_order.id,
     )
+    return 1, 0
 
+
+def _attach_tps(
+    conn: sqlite3.Connection,
+    *,
+    snapshot: _PlanSnapshot,
+    broker: BrokerClient,
+    total_filled: int,
+    submitted_at: dt.datetime,
+) -> tuple[int, int]:
+    """Submit one limit-sell per TP tranche, sized to ``total_filled``.
+    Returns ``(n_submitted, n_failed)``. Each submit is crash-resilient
+    (same contract as :func:`_attach_sl`)."""
+    if total_filled <= 0:
+        return 0, 0
+    submitted = 0
+    failed = 0
     # Submit one limit-sell per TP tranche. qty proportional to tranche_pct.
     remaining_qty = total_filled
     for idx, tranche in enumerate(snapshot.tp_tranches):
@@ -285,13 +472,28 @@ def _attach_exits(
         if qty <= 0:
             continue
         target_price = float(tranche["target_price"])
-        tp_order = broker.submit_limit_order(
-            symbol=snapshot.ticker,
-            qty=qty,
-            limit_price=target_price,
-            side="sell",
-            time_in_force="gtc",
-        )
+        try:
+            tp_order = broker.submit_limit_order(
+                symbol=snapshot.ticker,
+                qty=qty,
+                limit_price=target_price,
+                side="sell",
+                time_in_force="gtc",
+            )
+        except Exception as exc:
+            failed += 1
+            logger.warning(
+                "exit_manager attach TP FAILED plan_id=%d tranche=%d qty=%d limit=%.2f: %s; "
+                "will retry next cycle",
+                snapshot.plan_id,
+                int(tranche["tranche_index"]),
+                qty,
+                target_price,
+                exc,
+            )
+            # Do NOT decrement remaining_qty — the unsold tranche rolls into
+            # the residue the last successful tranche absorbs (or is retried).
+            continue
         insert_order(
             conn,
             plan_id=snapshot.plan_id,
@@ -318,7 +520,7 @@ def _attach_exits(
             tp_order.id,
         )
 
-    return submitted
+    return submitted, failed
 
 
 # ----- exit lifecycle (write outcome when exits settle) -----
@@ -384,6 +586,57 @@ def _cancel_open_exits(
                 )
                 continue
             n += 1
+    return n
+
+
+def _cancel_unfilled_entries(
+    *,
+    snapshot: _PlanSnapshot,
+    broker: BrokerClient,
+) -> int:
+    """Cancel every still-open ENTRY tier on a plan that already has a fill.
+
+    The entry ladder is a 2-3 tier GTC limit BUY. In practice only the
+    aggressive tier fills; cheaper tiers sit SUBMITTED and the ladder never
+    reaches the all-terminal "settled" state until the TTL sweep cancels
+    them ~7 trading days later — so the filled shares carry NO protective
+    SELL for up to a week. Worse, the still-open BUY tiers reserve the
+    shares (opposite-side hold), so Alpaca rejects the protective SL with
+    ``held_for_orders insufficient qty``.
+
+    Cancelling the open tiers on the first fill fixes both: it frees the
+    reserved shares (the SL is accepted) and makes the ladder settle (all
+    tiers terminal) so exits attach promptly. The aggressive scale-in tiers
+    are intentionally abandoned — we keep only the filled qty.
+
+    Best-effort: mirrors ``_cancel_open_exits`` — a failed cancel is
+    logged and skipped, never raised. Does NOT update the local order
+    status to CANCELED; that lands on the reconciler's next poll (same
+    doctrine as ``_cancel_open_exits``: marking CANCELED locally would drop
+    the order out of ``fetch_open_orders`` before any final partial fill is
+    observed). Returns the count of cancel REQUESTS Alpaca accepted.
+    """
+    n = 0
+    for o in snapshot.entry_orders:
+        if o["status"] not in _TERMINAL_ENTRY_STATUSES:
+            try:
+                broker.cancel_order(o["alpaca_order_id"])
+            except Exception as exc:
+                logger.warning(
+                    "exit_manager cancel unfilled entry failed alpaca=%s plan_id=%d: %s; "
+                    "will retry next cycle",
+                    o["alpaca_order_id"],
+                    snapshot.plan_id,
+                    exc,
+                )
+                continue
+            n += 1
+            logger.info(
+                "exit_manager cancel unfilled entry alpaca=%s plan_id=%d ticker=%s",
+                o["alpaca_order_id"],
+                snapshot.plan_id,
+                snapshot.ticker,
+            )
     return n
 
 
@@ -534,8 +787,101 @@ def process_plan_exit(
     if snap.has_outcome:
         return ExitOutcome(plan_id=plan_id, action="NOOP")
 
-    # Entry phase still in progress — wait.
-    if not snap.entry_phase_settled:
+    # SL-CONVERGENCE rule (the disaster-stop guarantee). A filled position
+    # that is not FULLY covered by a disaster-stop must converge to one,
+    # independently of ladder settlement and regardless of whether a TP
+    # already landed:
+    #   (a) best-effort cancel any still-open ENTRY tiers — frees the
+    #       reserved-share / opposite-side hold (the held_for_orders cause)
+    #       and collapses the ladder to the filled qty (scale-in abandoned),
+    #   (b) cancel any UNDER-sized live SL (a gap fill on the cheaper tier
+    #       landed after a smaller SL — re-size up to the full position), then
+    #   (c) attempt the SL sized to the CURRENT position qty, plus the TP
+    #       ladder if it is not attached yet.
+    # If the SL submit is rejected nothing SL-shaped is persisted, so this
+    # branch re-enters next pass and retries until the SL lands. Guards:
+    #   - ``net_open_qty > 0``: a zero-fill plan is NOT a position, and a plan
+    #     whose exits already sold the whole position (net 0, e.g. all TPs
+    #     filled) is closed — neither re-arms an SL.
+    #   - ``sl_coverage_qty < position``: a position already fully covered by a
+    #     live / already-fired SL is protected — idempotent skip. Only UNDER-
+    #     coverage (no SL, a canceled-zero-fill SL, or a too-small SL after a
+    #     gap fill) re-converges; a partial TP that shrinks the position below
+    #     an over-covering SL does NOT (the Phase-A SL-not-resized-down
+    #     simplification stands — the SL simply sells remaining inventory).
+    # SAFETY: short-circuit SL-convergence when a TIME_STOP market-sell is in
+    # flight. The convergence coverage check (``sl_coverage_qty``) counts only
+    # order_kind=='SL', so a pending TIME_STOP contributes ZERO coverage. Once
+    # the time-stop has cancelled the live SL (which then polls to a terminal
+    # CANCELED with 0 fill) sl_coverage_qty drops to 0 while net_open_qty is
+    # still > 0 (the market-sell has not filled — e.g. submitted at/after the
+    # close). Without this guard the convergence gate would RE-ARM a fresh
+    # full-size SL on top of the live TIME_STOP, so both execute when the
+    # market opens and OVER-SELL the position to a short. The time-stop IS the
+    # liquidation; nothing protective should be re-armed against a position
+    # that is being market-liquidated.
+    size_qty = _position_qty(snap, broker)
+    if snap.has_live_time_stop:
+        return ExitOutcome(plan_id=plan_id, action="NOOP")
+    if snap.net_open_qty > 0 and snap.sl_coverage_qty < size_qty:
+        n_canceled = _cancel_unfilled_entries(snapshot=snap, broker=broker)
+        # Cancel an under-sized live SL so the re-submit below does not stack a
+        # second SL on top of it (double protection / double sell). Best-effort
+        # cancel; the ledger status flips on the reconciler's next poll, so the
+        # under-sized SL still counts as coverage until then — that is fine, we
+        # only ADD coverage here, never drop below the position.
+        for sl in snap.live_sl_orders:
+            try:
+                broker.cancel_order(sl["alpaca_order_id"])
+            except Exception as exc:
+                logger.warning(
+                    "exit_manager cancel under-sized SL failed alpaca=%s plan_id=%d: %s; "
+                    "will retry next cycle",
+                    sl["alpaca_order_id"],
+                    snap.plan_id,
+                    exc,
+                )
+        sl_submitted, sl_failed = _attach_sl(
+            conn,
+            snapshot=snap,
+            broker=broker,
+            qty=size_qty,
+            submitted_at=observed_at,
+        )
+        tp_submitted = 0
+        tp_failed = 0
+        if not snap.has_tp_orders:
+            tp_submitted, tp_failed = _attach_tps(
+                conn,
+                snapshot=snap,
+                broker=broker,
+                total_filled=size_qty,
+                submitted_at=observed_at,
+            )
+        # Re-snapshot so the dead-man flag reflects whether the SL actually
+        # landed this pass (sl_submitted may be 0 on a rejection). Coverage is
+        # re-read against the live position; a still-uncovered position is the
+        # transient unprotected state the next pass retries.
+        snap = _snapshot(conn, plan_id) or snap
+        still_unprotected = (
+            1
+            if (snap.net_open_qty > 0 and snap.sl_coverage_qty < _position_qty(snap, broker))
+            else 0
+        )
+        return ExitOutcome(
+            plan_id=plan_id,
+            action="CONVERGE_SL",
+            n_exits_submitted=sl_submitted + tp_submitted,
+            n_exits_failed=sl_failed + tp_failed,
+            n_entries_canceled=n_canceled,
+            n_filled_without_sl=still_unprotected,
+        )
+
+    # Entry phase still in progress and no exits yet — wait. Once the plan
+    # has exit_orders (it converged to a live SL above) the exit-phase
+    # machinery below runs even if the entry ladder never formally settles —
+    # a never-acking entry cancel must not strand the outcome write forever.
+    if not snap.entry_phase_settled and not snap.exit_orders:
         return ExitOutcome(plan_id=plan_id, action="NOOP")
 
     # Entry settled with zero fills → UNFILLED outcome, no exits.
@@ -552,16 +898,6 @@ def process_plan_exit(
             closed_at=observed_at,
         )
         return ExitOutcome(plan_id=plan_id, action="UNFILLED", exit_kind="UNFILLED")
-
-    # Entry settled with fills — exits not yet attached: attach now.
-    if not snap.exit_orders:
-        n = _attach_exits(
-            conn,
-            snapshot=snap,
-            broker=broker,
-            submitted_at=observed_at,
-        )
-        return ExitOutcome(plan_id=plan_id, action="ATTACHED", n_exits_submitted=n)
 
     # Exit phase active. Check for time-stop first.
     if _time_stop_should_fire(snap, observed_at):

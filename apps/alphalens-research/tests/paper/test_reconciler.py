@@ -65,6 +65,10 @@ class _StubBrokerClient:
         self.exit_submissions: list[dict] = []
         self.canceled_orders: list[str] = []
         self._next_exit_id = 1
+        # ticker → live position qty for the SL-convergence sizing read.
+        # Unset → get_position returns None → _position_qty falls back to the
+        # observed ledger filled qty (the pre-hardening default behaviour).
+        self.position_qty_for: dict[str, int] = {}
         # Gross-guard reads account.equity + account.long_market_value
         # post-reconcile per memo §6.1 Path B.
         self.account = _StubAccount()
@@ -101,6 +105,25 @@ class _StubBrokerClient:
 
     def get_account(self) -> _StubAccount:
         return self.account
+
+    def get_position(self, symbol: str):
+        """Live broker position the exit_manager sizes protective orders to.
+
+        Defaults to the ledger-side filled total via ``position_qty_for`` (set
+        per-ticker by tests that exercise the SL-convergence path). When unset,
+        return None so ``_position_qty`` falls back to the observed ledger qty
+        — the same not-yet-modelled-position behaviour the time-stop path
+        already tolerated.
+        """
+        qty = self.position_qty_for.get(symbol)
+        if qty is None or qty <= 0:
+            return None
+
+        @dataclass
+        class _Pos:
+            qty: int
+
+        return _Pos(qty=qty)
 
 
 def _make_plan_with_order(
@@ -766,6 +789,81 @@ class TestTtlSweep(_ReconcilerTestBase):
 
         self.assertEqual(report.n_entries_ttl_canceled, 0)
         self.assertEqual(self.client.canceled_orders, [])
+
+
+class _ExitFailingBroker(_StubBrokerClient):
+    """Stub whose stop-order submit raises for a chosen symbol, modelling
+    Alpaca rejecting an SL with held_for_orders / insufficient qty."""
+
+    def __init__(self, *, fail_stop_for: set[str] | None = None) -> None:
+        super().__init__()
+        self.fail_stop_for = fail_stop_for or set()
+
+    def submit_stop_order(self, **kwargs):
+        if kwargs.get("symbol") in self.fail_stop_for:
+            raise RuntimeError(
+                "stub APIError: held_for_orders insufficient qty available for order"
+            )
+        return super().submit_stop_order(**kwargs)
+
+
+class TestReconcileExitResilience(_ReconcilerTestBase):
+    """One plan rejecting its protective SELL must not abort the reconcile
+    pass for plans behind it."""
+
+    def _seed_filled_plan(self, *, ticker: str, alpaca_id: str) -> int:
+        plan_id, order_id = _make_plan_with_order(
+            self.ledger, alpaca_order_id=alpaca_id, ticker=ticker, qty=27
+        )
+        ts = dt.datetime.now(dt.UTC)
+        with open_ledger(self.ledger) as conn:
+            conn.execute(
+                "UPDATE orders SET status = 'FILLED' WHERE alpaca_order_id = ?",
+                (alpaca_id,),
+            )
+            from alphalens_pipeline.paper.ledger import insert_fill
+
+            insert_fill(
+                conn,
+                order_id=order_id,
+                alpaca_fill_id=f"{alpaca_id}-fill",
+                qty=27,
+                price=99.5,
+                filled_at=ts,
+            )
+        return plan_id
+
+    def test_one_plan_sl_rejection_does_not_block_others(self):
+        bad_plan = self._seed_filled_plan(ticker="BADX", alpaca_id="bad-entry")
+        good_plan = self._seed_filled_plan(ticker="GOODX", alpaca_id="good-entry")
+        # Both entry orders already FILLED locally → no open orders to poll;
+        # exit_manager drives attachment for both touched plans.
+        broker = _ExitFailingBroker(fail_stop_for={"BADX"})
+
+        # Must NOT raise even though BADX's SL submit errors.
+        report = reconcile_orders(ledger_path=self.ledger, broker=broker)
+
+        # The good plan still got its full SL + TP attached.
+        with open_ledger(self.ledger) as conn:
+            good_exits = sorted(
+                row["order_kind"]
+                for row in conn.execute(
+                    "SELECT order_kind FROM orders WHERE plan_id = ? AND side = 'SELL'",
+                    (good_plan,),
+                ).fetchall()
+            )
+            bad_exits = [
+                row["order_kind"]
+                for row in conn.execute(
+                    "SELECT order_kind FROM orders WHERE plan_id = ? AND order_kind = 'SL'",
+                    (bad_plan,),
+                ).fetchall()
+            ]
+        self.assertEqual(good_exits, ["SL", "TP"])
+        # The bad plan's SL never persisted (submit failed) → retryable.
+        self.assertEqual(bad_exits, [])
+        # Report still reflects the successful attachments.
+        self.assertGreaterEqual(report.n_exits_attached, 2)
 
 
 if __name__ == "__main__":

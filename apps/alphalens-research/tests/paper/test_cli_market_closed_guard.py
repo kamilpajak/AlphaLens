@@ -171,6 +171,7 @@ class TestReconcileGuard(unittest.TestCase):
             mock.patch(
                 "alphalens_pipeline.paper.reconciler.reconcile_orders",
             ) as mock_reconcile,
+            mock.patch("alphalens_cli.commands.paper.emit_domain_metrics"),
         ):
             mock_reconcile.return_value = _stub_reconcile_report()
             code, _ = _run(["reconcile", "--allow-closed-market"])
@@ -190,6 +191,7 @@ class TestReconcileGuard(unittest.TestCase):
             mock.patch(
                 "alphalens_pipeline.paper.reconciler.reconcile_orders",
             ) as mock_reconcile,
+            mock.patch("alphalens_cli.commands.paper.emit_domain_metrics"),
         ):
             mock_reconcile.return_value = _stub_reconcile_report()
             code, _ = _run(["reconcile"])
@@ -219,6 +221,10 @@ def _stub_reconcile_report():
         n_orders_checked = 0
         n_orders_transitioned = 0
         n_fills_appended = 0
+        n_exits_attached = 0
+        n_exits_failed = 0
+        n_entries_canceled = 0
+        n_filled_without_sl = 0
         outcomes: list = []
 
     return _Report()

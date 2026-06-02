@@ -856,5 +856,63 @@ class TestEdgarPressReleaseDoesNotCollideWithCronEnums(unittest.TestCase):
         self.assertNotIn("edgar-press-release", ACTIVE_JOBS)
 
 
+class TestPaperFilledWithoutSl(unittest.TestCase):
+    """paper-exit hardening dead-man-switch: a filled paper position that does
+    not converge to a live protective SL must page. The reconciler emits
+    ``alphalens_paper_filled_without_sl{account=...}`` (a GAUGE); a sustained
+    non-zero value is an unprotected live position. Distinct alertname + NO
+    job= label keep it out of the cron-keyed enumerations (the paper jobs are
+    deliberately staleness-rule-exempt), so it needs its OWN pins here.
+    """
+
+    METRIC = "alphalens_paper_filled_without_sl"
+    ALERT = "AlphalensPaperFilledWithoutSl"
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def _one(self) -> dict:
+        matches = [r for r in self._rules() if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_alert_exists(self) -> None:
+        self._one()
+
+    def test_expr_is_gauge_correct_max_over_time_gt_zero(self) -> None:
+        expr = self._one()["expr"]
+        self.assertIn(self.METRIC, expr)
+        self.assertIn("max_over_time", expr)
+        self.assertIn("> 0", expr)
+        # GAUGE — never counter functions (the PR #312 increase()/rate() lesson).
+        self.assertNotIn("increase(", expr)
+        self.assertNotIn("rate(", expr)
+
+    def test_has_for_debounce(self) -> None:
+        self.assertIn("for", self._one())
+
+    def test_routes_to_telegram(self) -> None:
+        self.assertEqual(self._one().get("labels", {}).get("route"), "telegram")
+
+    def test_severity_is_critical(self) -> None:
+        # A naked live position IS a wake-up condition (unlike a degraded data
+        # source which is only warning).
+        self.assertEqual(self._one().get("labels", {}).get("severity"), "critical")
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        # A job= label would falsely register this in the job-keyed parity test
+        # and demand a phantom systemd unit. The paper jobs are intentionally
+        # staleness-rule-exempt; this is a per-account domain gauge.
+        rule = self._one()
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+    def test_alertname_distinct_from_cron_alertnames(self) -> None:
+        cron = {"AlphalensJobStale", "AlphalensJobMetricMissing", "AlphalensJobFailed"}
+        self.assertNotIn(self.ALERT, cron)
+
+
 if __name__ == "__main__":
     unittest.main()

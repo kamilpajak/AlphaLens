@@ -101,6 +101,17 @@ class ReconcileReport:
     gross_ratio: float
     gross_warning_emitted: bool
     outcomes: tuple[OrderReconcileOutcome, ...]
+    # Hardening visibility (LIVE-account protection telemetry):
+    #   n_exits_failed       — exit submits the broker rejected this pass
+    #                          (held_for_orders / insufficient qty / APIError).
+    #   n_entries_canceled   — open ENTRY tiers cancelled by SL convergence.
+    #   n_filled_without_sl  — plans that END this pass with filled shares but
+    #                          NO live protective SL. The dead-man: > 0 means
+    #                          an unprotected live position. Emitted as a
+    #                          Prometheus gauge so an alert can page on it.
+    n_exits_failed: int = 0
+    n_entries_canceled: int = 0
+    n_filled_without_sl: int = 0
 
 
 def _existing_fill_ids(conn: sqlite3.Connection, order_id: int) -> set[str]:
@@ -380,19 +391,40 @@ def reconcile_orders(
         n_attached = 0
         n_outcomes = 0
         n_time_stops = 0
+        n_exits_failed = 0
+        n_entries_canceled = 0
+        n_filled_without_sl = 0
         for plan_id in sorted(plans_touched):
-            exit_outcome = process_plan_exit(
-                conn,
-                plan_id=plan_id,
-                broker=broker,
-                observed_at=observed_at,
-            )
-            if exit_outcome.action == "ATTACHED":
+            # Defensive wrap: process_plan_exit already catches per-broker-call
+            # errors internally (exit submits + cancels are best-effort), but a
+            # single plan must NEVER abort the exit-phase loop for the plans
+            # behind it. Any unexpected error is logged + skipped + retried next
+            # cycle.
+            try:
+                exit_outcome = process_plan_exit(
+                    conn,
+                    plan_id=plan_id,
+                    broker=broker,
+                    observed_at=observed_at,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "reconcile exit-phase failed for plan_id=%d: %s; will retry next cycle",
+                    plan_id,
+                    exc,
+                )
+                continue
+            # ATTACHED kept for back-compat; CONVERGE_SL is the hardened action
+            # that attaches / re-sizes the protective SL (+ TP ladder).
+            if exit_outcome.action in ("ATTACHED", "CONVERGE_SL"):
                 n_attached += exit_outcome.n_exits_submitted
             elif exit_outcome.action in ("CLOSED", "UNFILLED"):
                 n_outcomes += 1
             elif exit_outcome.action == "TIME_STOP":
                 n_time_stops += 1
+            n_exits_failed += exit_outcome.n_exits_failed
+            n_entries_canceled += exit_outcome.n_entries_canceled
+            n_filled_without_sl += exit_outcome.n_filled_without_sl
 
     # Memo §6.1 Path B — closed-loop live-gross check post-reconcile.
     from alphalens_pipeline.paper.gross_guard import check_live_gross
@@ -408,7 +440,8 @@ def reconcile_orders(
 
     logger.info(
         "paper reconcile: %d orders checked, %d transitioned, %d fills appended, "
-        "%d exits attached, %d outcomes written, %d time-stops, %d ttl-cancels, gross=%.2f",
+        "%d exits attached, %d outcomes written, %d time-stops, %d ttl-cancels, "
+        "%d exits failed, %d entries canceled, %d filled-without-SL, gross=%.2f",
         len(outcomes),
         transitioned,
         appended,
@@ -416,8 +449,22 @@ def reconcile_orders(
         n_outcomes,
         n_time_stops,
         n_entries_ttl_canceled,
+        n_exits_failed,
+        n_entries_canceled,
+        n_filled_without_sl,
         gross_ratio,
     )
+    if n_filled_without_sl > 0:
+        # The dead-man condition: a filled position ended the pass with no
+        # live disaster-stop. This is the single most operationally dangerous
+        # state in the harness, so log it at WARNING (not just the INFO line)
+        # in addition to the Prometheus gauge the CLI emits.
+        logger.warning(
+            "paper reconcile: %d filled position(s) have NO live protective SL "
+            "(account=%s); convergence retries next pass",
+            n_filled_without_sl,
+            account,
+        )
     return ReconcileReport(
         n_orders_checked=len(outcomes),
         n_orders_transitioned=transitioned,
@@ -429,6 +476,9 @@ def reconcile_orders(
         gross_ratio=gross_ratio,
         gross_warning_emitted=gross_warning,
         outcomes=tuple(outcomes),
+        n_exits_failed=n_exits_failed,
+        n_entries_canceled=n_entries_canceled,
+        n_filled_without_sl=n_filled_without_sl,
     )
 
 
