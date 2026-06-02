@@ -15,7 +15,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-from alphalens_pipeline.paper.exit_manager import process_plan_exit
+from alphalens_pipeline.paper.exit_manager import _snapshot, process_plan_exit
 from alphalens_pipeline.paper.ledger import (
     fetch_orders_for_plan,
     insert_fill,
@@ -509,18 +509,18 @@ class TestZenRegressions(_ExitTestBase):
             filled_qty=27,
             filled_price=100.0,
         )
+        # Pass 1: attach (fill recent, not yet past the time-stop deadline).
+        with open_ledger(self.ledger) as conn:
+            process_plan_exit(
+                conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
+        # Age past the deadline so the time-stop fires from pass 2 on.
         ancient = _FIRST_FILL_AT_FIXED
         with open_ledger(self.ledger) as conn:
             conn.execute(
                 "UPDATE fills SET filled_at = ? WHERE order_id IN "
                 "(SELECT order_id FROM orders WHERE plan_id = ? AND order_kind = 'ENTRY')",
                 (ancient.isoformat(), plan_id),
-            )
-
-        # Pass 1: attach.
-        with open_ledger(self.ledger) as conn:
-            process_plan_exit(
-                conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
             )
         # Pass 2: time-stop fires.
         with open_ledger(self.ledger) as conn:
@@ -634,6 +634,16 @@ class TestZenRegressions(_ExitTestBase):
             filled_qty=27,
             filled_price=100.0,
         )
+        # Tell the stub Alpaca says we have 18 shares (e.g. an exit fill
+        # already happened that the reconciler hasn't picked up yet).
+        self.client.position_qty_for["NVDA"] = 18
+
+        # Pass 1: attach (fill recent, not yet past the time-stop deadline).
+        with open_ledger(self.ledger) as conn:
+            process_plan_exit(
+                conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
+        # Age past the deadline so the time-stop fires on pass 2.
         ancient = _FIRST_FILL_AT_FIXED
         with open_ledger(self.ledger) as conn:
             conn.execute(
@@ -641,16 +651,7 @@ class TestZenRegressions(_ExitTestBase):
                 "(SELECT order_id FROM orders WHERE plan_id = ? AND order_kind = 'ENTRY')",
                 (ancient.isoformat(), plan_id),
             )
-
-        # Tell the stub Alpaca says we have 18 shares (e.g. an exit fill
-        # already happened that the reconciler hasn't picked up yet).
-        self.client.position_qty_for["NVDA"] = 18
-
-        # Pass 1: attach. Pass 2: time-stop.
-        with open_ledger(self.ledger) as conn:
-            process_plan_exit(
-                conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
-            )
+        # Pass 2: time-stop.
         with open_ledger(self.ledger) as conn:
             o = process_plan_exit(
                 conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
@@ -1032,6 +1033,13 @@ class TestTimeStop(_ExitTestBase):
             filled_qty=27,
             filled_price=100.0,
         )
+        # First pass attaches the exits (fill is recent, not yet past deadline).
+        with open_ledger(self.ledger) as conn:
+            o_attach = process_plan_exit(
+                conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
+        self.assertEqual(o_attach.action, "CONVERGE_SL")
+
         # Backdate the entry fill so first_fill_at is older than TIME_STOP_DAYS.
         ancient = _FIRST_FILL_AT_FIXED
         with open_ledger(self.ledger) as conn:
@@ -1040,13 +1048,6 @@ class TestTimeStop(_ExitTestBase):
                 "(SELECT order_id FROM orders WHERE plan_id = ? AND order_kind = 'ENTRY')",
                 (ancient.isoformat(), plan_id),
             )
-
-        # First pass attaches the exits.
-        with open_ledger(self.ledger) as conn:
-            o_attach = process_plan_exit(
-                conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
-            )
-        self.assertEqual(o_attach.action, "CONVERGE_SL")
 
         # Second pass — time-stop fires before any exit completes.
         with open_ledger(self.ledger) as conn:
@@ -1085,7 +1086,13 @@ class TestTimeStopVsSlConvergenceCollision(_ExitTestBase):
     TIME_STOP exists), so live sell qty never exceeds the live position qty.
     """
 
-    def _seed_filled_aged_plan(self) -> int:
+    def _seed_filled_recent_plan(self) -> int:
+        """Seed a fully-filled plan whose fill is RECENT (not yet past the
+        time-stop deadline), so pass 1 arms the protective SL via convergence.
+        ``_age_plan`` then backdates the fill so the time-stop fires on a
+        subsequent pass — preserving the pass1=arm-SL, pass2=fire-time-stop
+        sequence after the rejected-time-stop retry change made a past-deadline
+        plan fire the time-stop on the very first pass (convergence skipped)."""
         plan_id = _seed_plan(self.ledger)
         _add_entry(
             self.ledger,
@@ -1096,14 +1103,16 @@ class TestTimeStopVsSlConvergenceCollision(_ExitTestBase):
             filled_qty=27,
             filled_price=100.0,
         )
-        # Backdate the entry fill past TIME_STOP_DAYS so the time-stop fires.
+        return plan_id
+
+    def _age_plan(self, plan_id: int) -> None:
+        """Backdate the entry fill past TIME_STOP_DAYS so the time-stop fires."""
         with open_ledger(self.ledger) as conn:
             conn.execute(
                 "UPDATE fills SET filled_at = ? WHERE order_id IN "
                 "(SELECT order_id FROM orders WHERE plan_id = ? AND order_kind = 'ENTRY')",
                 (_FIRST_FILL_AT_FIXED.isoformat(), plan_id),
             )
-        return plan_id
 
     def _live_sell_qty(self, plan_id: int) -> int:
         """Sum the qty of every NON-TERMINAL sell order (SL / TP / TIME_STOP)
@@ -1127,17 +1136,20 @@ class TestTimeStopVsSlConvergenceCollision(_ExitTestBase):
         return sum(1 for r in rows if r["status"] not in terminal)
 
     def test_live_time_stop_blocks_sl_rearm_no_oversell(self):
-        plan_id = self._seed_filled_aged_plan()
+        plan_id = self._seed_filled_recent_plan()
         # Live broker position stays 27 throughout (TIME_STOP unfilled).
         self.client.position_qty_for["NVDA"] = 27
 
-        # Pass 1: attach — one live SL covers all 27.
+        # Pass 1: attach — one live SL covers all 27 (fill not yet aged).
         with open_ledger(self.ledger) as conn:
             o1 = process_plan_exit(
                 conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
             )
         self.assertEqual(o1.action, "CONVERGE_SL")
         self.assertEqual(self._live_sl_count(plan_id), 1)
+
+        # Now age the fill past the time-stop deadline.
+        self._age_plan(plan_id)
 
         # Pass 2: time-stop fires — submits the TIME_STOP market-sell and
         # requests cancel of the live SL + TPs.
@@ -1197,13 +1209,15 @@ class TestTimeStopVsSlConvergenceCollision(_ExitTestBase):
     def test_time_stop_fill_still_closes_after_guard(self):
         """Once the TIME_STOP fills (terminal), the guard no longer blocks and
         the normal exit-phase closure writes a TIME_STOP_HIT outcome."""
-        plan_id = self._seed_filled_aged_plan()
+        plan_id = self._seed_filled_recent_plan()
         self.client.position_qty_for["NVDA"] = 27
 
+        # Pass 1 arms the SL (fill not yet aged), then age + pass 2 fires.
         with open_ledger(self.ledger) as conn:
             process_plan_exit(
                 conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
             )
+        self._age_plan(plan_id)
         with open_ledger(self.ledger) as conn:
             o2 = process_plan_exit(
                 conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
@@ -1459,19 +1473,21 @@ class TestTimeStopSizedToLivePosition(_ExitTestBase):
             filled_qty=27,
             filled_price=100.0,
         )
+        # A partial TP already executed 13 shares: live position is 14.
+        self.client.position_qty_for["NVDA"] = 14
+
+        # Pass 1 attaches exits while the fill is recent (not yet aged).
+        with open_ledger(self.ledger) as conn:
+            process_plan_exit(
+                conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
+        # Then age the fill past the time-stop deadline.
         ancient = _FIRST_FILL_AT_FIXED
         with open_ledger(self.ledger) as conn:
             conn.execute(
                 "UPDATE fills SET filled_at = ? WHERE order_id IN "
                 "(SELECT order_id FROM orders WHERE plan_id = ? AND order_kind = 'ENTRY')",
                 (ancient.isoformat(), plan_id),
-            )
-        # A partial TP already executed 13 shares: live position is 14.
-        self.client.position_qty_for["NVDA"] = 14
-
-        with open_ledger(self.ledger) as conn:
-            process_plan_exit(
-                conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
             )
         with open_ledger(self.ledger) as conn:
             o = process_plan_exit(
@@ -1562,6 +1578,297 @@ class TestConvergenceIdempotentNoEvent(_ExitTestBase):
             self.assertEqual(o.action, "NOOP")
         self.assertEqual(len(self.client.submissions), n_sub)
         self.assertEqual(len(self.client.canceled), n_can)
+
+
+class TestSlCoverageCountsRemainingOpenQty(_ExitTestBase):
+    """LOW: ``sl_coverage_qty`` must count the REMAINING open qty of a
+    partially-filled LIVE SL (``qty - filled``), not the original ``qty`` —
+    else a partly-consumed SL overstates remaining coverage and delays
+    re-convergence on the still-open shares."""
+
+    def test_partially_filled_live_sl_counts_remaining_only(self):
+        plan_id = _seed_plan(self.ledger)
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=27,
+            status="FILLED",
+            filled_qty=27,
+            filled_price=100.0,
+        )
+        # A live SL of qty 27 that has already partial-filled 10 shares
+        # (PARTIALLY_FILLED). Remaining open coverage = 27 - 10 = 17.
+        ts = dt.datetime.now(dt.UTC)
+        with open_ledger(self.ledger) as conn:
+            sl_oid = insert_order(
+                conn,
+                plan_id=plan_id,
+                alpaca_order_id="sl-partial-live",
+                side="SELL",
+                order_kind="SL",
+                order_type="STOP",
+                qty=27,
+                stop_price=80.0,
+                time_in_force="gtc",
+                submitted_at=ts,
+                status="PARTIALLY_FILLED",
+            )
+            insert_fill(
+                conn,
+                order_id=sl_oid,
+                alpaca_fill_id="sl-partial-live-fill",
+                qty=10,
+                price=79.5,
+                filled_at=ts,
+            )
+            snap = _snapshot(conn, plan_id)
+        # Remaining open qty (17), NOT the original 27.
+        self.assertEqual(snap.sl_coverage_qty, 17)
+
+
+class _PositionReadFailsBroker(_StubBrokerClient):
+    """Stub broker whose ``get_position`` ALWAYS raises (Alpaca read error /
+    timeout). Forces ``_position_qty`` down its fallback path so we can assert
+    the fallback sizes to the live ledger position, not the gross entry total.
+    """
+
+    def get_position(self, symbol: str):
+        raise RuntimeError("stub APIError: position read timed out")
+
+
+class _PositionReadNoneBroker(_StubBrokerClient):
+    """Stub broker whose ``get_position`` returns None (no live broker position
+    reported). Same fallback path as :class:`_PositionReadFailsBroker`."""
+
+    def get_position(self, symbol: str):
+        return None
+
+
+class TestPositionQtyFallbackUsesNetOpen(_ExitTestBase):
+    """HIGH (oversell risk): when the live broker position read fails / returns
+    None, the SL fallback size MUST be ``net_open_qty`` (entry fills minus exit
+    fills already SOLD), NOT the gross ``total_entry_filled_qty``. Sizing to
+    gross entry fills after a partial TP already sold shares oversizes the SL ->
+    persistent insufficient_qty rejection + oversell-to-short risk.
+
+    Scenario: 27 shares entered, a 13-share TP already FILLED -> 14 net held.
+    The broker position read fails, so the convergence SL must size to 14.
+    """
+
+    def _seed_filled_with_partial_tp_sold(self) -> int:
+        """27 entered + 1 TP order recorded as FILLED for 13 -> net 14 held."""
+        plan_id = _seed_plan(self.ledger)
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=27,
+            status="FILLED",
+            filled_qty=27,
+            filled_price=100.0,
+        )
+        # Record a TP exit order that already SOLD 13 shares (partial TP).
+        ts = dt.datetime.now(dt.UTC)
+        with open_ledger(self.ledger) as conn:
+            tp_oid = insert_order(
+                conn,
+                plan_id=plan_id,
+                alpaca_order_id="tp-sold",
+                side="SELL",
+                order_kind="TP",
+                tranche_index=0,
+                order_type="LIMIT",
+                qty=13,
+                limit_price=110.0,
+                time_in_force="gtc",
+                submitted_at=ts,
+                status="FILLED",
+            )
+            insert_fill(
+                conn,
+                order_id=tp_oid,
+                alpaca_fill_id="tp-sold-fill",
+                qty=13,
+                price=110.0,
+                filled_at=ts,
+            )
+        return plan_id
+
+    def _live_sl_qty(self, plan_id: int) -> list[int]:
+        with open_ledger(self.ledger) as conn:
+            rows = [r for r in fetch_orders_for_plan(conn, plan_id) if r["order_kind"] == "SL"]
+        return [int(r["qty"]) for r in rows]
+
+    def test_fallback_on_read_error_sizes_sl_to_net_open_not_gross(self):
+        plan_id = self._seed_filled_with_partial_tp_sold()
+        broker = _PositionReadFailsBroker()
+        with open_ledger(self.ledger) as conn:
+            with self.assertLogs("alphalens_pipeline.paper.exit_manager", level="WARNING"):
+                o = process_plan_exit(
+                    conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
+                )
+        self.assertEqual(o.action, "CONVERGE_SL")
+        # SL sized to net_open (27 - 13 = 14), NOT the gross 27 entry fills.
+        self.assertEqual(
+            self._live_sl_qty(plan_id),
+            [14],
+            "SL fallback oversized to gross entry fills (oversell-to-short risk)",
+        )
+
+    def test_fallback_on_none_position_sizes_sl_to_net_open_not_gross(self):
+        plan_id = self._seed_filled_with_partial_tp_sold()
+        broker = _PositionReadNoneBroker()
+        with open_ledger(self.ledger) as conn:
+            o = process_plan_exit(
+                conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
+            )
+        self.assertEqual(o.action, "CONVERGE_SL")
+        self.assertEqual(
+            self._live_sl_qty(plan_id),
+            [14],
+            "SL fallback oversized to gross entry fills (oversell-to-short risk)",
+        )
+
+
+class TestRejectedTimeStopRetriesNoOscillation(_ExitTestBase):
+    """HIGH: a TIME_STOP that is submitted then REJECTED (terminal, 0 fill) on
+    a past-deadline plan must be RETRIED on subsequent passes — not permanently
+    suppressed by the bare 'a TIME_STOP exists' guard. AND the SL-convergence
+    branch must NOT arm a competing SL each pass once the plan is in time-stop
+    territory (which would churn cancel/re-submit every pass and risk oversell).
+
+    Failure on the base code:
+      - ``_time_stop_should_fire`` counts ANY TIME_STOP incl. the terminal
+        REJECTED one -> returns False forever -> liquidation never retried
+        (the position is stranded with no live sell at all).
+      - If (a) alone is applied without the interaction guard, a single pass
+        would arm a fresh SL (convergence) and then re-fire the time-stop which
+        cancels it and re-submits -> oscillation, churn, transient double sell.
+    """
+
+    def _seed_filled_recent_plan(self) -> int:
+        """27 shares filled with a RECENT fill (pass 1 arms the SL); call
+        ``_age_plan`` after to push the fill past the time-stop deadline."""
+        plan_id = _seed_plan(self.ledger)
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=27,
+            status="FILLED",
+            filled_qty=27,
+            filled_price=100.0,
+        )
+        return plan_id
+
+    def _age_plan(self, plan_id: int) -> None:
+        with open_ledger(self.ledger) as conn:
+            conn.execute(
+                "UPDATE fills SET filled_at = ? WHERE order_id IN "
+                "(SELECT order_id FROM orders WHERE plan_id = ? AND order_kind = 'ENTRY')",
+                (_FIRST_FILL_AT_FIXED.isoformat(), plan_id),
+            )
+
+    def _live_sells(self, plan_id: int) -> int:
+        """Count of NON-TERMINAL sell orders (SL / TP / TIME_STOP)."""
+        terminal = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+        with open_ledger(self.ledger) as conn:
+            rows = conn.execute(
+                "SELECT status FROM orders WHERE plan_id = ? AND side = 'SELL'",
+                (plan_id,),
+            ).fetchall()
+        return sum(1 for r in rows if r["status"] not in terminal)
+
+    def _live_sell_qty(self, plan_id: int) -> int:
+        terminal = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+        with open_ledger(self.ledger) as conn:
+            rows = conn.execute(
+                "SELECT qty, status FROM orders WHERE plan_id = ? AND side = 'SELL'",
+                (plan_id,),
+            ).fetchall()
+        return sum(int(r["qty"]) for r in rows if r["status"] not in terminal)
+
+    def _reject_open_time_stops(self, plan_id: int) -> None:
+        """Model the reconciler polling the just-submitted TIME_STOP to a
+        terminal REJECTED with 0 fill (e.g. Alpaca rejected the market sell)."""
+        with open_ledger(self.ledger) as conn:
+            rows = fetch_orders_for_plan(conn, plan_id)
+            for o in rows:
+                if o["order_kind"] == "TIME_STOP" and o["status"] == "SUBMITTED":
+                    update_order_status(conn, order_id=int(o["order_id"]), status="REJECTED")
+
+    def _cancel_open_sl_tp(self, plan_id: int) -> None:
+        """Model the reconciler polling the time-stop-cancelled SL/TPs to
+        terminal CANCELED with 0 fill."""
+        with open_ledger(self.ledger) as conn:
+            rows = fetch_orders_for_plan(conn, plan_id)
+            for o in rows:
+                if o["order_kind"] in ("SL", "TP") and o["status"] == "SUBMITTED":
+                    update_order_status(conn, order_id=int(o["order_id"]), status="CANCELED")
+
+    def test_rejected_time_stop_is_retried_and_no_competing_sl(self):
+        plan_id = self._seed_filled_recent_plan()
+        self.client.position_qty_for["NVDA"] = 27
+
+        # Pass 1: attach — one live SL covers all 27 (fill not yet aged).
+        with open_ledger(self.ledger) as conn:
+            o1 = process_plan_exit(
+                conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
+        self.assertEqual(o1.action, "CONVERGE_SL")
+
+        # Age past the deadline so the time-stop fires from pass 2 on.
+        self._age_plan(plan_id)
+
+        # Pass 2: time-stop fires — submits the TIME_STOP, cancels SL + TPs.
+        with open_ledger(self.ledger) as conn:
+            o2 = process_plan_exit(
+                conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
+        self.assertEqual(o2.action, "TIME_STOP")
+        # Reconciler: the SL/TPs go terminal CANCELED, the TIME_STOP is REJECTED.
+        self._cancel_open_sl_tp(plan_id)
+        self._reject_open_time_stops(plan_id)
+        n_stop_after_pass2 = len([s for s in self.client.submissions if s["kind"] == "MARKET"])
+        self.assertEqual(n_stop_after_pass2, 1)
+
+        # Passes 3..6: the rejected TIME_STOP must be RETRIED (a fresh market
+        # sell submitted) AND convergence must NOT arm a competing SL.
+        retried = False
+        for _ in range(4):
+            with open_ledger(self.ledger) as conn:
+                o = process_plan_exit(
+                    conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
+                )
+            # Each retry submits a fresh TIME_STOP (terminal, so should-fire
+            # is True again) — never a CONVERGE_SL that arms an SL.
+            if o.action == "TIME_STOP":
+                retried = True
+                # The just-submitted TIME_STOP gets rejected again next poll.
+                self._reject_open_time_stops(plan_id)
+            # Safety invariant: at most ONE live sell-side order at any time
+            # (the in-flight TIME_STOP between submit and reject), never an SL
+            # stacked on top of a TIME_STOP.
+            self.assertLessEqual(
+                self._live_sells(plan_id),
+                1,
+                "convergence armed a competing SL alongside the time-stop (churn/oversell)",
+            )
+            self.assertLessEqual(
+                self._live_sell_qty(plan_id),
+                27,
+                "live sell qty exceeds position qty -> oversell to short",
+            )
+
+        self.assertTrue(retried, "rejected TIME_STOP was permanently suppressed, never retried")
+        # No SL was ever re-armed after the time-stop deadline passed.
+        with open_ledger(self.ledger) as conn:
+            sl_rows = [r for r in fetch_orders_for_plan(conn, plan_id) if r["order_kind"] == "SL"]
+        # Only the single pass-1 SL ever existed (now terminal CANCELED).
+        self.assertEqual(
+            len(sl_rows), 1, "convergence armed a fresh SL past the time-stop deadline"
+        )
 
 
 if __name__ == "__main__":

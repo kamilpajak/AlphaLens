@@ -55,14 +55,18 @@ Known Issue in the design memo follow-up — and acceptable in exchange
 for not needing a cancel-and-resize loop on every TP fill.
 
 Behaviour notes / Known issues (PR-body markers):
-  (a) Transient double-SL OVER-coverage during a gap-fill SL resize. When a
-      cheaper tier fills in the race after its cancel request, the convergence
-      rule cancels the old under-sized SL and submits a correctly-sized one
-      before the cancel has acked. For one poll both SLs are live (protect-
-      first bias — we ADD coverage then drop the stale one), so coverage
-      briefly exceeds the position. It clears on the next reconcile poll and
-      NEVER under-covers. We accept brief over-protection, never under-
-      protection.
+  (a) Cancel-FIRST on a gap-fill SL resize (transient UNDER-coverage window).
+      When a cheaper tier fills in the race and the position grows past the
+      live under-sized SL, the convergence rule CANCELS the stale under-sized
+      SL FIRST, then submits the correctly-sized one. For a brief window
+      (until the resized SL is acked) the position may be under-covered; the
+      next reconcile pass re-runs convergence and re-submits if the resize did
+      not land, so the gap self-heals. We deliberately do NOT protect-first
+      (submit the new SL before cancelling the old one): two live stop-sells
+      on the same shares would BOTH trigger together and OVER-SELL the position
+      to a short — the exact bug class this module guards against. A brief
+      under-covered window (self-healed next pass) is the correct trade-off
+      against ever over-covering / oversell-to-short.
   (b) The TP ladder is NOT re-sized up after a gap fill. The SL always covers
       the full position, but the TP tranches stay sized to the FIRST observed
       fill (the Phase-A simplification). Some upside shares may sit without a
@@ -159,9 +163,13 @@ class _PlanSnapshot:
 
     @property
     def sl_coverage_qty(self) -> int:
-        """Shares currently covered by a disaster-stop: the qty on every LIVE
-        (non-terminal) SL order plus the observed fills of any SL that already
-        FIRED. A terminal SL CANCELED with zero fill contributes nothing, so a
+        """Shares currently covered by a disaster-stop: for every LIVE
+        (non-terminal) SL order, the REMAINING open qty (``qty`` minus shares
+        already filled, clamped at >= 0), plus the observed fills of any SL
+        that already FIRED. Counting the original ``qty`` of a partially-filled
+        live SL would overstate remaining coverage and delay re-convergence;
+        the remaining-open qty is the protection that actually still stands.
+        A terminal SL CANCELED with zero fill contributes nothing, so a
         position with only such an SL is unprotected and must re-converge.
         """
         total = 0
@@ -170,7 +178,7 @@ class _PlanSnapshot:
                 continue
             filled = int(o["filled_qty_observed"] or 0) if "filled_qty_observed" in o else 0
             if o["status"] not in _TERMINAL_ENTRY_STATUSES:
-                total += int(o["qty"] or 0)
+                total += max(int(o["qty"] or 0) - filled, 0)
             elif filled > 0:
                 total += filled
         return total
@@ -357,27 +365,34 @@ def _position_qty(snapshot: _PlanSnapshot, broker: BrokerClient) -> int:
 
     The same-ticker policy guarantees one active plan per ticker, so the
     broker-side position is the authoritative count. We PREFER it over the
-    ledger filled total because an exit fill (a partial TP) may have landed
-    at Alpaca that the reconciler has not observed yet — sizing the SL to the
-    stale ledger total would over-state inventory and risk an
-    insufficient-qty rejection. On any read error we fall back to the
-    already-observed ledger total rather than expanding the BrokerClient
-    protocol. Returns 0 when neither source reports a positive position.
+    ledger total because an exit fill (a partial TP) may have landed at Alpaca
+    that the reconciler has not observed yet — sizing the SL to a stale ledger
+    total would over-state inventory and risk an insufficient-qty rejection.
+
+    On any read error / None we fall back to ``net_open_qty`` (entry fills
+    MINUS exit fills = the true live ledger-side position) rather than the
+    GROSS ``total_entry_filled_qty``. Sizing the fallback to gross entry fills
+    ignores shares already SOLD by exits, oversizing the protective sell ->
+    persistent insufficient_qty rejection AND, if the over-sized SL ever lands,
+    oversell-to-short. ``net_open_qty`` is the safe fallback: it never exceeds
+    the shares actually held. Returns 0 when neither source reports a positive
+    position.
     """
-    ledger_qty = snapshot.total_entry_filled_qty
+    ledger_qty = snapshot.net_open_qty
     try:
         position = broker.get_position(snapshot.ticker)
     except Exception as exc:
         logger.warning(
-            "exit_manager position read failed for %s: %s; sizing to ledger qty %d",
+            "exit_manager position read failed for %s: %s; sizing to net-open ledger qty %d",
             snapshot.ticker,
             exc,
             ledger_qty,
         )
         return max(ledger_qty, 0)
     if position is None:
-        # No live broker position (e.g. fully exited) — fall back to the
-        # ledger total so a not-yet-reconciled fresh fill is still covered.
+        # No live broker position reported — fall back to the net-open ledger
+        # qty (entry fills minus exit fills) so a not-yet-reconciled fresh fill
+        # is still covered without over-counting shares already sold.
         return max(ledger_qty, 0)
     pos_qty = int(float(getattr(position, "qty", 0) or 0))
     return max(pos_qty, 0)
@@ -677,11 +692,21 @@ def _write_outcome(
 
 
 def _time_stop_should_fire(snapshot: _PlanSnapshot, now: dt.datetime) -> bool:
-    """True when the position is old enough for time-stop AND we haven't
-    already submitted a TIME_STOP order. The existence check prevents an
-    infinite re-fire loop when the time-stop market order doesn't fill
-    immediately (e.g. submitted while market is closed) and the next
-    reconcile pass would otherwise cancel-and-resubmit it endlessly.
+    """True when the position is old enough for time-stop AND no PRIOR TIME_STOP
+    has either liquidated the position or is still in flight.
+
+    A prior TIME_STOP suppresses a re-fire when it is EITHER:
+      * non-terminal (in flight — the market sell hasn't filled yet, e.g.
+        submitted while the market is closed); re-firing would cancel and
+        re-submit it every pass, OR
+      * terminal WITH a fill (filled_qty_observed > 0 — it did its job and
+        liquidated the position); re-firing would submit a second market
+        sell on top of an already-sold position → oversell-to-short.
+
+    Only a terminal ZERO-fill TIME_STOP (REJECTED / CANCELED, never executed)
+    allows a re-fire — that is the rejected-time-stop retry case: the
+    liquidation never happened, so the next pass RE-SUBMITS a fresh market
+    sell rather than stranding the position forever.
 
     The age metric is the number of XNYS trading days elapsed between
     the entry fill and ``now`` (half-open, end-inclusive). The PR-B
@@ -694,8 +719,13 @@ def _time_stop_should_fire(snapshot: _PlanSnapshot, now: dt.datetime) -> bool:
 
     if snapshot.first_entry_fill_at is None:
         return False
-    if any(o["order_kind"] == "TIME_STOP" for o in snapshot.exit_orders):
-        return False
+    for o in snapshot.exit_orders:
+        if o["order_kind"] != "TIME_STOP":
+            continue
+        non_terminal = o["status"] not in _TERMINAL_ENTRY_STATUSES
+        filled = int(o["filled_qty_observed"] or 0) if "filled_qty_observed" in o else 0
+        if non_terminal or filled > 0:
+            return False
     age = trading_days_elapsed(snapshot.first_entry_fill_at, now)
     return age >= TIME_STOP_DAYS
 
@@ -809,27 +839,47 @@ def process_plan_exit(
     #     gap fill) re-converges; a partial TP that shrinks the position below
     #     an over-covering SL does NOT (the Phase-A SL-not-resized-down
     #     simplification stands — the SL simply sells remaining inventory).
-    # SAFETY: short-circuit SL-convergence when a TIME_STOP market-sell is in
-    # flight. The convergence coverage check (``sl_coverage_qty``) counts only
+    # SAFETY: short-circuit SL-convergence whenever the plan is in TIME-STOP
+    # territory, i.e. (1) a TIME_STOP market-sell is already in flight, OR
+    # (2) the time-stop deadline has passed and this pass is about to fire one.
+    #
+    # The convergence coverage check (``sl_coverage_qty``) counts only
     # order_kind=='SL', so a pending TIME_STOP contributes ZERO coverage. Once
     # the time-stop has cancelled the live SL (which then polls to a terminal
     # CANCELED with 0 fill) sl_coverage_qty drops to 0 while net_open_qty is
     # still > 0 (the market-sell has not filled — e.g. submitted at/after the
-    # close). Without this guard the convergence gate would RE-ARM a fresh
-    # full-size SL on top of the live TIME_STOP, so both execute when the
-    # market opens and OVER-SELL the position to a short. The time-stop IS the
-    # liquidation; nothing protective should be re-armed against a position
-    # that is being market-liquidated.
+    # close). Without the ``has_live_time_stop`` guard the convergence gate
+    # would RE-ARM a fresh full-size SL on top of the live TIME_STOP, so both
+    # execute when the market opens and OVER-SELL the position to a short.
+    #
+    # The ``should_fire_time_stop`` arm of the guard is the COUPLED half of the
+    # rejected-time-stop retry change in ``_time_stop_should_fire``: now that a
+    # REJECTED / CANCELED (terminal) TIME_STOP no longer suppresses a re-fire,
+    # a past-deadline pass with no live TIME_STOP would otherwise (a) arm a
+    # fresh SL via convergence and then (b) immediately re-fire the time-stop,
+    # cancelling that SL and re-submitting the market sell — churning every
+    # pass. Skipping convergence whenever the time-stop is about to fire makes
+    # the post-deadline behaviour a clean LIQUIDATION (time-stop retried until
+    # it lands), never a convergence-vs-time-stop oscillation. Before the
+    # deadline ``should_fire_time_stop`` is False, so convergence keeps the SL
+    # fresh exactly as before. The value is computed ONCE here and reused by
+    # the time-stop branch below so the skip and the fire stay consistent.
+    # The time-stop IS the liquidation; nothing protective should be re-armed
+    # against a position that is being market-liquidated.
     size_qty = _position_qty(snap, broker)
     if snap.has_live_time_stop:
         return ExitOutcome(plan_id=plan_id, action="NOOP")
-    if snap.net_open_qty > 0 and snap.sl_coverage_qty < size_qty:
+    should_fire_time_stop = _time_stop_should_fire(snap, observed_at)
+    if not should_fire_time_stop and snap.net_open_qty > 0 and snap.sl_coverage_qty < size_qty:
         n_canceled = _cancel_unfilled_entries(snapshot=snap, broker=broker)
-        # Cancel an under-sized live SL so the re-submit below does not stack a
-        # second SL on top of it (double protection / double sell). Best-effort
-        # cancel; the ledger status flips on the reconciler's next poll, so the
-        # under-sized SL still counts as coverage until then — that is fine, we
-        # only ADD coverage here, never drop below the position.
+        # CANCEL-FIRST: cancel the under-sized live SL BEFORE submitting the
+        # resized one below, so we never run two live stop-sells on the same
+        # shares (both would trigger together → oversell-to-short). This
+        # accepts a brief transient window that may be UNDER-covered (the
+        # cancel ack and the resized-SL ack race); the next reconcile pass
+        # re-runs convergence and re-submits if the resize did not land, so the
+        # gap self-heals. We deliberately do NOT protect-first. Best-effort
+        # cancel; the ledger status only flips on the reconciler's next poll.
         for sl in snap.live_sl_orders:
             try:
                 broker.cancel_order(sl["alpaca_order_id"])
@@ -899,8 +949,10 @@ def process_plan_exit(
         )
         return ExitOutcome(plan_id=plan_id, action="UNFILLED", exit_kind="UNFILLED")
 
-    # Exit phase active. Check for time-stop first.
-    if _time_stop_should_fire(snap, observed_at):
+    # Exit phase active. Check for time-stop first. Reuse the value computed
+    # before the convergence gate so the convergence-skip and the actual fire
+    # are driven by the SAME decision (no re-eval drift between the two).
+    if should_fire_time_stop:
         _submit_time_stop(conn, snapshot=snap, broker=broker, observed_at=observed_at)
         # Re-snapshot so the outcome write sees the just-canceled exits + new TIME_STOP order.
         snap = _snapshot(conn, plan_id) or snap
