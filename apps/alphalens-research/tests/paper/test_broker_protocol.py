@@ -28,6 +28,9 @@ _EXPECTED = {
     "get_position": ["symbol"],
     "get_order": ["order_id"],
     "cancel_order": ["order_id"],
+    # Reset-support enumerate primitives (broker-agnostic state sweep).
+    "list_open_orders": [],
+    "list_positions": [],
 }
 
 
@@ -38,7 +41,7 @@ def _public_methods(cls):
 
 
 class TestBrokerProtocolSurface(unittest.TestCase):
-    def test_protocol_declares_exactly_the_seven_methods(self):
+    def test_protocol_declares_exactly_the_expected_methods(self):
         self.assertEqual(_public_methods(BrokerClient), set(_EXPECTED))
 
     def test_protocol_method_signatures_match_spec(self):
@@ -67,6 +70,42 @@ class TestAlpacaClientConformsStructurally(unittest.TestCase):
         # Decorative: @runtime_checkable matches method NAMES only. A bare
         # object missing the methods must NOT pass.
         self.assertFalse(isinstance(object(), BrokerClient))
+
+
+class TestConformancePositiveControl(unittest.TestCase):
+    """A stub missing the enumerate primitives must NOT pass isinstance.
+
+    Guards the #388 conformance pattern: if someone adds a partial stub
+    (the 7 original methods but not the 2 new enumerate primitives), the
+    runtime_checkable isinstance check catches the missing names.
+    """
+
+    def test_stub_missing_enumerate_primitives_fails_isinstance(self):
+        class _PartialBroker:
+            def submit_limit_order(self, **kw):  # pragma: no cover - shape only
+                ...
+
+            def submit_stop_order(self, **kw):  # pragma: no cover - shape only
+                ...
+
+            def submit_market_order(self, **kw):  # pragma: no cover - shape only
+                ...
+
+            def get_account(self):  # pragma: no cover - shape only
+                ...
+
+            def get_position(self, symbol):  # pragma: no cover - shape only
+                ...
+
+            def get_order(self, order_id):  # pragma: no cover - shape only
+                ...
+
+            def cancel_order(self, order_id):  # pragma: no cover - shape only
+                ...
+
+            # Deliberately NO list_open_orders / list_positions.
+
+        self.assertFalse(isinstance(_PartialBroker(), BrokerClient))
 
 
 class TestPlatformFactory(unittest.TestCase):
