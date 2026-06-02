@@ -65,9 +65,9 @@ class _StubBrokerClient:
         self.exit_submissions: list[dict] = []
         self.canceled_orders: list[str] = []
         self._next_exit_id = 1
-        # ticker → live position qty for the SL-convergence sizing read.
-        # Unset → get_position returns None → _position_qty falls back to the
-        # observed ledger filled qty (the pre-hardening default behaviour).
+        # ticker → live position qty for the attach-once ladder sizing read.
+        # Unset → get_position returns None → _read_position falls back to the
+        # observed ledger filled qty.
         self.position_qty_for: dict[str, int] = {}
         # Gross-guard reads account.equity + account.long_market_value
         # post-reconcile per memo §6.1 Path B.
@@ -100,6 +100,37 @@ class _StubBrokerClient:
         self._next_exit_id += 1
         return _StubExitOrder(id=oid)
 
+    def attach_exit_ladder(self, *, symbol, tranches, stop_price, time_in_force="gtc"):
+        """OCO-ladder attach (attach-once exit path). Returns one
+        ExitLadderLeg per tranche with fake per-tranche tp/sl ids; records the
+        attach so exit-aware tests can assert the qty split."""
+        from alphalens_pipeline.paper.broker import ExitLadderLeg
+
+        self.exit_submissions.append(
+            {
+                "kind": "LADDER",
+                "symbol": symbol,
+                "stop_price": stop_price,
+                "tranche_qtys": [t.qty for t in tranches],
+            }
+        )
+        legs: list[ExitLadderLeg] = []
+        for i, tr in enumerate(tranches):
+            tp_id = f"exit-tp-{self._next_exit_id:03d}"
+            sl_id = f"exit-sl-{self._next_exit_id:03d}"
+            self._next_exit_id += 1
+            legs.append(
+                ExitLadderLeg(
+                    tranche_index=i,
+                    qty=tr.qty,
+                    take_profit_limit=tr.take_profit_limit,
+                    stop_price=stop_price,
+                    tp_order_id=tp_id,
+                    sl_order_id=sl_id,
+                )
+            )
+        return legs
+
     def cancel_order(self, alpaca_order_id: str) -> None:
         self.canceled_orders.append(alpaca_order_id)
 
@@ -110,8 +141,8 @@ class _StubBrokerClient:
         """Live broker position the exit_manager sizes protective orders to.
 
         Defaults to the ledger-side filled total via ``position_qty_for`` (set
-        per-ticker by tests that exercise the SL-convergence path). When unset,
-        return None so ``_position_qty`` falls back to the observed ledger qty
+        per-ticker by tests that exercise the attach-once path). When unset,
+        return None so ``_read_position`` falls back to the observed ledger qty
         — the same not-yet-modelled-position behaviour the time-stop path
         already tolerated.
         """
@@ -796,19 +827,22 @@ class TestTtlSweep(_ReconcilerTestBase):
 
 
 class _ExitFailingBroker(_StubBrokerClient):
-    """Stub whose stop-order submit raises for a chosen symbol, modelling
-    Alpaca rejecting an SL with held_for_orders / insufficient qty."""
+    """Stub whose OCO-ladder attach raises for a chosen symbol, modelling
+    Alpaca rejecting the exit attach (the adapter's all-or-nothing wrapper
+    leaves nothing live; the exit_manager persists nothing → retryable)."""
 
     def __init__(self, *, fail_stop_for: set[str] | None = None) -> None:
         super().__init__()
         self.fail_stop_for = fail_stop_for or set()
 
-    def submit_stop_order(self, **kwargs):
-        if kwargs.get("symbol") in self.fail_stop_for:
+    def attach_exit_ladder(self, *, symbol, tranches, stop_price, time_in_force="gtc"):
+        if symbol in self.fail_stop_for:
             raise RuntimeError(
                 "stub APIError: held_for_orders insufficient qty available for order"
             )
-        return super().submit_stop_order(**kwargs)
+        return super().attach_exit_ladder(
+            symbol=symbol, tranches=tranches, stop_price=stop_price, time_in_force=time_in_force
+        )
 
 
 class TestReconcileExitResilience(_ReconcilerTestBase):

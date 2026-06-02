@@ -486,6 +486,17 @@ class AlpacaClient:
         recorded :class:`ExitLadderLeg` prices are the tick-rounded values
         actually submitted, not the caller's raw intent. OCO requires WHOLE
         shares.
+
+        ALL-OR-NOTHING AT THE BROKER: if attaching ANY tranche fails (the
+        submit raises, OR the parent comes back with no capturable stop leg),
+        every OCO group already placed THIS call is best-effort cancelled
+        (cancelling an OCO parent cancels its whole group) before the original
+        error is re-raised. So a failed attach leaves NOTHING live at the
+        broker — it matches the zero ledger rows the caller persists on
+        failure, making a clean retry safe (no duplicate live OCO groups on the
+        next pass). Each rollback cancel runs in its own try/except so a cancel
+        failure cannot mask the original error; the original is always the one
+        propagated.
         """
         # Lazy import to avoid a top-level data -> paper import edge (mirrors
         # the lazy import in broker.get_default_broker_client). The paper
@@ -508,43 +519,75 @@ class AlpacaClient:
         rounded_stop = _round_to_alpaca_tick(stop_price)
         tif = _tif(time_in_force, self._sdk)
         legs: list[Any] = []
-        for index, tranche in enumerate(tranches):
-            rounded_tp = _round_to_alpaca_tick(tranche.take_profit_limit)
-            req = self._sdk.LimitOrderRequest(
-                symbol=symbol,
-                qty=tranche.qty,
-                side=self._sdk.OrderSide.SELL,
-                time_in_force=tif,
-                order_class=self._sdk.OrderClass.OCO,
-                take_profit=self._sdk.TakeProfitRequest(limit_price=rounded_tp),
-                stop_loss=self._sdk.StopLossRequest(stop_price=rounded_stop),
-            )
-            parent = self._trading.submit_order(order_data=req)
-            parent_legs = getattr(parent, "legs", None)
-            if not parent_legs:
-                raise AlpacaClientError(
-                    f"OCO submit for {symbol} tranche #{index} returned no "
-                    "child legs; cannot capture the stop-loss order id. "
-                    "Refusing to attach a take-profit without its protective "
-                    "stop-loss (the disaster stop would be silently dropped)."
-                )
-            # Record the prices ACTUALLY SUBMITTED (tick-rounded), not the raw
-            # intent — the order ids point at the rounded orders, so a future
-            # reconciler comparing a leg to the broker order sees no sub-tick
-            # drift (see ExitLadderLeg docstring).
-            legs.append(
-                ExitLadderLeg(
-                    tranche_index=index,
+        # OCO parent ids placed THIS call, for all-or-nothing rollback: on any
+        # mid-ladder failure each is cancelled (cancelling the parent cancels
+        # its whole OCO group) so nothing stays live at the broker.
+        placed_parent_ids: list[str] = []
+        try:
+            for index, tranche in enumerate(tranches):
+                rounded_tp = _round_to_alpaca_tick(tranche.take_profit_limit)
+                req = self._sdk.LimitOrderRequest(
+                    symbol=symbol,
                     qty=tranche.qty,
-                    take_profit_limit=rounded_tp,
-                    stop_price=rounded_stop,
-                    # str() — Alpaca order ids are UUID objects; ExitLadderLeg
-                    # types them as str and the ledger persists them as TEXT
-                    # (matches the str(order.id) convention elsewhere).
-                    tp_order_id=str(parent.id),
-                    sl_order_id=str(parent_legs[0].id),
+                    side=self._sdk.OrderSide.SELL,
+                    time_in_force=tif,
+                    order_class=self._sdk.OrderClass.OCO,
+                    take_profit=self._sdk.TakeProfitRequest(limit_price=rounded_tp),
+                    stop_loss=self._sdk.StopLossRequest(stop_price=rounded_stop),
                 )
-            )
+                parent = self._trading.submit_order(order_data=req)
+                # Capture the parent id BEFORE the legs check so a no-legs parent
+                # that already rests at the broker is still rolled back.
+                placed_parent_ids.append(str(parent.id))
+                parent_legs = getattr(parent, "legs", None)
+                if not parent_legs:
+                    raise AlpacaClientError(
+                        f"OCO submit for {symbol} tranche #{index} returned no "
+                        "child legs; cannot capture the stop-loss order id. "
+                        "Refusing to attach a take-profit without its protective "
+                        "stop-loss (the disaster stop would be silently dropped)."
+                    )
+                # Record the prices ACTUALLY SUBMITTED (tick-rounded), not the
+                # raw intent — the order ids point at the rounded orders, so a
+                # future reconciler comparing a leg to the broker order sees no
+                # sub-tick drift (see ExitLadderLeg docstring).
+                legs.append(
+                    ExitLadderLeg(
+                        tranche_index=index,
+                        qty=tranche.qty,
+                        take_profit_limit=rounded_tp,
+                        stop_price=rounded_stop,
+                        # str() — Alpaca order ids are UUID objects;
+                        # ExitLadderLeg types them as str and the ledger
+                        # persists them as TEXT (matches str(order.id) elsewhere).
+                        tp_order_id=str(parent.id),
+                        sl_order_id=str(parent_legs[0].id),
+                    )
+                )
+        except Exception as exc:
+            # All-or-nothing: best-effort cancel every OCO group already placed
+            # this call so the failed attach leaves nothing live at the broker.
+            for parent_id in placed_parent_ids:
+                try:
+                    self._trading.cancel_order_by_id(parent_id)
+                except Exception as cancel_exc:  # pragma: no cover - logging only
+                    logger.warning(
+                        "attach_exit_ladder rollback: failed to cancel OCO group %s "
+                        "for %s after a mid-ladder error: %s",
+                        parent_id,
+                        symbol,
+                        cancel_exc,
+                    )
+            # Wrap an unexpected broker error so callers see a single
+            # AlpacaClientError type; an AlpacaClientError we raised ourselves
+            # (e.g. the empty-legs guard) propagates unchanged.
+            if isinstance(exc, AlpacaClientError):
+                raise
+            raise AlpacaClientError(
+                f"attach_exit_ladder for {symbol} failed mid-ladder after "
+                f"{len(placed_parent_ids)} OCO submit(s); rolled back all placed "
+                f"groups. Original error: {exc}"
+            ) from exc
         return legs
 
     def cancel_order(self, order_id: str) -> None:

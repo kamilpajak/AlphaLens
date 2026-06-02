@@ -281,7 +281,7 @@ class TestAttachExitLadderDecomposition(_FakeAlpacaTestCase):
         self.assertIn("empty", str(cm.exception).lower())
         self.assertEqual(self._trading_instance().submit_order.call_count, 0)
 
-    def test_empty_legs_on_second_tranche_raises_after_first_submitted(self):
+    def test_empty_legs_on_second_tranche_rolls_back_first_then_raises(self):
         # Given tranche #1 returns a valid OCO parent but tranche #2 comes back
         # with no legs (SL id uncapturable on the second submit).
         from alphalens_pipeline.data.alt_data.alpaca_client import AlpacaClientError
@@ -304,11 +304,78 @@ class TestAttachExitLadderDecomposition(_FakeAlpacaTestCase):
                 ],
                 stop_price=90.0,
             )
-        # The loop aborts on tranche #2; tranche #1 is already LIVE at the
-        # broker (two submits fired, no rollback — documents the partial-ladder
-        # leak the later reconciler PR must handle).
+        # The loop aborts on tranche #2; both submits fired.
         self.assertEqual(self._trading_instance().submit_order.call_count, 2)
         self.assertIn("#1", str(cm.exception))
+        # ALL-OR-NOTHING: the no-legs parent (tp-2) AND the already-live tranche
+        # #1 (tp-1) are both cancelled so nothing stays live at the broker.
+        canceled = [c.args[0] for c in self._trading_instance().cancel_order_by_id.call_args_list]
+        self.assertIn("tp-1", canceled)
+        self.assertIn("tp-2", canceled)
+
+
+class TestAttachExitLadderAllOrNothing(_FakeAlpacaTestCase):
+    """ALL-OR-NOTHING (Q2): a mid-ladder failure must cancel every OCO group
+    already placed this call before re-raising, so a failed attach leaves
+    NOTHING live at the broker (matching the zero ledger rows the caller
+    persists on failure → a clean, duplicate-free retry)."""
+
+    def _build_client(self):
+        from alphalens_pipeline.data.alt_data.alpaca_client import AlpacaClient
+
+        return AlpacaClient(api_key="k", secret_key="s")
+
+    def _trading_instance(self):
+        return self.fake_client_mod.TradingClient.return_value
+
+    def test_third_tranche_submit_raises_cancels_two_placed_groups(self):
+        from alphalens_pipeline.data.alt_data.alpaca_client import AlpacaClientError
+        from alphalens_pipeline.paper.broker import ExitTranche
+
+        # Tranches #0 and #1 place valid OCO groups; tranche #2's submit raises.
+        self._trading_instance().submit_order.side_effect = [
+            _oco_parent_stub("tp-0", "sl-0"),
+            _oco_parent_stub("tp-1", "sl-1"),
+            RuntimeError("alpaca 403: rejected mid-ladder"),
+        ]
+        client = self._build_client()
+        with self.assertRaises(AlpacaClientError):
+            client.attach_exit_ladder(
+                symbol="NVDA",
+                tranches=[
+                    ExitTranche(qty=4, take_profit_limit=120.0),
+                    ExitTranche(qty=3, take_profit_limit=130.0),
+                    ExitTranche(qty=2, take_profit_limit=140.0),
+                ],
+                stop_price=90.0,
+            )
+        # The two already-placed OCO parents were cancelled (rollback).
+        canceled = [c.args[0] for c in self._trading_instance().cancel_order_by_id.call_args_list]
+        self.assertEqual(sorted(canceled), ["tp-0", "tp-1"])
+
+    def test_rollback_cancel_failure_does_not_mask_original_error(self):
+        from alphalens_pipeline.data.alt_data.alpaca_client import AlpacaClientError
+        from alphalens_pipeline.paper.broker import ExitTranche
+
+        self._trading_instance().submit_order.side_effect = [
+            _oco_parent_stub("tp-0", "sl-0"),
+            RuntimeError("original mid-ladder error"),
+        ]
+        # The rollback cancel ALSO fails — must not mask the original error.
+        self._trading_instance().cancel_order_by_id.side_effect = RuntimeError("cancel also failed")
+        client = self._build_client()
+        with self.assertRaises(AlpacaClientError) as cm:
+            client.attach_exit_ladder(
+                symbol="NVDA",
+                tranches=[
+                    ExitTranche(qty=4, take_profit_limit=120.0),
+                    ExitTranche(qty=3, take_profit_limit=130.0),
+                ],
+                stop_price=90.0,
+            )
+        # The propagated error is the ORIGINAL mid-ladder failure, not the
+        # cancel failure.
+        self.assertIn("original mid-ladder error", str(cm.exception))
 
     def test_empty_legs_parent_raises_cannot_capture_sl_id(self):
         # Given a parent with NO legs (SL id uncapturable).

@@ -1,84 +1,67 @@
-"""Attach TP / SL exits + write plan_outcome.
+"""Attach an OCO-ladder exit + write plan_outcome.
 
-The protective stop-loss (SL) is a SAFETY-CRITICAL leg: any filled position
-MUST converge to a LIVE disaster-stop, and it must do so independently of
-whether the entry ladder ever settles. This module enforces that as a
-self-healing convergence rule rather than a one-shot settlement-gated attach.
+The protective disaster-stop is a SAFETY-CRITICAL leg: any filled position
+MUST carry a LIVE stop. Entry policy is CANCEL-ON-FIRST-FILL (no scale-in), so
+once the entries settle the held aggregate only DECREASES — this module
+attaches the protective exit ONCE on the filled aggregate (the OCO-ladder),
+never a self-healing per-pass convergence loop.
 
 State machine per plan:
 
-  CONVERGENCE rule (runs EVERY pass, before the settlement gate):
-    -> the position (entry fills minus exit fills) is open AND its live
-       disaster-stop coverage is LESS than the current position qty (no SL,
-       a canceled-zero-fill SL, or a too-small SL after a gap fill):
+  ATTACH-ONCE rule (runs before the settlement gate, while no ladder exists):
+    -> the position (entry fills minus exit fills) is open AND the plan has no
+       attached exit ladder yet (no exit row carries an exit_group_id):
          (a) best-effort cancel any still-open ENTRY tiers — frees the
-             reserved-share / opposite-side hold that makes Alpaca reject
-             the SL with held_for_orders, and collapses the ladder to the
-             filled qty (scale-in tiers are intentionally abandoned),
-         (b) cancel any UNDER-sized live SL so the re-submit does not stack,
-             then
-         (c) attempt the disaster-stop SL sized to the CURRENT position qty.
-       SL-PRIORITY invariant: the protective disaster-stop must ALWAYS win the
-       shares; the opportunistic take-profit is strictly secondary. The TP
-       ladder is attached ONLY once the SL is live this pass — never while the
-       SL is missing. If the SL submit is rejected because the plan's OWN live
-       TP order(s) reserve the shares (the live DLB / S state: a resting TP
-       holds the position while no SL covers it), those TPs are CANCELLED
-       best-effort and the SL is re-attempted the same pass (Alpaca releases
-       the hold immediately on cancel). If the SL submit is rejected for any
-       other reason (held_for_orders / wash-trade 403 / any APIError) NOTHING
-       SL-shaped is persisted and NO TP is submitted, so the SAME branch
-       re-enters next pass and retries. This is NOT gated on
-       entry_phase_settled and is NOT skipped just because a TP order
-       already exists — a TP-without-SL state is transient, never terminal.
-       A partial TP that shrinks the position below an over-covering SL does
-       NOT re-converge (the Phase-A SL-not-resized-down simplification stands).
+             reserved-share / opposite-side hold and collapses the ladder to
+             the filled qty (scale-in tiers are intentionally abandoned),
+         (b) size the ladder to the LIVE broker position (authoritative),
+         (c) build M ExitTranche intents (TP ladder split across the held qty,
+             last tranche absorbs the residue) and hand them + the single
+             disaster_stop to ``broker.attach_exit_ladder``. The broker (Alpaca
+             adapter) decomposes that into M OCO groups, each group's stop_loss
+             leg at the SAME disaster_stop — so the held position is fully
+             protected regardless of which take-profit tranche fills first.
+       The attach is ALL-OR-NOTHING at both ends: the adapter cancels every
+       OCO group already placed if any tranche fails (nothing live at the
+       broker), and on failure this module persists NOTHING (no ledger rows).
+       A failed attach leaves the plan without a ladder, so the SAME branch
+       safely re-attaches next pass — never a duplicate live group.
+       NO_STRUCTURE / defense-in-depth: a plan with no TP tranches gets a
+       SINGLE full-size protective stop instead (carrying a non-NULL
+       exit_group_id so it too is attach-once).
 
   ENTRY phase (no fills yet)
     -> ALL entry orders terminal AND total filled qty == 0:
          -> WRITE plan_outcome(UNFILLED), no exits
     -> otherwise wait (NOOP).
 
-  EXIT phase (TPs + SL live)
-    -> TPs / SL flow through reconciler.reconcile_orders() like any other
-       order (statuses + fills synthesized from Alpaca polls).
+  EXIT phase (OCO-ladder live)
+    -> The TP + SL legs flow through reconciler.reconcile_orders() like any
+       other order (statuses + fills synthesized from Alpaca polls). When one
+       side of an OCO group fills the broker AUTO-CANCELS the sibling.
     -> When all SELL orders reach terminal state:
          -> WRITE plan_outcome(TP_HIT / SL_HIT / PARTIAL_TP / TIME_STOP_HIT)
-            with blended_entry/exit + realized R-multiple.
+            via the quantity-weighted classifier, with blended_entry/exit +
+            realized R-multiple.
     -> Time-stop: if first fill > TIME_STOP_DAYS ago and exit phase still
        open, cancel pending exits + submit market-sell for the LIVE broker
        position (never the planned qty — a planned-qty time-stop over-sells
        after a partial TP).
 
-Sizing: every protective order (SL, each TP tranche, TIME_STOP) is sized to
-the CURRENT observed filled / live broker position qty, never the planned
-qty. The TIME_STOP reads the live Alpaca position directly.
-
-Phase A simplification: a partial TP fill does NOT shrink the SL qty.
-The SL stays sized for the full filled quantity, so if SL fires after
-partial TP execution the stop sells slightly less than intended (only
-remaining position size). This is a small directional bias — flagged as
-Known Issue in the design memo follow-up — and acceptable in exchange
-for not needing a cancel-and-resize loop on every TP fill.
+Sizing: the ladder + the TIME_STOP are sized to the CURRENT live broker
+position qty, never the planned qty. The TIME_STOP reads the live Alpaca
+position directly.
 
 Behaviour notes / Known issues (PR-body markers):
-  (a) Cancel-FIRST on a gap-fill SL resize (transient UNDER-coverage window).
-      When a cheaper tier fills in the race and the position grows past the
-      live under-sized SL, the convergence rule CANCELS the stale under-sized
-      SL FIRST, then submits the correctly-sized one. For a brief window
-      (until the resized SL is acked) the position may be under-covered; the
-      next reconcile pass re-runs convergence and re-submits if the resize did
-      not land, so the gap self-heals. We deliberately do NOT protect-first
-      (submit the new SL before cancelling the old one): two live stop-sells
-      on the same shares would BOTH trigger together and OVER-SELL the position
-      to a short — the exact bug class this module guards against. A brief
-      under-covered window (self-healed next pass) is the correct trade-off
-      against ever over-covering / oversell-to-short.
-  (b) The TP ladder is NOT re-sized up after a gap fill. The SL always covers
-      the full position, but the TP tranches stay sized to the FIRST observed
-      fill (the Phase-A simplification). Some upside shares may sit without a
-      take-profit limit until manual / later handling — not a safety risk
-      (the SL covers them), only a missed-TP-coverage nicety.
+  (a) The OCO sibling auto-cancel is the broker's job: when a TP tranche fills,
+      its paired stop leg is auto-cancelled by Alpaca (and vice versa). The
+      reconciler polls those terminal transitions; the exit_manager does not
+      couple TP and SL itself (the convergence-era SL-priority / cancel-first
+      machinery is gone — the OCO group owns the coupling).
+  (b) The ladder is attached ONCE on the filled aggregate. Because entry policy
+      is cancel-on-first-fill the aggregate never grows, so there is no gap-fill
+      re-size case (the convergence-era concern). A partial TP simply shrinks
+      the held position; the remaining OCO stop legs still cover it.
   (c) The account label is a closed enum {main, test}. Anything that turns it
       into a Prometheus / gauge label needs only simple sanitization of those
       two known values — there is no free-form account string to defend
@@ -90,15 +73,17 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from alphalens_pipeline.paper.broker import BrokerClient
+from alphalens_pipeline.paper.broker import BrokerClient, ExitLadderLeg, ExitTranche
 from alphalens_pipeline.paper.constants import TIME_STOP_DAYS
 from alphalens_pipeline.paper.ledger import (
     fetch_orders_for_plan,
     insert_order,
     insert_plan_outcome,
+    record_exit_ladder,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,6 +120,12 @@ class _PlanSnapshot:
     has_outcome: bool
     account: str  # v4: 'main' or 'test' — used when inserting exit orders
     platform: str  # v5: trading platform (e.g. 'alpaca') — threaded onto exit orders
+    # v6 OCO-ladder: True iff ANY exit-order row carries a non-NULL
+    # ``exit_group_id`` (an attached OCO-ladder leg OR the defense-in-depth
+    # fallback stop). The ATTACH-ONCE gate keys on this: a plan that already
+    # has a ladder is never re-attached. Derived from the already-fetched rows
+    # in :func:`_snapshot` — no extra query.
+    has_exit_ladder: bool
 
     @property
     def entry_phase_settled(self) -> bool:
@@ -160,60 +151,13 @@ class _PlanSnapshot:
     @property
     def net_open_qty(self) -> int:
         """Ledger-side estimate of shares still held: entry fills minus exit
-        fills. Used as the convergence GATE — a position whose exits have
-        fully sold it (net 0) is closed and must NOT re-arm an SL. The
-        protective-order SIZE still comes from the live broker position
-        (``_position_qty``), which is authoritative for a not-yet-reconciled
-        fill; this is only the gate.
+        fills. Used as the ATTACH-ONCE GATE — a position whose exits have
+        fully sold it (net 0) is closed and must NOT attach a fresh ladder.
+        The ladder SIZE still comes from the live broker position
+        (:func:`_read_position`), authoritative for a not-yet-reconciled fill;
+        this is only the gate.
         """
         return self.total_entry_filled_qty - self.total_exit_filled_qty
-
-    @property
-    def sl_coverage_qty(self) -> int:
-        """Shares currently covered by a disaster-stop: for every LIVE
-        (non-terminal) SL order, the REMAINING open qty (``qty`` minus shares
-        already filled, clamped at >= 0), plus the observed fills of any SL
-        that already FIRED. Counting the original ``qty`` of a partially-filled
-        live SL would overstate remaining coverage and delay re-convergence;
-        the remaining-open qty is the protection that actually still stands.
-        A terminal SL CANCELED with zero fill contributes nothing, so a
-        position with only such an SL is unprotected and must re-converge.
-        """
-        total = 0
-        for o in self.exit_orders:
-            if o["order_kind"] != "SL":
-                continue
-            filled = int(o["filled_qty_observed"] or 0) if "filled_qty_observed" in o else 0
-            if o["status"] not in _TERMINAL_ENTRY_STATUSES:
-                total += max(int(o["qty"] or 0) - filled, 0)
-            elif filled > 0:
-                total += filled
-        return total
-
-    @property
-    def live_sl_orders(self) -> tuple[_RowProto, ...]:
-        """The non-terminal SL orders (used to cancel an under-sized SL before
-        re-submitting a correctly-sized one during a gap-fill re-size)."""
-        return tuple(
-            o
-            for o in self.exit_orders
-            if o["order_kind"] == "SL" and o["status"] not in _TERMINAL_ENTRY_STATUSES
-        )
-
-    @property
-    def has_tp_orders(self) -> bool:
-        return any(o["order_kind"] == "TP" for o in self.exit_orders)
-
-    @property
-    def live_tp_orders(self) -> tuple[_RowProto, ...]:
-        """The non-terminal TP orders. The SL-priority rule cancels these when
-        an opportunistic TP is resting on a position that has no live disaster-
-        stop, so the protective SL can take the shares (the TP yields)."""
-        return tuple(
-            o
-            for o in self.exit_orders
-            if o["order_kind"] == "TP" and o["status"] not in _TERMINAL_ENTRY_STATUSES
-        )
 
     @property
     def has_live_time_stop(self) -> bool:
@@ -236,8 +180,7 @@ class ExitOutcome:
     """One plan's exit-phase outcome from a reconcile pass."""
 
     plan_id: int
-    # 'ATTACHED' | 'CLOSED' | 'TIME_STOP' | 'UNFILLED' | 'CONVERGE_SL'
-    #   | 'DESYNC_FLAT' | 'NOOP'
+    # 'ATTACHED' | 'CLOSED' | 'TIME_STOP' | 'UNFILLED' | 'DESYNC_FLAT' | 'NOOP'
     action: str
     n_exits_submitted: int = 0
     exit_kind: str | None = None
@@ -348,6 +291,12 @@ def _snapshot(conn: sqlite3.Connection, plan_id: int) -> _PlanSnapshot | None:
             entry_orders.append(decorated)
         else:
             exit_orders.append(decorated)
+    # ATTACH-ONCE flag: any exit row tagged with an exit_group_id is an
+    # attached OCO-ladder leg (or the fallback stop). ``dict(o)`` already
+    # carries the column (orders.SELECT *), so this is a pure row read.
+    has_exit_ladder = any(
+        ("exit_group_id" in d and d.get("exit_group_id") is not None) for d in exit_orders
+    )
     return _PlanSnapshot(
         plan_id=plan_id,
         ticker=plan["ticker"],
@@ -359,6 +308,7 @@ def _snapshot(conn: sqlite3.Connection, plan_id: int) -> _PlanSnapshot | None:
         has_outcome=_fetch_outcome_exists(conn, plan_id),
         account=plan["account"],
         platform=plan["platform"],
+        has_exit_ladder=has_exit_ladder,
     )
 
 
@@ -450,15 +400,45 @@ def _read_position(snapshot: _PlanSnapshot, broker: BrokerClient) -> _PositionRe
     return _PositionRead(state=_POS_REAL, qty=pos_qty)
 
 
-def _position_qty(snapshot: _PlanSnapshot, broker: BrokerClient) -> int:
-    """The qty every protective order is sized to. Thin wrapper over
-    :func:`_read_position` for call sites (re-snapshot dead-man recompute,
-    time-stop) that only need the sizing number, not the flat-vs-error state.
+def _build_exit_tranches(snapshot: _PlanSnapshot, aggregate_qty: int) -> list[ExitTranche]:
+    """Split the held ``aggregate_qty`` across the plan's TP tranches into a
+    list of :class:`ExitTranche` INTENTS for the OCO-ladder attach.
+
+    Per-tranche qty is ``aggregate_qty * tranche_pct / 100`` (whole-share
+    floor); the LAST non-empty tranche absorbs the rounding residue so
+    ``sum(qty) == aggregate_qty`` (the same residue rule the legacy per-TP
+    attach used). Tranches whose computed qty is <= 0 are skipped
+    (``ExitTranche`` rejects a zero/negative qty). ``take_profit_limit`` is the
+    tranche's ``target_price``.
+
+    Returns ``[]`` when ``aggregate_qty <= 0`` OR the plan has no TP tranches;
+    the caller treats an empty ladder as the NO_STRUCTURE / defense-in-depth
+    case (a single full-size protective stop).
     """
-    return _read_position(snapshot, broker).qty
+    if aggregate_qty <= 0 or not snapshot.tp_tranches:
+        return []
+    # Index of the last tranche that will carry a positive qty, so it can
+    # absorb the residue. Compute it the same way the legacy attach did:
+    # every tranche except the structural last one floors its share; the last
+    # one takes whatever remains.
+    n = len(snapshot.tp_tranches)
+    tranches: list[ExitTranche] = []
+    remaining = aggregate_qty
+    for idx, tranche in enumerate(snapshot.tp_tranches):
+        if idx == n - 1:
+            qty = remaining
+        else:
+            qty = int(aggregate_qty * float(tranche["tranche_pct"]) / 100.0)
+        if qty <= 0:
+            # A zero-share tranche contributes nothing; its share rolls into
+            # the residue the last tranche absorbs (remaining is untouched).
+            continue
+        tranches.append(ExitTranche(qty=qty, take_profit_limit=float(tranche["target_price"])))
+        remaining -= qty
+    return tranches
 
 
-def _attach_sl(
+def _attach_fallback_stop(
     conn: sqlite3.Connection,
     *,
     snapshot: _PlanSnapshot,
@@ -466,14 +446,17 @@ def _attach_sl(
     qty: int,
     submitted_at: dt.datetime,
 ) -> tuple[int, int]:
-    """Submit the single disaster-stop SL sized to ``qty``. Returns
+    """Defense-in-depth: attach a SINGLE full-size protective STOP sized to
+    ``qty`` when the plan has no TP tranches (so :func:`_build_exit_tranches`
+    returned ``[]`` and the OCO-ladder path cannot run). Returns
     ``(n_submitted, n_failed)`` (each 0 or 1).
 
-    Crash-resilience: the broker submit is wrapped in try/except so a broker
-    error (Alpaca APIError held_for_orders / insufficient qty / wash-trade /
-    any submit failure) is caught, logged, counted — it does NOT propagate.
-    When the submit fails NOTHING is persisted, so the convergence rule in
-    ``process_plan_exit`` re-enters next pass and retries until the SL lands.
+    CRITICAL: the persisted SL row carries a NON-NULL ``exit_group_id`` (its own
+    broker order id), so ``_PlanSnapshot.has_exit_ladder`` becomes True next
+    pass and the ATTACH-ONCE gate also covers this fallback — otherwise a fresh
+    duplicate stop would be submitted every pass. Crash-resilient: a broker
+    error is caught, logged, counted, and NOTHING is persisted, so the attach
+    branch re-enters next pass and retries.
     """
     if qty <= 0:
         return 0, 0
@@ -487,7 +470,7 @@ def _attach_sl(
         )
     except Exception as exc:
         logger.warning(
-            "exit_manager attach SL FAILED plan_id=%d ticker=%s qty=%d stop=%.2f: %s; "
+            "exit_manager attach FALLBACK SL FAILED plan_id=%d ticker=%s qty=%d stop=%.2f: %s; "
             "will retry next cycle",
             snapshot.plan_id,
             snapshot.ticker,
@@ -509,9 +492,13 @@ def _attach_sl(
         submitted_at=submitted_at,
         account=snapshot.account,
         platform=snapshot.platform,
+        # Non-NULL exit_group_id so has_exit_ladder is True next pass (the
+        # fallback is attach-once like the OCO ladder). The stop's own id is
+        # the stable per-group key (mirrors record_exit_ladder's tp-id key).
+        exit_group_id=str(sl_order.id),
     )
     logger.info(
-        "exit_manager attach SL plan_id=%d ticker=%s qty=%d stop=%.2f alpaca=%s",
+        "exit_manager attach FALLBACK SL plan_id=%d ticker=%s qty=%d stop=%.2f alpaca=%s",
         snapshot.plan_id,
         snapshot.ticker,
         qty,
@@ -519,83 +506,6 @@ def _attach_sl(
         sl_order.id,
     )
     return 1, 0
-
-
-def _attach_tps(
-    conn: sqlite3.Connection,
-    *,
-    snapshot: _PlanSnapshot,
-    broker: BrokerClient,
-    total_filled: int,
-    submitted_at: dt.datetime,
-) -> tuple[int, int]:
-    """Submit one limit-sell per TP tranche, sized to ``total_filled``.
-    Returns ``(n_submitted, n_failed)``. Each submit is crash-resilient
-    (same contract as :func:`_attach_sl`)."""
-    if total_filled <= 0:
-        return 0, 0
-    submitted = 0
-    failed = 0
-    # Submit one limit-sell per TP tranche. qty proportional to tranche_pct.
-    remaining_qty = total_filled
-    for idx, tranche in enumerate(snapshot.tp_tranches):
-        # Last tranche absorbs any rounding residue so SUM(tranche_qty) == total_filled.
-        if idx == len(snapshot.tp_tranches) - 1:
-            qty = remaining_qty
-        else:
-            qty = int(total_filled * float(tranche["tranche_pct"]) / 100.0)
-        if qty <= 0:
-            continue
-        target_price = float(tranche["target_price"])
-        try:
-            tp_order = broker.submit_limit_order(
-                symbol=snapshot.ticker,
-                qty=qty,
-                limit_price=target_price,
-                side="sell",
-                time_in_force="gtc",
-            )
-        except Exception as exc:
-            failed += 1
-            logger.warning(
-                "exit_manager attach TP FAILED plan_id=%d tranche=%d qty=%d limit=%.2f: %s; "
-                "will retry next cycle",
-                snapshot.plan_id,
-                int(tranche["tranche_index"]),
-                qty,
-                target_price,
-                exc,
-            )
-            # Do NOT decrement remaining_qty — the unsold tranche rolls into
-            # the residue the last successful tranche absorbs (or is retried).
-            continue
-        insert_order(
-            conn,
-            plan_id=snapshot.plan_id,
-            alpaca_order_id=str(tp_order.id),
-            side="SELL",
-            order_kind="TP",
-            tranche_index=int(tranche["tranche_index"]),
-            order_type="LIMIT",
-            qty=qty,
-            limit_price=target_price,
-            time_in_force="gtc",
-            submitted_at=submitted_at,
-            account=snapshot.account,
-            platform=snapshot.platform,
-        )
-        remaining_qty -= qty
-        submitted += 1
-        logger.info(
-            "exit_manager attach TP plan_id=%d tranche=%d qty=%d limit=%.2f alpaca=%s",
-            snapshot.plan_id,
-            int(tranche["tranche_index"]),
-            qty,
-            target_price,
-            tp_order.id,
-        )
-
-    return submitted, failed
 
 
 # ----- exit lifecycle (write outcome when exits settle) -----
@@ -751,6 +661,53 @@ def _cancel_unfilled_entries(
                 snapshot.ticker,
             )
     return n
+
+
+def _cancel_orphaned_ladder_legs(
+    *,
+    legs: Sequence[ExitLadderLeg],
+    snapshot: _PlanSnapshot,
+    broker: BrokerClient,
+) -> None:
+    """Best-effort cancel every broker order in an ALREADY-PLACED OCO ladder.
+
+    Called only when ``broker.attach_exit_ladder`` SUCCEEDED (M OCO groups are
+    now LIVE at the broker) but the subsequent ``record_exit_ladder`` ledger
+    write FAILED and rolled back ALL rows. Without this, ``has_exit_ladder``
+    stays False (nothing persisted) while the live groups remain at the broker;
+    the next pass re-enters the attach branch and submits a SECOND set of M OCO
+    groups on the same shares — two disaster-stop legs at one price → over-sell
+    to a short if price gaps through. This closes that broker-success /
+    ledger-failure window so a failed-persist leaves NOTHING live, matching the
+    adapter's own all-or-nothing rollback at the exit_manager boundary.
+
+    Cancels each leg's take-profit AND stop-loss id. ``sl_order_id`` is
+    deduped across legs per the :class:`ExitLadderLeg` doctrine (a future
+    shared-stop broker repeats one stop id across tranches). Cancelling either
+    side of an OCO group typically auto-cancels its sibling at the broker; the
+    dedup + the broker treating an already-cancelled id as a no-op makes the
+    redundant cancels harmless. Each cancel is independent best-effort — a
+    failed cancel is logged and skipped, never raised (the dead-man
+    ``n_filled_without_sl`` signal already flags the still-unprotected state on
+    re-snapshot; a broker that ignores these cancels reduces to the prior
+    double-attach risk, not worse).
+    """
+    seen: set[str] = set()
+    for leg in legs:
+        for order_id in (leg.tp_order_id, leg.sl_order_id):
+            if order_id in seen:
+                continue
+            seen.add(order_id)
+            try:
+                broker.cancel_order(order_id)
+            except Exception as exc:
+                logger.warning(
+                    "exit_manager cancel orphaned ladder leg failed alpaca=%s plan_id=%d: "
+                    "%s; live OCO group may persist until the next reconcile",
+                    order_id,
+                    snapshot.plan_id,
+                    exc,
+                )
 
 
 def _write_outcome(
@@ -915,60 +872,36 @@ def process_plan_exit(
     if snap.has_outcome:
         return ExitOutcome(plan_id=plan_id, action="NOOP")
 
-    # SL-CONVERGENCE rule (the disaster-stop guarantee). A filled position
-    # that is not FULLY covered by a disaster-stop must converge to one,
-    # independently of ladder settlement and regardless of whether a TP
-    # already landed:
-    #   (a) best-effort cancel any still-open ENTRY tiers — frees the
-    #       reserved-share / opposite-side hold (the held_for_orders cause)
-    #       and collapses the ladder to the filled qty (scale-in abandoned),
-    #   (b) cancel any UNDER-sized live SL (a gap fill on the cheaper tier
-    #       landed after a smaller SL — re-size up to the full position), then
-    #   (c) attempt the SL sized to the CURRENT position qty FIRST. SL-PRIORITY:
-    #       the TP ladder is attached ONLY once the SL is live this pass; if the
-    #       SL submit fails NO TP is submitted (a wash-trade-exempt TP limit
-    #       would reserve the shares and block the SL forever — the live defect).
-    #       If the SL is blocked by the plan's OWN live TP reserving the shares,
-    #       those TPs are cancelled best-effort and the SL is re-attempted the
-    #       same pass (the TP yields the shares to the protective SL).
-    # If the SL submit is rejected nothing SL-shaped is persisted, so this
-    # branch re-enters next pass and retries until the SL lands. Guards:
-    #   - ``net_open_qty > 0``: a zero-fill plan is NOT a position, and a plan
-    #     whose exits already sold the whole position (net 0, e.g. all TPs
-    #     filled) is closed — neither re-arms an SL.
-    #   - ``sl_coverage_qty < position``: a position already fully covered by a
-    #     live / already-fired SL is protected — idempotent skip. Only UNDER-
-    #     coverage (no SL, a canceled-zero-fill SL, or a too-small SL after a
-    #     gap fill) re-converges; a partial TP that shrinks the position below
-    #     an over-covering SL does NOT (the Phase-A SL-not-resized-down
-    #     simplification stands — the SL simply sells remaining inventory).
-    # SAFETY: short-circuit SL-convergence whenever the plan is in TIME-STOP
-    # territory, i.e. (1) a TIME_STOP market-sell is already in flight, OR
-    # (2) the time-stop deadline has passed and this pass is about to fire one.
+    # ATTACH-ONCE OCO-ladder rule (the disaster-stop guarantee). Entry policy
+    # is CANCEL-ON-FIRST-FILL: there is no scale-in, so once the entries settle
+    # the held aggregate only DECREASES — the protective exit ladder is attached
+    # ONCE on the filled aggregate and never re-converged. The broker (Alpaca
+    # adapter) owns the per-tranche OCO decomposition: M take-profit tranches,
+    # each an OCO group whose stop_loss leg sits at the SAME disaster_stop, so
+    # the held position is fully protected regardless of which tranche fills
+    # first. The exit_manager only expresses INTENT (ExitTranche list + one
+    # stop price) — no OCO mechanics leak here (the broker-neutral boundary).
     #
-    # The convergence coverage check (``sl_coverage_qty``) counts only
-    # order_kind=='SL', so a pending TIME_STOP contributes ZERO coverage. Once
-    # the time-stop has cancelled the live SL (which then polls to a terminal
-    # CANCELED with 0 fill) sl_coverage_qty drops to 0 while net_open_qty is
-    # still > 0 (the market-sell has not filled — e.g. submitted at/after the
-    # close). Without the ``has_live_time_stop`` guard the convergence gate
-    # would RE-ARM a fresh full-size SL on top of the live TIME_STOP, so both
-    # execute when the market opens and OVER-SELL the position to a short.
+    # Gate ``not snap.has_exit_ladder``: a plan that already has an attached
+    # ladder (any exit row tagged with an exit_group_id) — OR the defense-in-
+    # depth fallback stop — is NEVER re-attached. The attach is all-or-nothing
+    # at BOTH ends: the adapter cancels every OCO group already placed if any
+    # tranche fails (so nothing is live at the broker), and the caller persists
+    # NOTHING on failure (so no ledger rows). The one gap the adapter cannot
+    # cover — attach SUCCEEDS (groups live) but the ledger write then fails and
+    # rolls back — is closed at this boundary: the except below cancels the
+    # just-placed legs (``_cancel_orphaned_ladder_legs``) so nothing stays live.
+    # A failed attach therefore leaves has_exit_ladder False AND nothing live,
+    # so the SAME branch safely re-attaches next pass — no duplicate live groups.
     #
-    # The ``should_fire_time_stop`` arm of the guard is the COUPLED half of the
-    # rejected-time-stop retry change in ``_time_stop_should_fire``: now that a
-    # REJECTED / CANCELED (terminal) TIME_STOP no longer suppresses a re-fire,
-    # a past-deadline pass with no live TIME_STOP would otherwise (a) arm a
-    # fresh SL via convergence and then (b) immediately re-fire the time-stop,
-    # cancelling that SL and re-submitting the market sell — churning every
-    # pass. Skipping convergence whenever the time-stop is about to fire makes
-    # the post-deadline behaviour a clean LIQUIDATION (time-stop retried until
-    # it lands), never a convergence-vs-time-stop oscillation. Before the
-    # deadline ``should_fire_time_stop`` is False, so convergence keeps the SL
-    # fresh exactly as before. The value is computed ONCE here and reused by
-    # the time-stop branch below so the skip and the fire stay consistent.
-    # The time-stop IS the liquidation; nothing protective should be re-armed
-    # against a position that is being market-liquidated.
+    # SAFETY: skip the attach whenever the plan is in TIME-STOP territory, i.e.
+    # (1) a TIME_STOP market-sell is already in flight (``has_live_time_stop``),
+    # OR (2) the time-stop deadline has passed and this pass is about to fire
+    # one (``should_fire_time_stop``). The time-stop IS the liquidation; nothing
+    # protective should be attached against a position being market-liquidated
+    # (a fresh ladder + the in-flight market sell would over-sell to a short).
+    # ``should_fire_time_stop`` is computed ONCE here and reused by the time-stop
+    # branch below so the skip and the fire stay consistent.
     pos = _read_position(snap, broker)
     size_qty = pos.qty
     if snap.has_live_time_stop:
@@ -1033,106 +966,104 @@ def process_plan_exit(
             exit_kind="RECONCILED_FLAT",
             n_ledger_broker_desync=1,
         )
-    if not should_fire_time_stop and snap.net_open_qty > 0 and snap.sl_coverage_qty < size_qty:
+    if not should_fire_time_stop and snap.net_open_qty > 0 and not snap.has_exit_ladder:
+        # (a) Cancel-on-first-fill: free any still-open entry tier (scale-in is
+        # abandoned) so the held aggregate is the filled qty and no opposite-
+        # side BUY hold blocks the protective stop. [keeps #401]
         n_canceled = _cancel_unfilled_entries(snapshot=snap, broker=broker)
-        # CANCEL-FIRST: cancel the under-sized live SL BEFORE submitting the
-        # resized one below, so we never run two live stop-sells on the same
-        # shares (both would trigger together → oversell-to-short). This
-        # accepts a brief transient window that may be UNDER-covered (the
-        # cancel ack and the resized-SL ack race); the next reconcile pass
-        # re-runs convergence and re-submits if the resize did not land, so the
-        # gap self-heals. We deliberately do NOT protect-first. Best-effort
-        # cancel; the ledger status only flips on the reconciler's next poll.
-        for sl in snap.live_sl_orders:
-            try:
-                broker.cancel_order(sl["alpaca_order_id"])
-            except Exception as exc:
-                logger.warning(
-                    "exit_manager cancel under-sized SL failed alpaca=%s plan_id=%d: %s; "
-                    "will retry next cycle",
-                    sl["alpaca_order_id"],
-                    snap.plan_id,
-                    exc,
-                )
-        sl_submitted, sl_failed = _attach_sl(
-            conn,
-            snapshot=snap,
-            broker=broker,
-            qty=size_qty,
-            submitted_at=observed_at,
-        )
-        # SL-PRIORITY invariant: the protective disaster-stop must always win
-        # the shares; the opportunistic take-profit is strictly secondary.
-        # If the SL submit was REJECTED this pass and the plan's OWN live TP
-        # order(s) are reserving the shares (the live DLB / S state: a resting
-        # TP limit holds the position while no SL covers it), cancel those TPs
-        # best-effort so the SL can land — then re-attempt the SL ONCE this
-        # pass (the probe shows Alpaca releases the hold ~immediately on cancel,
-        # so the re-submit lands same-pass). The safety SL takes the shares; the
-        # yielded TP is DROPPED and is NOT re-armed while the SL covers the
-        # position (a Phase-A limitation: the convergence block only runs while
-        # under-covered, so once the SL is live it does not re-enter to re-attach
-        # the TP). The position keeps its disaster-stop; the take-profit is the
-        # opportunistic secondary leg, so dropping it is a non-safety trade-off.
-        if sl_submitted == 0 and snap.live_tp_orders:
-            for tp in snap.live_tp_orders:
+        # (b) Size the ladder to the LIVE broker position (authoritative
+        # inventory; falls back to net-open ledger qty on a transient read
+        # error — see _read_position). A FLAT broker (size 0) with no exit
+        # orders was already handled by the DESYNC guard above; a size <= 0
+        # here is a no-op fall-through.
+        n_exits_submitted = 0
+        n_exits_failed = 0
+        if size_qty > 0:
+            tranches = _build_exit_tranches(snap, size_qty)
+            if tranches:
+                # (d) OCO-ladder attach — all-or-nothing at the broker. On
+                # success persist BOTH legs per tranche (2 rows each, sharing
+                # an exit_group_id). On failure persist NOTHING (the adapter
+                # leaves nothing live), so has_exit_ladder stays False and the
+                # next pass safely re-attaches.
+                legs: list[ExitLadderLeg] = []
                 try:
-                    broker.cancel_order(tp["alpaca_order_id"])
-                except Exception as exc:
-                    logger.warning(
-                        "exit_manager cancel TP to free shares for SL failed alpaca=%s "
-                        "plan_id=%d: %s; will retry next cycle",
-                        tp["alpaca_order_id"],
+                    legs = broker.attach_exit_ladder(
+                        symbol=snap.ticker,
+                        tranches=tranches,
+                        stop_price=snap.disaster_stop,
+                        time_in_force="gtc",
+                    )
+                    record_exit_ladder(
+                        conn,
+                        plan_id=plan_id,
+                        legs=legs,
+                        submitted_at=observed_at,
+                        account=snap.account,
+                        platform=snap.platform,
+                    )
+                    n_exits_submitted = 2 * len(legs)
+                    logger.info(
+                        "exit_manager attach OCO-ladder plan_id=%d ticker=%s qty=%d "
+                        "tranches=%d stop=%.2f",
                         snap.plan_id,
+                        snap.ticker,
+                        size_qty,
+                        len(legs),
+                        snap.disaster_stop,
+                    )
+                except Exception as exc:
+                    n_exits_failed = 1
+                    logger.warning(
+                        "exit_manager attach OCO-ladder FAILED plan_id=%d ticker=%s qty=%d: "
+                        "%s; nothing persisted, will retry next cycle",
+                        snap.plan_id,
+                        snap.ticker,
+                        size_qty,
                         exc,
                     )
-            sl_submitted, sl_failed = _attach_sl(
-                conn,
-                snapshot=snap,
-                broker=broker,
-                qty=size_qty,
-                submitted_at=observed_at,
-            )
-        # Attach the TP ladder ONLY when the SL is now live and no TP exists
-        # yet. "SL live" means it was just submitted successfully this pass
-        # (``sl_submitted == 1``) — the gate guarantees no adequate pre-existing
-        # SL reached here. If the SL submit FAILED, submit NO TP: a TP limit is
-        # wash-trade-EXEMPT and would be accepted, reserving the shares and
-        # blocking the disaster-stop forever (the live defect). The SL retries
-        # next pass; the TP waits until it is live.
-        tp_submitted = 0
-        tp_failed = 0
-        if sl_submitted == 1 and not snap.live_tp_orders:
-            tp_submitted, tp_failed = _attach_tps(
-                conn,
-                snapshot=snap,
-                broker=broker,
-                total_filled=size_qty,
-                submitted_at=observed_at,
-            )
-        # Re-snapshot so the dead-man flag reflects whether the SL actually
-        # landed this pass (sl_submitted may be 0 on a rejection). Coverage is
-        # re-read against the live position; a still-uncovered position is the
-        # transient unprotected state the next pass retries.
+                    # Broker-success / ledger-failure window: if attach_exit_ladder
+                    # already placed live OCO groups (``legs`` non-empty) but
+                    # record_exit_ladder then rolled back ALL rows, those groups
+                    # are LIVE at the broker yet has_exit_ladder stays False —
+                    # the next pass would re-attach a SECOND ladder on the same
+                    # shares (double disaster-stop → over-sell to short). Cancel
+                    # the orphaned legs so a failed persist leaves nothing live.
+                    # When attach_exit_ladder itself raised, ``legs`` is empty
+                    # (the adapter's own rollback already cleared the broker), so
+                    # this is a no-op for that path.
+                    if legs:
+                        _cancel_orphaned_ladder_legs(legs=legs, snapshot=snap, broker=broker)
+            else:
+                # (e) NO_STRUCTURE / defense-in-depth: the plan has no TP
+                # tranches, so attach a SINGLE full-size protective stop. It
+                # carries a non-NULL exit_group_id so has_exit_ladder is True
+                # next pass (attach-once covers the fallback too).
+                n_exits_submitted, n_exits_failed = _attach_fallback_stop(
+                    conn,
+                    snapshot=snap,
+                    broker=broker,
+                    qty=size_qty,
+                    submitted_at=observed_at,
+                )
+        # (f) Re-snapshot so the dead-man flag reflects whether a ladder
+        # actually landed this pass. A still-unprotected filled position is the
+        # transient state the next pass retries.
         snap = _snapshot(conn, plan_id) or snap
-        still_unprotected = (
-            1
-            if (snap.net_open_qty > 0 and snap.sl_coverage_qty < _position_qty(snap, broker))
-            else 0
-        )
+        n_filled_without_sl = 1 if (snap.net_open_qty > 0 and not snap.has_exit_ladder) else 0
         return ExitOutcome(
             plan_id=plan_id,
-            action="CONVERGE_SL",
-            n_exits_submitted=sl_submitted + tp_submitted,
-            n_exits_failed=sl_failed + tp_failed,
+            action="ATTACHED",
+            n_exits_submitted=n_exits_submitted,
+            n_exits_failed=n_exits_failed,
             n_entries_canceled=n_canceled,
-            n_filled_without_sl=still_unprotected,
+            n_filled_without_sl=n_filled_without_sl,
         )
 
     # Entry phase still in progress and no exits yet — wait. Once the plan
-    # has exit_orders (it converged to a live SL above) the exit-phase
-    # machinery below runs even if the entry ladder never formally settles —
-    # a never-acking entry cancel must not strand the outcome write forever.
+    # has exit_orders (it attached a ladder above) the exit-phase machinery
+    # below runs even if the entry ladder never formally settles — a
+    # never-acking entry cancel must not strand the outcome write forever.
     if not snap.entry_phase_settled and not snap.exit_orders:
         return ExitOutcome(plan_id=plan_id, action="NOOP")
 
