@@ -19,8 +19,8 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
+from alphalens_pipeline.paper.broker import BrokerClient
 from alphalens_pipeline.paper.ledger import (
     fetch_orders_for_plan,
     insert_order,
@@ -86,8 +86,9 @@ def submit_for_date(
     *,
     brief_date: dt.date,
     ledger_path: Path,
-    alpaca_client: Any,
+    broker: BrokerClient,
     account: str = "main",
+    platform: str = "alpaca",
 ) -> SubmitReport:
     """Submit entry-tier limit orders for every PLANNED candidate on
     ``brief_date`` that hasn't been submitted yet.
@@ -95,7 +96,10 @@ def submit_for_date(
     Args:
         brief_date: ISO date of the brief whose plans to submit against.
         ledger_path: SQLite ledger location.
-        alpaca_client: a wired :class:`AlpacaClient` (main OR test profile).
+        broker: a wired :class:`BrokerClient` (e.g. an :class:`AlpacaClient`,
+            main OR test profile).
+        platform: paper-trading platform stamped on each entry order row
+            (separate axis from ``account``). Defaults to ``"alpaca"``.
 
     For each PLANNED plan:
       For each tier with qty > 0 that doesn't already have an ENTRY
@@ -138,7 +142,7 @@ def submit_for_date(
                     n_skipped_existing += 1
                     continue
 
-                order = alpaca_client.submit_limit_order(
+                order = broker.submit_limit_order(
                     symbol=ticker,
                     qty=qty,
                     limit_price=limit_price,
@@ -159,6 +163,7 @@ def submit_for_date(
                     time_in_force="gtc",
                     submitted_at=submitted_at,
                     account=account,
+                    platform=platform,
                 )
                 n_submitted += 1
                 total_submitted += 1

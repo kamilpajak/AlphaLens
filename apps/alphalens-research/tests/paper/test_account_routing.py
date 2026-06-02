@@ -16,9 +16,11 @@ from pathlib import Path
 from alphalens_pipeline.paper.ledger import (
     LEDGER_SCHEMA_VERSION,
     VALID_ACCOUNTS,
+    VALID_PLATFORMS,
     fetch_open_orders,
     fetch_orders_for_plan,
     fetch_plans_for_date,
+    init_ledger,
     insert_fill,
     insert_order,
     insert_planned,
@@ -49,11 +51,14 @@ def _seed_plan(conn, *, brief_date: dt.date, ticker: str, account: str) -> int:
 
 
 class TestSchemaVersion(unittest.TestCase):
-    def test_schema_version_is_4(self):
-        self.assertEqual(LEDGER_SCHEMA_VERSION, 4)
+    def test_schema_version_is_5(self):
+        self.assertEqual(LEDGER_SCHEMA_VERSION, 5)
 
     def test_valid_accounts_enum(self):
         self.assertEqual(VALID_ACCOUNTS, frozenset({"main", "test"}))
+
+    def test_valid_platforms_enum(self):
+        self.assertEqual(VALID_PLATFORMS, frozenset({"alpaca"}))
 
 
 class TestPlansAccountColumn(unittest.TestCase):
@@ -254,7 +259,7 @@ class TestExitManagerThreadsAccountFromSnapshot(unittest.TestCase):
                     filled_at=dt.datetime.now(dt.UTC),
                 )
 
-                outcome = process_plan_exit(conn, plan_id=plan_id, alpaca_client=_StubClient())
+                outcome = process_plan_exit(conn, plan_id=plan_id, broker=_StubClient())
 
                 self.assertEqual(outcome.action, "ATTACHED")
                 self.assertGreater(outcome.n_exits_submitted, 0)
@@ -304,6 +309,248 @@ class TestDefaultAccountIsMain(unittest.TestCase):
                 )
                 plans = fetch_plans_for_date(conn, dt.date(2026, 5, 27))
                 self.assertEqual(plans[0]["account"], "main")
+
+
+class TestPlatformColumn(unittest.TestCase):
+    """Schema v5 adds a per-row ``platform`` column on plans + orders
+    (issue #388) — a separate axis from ``account``. Today only 'alpaca'
+    is valid; the column exists so a second broker (e.g. IBKR) lands as
+    data, not a migration."""
+
+    def test_plan_platform_defaults_to_alpaca(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger.db"
+            with open_ledger(ledger) as conn:
+                # _seed_plan calls insert_planned with NO platform arg.
+                plan_id = _seed_plan(
+                    conn, brief_date=dt.date(2026, 5, 27), ticker="AAPL", account="main"
+                )
+                row = conn.execute(
+                    "SELECT platform FROM plans WHERE plan_id = ?", (plan_id,)
+                ).fetchone()
+                self.assertEqual(row["platform"], "alpaca")
+
+    def test_invalid_platform_rejected_on_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger.db"
+            with open_ledger(ledger) as conn, self.assertRaises(ValueError):
+                insert_planned(
+                    conn,
+                    brief_date=dt.date(2026, 5, 27),
+                    ticker="AAPL",
+                    theme="theme-x",
+                    planned_at=dt.datetime.now(dt.UTC),
+                    suggested_size_pct=1.0,
+                    scale_factor=1.0,
+                    final_size_pct=1.0,
+                    paper_equity=1_000_000.0,
+                    total_notional=1000.0,
+                    gross_notional=1000.0,
+                    disaster_stop=95.0,
+                    order_ttl_days=10,
+                    tiers=[(0, 100.0, 10, 100.0, "shallow")],
+                    tp_tranches=[(0, 110.0, 100.0, 1.0, "tp1")],
+                    account="main",
+                    platform="ibkr",  # unknown
+                )
+
+    def test_invalid_platform_rejected_on_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger.db"
+            with open_ledger(ledger) as conn:
+                plan_id = _seed_plan(
+                    conn, brief_date=dt.date(2026, 5, 27), ticker="X", account="main"
+                )
+                with self.assertRaises(ValueError):
+                    insert_order(
+                        conn,
+                        plan_id=plan_id,
+                        alpaca_order_id="uuid-bad-platform",
+                        side="BUY",
+                        order_kind="ENTRY",
+                        order_type="LIMIT",
+                        qty=10,
+                        time_in_force="gtc",
+                        submitted_at=dt.datetime.now(dt.UTC),
+                        tier_index=0,
+                        limit_price=100.0,
+                        account="main",
+                        platform="ibkr",  # unknown
+                    )
+
+    def test_order_platform_defaults_to_alpaca(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger.db"
+            with open_ledger(ledger) as conn:
+                plan_id = _seed_plan(
+                    conn, brief_date=dt.date(2026, 5, 27), ticker="AAPL", account="main"
+                )
+                order_id = insert_order(
+                    conn,
+                    plan_id=plan_id,
+                    alpaca_order_id="uuid-default-platform",
+                    side="BUY",
+                    order_kind="ENTRY",
+                    order_type="LIMIT",
+                    qty=10,
+                    time_in_force="gtc",
+                    submitted_at=dt.datetime.now(dt.UTC),
+                    tier_index=0,
+                    limit_price=100.0,
+                    account="main",
+                    # No platform= argument — defaults to 'alpaca'.
+                )
+                row = conn.execute(
+                    "SELECT platform FROM orders WHERE order_id = ?", (order_id,)
+                ).fetchone()
+                self.assertEqual(row["platform"], "alpaca")
+
+    def test_plans_unique_includes_platform(self):
+        # The plans UNIQUE constraint widened to include `platform` in v5.
+        # A real 2-platform coexistence row (same brief_date/ticker/account,
+        # different platform) is impossible to insert while
+        # VALID_PLATFORMS == {'alpaca'} — the CHECK(platform IN ('alpaca'))
+        # rejects any second value — so introspecting the DDL is the honest
+        # pin that the uniqueness axis was widened.
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "ledger.db"
+            with open_ledger(ledger) as conn:
+                ddl = conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='plans'"
+                ).fetchone()["sql"]
+                self.assertIn("UNIQUE(brief_date, ticker, account, platform)", ddl)
+
+
+class TestRunbookAlterMigration(unittest.TestCase):
+    """Pins the EXACT ``ALTER TABLE`` the operator runs on the live VPS
+    ledger to migrate an existing v4 file (account-only schema) up to v5.
+
+    v5 is a runbook-only migration (no in-code migrate step) per the v4
+    precedent. SQLite ``ALTER TABLE ... ADD COLUMN`` can add the column
+    and backfill the DEFAULT into pre-existing rows, but it CANNOT widen
+    the existing UNIQUE constraint — the migrated table keeps the OLD
+    3-col ``UNIQUE(brief_date, ticker, account)``. That is the documented
+    deferral: a full table rebuild would be needed to widen it, which is
+    unnecessary while only one platform exists.
+    """
+
+    _OLD_V4_PLANS_DDL = """
+        CREATE TABLE plans (
+            plan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            brief_date TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            account TEXT NOT NULL DEFAULT 'main' CHECK(account IN ('main', 'test')),
+            UNIQUE(brief_date, ticker, account)
+        )
+    """
+
+    _RUNBOOK_ALTER = "ALTER TABLE plans ADD COLUMN platform TEXT NOT NULL DEFAULT 'alpaca'"
+
+    def test_runbook_alter_backfills_platform_and_keeps_old_unique(self):
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "v4_ledger.db"
+            conn = sqlite3.connect(ledger)
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.execute(self._OLD_V4_PLANS_DDL)
+                conn.execute(
+                    "INSERT INTO plans (brief_date, ticker, account) VALUES (?, ?, ?)",
+                    ("2026-05-27", "AAPL", "main"),
+                )
+                conn.commit()
+
+                # Operator runbook migration.
+                conn.execute(self._RUNBOOK_ALTER)
+                conn.commit()
+
+                # (a) the column now exists.
+                cols = {r["name"] for r in conn.execute("PRAGMA table_info(plans)")}
+                self.assertIn("platform", cols)
+
+                # (b) the pre-existing row's platform backfilled to 'alpaca'.
+                row = conn.execute(
+                    "SELECT platform FROM plans WHERE ticker = ?", ("AAPL",)
+                ).fetchone()
+                self.assertEqual(row["platform"], "alpaca")
+
+                # (c) the table still carries the OLD 3-col UNIQUE — ALTER
+                #     cannot widen it (documented deferral).
+                ddl = conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='plans'"
+                ).fetchone()["sql"]
+                self.assertIn("UNIQUE(brief_date, ticker, account)", ddl)
+                self.assertNotIn("UNIQUE(brief_date, ticker, account, platform)", ddl)
+            finally:
+                conn.close()
+
+
+class TestV5SchemaGuard(unittest.TestCase):
+    """Pins the deploy-before-ALTER fail-fast (ZEN HIGH, issue #388).
+
+    The v5 ``platform`` column lands on an operator-migrated ledger via a
+    runbook ``ALTER TABLE ... ADD COLUMN`` step, NOT in-code. If the new
+    code is deployed BEFORE the operator runs that ALTER, inserts would
+    emit ``platform`` into a table that lacks it and SQLite would raise a
+    cryptic ``OperationalError: table plans has no column named platform``
+    mid-insert. ``init_ledger`` calls ``_assert_v5_platform_columns`` after
+    the idempotent ``CREATE TABLE IF NOT EXISTS`` loop — which does NOT add
+    a column to an already-existing table — so a stale v4 file fails here
+    with a clear instruction instead.
+    """
+
+    _OLD_V4_PLANS_DDL = """
+        CREATE TABLE plans (
+            plan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            brief_date TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            account TEXT NOT NULL DEFAULT 'main' CHECK(account IN ('main', 'test')),
+            UNIQUE(brief_date, ticker, account)
+        )
+    """
+
+    # Columns referenced by the v5 CREATE INDEX DDL (status, order_kind)
+    # must exist so the idempotent index-creation step doesn't fail before
+    # the guard runs — but NO platform column (the whole point).
+    _OLD_V4_ORDERS_DDL = """
+        CREATE TABLE orders (
+            order_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id INTEGER NOT NULL,
+            alpaca_order_id TEXT NOT NULL UNIQUE,
+            order_kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            account TEXT NOT NULL DEFAULT 'main' CHECK(account IN ('main', 'test'))
+        )
+    """
+
+    _META_DDL = """
+        CREATE TABLE meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """
+
+    def test_init_ledger_fails_fast_on_pre_alter_v4_file(self):
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "v4_ledger.db"
+            conn = sqlite3.connect(ledger)
+            try:
+                conn.execute(self._META_DDL)
+                conn.execute(self._OLD_V4_PLANS_DDL)
+                conn.execute(self._OLD_V4_ORDERS_DDL)
+                conn.commit()
+            finally:
+                conn.close()
+
+            with self.assertRaises(RuntimeError) as ctx:
+                init_ledger(ledger)
+
+            message = str(ctx.exception)
+            self.assertIn("platform", message)
+            self.assertIn("ALTER TABLE", message)
 
 
 if __name__ == "__main__":

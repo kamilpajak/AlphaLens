@@ -28,7 +28,7 @@ class _StubOrder:
     id: str
 
 
-class _StubAlpacaClient:
+class _StubBrokerClient:
     """Records each ``submit_limit_order`` call + returns sequential
     synthetic order ids. The submitter only touches this surface; no
     other AlpacaClient methods are needed here."""
@@ -88,7 +88,7 @@ class _SubmitterTestBase(unittest.TestCase):
         self.tmpdir = Path(self._tmp.name)
         self.ledger = self.tmpdir / "ledger.db"
         self.d = dt.date(2026, 5, 28)
-        self.client = _StubAlpacaClient()
+        self.client = _StubBrokerClient()
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -107,9 +107,7 @@ class TestSubmitHappyPath(_SubmitterTestBase):
             ],
         )
 
-        report = submit_for_date(
-            brief_date=self.d, ledger_path=self.ledger, alpaca_client=self.client
-        )
+        report = submit_for_date(brief_date=self.d, ledger_path=self.ledger, broker=self.client)
 
         self.assertEqual(report.n_plans_processed, 1)
         self.assertEqual(report.n_orders_submitted, 3)
@@ -146,9 +144,7 @@ class TestSubmitHappyPath(_SubmitterTestBase):
             ],
         )
 
-        report = submit_for_date(
-            brief_date=self.d, ledger_path=self.ledger, alpaca_client=self.client
-        )
+        report = submit_for_date(brief_date=self.d, ledger_path=self.ledger, broker=self.client)
 
         self.assertEqual(report.n_orders_submitted, 1)
         self.assertEqual(report.outcomes[0].n_tiers_skipped_zero_qty, 1)
@@ -201,9 +197,7 @@ class TestSubmitIdempotency(_SubmitterTestBase):
                 submitted_at=ts,
             )
 
-        report = submit_for_date(
-            brief_date=self.d, ledger_path=self.ledger, alpaca_client=self.client
-        )
+        report = submit_for_date(brief_date=self.d, ledger_path=self.ledger, broker=self.client)
 
         # Only tier 2 hit the broker — the existing two were skipped.
         self.assertEqual(report.n_orders_submitted, 1)
@@ -236,9 +230,7 @@ class TestSubmitIdempotency(_SubmitterTestBase):
                 submitted_at=ts,
             )
 
-        report = submit_for_date(
-            brief_date=self.d, ledger_path=self.ledger, alpaca_client=self.client
-        )
+        report = submit_for_date(brief_date=self.d, ledger_path=self.ledger, broker=self.client)
 
         self.assertEqual(report.n_orders_submitted, 0)
         self.assertEqual(len(self.client.calls), 0)
@@ -268,9 +260,7 @@ class TestSubmitOnlyProcessesPlanned(_SubmitterTestBase):
                 (plan_id_blocked,),
             )
 
-        report = submit_for_date(
-            brief_date=self.d, ledger_path=self.ledger, alpaca_client=self.client
-        )
+        report = submit_for_date(brief_date=self.d, ledger_path=self.ledger, broker=self.client)
         self.assertEqual(report.n_plans_processed, 1)
         self.assertEqual([o.plan_id for o in report.outcomes], [plan_id_planned])
 
@@ -291,11 +281,58 @@ class TestSubmitMultipleDates(_SubmitterTestBase):
             tiers=[(0, 100.0, 10, 100.0, "t0")],
         )
 
-        report = submit_for_date(
-            brief_date=self.d, ledger_path=self.ledger, alpaca_client=self.client
-        )
+        report = submit_for_date(brief_date=self.d, ledger_path=self.ledger, broker=self.client)
         self.assertEqual(report.n_plans_processed, 1)
         self.assertEqual(self.client.calls[0]["symbol"], "NEW")
+
+
+class TestSubmitBrokerAgnostic(_SubmitterTestBase):
+    def test_accepts_any_brokerclient_impl(self):
+        """The submitter is broker-agnostic: it depends only on the
+        ``submit_limit_order`` structural surface, not on AlpacaClient.
+        A second, unrelated stub that mirrors that minimal surface drives
+        the same end-to-end ledger writes."""
+
+        class _OtherBrokerStub:
+            """A non-Alpaca broker stub. Same duck-typed surface as
+            ``_StubBrokerClient`` (records calls + returns an object with
+            ``.id``) but a distinct, unrelated type."""
+
+            def __init__(self) -> None:
+                self.calls: list[dict] = []
+
+            def submit_limit_order(self, *, symbol, qty, limit_price, side, time_in_force):
+                self.calls.append(
+                    {
+                        "symbol": symbol,
+                        "qty": qty,
+                        "limit_price": limit_price,
+                        "side": side,
+                        "time_in_force": time_in_force,
+                    }
+                )
+                return _StubOrder(id=f"other-{len(self.calls):03d}")
+
+        plan_id = _make_plan(
+            self.ledger,
+            brief_date=self.d,
+            ticker="NVDA",
+            tiers=[(0, 100.0, 27, 100.0, "t0")],
+        )
+
+        other_broker = _OtherBrokerStub()
+        report = submit_for_date(brief_date=self.d, ledger_path=self.ledger, broker=other_broker)
+
+        # The alternate broker received the submit call ...
+        self.assertEqual(report.n_orders_submitted, 1)
+        self.assertEqual(len(other_broker.calls), 1)
+        self.assertEqual(other_broker.calls[0]["symbol"], "NVDA")
+
+        # ... and its returned order id was persisted to the ledger.
+        with open_ledger(self.ledger) as conn:
+            orders = fetch_orders_for_plan(conn, plan_id)
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0]["alpaca_order_id"], "other-001")
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Protocol
 
 from alphalens_pipeline.paper.brief_loader import CandidateBrief, load_brief
+from alphalens_pipeline.paper.broker import BrokerClient
 from alphalens_pipeline.paper.constants import (
     DEFAULT_ORDER_TTL_DAYS,
     DEFAULT_PAPER_EQUITY_USD,
@@ -151,24 +152,24 @@ def _shadow(
 
 def _resolve_position_checker(
     explicit: PositionChecker | None,
-    alpaca_client,
+    broker: BrokerClient | None,
 ) -> PositionChecker:
     if explicit is not None:
         return explicit
-    if alpaca_client is not None:
-        return _AlpacaPositionChecker(alpaca_client)
+    if broker is not None:
+        return _AlpacaPositionChecker(broker)
     return _NullPositionChecker()
 
 
 def _resolve_equity_provider(
     explicit: EquityProvider | None,
-    alpaca_client,
+    broker: BrokerClient | None,
     fallback_equity: float,
 ) -> EquityProvider:
     if explicit is not None:
         return explicit
-    if alpaca_client is not None:
-        return _AlpacaEquityProvider(alpaca_client)
+    if broker is not None:
+        return _AlpacaEquityProvider(broker)
     return _FixedEquityProvider(fallback_equity)
 
 
@@ -223,6 +224,7 @@ def _process_candidate(
     gross_cap: float,
     planned_at: dt.datetime,
     account: str,
+    platform: str,
 ) -> tuple[PlanOutcome, float]:
     """Plan one candidate. Returns ``(outcome, new_cumulative_gross)``."""
     if not candidate.verified:
@@ -297,6 +299,7 @@ def _process_candidate(
         tiers=tiers,
         tp_tranches=tp_rows,
         account=account,
+        platform=platform,
     )
     return (
         PlanOutcome(ticker=candidate.ticker, theme=candidate.theme, status="PLANNED"),
@@ -345,24 +348,28 @@ def plan_for_date(
     brief_date: dt.date,
     briefs_dir: Path,
     ledger_path: Path,
-    alpaca_client=None,
+    broker: BrokerClient | None = None,
     position_checker: PositionChecker | None = None,
     equity_provider: EquityProvider | None = None,
     fallback_equity: float = DEFAULT_PAPER_EQUITY_USD,
     force: bool = False,
     candidates: Iterable[CandidateBrief] | None = None,
     account: str = "main",
+    platform: str = "alpaca",
 ) -> PlanReport:
     """Plan one day's verified candidates and persist to the SQLite ledger.
 
     ``candidates`` is an optional pre-loaded list — exposed so tests can drive
     the planner without writing a parquet to disk.
 
-    ``alpaca_client`` is the canonical :class:`AlpacaClient`. When provided,
-    the planner uses it for live equity + the same-ticker dedup check. When
-    omitted, the planner falls back to ``fallback_equity`` and treats every
-    ticker as having no open position (offline mode). Tests inject custom
-    :class:`PositionChecker` / :class:`EquityProvider` via the explicit args.
+    ``broker`` is the canonical :class:`BrokerClient` (the default impl wraps
+    :class:`AlpacaClient`). When provided, the planner uses it for live equity
+    + the same-ticker dedup check. When omitted, the planner falls back to
+    ``fallback_equity`` and treats every ticker as having no open position
+    (offline mode). Tests inject custom :class:`PositionChecker` /
+    :class:`EquityProvider` via the explicit args. ``platform`` records which
+    broker/venue the plan targets (default ``"alpaca"``) and is persisted on
+    each PLANNED row.
 
     Single-writer assumption: the SQLite ledger uses WAL journal mode, which
     allows concurrent readers but serialises writers. A second writer
@@ -377,10 +384,8 @@ def plan_for_date(
     candidates_list = (
         list(candidates) if candidates is not None else load_brief(brief_date, briefs_dir)
     )
-    pos_checker = _resolve_position_checker(position_checker, alpaca_client)
-    equity_provider_resolved = _resolve_equity_provider(
-        equity_provider, alpaca_client, fallback_equity
-    )
+    pos_checker = _resolve_position_checker(position_checker, broker)
+    equity_provider_resolved = _resolve_equity_provider(equity_provider, broker, fallback_equity)
     paper_equity = equity_provider_resolved.get_paper_equity()
     gross_cap = GROSS_SAFETY_FRAC * paper_equity
     planned_at = dt.datetime.now(dt.UTC)
@@ -442,6 +447,7 @@ def plan_for_date(
                 gross_cap=gross_cap,
                 planned_at=planned_at,
                 account=account,
+                platform=platform,
             )
             outcomes.append(outcome)
             if outcome.status == "PLANNED":
