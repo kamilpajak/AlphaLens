@@ -101,8 +101,14 @@ class SecRateCoordinator:
             return False
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._path, "a"):  # create if absent; confirm writability
-                pass
+            # Create owner-rw only (0o600): every SEC consumer runs as the SAME
+            # UID — edgar-detect on the host as jacoren, thematic-build via
+            # `docker run --user %U:%G` — sharing one inode through the
+            # ~/.alphalens HOME bind-mount, so world bits are unnecessary
+            # (least privilege; CodeQL py/overly-permissive-file). Confirms
+            # writability and pins the mode deterministically (this runs before
+            # the first _reserve_slot, so it owns file creation).
+            os.close(os.open(self._path, os.O_RDWR | os.O_CREAT, 0o600))
             return True
         except OSError as exc:
             logger.warning(
@@ -175,7 +181,9 @@ class SecRateCoordinator:
         # clock, so the TOCTOU window between open() and flock() cannot grant two
         # processes the same slot.
         now = self._clock()
-        fd = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o644)
+        # 0o600: owner-rw only — all SEC consumers run as the same UID sharing
+        # one inode via the HOME bind-mount (see _probe_enabled).
+        fd = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             self._acquire(fd)
             try:
