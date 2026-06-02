@@ -232,6 +232,13 @@ class BrokerClient(Protocol):
         stop" failure the empty-``legs`` guard defends against, only at the
         input boundary. An empty sequence is a caller bug — the adapter raises
         rather than returning a no-op ``[]``.
+
+        NOT atomic across tranches: if attaching tranche #k fails (e.g. a
+        venue returns a pair with no capturable stop id) the adapter raises
+        mid-way, leaving tranches < k ALREADY live at the broker with no
+        rollback. The CALLER (reconciler) owns rollback / retry / convergence
+        of a partially-attached ladder — this primitive only guarantees it
+        never returns a leg whose protective stop it could not capture.
         """
         ...
 
