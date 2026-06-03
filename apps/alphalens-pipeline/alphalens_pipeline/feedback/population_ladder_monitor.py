@@ -171,13 +171,22 @@ def _engine_cutoffs(
     )
 
 
-def _bars_cache_path(store_dir: Path, ticker: str) -> Path:
-    return store_dir / "bars" / f"{ticker.upper()}.parquet"
+def _bars_cache_path(store_dir: Path, ticker: str, arrival_session: dt.date) -> Path:
+    # Keyed by (ticker, arrival_session): the cache holds exactly ONE brief's
+    # window. A ticker that re-surfaces on a later brief date has a DIFFERENT
+    # arrival and therefore its own cache file — so a later-arrival brief can
+    # never set the cache floor for an earlier-arrival one, and the bars handed
+    # to the replay are exactly that brief's [arrival, horizon] window (no
+    # cross-brief slicing needed). Forward-only tail-fetch is correct because a
+    # single brief's window only grows at the horizon end.
+    return store_dir / "bars" / f"{ticker.upper()}_{arrival_session.isoformat()}.parquet"
 
 
-def _read_cached_bars(store_dir: Path, ticker: str) -> list[dict[str, Any]]:
-    """Read the append-only per-ticker bar cache (empty list when absent)."""
-    path = _bars_cache_path(store_dir, ticker)
+def _read_cached_bars(
+    store_dir: Path, ticker: str, arrival_session: dt.date
+) -> list[dict[str, Any]]:
+    """Read the append-only per-(ticker, arrival) bar cache (empty when absent)."""
+    path = _bars_cache_path(store_dir, ticker, arrival_session)
     if not path.exists():
         return []
     try:
@@ -188,9 +197,11 @@ def _read_cached_bars(store_dir: Path, ticker: str) -> list[dict[str, Any]]:
     return df.to_dict("records")
 
 
-def _write_cached_bars(store_dir: Path, ticker: str, bars: list[dict[str, Any]]) -> None:
-    """Atomically write the merged per-ticker bar cache (tmp + os.replace)."""
-    path = _bars_cache_path(store_dir, ticker)
+def _write_cached_bars(
+    store_dir: Path, ticker: str, arrival_session: dt.date, bars: list[dict[str, Any]]
+) -> None:
+    """Atomically write the merged per-(ticker, arrival) bar cache (tmp + replace)."""
+    path = _bars_cache_path(store_dir, ticker, arrival_session)
     path.parent.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(bars, columns=list(_BAR_COLUMNS))
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -201,18 +212,22 @@ def _write_cached_bars(store_dir: Path, ticker: str, bars: list[dict[str, Any]])
 def _extend_bar_cache(
     store_dir: Path,
     ticker: str,
+    arrival_session: dt.date,
     fetch: BarFetch,
     arrival_start: dt.datetime,
     horizon_end: dt.datetime,
 ) -> list[dict[str, Any]]:
-    """Incrementally extend the per-ticker bar cache and return the full path.
+    """Incrementally extend the per-(ticker, arrival) bar cache and return it.
 
     Fetches ONLY the tail ``[last_cached_ts + 1ms, horizon_end)`` and appends it
-    to the cache — never re-fetches the whole growing window. Returns the merged,
-    de-duplicated, time-sorted bar list (the full cached path). Raises on a fetch
-    error so the caller can carry the prior row forward.
+    to the cache — never re-fetches the whole growing window. The cache holds
+    exactly this brief's ``[arrival_start, horizon_end]`` window (keyed by
+    ``arrival_session``), so the returned bars are exactly what the replay needs
+    and forward-only tail-fetch can never miss earlier bars. Returns the merged,
+    de-duplicated, time-sorted bar list. Raises on a fetch error so the caller
+    can carry the prior row forward.
     """
-    cached = _read_cached_bars(store_dir, ticker)
+    cached = _read_cached_bars(store_dir, ticker, arrival_session)
     last_ts = max((int(b["t"]) for b in cached), default=None)
     if last_ts is None:
         fetch_start = arrival_start
@@ -227,7 +242,7 @@ def _extend_bar_cache(
         merged[int(b["t"])] = b
     ordered = [merged[t] for t in sorted(merged)]
     if new_bars:
-        _write_cached_bars(store_dir, ticker, ordered)
+        _write_cached_bars(store_dir, ticker, arrival_session, ordered)
     return ordered
 
 
@@ -592,7 +607,9 @@ def _replay_candidate(
         logger.info("population-monitor: fetch budget exhausted — deferring %s.", ticker)
         return None
     try:
-        bars = _extend_bar_cache(store_dir, ticker, fetch, arrival_start, horizon_end)
+        bars = _extend_bar_cache(
+            store_dir, ticker, arrival_session, fetch, arrival_start, horizon_end
+        )
     except (PolygonError, ValueError, KeyError, TypeError, OSError) as exc:
         logger.warning(
             "population-monitor: fetch failed for %s — carrying prior (%s).", ticker, exc

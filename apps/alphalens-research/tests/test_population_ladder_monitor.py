@@ -372,7 +372,9 @@ class TestIncrementalCache(_MonitorTestBase):
             bar_fetch=_fetch,
             now=now1,
         )
-        cache_path = self.store_dir / "bars" / "NVDA.parquet"
+        # Cache is keyed by (ticker, arrival_session); 2026-05-01 is a trading day
+        # so arrival == brief_date.
+        cache_path = self.store_dir / "bars" / "NVDA_2026-05-01.parquet"
         self.assertTrue(cache_path.exists())
         n_after_run1 = len(pd.read_parquet(cache_path))
         first_start = fetch_windows[0][1]
@@ -394,6 +396,46 @@ class TestIncrementalCache(_MonitorTestBase):
         self.assertGreater(second_start, first_start)
         n_after_run2 = len(pd.read_parquet(cache_path))
         self.assertGreater(n_after_run2, n_after_run1, "cache must grow, not be refetched whole")
+
+    def test_resurfacing_ticker_uses_per_arrival_caches(self):
+        # GIVEN the SAME ticker surfaced on TWO different brief dates (different
+        # arrival sessions). WHEN the monitor runs. THEN each brief gets its OWN
+        # cache keyed by (ticker, arrival) — a later-arrival brief can NEVER set
+        # the cache floor for an earlier-arrival one (the cross-contamination bug).
+        bd_early = dt.date(2026, 5, 1)
+        bd_late = dt.date(2026, 5, 8)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)  # both matured
+        _write_brief(self.briefs_dir, bd_early, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+        _write_brief(self.briefs_dir, bd_late, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        fetch_starts: list[dt.datetime] = []
+
+        def _fetch(ticker, start, end):
+            fetch_starts.append(start)
+            base = int(start.timestamp() * 1000)
+            end_ms = int(end.timestamp() * 1000)
+            day = 86_400_000
+            bars, t = [], base
+            while t < end_ms:
+                bars.append({"t": t, "o": 100.0, "h": 100.5, "l": 99.5, "c": 100.0, "v": 1000.0})
+                t += day
+            return bars
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        bars_dir = self.store_dir / "bars"
+        self.assertTrue((bars_dir / "NVDA_2026-05-01.parquet").exists())
+        self.assertTrue((bars_dir / "NVDA_2026-05-08.parquet").exists())
+        # The earlier brief's cache must START at its OWN arrival (2026-05-01),
+        # never floored at the later brief's arrival.
+        early_first_ts = int(pd.read_parquet(bars_dir / "NVDA_2026-05-01.parquet")["t"].min())
+        early_first = dt.datetime.fromtimestamp(early_first_ts / 1000, tz=UTC).date()
+        self.assertEqual(early_first, dt.date(2026, 5, 1))
 
 
 class TestBrokerFree(unittest.TestCase):
