@@ -312,14 +312,18 @@ class SaxoClient:
         # _redact'd it would still carry the literal ``refresh_token=`` prefix
         # that the redaction test bans). The code alone is the actionable bit.
         error, _desc = _parse_oauth_error(response)
-        summary = (
-            f"saxo /token HTTP {response.status_code} "
-            f"error={_redact(error) if error else 'unknown'}"
-        )
+        # The short OAuth error CODE goes into the RAISED exception (not a
+        # logging sink). The LOG line carries ONLY the integer status code — no
+        # response-body-derived string ever reaches journald, so token material
+        # cannot leak even via a taint over-approximation that propagates the
+        # request's refresh_token through the httpx response object (CodeQL
+        # py/clear-text-logging-sensitive-data). ``status`` is a fresh int.
+        status = int(response.status_code)
+        summary = f"saxo /token HTTP {status} error={_redact(error) if error else 'unknown'}"
         if classify_token_error(response) == "permanent":
-            logger.warning("saxo refresh permanently rejected: %s", summary)
+            logger.warning("saxo refresh permanently rejected (HTTP %d)", status)
             raise SaxoReauthRequiredError(summary, reason="server_rejected")
-        logger.info("saxo /token transient failure: %s", summary)
+        logger.info("saxo /token transient failure (HTTP %d)", status)
         raise SaxoTransientError(summary)
 
     @staticmethod
