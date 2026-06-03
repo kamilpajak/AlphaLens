@@ -356,6 +356,70 @@ class TestMigratedLaunchdUnits(unittest.TestCase):
             )
 
 
+class TestPaperTradeStreamUnit(unittest.TestCase):
+    """Pin the always-on Alpaca trade_updates daemon unit.
+
+    Safety-critical, non-obvious fields: it is a long-running ``Type=simple``
+    daemon (NOT a oneshot like the other paper units), and it must NOT carry an
+    ``ExecCondition=...is-trading-day`` holiday gate — it has to catch a
+    Friday-fills / after-hours fill, unlike the submit/reconcile oneshots. The
+    EnvironmentFile is fail-loud (no leading dash) so a missing creds file fails
+    the unit rather than running with no Alpaca keys. No emit-hook /
+    ExecStopPost (it emits freshness gauges inline; it is in EXEMPT_JOBS).
+    """
+
+    SERVICE = SYSTEMD_DIR / "alphalens-paper-trade-stream.service"
+
+    def setUp(self) -> None:
+        self.assertTrue(self.SERVICE.exists(), f"missing unit: {self.SERVICE}")
+        self.text = self.SERVICE.read_text()
+
+    def test_is_long_running_simple_daemon_not_oneshot(self) -> None:
+        self.assertIn("Type=simple", self.text)
+        self.assertNotIn("Type=oneshot", self.text)
+
+    def test_restarts_on_failure_fast(self) -> None:
+        self.assertIn("Restart=on-failure", self.text)
+        self.assertRegex(self.text, r"(?m)^RestartSec=15\s*$")
+
+    def test_no_holiday_gate_so_it_catches_off_hours_fills(self) -> None:
+        # An ExecCondition=is-trading-day gate would make the always-on daemon
+        # skip weekends / after-hours — exactly when a Friday-fills-Monday or
+        # extended-hours fill needs prompt protection. Check for the DIRECTIVE
+        # line, not the substring (the rationale comment names it on purpose).
+        self.assertIsNone(
+            re.search(r"(?m)^ExecCondition=", self.text),
+            "daemon must not carry an ExecCondition holiday gate",
+        )
+
+    def test_loads_etc_alphalens_env_fail_loud(self) -> None:
+        self.assertRegex(
+            self.text,
+            re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE),
+        )
+
+    def test_execstart_runs_trade_stream_via_host_venv(self) -> None:
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/alphalens paper trade-stream "
+                r"--use-test-account\s*$",
+                re.MULTILINE,
+            ),
+        )
+
+    def test_has_no_timer_sibling(self) -> None:
+        # A long-running daemon is started directly (enable --now), never by a
+        # timer — a stray .timer would imply a oneshot cadence it does not have.
+        self.assertFalse((SYSTEMD_DIR / "alphalens-paper-trade-stream.timer").exists())
+
+    def test_drains_in_flight_reconcile_on_stop(self) -> None:
+        self.assertRegex(self.text, r"(?m)^TimeoutStopSec=30\s*$")
+
+    def test_carries_install_section(self) -> None:
+        self.assertIn("WantedBy=default.target", self.text)
+
+
 class TestLiteraturePublishWrapper(unittest.TestCase):
     """Static checks on the literature scan publish wrapper.
 

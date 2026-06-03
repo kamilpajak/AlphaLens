@@ -72,6 +72,14 @@ EXEMPT_JOBS: dict[str, str] = {
         "separately if ever needed. Mirrors the exclusion already "
         "documented in test_deploy_systemd_units.py + test_monitoring_alerts.py."
     ),
+    "paper-trade-stream": (
+        "Long-running daemon (Type=simple + Restart=on-failure): always-on "
+        "Alpaca trade_updates WebSocket. Like form4-backfill it has no clean "
+        "per-fire success for an ExecStopPost hook to emit; instead it emits "
+        "its own freshness gauges inline (alphalens_paper_trade_stream_* — "
+        "connected / heartbeat / last_reconcile), alerted by "
+        "AlphalensPaperTradeStream{Down,Stale,MetricMissing}."
+    ),
 }
 
 

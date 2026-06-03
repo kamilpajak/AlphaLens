@@ -1,0 +1,74 @@
+[Unit]
+# AlphaLens Alpaca trade_updates daemon — always-on WebSocket that fires the
+# existing reconcile path sub-second on a fill, so a filled paper position is
+# protected (OCO ladder attached) within seconds instead of up to ~30 min.
+#
+# Install as a *user* unit (no root):
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/systemd/alphalens-paper-trade-stream.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alphalens-paper-trade-stream.service
+#
+# Inspect:  journalctl --user -u alphalens-paper-trade-stream.service -f
+# Stop:     systemctl --user stop alphalens-paper-trade-stream.service
+#
+# Persistence (survives logout): once, as the user:
+#   loginctl enable-linger $USER
+#
+# IMPORTANT: keep alphalens-paper-reconcile.timer RUNNING. This daemon only
+# CUTS the fill-to-attach latency; the 30-min poll stays as the gap-recovery
+# and wall-clock backstop (TTL sweep, 42-day time-stop, gross_guard, #404
+# desync). If this daemon dies, behaviour reverts to the poll's latency, never
+# to no-protection.
+Description=AlphaLens Alpaca trade_updates daemon (sub-second fill detection)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/AlphaLens
+
+# Alpaca paper keys: ALPACA_TEST_API_KEY / ALPACA_TEST_API_SECRET (and
+# ALPHALENS_TEXTFILE_DIR for the freshness gauges) live in the shared secrets
+# file. No leading '-': a missing file fails the unit loud rather than running
+# with no credentials.
+EnvironmentFile=/etc/alphalens/env
+
+# --use-test-account routes the daemon at the TEST paper account. It MUST match
+# the account the submit / reconcile units use, or the daemon sweeps the wrong
+# account and never sees the relevant fills. Drop the flag to go live on main.
+ExecStart=%h/AlphaLens/.venv/bin/alphalens paper trade-stream --use-test-account
+
+# A dropped WebSocket re-attaches fast and the connect-time full resync makes a
+# restart cheap + safe (it recovers any fill missed while down), so restart
+# quickly. NO ExecCondition holiday gate: the daemon is always-on and must
+# catch a Friday-fills / after-hours fill; reconcile no-ops when idle.
+Restart=on-failure
+RestartSec=15
+
+# Cap restart loops: if it keeps dying within 10 min, stop trying (page via the
+# AlphalensPaperTradeStreamDown / Stale alerts instead of thrashing).
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+# Give an in-flight reconcile time to finish on stop before SIGKILL, so a
+# systemd stop drains cleanly (record_exit_ladder is one transaction, so even a
+# SIGKILL rolls back a partial attach — but clean drain is preferred).
+TimeoutStopSec=30
+
+# No ExecStopPost=alphalens-emit-job-metrics: that per-run cron-health hook is
+# for oneshot units. A long-lived Type=simple daemon has no clean per-fire
+# success; it emits its own freshness gauges inline (see the
+# AlphalensPaperTradeStream* alerts). This unit is therefore listed in
+# EXEMPT_JOBS of test_systemd_metrics_hook_completeness.py, same as
+# form4-backfill and the VIX cache refresh.
+
+StandardOutput=journal
+StandardError=journal
+
+MemoryMax=512M
+TasksMax=32
+
+[Install]
+WantedBy=default.target

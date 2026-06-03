@@ -27,8 +27,10 @@ def _install_fake_alpaca(target: dict) -> tuple[MagicMock, MagicMock, MagicMock]
     fake_trading_client = types.ModuleType("alpaca.trading.client")
     fake_trading_requests = types.ModuleType("alpaca.trading.requests")
     fake_trading_enums = types.ModuleType("alpaca.trading.enums")
+    fake_trading_stream = types.ModuleType("alpaca.trading.stream")
 
     fake_trading_client.TradingClient = MagicMock(name="TradingClient")
+    fake_trading_stream.TradingStream = MagicMock(name="TradingStream")
     # Each request dataclass is a MagicMock so the test can assert the kwargs
     # the wrapper passed through (symbol, qty, limit_price, side enum, etc.).
     fake_trading_requests.LimitOrderRequest = MagicMock(name="LimitOrderRequest")
@@ -61,10 +63,12 @@ def _install_fake_alpaca(target: dict) -> tuple[MagicMock, MagicMock, MagicMock]
     target["alpaca.trading.client"] = fake_trading_client
     target["alpaca.trading.requests"] = fake_trading_requests
     target["alpaca.trading.enums"] = fake_trading_enums
+    target["alpaca.trading.stream"] = fake_trading_stream
     fake_alpaca.trading = fake_trading
     fake_trading.client = fake_trading_client
     fake_trading.requests = fake_trading_requests
     fake_trading.enums = fake_trading_enums
+    fake_trading.stream = fake_trading_stream
 
     return fake_trading_client, fake_trading_requests, fake_trading_enums
 
@@ -745,6 +749,23 @@ class TestSdkMissingImport(unittest.TestCase):
                 self.assertIn("alpaca-py", str(cm.exception))
             finally:
                 mod._reset_sdk_cache_for_tests()
+
+
+class TestTradeStreamFactory(_FakeAlpacaTestCase):
+    def test_lazy_sdk_namespace_exposes_trading_stream(self):
+        from alphalens_pipeline.data.alt_data.alpaca_client import _load_alpaca_sdk
+
+        sdk = _load_alpaca_sdk()
+        self.assertIs(sdk.TradingStream, sys.modules["alpaca.trading.stream"].TradingStream)
+
+    def test_trade_stream_uses_profile_creds_and_paper_true(self):
+        from alphalens_pipeline.data.alt_data.alpaca_client import AlpacaClient
+
+        client = AlpacaClient(api_key="k", secret_key="s")
+        stream = client.trade_stream()
+        fake_stream_cls = sys.modules["alpaca.trading.stream"].TradingStream
+        fake_stream_cls.assert_called_once_with("k", "s", paper=True)
+        self.assertIs(stream, fake_stream_cls.return_value)
 
 
 if __name__ == "__main__":

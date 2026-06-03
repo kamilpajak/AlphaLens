@@ -146,6 +146,7 @@ def _load_alpaca_sdk() -> SimpleNamespace:
             StopOrderRequest,
             TakeProfitRequest,
         )
+        from alpaca.trading.stream import TradingStream
     except ImportError as exc:
         raise AlpacaClientError(
             "alpaca-py SDK not installed. `uv add alpaca-py` (already in "
@@ -162,6 +163,7 @@ def _load_alpaca_sdk() -> SimpleNamespace:
         OrderSide=OrderSide,
         OrderClass=OrderClass,
         TimeInForce=TimeInForce,
+        TradingStream=TradingStream,
     )
     return _SDK
 
@@ -230,6 +232,11 @@ class AlpacaClient:
         _validate_paper_base_url(os.environ.get(BASE_URL_ENV))
         sdk = _load_alpaca_sdk()
         self._sdk = sdk
+        # Retain creds: TradingClient does not re-expose them, and the
+        # trade_updates WS factory (trade_stream) needs to re-auth the socket
+        # with the same per-profile credentials — without re-reading the env.
+        self._api_key = api_key
+        self._secret_key = secret_key
         # paper=True is the structural guarantee — no constructor arg to flip
         # it, no env override path. The base-URL guard above prevents the
         # other side of the same footgun.
@@ -272,6 +279,19 @@ class AlpacaClient:
         """Underlying SDK ``TradingClient``. Escape hatch for ops not yet
         wrapped (e.g. ``close_position``, asset metadata)."""
         return self._trading
+
+    def trade_stream(self) -> Any:
+        """Build an account-scoped ``trade_updates`` WebSocket (alpaca-py
+        ``TradingStream``) for this client's profile.
+
+        ``paper=True`` is hardcoded — same structural guarantee as the REST
+        client; the stream re-auths with the per-profile creds retained at
+        construction, never re-reading the env. NOT part of the broker-neutral
+        ``BrokerClient`` protocol (a future broker may have no streaming): the
+        ``trade_updates`` daemon depends on the concrete ``AlpacaClient`` for
+        the stream and on broker-neutral ``reconcile_orders`` for the writes.
+        """
+        return self._sdk.TradingStream(self._api_key, self._secret_key, paper=True)
 
     # ----- account / portfolio reads -----
 

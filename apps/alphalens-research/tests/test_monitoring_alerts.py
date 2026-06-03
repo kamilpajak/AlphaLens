@@ -740,6 +740,91 @@ class TestVixCacheStaleness(unittest.TestCase):
             )
 
 
+class TestPaperTradeStreamFreshness(unittest.TestCase):
+    """Pin the Alpaca trade_updates daemon alert family.
+
+    The always-on daemon (alphalens-paper-trade-stream.service) cuts the
+    fill-to-attach latency from up to 30 min to seconds. It is a long-running
+    Type=simple unit with NO per-fire ExecStopPost success, so — like the VIX
+    cache + form4-backfill — it is EXEMPT from the cron emit-hook parity and
+    carries DISTINCT alertnames + NO job= label to stay out of every cron
+    enumeration. The cron-keyed asserts (AlphalensJobStale, the staleness dict)
+    will never cover these, so this family needs its own pins here.
+
+    The staleness alert keys on last-SUCCESSFUL-reconcile age, NOT last-event
+    age: trade_updates is account-scoped and silent on a quiet weekend, but the
+    worker's ~75s periodic safety resync keeps advancing last_reconcile while
+    the loop genuinely cycles — so staling means the process died / wedged.
+    """
+
+    METRIC = "alphalens_paper_trade_stream_last_reconcile_timestamp_seconds"
+    CONNECTED = "alphalens_paper_trade_stream_connected"
+    DOWN = "AlphalensPaperTradeStreamDown"
+    STALE = "AlphalensPaperTradeStreamStale"
+    MISSING = "AlphalensPaperTradeStreamMetricMissing"
+    # 600s = 10m ~= 8x the 75s periodic resync, with margin for missed scrapes.
+    THRESHOLD = 600
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def _one(self, alertname: str) -> dict:
+        matches = [r for r in self._rules() if r.get("alert") == alertname]
+        self.assertEqual(
+            len(matches),
+            1,
+            f"Expected exactly one {alertname} alert, found {len(matches)}.",
+        )
+        return matches[0]
+
+    def test_stale_alert_is_threshold_only_on_last_reconcile_gauge(self) -> None:
+        rule = self._one(self.STALE)
+        expr = rule["expr"]
+        self.assertIn(self.METRIC, expr)
+        self.assertNotIn("absent(", expr)
+        # Pin the literal threshold against a silent widen (the cron staleness
+        # dict keys on AlphalensJobStale only, so this rule escapes it).
+        self.assertRegex(
+            expr,
+            rf"time\(\)\s*-\s*{re.escape(self.METRIC)}(\{{[^}}]*\}})?\s*>\s*{self.THRESHOLD}\b",
+            f"Stale expr must be `time() - {self.METRIC}[{{...}}] > {self.THRESHOLD}`.",
+        )
+
+    def test_down_alert_is_connected_equals_zero(self) -> None:
+        rule = self._one(self.DOWN)
+        self.assertRegex(
+            rule["expr"],
+            rf"{re.escape(self.CONNECTED)}(\{{[^}}]*\}})?\s*==\s*0\b",
+            f"Down expr must be `{self.CONNECTED}[{{...}}] == 0`.",
+        )
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+
+    def test_stale_alert_reports_duration_and_routes_to_telegram(self) -> None:
+        rule = self._one(self.STALE)
+        self.assertIn(
+            "humanizeDuration",
+            rule.get("annotations", {}).get("description", ""),
+            "Stale alert must report the real staleness duration.",
+        )
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+
+    def test_metric_missing_alert_wraps_absent_with_no_duration(self) -> None:
+        rule = self._one(self.MISSING)
+        self.assertIn(f"absent({self.METRIC}", rule["expr"])
+        ann = rule.get("annotations", {})
+        for field in ("summary", "description"):
+            self.assertNotIn("humanizeDuration", ann.get(field, ""))
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+
+    def test_rules_carry_no_job_label_so_they_stay_out_of_cron_enums(self) -> None:
+        for alertname in (self.DOWN, self.STALE, self.MISSING):
+            expr = self._one(alertname)["expr"]
+            self.assertIsNone(
+                re.search(r'job="[^"]+"', expr),
+                f"{alertname} must not carry a job= label (it is not a cron job).",
+            )
+
+
 class TestEdgarPressReleaseDark(unittest.TestCase):
     """#384 per-source dead-man-switch for the EDGAR EX-99.1 ingest.
 
