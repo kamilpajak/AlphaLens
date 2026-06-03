@@ -41,12 +41,11 @@ class TestMapThemesCLI(unittest.TestCase):
         self.runner = CliRunner()
 
     def _env(self, **overrides):
-        # PR-G (2026-05-30) swapped GOOGLE_API_KEY → OPENROUTER_API_KEY
-        # for the thematic CLI; the GOOGLE_API_KEY entry is kept for the
-        # research-side scorer that still uses Gemini.
+        # PR-G (2026-05-30) swapped GOOGLE_API_KEY → OPENROUTER_API_KEY for
+        # the thematic CLI; the whole pipeline now routes LLM calls through
+        # OpenRouter, so GOOGLE_API_KEY is no longer part of the env.
         base = {
             "OPENROUTER_API_KEY": "fake",
-            "GOOGLE_API_KEY": "fake",
             "POLYGON_API_KEY": "fake",
         }
         base.update(overrides)

@@ -13,8 +13,8 @@ Why not import the pipeline module directly:
 * The Django prod image installs only the ``alphalens-django`` workspace
   package (``uv sync ... --package alphalens-django`` in
   ``deploy/docker/django-prod/Dockerfile``). Pulling the full pipeline
-  would drag in google-genai, langchain-google-genai, yfinance, alpaca-py,
-  pandera, ivolatility, etc. — none of which the Django container needs.
+  would drag in yfinance, alpaca-py, pandera, ivolatility, etc. — none of
+  which the Django container needs.
 * The Docker boundary means a top-level
   ``from alphalens_pipeline.paper.calendar import ...`` would crash at
   import time inside the runtime image.

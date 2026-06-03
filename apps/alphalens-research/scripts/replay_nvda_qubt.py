@@ -25,6 +25,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from alphalens_pipeline.data.alt_data.polygon_client import PolygonClient
 from alphalens_pipeline.thematic.extraction import event_extractor
 from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
 
@@ -87,8 +88,8 @@ def banner(msg: str) -> None:
 
 
 def step_layer2() -> dict:
-    banner("Layer 2 — Gemini Flash event extraction")
-    api_key = os.environ["GOOGLE_API_KEY"]
+    banner("Layer 2 — DeepSeek v4 Flash event extraction")
+    api_key = os.environ["OPENROUTER_API_KEY"]
     event = event_extractor.extract_one(NEWS_ROW, api_key=api_key)
     if event is None:
         raise RuntimeError("Layer 2 returned None")
@@ -98,11 +99,11 @@ def step_layer2() -> dict:
 
 
 def step_layer3_propose(themes: list[str]) -> dict[str, list[dict]]:
-    banner(f"Layer 3 — Gemini Pro mapper, themes={themes}")
-    api_key = os.environ["GOOGLE_API_KEY"]
+    banner(f"Layer 3 — DeepSeek v4 Pro mapper, themes={themes}")
+    api_key = os.environ["OPENROUTER_API_KEY"]
     all_by_theme: dict[str, list[dict]] = {}
     for theme in themes:
-        cands = theme_mapper.propose_candidates(theme=theme, api_key=api_key)
+        cands = theme_mapper.propose_candidates(theme=theme, api_key=api_key)["candidates"]
         all_by_theme[theme] = cands
         print(f"\n--- theme={theme!r}: {len(cands)} candidates ---")
         for c in cands:
@@ -120,11 +121,12 @@ def step_layer3_propose(themes: list[str]) -> dict[str, list[dict]]:
 def step_gates(ticker: str, themes: list[str]) -> dict:
     banner(f"Layer 3 verification gates — ticker={ticker}, themes={themes}")
     polygon_key = os.environ.get("POLYGON_API_KEY", "")
+    polygon_client = PolygonClient(api_key=polygon_key) if polygon_key else None
     verdict = orchestrator.verify_candidate(
         ticker=ticker,
         themes=themes,
         asof=ASOF,
-        api_key=polygon_key,
+        polygon_client=polygon_client,
     )
     print(json.dumps(verdict, indent=2, default=str))
     return verdict

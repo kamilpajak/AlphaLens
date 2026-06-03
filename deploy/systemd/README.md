@@ -22,7 +22,7 @@ hosts where launchd is unavailable.
 
 All three AlphaLens systemd units load secrets via
 `EnvironmentFile=/etc/alphalens/env`:
-- `alphalens-thematic-build.service` — `GOOGLE_API_KEY`, `POLYGON_API_KEY`,
+- `alphalens-thematic-build.service` — `OPENROUTER_API_KEY`, `POLYGON_API_KEY`,
   `PERPLEXITY_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
   `ALPHA_VANTAGE_API_KEY`, `SEC_EDGAR_USER_AGENT`, **plus `FRED_API_KEY`**
   (the `cache refresh-vix` step at the end of `run_thematic_day.sh` pulls
@@ -49,7 +49,7 @@ cherry-pick which keys cross into the container.
 
 **No leading `-` on `EnvironmentFile=`** — a missing/typoed file MUST
 fail the unit loud, not silently degrade to "no secrets" (Polygon
-skipped, Gemini extract fails partway, partial parquet poisons cache).
+skipped, LLM extract fails partway, partial parquet poisons cache).
 CI smoke runs install a stub: `sudo mkdir -p /etc/alphalens && sudo touch /etc/alphalens/env`.
 
 **Why `/etc/alphalens/env` and not the repo's `.env` files:**
@@ -75,7 +75,7 @@ often `users`. Verify with `id -gn` before running the bootstrap.
 OPERATOR_GROUP=$(id -gn)   # e.g. `jacoren` on Debian
 sudo mkdir -p /etc/alphalens
 sudo tee /etc/alphalens/env > /dev/null <<'EOF'
-GOOGLE_API_KEY=...
+OPENROUTER_API_KEY=...
 ALPHA_VANTAGE_API_KEY=...
 POLYGON_API_KEY=...
 PERPLEXITY_API_KEY=...
@@ -104,7 +104,7 @@ sudo chown "root:$(id -gn)" /etc/alphalens/env           # restore owner if edit
 
 ```bash
 systemctl --user show alphalens-thematic-build.service \
-    -p Environment 2>/dev/null | tr ' ' '\n' | grep -c '^GOOGLE_API_KEY='
+    -p Environment 2>/dev/null | tr ' ' '\n' | grep -c '^OPENROUTER_API_KEY='
 # Expect: 1
 ```
 
@@ -479,7 +479,7 @@ investigates.
 ### Install
 
 ```bash
-# Prereq: /etc/alphalens/env must exist with GOOGLE_API_KEY, POLYGON_API_KEY,
+# Prereq: /etc/alphalens/env must exist with OPENROUTER_API_KEY, POLYGON_API_KEY,
 # ALPHA_VANTAGE_API_KEY, PERPLEXITY_API_KEY, TELEGRAM_BOT_TOKEN,
 # TELEGRAM_CHAT_ID, SEC_EDGAR_USER_AGENT — see "Environment file setup" at
 # the top of this README.

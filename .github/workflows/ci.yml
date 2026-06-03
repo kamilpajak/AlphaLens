@@ -69,7 +69,7 @@ jobs:
         # Gate: low-and-above severity (-ll). XML parsing on untrusted SEC
         # EDGAR feeds uses defusedxml (B314 fix); urllib3 calls go through
         # the canonical requests-based vendor clients (sec_edgar_client,
-        # alphavantage_client, polygon_client, gemini_client). The single
+        # alphavantage_client, polygon_client). The single
         # urllib.request.urlopen call to GDELT is # nosec B310 — URL built
         # from a constant base + querystring, file:// not reachable.
         run: uv run bandit -r apps/alphalens-pipeline/alphalens_pipeline/ apps/alphalens-pipeline/alphalens_cli/ apps/alphalens-research/alphalens_research/ -ll -q

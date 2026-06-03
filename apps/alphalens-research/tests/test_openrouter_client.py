@@ -1,23 +1,23 @@
 """Canonical OpenRouter client — round-trip + structured-output + auth.
 
-PR-G (epic #295 follow-up): replaces ``GeminiClient`` at three call sites
-in the thematic pipeline (extract Flash, mapper Pro, brief generator
-Pro/Flash). The client mirrors :class:`GeminiClient`'s public surface so
-the swap at call sites is a one-line import + model-name change, NOT a
-contract change.
+PR-G (epic #295 follow-up): replaced the earlier Gemini client at three
+call sites in the thematic pipeline (extract Flash, mapper Pro, brief
+generator Pro/Flash). The client keeps a minimal, backend-agnostic public
+surface so the swap at call sites was a one-line import + model-name
+change, NOT a contract change.
 
 Key contracts pinned here:
 
-* **Public surface mirrors GeminiClient** — ``from_env()``,
+* **Stable public surface** — ``from_env()``,
   ``generate_content(*, model, contents, config)``, ``build_config(**kw)``
   — so adapters can stay agnostic to the LLM backend.
-* **``response.text`` matches Gemini's shape** — adapters today read
+* **``response.text`` exposes the completion text** — adapters read
   ``response.text``; OpenRouter returns ``choices[0].message.content``.
   The wrapper exposes it as ``.text`` so call sites don't branch.
 * **JSON-mode + schema-in-prompt** — DeepSeek's JSON mode requires
   (a) ``response_format={'type': 'json_object'}`` and (b) the literal
   word "json" in the prompt. The wrapper enforces both when the caller
-  passes Gemini-style ``response_mime_type="application/json"`` +
+  passes ``response_mime_type="application/json"`` +
   ``response_schema=...``. Schema is embedded in a synthesised system
   message; output is free-form JSON (we already JSON-repair at call
   sites, so strict ``json_schema`` mode is not required).
@@ -25,7 +25,7 @@ Key contracts pinned here:
   the zen-codereview key — that's a separate OpenRouter account/key
   for billing isolation). Auth never lives in URL or body.
 * **Lazy singleton** — one HTTP connection pool per process, parallel
-  to ``get_default_gemini_client()``.
+  to the other ``get_default_*_client()`` singletons.
 
 Tests use ``httpx.MockTransport`` to intercept the HTTPS call without
 hitting OpenRouter's servers. The transport asserts the request shape

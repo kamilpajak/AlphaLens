@@ -11,7 +11,7 @@ requires-python = ">=3.13"
 # INTENTIONALLY zero third-party dependencies — store.py + regime.py are
 # pure stdlib (sqlite3 / datetime / fcntl / json / uuid). This is what lets
 # the slim Django image import the ledger without pulling the heavy pipeline
-# dependency tree (google-genai / yfinance / pandera / alpaca / scipy).
+# dependency tree (yfinance / pandera / alpaca / scipy).
 # Adding a third-party dep here re-bloats the Django image — don't.
 dependencies = []
 

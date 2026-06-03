@@ -1,9 +1,9 @@
-"""Analyze Layer 3 rejection reasoning with Gemini Flash 3 → scorer improvement leads.
+"""Analyze Layer 3 rejection reasoning with DeepSeek v4 Flash → scorer improvement leads.
 
 Reads every rejected sample from `docs/research/acceptance_{scorer}_reports/`, sends
-the Portfolio Manager's decision text to Gemini Flash for structured categorization,
-and aggregates across the cohort. Output: per-pick JSONL + aggregate markdown with
-dominant rejection themes and suggested scorer pre-filters.
+the Portfolio Manager's decision text to DeepSeek v4 Flash (via OpenRouter) for
+structured categorization, and aggregates across the cohort. Output: per-pick JSONL +
+aggregate markdown with dominant rejection themes and suggested scorer pre-filters.
 
 Cost: ~50 Flash calls × ~3k tokens each = ~150k tokens total. Seconds of wall time.
 
@@ -23,7 +23,7 @@ import pandas as pd
 
 REPO = Path(__file__).resolve().parent.parent
 ACCEPT_RATINGS = {"BUY", "OVERWEIGHT"}
-MODEL = "gemini-2.5-flash"
+MODEL = "deepseek/deepseek-v4-flash"
 
 PROMPT_TEMPLATE = """You are auditing a trading system's rejection of a stock pick. Below is the Portfolio Manager's final verdict text. Classify it.
 
@@ -74,16 +74,17 @@ def collect_rejections(scorer: str) -> list[dict]:
     return rows
 
 
-def classify_with_gemini(row: dict, client) -> dict:
+def classify_with_llm(row: dict, client) -> dict:
     prompt = PROMPT_TEMPLATE.format(
         ticker=row["ticker"],
         date=row["date"],
         rating=row["rating"],
         verdict=row["verdict_text"][:8000],  # cap to avoid huge prompts
     )
-    resp = client.generate_content(model=MODEL, contents=prompt)
+    config = client.build_config(response_mime_type="application/json")
+    resp = client.generate_content(model=MODEL, contents=prompt, config=config)
     text = resp.text.strip()
-    # Gemini sometimes wraps in ```json fences — strip defensively.
+    # Some models wrap in ```json fences — strip defensively.
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         if text.startswith("json"):
@@ -96,21 +97,21 @@ def classify_with_gemini(row: dict, client) -> dict:
 
 
 def main() -> None:
-    from alphalens_pipeline.data.alt_data.gemini_client import GeminiClient
+    from alphalens_pipeline.data.alt_data.openrouter_client import OpenRouterClient
 
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         # Load from .env if not already exported
         env_path = REPO / ".env"
         if env_path.exists():
             for line in env_path.read_text().splitlines():
-                if line.startswith("GOOGLE_API_KEY="):
+                if line.startswith("OPENROUTER_API_KEY="):
                     api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
                     break
     if not api_key:
-        raise SystemExit("GOOGLE_API_KEY not set")
+        raise SystemExit("OPENROUTER_API_KEY not set")
 
-    client = GeminiClient(api_key=api_key)
+    client = OpenRouterClient(api_key=api_key)
 
     all_rows = []
     for scorer in ("momentum", "early-stage"):
@@ -120,14 +121,14 @@ def main() -> None:
         for i, row in enumerate(rejections, 1):
             print(f"  [{i}/{len(rejections)}] {row['date']} {row['ticker']} ({row['regime']})")
             try:
-                classification = classify_with_gemini(row, client)
+                classification = classify_with_llm(row, client)
             except Exception as exc:
                 print(f"    ERROR: {exc}")
                 classification = {"primary_reason": "api_error", "error": str(exc)[:200]}
             row_out = {k: v for k, v in row.items() if k != "verdict_text"}
             row_out.update(classification)
             all_rows.append(row_out)
-            time.sleep(0.3)  # gentle pacing under free tier
+            time.sleep(0.3)  # gentle pacing for the API rate limit
 
     # Persist
     out_jsonl = REPO / "docs/research/rejection_analysis.jsonl"
