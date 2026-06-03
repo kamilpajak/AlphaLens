@@ -280,7 +280,11 @@ def _terminal_row(
     # live and price could fill them on a later session, so the candidate is "not
     # filled YET" (ongoing) -- freezing it here would permanently miss a later
     # fill and under-count the population's fill rate.
-    if classification == "NO_FILL" and entry_expiry_session >= last_closed_session:
+    # ``>`` not ``>=``: the entry cutoff is the entry_expiry session's OPEN
+    # (entry_expiry_ms), so once that session has closed no fill is possible and
+    # the NO_FILL is final. Only an entry_expiry session STILL in the future
+    # (strictly after the last closed session) leaves the limits live.
+    if classification == "NO_FILL" and entry_expiry_session > last_closed_session:
         terminal = False
     realized_r = outcome.realized_r if terminal else None
     open_r = None if terminal else outcome.realized_r
