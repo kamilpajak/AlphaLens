@@ -1007,5 +1007,139 @@ class TestPartialSlCoverageMonitor(_ReconcilerTestBase):
         self.assertEqual(report.n_plans_partial_sl, 0)
 
 
+class TestCanceledAfterFillFallbackPrice(_ReconcilerTestBase):
+    """PR-5 data-loss fix (reconciler ~line 175).
+
+    Alpaca can fill an SL leg, OCO-auto-cancel the order, and then return
+    ``status=canceled`` with ``filled_qty>0`` but ``filled_avg_price=None``.
+    The old guard (``alpaca_avg_price is not None``) dropped the fill chunk
+    entirely → the SL row went terminal CANCELED with filled_qty_observed=0
+    → ``_classify_exit_kind`` saw qty_sl==0 → a genuine stop-out was recorded
+    as PARTIAL_TP with null realized-R. DATA LOSS.
+
+    The fix records the chunk at a deterministic fallback price from the
+    order's own ledger row (stop_price for STOP / STOP_LIMIT, limit_price for
+    LIMIT) so the SL row keeps filled_qty_observed>0 and _write_outcome has a
+    usable (approximate) exit price.
+    """
+
+    def _seed_open_sl(
+        self,
+        *,
+        alpaca_id: str,
+        order_type: str,
+        stop_price: float | None = None,
+        limit_price: float | None = None,
+        order_kind: str = "SL",
+        qty: int = 27,
+    ) -> int:
+        """Seed a PLANNED row + one OPEN (SUBMITTED) exit order of the given
+        type. Returns the exit order_id. The plan's planned_at is now-UTC so
+        the TTL sweep is a no-op."""
+        ts = dt.datetime.now(dt.UTC)
+        d = dt.date(2026, 5, 28)
+        with open_ledger(self.ledger) as conn:
+            row = insert_planned(
+                conn,
+                brief_date=d,
+                ticker="NVDA",
+                theme="ai-infra",
+                planned_at=ts,
+                suggested_size_pct=5.0,
+                scale_factor=0.05,
+                final_size_pct=0.25,
+                paper_equity=1_000_000.0,
+                total_notional=2500.0,
+                gross_notional=2700.0,
+                disaster_stop=80.0,
+                order_ttl_days=10,
+                tiers=[(0, 100.0, qty, 100.0, "t0")],
+                tp_tranches=[(0, 120.0, 100.0, 2.0, "tp")],
+            )
+            order_id = insert_order(
+                conn,
+                plan_id=row.plan_id,
+                alpaca_order_id=alpaca_id,
+                side="SELL",
+                order_kind=order_kind,
+                order_type=order_type,
+                qty=qty,
+                limit_price=limit_price,
+                stop_price=stop_price,
+                time_in_force="gtc",
+                submitted_at=ts,
+            )
+        return order_id
+
+    def test_canceled_after_fill_with_null_avg_price_records_sl_fill_at_fallback(self):
+        # Given: a STOP (SL) order whose Alpaca state is canceled-after-fill —
+        # filled_qty=27 but filled_avg_price=None (the OCO auto-cancel race).
+        order_id = self._seed_open_sl(alpaca_id="sl1", order_type="STOP", stop_price=80.0)
+        self.client.add(
+            _StubAlpacaOrder(id="sl1", status="canceled", filled_qty=27, filled_avg_price=None)
+        )
+
+        with self.assertLogs("alphalens_pipeline.paper.reconciler", level="WARNING") as cm:
+            report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
+
+        # The fill IS recorded (was 0 before the fix) at the ledger stop_price.
+        self.assertEqual(report.n_fills_appended, 1)
+        with open_ledger(self.ledger) as conn:
+            fills = fetch_fills_for_order(conn, order_id)
+        self.assertEqual(len(fills), 1)
+        self.assertEqual(fills[0]["qty"], 27)
+        self.assertAlmostEqual(fills[0]["price"], 80.0)
+        self.assertTrue(
+            any("fallback price" in m for m in cm.output),
+            msg=f"expected fallback-price WARNING, got {cm.output!r}",
+        )
+
+    def test_canceled_after_fill_limit_order_uses_limit_price_fallback(self):
+        # Given: a LIMIT (TP) order canceled-after-fill with null avg price.
+        order_id = self._seed_open_sl(
+            alpaca_id="tp1", order_type="LIMIT", limit_price=120.0, order_kind="TP"
+        )
+        self.client.add(
+            _StubAlpacaOrder(id="tp1", status="canceled", filled_qty=27, filled_avg_price=None)
+        )
+
+        with self.assertLogs("alphalens_pipeline.paper.reconciler", level="WARNING") as cm:
+            report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
+
+        self.assertEqual(report.n_fills_appended, 1)
+        with open_ledger(self.ledger) as conn:
+            fills = fetch_fills_for_order(conn, order_id)
+        self.assertEqual(fills[0]["qty"], 27)
+        self.assertAlmostEqual(fills[0]["price"], 120.0)
+        self.assertTrue(any("fallback price" in m for m in cm.output))
+
+    def test_canceled_after_fill_market_order_no_fallback_price_drops_and_warns(self):
+        # Given: a MARKET order with filled_qty>0, null avg price, and NO
+        # stop/limit price. Realized-R would be meaningless → keep the current
+        # drop behavior, but emit a DISTINCT warning so the dropped fill is
+        # visible (the documented residual).
+        order_id = self._seed_open_sl(alpaca_id="mkt1", order_type="MARKET", order_kind="TIME_STOP")
+        self.client.add(
+            _StubAlpacaOrder(id="mkt1", status="canceled", filled_qty=27, filled_avg_price=None)
+        )
+
+        with self.assertLogs("alphalens_pipeline.paper.reconciler", level="WARNING") as cm:
+            report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
+
+        # Fill NOT recorded (no usable fallback price).
+        self.assertEqual(report.n_fills_appended, 0)
+        with open_ledger(self.ledger) as conn:
+            fills = fetch_fills_for_order(conn, order_id)
+        self.assertEqual(len(fills), 0)
+        # A DISTINCT warning fires (it must NOT claim a fallback price was used).
+        self.assertTrue(
+            any("no fallback price" in m for m in cm.output),
+            msg=f"expected no-fallback-price WARNING, got {cm.output!r}",
+        )
+        self.assertFalse(
+            any("recording cancelled-after-fill chunk at fallback" in m for m in cm.output)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
