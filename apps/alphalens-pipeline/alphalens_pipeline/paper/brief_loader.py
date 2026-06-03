@@ -1,14 +1,14 @@
-"""Read one day's thematic brief parquet into a planner-friendly shape.
+"""Read one day's thematic brief parquet into a ``CandidateBrief`` shape.
 
-Source of truth for the planner is the parquet file written by the daily
-thematic pipeline (``~/.alphalens/thematic_briefs/<date>.parquet``). The
-Django DB is a downstream consumer of the same parquet — reading directly
-from parquet keeps the planner runnable on the laptop without the API up
-and matches the design memo's "parquet is SoT" framing.
+Source of truth is the parquet file written by the daily thematic pipeline
+(``~/.alphalens/thematic_briefs/<date>.parquet``). The Django DB is a
+downstream consumer of the same parquet — reading directly from parquet keeps
+this loader runnable on the laptop without the API up and matches the design
+memo's "parquet is SoT" framing.
 
-This module does only loading + decoding (``brief_trade_setup`` is
-persisted as a JSON string in parquet; we parse it here). All sizing /
-planning decisions live in :mod:`alphalens_pipeline.paper.planner`.
+This module does only loading + decoding (``brief_trade_setup`` is persisted as
+a JSON string in parquet; we parse it here). The decoded rows feed the
+broker-free feedback replay engines (``alphalens_pipeline.feedback``).
 """
 
 from __future__ import annotations

@@ -83,7 +83,6 @@ DIST_TO_MODULE_OVERRIDES: dict[str, set[str]] = {
     "pyyaml": {"yaml"},
     "python-dotenv": {"dotenv"},
     "beautifulsoup4": {"bs4"},
-    "alpaca-py": {"alpaca"},
     "phase-robust-backtesting": {"phase_robust_backtesting"},
     "exchange-calendars": {"exchange_calendars"},
     "json-repair": {"json_repair"},

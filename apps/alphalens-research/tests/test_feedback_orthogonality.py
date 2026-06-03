@@ -148,14 +148,14 @@ SCAN_ROOTS = (
 
 _EXCLUDED_SEGMENTS = frozenset({"tests", "migrations"})
 
-# Resolved paths of the feedback store (positive control) + the two protected
+# Resolved paths of the feedback store (positive control) + two surviving
 # scoring-side modules (negative control). Computed once at module load.
 _STORE_PY = WORKSPACE_ROOT / "apps/alphalens-feedback/alphalens_feedback/store.py"
-_EXECUTION_TELEMETRY_PY = (
-    WORKSPACE_ROOT / "apps/alphalens-pipeline/alphalens_pipeline/feedback/execution_telemetry.py"
+_LADDER_BACKFILL_PY = (
+    WORKSPACE_ROOT / "apps/alphalens-pipeline/alphalens_pipeline/feedback/ladder_backfill.py"
 )
-_EXECUTION_MODES_PY = (
-    WORKSPACE_ROOT / "apps/alphalens-pipeline/alphalens_pipeline/feedback/execution_modes.py"
+_LADDER_REPLAY_PY = (
+    WORKSPACE_ROOT / "apps/alphalens-pipeline/alphalens_pipeline/feedback/ladder_replay.py"
 )
 
 
@@ -523,27 +523,29 @@ class TestNoScoringSideClickReader(unittest.TestCase):
         self.assertTrue(is_feedback_consumer(_STORE_PY))
         self.assertTrue(reads_click_data(_STORE_PY))
 
-    def test_negative_control_execution_telemetry_not_flagged(self):
-        # execution_telemetry IS a feedback-consumer (it imports FeedbackStore via
-        # execution_gauges_for_ledger) yet reads NO click column — consuming the
-        # store is fine, reading a CLICK column is the violation. This pins the
-        # exact desired behaviour.
+    def test_negative_control_ladder_backfill_not_flagged(self):
+        # ladder_backfill IS a feedback-consumer (it imports FeedbackStore and
+        # stamps the broker-free ladder outcome) yet reads NO click column —
+        # consuming the store is fine, reading a CLICK column is the violation.
+        # This pins the exact desired behaviour for a surviving consumer.
         self.assertTrue(
-            is_feedback_consumer(_EXECUTION_TELEMETRY_PY),
-            "execution_telemetry should register as a feedback-consumer (it opens "
-            "the store) — the negative control is only meaningful if it does.",
+            is_feedback_consumer(_LADDER_BACKFILL_PY),
+            "ladder_backfill should register as a feedback-consumer (it opens the "
+            "store) — the negative control is only meaningful if it does.",
         )
         self.assertFalse(
-            reads_click_data(_EXECUTION_TELEMETRY_PY),
-            "execution_telemetry must NOT be flagged as a click reader — it reads "
-            "only (regime, fill_status, shadow_return, realized_return).",
+            reads_click_data(_LADDER_BACKFILL_PY),
+            "ladder_backfill must NOT be flagged as a click reader — it enumerates "
+            "only id / brief_date / ticker via iter_decisions_for_ladder.",
         )
 
-    def test_negative_control_execution_modes_not_flagged(self):
+    def test_negative_control_ladder_replay_not_flagged(self):
+        # ladder_replay is the PURE engine: it never opens the store and never
+        # reads a click column. It must not be flagged.
         self.assertFalse(
-            reads_click_data(_EXECUTION_MODES_PY),
-            "execution_modes must NOT be flagged as a click reader — it consumes "
-            "only the click-free projection rows.",
+            reads_click_data(_LADDER_REPLAY_PY),
+            "ladder_replay must NOT be flagged as a click reader — it is a pure "
+            "price-path replay engine with no ledger access.",
         )
 
 

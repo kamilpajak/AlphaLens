@@ -1,33 +1,22 @@
-"""Paper-trade forward-observation harness.
+"""Shared broker-free trade-setup geometry + exchange-calendar helpers.
 
-Sized + driven by the deterministic ``brief_trade_setup`` shipped per
-candidate. NOT a strategy validation — this module is a measurement
-instrument for the trade-setup ladder. See
-``docs/research/paper_trading_capital_sizing_2026_05_28.md`` for the design
-memo + sizing math (``N_FIXED = 360``, ``min(suggested_size_pct, 1/N_FIXED)``,
-60d time-stop, no hard concurrency cap).
+This package was formerly the paper-trade forward-observation harness; the
+broker chain (Alpaca / Saxo clients, the plan → submit → reconcile → exit
+orchestration, the trade_updates WS daemon) was decommissioned (ADR 0012).
+What survives is the broker-AGNOSTIC core the broker-free feedback engines
+still consume:
 
-Paper-only by construction. The Alpaca SDK is reached exclusively through
-``alphalens_pipeline.data.alt_data.alpaca_client.AlpacaClient`` which
-hardcodes ``paper=True`` and rejects non-paper base URLs. The project
-doctrine ``capital_deploy_clause`` keeps real capital off the table.
+- ``calendar`` — exchange-session arithmetic (ISO 10383 MIC, defaults to
+  ``XNYS``): session-on-or-after, advance / previous trading day, session-open
+  UTC, elapsed trading days.
+- ``sizing`` — the ``brief_trade_setup`` ladder validation + geometry.
+- ``brief_loader`` — load the per-date brief parquet into ``CandidateBrief``
+  rows (the ladder + verification flags the replay engines enumerate).
+- ``constants`` — shared TTL / time-stop / sizing constants.
 
-Storage choice — SQLite vs Django/Postgres:
-    Phase A persists everything to a local SQLite file at
-    ``~/.alphalens/paper_ledger.db``. This matches the existing
-    ``Layer 1 EDGAR detector`` pattern (``candidates.db``): local CLI
-    tool, single-writer (daily cron + manual operator runs), no SPA
-    consumer in Phase A. Postgres-via-Django is reserved for the
-    SPA-served briefs path; mixing them now would force every
-    ``alphalens paper plan`` invocation to bootstrap Django settings +
-    a live DB connection even for ``--no-alpaca`` dry-runs.
-
-    Phase B (when ≥10 closed positions accumulate and the SPA needs to
-    surface outcomes) will mirror the SQLite ledger into a Django
-    ``paper_outcomes`` model via a separate management command —
-    identical pattern to how thematic-brief parquets sync into
-    ``Brief`` / ``DayMeta`` via ``rebuild_briefs_cache``. SQLite remains
-    the operational SoT; Postgres becomes the read-replica for the SPA.
+These are pure (calendar + parquet read + arithmetic); no broker, no live
+order placement. Feedback measurement is now fully broker-free price-path
+replay (see ``alphalens_pipeline.feedback``).
 """
 
 __status__ = "ACTIVE"

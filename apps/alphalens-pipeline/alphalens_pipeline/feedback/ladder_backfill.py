@@ -7,12 +7,11 @@ fetches the intraday minute path via Polygon, replays it through the pure engine
 and stamps the gen-4 ladder-outcome columns onto every decision in the group.
 
 Broker-free contract (design memo §5.1): enumeration is from the feedback
-``decisions`` table, not the paper ledger. This module does NOT import or call
-``fetch_plans_for_date`` / ``fetch_outcome_for_plan`` / ``compute_shadow_returns``
-— it reuses ONLY the pure session / maturity / Polygon-fetch helpers from
-``shadow_return`` (the same VWAP-window + horizon-session arithmetic the
-shadow-return job uses), so the ``reference_close`` anchor stays consistent with
-``shadow_return`` (the arrival opening-window VWAP), NOT the blended entry.
+``decisions`` table, not the paper ledger. This module does NOT read any paper
+ledger — it reuses ONLY the pure session / maturity / Polygon-fetch helpers from
+``bar_window`` (the shared VWAP-window + horizon-session arithmetic), so the
+``reference_close`` anchor is the arrival opening-window VWAP, NOT a blended
+broker entry.
 
 Click-orthogonality: the only ledger READ is :meth:`FeedbackStore.
 iter_decisions_for_ladder`, which projects id / brief_date / ticker only — no
@@ -35,13 +34,13 @@ from typing import Any
 
 from alphalens_feedback.store import FeedbackStore
 
-from alphalens_pipeline.feedback.ladder_replay import LadderOutcome, replay_ladder
-from alphalens_pipeline.feedback.shadow_return import (
+from alphalens_pipeline.feedback.bar_window import (
     ARRIVAL_VWAP_WINDOW_MIN,
     DEFAULT_LOOKBACK_DAYS,
     HOLDING_HORIZON_TRADING_DAYS,
     _window_vwap,
 )
+from alphalens_pipeline.feedback.ladder_replay import LadderOutcome, replay_ladder
 from alphalens_pipeline.paper.brief_loader import load_brief
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
@@ -53,7 +52,7 @@ from alphalens_pipeline.paper.calendar import (
 logger = logging.getLogger(__name__)
 
 # A (ticker, window start, window end) → list of Polygon agg bars. Same shape as
-# ``shadow_return.BarFetch`` so the production default + test stubs are shared.
+# ``bar_window.BarFetch`` so the production default + test stubs are shared.
 BarFetch = Callable[[str, dt.datetime, dt.datetime], Sequence[dict[str, Any]]]
 
 # Minutes of the horizon-end session to include so the replay path covers the
@@ -96,12 +95,11 @@ def replay_ladder_decisions_window(
 ) -> list[LadderBackfillReport]:
     """Replay the ladder for every matured, not-yet-replayed feedback decision.
 
-    Sweeps decisions whose ``brief_date >= end_date - lookback_days`` (the same
-    date origin the shadow-return sweep uses) AND whose ``ladder_classification``
-    is still NULL. Groups by ``(brief_date, ticker)``, replays ONCE per group,
-    and stamps every member decision id. Per-date maturity is gated exactly like
-    the shadow-return job: the horizon session must be strictly in the past
-    (Polygon serves only closed sessions).
+    Sweeps decisions whose ``brief_date >= end_date - lookback_days`` AND whose
+    ``ladder_classification`` is still NULL. Groups by ``(brief_date, ticker)``,
+    replays ONCE per group, and stamps every member decision id. Per-date
+    maturity is gated on the horizon session being strictly in the past (Polygon
+    serves only closed sessions).
 
     Returns one :class:`LadderBackfillReport` per brief date touched (newest
     first), so the caller can print an aggregate.
@@ -176,8 +174,8 @@ def _replay_one_date(
             no_data=0,
         )
 
-    # Anchor windows (same arithmetic as shadow_return). reference_close = the
-    # arrival opening-window VWAP, consistent with shadow_return's anchor.
+    # Anchor windows (the shared bar_window arithmetic). reference_close = the
+    # arrival opening-window VWAP.
     arrival_session = session_on_or_after(brief_date, exchange)
     arrival_start = session_open_utc(arrival_session, exchange)
     arrival_end = arrival_start + dt.timedelta(minutes=ARRIVAL_VWAP_WINDOW_MIN)

@@ -1,11 +1,13 @@
 [Unit]
-# Nightly shadow-return backfill (Track A v2 PR-T). Sweeps the last 14
-# calendar days of brief dates and prices every one whose +5-trading-session
-# holding horizon has matured, stamping shadow_return + realized_return onto
-# the feedback ledger. A SEPARATE pass from the cheap fill-status join
-# (`alphalens feedback join-outcomes`) because the Polygon minute-bar pull is
-# rate-limited and the horizon must have closed (Polygon Basic serves only
-# closed sessions).
+# Nightly broker-free ladder + population-monitor backfill (Track A v2 PR-T).
+# Replays each matured feedback decision's trade ladder over the last 14
+# calendar days, then runs the population monitor over its own larger window —
+# both deterministic price-path replays over Polygon minute bars (no broker).
+# The legacy shadow-return / execution-quality metrics were removed with the
+# broker chain (ADR 0012); the unit + command name are retained so the existing
+# timer keeps working (a rename is a deferred follow-up). The Polygon minute-bar
+# pull is rate-limited and the horizon must have closed (Polygon Basic serves
+# only closed sessions).
 #
 # Install as a *user* unit alongside the companion timer:
 #
@@ -37,10 +39,10 @@ WorkingDirectory=%h/AlphaLens
 # "Environment file setup".
 EnvironmentFile=/etc/alphalens/env
 
-# Sweep mode (NOT the single-date `compute-shadow-returns`, which would always
-# price 0 — today's brief never matured). No --date arithmetic: the back
-# window + per-date maturity guard pick the dates that need pricing.
-ExecStart=%h/AlphaLens/.venv/bin/alphalens feedback backfill-shadow-returns --account test
+# Sweep mode: no --date arithmetic — the back window + per-date maturity guard
+# pick the dates that need replaying. The ladder + population replays need no
+# broker / account, so no --account flag.
+ExecStart=%h/AlphaLens/.venv/bin/alphalens feedback backfill-shadow-returns
 
 # Prometheus textfile metrics (see alphalens-edgar-detect.service for the
 # pattern). A clean run that prices 0 matured dates still counts as success
