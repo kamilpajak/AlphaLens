@@ -408,6 +408,79 @@ class TestFeedbackBackfillShadowReturnsCommand(unittest.TestCase):
         self.assertEqual(_DEFAULT_LOOKBACK_DAYS, DEFAULT_LOOKBACK_DAYS)
         self.assertEqual(_DEFAULT_LOOKBACK_DAYS, 14)
 
+    def test_backfill_fold_runs_ladder_replay_and_stamps(self):
+        # The folded-in ladder step must stamp the gen-4 columns from the same
+        # nightly command. Provide a brief parquet + stub the ladder bar fetch.
+        import json
+
+        import pandas as pd
+        from alphalens_pipeline.feedback import ladder_backfill as lb
+        from alphalens_pipeline.feedback import shadow_return as sr
+
+        brief = dt.datetime.now(UTC).date() - dt.timedelta(days=12)
+        briefs_dir = Path(self._td.name) / "thematic_briefs"
+        briefs_dir.mkdir()
+        setup = {
+            "status": "OK",
+            "disaster_stop": 95.0,
+            "entry_tiers": [{"limit": 100.0, "alloc_pct": 100.0}],
+            "tp_tranches": [{"target": 110.0, "tranche_pct": 100.0}],
+        }
+        pd.DataFrame(
+            [{"ticker": "NVDA", "theme": "ai", "brief_trade_setup": json.dumps(setup)}]
+        ).to_parquet(briefs_dir / f"{brief.isoformat()}.parquet")
+        with FeedbackStore.open(self.fb_path) as fb:
+            fb.insert(
+                Decision(
+                    brief_date=brief,
+                    ticker="NVDA",
+                    theme="ai",
+                    surfaced_at=dt.datetime.now(UTC),
+                    action="interested",
+                    action_at=dt.datetime.now(UTC),
+                )
+            )
+
+        def fake_fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [
+                {"t": base, "h": 101.0, "l": 99.0, "c": 100.0, "v": 100.0},
+                {"t": base + 60_000, "h": 111.0, "l": 100.0, "c": 110.0, "v": 100.0},
+            ]
+
+        orig_sr, orig_lb = sr._default_bar_fetch, lb._default_bar_fetch
+        sr._default_bar_fetch = lambda *a, **k: []  # shadow returns: no bars (harmless)
+        lb._default_bar_fetch = fake_fetch
+        try:
+            result = self.runner.invoke(
+                app,
+                [
+                    "feedback",
+                    "backfill-shadow-returns",
+                    "--account",
+                    "test",
+                    "--ledger",
+                    str(self.fb_path),
+                    "--paper-ledger",
+                    str(self.ledger_path),
+                    "--briefs-dir",
+                    str(briefs_dir),
+                ],
+            )
+        finally:
+            sr._default_bar_fetch = orig_sr
+            lb._default_bar_fetch = orig_lb
+
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("ladder-replay", result.stdout)
+        with FeedbackStore.open(self.fb_path) as fb:
+            row = fb.conn.execute(
+                "SELECT ladder_classification, realized_r FROM decisions "
+                "WHERE brief_date = ? AND ticker = 'NVDA'",
+                (brief.isoformat(),),
+            ).fetchone()
+        self.assertEqual(row["ladder_classification"], "TP_FULL")
+
 
 class TestFeedbackExecutionModesCommand(unittest.TestCase):
     """`alphalens feedback execution-modes` — read-only inert recommendation."""

@@ -214,6 +214,11 @@ def backfill_shadow_returns_command(
         "--paper-ledger",
         help="Override the default paper-trade ledger location.",
     ),
+    briefs_dir: Path = typer.Option(
+        Path.home() / ".alphalens" / "thematic_briefs",
+        "--briefs-dir",
+        help="Directory of daily thematic brief parquets (for the broker-free ladder replay).",
+    ),
 ) -> None:
     """Sweep recent brief dates, pricing each whose holding horizon has matured.
 
@@ -239,6 +244,11 @@ def backfill_shadow_returns_command(
         f"{n_priced_total} priced across {len(matured)} matured dates, "
         f"{len(pending)} dates not yet matured."
     )
+    # Broker-free ladder replay over the same maturity window. Folded in here
+    # (NOT a new systemd unit) so it reuses the 06:30 UTC timer. Wrapped in a
+    # never-raises guard so a replay failure cannot shadow the telemetry emit
+    # below — exactly like ``_refresh_execution_telemetry``'s contract.
+    _refresh_ladder_outcomes(ledger, briefs_dir, lookback_days=lookback_days)
     # Nightly auto-refresh: the sweep is the maturity event that feeds the
     # execution-quality gauges, so re-emit them here. Never raises (helper
     # swallows + logs), so it cannot change this command's exit behaviour.
@@ -282,6 +292,25 @@ def _refresh_execution_telemetry(ledger: Path) -> Path | None:
         logger.exception("execution-telemetry build failed; continuing")
         return None
     return _emit_execution_telemetry(gauges)
+
+
+def _refresh_ladder_outcomes(ledger: Path, briefs_dir: Path, *, lookback_days: int) -> None:
+    """Run the broker-free ladder replay over the maturity window. Never raises.
+
+    Folded into the nightly ``backfill-shadow-returns`` tail so it reuses the
+    06:30 UTC timer (no new systemd unit / alert rule). Intentionally swallow-all:
+    a replay or Polygon failure must NOT change the exit behaviour of the
+    shadow-return command or shadow the execution-telemetry emit that follows.
+    """
+    try:
+        from alphalens_pipeline.feedback.ladder_backfill import replay_ladder_decisions_window
+
+        reports = replay_ladder_decisions_window(ledger, briefs_dir, lookback_days=lookback_days)
+        stamped = sum(r.stamped for r in reports)
+        matured = sum(1 for r in reports if r.matured)
+        typer.echo(f"ladder-replay: {stamped} decisions stamped across {matured} matured dates.")
+    except Exception:
+        logger.exception("ladder-replay refresh failed; continuing")
 
 
 @feedback_app.command(name="execution-modes")
