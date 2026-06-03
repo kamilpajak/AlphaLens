@@ -26,8 +26,8 @@ Lifecycle status of each layer lives in its `__init__.py` as the `__status__` co
 | Path | Status | Notes |
 |------|--------|-------|
 | `alphalens_pipeline/core/` | ACTIVE (namespace) | plumbing — candidates, queue |
-| `alphalens_pipeline/edgar_detector/` | ACTIVE | Layer 1 — `detect` live in launchd |
-| `alphalens_pipeline/literature_scanner/` | ACTIVE | Monthly + weekly Perplexity scan, live in launchd |
+| `alphalens_pipeline/edgar_detector/` | ACTIVE | Layer 1 — `detect` live on VPS (systemd) |
+| `alphalens_pipeline/literature_scanner/` | ACTIVE | Monthly + weekly Perplexity scan, live on VPS (systemd) |
 | `alphalens_pipeline/thematic/` | ACTIVE | Daily thematic pipeline, live on VPS |
 | `alphalens_pipeline/data/` | ACTIVE (namespace) | data infrastructure — `data/store/` PIT SoT, `data/{alt_data,fundamentals,macro}/` clients, `data/factors.py`, `data/universes/` |
 | `alphalens_pipeline/scorers/` | ACTIVE | reusable validated-scorer library (fcff_yield, cohen_malloy_classifier, opportunistic_form4) |
@@ -231,7 +231,7 @@ Long-running data acquisition jobs that don't fit on the laptop run on the dedic
 - Nextcloud sync between VPS and Mac is opt-in per script (`--rclone-remote` arg). Currently OFF — VPS cache is source of truth for VPS-side consumers
 - For Mac-side use: `rsync -av jacoren@vps:.alphalens/<area>/ ~/.alphalens/<area>/`
 
-Operator recipes: `deploy/systemd/README.md` (systemd units), `deploy/docker/README.md` (Docker stack + Cloudflare wiring), `deploy/launchd/README.md` (ARCHIVED — macOS jobs migrated to systemd 2026-05-30), `deploy/runpod/README.md` (GPU/CPU pod bootstrap).
+Operator recipes: `deploy/systemd/README.md` (systemd units — includes the one-time launchd→systemd cutover history), `deploy/docker/README.md` (Docker stack + Cloudflare wiring), `deploy/runpod/README.md` (GPU/CPU pod bootstrap).
 
 ## Production topology (migration B)
 
@@ -247,7 +247,7 @@ Operator recipes: `deploy/systemd/README.md` (systemd units), `deploy/docker/REA
 - LLM config: Gemini 3.1 Pro (guru pilot, low thinking budget)
 - Runtime data (outside repo, survives git ops):
   - `~/.alphalens/candidates.db` — Layer 1 candidate queue (historical log; no live drain)
-  - `~/.alphalens/edgar-detect/` — portfolio.yaml, EDGAR dedup, digest, launchd logs
+  - `~/.alphalens/edgar-detect/` — portfolio.yaml, EDGAR dedup, digest (runtime logs via systemd journal on the VPS)
   - `~/.alphalens/form4_parquet/` — VPS Form-4 backfill output (hive-partitioned)
   - `~/.alphalens/av_cache/` — VPS AV EARNINGS daily backfill output (per-ticker JSON)
   - `~/.alphalens/thematic_briefs/` — daily thematic pipeline parquets (consumed by Django briefs ingest)
