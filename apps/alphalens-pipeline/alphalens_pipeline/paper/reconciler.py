@@ -154,9 +154,19 @@ def _fallback_fill_price(ledger_row: sqlite3.Row) -> float | None:
     available (e.g. a MARKET order with no stop/limit price) — the caller then
     drops the chunk + warns, because a realized-R from an unknown market fill
     price would be meaningless.
+
+    APPROXIMATION caveat: the real STOP fill can slip PAST ``stop_price`` in a
+    gap, so a stop-out priced at ``stop_price`` yields a slightly OPTIMISTIC
+    realized-R (understates the loss). This is an accepted trade-off for the
+    paper harness — it preserves the quantity-weighted SL_HIT classification and
+    a close-enough exit price, and every fallback-priced fill is flagged by the
+    caller's WARNING so an operator can spot the approximate exit in the journal.
+
+    ``STOP_LIMIT`` is forward-compatible only — the orders.order_type CHECK
+    currently permits LIMIT / STOP / MARKET, so that arm is not reachable today.
     """
     order_type = ledger_row["order_type"]
-    if order_type in ("STOP", "STOP_LIMIT"):
+    if order_type in ("STOP", "STOP_LIMIT"):  # STOP_LIMIT: forward-compat, see docstring
         price = ledger_row["stop_price"]
     elif order_type == "LIMIT":
         price = ledger_row["limit_price"]
@@ -215,7 +225,10 @@ def _process_one_order(
         if fill_price is None:
             # No usable fallback (e.g. a MARKET order with no stop/limit price);
             # realized-R would be meaningless. Keep the current drop behavior but
-            # emit a DISTINCT warning so the dropped fill stays visible.
+            # emit a DISTINCT warning so the dropped fill stays visible. Because
+            # the chunk is never recorded, delta stays > 0, so this warning
+            # repeats once per poll until the order reaches a terminal status
+            # (usually the next pass) — expected log noise, not a loop bug.
             logger.warning(
                 "paper reconcile DROPPING cancelled-after-fill chunk: no fallback price "
                 "alpaca=%s order_id=%d kind=%s type=%s +qty=%d (filled_avg_price missing) -> %d/%d",
