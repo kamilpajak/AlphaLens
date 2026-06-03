@@ -116,7 +116,8 @@ def _run_extract() -> dict:
             engine=no_match_engine,
             resolver=empty_resolver,
         )
-    assert event is not None
+    if event is None:  # guards the callers' real assertions; -O-safe (no bare assert)
+        raise AssertionError("extract_one returned None on the mocked LLM path")
     return event
 
 

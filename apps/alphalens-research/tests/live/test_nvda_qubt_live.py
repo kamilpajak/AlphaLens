@@ -79,16 +79,30 @@ class TestNvdaQubtLive(unittest.TestCase):
         from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
 
         def _probe_extract() -> None:
-            # extract_one swallows LLM failures and returns None — that None IS
-            # the silent-empty / model-retired signal this layer exists to catch.
+            from alphalens_pipeline.data.alt_data.openrouter_client import (
+                get_default_openrouter_client,
+            )
+
             event = event_extractor.extract_one(NEWS_ROW)
-            if event is None:
-                raise PermanentProbeError(
-                    "extract_one returned None (no event from non-empty news)"
-                )
-            themes = event.get("themes")
-            if not isinstance(themes, list) or not themes:
-                raise PermanentProbeError(f"extract_one produced no themes: {themes!r}")
+            if event is not None:
+                themes = event.get("themes")
+                if not isinstance(themes, list) or not themes:
+                    raise PermanentProbeError(f"extract_one produced no themes: {themes!r}")
+                return
+            # extract_one swallows LLM failures and returns None, so a None here is
+            # ambiguous: a genuine pipeline break vs a transient vendor blip during
+            # the call. Disambiguate with ONE raw client ping (only on the failure
+            # path — the happy path stays at a single LLM call): a 429/5xx/network
+            # error -> Transient (tolerated weekly, no flaky-red); a healthy model
+            # that still yielded no event -> Permanent (the real silent-empty signal).
+            try:
+                client = get_default_openrouter_client()
+                client.generate_content(model=event_extractor.DEFAULT_MODEL, contents="ping")
+            except Exception as exc:  # classified then re-raised
+                _classify_llm_error(exc)
+            raise PermanentProbeError(
+                "extract_one returned None despite a healthy model (no event from non-empty news)"
+            )
 
         def _probe_propose() -> None:
             try:
