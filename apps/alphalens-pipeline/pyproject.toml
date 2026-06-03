@@ -14,16 +14,18 @@ dependencies = [
     "scipy>=1.17.1",
     "pyarrow>=24.0.0",
     "requests>=2.32.0",
+    # HTTP client for the OpenRouter wrapper (was transitive via google-genai
+    # before the Gemini removal; now declared directly).
+    "httpx>=0.28.0",
     # CLI + config
     "typer>=0.25.1",
     "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.0",
     # Vendor SDKs the pipeline directly drives
-    "google-genai>=0.8.0",
     "yfinance>=0.2.63",
     "quiverquant",
     "feedparser>=6.0.11",
     # LLM / parsing
-    "langchain-google-genai>=4.2.2",
     "json-repair>=0.59.10",
     # Options data vendor (consumed by thematic options-volume signal)
     "ivolatility>=1.9.3",

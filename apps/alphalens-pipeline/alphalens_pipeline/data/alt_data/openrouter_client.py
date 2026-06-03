@@ -2,17 +2,17 @@
 
 Single source of truth for every OpenRouter call in the project.
 Currently routes DeepSeek v4 Flash + Pro for the thematic pipeline
-(PR-G replaces Gemini Flash/Pro across extract, mapper, brief). The
-class deliberately mirrors :class:`GeminiClient`'s public surface so
-adapters at call sites stay backend-agnostic and the swap is a
-one-line import + model-name change.
+(PR-G replaced the earlier Gemini Flash/Pro backend across extract,
+mapper, brief). The class exposes a minimal ``generate_content(model=,
+contents=)`` surface so adapters at call sites stay backend-agnostic
+and a future model swap is a one-line import + model-name change.
 
 What this client centralises:
 
 * The Bearer-auth boundary. ``OPENROUTER_API_KEY`` lives in one place;
   the actionable "set OPENROUTER_API_KEY" error message likewise.
 * The OpenAI-compatible /v1/chat/completions request shape. Adapters
-  pass Gemini-style ``contents`` (a single string) and the wrapper
+  pass a single ``contents`` string and the wrapper
   builds the ``messages=[{...}]`` array, including an auto-synthesised
   system message when JSON output is requested.
 * The response-shape translation. OpenRouter returns
@@ -255,10 +255,10 @@ class OpenRouterClient:
         max_output_tokens: int | None = None,
         **extra: Any,
     ) -> OpenRouterConfig:
-        """Translate Gemini-style kwargs into an :class:`OpenRouterConfig`.
+        """Translate generation kwargs into an :class:`OpenRouterConfig`.
 
-        Mirrors :meth:`GeminiClient.build_config` so call sites can pass
-        the same kwargs they pass to Gemini today. Specifically:
+        Keeps a stable ``build_config`` surface so call sites stay
+        backend-agnostic. Specifically:
 
         * ``response_mime_type="application/json"`` →
           ``response_format={"type": "json_object"}``

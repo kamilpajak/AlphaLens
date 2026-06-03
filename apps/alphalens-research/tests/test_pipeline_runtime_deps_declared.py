@@ -75,20 +75,18 @@ FIRST_PARTY_PREFIXES: tuple[str, ...] = (
 )
 
 # Distribution name → top-level import-module names. Most are identical
-# after lower-case + s/-/_/ (e.g. ``google-genai`` → ``google_genai``),
+# after lower-case + s/-/_/ (e.g. ``json-repair`` → ``json_repair``),
 # but PyPI distribution names and importable top-level modules diverge
 # often enough that we keep an explicit override table for the cases
 # that don't follow the heuristic.
 DIST_TO_MODULE_OVERRIDES: dict[str, set[str]] = {
     "pyyaml": {"yaml"},
     "python-dotenv": {"dotenv"},
-    "google-genai": {"google"},  # ``from google import genai``
     "beautifulsoup4": {"bs4"},
     "alpaca-py": {"alpaca"},
     "phase-robust-backtesting": {"phase_robust_backtesting"},
     "exchange-calendars": {"exchange_calendars"},
     "json-repair": {"json_repair"},
-    "langchain-google-genai": {"langchain_google_genai"},
     "jsonschema-specifications": {"jsonschema_specifications"},
 }
 

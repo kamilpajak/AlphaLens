@@ -727,7 +727,7 @@ class TestPaperSubmitUnit(unittest.TestCase):
         # Same pattern as edgar-detect: the paper subtree depends on
         # alpaca-py + pandas which we keep in the host venv, NOT in the
         # pipeline Docker image (image is purpose-built for the
-        # thematic build's google-genai dependency stack).
+        # thematic build's OpenRouter + data dependency stack).
         #
         # ExecStart is wrapped in ``/bin/sh -c`` (needed for ``$(date)``
         # substitution); the actual alphalens invocation lives inside
