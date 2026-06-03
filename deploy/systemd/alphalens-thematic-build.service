@@ -30,7 +30,7 @@ WorkingDirectory=%h/AlphaLens
 # loads them into the unit's process env, and the explicit `-e KEY` flags
 # below cherry-pick which ones cross into the container. No leading `-`:
 # if the file is missing the unit MUST fail loud rather than limp on
-# without secrets (Polygon skipped, Gemini extract fails partway, partial
+# without secrets (Polygon skipped, LLM extract fails partway, partial
 # parquet poisons cache). See deploy/systemd/README.md "Environment file
 # setup" for the bootstrap recipe.
 EnvironmentFile=/etc/alphalens/env
@@ -118,7 +118,7 @@ ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics thematic
 StandardOutput=journal
 StandardError=journal
 
-# Pipeline runs Polygon news (~few MB JSON), Gemini API calls (network-bound),
+# Pipeline runs Polygon news (~few MB JSON), OpenRouter LLM calls (network-bound),
 # and pandas/parquet I/O. 4G is comfortable headroom on a small VPS; bump if
 # the SP500-scale insider gate trips OOM.
 MemoryMax=4G
@@ -126,7 +126,7 @@ TasksMax=512
 
 # Type=oneshot defaults TimeoutStartSec to infinity (man systemd.service
 # §"Type=oneshot"). Without an explicit timeout, a run that wedges on a
-# Gemini quota loop, a Polygon retry storm, or a stuck rebuild-cache step
+# OpenRouter quota loop, a Polygon retry storm, or a stuck rebuild-cache step
 # would block every subsequent timer fire forever — systemd queues new
 # fires behind the running unit. 45min = ~3× the typical 15-20min wall
 # time; a healthy run never trips this, a wedged one gets SIGTERM (then
@@ -135,7 +135,7 @@ TasksMax=512
 TimeoutStartSec=45min
 
 # Oneshot doesn't auto-restart on success. On real failures (Polygon 5xx,
-# Gemini quota, OOM) systemd surfaces non-zero exit in journalctl + status.
+# OpenRouter quota, OOM) systemd surfaces non-zero exit in journalctl + status.
 # The timer fires 6× daily (PR-F); a one-slot miss is acceptable.
 
 [Install]

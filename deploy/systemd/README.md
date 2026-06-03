@@ -49,7 +49,7 @@ cherry-pick which keys cross into the container.
 
 **No leading `-` on `EnvironmentFile=`** — a missing/typoed file MUST
 fail the unit loud, not silently degrade to "no secrets" (Polygon
-skipped, Gemini extract fails partway, partial parquet poisons cache).
+skipped, LLM extract fails partway, partial parquet poisons cache).
 CI smoke runs install a stub: `sudo mkdir -p /etc/alphalens && sudo touch /etc/alphalens/env`.
 
 **Why `/etc/alphalens/env` and not the repo's `.env` files:**
