@@ -18,6 +18,12 @@ Description=AlphaLens SEC EDGAR Form-4 backfill
 After=network-online.target
 Wants=network-online.target
 
+# Cap restart loops: if the script keeps dying within 10 min, stop trying.
+# [Unit]-section directives in modern systemd — under [Service] they are
+# silently ignored.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
 [Service]
 Type=simple
 WorkingDirectory=%h/AlphaLens
@@ -62,10 +68,6 @@ ExecStart=%h/AlphaLens/.venv/bin/python apps/alphalens-research/scripts/run_form
 # Restart on any non-zero exit (network blip, OOM kill, transient SEC 5xx).
 Restart=on-failure
 RestartSec=60
-
-# Cap restart loops: if the script keeps dying within 5 min, stop trying.
-StartLimitIntervalSec=600
-StartLimitBurst=5
 
 # Keep stdout/stderr in journald.
 StandardOutput=journal

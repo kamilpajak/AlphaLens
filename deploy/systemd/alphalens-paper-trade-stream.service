@@ -25,6 +25,13 @@ Description=AlphaLens Alpaca trade_updates daemon (sub-second fill detection)
 After=network-online.target
 Wants=network-online.target
 
+# Cap restart loops: if it keeps dying within 10 min, stop trying (page via the
+# AlphalensPaperTradeStreamDown / Stale alerts instead of thrashing). These are
+# [Unit]-section directives in modern systemd — placing them under [Service] is
+# silently ignored ("Unknown key name ... in section 'Service'").
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
 [Service]
 Type=simple
 WorkingDirectory=%h/AlphaLens
@@ -46,11 +53,6 @@ ExecStart=%h/AlphaLens/.venv/bin/alphalens paper trade-stream --use-test-account
 # catch a Friday-fills / after-hours fill; reconcile no-ops when idle.
 Restart=on-failure
 RestartSec=15
-
-# Cap restart loops: if it keeps dying within 10 min, stop trying (page via the
-# AlphalensPaperTradeStreamDown / Stale alerts instead of thrashing).
-StartLimitIntervalSec=600
-StartLimitBurst=5
 
 # Give an in-flight reconcile time to finish on stop before SIGKILL, so a
 # systemd stop drains cleanly (record_exit_ladder is one transaction, so even a
