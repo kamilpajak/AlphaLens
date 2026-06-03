@@ -17,7 +17,7 @@ The repo is a small monorepo with three Python workspace members + a frontend + 
 - **`apps/alphalens-research/`** — research lab: `alphalens_research` (screeners, backtest engine, attribution, overlays, gates, preaudit, diagnostics, retrospective audit). Lab imports from pipeline (`data`, `core`, `scorers`); the reverse is forbidden at top level (enforced by `tests/test_module_dependencies.py`).
 - **`apps/alphalens-django/`** — read/write briefs API (Django 6 + DRF + Postgres + Cloudflare Access). Migration history in [ADR 0009](docs/adr/0009-django-replaces-fastapi.md).
 - **`apps/web/`** — SvelteKit + Tailwind dashboard that consumes the Django API.
-- **`deploy/`** — all deploy targets: `docker/` (pipeline + django-prod), `systemd/` (Linux VPS units), `launchd/` (5 live macOS jobs), `runpod/` (GPU/CPU pod bootstrap).
+- **`deploy/`** — all deploy targets: `docker/` (pipeline + django-prod), `systemd/` (Linux VPS units — edgar-detect, literature scans, thematic build, paper, backfills), `runpod/` (GPU/CPU pod bootstrap).
 - **`docs/adr/`** — 11 ADRs covering the load-bearing decisions.
 
 Architectural detail and quick contributor guide: [`CLAUDE.md`](CLAUDE.md). Per-layer postmortems: [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md).
@@ -32,7 +32,7 @@ Two parallel research tracks active:
 The first phase-robust positive observation landed 2026-05-09 — PASS_MARGINAL on Cohen-Malloy opportunistic Form-4 — replicated across two independent OOS windows. PASS_MARGINAL is not a full PASS; it unlocks eligibility for advanced overlay testing, not capital deployment.
 
 Live in production:
-- Layer 1 SEC EDGAR detector (launchd `edgar-detect` every 15 min)
+- Layer 1 SEC EDGAR detector (VPS systemd `edgar-detect` every 15 min)
 - Literature review (Perplexity, monthly + weekly)
 - VPS daily thematic pipeline → Django brief API → SvelteKit dashboard
 
@@ -47,8 +47,8 @@ Each layer / screener package declares `__status__ ∈ {ACTIVE, CLOSED, RESEARCH
 | Path | Status | Notes |
 |------|--------|-------|
 | `alphalens_pipeline/core/` | ACTIVE (namespace) | Plumbing — candidates, queue |
-| `alphalens_pipeline/edgar_detector/` | ACTIVE | Layer 1 — `detect` live in launchd |
-| `alphalens_pipeline/literature_scanner/` | ACTIVE | Monthly + weekly Perplexity scan, live in launchd |
+| `alphalens_pipeline/edgar_detector/` | ACTIVE | Layer 1 — `detect` live on VPS (systemd) |
+| `alphalens_pipeline/literature_scanner/` | ACTIVE | Monthly + weekly Perplexity scan, live on VPS (systemd) |
 | `alphalens_pipeline/thematic/` | ACTIVE | Daily thematic pipeline (news → brief), live on VPS |
 | `alphalens_pipeline/data/` | ACTIVE (namespace) | PIT SoT + vendor clients + S&P 400/500/600 PIT yamls |
 | `alphalens_pipeline/scorers/` | ACTIVE | Reusable validated-scorer library |
@@ -131,7 +131,7 @@ Pre-registration ledger (`docs/research/preregistration/ledger.json`) records ev
 
 ### Prerequisites
 
-- macOS for launchd scheduling (CLI itself runs anywhere)
+- Linux VPS for systemd scheduling (CLI itself runs anywhere, incl. macOS)
 - Python 3.13 via [`uv`](https://github.com/astral-sh/uv)
 - API keys: Google AI (Gemini), Alpha Vantage, Telegram bot; optional Polygon
 
@@ -187,24 +187,17 @@ sqlite3 ~/.alphalens/candidates.db \
   "SELECT id, ticker, source, priority, status, decision FROM candidates ORDER BY id DESC LIMIT 20;"
 ```
 
-### Scheduled jobs (launchd)
+### Scheduled jobs (systemd, VPS)
 
-| Job | When | Purpose |
+Production scheduling runs as systemd-user units on the Linux VPS, not on the Mac.
+
+| Unit | When | Purpose |
 |---|---|---|
-| `com.alphalens.edgar-detect` | every 15 min | Layer 1 EDGAR poll → submit Candidates |
-| `com.alphalens.literature-scan-monthly` | 1st of month, 09:00 | Perplexity deep literature scan |
-| `com.alphalens.literature-scan-weekly` | Sunday, 18:00 | Perplexity RSS scan |
+| `alphalens-edgar-detect` | every 15 min | Layer 1 EDGAR poll → submit Candidates |
+| `alphalens-literature-scan-monthly` | 1st of month, 09:00 | Perplexity deep literature scan |
+| `alphalens-literature-scan-weekly` | Sunday, 18:00 | Perplexity RSS scan |
 
-Install:
-
-```bash
-cp deploy/launchd/com.alphalens.*.plist ~/Library/LaunchAgents/
-for plist in com.alphalens.edgar-detect \
-             com.alphalens.literature-scan-monthly \
-             com.alphalens.literature-scan-weekly; do
-  launchctl load ~/Library/LaunchAgents/${plist}.plist
-done
-```
+Unit sources and the install / cutover recipe live in [`deploy/systemd/`](deploy/systemd/README.md).
 
 ## Layout
 
@@ -228,8 +221,7 @@ deploy/
 ├── docker/
 │   ├── Dockerfile.pipeline      ← pipeline image (thematic daily)
 │   └── django-prod/             ← Django + nginx + Postgres compose
-├── systemd/                     ← VPS user units (form4-backfill, av-earnings, thematic build)
-├── launchd/                     ← macOS scheduled jobs (5 live)
+├── systemd/                     ← VPS user units (edgar-detect, literature scans, thematic build, paper, backfills)
 └── runpod/                      ← GPU/CPU pod bootstrap + experiment runner
 
 docs/

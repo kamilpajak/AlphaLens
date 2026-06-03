@@ -1,4 +1,4 @@
-"""Layer 1 SEC EDGAR detector (live in launchd)."""
+"""Layer 1 SEC EDGAR detector (live on VPS systemd)."""
 
 from typing import Literal
 

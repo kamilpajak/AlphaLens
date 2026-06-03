@@ -180,9 +180,9 @@ done
 launchctl list | grep alphalens   # expect: empty
 ```
 
-The plist sources stay in-repo at `deploy/launchd/` as historical
-artifacts; that README is marked `ARCHIVED` so future operators don't
-re-install the legacy path.
+The macOS plist sources were removed from the repo once the systemd
+units had run clean; `git log` is the historical record. Do not
+re-create the launchd path — systemd on the VPS is the only scheduler.
 
 ## alphalens-edgar-detect.service + .timer
 
