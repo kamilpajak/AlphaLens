@@ -386,7 +386,9 @@ def reconcile(
         f"exits_failed={report.n_exits_failed} "
         f"entries_canceled={report.n_entries_canceled} "
         f"filled_without_sl={report.n_filled_without_sl} "
-        f"ledger_broker_desync={report.n_ledger_broker_desync}"
+        f"ledger_broker_desync={report.n_ledger_broker_desync} "
+        f"uncovered_sl={report.total_uncovered_sl_qty} "
+        f"plans_partial_sl={report.n_plans_partial_sl}"
     )
     if report.n_ledger_broker_desync > 0:
         # The ledger and broker disagree about reality: the broker confirmed a
