@@ -513,6 +513,8 @@ class TestPaperReconcileEmitsDomainMetrics(unittest.TestCase):
             "n_entries_canceled": 1,
             "n_filled_without_sl": 1,
             "n_ledger_broker_desync": 1,
+            "total_uncovered_sl_qty": 5,
+            "n_plans_partial_sl": 1,
         }
         defaults.update(overrides)
         return ReconcileReport(**defaults)
@@ -533,6 +535,8 @@ class TestPaperReconcileEmitsDomainMetrics(unittest.TestCase):
         self.assertEqual(metrics['alphalens_paper_entries_canceled{account="test"}'], 1)
         self.assertEqual(metrics['alphalens_paper_exits_attached{account="test"}'], 2)
         self.assertEqual(metrics['alphalens_paper_ledger_broker_desync{account="test"}'], 1)
+        # PR-4.5 partial-SL-coverage monitor gauge, with the account label.
+        self.assertEqual(metrics['alphalens_paper_uncovered_sl_qty{account="test"}'], 5)
 
     def test_emit_helper_swallows_emit_error(self) -> None:
         # The reconcile work is already persisted before the emit; an emit

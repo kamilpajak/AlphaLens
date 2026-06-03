@@ -2225,5 +2225,174 @@ class TestClassifyExitKindQuantityWeighted(unittest.TestCase):
         self.assertEqual(_classify_exit_kind(snap), "TP_HIT")
 
 
+class TestUncoveredSlQty(unittest.TestCase):
+    """Partial-SL-coverage monitor (PR-4.5): ``_PlanSnapshot.uncovered_sl_qty``
+    is the read-only ledger-only signal for a filled position becoming
+    PARTIALLY unprotected — net_open_qty minus summed LIVE (non-terminal) SL-leg
+    qty, floored at 0. Conservative: a stale-high non-terminal SL (the
+    documented adjust-not-cancel path) over-states coverage -> 0 (no false
+    alarm); a stop going TERMINAL while shares remain drops coverage -> positive.
+    """
+
+    @staticmethod
+    def _entry(filled: int) -> _RowLike:
+        return _RowLike(
+            {
+                "order_kind": "ENTRY",
+                "status": "FILLED",
+                "qty": filled,
+                "filled_qty_observed": filled,
+            }
+        )
+
+    @staticmethod
+    def _exit(kind: str, *, qty: int, status: str, filled: int = 0) -> _RowLike:
+        return _RowLike(
+            {
+                "order_kind": kind,
+                "status": status,
+                "qty": qty,
+                "filled_qty_observed": filled,
+            }
+        )
+
+    def _snapshot(
+        self,
+        *,
+        entry_qty: int,
+        exit_orders: list[_RowLike],
+    ) -> _PlanSnapshot:
+        return _PlanSnapshot(
+            plan_id=1,
+            ticker="NVDA",
+            disaster_stop=80.0,
+            tp_tranches=(),
+            first_entry_fill_at=None,
+            entry_orders=(self._entry(entry_qty),) if entry_qty else (),
+            exit_orders=tuple(exit_orders),
+            has_outcome=False,
+            account="test",
+            platform="alpaca",
+            has_exit_ladder=bool(exit_orders),
+        )
+
+    def test_uncovered_sl_qty_zero_when_fully_covered(self):
+        # Given: 27 shares held, two live SL legs summing to 27 (an OCO ladder).
+        snap = self._snapshot(
+            entry_qty=27,
+            exit_orders=[
+                self._exit("TP", qty=13, status="SUBMITTED"),
+                self._exit("SL", qty=13, status="SUBMITTED"),
+                self._exit("TP", qty=14, status="SUBMITTED"),
+                self._exit("SL", qty=14, status="SUBMITTED"),
+            ],
+        )
+        # Then: coverage matches the held position exactly -> nothing uncovered.
+        self.assertEqual(snap.uncovered_sl_qty, 0)
+
+    def test_uncovered_sl_qty_zero_when_sl_adjusted_stale_high(self):
+        # Given (the documented adjust-not-cancel path): a partial TP fill shrank
+        # net_open from 27 to 14 (13 sold via TP), but the paired SL row is still
+        # the ORIGINAL 27 and stays NON-TERMINAL (Alpaca adjusted its qty at the
+        # broker; the reconciler has not observed the lower qty yet).
+        snap = self._snapshot(
+            entry_qty=27,
+            exit_orders=[
+                self._exit("TP", qty=13, status="FILLED", filled=13),
+                self._exit("SL", qty=27, status="SUBMITTED"),
+            ],
+        )
+        # net_open = 27 - 13 = 14; live SL coverage = 27 (stale-high) ->
+        # max(0, 14 - 27) = 0. Conservative: no false alarm.
+        self.assertEqual(snap.net_open_qty, 14)
+        self.assertEqual(snap.uncovered_sl_qty, 0)
+
+    def test_uncovered_sl_qty_positive_when_sl_cancelled_with_shares_remaining(self):
+        # Given (THE dangerous case): 27 shares held, the only SL leg is CANCELED
+        # (terminal) and no other SL covers — the position is fully unprotected
+        # by a STOP even though a ladder once existed.
+        snap = self._snapshot(
+            entry_qty=27,
+            exit_orders=[
+                self._exit("TP", qty=27, status="SUBMITTED"),
+                self._exit("SL", qty=27, status="CANCELED"),
+            ],
+        )
+        # net_open = 27; live SL coverage = 0 -> uncovered == net_open_qty.
+        self.assertEqual(snap.uncovered_sl_qty, 27)
+
+    def test_uncovered_sl_qty_ignores_terminal_sl_rows(self):
+        # Given: two SL legs for 27 held shares — one CANCELED (terminal), one
+        # SUBMITTED covering only 13. Only the live leg counts.
+        snap = self._snapshot(
+            entry_qty=27,
+            exit_orders=[
+                self._exit("SL", qty=14, status="CANCELED"),
+                self._exit("SL", qty=13, status="SUBMITTED"),
+            ],
+        )
+        # live coverage = 13 -> uncovered = 27 - 13 = 14.
+        self.assertEqual(snap.uncovered_sl_qty, 14)
+
+    def test_uncovered_sl_qty_counts_only_sl_kind_not_tp_or_time_stop(self):
+        # Given: 27 held, NO live SL leg at all, but a live TP (qty 27) and a
+        # live TIME_STOP (qty 27). Neither is protective coverage — only SL legs
+        # count toward the uncovered computation.
+        snap = self._snapshot(
+            entry_qty=27,
+            exit_orders=[
+                self._exit("TP", qty=27, status="SUBMITTED"),
+                self._exit("TIME_STOP", qty=27, status="SUBMITTED"),
+            ],
+        )
+        # live SL coverage = 0 -> uncovered = 27.
+        self.assertEqual(snap.uncovered_sl_qty, 27)
+
+
+class TestUncoveredSlQtyForPlan(_ExitTestBase):
+    """Public ledger-backed helper ``uncovered_sl_qty_for_plan``: builds the
+    snapshot via _snapshot and returns snap.uncovered_sl_qty, or 0 if the plan
+    no longer exists (missing snapshot)."""
+
+    def test_returns_zero_on_missing_snapshot(self):
+        from alphalens_pipeline.paper.exit_manager import uncovered_sl_qty_for_plan
+
+        # Given: a plan_id that was never inserted (snapshot is None).
+        with open_ledger(self.ledger) as conn:
+            self.assertEqual(uncovered_sl_qty_for_plan(conn, plan_id=9999), 0)
+
+    def test_returns_positive_when_sl_cancelled_with_shares_remaining(self):
+        from alphalens_pipeline.paper.exit_manager import uncovered_sl_qty_for_plan
+
+        # Given: a filled 27-share entry + a single CANCELED SL leg, no live SL.
+        plan_id = _seed_plan(self.ledger)
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=27,
+            status="FILLED",
+            filled_qty=27,
+            filled_price=99.5,
+        )
+        with open_ledger(self.ledger) as conn:
+            insert_order(
+                conn,
+                plan_id=plan_id,
+                alpaca_order_id="sl-dead",
+                side="SELL",
+                order_kind="SL",
+                order_type="STOP",
+                qty=27,
+                stop_price=80.0,
+                time_in_force="gtc",
+                submitted_at=dt.datetime.now(dt.UTC),
+                status="CANCELED",
+                exit_group_id="sl-dead",
+            )
+        with open_ledger(self.ledger) as conn:
+            self.assertEqual(uncovered_sl_qty_for_plan(conn, plan_id), 27)
+
+
 if __name__ == "__main__":
     unittest.main()

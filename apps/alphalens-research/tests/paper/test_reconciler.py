@@ -908,5 +908,104 @@ class TestReconcileExitResilience(_ReconcilerTestBase):
         self.assertGreaterEqual(report.n_exits_attached, 2)
 
 
+class TestPartialSlCoverageMonitor(_ReconcilerTestBase):
+    """Partial-SL-coverage monitor (PR-4.5): the reconciler accumulates a
+    read-only per-plan ``uncovered_sl_qty_for_plan`` into
+    ``ReconcileReport.total_uncovered_sl_qty`` + counts under-covered plans into
+    ``n_plans_partial_sl``. A monitor failure must NEVER abort the batch
+    (crash isolation)."""
+
+    def _seed_filled_plan(self, *, ticker: str, alpaca_id: str, qty: int = 27) -> int:
+        plan_id, order_id = _make_plan_with_order(
+            self.ledger, alpaca_order_id=alpaca_id, ticker=ticker, qty=qty
+        )
+        ts = dt.datetime.now(dt.UTC)
+        with open_ledger(self.ledger) as conn:
+            conn.execute(
+                "UPDATE orders SET status = 'FILLED' WHERE alpaca_order_id = ?",
+                (alpaca_id,),
+            )
+            from alphalens_pipeline.paper.ledger import insert_fill
+
+            insert_fill(
+                conn,
+                order_id=order_id,
+                alpaca_fill_id=f"{alpaca_id}-fill",
+                qty=qty,
+                price=99.5,
+                filled_at=ts,
+            )
+        return plan_id
+
+    def _add_terminal_sl(self, plan_id: int, *, qty: int, status: str = "CANCELED") -> None:
+        """Seed an SL leg carrying an exit_group_id (so has_exit_ladder is True
+        and the attach-once gate does NOT re-attach) in a TERMINAL state — the
+        partially/fully-uncovered case the monitor exists for."""
+        with open_ledger(self.ledger) as conn:
+            insert_order(
+                conn,
+                plan_id=plan_id,
+                alpaca_order_id=f"sl-{plan_id}",
+                side="SELL",
+                order_kind="SL",
+                order_type="STOP",
+                qty=qty,
+                stop_price=80.0,
+                time_in_force="gtc",
+                submitted_at=dt.datetime.now(dt.UTC),
+                status=status,
+                exit_group_id=f"sl-{plan_id}",
+            )
+
+    def test_cancelled_sl_with_open_position_increments_uncovered(self):
+        # Given: a filled 27-share plan whose only SL leg is CANCELED (terminal)
+        # while the broker still confirms the 27-share position.
+        plan_id = self._seed_filled_plan(ticker="NVDA", alpaca_id="e1")
+        self._add_terminal_sl(plan_id, qty=27, status="CANCELED")
+        self.client.position_qty_for["NVDA"] = 27
+
+        report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
+
+        # The monitor flags 27 uncovered shares across 1 plan.
+        self.assertEqual(report.total_uncovered_sl_qty, 27)
+        self.assertEqual(report.n_plans_partial_sl, 1)
+
+    def test_fully_covered_plan_does_not_increment_uncovered(self):
+        # Given: a filled 27-share plan that attaches a live OCO ladder this pass
+        # (SUBMITTED SL legs summing to 27 → full coverage).
+        self._seed_filled_plan(ticker="GOODX", alpaca_id="g1")
+        self.client.position_qty_for["GOODX"] = 27
+
+        report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
+
+        # Ladder attached; nothing uncovered.
+        self.assertGreaterEqual(report.n_exits_attached, 2)
+        self.assertEqual(report.total_uncovered_sl_qty, 0)
+        self.assertEqual(report.n_plans_partial_sl, 0)
+
+    def test_monitor_failure_does_not_abort_batch(self):
+        # Given: a filled plan + a monitor helper that always raises.
+        plan_id = self._seed_filled_plan(ticker="NVDA", alpaca_id="e1")
+        self._add_terminal_sl(plan_id, qty=27, status="CANCELED")
+        self.client.position_qty_for["NVDA"] = 27
+
+        import alphalens_pipeline.paper.exit_manager as em
+
+        original = em.uncovered_sl_qty_for_plan
+
+        def _boom(conn, plan_id):
+            raise RuntimeError("stub: monitor blew up")
+
+        em.uncovered_sl_qty_for_plan = _boom
+        try:
+            # Must NOT raise; the failed monitor is treated as 0-uncovered.
+            report = reconcile_orders(ledger_path=self.ledger, broker=self.client)
+        finally:
+            em.uncovered_sl_qty_for_plan = original
+
+        self.assertEqual(report.total_uncovered_sl_qty, 0)
+        self.assertEqual(report.n_plans_partial_sl, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

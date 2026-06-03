@@ -591,3 +591,46 @@ groups:
         annotations:
           summary: "paper account {{ $labels.account }} ledger and broker disagree about a position"
           description: "alphalens_paper_ledger_broker_desync went > 0 in the last 6h — a reconcile pass found the broker confirming a position flat while the ledger believed it filled (a ledger<->broker desync, e.g. after a broken-migration window that left the ledger ahead of the broker). The harness stopped chasing the phantom and wrote RECONCILED_FLAT, but check `journalctl --user -u alphalens-paper-reconcile.service` on the VPS and reconcile the ledger plan rows against the broker positions for the account."
+
+      # ---------------------------------------------------------------
+      # Paper PARTIAL-stop-coverage monitor (OCO-ladder defense-in-depth).
+      # ---------------------------------------------------------------
+      #
+      # The attach-once OCO-ladder route (PR-4) attaches the protective stop
+      # ONCE on the filled aggregate and never resizes it; Alpaca's docs say a
+      # partial take-profit fill AUTO-ADJUSTS the paired stop's qty down to the
+      # remaining position, so coverage stays continuous. The reconciler emits
+      # ``alphalens_paper_uncovered_sl_qty{account=...}`` — a GAUGE of shares
+      # believed held (entry fills minus exit fills) MINUS the summed qty of
+      # every NON-TERMINAL stop leg. It reads 0 on the documented adjust path
+      # (the adjusted stop stays non-terminal; a stale-high ledger qty only
+      # over-states coverage, never under-states it). It goes > 0 only when a
+      # filled position becomes PARTIALLY unprotected for ANY reason — e.g. the
+      # broker ever deviates from adjust-not-cancel, or a stop leg goes terminal
+      # (CANCELED / EXPIRED / REJECTED / FILLED) while shares remain. This is
+      # the defense-in-depth net the OCO-ladder review asked for: the sibling
+      # ``alphalens_paper_filled_without_sl`` dead-man only fires when there is
+      # NO ladder AT ALL (has_exit_ladder False), NOT when a ladder exists but
+      # under-covers — exactly the gap this rule closes.
+      #
+      # SAME SHAPE as AlphalensPaperFilledWithoutSl (a SUSTAINED gauge): GAUGE
+      # read via max_over_time over a window slightly longer than the 30-min
+      # reconcile cadence ([40m]) > 0, never increase()/rate() (the PR #312
+      # lesson); ``for: 1h`` (~2 reconcile slots) debounces a single transient
+      # pass so only a value that stays > 0 across more than one slot pages.
+      # DISTINCT alertname + NO ``job=`` label (like FilledWithoutSl /
+      # LedgerBrokerDesync / VIX-cache / EDGAR-dark) keeps it OUT of the per-job
+      # cron staleness enumerations — the paper jobs are deliberately
+      # staleness-rule-exempt (weekend false-page), and this is a per-account
+      # domain gauge, not a unit last_success. severity critical: a partially
+      # naked live position IS a wake-up condition.
+      - alert: AlphalensPaperUncoveredSl
+        expr: max_over_time(alphalens_paper_uncovered_sl_qty[40m]) > 0
+        for: 1h
+        labels:
+          severity: critical
+          route: telegram
+          unit: paper-reconcile
+        annotations:
+          summary: "paper account {{ $labels.account }} has a filled position PARTIALLY uncovered by its protective stop"
+          description: "alphalens_paper_uncovered_sl_qty has stayed > 0 across more than one reconcile pass — a filled paper position is PARTIALLY uncovered by its protective stop legs (the live position exceeds the summed live SL-leg qty). Investigate whether an OCO stop leg was cancelled instead of adjusted on a partial TP fill; check `journalctl --user -u alphalens-paper-reconcile.service` on the VPS and the ledger SL orders for the account. Until cleared part of the position sits without a disaster stop."

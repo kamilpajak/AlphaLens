@@ -169,6 +169,39 @@ class _PlanSnapshot:
         return self.total_entry_filled_qty - self.total_exit_filled_qty
 
     @property
+    def uncovered_sl_qty(self) -> int:
+        """Shares we believe are held but are NOT covered by a LIVE stop leg.
+
+        ``net_open_qty`` (entry fills minus exit fills) is the position we
+        believe is still held; the summed qty of every NON-TERMINAL SL leg is
+        the live protective coverage. ``uncovered = max(0, net_open - live SL
+        coverage)``. This is the PARTIAL-coverage monitor (PR-4.5): it catches a
+        filled position that becomes PARTIALLY unprotected for ANY reason — a
+        stop leg going terminal (CANCELED / EXPIRED / REJECTED / FILLED) while
+        shares remain — which the all-or-nothing ``has_exit_ladder`` dead-man
+        flag (no ladder at all) cannot see.
+
+        Conservative by construction (no false alarm on the documented
+        adjust-not-cancel path): when Alpaca AUTO-ADJUSTS a stop's qty down on a
+        partial TP fill, the SL row stays NON-TERMINAL and its LEDGER qty may be
+        stale-HIGH (the reconciler has not yet observed the adjusted qty), so the
+        summed coverage over-states the live stop -> uncovered reads 0. Only when
+        a stop row reaches a TERMINAL state while shares remain (and no other
+        live SL covers them) does coverage drop and ``uncovered`` go positive —
+        the dangerous deviate-from-adjust case the monitor exists for.
+
+        Reuses :data:`_TERMINAL_ENTRY_STATUSES` (the canonical terminal-status
+        set shared with the entry-settled / time-stop gates), so a status added
+        there flows here without a duplicated literal.
+        """
+        live_sl_qty = sum(
+            int(o["qty"] or 0)
+            for o in self.exit_orders
+            if o["order_kind"] == "SL" and o["status"] not in _TERMINAL_ENTRY_STATUSES
+        )
+        return max(0, self.net_open_qty - live_sl_qty)
+
+    @property
     def has_live_time_stop(self) -> bool:
         """True when a TIME_STOP market-sell is in flight (submitted but not
         yet terminal). A live time-stop IS the liquidation for the whole
@@ -1149,7 +1182,30 @@ def process_plan_exit(
     return ExitOutcome(plan_id=plan_id, action="CLOSED", exit_kind=kind)
 
 
+def uncovered_sl_qty_for_plan(conn: sqlite3.Connection, plan_id: int) -> int:
+    """Read-only partial-SL-coverage monitor for one plan (PR-4.5).
+
+    Returns ``snapshot.uncovered_sl_qty`` (shares believed held minus summed
+    LIVE stop-leg qty, floored at 0), or 0 if the plan no longer exists (the
+    snapshot is None — cleared by ``--force`` / deleted). This is a SEPARATE
+    read-only computation deliberately kept OUT of the ``process_plan_exit`` /
+    ``ExitOutcome`` return paths: the monitor is defense-in-depth (the
+    safety-net the OCO-ladder attach-once review asked for) and threading a
+    counter through the many exit-phase return branches is invasive and
+    error-prone. The reconciler calls this once per plan AFTER
+    ``process_plan_exit`` and accumulates it, wrapped so a monitor failure can
+    never abort the reconcile batch.
+
+    Ledger-only: no extra broker call (the key cost / determinism constraint).
+    """
+    snap = _snapshot(conn, plan_id)
+    if snap is None:
+        return 0
+    return snap.uncovered_sl_qty
+
+
 __all__ = [
     "ExitOutcome",
     "process_plan_exit",
+    "uncovered_sl_qty_for_plan",
 ]
