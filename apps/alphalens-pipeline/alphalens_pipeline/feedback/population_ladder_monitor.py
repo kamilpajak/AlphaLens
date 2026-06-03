@@ -50,7 +50,7 @@ import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -194,7 +194,9 @@ def _read_cached_bars(
     except (OSError, ValueError) as exc:  # corrupt / partial cache: re-fetch from scratch
         logger.warning("population-monitor: bad bar cache for %s — %s; ignoring.", ticker, exc)
         return []
-    return df.to_dict("records")
+    # pandas types to_dict("records") as list[dict[Hashable, Any]]; the frame's
+    # columns are the fixed str _BAR_COLUMNS, so narrow to the declared type.
+    return cast("list[dict[str, Any]]", df.to_dict("records"))
 
 
 def _write_cached_bars(
