@@ -1,0 +1,224 @@
+<script lang="ts">
+	import { marked } from 'marked';
+	import type { PageData } from './$types';
+
+	let { data }: { data: PageData } = $props();
+
+	let contentEl = $state<HTMLElement | null>(null);
+	let mermaidRendered = $state(false);
+
+	// Build a flat list of (level, text, slug) tuples for the TOC sidebar
+	// before handing the markdown to `marked` for full-document rendering.
+	// Slug rule: lowercase, alphanumerics + spaces collapse to '-' — matches
+	// the default GitHub-style anchor convention so deep-link copy works.
+	interface TocEntry {
+		level: 2 | 3;
+		text: string;
+		slug: string;
+	}
+
+	function slugify(text: string): string {
+		return text
+			.toLowerCase()
+			.replace(/[^a-z0-9\s-]/g, '')
+			.trim()
+			.replace(/\s+/g, '-');
+	}
+
+	function extractToc(md: string): TocEntry[] {
+		const toc: TocEntry[] = [];
+		// Track slug occurrences to dedupe: Svelte's `{#each ... as ... (key)}`
+		// throws on duplicate keys. Today no two headings collapse to the same
+		// slug, but the doc is LIVING and a future edit (e.g., two headings
+		// that differ only by punctuation) could silently break the page.
+		// Append a counter on collision — same convention as GitHub anchors.
+		const seen = new Map<string, number>();
+		for (const line of md.split('\n')) {
+			const m = line.match(/^(##|###)\s+(.+?)\s*$/);
+			if (!m) continue;
+			const level = m[1].length as 2 | 3;
+			const text = m[2];
+			let slug = slugify(text);
+			const count = seen.get(slug) ?? 0;
+			if (count > 0) slug = `${slug}-${count}`;
+			seen.set(slug, count + 1);
+			toc.push({ level, text, slug });
+		}
+		return toc;
+	}
+
+	// Register a renderer override so every <h2> / <h3> the document emits
+	// gets an id attribute matching the TOC's slug. Without this the
+	// anchor links from the sidebar would fall through to no-op (default
+	// `marked` doesn't slug headings).
+	function buildRenderer() {
+		const renderer = new marked.Renderer();
+		renderer.heading = ({ tokens, depth }) => {
+			const text = renderer.parser.parseInline(tokens);
+			const slug = slugify(text.replace(/<[^>]+>/g, ''));
+			return `<h${depth} id="${slug}">${text}</h${depth}>`;
+		};
+		return renderer;
+	}
+
+	const toc = $derived(extractToc(data.markdown));
+	const html = $derived(
+		marked.parse(data.markdown, { renderer: buildRenderer(), gfm: true }) as string
+	);
+
+	let activeSlug = $state<string | null>(null);
+
+	// Smooth-scroll on TOC click. Avoid hash-routing (would push history
+	// state every click) — explicit element.scrollIntoView keeps the URL
+	// stable while updating the highlighted entry.
+	function jumpTo(slug: string) {
+		const el = document.getElementById(slug);
+		if (!el) return;
+		el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+		activeSlug = slug;
+	}
+
+	// Mermaid rendering. The package is ~2MB minified, so we dynamic-import
+	// it on demand once the article DOM is populated — no cost on routes
+	// that don't use diagrams. Marked emits ```mermaid blocks as
+	// <pre><code class="language-mermaid">SOURCE</code></pre>; we rewrite
+	// those into <div class="mermaid">SOURCE</div> (mermaid.run() picks up
+	// elements with that class) then invoke run() once.
+	$effect(() => {
+		if (!contentEl) return;
+		if (mermaidRendered) return;
+		if (typeof window === 'undefined') return;
+		const codes = contentEl.querySelectorAll('code.language-mermaid');
+		if (codes.length === 0) return;
+		mermaidRendered = true;
+		void (async () => {
+			const { default: mermaid } = await import('mermaid');
+			mermaid.initialize({
+				startOnLoad: false,
+				theme: 'dark',
+				// `loose` is required to render the HTML typography that the
+				// doc relies on inside mermaid nodes (`<b>`, `<small>`,
+				// `<code>`, `<i>`). It permits arbitrary HTML inside
+				// <foreignObject> elements, including `<script>` if any
+				// were present in the markdown source. Safe today because
+				// the markdown is a repo-controlled static file fetched
+				// from /docs/research/. If this route ever loads
+				// user-supplied or runtime-mutable content, tighten to
+				// `strict` AND strip HTML from the markdown before passing
+				// it to mermaid, otherwise this is an XSS vector via
+				// `<foreignObject>`.
+				securityLevel: 'loose',
+				themeVariables: {
+					primaryColor: '#11141b',
+					primaryTextColor: '#e4e7ee',
+					primaryBorderColor: '#2b3142',
+					lineColor: '#7d8498',
+					tertiaryColor: '#06070a',
+					fontFamily: 'JetBrains Mono Variable, monospace',
+					fontSize: '13px'
+				}
+			});
+			for (const code of Array.from(codes)) {
+				const pre = code.parentElement;
+				if (!pre || pre.tagName !== 'PRE') continue;
+				const source = code.textContent ?? '';
+				const div = document.createElement('div');
+				div.className = 'mermaid';
+				div.textContent = source;
+				pre.replaceWith(div);
+			}
+			try {
+				await mermaid.run({ querySelector: 'div.mermaid' });
+			} catch (err) {
+				console.error('mermaid render failed', err);
+			}
+		})();
+	});
+</script>
+
+<svelte:head>
+	<title>AlphaLens — Ideal Shape</title>
+</svelte:head>
+
+<div class="max-w-[1400px] mx-auto px-3 sm:px-4 py-6">
+	<header class="border border-grid bg-bg-1 corners relative fade-up mb-5">
+		<div class="px-4 sm:px-6 py-5">
+			<div class="text-[10px] uppercase tracking-[0.3em] text-fg-muted">// north star</div>
+			<h1
+				class="font-display font-bold text-3xl sm:text-4xl lg:text-5xl text-amber tracking-tight mt-1"
+			>
+				ideal shape
+			</h1>
+			<p class="text-fg-dim text-xs sm:text-sm mt-3 max-w-2xl leading-relaxed">
+				Direction AlphaLens is already walking PR-by-PR — not a rewrite. 3-tier interaction
+				model, feedback loop, 8 tracks. Source of truth for
+				<span class="text-amber">why</span> each next feature.
+			</p>
+		</div>
+	</header>
+
+	<div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+		<!-- TOC sidebar -->
+		<aside
+			class="lg:col-span-3 lg:sticky lg:top-6 lg:self-start fade-up"
+			style="animation-delay: 0.05s"
+		>
+			<div class="border border-grid bg-bg-1 p-4">
+				<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">// contents</div>
+				<nav class="flex flex-col gap-1">
+					{#each toc as entry (entry.slug)}
+						<button
+							type="button"
+							onclick={() => jumpTo(entry.slug)}
+							class="text-left text-xs leading-snug text-fg-dim hover:text-amber transition-colors py-1 cursor-pointer"
+							class:pl-0={entry.level === 2}
+							class:pl-4={entry.level === 3}
+							class:text-amber={activeSlug === entry.slug}
+							data-testid="vision-toc-entry"
+						>
+							{entry.text}
+						</button>
+					{/each}
+				</nav>
+			</div>
+		</aside>
+
+		<!-- Rendered markdown -->
+		<article
+			class="vision-article lg:col-span-9 border border-grid bg-bg-1 px-5 sm:px-8 py-6 fade-up
+				prose prose-invert max-w-none
+				prose-headings:font-display prose-headings:text-amber prose-headings:tracking-tight
+				prose-h1:text-3xl prose-h2:text-2xl prose-h2:mt-10 prose-h2:mb-4 prose-h2:border-b prose-h2:border-grid prose-h2:pb-2
+				prose-h3:text-lg prose-h3:text-cyan prose-h3:mt-6 prose-h3:mb-3
+				prose-p:text-fg prose-p:leading-relaxed
+				prose-a:text-cyan prose-a:no-underline hover:prose-a:text-amber
+				prose-strong:text-amber prose-strong:font-bold
+				prose-code:text-cyan prose-code:bg-bg-2 prose-code:px-1 prose-code:rounded prose-code:text-xs prose-code:before:content-none prose-code:after:content-none
+				prose-pre:bg-bg-2 prose-pre:border prose-pre:border-grid prose-pre:text-xs
+				prose-blockquote:border-l-violet prose-blockquote:text-fg-dim prose-blockquote:font-normal prose-blockquote:not-italic
+				prose-ul:text-fg prose-li:my-1
+				prose-table:text-xs prose-th:text-amber prose-th:border-grid prose-td:border-grid prose-td:text-fg-dim
+				prose-hr:border-grid"
+			style="animation-delay: 0.1s"
+			data-testid="vision-content"
+			bind:this={contentEl}
+		>
+			{@html html}
+		</article>
+	</div>
+</div>
+
+<style>
+	/* Mermaid diagrams are injected into {@html} content as <div class="mermaid">,
+	   so Svelte's scoped styles can't reach them — :global under the
+	   component-owned .vision-article element centres them without leaking. */
+	.vision-article :global(.mermaid) {
+		display: flex;
+		justify-content: center;
+		margin: 1.5rem 0;
+	}
+	.vision-article :global(.mermaid svg) {
+		max-width: 100%;
+		height: auto;
+	}
+</style>

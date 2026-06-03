@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-// Copies the markdown/JSON evidence files referenced by /experiments into
-// static/docs/research/ so the in-page Evidence drawer can fetch them.
+// Copies markdown/JSON evidence files referenced by /experiments AND the
+// ideal-shape doc rendered by /vision into static/docs/research/ so the
+// SPA can fetch them at runtime (Evidence drawer for experiments,
+// markdown body for vision).
 //
 // Runs as a prebuild hook (and predev). Idempotent — silently overwrites.
-// If a referenced file is missing, prints a warning and continues (drawer
-// will show a friendly "not found" message at runtime).
+// If a referenced file is missing, the script exits non-zero (see bottom
+// of file) so CI catches the gap instead of leaving a runtime 404.
 
 import { mkdirSync, copyFileSync, existsSync, rmSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -31,7 +33,9 @@ const REFERENCED = [
 	'idiosyncratic_momentum_audit_verdict_2026_05_14.md',
 	'v9d_retrospective_pre_2018_postmortem_2026_05_05.md',
 	'pc_abnormal_retrospective_pre_2018_verdict.json',
-	'insider_form4_opportunistic_slippage_stress_postmortem_2026_05_12.md'
+	'insider_form4_opportunistic_slippage_stress_postmortem_2026_05_12.md',
+	// Source for the /vision SPA route — rendered client-side via `marked`.
+	'alphalens_ideal_shape_2026_05_29.md'
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

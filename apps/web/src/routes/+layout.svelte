@@ -109,6 +109,9 @@
 				<a href="/experiments" class="hover:text-amber transition-colors" class:text-amber={route === '/experiments'}>
 					<span class="hidden sm:inline">[04]&nbsp;</span>experiments
 				</a>
+				<a href="/vision" class="hover:text-amber transition-colors" class:text-amber={route === '/vision'}>
+					<span class="hidden sm:inline">[05]&nbsp;</span>vision
+				</a>
 				<a
 					href={apiDocsHref}
 					target="_blank"
@@ -116,7 +119,7 @@
 					class="hover:text-amber transition-colors"
 					aria-label="api documentation (opens in a new tab)"
 				>
-					<span class="hidden sm:inline">[05]&nbsp;</span>api <span aria-hidden="true">↗</span>
+					<span class="hidden sm:inline">[06]&nbsp;</span>api <span aria-hidden="true">↗</span>
 				</a>
 			</nav>
 			<div class="ml-auto flex items-center gap-3 sm:gap-5 text-fg-muted">
