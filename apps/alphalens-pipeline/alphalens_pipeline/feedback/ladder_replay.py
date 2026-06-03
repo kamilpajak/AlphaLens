@@ -312,12 +312,13 @@ def replay_ladder(
         # 3) Time-stop LAST: only when the as-specified exit did NOT fire on this
         #    bar (a real SL/TP on the cutoff bar WINS over the synthetic stop).
         #    Marks the remainder to THIS bar's close and ends the in-trade window.
-        if (
-            not exit_reached
-            and position_expiry_ms is not None
-            and filled
-            and ts >= position_expiry_ms
-        ):
+        # ``filled`` is guaranteed non-empty here (the ``if not filled: continue``
+        # guard above), so it is not re-checked.
+        if not exit_reached and position_expiry_ms is not None and ts >= position_expiry_ms:
+            # TIME_STOP records the BAR's CLOSE as ``price`` (not a fill level — the
+            # remainder is marked to close at expiry). Consumers should read the
+            # realized_r / classification, not interpret this cross's price as a
+            # trigger level.
             seq.append(LevelCrossing("TIME_STOP", _TIME, close, ts))
             expiry_close = close
             time_stop = True
@@ -544,7 +545,9 @@ def _replay_ratchet(
     blended entry (break-even+); on TP2 hit raise it to the TP1 price (lock-in).
     The remainder exits when ``low <= eff_stop``; if it survives the horizon it is
     marked to the last close. Same SL-first ambiguity + same bug-#1 filled-frac
-    re-basing as the headline pass.
+    re-basing as the headline pass. The position TIME_STOP is intentionally NOT
+    applied to the ratchet pass -- the time-stop is a layer-2 headline concern;
+    the ratchet what-if terminates on SL / full-TP / horizon only.
 
     Returns ``ratchet_realized_r`` (R-units) or ``None`` when risk <= 0 (geometry
     undefined -- matches the headline BAD_GEOMETRY guard).
