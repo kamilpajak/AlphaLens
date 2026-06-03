@@ -1193,6 +1193,40 @@ class TestStampLadderOutcome(unittest.TestCase):
             self.assertEqual(row["horizon_open"], "True")
             self.assertEqual(row["ladder_classification"], "OPEN")
 
+    def test_upsert_preserves_existing_ladder_columns(self):
+        # zen CRITICAL: a user flipping interested -> dismissed re-POSTs through
+        # insert() AFTER the nightly ladder backfill stamped an outcome. The
+        # upsert must NOT wipe the gen-4 ladder columns back to NULL (job-set,
+        # never user-set) — exactly as the v2 outcome columns are preserved.
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(_make_decision(action="interested"))
+            fb.stamp_ladder_outcome(
+                row_id,
+                sequence_str="E1->TP1->SL",
+                realized_r=-0.167,
+                ladder_classification="PARTIAL_TP_THEN_SL",
+                blended_entry=98.0,
+                ratchet_realized_r=0.25,
+            )
+            # user flips to dismissed (same brief_date, ticker, theme)
+            fb.insert(
+                _make_decision(
+                    action="dismissed",
+                    dismiss_category="thesis_setup",
+                    dismiss_reason="too_expensive",
+                )
+            )
+            row = fb.conn.execute(
+                "SELECT sequence_str, realized_r, ladder_classification, "
+                "blended_entry, ratchet_realized_r FROM decisions WHERE id = ?",
+                (row_id,),
+            ).fetchone()
+            self.assertEqual(row["sequence_str"], "E1->TP1->SL")
+            self.assertAlmostEqual(row["realized_r"], -0.167)
+            self.assertEqual(row["ladder_classification"], "PARTIAL_TP_THEN_SL")
+            self.assertAlmostEqual(row["blended_entry"], 98.0)
+            self.assertAlmostEqual(row["ratchet_realized_r"], 0.25)
+
 
 class TestIterDecisionsForLadder(unittest.TestCase):
     """gen-4 iter_decisions_for_ladder: matured-window + NULL-classification gate,

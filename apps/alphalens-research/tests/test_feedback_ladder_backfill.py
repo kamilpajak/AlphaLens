@@ -187,12 +187,14 @@ class TestLadderBackfill(unittest.TestCase):
                 ).fetchone()
                 self.assertEqual(row["ladder_classification"], "TP_FULL")
 
-    def test_missing_brief_does_not_crash(self):
-        # A decision whose brief parquet is absent → counted as no_data, no crash.
+    def test_missing_brief_left_unstamped_for_retry(self):
+        # zen MEDIUM: a missing brief is RETRYABLE — counted as no_data, no crash,
+        # and the row is left NULL (NOT stamped NO_DATA) so the next sweep retries
+        # it once the brief appears, instead of permanently abandoning it.
         brief_date = dt.date(2026, 5, 1)
         now = dt.datetime(2026, 6, 1, 7, 0, tzinfo=UTC)
         with FeedbackStore.open(self.feedback_path) as fb:
-            _insert_decision(fb, brief_date, "GONE")
+            decision_id = _insert_decision(fb, brief_date, "GONE")
         reports = replay_ladder_decisions_window(
             self.feedback_path,
             self.briefs_dir,
@@ -202,6 +204,43 @@ class TestLadderBackfill(unittest.TestCase):
             now=now,
         )
         self.assertTrue(any(r.no_data > 0 for r in reports))
+        with FeedbackStore.open(self.feedback_path) as fb:
+            row = fb.conn.execute(
+                "SELECT ladder_classification FROM decisions WHERE id = ?",
+                (decision_id,),
+            ).fetchone()
+            self.assertIsNone(row["ladder_classification"])  # retryable, not stamped
+            # still surfaced by the NULL-gate query for the next sweep
+            pending = fb.iter_decisions_for_ladder(lookback_start=dt.date(2026, 4, 1))
+            self.assertIn(decision_id, {r[0] for r in pending})
+
+    def test_transient_fetch_error_left_unstamped_for_retry(self):
+        # A Polygon outage (no bars / exception) must NOT poison the NULL-gate:
+        # leave the row unstamped so the bounded sweep window retries it.
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 6, 1, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+        with FeedbackStore.open(self.feedback_path) as fb:
+            decision_id = _insert_decision(fb, brief_date, "NVDA")
+
+        def _empty_fetch(ticker, start, end):
+            return []  # transient: no bars returned
+
+        reports = replay_ladder_decisions_window(
+            self.feedback_path,
+            self.briefs_dir,
+            end_date=now.date(),
+            lookback_days=40,
+            bar_fetch=_empty_fetch,
+            now=now,
+        )
+        self.assertTrue(any(r.no_data > 0 for r in reports))
+        with FeedbackStore.open(self.feedback_path) as fb:
+            row = fb.conn.execute(
+                "SELECT ladder_classification FROM decisions WHERE id = ?",
+                (decision_id,),
+            ).fetchone()
+            self.assertIsNone(row["ladder_classification"])  # retryable, not stamped
 
 
 class TestBrokerFree(unittest.TestCase):

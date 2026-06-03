@@ -191,17 +191,20 @@ def _replay_one_date(
     no_structure = 0
     no_data = 0
     for ticker, ids in ticker_groups:
-        setup = setups.get(ticker.upper()) if setups is not None else None
+        # zen MEDIUM: a missing brief or a transient fetch failure / no-bars is
+        # RETRYABLE — leave ladder_classification NULL so the next nightly sweep
+        # re-attempts it within the lookback window (bounded; ages out
+        # naturally). We must NOT stamp a terminal NO_DATA, because the
+        # iter_decisions_for_ladder NULL gate would then skip the row forever
+        # and a single Polygon 429 / a not-yet-built brief would permanently
+        # abandon the decision (the SEC-ingest cache-poisoning class of bug).
         if setups is None:
-            no_data += 1
-            for did in ids:
-                fb.stamp_ladder_outcome(did, ladder_classification="NO_DATA")
+            no_data += 1  # whole-date brief gap: retry next sweep, do NOT stamp
             continue
+        setup = setups.get(ticker.upper())
         outcome = _replay_group(ticker, setup, fetch, arrival_start, arrival_end, horizon_end)
         if outcome is None:
-            no_data += 1
-            for did in ids:
-                fb.stamp_ladder_outcome(did, ladder_classification="NO_DATA")
+            no_data += 1  # transient fetch error / no bars: retry, do NOT stamp
             continue
         if outcome.status == "NO_STRUCTURE":
             no_structure += 1
@@ -224,7 +227,8 @@ def _load_setups(briefs_dir: Path, brief_date: dt.date) -> dict[str, dict | None
     """Index ``ticker.upper() -> trade_setup`` for a brief date.
 
     Returns ``None`` when the brief parquet is missing / unreadable (the whole
-    date's groups are then counted as no_data and stamped NO_DATA) — a missing
+    date's groups are then counted as no_data and left UNSTAMPED for a later
+    retry — see the no_data handling in :func:`_replay_one_date`) — a missing
     brief is a data gap, not a crash.
     """
     try:
@@ -267,11 +271,13 @@ def _replay_group(
 def _stamp(fb: FeedbackStore, decision_id: str, outcome: LadderOutcome) -> None:
     """Write the gen-4 ladder-outcome columns for one decision id.
 
-    When the engine could not run the as-specified replay (``status != "OK"``,
-    i.e. NO_STRUCTURE / NO_DATA) the stored ``ladder_classification`` is the
-    STATUS, not the inner ``NO_FILL`` default — so a non-NULL classification
-    always means "the date was processed", which is what the
-    ``iter_decisions_for_ladder`` NULL gate relies on for idempotent re-sweeps.
+    Only called for a real engine outcome (``OK`` or ``NO_STRUCTURE`` — the
+    latter is terminal: a candidate with no ladder will never gain one). For a
+    NO_STRUCTURE outcome the stored ``ladder_classification`` is the STATUS, not
+    the inner ``NO_FILL`` default, so a non-NULL classification always means "the
+    date was processed with data" — which the ``iter_decisions_for_ladder`` NULL
+    gate relies on. Transient/retryable gaps (missing brief, fetch error, no
+    bars) are deliberately NOT stamped here (see :func:`_replay_one_date`).
     """
     classification = outcome.classification if outcome.status == "OK" else outcome.status
     fb.stamp_ladder_outcome(

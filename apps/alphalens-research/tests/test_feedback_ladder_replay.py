@@ -50,6 +50,35 @@ _EQUAL_3 = {
 }
 
 
+class TestPostExitFillsDoNotCorruptHeadline(unittest.TestCase):
+    """zen HIGH: once the as-specified position has EXITED it is flat — a later
+    dip to a still-unfilled deeper entry tier must NOT be added to ``filled``
+    (which would retroactively change blended_entry / filled_frac / realized_r),
+    and post-exit bars must NOT extend the in-trade MFE/MAE window."""
+
+    def test_post_exit_dip_does_not_fill_unused_tier(self):
+        # E1=100, E2=90 (equal alloc), SL=80, TPs 110/120/130. Only E1 fills,
+        # then all three TPs hit (exit_reached), then a late bar dips to E2's
+        # limit (90). E2 must NOT fill; blended stays 100; realized_r unchanged.
+        setup = _setup(
+            entries=[(100.0, 50.0), (90.0, 50.0)],
+            tps=[(110.0, 33.3), (120.0, 33.3), (130.0, 33.3)],
+            stop=80.0,
+        )
+        bars = [
+            _bar(1, low=100.0, high=101.0, close=100.5),  # fills E1 only
+            _bar(2, low=105.0, high=130.0, close=129.0),  # all 3 TPs hit -> flat
+            _bar(3, low=90.0, high=95.0, close=92.0),  # dip to E2 limit AFTER exit
+        ]
+        outcome = replay_ladder(setup, bars)
+        self.assertEqual(outcome.entries_filled, ("E1",))  # E2 NOT filled post-exit
+        self.assertAlmostEqual(outcome.blended_entry, 100.0, places=3)
+        self.assertEqual(outcome.classification, "TP_FULL")
+        # in-trade MAE must not include the post-exit dip to 90 (low while held
+        # was 100 on bar 1 -> MAE 0, not negative from the post-exit 90).
+        self.assertGreaterEqual(outcome.mae, 0.0)
+
+
 class TestParseLadder(unittest.TestCase):
     """Step 2: parse_ladder exposes total_entry_alloc + atr."""
 

@@ -225,7 +225,17 @@ def replay_ladder(
 
     for bar in ordered:
         ts, low, high, close = _bar_lhc(bar)
-        last_close = close
+        last_close = close  # advances EVERY bar (whole-horizon forward_return)
+
+        # Once the as-specified position has exited (full SL, or all TPs taken)
+        # it is FLAT: no new entry fills, no in-trade excursion, no further exit
+        # resolution. ``last_close`` still advances above so ``forward_return``
+        # spans the whole horizon. (zen HIGH: a post-exit dip must NOT fill an
+        # unused deeper tier and retroactively change the blended entry /
+        # filled_frac / realized_r of an already-closed position, nor extend the
+        # MFE/MAE window past the actual holding period.)
+        if exit_reached:
+            continue
 
         # 1) Entries first (you cannot exit before entering). Multiple tiers can
         #    fill in one bar (a gap-down through several limits).
@@ -238,17 +248,13 @@ def replay_ladder(
         if not filled:
             continue  # no position yet -> TP/SL/excursion cannot trigger
 
-        # Track in-trade excursion over EVERY bar from first fill onward (bug-
-        # tracking the whole horizon, not just up to the as-specified exit).
+        # Track in-trade excursion over every HELD bar (first fill until the
+        # as-specified exit). forward_return carries the whole-horizon directional
+        # signal; MFE/MAE measure only what happened while the position was open.
         in_trade_high = high if in_trade_high is None else max(in_trade_high, high)
         in_trade_low = low if in_trade_low is None else min(in_trade_low, low)
 
-        # 2) Resolve the as-specified exit for this bar -- but only the FIRST
-        #    time (we keep iterating after for the substrate, yet the headline
-        #    exit marker is the first one). Entries above still keep filling.
-        if exit_reached:
-            continue
-
+        # 2) Resolve the as-specified exit for this bar.
         sl_cross = low <= stop
         tp_crosses = [t for t in ladder.tps if t.level_id not in hit_tp_ids and high >= t.price]
 
@@ -447,9 +453,13 @@ def _excursions(
 ) -> tuple[float | None, float | None, float | None, float | None]:
     """MFE / MAE in R-units and as fractions of the blended entry.
 
-    Anchored to the blended entry, computed over IN-TRADE bars only (the caller
-    only updates the high/low watermarks once a position exists). ``None`` when
-    there is no in-trade bar or ``risk <= 0`` (R-units undefined).
+    Anchored EX-POST to the FINAL blended entry, computed over IN-TRADE bars only
+    (the caller updates the high/low watermarks from the first fill until the
+    as-specified exit). Note the anchor is the final blend: an excursion bar
+    between the first and a later tier fill is measured against a blend that
+    already includes the later tier — a deliberate substrate approximation, not
+    a running-blend reconstruction. ``None`` when there is no in-trade bar or
+    ``risk <= 0`` (R-units undefined).
     """
     if in_trade_high is None or in_trade_low is None:
         return None, None, None, None

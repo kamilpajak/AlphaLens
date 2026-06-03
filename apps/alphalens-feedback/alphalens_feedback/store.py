@@ -483,17 +483,22 @@ class FeedbackStore:
         """
         existing = self.conn.execute(
             """SELECT id, outcome_plan_id, fill_status, exit_kind,
-                      shadow_return, realized_return, outcome_computed_at
+                      shadow_return, realized_return, outcome_computed_at,
+                      sequence_str, mfe, mae, forward_return, ladder_classification,
+                      blended_entry, realized_r, horizon_open, ambiguous_bars,
+                      ratchet_realized_r
                FROM decisions WHERE brief_date = ? AND ticker = ? AND theme = ?""",
             (decision.brief_date.isoformat(), decision.ticker, decision.theme),
         ).fetchone()
         was_created = existing is None
         target_id = existing["id"] if existing else decision.id
-        # Outcome columns are job-set by the post-hoc outcome-join, never by
-        # the user POST path. On upsert (a user flipping interested ->
-        # dismissed) INSERT OR REPLACE rewrites the whole row, so carry the
-        # existing outcome values forward rather than letting them revert to
-        # NULL. A brand-new row has no outcome yet (all NULL).
+        # Outcome + ladder columns are job-set by the post-hoc outcome-join and
+        # the nightly ladder backfill, never by the user POST path. On upsert (a
+        # user flipping interested -> dismissed) INSERT OR REPLACE rewrites the
+        # WHOLE row, so carry both groups of job-set values forward rather than
+        # letting them revert to NULL. A brand-new row has none yet (all NULL).
+        # (zen CRITICAL: omitting the ladder group here silently wiped a
+        # previously-replayed ladder outcome on any user re-click.)
         if existing is not None:
             outcome_values = (
                 existing["outcome_plan_id"],
@@ -503,8 +508,10 @@ class FeedbackStore:
                 existing["realized_return"],
                 existing["outcome_computed_at"],
             )
+            ladder_values = tuple(existing[name] for name, _t in _LADDER_OUTCOME_COLUMNS)
         else:
             outcome_values = (None, None, None, None, None, None)
+            ladder_values = (None,) * len(_LADDER_OUTCOME_COLUMNS)
         self.conn.execute(
             """
             INSERT OR REPLACE INTO decisions (
@@ -515,8 +522,12 @@ class FeedbackStore:
                 layer4_score, rank_in_day, cohort_size_in_day,
                 gate_verdict_json, brief_model_used,
                 outcome_plan_id, fill_status, exit_kind,
-                shadow_return, realized_return, outcome_computed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                shadow_return, realized_return, outcome_computed_at,
+                sequence_str, mfe, mae, forward_return, ladder_classification,
+                blended_entry, realized_r, horizon_open, ambiguous_bars,
+                ratchet_realized_r
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 target_id,
@@ -535,13 +546,14 @@ class FeedbackStore:
                 decision.entry_price,
                 decision.market_regime_at_entry,
                 # v3 brief-metadata: written DIRECTLY from the Decision on every
-                # insert (click-time), NOT carried-forward like outcome_values.
+                # insert (click-time), NOT carried-forward like the job-set groups.
                 decision.layer4_score,
                 decision.rank_in_day,
                 decision.cohort_size_in_day,
                 decision.gate_verdict_json,
                 decision.brief_model_used,
                 *outcome_values,
+                *ladder_values,
             ),
         )
         return target_id, was_created
