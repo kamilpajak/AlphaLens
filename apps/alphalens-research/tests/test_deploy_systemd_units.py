@@ -1368,5 +1368,46 @@ class TestSaxoTokenDirCarveOut(unittest.TestCase):
         )
 
 
+class TestStartLimitInUnitSection(unittest.TestCase):
+    """``StartLimitIntervalSec`` / ``StartLimitBurst`` are [Unit]-section keys in
+    modern systemd; under [Service] they are silently ignored ("Unknown key
+    name ... in section 'Service'"), so the crash-loop cap never applies. Pin
+    that no alphalens unit misplaces them (caught live on the VPS when the
+    trade-stream daemon was deployed).
+    """
+
+    _START_LIMIT_KEYS = ("StartLimitIntervalSec", "StartLimitBurst", "StartLimitInterval")
+
+    def _section_of_directives(self, text: str) -> dict[str, str]:
+        """Map each StartLimit* directive line to the section it sits in."""
+        placement: dict[str, str] = {}
+        section = ""
+        for raw in text.splitlines():
+            line = raw.strip()
+            if line.startswith("[") and line.endswith("]"):
+                section = line
+                continue
+            if line.startswith("#") or "=" not in line:
+                continue
+            key = line.split("=", 1)[0].strip()
+            if key in self._START_LIMIT_KEYS:
+                placement[key] = section
+        return placement
+
+    def test_no_alphalens_unit_puts_startlimit_in_service_section(self) -> None:
+        offenders: list[str] = []
+        checked = 0
+        for unit in sorted(SYSTEMD_DIR.glob("alphalens-*.service")):
+            placement = self._section_of_directives(unit.read_text())
+            for key, section in placement.items():
+                checked += 1
+                if section != "[Unit]":
+                    offenders.append(f"{unit.name}: {key} in {section or '(no section)'}")
+        # Positive control: at least one unit actually declares these, so the
+        # test cannot pass vacuously if the directives are renamed/removed.
+        self.assertGreater(checked, 0, "no StartLimit* directives found to check")
+        self.assertEqual(offenders, [], f"StartLimit* must live in [Unit]: {offenders}")
+
+
 if __name__ == "__main__":
     unittest.main()
