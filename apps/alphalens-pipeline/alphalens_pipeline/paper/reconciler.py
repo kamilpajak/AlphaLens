@@ -116,10 +116,23 @@ class ReconcileReport:
     #                          means the ledger and broker disagree about
     #                          reality — emitted as a Prometheus gauge + a loud
     #                          CLI WARNING.
+    #   total_uncovered_sl_qty — sum across plans of shares believed held but
+    #                          NOT covered by a LIVE protective stop leg
+    #                          (net_open_qty minus summed non-terminal SL-leg
+    #                          qty). The PARTIAL-coverage monitor (PR-4.5): a
+    #                          read-only ledger-only computation that catches a
+    #                          filled position becoming PARTIALLY unprotected
+    #                          (e.g. an OCO stop leg going terminal while shares
+    #                          remain) — the case n_filled_without_sl (NO ladder
+    #                          at all) cannot see. Emitted as a Prometheus gauge.
+    #   n_plans_partial_sl   — count of plans with total_uncovered_sl_qty > 0
+    #                          (how many distinct positions are under-covered).
     n_exits_failed: int = 0
     n_entries_canceled: int = 0
     n_filled_without_sl: int = 0
     n_ledger_broker_desync: int = 0
+    total_uncovered_sl_qty: int = 0
+    n_plans_partial_sl: int = 0
 
 
 def _existing_fill_ids(conn: sqlite3.Connection, order_id: int) -> set[str]:
@@ -328,7 +341,10 @@ def reconcile_orders(
     XNYS anchor dates so the trading-day arithmetic is deterministic
     independent of which weekday CI happens to run on.
     """
-    from alphalens_pipeline.paper.exit_manager import process_plan_exit
+    from alphalens_pipeline.paper.exit_manager import (
+        process_plan_exit,
+        uncovered_sl_qty_for_plan,
+    )
 
     if observed_at is None:
         observed_at = dt.datetime.now(dt.UTC)
@@ -403,6 +419,8 @@ def reconcile_orders(
         n_entries_canceled = 0
         n_filled_without_sl = 0
         n_ledger_broker_desync = 0
+        total_uncovered_sl_qty = 0
+        n_plans_partial_sl = 0
         for plan_id in sorted(plans_touched):
             # Defensive wrap: process_plan_exit already catches per-broker-call
             # errors internally (exit submits + cancels are best-effort), but a
@@ -437,6 +455,25 @@ def reconcile_orders(
             n_entries_canceled += exit_outcome.n_entries_canceled
             n_filled_without_sl += exit_outcome.n_filled_without_sl
             n_ledger_broker_desync += exit_outcome.n_ledger_broker_desync
+            # PARTIAL-SL-coverage monitor (PR-4.5): a SEPARATE read-only
+            # ledger-only computation per plan, run AFTER process_plan_exit so
+            # it sees the just-attached / just-transitioned exit rows. Wrapped
+            # in its own try/except so a monitor bug can NEVER abort the
+            # reconcile batch — on any error treat the plan as 0-uncovered and
+            # log, mirroring the per-plan crash isolation above. It is purely
+            # observability; the protective work is already persisted.
+            try:
+                uncovered = uncovered_sl_qty_for_plan(conn, plan_id)
+            except Exception as exc:
+                logger.warning(
+                    "reconcile partial-SL monitor failed for plan_id=%d: %s; treating as 0",
+                    plan_id,
+                    exc,
+                )
+                uncovered = 0
+            if uncovered > 0:
+                total_uncovered_sl_qty += uncovered
+                n_plans_partial_sl += 1
 
     # Memo §6.1 Path B — closed-loop live-gross check post-reconcile.
     from alphalens_pipeline.paper.gross_guard import check_live_gross
@@ -479,6 +516,20 @@ def reconcile_orders(
             n_ledger_broker_desync,
             account,
         )
+    if total_uncovered_sl_qty > 0:
+        # PARTIAL-coverage condition: a filled position has live stop legs that
+        # cover FEWER shares than we believe are held (e.g. an OCO stop leg went
+        # terminal while shares remain). Distinct from n_filled_without_sl
+        # (which fires only when there is NO ladder at all). Surface loudly so
+        # an operator checks whether the broker cancelled a stop instead of
+        # adjusting it on a partial TP fill.
+        logger.warning(
+            "paper reconcile: %d share(s) across %d plan(s) PARTIALLY uncovered by a "
+            "protective stop (account=%s) — live position exceeds summed live SL-leg qty",
+            total_uncovered_sl_qty,
+            n_plans_partial_sl,
+            account,
+        )
     if n_filled_without_sl > 0:
         # The dead-man condition: a filled position ended the pass with no
         # live disaster-stop. This is the single most operationally dangerous
@@ -505,6 +556,8 @@ def reconcile_orders(
         n_entries_canceled=n_entries_canceled,
         n_filled_without_sl=n_filled_without_sl,
         n_ledger_broker_desync=n_ledger_broker_desync,
+        total_uncovered_sl_qty=total_uncovered_sl_qty,
+        n_plans_partial_sl=n_plans_partial_sl,
     )
 
 

@@ -987,5 +987,64 @@ class TestPaperLedgerBrokerDesync(unittest.TestCase):
         self.assertNotIn(self.ALERT, cron)
 
 
+class TestPaperUncoveredSl(unittest.TestCase):
+    """OCO-ladder partial-coverage monitor (PR-4.5): the attach-once ladder is
+    never resized, so a filled position that becomes PARTIALLY uncovered (a stop
+    leg cancelled instead of adjusted on a partial TP fill, or any stop leg
+    going terminal while shares remain) must page. The reconciler emits
+    ``alphalens_paper_uncovered_sl_qty{account=...}`` (a GAUGE); a sustained
+    non-zero value is a partially unprotected live position — the gap the
+    AlphalensPaperFilledWithoutSl dead-man (NO ladder at all) cannot see.
+    DISTINCT alertname + NO job= label keep it out of the cron-keyed
+    enumerations, so it needs its OWN pins here (mirrors TestPaperFilledWithoutSl).
+    """
+
+    METRIC = "alphalens_paper_uncovered_sl_qty"
+    ALERT = "AlphalensPaperUncoveredSl"
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def _one(self) -> dict:
+        matches = [r for r in self._rules() if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_alert_exists(self) -> None:
+        self._one()
+
+    def test_expr_is_gauge_correct_max_over_time_gt_zero(self) -> None:
+        expr = self._one()["expr"]
+        self.assertIn(self.METRIC, expr)
+        self.assertIn("max_over_time", expr)
+        self.assertIn("> 0", expr)
+        # GAUGE — never counter functions (the PR #312 increase()/rate() lesson).
+        self.assertNotIn("increase(", expr)
+        self.assertNotIn("rate(", expr)
+
+    def test_has_for_debounce(self) -> None:
+        # SUSTAINED gauge (like FilledWithoutSl): a single transient pass must
+        # not page; a ``for:`` debounce requires the value to stay > 0.
+        self.assertIn("for", self._one())
+
+    def test_routes_to_telegram(self) -> None:
+        self.assertEqual(self._one().get("labels", {}).get("route"), "telegram")
+
+    def test_severity_is_critical(self) -> None:
+        # A partially naked live position IS a wake-up condition.
+        self.assertEqual(self._one().get("labels", {}).get("severity"), "critical")
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        rule = self._one()
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+    def test_alertname_distinct_from_cron_alertnames(self) -> None:
+        cron = {"AlphalensJobStale", "AlphalensJobMetricMissing", "AlphalensJobFailed"}
+        self.assertNotIn(self.ALERT, cron)
+
+
 if __name__ == "__main__":
     unittest.main()

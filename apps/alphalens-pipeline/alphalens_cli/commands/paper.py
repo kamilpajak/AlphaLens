@@ -104,6 +104,11 @@ def _emit_reconcile_metrics(report: ReconcileReport, *, account: str) -> None:
         confirmed the position flat while the ledger believed it filled. A
         sustained value > 0 means the ledger and broker disagree about reality;
         the alert rule pages on it.
+      * ``alphalens_paper_uncovered_sl_qty`` — shares across all plans that are
+        believed held but NOT covered by a live protective stop leg (the
+        PARTIAL-coverage monitor, PR-4.5). Reads 0 normally; a sustained value
+        > 0 means a filled position is partially unprotected (e.g. an OCO stop
+        leg cancelled instead of adjusted on a partial TP fill).
 
     The reconcile work is already persisted before this call; an emit failure
     is pure observability debt and must NEVER fail the unit (PR #311 rule —
@@ -121,6 +126,9 @@ def _emit_reconcile_metrics(report: ReconcileReport, *, account: str) -> None:
                 f'alphalens_paper_exits_attached{{account="{acct}"}}': report.n_exits_attached,
                 f'alphalens_paper_ledger_broker_desync{{account="{acct}"}}': (
                     report.n_ledger_broker_desync
+                ),
+                f'alphalens_paper_uncovered_sl_qty{{account="{acct}"}}': (
+                    report.total_uncovered_sl_qty
                 ),
             },
         )
@@ -378,7 +386,9 @@ def reconcile(
         f"exits_failed={report.n_exits_failed} "
         f"entries_canceled={report.n_entries_canceled} "
         f"filled_without_sl={report.n_filled_without_sl} "
-        f"ledger_broker_desync={report.n_ledger_broker_desync}"
+        f"ledger_broker_desync={report.n_ledger_broker_desync} "
+        f"uncovered_sl={report.total_uncovered_sl_qty} "
+        f"plans_partial_sl={report.n_plans_partial_sl}"
     )
     if report.n_ledger_broker_desync > 0:
         # The ledger and broker disagree about reality: the broker confirmed a
