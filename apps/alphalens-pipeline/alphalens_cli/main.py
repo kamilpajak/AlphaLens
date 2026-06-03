@@ -27,6 +27,7 @@ from alphalens_cli.commands.literature import literature_app
 from alphalens_cli.commands.paper import paper_app
 from alphalens_cli.commands.preaudit import preaudit_command
 from alphalens_cli.commands.preregister import preregister_app
+from alphalens_cli.commands.saxo import saxo_app
 from alphalens_cli.commands.status import status
 from alphalens_cli.commands.templates import templates_app
 from alphalens_cli.commands.thematic import thematic_app
@@ -60,6 +61,7 @@ app.add_typer(feedback_app, name="feedback")
 app.add_typer(literature_app, name="literature")
 app.add_typer(paper_app, name="paper")
 app.add_typer(preregister_app, name="preregister")
+app.add_typer(saxo_app, name="saxo")
 app.add_typer(templates_app, name="templates")
 app.add_typer(thematic_app, name="thematic")
 app.command(name="status")(status)

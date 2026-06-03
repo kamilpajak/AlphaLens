@@ -80,6 +80,15 @@ STALENESS_EXEMPT_JOBS: frozenset[str] = frozenset(
         "paper-plan",
         "paper-submit",
         "paper-reconcile",
+        # saxo-refresh emits the cron-health hook, but its staleness is covered
+        # by the DISTINCT AlphalensSaxoRefreshStale rule (time() -
+        # alphalens_saxo_token_chain_last_refresh_timestamp_seconds > 1800),
+        # which fires WHILE the token is still alive — strictly stronger than a
+        # cron job=stale window keyed on last_success. A duplicate cron
+        # AlphalensJobStale rule would only add noise. Pinned by
+        # test_monitoring_alerts.TestSaxoTokenChainAlerts; design memo
+        # docs/research/saxo_client_token_renewal_design_2026_06_03.md.
+        "saxo-refresh",
     }
 )
 

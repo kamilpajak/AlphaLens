@@ -1046,5 +1046,117 @@ class TestPaperUncoveredSl(unittest.TestCase):
         self.assertNotIn(self.ALERT, cron)
 
 
+class TestSaxoTokenChainAlerts(unittest.TestCase):
+    """Saxo OpenAPI token-chain alert family
+    (docs/research/saxo_client_token_renewal_design_2026_06_03.md §Metrics).
+
+    The alphalens-saxo-refresh keep-alive emits the alphalens_saxo_* gauges.
+    These alerts read them. DISTINCT alertnames + NO ``job=`` label keep them
+    OUT of the cron-keyed AlphalensJobStale / AlphalensJobMetricMissing
+    enumerations (the token chain is a per-environment domain signal, not a
+    unit last_success), so this family carries its OWN regression pins.
+    """
+
+    REAUTH = "AlphalensSaxoReauthRequired"
+    STALE = "AlphalensSaxoRefreshStale"
+    BOOTSTRAP = "AlphalensSaxoBootstrapNeeded"
+    MISSING = "AlphalensSaxoChainStateMissing"
+    FULL_AUTH = "AlphalensSaxoFullAuthAging"
+    ALL = (REAUTH, STALE, BOOTSTRAP, MISSING, FULL_AUTH)
+    # THE load-bearing staleness threshold (>6 missed 5-min fires, still inside
+    # the ~40min refresh life so re-login is calm). Pinned so a silent widen
+    # fails the test — this rule's distinct alertname escapes the cron dict.
+    STALE_THRESHOLD = 1800
+    FULL_AUTH_THRESHOLD = 518400  # 6 days
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def _one(self, alertname: str) -> dict:
+        matches = [r for r in self._rules() if r.get("alert") == alertname]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {alertname}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_all_five_alerts_present(self) -> None:
+        for name in self.ALL:
+            self._one(name)
+
+    def test_reauth_alert_is_binary_gauge_critical(self) -> None:
+        rule = self._one(self.REAUTH)
+        self.assertIn("alphalens_saxo_reauth_required > 0", rule["expr"])
+        self.assertEqual(rule.get("labels", {}).get("severity"), "critical")
+
+    def test_refresh_stale_is_the_load_bearing_timestamp_rule(self) -> None:
+        rule = self._one(self.STALE)
+        expr = rule["expr"]
+        self.assertIn("alphalens_saxo_token_chain_last_refresh_timestamp_seconds", expr)
+        # Threshold-only (the absent() guard lives in ChainStateMissing).
+        self.assertNotIn("absent(", expr)
+        self.assertRegex(
+            expr,
+            r"time\(\)\s*-\s*alphalens_saxo_token_chain_last_refresh_timestamp_seconds"
+            rf"(\{{[^}}]*\}})?\s*>\s*{self.STALE_THRESHOLD}\b",
+            f"stale expr must be `time() - <last_refresh>[{{...}}] > {self.STALE_THRESHOLD}`.",
+        )
+        self.assertEqual(rule.get("labels", {}).get("severity"), "critical")
+        self.assertIn(
+            "humanizeDuration",
+            rule.get("annotations", {}).get("description", ""),
+            "stale alert must report the real staleness duration.",
+        )
+
+    def test_bootstrap_alert_targets_chain_state_2(self) -> None:
+        rule = self._one(self.BOOTSTRAP)
+        self.assertIn("alphalens_saxo_chain_state == 2", rule["expr"])
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertEqual(rule.get("for"), "5m")
+
+    def test_chain_state_missing_is_live_critical_absent(self) -> None:
+        rule = self._one(self.MISSING)
+        expr = rule["expr"]
+        self.assertIn('absent(alphalens_saxo_chain_state{environment="live"})', expr)
+        self.assertEqual(rule.get("labels", {}).get("severity"), "critical")
+        # absent() fires with value 1, so no humanizeDuration (misleading 1s).
+        ann = rule.get("annotations", {})
+        for field in ("summary", "description"):
+            self.assertNotIn("humanizeDuration", ann.get(field, ""))
+
+    def test_full_auth_aging_threshold_is_six_days(self) -> None:
+        rule = self._one(self.FULL_AUTH)
+        expr = rule["expr"]
+        self.assertIn("alphalens_saxo_token_chain_last_full_auth_timestamp_seconds", expr)
+        self.assertRegex(expr, rf">\s*{self.FULL_AUTH_THRESHOLD}\b")
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+
+    def test_all_route_to_telegram_with_saxo_unit_label(self) -> None:
+        for name in self.ALL:
+            labels = self._one(name).get("labels", {})
+            self.assertEqual(labels.get("route"), "telegram", f"{name} must route to telegram")
+            self.assertEqual(labels.get("unit"), "saxo-refresh", f"{name} must carry unit label")
+
+    def test_alertnames_distinct_from_cron_alertnames(self) -> None:
+        cron = {"AlphalensJobStale", "AlphalensJobMetricMissing", "AlphalensJobFailed"}
+        for name in self.ALL:
+            self.assertNotIn(name, cron)
+
+    def test_no_saxo_rule_carries_a_job_label_in_expr(self) -> None:
+        # A job= label would falsely register these in the cron job-keyed parity
+        # tests and demand a phantom AlphalensJobStale rule. The unit label is
+        # for Alertmanager grouping only; the expr must not filter on job=.
+        for name in self.ALL:
+            self.assertIsNone(
+                re.search(r'job="[^"]+"', self._one(name).get("expr", "")),
+                f"{name} expr must not carry a job= selector.",
+            )
+
+    def test_saxo_refresh_not_in_active_cron_jobs(self) -> None:
+        # The saxo-refresh unit's domain gauges are covered by the distinct
+        # alert family above, NOT the cron job-stale machinery — keep it out of
+        # ACTIVE_JOBS so no phantom AlphalensJobStale rule is demanded.
+        self.assertNotIn("saxo-refresh", ACTIVE_JOBS)
+
+
 if __name__ == "__main__":
     unittest.main()

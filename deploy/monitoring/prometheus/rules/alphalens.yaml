@@ -634,3 +634,90 @@ groups:
         annotations:
           summary: "paper account {{ $labels.account }} has a filled position PARTIALLY uncovered by its protective stop"
           description: "alphalens_paper_uncovered_sl_qty has stayed > 0 across more than one reconcile pass — a filled paper position is PARTIALLY uncovered by its protective stop legs (the live position exceeds the summed live SL-leg qty). Investigate whether an OCO stop leg was cancelled instead of adjusted on a partial TP fill; check `journalctl --user -u alphalens-paper-reconcile.service` on the VPS and the ledger SL orders for the account. Until cleared part of the position sits without a disaster stop."
+
+      # ---------------------------------------------------------------
+      # Saxo OpenAPI token-chain health
+      # (docs/research/saxo_client_token_renewal_design_2026_06_03.md).
+      # ---------------------------------------------------------------
+      #
+      # The alphalens-saxo-refresh keep-alive emits the alphalens_saxo_* domain
+      # gauges every 5-min fire. These alerts read those gauges. DISTINCT
+      # alertnames + NO ``job=`` label keep them OUT of the cron-keyed
+      # AlphalensJobStale / AlphalensJobMetricMissing enumerations (the token
+      # chain is a per-environment domain signal, not a unit last_success), so
+      # they carry their OWN regression pins in test_monitoring_alerts.py.
+
+      # The chain is permanently broken (refresh hit invalid_grant). A human
+      # must re-auth at a browser — trading is HALTED until then. reauth_reason
+      # distinguishes expired_locally (downtime) vs server_rejected
+      # (revoke/disclaimer). Binary gauge kept for back-compat with the simple
+      # alert; the tri-state chain_state carries the richer signal.
+      - alert: AlphalensSaxoReauthRequired
+        expr: alphalens_saxo_reauth_required > 0
+        for: 0m
+        labels:
+          severity: critical
+          route: telegram
+          unit: saxo-refresh
+        annotations:
+          summary: "Saxo {{ $labels.environment }} token chain BROKEN — manual re-login required"
+          description: "Refresh hit invalid_grant. reauth_reason distinguishes expired_locally (downtime) vs server_rejected (revoke/disclaimer). Run `alphalens saxo auth --env {{ $labels.environment }}` on the VPS. Trading HALTED until then."
+
+      # THE load-bearing rule: a stalled keep-alive timer leaves a frozen
+      # last_refresh timestamp that grows unboundedly under time() — exactly
+      # the repo's AlphalensJobStale pattern. Fires at >30min (>6 missed 5-min
+      # fires) while the token is usually still alive (inside the ~40min
+      # refresh life) so re-login is calm. Catches a dead timer the
+      # ReauthRequired / ChainStateMissing pair is blind to.
+      - alert: AlphalensSaxoRefreshStale
+        expr: time() - alphalens_saxo_token_chain_last_refresh_timestamp_seconds > 1800
+        for: 0m
+        labels:
+          severity: critical
+          route: telegram
+          unit: saxo-refresh
+        annotations:
+          summary: "Saxo {{ $labels.environment }} refresh has not advanced for >30min — keep-alive may be dead while the token is still alive"
+          description: "alphalens_saxo_token_chain_last_refresh_timestamp_seconds has been stale for {{ $value | humanizeDuration }}. The 5-min keep-alive likely stopped; the refresh token still has runway, so re-auth / restart now while it is calm. Check `journalctl --user -u alphalens-saxo-refresh.service` on the VPS."
+
+      # No token chain on disk (fresh deploy / never bootstrapped). chain_state
+      # tri-state: 0 healthy / 1 reauth / 2 bootstrap / 3 corrupt.
+      - alert: AlphalensSaxoBootstrapNeeded
+        expr: alphalens_saxo_chain_state == 2
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: saxo-refresh
+        annotations:
+          summary: "Saxo {{ $labels.environment }} has no token chain — run `alphalens saxo auth --env {{ $labels.environment }}`"
+          description: "alphalens_saxo_chain_state is 2 (bootstrap_needed) for the {{ $labels.environment }} environment. Bootstrap the chain on the VPS before any trading path runs."
+
+      # Live blind-spot promoted to critical: the LIVE chain_state series is
+      # absent (the keep-alive never ran for live, or the textfile collector is
+      # misconfigured). A missing live signal is itself an outage.
+      - alert: AlphalensSaxoChainStateMissing
+        expr: absent(alphalens_saxo_chain_state{environment="live"})
+        for: 10m
+        labels:
+          severity: critical
+          route: telegram
+          unit: saxo-refresh
+        annotations:
+          summary: "Saxo live chain_state series is ABSENT — the keep-alive may never have emitted for live"
+          description: "absent(alphalens_saxo_chain_state{environment=\"live\"}) — no live token-chain health signal is reaching Prometheus. Check the saxo-refresh unit + the textfile collector on the VPS."
+
+      # Weekly-reauth hygiene: proactively absorb Saxo disclaimer
+      # re-confirmations (which terminate the chain ~weekly) by re-auth'ing
+      # before they break a live session. Fires at 6 days since the last full
+      # browser auth.
+      - alert: AlphalensSaxoFullAuthAging
+        expr: time() - alphalens_saxo_token_chain_last_full_auth_timestamp_seconds > 518400
+        for: 0m
+        labels:
+          severity: warning
+          route: telegram
+          unit: saxo-refresh
+        annotations:
+          summary: "Saxo {{ $labels.environment }} full browser auth is >6 days old — proactively re-auth"
+          description: "The last full browser auth was {{ $value | humanizeDuration }} ago. Saxo recommends weekly re-auth; run `alphalens saxo auth --env {{ $labels.environment }}` to absorb a disclaimer termination before it breaks a live session."
