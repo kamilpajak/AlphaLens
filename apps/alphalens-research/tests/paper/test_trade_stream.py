@@ -6,7 +6,6 @@ worker tick, health emit, shutdown guards) are exercised directly with injected
 reconcile / emit / clock fakes.
 """
 
-import importlib.util
 import sqlite3
 import unittest
 from pathlib import Path
@@ -204,10 +203,25 @@ class TestShutdownGuards(unittest.TestCase):
 
     def test_on_signal_sets_stop_and_wake(self):
         d = _make_daemon()
-        d._stream._loop = None
         d._on_signal(15, None)
         self.assertTrue(d._stop.is_set())
         self.assertTrue(d._wake.is_set())
+
+    def test_on_signal_does_not_touch_the_stream(self):
+        # Deadlock guard: the signal handler runs on the loop thread, and
+        # stream.stop() blocks on the loop — calling it here would deadlock.
+        # The worker thread (a non-loop thread) is the only stream-stopper.
+        d = _make_daemon()
+        d._stream._loop = SimpleNamespace(is_running=lambda: True)
+        d._on_signal(15, None)
+        d._stream.stop.assert_not_called()
+
+    def test_worker_loop_stops_stream_on_exit(self):
+        d = _make_daemon()
+        d._stream._loop = SimpleNamespace(is_running=lambda: True)
+        d._stop.set()  # so the loop body never ticks; goes straight to stop
+        d._reconcile_loop()
+        d._stream.stop.assert_called_once()
 
 
 class TestRunOrdering(unittest.TestCase):
@@ -237,8 +251,7 @@ class TestRunOrdering(unittest.TestCase):
 
 class TestSingleWriterNegativeControl(unittest.TestCase):
     def test_daemon_module_never_writes_the_ledger_directly(self):
-        path = Path(importlib.util.find_spec("alphalens_pipeline.paper.trade_stream").origin)
-        src = path.read_text()
+        src = Path(str(ts.__file__)).read_text()
         # The daemon is a trigger, not a writer: it must not open the ledger or
         # emit SQL itself — every write goes through reconcile_orders.
         for forbidden in (

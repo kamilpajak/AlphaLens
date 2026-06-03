@@ -215,6 +215,11 @@ class PaperTradeStreamDaemon:
     def _reconcile_loop(self) -> None:
         while not self._stop.is_set():
             self._tick()
+        # Stop the SDK stream from HERE — the worker is a non-loop thread, so
+        # stream.stop() (which does run_coroutine_threadsafe(...).result()) can
+        # complete. Calling it from _on_signal would run on the loop thread and
+        # deadlock on .result() (the loop waiting on itself).
+        self._stop_stream()
 
     # -- observability --------------------------------------------------
 
@@ -250,7 +255,10 @@ class PaperTradeStreamDaemon:
         )
         self._worker.start()
         try:
-            self._stream.run()  # blocking; owns its own asyncio loop
+            # Race guard: a signal during the connect window already set _stop;
+            # skip the blocking run() (nothing would stop it) and go to cleanup.
+            if not self._stop.is_set():
+                self._stream.run()  # blocking; owns its own asyncio loop
         finally:
             self._shutdown()
 
@@ -265,9 +273,11 @@ class PaperTradeStreamDaemon:
                 logger.debug("could not install handler for %s", sig)
 
     def _on_signal(self, _signum: int, _frame: Any) -> None:
+        # Signal handlers run on the MAIN (loop) thread. Only set flags here:
+        # the worker thread stops the SDK stream (see _reconcile_loop), because
+        # stream.stop() blocks on the loop and would deadlock if called here.
         self._stop.set()
         self._wake.set()
-        self._stop_stream()
 
     def _stop_stream(self) -> None:
         # Guard the pre-subscribe window where the SDK loop is not yet running:
