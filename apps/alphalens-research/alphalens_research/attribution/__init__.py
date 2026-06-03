@@ -11,7 +11,6 @@ Modules:
 - factor_analysis  — Carhart-4F + FF5+UMD α/β + HAC SEs
 - metrics          — Sharpe, Rank IC, turnover, concentration
 - regime           — bull/bear/flat split and per-regime α/Sharpe
-- decision_matrix  — 8-gate GO/KILL/PAPER_TRACK evaluator
 - diagnostics      — IC by decile, horizon-IC, bear-regime decomposition
 - report           — Markdown/CSV report builder consuming all the above
 
