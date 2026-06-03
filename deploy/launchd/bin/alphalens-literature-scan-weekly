@@ -1,4 +1,0 @@
-#!/bin/bash
-# Weekly RSS scan — Perplexity medium-context, top-3 papers, recency=week.
-# Output: docs/research/literature_review/weekly/YYYY-Www.md + Telegram digest.
-exec /Users/jacoren/Developer/Personal/AlphaLens/.venv/bin/alphalens literature scan --window weekly "$@"

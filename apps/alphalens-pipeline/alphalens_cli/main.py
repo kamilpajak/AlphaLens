@@ -7,7 +7,7 @@ Top-level commands:
 
 Groups:
     edgar/              — Layer 1 SEC EDGAR event detection (LIVE)
-    literature/         — Perplexity scan via launchd (LIVE)
+    literature/         — Perplexity scan via VPS systemd (LIVE)
     preregister/        — pre-registration ledger (multiple-testing accountability)
     thematic/           — Layer 2-5 thematic event pipeline (LIVE)
 """
