@@ -364,6 +364,7 @@ jobs:
           OPENROUTER_LIVE_TEST: "1"
           POLYGON_LIVE_TEST: "1"
           YFINANCE_LIVE_TEST: "1"
+          NVDA_QUBT_LIVE_TEST: "1"
           SEC_EDGAR_USER_AGENT: ${{ secrets.SEC_EDGAR_USER_AGENT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
