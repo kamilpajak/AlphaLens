@@ -721,3 +721,52 @@ groups:
         annotations:
           summary: "Saxo {{ $labels.environment }} full browser auth is >6 days old — proactively re-auth"
           description: "The last full browser auth was {{ $value | humanizeDuration }} ago. Saxo recommends weekly re-auth; run `alphalens saxo auth --env {{ $labels.environment }}` to absorb a disclaimer termination before it breaks a live session."
+
+      # ---------------------------------------------------------------
+      # Alpaca trade_updates daemon (alphalens-paper-trade-stream.service) —
+      # the always-on WebSocket that fires reconcile sub-second on a fill so a
+      # filled position is protected without waiting up to 30 min for the poll.
+      # DISTINCT alertnames + NO job= label so these stay OUT of the cron-keyed
+      # AlphalensJobStale enum (the long-running daemon has no oneshot success,
+      # so it is EXEMPT from the per-fire cron-health hook — same as the VIX
+      # cache + form4-backfill). The daemon emits its own freshness gauges
+      # inline; the 30-min reconcile poll remains the hard backstop, so a daemon
+      # outage degrades to poll latency, never to no-protection.
+      #
+      # Alert on last-SUCCESSFUL-reconcile age, NOT last-event age: trade_updates
+      # is account-scoped and legitimately silent on a quiet weekend, but the
+      # worker's ~75s periodic safety resync keeps advancing last_reconcile while
+      # the loop genuinely cycles — so staleness means the process died or the
+      # consumer wedged, not "no trades today".
+      - alert: AlphalensPaperTradeStreamDown
+        expr: alphalens_paper_trade_stream_connected == 0
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: paper-trade-stream
+        annotations:
+          summary: "Alpaca trade_updates daemon disconnected (account {{ $labels.account }})"
+          description: "The trade_updates WebSocket has reported disconnected for >5m. Filled positions revert to up-to-30-min poll-latency protection until it reconnects. Check `journalctl --user -u alphalens-paper-trade-stream.service` on the VPS."
+
+      - alert: AlphalensPaperTradeStreamStale
+        expr: time() - alphalens_paper_trade_stream_last_reconcile_timestamp_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: paper-trade-stream
+        annotations:
+          summary: "Alpaca trade_updates daemon stale > 10m (account {{ $labels.account }})"
+          description: "Last successful reconcile was {{ $value | humanizeDuration }} ago; the ~75s periodic safety resync should advance it well within 10m. The daemon process likely died or the WS consumer wedged — filled positions fall back to the 30-min poll. Restart alphalens-paper-trade-stream.service on the VPS."
+
+      - alert: AlphalensPaperTradeStreamMetricMissing
+        expr: absent(alphalens_paper_trade_stream_last_reconcile_timestamp_seconds)
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: paper-trade-stream
+        annotations:
+          summary: "Alpaca trade_updates daemon freshness metric missing"
+          description: "No trade_updates last-reconcile metric. The daemon has not run a successful reconcile since metrics were enabled, or the textfile collector / scrape is broken. The 30-min poll still protects positions. Clears after the first successful daemon reconcile."

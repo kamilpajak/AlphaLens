@@ -33,8 +33,10 @@ def _install_fake_alpaca(target: dict) -> tuple[MagicMock, MagicMock, MagicMock]
     fake_trading_client = types.ModuleType("alpaca.trading.client")
     fake_trading_requests = types.ModuleType("alpaca.trading.requests")
     fake_trading_enums = types.ModuleType("alpaca.trading.enums")
+    fake_trading_stream = types.ModuleType("alpaca.trading.stream")
 
     fake_trading_client.TradingClient = MagicMock(name="TradingClient")
+    fake_trading_stream.TradingStream = MagicMock(name="TradingStream")
     fake_trading_requests.LimitOrderRequest = MagicMock(name="LimitOrderRequest")
     fake_trading_requests.MarketOrderRequest = MagicMock(name="MarketOrderRequest")
     fake_trading_requests.StopOrderRequest = MagicMock(name="StopOrderRequest")
@@ -65,10 +67,12 @@ def _install_fake_alpaca(target: dict) -> tuple[MagicMock, MagicMock, MagicMock]
     target["alpaca.trading.client"] = fake_trading_client
     target["alpaca.trading.requests"] = fake_trading_requests
     target["alpaca.trading.enums"] = fake_trading_enums
+    target["alpaca.trading.stream"] = fake_trading_stream
     fake_alpaca.trading = fake_trading
     fake_trading.client = fake_trading_client
     fake_trading.requests = fake_trading_requests
     fake_trading.enums = fake_trading_enums
+    fake_trading.stream = fake_trading_stream
 
     return fake_trading_client, fake_trading_requests, fake_trading_enums
 

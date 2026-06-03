@@ -428,6 +428,57 @@ def reconcile(
         typer.echo(f"  · {outcome.alpaca_order_id[:12]}  {' '.join(suffix_parts)}")
 
 
+@paper_app.command("trade-stream")
+def trade_stream(
+    ledger_path: Path | None = typer.Option(
+        None,
+        "--ledger",
+        help=_LEDGER_HELP,
+    ),
+    use_test_account: bool = typer.Option(
+        False,
+        "--use-test-account",
+        help="Route through ALPACA_TEST_* account (dev sandbox).",
+    ),
+    platform: str = typer.Option(
+        "alpaca",
+        "--platform",
+        help="Paper-trading platform to route orders to. Only 'alpaca' today.",
+    ),
+) -> None:
+    """Always-on Alpaca ``trade_updates`` daemon — sub-second fill detection.
+
+    Holds one account-scoped WebSocket and, on a fill / partial_fill / cancel /
+    etc., fires the SAME ``reconcile_orders`` the 30-min poll fires — within
+    seconds instead of up to ~30 min. This collapses the naked-protection
+    window (a filled position with no disaster stop) at the opening cross.
+
+    Blocking: runs until SIGTERM (systemd stop). NO market-closed gate — the
+    daemon is always-on and must catch a Friday-fills / after-hours fill; the
+    reconcile no-ops when there is nothing to do. Keep the 30-min reconcile
+    timer running as the gap-recovery + wall-clock backstop.
+    """
+    from alphalens_pipeline.data.alt_data.alpaca_client import get_default_alpaca_client
+    from alphalens_pipeline.paper.broker import get_default_broker_client
+    from alphalens_pipeline.paper.constants import DEFAULT_LEDGER_RELPATH
+    from alphalens_pipeline.paper.trade_stream import PaperTradeStreamDaemon
+
+    resolved_ledger = (
+        ledger_path if ledger_path is not None else Path.home() / DEFAULT_LEDGER_RELPATH
+    )
+    profile = "test" if use_test_account else "main"
+    broker = get_default_broker_client(platform=platform, profile=profile)
+    stream = get_default_alpaca_client(profile=profile).trade_stream()
+    daemon = PaperTradeStreamDaemon(
+        stream=stream,
+        broker=broker,
+        ledger_path=resolved_ledger,
+        account=profile,
+    )
+    typer.echo(f"paper trade-stream (profile={profile}): connecting trade_updates...")
+    daemon.run()
+
+
 @paper_app.command("report")
 def report(
     date: str | None = typer.Option(
