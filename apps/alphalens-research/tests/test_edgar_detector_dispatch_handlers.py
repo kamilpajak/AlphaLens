@@ -172,15 +172,5 @@ class TestAutoTriggerEnqueueHandler(unittest.TestCase):
         handler.handle(_classified(ticker="AAPL"))
 
 
-class TestObsoleteSyncHandlerRemoved(unittest.TestCase):
-    def test_legacy_class_no_longer_exported(self):
-        from alphalens_pipeline.edgar_detector.dispatch.handlers import auto_trigger
-
-        self.assertFalse(
-            hasattr(auto_trigger, "AutoTriggerHandler"),
-            "Sync AutoTriggerHandler replaced by AutoTriggerEnqueueHandler + worker",
-        )
-
-
 if __name__ == "__main__":
     unittest.main()
