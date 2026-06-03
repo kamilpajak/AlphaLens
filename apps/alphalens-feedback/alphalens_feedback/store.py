@@ -276,6 +276,16 @@ _SCHEMA_DDL = (
         shadow_return REAL,
         realized_return REAL,
         outcome_computed_at TEXT,
+        sequence_str TEXT,
+        mfe REAL,
+        mae REAL,
+        forward_return REAL,
+        ladder_classification TEXT,
+        blended_entry REAL,
+        realized_r REAL,
+        horizon_open TEXT,
+        ambiguous_bars INTEGER,
+        ratchet_realized_r REAL,
         UNIQUE(brief_date, ticker, theme)
     )
     """,
@@ -289,8 +299,10 @@ _SCHEMA_DDL = (
 # ``realized_return`` (PR-3) so it is a decimal fraction unit-consistent with
 # ``shadow_return`` for the §6 execution-gap subtraction. 3 = v3 click-time
 # brief-metadata columns added (Variant A) — stamped from the Brief on every
-# insert (NOT carried-forward like the job-set outcome columns).
-_SCHEMA_GENERATION = 3
+# insert (NOT carried-forward like the job-set outcome columns). 4 = ladder-replay
+# outcome columns added (broker-free price-path replay) — job-set by the nightly
+# ladder backfill, like the v2 outcome columns (carried-forward on upsert).
+_SCHEMA_GENERATION = 4
 
 # v2 outcome-join columns, as (name, sqlite_type). Present in ``_SCHEMA_DDL``
 # above for fresh databases AND added to legacy v1 databases by
@@ -317,6 +329,26 @@ _BRIEF_METADATA_COLUMNS: tuple[tuple[str, str], ...] = (
     ("cohort_size_in_day", "INTEGER"),
     ("gate_verdict_json", "TEXT"),
     ("brief_model_used", "TEXT"),
+)
+
+# Generation 4 ladder-replay outcome columns, as (name, sqlite_type). Same
+# single-source-of-truth role as ``_OUTCOME_COLUMNS``: present in ``_SCHEMA_DDL``
+# for fresh databases AND added to gen-3 databases by ``_migrate_schema`` via
+# ``ALTER TABLE ADD COLUMN``. Job-set by the nightly broker-free ladder backfill
+# (``alphalens_pipeline.feedback.ladder_backfill``), never by the user POST path.
+# ``horizon_open`` is stored as TEXT (str of the bool) so the engine's tri-state
+# (True / False / never-replayed-NULL) survives the round-trip.
+_LADDER_OUTCOME_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("sequence_str", "TEXT"),
+    ("mfe", "REAL"),
+    ("mae", "REAL"),
+    ("forward_return", "REAL"),
+    ("ladder_classification", "TEXT"),
+    ("blended_entry", "REAL"),
+    ("realized_r", "REAL"),
+    ("horizon_open", "TEXT"),
+    ("ambiguous_bars", "INTEGER"),
+    ("ratchet_realized_r", "REAL"),
 )
 
 
@@ -356,6 +388,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     Generation 3 (v3 Variant A) adds the click-time brief-metadata columns
     (``_BRIEF_METADATA_COLUMNS``) via the same idempotent table_info-guarded
     ADD COLUMN loop as the outcome columns.
+
+    Generation 4 (ladder replay) adds the broker-free price-path replay outcome
+    columns (``_LADDER_OUTCOME_COLUMNS``) via the same idempotent table_info-
+    guarded ADD COLUMN loop. They are job-set by the nightly ladder backfill
+    (carried-forward on upsert like the v2 outcome columns), never user-written.
     """
     existing = {row[1] for row in conn.execute("PRAGMA table_info(decisions)")}
     # gen 1 -> gen 2: realized_pnl (dollars, never populated) -> realized_return
@@ -372,6 +409,12 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     # gen 2 -> gen 3: v3 click-time brief-metadata columns. Same idempotent
     # table_info-guarded ADD COLUMN pattern as the outcome loop above.
     for name, sql_type in _BRIEF_METADATA_COLUMNS:
+        if name not in existing:
+            # Identifiers are module constants, not user input — safe to inline.
+            conn.execute(f"ALTER TABLE decisions ADD COLUMN {name} {sql_type}")
+    # gen 3 -> gen 4: ladder-replay outcome columns. Same idempotent
+    # table_info-guarded ADD COLUMN pattern.
+    for name, sql_type in _LADDER_OUTCOME_COLUMNS:
         if name not in existing:
             # Identifiers are module constants, not user input — safe to inline.
             conn.execute(f"ALTER TABLE decisions ADD COLUMN {name} {sql_type}")
@@ -440,17 +483,22 @@ class FeedbackStore:
         """
         existing = self.conn.execute(
             """SELECT id, outcome_plan_id, fill_status, exit_kind,
-                      shadow_return, realized_return, outcome_computed_at
+                      shadow_return, realized_return, outcome_computed_at,
+                      sequence_str, mfe, mae, forward_return, ladder_classification,
+                      blended_entry, realized_r, horizon_open, ambiguous_bars,
+                      ratchet_realized_r
                FROM decisions WHERE brief_date = ? AND ticker = ? AND theme = ?""",
             (decision.brief_date.isoformat(), decision.ticker, decision.theme),
         ).fetchone()
         was_created = existing is None
         target_id = existing["id"] if existing else decision.id
-        # Outcome columns are job-set by the post-hoc outcome-join, never by
-        # the user POST path. On upsert (a user flipping interested ->
-        # dismissed) INSERT OR REPLACE rewrites the whole row, so carry the
-        # existing outcome values forward rather than letting them revert to
-        # NULL. A brand-new row has no outcome yet (all NULL).
+        # Outcome + ladder columns are job-set by the post-hoc outcome-join and
+        # the nightly ladder backfill, never by the user POST path. On upsert (a
+        # user flipping interested -> dismissed) INSERT OR REPLACE rewrites the
+        # WHOLE row, so carry both groups of job-set values forward rather than
+        # letting them revert to NULL. A brand-new row has none yet (all NULL).
+        # (zen CRITICAL: omitting the ladder group here silently wiped a
+        # previously-replayed ladder outcome on any user re-click.)
         if existing is not None:
             outcome_values = (
                 existing["outcome_plan_id"],
@@ -460,8 +508,10 @@ class FeedbackStore:
                 existing["realized_return"],
                 existing["outcome_computed_at"],
             )
+            ladder_values = tuple(existing[name] for name, _t in _LADDER_OUTCOME_COLUMNS)
         else:
             outcome_values = (None, None, None, None, None, None)
+            ladder_values = (None,) * len(_LADDER_OUTCOME_COLUMNS)
         self.conn.execute(
             """
             INSERT OR REPLACE INTO decisions (
@@ -472,8 +522,12 @@ class FeedbackStore:
                 layer4_score, rank_in_day, cohort_size_in_day,
                 gate_verdict_json, brief_model_used,
                 outcome_plan_id, fill_status, exit_kind,
-                shadow_return, realized_return, outcome_computed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                shadow_return, realized_return, outcome_computed_at,
+                sequence_str, mfe, mae, forward_return, ladder_classification,
+                blended_entry, realized_r, horizon_open, ambiguous_bars,
+                ratchet_realized_r
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 target_id,
@@ -492,13 +546,14 @@ class FeedbackStore:
                 decision.entry_price,
                 decision.market_regime_at_entry,
                 # v3 brief-metadata: written DIRECTLY from the Decision on every
-                # insert (click-time), NOT carried-forward like outcome_values.
+                # insert (click-time), NOT carried-forward like the job-set groups.
                 decision.layer4_score,
                 decision.rank_in_day,
                 decision.cohort_size_in_day,
                 decision.gate_verdict_json,
                 decision.brief_model_used,
                 *outcome_values,
+                *ladder_values,
             ),
         )
         return target_id, was_created
@@ -552,6 +607,62 @@ class FeedbackStore:
         if realized_return is not _UNSET:
             set_clauses.append("realized_return = ?")
             params.append(realized_return)
+        params.append(decision_id)
+        self.conn.execute(
+            # set_clauses are module-fixed identifiers, never user input; only
+            # the VALUES are parameterised (? placeholders).
+            f"UPDATE decisions SET {', '.join(set_clauses)} WHERE id = ?",  # nosec B608
+            params,
+        )
+
+    def stamp_ladder_outcome(
+        self,
+        decision_id: str,
+        *,
+        sequence_str: str | None = _UNSET,
+        mfe: float | None = _UNSET,
+        mae: float | None = _UNSET,
+        forward_return: float | None = _UNSET,
+        ladder_classification: str | None = _UNSET,
+        blended_entry: float | None = _UNSET,
+        realized_r: float | None = _UNSET,
+        horizon_open: str | None = _UNSET,
+        ambiguous_bars: int | None = _UNSET,
+        ratchet_realized_r: float | None = _UNSET,
+    ) -> None:
+        """Stamp the broker-free ladder-replay outcome onto a decision (gen 4).
+
+        Mirrors :meth:`stamp_outcome` exactly: a targeted ``UPDATE`` rather than
+        an :meth:`insert` rebuild (so ``__post_init__`` does NOT re-run and a
+        legacy row stays stampable), holding the lock only per-decision, and
+        naturally idempotent. Every field uses the ``_UNSET`` sentinel so a
+        two-pass write (e.g. the cheap substrate pass then the as-specified pass)
+        leaves omitted columns untouched, and an explicit ``None`` (e.g. a
+        BAD_GEOMETRY ``realized_r``) is written rather than silently dropped.
+        ``horizon_open`` is stored as TEXT (``str(bool)``).
+        """
+        candidates: list[tuple[str, object]] = [
+            ("sequence_str", sequence_str),
+            ("mfe", mfe),
+            ("mae", mae),
+            ("forward_return", forward_return),
+            ("ladder_classification", ladder_classification),
+            ("blended_entry", blended_entry),
+            ("realized_r", realized_r),
+            ("horizon_open", horizon_open),
+            ("ambiguous_bars", ambiguous_bars),
+            ("ratchet_realized_r", ratchet_realized_r),
+        ]
+        set_clauses: list[str] = []
+        params: list[object] = []
+        for name, value in candidates:
+            if value is not _UNSET:
+                # Column names are module-fixed identifiers, not user input —
+                # safe to inline; only the VALUES are parameterised.
+                set_clauses.append(f"{name} = ?")
+                params.append(value)
+        if not set_clauses:
+            return  # all-unset → no-op, never an empty UPDATE
         params.append(decision_id)
         self.conn.execute(
             # set_clauses are module-fixed identifiers, never user input; only
@@ -623,6 +734,29 @@ class FeedbackStore:
             seen.add(key)
             out.append((r["regime"], r["fill_status"], r["shadow_return"], r["realized_return"]))
         return out
+
+    def iter_decisions_for_ladder(self, *, lookback_start: dt.date) -> list[tuple[str, str, str]]:
+        """Project ``(id, brief_date, ticker)`` for rows awaiting a ladder replay.
+
+        Selects decisions whose ``brief_date >= lookback_start`` AND whose
+        ``ladder_classification`` is still NULL (not yet replayed), ordered
+        newest-first so the freshest just-matured dates are stamped before an
+        older already-replayed tail (consistent with the shadow-return sweep's
+        newest→oldest ordering). The caller groups by ``(brief_date, ticker)``,
+        replays once per group, and stamps every member id.
+
+        Click-orthogonality: this projects ONLY id / brief_date / ticker — NEVER
+        a click column (action / dismiss_* / confidence_subjective). The ladder
+        replay is a job-set outcome path that must stay orthogonal to the human
+        click signal (v3 feedback-ledger orthogonality discipline).
+        """
+        rows = self.conn.execute(
+            "SELECT id, brief_date, ticker FROM decisions "
+            "WHERE brief_date >= ? AND ladder_classification IS NULL "
+            "ORDER BY brief_date DESC",
+            (lookback_start.isoformat(),),
+        ).fetchall()
+        return [(r["id"], r["brief_date"], r["ticker"]) for r in rows]
 
 
 def _row_to_decision(row: sqlite3.Row) -> Decision:

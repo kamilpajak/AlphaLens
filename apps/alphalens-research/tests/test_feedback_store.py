@@ -364,7 +364,7 @@ class TestOutcomeColumnsSchema(unittest.TestCase):
             path = Path(td) / "feedback.db"
             with FeedbackStore.open(path) as fb:
                 user_version = fb.conn.execute("PRAGMA user_version").fetchone()[0]
-                self.assertEqual(user_version, 3)
+                self.assertEqual(user_version, 4)
 
     def test_fresh_db_open_twice_does_not_raise_duplicate_column(self):
         # Migration must be idempotent: a fresh DB already carries the
@@ -405,7 +405,7 @@ class TestOutcomeColumnsSchema(unittest.TestCase):
             with FeedbackStore.open(path) as fb:
                 cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
                 self.assertTrue(_OUTCOME_COLUMN_NAMES.issubset(cols))
-                self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 3)
+                self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 4)
                 # legacy row still readable, outcome fields default NULL
                 legacy = fb.get("legacy-1")
                 self.assertIsNotNone(legacy)
@@ -438,7 +438,7 @@ class TestOutcomeColumnsSchema(unittest.TestCase):
                 cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
                 self.assertIn("realized_return", cols)
                 self.assertNotIn("realized_pnl", cols)
-                self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 3)
+                self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 4)
                 # legacy row still reads, realized_return defaults NULL
                 self.assertIsNone(fb.get("g1-1").realized_return)
 
@@ -573,7 +573,7 @@ class TestBriefMetadataColumns(unittest.TestCase):
         with FeedbackStore.open(self.path) as fb:
             cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
             self.assertTrue(_BRIEF_METADATA_COLUMN_NAMES.issubset(cols))
-            self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 3)
+            self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 4)
             # pre-existing row now carries the v3 columns as NULL
             legacy = fb.get("g2-1")
             self.assertIsNotNone(legacy)
@@ -1013,6 +1013,258 @@ class TestIterMaturedDecisions(unittest.TestCase):
                 rows = fb.iter_matured_decisions()
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0], ("mid", "FILLED", 0.05, 0.03))
+
+
+# gen-3 schema (v3 Variant A: 26 columns — gen-2 21 + 5 brief-metadata, NO
+# ladder-replay columns) — used to exercise the gen-3 -> gen-4 ADD COLUMN path.
+_GEN3_DECISIONS_DDL = """
+    CREATE TABLE decisions (
+        id TEXT PRIMARY KEY,
+        brief_date TEXT NOT NULL,
+        ticker TEXT NOT NULL,
+        theme TEXT NOT NULL,
+        surfaced_at TEXT NOT NULL,
+        action TEXT NOT NULL,
+        action_at TEXT NOT NULL,
+        dismiss_category TEXT,
+        dismiss_reason TEXT,
+        dismiss_note TEXT,
+        confidence_subjective INTEGER,
+        paper_trade_plan_id TEXT,
+        position_size_usd REAL,
+        entry_price REAL,
+        market_regime_at_entry TEXT,
+        layer4_score INTEGER,
+        rank_in_day INTEGER,
+        cohort_size_in_day INTEGER,
+        gate_verdict_json TEXT,
+        brief_model_used TEXT,
+        outcome_plan_id TEXT,
+        fill_status TEXT,
+        exit_kind TEXT,
+        shadow_return REAL,
+        realized_return REAL,
+        outcome_computed_at TEXT,
+        UNIQUE(brief_date, ticker, theme)
+    );
+"""
+
+_LADDER_OUTCOME_COLUMN_NAMES = {
+    "sequence_str",
+    "mfe",
+    "mae",
+    "forward_return",
+    "ladder_classification",
+    "blended_entry",
+    "realized_r",
+    "horizon_open",
+    "ambiguous_bars",
+    "ratchet_realized_r",
+}
+
+
+def _seed_decision_row(conn, decision_id: str) -> None:
+    conn.execute(
+        """INSERT INTO decisions(id, brief_date, ticker, theme, surfaced_at,
+                                  action, action_at)
+           VALUES (?, '2026-05-20', 'NVDA', 'ai',
+                   '2026-05-20T06:30:00+00:00', 'interested',
+                   '2026-05-20T08:00:00+00:00')""",
+        (decision_id,),
+    )
+
+
+class TestLadderOutcomeSchema(unittest.TestCase):
+    """gen-4 ladder-replay outcome columns: fresh DDL, gen-3 -> gen-4 ALTER,
+    CREATE/ALTER parity, and PRAGMA user_version bump."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.path = Path(self._td.name) / "feedback.db"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_fresh_db_has_ladder_columns_and_user_version_4(self):
+        with FeedbackStore.open(self.path) as fb:
+            cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
+            self.assertTrue(_LADDER_OUTCOME_COLUMN_NAMES.issubset(cols))
+            self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 4)
+
+    def test_gen3_db_gets_ladder_columns_via_alter_and_bumps_user_version(self):
+        import sqlite3
+
+        raw = sqlite3.connect(str(self.path))
+        raw.executescript(_GEN3_DECISIONS_DDL)
+        raw.execute("PRAGMA user_version = 3")
+        _seed_decision_row(raw, "g3-1")
+        raw.commit()
+        self.assertEqual(raw.execute("PRAGMA user_version").fetchone()[0], 3)
+        raw.close()
+
+        with FeedbackStore.open(self.path) as fb:
+            cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
+            self.assertTrue(_LADDER_OUTCOME_COLUMN_NAMES.issubset(cols))
+            self.assertEqual(fb.conn.execute("PRAGMA user_version").fetchone()[0], 4)
+            # pre-existing row gains the columns as NULL
+            row = fb.conn.execute(
+                "SELECT ladder_classification, realized_r FROM decisions WHERE id = 'g3-1'"
+            ).fetchone()
+            self.assertIsNone(row["ladder_classification"])
+            self.assertIsNone(row["realized_r"])
+
+    def test_open_twice_does_not_raise_duplicate_column(self):
+        with FeedbackStore.open(self.path):
+            pass
+        with FeedbackStore.open(self.path) as fb:  # must not raise
+            cols = {r[1] for r in fb.conn.execute("PRAGMA table_info(decisions)")}
+            self.assertTrue(_LADDER_OUTCOME_COLUMN_NAMES.issubset(cols))
+
+    def test_fresh_db_and_upgraded_gen3_table_info_identical(self):
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as td:
+            fresh_path = Path(td) / "fresh.db"
+            with FeedbackStore.open(fresh_path) as fb:
+                fresh = _normalized_table_info(fb.conn)
+
+            upgraded_path = Path(td) / "upgraded.db"
+            raw = sqlite3.connect(str(upgraded_path))
+            raw.executescript(_GEN3_DECISIONS_DDL)
+            raw.execute("PRAGMA user_version = 3")
+            raw.commit()
+            raw.close()
+            with FeedbackStore.open(upgraded_path) as fb:
+                upgraded = _normalized_table_info(fb.conn)
+
+        self.assertEqual(set(fresh), set(upgraded))
+        self.assertTrue(_LADDER_OUTCOME_COLUMN_NAMES.issubset(set(fresh)))
+        for col in fresh:
+            self.assertEqual(fresh[col], upgraded[col], f"column {col!r} diverges")
+
+
+class TestStampLadderOutcome(unittest.TestCase):
+    """gen-4 stamp_ladder_outcome: two-pass survival, all-unset no-op."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.path = Path(self._td.name) / "feedback.db"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _ladder_row(self, fb, decision_id: str):
+        return fb.conn.execute(
+            "SELECT sequence_str, realized_r, ladder_classification, horizon_open "
+            "FROM decisions WHERE id = ?",
+            (decision_id,),
+        ).fetchone()
+
+    def test_two_pass_first_value_survives(self):
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(_make_decision())
+            # pass 1: stamp sequence_str only
+            fb.stamp_ladder_outcome(row_id, sequence_str="E1->E2->TP1->SL")
+            # pass 2: stamp realized_r only — must NOT wipe sequence_str
+            fb.stamp_ladder_outcome(row_id, realized_r=-0.167)
+            row = self._ladder_row(fb, row_id)
+            self.assertEqual(row["sequence_str"], "E1->E2->TP1->SL")
+            self.assertAlmostEqual(row["realized_r"], -0.167)
+
+    def test_all_unset_is_noop(self):
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(_make_decision())
+            fb.stamp_ladder_outcome(row_id, sequence_str="E1->TP1")
+            before = self._ladder_row(fb, row_id)
+            # an all-unset call must not change anything (and must not error)
+            fb.stamp_ladder_outcome(row_id)
+            after = self._ladder_row(fb, row_id)
+            self.assertEqual(tuple(before), tuple(after))
+
+    def test_horizon_open_stored_as_text(self):
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(_make_decision())
+            fb.stamp_ladder_outcome(
+                row_id,
+                ladder_classification="OPEN",
+                horizon_open=str(True),
+            )
+            row = self._ladder_row(fb, row_id)
+            self.assertEqual(row["horizon_open"], "True")
+            self.assertEqual(row["ladder_classification"], "OPEN")
+
+    def test_upsert_preserves_existing_ladder_columns(self):
+        # zen CRITICAL: a user flipping interested -> dismissed re-POSTs through
+        # insert() AFTER the nightly ladder backfill stamped an outcome. The
+        # upsert must NOT wipe the gen-4 ladder columns back to NULL (job-set,
+        # never user-set) — exactly as the v2 outcome columns are preserved.
+        with FeedbackStore.open(self.path) as fb:
+            row_id, _ = fb.insert(_make_decision(action="interested"))
+            fb.stamp_ladder_outcome(
+                row_id,
+                sequence_str="E1->TP1->SL",
+                realized_r=-0.167,
+                ladder_classification="PARTIAL_TP_THEN_SL",
+                blended_entry=98.0,
+                ratchet_realized_r=0.25,
+            )
+            # user flips to dismissed (same brief_date, ticker, theme)
+            fb.insert(
+                _make_decision(
+                    action="dismissed",
+                    dismiss_category="thesis_setup",
+                    dismiss_reason="too_expensive",
+                )
+            )
+            row = fb.conn.execute(
+                "SELECT sequence_str, realized_r, ladder_classification, "
+                "blended_entry, ratchet_realized_r FROM decisions WHERE id = ?",
+                (row_id,),
+            ).fetchone()
+            self.assertEqual(row["sequence_str"], "E1->TP1->SL")
+            self.assertAlmostEqual(row["realized_r"], -0.167)
+            self.assertEqual(row["ladder_classification"], "PARTIAL_TP_THEN_SL")
+            self.assertAlmostEqual(row["blended_entry"], 98.0)
+            self.assertAlmostEqual(row["ratchet_realized_r"], 0.25)
+
+
+class TestIterDecisionsForLadder(unittest.TestCase):
+    """gen-4 iter_decisions_for_ladder: matured-window + NULL-classification gate,
+    and the 3-field click-orthogonal projection."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.path = Path(self._td.name) / "feedback.db"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_returns_only_unreplayed_in_window_three_fields(self):
+        with FeedbackStore.open(self.path) as fb:
+            # in-window, unreplayed
+            fb.insert(_make_decision(brief_date=dt.date(2026, 5, 28), ticker="AAA", theme="t1"))
+            # in-window but already replayed (classification set)
+            r2, _ = fb.insert(
+                _make_decision(brief_date=dt.date(2026, 5, 28), ticker="BBB", theme="t2")
+            )
+            fb.stamp_ladder_outcome(r2, ladder_classification="TP_FULL")
+            # out of window (older than lookback_start)
+            fb.insert(_make_decision(brief_date=dt.date(2026, 5, 10), ticker="CCC", theme="t3"))
+
+            rows = fb.iter_decisions_for_ladder(lookback_start=dt.date(2026, 5, 20))
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual(len(row), 3)  # id, brief_date, ticker only
+            _id, brief_date, ticker = row
+            self.assertEqual(brief_date, "2026-05-28")
+            self.assertEqual(ticker, "AAA")
+
+    def test_ordered_newest_first(self):
+        with FeedbackStore.open(self.path) as fb:
+            fb.insert(_make_decision(brief_date=dt.date(2026, 5, 25), ticker="OLD", theme="t1"))
+            fb.insert(_make_decision(brief_date=dt.date(2026, 5, 28), ticker="NEW", theme="t2"))
+            rows = fb.iter_decisions_for_ladder(lookback_start=dt.date(2026, 5, 20))
+            self.assertEqual([r[1] for r in rows], ["2026-05-28", "2026-05-25"])
 
 
 if __name__ == "__main__":
