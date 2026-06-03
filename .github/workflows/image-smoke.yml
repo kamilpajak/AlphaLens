@@ -76,7 +76,7 @@ jobs:
           docker run --rm --entrypoint python alphalens-pipeline:ci-smoke -c "
           import jsonschema, pandera, pandas, numpy, scipy, pyarrow, defusedxml, typer
           import yfinance, feedparser, alpaca, exchange_calendars, ivolatility
-          import google.genai, langchain_google_genai, json_repair, quiverquant
+          import httpx, yaml, json_repair, quiverquant
           import alphalens_feedback.store, alphalens_feedback.regime
           from alphalens_pipeline.feedback import outcome_join, shadow_return, execution_modes
           from alphalens_cli.main import app
