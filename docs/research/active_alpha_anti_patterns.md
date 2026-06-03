@@ -104,7 +104,7 @@ The postmortem documents *what failed* in five specific strategies. This catalog
 
 **Detection:**
 - Count `git log --oneline | grep -iE "(scorer|threshold|universe|weight|rebalance)"` on the strategy branch.
-- Count YAML config fingerprint changes (use `alphalens/archive/rotation/precommit.py` `ConfigFingerprint` pattern).
+- Count YAML config fingerprint changes (hash each commit's strategy config and count distinct fingerprints).
 - True `n` is closer to 15-30 than to 2-3 for any meaningful research program.
 
 **Mitigation:**
@@ -326,7 +326,7 @@ Before committing infrastructure work to a strategy idea:
 
 - **Postmortem narrative:** `docs/research/paradigm_failures_postmortem.md`
 - **Per-layer detailed audits:** `docs/research/layer2{b,d}_*.md`, `docs/research/multiple_testing_audit_2026-04.md`, `docs/research/pipeline_bias_repair_plan.md`, `docs/research/pit_universe_backtest.md`
-- **Reusable infrastructure:** `alphalens/backtest/{factor_analysis,multiple_testing,sharpe}.py`, `alphalens/archive/rotation/{sanity_checks,precommit,config}.py`, `alphalens/per_ticker_cost.py`
+- **Reusable infrastructure:** `alphalens_research/attribution/{factor_analysis,cost_model}.py`, `alphalens_research/backtest/metrics.py` (Sharpe / rank-IC), multiple-testing thresholds in the `phase-robust-backtesting` dep (ADR 0006). The old `alphalens/archive/rotation/*` helpers were removed per ADR 0010 — retrieve via git history.
 - **Methodology principles:** Postmortem §"Methodology principles" — applies to next idea
 
 ## Future additions
