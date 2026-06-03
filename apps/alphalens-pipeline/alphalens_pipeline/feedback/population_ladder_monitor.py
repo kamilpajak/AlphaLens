@@ -81,7 +81,7 @@ BarFetch = Callable[[str, dt.datetime, dt.datetime], Sequence[dict[str, Any]]]
 # night or two after it matures (and after VPS downtime). DELIBERATELY NOT
 # ``shadow_return.DEFAULT_LOOKBACK_DAYS`` (14) — that is the 5-session metric's
 # window and is far too short for the full-hold replay.
-_MONITOR_LOOKBACK_DAYS = 75
+MONITOR_LOOKBACK_DAYS = 75
 
 # Per-night hard cap on Polygon fetches. When exceeded the remaining tickers are
 # logged + DEFERRED (their prior rows carry forward) and retried next night —
@@ -429,7 +429,7 @@ def replay_population_ladders(
     briefs_dir: Path,
     *,
     end_date: dt.date | None = None,
-    lookback_days: int = _MONITOR_LOOKBACK_DAYS,
+    lookback_days: int = MONITOR_LOOKBACK_DAYS,
     store_dir: Path | None = None,
     bar_fetch: BarFetch | None = None,
     now: dt.datetime | None = None,
@@ -616,6 +616,12 @@ def _replay_candidate(
         )
         return None
     if not bars:
+        # No bars is treated as RETRYABLE (carry prior), NOT a terminal NO_DATA:
+        # a transient Polygon gap must never freeze a poisoned terminal (the
+        # cache-poisoning class). The cost is that a genuinely data-less ticker
+        # (delisted / no Polygon coverage) stays ONGOING until it ages out of the
+        # MONITOR_LOOKBACK_DAYS window — bounded, never unbounded, and surfaced by
+        # the report's `carried_forward` count rather than silently dropped.
         logger.warning("population-monitor: no bars for %s — carrying prior.", ticker)
         return None
 
@@ -669,7 +675,7 @@ def _finite(value: Any) -> float | None:
 def summarize_population_ladders(
     store_dir: Path,
     *,
-    lookback_days: int = _MONITOR_LOOKBACK_DAYS,
+    lookback_days: int = MONITOR_LOOKBACK_DAYS,
     exchange: str = DEFAULT_EXCHANGE,
 ) -> dict[str, Any]:
     """Read-only roll-up over the monitor parquet store.
@@ -738,6 +744,7 @@ def summarize_population_ladders(
 
 
 __all__ = [
+    "MONITOR_LOOKBACK_DAYS",
     "BarFetch",
     "PopulationMonitorReport",
     "replay_population_ladders",

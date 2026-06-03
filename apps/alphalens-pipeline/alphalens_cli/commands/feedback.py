@@ -251,7 +251,7 @@ def backfill_shadow_returns_command(
     _refresh_ladder_outcomes(ledger, briefs_dir, lookback_days=lookback_days)
     # Population ladder monitor (PR-2): the broker-free full-hold replay over EVERY
     # brief candidate, NOT just clicked decisions. It uses its OWN, much larger
-    # lookback (``_MONITOR_LOOKBACK_DAYS`` ≈ the 42-session hold), NOT the command's
+    # lookback (``MONITOR_LOOKBACK_DAYS`` ≈ the 42-session hold), NOT the command's
     # ``--lookback-days`` (which is the 5-session shadow_return's 14). Folded here so
     # it reuses the 06:30 UTC timer (no new systemd unit). Never raises.
     _refresh_population_ladders(briefs_dir)
@@ -323,7 +323,7 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     """Run the broker-free POPULATION ladder monitor (PR-2). Never raises.
 
     Replays EVERY brief candidate's ladder to terminal over the monitor's OWN
-    ~42-session lookback (``_MONITOR_LOOKBACK_DAYS``), independent of the
+    ~42-session lookback (``MONITOR_LOOKBACK_DAYS``), independent of the
     shadow-return 14-day window. Folded into the nightly tail so it reuses the
     06:30 UTC timer (no new systemd unit / alert rule). Intentionally swallow-all:
     a replay / Polygon failure must NOT change the command's exit behaviour or
@@ -331,11 +331,11 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     """
     try:
         from alphalens_pipeline.feedback.population_ladder_monitor import (
-            _MONITOR_LOOKBACK_DAYS,
+            MONITOR_LOOKBACK_DAYS,
             replay_population_ladders,
         )
 
-        reports = replay_population_ladders(briefs_dir, lookback_days=_MONITOR_LOOKBACK_DAYS)
+        reports = replay_population_ladders(briefs_dir, lookback_days=MONITOR_LOOKBACK_DAYS)
         terminal = sum(r.terminal for r in reports)
         ongoing = sum(r.ongoing for r in reports)
         typer.echo(

@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pandas as pd
 from alphalens_pipeline.feedback.population_ladder_monitor import (
-    _MONITOR_LOOKBACK_DAYS,
+    MONITOR_LOOKBACK_DAYS,
     replay_population_ladders,
     summarize_population_ladders,
 )
@@ -578,8 +578,8 @@ class TestLookbackConstant(unittest.TestCase):
     def test_monitor_lookback_is_distinct_and_large_enough(self):
         # The monitor uses its OWN lookback (>= ~60 calendar days for 42 sessions),
         # NOT shadow_return's 14-day window.
-        self.assertGreaterEqual(_MONITOR_LOOKBACK_DAYS, 60)
-        self.assertNotEqual(_MONITOR_LOOKBACK_DAYS, 14)
+        self.assertGreaterEqual(MONITOR_LOOKBACK_DAYS, 60)
+        self.assertNotEqual(MONITOR_LOOKBACK_DAYS, 14)
 
 
 if __name__ == "__main__":
