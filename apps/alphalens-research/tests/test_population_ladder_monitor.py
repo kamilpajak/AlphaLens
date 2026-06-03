@@ -219,6 +219,55 @@ class TestTerminalOutcomes(_MonitorTestBase):
         self.assertIsNotNone(row["open_r"])
         self.assertFalse(pd.isna(row["open_r"]))
 
+    def _no_fill_fetch(self, ticker, start, end):
+        # Price stays strictly ABOVE the E1 limit (100) across the whole window,
+        # so the dip-buy limit is never touched -> NO_FILL.
+        base = int(start.timestamp() * 1000)
+        end_ms = int(end.timestamp() * 1000)
+        day = 86_400_000
+        bars, t = [], base
+        while t < end_ms:
+            bars.append({"t": t, "o": 105.0, "h": 106.0, "l": 104.0, "c": 105.0, "v": 1000.0})
+            t += day
+        return bars or [{"t": base, "o": 105.0, "h": 106.0, "l": 104.0, "c": 105.0, "v": 1000.0}]
+
+    def test_no_fill_ongoing_while_entry_ttl_open(self):
+        # GIVEN a candidate whose entries never touch, observed only a few sessions
+        # in (entry-TTL = 7 sessions NOT yet elapsed). WHEN replayed. THEN the row
+        # is NO_FILL but NOT terminal -- the limits are still live, so it must be
+        # re-checked (not frozen, which would miss a later dip-fill).
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 5, 6, 7, 0, tzinfo=UTC)  # ~3 sessions in, < 7-session entry TTL
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=self._no_fill_fetch,
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertEqual(row["ladder_classification"], "NO_FILL")
+        self.assertFalse(bool(row["terminal"]))  # entry TTL still open -> ongoing
+
+    def test_no_fill_terminal_once_entry_ttl_elapsed(self):
+        # GIVEN the same never-filling candidate observed long after the 7-session
+        # entry TTL has fully elapsed. WHEN replayed. THEN NO_FILL is now TERMINAL
+        # (the limits expired unfilled -- a final no-fill).
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)  # well past entry TTL (and the hold)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=self._no_fill_fetch,
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertEqual(row["ladder_classification"], "NO_FILL")
+        self.assertTrue(bool(row["terminal"]))  # entry TTL elapsed -> terminal
+
 
 class TestTerminalFreeze(_MonitorTestBase):
     def test_terminal_row_is_not_refetched(self):
