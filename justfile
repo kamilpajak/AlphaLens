@@ -78,6 +78,7 @@ test: test-python test-django test-web
 # The hermetic helper test runs here too; the four probes skip without flags.
 probe-live:
     SEC_LIVE_TEST=1 OPENROUTER_LIVE_TEST=1 POLYGON_LIVE_TEST=1 YFINANCE_LIVE_TEST=1 \
+    NVDA_QUBT_LIVE_TEST=1 \
         uv run python -m unittest discover \
             -s apps/alphalens-research/tests/live \
             -t apps/alphalens-research -v
