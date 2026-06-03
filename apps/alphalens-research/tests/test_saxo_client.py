@@ -55,6 +55,103 @@ class TestSaxoClientEndpoints(unittest.TestCase):
             _client(lambda r: httpx.Response(200, json={}), environment="")
 
 
+class TestSaxoClientFromEnv(unittest.TestCase):
+    """from_env branch coverage: required SAXO_ENV, live guard, PKCE-no-secret."""
+
+    def setUp(self) -> None:
+        from unittest import mock
+
+        # Start from a clean slate so a stray real SAXO_* in the shell can't
+        # leak into the assertions.
+        self._env = mock.patch.dict(
+            "os.environ",
+            {
+                "SAXO_ENV": "sim",
+                "SAXO_APP_KEY": "APPKEY",
+                "SAXO_REDIRECT_URI": "https://example.invalid/cb",
+            },
+            clear=False,
+        )
+        self._env.start()
+        for k in ("SAXO_ALLOW_LIVE", "SAXO_APP_SECRET"):
+            __import__("os").environ.pop(k, None)
+
+    def tearDown(self) -> None:
+        self._env.stop()
+
+    def test_from_env_happy_path(self) -> None:
+        client = SaxoClient.from_env()
+        self.assertEqual(client.environment, "sim")
+        self.assertEqual(client.app_key, "APPKEY")
+
+    def test_empty_env_rejected_not_defaulted(self) -> None:
+        __import__("os").environ["SAXO_ENV"] = ""
+        with self.assertRaises(SaxoConfigError):
+            SaxoClient.from_env()
+
+    def test_live_without_allow_live_rejected(self) -> None:
+        __import__("os").environ["SAXO_ENV"] = "live"
+        with self.assertRaises(SaxoConfigError):
+            SaxoClient.from_env()
+
+    def test_live_with_allow_live_ok(self) -> None:
+        os_environ = __import__("os").environ
+        os_environ["SAXO_ENV"] = "live"
+        os_environ["SAXO_ALLOW_LIVE"] = "1"
+        client = SaxoClient.from_env()
+        self.assertEqual(client.environment, "live")
+        self.assertNotIn("sim", client.auth_base_url)
+
+    def test_app_secret_present_rejected_pkce_mandated(self) -> None:
+        __import__("os").environ["SAXO_APP_SECRET"] = "leaky-secret"
+        with self.assertRaises(SaxoConfigError):
+            SaxoClient.from_env()
+
+    def test_missing_app_key_rejected(self) -> None:
+        __import__("os").environ.pop("SAXO_APP_KEY", None)
+        with self.assertRaises(SaxoConfigError):
+            SaxoClient.from_env()
+
+    def test_missing_redirect_uri_rejected(self) -> None:
+        __import__("os").environ.pop("SAXO_REDIRECT_URI", None)
+        with self.assertRaises(SaxoConfigError):
+            SaxoClient.from_env()
+
+
+class TestSaxoClientDefaultSingleton(unittest.TestCase):
+    def test_default_client_is_cached_then_resettable(self) -> None:
+        from unittest import mock
+
+        from alphalens_pipeline.data.alt_data import saxo_client as mod
+
+        env = {
+            "SAXO_ENV": "sim",
+            "SAXO_APP_KEY": "APPKEY",
+            "SAXO_REDIRECT_URI": "https://example.invalid/cb",
+        }
+        with mock.patch.dict("os.environ", env, clear=False):
+            __import__("os").environ.pop("SAXO_APP_SECRET", None)
+            mod._reset_default_client_for_tests()
+            first = mod.get_default_saxo_client()
+            second = mod.get_default_saxo_client()
+            self.assertIs(first, second, "singleton must be cached")
+            mod._reset_default_client_for_tests()
+            third = mod.get_default_saxo_client()
+            self.assertIsNot(first, third, "reset must clear the cache")
+            third.close()
+
+
+class TestSaxoClientAuthorizeUrl(unittest.TestCase):
+    def test_authorize_url_has_pkce_s256_and_hardcoded_host(self) -> None:
+        client = _client(lambda r: httpx.Response(200, json={}))
+        url = client.authorize_url(state="ST", code_challenge="CH")
+        self.assertIn("logonvalidation.net/authorize", url)
+        self.assertIn("code_challenge=CH", url)
+        self.assertIn("code_challenge_method=S256", url)
+        self.assertIn("state=ST", url)
+        self.assertIn("response_type=code", url)
+
+
 class TestSaxoClientRefresh(unittest.TestCase):
     def test_refresh_returns_parsed_token_payload(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
