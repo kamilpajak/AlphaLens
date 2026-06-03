@@ -144,6 +144,37 @@ def _summed_filled_qty(conn: sqlite3.Connection, order_id: int) -> int:
     return int(cur.fetchone()[0])
 
 
+def _fallback_fill_price(ledger_row: sqlite3.Row) -> float | None:
+    """Deterministic fallback price for a fill chunk whose Alpaca
+    ``filled_avg_price`` is missing (the canceled-after-fill / OCO-auto-cancel
+    race — see :func:`_process_one_order`).
+
+    Uses the order's OWN ledger price: ``stop_price`` for STOP / STOP_LIMIT
+    orders, ``limit_price`` for LIMIT orders. Returns None when neither is
+    available (e.g. a MARKET order with no stop/limit price) — the caller then
+    drops the chunk + warns, because a realized-R from an unknown market fill
+    price would be meaningless.
+
+    APPROXIMATION caveat: the real STOP fill can slip PAST ``stop_price`` in a
+    gap, so a stop-out priced at ``stop_price`` yields a slightly OPTIMISTIC
+    realized-R (understates the loss). This is an accepted trade-off for the
+    paper harness — it preserves the quantity-weighted SL_HIT classification and
+    a close-enough exit price, and every fallback-priced fill is flagged by the
+    caller's WARNING so an operator can spot the approximate exit in the journal.
+
+    ``STOP_LIMIT`` is forward-compatible only — the orders.order_type CHECK
+    currently permits LIMIT / STOP / MARKET, so that arm is not reachable today.
+    """
+    order_type = ledger_row["order_type"]
+    if order_type in ("STOP", "STOP_LIMIT"):  # STOP_LIMIT: forward-compat, see docstring
+        price = ledger_row["stop_price"]
+    elif order_type == "LIMIT":
+        price = ledger_row["limit_price"]
+    else:
+        price = None
+    return float(price) if price is not None else None
+
+
 def _process_one_order(
     conn: sqlite3.Connection,
     *,
@@ -172,30 +203,81 @@ def _process_one_order(
     delta = alpaca_filled_qty - locally_filled
     n_new_fills = 0
 
-    if delta > 0 and alpaca_avg_price is not None:
-        # Synthesize one fill row capturing the new chunk. The fill_id is
-        # derived from the cumulative filled_qty so repeated polls with
-        # identical state hit UNIQUE and silently no-op.
-        synthetic_fill_id = f"{alpaca_order_id}-cum-{alpaca_filled_qty}"
-        if synthetic_fill_id not in _existing_fill_ids(conn, order_id):
-            insert_fill(
-                conn,
-                order_id=order_id,
-                alpaca_fill_id=synthetic_fill_id,
-                qty=delta,
-                price=alpaca_avg_price,
-                filled_at=observed_at,
-            )
-            n_new_fills = 1
-            logger.info(
-                "paper reconcile fill alpaca=%s order_id=%d +qty=%d @%.2f -> %d/%d",
+    if delta > 0:
+        # Resolve the price for the new fill chunk. Normal path: Alpaca's
+        # volume-weighted ``filled_avg_price``. Data-loss edge (PR-5): Alpaca
+        # can FILL an exit leg, OCO-auto-cancel the order, and then return
+        # status=canceled with filled_qty>0 but filled_avg_price=None. The old
+        # ``alpaca_avg_price is not None`` guard dropped that chunk entirely, so
+        # the SL row went terminal CANCELED with filled_qty_observed=0 and a
+        # genuine stop-out was misclassified as PARTIAL_TP with null realized-R.
+        # When the avg price is missing we fall back to the order's OWN price
+        # (stop_price for STOP / STOP_LIMIT, limit_price for LIMIT) so the fill
+        # is still recorded — preserving filled_qty_observed>0 for
+        # _classify_exit_kind and giving _write_outcome an approximate exit
+        # price for realized-R rather than silently losing the stop-out.
+        fill_price = alpaca_avg_price
+        used_fallback = False
+        if fill_price is None:
+            fill_price = _fallback_fill_price(ledger_row)
+            used_fallback = fill_price is not None
+
+        if fill_price is None:
+            # No usable fallback (e.g. a MARKET order with no stop/limit price);
+            # realized-R would be meaningless. Keep the current drop behavior but
+            # emit a DISTINCT warning so the dropped fill stays visible. Because
+            # the chunk is never recorded, delta stays > 0, so this warning
+            # repeats once per poll until the order reaches a terminal status
+            # (usually the next pass) — expected log noise, not a loop bug.
+            logger.warning(
+                "paper reconcile DROPPING cancelled-after-fill chunk: no fallback price "
+                "alpaca=%s order_id=%d kind=%s type=%s +qty=%d (filled_avg_price missing) -> %d/%d",
                 alpaca_order_id,
                 order_id,
+                ledger_row["order_kind"],
+                ledger_row["order_type"],
                 delta,
-                alpaca_avg_price,
                 alpaca_filled_qty,
                 int(ledger_row["qty"]),
             )
+        else:
+            # Synthesize one fill row capturing the new chunk. The fill_id is
+            # derived from the cumulative filled_qty so repeated polls with
+            # identical state hit UNIQUE and silently no-op.
+            synthetic_fill_id = f"{alpaca_order_id}-cum-{alpaca_filled_qty}"
+            if synthetic_fill_id not in _existing_fill_ids(conn, order_id):
+                insert_fill(
+                    conn,
+                    order_id=order_id,
+                    alpaca_fill_id=synthetic_fill_id,
+                    qty=delta,
+                    price=fill_price,
+                    filled_at=observed_at,
+                )
+                n_new_fills = 1
+                if used_fallback:
+                    logger.warning(
+                        "paper reconcile recording cancelled-after-fill chunk at fallback price "
+                        "alpaca=%s order_id=%d kind=%s +qty=%d @%.2f (filled_avg_price missing) "
+                        "-> %d/%d",
+                        alpaca_order_id,
+                        order_id,
+                        ledger_row["order_kind"],
+                        delta,
+                        fill_price,
+                        alpaca_filled_qty,
+                        int(ledger_row["qty"]),
+                    )
+                else:
+                    logger.info(
+                        "paper reconcile fill alpaca=%s order_id=%d +qty=%d @%.2f -> %d/%d",
+                        alpaca_order_id,
+                        order_id,
+                        delta,
+                        fill_price,
+                        alpaca_filled_qty,
+                        int(ledger_row["qty"]),
+                    )
 
     if new_status != prev_status:
         update_order_status(

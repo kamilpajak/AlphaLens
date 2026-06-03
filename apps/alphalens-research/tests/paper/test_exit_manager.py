@@ -735,6 +735,64 @@ class TestExitClosure(_ExitTestBase):
         self.assertEqual(o2.action, "CLOSED")
         self.assertEqual(o2.exit_kind, "SL_HIT")
 
+    def test_canceled_after_fill_sl_drives_reconciler_chain_to_sl_hit(self):
+        # END-TO-END (PR-5): the SL leg fills then OCO-auto-cancels, and Alpaca
+        # returns status=canceled with filled_qty>0 but filled_avg_price=None.
+        # The reconciler fix must record that fill at the SL stop_price so the
+        # SL row carries filled_qty_observed>0; _classify_exit_kind then returns
+        # SL_HIT (NOT PARTIAL_TP), the desync guard never fires (exit_orders
+        # present), and realized-R is the (negative) stop R rather than null.
+        from alphalens_pipeline.paper.ledger import fetch_orders_for_plan
+        from alphalens_pipeline.paper.reconciler import reconcile_orders
+
+        plan_id = _seed_plan(self.ledger, disaster_stop=80.0)
+        # Attach the OCO ladder on a full 27-share fill at 100.
+        _add_entry(
+            self.ledger,
+            plan_id=plan_id,
+            alpaca_id="e1",
+            qty=27,
+            status="FILLED",
+            filled_qty=27,
+            filled_price=100.0,
+        )
+        with open_ledger(self.ledger) as conn:
+            process_plan_exit(
+                conn, plan_id=plan_id, broker=self.client, observed_at=_OBSERVED_AT_FIXED
+            )
+            orders = fetch_orders_for_plan(conn, plan_id)
+        sl_orders = [o for o in orders if o["order_kind"] == "SL"]
+        tp_orders = [o for o in orders if o["order_kind"] == "TP"]
+
+        # A reconciler-shaped broker: the SL legs report canceled-after-fill with
+        # NULL avg price (the OCO race); the TP legs report a clean OCO cancel
+        # (zero fill); the position reads FLAT (both stops fired).
+        recon_broker = _CanceledAfterFillReconBroker()
+        for o in sl_orders:
+            recon_broker.set_order(
+                o["alpaca_order_id"], status="canceled", filled_qty=int(o["qty"]), avg_price=None
+            )
+        for o in tp_orders:
+            recon_broker.set_order(o["alpaca_order_id"], status="canceled", filled_qty=0)
+        recon_broker.position_qty_for["NVDA"] = 0
+
+        report = reconcile_orders(ledger_path=self.ledger, broker=recon_broker)
+        # The fix recorded the SL fills (was 0 before): 2 SL legs.
+        self.assertEqual(report.n_fills_appended, len(sl_orders))
+        # reconcile_orders drives process_plan_exit transitively: all exits are
+        # now terminal so the plan classifies + writes its outcome in the same
+        # pass. The desync guard never fired (exit_orders present).
+        self.assertEqual(report.n_ledger_broker_desync, 0)
+        with open_ledger(self.ledger) as conn:
+            row = conn.execute(
+                "SELECT exit_kind, realized_r_multiple FROM plan_outcomes WHERE plan_id = ?",
+                (plan_id,),
+            ).fetchone()
+        self.assertEqual(row["exit_kind"], "SL_HIT")
+        self.assertIsNotNone(row["realized_r_multiple"])  # NOT null
+        # The SL fired at the stop fallback (80.0); R = (80 - 100) / (100 - 80) = -1.
+        self.assertAlmostEqual(row["realized_r_multiple"], (80.0 - 100.0) / (100.0 - 80.0))
+
 
 class TestZenRegressions(_ExitTestBase):
     """Regression tests for issues found in the post-PR #277 zen review."""
@@ -1667,6 +1725,46 @@ class _PositionReadFailsBroker(_StubBrokerClient):
         raise RuntimeError("stub APIError: position read timed out")
 
 
+@dataclass
+class _ReconOrderState:
+    id: str
+    status: str
+    filled_qty: int = 0
+    filled_avg_price: float | None = None
+
+
+@dataclass
+class _ReconAccount:
+    equity: float = 1_000_000.0
+    long_market_value: float = 0.0
+
+
+class _CanceledAfterFillReconBroker(_StubBrokerClient):
+    """Reconciler-shaped broker for the PR-5 end-to-end test. ``get_order``
+    returns per-id synthetic Alpaca orders (so the reconciler can poll
+    canceled-after-fill SL legs with a NULL avg price); inherits the OCO-ladder
+    + cancel + position stubs from :class:`_StubBrokerClient`. ``get_account``
+    is required because reconcile_orders runs the gross-guard post-pass."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._orders: dict[str, _ReconOrderState] = {}
+        self.account = _ReconAccount()
+
+    def set_order(
+        self, alpaca_id: str, *, status: str, filled_qty: int = 0, avg_price: float | None = None
+    ) -> None:
+        self._orders[alpaca_id] = _ReconOrderState(
+            id=alpaca_id, status=status, filled_qty=filled_qty, filled_avg_price=avg_price
+        )
+
+    def get_order(self, alpaca_order_id: str):
+        return self._orders[alpaca_order_id]
+
+    def get_account(self) -> _ReconAccount:
+        return self.account
+
+
 class _PositionFlatBroker(_StubBrokerClient):
     """Stub broker whose ``get_position`` returns None = a DEFINITIVE
     broker-confirmed flat / absent position (the 404 / "does not exist" case).
@@ -1891,6 +1989,20 @@ class TestLedgerBrokerDesync(_ExitTestBase):
                 status="SUBMITTED",  # broker filled it; ledger has not polled the fill yet
             )
         broker = _PositionFlatBroker()
+        # COUNT-BASED-GATE REGRESSION PIN: the SL leg above is SUBMITTED with
+        # zero observed fills, so total_exit_filled_qty == 0. A gate keyed on
+        # ``total_exit_filled_qty == 0`` WOULD wrongly declare desync here and
+        # discard the soon-to-fill SL_HIT. The real gate is ``not
+        # snap.exit_orders`` (an SL row EXISTS), which correctly defers. This
+        # FAILS if anyone relaxes the ``not snap.exit_orders`` desync gate to a
+        # count-based predicate.
+        from alphalens_pipeline.paper.exit_manager import _snapshot
+
+        with open_ledger(self.ledger) as conn:
+            snap = _snapshot(conn, plan_id)
+        self.assertEqual(snap.total_exit_filled_qty, 0)
+        self.assertTrue(snap.exit_orders)  # the SL row is present
+        self.assertGreater(snap.net_open_qty, 0)
         with open_ledger(self.ledger) as conn:
             o = process_plan_exit(
                 conn, plan_id=plan_id, broker=broker, observed_at=_OBSERVED_AT_FIXED
