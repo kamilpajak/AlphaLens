@@ -1,0 +1,74 @@
+[Unit]
+# Saxo OpenAPI token keep-alive — the SINGLE WRITER of the token chain.
+# Fires every 5 min (see companion timer). Loads the chain at
+# /etc/alphalens/saxo/token_<env>.json, recovers a mid-refresh crash, and
+# proactively rotates the access+refresh token while it is comfortably inside
+# the safety margin (refresh the 1200s access token at ~15min; the 2400s
+# refresh token wall has a 300s backstop). No other process ever calls
+# /token with grant_type=refresh_token — every read-only consumer uses the
+# current access token or fails loud. See
+# docs/research/saxo_client_token_renewal_design_2026_06_03.md.
+#
+# 24/7 caveat (verbatim in the PR ## Known issues): zero-touch holds only
+# WHILE the VPS stays up and no revoke / disclaimer / >40min-outage event
+# fires. A manual browser re-login is an unavoidable, event-driven
+# requirement (rare, weeks apart). Recovery runbook:
+#   ssh VPS; alphalens saxo auth --env <env> --manual  (paste redirect URL)
+#
+# Install as a *user* unit alongside the companion timer:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/systemd/alphalens-saxo-refresh.service ~/.config/systemd/user/
+#   cp deploy/systemd/alphalens-saxo-refresh.timer   ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alphalens-saxo-refresh.timer
+#
+# Inspect:  journalctl --user -u alphalens-saxo-refresh.service -f
+# Trigger manually: systemctl --user start alphalens-saxo-refresh.service
+#
+# Deploy precondition: chrony / systemd-timesyncd MUST keep the clock
+# disciplined (MAX_TOLERATED_CLOCK_SKEW_S=60s is the asserted budget).
+Description=AlphaLens Saxo OpenAPI token keep-alive (single writer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+
+# Shared secrets file: /etc/alphalens/env. The saxo-refresh unit (and the
+# future order unit) are the ONLY units that may carry SAXO_* — the
+# non-trading units (edgar-detect, thematic-build, literature-scan-*, django)
+# are carved out (test_deploy_systemd_units). No leading `-`: fail loud on a
+# missing/typo env file rather than silently never refreshing.
+EnvironmentFile=/etc/alphalens/env
+
+# Token store lives OUTSIDE ~/.alphalens (the rsync/Nextcloud sync root) so a
+# live brokerage bearer is never exfiltrated off-host. Pinned here as deploy
+# config; the code default (~/.config/alphalens-saxo) is dev-only.
+Environment=SAXO_TOKEN_STORE_DIR=/etc/alphalens/saxo
+
+# Explicit --env: the keep-alive must never run an ambiguous environment.
+# SAXO_ENV/SAXO_ALLOW_LIVE in /etc/alphalens/env additionally gate the host.
+ExecStart=%h/AlphaLens/.venv/bin/alphalens saxo refresh --env sim
+
+# Prometheus textfile metrics — same pattern as the other oneshot units.
+# The CLI ALSO emits the alphalens_saxo_* domain gauges itself; this hook
+# adds the cron-health last_success/duration/exit_code series.
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics saxo-refresh
+
+StandardOutput=journal
+StandardError=journal
+
+# Refresh makes one tiny /token POST + a small JSON write. 512M suffices;
+# 1G matches the project-wide unit ceiling.
+MemoryMax=1G
+TasksMax=32
+
+# A wedged TLS call must not block the next 5-min fire forever. The client's
+# own 15s HTTP timeout normally releases first; TimeoutStartSec is the
+# backstop (generous vs the deadline-bounded retry budget).
+TimeoutStartSec=4min
+
+[Install]
+WantedBy=default.target

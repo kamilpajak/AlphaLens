@@ -1,0 +1,31 @@
+[Unit]
+# Fires the companion alphalens-saxo-refresh.service every 5 min.
+#
+# SHORT FIXED 5-min cadence (NOT 15 min): with refresh_window=2400s and
+# margin=300s, a 5-min cadence fits >=6 attempts inside one window, so even
+# two consecutive missed fires + skew + cold-start + RTT leave large slack.
+# 5 min is also robust if the real refresh window is shorter than the example
+# 2400s (handles the 2400-uncertainty WITHOUT a self-rewriting dynamic-cadence
+# timer, which is deferred).
+#
+# OnBootSec=1min: hold off until network-online stabilises after a reboot.
+#
+# Persistent=true: a missed fire (VPS was off) runs once at boot so the chain
+# is refreshed as soon as the host returns — important because the refresh
+# token has a hard wall and a long outage is exactly the failure mode that
+# forces a manual re-login.
+#
+# RandomizedDelaySec=0: this is a deadline-bound keep-alive — jitter would
+# erode the margin for no benefit (a single writer, no thundering herd).
+Description=Trigger AlphaLens Saxo token keep-alive every 5 minutes
+After=network-online.target
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+RandomizedDelaySec=0
+Persistent=true
+Unit=alphalens-saxo-refresh.service
+
+[Install]
+WantedBy=timers.target

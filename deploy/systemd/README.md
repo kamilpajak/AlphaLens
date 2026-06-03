@@ -16,6 +16,7 @@ hosts where launchd is unavailable.
 | `alphalens-paper-submit.{service,timer}` | Mon-Fri 13:25 UTC | host-venv `alphalens paper submit --use-test-account --date $(date -u -d yesterday +%Y-%m-%d)` — submits the PLANNED rows plan wrote (same `(D-1)` brief) as entry-tier limits pre-XNYS-open (PR-D, epic #295 #298). ExecCondition gates on `alphalens paper is-trading-day` to skip US holidays. |
 | `alphalens-paper-reconcile.{service,timer}` | Mon-Fri every 30 min 14:00-21:00 UTC | host-venv `alphalens paper reconcile --use-test-account` — Alpaca order-status sweep during XNYS session (PR-D, epic #295 #298). Same ExecCondition holiday gate as paper-submit. |
 | `alphalens-feedback-shadow-returns.{service,timer}` | daily 06:30 UTC | host-venv `alphalens feedback backfill-shadow-returns --account test` — sweeps the last 14 brief dates, prices each whose +5-session horizon matured (Polygon minute bars → `shadow_return` + `realized_return`). `Persistent=true` catch-up; idempotent re-stamp. Track A v2 PR-T. Needs `POLYGON_API_KEY`. NOT trading-day-gated (the per-date maturity guard handles non-trading dates). |
+| `alphalens-saxo-refresh.{service,timer}` | every 5 min | host-venv `alphalens saxo refresh --env <env>` — SINGLE WRITER of the Saxo OpenAPI token chain. Recovers a mid-refresh crash + proactively rotates the access/refresh token while inside the safety margin. Emits `alphalens_saxo_*` health gauges. `SAXO_TOKEN_STORE_DIR=/etc/alphalens/saxo` (token store is structurally OUTSIDE `~/.alphalens/`). `Persistent=true` catch-up. See `docs/research/saxo_client_token_renewal_design_2026_06_03.md`. |
 | `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) |
 
 ## Environment file setup (`/etc/alphalens/env`)
@@ -42,6 +43,12 @@ All three AlphaLens systemd units load secrets via
   ticker fetch is skipped and the sweep reports "0 priced" (looks like a
   quiet night), so the fail-loud-on-missing-file `EnvironmentFile=` guard is
   the only protection against a silently mis-pointed env.
+- `alphalens-saxo-refresh.service` — `SAXO_APP_KEY`, `SAXO_REDIRECT_URI`,
+  `SAXO_ENV` (live additionally needs `SAXO_ALLOW_LIVE=1`). `SAXO_APP_SECRET`
+  MUST be ABSENT (PKCE is mandated — `from_env` refuses to start otherwise).
+  Only this unit + the FUTURE order unit may carry `SAXO_*`; the non-trading
+  units are carved out (enforced by `test_deploy_systemd_units`). See the
+  `## alphalens-saxo-refresh.service + .timer` section below.
 
 systemd reads each `KEY=VALUE` line into the unit's process env before
 `ExecStart`; for the docker-run unit, the explicit `-e KEY` flags then
@@ -497,3 +504,89 @@ systemctl --user list-timers alphalens-thematic-build
 journalctl --user -u alphalens-thematic-build.service --since today
 systemctl --user start alphalens-thematic-build.service     # manual fire
 ```
+
+## alphalens-saxo-refresh.service + .timer
+
+The SINGLE WRITER of the Saxo OpenAPI token chain. Every 5 min it loads the
+chain, recovers a mid-refresh crash (intent journal), and proactively rotates
+the access + refresh token while it is comfortably inside the safety margin.
+No other process ever calls `/token` with grant_type=refresh_token — every
+read-only consumer uses the current access token or fails loud. Design:
+`docs/research/saxo_client_token_renewal_design_2026_06_03.md`.
+
+### Environment
+
+Add to `/etc/alphalens/env` (the saxo-refresh unit + the FUTURE order unit are
+the ONLY units that may carry `SAXO_*`; the non-trading units are carved out):
+
+```
+SAXO_APP_KEY=<the OpenAPI app key>
+SAXO_REDIRECT_URI=<the registered redirect URI>
+SAXO_ENV=sim            # or live (live additionally requires SAXO_ALLOW_LIVE=1)
+# SAXO_ALLOW_LIVE=1     # ONLY for live; a second affirmative guard
+# SAXO_APP_SECRET MUST be ABSENT — PKCE is mandated (no long-lived secret on disk)
+```
+
+PKCE is mandated on the VPS, so there is **no long-lived `SAXO_APP_SECRET` on
+disk**. `from_env` refuses to start if `SAXO_APP_SECRET` is set together with
+the PKCE path (mutually exclusive).
+
+### Token store location — OUTSIDE the sync root
+
+The token record lives at `/etc/alphalens/saxo/token_<env>.json` (0o600),
+pinned via `SAXO_TOKEN_STORE_DIR=/etc/alphalens/saxo` on the unit. This dir is
+**structurally outside `~/.alphalens/`** so the documented `rsync -av
+jacoren@vps:.alphalens/` / Nextcloud opt-in recipes never exfiltrate a live
+brokerage bearer off-host. If you ever add a broad backup of `/etc/alphalens`,
+**exclude the saxo token dir**:
+
+```
+rsync ... --exclude '/etc/alphalens/saxo'      # never sync the live token chain
+rclone ... --exclude 'saxo/**'
+```
+
+### Bootstrap (one-time, interactive)
+
+```bash
+alphalens saxo auth --env sim --manual
+# Opens nothing — prints the authorize URL. Open it in ANY browser, log in to
+# Saxo, approve, then paste the FULL redirect URL back (input is HIDDEN — the
+# auth code never echoes to the terminal or shell history).
+```
+
+### Install
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/alphalens-saxo-refresh.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-saxo-refresh.timer   ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-saxo-refresh.timer
+```
+
+### Inspect
+
+```bash
+alphalens saxo status --env sim                  # ages/booleans/deltas, NO token material
+alphalens saxo probe  --env sim                  # read-only GET /port/v1/users/me smoke
+systemctl --user list-timers alphalens-saxo-refresh
+journalctl --user -u alphalens-saxo-refresh.service --since today
+```
+
+### Recovery runbook (>30min downtime / revoke / disclaimer)
+
+True zero-touch 24/7 is NOT guaranteeable — a manual browser re-login is an
+unavoidable, event-driven requirement (typically weeks apart). It is triggered
+by a maintenance gap longer than the ~40-min refresh window, a revoke in
+SaxoTraderGO, or a Saxo disclaimer re-confirmation. The
+`AlphalensSaxoRefreshStale` alert fires within ~30 min (while the token is
+usually still alive, so re-login is calm); `AlphalensSaxoReauthRequired` fires
+on a hard `invalid_grant`. To recover:
+
+```bash
+ssh <vps>
+alphalens saxo auth --env <env> --manual    # paste the redirect URL
+```
+
+The proactive `AlphalensSaxoFullAuthAging` warning (6 days) lets you re-auth
+BEFORE a disclaimer termination breaks a live session.

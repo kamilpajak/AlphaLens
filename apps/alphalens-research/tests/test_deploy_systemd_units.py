@@ -58,6 +58,23 @@ PAPER_RECONCILE_TIMER = SYSTEMD_DIR / "alphalens-paper-reconcile.timer"
 SHADOW_SERVICE = SYSTEMD_DIR / "alphalens-feedback-shadow-returns.service"
 SHADOW_TIMER = SYSTEMD_DIR / "alphalens-feedback-shadow-returns.timer"
 
+# Saxo token keep-alive (single writer of the token chain).
+SAXO_SERVICE = SYSTEMD_DIR / "alphalens-saxo-refresh.service"
+SAXO_TIMER = SYSTEMD_DIR / "alphalens-saxo-refresh.timer"
+
+# Token-store dir constant — must stay structurally OUTSIDE ~/.alphalens.
+SAXO_TOKEN_DIR = "/etc/alphalens/saxo"
+
+# Units that must NOT carry SAXO_* nor bind-mount the saxo token dir (the
+# non-trading carve-out, secret-leak Findings 4,5). Only saxo-refresh + the
+# future order unit are allowed the SAXO_* surface.
+NON_TRADING_SERVICES = (
+    EDGAR_SERVICE,
+    LIT_WEEKLY_SERVICE,
+    LIT_MONTHLY_SERVICE,
+    SYSTEMD_DIR / "alphalens-thematic-build.service",
+)
+
 ACTIVE_SERVICES = (
     EDGAR_SERVICE,
     LIT_WEEKLY_SERVICE,
@@ -1157,6 +1174,134 @@ class TestShadowReturnsUnit(unittest.TestCase):
         text = SHADOW_TIMER.read_text()
         self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
         self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
+
+
+class TestSaxoRefreshUnit(unittest.TestCase):
+    """alphalens-saxo-refresh — single-writer Saxo token keep-alive.
+
+    Pins the load-bearing directives: an explicit ``--env``, the
+    fail-loud EnvironmentFile, the token store pinned OUTSIDE ~/.alphalens, the
+    5-min cadence + Persistent=true, and the emit hook. The secret-leak
+    carve-out (non-trading units must NOT carry SAXO_* / mount the token dir)
+    is asserted separately below.
+    """
+
+    def test_service_uses_host_venv_with_explicit_env(self) -> None:
+        # The keep-alive must pin an explicit --env (never an ambiguous run).
+        self.assertRegex(
+            SAXO_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/alphalens\s+saxo\s+refresh\s+--env\s+\w+\s*$",
+                re.MULTILINE,
+            ),
+            "saxo-refresh ExecStart must invoke the host venv "
+            "`alphalens saxo refresh --env <env>` with an explicit --env.",
+        )
+
+    def test_service_is_oneshot_with_working_dir(self) -> None:
+        text = SAXO_SERVICE.read_text()
+        self.assertIn("Type=oneshot", text)
+        self.assertIn("WorkingDirectory=%h/AlphaLens", text)
+
+    def test_service_loads_etc_alphalens_env_fail_loud(self) -> None:
+        self.assertRegex(
+            SAXO_SERVICE.read_text(),
+            re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE),
+            "saxo-refresh must load /etc/alphalens/env without a leading dash.",
+        )
+
+    def test_service_pins_token_dir_outside_alphalens_sync_root(self) -> None:
+        text = SAXO_SERVICE.read_text()
+        self.assertRegex(
+            text,
+            re.compile(
+                rf"^Environment=SAXO_TOKEN_STORE_DIR={re.escape(SAXO_TOKEN_DIR)}\s*$", re.MULTILINE
+            ),
+            "saxo-refresh must pin SAXO_TOKEN_STORE_DIR=/etc/alphalens/saxo so the "
+            "token store is structurally OUTSIDE ~/.alphalens (the rsync/Nextcloud "
+            "sync root).",
+        )
+        self.assertNotIn(
+            "/.alphalens/",
+            SAXO_TOKEN_DIR,
+            "the token dir constant must not be under ~/.alphalens.",
+        )
+
+    def test_service_wires_emit_hook_with_own_job_name(self) -> None:
+        self.assertRegex(
+            SAXO_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStopPost=%h/AlphaLens/deploy/systemd/bin/"
+                r"alphalens-emit-job-metrics\s+saxo-refresh\s*$",
+                re.MULTILINE,
+            ),
+        )
+
+    def test_service_no_doubled_alphalens_token(self) -> None:
+        self.assertNotRegex(
+            SAXO_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStart(?:Post)?=[^\n]*\.venv/bin/alphalens\s+alphalens\b", re.MULTILINE
+            ),
+            "`.venv/bin/alphalens alphalens ...` is a doubled-token bug.",
+        )
+
+    def test_timer_fires_every_5min_persistent(self) -> None:
+        text = SAXO_TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^OnUnitActiveSec=5min\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^Persistent=true\s*$", re.MULTILINE))
+
+    def test_timer_carries_install_section(self) -> None:
+        text = SAXO_TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
+
+
+class TestSaxoTokenDirCarveOut(unittest.TestCase):
+    """Secret-leak carve-out: only saxo-refresh (+ future order unit) may carry
+    SAXO_* / mount the token dir. The non-trading units must NOT (Findings 4,5).
+    """
+
+    def test_non_trading_units_do_not_carry_saxo_env_or_token_dir(self) -> None:
+        for path in NON_TRADING_SERVICES:
+            text = path.read_text()
+            self.assertNotIn(
+                "SAXO_APP_SECRET",
+                text,
+                f"{path.name} must NOT carry SAXO_APP_SECRET (carve-out).",
+            )
+            self.assertNotIn(
+                "SAXO_REFRESH_TOKEN",
+                text,
+                f"{path.name} must NOT carry SAXO_REFRESH_TOKEN (carve-out).",
+            )
+            self.assertNotIn(
+                SAXO_TOKEN_DIR,
+                text,
+                f"{path.name} must NOT reference the saxo token dir "
+                f"{SAXO_TOKEN_DIR} (no bind-mount, no env) — only the trading "
+                "units may (secret-leak Findings 4,5).",
+            )
+
+    def test_saxo_refresh_does_not_carry_app_secret(self) -> None:
+        # PKCE is mandated; the keep-alive must not carry a long-lived secret.
+        self.assertNotIn(
+            "SAXO_APP_SECRET",
+            SAXO_SERVICE.read_text(),
+            "saxo-refresh under PKCE must NOT carry SAXO_APP_SECRET.",
+        )
+
+    def test_token_dir_in_rsync_rclone_exclude_doc(self) -> None:
+        # The token dir constant must appear in the documented rsync/rclone
+        # exclude list so a future broad backup never exfiltrates the bearer.
+        readme = (SYSTEMD_DIR / "README.md").read_text()
+        self.assertIn("--exclude", readme)
+        self.assertRegex(
+            readme,
+            re.compile(r"exclude.{0,40}saxo", re.IGNORECASE | re.DOTALL),
+            "deploy/systemd/README.md must document an rsync/rclone exclude for "
+            "the saxo token dir.",
+        )
 
 
 if __name__ == "__main__":
