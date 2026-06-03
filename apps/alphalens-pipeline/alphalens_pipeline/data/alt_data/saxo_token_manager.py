@@ -75,9 +75,20 @@ HARD_FLOOR_S = 30
 MIN_ROTATION_INTERVAL_S = 60
 
 # Deadline-bounded retry backoff schedule (seconds). The loop stops BEFORE a
-# sleep would cross (refresh_token_expires_at - HARD_FLOOR_S); it is the
-# deadline, not the count, that bounds it.
+# sleep would cross the per-fire deadline; it is the deadline, not the count,
+# that bounds it.
 _BACKOFF_SCHEDULE_S = (5, 15, 30, 60)
+
+# Per-fire retry budget: the MAX wall-time a single keep-alive fire spends
+# retrying transients before it gives up and lets the NEXT fire retry. MUST be
+# strictly < LEASE_TTL_S and well under the keep-alive interval (5 min) so two
+# fires can NEVER overlap an in-flight POST of the same refresh token. Without
+# this, a sustained outage would let one fire retry for the whole refresh-token
+# lifetime (~refresh TTL); after the 90s lease lapsed the next fire(s) would
+# take over and POST the SAME token concurrently — the first rotation then
+# invalidates it for the others, falsely marking the chain dead. Bounding each
+# fire here preserves the single-writer guarantee under systematic outage.
+PER_FIRE_RETRY_BUDGET_S = 75
 
 # Fallback token TTLs if the live response omits the field (token contract;
 # logged as a warning, never silently assumed without a log).
@@ -274,9 +285,16 @@ class SaxoTokenManager:
     def _refresh_with_deadline(self, refresh_token: str, deadline_expiry: float) -> dict:
         """POST with deadline-bounded retry. Raises on exhaustion / permanent.
 
-        ``deadline_expiry`` is the refresh-token wall expiry; the loop stops
-        before a sleep would cross ``deadline_expiry - HARD_FLOOR_S``.
+        Bounded by the EARLIER of two deadlines:
+        * the refresh-token wall expiry (``deadline_expiry - HARD_FLOOR_S``) —
+          never sleep the grant off the cliff; and
+        * a per-fire budget (``now + PER_FIRE_RETRY_BUDGET_S``) — give up THIS
+          fire well before the lease lapses so the next keep-alive fire never
+          overlaps an in-flight POST of the same token (single-writer guard).
+        Whichever is sooner wins. Transient exhaustion does NOT mark the chain
+        dead — the refresh token is still valid and the next fire retries.
         """
+        fire_deadline = min(deadline_expiry - HARD_FLOOR_S, self._wall() + PER_FIRE_RETRY_BUDGET_S)
         attempt = 0
         while True:
             try:
@@ -288,13 +306,13 @@ class SaxoTokenManager:
             except SaxoTransientError:
                 backoff = _BACKOFF_SCHEDULE_S[min(attempt, len(_BACKOFF_SCHEDULE_S) - 1)]
                 attempt += 1
-                if self._wall() + backoff >= deadline_expiry - HARD_FLOOR_S:
-                    # The next sleep would run the grant off the cliff — stop
-                    # and raise loudly. The chain is NOT marked dead (the RT is
-                    # still valid; the next keep-alive fire retries).
+                if self._wall() + backoff >= fire_deadline:
+                    # The next sleep would cross the per-fire budget (or the
+                    # refresh-token cliff) — stop and raise loudly. The chain is
+                    # NOT marked dead; the next keep-alive fire retries.
                     raise SaxoTransientError(
-                        f"saxo refresh exhausted the deadline budget for env "
-                        f"{self._environment} (would cross refresh expiry)"
+                        f"saxo refresh exhausted the per-fire retry budget for env "
+                        f"{self._environment} (will be retried by the next keep-alive fire)"
                     ) from None
                 self._sleep(backoff)
 
@@ -341,7 +359,7 @@ class SaxoTokenManager:
             )
             return float(fallback)
         try:
-            return float(value)
+            return float(value)  # type: ignore[arg-type]  # narrowed by the except
         except (TypeError, ValueError):
             logger.warning(
                 "saxo /token %s TTL %r is non-numeric; falling back to %ss",
@@ -364,9 +382,15 @@ class SaxoTokenManager:
         record = self._load_checked()
         if record is None or record.journal_state != "refreshing":
             return
+        # An already-dead chain (permanent rejection left the flag set) is
+        # terminal — never re-POST the consumed token (it can only invalid_grant
+        # again and would clobber reauth_reason). The reader/refresh paths
+        # already raise on reauth_required; recovery must too.
+        if record.reauth_required:
+            return
         with self._store.locked():
             fresh = self._load_checked()
-            if fresh is None or fresh.journal_state != "refreshing":
+            if fresh is None or fresh.journal_state != "refreshing" or fresh.reauth_required:
                 return
             try:
                 payload = self._client.refresh_token(refresh_token=fresh.refresh_token)
@@ -382,8 +406,23 @@ class SaxoTokenManager:
     # --- state helpers ------------------------------------------------------
 
     def _mark_reauth(self, record: SaxoTokenRecord, *, reason: str) -> None:
-        """Sticky reauth flag — goes through the full durable rename path."""
-        self._store.write(self._with_fields(record, reauth_required=True, reauth_reason=reason))
+        """Sticky reauth flag — goes through the full durable rename path.
+
+        Also resets the journal to a terminal ``active`` state: a dead chain
+        must never be left in ``refreshing`` limbo (it would lure a later
+        :meth:`recover` into re-POSTing the consumed token and clobbering the
+        reason). reauth_required is the single source of truth that the chain
+        is broken; the journal stops being "mid-refresh".
+        """
+        self._store.write(
+            self._with_fields(
+                record,
+                reauth_required=True,
+                reauth_reason=reason,
+                journal_state="active",
+                journal_attempted_at=None,
+            )
+        )
 
     @staticmethod
     def _with_fields(record: SaxoTokenRecord, **fields: object) -> SaxoTokenRecord:
@@ -435,6 +474,7 @@ __all__ = [
     "LEASE_TTL_S",
     "MAX_TOLERATED_CLOCK_SKEW_S",
     "MIN_ROTATION_INTERVAL_S",
+    "PER_FIRE_RETRY_BUDGET_S",
     "REFRESH_SAFETY_MARGIN_S",
     "SaxoBootstrapNeededError",
     "SaxoTokenManager",

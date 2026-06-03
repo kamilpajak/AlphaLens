@@ -26,7 +26,9 @@ from alphalens_pipeline.data.alt_data.saxo_client import (
 )
 from alphalens_pipeline.data.alt_data.saxo_token_manager import (
     ACCESS_SAFETY_MARGIN_S,
+    LEASE_TTL_S,
     MAX_TOLERATED_CLOCK_SKEW_S,
+    PER_FIRE_RETRY_BUDGET_S,
     REFRESH_SAFETY_MARGIN_S,
     SaxoBootstrapNeededError,
     SaxoTokenManager,
@@ -432,6 +434,78 @@ class TestJournalRecovery(_ManagerFixture):
         self.assertTrue(stored.reauth_required)
         self.assertEqual(stored.reauth_reason, "lost_rotation")
         self.assertEqual(mgr.chain_state(), 1)
+
+
+class TestPerFireRetryBudget(_ManagerFixture):
+    def test_sustained_outage_gives_up_within_per_fire_budget(self) -> None:
+        # zen HIGH regression: with a far-future refresh-token expiry a single
+        # keep-alive fire must NOT retry for the whole refresh-token lifetime
+        # (that would let the next 5-min fire take over the lapsed 90s lease and
+        # POST the same token concurrently -> false self-inflicted halt). Each
+        # fire must give up inside PER_FIRE_RETRY_BUDGET_S (< LEASE_TTL_S) and
+        # let the next fire retry. The chain is NOT marked dead.
+        now = self.clock.wall()
+        rec = _record(
+            self.clock,
+            access_token_expires_at=now + 100.0,
+            refresh_token_expires_at=now + 100_000.0,  # far away: only the budget bounds us
+        )
+        self.store.write(rec)
+        mgr = self._manager(lambda r: httpx.Response(503, text="upstream down"))
+        with self.assertRaises(SaxoTransientError):
+            mgr.refresh()
+        total_slept = sum(self.slept)
+        self.assertLessEqual(
+            total_slept,
+            PER_FIRE_RETRY_BUDGET_S,
+            "a single fire must give up within the per-fire budget, not the RT lifetime",
+        )
+        self.assertLess(
+            PER_FIRE_RETRY_BUDGET_S, LEASE_TTL_S, "budget must be < lease so fires never overlap"
+        )
+        stored = self.store.read()
+        assert stored is not None
+        self.assertFalse(
+            stored.reauth_required, "transient exhaustion must NOT mark the chain dead"
+        )
+
+
+class TestPermanentRejectionIsTerminal(_ManagerFixture):
+    def test_invalid_grant_resets_journal_to_active(self) -> None:
+        # zen MEDIUM regression: the permanent path must leave a TERMINAL record
+        # (journal_state=active), never 'refreshing' limbo, so a later recover()
+        # cannot re-POST the dead token and clobber the reason.
+        rec = _record(self.clock, access_token_expires_at=self.clock.wall() + 100.0)
+        self.store.write(rec)
+        mgr = self._manager(lambda r: httpx.Response(400, json={"error": "invalid_grant"}))
+        with self.assertRaises(SaxoReauthRequiredError):
+            mgr.refresh()
+        stored = self.store.read()
+        assert stored is not None
+        self.assertTrue(stored.reauth_required)
+        self.assertEqual(stored.reauth_reason, "server_rejected")
+        self.assertEqual(stored.journal_state, "active", "dead chain must not stay 'refreshing'")
+
+    def test_recover_on_already_reauth_chain_is_noop_preserves_reason(self) -> None:
+        # zen MEDIUM regression: recover() must bail on an already-dead chain —
+        # no needless POST, and reason stays server_rejected (not clobbered to
+        # lost_rotation), preserving the downtime-vs-revoke alert distinction.
+        now = self.clock.wall()
+        rec = _record(
+            self.clock,
+            reauth_required=True,
+            reauth_reason="server_rejected",
+            journal_state="refreshing",  # pre-fix terminal state could look like this
+            journal_attempted_at=now,
+            access_token_expires_at=now + 100.0,
+        )
+        self.store.write(rec)
+        mgr = self._manager(lambda r: httpx.Response(400, json={"error": "invalid_grant"}))
+        mgr.recover()
+        self.assertEqual(self.posts, [], "recover() must not POST on an already-dead chain")
+        stored = self.store.read()
+        assert stored is not None
+        self.assertEqual(stored.reauth_reason, "server_rejected", "reason must not be clobbered")
 
 
 class TestChainStateGauge(_ManagerFixture):

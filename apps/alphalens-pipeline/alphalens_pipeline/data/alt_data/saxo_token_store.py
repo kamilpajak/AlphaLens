@@ -108,6 +108,11 @@ class SaxoTokenRecord:
     environment: str
     access_token: str
     refresh_token: str
+    # The prior (rotated-out) refresh token. Retained for forensic history and
+    # a possible future double-crash ring-buffer recovery — the current
+    # single-attempt ``recover()`` only ever retries the active ``refresh_token``
+    # (one attempt is the minimal strictly-cannot-lose choice), so this field is
+    # NOT consulted on the recovery path today.
     previous_refresh_token: str | None
     access_token_expires_at: float
     refresh_token_expires_at: float
