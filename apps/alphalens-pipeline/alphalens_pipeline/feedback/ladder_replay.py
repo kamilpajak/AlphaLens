@@ -53,6 +53,7 @@ TIE_BREAK_SL_FIRST = "sl_first"
 _ENTRY = "ENTRY"
 _TP = "TP"
 _SL = "SL"
+_TIME = "TIME_STOP"
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,8 @@ def replay_ladder(
     bars: Sequence[Mapping[str, Any]],
     *,
     reference_close: float | None = None,
+    entry_expiry_ms: int | None = None,
+    position_expiry_ms: int | None = None,
 ) -> LadderOutcome:
     """Replay an OHLC bar list against the ladder.
 
@@ -199,6 +202,21 @@ def replay_ladder(
     iterating so the MFE / MAE substrate covers the WHOLE in-trade window, not
     just the bars up to the exit. ``reference_close`` anchors ``forward_return``
     (computed independently of any fill); ``None`` leaves it ``None``.
+
+    Time-awareness (PR-1): both cutoffs are ABSOLUTE epoch-ms scalars (the
+    weeks/sessions -> ms conversion belongs to the future driver, NOT this pure
+    engine). Both default ``None`` -> byte-identical legacy behaviour.
+
+    * ``entry_expiry_ms`` -- an entry tier fills only when its limit is touched
+      on a bar with ``ts < entry_expiry_ms``. A limit touched at/after the cutoff
+      does NOT fill (stale entry-TTL). It only blocks NEW fills; TP/SL resolution
+      on an already-open position continues. If nothing filled before the cutoff
+      the existing NO_FILL path applies.
+    * ``position_expiry_ms`` -- if an OPEN position has not exited via SL/TP by
+      the FIRST bar with ``ts >= position_expiry_ms``, the remainder is
+      time-stopped and marked to THAT bar's close (terminal ``TIME_STOP``). A
+      real SL/TP firing on the same bar as the cutoff WINS over the synthetic
+      time-stop (resolved before the time-stop check).
     """
     ladder = parse_ladder(trade_setup)
     if not ladder.ok:
@@ -218,7 +236,9 @@ def replay_ladder(
     hit_tp_ids: set[str] = set()
     ambiguous_bars = 0
     sl_hit = False
-    exit_reached = False  # the as-specified exit (first SL or full TP) has fired
+    time_stop = False  # synthetic position time-stop fired (terminal TIME_STOP)
+    expiry_close: float | None = None  # close of the bar the time-stop fired on
+    exit_reached = False  # the as-specified exit (first SL, full TP, or time-stop) has fired
     last_close: float | None = None
     in_trade_high: float | None = None  # highest high since first fill
     in_trade_low: float | None = None  # lowest low since first fill
@@ -240,6 +260,11 @@ def replay_ladder(
         # 1) Entries first (you cannot exit before entering). Multiple tiers can
         #    fill in one bar (a gap-down through several limits).
         for lvl in ladder.entries:
+            # Entry-TTL: a limit touched at/after the cutoff is a stale entry and
+            # does NOT fill (it only blocks NEW fills; the TP/SL block below still
+            # resolves an already-open position).
+            if entry_expiry_ms is not None and ts >= entry_expiry_ms:
+                break
             if lvl.level_id not in filled_ids and low <= lvl.price:
                 filled.append(lvl)
                 filled_ids.add(lvl.level_id)
@@ -284,6 +309,21 @@ def replay_ladder(
         if len(hit_tp_ids) == len(ladder.tps) and ladder.tps:
             exit_reached = True  # fully scaled out via TPs
 
+        # 3) Time-stop LAST: only when the as-specified exit did NOT fire on this
+        #    bar (a real SL/TP on the cutoff bar WINS over the synthetic stop).
+        #    Marks the remainder to THIS bar's close and ends the in-trade window.
+        # ``filled`` is guaranteed non-empty here (the ``if not filled: continue``
+        # guard above), so it is not re-checked.
+        if not exit_reached and position_expiry_ms is not None and ts >= position_expiry_ms:
+            # TIME_STOP records the BAR's CLOSE as ``price`` (not a fill level — the
+            # remainder is marked to close at expiry). Consumers should read the
+            # realized_r / classification, not interpret this cross's price as a
+            # trigger level.
+            seq.append(LevelCrossing("TIME_STOP", _TIME, close, ts))
+            expiry_close = close
+            time_stop = True
+            exit_reached = True
+
     blended = _blended_entry(filled) if filled else None
     ratchet_r = (
         _replay_ratchet(ladder, ordered, filled, blended, (blended - stop) if blended else 0.0)
@@ -304,6 +344,8 @@ def replay_ladder(
         in_trade_low,
         reference_close,
         ratchet_r,
+        time_stop=time_stop,
+        expiry_close=expiry_close,
     )
 
 
@@ -320,6 +362,9 @@ def _finalize(
     in_trade_low: float | None,
     reference_close: float | None,
     ratchet_r: float | None,
+    *,
+    time_stop: bool = False,
+    expiry_close: float | None = None,
 ) -> LadderOutcome:
     entries_filled = tuple(lvl.level_id for lvl in filled)
     tps_hit = tuple(t.level_id for t in ladder.tps if t.level_id in hit_tp_ids)
@@ -364,7 +409,7 @@ def _finalize(
 
     filled_frac = _filled_frac(ladder, filled)
     realized_r, horizon_open = _realized_r_with_frac(
-        ladder, hit_tp_ids, blended, stop, risk, sl_hit, last_close, filled_frac
+        ladder, hit_tp_ids, blended, stop, risk, sl_hit, last_close, filled_frac, expiry_close
     )
     mfe, mae, mfe_pct, mae_pct = _excursions(blended, risk, in_trade_high, in_trade_low)
 
@@ -373,6 +418,7 @@ def _finalize(
         sl_hit,
         len(hit_tp_ids) == len(ladder.tps) and bool(ladder.tps),
         horizon_open,
+        time_stop,
     )
     return LadderOutcome(
         status="OK",
@@ -403,6 +449,7 @@ def _realized_r_with_frac(
     sl_hit: bool,
     last_close: float | None,
     filled_frac: float,
+    expiry_close: float | None = None,
 ) -> tuple[float, bool]:
     """Realized R over the FILLED position with TP shares re-based to the fill.
 
@@ -439,6 +486,10 @@ def _realized_r_with_frac(
     if remaining > 1e-9:
         if sl_hit:
             contrib += remaining * (stop - blended) / risk  # = -remaining
+        elif expiry_close is not None:
+            # Time-stop: mark the remainder at the close of the expiry bar. Terminal
+            # (TIME_STOP), so horizon_open stays False.
+            contrib += remaining * (expiry_close - blended) / risk
         elif last_close is not None:
             contrib += remaining * (last_close - blended) / risk
             horizon_open = True
@@ -494,7 +545,9 @@ def _replay_ratchet(
     blended entry (break-even+); on TP2 hit raise it to the TP1 price (lock-in).
     The remainder exits when ``low <= eff_stop``; if it survives the horizon it is
     marked to the last close. Same SL-first ambiguity + same bug-#1 filled-frac
-    re-basing as the headline pass.
+    re-basing as the headline pass. The position TIME_STOP is intentionally NOT
+    applied to the ratchet pass -- the time-stop is a layer-2 headline concern;
+    the ratchet what-if terminates on SL / full-TP / horizon only.
 
     Returns ``ratchet_realized_r`` (R-units) or ``None`` when risk <= 0 (geometry
     undefined -- matches the headline BAD_GEOMETRY guard).
@@ -549,13 +602,19 @@ def _replay_ratchet(
     return contrib
 
 
-def _classify(any_tp: bool, sl_hit: bool, all_tp: bool, horizon_open: bool) -> str:
+def _classify(
+    any_tp: bool, sl_hit: bool, all_tp: bool, horizon_open: bool, time_stop: bool = False
+) -> str:
     if all_tp:
         return "TP_FULL"
     if any_tp and sl_hit:
         return "PARTIAL_TP_THEN_SL"
     if sl_hit:
         return "SL_HIT"
+    if time_stop:
+        # Terminal: covers partial-TP-then-timestop AND no-TP-timestop. Outranks
+        # PARTIAL_TP_OPEN; a real SL above outranks it.
+        return "TIME_STOP"
     if any_tp:
         return "PARTIAL_TP_OPEN"
     if horizon_open:

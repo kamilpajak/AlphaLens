@@ -269,6 +269,120 @@ class TestRatchetPass(unittest.TestCase):
         self.assertAlmostEqual(outcome.realized_r, 0.0, places=4)
 
 
+class TestTimeAwareness(unittest.TestCase):
+    """PR-1: entry-TTL (``entry_expiry_ms``) + position time-stop
+    (``position_expiry_ms``). Both default None -> byte-identical legacy
+    behaviour. Cutoffs are ABSOLUTE epoch-ms scalars; the engine never imports
+    datetime."""
+
+    def test_no_expiry_params_unchanged(self):
+        # Defaults None must reproduce the pre-change outcome exactly. Baseline
+        # captured fresh from the same call without any expiry kwargs.
+        setup = _setup(**_EQUAL_3)
+        bars = [
+            _bar(1, low=95.0, high=97.0, close=96.0),  # fills E1+E2+E3
+            _bar(2, low=96.0, high=102.0, close=101.0),  # TP1 hit
+            _bar(3, low=92.0, high=99.0, close=93.0),  # SL hit
+        ]
+        baseline = replay_ladder(setup, bars)
+        with_none = replay_ladder(setup, bars, entry_expiry_ms=None, position_expiry_ms=None)
+        self.assertEqual(with_none.classification, baseline.classification)
+        self.assertEqual(with_none.realized_r, baseline.realized_r)
+        self.assertEqual(with_none.sequence_str(), baseline.sequence_str())
+
+    def test_entry_ttl_no_fill(self):
+        # E1's limit (99) is only touched on a bar at ts == entry_expiry_ms.
+        # A touch at-or-after the cutoff must NOT fill -> NO_FILL, no entries,
+        # realized_r None.
+        setup = _setup(entries=[(99.0, 100.0)], tps=[(110.0, 100.0)], stop=92.0)
+        bars = [
+            _bar(1, low=100.0, high=101.0, close=100.5),  # above E1 limit, no fill
+            _bar(2, low=98.0, high=100.0, close=99.0),  # touches E1(99) but AT cutoff
+        ]
+        outcome = replay_ladder(setup, bars, entry_expiry_ms=2)
+        self.assertEqual(outcome.classification, "NO_FILL")
+        self.assertEqual(outcome.entries_filled, ())
+        self.assertIsNone(outcome.realized_r)
+
+    def test_entry_ttl_allows_fill_before_cutoff(self):
+        # E1(99) touched strictly before the cutoff fills; deeper E2(95) only
+        # touched AT/after the cutoff does NOT fill -> blended == E1 price.
+        setup = _setup(
+            entries=[(99.0, 50.0), (95.0, 50.0)],
+            tps=[(110.0, 100.0)],
+            stop=90.0,
+        )
+        bars = [
+            _bar(1, low=98.0, high=100.0, close=99.0),  # fills E1(99) before cutoff
+            _bar(2, low=94.0, high=99.0, close=96.0),  # touches E2(95) AT cutoff -> no fill
+        ]
+        outcome = replay_ladder(setup, bars, entry_expiry_ms=2)
+        self.assertEqual(outcome.entries_filled, ("E1",))
+        self.assertAlmostEqual(outcome.blended_entry, 99.0, places=3)
+
+    def test_time_stop_sideways_drift(self):
+        # Entry fills; price drifts between SL(92) and TP1(102), never touching
+        # either; bars continue past position_expiry_ms. The remainder marks at
+        # the close of the FIRST bar at/after the cutoff (distinct from the final
+        # bar close to prove the mark point).
+        setup = _setup(entries=[(99.0, 100.0)], tps=[(102.0, 100.0)], stop=92.0)
+        bars = [
+            _bar(1, low=98.0, high=100.0, close=99.0),  # fills E1(99); blended=99, risk=7
+            _bar(2, low=98.0, high=101.0, close=100.0),  # drift, ts < cutoff
+            _bar(3, low=97.0, high=101.0, close=98.0),  # expiry bar (ts == cutoff): mark @ 98
+            _bar(4, low=96.0, high=100.0, close=99.5),  # AFTER exit: must NOT change mark
+        ]
+        outcome = replay_ladder(setup, bars, position_expiry_ms=3)
+        self.assertEqual(outcome.classification, "TIME_STOP")
+        self.assertFalse(outcome.horizon_open)
+        self.assertTrue(outcome.sequence_str().endswith("TIME_STOP"))
+        # expiry_close = 98 (bar 3, FIRST at/after cutoff), NOT 99.5 (bar 4).
+        self.assertAlmostEqual(outcome.realized_r, (98.0 - 99.0) / 7.0, places=4)
+
+    def test_time_stop_partial_tp_then_expiry(self):
+        # TP1(105) hits, remainder drifts, then time-stops. classification
+        # TIME_STOP; tps_hit==("TP1",); realized_r = TP1 contribution + remainder
+        # marked at expiry close.
+        setup = _setup(
+            entries=[(100.0, 100.0)],
+            tps=[(105.0, 50.0), (110.0, 50.0)],
+            stop=95.0,
+        )
+        bars = [
+            _bar(1, low=99.0, high=101.0, close=100.0),  # fills E1(100); blended=100, risk=5
+            _bar(2, low=100.0, high=105.0, close=104.0),  # TP1(105) hit (share 0.5)
+            _bar(3, low=99.0, high=104.0, close=101.0),  # expiry bar (ts == cutoff): mark @ 101
+        ]
+        outcome = replay_ladder(setup, bars, position_expiry_ms=3)
+        self.assertEqual(outcome.classification, "TIME_STOP")
+        self.assertEqual(outcome.tps_hit, ("TP1",))
+        # TP1: 0.5*(105-100)/5 = +0.5 ; remainder 0.5 marked @ 101: 0.5*(101-100)/5 = +0.1
+        self.assertAlmostEqual(outcome.realized_r, 0.5 + 0.1, places=4)
+
+    def test_real_sl_on_cutoff_bar_wins(self):
+        # SL touched on the SAME bar as position_expiry_ms -> a real SL outranks
+        # the synthetic time-stop -> SL_HIT, not TIME_STOP.
+        setup = _setup(entries=[(99.0, 100.0)], tps=[(110.0, 100.0)], stop=92.0)
+        bars = [
+            _bar(1, low=98.0, high=100.0, close=99.0),  # fills E1(99)
+            _bar(2, low=91.0, high=99.0, close=93.0),  # SL(92) pierced AND ts == cutoff
+        ]
+        outcome = replay_ladder(setup, bars, position_expiry_ms=2)
+        self.assertEqual(outcome.classification, "SL_HIT")
+        self.assertTrue(outcome.sl_hit)
+
+    def test_full_tp_before_cutoff_unaffected(self):
+        # Full scale-out before the cutoff -> TP_FULL; the time-stop never fires.
+        setup = _setup(entries=[(99.0, 100.0)], tps=[(102.0, 100.0)], stop=92.0)
+        bars = [
+            _bar(1, low=98.0, high=100.0, close=99.0),  # fills E1(99)
+            _bar(2, low=99.0, high=103.0, close=102.5),  # TP1(102) hit -> fully scaled out
+            _bar(3, low=97.0, high=101.0, close=98.0),  # past cutoff but already flat
+        ]
+        outcome = replay_ladder(setup, bars, position_expiry_ms=3)
+        self.assertEqual(outcome.classification, "TP_FULL")
+
+
 class TestStatusGuards(unittest.TestCase):
     def test_no_structure(self):
         self.assertEqual(replay_ladder(None, [_bar(1, 1, 2, 1.5)]).status, "NO_STRUCTURE")
