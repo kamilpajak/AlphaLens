@@ -111,6 +111,8 @@ The handler wraps `reconcile_orders` in a try/except that logs and continues —
 
 Static API key + secret from `/etc/alphalens/env` (same keys the REST `AlpacaClient` already uses, `test`/`main` profile). `paper=True` selects the paper trading-stream endpoint. No new credential, no service token.
 
+**Verified live 2026-06-03 (real probe, market closed).** Connecting `wss://paper-api.alpaca.markets/stream` with the existing static TEST paper keys and sending `{"action":"auth",…}` returned `{"stream":"authorization","data":{"action":"authenticate","status":"authorized"}}`, and `{"action":"listen","data":{"streams":["trade_updates"]}}` returned `{"stream":"listening","data":{"streams":["trade_updates"]}}`. The handshake the daemon depends on works with the market closed (the stream is account-scoped, not market-gated) — no events flow until a fill, but auth + listen succeed. The market-data `wss://stream.data.alpaca.markets/v2/test` feed (FAKEPACA) also handshook (`connected` → `authenticated` → subscription ack → synthetic trade ticks) and confirms the 1-connection data endpoint is reachable 24/7 — but that stream stays out of scope (§3).
+
 ---
 
 ## 5. Backstop — the 30-min poll stays
