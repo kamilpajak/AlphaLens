@@ -119,288 +119,26 @@ class TestFeedbackReportCommand(unittest.TestCase):
         self.assertNotIn("⚠", result.stdout)
 
 
-class TestFeedbackJoinOutcomesCommand(unittest.TestCase):
-    """`alphalens feedback join-outcomes` drives the decision<->paper join."""
-
-    def setUp(self):
-        self.runner = CliRunner()
-        self._td = tempfile.TemporaryDirectory()
-        self.fb_path = Path(self._td.name) / "feedback.db"
-        self.ledger_path = Path(self._td.name) / "paper_ledger.db"
-
-    def tearDown(self):
-        self._td.cleanup()
-
-    def test_join_stamps_decision_from_paper_outcome(self):
-        from alphalens_pipeline.paper import ledger as paper_ledger
-
-        # seed a clicked decision
-        _seed_decisions(self.fb_path, [_interested("NVDA", "ai")])
-        # seed a matching paper plan + outcome on the 'test' account
-        with paper_ledger.open_ledger(self.ledger_path) as conn:
-            plan = paper_ledger.insert_planned(
-                conn,
-                brief_date=dt.date(2026, 5, 28),
-                ticker="NVDA",
-                theme="ai",
-                planned_at=dt.datetime(2026, 5, 28, 13, 5, tzinfo=UTC),
-                suggested_size_pct=2.0,
-                scale_factor=1.0,
-                final_size_pct=2.0,
-                paper_equity=100_000.0,
-                total_notional=2_000.0,
-                gross_notional=2_000.0,
-                disaster_stop=90.0,
-                order_ttl_days=2,
-                tiers=[(0, 100.0, 20, 100.0, "entry")],
-                tp_tranches=[(0, 120.0, 100.0, 2.0, "tp")],
-                account="test",
-            )
-            paper_ledger.insert_plan_outcome(
-                conn,
-                plan_id=plan.plan_id,
-                exit_kind="TP_HIT",
-                closed_at=dt.datetime(2026, 5, 30, 20, 0, tzinfo=UTC),
-            )
-
-        result = self.runner.invoke(
-            app,
-            [
-                "feedback",
-                "join-outcomes",
-                "--date",
-                "2026-05-28",
-                "--account",
-                "test",
-                "--ledger",
-                str(self.fb_path),
-                "--paper-ledger",
-                str(self.ledger_path),
-            ],
-        )
-        self.assertEqual(result.exit_code, 0, result.stdout)
-        self.assertIn("1/1", result.stdout)
-        with FeedbackStore.open(self.fb_path) as fb:
-            row = fb.list_by_brief_date(dt.date(2026, 5, 28))[0]
-            self.assertEqual(row.fill_status, "FILLED")
-            self.assertEqual(row.exit_kind, "TP_HIT")
-
-
-class TestFeedbackComputeShadowReturnsCommand(unittest.TestCase):
-    """`alphalens feedback compute-shadow-returns` drives the Polygon shadow pass."""
-
-    def setUp(self):
-        self.runner = CliRunner()
-        self._td = tempfile.TemporaryDirectory()
-        self.fb_path = Path(self._td.name) / "feedback.db"
-        self.ledger_path = Path(self._td.name) / "paper_ledger.db"
-
-    def tearDown(self):
-        self._td.cleanup()
-
-    def test_compute_shadow_returns_stamps_shadow(self):
-        from alphalens_pipeline.feedback import shadow_return as sr
-        from alphalens_pipeline.paper import ledger as paper_ledger
-        from alphalens_pipeline.paper.calendar import (
-            advance_trading_sessions,
-            session_on_or_after,
-            session_open_utc,
-        )
-
-        # brief_date in the past so the +5-session horizon has matured.
-        brief = dt.date(2026, 5, 15)
-
-        def _seed_decision_for(brief_date):
-            with FeedbackStore.open(self.fb_path) as fb:
-                fb.insert(
-                    Decision(
-                        brief_date=brief_date,
-                        ticker="NVDA",
-                        theme="ai",
-                        surfaced_at=dt.datetime(2026, 5, 15, 6, 30, tzinfo=UTC),
-                        action="interested",
-                        action_at=dt.datetime(2026, 5, 15, 8, 0, tzinfo=UTC),
-                    )
-                )
-
-        _seed_decision_for(brief)
-        with paper_ledger.open_ledger(self.ledger_path) as conn:
-            plan = paper_ledger.insert_planned(
-                conn,
-                brief_date=brief,
-                ticker="NVDA",
-                theme="ai",
-                planned_at=dt.datetime(2026, 5, 15, 13, 5, tzinfo=UTC),
-                suggested_size_pct=2.0,
-                scale_factor=1.0,
-                final_size_pct=2.0,
-                paper_equity=100_000.0,
-                total_notional=2_000.0,
-                gross_notional=2_000.0,
-                disaster_stop=90.0,
-                order_ttl_days=2,
-                tiers=[(0, 100.0, 20, 100.0, "entry")],
-                tp_tranches=[(0, 120.0, 100.0, 2.0, "tp")],
-                account="test",
-            )
-            paper_ledger.insert_plan_outcome(
-                conn,
-                plan_id=plan.plan_id,
-                exit_kind="TP_HIT",
-                closed_at=dt.datetime(2026, 5, 22, 20, 0, tzinfo=UTC),
-                blended_entry_price=100.0,
-                blended_exit_price=120.0,
-            )
-
-        arrival_open = session_open_utc(session_on_or_after(brief))
-        horizon_open = session_open_utc(
-            advance_trading_sessions(brief, sr.HOLDING_HORIZON_TRADING_DAYS)
-        )
-
-        def fake_fetch(ticker, start, end):
-            close = 100.0 if start == arrival_open else 110.0 if start == horizon_open else None
-            if close is None:
-                return []
-            return [{"t": int(start.timestamp() * 1000), "c": close, "v": 100.0}]
-
-        orig = sr._default_bar_fetch
-        sr._default_bar_fetch = fake_fetch
-        try:
-            result = self.runner.invoke(
-                app,
-                [
-                    "feedback",
-                    "compute-shadow-returns",
-                    "--date",
-                    "2026-05-15",
-                    "--account",
-                    "test",
-                    "--ledger",
-                    str(self.fb_path),
-                    "--paper-ledger",
-                    str(self.ledger_path),
-                ],
-            )
-        finally:
-            sr._default_bar_fetch = orig
-
-        self.assertEqual(result.exit_code, 0, result.stdout)
-        self.assertIn("1 priced", result.stdout)
-        with FeedbackStore.open(self.fb_path) as fb:
-            row = fb.list_by_brief_date(brief)[0]
-            self.assertAlmostEqual(row.shadow_return, 0.10)
-            self.assertAlmostEqual(row.realized_return, 0.20)
-
-
-class TestFeedbackBackfillShadowReturnsCommand(unittest.TestCase):
+class TestFeedbackBackfillCommand(unittest.TestCase):
     """`alphalens feedback backfill-shadow-returns` is the nightly timer's entrypoint.
 
-    It sweeps a fixed look-back window and prices every matured date, so the
-    systemd unit needs no date arithmetic. The seed date is anchored relative to
-    *today* so it always lands inside the default 14-day window regardless of
-    when the suite runs.
+    The name is retained for the existing systemd unit; the command now drives
+    only the broker-free ladder + population-monitor replays. The seed date is
+    anchored relative to *today* so it always lands inside the default 14-day
+    window regardless of when the suite runs.
     """
 
     def setUp(self):
         self.runner = CliRunner()
         self._td = tempfile.TemporaryDirectory()
         self.fb_path = Path(self._td.name) / "feedback.db"
-        self.ledger_path = Path(self._td.name) / "paper_ledger.db"
 
     def tearDown(self):
         self._td.cleanup()
 
-    def test_backfill_prices_matured_date_and_prints_aggregate(self):
-        from alphalens_pipeline.feedback import shadow_return as sr
-        from alphalens_pipeline.paper import ledger as paper_ledger
-        from alphalens_pipeline.paper.calendar import (
-            advance_trading_sessions,
-            session_on_or_after,
-            session_open_utc,
-        )
-
-        # 12 calendar days back: the +5-session horizon has matured AND the date
-        # is inside the default 14-day window (no fixed-date drift as time passes).
-        brief = dt.datetime.now(UTC).date() - dt.timedelta(days=12)
-        with FeedbackStore.open(self.fb_path) as fb:
-            fb.insert(
-                Decision(
-                    brief_date=brief,
-                    ticker="NVDA",
-                    theme="ai",
-                    surfaced_at=dt.datetime.now(UTC),
-                    action="interested",
-                    action_at=dt.datetime.now(UTC),
-                )
-            )
-        with paper_ledger.open_ledger(self.ledger_path) as conn:
-            plan = paper_ledger.insert_planned(
-                conn,
-                brief_date=brief,
-                ticker="NVDA",
-                theme="ai",
-                planned_at=dt.datetime.now(UTC),
-                suggested_size_pct=2.0,
-                scale_factor=1.0,
-                final_size_pct=2.0,
-                paper_equity=100_000.0,
-                total_notional=2_000.0,
-                gross_notional=2_000.0,
-                disaster_stop=90.0,
-                order_ttl_days=2,
-                tiers=[(0, 100.0, 20, 100.0, "entry")],
-                tp_tranches=[(0, 120.0, 100.0, 2.0, "tp")],
-                account="test",
-            )
-            paper_ledger.insert_plan_outcome(
-                conn,
-                plan_id=plan.plan_id,
-                exit_kind="TP_HIT",
-                closed_at=dt.datetime.now(UTC),
-                blended_entry_price=100.0,
-                blended_exit_price=120.0,
-            )
-
-        arrival_open = session_open_utc(session_on_or_after(brief))
-        horizon_open = session_open_utc(
-            advance_trading_sessions(brief, sr.HOLDING_HORIZON_TRADING_DAYS)
-        )
-
-        def fake_fetch(ticker, start, end):
-            close = 100.0 if start == arrival_open else 110.0 if start == horizon_open else None
-            if close is None:
-                return []
-            return [{"t": int(start.timestamp() * 1000), "c": close, "v": 100.0}]
-
-        orig = sr._default_bar_fetch
-        sr._default_bar_fetch = fake_fetch
-        try:
-            result = self.runner.invoke(
-                app,
-                [
-                    "feedback",
-                    "backfill-shadow-returns",
-                    "--account",
-                    "test",
-                    "--ledger",
-                    str(self.fb_path),
-                    "--paper-ledger",
-                    str(self.ledger_path),
-                ],
-            )
-        finally:
-            sr._default_bar_fetch = orig
-
-        self.assertEqual(result.exit_code, 0, result.stdout)
-        self.assertIn("backfill", result.stdout)
-        self.assertIn("1 priced", result.stdout)
-        with FeedbackStore.open(self.fb_path) as fb:
-            row = fb.list_by_brief_date(brief)[0]
-            self.assertAlmostEqual(row.shadow_return, 0.10)
-
     def test_cli_lookback_default_in_sync_with_module(self):
         from alphalens_cli.commands.feedback import _DEFAULT_LOOKBACK_DAYS
-        from alphalens_pipeline.feedback.shadow_return import DEFAULT_LOOKBACK_DAYS
+        from alphalens_pipeline.feedback.bar_window import DEFAULT_LOOKBACK_DAYS
 
         # typer.Option evaluates its default at import time and the CLI lazy-imports
         # the feedback module inside the command body, so the literal is duplicated
@@ -408,14 +146,13 @@ class TestFeedbackBackfillShadowReturnsCommand(unittest.TestCase):
         self.assertEqual(_DEFAULT_LOOKBACK_DAYS, DEFAULT_LOOKBACK_DAYS)
         self.assertEqual(_DEFAULT_LOOKBACK_DAYS, 14)
 
-    def test_backfill_fold_runs_ladder_replay_and_stamps(self):
-        # The folded-in ladder step must stamp the gen-4 columns from the same
+    def test_backfill_runs_ladder_replay_and_stamps(self):
+        # The broker-free ladder step must stamp the gen-4 columns from the
         # nightly command. Provide a brief parquet + stub the ladder bar fetch.
         import json
 
         import pandas as pd
         from alphalens_pipeline.feedback import ladder_backfill as lb
-        from alphalens_pipeline.feedback import shadow_return as sr
 
         brief = dt.datetime.now(UTC).date() - dt.timedelta(days=12)
         briefs_dir = Path(self._td.name) / "thematic_briefs"
@@ -448,8 +185,7 @@ class TestFeedbackBackfillShadowReturnsCommand(unittest.TestCase):
                 {"t": base + 60_000, "h": 111.0, "l": 100.0, "c": 110.0, "v": 100.0},
             ]
 
-        orig_sr, orig_lb = sr._default_bar_fetch, lb._default_bar_fetch
-        sr._default_bar_fetch = lambda *a, **k: []  # shadow returns: no bars (harmless)
+        orig_lb = lb._default_bar_fetch
         lb._default_bar_fetch = fake_fetch
         try:
             result = self.runner.invoke(
@@ -457,18 +193,13 @@ class TestFeedbackBackfillShadowReturnsCommand(unittest.TestCase):
                 [
                     "feedback",
                     "backfill-shadow-returns",
-                    "--account",
-                    "test",
                     "--ledger",
                     str(self.fb_path),
-                    "--paper-ledger",
-                    str(self.ledger_path),
                     "--briefs-dir",
                     str(briefs_dir),
                 ],
             )
         finally:
-            sr._default_bar_fetch = orig_sr
             lb._default_bar_fetch = orig_lb
 
         self.assertEqual(result.exit_code, 0, result.stdout)
@@ -480,130 +211,6 @@ class TestFeedbackBackfillShadowReturnsCommand(unittest.TestCase):
                 (brief.isoformat(),),
             ).fetchone()
         self.assertEqual(row["ladder_classification"], "TP_FULL")
-
-
-class TestFeedbackExecutionModesCommand(unittest.TestCase):
-    """`alphalens feedback execution-modes` — read-only inert recommendation."""
-
-    def setUp(self):
-        self.runner = CliRunner()
-        self._td = tempfile.TemporaryDirectory()
-        self.path = Path(self._td.name) / "feedback.db"
-
-    def tearDown(self):
-        self._td.cleanup()
-
-    def test_missing_ledger_prints_friendly_message(self):
-        result = self.runner.invoke(
-            app, ["feedback", "execution-modes", "--ledger", str(self.path)]
-        )
-        self.assertEqual(result.exit_code, 0, result.stdout)
-        self.assertIn("no matured decisions yet", result.stdout)
-
-    def test_inert_banner_below_gate(self):
-        # A handful of priced decisions (far below the 50 gate) → GATE INERT,
-        # every cell LIMIT, ledger untouched (read-only).
-        with FeedbackStore.open(self.path) as fb:
-            for i in range(3):
-                rid, _ = fb.insert(
-                    Decision(
-                        brief_date=dt.date(2026, 5, 20),
-                        ticker=f"AAA{i}",
-                        theme="ai",
-                        surfaced_at=dt.datetime(2026, 5, 20, 6, 30, tzinfo=UTC),
-                        action="interested",
-                        action_at=dt.datetime(2026, 5, 20, 8, 0, tzinfo=UTC),
-                        market_regime_at_entry="mid",
-                    )
-                )
-                fb.stamp_outcome(
-                    rid,
-                    fill_status="FILLED",
-                    exit_kind="TP_HIT",
-                    outcome_plan_id="p1",
-                    outcome_computed_at=dt.datetime(2026, 5, 27, 2, 0, tzinfo=UTC),
-                    shadow_return=0.05,
-                    realized_return=0.03,
-                )
-        result = self.runner.invoke(
-            app, ["feedback", "execution-modes", "--ledger", str(self.path)]
-        )
-        self.assertEqual(result.exit_code, 0, result.stdout)
-        self.assertIn("GATE INERT", result.stdout)
-        self.assertIn("LIMIT", result.stdout)
-        self.assertNotIn("MARKET", result.stdout)
-
-
-class TestFeedbackTelemetryCommand(unittest.TestCase):
-    """`alphalens feedback telemetry` — read-only execution-quality gauges."""
-
-    PROM_FILE = "alphalens_domain_feedback-execution-telemetry.prom"
-
-    def setUp(self):
-        self.runner = CliRunner()
-        self._td = tempfile.TemporaryDirectory()
-        self.path = Path(self._td.name) / "feedback.db"
-        self._metrics = tempfile.TemporaryDirectory()
-        self.metrics_dir = Path(self._metrics.name)
-
-    def tearDown(self):
-        self._td.cleanup()
-        self._metrics.cleanup()
-
-    def _seed_matured(self) -> None:
-        with FeedbackStore.open(self.path) as fb:
-            for i, regime in enumerate(("low", "high", "mid")):
-                rid, _ = fb.insert(
-                    Decision(
-                        brief_date=dt.date(2026, 5, 20),
-                        ticker=f"AAA{i}",
-                        theme="ai",
-                        surfaced_at=dt.datetime(2026, 5, 20, 6, 30, tzinfo=UTC),
-                        action="interested",
-                        action_at=dt.datetime(2026, 5, 20, 8, 0, tzinfo=UTC),
-                        market_regime_at_entry=regime,
-                    )
-                )
-                fb.stamp_outcome(
-                    rid,
-                    fill_status="FILLED" if i % 2 == 0 else "UNFILLED",
-                    exit_kind="TP_HIT",
-                    outcome_plan_id=f"p{i}",
-                    outcome_computed_at=dt.datetime(2026, 5, 27, 2, 0, tzinfo=UTC),
-                    shadow_return=0.05,
-                    realized_return=0.03 if i % 2 == 0 else None,
-                )
-
-    def test_missing_ledger_prints_friendly_message(self):
-        result = self.runner.invoke(app, ["feedback", "telemetry", "--ledger", str(self.path)])
-        self.assertEqual(result.exit_code, 0, result.stdout)
-        self.assertIn("no matured decisions yet", result.stdout)
-
-    def test_emits_prom_file_and_prints_table(self):
-        self._seed_matured()
-        result = self.runner.invoke(
-            app,
-            ["feedback", "telemetry", "--ledger", str(self.path)],
-            env={"ALPHALENS_TEXTFILE_DIR": str(self.metrics_dir)},
-        )
-        self.assertEqual(result.exit_code, 0, result.stdout)
-        self.assertIn("pooled", result.stdout)
-        self.assertIn("low", result.stdout)
-        prom = self.metrics_dir / self.PROM_FILE
-        self.assertTrue(prom.exists(), list(self.metrics_dir.iterdir()))
-        text = prom.read_text()
-        self.assertIn("alphalens_feedback_execution_matured_decisions", text)
-        self.assertIn("alphalens_feedback_execution_gate_n_threshold", text)
-
-    def test_no_emit_writes_no_prom_file(self):
-        self._seed_matured()
-        result = self.runner.invoke(
-            app,
-            ["feedback", "telemetry", "--ledger", str(self.path), "--no-emit"],
-            env={"ALPHALENS_TEXTFILE_DIR": str(self.metrics_dir)},
-        )
-        self.assertEqual(result.exit_code, 0, result.stdout)
-        self.assertFalse((self.metrics_dir / self.PROM_FILE).exists())
 
 
 if __name__ == "__main__":

@@ -70,12 +70,11 @@ ENV_EXAMPLE_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=", re.MULTILINE)
 # The key must be an ENVIRONMENT-VARIABLE NAME: UPPERCASE-led
 # ``[A-Z][A-Z0-9_]*`` (the universal POSIX convention every real
 # pass-through key follows — OPENROUTER_API_KEY, POLYGON_API_KEY, …). This
-# deliberately EXCLUDES a host-venv unit's typer CLI flag value such as
-# ``alphalens saxo refresh --env sim`` — ``sim`` is a lowercase flag VALUE,
-# not a docker env-var name passed through to a container, so it must not be
-# mistaken for a documented secret. (A docker ``-e`` only appears on the
-# docker-run thematic-build unit; the saxo-refresh unit runs the host venv
-# and has no container to forward into.)
+# deliberately EXCLUDES a host-venv unit's typer CLI flag VALUE such as
+# ``--env sim`` (a lowercase flag value, not a docker env-var name passed
+# through to a container), so it must not be mistaken for a documented secret.
+# (A docker ``-e`` only appears on the docker-run thematic-build unit; the
+# host-venv units run no container to forward into.)
 #
 # Capturing the key name lets us collect the pass-through set. The trailing
 # ``(?=\s|\\|$)`` ensures the key is a complete token (so ``-e KEYFOO`` can't

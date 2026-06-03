@@ -487,95 +487,6 @@ class TestCacheRefreshVixEmitsDomainMetrics(unittest.TestCase):
             )
 
 
-class TestPaperReconcileEmitsDomainMetrics(unittest.TestCase):
-    """paper-exit hardening: ``alphalens paper reconcile`` emits the
-    protection dead-man gauges (filled_without_sl / exits_failed) so the
-    AlphalensPaperFilledWithoutSl alert has an input. The emit IS the
-    contract — a refactor that drops it silently removes the alert input
-    for an unprotected live position.
-    """
-
-    def _report(self, **overrides):
-        from alphalens_pipeline.paper.reconciler import ReconcileReport
-
-        defaults = {
-            "n_orders_checked": 1,
-            "n_orders_transitioned": 0,
-            "n_fills_appended": 0,
-            "n_exits_attached": 2,
-            "n_outcomes_written": 0,
-            "n_time_stops_fired": 0,
-            "n_entries_ttl_canceled": 0,
-            "gross_ratio": 0.0,
-            "gross_warning_emitted": False,
-            "outcomes": (),
-            "n_exits_failed": 1,
-            "n_entries_canceled": 1,
-            "n_filled_without_sl": 1,
-            "n_ledger_broker_desync": 1,
-            "total_uncovered_sl_qty": 5,
-            "n_plans_partial_sl": 1,
-        }
-        defaults.update(overrides)
-        return ReconcileReport(**defaults)
-
-    def test_emit_helper_writes_protection_gauges(self) -> None:
-        from alphalens_cli.commands import paper
-
-        report = self._report()
-        with patch.object(paper, "emit_domain_metrics") as emit:
-            paper._emit_reconcile_metrics(report, account="test")
-
-        emit.assert_called_once()
-        kwargs = emit.call_args.kwargs
-        self.assertEqual(kwargs["job"], "paper-reconcile")
-        metrics = kwargs["metrics"]
-        self.assertEqual(metrics['alphalens_paper_filled_without_sl{account="test"}'], 1)
-        self.assertEqual(metrics['alphalens_paper_exits_failed{account="test"}'], 1)
-        self.assertEqual(metrics['alphalens_paper_entries_canceled{account="test"}'], 1)
-        self.assertEqual(metrics['alphalens_paper_exits_attached{account="test"}'], 2)
-        self.assertEqual(metrics['alphalens_paper_ledger_broker_desync{account="test"}'], 1)
-        # PR-4.5 partial-SL-coverage monitor gauge, with the account label.
-        self.assertEqual(metrics['alphalens_paper_uncovered_sl_qty{account="test"}'], 5)
-
-    def test_emit_helper_swallows_emit_error(self) -> None:
-        # The reconcile work is already persisted before the emit; an emit
-        # failure must NOT raise (PR #311 callsite rule), so a metrics-dir
-        # problem cannot flip the cron-health exit code.
-        from alphalens_cli.commands import paper
-
-        report = self._report()
-        with patch.object(
-            paper, "emit_domain_metrics", side_effect=RuntimeError("bad metrics dir")
-        ):
-            paper._emit_reconcile_metrics(report, account="main")  # MUST NOT raise
-
-    def test_reconcile_command_emits_via_helper(self) -> None:
-        # End-to-end wiring: the reconcile command reaches the emit callsite.
-        import datetime as dt
-
-        from alphalens_cli.commands import paper
-
-        report = self._report()
-        with (
-            patch.object(paper, "_today_utc", return_value=dt.date(2026, 5, 29)),
-            patch("alphalens_pipeline.paper.calendar.is_trading_day", return_value=True),
-            patch(
-                "alphalens_pipeline.paper.broker.get_default_broker_client",
-                return_value=object(),
-            ),
-            patch(
-                "alphalens_pipeline.paper.reconciler.reconcile_orders",
-                return_value=report,
-            ),
-            patch.object(paper, "emit_domain_metrics") as emit,
-        ):
-            paper.reconcile(use_test_account=True)
-
-        emit.assert_called_once()
-        self.assertEqual(emit.call_args.kwargs["job"], "paper-reconcile")
-
-
 class TestEmitFailureDoesNotPoisonSuccessPath(unittest.TestCase):
     """A transient metrics-dir failure (disk full, permission flip)
     must NOT turn a successful cron run into a failed unit.
@@ -829,19 +740,17 @@ class TestThematicIngestEmitsSourceRows(unittest.TestCase):
                 thematic.ingest(date="2026-05-29", cache_dir=Path(tmp))  # MUST NOT raise
 
 
-class TestBackfillRefreshesExecutionTelemetry(unittest.TestCase):
-    """v3 PR-3: the nightly ``backfill-shadow-returns`` tail re-emits the
-    execution-quality gauges via ``_refresh_execution_telemetry(ledger)``.
+class TestBackfillRefreshesPopulationLadders(unittest.TestCase):
+    """The nightly ``backfill-shadow-returns`` tail runs the broker-free
+    population-monitor replay via ``_refresh_population_ladders(briefs_dir)``.
 
     A future refactor that drops the tail call would silently freeze the
-    telemetry at its last value (no test failure, stale dashboard). The call
-    IS the contract. The pricing sweep is stubbed to a no-op so no Polygon /
-    network call happens — the test isolates the wiring, not the sweep.
+    population monitor (no test failure, stale store). The call IS the
+    contract. The replay helpers are stubbed so no Polygon / network call
+    happens — the test isolates the wiring, not the replay.
     """
 
-    def test_backfill_tail_refreshes_telemetry_with_ledger_path(self) -> None:
-        from types import SimpleNamespace
-
+    def test_backfill_tail_refreshes_population_with_briefs_dir(self) -> None:
         from alphalens_cli.commands import feedback
         from alphalens_cli.main import app
         from typer.testing import CliRunner
@@ -849,32 +758,18 @@ class TestBackfillRefreshesExecutionTelemetry(unittest.TestCase):
         runner = CliRunner()
         recorded: list[Path] = []
 
-        def fake_refresh(ledger: Path):
-            recorded.append(ledger)
-
-        # No matured/pending dates → the sweep does no pricing at all; the
-        # command still reaches its tail. One stub report keeps the summary
-        # echo's start/end indexing valid.
-        import datetime as dt
-
-        report = SimpleNamespace(
-            matured=False,
-            n_priced=0,
-            brief_date=dt.date(2026, 5, 20),
-        )
+        def fake_refresh(briefs_dir: Path):
+            recorded.append(briefs_dir)
 
         with tempfile.TemporaryDirectory() as tmp:
             ledger = Path(tmp) / "feedback.db"
-            paper_ledger = Path(tmp) / "paper_ledger.db"
+            briefs_dir = Path(tmp) / "thematic_briefs"
             with (
+                patch.object(feedback, "_refresh_ladder_outcomes"),
                 patch.object(
                     feedback,
-                    "_refresh_execution_telemetry",
+                    "_refresh_population_ladders",
                     side_effect=fake_refresh,
-                ),
-                patch(
-                    "alphalens_pipeline.feedback.shadow_return.compute_shadow_returns_window",
-                    return_value=[report],
                 ),
             ):
                 result = runner.invoke(
@@ -884,13 +779,13 @@ class TestBackfillRefreshesExecutionTelemetry(unittest.TestCase):
                         "backfill-shadow-returns",
                         "--ledger",
                         str(ledger),
-                        "--paper-ledger",
-                        str(paper_ledger),
+                        "--briefs-dir",
+                        str(briefs_dir),
                     ],
                 )
 
         self.assertEqual(result.exit_code, 0, result.stdout)
-        self.assertEqual(recorded, [ledger])
+        self.assertEqual(recorded, [briefs_dir])
 
 
 if __name__ == "__main__":

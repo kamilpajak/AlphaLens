@@ -31,14 +31,10 @@ hand-maintained constant:
   * the set of staleness-rule job labels is parsed from
     ``deploy/monitoring/prometheus/rules/alphalens.yaml``.
 
-The paper jobs (``paper-plan`` / ``paper-submit`` / ``paper-reconcile``)
-emit job metrics BUT are deliberately staleness-rule-exempt: they run only
-on US trading days, so a weekend / holiday gap would false-page on a
-staleness window. Their failures are caught by the global
-``AlphalensJobFailed`` (non-zero exit) alert instead — see
-``project_paper_chain_date_contract_2026_06_01`` ("No staleness alert for
-paper jobs (weekend false-page); failures covered by global
-AlphalensJobFailed"). They are listed in ``STALENESS_EXEMPT_JOBS`` below.
+The Alpaca/Saxo paper-trading + Saxo-refresh units that used to populate the
+``STALENESS_EXEMPT_JOBS`` set were decommissioned with the broker chain
+(ADR 0012), so the set is now empty: every surviving emitting unit fires on a
+fixed daily/weekly cadence and carries a staleness rule.
 
 Positive control: synthetic inputs (a rule with ``job="nonexistent"``, and
 an emitting unit with no rule) are fed through the same parity logic and
@@ -71,26 +67,13 @@ EMIT_HOOK_RE = re.compile(
 )
 
 # Jobs that emit metrics but are intentionally NOT given an
-# AlphalensJobStale rule. The paper chain runs only on US trading days;
-# a staleness window spanning a weekend / holiday would false-page. Their
-# outages surface via the global AlphalensJobFailed (non-zero exit) alert
-# instead. Documented in project_paper_chain_date_contract_2026_06_01.
-STALENESS_EXEMPT_JOBS: frozenset[str] = frozenset(
-    {
-        "paper-plan",
-        "paper-submit",
-        "paper-reconcile",
-        # saxo-refresh emits the cron-health hook, but its staleness is covered
-        # by the DISTINCT AlphalensSaxoRefreshStale rule (time() -
-        # alphalens_saxo_token_chain_last_refresh_timestamp_seconds > 1800),
-        # which fires WHILE the token is still alive — strictly stronger than a
-        # cron job=stale window keyed on last_success. A duplicate cron
-        # AlphalensJobStale rule would only add noise. Pinned by
-        # test_monitoring_alerts.TestSaxoTokenChainAlerts; design memo
-        # docs/research/saxo_client_token_renewal_design_2026_06_03.md.
-        "saxo-refresh",
-    }
-)
+# AlphalensJobStale rule. The Alpaca/Saxo paper-trading + Saxo-refresh units
+# that used to populate this set were decommissioned with the broker chain
+# (ADR 0012), so the set is currently empty: every surviving emitting unit
+# fires on a fixed daily/weekly cadence and DOES carry a staleness rule. Add
+# a job here only if a future trading-day-only unit would false-page on a
+# weekend staleness window.
+STALENESS_EXEMPT_JOBS: frozenset[str] = frozenset()
 
 
 def _emitting_jobs() -> set[str]:

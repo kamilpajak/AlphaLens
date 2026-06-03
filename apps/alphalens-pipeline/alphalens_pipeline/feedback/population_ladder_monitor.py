@@ -54,12 +54,12 @@ from typing import Any, cast
 
 import pandas as pd
 
-from alphalens_pipeline.feedback.ladder_replay import LadderOutcome, replay_ladder
-from alphalens_pipeline.feedback.shadow_return import (
+from alphalens_pipeline.feedback.bar_window import (
     ARRIVAL_VWAP_WINDOW_MIN,
     IMPLAUSIBLE_RETURN_THRESHOLD,
     _window_vwap,
 )
+from alphalens_pipeline.feedback.ladder_replay import LadderOutcome, replay_ladder
 from alphalens_pipeline.paper.brief_loader import CandidateBrief, load_brief
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
@@ -73,13 +73,13 @@ from alphalens_pipeline.paper.sizing import TradeSetupNotPlannableError, validat
 logger = logging.getLogger(__name__)
 
 # A (ticker, window start, window end) → list of Polygon agg bars. Same shape as
-# ``shadow_return.BarFetch`` so the production default + test stubs are shared.
+# ``bar_window.BarFetch`` so the production default + test stubs are shared.
 BarFetch = Callable[[str, dt.datetime, dt.datetime], Sequence[dict[str, Any]]]
 
 # Monitor-LOCAL lookback in CALENDAR days. The hold is 42 trading sessions
 # (≈ 60 calendar days); 75 gives margin so a row can still be re-replayed for a
 # night or two after it matures (and after VPS downtime). DELIBERATELY NOT
-# ``shadow_return.DEFAULT_LOOKBACK_DAYS`` (14) — that is the 5-session metric's
+# ``bar_window.DEFAULT_LOOKBACK_DAYS`` (14) — that is the fixed 5-session metric's
 # window and is far too short for the full-hold replay.
 MONITOR_LOOKBACK_DAYS = 75
 
@@ -251,9 +251,9 @@ def _extend_bar_cache(
 def _outcome_is_implausible(outcome: LadderOutcome) -> bool:
     """True when the replay's forward return is a likely unadjusted-split artifact.
 
-    Mirrors shadow_return's guard (Polygon bars are ``adjusted=false``). When True
-    the caller skips + carries the prior row forward rather than recording a
-    corrupted outcome.
+    Mirrors the bar_window implausible-move guard (Polygon bars are
+    ``adjusted=false``). When True the caller skips + carries the prior row
+    forward rather than recording a corrupted outcome.
     """
     fr = outcome.forward_return
     return fr is not None and abs(fr) > IMPLAUSIBLE_RETURN_THRESHOLD
@@ -599,7 +599,7 @@ def _replay_candidate(
 
     Window: arrival open → ``min(position_expiry_session, last_closed_session)``
     session close (open + ``_HORIZON_SESSION_SPAN_MIN``). ``reference_close`` is
-    the arrival opening-window VWAP (same anchor as shadow_return).
+    the arrival opening-window VWAP (the shared bar_window anchor).
     """
     from alphalens_pipeline.data.alt_data.polygon_client import PolygonError
 

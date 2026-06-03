@@ -20,10 +20,10 @@ Why a standalone workspace package (not ``alphalens_pipeline.feedback``):
     pure-stdlib core into this leaf package gives ONE schema owner that both
     sides depend on with zero heavy deps and no boundary violation.
 
-    The pipeline-coupled feedback ANALYTICS (``outcome_join``,
-    ``shadow_return``, ``execution_modes``) stay in
-    ``alphalens_pipeline.feedback`` — they import ``alphalens_pipeline.paper``
-    and are never needed by Django.
+    The pipeline-coupled feedback ANALYTICS (the broker-free ladder + population
+    replay engines and their shared bar-window primitives) stay in
+    ``alphalens_pipeline.feedback`` — they pull in the heavy pipeline deps and
+    are never needed by Django.
 
 Single SQLite file, user-authored, NOT regenerable from parquet — same
 lifecycle as ``candidates.db`` / ``paper_ledger.db``; lives on the
