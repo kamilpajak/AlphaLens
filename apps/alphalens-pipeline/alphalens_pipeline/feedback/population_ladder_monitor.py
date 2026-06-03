@@ -267,7 +267,7 @@ def _terminal_row(
     last_closed_session: dt.date,
 ) -> dict[str, Any]:
     """Build a monitor store row from a replay outcome (terminal or ongoing)."""
-    (_arrival, _entry_exp, _pos_exp, entry_ttl, position_ttl, _e, _p) = cutoffs
+    (_arrival, entry_expiry_session, _pos_exp, entry_ttl, position_ttl, _e, _p) = cutoffs
     classification = outcome.classification if outcome.status == "OK" else outcome.status
     terminal = (
         outcome.status == "OK" and classification in _TERMINAL_SET
@@ -275,6 +275,17 @@ def _terminal_row(
         # TIME_STOP next replay; until then it is ongoing. (Belt-and-suspenders:
         # the engine already forces TIME_STOP once position_expiry_ms is reached.)
     )
+    # A NO_FILL is only TERMINAL once the entry-TTL window has fully elapsed
+    # (entry_expiry strictly in the past). Until then the dip-buy limits are still
+    # live and price could fill them on a later session, so the candidate is "not
+    # filled YET" (ongoing) -- freezing it here would permanently miss a later
+    # fill and under-count the population's fill rate.
+    # ``>`` not ``>=``: the entry cutoff is the entry_expiry session's OPEN
+    # (entry_expiry_ms), so once that session has closed no fill is possible and
+    # the NO_FILL is final. Only an entry_expiry session STILL in the future
+    # (strictly after the last closed session) leaves the limits live.
+    if classification == "NO_FILL" and entry_expiry_session > last_closed_session:
+        terminal = False
     realized_r = outcome.realized_r if terminal else None
     open_r = None if terminal else outcome.realized_r
     holding_days = _holding_days(outcome, last_closed_session, terminal=terminal)
