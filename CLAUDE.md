@@ -43,7 +43,7 @@ The CLI binary `alphalens` is registered in `apps/alphalens-pipeline/pyproject.t
 | `alphalens_research/gates/` | RESEARCH_ONLY | Layer 2 selection-gates wrapper |
 | `alphalens_research/backtest/` | ACTIVE | Layer 3 engine — engine, multi_phase, multiple_testing, weighting, theme_analysis, llm_scorers, historical_validation, metrics |
 | `alphalens_research/overlays/` | RESEARCH_ONLY | Layer 4 risk-overlays; single occupant `vol_target.py` |
-| `alphalens_research/attribution/` | ACTIVE | Layer 5 — cost_model, factor_analysis, regime, decision_matrix, diagnostics, report, walk_forward |
+| `alphalens_research/attribution/` | ACTIVE | Layer 5 — cost_model, factor_analysis, regime, diagnostics, report, walk_forward |
 | `alphalens_research/preaudit/` | ACTIVE | per-strategy SmokeProfile + coverage gate before audit launch |
 | `alphalens_research/diagnostics/` | ACTIVE | survivorship_pit, cyclicality screens |
 | `alphalens_research/retrospective_audit/` | RESEARCH_ONLY | PIT universe loaders (U1/U2/U3) + SMD cache primitives for one-shot retrospectives |
