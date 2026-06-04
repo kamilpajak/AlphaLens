@@ -1,0 +1,49 @@
+{
+	"n_brief": 168,
+	"n_plannable": 102,
+	"n_terminal": 5,
+	"n_matured": 3,
+	"n_gate_threshold": 30,
+	"benchmark": "SPY",
+	"metric_note": "excess-of-benchmark, gross of cost, mechanical ladder",
+	"edge": {
+		"status": "insufficient",
+		"n_matured": 3,
+		"threshold": 30,
+		"market_excess_mean": null,
+		"market_excess_median": null,
+		"market_excess_quantiles": { "p10": null, "p50": null, "p90": null },
+		"gross_realized_r_mean": null,
+		"gross_realized_r_median": null,
+		"gross_realized_r_n": 3,
+		"holding_days_n": 3,
+		"holding_days_p50": null,
+		"holding_days_p95": null,
+		"gross_of_cost": true,
+		"regime_stratified": false
+	},
+	"portfolio": {
+		"status": "insufficient",
+		"n_matured": 3,
+		"threshold": 30,
+		"total_realized_contribution_pct_of_book": null,
+		"size_weighted_realized_r": null,
+		"mean_realized_risk_pct": null,
+		"mean_tiers_filled_count": null,
+		"gross_of_cost": true
+	},
+	"deployment": {
+		"n_terminal": 5,
+		"n_filled": 4,
+		"n_no_fill": 1,
+		"fill_rate": 0.8,
+		"no_fill_rate": 0.2,
+		"mean_tiers_filled_count": 1.4
+	},
+	"open_positions": {
+		"n_open": 99,
+		"near_tp": 22,
+		"near_sl": 14,
+		"note": "descriptive only; open positions are never reduced to a mean R"
+	}
+}

@@ -24,6 +24,7 @@
     "apps/alphalens-pipeline/alphalens_cli",
     "apps/alphalens-research/alphalens_research",
     "apps/alphalens-django/briefs",
+    "apps/alphalens-django/edge",
     "apps/alphalens-django/core",
     "apps/alphalens-django/auth_cf",
     "apps/alphalens-django/config"

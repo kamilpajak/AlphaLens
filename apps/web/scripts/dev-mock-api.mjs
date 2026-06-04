@@ -6,6 +6,9 @@
 // stripping the `/api` prefix, so this server answers the production contract:
 //   GET /v1/days?limit=N      -> paginated index envelope
 //   GET /v1/days/{YYYY-MM-DD}  -> full DayBrief (or 404)
+//   GET /v1/edge/summary       -> N-gated benchmark-excess aggregate
+//                                 (?state=insufficient serves the gated variant)
+//   GET /v1/edge/outcomes      -> per-candidate rows (?status=terminal|ongoing)
 //
 // Run:  node scripts/dev-mock-api.mjs   (or: PORT=8081 node scripts/dev-mock-api.mjs)
 // Then: pnpm dev   and open http://localhost:5173/
@@ -25,6 +28,15 @@ const DAYS_INDEX_BODY = JSON.stringify({
 	meta: { total: DAYS_INDEX.length, limit: 200, offset: 0 }
 });
 
+// Edge dashboard fixtures: the populated state is the default; pass
+// `?state=insufficient` to preview the N-gated "insufficient data" panels.
+const EDGE_SUMMARY_OK = readFileSync(join(FIXTURES, 'edge-summary.json'), 'utf8');
+const EDGE_SUMMARY_INSUFFICIENT = readFileSync(
+	join(FIXTURES, 'edge-summary-insufficient.json'),
+	'utf8'
+);
+const EDGE_OUTCOMES = JSON.parse(readFileSync(join(FIXTURES, 'edge-outcomes.json'), 'utf8'));
+
 function readDay(date) {
 	try {
 		return readFileSync(join(FIXTURES, 'days', `${date}.json`), 'utf8');
@@ -43,6 +55,19 @@ const server = createServer((req, res) => {
 
 	if (url.pathname === '/v1/days') {
 		return json(res, 200, DAYS_INDEX_BODY);
+	}
+
+	if (url.pathname === '/v1/edge/summary') {
+		const insufficient = url.searchParams.get('state') === 'insufficient';
+		return json(res, 200, insufficient ? EDGE_SUMMARY_INSUFFICIENT : EDGE_SUMMARY_OK);
+	}
+
+	if (url.pathname === '/v1/edge/outcomes') {
+		const status = url.searchParams.get('status');
+		let rows = EDGE_OUTCOMES.data;
+		if (status === 'terminal') rows = rows.filter((o) => o.terminal);
+		else if (status === 'ongoing') rows = rows.filter((o) => !o.terminal);
+		return json(res, 200, JSON.stringify({ data: rows }));
 	}
 
 	const dayMatch = url.pathname.match(/^\/v1\/days\/(\d{4}-\d{2}-\d{2})$/);

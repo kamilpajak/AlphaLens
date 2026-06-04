@@ -79,7 +79,7 @@ jobs:
           import bs4
           import httpx, yaml, json_repair, quiverquant
           import alphalens_feedback.store, alphalens_feedback.regime
-          from alphalens_pipeline.feedback import bar_window, ladder_replay, ladder_backfill, population_ladder_monitor
+          from alphalens_pipeline.feedback import bar_window, ladder_replay, ladder_backfill, population_ladder_monitor, benchmark_excess
           from alphalens_cli.main import app
           print('pipeline import-smoke OK')
           "

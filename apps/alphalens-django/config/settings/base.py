@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "corsheaders",
     "briefs.apps.BriefsConfig",
+    "edge.apps.EdgeConfig",
     "auth_cf.apps.AuthCfConfig",
     "core.apps.CoreConfig",
     "feedback.apps.FeedbackConfig",
@@ -94,6 +95,16 @@ ALPHALENS_FEEDBACK_DB = env(
 ALPHALENS_VIX_CACHE = env(
     "ALPHALENS_VIX_CACHE",
     default=str(Path.home() / ".alphalens" / "macro" / "vix_regime_cache.json"),
+)
+
+# Population-ladder outcome parquet store (edge dashboard cache, memo §4). The
+# pipeline writes one parquet per brief date here; rebuild_ladder_outcomes_cache
+# mirrors them into Postgres. Same host ``~/.alphalens`` mount + container HOME
+# trap as ALPHALENS_BRIEFS_DIR. The ingest reads this via its own module-level
+# default (so argparse picks it up); the env name is documented here for parity.
+ALPHALENS_LADDER_OUTCOMES_DIR = env(
+    "ALPHALENS_LADDER_OUTCOMES_DIR",
+    default=str(Path.home() / ".alphalens" / "population_ladders"),
 )
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
