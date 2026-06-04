@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	classificationTone,
 	excessBarGeometry,
+	fmtFracPct,
 	fmtR,
 	statsUnlocked,
 	statusLabel
@@ -103,6 +104,36 @@ describe('fmtR', () => {
 		expect(fmtR(null)).toBe('—');
 		expect(fmtR(undefined)).toBe('—');
 		expect(fmtR(Number.NaN)).toBe('—');
+	});
+});
+
+describe('fmtFracPct', () => {
+	it('scales a fraction-of-book to a percent string (the % BOOK / risk% bug)', () => {
+		// The population-monitor size columns store FRACTIONS (0.0021 = 0.21%).
+		// fmtPct alone (no ×100) would render "+0.00%" — the regression this fixes.
+		expect(fmtFracPct(0.0021, 2)).toBe('+0.21%');
+		expect(fmtFracPct(0.05, 2)).toBe('+5.00%');
+		expect(fmtFracPct(0.0008, 2)).toBe('+0.08%');
+	});
+
+	it('drops the leading sign when withSign=false (risk%, fill-rate)', () => {
+		expect(fmtFracPct(0.0033, 2, false)).toBe('0.33%');
+		expect(fmtFracPct(0.5314, 1, false)).toBe('53.1%');
+	});
+
+	it('keeps the minus sign on negative contributions', () => {
+		expect(fmtFracPct(-0.0033, 2)).toBe('-0.33%');
+	});
+
+	it('renders +0.00% for an exact zero', () => {
+		expect(fmtFracPct(0, 2)).toBe('+0.00%');
+	});
+
+	it('renders an em dash for null / undefined / non-finite', () => {
+		expect(fmtFracPct(null)).toBe('—');
+		expect(fmtFracPct(undefined)).toBe('—');
+		expect(fmtFracPct(Number.NaN)).toBe('—');
+		expect(fmtFracPct(Number.POSITIVE_INFINITY)).toBe('—');
 	});
 });
 
