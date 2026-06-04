@@ -23,9 +23,20 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(__dirname, '..', 'src', 'routes', 'experiments', '+page.svelte');
+const LEDGER_TS = resolve(__dirname, '..', 'src', 'lib', 'data', 'research-ledger.ts');
 const GLOSSARY_TS = resolve(__dirname, '..', 'src', 'lib', 'data', 'glossary.ts');
 
-const src = readFileSync(SRC, 'utf-8');
+// The paradigm / pattern / status-legend data arrays (which carry the `[term]`
+// markup and the `audit-tooltips:dynamic-terms` hint) were extracted to
+// `$lib/data/research-ledger.ts`; the JSX template + inline JargonTip prose
+// stays in the route. Scan BOTH as one buffer: the ledger portion supplies the
+// data-field markup + the dynamic hint, the svelte portion supplies the JSX
+// JargonTip wraps. `sectionForLine` walks backward over the combined buffer, so
+// its `id:` / `n:` / `status:` anchors (ledger) and `<section>` anchors (svelte)
+// both resolve correctly.
+const ledgerSrc = readFileSync(LEDGER_TS, 'utf-8');
+const svelteSrc = readFileSync(SRC, 'utf-8');
+const src = `${ledgerSrc}\n${svelteSrc}`;
 const glossarySrc = readFileSync(GLOSSARY_TS, 'utf-8');
 
 // ---------- Parse glossary ----------

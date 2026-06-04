@@ -1,0 +1,1107 @@
+openapi: 3.0.3
+info:
+  title: AlphaLens Briefs API
+  version: 1.0.0
+  description: Read/write HTTP access to thematic briefs produced by the AlphaLens
+    daily pipeline.
+paths:
+  /v1/candidates/{date}/{ticker}:
+    get:
+      operationId: v1_candidates_retrieve
+      description: |-
+        ``/v1/candidates/{date}/{ticker}`` — single candidate fetch.
+
+        The detail PK is supplied as a compound URL segment, not a single field.
+        The router pattern in ``urls.py`` is custom for this reason.
+      parameters:
+      - in: path
+        name: date
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: ticker
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Candidate'
+          description: ''
+  /v1/days:
+    get:
+      operationId: v1_days_list
+      description: '``/v1/days`` — index + per-day envelope + per-day candidates.'
+      parameters:
+      - in: query
+        name: from
+        schema:
+          type: string
+          format: date
+        description: Inclusive ISO date lower bound.
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - in: query
+        name: to
+        schema:
+          type: string
+          format: date
+        description: Inclusive ISO date upper bound.
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedDayMetaList'
+          description: ''
+  /v1/days/{date}:
+    get:
+      operationId: v1_days_retrieve
+      description: '``/v1/days`` — index + per-day envelope + per-day candidates.'
+      parameters:
+      - in: path
+        name: date
+        schema:
+          type: string
+          format: date
+        description: ISO 8601 date (YYYY-MM-DD).
+        required: true
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DayBrief'
+          description: ''
+  /v1/days/{date}/candidates:
+    get:
+      operationId: v1_days_candidates_list
+      description: '``/v1/days`` — index + per-day envelope + per-day candidates.'
+      parameters:
+      - in: path
+        name: date
+        schema:
+          type: string
+          format: date
+        description: ISO 8601 date (YYYY-MM-DD).
+        required: true
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: min_score
+        schema:
+          type: integer
+        description: Layer-4 score floor.
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - in: query
+        name: theme
+        schema:
+          type: string
+        description: Exact theme match.
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCandidateList'
+          description: ''
+  /v1/feedback/decisions:
+    get:
+      operationId: v1_feedback_decisions_retrieve
+      description: |-
+        POST (create/upsert) + GET (list by brief_date) collection endpoint.
+
+        HTTP status convention (zen pre-merge finding #5): POST returns 201
+        only on fresh creation; 200 on upsert update (UNIQUE-key row already
+        existed and was replaced). The id is preserved across the upsert so
+        the SPA's local undo reference stays valid either way.
+      parameters:
+      - in: query
+        name: brief_date
+        schema:
+          type: string
+        description: YYYY-MM-DD — brief date to filter by.
+        required: true
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionListResponse'
+          description: ''
+    post:
+      operationId: v1_feedback_decisions_create
+      description: |-
+        POST (create/upsert) + GET (list by brief_date) collection endpoint.
+
+        HTTP status convention (zen pre-merge finding #5): POST returns 201
+        only on fresh creation; 200 on upsert update (UNIQUE-key row already
+        existed and was replaced). The id is preserved across the upsert so
+        the SPA's local undo reference stays valid either way.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DecisionRequest'
+        required: true
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionResponse'
+          description: ''
+  /v1/feedback/decisions/{decision_id}:
+    delete:
+      operationId: v1_feedback_decisions_destroy
+      description: DELETE single decision by uuid.
+      parameters:
+      - in: path
+        name: decision_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /v1/feedback/taxonomy:
+    get:
+      operationId: v1_feedback_taxonomy_retrieve
+      description: |-
+        Static endpoint exposing the locked dismiss taxonomy + action enum.
+
+        The SPA fetches this once on app boot to build the dropdowns
+        without hard-coding the labels client-side. Pipeline + Django + SPA
+        therefore share one source of truth (the taxonomy constant in
+        ``alphalens_feedback.store``).
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaxonomyResponse'
+          description: ''
+  /v1/market/status:
+    get:
+      operationId: market_status_retrieve
+      description: Returns whether the requested venue (defaulting to XNYS) is currently
+        in a regular session, whether today's session is a half-day, and the UTC ISO
+        8601 timestamp of the next session open. Anchored on UTC today unless ``?as_of=YYYY-MM-DD``
+        is supplied.
+      summary: Current market-status snapshot
+      parameters:
+      - in: query
+        name: as_of
+        schema:
+          type: string
+          format: date
+        description: ISO 8601 date (YYYY-MM-DD) to anchor the response on. Defaults
+          to today (UTC). Date-only — time components are rejected with 400.
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketStatus'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /v1/stats:
+    get:
+      operationId: v1_stats_retrieve
+      description: '``/v1/stats`` — top-line counters + N most-frequent themes.'
+      parameters:
+      - in: query
+        name: top_n
+        schema:
+          type: integer
+        description: Top themes to include (1-50).
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stats'
+          description: ''
+  /v1/themes:
+    get:
+      operationId: v1_themes_list
+      description: '``/v1/themes`` — distinct-theme aggregation + per-theme candidates.'
+      parameters:
+      - in: query
+        name: from
+        schema:
+          type: string
+          format: date
+        description: Inclusive ISO date lower bound.
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - in: query
+        name: to
+        schema:
+          type: string
+          format: date
+        description: Inclusive ISO date upper bound.
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedThemeSummaryList'
+          description: ''
+  /v1/themes/{theme}/candidates:
+    get:
+      operationId: v1_themes_candidates_list
+      description: '``/v1/themes`` — distinct-theme aggregation + per-theme candidates.'
+      parameters:
+      - in: query
+        name: from
+        schema:
+          type: string
+          format: date
+        description: Inclusive ISO date lower bound.
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - in: path
+        name: theme
+        schema:
+          type: string
+        description: Exact theme name.
+        required: true
+      - in: query
+        name: to
+        schema:
+          type: string
+          format: date
+        description: Inclusive ISO date upper bound.
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCandidateList'
+          description: ''
+  /v1/tickers/{ticker}/history:
+    get:
+      operationId: v1_tickers_history_list
+      description: '``/v1/tickers/{ticker}/history`` — every brief appearance for
+        one ticker.'
+      parameters:
+      - in: query
+        name: from
+        schema:
+          type: string
+          format: date
+        description: Inclusive ISO date lower bound.
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - in: path
+        name: ticker
+        schema:
+          type: string
+        description: Upper-case ticker symbol.
+        required: true
+      - in: query
+        name: to
+        schema:
+          type: string
+          format: date
+        description: Inclusive ISO date upper bound.
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCandidateList'
+          description: ''
+components:
+  schemas:
+    Candidate:
+      type: object
+      description: One ranked candidate from a daily thematic brief.
+      properties:
+        date:
+          type: string
+          format: date
+        ticker:
+          type: string
+          maxLength: 12
+        theme:
+          type: string
+          maxLength: 128
+        company_name:
+          type: string
+          maxLength: 256
+        rationale:
+          type: string
+        llm_confidence:
+          type: number
+          format: double
+          nullable: true
+        market_cap:
+          type: number
+          format: double
+          nullable: true
+        gates_passed: {}
+        n_gates_passed:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+        gates_failed: {}
+        n_gates_failed:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+        gates_unknown: {}
+        n_gates_unknown:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+        verified:
+          type: boolean
+        source_event_url:
+          type: string
+          format: uri
+          maxLength: 2048
+        source_event_title:
+          type: string
+          maxLength: 512
+        source_event_published_at:
+          type: string
+          maxLength: 64
+        theme_search_keywords: {}
+        industry_id:
+          type: number
+          format: double
+          nullable: true
+        industry_name:
+          type: string
+          maxLength: 256
+        sector_name:
+          type: string
+          maxLength: 128
+        peer_cohort_level:
+          type: string
+          maxLength: 8
+        insider_score_usd:
+          type: number
+          format: double
+          nullable: true
+        insider_score_sector_percentile:
+          type: number
+          format: double
+          nullable: true
+        fcff_yield_pct:
+          type: number
+          format: double
+          nullable: true
+        fcff_yield_sector_percentile:
+          type: number
+          format: double
+          nullable: true
+        valuation_pe:
+          type: number
+          format: double
+          nullable: true
+        valuation_ps:
+          type: number
+          format: double
+          nullable: true
+        valuation_ev_rev:
+          type: number
+          format: double
+          nullable: true
+        valuation_ev_ebitda:
+          type: number
+          format: double
+          nullable: true
+        valuation_fcf_margin:
+          type: number
+          format: double
+          nullable: true
+        valuation_composite_sector_percentile:
+          type: number
+          format: double
+          nullable: true
+        valuation_financials_publish_date:
+          type: string
+          maxLength: 32
+        valuation_financials_age_days:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        roic_pct:
+          type: number
+          format: double
+          nullable: true
+        roe_pct:
+          type: number
+          format: double
+          nullable: true
+        magic_formula_health_pass:
+          type: boolean
+        technical_rsi:
+          type: number
+          format: double
+          nullable: true
+        technical_ma50_distance_pct:
+          type: number
+          format: double
+          nullable: true
+        technical_atr_pct:
+          type: number
+          format: double
+          nullable: true
+        technical_volume_zscore:
+          type: number
+          format: double
+          nullable: true
+        technical_pct_off_52w_high:
+          type: number
+          format: double
+          nullable: true
+        technical_pct_off_52w_low:
+          type: number
+          format: double
+          nullable: true
+        technical_ma200_distance_pct:
+          type: number
+          format: double
+          nullable: true
+        technical_ma200_slope_pct_per_day:
+          type: number
+          format: double
+          nullable: true
+        catalyst_strength:
+          type: number
+          format: double
+          nullable: true
+        catalyst_event_type:
+          type: string
+          maxLength: 64
+        catalyst_confidence:
+          type: number
+          format: double
+          nullable: true
+        magic_formula_rank:
+          type: number
+          format: double
+          nullable: true
+        magic_formula_cohort_n:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        deep_drawdown_reversal:
+          type: boolean
+        layer4_weighted_score:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+        also_in_themes: {}
+        rank_in_day:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        cohort_size_in_day:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        next_earnings_date:
+          type: string
+          format: date
+          nullable: true
+        brief_model_used:
+          type: string
+          maxLength: 64
+        brief_tldr:
+          type: string
+        brief_supply_chain_md:
+          type: string
+        brief_bear_summary_md:
+          type: string
+        brief_catalyst_failure_exit:
+          type: string
+        brief_trade_setup:
+          nullable: true
+        brief_template_id:
+          type: string
+          maxLength: 128
+        brief_template_facts:
+          nullable: true
+        brief_generated_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - company_name
+      - date
+      - theme
+      - ticker
+    DayBrief:
+      type: object
+      description: 'Full payload for one day: meta + every ranked candidate.'
+      properties:
+        date:
+          type: string
+          format: date
+        n_candidates:
+          type: integer
+        n_themes:
+          type: integer
+        top_theme:
+          type: string
+          nullable: true
+        theme_counts:
+          type: object
+          additionalProperties:
+            type: integer
+        candidates:
+          type: array
+          items:
+            $ref: '#/components/schemas/Candidate'
+      required:
+      - candidates
+      - date
+      - n_candidates
+      - n_themes
+      - theme_counts
+      - top_theme
+    DayMeta:
+      type: object
+      description: 'Row in ``/v1/days``: per-day metadata only (no candidates).'
+      properties:
+        date:
+          type: string
+          format: date
+        n_candidates:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+        n_themes:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+        top_theme:
+          type: string
+          nullable: true
+          description: Empty-string DB default → None on the wire (parity with legacy
+            API).
+          readOnly: true
+      required:
+      - date
+      - n_candidates
+      - n_themes
+      - top_theme
+    DecisionListResponse:
+      type: object
+      description: Envelope for GET /v1/feedback/decisions.
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DecisionResponse'
+      required:
+      - data
+    DecisionRequest:
+      type: object
+      description: |-
+        Body schema for POST /v1/feedback/decisions. All optional fields
+        default to None so the pipeline-side Decision dataclass enforces the
+        rules (e.g. dismiss_category required when action=dismissed).
+      properties:
+        brief_date:
+          type: string
+          format: date
+        ticker:
+          type: string
+          maxLength: 10
+        theme:
+          type: string
+          maxLength: 200
+        surfaced_at:
+          type: string
+          format: date-time
+        action:
+          type: string
+          maxLength: 20
+        action_at:
+          type: string
+          format: date-time
+          nullable: true
+        dismiss_category:
+          type: string
+          nullable: true
+          maxLength: 30
+        dismiss_reason:
+          type: string
+          nullable: true
+          maxLength: 30
+        dismiss_note:
+          type: string
+          nullable: true
+          maxLength: 200
+        confidence_subjective:
+          type: integer
+          nullable: true
+        paper_trade_plan_id:
+          type: string
+          nullable: true
+          maxLength: 64
+        position_size_usd:
+          type: number
+          format: double
+          nullable: true
+        entry_price:
+          type: number
+          format: double
+          nullable: true
+      required:
+      - action
+      - brief_date
+      - surfaced_at
+      - theme
+      - ticker
+    DecisionResponse:
+      type: object
+      description: |-
+        Response shape for a persisted decision row.
+
+        Mirrors ``views._serialise_decision`` output so drf-spectacular can
+        generate accurate OpenAPI schemas for the SPA + downstream clients.
+      properties:
+        id:
+          type: string
+        brief_date:
+          type: string
+          format: date
+        ticker:
+          type: string
+        theme:
+          type: string
+        surfaced_at:
+          type: string
+          format: date-time
+        action:
+          type: string
+        action_at:
+          type: string
+          format: date-time
+        dismiss_category:
+          type: string
+          nullable: true
+        dismiss_reason:
+          type: string
+          nullable: true
+        dismiss_note:
+          type: string
+          nullable: true
+        confidence_subjective:
+          type: integer
+          nullable: true
+        paper_trade_plan_id:
+          type: string
+          nullable: true
+        position_size_usd:
+          type: number
+          format: double
+          nullable: true
+        entry_price:
+          type: number
+          format: double
+          nullable: true
+        market_regime_at_entry:
+          type: string
+          nullable: true
+        layer4_score:
+          type: integer
+          nullable: true
+        rank_in_day:
+          type: integer
+          nullable: true
+        cohort_size_in_day:
+          type: integer
+          nullable: true
+        gate_verdict_json:
+          type: string
+          nullable: true
+        brief_model_used:
+          type: string
+          nullable: true
+        outcome_plan_id:
+          type: string
+          nullable: true
+        fill_status:
+          type: string
+          nullable: true
+        exit_kind:
+          type: string
+          nullable: true
+        shadow_return:
+          type: number
+          format: double
+          nullable: true
+        realized_return:
+          type: number
+          format: double
+          nullable: true
+        outcome_computed_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - action
+      - action_at
+      - brief_date
+      - confidence_subjective
+      - dismiss_category
+      - dismiss_note
+      - dismiss_reason
+      - entry_price
+      - exit_kind
+      - fill_status
+      - id
+      - market_regime_at_entry
+      - outcome_computed_at
+      - outcome_plan_id
+      - paper_trade_plan_id
+      - position_size_usd
+      - realized_return
+      - shadow_return
+      - surfaced_at
+      - theme
+      - ticker
+    MarketStatus:
+      type: object
+      properties:
+        is_trading_day:
+          type: boolean
+        is_half_day:
+          type: boolean
+        next_open_iso:
+          type: string
+          format: date-time
+        exchange:
+          type: string
+      required:
+      - exchange
+      - is_half_day
+      - is_trading_day
+      - next_open_iso
+    PaginatedCandidateList:
+      type: object
+      required:
+      - data
+      - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Candidate'
+        meta:
+          type: object
+          required:
+          - total
+          - limit
+          - offset
+          properties:
+            total:
+              type: integer
+              example: 123
+            limit:
+              type: integer
+              example: 50
+            offset:
+              type: integer
+              example: 0
+    PaginatedDayMetaList:
+      type: object
+      required:
+      - data
+      - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DayMeta'
+        meta:
+          type: object
+          required:
+          - total
+          - limit
+          - offset
+          properties:
+            total:
+              type: integer
+              example: 123
+            limit:
+              type: integer
+              example: 50
+            offset:
+              type: integer
+              example: 0
+    PaginatedThemeSummaryList:
+      type: object
+      required:
+      - data
+      - meta
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ThemeSummary'
+        meta:
+          type: object
+          required:
+          - total
+          - limit
+          - offset
+          properties:
+            total:
+              type: integer
+              example: 123
+            limit:
+              type: integer
+              example: 50
+            offset:
+              type: integer
+              example: 0
+    Stats:
+      type: object
+      description: Top-line counters and most-frequent themes for ``/v1/stats``.
+      properties:
+        n_days:
+          type: integer
+        n_candidates:
+          type: integer
+        n_themes:
+          type: integer
+        earliest_date:
+          type: string
+          format: date
+          nullable: true
+        latest_date:
+          type: string
+          format: date
+          nullable: true
+        last_rebuild_at:
+          type: string
+          format: date-time
+          nullable: true
+        top_themes:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopTheme'
+      required:
+      - earliest_date
+      - last_rebuild_at
+      - latest_date
+      - n_candidates
+      - n_days
+      - n_themes
+      - top_themes
+    TaxonomyResponse:
+      type: object
+      description: Shape of GET /v1/feedback/taxonomy — exposed to SPA dropdowns.
+      properties:
+        actions:
+          type: array
+          items:
+            type: string
+        categories:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+      required:
+      - actions
+      - categories
+    ThemeSummary:
+      type: object
+      description: 'Row in ``/v1/themes``: distinct theme + appearance counts.'
+      properties:
+        theme:
+          type: string
+        n_candidates:
+          type: integer
+        n_days:
+          type: integer
+        first_seen:
+          type: string
+          format: date
+        last_seen:
+          type: string
+          format: date
+      required:
+      - first_seen
+      - last_seen
+      - n_candidates
+      - n_days
+      - theme
+    TopTheme:
+      type: object
+      properties:
+        theme:
+          type: string
+        n_days:
+          type: integer
+        n_candidates:
+          type: integer
+      required:
+      - n_candidates
+      - n_days
+      - theme
+  securitySchemes:
+    CloudflareAccessJWT:
+      type: apiKey
+      in: header
+      name: Cf-Access-Jwt-Assertion
+      description: Cloudflare Access service token / SSO JWT, injected by the Cloudflare
+        edge after the user passes the configured identity provider (Google SSO).
+        Verified server-side against the team's JWKS.
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid
