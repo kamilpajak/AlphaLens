@@ -14,6 +14,11 @@ dependencies = [
     "scipy>=1.17.1",
     "pyarrow>=24.0.0",
     "requests>=2.32.0",
+    # numpy imported directly by the scorers, data.schemas, and
+    # thematic.screening modules (~9 sites). Before this it rode in
+    # transitively via pandas/scipy; declared directly so a future
+    # pandas bump dropping it fails the closure test, not the VPS.
+    "numpy>=2.4.0",
     # HTTP client for the OpenRouter wrapper (was transitive via google-genai
     # before the Gemini removal; now declared directly).
     "httpx>=0.28.0",
@@ -25,6 +30,12 @@ dependencies = [
     "yfinance>=0.2.63",
     "quiverquant",
     "feedparser>=6.0.11",
+    # HTML parsing for the thematic 10-K verification grep
+    # (thematic.verification.tenk_grep imports `from bs4 import
+    # BeautifulSoup`). Rode in transitively via yfinance before; declared
+    # directly so a yfinance bump dropping it fails the closure test
+    # instead of breaking `alphalens thematic verify` at runtime.
+    "beautifulsoup4>=4.14.0",
     # LLM / parsing
     "json-repair>=0.59.10",
     # Options data vendor (consumed by thematic options-volume signal)

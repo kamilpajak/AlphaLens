@@ -294,6 +294,45 @@ class TestJsonschemaSpecificallyDeclared(unittest.TestCase):
         )
 
 
+class TestTransitiveOnlyDistsDeclaredDirectly(unittest.TestCase):
+    """Pin used-but-only-transitively-supplied dists as DIRECT deps.
+
+    ``beautifulsoup4`` (imported as ``bs4`` in thematic.verification.
+    tenk_grep) rides in via ``yfinance``; ``numpy`` rides in via
+    ``pandas``/``scipy``. Both are imported directly by pipeline code, so
+    a future yfinance / pandas bump that drops them would break
+    ``alphalens thematic verify`` (bs4) or the scorers + schemas (numpy)
+    at runtime on the VPS while the general closure test stays green
+    (the dist is still IN the closure, just no longer ours to keep).
+    Declaring them directly makes the dependency explicit and pins the
+    floor. Same class CLAUDE.md already records as fixed for
+    httpx / pyyaml.
+    """
+
+    def _declared_dist_names(self) -> list[str]:
+        data = tomllib.loads(PIPELINE_PYPROJECT.read_text())
+        deps = data.get("project", {}).get("dependencies", []) or []
+        return [d.split(">=")[0].split("==")[0].split("[")[0].strip().lower() for d in deps]
+
+    def test_beautifulsoup4_in_pipeline_pyproject(self):
+        self.assertIn(
+            "beautifulsoup4",
+            self._declared_dist_names(),
+            "beautifulsoup4 MUST be a direct runtime dep — tenk_grep.py "
+            "imports `from bs4 import BeautifulSoup` and it only rides in "
+            "transitively via yfinance.",
+        )
+
+    def test_numpy_in_pipeline_pyproject(self):
+        self.assertIn(
+            "numpy",
+            self._declared_dist_names(),
+            "numpy MUST be a direct runtime dep — it is imported in ~9 "
+            "pipeline modules (scorers, data.schemas, thematic.screening) "
+            "and only rides in transitively via pandas/scipy.",
+        )
+
+
 class TestDeferredImportExemptions(unittest.TestCase):
     """Unit-test the AST-walk filter against synthetic snippets.
 

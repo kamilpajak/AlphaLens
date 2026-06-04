@@ -37,10 +37,13 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 import unittest
 from unittest import mock
 
 import httpx
+from alphalens_pipeline.data.alt_data import openrouter_client as _orc_module
 from alphalens_pipeline.data.alt_data.openrouter_client import (
     API_KEY_ENV,
     OPENROUTER_BASE_URL,
@@ -435,6 +438,103 @@ class TestLazyDefaultSingleton(unittest.TestCase):
             _reset_default_client_for_tests()
             b = get_default_openrouter_client()
         self.assertIsNot(a, b)
+
+
+class TestDefaultSingletonThreadSafety(unittest.TestCase):
+    """Concurrent first-call must build exactly ONE client and register
+    the ``atexit`` close hook exactly ONCE.
+
+    Without double-checked locking, N threads racing the first call all
+    see ``_DEFAULT_CLIENT is None``, each build a client (and each
+    ``httpx`` connection pool), and each call ``atexit.register`` — so
+    the process leaks N-1 pools and registers N close hooks. The lock
+    serialises construction; the inner re-check inside the lock collapses
+    the race to a single build.
+    """
+
+    def setUp(self) -> None:
+        _reset_default_client_for_tests()
+
+    def tearDown(self) -> None:
+        _reset_default_client_for_tests()
+
+    def test_concurrent_first_call_builds_one_instance(self) -> None:
+        n_threads = 16
+        # All workers rendezvous here, then call the factory together, so
+        # every thread races the same first-call ``is None`` check.
+        start = threading.Barrier(n_threads)
+        register_calls: list[object] = []
+        register_lock = threading.Lock()
+
+        original_from_env = OpenRouterClient.from_env
+
+        def slow_from_env() -> OpenRouterClient:
+            # Hold the (single) builder inside construction long enough
+            # that, without the lock, every other thread would also pass
+            # the outer ``is None`` check and build its own client.
+            time.sleep(0.05)
+            return original_from_env()
+
+        real_register = _orc_module.atexit.register
+
+        def counting_register(func: object, *args: object, **kwargs: object) -> object:
+            # The patched ``atexit.register`` is the process-global one, so
+            # unrelated libraries (httpx etc.) may register during the test
+            # window too. Record every call but assert only on OUR close
+            # hook below. Still forward to the real registrar so nothing
+            # leaks behaviour.
+            with register_lock:
+                register_calls.append(func)
+            return real_register(func, *args, **kwargs)
+
+        results: list[OpenRouterClient] = []
+        errors: list[BaseException] = []
+        results_lock = threading.Lock()
+
+        def worker() -> None:
+            try:
+                start.wait(timeout=5)
+                client = get_default_openrouter_client()
+            except BaseException as exc:  # surface in the assert, not a hang
+                with results_lock:
+                    errors.append(exc)
+                return
+            with results_lock:
+                results.append(client)
+
+        with mock.patch.dict(os.environ, {API_KEY_ENV: _DUMMY_KEY}, clear=False):
+            with (
+                mock.patch.object(OpenRouterClient, "from_env", staticmethod(slow_from_env)),
+                mock.patch.object(_orc_module.atexit, "register", counting_register),
+            ):
+                threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join(timeout=10)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), n_threads)
+        # Exactly one instance shared by every thread.
+        self.assertEqual(len({id(c) for c in results}), 1)
+        # Exactly one httpx pool gets an atexit close hook. The factory
+        # registers ``client._http.close`` (a bound method). The patched
+        # registrar is process-global so it also sees unrelated httpx
+        # registrations — filter to our close hooks by name, then count
+        # DISTINCT owning pools. Broken (unguarded) builds N clients → N
+        # distinct pools registered; fixed builds one.
+        close_hook_owners = {
+            id(f.__self__)
+            for f in register_calls
+            if getattr(f, "__name__", None) == "close"
+            and isinstance(getattr(f, "__self__", None), httpx.Client)
+        }
+        self.assertEqual(
+            len(close_hook_owners),
+            1,
+            f"expected exactly one httpx pool registered for atexit close, "
+            f"got {len(close_hook_owners)}",
+        )
 
 
 if __name__ == "__main__":

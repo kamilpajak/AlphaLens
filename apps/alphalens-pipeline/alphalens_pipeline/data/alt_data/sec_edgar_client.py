@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -293,6 +294,10 @@ class SecEdgarClient:
 # first call keeps the env-var resolution centralized; tests reset via
 # _reset_default_client_for_tests().
 _DEFAULT_CLIENT: SecEdgarClient | None = None
+# Guards first-call construction so two threads racing the first call
+# don't each build a client (and a redundant SecRateCoordinator).
+# Double-checked locking (same idiom as ``paper.calendar._calendar``).
+_DEFAULT_CLIENT_LOCK = threading.Lock()
 
 
 def get_default_sec_client() -> SecEdgarClient:
@@ -302,20 +307,23 @@ def get_default_sec_client() -> SecEdgarClient:
     back to :data:`ALPHALENS_DEFAULT_USER_AGENT`. Subsequent calls return the
     same instance — caches and throttle state are shared across every caller
     in the process, which is precisely the SEC fair-access contract we want.
+    Construction is thread-safe via double-checked locking.
     """
     global _DEFAULT_CLIENT  # noqa: PLW0603 — lazy singleton is the documented pattern
     if _DEFAULT_CLIENT is None:
-        user_agent = os.environ.get(USER_AGENT_ENV) or ALPHALENS_DEFAULT_USER_AGENT
-        rate_limit = 10
-        coordinator = SecRateCoordinator(
-            path=default_coord_path(),
-            min_interval_s=1.0 / rate_limit,
-        )
-        _DEFAULT_CLIENT = SecEdgarClient(
-            user_agent=user_agent,
-            rate_limit_per_sec=rate_limit,
-            coordinator=coordinator,
-        )
+        with _DEFAULT_CLIENT_LOCK:
+            if _DEFAULT_CLIENT is None:
+                user_agent = os.environ.get(USER_AGENT_ENV) or ALPHALENS_DEFAULT_USER_AGENT
+                rate_limit = 10
+                coordinator = SecRateCoordinator(
+                    path=default_coord_path(),
+                    min_interval_s=1.0 / rate_limit,
+                )
+                _DEFAULT_CLIENT = SecEdgarClient(
+                    user_agent=user_agent,
+                    rate_limit_per_sec=rate_limit,
+                    coordinator=coordinator,
+                )
     return _DEFAULT_CLIENT
 
 
