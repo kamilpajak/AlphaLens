@@ -4,6 +4,7 @@
 // (tests/unit/edge.test.ts). No client-side aggregation lives here — the
 // N-gate is server-side; these helpers only render what the API returns.
 
+import { fmtPct } from './format';
 import type { EdgeStatus } from './types';
 
 /** Tailwind palette tone for the terminal-ops language. */
@@ -75,6 +76,25 @@ export function fmtR(value: number | null | undefined, digits = 2): string {
 	if (value === null || value === undefined || !Number.isFinite(value)) return '—';
 	const sign = value >= 0 ? '+' : '';
 	return `${sign}${value.toFixed(digits)}R`;
+}
+
+/**
+ * Format a FRACTION-of-book value (0..1 scale) as a percent string.
+ *
+ * The population-monitor size columns (`*_pct_of_book`, `*_risk_pct`,
+ * `*_gross_weight_pct`) and the deployment fill-rate are all stored as
+ * FRACTIONS (e.g. 0.0021 = 0.21%, 0.05 = 5%). `fmtPct` does NOT scale by 100,
+ * so feeding it a fraction renders "+0.00%" — the % BOOK / risk% display bug.
+ * This scales ×100 first, then delegates sign + digit handling to `fmtPct`.
+ * Null / non-finite → an em dash.
+ */
+export function fmtFracPct(
+	value: number | null | undefined,
+	digits = 1,
+	withSign = true
+): string {
+	if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+	return fmtPct(value * 100, digits, withSign);
 }
 
 /** Human label for the N-gate status used in panel chrome. */

@@ -3,10 +3,11 @@
 	import type { EdgeOutcome } from '$lib/types';
 	import { AlertTriangle, Clock, Lock } from 'lucide-svelte';
 	import JargonTip from '$lib/components/JargonTip.svelte';
-	import { fmtPct, fmtNum } from '$lib/format';
+	import { fmtNum } from '$lib/format';
 	import {
 		classificationTone,
 		excessBarGeometry,
+		fmtFracPct,
 		fmtR,
 		statsUnlocked,
 		type EdgeTone
@@ -257,7 +258,7 @@
 								>
 							</div>
 							<div class="text-fg text-lg font-bold normal-case whitespace-nowrap">
-								{fmtPct(summary.portfolio.total_realized_contribution_pct_of_book, 2)}
+								{fmtFracPct(summary.portfolio.total_realized_contribution_pct_of_book, 2)}
 							</div>
 						</div>
 						<div class="flex items-center justify-between text-fg-muted">
@@ -268,7 +269,7 @@
 									>mean risk%</JargonTip
 								>
 								<span class="text-fg-dim font-bold normal-case whitespace-nowrap">
-									{fmtPct(summary.portfolio.mean_realized_risk_pct, 2, false)}
+									{fmtFracPct(summary.portfolio.mean_realized_risk_pct, 2, false)}
 								</span>
 							</span>
 							<span class="whitespace-nowrap">
@@ -295,11 +296,7 @@
 							>
 						</span>
 						<span class="text-fg text-base font-bold normal-case whitespace-nowrap">
-							{fmtPct(
-								summary.deployment.fill_rate != null ? summary.deployment.fill_rate * 100 : null,
-								0,
-								false
-							)}
+							{fmtFracPct(summary.deployment.fill_rate, 0, false)}
 						</span>
 					</div>
 					<div class="flex items-center justify-between">
@@ -311,13 +308,7 @@
 							>
 						</span>
 						<span class="text-fg-dim font-bold normal-case whitespace-nowrap">
-							{fmtPct(
-								summary.deployment.no_fill_rate != null
-									? summary.deployment.no_fill_rate * 100
-									: null,
-								0,
-								false
-							)}
+							{fmtFracPct(summary.deployment.no_fill_rate, 0, false)}
 						</span>
 					</div>
 					<div class="flex items-center justify-between">
@@ -497,7 +488,7 @@
 									{o.holding_days_elapsed != null ? `${o.holding_days_elapsed}d` : '—'}
 								</td>
 								<td class="hidden md:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
-									{o.terminal ? fmtPct(o.realized_return_pct_of_book, 2) : '—'}
+									{o.terminal ? fmtFracPct(o.realized_return_pct_of_book, 2) : '—'}
 								</td>
 								<td class="hidden md:table-cell py-2.5 pr-3 text-amber lowercase truncate max-w-[140px]">
 									{#if !o.terminal}
