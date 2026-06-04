@@ -211,6 +211,18 @@ jobs:
       - name: Ruff lint (django)
         run: uv run ruff check apps/alphalens-django/
 
+      - name: Missing-migration gate (makemigrations --check)
+        working-directory: apps/alphalens-django
+        # Fails CI if a model field was edited without generating its
+        # migration. The test DB is built via `migrate`, so a model/schema
+        # drift passes the pytest suite and only breaks at prod deploy
+        # (`migrate` raises, or the column never lands). `--check` exits
+        # non-zero when changes would be created; `--dry-run` keeps it from
+        # writing any migration file. Settings module resolves via
+        # manage.py's DJANGO_SETTINGS_MODULE default (config.settings.dev),
+        # same as the neighbouring pytest step.
+        run: uv run python manage.py makemigrations --check --dry-run
+
       - name: Pytest with coverage
         working-directory: apps/alphalens-django
         # Coverage scoped to the app source dirs (core, auth_cf, briefs, config,
@@ -279,9 +291,33 @@ jobs:
         working-directory: apps/web
         run: pnpm run check
 
+      - name: Unit tests (vitest)
+        working-directory: apps/web
+        # Fast hermetic unit suite (markdown sanitization, apiFetch auth
+        # normalization, OpenAPI contract). Scoped to tests/unit/** so it
+        # never overlaps the Playwright suite below.
+        run: pnpm run test:unit
+
       - name: Build
         working-directory: apps/web
         run: pnpm run build
+
+      - name: Install Playwright browser (chromium)
+        working-directory: apps/web
+        # playwright.config.ts targets a single chromium project. --with-deps
+        # pulls the OS libraries the headless browser needs on ubuntu-latest.
+        # Only chromium is installed (not webkit/firefox) to keep the step fast.
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Web tests (Playwright)
+        working-directory: apps/web
+        # The 5 hermetic Playwright suites (smoke, feedback, template-facts,
+        # market-status, django-smoke) that `just test-web` runs locally —
+        # they were NOT gated in CI before. `pnpm test` == `playwright test`;
+        # its webServer config builds + previews the SPA on 127.0.0.1:4173,
+        # so no separate server step is needed. CI=true forces playwright to
+        # start its own server (reuseExistingServer is off under CI).
+        run: pnpm test
 
   # -----------------------------------------------------------------------
   # SonarCloud — runs after research/django produce coverage. Skipped on
