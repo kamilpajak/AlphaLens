@@ -36,6 +36,7 @@ from alphalens_pipeline.data.alt_data.polygon_client import (
     get_default_polygon_client,
 )
 from alphalens_pipeline.thematic.mapping import catalyst_resolver, theme_mapper
+from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 from alphalens_pipeline.thematic.verification import (
     insider,
     mcap_filter,
@@ -236,14 +237,16 @@ def _fetch_press_window(asof: dt.date, polygon_client: PolygonClient | None) -> 
         return None
 
 
-def _resolve_catalyst(theme: str, asof: dt.date, cache: dict[str, dict | None]) -> dict:
+def _resolve_catalyst(
+    theme: str, asof: dt.date, cache: dict[str, CatalystPayload | None]
+) -> CatalystPayload | None:
     if theme not in cache:
         try:
             cache[theme] = catalyst_resolver.find_trigger_event(theme=theme, asof=asof)
         except Exception as exc:
             logger.warning("catalyst resolver failed for theme %s: %s", theme, exc, exc_info=True)
             cache[theme] = None
-    return cache[theme] or {}
+    return cache[theme]
 
 
 def _build_row(
@@ -252,7 +255,7 @@ def _build_row(
     cand: dict,
     verdict: dict,
     market_cap: float,
-    catalyst: dict | None,
+    catalyst: CatalystPayload | None,
     keywords: Sequence[str],
 ) -> dict:
     return {
@@ -272,9 +275,9 @@ def _build_row(
         "gates_unknown_str": ",".join(verdict["gates_unknown"]),
         "n_gates_unknown": len(verdict["gates_unknown"]),
         "verified": verdict["verified"],
-        "source_event_url": catalyst.get("url") if catalyst else None,
-        "source_event_title": catalyst.get("title") if catalyst else None,
-        "source_event_published_at": catalyst.get("published_at") if catalyst else None,
+        "source_event_url": catalyst.url if catalyst else None,
+        "source_event_title": catalyst.title if catalyst else None,
+        "source_event_published_at": catalyst.published_at if catalyst else None,
         "theme_search_keywords": list(keywords),
     }
 
@@ -342,7 +345,7 @@ def _verify_candidates_for_theme(
     candidates: list[dict],
     in_bracket: dict[str, float],
     keywords: list[str],
-    catalyst: dict | None,
+    catalyst: CatalystPayload | None,
     asof: dt.date,
     polygon_client: PolygonClient | None,
     press_df,
@@ -446,7 +449,7 @@ def map_themes(
     rows: list[dict] = []
     dropped_total = 0
     dropped_all_unknown = 0
-    catalyst_cache: dict[str, dict | None] = {}
+    catalyst_cache: dict[str, CatalystPayload | None] = {}
     for theme in themes:
         catalyst = _resolve_catalyst(theme, asof, catalyst_cache)
         if not catalyst:

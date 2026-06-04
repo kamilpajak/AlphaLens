@@ -53,9 +53,9 @@ class TestFindTriggerEvent(unittest.TestCase):
                 lookback_days=30,
             )
         self.assertIsNotNone(cat)
-        self.assertEqual(cat["url"], "https://nvidianews.example/ising")
-        self.assertIn("NVIDIA", cat["title"])
-        self.assertEqual(cat["published_at"], "2026-04-14")
+        self.assertEqual(cat.url, "https://nvidianews.example/ising")
+        self.assertIn("NVIDIA", cat.title)
+        self.assertEqual(cat.published_at, "2026-04-14")
 
     def test_returns_none_when_theme_not_in_window(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -138,7 +138,7 @@ class TestFindTriggerEvent(unittest.TestCase):
                 news_dir=news,
                 lookback_days=30,
             )
-        self.assertEqual(cat["url"], "https://x/new")
+        self.assertEqual(cat.url, "https://x/new")
 
     def test_returns_none_when_dirs_missing(self):
         cat = catalyst_resolver.find_trigger_event(
@@ -181,7 +181,7 @@ class TestFindTriggerEvent(unittest.TestCase):
                 news_dir=news,
                 lookback_days=30,
             )
-        self.assertLessEqual(len(cat["title"]), 200)
+        self.assertLessEqual(len(cat.title), 200)
 
     def test_skips_files_with_invalid_filename_dates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -305,8 +305,8 @@ class TestFindTriggerEventTimestampSchema(unittest.TestCase):
                 lookback_days=30,
             )
         self.assertIsNotNone(cat)
-        self.assertEqual(cat["url"], "https://example.com/cyber")
-        self.assertEqual(cat["published_at"], "2026-05-18")
+        self.assertEqual(cat.url, "https://example.com/cyber")
+        self.assertEqual(cat.published_at, "2026-05-18")
 
     def test_returns_none_when_neither_time_column_present(self):
         # Defensive: this is the silent-failure mode the 2026-05-18 bug
@@ -378,7 +378,7 @@ class TestFindTriggerEventTimestampSchema(unittest.TestCase):
                 lookback_days=30,
             )
         self.assertIsNotNone(cat)
-        self.assertEqual(cat["published_at"], "2026-05-18")
+        self.assertEqual(cat.published_at, "2026-05-18")
 
     def test_prefers_timestamp_when_both_columns_present(self):
         # If a news file happens to carry both legacy and new column,
@@ -411,7 +411,7 @@ class TestFindTriggerEventTimestampSchema(unittest.TestCase):
                 news_dir=news,
                 lookback_days=30,
             )
-        self.assertEqual(cat["published_at"], "2026-05-18")
+        self.assertEqual(cat.published_at, "2026-05-18")
 
 
 class TestFindTriggerEventNoiseFilter(unittest.TestCase):
@@ -466,7 +466,7 @@ class TestFindTriggerEventNoiseFilter(unittest.TestCase):
                 lookback_days=30,
             )
         # Promo (newer) dropped → M&A wins.
-        self.assertEqual(cat["url"], "https://reuters.com/article/abc")
+        self.assertEqual(cat.url, "https://reuters.com/article/abc")
 
     def test_drops_url_pattern_blocklist(self):
         # Even if event_type isn't flagged (Flash mis-classified the promo
@@ -515,7 +515,7 @@ class TestFindTriggerEventNoiseFilter(unittest.TestCase):
                 news_dir=news,
                 lookback_days=30,
             )
-        self.assertEqual(cat["url"], "https://reuters.com/article/legit-ma")
+        self.assertEqual(cat.url, "https://reuters.com/article/legit-ma")
 
     def test_returns_none_when_all_events_are_noise(self):
         # If every candidate event is noise, return None (gates_unknown
@@ -582,7 +582,7 @@ class TestFindTriggerEventNoiseFilter(unittest.TestCase):
                 lookback_days=30,
             )
         self.assertIsNotNone(cat)
-        self.assertEqual(cat["url"], "https://reuters.com/article/legit")
+        self.assertEqual(cat.url, "https://reuters.com/article/legit")
 
 
 class TestTier2StoryArc(unittest.TestCase):
@@ -677,13 +677,13 @@ class TestTier2StoryArc(unittest.TestCase):
             )
         self.assertIsNotNone(cat)
         # Catalyst URL traces back to the root, not the latest echo
-        self.assertEqual(cat["url"], "https://reuters.example/spacex-ipo")
-        self.assertEqual(cat["published_at"], "2026-05-12")
+        self.assertEqual(cat.url, "https://reuters.example/spacex-ipo")
+        self.assertEqual(cat.published_at, "2026-05-12")
         # Trigger URL is the LATEST event (the freshness that activated the brief)
-        self.assertEqual(cat["trigger_url"], "https://ft.example/spacex-echo")
-        self.assertEqual(cat["trigger_published_at"], "2026-05-14")
-        self.assertEqual(cat["echo_count"], 3)
-        self.assertTrue(cat["is_amplified"])
+        self.assertEqual(cat.trigger_url, "https://ft.example/spacex-echo")
+        self.assertEqual(cat.trigger_published_at, "2026-05-14")
+        self.assertEqual(cat.echo_count, 3)
+        self.assertTrue(cat.is_amplified)
 
     def test_returns_trigger_when_entities_sparse(self):
         # Trigger has only 1 primary_entity (< MIN_TRIGGER_ENTITIES=2). Anchor
@@ -724,11 +724,11 @@ class TestTier2StoryArc(unittest.TestCase):
                 lookback_days=30,
             )
         self.assertIsNotNone(cat)
-        self.assertEqual(cat["url"], "https://wsj.example/apple-q4")
-        self.assertEqual(cat["echo_count"], 1)
-        self.assertFalse(cat["is_amplified"])
+        self.assertEqual(cat.url, "https://wsj.example/apple-q4")
+        self.assertEqual(cat.echo_count, 1)
+        self.assertFalse(cat.is_amplified)
         # When degraded, trigger fields equal catalyst fields
-        self.assertEqual(cat["trigger_url"], cat["url"])
+        self.assertEqual(cat.trigger_url, cat.url)
 
     def test_arc_excludes_unrelated_theme_entity_overlap(self):
         # Two events share entity {SPACEX} but belong to DIFFERENT themes.
@@ -794,9 +794,9 @@ class TestTier2StoryArc(unittest.TestCase):
             )
         self.assertIsNotNone(cat)
         # Geopolitics event SHARES entities but is theme-isolated → NOT in arc
-        self.assertEqual(cat["url"], "https://space.example/new")
-        self.assertEqual(cat["echo_count"], 1)
-        self.assertFalse(cat["is_amplified"])
+        self.assertEqual(cat.url, "https://space.example/new")
+        self.assertEqual(cat.echo_count, 1)
+        self.assertFalse(cat.is_amplified)
 
     def test_arc_excludes_low_entity_jaccard(self):
         # Trigger entities {SPACEX, MUSK}; candidate entities {SPACEX, NASA,
@@ -863,8 +863,8 @@ class TestTier2StoryArc(unittest.TestCase):
             )
         self.assertIsNotNone(cat)
         # Diluted event excluded; catalyst == trigger
-        self.assertEqual(cat["url"], "https://reuters.example/spacex-trigger")
-        self.assertEqual(cat["echo_count"], 1)
+        self.assertEqual(cat.url, "https://reuters.example/spacex-trigger")
+        self.assertEqual(cat.echo_count, 1)
 
     def test_bare_string_primary_entities_not_shredded_into_chars(self):
         """If Gemini emits "SPACEX" (str) instead of ["SPACEX"] (list), the
@@ -910,9 +910,9 @@ class TestTier2StoryArc(unittest.TestCase):
             )
         # Single-entity (post-coercion) → sparse-entity gate fires → legacy mode.
         self.assertIsNotNone(cat)
-        self.assertEqual(cat["url"], "https://reuters.example/spacex-str")
-        self.assertEqual(cat["echo_count"], 1)
-        self.assertFalse(cat["is_amplified"])
+        self.assertEqual(cat.url, "https://reuters.example/spacex-str")
+        self.assertEqual(cat.echo_count, 1)
+        self.assertFalse(cat.is_amplified)
 
     def test_arc_high_jaccard_includes_partial_entity_overlap(self):
         # Trigger {SPACEX, MUSK}; candidate {SPACEX, MUSK, BOEING} →
@@ -976,10 +976,10 @@ class TestTier2StoryArc(unittest.TestCase):
                 lookback_days=30,
             )
         self.assertIsNotNone(cat)
-        self.assertEqual(cat["url"], "https://reuters.example/spacex-boeing")
-        self.assertEqual(cat["echo_count"], 2)
-        self.assertTrue(cat["is_amplified"])
-        self.assertEqual(cat["trigger_url"], "https://ft.example/spacex-trigger")
+        self.assertEqual(cat.url, "https://reuters.example/spacex-boeing")
+        self.assertEqual(cat.echo_count, 2)
+        self.assertTrue(cat.is_amplified)
+        self.assertEqual(cat.trigger_url, "https://ft.example/spacex-trigger")
 
 
 if __name__ == "__main__":

@@ -25,7 +25,34 @@ from unittest.mock import patch
 import pandas as pd
 from alphalens_pipeline.thematic.argumentation import generator, orchestrator
 from alphalens_pipeline.thematic.mapping import catalyst_resolver
+from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 from alphalens_pipeline.thematic.screening import scorer
+
+
+def _payload(
+    *,
+    event_type: str | None = "m_and_a",
+    confidence: float | None = 0.9,
+    template_id: str | None = None,
+    template_facts: dict | None = None,
+    url: str = "https://example/news",
+    published_at: str = "2026-05-30",
+) -> CatalystPayload:
+    """Build a minimal CatalystPayload for the scorer-wiring mocks."""
+    return CatalystPayload(
+        url=url,
+        title="catalyst",
+        published_at=published_at,
+        event_type=event_type,
+        confidence=confidence,
+        second_order_implications=[],
+        echo_count=1,
+        trigger_url=url,
+        trigger_published_at="2026-05-30",
+        is_amplified=False,
+        template_id=template_id,
+        template_facts=template_facts,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -131,8 +158,8 @@ class TestFindTemplateCatalystForTicker(unittest.TestCase):
             result = _find("CELH", ed, nd)
         self.assertIsNotNone(result)
         assert result is not None
-        self.assertEqual(result["template_id"], "earnings_surprise")
-        self.assertEqual(result["template_facts"], fields)
+        self.assertEqual(result.template_id, "earnings_surprise")
+        self.assertEqual(result.template_facts, fields)
 
     def test_lowercase_ticker_matches_uppercase_entity(self):
         events = pd.DataFrame(
@@ -338,8 +365,8 @@ class TestFindTemplateCatalystForTicker(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         # Richness beats recency: the rich payload wins though its news is earlier.
-        self.assertEqual(result["template_facts"]["eps_surprise_pct"], 12.5)
-        self.assertIn("revenue_usd", result["template_facts"])
+        self.assertEqual(result.template_facts["eps_surprise_pct"], 12.5)
+        self.assertIn("revenue_usd", result.template_facts)
 
     def test_multi_outlet_echo_collapses_before_index(self):
         # 3 outlets, same template event on CELH -> dedup keeps ONE; the index
@@ -379,7 +406,7 @@ class TestFindTemplateCatalystForTicker(unittest.TestCase):
                 asof=dt.date(2026, 5, 30), events_dir=ed, news_dir=nd, lookback_days=1
             )
         self.assertEqual(len(index["CELH"]), 1)
-        self.assertEqual(index["CELH"][0]["template_facts"]["deal_value_usd"], 5_000_000_000)
+        self.assertEqual(index["CELH"][0].template_facts["deal_value_usd"], 5_000_000_000)
 
     def test_empty_window_returns_none(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -522,10 +549,10 @@ class TestFindTemplateCatalystForTicker(unittest.TestCase):
         # An empty / unparseable published_at sorts to oldest (date.min ordinal)
         # rather than crashing the sort.
         rich = catalyst_resolver._template_catalyst_sort_key(
-            {"template_facts": {"a": 1, "b": 2}, "published_at": "", "url": "z"}
+            _payload(template_facts={"a": 1, "b": 2}, url="z", published_at="")
         )
         sparse = catalyst_resolver._template_catalyst_sort_key(
-            {"template_facts": {"a": 1}, "published_at": "not-a-date", "url": "a"}
+            _payload(template_facts={"a": 1}, url="a", published_at="not-a-date")
         )
         # Richer facts sort first regardless of the unparseable dates.
         self.assertLess(rich, sparse)
@@ -641,10 +668,10 @@ class TestScorerWiresSubjectMatchLookup(unittest.TestCase):
 
         def _fake_lookup(*, ticker, asof, entity_index=None, **_):
             if ticker.upper() == "CELH":
-                return {
-                    "template_id": "earnings_surprise",
-                    "template_facts": {"reporting_ticker": "CELH", "eps_surprise_pct": 12.5},
-                }
+                return _payload(
+                    template_id="earnings_surprise",
+                    template_facts={"reporting_ticker": "CELH", "eps_surprise_pct": 12.5},
+                )
             return None
 
         sig = self._empty_signal()
@@ -675,19 +702,19 @@ class TestScorerWiresSubjectMatchLookup(unittest.TestCase):
         candidates = pd.DataFrame(
             [{"ticker": "CELH", "theme": "beverages", "company_name": "Celsius"}]
         )
-        theme_event = {
-            "event_type": "partnership",
-            "confidence": 0.8,
-            "template_id": None,
-            "template_facts": None,
-            "url": "https://polygon.io/celh",
-        }
+        theme_event = _payload(
+            event_type="partnership",
+            confidence=0.8,
+            template_id=None,
+            template_facts=None,
+            url="https://polygon.io/celh",
+        )
 
         def _fake_subject(*, ticker, asof, entity_index=None, **_):
-            return {
-                "template_id": "earnings_surprise",
-                "template_facts": {"reporting_ticker": "CELH"},
-            }
+            return _payload(
+                template_id="earnings_surprise",
+                template_facts={"reporting_ticker": "CELH"},
+            )
 
         sig = self._empty_signal()
         with (

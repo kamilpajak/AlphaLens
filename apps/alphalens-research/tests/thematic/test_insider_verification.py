@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 import pandas as pd
+from alphalens_pipeline.thematic.sources import form4_store
 from alphalens_pipeline.thematic.verification import insider as insider_v
 
 
@@ -56,8 +57,8 @@ class TestHasOpportunisticBuy(unittest.TestCase):
             ]
         )
         with (
-            patch.object(insider_v, "_load_form4_for_ticker", return_value=history),
-            patch.object(insider_v, "_load_form4_for_insiders", return_value=history),
+            patch.object(form4_store, "load_form4_for_ticker", return_value=history),
+            patch.object(form4_store, "load_form4_for_insiders", return_value=history),
         ):
             result = insider_v.has_opportunistic_buy(
                 ticker="BEEM",
@@ -77,8 +78,8 @@ class TestHasOpportunisticBuy(unittest.TestCase):
             ]
         )
         with (
-            patch.object(insider_v, "_load_form4_for_ticker", return_value=history),
-            patch.object(insider_v, "_load_form4_for_insiders", return_value=history),
+            patch.object(form4_store, "load_form4_for_ticker", return_value=history),
+            patch.object(form4_store, "load_form4_for_insiders", return_value=history),
         ):
             result = insider_v.has_opportunistic_buy(
                 ticker="BEEM",
@@ -92,7 +93,7 @@ class TestHasOpportunisticBuy(unittest.TestCase):
         # No Form-4 records anywhere for this ticker = "we have no data" not
         # "insider activity was checked and absent". The orchestrator records
         # unknown so an operator can distinguish from real-no-signal cases.
-        with patch.object(insider_v, "_load_form4_for_ticker", return_value=pd.DataFrame()):
+        with patch.object(form4_store, "load_form4_for_ticker", return_value=pd.DataFrame()):
             self.assertIsNone(
                 insider_v.has_opportunistic_buy(
                     ticker="UNKN",
@@ -112,7 +113,7 @@ class TestHasOpportunisticBuy(unittest.TestCase):
                 _record("ins1", dt.date(2024, 6, 15), "P", 10, 1, "BEEM"),
             ]
         )
-        with patch.object(insider_v, "_load_form4_for_ticker", return_value=old_history):
+        with patch.object(form4_store, "load_form4_for_ticker", return_value=old_history):
             self.assertFalse(
                 insider_v.has_opportunistic_buy(
                     ticker="BEEM",
@@ -132,8 +133,8 @@ class TestHasOpportunisticBuy(unittest.TestCase):
             ]
         )
         with (
-            patch.object(insider_v, "_load_form4_for_ticker", return_value=history),
-            patch.object(insider_v, "_load_form4_for_insiders", return_value=history),
+            patch.object(form4_store, "load_form4_for_ticker", return_value=history),
+            patch.object(form4_store, "load_form4_for_insiders", return_value=history),
         ):
             self.assertFalse(
                 insider_v.has_opportunistic_buy(
@@ -155,8 +156,8 @@ class TestHasOpportunisticBuy(unittest.TestCase):
             ]
         )
         with (
-            patch.object(insider_v, "_load_form4_for_ticker", return_value=history),
-            patch.object(insider_v, "_load_form4_for_insiders", return_value=history),
+            patch.object(form4_store, "load_form4_for_ticker", return_value=history),
+            patch.object(form4_store, "load_form4_for_insiders", return_value=history),
         ):
             # Wait — March is the routine month, but a May trade IS still opportunistic for
             # this insider IF we lock classification to year start. Per Cohen-Malloy paper,
@@ -193,8 +194,8 @@ class TestHasOpportunisticBuy(unittest.TestCase):
             ]
         )
         with (
-            patch.object(insider_v, "_load_form4_for_ticker", return_value=ticker_history),
-            patch.object(insider_v, "_load_form4_for_insiders", return_value=full_history),
+            patch.object(form4_store, "load_form4_for_ticker", return_value=ticker_history),
+            patch.object(form4_store, "load_form4_for_insiders", return_value=full_history),
         ):
             self.assertFalse(
                 insider_v.has_opportunistic_buy(
@@ -206,7 +207,7 @@ class TestHasOpportunisticBuy(unittest.TestCase):
             )
 
     def test_returns_none_on_loader_error(self):
-        with patch.object(insider_v, "_load_form4_for_ticker", side_effect=RuntimeError("IO")):
+        with patch.object(form4_store, "load_form4_for_ticker", side_effect=RuntimeError("IO")):
             self.assertIsNone(
                 insider_v.has_opportunistic_buy(
                     ticker="BEEM",
@@ -232,7 +233,7 @@ class TestLoadFormFourPartitions(unittest.TestCase):
             self._seed(root, 2022, [_record("ins", dt.date(2022, 6, 1), "P", 10, 1, "BEEM")])
             self._seed(root, 2026, [_record("ins", dt.date(2026, 6, 1), "P", 10, 1, "BEEM")])
 
-            df = insider_v._load_form4_partitions(form4_root=root, years={2026})
+            df = form4_store.load_form4_partitions(form4_root=root, years={2026})
             self.assertEqual(len(df), 1)
             self.assertEqual(df.iloc[0]["transaction_date"].year, 2026)
 
@@ -250,7 +251,7 @@ class TestLoadFormFourPartitions(unittest.TestCase):
                     _record("a", dt.date(2026, 2, 1), "P", 10, 1, "OTHER"),
                 ],
             )
-            df = insider_v._load_form4_partitions(form4_root=root, years={2026}, ticker="BEEM")
+            df = form4_store.load_form4_partitions(form4_root=root, years={2026}, ticker="BEEM")
             self.assertEqual(len(df), 1)
 
     def test_load_form4_partitions_insider_filter(self):
@@ -267,7 +268,7 @@ class TestLoadFormFourPartitions(unittest.TestCase):
                     _record("bob", dt.date(2026, 2, 1), "P", 10, 1, "BEEM"),
                 ],
             )
-            df = insider_v._load_form4_partitions(
+            df = form4_store.load_form4_partitions(
                 form4_root=root, years={2026}, insider_ciks={"alice"}
             )
             self.assertEqual(len(df), 1)
@@ -276,7 +277,7 @@ class TestLoadFormFourPartitions(unittest.TestCase):
     def test_load_form4_partitions_missing_root(self):
         from pathlib import Path
 
-        df = insider_v._load_form4_partitions(form4_root=Path("/nonexistent/path"), years={2026})
+        df = form4_store.load_form4_partitions(form4_root=Path("/nonexistent/path"), years={2026})
         self.assertTrue(df.empty)
 
     def test_load_form4_partitions_empty_years(self):
@@ -284,12 +285,12 @@ class TestLoadFormFourPartitions(unittest.TestCase):
         from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            df = insider_v._load_form4_partitions(form4_root=Path(tmpdir), years=set())
+            df = form4_store.load_form4_partitions(form4_root=Path(tmpdir), years=set())
             self.assertTrue(df.empty)
 
     def test_classification_years_includes_lookback(self):
         self.assertEqual(
-            insider_v._classification_years(dt.date(2026, 5, 15)),
+            form4_store.classification_years(dt.date(2026, 5, 15)),
             {2023, 2024, 2025, 2026},
         )
 
@@ -304,7 +305,7 @@ class TestLoadFormFourPartitions(unittest.TestCase):
                 2026,
                 [_record("a", dt.date(2026, 6, 1), "P", 10, 1, "BEEM")],
             )
-            df = insider_v._load_form4_for_ticker("BEEM", form4_root=root, years={2026})
+            df = form4_store.load_form4_for_ticker("BEEM", form4_root=root, years={2026})
             self.assertEqual(len(df), 1)
 
     def test_load_form4_for_ticker_legacy_full_scan(self):
@@ -319,7 +320,7 @@ class TestLoadFormFourPartitions(unittest.TestCase):
                 2024,
                 [_record("a", dt.date(2024, 1, 1), "P", 10, 1, "BEEM")],
             )
-            df = insider_v._load_form4_for_ticker("BEEM", form4_root=root)
+            df = form4_store.load_form4_for_ticker("BEEM", form4_root=root)
             self.assertEqual(len(df), 1)
 
 

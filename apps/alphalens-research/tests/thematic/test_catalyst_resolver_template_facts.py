@@ -131,8 +131,8 @@ class TestTemplateFactsForwarding(unittest.TestCase):
 
         self.assertIsNotNone(result)
         assert result is not None
-        self.assertEqual(result["template_id"], "m_and_a_press_release")
-        self.assertEqual(result["template_facts"], fields)
+        self.assertEqual(result.template_id, "m_and_a_press_release")
+        self.assertEqual(result.template_facts, fields)
 
     def test_flash_catalyst_payload_template_fields_are_none(self):
         events = pd.DataFrame(
@@ -177,8 +177,8 @@ class TestTemplateFactsForwarding(unittest.TestCase):
 
         self.assertIsNotNone(result)
         assert result is not None
-        self.assertIsNone(result["template_id"])
-        self.assertIsNone(result["template_facts"])
+        self.assertIsNone(result.template_id)
+        self.assertIsNone(result.template_facts)
 
     def test_template_fields_malformed_json_degrades_to_none(self):
         # A corrupt template_fields_json must not crash the resolver —
@@ -227,8 +227,8 @@ class TestTemplateFactsForwarding(unittest.TestCase):
 
         self.assertIsNotNone(result)
         assert result is not None
-        self.assertEqual(result["template_id"], "m_and_a_press_release")
-        self.assertIsNone(result["template_facts"])
+        self.assertEqual(result.template_id, "m_and_a_press_release")
+        self.assertIsNone(result.template_facts)
 
     def test_pre_pr3_events_parquet_missing_template_fields_column(self):
         # Backwards-compat: legacy parquets lack template_fields_json
@@ -279,8 +279,8 @@ class TestTemplateFactsForwarding(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         # template_id still surfaces from the row that had it.
-        self.assertEqual(result["template_id"], "m_and_a_press_release")
-        self.assertIsNone(result["template_facts"])
+        self.assertEqual(result.template_id, "m_and_a_press_release")
+        self.assertIsNone(result.template_facts)
 
 
 if __name__ == "__main__":

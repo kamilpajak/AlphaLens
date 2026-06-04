@@ -35,6 +35,7 @@ from alphalens_pipeline.thematic.extraction.templates.holdout import (
     HOLDOUT_SUPERSEDED_BY_TEMPLATE,
     TemplateMetrics,
 )
+from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 
 logger = logging.getLogger(__name__)
 
@@ -323,8 +324,8 @@ def _build_catalyst_payload_v2(
     time_col: str,
     *,
     echo_count: int,
-) -> dict:
-    """Build the resolver's return payload from catalyst+trigger pair.
+) -> CatalystPayload:
+    """Build the resolver's typed return payload from catalyst+trigger pair.
 
     ``catalyst`` is the root of the story arc (earliest entity-overlapping
     event); ``trigger`` is the latest event that activated the brief.
@@ -353,26 +354,24 @@ def _build_catalyst_payload_v2(
     template_fields_raw = (
         catalyst.get("template_fields_json") if "template_fields_json" in catalyst.index else None
     )
-    return {
-        "url": str(catalyst.get("url", "") or ""),
-        "title": title,
-        "published_at": catalyst[time_col].date().isoformat(),
-        "event_type": str(catalyst.get("event_type", "") or "") or None,
-        "confidence": float(catalyst["confidence"])
-        if pd.notna(catalyst.get("confidence"))
-        else None,
-        "second_order_implications": _soi_list(catalyst.get("second_order_implications")),
-        "echo_count": int(echo_count),
-        "trigger_url": str(trigger.get("url", "") or ""),
-        "trigger_published_at": trigger[time_col].date().isoformat(),
-        "is_amplified": int(echo_count) > 1,
+    return CatalystPayload(
+        url=str(catalyst.get("url", "") or ""),
+        title=title,
+        published_at=catalyst[time_col].date().isoformat(),
+        event_type=str(catalyst.get("event_type", "") or "") or None,
+        confidence=float(catalyst["confidence"]) if pd.notna(catalyst.get("confidence")) else None,
+        second_order_implications=_soi_list(catalyst.get("second_order_implications")),
+        echo_count=int(echo_count),
+        trigger_url=str(trigger.get("url", "") or ""),
+        trigger_published_at=trigger[time_col].date().isoformat(),
+        is_amplified=int(echo_count) > 1,
         # PR-3: typed-fact provenance.
-        "template_id": template_id,
-        "template_facts": _coerce_template_facts(template_fields_raw),
-    }
+        template_id=template_id,
+        template_facts=_coerce_template_facts(template_fields_raw),
+    )
 
 
-def _build_catalyst_payload(top: pd.Series, time_col: str) -> dict:
+def _build_catalyst_payload(top: pd.Series, time_col: str) -> CatalystPayload:
     """Backward-compatible single-event payload (no arc): catalyst == trigger."""
     return _build_catalyst_payload_v2(top, top, time_col, echo_count=1)
 
@@ -385,7 +384,7 @@ def find_trigger_event(
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     metrics: TemplateMetrics | None = None,
-) -> dict | None:
+) -> CatalystPayload | None:
     """Return the catalyst payload for a theme.
 
     Walks the rolling events window for events tagged with ``theme``, joins
@@ -485,7 +484,7 @@ def _normalize_symbol(sym: str) -> str:
     return sym.strip().upper().replace(".", "-")
 
 
-def _template_catalyst_sort_key(payload: dict) -> tuple[int, int, str]:
+def _template_catalyst_sort_key(payload: CatalystPayload) -> tuple[int, int, str]:
     """Best-first ordering for >=2 template events on one ticker (#395).
 
     Mirrors the ``dedup`` survivor rule so a multi-event ticker resolves the
@@ -500,13 +499,13 @@ def _template_catalyst_sort_key(payload: dict) -> tuple[int, int, str]:
     counts the raw JSON string. The two agree for well-formed rows -- they are
     separate implementations because each runs on a different stage's shape.
     """
-    facts = payload.get("template_facts") or {}
+    facts = payload.template_facts or {}
     richness = sum(1 for v in facts.values() if v is not None)
     try:
-        published_ord = dt.date.fromisoformat(payload.get("published_at") or "").toordinal()
+        published_ord = dt.date.fromisoformat(payload.published_at or "").toordinal()
     except (ValueError, TypeError):
         published_ord = dt.date.min.toordinal()
-    return (-richness, -published_ord, payload.get("url") or "")
+    return (-richness, -published_ord, payload.url or "")
 
 
 def build_template_entity_index(
@@ -516,12 +515,12 @@ def build_template_entity_index(
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     metrics: TemplateMetrics | None = None,
-) -> dict[str, list[dict]]:
+) -> dict[str, list[CatalystPayload]]:
     """Index template-extracted events by EACH primary-entity ticker (#395).
 
     Built ONCE per scoring batch so the per-candidate lookup is O(1). Returns
     ``{NORMALIZED_TICKER: [payload, ...]}`` where each payload is a
-    :func:`_build_catalyst_payload_v2` dict and the per-ticker list is
+    :class:`CatalystPayload` and the per-ticker list is
     pre-sorted best-first by :func:`_template_catalyst_sort_key` (lookup takes
     ``[0]``).
 
@@ -580,10 +579,10 @@ def build_template_entity_index(
         return {}
 
     joined = joined.reset_index(drop=True)
-    index: dict[str, list[dict]] = {}
+    index: dict[str, list[CatalystPayload]] = {}
     for _, row in joined.iterrows():
         payload = _build_catalyst_payload_v2(row, row, time_col, echo_count=1)
-        if payload.get("template_id") is None:
+        if payload.template_id is None:
             # Defensive: the extraction_method filter should guarantee a
             # template_id; a corrupt row without one is not a usable catalyst.
             continue
@@ -603,8 +602,8 @@ def find_template_catalyst_for_ticker(
     news_dir: Path = DEFAULT_NEWS_DIR,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     metrics: TemplateMetrics | None = None,
-    entity_index: dict[str, list[dict]] | None = None,
-) -> dict | None:
+    entity_index: dict[str, list[CatalystPayload]] | None = None,
+) -> CatalystPayload | None:
     """Best subject-match template catalyst for ``ticker`` (option b, #395).
 
     Fires iff ``ticker`` is a ``primary_entities`` member of a

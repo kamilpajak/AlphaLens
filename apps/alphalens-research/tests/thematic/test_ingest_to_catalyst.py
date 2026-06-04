@@ -124,8 +124,8 @@ class TestRootSourceWinsEndToEnd(unittest.TestCase):
 
         self.assertIsNotNone(cat)
         # The catalyst URL points to the ROOT, not the FT echo.
-        self.assertEqual(cat["url"], polygon_row["url"])
-        self.assertNotEqual(cat["url"], rss_echo["url"])
+        self.assertEqual(cat.url, polygon_row["url"])
+        self.assertNotEqual(cat.url, rss_echo["url"])
 
     def test_root_event_wins_via_tier2_when_tier1_misses_across_days(self):
         """Tier 2 catches cross-day arcs that Tier 1 (day-scoped) cannot.
@@ -216,11 +216,11 @@ class TestRootSourceWinsEndToEnd(unittest.TestCase):
 
         self.assertIsNotNone(cat)
         # Catalyst is the Day-1 Polygon root, not the Day-3 FT echo.
-        self.assertEqual(cat["url"], polygon_day1["url"])
-        self.assertEqual(cat["echo_count"], 2)
-        self.assertTrue(cat["is_amplified"])
+        self.assertEqual(cat.url, polygon_day1["url"])
+        self.assertEqual(cat.echo_count, 2)
+        self.assertTrue(cat.is_amplified)
         # Trigger reflects "what activated today's brief" = Day-3 FT echo.
-        self.assertEqual(cat["trigger_url"], ft_day3["url"])
+        self.assertEqual(cat.trigger_url, ft_day3["url"])
 
 
 if __name__ == "__main__":
