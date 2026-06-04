@@ -10,7 +10,7 @@ Locked into pre-reg ``event_drift_v3_pead_quality_clean`` (2026-05-03):
   - Universe ex Financials/Utilities (GICS 40/55)
   - Threshold |t|>=3.50 (program meta-Bonferroni n=20)
 
-Class status governed by tests/test_layer_status.py LAYERS_WITH_STATUS.
+Class status governed by tests/test_layer_status.py (auto-discovered layer roots).
 """
 
 from typing import Literal

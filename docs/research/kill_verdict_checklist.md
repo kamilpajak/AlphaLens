@@ -155,7 +155,7 @@ When closing a future layer, the workflow is:
 
 1. Run pilot per `go_no_go_screen_template.md` Phase 1-5.
 2. If the verdict is KILL, populate `__closed_evidence__` mapping each gate to the artifact produced during pilot. Gates not run in pilot → `"UNTESTED: <reason>"`.
-3. Add layer to `LAYERS_WITH_STATUS` in `tests/test_layer_status.py`.
+3. Place the layer under one of the auto-discovered layer roots in `tests/test_layer_status.py` (any `__init__.py` there is required to declare `__status__` — no manual tuple to update). A genuine namespace-only package goes in `NAMESPACE_ONLY_ALLOWLIST`.
 4. Test enforces structure on next CI run.
 
 For layers whose paradigm has already been falsified at the conceptual level (e.g., a future LLM-conviction variant after AP-14 is established), it is acceptable to declare most gates `"UNTESTED: <reason>"` provided the kill rationale is documented in `__closed_reason__` and a postmortem entry. The checklist's job is honesty, not gate-stuffing.

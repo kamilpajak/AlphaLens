@@ -46,11 +46,10 @@ _VERDICT_MEMO = "docs/research/idiosyncratic_momentum_audit_verdict_2026_05_14.m
 __closed_evidence__: dict[str, str] = {
     "walk_forward_oos": _VERDICT_MEMO,
     "carhart_4f_hac": _VERDICT_MEMO,
-    "cost_drag": (
-        "docs/research/idiosyncratic_momentum_audit_2026-05-14.json (G4 reads "
-        "alpha_t_net from net-cost regression per H1 fix pattern; all 3 windows "
-        "FAIL G4 at 15bps half-spread)"
-    ),
+    # G4 net-cost (alpha_t_net @15bps half-spread, all 3 windows FAIL) is
+    # written up in the verdict memo (tables + cost-model artifact section);
+    # the raw per-window numbers live in the sibling audit .json.
+    "cost_drag": _VERDICT_MEMO,
     "bootstrap_ci": (
         "N/A: memo section 8 success criteria do not require Romano-Wolf "
         "block-bootstrap (single-layer screener; bootstrap reserved for compound + "

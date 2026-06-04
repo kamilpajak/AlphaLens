@@ -2,8 +2,12 @@
 
 Two tiers of rules:
 
-1. Intra-research: backtest must stay screener-agnostic + attribution-agnostic
-   so the Layer 3 (engine) → Layer 5 (attribution) DAG holds.
+1. Intra-research: the ADR 0007 layer DAG (Layer 2 screener → 3 engine →
+   4 overlay → 5 attribution) is one-way. backtest must stay screener- and
+   attribution-agnostic; screeners must not reach forward into backtest /
+   overlays / attribution; overlays must not import attribution; attribution
+   (terminal) must not import screeners; gates must not import backtest /
+   attribution.
 
 2. Cross-tier (split PR2): ``alphalens_pipeline`` must not import from
    ``alphalens_research`` — the pipeline tier is downstream-free
@@ -39,12 +43,7 @@ RULES = (
         "name": "backtest must stay screener-agnostic",
         "from_pkg": "alphalens_research.backtest",
         "forbidden_prefix": "alphalens_research.screeners.",
-        "exemptions": {
-            # Layer 2c (Lean) ARCHIVED + Layer 2b (themed) CLOSED — historical
-            # validation replays recorded picks against the only available OHLCV
-            # loader. Imports are flagged RESEARCH-ONLY in source.
-            "apps/alphalens-research/alphalens_research/backtest/historical_validation.py",
-        },
+        "exemptions": set(),
     },
     {
         # ADR 0007 + Phase 4 reorg: Layer 3 (engine) produces BacktestReport;
@@ -53,6 +52,62 @@ RULES = (
         # would create a cycle where the engine self-attributes its own output.
         "name": "engine must stay attribution-agnostic (BacktestReport flows L3 -> L5, not back)",
         "from_pkg": "alphalens_research.backtest",
+        "forbidden_prefix": "alphalens_research.attribution.",
+        "exemptions": set(),
+    },
+    # ADR 0007 layer DAG (Layer 2 -> 3 -> 4 -> 5). A screener ranks @ time t and
+    # is consumed by the engine; it must not reach forward into the engine,
+    # overlay, or attribution that sit downstream of it. Three separate rules so
+    # a single forbidden_prefix stays exact (a shared prefix would not cover all
+    # three sibling packages).
+    {
+        "name": "screeners must not import backtest (Layer 2 -> 3 is one-way)",
+        "from_pkg": "alphalens_research.screeners",
+        "forbidden_prefix": "alphalens_research.backtest.",
+        "exemptions": set(),
+    },
+    {
+        "name": "screeners must not import overlays (Layer 2 sits upstream of Layer 4)",
+        "from_pkg": "alphalens_research.screeners",
+        "forbidden_prefix": "alphalens_research.overlays.",
+        "exemptions": set(),
+    },
+    {
+        "name": "screeners must not import attribution (Layer 2 sits upstream of Layer 5)",
+        "from_pkg": "alphalens_research.screeners",
+        "forbidden_prefix": "alphalens_research.attribution.",
+        "exemptions": set(),
+    },
+    {
+        # Layer 4 (overlay) resizes portfolio exposure on realised vol; Layer 5
+        # (attribution) consumes the overlaid returns. The overlay reaching into
+        # attribution would invert the L4 -> L5 direction.
+        "name": "overlays must not import attribution (Layer 4 -> 5 is one-way)",
+        "from_pkg": "alphalens_research.overlays",
+        "forbidden_prefix": "alphalens_research.attribution.",
+        "exemptions": set(),
+    },
+    {
+        # Attribution is the terminal consumer (Layer 5). It reads BacktestReport
+        # returns, never the screener that produced the picks — that would make
+        # the verdict layer depend on a specific Layer 2 implementation.
+        "name": "attribution must not import screeners (Layer 5 is terminal)",
+        "from_pkg": "alphalens_research.attribution",
+        "forbidden_prefix": "alphalens_research.screeners.",
+        "exemptions": set(),
+    },
+    # Layer 2 selection-gate wraps a Scorer and modifies WHICH tickers deploy. It
+    # sits between the screener (Layer 2) and the engine (Layer 3); it must not
+    # reach forward into the engine or the attribution that sit downstream.
+    {
+        "name": "gates must not import backtest (gate feeds the engine, not vice versa)",
+        "from_pkg": "alphalens_research.gates",
+        "forbidden_prefix": "alphalens_research.backtest.",
+        "exemptions": set(),
+    },
+    {
+        "name": "gates must not import attribution (gate sits upstream of Layer 5)",
+        "from_pkg": "alphalens_research.gates",
         "forbidden_prefix": "alphalens_research.attribution.",
         "exemptions": set(),
     },
@@ -155,12 +210,29 @@ class TestModuleDependencies(unittest.TestCase):
         )
 
     def test_exemptions_still_exist(self):
-        """If an exempted file is removed, the exemption entry must go too."""
+        """A documented exemption must stay tied to a real violation.
+
+        Two ways an exemption can rot:
+          1. The exempted file is deleted — the entry now points at nothing.
+          2. The exempted file no longer contains the forbidden import — the
+             entry silently widens the allowlist for a smell that is gone.
+
+        Both fail loudly here so a stale exemption can't mask a future
+        re-introduction of the same forbidden import.
+        """
         for rule in RULES:
             for rel in rule["exemptions"]:
+                path = WORKSPACE_ROOT / rel
                 self.assertTrue(
-                    (WORKSPACE_ROOT / rel).exists(),
+                    path.exists(),
                     f"exemption refers to missing file: {rel}",
+                )
+                modules = list(_iter_imports(path, include_function_scope=True))
+                self.assertTrue(
+                    any(m.startswith(rule["forbidden_prefix"]) for m in modules),
+                    f"dead exemption: {rel} no longer imports "
+                    f"{rule['forbidden_prefix']!r} — remove it from rule "
+                    f"{rule['name']!r}",
                 )
 
 
