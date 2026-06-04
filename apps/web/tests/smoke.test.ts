@@ -573,6 +573,19 @@ test.describe('smoke — brief detail interactions', () => {
 	});
 });
 
+// /experiments is client-rendered (SSR off), so the paradigm rows and their
+// JargonTips appear only after Svelte's hydration pass. A bare `goto` followed
+// by an immediate `.count()` race-loses against hydration on slower CI runners
+// — the suite passes locally but flakes in CI (this is why the Playwright suite
+// only started gating in CI with the migration-check PR). Navigate, then wait
+// for the tooltip tree to be populated (≥20 tips and the trailing glossary
+// section ⇒ the single atomic hydration pass finished) before counting.
+async function gotoExperiments(page: Page) {
+	await page.goto('/experiments');
+	await page.locator('section#glossary').waitFor({ state: 'attached' });
+	await expect(page.locator('[data-testid="jargon-tip"]').nth(19)).toBeAttached();
+}
+
 test.describe('experiments — hybrid tooltip policy', () => {
 	// Policy: short acronyms (αt, OOS, IS, FL, CAR, BAB, Q5) get a JargonTip
 	// at EVERY occurrence in data text. Multi-word / longer terms (Carhart 4F,
@@ -582,85 +595,85 @@ test.describe('experiments — hybrid tooltip policy', () => {
 	// These assertions guard the policy from silent drift via text edits.
 
 	test('αt always-tooltip — appears as JargonTip across the page', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('[data-testid="jargon-tip"]:has-text("αt")').count();
 		expect(count, 'αt JargonTip count across page').toBeGreaterThanOrEqual(20);
 	});
 
 	test('OOS — appears as JargonTip in patterns + each paradigm row mini-bar', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('[data-testid="jargon-tip"]:has-text("OOS")').count();
 		expect(count, 'OOS JargonTip count').toBeGreaterThanOrEqual(20);
 	});
 
 	test('IS — appears as JargonTip in patterns + each paradigm row mini-bar', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('[data-testid="jargon-tip"]:has-text("IS")').count();
 		expect(count, 'IS JargonTip count').toBeGreaterThanOrEqual(20);
 	});
 
 	test('FL — JargonTip exists at least in how.to.read + paradigm metrics', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('[data-testid="jargon-tip"]:has-text("FL")').count();
 		expect(count, 'FL JargonTip count').toBeGreaterThanOrEqual(2);
 	});
 
 	test('CAR — wrapped on every occurrence in P04 row', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('article#P04 [data-testid="jargon-tip"]:has-text("CAR")').count();
 		expect(count, 'CAR JargonTip count in P04').toBe(4);
 	});
 
 	test('BAB — exists in P15 row', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('article#P15 [data-testid="jargon-tip"]:has-text("BAB")').count();
 		expect(count, 'BAB JargonTip count in P15').toBeGreaterThanOrEqual(1);
 	});
 
 	test('Q5 — exists in S01 row', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('article#S01 [data-testid="jargon-tip"]:has-text("Q5")').count();
 		expect(count, 'Q5 JargonTip count in S01').toBeGreaterThanOrEqual(1);
 	});
 
 	test('Bonferroni — first-per-section across patterns + paradigm rows', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('[data-testid="jargon-tip"]:has-text("Bonferroni")').count();
 		expect(count, 'Bonferroni JargonTip count').toBeGreaterThanOrEqual(2);
 	});
 
 	test('Carhart 4F — first-per-section in how.to.read + patterns', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('[data-testid="jargon-tip"]:has-text("Carhart")').count();
 		expect(count, 'Carhart 4F JargonTip count').toBeGreaterThanOrEqual(2);
 	});
 
 	test('PEAD — exists in P14 row', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('article#P14 [data-testid="jargon-tip"]:has-text("PEAD")').count();
 		expect(count, 'PEAD JargonTip count in P14').toBeGreaterThanOrEqual(1);
 	});
 
 	test('NW HAC — exists in P14 row', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('article#P14 [data-testid="jargon-tip"]:has-text("NW HAC")').count();
 		expect(count, 'NW HAC JargonTip count in P14').toBeGreaterThanOrEqual(1);
 	});
 
 	test('Form-4 — exists in S01 row (first-per-section)', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('article#S01 [data-testid="jargon-tip"]:has-text("Form-4")').count();
 		expect(count, 'Form-4 JargonTip count in S01').toBeGreaterThanOrEqual(1);
 	});
 
 	test('ADR — exists in patterns section', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const count = await page.locator('[data-testid="jargon-tip"]:has-text("ADR")').count();
 		expect(count, 'ADR JargonTip count').toBeGreaterThanOrEqual(1);
 	});
 
 	test('glossary section has NO JargonTips (defines them; tooltips would be self-referential)', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		// The glossary section comes last on the page; scope by section title text.
 		// Each glossary entry is a <dt>/<dd> pair inside the section. JargonTip
 		// uses <span data-testid="jargon-tip">, none should appear under the
@@ -671,7 +684,7 @@ test.describe('experiments — hybrid tooltip policy', () => {
 	});
 
 	test('paradigm detail fields collapsed by default (P0.1)', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		// Every paradigm row's <details> must start closed so the page is
 		// scannable on initial render. If a future edit flips a default to
 		// open, scroll depth balloons back to the pre-P0.1 level.
@@ -695,7 +708,7 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		expect(dashChips, 'dashboard footer keeps thematic vocab').toContain('PRESS-GATE');
 		expect(dashChips, 'dashboard footer does not show research vocab').not.toContain('DOCTRINE');
 
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		await expect(page.locator('footer span.text-amber').first()).toBeVisible();
 		const expChips = (await page.locator('footer span.text-amber').allTextContents()).join(' ');
 		expect(expChips, '/experiments footer shows research vocab').toContain('DOCTRINE');
@@ -704,7 +717,7 @@ test.describe('experiments — hybrid tooltip policy', () => {
 
 	test('sticky TOC renders on xl viewport with 7 section anchors (P3.1)', async ({ page }) => {
 		await page.setViewportSize({ width: 1440, height: 900 });
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		// Aside rail is `hidden xl:block` — invisible below 1280px.
 		const tocLinks = await page.locator('nav[aria-label="Section table of contents"] a').count();
 		expect(tocLinks, '7 section anchors in TOC').toBe(7);
@@ -716,7 +729,7 @@ test.describe('experiments — hybrid tooltip policy', () => {
 	});
 
 	test('--color-fg-muted contrast against --color-bg meets WCAG AA (≥4.5:1) (P1.1)', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const ratio = await page.evaluate(() => {
 			const cs = getComputedStyle(document.documentElement);
 			const fg = cs.getPropertyValue('--color-fg-muted').trim();
@@ -740,7 +753,7 @@ test.describe('experiments — hybrid tooltip policy', () => {
 	});
 
 	test('heading semantics: ≥7 h2 (one per section), ≥31 h3 (paradigms+patterns) (P0.3)', async ({ page }) => {
-		await page.goto('/experiments');
+		await gotoExperiments(page);
 		const h2 = await page.locator('h2').count();
 		const h3 = await page.locator('h3').count();
 		expect(h2, '≥7 h2 (status.legend, how.to.read, paradigms.ledger, failure.patterns, infrastructure.live, methodology.artifacts, glossary.terms)').toBeGreaterThanOrEqual(7);
