@@ -324,44 +324,25 @@ def _full_ladder_blended_entry(setup: dict) -> float | None:
     return sum(prices) / len(prices)  # equal-weight fallback (allocs absent / zero)
 
 
-def _size_fields(
-    setup: dict,
-    outcome: LadderOutcome,
-    *,
-    realized_r: float | None,
-    open_r: float | None,
-) -> dict[str, Any]:
-    """Portfolio-size (two-layer) fields for one candidate row.
+def _safe_finite_float(raw: Any) -> float | None:
+    """Coerce ``raw`` to a finite float, or ``None`` (missing / non-numeric / inf/nan)."""
+    if raw is None:
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return val if math.isfinite(val) else None
 
-    ALL additive: never reads or mutates the R-space edge fields. Every division is
-    guarded (a missing size / degenerate geometry yields ``None`` for that field, never
-    a crash). ``realized_r`` / ``open_r`` are the monitor's already-split terminal /
-    ongoing R values (mutually exclusive). The contribution composition is exact:
-    ``P&L%_of_book = R × gross_weight × stop_distance_pct`` (the stop distance is the
-    bridge between gross exposure and risk-normalised R).
-    """
-    # --- Signal-time (intended geometry, independent of fills) ---------------
-    raw_size = setup.get("suggested_size_pct")
-    suggested_gross_weight_pct: float | None
-    if raw_size is None:
-        suggested_gross_weight_pct = None
-    else:
-        try:
-            pct = float(raw_size)
-        except (TypeError, ValueError):
-            suggested_gross_weight_pct = None
-        else:
-            # Stored as a PERCENT (e.g. 4.07 -> 4.07%); normalise to a fraction.
-            suggested_gross_weight_pct = pct / 100.0 if math.isfinite(pct) else None
+
+def _signal_time_size(setup: dict) -> dict[str, Any]:
+    """Signal-time (intended) size geometry, independent of fills."""
+    pct = _safe_finite_float(setup.get("suggested_size_pct"))
+    # Stored as a PERCENT (e.g. 4.07 -> 4.07%); normalise to a fraction.
+    suggested_gross_weight_pct = pct / 100.0 if pct is not None else None
 
     full_blended = _full_ladder_blended_entry(setup)
-    raw_stop = setup.get("disaster_stop")
-    try:
-        disaster_stop = float(raw_stop) if raw_stop is not None else None
-    except (TypeError, ValueError):
-        disaster_stop = None
-    if disaster_stop is not None and not math.isfinite(disaster_stop):
-        disaster_stop = None
+    disaster_stop = _safe_finite_float(setup.get("disaster_stop"))
 
     stop_distance_pct_full = _safe_div(
         (full_blended - disaster_stop)
@@ -374,8 +355,24 @@ def _size_fields(
         if (suggested_gross_weight_pct is not None and stop_distance_pct_full is not None)
         else None
     )
+    return {
+        "suggested_gross_weight_pct": suggested_gross_weight_pct,
+        "full_ladder_blended_entry": full_blended,
+        "disaster_stop": disaster_stop,
+        "stop_distance_pct_full": stop_distance_pct_full,
+        "implied_risk_pct_full": implied_risk_pct_full,
+    }
 
-    # --- Outcome-time (what actually deployed) -------------------------------
+
+def _outcome_time_size(
+    outcome: LadderOutcome,
+    *,
+    realized_r: float | None,
+    open_r: float | None,
+    suggested_gross_weight_pct: float | None,
+    disaster_stop: float | None,
+) -> dict[str, Any]:
+    """Outcome-time (what actually deployed) size geometry."""
     tiers_filled_count = len(outcome.entries_filled)
     filled_fraction = outcome.filled_fraction
     # realized gross weight = suggested × filled_fraction. NULL when the size is
@@ -413,12 +410,7 @@ def _size_fields(
         if (open_r is not None and realized_risk_pct is not None)
         else None
     )
-
     return {
-        "suggested_gross_weight_pct": suggested_gross_weight_pct,
-        "full_ladder_blended_entry": full_blended,
-        "stop_distance_pct_full": stop_distance_pct_full,
-        "implied_risk_pct_full": implied_risk_pct_full,
         "tiers_filled_count": tiers_filled_count,
         "realized_gross_weight_pct": realized_gross_weight_pct,
         "stop_distance_pct": stop_distance_pct,
@@ -426,6 +418,35 @@ def _size_fields(
         "realized_return_pct_of_book": realized_return_pct_of_book,
         "open_return_pct_of_book": open_return_pct_of_book,
     }
+
+
+def _size_fields(
+    setup: dict,
+    outcome: LadderOutcome,
+    *,
+    realized_r: float | None,
+    open_r: float | None,
+) -> dict[str, Any]:
+    """Portfolio-size (two-layer) fields for one candidate row.
+
+    ALL additive: never reads or mutates the R-space edge fields. Every division is
+    guarded (a missing size / degenerate geometry yields ``None`` for that field, never
+    a crash). ``realized_r`` / ``open_r`` are the monitor's already-split terminal /
+    ongoing R values (mutually exclusive). The contribution composition is exact:
+    ``P&L%_of_book = R × gross_weight × stop_distance_pct`` (the stop distance is the
+    bridge between gross exposure and risk-normalised R).
+    """
+    signal = _signal_time_size(setup)
+    outcome_fields = _outcome_time_size(
+        outcome,
+        realized_r=realized_r,
+        open_r=open_r,
+        suggested_gross_weight_pct=signal["suggested_gross_weight_pct"],
+        disaster_stop=signal["disaster_stop"],
+    )
+    # ``disaster_stop`` is an internal bridge value, not an emitted field.
+    signal.pop("disaster_stop")
+    return {**signal, **outcome_fields}
 
 
 def _terminal_row(
@@ -721,64 +742,83 @@ def _replay_one_date(
 
     existing = _read_existing_store(store_dir, brief_date)
     rows: list[dict[str, Any]] = []
-    n_brief = 0
-    n_plannable = 0
-    terminal = 0
-    ongoing = 0
-    carried = 0
+    counts = {"brief": 0, "plannable": 0, "terminal": 0, "ongoing": 0, "carried": 0}
     fetches_before = budget.used
 
     for c in candidates:
-        n_brief += 1
-        ticker = c.ticker.upper()
-        plannable, reason = _is_plannable(c)
-        if not plannable:
-            rows.append(_nonplannable_row(brief_date, ticker, reason or "not plannable"))
-            continue
-        n_plannable += 1
-        assert c.trade_setup is not None  # plannable guarantees it
-        prior = existing.get(ticker)
-
-        # FREEZE: a terminal prior row is copied forward verbatim, no fetch/replay.
-        if prior is not None and bool(prior.get("terminal")):
-            rows.append(_carry_prior(prior))
-            terminal += 1
-            continue
-
-        cutoffs = _engine_cutoffs(brief_date, c.trade_setup, exchange)
-        outcome = _replay_candidate(
-            store_dir, ticker, c.trade_setup, cutoffs, last_closed_session, fetch, budget, exchange
-        )
-        if outcome is None:
-            # Fetch failure / deferral / implausible move: carry the prior row
-            # forward verbatim (denominator never shrinks); a brand-new ticker
-            # gets a retryable placeholder.
-            rows.append(
-                _carry_prior(prior)
-                if prior is not None
-                else _placeholder_row(brief_date, ticker, cutoffs)
-            )
-            carried += 1
-            continue
-        row = _terminal_row(
-            brief_date, ticker, c.trade_setup, outcome, cutoffs, last_closed_session
+        counts["brief"] += 1
+        row, category = _candidate_row(
+            c,
+            brief_date,
+            existing,
+            store_dir=store_dir,
+            fetch=fetch,
+            last_closed_session=last_closed_session,
+            exchange=exchange,
+            budget=budget,
         )
         rows.append(row)
-        if row["terminal"]:
-            terminal += 1
-        else:
-            ongoing += 1
+        if category != "nonplannable":
+            counts["plannable"] += 1
+        if category in counts:
+            counts[category] += 1
 
     _write_store_atomic(store_dir, brief_date, rows)
     return PopulationMonitorReport(
         brief_date=brief_date,
-        n_brief=n_brief,
-        n_plannable=n_plannable,
-        terminal=terminal,
-        ongoing=ongoing,
-        carried_forward=carried,
+        n_brief=counts["brief"],
+        n_plannable=counts["plannable"],
+        terminal=counts["terminal"],
+        ongoing=counts["ongoing"],
+        carried_forward=counts["carried"],
         fetches=budget.used - fetches_before,
     )
+
+
+def _candidate_row(
+    c: CandidateBrief,
+    brief_date: dt.date,
+    existing: dict[str, dict[str, Any]],
+    *,
+    store_dir: Path,
+    fetch: BarFetch,
+    last_closed_session: dt.date,
+    exchange: str,
+    budget: _FetchBudget,
+) -> tuple[dict[str, Any], str]:
+    """Replay one candidate → ``(row, category)``.
+
+    ``category`` ∈ {``nonplannable``, ``terminal``, ``ongoing``, ``carried``}
+    and drives the per-date counters in :func:`_replay_one_date`.
+    """
+    ticker = c.ticker.upper()
+    plannable, reason = _is_plannable(c)
+    if not plannable:
+        return _nonplannable_row(brief_date, ticker, reason or "not plannable"), "nonplannable"
+    assert c.trade_setup is not None  # plannable guarantees it
+    prior = existing.get(ticker)
+
+    # FREEZE: a terminal prior row is copied forward verbatim, no fetch/replay.
+    if prior is not None and bool(prior.get("terminal")):
+        return _carry_prior(prior), "terminal"
+
+    cutoffs = _engine_cutoffs(brief_date, c.trade_setup, exchange)
+    outcome = _replay_candidate(
+        store_dir, ticker, c.trade_setup, cutoffs, last_closed_session, fetch, budget, exchange
+    )
+    if outcome is None:
+        # Fetch failure / deferral / implausible move: carry the prior row
+        # forward verbatim (denominator never shrinks); a brand-new ticker
+        # gets a retryable placeholder.
+        carried_row = (
+            _carry_prior(prior)
+            if prior is not None
+            else _placeholder_row(brief_date, ticker, cutoffs)
+        )
+        return carried_row, "carried"
+
+    row = _terminal_row(brief_date, ticker, c.trade_setup, outcome, cutoffs, last_closed_session)
+    return row, "terminal" if row["terminal"] else "ongoing"
 
 
 def _replay_candidate(
@@ -881,12 +921,96 @@ def _finite(value: Any) -> float | None:
     return f if math.isfinite(f) else None
 
 
-def summarize_population_ladders(
-    store_dir: Path,
-    *,
-    lookback_days: int = MONITOR_LOOKBACK_DAYS,
-    exchange: str = DEFAULT_EXCHANGE,
-) -> dict[str, Any]:
+class _PopulationAccumulator:
+    """Running roll-up state over the monitor parquet store.
+
+    Terminal (realized) and ongoing (open mark-to-market) populations are kept
+    SEPARATE — the open mark is NEVER pooled into the realized mean. The size /
+    portfolio layer (terminal rows only) is kept ENTIRELY separate from the
+    equal-weight edge metric. Reads NO click column — only the monitor's own
+    (terminal, realized_r, open_r, holding_days) fields.
+    """
+
+    def __init__(self) -> None:
+        self.n_brief = 0
+        self.n_plannable = 0
+        self.realized: list[float] = []
+        self.open_marks: list[float] = []
+        self.holding_days: list[float] = []
+        # Size layer: ``contributions`` sums portfolio P&L as % of book; the
+        # risk-weighted mean R weights each trade by the capital-at-risk deployed.
+        self.contributions: list[float] = []
+        self.realized_risk_pcts: list[float] = []
+        self.risk_weighted_r_num = 0.0  # Σ realized_r × realized_risk_pct
+        self.risk_weighted_r_den = 0.0  # Σ realized_risk_pct
+        self.tiers_filled: list[float] = []
+
+    def add_row(self, row: Any) -> None:
+        if not bool(row.get("plannable")):
+            return
+        self.n_plannable += 1
+        if bool(row.get("terminal")):
+            self._add_terminal(row)
+        else:
+            ov = _finite(row.get("open_r"))
+            if ov is not None:
+                self.open_marks.append(ov)
+
+    def _add_terminal(self, row: Any) -> None:
+        # Guard each field independently: .get() tolerates an OLD-format row that
+        # lacks the size columns; _finite drops NaN / inf.
+        rv = _finite(row.get("realized_r"))
+        if rv is not None:
+            self.realized.append(rv)
+        hd = _finite(row.get("holding_days_elapsed"))
+        if hd is not None:
+            self.holding_days.append(hd)
+        contrib = _finite(row.get("realized_return_pct_of_book"))
+        if contrib is not None:
+            self.contributions.append(contrib)
+        risk = _finite(row.get("realized_risk_pct"))
+        if risk is not None:
+            self.realized_risk_pcts.append(risk)
+            if rv is not None:
+                self.risk_weighted_r_num += rv * risk
+                self.risk_weighted_r_den += risk
+        tfc = _finite(row.get("tiers_filled_count"))
+        if tfc is not None:
+            self.tiers_filled.append(tfc)
+
+    def to_summary(self) -> dict[str, Any]:
+        return {
+            # ---- Edge layer (size-free, equal-weight) — the PRIMARY metric.
+            "n_brief": self.n_brief,
+            "n_plannable": self.n_plannable,
+            "realized_n": len(self.realized),
+            "realized_mean": _mean(self.realized),
+            "open_n": len(self.open_marks),
+            "open_mean": _mean(self.open_marks),
+            "holding_days_n": len(self.holding_days),
+            "holding_days_p50": _percentile(self.holding_days, 50.0),
+            "holding_days_p95": _percentile(self.holding_days, 95.0),
+            "regime_stratified": False,
+            # ---- Size / portfolio layer (additive, NOT the edge) — terminal only.
+            "total_realized_contribution_pct_of_book": (
+                sum(self.contributions) if self.contributions else None
+            ),
+            "size_weighted_realized_r": (
+                self.risk_weighted_r_num / self.risk_weighted_r_den
+                if self.risk_weighted_r_den > 0
+                else None
+            ),
+            "mean_realized_risk_pct": _mean(self.realized_risk_pcts),
+            "mean_tiers_filled_count": _mean(self.tiers_filled),
+        }
+
+
+def _mean(values: list[float]) -> float | None:
+    """Arithmetic mean of a list, or ``None`` when empty."""
+    return (sum(values) / len(values)) if values else None
+
+
+def summarize_population_ladders(store_dir: Path) -> dict[str, Any]:
     """Read-only roll-up over the monitor parquet store.
 
     Reports terminal (realized) and ongoing (open mark-to-market) populations
@@ -901,25 +1025,10 @@ def summarize_population_ladders(
     VIX is a current cache that is ~96h stale; stamping it onto a historical brief
     date would be look-ahead). So this PR does NOT stratify by regime: it stamps
     no regime, returns a single stratum, and sets ``regime_stratified=False`` so a
-    consumer cannot mistake the single number for a regime-conditioned one. This
-    reads NO click column — only the monitor's own (terminal, realized_r, open_r,
-    holding_days) fields.
+    consumer cannot mistake the single number for a regime-conditioned one.
     """
     store = Path(store_dir)
-    realized: list[float] = []
-    open_marks: list[float] = []
-    holding_days: list[float] = []
-    # Size layer (terminal rows only): kept ENTIRELY separate from the equal-weight
-    # edge metric above. ``contributions`` sums portfolio P&L as % of book; the
-    # risk-weighted mean R weights each trade by the capital-at-risk it deployed.
-    contributions: list[float] = []
-    realized_risk_pcts: list[float] = []
-    risk_weighted_r_num = 0.0  # Σ realized_r × realized_risk_pct
-    risk_weighted_r_den = 0.0  # Σ realized_risk_pct
-    tiers_filled: list[float] = []
-    n_brief = 0
-    n_plannable = 0
-
+    acc = _PopulationAccumulator()
     if store.exists():
         for path in sorted(store.glob("*.parquet")):
             try:
@@ -929,61 +1038,10 @@ def summarize_population_ladders(
                     "population-monitor: bad store parquet %s — %s; skipping.", path, exc
                 )
                 continue
-            n_brief += len(df)
+            acc.n_brief += len(df)
             for _, row in df.iterrows():
-                if not bool(row.get("plannable")):
-                    continue
-                n_plannable += 1
-                if bool(row.get("terminal")):
-                    rv = _finite(row.get("realized_r"))
-                    if rv is not None:
-                        realized.append(rv)
-                    hd = _finite(row.get("holding_days_elapsed"))
-                    if hd is not None:
-                        holding_days.append(hd)
-                    # Size layer — guard each field independently (.get() tolerates an
-                    # OLD-format row that lacks the columns; _finite drops NaN / inf).
-                    contrib = _finite(row.get("realized_return_pct_of_book"))
-                    if contrib is not None:
-                        contributions.append(contrib)
-                    risk = _finite(row.get("realized_risk_pct"))
-                    if risk is not None:
-                        realized_risk_pcts.append(risk)
-                        if rv is not None:
-                            risk_weighted_r_num += rv * risk
-                            risk_weighted_r_den += risk
-                    tfc = _finite(row.get("tiers_filled_count"))
-                    if tfc is not None:
-                        tiers_filled.append(tfc)
-                else:
-                    ov = _finite(row.get("open_r"))
-                    if ov is not None:
-                        open_marks.append(ov)
-
-    return {
-        # ---- Edge layer (size-free, equal-weight) — the PRIMARY metric, unchanged.
-        "n_brief": n_brief,
-        "n_plannable": n_plannable,
-        "realized_n": len(realized),
-        "realized_mean": (sum(realized) / len(realized)) if realized else None,
-        "open_n": len(open_marks),
-        "open_mean": (sum(open_marks) / len(open_marks)) if open_marks else None,
-        "holding_days_n": len(holding_days),
-        "holding_days_p50": _percentile(holding_days, 50.0),
-        "holding_days_p95": _percentile(holding_days, 95.0),
-        "regime_stratified": False,
-        # ---- Size / portfolio layer (additive, NOT the edge) — terminal trades only.
-        "total_realized_contribution_pct_of_book": (sum(contributions) if contributions else None),
-        "size_weighted_realized_r": (
-            risk_weighted_r_num / risk_weighted_r_den if risk_weighted_r_den > 0 else None
-        ),
-        "mean_realized_risk_pct": (
-            sum(realized_risk_pcts) / len(realized_risk_pcts) if realized_risk_pcts else None
-        ),
-        "mean_tiers_filled_count": (
-            sum(tiers_filled) / len(tiers_filled) if tiers_filled else None
-        ),
-    }
+                acc.add_row(row)
+    return acc.to_summary()
 
 
 __all__ = [

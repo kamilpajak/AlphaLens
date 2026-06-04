@@ -214,43 +214,47 @@ class TemplateEngine:
         article: Article,
         assigned: dict[str, ResolvedEntity],
     ) -> Any:
-        # entity:<role> source — populated from the role assignment map.
-        #
-        # MVP convention (covers all 5 dnia-jeden ship templates): if the
-        # YAML field name ends in ``_ticker`` we return the ticker symbol,
-        # otherwise we return the resolved entity's display name. This is
-        # implicit and brittle — a new template using ``field: target``
-        # (without ``_ticker`` suffix) silently gets the company name
-        # rather than the symbol. A more robust mapping (explicit
-        # ``source_kind: ticker|name`` in YAML) is deferred to a follow-up
-        # PR once the template library grows beyond the initial five.
-        # Caught by zen pre-merge review of PR #322 (MEDIUM, deferred).
-        if extr.source and extr.source.startswith("entity:"):
-            role_name = extr.source.split(":", 1)[1]
-            ent = assigned.get(role_name)
-            if ent is None:
-                return None
-            return ent.ticker if extr.field.endswith("_ticker") else ent.name
-
-        # article.<attr> source — pull a literal column from the article.
-        if extr.source and extr.source.startswith("article."):
-            attr = extr.source.split(".", 1)[1]
+        source = extr.source or ""
+        if source.startswith("entity:"):
+            return self._extract_entity_field(extr, assigned)
+        if source.startswith("article."):
+            attr = source.split(".", 1)[1]
             return getattr(article, attr, None)
-
-        # Regex source — run pattern against title+body, run post_process.
         if extr.patterns:
-            haystack = f"{article.title}\n{article.body}"
-            m = re.search(extr.patterns, haystack, re.IGNORECASE)
-            if not m:
-                return None
-            groups = m.groupdict()
-            value: Any = groups or m.group(0)
-            for fn_name in extr.post_process:
-                fn = _POST_PROCESS_REGISTRY.get(fn_name)
-                if fn is None:
-                    logger.warning("unknown post_process function: %s", fn_name)
-                    continue
-                value = fn(value if isinstance(value, dict) else groups)
-            return value
-
+            return self._extract_regex_field(extr, article)
         return None
+
+    def _extract_entity_field(self, extr: Any, assigned: dict[str, ResolvedEntity]) -> Any:
+        """``entity:<role>`` source — read from the role assignment map.
+
+        MVP convention (covers all 5 dnia-jeden ship templates): if the
+        YAML field name ends in ``_ticker`` we return the ticker symbol,
+        otherwise we return the resolved entity's display name. This is
+        implicit and brittle — a new template using ``field: target``
+        (without ``_ticker`` suffix) silently gets the company name
+        rather than the symbol. A more robust mapping (explicit
+        ``source_kind: ticker|name`` in YAML) is deferred to a follow-up
+        PR once the template library grows beyond the initial five.
+        Caught by zen pre-merge review of PR #322 (MEDIUM, deferred).
+        """
+        role_name = extr.source.split(":", 1)[1]
+        ent = assigned.get(role_name)
+        if ent is None:
+            return None
+        return ent.ticker if extr.field.endswith("_ticker") else ent.name
+
+    def _extract_regex_field(self, extr: Any, article: Article) -> Any:
+        """Regex source — run pattern against title+body, apply post_process."""
+        haystack = f"{article.title}\n{article.body}"
+        m = re.search(extr.patterns, haystack, re.IGNORECASE)
+        if not m:
+            return None
+        groups = m.groupdict()
+        value: Any = groups or m.group(0)
+        for fn_name in extr.post_process:
+            fn = _POST_PROCESS_REGISTRY.get(fn_name)
+            if fn is None:
+                logger.warning("unknown post_process function: %s", fn_name)
+                continue
+            value = fn(value if isinstance(value, dict) else groups)
+        return value

@@ -127,7 +127,7 @@ def _row_template_facts(row: pd.Series) -> dict | None:
         return None
     try:
         decoded = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
+    except ValueError:  # JSONDecodeError is a ValueError subclass
         logger.warning(
             "catalyst_template_facts_json failed to parse for %s",
             row.get("ticker"),
