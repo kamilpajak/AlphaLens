@@ -1,6 +1,11 @@
 <script lang="ts">
 	import type { TradeSetup } from '$lib/types';
 	import { fmtPrice, fmtPct } from '$lib/format';
+	import {
+		fullLadderBlendedEntry,
+		stopDistanceFracFull,
+		impliedRiskPctOfBook
+	} from '$lib/tradeSetupRisk';
 	import { Crosshair } from 'lucide-svelte';
 
 	interface Props {
@@ -11,6 +16,15 @@
 	const hasStructure = $derived(
 		setup != null && setup.status === 'OK' && setup.entry_tiers.length > 0
 	);
+
+	// Forward-looking risk geometry (ex-ante; computed from the setup the card
+	// already shows). `riskPct` is the headline: how much of the book is at risk
+	// on the disaster stop if the full ladder fills. See $lib/tradeSetupRisk.
+	const fullBlended = $derived(setup ? fullLadderBlendedEntry(setup.entry_tiers) : null);
+	const stopFrac = $derived(
+		setup && fullBlended != null ? stopDistanceFracFull(fullBlended, setup.disaster_stop) : null
+	);
+	const riskPct = $derived(setup ? impliedRiskPctOfBook(setup.suggested_size_pct, stopFrac) : null);
 </script>
 
 <section data-testid="trade-setup" class="relative overflow-hidden">
@@ -68,9 +82,27 @@
 				</div>
 			</div>
 			<div>
+				<div class="text-fg-muted">risk at stop</div>
+				<div class="text-fg text-base font-bold normal-case">
+					{riskPct != null ? `${fmtPct(riskPct, 1, false)} of book` : '—'}
+				</div>
+			</div>
+			<div>
 				<div class="text-fg-muted">ref last close</div>
 				<div class="text-fg text-base font-bold normal-case whitespace-nowrap">
 					{fmtPrice(setup.asof_close)}
+				</div>
+			</div>
+			<div>
+				<div class="text-fg-muted">full-ladder entry</div>
+				<div class="text-fg text-base font-bold normal-case whitespace-nowrap">
+					{fmtPrice(fullBlended)}
+				</div>
+			</div>
+			<div>
+				<div class="text-fg-muted">to stop</div>
+				<div class="text-fg-muted text-base font-bold normal-case whitespace-nowrap">
+					{stopFrac != null ? fmtPct(-stopFrac * 100, 1) : '—'}
 				</div>
 			</div>
 		</div>
