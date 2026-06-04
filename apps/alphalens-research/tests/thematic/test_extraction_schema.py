@@ -177,6 +177,18 @@ class TestParseExtraction(unittest.TestCase):
         self.assertEqual(normalized["sentiment"], "positive")
         self.assertEqual(normalized["primary_entities"], ["NVDA"])
 
+    def test_normalize_slugifies_themes_and_drops_empties(self):
+        normalized = schema.normalize_extraction(
+            {
+                "event_type": "earnings",
+                "themes": ["AI ethics", "defense_procurement", "oil & gas", "   "],
+                "sentiment": "neutral",
+                "confidence": 0.5,
+            }
+        )
+        # Mixed-format themes canonicalise to slugs; the all-whitespace one drops.
+        self.assertEqual(normalized["themes"], ["ai_ethics", "defense_procurement", "oil_gas"])
+
     def test_normalize_coerces_unknown_event_type_to_other(self):
         normalized = schema.normalize_extraction(
             {

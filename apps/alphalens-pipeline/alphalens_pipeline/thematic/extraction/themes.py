@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from alphalens_pipeline.thematic.theme_text import slugify_theme
+
 DEFAULT_EVENTS_DIR = Path.home() / ".alphalens" / "thematic_events"
 DEFAULT_WINDOW_DAYS = 30
 DEFAULT_RECENT_DAYS = 7
@@ -76,7 +78,10 @@ def roll_up(
 
     exploded = df[["_event_date", "themes"]].explode("themes").rename(columns={"themes": "theme"})
     exploded = exploded.dropna(subset=["theme"])
-    exploded["theme"] = exploded["theme"].astype(str).str.strip()
+    # Slugify on read so format variants ("AI ethics" / "AI_ethics") collapse to
+    # ONE theme across the rolling window — a write-format change can never
+    # spuriously split a theme or flag it novel. Idempotent on already-slug rows.
+    exploded["theme"] = exploded["theme"].astype(str).map(slugify_theme)
     exploded = exploded[exploded["theme"] != ""]
     if exploded.empty:
         return _empty_frame()

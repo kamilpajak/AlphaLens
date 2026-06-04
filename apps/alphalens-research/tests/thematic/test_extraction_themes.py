@@ -44,8 +44,30 @@ class TestRollUp(unittest.TestCase):
 
             counts = dict(zip(df["theme"], df["count_window"], strict=True))
             self.assertEqual(counts["quantum_computing"], 2)
-            self.assertEqual(counts["AI"], 1)
+            self.assertEqual(counts["ai"], 1)  # "AI" slugged to "ai"
             self.assertEqual(counts["biotech"], 1)
+
+    def test_format_variants_collapse_to_one_slug(self):
+        # The same concept written two ways ("AI ethics" vs "AI_ethics") must
+        # count as ONE theme: the rollup slugifies on read, so a format change
+        # never spuriously splits a theme (or flags it novel) across the window.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            events_dir = Path(tmpdir)
+            self._write(
+                events_dir,
+                dt.date(2026, 5, 10),
+                [_event_row("a", "2026-05-10", ["AI ethics"])],
+            )
+            self._write(
+                events_dir,
+                dt.date(2026, 5, 14),
+                [_event_row("b", "2026-05-14", ["AI_ethics"])],
+            )
+
+            df = themes.roll_up(asof=dt.date(2026, 5, 15), events_dir=events_dir, window_days=30)
+
+            counts = dict(zip(df["theme"], df["count_window"], strict=True))
+            self.assertEqual(counts, {"ai_ethics": 2})
 
     def test_novelty_score_uses_7d_over_30d_ratio(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -92,7 +114,7 @@ class TestRollUp(unittest.TestCase):
             )
 
             df = themes.roll_up(asof=dt.date(2026, 5, 15), events_dir=events_dir, window_days=30)
-            ai = df[df["theme"] == "AI"].iloc[0]
+            ai = df[df["theme"] == "ai"].iloc[0]
             self.assertEqual(ai["first_seen"].date(), dt.date(2026, 5, 10))
             self.assertEqual(ai["latest_seen"].date(), dt.date(2026, 5, 14))
 
