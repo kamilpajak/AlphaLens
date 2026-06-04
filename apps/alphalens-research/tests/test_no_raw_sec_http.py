@@ -15,10 +15,16 @@ Why the conjunction: a constant like ``SEC_SEARCH_URL = "https://efts..."``
 is fine when the URL is built locally and handed to ``client.get_json(url)``.
 The smell is a SEC URL paired with a raw HTTP call in the same module — that
 means the file bypasses the client's throttle + retry + UA contract.
+
+Mirror of :mod:`tests.test_no_raw_av_http` and :mod:`tests.test_no_raw_polygon_http`;
+same conjunction logic (URL fragment AND raw HTTP pattern, both in the same
+file), compiled word-boundary regexes, and a ``test_detection_regex_locks_shadow_patterns``
+positive control so the matcher / URL-fragment lists cannot rot to empty silently.
 """
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -48,20 +54,23 @@ SEC_URL_FRAGMENTS = (
     "efts.sec.gov",
 )
 
-# Module-level patterns that constitute a raw HTTP call. We match the
-# module-and-attribute prefix rather than specific function names so the
-# enforcement covers requests.post / requests.Session().get / httpx.* /
-# aiohttp.ClientSession() if a future contributor reaches for a different
-# HTTP library. The canonical client uses ``self._session.get(...)`` which
-# does not match any of these (no module name in the call). The
-# ``urllib.parse.urlencode`` helper used to build SEC URLs in edgar_detector
-# edgar.py is fine — it doesn't fetch anything — and only matches
-# ``urllib.request.`` below.
+# Module-level patterns that constitute a raw HTTP call. Word-boundary +
+# call-shape ensures a substring like "burning further requests." in a
+# docstring doesn't match, but ``requests.get(``, ``urlopen(``, ``httpx.post(``,
+# ``aiohttp.ClientSession`` all do. We match the module-and-attribute prefix
+# rather than specific function names so the enforcement covers requests.post /
+# requests.Session().get / httpx.* / aiohttp.ClientSession() if a future
+# contributor reaches for a different HTTP library. The canonical client uses
+# ``self._session.get(...)``; ``self.`` defeats the word boundary on the left,
+# so it's exempt. The ``urllib.parse.urlencode`` helper used to build SEC URLs
+# in edgar_detector edgar.py is fine — it doesn't fetch anything — and the
+# ``urllib\.request\.`` pattern below does not match ``urllib.parse.``.
 RAW_HTTP_PATTERNS = (
-    "urllib.request.",
-    "requests.",
-    "httpx.",
-    "aiohttp.",
+    re.compile(r"(?<![\w.])urlopen\("),
+    re.compile(r"(?<![\w.])urllib\.request\.\w+"),
+    re.compile(r"(?<![\w.])requests\.\w+\("),
+    re.compile(r"(?<![\w.])httpx\.\w+\("),
+    re.compile(r"(?<![\w.])aiohttp\.\w+"),
 )
 
 
@@ -75,13 +84,51 @@ def _find_raw_http_lines(text: str) -> list[tuple[int, str]]:
         if line.lstrip().startswith("#"):
             continue
         for pattern in RAW_HTTP_PATTERNS:
-            if pattern in line:
+            if pattern.search(line):
                 hits.append((lineno, line.rstrip()))
                 break
     return hits
 
 
 class TestNoRawSecHttp(unittest.TestCase):
+    def test_detection_regex_locks_shadow_patterns(self):
+        """Positive control on the detection regex itself. The negative test
+        below could silently pass if the regex / URL-fragment lists rot to
+        empty; this test asserts that each shape we MEAN to catch (bare
+        urlopen, urllib.request.urlopen, requests.get, httpx.post,
+        aiohttp.ClientSession) is flagged, and that known-safe shapes
+        (canonical DI ``self._session.get``, ``urllib.parse.urlencode`` URL
+        building, and docstring prose) are NOT.
+        """
+        shadow_samples = [
+            'with urlopen("https://www.sec.gov/Archives/edgar/data/320193") as resp:',
+            'urllib.request.urlopen("https://data.sec.gov/submissions/CIK0000320193.json")',
+            'resp = requests.get("https://efts.sec.gov/LATEST/search-index")',
+            'await httpx.post("https://www.sec.gov/cgi-bin/browse-edgar")',
+            "aiohttp.ClientSession()  # https://data.sec.gov/submissions/",
+        ]
+        for sample in shadow_samples:
+            hits = _find_raw_http_lines(sample)
+            self.assertEqual(len(hits), 1, f"expected exactly one hit on shadow sample: {sample!r}")
+
+        safe_samples = [
+            "with self._session.get(url, headers=headers) as resp:",
+            "query = urllib.parse.urlencode({'action': 'getcompany'})",
+            '"""...persistent rate-limit (retry exhausted), the exception """',
+            "# urlopen line in a comment must never trip detection",
+            "from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient",
+            "client = get_default_sec_client()",
+        ]
+        for sample in safe_samples:
+            hits = _find_raw_http_lines(sample)
+            self.assertEqual(
+                len(hits), 0, f"expected zero hits on safe sample: {sample!r} (got {hits})"
+            )
+
+        # And the URL fragment list must cover the canonical SEC base URLs.
+        self.assertTrue(_file_uses_sec_url('"https://data.sec.gov/submissions/CIK0000320193.json"'))
+        self.assertTrue(_file_uses_sec_url('"https://www.sec.gov/Archives/edgar/data/320193"'))
+
     def test_no_shadow_sec_http_outside_canonical_client(self):
         offenders: list[tuple[str, int, str]] = []
         for root in SCAN_DIRS:
