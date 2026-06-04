@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+from alphalens_pipeline.thematic.theme_text import slugify_theme
+
 EVENT_TYPES: tuple[str, ...] = (
     # Corporate actions & ownership
     "m_and_a",
@@ -134,7 +136,10 @@ def normalize_extraction(extraction: dict) -> dict:
     primary_entities = [
         str(e).strip().upper() for e in (extraction.get("primary_entities") or []) if str(e).strip()
     ]
-    themes = [str(t).strip() for t in (extraction.get("themes") or []) if str(t).strip()]
+    # Canonicalise themes to a slug so the one shape is stored + displayed
+    # everywhere; the LLM emits a mix of "AI ethics" and "AI_ethics". Empties
+    # (an all-separator token) are dropped after slugging.
+    themes = [s for t in (extraction.get("themes") or []) if (s := slugify_theme(t))]
     implications = [
         str(s).strip()
         for s in (extraction.get("second_order_implications") or [])
