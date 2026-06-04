@@ -2,6 +2,11 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
 	testDir: 'tests',
+	// `tests/unit/**` holds the vitest unit suite (run via `pnpm run test:unit`).
+	// Those files import from 'vitest', so Playwright must not collect them —
+	// otherwise `pnpm test` tries to run them and vitest's expect() blows up
+	// with "Vitest failed to access its internal state".
+	testIgnore: '**/tests/unit/**',
 	timeout: 30_000,
 	fullyParallel: false,
 	reporter: process.env.CI ? 'github' : 'list',
