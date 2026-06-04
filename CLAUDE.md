@@ -91,16 +91,14 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 
 ## Conventions
 
-**Status markers** — each layer/screener `__init__.py` declares `__status__: Literal["ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"]` plus `__closed_date__`, `__closed_reason__`, and `__closed_evidence__: dict[str, str]` (mapping 7 gates → evidence path) if `__status__ ∈ {CLOSED, ARCHIVED}`. Schema: `docs/research/kill_verdict_checklist.md`. New layer requires updating `LAYERS_WITH_STATUS` in `apps/alphalens-research/tests/test_layer_status.py`.
+**Status markers** — each layer/screener `__init__.py` declares `__status__: Literal["ACTIVE", "CLOSED", "RESEARCH_ONLY", "ARCHIVED"]` plus `__closed_date__`, `__closed_reason__`, and `__closed_evidence__: dict[str, str]` (mapping 7 gates → evidence path) if `__status__ ∈ {CLOSED, ARCHIVED}`. Schema: `docs/research/kill_verdict_checklist.md`. `apps/alphalens-research/tests/test_layer_status.py` auto-discovers every package declaring `__status__` under the layer roots (no manual registry to maintain); a small `NAMESPACE_ONLY_ALLOWLIST` covers genuine namespace packages that legitimately carry no `__status__`.
 
 **English-only in code** — comments, docstrings, identifiers in English. Math notation (α, ρ, ×, −) stays. Polish prose lives in CLAUDE.md, MEMORY, conversations, commit messages, postmortems. Enforcement: `apps/alphalens-research/tests/test_no_polish_chars.py`.
 
 **Dependency direction** — enforcement rules in `apps/alphalens-research/tests/test_module_dependencies.py`:
-- `alphalens_research.backtest.*` does NOT import from `alphalens_research.screeners.*` (exemption: `historical_validation.py`)
+- `alphalens_research.backtest.*` does NOT import from `alphalens_research.screeners.*`
 - `alphalens_research.backtest.*` does NOT import from `alphalens_research.attribution.*` (Layer 3 → Layer 5 direction; engine produces `BacktestReport`, attribution consumes)
 - `alphalens_pipeline.*` does NOT import from `alphalens_research.*` at top level (workspace DAG — lazy imports inside `alphalens_cli.commands.{audit,preaudit,preregister}` command bodies are the documented exception)
-
-**Config parity** — `SCORER_CONFIG` in `lean_project/main.py` (Docker-inlined) must match `LEAN_DEFAULTS` on shared keys. Enforcement: `apps/alphalens-research/tests/test_lean_config_parity.py`.
 
 **Lazy CLI imports** — `apps/alphalens-pipeline/alphalens_cli/commands/research.py` intentionally does NOT promote cross-function duplicates to top-level. Measured +913ms regression in `alphalens` startup time per invoke (Layer 1 edgar-detect cron fires often). The same pattern keeps `pipeline → research` from leaking into top-level imports across the workspace split.
 
@@ -238,7 +236,10 @@ Operator recipes: `deploy/systemd/README.md` (systemd units — includes the one
 
 ## Environment
 
-- API keys in `.env` (`OPENROUTER_API_KEY`, `ALPHA_VANTAGE_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `POLYGON_API_KEY`, `PERPLEXITY_API_KEY`)
+- API keys in `.env` (root). Full operator catalogue with per-key purpose comments + placeholders lives in [`.env.example`](.env.example). Three tiers:
+  - **Live** (wired to running code): `OPENROUTER_API_KEY`, `ALPHA_VANTAGE_API_KEY`, `POLYGON_API_KEY`, `FRED_API_KEY`, `PERPLEXITY_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `SEC_EDGAR_USER_AGENT` (the SEC contact has a built-in default UA so it is optional locally but required in production).
+  - **Research-only / optional** (ad-hoc scripts or expired subscriptions, no live consumer): `SIMFIN_API_KEY`, `QUIVER_API_KEY`, `IVOLATILITY_API_KEY`, `RUNPOD_API_KEY`.
+  - **Dead** (zero source consumers — slated for removal from live `.env` copies): `GOOGLE_API_KEY` (Gemini client removed, PR #416), `ALPACA_*` (paper-trade + broker chain decommissioned, [ADR 0012](docs/adr/0012-decommission-paper-trading-and-broker-chain.md)).
 - LLM config: DeepSeek v4 Pro/Flash via OpenRouter (thematic pipeline + research `llm_scorers`)
 - Runtime data (outside repo, survives git ops):
   - `~/.alphalens/candidates.db` — Layer 1 candidate queue (historical log; no live drain)
