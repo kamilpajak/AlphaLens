@@ -125,16 +125,7 @@ def evaluate(
     if not corpus.exists():
         raise typer.BadParameter(f"corpus path does not exist: {corpus}")
 
-    # Load corpus — single file or every parquet in a dir (mirrors news_ingest
-    # layout: one parquet per UTC day).
-    if corpus.is_dir():
-        frames = [pd.read_parquet(p) for p in sorted(corpus.glob("*.parquet"))]
-        if not frames:
-            raise typer.BadParameter(f"no *.parquet under {corpus}")
-        df = pd.concat(frames, ignore_index=True)
-    else:
-        df = pd.read_parquet(corpus)
-
+    df = _load_corpus(corpus)
     if df.empty:
         typer.echo("corpus is empty — nothing to evaluate")
         return
@@ -150,25 +141,7 @@ def evaluate(
     if not engine.specs:
         raise typer.BadParameter(f"no templates found in {templates_dir}")
 
-    matched_events: list = []
-    for _, row in df.iterrows():
-        # ``row.get("tickers")`` returns a numpy array for list-typed parquet
-        # columns; bare ``or []`` raises "truth value ambiguous" on arrays.
-        raw_tickers = row.get("tickers")
-        tickers_list = list(raw_tickers) if raw_tickers is not None else []
-        article = Article(
-            id=str(row.get("id", "")),
-            source=str(row.get("source", "")),
-            title=str(row.get("title", "")),
-            body=str(row.get("body", "")),
-            url=str(row.get("url", "")),
-            published_at=row.get("timestamp"),
-            tickers_raw=tickers_list,
-        )
-        entities = resolver.resolve(article)
-        event = engine.match(article, entities)
-        if event is not None:
-            matched_events.append(event)
+    matched_events = _match_corpus(df, resolver, engine)
 
     snap = engine.metrics.snapshot()
     total_articles = len(df)
@@ -195,3 +168,37 @@ def evaluate(
     if emit_metrics:
         engine.metrics.flush(job="template-engine-evaluate")
         typer.echo("\nmetrics flushed to Prometheus textfile.")
+
+
+def _load_corpus(corpus: Path) -> pd.DataFrame:
+    """Load one parquet or every parquet in a dir (news_ingest layout)."""
+    if corpus.is_dir():
+        frames = [pd.read_parquet(p) for p in sorted(corpus.glob("*.parquet"))]
+        if not frames:
+            raise typer.BadParameter(f"no *.parquet under {corpus}")
+        return pd.concat(frames, ignore_index=True)
+    return pd.read_parquet(corpus)
+
+
+def _match_corpus(df: pd.DataFrame, resolver: EntityResolver, engine: TemplateEngine) -> list:
+    """Build an ``Article`` per row and collect the engine's non-None matches."""
+    matched_events: list = []
+    for _, row in df.iterrows():
+        # ``row.get("tickers")`` returns a numpy array for list-typed parquet
+        # columns; bare ``or []`` raises "truth value ambiguous" on arrays.
+        raw_tickers = row.get("tickers")
+        tickers_list = list(raw_tickers) if raw_tickers is not None else []
+        article = Article(
+            id=str(row.get("id", "")),
+            source=str(row.get("source", "")),
+            title=str(row.get("title", "")),
+            body=str(row.get("body", "")),
+            url=str(row.get("url", "")),
+            published_at=row.get("timestamp"),
+            tickers_raw=tickers_list,
+        )
+        entities = resolver.resolve(article)
+        event = engine.match(article, entities)
+        if event is not None:
+            matched_events.append(event)
+    return matched_events

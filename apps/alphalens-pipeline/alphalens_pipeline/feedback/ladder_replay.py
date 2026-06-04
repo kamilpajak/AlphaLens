@@ -235,142 +235,160 @@ def replay_ladder(
 
     stop = ladder.disaster_stop
     assert stop is not None  # ok=True guarantees it
-    seq: list[LevelCrossing] = []
-    filled: list[_Level] = []
-    filled_ids: set[str] = set()
-    hit_tp_ids: set[str] = set()
-    ambiguous_bars = 0
-    sl_hit = False
-    time_stop = False  # synthetic position time-stop fired (terminal TIME_STOP)
-    expiry_close: float | None = None  # close of the bar the time-stop fired on
-    exit_reached = False  # the as-specified exit (first SL, full TP, or time-stop) has fired
-    last_close: float | None = None
-    in_trade_high: float | None = None  # highest high since first fill
-    in_trade_low: float | None = None  # lowest low since first fill
 
+    walk = _LadderWalk(
+        ladder, stop, entry_expiry_ms=entry_expiry_ms, position_expiry_ms=position_expiry_ms
+    )
     for bar in ordered:
+        walk.step(bar)
+
+    blended = _blended_entry(walk.filled) if walk.filled else None
+    ratchet_r: float | None = None
+    if walk.filled and blended is not None:
+        risk_per_share = (blended - stop) if blended else 0.0
+        ratchet_r = _replay_ratchet(ladder, ordered, walk.filled, blended, risk_per_share)
+
+    return _finalize(walk, blended=blended, reference_close=reference_close, ratchet_r=ratchet_r)
+
+
+class _LadderWalk:
+    """Single full-horizon pass state for the as-specified ladder replay.
+
+    Encapsulates the per-bar mutation that :func:`replay_ladder` drives so the
+    crossing sequence, fills, excursion watermarks, and exit flags live in one
+    place. Behaviour is byte-identical to the original inline loop.
+    """
+
+    def __init__(
+        self,
+        ladder: _ParsedLadder,
+        stop: float,
+        *,
+        entry_expiry_ms: int | None,
+        position_expiry_ms: int | None,
+    ) -> None:
+        self.ladder = ladder
+        self.stop = stop
+        self.entry_expiry_ms = entry_expiry_ms
+        self.position_expiry_ms = position_expiry_ms
+        self.seq: list[LevelCrossing] = []
+        self.filled: list[_Level] = []
+        self.filled_ids: set[str] = set()
+        self.hit_tp_ids: set[str] = set()
+        self.ambiguous_bars = 0
+        self.sl_hit = False
+        self.time_stop = False  # synthetic position time-stop fired (terminal TIME_STOP)
+        self.expiry_close: float | None = None  # close of the bar the time-stop fired on
+        self.exit_reached = False  # as-specified exit (first SL, full TP, or time-stop) fired
+        self.last_close: float | None = None
+        self.in_trade_high: float | None = None  # highest high since first fill
+        self.in_trade_low: float | None = None  # lowest low since first fill
+
+    def step(self, bar: Mapping[str, Any]) -> None:
         ts, low, high, close = _bar_lhc(bar)
-        last_close = close  # advances EVERY bar (whole-horizon forward_return)
+        self.last_close = close  # advances EVERY bar (whole-horizon forward_return)
 
-        # Once the as-specified position has exited (full SL, or all TPs taken)
-        # it is FLAT: no new entry fills, no in-trade excursion, no further exit
-        # resolution. ``last_close`` still advances above so ``forward_return``
-        # spans the whole horizon. (zen HIGH: a post-exit dip must NOT fill an
-        # unused deeper tier and retroactively change the blended entry /
-        # filled_frac / realized_r of an already-closed position, nor extend the
-        # MFE/MAE window past the actual holding period.)
-        if exit_reached:
-            continue
+        # Once the as-specified position has exited (full SL, or all TPs taken) it is
+        # FLAT: no new entry fills, no in-trade excursion, no further exit resolution.
+        # ``last_close`` still advances above so ``forward_return`` spans the whole
+        # horizon. (zen HIGH: a post-exit dip must NOT fill an unused deeper tier and
+        # retroactively change blended entry / filled_frac / realized_r, nor extend
+        # the MFE/MAE window past the actual holding period.)
+        if self.exit_reached:
+            return
 
-        # 1) Entries first (you cannot exit before entering). Multiple tiers can
-        #    fill in one bar (a gap-down through several limits).
-        for lvl in ladder.entries:
-            # Entry-TTL: a limit touched at/after the cutoff is a stale entry and
-            # does NOT fill (it only blocks NEW fills; the TP/SL block below still
-            # resolves an already-open position).
-            if entry_expiry_ms is not None and ts >= entry_expiry_ms:
+        self._fill_entries(ts, low)
+        if not self.filled:
+            return  # no position yet -> TP/SL/excursion cannot trigger
+
+        # In-trade excursion over every HELD bar (first fill until the as-specified
+        # exit). MFE/MAE measure only what happened while the position was open.
+        self.in_trade_high = high if self.in_trade_high is None else max(self.in_trade_high, high)
+        self.in_trade_low = low if self.in_trade_low is None else min(self.in_trade_low, low)
+
+        if self._resolve_stop(ts, low, high):
+            return
+        self._take_tps(ts, high)
+        self._maybe_time_stop(ts, close)
+
+    def _fill_entries(self, ts: int, low: float) -> None:
+        """Entries first (you cannot exit before entering). Multiple tiers can fill
+        in one bar (a gap-down through several limits)."""
+        for lvl in self.ladder.entries:
+            # Entry-TTL: a limit touched at/after the cutoff is stale and does NOT
+            # fill (only blocks NEW fills; TP/SL still resolves an open position).
+            if self.entry_expiry_ms is not None and ts >= self.entry_expiry_ms:
                 break
-            if lvl.level_id not in filled_ids and low <= lvl.price:
-                filled.append(lvl)
-                filled_ids.add(lvl.level_id)
-                seq.append(LevelCrossing(lvl.level_id, _ENTRY, lvl.price, ts))
+            if lvl.level_id not in self.filled_ids and low <= lvl.price:
+                self.filled.append(lvl)
+                self.filled_ids.add(lvl.level_id)
+                self.seq.append(LevelCrossing(lvl.level_id, _ENTRY, lvl.price, ts))
 
-        if not filled:
-            continue  # no position yet -> TP/SL/excursion cannot trigger
+    def _resolve_stop(self, ts: int, low: float, high: float) -> bool:
+        """Resolve a disaster-stop pierce. Returns True when the position exited.
 
-        # Track in-trade excursion over every HELD bar (first fill until the
-        # as-specified exit). forward_return carries the whole-horizon directional
-        # signal; MFE/MAE measure only what happened while the position was open.
-        in_trade_high = high if in_trade_high is None else max(in_trade_high, high)
-        in_trade_low = low if in_trade_low is None else min(in_trade_low, low)
+        SL-first on ambiguity: a TP also crossable this bar (Bug #3), OR a fresh
+        entry that filled THIS bar AND a stop pierced THIS bar (intra-bar order
+        unknown), both flag the SL ``same_bar_ambiguous`` + bump the counter.
+        """
+        if low > self.stop:
+            return False
+        tp_crossable = any(
+            t.level_id not in self.hit_tp_ids and high >= t.price for t in self.ladder.tps
+        )
+        entered_this_bar = any(c.bar_ts_ms == ts and c.kind == _ENTRY for c in self.seq)
+        ambiguous = tp_crossable or entered_this_bar
+        if ambiguous:
+            self.ambiguous_bars += 1
+        self.seq.append(LevelCrossing("SL", _SL, self.stop, ts, same_bar_ambiguous=ambiguous))
+        self.sl_hit = True
+        self.exit_reached = True
+        return True
 
-        # 2) Resolve the as-specified exit for this bar.
-        sl_cross = low <= stop
-        tp_crosses = [t for t in ladder.tps if t.level_id not in hit_tp_ids and high >= t.price]
+    def _take_tps(self, ts: int, high: float) -> None:
+        """Record each TP tranche hit this bar (ascending); mark exit on full scale-out."""
+        for t in self.ladder.tps:
+            if t.level_id in self.hit_tp_ids or high < t.price:
+                continue
+            self.hit_tp_ids.add(t.level_id)
+            self.seq.append(LevelCrossing(t.level_id, _TP, t.price, ts))
+        if self.ladder.tps and len(self.hit_tp_ids) == len(self.ladder.tps):
+            self.exit_reached = True  # fully scaled out via TPs
 
-        if sl_cross and tp_crosses:
-            # Ambiguous: conservative SL-first. Record SL, mark exit.
-            ambiguous_bars += 1
-            seq.append(LevelCrossing("SL", _SL, stop, ts, same_bar_ambiguous=True))
-            sl_hit = True
-            exit_reached = True
-            continue
-        if sl_cross:
-            # Bug #3: an entry that filled THIS bar AND a stop pierced THIS bar is
-            # ambiguous (we cannot order entry-then-stop vs stop intra-bar). Flag
-            # it SL-first when a fresh entry landed in the same bar.
-            entered_this_bar = any(c.bar_ts_ms == ts and c.kind == _ENTRY for c in seq)
-            if entered_this_bar:
-                ambiguous_bars += 1
-                seq.append(LevelCrossing("SL", _SL, stop, ts, same_bar_ambiguous=True))
-            else:
-                seq.append(LevelCrossing("SL", _SL, stop, ts))
-            sl_hit = True
-            exit_reached = True
-            continue
-        for t in tp_crosses:  # ascending; record each tranche hit this bar
-            hit_tp_ids.add(t.level_id)
-            seq.append(LevelCrossing(t.level_id, _TP, t.price, ts))
-        if len(hit_tp_ids) == len(ladder.tps) and ladder.tps:
-            exit_reached = True  # fully scaled out via TPs
-
-        # 3) Time-stop LAST: only when the as-specified exit did NOT fire on this
-        #    bar (a real SL/TP on the cutoff bar WINS over the synthetic stop).
-        #    Marks the remainder to THIS bar's close and ends the in-trade window.
-        # ``filled`` is guaranteed non-empty here (the ``if not filled: continue``
-        # guard above), so it is not re-checked.
-        if not exit_reached and position_expiry_ms is not None and ts >= position_expiry_ms:
-            # TIME_STOP records the BAR's CLOSE as ``price`` (not a fill level — the
-            # remainder is marked to close at expiry). Consumers should read the
-            # realized_r / classification, not interpret this cross's price as a
-            # trigger level.
-            seq.append(LevelCrossing("TIME_STOP", _TIME, close, ts))
-            expiry_close = close
-            time_stop = True
-            exit_reached = True
-
-    blended = _blended_entry(filled) if filled else None
-    ratchet_r = (
-        _replay_ratchet(ladder, ordered, filled, blended, (blended - stop) if blended else 0.0)
-        if filled and blended is not None
-        else None
-    )
-
-    return _finalize(
-        ladder,
-        seq,
-        filled,
-        hit_tp_ids,
-        sl_hit,
-        ambiguous_bars,
-        last_close,
-        blended,
-        in_trade_high,
-        in_trade_low,
-        reference_close,
-        ratchet_r,
-        time_stop=time_stop,
-        expiry_close=expiry_close,
-    )
+    def _maybe_time_stop(self, ts: int, close: float) -> None:
+        """Synthetic position time-stop LAST: only when the as-specified exit did NOT
+        fire on this bar (a real SL/TP on the cutoff bar WINS over the time-stop)."""
+        if self.exit_reached or self.position_expiry_ms is None or ts < self.position_expiry_ms:
+            return
+        # TIME_STOP records the BAR's CLOSE as ``price`` (not a fill level — the
+        # remainder is marked to close at expiry). Consumers should read the
+        # realized_r / classification, not interpret this cross's price as a trigger.
+        self.seq.append(LevelCrossing("TIME_STOP", _TIME, close, ts))
+        self.expiry_close = close
+        self.time_stop = True
+        self.exit_reached = True
 
 
 def _finalize(
-    ladder: _ParsedLadder,
-    seq: list[LevelCrossing],
-    filled: list[_Level],
-    hit_tp_ids: set[str],
-    sl_hit: bool,
-    ambiguous_bars: int,
-    last_close: float | None,
+    walk: _LadderWalk,
+    *,
     blended: float | None,
-    in_trade_high: float | None,
-    in_trade_low: float | None,
     reference_close: float | None,
     ratchet_r: float | None,
-    *,
-    time_stop: bool = False,
-    expiry_close: float | None = None,
 ) -> LadderOutcome:
+    # Unpack the walk's terminal state into the local names the body uses.
+    ladder = walk.ladder
+    seq = walk.seq
+    filled = walk.filled
+    hit_tp_ids = walk.hit_tp_ids
+    sl_hit = walk.sl_hit
+    ambiguous_bars = walk.ambiguous_bars
+    last_close = walk.last_close
+    in_trade_high = walk.in_trade_high
+    in_trade_low = walk.in_trade_low
+    time_stop = walk.time_stop
+    expiry_close = walk.expiry_close
+
     entries_filled = tuple(lvl.level_id for lvl in filled)
     tps_hit = tuple(t.level_id for t in ladder.tps if t.level_id in hit_tp_ids)
 
@@ -541,6 +559,24 @@ def _forward_return(reference_close: float | None, last_close: float | None) -> 
     return (last_close - reference_close) / reference_close
 
 
+def _fill_entry_ids(ladder: _ParsedLadder, filled_ids: set[str], low: float) -> None:
+    """Add any entry tier whose limit is touched this bar to ``filled_ids`` (in place)."""
+    for lvl in ladder.entries:
+        if lvl.level_id not in filled_ids and low <= lvl.price:
+            filled_ids.add(lvl.level_id)
+
+
+def _ratchet_eff_stop(
+    eff_stop: float, hit_tp_ids: set[str], blended: float, tp1_price: float
+) -> float:
+    """Raise the effective stop per the ratchet rule: TP1 -> break-even+, TP2 -> lock-in."""
+    if "TP1" in hit_tp_ids:
+        eff_stop = max(eff_stop, blended)  # break-even+
+    if "TP2" in hit_tp_ids:
+        eff_stop = max(eff_stop, tp1_price)  # lock-in
+    return eff_stop
+
+
 def _replay_ratchet(
     ladder: _ParsedLadder,
     ordered_bars: Sequence[Mapping[str, Any]],
@@ -574,34 +610,26 @@ def _replay_ratchet(
     sl_hit = False
     last_close: float | None = None
     filled_ids: set[str] = set()
-    have_position = False
 
     for bar in ordered_bars:
         _ts, low, high, close = _bar_lhc(bar)
         last_close = close
         # Re-derive position state on the SAME fill model so the ratchet walk is
         # self-contained (no shared mutable state with the headline pass).
-        for lvl in ladder.entries:
-            if lvl.level_id not in filled_ids and low <= lvl.price:
-                filled_ids.add(lvl.level_id)
-                have_position = True
-        if not have_position:
+        _fill_entry_ids(ladder, filled_ids, low)
+        if not filled_ids:
             continue
 
-        sl_cross = low <= eff_stop
-        tp_crosses = [t for t in ladder.tps if t.level_id not in hit_tp_ids and high >= t.price]
-
-        if sl_cross:
-            # SL-first on ambiguity (a TP also crossable this bar).
+        # SL-first on ambiguity (a TP also crossable this bar): the disaster /
+        # ratcheted stop wins, so a pierce ends the walk before taking any TP.
+        if low <= eff_stop:
             sl_hit = True
             break
-        for t in tp_crosses:
-            hit_tp_ids.add(t.level_id)
+        for t in ladder.tps:
+            if t.level_id not in hit_tp_ids and high >= t.price:
+                hit_tp_ids.add(t.level_id)
         # Ratchet the effective stop AFTER recording TP hits this bar.
-        if "TP1" in hit_tp_ids:
-            eff_stop = max(eff_stop, blended)  # break-even+
-        if "TP2" in hit_tp_ids:
-            eff_stop = max(eff_stop, tp1_price)  # lock-in
+        eff_stop = _ratchet_eff_stop(eff_stop, hit_tp_ids, blended, tp1_price)
         if len(hit_tp_ids) == len(ladder.tps):
             break  # fully scaled out
 

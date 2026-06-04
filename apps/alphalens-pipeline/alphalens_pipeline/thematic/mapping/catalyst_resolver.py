@@ -204,36 +204,53 @@ def _apply_template_precedence(
     keep_mask = pd.Series(True, index=joined.index)
     superseded_count = 0
     for key, group in joined.groupby("_super_key", sort=False):
-        # pandas types ``key`` as Hashable, but the underlying column was
-        # built from a 2-tuple per row above. Explicit unpack with a
-        # length check keeps pyright happy and guards against future
-        # changes to the key shape.
-        if not isinstance(key, tuple) or len(key) != 2:
+        if not _is_supersession_candidate(key, group):
             continue
-        ticker, _event_type = key
-        if ticker is None or len(group) < 2:
+        dropped = _superseded_flash_index(group, time_col)
+        if dropped.empty:
             continue
-        templates = group[group["extraction_method"] == "template"]
-        if templates.empty:
-            continue
-        # Each template row asserts a 24h window — Flash rows whose
-        # timestamp falls inside any of those windows are dropped.
-        for _, tmpl_row in templates.iterrows():
-            tmpl_ts = tmpl_row[time_col]
-            lo = tmpl_ts - SUPERSESSION_WINDOW
-            hi = tmpl_ts + SUPERSESSION_WINDOW
-            in_window = (group[time_col] >= lo) & (group[time_col] <= hi)
-            flash_in_window = group[in_window & (group["extraction_method"] == "flash")]
-            if flash_in_window.empty:
-                continue
-            keep_mask.loc[flash_in_window.index] = False
-            superseded_count += len(flash_in_window)
+        keep_mask.loc[dropped] = False
+        superseded_count += len(dropped)
 
     if superseded_count and metrics is not None:
         for _ in range(superseded_count):
             metrics.record_drop(HOLDOUT_SUPERSEDED_BY_TEMPLATE)
 
     return joined[keep_mask].drop(columns="_super_key")
+
+
+def _is_supersession_candidate(key: Any, group: pd.DataFrame) -> bool:
+    """Whether a ``_super_key`` group can host a template→flash supersession.
+
+    pandas types ``key`` as Hashable, but the underlying column was built
+    from a 2-tuple ``(ticker, event_type)`` per row. The explicit unpack +
+    length check keeps pyright happy and guards future key-shape changes.
+    A group needs a resolved ticker and ≥2 rows to have anything to drop.
+    """
+    if not isinstance(key, tuple) or len(key) != 2:
+        return False
+    ticker, _ = key  # key is (ticker, event_type); only ticker gates the drop
+    return ticker is not None and len(group) >= 2
+
+
+def _superseded_flash_index(group: pd.DataFrame, time_col: str) -> pd.Index:
+    """Index of Flash rows superseded by a template row in the same 24h slot.
+
+    Each template row asserts a ±``SUPERSESSION_WINDOW`` window; Flash rows
+    whose timestamp falls inside any such window are dropped.
+    """
+    templates = group[group["extraction_method"] == "template"]
+    if templates.empty:
+        return pd.Index([])
+    dropped = pd.Index([])
+    for _, tmpl_row in templates.iterrows():
+        tmpl_ts = tmpl_row[time_col]
+        lo = tmpl_ts - SUPERSESSION_WINDOW
+        hi = tmpl_ts + SUPERSESSION_WINDOW
+        in_window = (group[time_col] >= lo) & (group[time_col] <= hi)
+        flash_in_window = group[in_window & (group["extraction_method"] == "flash")]
+        dropped = dropped.union(flash_in_window.index)
+    return dropped
 
 
 def _resolve_time_column(joined: pd.DataFrame) -> str | None:
@@ -310,7 +327,7 @@ def _coerce_template_facts(raw: Any) -> dict | None:
         return None
     try:
         decoded = json.loads(raw_stripped)
-    except (json.JSONDecodeError, ValueError) as exc:
+    except ValueError as exc:  # JSONDecodeError is a ValueError subclass
         logger.warning("template_fields_json failed to parse: %s", exc)
         return None
     if not isinstance(decoded, dict) or not decoded:

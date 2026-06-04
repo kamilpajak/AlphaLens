@@ -40,11 +40,15 @@ _OTHER_WARN_THRESHOLD = 0.15
 # ``test_cli_lookback_default_in_sync_with_module``.
 _DEFAULT_LOOKBACK_DAYS = 14
 
+# Per-user runtime data root (``~/.alphalens``). Holds the feedback ledger and
+# the daily thematic brief parquets the broker-free replay reads.
+_ALPHALENS_HOME = Path.home() / ".alphalens"
+
 
 @feedback_app.command(name="report")
 def report_command(
     ledger: Path = typer.Option(
-        Path.home() / ".alphalens" / "feedback.db",
+        _ALPHALENS_HOME / "feedback.db",
         "--ledger",
         help="Override the default feedback ledger location.",
     ),
@@ -110,12 +114,12 @@ def backfill_shadow_returns_command(
         ),
     ),
     ledger: Path = typer.Option(
-        Path.home() / ".alphalens" / "feedback.db",
+        _ALPHALENS_HOME / "feedback.db",
         "--ledger",
         help="Override the default feedback ledger location.",
     ),
     briefs_dir: Path = typer.Option(
-        Path.home() / ".alphalens" / "thematic_briefs",
+        _ALPHALENS_HOME / "thematic_briefs",
         "--briefs-dir",
         help="Directory of daily thematic brief parquets (for the broker-free ladder replay).",
     ),
