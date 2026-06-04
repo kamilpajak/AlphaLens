@@ -86,8 +86,43 @@ otherwise nginx mounts an empty dir on macOS — see CLAUDE.md
 "workflow conventions" for the gotcha. Same-origin (`VITE_API_BASE`
 unset → fetch via `/api/*` reverse-proxy).
 
-## Smoke tests
+## Tests
 
 ```sh
+pnpm test:unit    # vitest unit suite (tests/unit/**) — runs in CI
 pnpm test:smoke   # Playwright; expects pnpm dev or Pages preview running
+pnpm test         # full Playwright suite (tests/*.test.ts)
 ```
+
+The vitest suite (`tests/unit/`) covers the markdown-sanitization pipeline
+(`$lib/markdown`), the `apiFetch` auth-normalization branches (`$lib/api`),
+and the `Candidate` ⇄ OpenAPI contract. Playwright owns the browser smoke
+suite; the two never overlap (see `vitest.config.ts` include glob).
+
+## API types — codegen + contract
+
+The backend's DTO shape is the source of truth, exposed by drf-spectacular at
+`GET /api/schema/`. To avoid hand-drift in `src/lib/types.ts`:
+
+* `openapi/schema.yaml` is the **committed** OpenAPI schema (the SPA build runs
+  on Cloudflare Pages with no backend, so it cannot generate live).
+* `pnpm run gen:api-types` regenerates `src/lib/api-types.gen.ts` from that
+  committed schema via `openapi-typescript`.
+* `tests/unit/contract.test.ts` pins that the hand-written `Candidate`
+  interface and the schema's `Candidate` component declare the **identical**
+  key set — a backend rename/drop fails the test instead of surfacing as
+  `undefined` in the UI.
+
+When the backend contract changes, regenerate the committed schema from the
+Django app (it needs the workspace packages on `PYTHONPATH`):
+
+```sh
+cd apps/alphalens-django
+PYTHONPATH=../alphalens-feedback:../alphalens-pipeline:../alphalens-research \
+  DJANGO_SETTINGS_MODULE=config.settings.base \
+  python manage.py spectacular --file ../web/openapi/schema.yaml
+cd ../web && pnpm run gen:api-types   # refresh the generated DTOs
+```
+
+Then update `src/lib/types.ts` + the `TS_CANDIDATE_KEYS` list in the contract
+test to match.
