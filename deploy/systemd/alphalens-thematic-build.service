@@ -108,6 +108,15 @@ ExecStartPost=/usr/bin/docker compose \
     -f %h/AlphaLens/deploy/docker/django-prod/docker-compose.yaml \
     --profile maintenance run --rm rebuild-cache
 
+# Sync the population-ladder parquet (the market-behavior edge telemetry,
+# written + benchmark-enriched by the host-venv feedback-shadow-returns job at
+# 06:30 UTC) into the edge Postgres cache. Same maintenance one-shot as
+# rebuild-cache; idempotent, so running it on every thematic-build fire just
+# re-ingests the current parquet (freshest after the nightly host enrich).
+ExecStartPost=/usr/bin/docker compose \
+    -f %h/AlphaLens/deploy/docker/django-prod/docker-compose.yaml \
+    --profile maintenance run --rm rebuild-ladder-outcomes
+
 # Prometheus textfile metrics (see alphalens-edgar-detect.service for
 # the pattern). Runs unconditionally so a failed pipeline run or
 # verify-cache halt also updates the exit code gauge — Alertmanager

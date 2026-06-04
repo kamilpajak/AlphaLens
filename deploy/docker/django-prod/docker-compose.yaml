@@ -52,6 +52,11 @@ x-django-base: &django-base
     # `--force` then silently deletes every date from the DB. See
     # briefs.ingest.parquet:DEFAULT_BRIEFS_DIR.
     ALPHALENS_BRIEFS_DIR: /var/lib/alphalens/thematic_briefs
+    # Container-side default for rebuild_ladder_outcomes_cache — same
+    # rationale as ALPHALENS_BRIEFS_DIR (must match the bind mount target
+    # below, else the command falls back to a non-existent in-container
+    # ~/.alphalens path). See edge.ingest.parquet:DEFAULT_LADDER_OUTCOMES_DIR.
+    ALPHALENS_LADDER_OUTCOMES_DIR: /var/lib/alphalens/population_ladders
   depends_on:
     postgres:
       condition: service_healthy
@@ -60,6 +65,11 @@ x-django-base: &django-base
     # command see the same artifact path as the daily pipeline. Operator
     # may override BRIEFS_DIR in .env to point at a different snapshot.
     - ${BRIEFS_DIR:-${HOME}/.alphalens/thematic_briefs}:/var/lib/alphalens/thematic_briefs:ro
+    # Read-only mount of the host's population-ladder parquet store (the
+    # market-behavior edge telemetry, written + benchmark-enriched by the
+    # host-venv nightly feedback-shadow-returns job). rebuild-ladder-outcomes
+    # ingests it into Postgres; the always-on django service ignores it.
+    - ${LADDER_OUTCOMES_DIR:-${HOME}/.alphalens/population_ladders}:/var/lib/alphalens/population_ladders:ro
 
 services:
   postgres:
@@ -114,6 +124,19 @@ services:
       - rebuild_briefs_cache
       - --briefs-dir
       - /var/lib/alphalens/thematic_briefs
+
+  # Edge market-behavior dashboard cache — population_ladders parquet → Postgres
+  # (PR #442). Same maintenance one-shot pattern as rebuild-cache; the host-venv
+  # feedback-shadow-returns job writes + benchmark-enriches the parquet nightly.
+  rebuild-ladder-outcomes:
+    <<: *django-base
+    profiles: ["maintenance"]
+    command:
+      - python
+      - manage.py
+      - rebuild_ladder_outcomes_cache
+      - --store-dir
+      - /var/lib/alphalens/population_ladders
 
 volumes:
   alphalens_pgdata:
