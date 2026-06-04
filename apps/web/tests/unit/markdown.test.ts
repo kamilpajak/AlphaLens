@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderMarkdown } from '../../src/lib/markdown';
+import { renderJson, renderMarkdown } from '../../src/lib/markdown';
 
 // The evidence drawer renders research markdown through `{@html}`. Without
 // sanitization a single careless edit to a synced research doc becomes stored
@@ -35,5 +35,27 @@ describe('renderMarkdown', () => {
 		expect(html).toContain('<strong>bold</strong>');
 		expect(html).toContain('<code>code</code>');
 		expect(html).toContain('href="https://example.com/page"');
+	});
+});
+
+// `renderJson` fences the input as a ```json block and routes it through
+// `renderMarkdown`, so it inherits the same sanitization. This pins the
+// end-to-end path so a future refactor that bypasses the render chain
+// (e.g. building the HTML directly) fails loudly.
+describe('renderJson', () => {
+	it('escapes active content from a JSON string rendered as a code block', async () => {
+		const html = await renderJson('{"x": "<script>alert(1)</script>"}');
+		// No live <script> element — the payload is HTML-escaped inside the
+		// code block (inert text), proven by the escaped form being present.
+		expect(html).not.toContain('<script>');
+		expect(html).toContain('&lt;script&gt;');
+		// The legitimate key survives inside the rendered code block.
+		expect(html).toContain('"x"');
+	});
+
+	it('falls back to a plain fenced block for non-JSON text', async () => {
+		const html = await renderJson('not <b>json</b> at all');
+		expect(html).toContain('<pre');
+		expect(html).toContain('not');
 	});
 });
