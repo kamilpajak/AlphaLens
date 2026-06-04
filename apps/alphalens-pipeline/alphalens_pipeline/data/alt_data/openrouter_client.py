@@ -63,6 +63,7 @@ import atexit
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -334,6 +335,12 @@ class OpenRouterClient:
 # injected client. First call reads OPENROUTER_API_KEY from the
 # environment; tests reset via _reset_default_client_for_tests.
 _DEFAULT_CLIENT: OpenRouterClient | None = None
+# Guards first-call construction. Without it, concurrent first callers
+# all see ``_DEFAULT_CLIENT is None``, each build a client + httpx pool,
+# and each call ``atexit.register`` — leaking pools and registering
+# duplicate close hooks. Double-checked locking collapses the race to a
+# single build (same idiom as ``paper.calendar._calendar``).
+_DEFAULT_CLIENT_LOCK = threading.Lock()
 
 
 def get_default_openrouter_client() -> OpenRouterClient:
@@ -348,11 +355,19 @@ def get_default_openrouter_client() -> OpenRouterClient:
     connection pool. Cron-style processes exit immediately and Python's
     GC handles it anyway, but the explicit close is defence-in-depth
     (zen pre-merge review of PR-G flagged the leak surface).
+
+    Construction is thread-safe via double-checked locking: the fast
+    path skips the lock once the singleton exists; the first concurrent
+    callers serialise on ``_DEFAULT_CLIENT_LOCK`` and the inner re-check
+    guarantees exactly one build + one ``atexit.register``.
     """
     global _DEFAULT_CLIENT  # noqa: PLW0603 — lazy singleton is the documented pattern
     if _DEFAULT_CLIENT is None:
-        _DEFAULT_CLIENT = OpenRouterClient.from_env()
-        atexit.register(_DEFAULT_CLIENT._http.close)
+        with _DEFAULT_CLIENT_LOCK:
+            if _DEFAULT_CLIENT is None:
+                client = OpenRouterClient.from_env()
+                atexit.register(client._http.close)
+                _DEFAULT_CLIENT = client
     return _DEFAULT_CLIENT
 
 

@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -184,6 +185,10 @@ class AlphaVantageClient:
 # ALPHA_VANTAGE_API_KEY from the environment; tests reset via
 # _reset_default_client_for_tests().
 _DEFAULT_CLIENT: AlphaVantageClient | None = None
+# Guards first-call construction so two threads racing the first call
+# don't each build a client. Double-checked locking (same idiom as
+# ``paper.calendar._calendar``).
+_DEFAULT_CLIENT_LOCK = threading.Lock()
 
 
 def get_default_av_client() -> AlphaVantageClient:
@@ -192,11 +197,14 @@ def get_default_av_client() -> AlphaVantageClient:
     Raises ``ValueError`` if ``ALPHA_VANTAGE_API_KEY`` is unset at first
     call. Subsequent calls return the same instance — the throttle state
     is shared across every caller in the process, matching the AV
-    quota's per-key semantics.
+    quota's per-key semantics. Construction is thread-safe via
+    double-checked locking.
     """
     global _DEFAULT_CLIENT  # noqa: PLW0603 — lazy singleton is the documented pattern
     if _DEFAULT_CLIENT is None:
-        _DEFAULT_CLIENT = AlphaVantageClient.from_env()
+        with _DEFAULT_CLIENT_LOCK:
+            if _DEFAULT_CLIENT is None:
+                _DEFAULT_CLIENT = AlphaVantageClient.from_env()
     return _DEFAULT_CLIENT
 
 

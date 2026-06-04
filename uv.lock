@@ -84,6 +84,7 @@ version = "0.1.0"
 source = { editable = "apps/alphalens-pipeline" }
 dependencies = [
     { name = "alphalens-feedback" },
+    { name = "beautifulsoup4" },
     { name = "defusedxml" },
     { name = "exchange-calendars" },
     { name = "feedparser" },
@@ -91,6 +92,7 @@ dependencies = [
     { name = "ivolatility" },
     { name = "json-repair" },
     { name = "jsonschema" },
+    { name = "numpy" },
     { name = "pandas" },
     { name = "pandera" },
     { name = "pyarrow" },
@@ -106,6 +108,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "alphalens-feedback", editable = "apps/alphalens-feedback" },
+    { name = "beautifulsoup4", specifier = ">=4.14.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "exchange-calendars", specifier = ">=4.5" },
     { name = "feedparser", specifier = ">=6.0.11" },
@@ -113,6 +116,7 @@ requires-dist = [
     { name = "ivolatility", specifier = ">=1.9.3" },
     { name = "json-repair", specifier = ">=0.59.10" },
     { name = "jsonschema", specifier = ">=4.0.0" },
+    { name = "numpy", specifier = ">=2.4.0" },
     { name = "pandas", specifier = ">=2.3.0" },
     { name = "pandera", specifier = ">=0.26.0" },
     { name = "pyarrow", specifier = ">=24.0.0" },

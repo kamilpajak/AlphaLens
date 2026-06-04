@@ -21,6 +21,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -408,6 +409,10 @@ class PolygonClient:
 # Reading POLYGON_API_KEY once at first call keeps env resolution centralised;
 # tests reset via _reset_default_client_for_tests().
 _DEFAULT_CLIENT: PolygonClient | None = None
+# Guards first-call construction so two threads racing the first call
+# don't each build a client. Double-checked locking (same idiom as
+# ``paper.calendar._calendar``).
+_DEFAULT_CLIENT_LOCK = threading.Lock()
 
 
 def get_default_polygon_client() -> PolygonClient:
@@ -416,11 +421,14 @@ def get_default_polygon_client() -> PolygonClient:
     Reads ``POLYGON_API_KEY`` from the environment on first call. Subsequent
     calls return the same instance — the rate-limit budget is shared across
     every caller in the process, which is precisely the Polygon Starter
-    fair-access contract we want.
+    fair-access contract we want. Construction is thread-safe via
+    double-checked locking.
     """
     global _DEFAULT_CLIENT  # noqa: PLW0603 — lazy singleton is the documented pattern
     if _DEFAULT_CLIENT is None:
-        _DEFAULT_CLIENT = PolygonClient.from_env()
+        with _DEFAULT_CLIENT_LOCK:
+            if _DEFAULT_CLIENT is None:
+                _DEFAULT_CLIENT = PolygonClient.from_env()
     return _DEFAULT_CLIENT
 
 
