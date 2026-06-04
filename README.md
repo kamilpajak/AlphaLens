@@ -238,11 +238,10 @@ docs/
 - **Code language**: English in source; enforced by `tests/test_no_polish_chars.py`
 - **New components** — pick the side per the [ADR 0011](docs/adr/0011-split-pipeline-and-research.md) DAG: infra / live services / data clients / scorer libraries → `apps/alphalens-pipeline/alphalens_pipeline/<name>/`; lab / backtest / attribution / overlays / preaudit / experiments → `apps/alphalens-research/alphalens_research/<name>/`; CLI commands → `apps/alphalens-pipeline/alphalens_cli/`; Django app → `apps/alphalens-django/`.
 
-Five enforcement tests guard architectural invariants (all in `apps/alphalens-research/tests/`):
+Four enforcement tests guard architectural invariants (all in `apps/alphalens-research/tests/`):
 
 - `test_layer_status.py` — every layer declares `__status__` + 7-gate `__closed_evidence__` for CLOSED/ARCHIVED.
 - `test_module_dependencies.py` — intra-research: `alphalens_research.backtest.*` ⇏ `alphalens_research.screeners.*` and `alphalens_research.backtest.*` ⇏ `alphalens_research.attribution.*`. Workspace DAG: `alphalens_pipeline.*` ⇏ `alphalens_research.*` at top level (lazy CLI imports are the documented exception).
-- `test_lean_config_parity.py` — kept for the legacy data layer; will retire when its last consumer is gone.
 - `test_no_polish_chars.py` — English-only in source.
 - `test_preaudit_cli_default_in_sync.py` — pins the duplicated `DEFAULT_SMOKE_TIMEOUT_S` constant between the CLI-side typer.Option default and the research-side runner.
 
