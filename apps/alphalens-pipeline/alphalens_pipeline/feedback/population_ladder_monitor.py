@@ -1045,26 +1045,7 @@ def _enrich_one_store_frame(df: pd.DataFrame, briefs_dir: Path) -> tuple[int, bo
         row = {col: df.at[idx, col] for col in df.columns}
         if not _needs_size_enrichment(row):
             continue
-        brief_date = _as_store_date(row.get("brief_date"))
-        if brief_date is None:
-            continue
-        if brief_date not in setups_by_date:
-            setups_by_date[brief_date] = _load_setups_for_date(brief_date, briefs_dir)
-        setups = setups_by_date[brief_date]
-        if not setups:
-            continue
-        setup = setups.get(str(row.get("ticker")).upper())
-        if setup is None:
-            continue
-        try:
-            fields = _size_fields_from_row(row, setup)
-        except Exception:  # one bad row must never abort the sweep
-            logger.exception(
-                "size-enrichment: failed for %s/%s; leaving NULL",
-                brief_date.isoformat(),
-                row.get("ticker"),
-            )
-            continue
+        fields = _resolve_size_fields(row, setups_by_date, briefs_dir)
         if fields is None:
             continue
         for col, val in fields.items():
@@ -1072,6 +1053,39 @@ def _enrich_one_store_frame(df: pd.DataFrame, briefs_dir: Path) -> tuple[int, bo
         enriched += 1
         changed = True
     return enriched, changed
+
+
+def _resolve_size_fields(
+    row: dict[str, Any],
+    setups_by_date: dict[dt.date, dict[str, dict] | None],
+    briefs_dir: Path,
+) -> dict[str, Any] | None:
+    """Resolve + recompute the size overlay for one store row, or ``None``.
+
+    ``None`` when the brief date / brief / ticker setup is unavailable, or the
+    recompute fails — a single bad row must never abort the sweep. ``setups_by_date``
+    is a per-frame cache so each brief date is loaded at most once.
+    """
+    brief_date = _as_store_date(row.get("brief_date"))
+    if brief_date is None:
+        return None
+    if brief_date not in setups_by_date:
+        setups_by_date[brief_date] = _load_setups_for_date(brief_date, briefs_dir)
+    setups = setups_by_date[brief_date]
+    if not setups:
+        return None
+    setup = setups.get(str(row.get("ticker")).upper())
+    if setup is None:
+        return None
+    try:
+        return _size_fields_from_row(row, setup)
+    except Exception:  # one bad row must never abort the sweep
+        logger.exception(
+            "size-enrichment: failed for %s/%s; leaving NULL",
+            brief_date.isoformat(),
+            row.get("ticker"),
+        )
+        return None
 
 
 def _load_setups_for_date(brief_date: dt.date, briefs_dir: Path) -> dict[str, dict] | None:

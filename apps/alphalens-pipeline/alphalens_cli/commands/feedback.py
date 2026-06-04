@@ -214,9 +214,7 @@ def _enrich_population_size_fields(briefs_dir: Path) -> None:
             enrich_store_with_size_fields,
         )
 
-        n = enrich_store_with_size_fields(
-            Path.home() / ".alphalens" / "population_ladders", briefs_dir
-        )
+        n = enrich_store_with_size_fields(_ALPHALENS_HOME / "population_ladders", briefs_dir)
         typer.echo(f"size-enrichment: backfilled size fields on {n} terminal rows.")
     except Exception:
         logger.exception("size-field enrichment failed; continuing")
@@ -237,7 +235,7 @@ def _enrich_population_benchmark_excess() -> None:
             enrich_store_with_benchmark_excess,
         )
 
-        n = enrich_store_with_benchmark_excess(Path.home() / ".alphalens" / "population_ladders")
+        n = enrich_store_with_benchmark_excess(_ALPHALENS_HOME / "population_ladders")
         typer.echo(f"benchmark-excess: enriched {n} rows with market-excess return.")
     except Exception:
         logger.exception("benchmark-excess enrichment failed; continuing")

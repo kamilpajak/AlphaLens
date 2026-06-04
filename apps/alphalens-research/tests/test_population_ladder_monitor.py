@@ -1297,6 +1297,42 @@ class TestSizeFieldEnrichment(_MonitorTestBase):
         self.assertFalse(pd.isna(df.loc["NVDA", "realized_gross_weight_pct"]))
         self.assertTrue(pd.isna(df.loc["XYZ", "realized_gross_weight_pct"]))
 
+    def test_missing_brief_leaves_size_null(self):
+        # GIVEN a nulled terminal row whose brief file no longer exists. WHEN
+        # enrichment runs. THEN it recomputes nothing (n == 0) and the row stays
+        # NULL — the date is genuinely unresolvable, never fudged.
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            enrich_store_with_size_fields,
+        )
+
+        brief_date, path = self._seed_terminal_row(_THREE_TIER_SETUP)
+        _null_size_columns(path)
+        (self.briefs_dir / f"{brief_date.isoformat()}.parquet").unlink()
+
+        n = enrich_store_with_size_fields(self.store_dir, self.briefs_dir)
+        self.assertEqual(n, 0)
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        for col in _SIZE_COLS:
+            self.assertTrue(pd.isna(row[col]))
+
+    def test_ticker_absent_from_brief_leaves_size_null(self):
+        # GIVEN a nulled terminal NVDA row whose brief was rewritten without NVDA.
+        # WHEN enrichment runs. THEN the setup lookup misses, n == 0, size stays NULL.
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            enrich_store_with_size_fields,
+        )
+
+        brief_date, path = self._seed_terminal_row(_THREE_TIER_SETUP)
+        _null_size_columns(path)
+        # Rewrite the brief with a DIFFERENT ticker so NVDA's setup is absent.
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "OTHER", "setup": _THREE_TIER_SETUP}])
+
+        n = enrich_store_with_size_fields(self.store_dir, self.briefs_dir)
+        self.assertEqual(n, 0)
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        for col in _SIZE_COLS:
+            self.assertTrue(pd.isna(row[col]))
+
 
 class TestLookbackConstant(unittest.TestCase):
     def test_monitor_lookback_is_distinct_and_large_enough(self):
