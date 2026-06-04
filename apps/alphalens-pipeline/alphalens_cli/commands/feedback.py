@@ -192,3 +192,27 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
         )
     except Exception:
         logger.exception("population-monitor refresh failed; continuing")
+        return
+
+    _enrich_population_benchmark_excess()
+
+
+def _enrich_population_benchmark_excess() -> None:
+    """Add benchmark-excess columns to the population-ladder store. Never raises.
+
+    Computes ``benchmark_window_return`` + ``market_excess_return`` per row
+    (market index over the SAME arrival→exit window as ``forward_return``) and
+    rewrites the store parquets. This is the EDGE dashboard's benchmark-relative
+    headline (memo §3.1) and must run HERE in the pipeline (Polygon + calendar);
+    the slim Django ingest only READS the columns. Swallow-all like the rest of
+    the nightly tail.
+    """
+    try:
+        from alphalens_pipeline.feedback.benchmark_excess import (
+            enrich_store_with_benchmark_excess,
+        )
+
+        n = enrich_store_with_benchmark_excess(Path.home() / ".alphalens" / "population_ladders")
+        typer.echo(f"benchmark-excess: enriched {n} rows with market-excess return.")
+    except Exception:
+        logger.exception("benchmark-excess enrichment failed; continuing")

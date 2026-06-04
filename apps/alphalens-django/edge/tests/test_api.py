@@ -1,0 +1,155 @@
+"""End-to-end DRF tests for ``/v1/edge/{summary,outcomes}``.
+
+Ingest a fake parquet store, then exercise the read-only endpoints. Verifies the
+N-gated summary shape (insufficient vs computed), the open-excluded-from-mean
+invariant, the per-candidate outcomes shape + status filter, and that the
+benchmark-excess is carried through at the return level.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from pathlib import Path
+
+import pandas as pd
+import pytest
+from briefs.ingest.parquet import rebuild_from_parquet as rebuild_briefs
+from edge.api.summary import N_GATE_THRESHOLD
+from edge.ingest.parquet import rebuild_from_parquet
+from rest_framework.test import APIClient
+
+
+def _write_parquet(directory: Path, iso_date: str, rows: list[dict]) -> None:
+    pd.DataFrame(rows).to_parquet(directory / f"{iso_date}.parquet", index=False)
+
+
+def _terminal(ticker: str, *, excess: float, realized_r: float, classification="TP_FULL") -> dict:
+    return {
+        "brief_date": dt.date(2026, 5, 27),
+        "ticker": ticker,
+        "plannable": True,
+        "terminal": True,
+        "matured_at": dt.date(2026, 6, 2),
+        "ladder_classification": classification,
+        "realized_r": realized_r,
+        "open_r": None,
+        "forward_return": excess + 0.02,
+        "benchmark_window_return": 0.02,
+        "market_excess_return": excess,
+        "holding_days_elapsed": 11,
+        "realized_risk_pct": 0.01,
+        "realized_return_pct_of_book": 0.002,
+        "tiers_filled_count": 2.0,
+    }
+
+
+def _ongoing(ticker: str, *, open_r: float) -> dict:
+    return {
+        "brief_date": dt.date(2026, 5, 27),
+        "ticker": ticker,
+        "plannable": True,
+        "terminal": False,
+        "matured_at": None,
+        "ladder_classification": "OPEN",
+        "realized_r": None,
+        "open_r": open_r,
+        "forward_return": 0.01,
+        "market_excess_return": None,
+    }
+
+
+@pytest.mark.django_db
+def test_summary_gated_when_below_threshold(tmp_path: Path):
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [_terminal(f"T{i}", excess=0.01, realized_r=0.5) for i in range(5)]
+        + [_ongoing("OP1", open_r=0.3)],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    resp = APIClient().get("/v1/edge/summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["edge"]["status"] == "insufficient"
+    assert body["edge"]["n_matured"] == 5
+    assert body["edge"]["threshold"] == N_GATE_THRESHOLD
+    assert body["edge"]["market_excess_mean"] is None
+    # Open is descriptive only — never folded into the (hidden) mean.
+    assert body["open_positions"]["n_open"] == 1
+    # Deployment is N-independent.
+    assert body["deployment"]["n_terminal"] == 5
+    assert body["deployment"]["fill_rate"] is not None
+
+
+@pytest.mark.django_db
+def test_summary_computed_when_at_threshold(tmp_path: Path):
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [_terminal(f"T{i}", excess=0.03, realized_r=0.5) for i in range(N_GATE_THRESHOLD)],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    body = APIClient().get("/v1/edge/summary").json()
+    assert body["edge"]["status"] in ("early", "ok")
+    assert body["edge"]["market_excess_mean"] == pytest.approx(0.03)
+    assert body["edge"]["market_excess_quantiles"]["p50"] is not None
+    assert body["benchmark"] == "SPY"
+
+
+@pytest.mark.django_db
+def test_outcomes_shape_and_theme_join(tmp_path: Path, briefs_dir: Path):
+    # Brief cache provides the theme for the (date, ticker) join.
+    _write_parquet_briefs(briefs_dir)
+    rebuild_briefs(briefs_dir)
+
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [_terminal("AMPL", excess=0.04, realized_r=1.2), _ongoing("BLBD", open_r=0.16)],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    body = APIClient().get("/v1/edge/outcomes").json()
+    rows = {r["ticker"]: r for r in body["data"]}
+    assert set(rows) == {"AMPL", "BLBD"}
+    ampl = rows["AMPL"]
+    assert ampl["terminal"] is True
+    assert ampl["market_excess_return"] == pytest.approx(0.04)
+    assert ampl["realized_r"] == pytest.approx(1.2)
+    assert ampl["theme"] == "ai-infra"
+    blbd = rows["BLBD"]
+    assert blbd["terminal"] is False
+    assert blbd["open_r"] == pytest.approx(0.16)
+
+
+@pytest.mark.django_db
+def test_outcomes_status_filter(tmp_path: Path):
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [_terminal("AMPL", excess=0.04, realized_r=1.2), _ongoing("BLBD", open_r=0.16)],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    terminal = APIClient().get("/v1/edge/outcomes?status=terminal").json()["data"]
+    assert {r["ticker"] for r in terminal} == {"AMPL"}
+    ongoing = APIClient().get("/v1/edge/outcomes?status=ongoing").json()["data"]
+    assert {r["ticker"] for r in ongoing} == {"BLBD"}
+
+
+def _write_parquet_briefs(briefs_dir: Path) -> None:
+    pd.DataFrame(
+        [
+            {"ticker": "AMPL", "theme": "ai-infra", "date": dt.date(2026, 5, 27)},
+            {"ticker": "BLBD", "theme": "ev", "date": dt.date(2026, 5, 27)},
+        ]
+    ).to_parquet(briefs_dir / "2026-05-27.parquet", index=False)
+
+
+@pytest.fixture
+def briefs_dir(tmp_path: Path) -> Path:
+    d = tmp_path / "briefs"
+    d.mkdir()
+    return d

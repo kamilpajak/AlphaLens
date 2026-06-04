@@ -42,19 +42,23 @@ class _MigrationLike(Protocol):
     name: str
 
 
-# Apps whose schema this guard protects. Deliberately just ``briefs``:
-#  * this command writes only Brief / DayMeta (the briefs app), and
-#  * briefs is the ONLY first-party app with migrations on the default
-#    (Postgres) connection — core / auth_cf / market have no migrations, and
-#    feedback lives on a SEPARATE DB behind a router, so guarding it against
-#    the default connection would BEHIND-false-positive (its migrations are
-#    recorded on a different connection than the one this guard reads).
-#  * contrib / third-party apps squash and replace migrations, so their
-#    "recorded-but-unknown-to-graph" set is legitimately non-empty and would
-#    AHEAD-false-positive.
+# Apps whose schema this guard protects: the first-party apps that own ORM
+# tables on the default (Postgres) connection and are written by a one-shot
+# rebuild command that never migrates.
+#  * ``briefs``  — the Brief / DayMeta cache (rebuild_briefs_cache); the
+#    #331/#340 deploy-env-drift incident this guard was built for.
+#  * ``edge``    — the LadderOutcome / DayMetaLadderOutcome cache
+#    (rebuild_ladder_outcomes_cache); same one-shot-never-migrates surface, so
+#    a stale rebuild image would hit the identical late-per-row UndefinedColumn.
+# Deliberately EXCLUDED: core / auth_cf / market have no migrations; feedback
+# lives on a SEPARATE DB (opened directly, not via the default connection), so
+# guarding it against the default connection would BEHIND-false-positive;
+# contrib / third-party apps squash + replace migrations, so their
+# "recorded-but-unknown-to-graph" set is legitimately non-empty and would
+# AHEAD-false-positive.
 # The anti-rot positive control in test_migration_guard.py pins that emptying
 # this set blinds the guard, so a future narrowing can't pass silently.
-_GUARDED_APPS: tuple[str, ...] = ("briefs",)
+_GUARDED_APPS: tuple[str, ...] = ("briefs", "edge")
 
 
 class SchemaSkewError(ImproperlyConfigured):

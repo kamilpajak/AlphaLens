@@ -45,6 +45,10 @@ RUN uv sync --frozen --no-dev --no-install-workspace --package alphalens-django
 COPY apps/alphalens-django/manage.py apps/alphalens-django/manage.py
 COPY apps/alphalens-django/config/ apps/alphalens-django/config/
 COPY apps/alphalens-django/briefs/ apps/alphalens-django/briefs/
+# edge app (market-behavior dashboard) — config/urls.py includes edge.api.urls,
+# so collectstatic imports edge/api/views.py at build time. Pure-Django + pandas
+# (already in the image); imports nothing from alphalens_pipeline.
+COPY apps/alphalens-django/edge/ apps/alphalens-django/edge/
 COPY apps/alphalens-django/auth_cf/ apps/alphalens-django/auth_cf/
 COPY apps/alphalens-django/core/ apps/alphalens-django/core/
 COPY apps/alphalens-django/market/ apps/alphalens-django/market/
