@@ -186,3 +186,107 @@ export interface FeedbackTaxonomy {
 	actions: FeedbackAction[];
 	categories: Record<DismissCategory, string[]>;
 }
+
+// ── Edge dashboard (market-behavior ledger) ─────────────────────────────
+// Mirrors GET /v1/edge/summary + /v1/edge/outcomes (the Phase-1 backend on
+// branch feature/feedback-edge-dashboard). The dashboard is EXPLORATORY only
+// (hypothesis-gen, never confirmatory) per
+// docs/research/feedback_edge_dashboard_2026_06_04.md §0/§3.
+//
+// The N-gate is enforced SERVER-SIDE: when n_matured < 30 the backend nulls
+// the stat fields (means/medians/quantiles) but never drops the keys, so the
+// frontend branches on `status` and renders whatever the API returns — it
+// never computes an aggregate client-side.
+
+/** Tri-state N-gate verdict. `insufficient` (<30) hides stats; `early`
+ *  (30..99) shows them with a high-variance warning; `ok` (>=100) is the
+ *  unlocked state. */
+export type EdgeStatus = 'insufficient' | 'early' | 'ok';
+
+/** Excess-R quantile triple (raw R-units). All null under the N-gate. */
+export interface EdgeQuantiles {
+	p10: number | null;
+	p50: number | null;
+	p90: number | null;
+}
+
+/** The benchmark-relative EDGE panel — the §3.1 PRIMARY metric. All the
+ *  mean/median/quantile fields are null when `status === 'insufficient'`. */
+export interface EdgePanel {
+	status: EdgeStatus;
+	n_matured: number;
+	threshold: number;
+	market_excess_mean: number | null;
+	market_excess_median: number | null;
+	market_excess_quantiles: EdgeQuantiles;
+	gross_realized_r_mean: number | null;
+	gross_realized_r_median: number | null;
+	gross_realized_r_n: number;
+	holding_days_n: number;
+	holding_days_p50: number | null;
+	holding_days_p95: number | null;
+	gross_of_cost: boolean;
+	regime_stratified: boolean;
+}
+
+/** The size-weighted PORTFOLIO panel (§ additive size layer). N-gated. */
+export interface PortfolioPanel {
+	status: EdgeStatus;
+	n_matured: number;
+	threshold: number;
+	total_realized_contribution_pct_of_book: number | null;
+	size_weighted_realized_r: number | null;
+	mean_realized_risk_pct: number | null;
+	mean_tiers_filled_count: number | null;
+	gross_of_cost: boolean;
+}
+
+/** Deployment metrics — N-INDEPENDENT, always populated (live from day one). */
+export interface DeploymentPanel {
+	n_terminal: number;
+	n_filled: number;
+	n_no_fill: number;
+	fill_rate: number | null;
+	no_fill_rate: number | null;
+	mean_tiers_filled_count: number | null;
+}
+
+/** Open-positions block — DESCRIPTIVE ONLY (§3.3). Never a mean open_R. */
+export interface OpenPositionsPanel {
+	n_open: number;
+	near_tp: number;
+	near_sl: number;
+	note: string;
+}
+
+export interface EdgeSummary {
+	n_brief: number;
+	n_plannable: number;
+	n_terminal: number;
+	n_matured: number;
+	n_gate_threshold: number;
+	benchmark: string;
+	metric_note: string;
+	edge: EdgePanel;
+	portfolio: PortfolioPanel;
+	deployment: DeploymentPanel;
+	open_positions: OpenPositionsPanel;
+}
+
+/** One per-candidate outcome row (GET /v1/edge/outcomes). `theme` is joined
+ *  from the brief cache (null when uncached). `realized_r`/`open_r` are
+ *  mutually exclusive by `terminal`. */
+export interface EdgeOutcome {
+	ticker: string;
+	brief_date: string;
+	theme: string | null;
+	ladder_classification: string;
+	terminal: boolean;
+	realized_r: number | null;
+	open_r: number | null;
+	market_excess_return: number | null;
+	forward_return: number | null;
+	benchmark_window_return: number | null;
+	holding_days_elapsed: number | null;
+	realized_return_pct_of_book: number | null;
+}
