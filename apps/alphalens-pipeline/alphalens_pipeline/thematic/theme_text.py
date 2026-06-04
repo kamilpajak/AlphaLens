@@ -32,5 +32,10 @@ def slugify_theme(theme: str) -> str:
         "  spaced  "          -> "spaced"
 
     Returns ``""`` for an empty / all-separator input; callers filter empties.
+
+    NOTE: non-ASCII characters are NOT transliterated — they are treated as
+    separators and dropped (e.g. ``"café tech"`` -> ``"caf_tech"``). Acceptable
+    because thematic keywords are English-only by repo convention; a theme that
+    is *entirely* non-ASCII would slug to ``""`` and be filtered.
     """
     return _SLUG_NONALNUM.sub("_", str(theme).strip().lower()).strip("_")
