@@ -48,6 +48,24 @@ _OK_SETUP = {
 # Not plannable: status not OK.
 _NO_STRUCTURE_SETUP = {"status": "NO_STRUCTURE", "disaster_stop": None, "entry_tiers": []}
 
+# A three-tier setup whose full-fill geometry pins the size-field algebra by hand:
+# full blended = 0.28*100 + 0.34*98 + 0.38*95 = 28 + 33.32 + 36.1 = 97.42
+# stop_distance_full = (97.42 - 70.0)/97.42 = 27.42/97.42 ≈ 0.281
+# suggested 4% -> gross fraction 0.04; implied_risk_full ≈ 0.04 * 0.281 ≈ 0.01125.
+_THREE_TIER_SETUP = {
+    "status": "OK",
+    "schema_version": "1.0.0",
+    "suggested_size_pct": 4.0,
+    "disaster_stop": 70.0,
+    "order_ttl_days": 7,
+    "entry_tiers": [
+        {"limit": 100.0, "alloc_pct": 28.0},
+        {"limit": 98.0, "alloc_pct": 34.0},
+        {"limit": 95.0, "alloc_pct": 38.0},
+    ],
+    "tp_tranches": [{"target": 130.0, "tranche_pct": 100.0}],
+}
+
 
 def _write_brief(briefs_dir: Path, brief_date: dt.date, rows: list[dict]) -> None:
     frame_rows = []
@@ -621,6 +639,412 @@ class TestAtomicWrite(_MonitorTestBase):
         tmp_files = list(self.store_dir.glob("*.parquet.tmp"))
         self.assertEqual(tmp_files, [], "no .parquet.tmp may be left after a successful write")
         self.assertTrue((self.store_dir / f"{brief_date.isoformat()}.parquet").exists())
+
+
+class TestSizeFields(_MonitorTestBase):
+    """Portfolio-size (two-layer) fields: additive, never touch the R-space edge."""
+
+    def test_full_fill_tp_pins_size_field_algebra(self):
+        # GIVEN a fully-filled terminal TP_FULL on the single-tier _OK_SETUP.
+        # WHEN replayed to terminal. THEN the size fields compose exactly:
+        #   suggested_gross_weight_pct = 2/100 = 0.02
+        #   full_ladder_blended_entry  = 100.0
+        #   stop_distance_pct_full     = (100-95)/100 = 0.05
+        #   implied_risk_pct_full      = 0.02 * 0.05 = 0.001
+        #   filled fully -> realized mirrors full; realized_r(TP@110) = (110-100)/5 = 2.0
+        #   realized_return_pct_of_book = realized_r * realized_risk_pct = 2.0 * 0.001 = 0.002
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            minute = 60_000
+            return [
+                {"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {"t": base + minute, "o": 100.0, "h": 111.0, "l": 100.0, "c": 110.0, "v": 1000.0},
+            ]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertTrue(bool(row["terminal"]))
+        self.assertEqual(row["ladder_classification"], "TP_FULL")
+        # Edge layer unchanged.
+        self.assertAlmostEqual(float(row["realized_r"]), 2.0, places=6)
+        # Signal-time geometry.
+        self.assertAlmostEqual(float(row["suggested_gross_weight_pct"]), 0.02, places=9)
+        self.assertAlmostEqual(float(row["full_ladder_blended_entry"]), 100.0, places=6)
+        self.assertAlmostEqual(float(row["stop_distance_pct_full"]), 0.05, places=9)
+        self.assertAlmostEqual(float(row["implied_risk_pct_full"]), 0.001, places=9)
+        # Outcome-time geometry.
+        self.assertEqual(int(row["tiers_filled_count"]), 1)
+        self.assertAlmostEqual(float(row["realized_gross_weight_pct"]), 0.02, places=9)
+        self.assertAlmostEqual(float(row["stop_distance_pct"]), 0.05, places=9)
+        self.assertAlmostEqual(float(row["realized_risk_pct"]), 0.001, places=9)
+        self.assertAlmostEqual(float(row["realized_return_pct_of_book"]), 0.002, places=9)
+        # Open analogue is None when terminal.
+        self.assertTrue(pd.isna(row["open_return_pct_of_book"]))
+
+    def test_three_tier_full_fill_hand_computed_contribution(self):
+        # GIVEN the three-tier setup; price gaps down through all 3 limits on bar 1
+        # then rallies to the single TP (130). WHEN replayed. THEN:
+        #   full blended = 0.28*100 + 0.34*98 + 0.38*95 = 97.42
+        #   stop_distance = (97.42-70)/97.42 ≈ 0.281
+        #   suggested 4% -> 0.04; full-fill -> realized mirrors full geometry.
+        #   realized_r(TP@130) = (130-97.42)/(97.42-70) = 32.58/27.42 ≈ 1.1882
+        #   realized_return_pct_of_book = realized_r * 0.04 * 0.281 ≈ 0.01336
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _THREE_TIER_SETUP}])
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            minute = 60_000
+            return [
+                # Bar 1 dips through all three limits (low 94 < 95) without hitting stop 70.
+                {"t": base, "o": 100.0, "h": 100.5, "l": 94.0, "c": 96.0, "v": 1000.0},
+                # Bar 2 rallies to TP 130.
+                {"t": base + minute, "o": 96.0, "h": 131.0, "l": 96.0, "c": 130.0, "v": 1000.0},
+            ]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertEqual(row["ladder_classification"], "TP_FULL")
+        self.assertEqual(int(row["tiers_filled_count"]), 3)
+        full_blended = 0.28 * 100.0 + 0.34 * 98.0 + 0.38 * 95.0  # 97.42
+        stop_dist = (full_blended - 70.0) / full_blended
+        self.assertAlmostEqual(float(row["full_ladder_blended_entry"]), full_blended, places=6)
+        self.assertAlmostEqual(float(row["stop_distance_pct_full"]), stop_dist, places=9)
+        self.assertAlmostEqual(float(row["suggested_gross_weight_pct"]), 0.04, places=9)
+        # Full fill -> realized risk == implied risk.
+        self.assertAlmostEqual(float(row["realized_risk_pct"]), 0.04 * stop_dist, places=9)
+        expected_r = (130.0 - full_blended) / (full_blended - 70.0)
+        self.assertAlmostEqual(float(row["realized_r"]), expected_r, places=6)
+        expected_contrib = expected_r * 0.04 * stop_dist
+        self.assertAlmostEqual(
+            float(row["realized_return_pct_of_book"]), expected_contrib, places=9
+        )
+        # Sanity: ≈ +1.34% of book.
+        self.assertAlmostEqual(float(row["realized_return_pct_of_book"]), 0.01336, places=4)
+
+    def test_partial_fill_scales_realized_gross_weight(self):
+        # GIVEN the three-tier setup; only E1 (limit 100) fills then the position
+        # is time-stopped (sideways). WHEN replayed. THEN:
+        #   tiers_filled_count = 1
+        #   filled_fraction = alloc(E1)/sum(alloc) = 28/100 = 0.28
+        #   realized_gross_weight_pct = 0.04 * 0.28 = 0.0112
+        #   realized blended = 100 (only E1) -> stop_distance = (100-70)/100 = 0.30
+        #   realized_risk_pct = 0.0112 * 0.30 = 0.00336
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _THREE_TIER_SETUP}])
+
+        def _fetch(ticker, start, end):
+            # E1 (100) fills; price never dips to 98/95 (low stays at 99.5) and never
+            # reaches TP 130 nor SL 70 -> partial fill, time-stop.
+            minute = 60_000
+            base = int(start.timestamp() * 1000)
+            end_ms = int(end.timestamp() * 1000)
+            bars, t = [], base
+            while t < end_ms:
+                bars.append({"t": t, "o": 100.0, "h": 100.5, "l": 99.5, "c": 100.0, "v": 1000.0})
+                t += minute * 60
+            return bars
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertTrue(bool(row["terminal"]))
+        self.assertEqual(int(row["tiers_filled_count"]), 1)
+        self.assertAlmostEqual(float(row["realized_gross_weight_pct"]), 0.04 * 0.28, places=9)
+        # Realized blended (E1 only) = 100 -> stop distance 0.30 (NOT the full 0.281).
+        self.assertAlmostEqual(float(row["full_ladder_blended_entry"]), 97.42, places=4)
+        self.assertAlmostEqual(float(row["stop_distance_pct"]), 0.30, places=9)
+        self.assertAlmostEqual(float(row["realized_risk_pct"]), 0.04 * 0.28 * 0.30, places=9)
+        # realized_return_pct_of_book = realized_r * realized_risk_pct.
+        self.assertAlmostEqual(
+            float(row["realized_return_pct_of_book"]),
+            float(row["realized_r"]) * (0.04 * 0.28 * 0.30),
+            places=9,
+        )
+
+    def test_no_fill_size_fields_are_null_or_zero_no_crash(self):
+        # GIVEN a candidate whose entries never touch (terminal NO_FILL).
+        # WHEN replayed. THEN signal-time fields are still populated (intent), but
+        # the outcome-time deployment fields are 0 / NULL and nothing crashes.
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            end_ms = int(end.timestamp() * 1000)
+            day = 86_400_000
+            bars, t = [], base
+            while t < end_ms:
+                bars.append({"t": t, "o": 105.0, "h": 106.0, "l": 104.0, "c": 105.0, "v": 1000.0})
+                t += day
+            return bars or [
+                {"t": base, "o": 105.0, "h": 106.0, "l": 104.0, "c": 105.0, "v": 1000.0}
+            ]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertEqual(row["ladder_classification"], "NO_FILL")
+        # Signal-time intent still present (geometry is fill-independent).
+        self.assertAlmostEqual(float(row["suggested_gross_weight_pct"]), 0.02, places=9)
+        self.assertAlmostEqual(float(row["stop_distance_pct_full"]), 0.05, places=9)
+        # Nothing deployed.
+        self.assertEqual(int(row["tiers_filled_count"]), 0)
+        self.assertEqual(float(row["realized_gross_weight_pct"]), 0.0)
+        self.assertTrue(pd.isna(row["stop_distance_pct"]))
+        self.assertEqual(float(row["realized_risk_pct"]), 0.0)
+        self.assertTrue(pd.isna(row["realized_return_pct_of_book"]))
+        self.assertTrue(pd.isna(row["open_return_pct_of_book"]))
+
+    def test_missing_suggested_size_yields_null_size_fields_no_crash(self):
+        # GIVEN a setup with no suggested_size_pct (a malformed / size-less setup —
+        # the live planner rejects it as non-plannable, but _size_fields must still
+        # degrade gracefully). WHEN size fields are computed for a full-fill TP.
+        # THEN size-independent geometry (stop_distance_pct_full) is still computed,
+        # every weight-bearing field is NULL, and nothing crashes.
+        from alphalens_pipeline.feedback.ladder_replay import replay_ladder
+        from alphalens_pipeline.feedback.population_ladder_monitor import _size_fields
+
+        setup = dict(_OK_SETUP)
+        del setup["suggested_size_pct"]
+        bars = [
+            {"t": 0, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+            {"t": 60_000, "o": 100.0, "h": 111.0, "l": 100.0, "c": 110.0, "v": 1000.0},
+        ]
+        outcome = replay_ladder(setup, bars, reference_close=100.0)
+        self.assertEqual(outcome.classification, "TP_FULL")
+        sf = _size_fields(setup, outcome, realized_r=outcome.realized_r, open_r=None)
+
+        self.assertIsNone(sf["suggested_gross_weight_pct"])
+        # Geometry that does NOT need the size is still computed.
+        self.assertAlmostEqual(sf["stop_distance_pct_full"], 0.05, places=9)
+        self.assertAlmostEqual(sf["stop_distance_pct"], 0.05, places=9)
+        # Every weight-bearing field is NULL when the size is unknown.
+        self.assertIsNone(sf["implied_risk_pct_full"])
+        self.assertIsNone(sf["realized_gross_weight_pct"])
+        self.assertIsNone(sf["realized_risk_pct"])
+        self.assertIsNone(sf["realized_return_pct_of_book"])
+        # tiers_filled_count is still observable (a position WAS opened).
+        self.assertEqual(sf["tiers_filled_count"], 1)
+
+    def test_nonplannable_row_has_null_size_fields(self):
+        # GIVEN a non-plannable candidate (status not OK -> the planner skips it).
+        # WHEN the monitor runs. THEN its row carries every size column as NULL.
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "XYZ", "setup": _NO_STRUCTURE_SETUP}])
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [{"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0}]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["XYZ"]
+        self.assertFalse(bool(row["plannable"]))
+        for col in (
+            "suggested_gross_weight_pct",
+            "full_ladder_blended_entry",
+            "stop_distance_pct_full",
+            "implied_risk_pct_full",
+            "tiers_filled_count",
+            "realized_gross_weight_pct",
+            "stop_distance_pct",
+            "realized_risk_pct",
+            "realized_return_pct_of_book",
+            "open_return_pct_of_book",
+        ):
+            self.assertIn(col, row.index)
+            self.assertTrue(pd.isna(row[col]), f"{col} must be NULL on a non-plannable row")
+
+    def test_open_trade_populates_open_contribution_not_realized(self):
+        # GIVEN a filled-but-still-open position (hold not elapsed). WHEN replayed.
+        # THEN open_return_pct_of_book is populated (open_r * realized_risk_pct) and
+        # realized_return_pct_of_book is NULL (no terminal outcome yet).
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC)  # ~10 sessions < 42
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            minute = 60_000
+            return [
+                {"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {"t": base + minute, "o": 100.0, "h": 103.0, "l": 100.0, "c": 102.0, "v": 1000.0},
+            ]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertFalse(bool(row["terminal"]))
+        self.assertTrue(pd.isna(row["realized_return_pct_of_book"]))
+        self.assertFalse(pd.isna(row["open_return_pct_of_book"]))
+        # open_return_pct_of_book == open_r * realized_risk_pct.
+        self.assertAlmostEqual(
+            float(row["open_return_pct_of_book"]),
+            float(row["open_r"]) * float(row["realized_risk_pct"]),
+            places=9,
+        )
+
+
+class TestSizeAwareSummary(_MonitorTestBase):
+    """summarize_population_ladders gains a size layer WITHOUT touching the edge layer."""
+
+    def _populate_terminal(self, now: dt.datetime) -> dt.date:
+        brief_date = dt.date(2026, 5, 1)
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [
+                {"ticker": "AAA", "setup": _OK_SETUP},
+                {"ticker": "BBB", "setup": _OK_SETUP},
+            ],
+        )
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            minute = 60_000
+            # Both fill then TP_FULL -> terminal realized.
+            return [
+                {"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {"t": base + minute, "o": 100.0, "h": 111.0, "l": 100.0, "c": 110.0, "v": 1000.0},
+            ]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        return brief_date
+
+    def test_equal_weight_edge_metric_unchanged_and_size_layer_added(self):
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        self._populate_terminal(now)
+        summary = summarize_population_ladders(self.store_dir)
+
+        # Edge layer (equal-weight) intact: both AAA, BBB are TP_FULL realized_r=2.0.
+        self.assertEqual(summary["realized_n"], 2)
+        self.assertAlmostEqual(summary["realized_mean"], 2.0, places=6)
+        self.assertIs(summary["regime_stratified"], False)
+
+        # Size layer present + correct (per-trade realized_risk_pct = 0.02*0.05 = 0.001).
+        self.assertIn("total_realized_contribution_pct_of_book", summary)
+        self.assertIn("size_weighted_realized_r", summary)
+        self.assertIn("mean_realized_risk_pct", summary)
+        self.assertIn("mean_tiers_filled_count", summary)
+        # Each contributes 2.0 * 0.001 = 0.002; two trades -> 0.004 total.
+        self.assertAlmostEqual(summary["total_realized_contribution_pct_of_book"], 0.004, places=9)
+        # size_weighted_realized_r = sum(r*risk)/sum(risk) = (2*0.001+2*0.001)/(0.002) = 2.0.
+        self.assertAlmostEqual(summary["size_weighted_realized_r"], 2.0, places=6)
+        self.assertAlmostEqual(summary["mean_realized_risk_pct"], 0.001, places=9)
+        self.assertAlmostEqual(summary["mean_tiers_filled_count"], 1.0, places=6)
+
+    def test_size_layer_guards_empty_store(self):
+        summary = summarize_population_ladders(self.store_dir)
+        self.assertEqual(summary["realized_n"], 0)
+        self.assertIsNone(summary["realized_mean"])
+        # New size keys present + null/zero, never crash on an empty store.
+        self.assertIsNone(summary["total_realized_contribution_pct_of_book"])
+        self.assertIsNone(summary["size_weighted_realized_r"])
+        self.assertIsNone(summary["mean_realized_risk_pct"])
+        self.assertIsNone(summary["mean_tiers_filled_count"])
+
+
+class TestSizeFieldsCarryForward(_MonitorTestBase):
+    def test_old_format_prior_row_without_size_cols_is_tolerated(self):
+        # GIVEN an OPEN row written by an OLD monitor (no size columns). WHEN run 2's
+        # fetch fails so the prior row is carried forward. THEN it does not crash and
+        # the missing size columns surface as NaN (re-populated on the next replay).
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC)  # OPEN
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        def _fetch_ok(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [{"t": base, "o": 100.0, "h": 103.0, "l": 99.0, "c": 102.0, "v": 1000.0}]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch_ok,
+            now=now,
+        )
+        # Simulate an OLD-format parquet: drop the new size columns entirely.
+        path = self.store_dir / f"{brief_date.isoformat()}.parquet"
+        df = pd.read_parquet(path)
+        size_cols = [
+            "suggested_gross_weight_pct",
+            "full_ladder_blended_entry",
+            "stop_distance_pct_full",
+            "implied_risk_pct_full",
+            "tiers_filled_count",
+            "realized_gross_weight_pct",
+            "stop_distance_pct",
+            "realized_risk_pct",
+            "realized_return_pct_of_book",
+            "open_return_pct_of_book",
+        ]
+        df = df.drop(columns=[c for c in size_cols if c in df.columns])
+        df.to_parquet(path)
+
+        def _fetch_boom(ticker, start, end):
+            raise ValueError("polygon outage")
+
+        # Must not raise even though the prior row lacks the new columns.
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch_boom,
+            now=now,
+        )
+        after = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        # Carried-forward row: missing size columns default to NaN.
+        for col in size_cols:
+            self.assertIn(col, after.index)
+            self.assertTrue(pd.isna(after[col]))
 
 
 class TestLookbackConstant(unittest.TestCase):

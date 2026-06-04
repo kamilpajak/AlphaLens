@@ -103,6 +103,28 @@ _TERMINAL_SET = frozenset(
 
 _BAR_COLUMNS = ("t", "o", "h", "l", "c", "v")
 
+# Portfolio-size (two-layer design) columns. These are STRICTLY ADDITIVE on top of
+# the size-free R-space edge fields (realized_r / open_r / mfe / mae): they describe
+# the position's portfolio contribution, never the edge of the setup. The bridge
+# from "% of book" (gross exposure) to "R" (risk-normalised) is ALWAYS the stop
+# distance — never suggested_size × R directly (dimensionally wrong). Listed here so
+# a carried-forward OLD-format row (lacking them) can be back-filled to NULL rather
+# than dropping the column from the rewritten parquet.
+_SIZE_COLUMNS = (
+    # Signal-time (intended geometry, independent of fills).
+    "suggested_gross_weight_pct",  # suggested size as a FRACTION of book (e.g. 0.0407)
+    "full_ladder_blended_entry",  # alloc-weighted blended entry over ALL 3 intended tiers
+    "stop_distance_pct_full",  # (full_blended - disaster_stop) / full_blended
+    "implied_risk_pct_full",  # suggested_gross_weight_pct * stop_distance_pct_full
+    # Outcome-time (what actually deployed).
+    "tiers_filled_count",  # 0-3 entry tiers filled
+    "realized_gross_weight_pct",  # suggested_gross_weight_pct * filled_fraction
+    "stop_distance_pct",  # (realized blended_entry - disaster_stop) / realized blended_entry
+    "realized_risk_pct",  # realized_gross_weight_pct * stop_distance_pct
+    "realized_return_pct_of_book",  # realized_r * realized_risk_pct (terminal only)
+    "open_return_pct_of_book",  # open_r * realized_risk_pct (ongoing only)
+)
+
 
 @dataclass(frozen=True)
 class PopulationMonitorReport:
@@ -259,9 +281,157 @@ def _outcome_is_implausible(outcome: LadderOutcome) -> bool:
     return fr is not None and abs(fr) > IMPLAUSIBLE_RETURN_THRESHOLD
 
 
+def _safe_div(num: float | None, den: float | None) -> float | None:
+    """``num / den`` or ``None`` when either is missing / non-finite / den == 0."""
+    if num is None or den is None:
+        return None
+    try:
+        n = float(num)
+        d = float(den)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(n) and math.isfinite(d)) or d == 0:
+        return None
+    return n / d
+
+
+def _full_ladder_blended_entry(setup: dict) -> float | None:
+    """Alloc-weighted blended entry over ALL THREE intended entry tiers.
+
+    Uses the SAME ``alloc_pct`` weights the replay engine uses, with the same
+    equal-weight fallback when allocs are absent / zero. This is the intended
+    full-fill blended entry (independent of which tiers actually filled).
+    Returns ``None`` when the setup has no usable entry tiers / prices.
+    """
+    raw_entries = setup.get("entry_tiers") or []
+    prices: list[float] = []
+    weights: list[float] = []
+    for t in raw_entries:
+        try:
+            price = float(t["limit"])
+            weight = float(t.get("alloc_pct", 0.0))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if not math.isfinite(price):
+            continue
+        prices.append(price)
+        weights.append(weight if math.isfinite(weight) else 0.0)
+    if not prices:
+        return None
+    wsum = sum(weights)
+    if wsum > 0:
+        return sum(p * w for p, w in zip(prices, weights, strict=True)) / wsum
+    return sum(prices) / len(prices)  # equal-weight fallback (allocs absent / zero)
+
+
+def _size_fields(
+    setup: dict,
+    outcome: LadderOutcome,
+    *,
+    realized_r: float | None,
+    open_r: float | None,
+) -> dict[str, Any]:
+    """Portfolio-size (two-layer) fields for one candidate row.
+
+    ALL additive: never reads or mutates the R-space edge fields. Every division is
+    guarded (a missing size / degenerate geometry yields ``None`` for that field, never
+    a crash). ``realized_r`` / ``open_r`` are the monitor's already-split terminal /
+    ongoing R values (mutually exclusive). The contribution composition is exact:
+    ``P&L%_of_book = R × gross_weight × stop_distance_pct`` (the stop distance is the
+    bridge between gross exposure and risk-normalised R).
+    """
+    # --- Signal-time (intended geometry, independent of fills) ---------------
+    raw_size = setup.get("suggested_size_pct")
+    suggested_gross_weight_pct: float | None
+    if raw_size is None:
+        suggested_gross_weight_pct = None
+    else:
+        try:
+            pct = float(raw_size)
+        except (TypeError, ValueError):
+            suggested_gross_weight_pct = None
+        else:
+            # Stored as a PERCENT (e.g. 4.07 -> 4.07%); normalise to a fraction.
+            suggested_gross_weight_pct = pct / 100.0 if math.isfinite(pct) else None
+
+    full_blended = _full_ladder_blended_entry(setup)
+    raw_stop = setup.get("disaster_stop")
+    try:
+        disaster_stop = float(raw_stop) if raw_stop is not None else None
+    except (TypeError, ValueError):
+        disaster_stop = None
+    if disaster_stop is not None and not math.isfinite(disaster_stop):
+        disaster_stop = None
+
+    stop_distance_pct_full = _safe_div(
+        (full_blended - disaster_stop)
+        if (full_blended is not None and disaster_stop is not None)
+        else None,
+        full_blended,
+    )
+    implied_risk_pct_full = (
+        suggested_gross_weight_pct * stop_distance_pct_full
+        if (suggested_gross_weight_pct is not None and stop_distance_pct_full is not None)
+        else None
+    )
+
+    # --- Outcome-time (what actually deployed) -------------------------------
+    tiers_filled_count = len(outcome.entries_filled)
+    filled_fraction = outcome.filled_fraction
+    # realized gross weight = suggested × filled_fraction. NULL when the size is
+    # unknown; 0 when the size IS known but nothing filled (zero capital deployed —
+    # a real, non-NULL fact); otherwise the product.
+    if suggested_gross_weight_pct is None:
+        realized_gross_weight_pct: float | None = None
+    elif filled_fraction is not None:
+        realized_gross_weight_pct = suggested_gross_weight_pct * filled_fraction
+    elif tiers_filled_count == 0:
+        realized_gross_weight_pct = 0.0
+    else:
+        realized_gross_weight_pct = None
+    # Realized stop distance over the FILLED blended entry (None when nothing filled).
+    stop_distance_pct = _safe_div(
+        (outcome.blended_entry - disaster_stop)
+        if (outcome.blended_entry is not None and disaster_stop is not None)
+        else None,
+        outcome.blended_entry,
+    )
+    if tiers_filled_count == 0:
+        realized_risk_pct: float | None = 0.0
+    elif realized_gross_weight_pct is not None and stop_distance_pct is not None:
+        realized_risk_pct = realized_gross_weight_pct * stop_distance_pct
+    else:
+        realized_risk_pct = None
+
+    realized_return_pct_of_book = (
+        realized_r * realized_risk_pct
+        if (realized_r is not None and realized_risk_pct is not None)
+        else None
+    )
+    open_return_pct_of_book = (
+        open_r * realized_risk_pct
+        if (open_r is not None and realized_risk_pct is not None)
+        else None
+    )
+
+    return {
+        "suggested_gross_weight_pct": suggested_gross_weight_pct,
+        "full_ladder_blended_entry": full_blended,
+        "stop_distance_pct_full": stop_distance_pct_full,
+        "implied_risk_pct_full": implied_risk_pct_full,
+        "tiers_filled_count": tiers_filled_count,
+        "realized_gross_weight_pct": realized_gross_weight_pct,
+        "stop_distance_pct": stop_distance_pct,
+        "realized_risk_pct": realized_risk_pct,
+        "realized_return_pct_of_book": realized_return_pct_of_book,
+        "open_return_pct_of_book": open_return_pct_of_book,
+    }
+
+
 def _terminal_row(
     brief_date: dt.date,
     ticker: str,
+    setup: dict,
     outcome: LadderOutcome,
     cutoffs: tuple[dt.date, dt.date, dt.date, int, int, int, int],
     last_closed_session: dt.date,
@@ -289,7 +459,7 @@ def _terminal_row(
     realized_r = outcome.realized_r if terminal else None
     open_r = None if terminal else outcome.realized_r
     holding_days = _holding_days(outcome, last_closed_session, terminal=terminal)
-    return {
+    row = {
         "brief_date": brief_date,
         "ticker": ticker,
         "plannable": True,
@@ -312,6 +482,8 @@ def _terminal_row(
         "entry_ttl_days": entry_ttl,
         "position_ttl_days": position_ttl,
     }
+    row.update(_size_fields(setup, outcome, realized_r=realized_r, open_r=open_r))
+    return row
 
 
 def _holding_days(
@@ -349,6 +521,11 @@ def _holding_days(
     return max(0, trading_days_elapsed(first_fill_session, exit_session))
 
 
+def _null_size_fields() -> dict[str, Any]:
+    """All size columns set to ``None`` (non-replayed / placeholder rows)."""
+    return dict.fromkeys(_SIZE_COLUMNS)
+
+
 def _nonplannable_row(brief_date: dt.date, ticker: str, reason: str) -> dict[str, Any]:
     """A row for a non-plannable candidate (recorded with a reason, not replayed)."""
     return {
@@ -373,6 +550,7 @@ def _nonplannable_row(brief_date: dt.date, ticker: str, reason: str) -> dict[str
         "holding_days_elapsed": None,
         "entry_ttl_days": None,
         "position_ttl_days": None,
+        **_null_size_fields(),
     }
 
 
@@ -408,7 +586,21 @@ def _placeholder_row(
         "holding_days_elapsed": None,
         "entry_ttl_days": entry_ttl,
         "position_ttl_days": position_ttl,
+        **_null_size_fields(),
     }
+
+
+def _carry_prior(prior: dict[str, Any]) -> dict[str, Any]:
+    """Carry a prior store row forward, back-filling any NEW (size) columns to None.
+
+    An OLD-format parquet predates the size columns; carrying its row verbatim would
+    drop those columns from the rewritten frame for a single-row date. Back-filling to
+    ``None`` keeps the schema stable (the next successful replay repopulates them).
+    """
+    carried = dict(prior)
+    for col in _SIZE_COLUMNS:
+        carried.setdefault(col, None)
+    return carried
 
 
 def _read_existing_store(store_dir: Path, brief_date: dt.date) -> dict[str, dict[str, Any]]:
@@ -549,7 +741,7 @@ def _replay_one_date(
 
         # FREEZE: a terminal prior row is copied forward verbatim, no fetch/replay.
         if prior is not None and bool(prior.get("terminal")):
-            rows.append(dict(prior))
+            rows.append(_carry_prior(prior))
             terminal += 1
             continue
 
@@ -562,11 +754,15 @@ def _replay_one_date(
             # forward verbatim (denominator never shrinks); a brand-new ticker
             # gets a retryable placeholder.
             rows.append(
-                dict(prior) if prior is not None else _placeholder_row(brief_date, ticker, cutoffs)
+                _carry_prior(prior)
+                if prior is not None
+                else _placeholder_row(brief_date, ticker, cutoffs)
             )
             carried += 1
             continue
-        row = _terminal_row(brief_date, ticker, outcome, cutoffs, last_closed_session)
+        row = _terminal_row(
+            brief_date, ticker, c.trade_setup, outcome, cutoffs, last_closed_session
+        )
         rows.append(row)
         if row["terminal"]:
             terminal += 1
@@ -713,6 +909,14 @@ def summarize_population_ladders(
     realized: list[float] = []
     open_marks: list[float] = []
     holding_days: list[float] = []
+    # Size layer (terminal rows only): kept ENTIRELY separate from the equal-weight
+    # edge metric above. ``contributions`` sums portfolio P&L as % of book; the
+    # risk-weighted mean R weights each trade by the capital-at-risk it deployed.
+    contributions: list[float] = []
+    realized_risk_pcts: list[float] = []
+    risk_weighted_r_num = 0.0  # Σ realized_r × realized_risk_pct
+    risk_weighted_r_den = 0.0  # Σ realized_risk_pct
+    tiers_filled: list[float] = []
     n_brief = 0
     n_plannable = 0
 
@@ -737,12 +941,27 @@ def summarize_population_ladders(
                     hd = _finite(row.get("holding_days_elapsed"))
                     if hd is not None:
                         holding_days.append(hd)
+                    # Size layer — guard each field independently (.get() tolerates an
+                    # OLD-format row that lacks the columns; _finite drops NaN / inf).
+                    contrib = _finite(row.get("realized_return_pct_of_book"))
+                    if contrib is not None:
+                        contributions.append(contrib)
+                    risk = _finite(row.get("realized_risk_pct"))
+                    if risk is not None:
+                        realized_risk_pcts.append(risk)
+                        if rv is not None:
+                            risk_weighted_r_num += rv * risk
+                            risk_weighted_r_den += risk
+                    tfc = _finite(row.get("tiers_filled_count"))
+                    if tfc is not None:
+                        tiers_filled.append(tfc)
                 else:
                     ov = _finite(row.get("open_r"))
                     if ov is not None:
                         open_marks.append(ov)
 
     return {
+        # ---- Edge layer (size-free, equal-weight) — the PRIMARY metric, unchanged.
         "n_brief": n_brief,
         "n_plannable": n_plannable,
         "realized_n": len(realized),
@@ -753,6 +972,17 @@ def summarize_population_ladders(
         "holding_days_p50": _percentile(holding_days, 50.0),
         "holding_days_p95": _percentile(holding_days, 95.0),
         "regime_stratified": False,
+        # ---- Size / portfolio layer (additive, NOT the edge) — terminal trades only.
+        "total_realized_contribution_pct_of_book": (sum(contributions) if contributions else None),
+        "size_weighted_realized_r": (
+            risk_weighted_r_num / risk_weighted_r_den if risk_weighted_r_den > 0 else None
+        ),
+        "mean_realized_risk_pct": (
+            sum(realized_risk_pcts) / len(realized_risk_pcts) if realized_risk_pcts else None
+        ),
+        "mean_tiers_filled_count": (
+            sum(tiers_filled) / len(tiers_filled) if tiers_filled else None
+        ),
     }
 
 
