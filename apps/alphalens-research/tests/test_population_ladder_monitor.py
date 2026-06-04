@@ -1047,6 +1047,350 @@ class TestSizeFieldsCarryForward(_MonitorTestBase):
             self.assertTrue(pd.isna(after[col]))
 
 
+_SIZE_COLS = [
+    "suggested_gross_weight_pct",
+    "full_ladder_blended_entry",
+    "stop_distance_pct_full",
+    "implied_risk_pct_full",
+    "tiers_filled_count",
+    "realized_gross_weight_pct",
+    "stop_distance_pct",
+    "realized_risk_pct",
+    "realized_return_pct_of_book",
+    "open_return_pct_of_book",
+]
+# The frozen replay verdict columns the enricher must NEVER touch.
+_VERDICT_COLS = [
+    "ladder_classification",
+    "blended_entry",
+    "realized_r",
+    "open_r",
+    "mfe",
+    "mae",
+    "mfe_pct",
+    "mae_pct",
+    "forward_return",
+    "sequence_str",
+    "terminal",
+]
+
+
+def _null_size_columns(path: Path) -> pd.DataFrame:
+    """Set every size column to NaN on the store parquet at ``path`` (in place)."""
+    df = pd.read_parquet(path)
+    for col in _SIZE_COLS:
+        df[col] = None
+    df.to_parquet(path)
+    return pd.read_parquet(path)
+
+
+class TestSizeFieldEnrichment(_MonitorTestBase):
+    """Backfill the size overlay onto terminal rows frozen before the size feature."""
+
+    def _three_tier_full_fill_fetch(self):
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            minute = 60_000
+            return [
+                {"t": base, "o": 100.0, "h": 100.5, "l": 94.0, "c": 96.0, "v": 1000.0},
+                {"t": base + minute, "o": 96.0, "h": 131.0, "l": 96.0, "c": 130.0, "v": 1000.0},
+            ]
+
+        return _fetch
+
+    def _seed_terminal_row(self, setup: dict) -> tuple[dt.date, Path]:
+        """Replay one full-fill TP terminal row and return (brief_date, store path)."""
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": setup}])
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=self._three_tier_full_fill_fetch(),
+            now=now,
+        )
+        return brief_date, self.store_dir / f"{brief_date.isoformat()}.parquet"
+
+    def test_null_size_terminal_row_is_recomputed_verdict_unchanged(self):
+        # GIVEN a terminal full-fill TP row whose size columns were nulled (the
+        # pre-PR-431 freeze case). WHEN enrich_store_with_size_fields runs. THEN the
+        # size overlay is recomputed to the exact hand-verified algebra and the
+        # frozen verdict (classification / realized_r / sequence_str) is unchanged.
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            enrich_store_with_size_fields,
+        )
+
+        brief_date, path = self._seed_terminal_row(_THREE_TIER_SETUP)
+        before = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertTrue(bool(before["terminal"]))
+        self.assertEqual(before["ladder_classification"], "TP_FULL")
+
+        nulled = _null_size_columns(path).set_index("ticker").loc["NVDA"]
+        for col in _SIZE_COLS:
+            self.assertTrue(pd.isna(nulled[col]))
+
+        n = enrich_store_with_size_fields(self.store_dir, self.briefs_dir)
+        self.assertEqual(n, 1)
+
+        after = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        # Size overlay restored to the hand-computed three-tier algebra.
+        full_blended = 0.28 * 100.0 + 0.34 * 98.0 + 0.38 * 95.0  # 97.42
+        stop_dist = (full_blended - 70.0) / full_blended
+        self.assertAlmostEqual(float(after["suggested_gross_weight_pct"]), 0.04, places=9)
+        self.assertAlmostEqual(float(after["full_ladder_blended_entry"]), full_blended, places=6)
+        self.assertAlmostEqual(float(after["stop_distance_pct_full"]), stop_dist, places=9)
+        self.assertEqual(int(after["tiers_filled_count"]), 3)
+        self.assertAlmostEqual(float(after["realized_risk_pct"]), 0.04 * stop_dist, places=9)
+        expected_r = (130.0 - full_blended) / (full_blended - 70.0)
+        expected_contrib = expected_r * 0.04 * stop_dist
+        self.assertAlmostEqual(
+            float(after["realized_return_pct_of_book"]), expected_contrib, places=9
+        )
+        # FROZEN verdict columns byte-identical before/after.
+        for col in _VERDICT_COLS:
+            b, a = before[col], after[col]
+            if pd.isna(b):
+                self.assertTrue(pd.isna(a), f"{col} should remain NaN")
+            else:
+                self.assertEqual(a, b, f"{col} must be unchanged")
+
+    def test_brief_setup_unavailable_for_ticker_stays_null_no_fudge(self):
+        # GIVEN a frozen terminal row whose brief no longer carries a parseable
+        # setup for that ticker (size genuinely unknowable post-hoc). WHEN enrichment
+        # runs. THEN every size column stays NULL (never fudged) and 0 rows enriched.
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            enrich_store_with_size_fields,
+        )
+
+        brief_date, path = self._seed_terminal_row(_THREE_TIER_SETUP)
+        _null_size_columns(path)
+        # Rewrite the brief so NVDA's setup is gone (only an unrelated ticker remains).
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "AAPL", "setup": _OK_SETUP}])
+
+        n = enrich_store_with_size_fields(self.store_dir, self.briefs_dir)
+        self.assertEqual(n, 0)
+        after = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        for col in _SIZE_COLS:
+            self.assertTrue(pd.isna(after[col]), f"{col} must stay NULL (no fudge)")
+
+    def test_missing_brief_leaves_row_null_resilient(self):
+        # GIVEN a terminal row whose brief parquet has been removed. WHEN enrichment
+        # runs. THEN it does not raise, enriches 0 rows, and the size stays NULL.
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            enrich_store_with_size_fields,
+        )
+
+        brief_date, path = self._seed_terminal_row(_THREE_TIER_SETUP)
+        _null_size_columns(path)
+        (self.briefs_dir / f"{brief_date.isoformat()}.parquet").unlink()
+
+        n = enrich_store_with_size_fields(self.store_dir, self.briefs_dir)
+        self.assertEqual(n, 0)
+        after = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        for col in _SIZE_COLS:
+            self.assertTrue(pd.isna(after[col]))
+
+    def test_idempotent_second_run_enriches_zero(self):
+        # GIVEN an already-enriched store. WHEN enrichment runs again. THEN it
+        # reports 0 rows and leaves the populated size fields byte-identical.
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            enrich_store_with_size_fields,
+        )
+
+        brief_date, path = self._seed_terminal_row(_THREE_TIER_SETUP)
+        _null_size_columns(path)
+        first = enrich_store_with_size_fields(self.store_dir, self.briefs_dir)
+        self.assertEqual(first, 1)
+        snapshot = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+
+        second = enrich_store_with_size_fields(self.store_dir, self.briefs_dir)
+        self.assertEqual(second, 0)
+        after = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        for col in _SIZE_COLS:
+            b, a = snapshot[col], after[col]
+            if pd.isna(b):
+                self.assertTrue(pd.isna(a))
+            else:
+                self.assertAlmostEqual(float(a), float(b), places=9)
+
+    def test_filled_fraction_rederived_from_sequence_str_matches_replay(self):
+        # GIVEN a partial-fill terminal row (only E1 of the 3-tier setup fills) whose
+        # size was nulled. WHEN enrichment recomputes from sequence_str + brief tiers.
+        # THEN the re-derived filled_fraction matches the original replay's:
+        #   alloc(E1)/sum(alloc) = 28/(28+34+38) = 0.28
+        #   realized_gross_weight_pct = 0.04 * 0.28 = 0.0112
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            _parse_filled_entry_ids,
+            _rederive_filled_fraction,
+            enrich_store_with_size_fields,
+        )
+
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _THREE_TIER_SETUP}])
+
+        def _fetch(ticker, start, end):
+            # E1 (100) fills; never dips to 98/95, never hits TP/SL -> partial, time-stop.
+            minute = 60_000
+            base = int(start.timestamp() * 1000)
+            end_ms = int(end.timestamp() * 1000)
+            bars, t = [], base
+            while t < end_ms:
+                bars.append({"t": t, "o": 100.0, "h": 100.5, "l": 99.5, "c": 100.0, "v": 1000.0})
+                t += minute * 60
+            return bars
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        path = self.store_dir / f"{brief_date.isoformat()}.parquet"
+        before = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertEqual(int(before["tiers_filled_count"]), 1)
+        original_gross = float(before["realized_gross_weight_pct"])
+
+        # Sanity: the adapter re-derives the SAME filled_fraction the engine used.
+        filled_ids = _parse_filled_entry_ids(before["sequence_str"])
+        self.assertEqual(filled_ids, ["E1"])
+        frac = _rederive_filled_fraction(_THREE_TIER_SETUP, filled_ids)
+        self.assertAlmostEqual(frac, 0.28, places=9)
+
+        _null_size_columns(path)
+        enrich_store_with_size_fields(self.store_dir, self.briefs_dir)
+        after = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertAlmostEqual(float(after["realized_gross_weight_pct"]), 0.04 * 0.28, places=9)
+        self.assertAlmostEqual(float(after["realized_gross_weight_pct"]), original_gross, places=9)
+
+    def test_nonplannable_and_already_sized_rows_skipped(self):
+        # GIVEN a store with a non-plannable row (NULL size by design) and a freshly
+        # replayed terminal row (already sized). WHEN enrichment runs. THEN neither is
+        # touched (non-plannable stays NULL; already-sized is left as-is) and n == 0.
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            enrich_store_with_size_fields,
+        )
+
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [
+                {"ticker": "NVDA", "setup": _THREE_TIER_SETUP},
+                {"ticker": "XYZ", "setup": _NO_STRUCTURE_SETUP},
+            ],
+        )
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=self._three_tier_full_fill_fetch(),
+            now=now,
+        )
+        # Both already correct: terminal sized, non-plannable NULL.
+        n = enrich_store_with_size_fields(self.store_dir, self.briefs_dir)
+        self.assertEqual(n, 0)
+        df = self._read_store(brief_date).set_index("ticker")
+        self.assertFalse(pd.isna(df.loc["NVDA", "realized_gross_weight_pct"]))
+        self.assertTrue(pd.isna(df.loc["XYZ", "realized_gross_weight_pct"]))
+
+    def test_missing_brief_leaves_size_null(self):
+        # GIVEN a nulled terminal row whose brief file no longer exists. WHEN
+        # enrichment runs. THEN it recomputes nothing (n == 0) and the row stays
+        # NULL — the date is genuinely unresolvable, never fudged.
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            enrich_store_with_size_fields,
+        )
+
+        brief_date, path = self._seed_terminal_row(_THREE_TIER_SETUP)
+        _null_size_columns(path)
+        (self.briefs_dir / f"{brief_date.isoformat()}.parquet").unlink()
+
+        n = enrich_store_with_size_fields(self.store_dir, self.briefs_dir)
+        self.assertEqual(n, 0)
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        for col in _SIZE_COLS:
+            self.assertTrue(pd.isna(row[col]))
+
+    def test_ticker_absent_from_brief_leaves_size_null(self):
+        # GIVEN a nulled terminal NVDA row whose brief was rewritten without NVDA.
+        # WHEN enrichment runs. THEN the setup lookup misses, n == 0, size stays NULL.
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            enrich_store_with_size_fields,
+        )
+
+        brief_date, path = self._seed_terminal_row(_THREE_TIER_SETUP)
+        _null_size_columns(path)
+        # Rewrite the brief with a DIFFERENT ticker so NVDA's setup is absent.
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "OTHER", "setup": _THREE_TIER_SETUP}])
+
+        n = enrich_store_with_size_fields(self.store_dir, self.briefs_dir)
+        self.assertEqual(n, 0)
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        for col in _SIZE_COLS:
+            self.assertTrue(pd.isna(row[col]))
+
+
+class TestSizeEnrichmentHelpers(unittest.TestCase):
+    """Direct unit tests of the size-backfill pure helpers + their guard branches."""
+
+    def test_parse_filled_entry_ids(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _parse_filled_entry_ids
+
+        self.assertEqual(_parse_filled_entry_ids("E1->E2->TP1->SL"), ["E1", "E2"])
+        self.assertEqual(_parse_filled_entry_ids("E1->E1->TP1"), ["E1"])  # de-dup
+        self.assertEqual(_parse_filled_entry_ids("TP1->SL"), [])  # no entry crossings
+        self.assertEqual(_parse_filled_entry_ids(None), [])
+        self.assertEqual(_parse_filled_entry_ids(123), [])  # non-string
+
+    def test_rederive_filled_fraction(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _rederive_filled_fraction
+
+        self.assertIsNone(_rederive_filled_fraction(_THREE_TIER_SETUP, []))  # nothing filled
+        # E1 of 28/34/38 -> 0.28; E1+E2 -> 0.62.
+        self.assertAlmostEqual(_rederive_filled_fraction(_THREE_TIER_SETUP, ["E1"]), 0.28, places=9)
+        self.assertAlmostEqual(
+            _rederive_filled_fraction(_THREE_TIER_SETUP, ["E1", "E2"]), 0.62, places=9
+        )
+        # An id absent from the ladder is ignored -> no usable fill -> None.
+        self.assertIsNone(_rederive_filled_fraction(_THREE_TIER_SETUP, ["E9"]))
+
+    def test_size_fields_from_row_no_suggested_size_leaves_book_fields_null(self):
+        # A NO_STRUCTURE setup (no suggested_size, no usable geometry) yields a dict
+        # whose book-weight fields are None (unknowable) — never fudged. The count
+        # fields are still concrete (0 / 0.0), so the dict is returned as-is.
+        from alphalens_pipeline.feedback.population_ladder_monitor import _size_fields_from_row
+
+        row = {"blended_entry": None, "sequence_str": None, "realized_r": None, "open_r": None}
+        fields = _size_fields_from_row(row, _NO_STRUCTURE_SETUP)
+        self.assertIsNotNone(fields)
+        self.assertIsNone(fields["suggested_gross_weight_pct"])
+        self.assertIsNone(fields["realized_gross_weight_pct"])
+        self.assertIsNone(fields["realized_return_pct_of_book"])
+        self.assertEqual(fields["tiers_filled_count"], 0)
+
+    def test_needs_size_enrichment(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _needs_size_enrichment
+
+        base = {"plannable": True, "realized_gross_weight_pct": None}
+        self.assertTrue(_needs_size_enrichment(base))
+        self.assertFalse(_needs_size_enrichment({**base, "realized_gross_weight_pct": 0.04}))
+        self.assertFalse(_needs_size_enrichment({**base, "plannable": False}))
+
+    def test_load_setups_for_date_broad_except_returns_none(self):
+        # An unanticipated load_brief error (not FileNotFoundError/ValueError) must be
+        # caught and yield None — the sweep continues (the zen-review hardening).
+        from unittest.mock import patch
+
+        from alphalens_pipeline.feedback import population_ladder_monitor as mon
+
+        with patch.object(mon, "load_brief", side_effect=RuntimeError("boom")):
+            self.assertIsNone(mon._load_setups_for_date(dt.date(2026, 5, 1), Path("/nonexistent")))
+
+
 class TestLookbackConstant(unittest.TestCase):
     def test_monitor_lookback_is_distinct_and_large_enough(self):
         # The monitor uses its OWN lookback (>= ~60 calendar days for 42 sessions),

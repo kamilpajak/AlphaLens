@@ -894,6 +894,252 @@ def _replay_candidate(
     return outcome
 
 
+def _parse_filled_entry_ids(sequence_str: Any) -> list[str]:
+    """Entry-tier ids (``E1``/``E2``/``E3`` ...) from a stored ``sequence_str``.
+
+    ``sequence_str`` is e.g. ``"E1->E2->TP1->SL"``; the entry crossings are the
+    tokens that start with ``E`` followed by a digit. Returns them de-duplicated,
+    in first-touch order (an entry fills at most once). Tolerates ``None`` / NaN /
+    a non-string (``[]``).
+    """
+    if sequence_str is None or not isinstance(sequence_str, str):
+        return []
+    seen: list[str] = []
+    for token in sequence_str.split("->"):
+        tok = token.strip()
+        if len(tok) >= 2 and tok[0] == "E" and tok[1:].isdigit() and tok not in seen:
+            seen.append(tok)
+    return seen
+
+
+def _rederive_filled_fraction(setup: dict, filled_entry_ids: list[str]) -> float | None:
+    """Re-derive ``filled_fraction`` from the brief tiers + the stored fill ids.
+
+    Reuses the engine's own :func:`parse_ladder` + :func:`_filled_frac` so the
+    alloc-weighting (and equal-weight fallback when allocs are absent / zero) is
+    byte-identical to what the live replay produced — NO duplicated arithmetic.
+    Returns ``None`` when nothing filled (so the size stub mirrors a real
+    ``LadderOutcome.filled_fraction`` of ``None`` for an empty fill set) or when
+    the ladder cannot be parsed.
+    """
+    if not filled_entry_ids:
+        return None
+    from alphalens_pipeline.feedback.ladder_replay import _filled_frac, parse_ladder
+
+    ladder = parse_ladder(setup)
+    if not ladder.ok:
+        return None
+    by_id = {lvl.level_id: lvl for lvl in ladder.entries}
+    filled_levels = [by_id[eid] for eid in filled_entry_ids if eid in by_id]
+    if not filled_levels:
+        return None
+    return _filled_frac(ladder, filled_levels)
+
+
+def _size_fields_from_row(row: dict[str, Any], setup: dict) -> dict[str, Any] | None:
+    """Recompute the size overlay for ONE stored terminal/ongoing row.
+
+    Rebuilds the minimal :class:`LadderOutcome` the size math needs
+    (``blended_entry`` + ``entries_filled`` + re-derived ``filled_fraction``) from
+    the row's own frozen replay columns and the brief's ``entry_tiers``, then runs
+    the SAME :func:`_size_fields` code path. The frozen verdict columns
+    (``realized_r`` / ``open_r`` / ``classification`` / ``sequence_str`` / ...) are
+    READ, never rewritten. Returns the size-column dict, or ``None`` when the size
+    is genuinely unknowable (no usable brief geometry) so the caller leaves the row
+    NULL rather than fudging.
+    """
+    blended_entry = _safe_finite_float(row.get("blended_entry"))
+    filled_entry_ids = _parse_filled_entry_ids(row.get("sequence_str"))
+    filled_fraction = _rederive_filled_fraction(setup, filled_entry_ids)
+    outcome_stub = LadderOutcome(
+        status="OK",
+        entries_filled=tuple(filled_entry_ids),
+        blended_entry=blended_entry,
+        filled_fraction=filled_fraction,
+    )
+    realized_r = _finite(row.get("realized_r"))
+    open_r = _finite(row.get("open_r"))
+    fields = _size_fields(setup, outcome_stub, realized_r=realized_r, open_r=open_r)
+    # If the setup carries no usable size at all (no suggested_size AND no parseable
+    # geometry), every emitted column is None -> leave the row NULL (never fudge).
+    if all(v is None for v in fields.values()):
+        return None
+    return fields
+
+
+def _needs_size_enrichment(row: dict[str, Any]) -> bool:
+    """A terminal/ongoing row whose size overlay is missing (NULL / NaN).
+
+    The marker is ``realized_gross_weight_pct`` (the canonical size column): a row
+    that already carries a non-null value has been size-stamped and is skipped
+    (idempotent). Rows that never opened a position (NO_FILL) legitimately carry a
+    size of ``0.0`` (a real fact, NOT null) and are therefore also skipped.
+    """
+    if not bool(row.get("plannable")):
+        return False  # non-plannable rows carry NULL size by design
+    val = row.get("realized_gross_weight_pct")
+    if val is None:
+        return True
+    try:
+        return math.isnan(float(val))
+    except (TypeError, ValueError):
+        return True
+
+
+def enrich_store_with_size_fields(store_dir: Path | str, briefs_dir: Path | str) -> int:
+    """Backfill the size overlay onto store rows frozen BEFORE the size feature.
+
+    The monitor freezes terminal rows and carries them forward verbatim, so a row
+    that resolved before the size-overlay feature (PR #431) keeps all 10 size
+    columns NULL forever — the edge dashboard's "% book" column is empty for those
+    matured trades. This post-hoc pass recomputes the size overlay
+    DETERMINISTICALLY from the brief (``suggested_size_pct`` + ``entry_tiers`` +
+    ``disaster_stop``) and the row's OWN frozen replay outcome
+    (``blended_entry`` + ``sequence_str`` -> ``filled_fraction``), reusing the
+    exact :func:`_size_fields` code path.
+
+    Constraints (HARD):
+
+    * The frozen verdict columns (``classification`` / ``realized_r`` / ``open_r``
+      / ``mfe`` / ``mae`` / ``sequence_str`` / ``forward_return`` / ...) are NEVER
+      written — only the 10 ``_SIZE_COLUMNS`` are filled.
+    * Idempotent + self-healing: a row already carrying a non-null size is left
+      byte-identical; re-running enriches 0 rows.
+    * A row stays NULL when its brief is genuinely unavailable or the setup has no
+      usable size geometry — never fudged.
+    * Resilient: one bad row / missing brief is logged and skipped; the sweep
+      never aborts.
+
+    Returns the count of rows newly populated with a size overlay.
+    """
+    store = Path(store_dir)
+    briefs = Path(briefs_dir)
+    if not store.exists():
+        return 0
+
+    n_enriched = 0
+    for path in sorted(store.glob("*.parquet")):
+        try:
+            df = pd.read_parquet(path)
+        except (OSError, ValueError) as exc:
+            logger.warning("size-enrichment: bad store parquet %s — %s; skipping.", path, exc)
+            continue
+        enriched, changed = _enrich_one_store_frame(df, briefs)
+        n_enriched += enriched
+        if changed:
+            _write_store_atomic_path(path, df)
+    return n_enriched
+
+
+def _enrich_one_store_frame(df: pd.DataFrame, briefs_dir: Path) -> tuple[int, bool]:
+    """Enrich one already-read store frame IN PLACE. ``(rows_enriched, changed)``.
+
+    Briefs are loaded at most once per (brief_date) and re-used across that date's
+    rows. A missing / unreadable brief leaves every row on that date untouched.
+    """
+    enriched = 0
+    changed = False
+    setups_by_date: dict[dt.date, dict[str, dict] | None] = {}
+
+    for idx in df.index:
+        row = {col: df.at[idx, col] for col in df.columns}
+        if not _needs_size_enrichment(row):
+            continue
+        fields = _resolve_size_fields(row, setups_by_date, briefs_dir)
+        if fields is None:
+            continue
+        for col, val in fields.items():
+            df.at[idx, col] = val
+        enriched += 1
+        changed = True
+    return enriched, changed
+
+
+def _resolve_size_fields(
+    row: dict[str, Any],
+    setups_by_date: dict[dt.date, dict[str, dict] | None],
+    briefs_dir: Path,
+) -> dict[str, Any] | None:
+    """Resolve + recompute the size overlay for one store row, or ``None``.
+
+    ``None`` when the brief date / brief / ticker setup is unavailable, or the
+    recompute fails — a single bad row must never abort the sweep. ``setups_by_date``
+    is a per-frame cache so each brief date is loaded at most once.
+    """
+    brief_date = _as_store_date(row.get("brief_date"))
+    if brief_date is None:
+        return None
+    if brief_date not in setups_by_date:
+        setups_by_date[brief_date] = _load_setups_for_date(brief_date, briefs_dir)
+    setups = setups_by_date[brief_date]
+    if not setups:
+        return None
+    setup = setups.get(str(row.get("ticker")).upper())
+    if setup is None:
+        return None
+    try:
+        return _size_fields_from_row(row, setup)
+    except Exception:  # one bad row must never abort the sweep
+        logger.exception(
+            "size-enrichment: failed for %s/%s; leaving NULL",
+            brief_date.isoformat(),
+            row.get("ticker"),
+        )
+        return None
+
+
+def _load_setups_for_date(brief_date: dt.date, briefs_dir: Path) -> dict[str, dict] | None:
+    """``{TICKER: trade_setup}`` for one brief date, or ``None`` when unavailable.
+
+    A candidate without a parseable ``trade_setup`` is omitted (its row stays
+    NULL). A missing / unreadable brief returns ``None`` so the whole date is left
+    untouched.
+    """
+    try:
+        candidates = load_brief(brief_date, briefs_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        logger.info(
+            "size-enrichment: no brief for %s — %s; leaving the date NULL.",
+            brief_date.isoformat(),
+            exc,
+        )
+        return None
+    except Exception as exc:  # any other brief-load error must NOT abort the whole sweep
+        logger.warning(
+            "size-enrichment: brief load failed for %s — %s; leaving the date NULL.",
+            brief_date.isoformat(),
+            exc,
+        )
+        return None
+    return {c.ticker.upper(): c.trade_setup for c in candidates if c.trade_setup is not None}
+
+
+def _as_store_date(value: Any) -> dt.date | None:
+    """Coerce a stored ``brief_date`` cell to a ``datetime.date`` (or ``None``)."""
+    if value is None:
+        return None
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    if hasattr(value, "to_pydatetime"):
+        try:
+            return value.to_pydatetime().date()
+        except (ValueError, TypeError):
+            return None
+    try:
+        return dt.date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _write_store_atomic_path(path: Path, df: pd.DataFrame) -> None:
+    """Atomically rewrite a store parquet at ``path`` (tmp + replace)."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    df.to_parquet(tmp)
+    os.replace(tmp, path)
+
+
 def _percentile(values: list[float], pct: float) -> float | None:
     """Nearest-rank percentile of a non-empty list (``pct`` in [0, 100])."""
     if not values:
@@ -1048,6 +1294,7 @@ __all__ = [
     "MONITOR_LOOKBACK_DAYS",
     "BarFetch",
     "PopulationMonitorReport",
+    "enrich_store_with_size_fields",
     "replay_population_ladders",
     "summarize_population_ladders",
 ]

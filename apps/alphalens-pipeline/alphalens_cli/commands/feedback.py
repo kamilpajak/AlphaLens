@@ -192,9 +192,32 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
         )
     except Exception:
         logger.exception("population-monitor refresh failed; continuing")
-        return
 
+    # Both enrichments operate on the EXISTING store parquets (independent of the
+    # fresh replay above), so they run even when the live replay failed.
     _enrich_population_benchmark_excess()
+    _enrich_population_size_fields(briefs_dir)
+
+
+def _enrich_population_size_fields(briefs_dir: Path) -> None:
+    """Backfill the size overlay on terminal rows frozen before PR #431. Never raises.
+
+    The monitor freezes terminal rows, so a row that resolved before the
+    size-overlay feature keeps its 10 size columns NULL forever (the edge
+    dashboard "% book" column is empty for those matured trades). This recomputes
+    them deterministically from the brief + the stored replay outcome, never
+    touching the frozen verdict. Idempotent + self-healing. Swallow-all like the
+    rest of the nightly tail.
+    """
+    try:
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            enrich_store_with_size_fields,
+        )
+
+        n = enrich_store_with_size_fields(_ALPHALENS_HOME / "population_ladders", briefs_dir)
+        typer.echo(f"size-enrichment: backfilled size fields on {n} terminal rows.")
+    except Exception:
+        logger.exception("size-field enrichment failed; continuing")
 
 
 def _enrich_population_benchmark_excess() -> None:
@@ -212,7 +235,7 @@ def _enrich_population_benchmark_excess() -> None:
             enrich_store_with_benchmark_excess,
         )
 
-        n = enrich_store_with_benchmark_excess(Path.home() / ".alphalens" / "population_ladders")
+        n = enrich_store_with_benchmark_excess(_ALPHALENS_HOME / "population_ladders")
         typer.echo(f"benchmark-excess: enriched {n} rows with market-excess return.")
     except Exception:
         logger.exception("benchmark-excess enrichment failed; continuing")
