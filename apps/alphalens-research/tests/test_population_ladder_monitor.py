@@ -26,6 +26,7 @@ from pathlib import Path
 import pandas as pd
 from alphalens_pipeline.feedback.population_ladder_monitor import (
     MONITOR_LOOKBACK_DAYS,
+    _stamp_theme,
     replay_population_ladders,
     summarize_population_ladders,
 )
@@ -133,6 +134,96 @@ class TestPlannableSelection(_MonitorTestBase):
         # Non-plannable is never fetched/replayed.
         self.assertNotIn("XYZ", fetched)
         self.assertIn("NVDA", fetched)
+
+
+class TestStampThemeUnit(unittest.TestCase):
+    def test_fills_missing_theme(self):
+        self.assertEqual(_stamp_theme({}, "ai")["theme"], "ai")
+        self.assertIsNone(_stamp_theme({}, None)["theme"])
+
+    def test_preserves_existing_theme(self):
+        # A frozen row already carrying a theme keeps it (provenance), even when a
+        # later brief would supply a different one.
+        self.assertEqual(_stamp_theme({"theme": "defense"}, "ai")["theme"], "defense")
+
+    def test_backfills_empty_or_none(self):
+        self.assertEqual(_stamp_theme({"theme": None}, "ai")["theme"], "ai")
+        self.assertEqual(_stamp_theme({"theme": ""}, "ai")["theme"], "ai")
+
+
+class TestThemeProvenance(_MonitorTestBase):
+    def test_replayed_row_carries_brief_theme(self):
+        # GIVEN a candidate whose brief carries a theme. WHEN replayed. THEN the
+        # store row carries that theme (it travels with the outcome record, not a
+        # downstream join).
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [{"ticker": "NVDA", "setup": _OK_SETUP, "theme": "ai-infra"}],
+        )
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [{"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0}]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertEqual(row["theme"], "ai-infra")
+
+    def test_frozen_terminal_keeps_original_theme_when_brief_theme_drifts(self):
+        # GIVEN a terminal row stamped with theme T1. WHEN a later run sees the SAME
+        # date's brief now carrying a drifted theme T2 (the 6x/day churn). THEN the
+        # FROZEN row keeps T1 (provenance preserved, not re-stamped to T2).
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+
+        def _fetch(ticker, start, end):  # fast TP_FULL → terminal on run 1
+            base = int(start.timestamp() * 1000)
+            minute = 60_000
+            return [
+                {"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {"t": base + minute, "o": 100.0, "h": 200.0, "l": 100.0, "c": 200.0, "v": 1000.0},
+            ]
+
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [{"ticker": "NVDA", "setup": _OK_SETUP, "theme": "defense"}],
+        )
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        self.assertTrue(
+            bool(self._read_store(brief_date).set_index("ticker").loc["NVDA"]["terminal"])
+        )
+
+        # Brief theme drifts; re-run. The frozen terminal must keep its original theme.
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [{"ticker": "NVDA", "setup": _OK_SETUP, "theme": "ai-mania"}],
+        )
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertEqual(row["theme"], "defense")
 
 
 class TestTerminalOutcomes(_MonitorTestBase):

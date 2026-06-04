@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import datetime as dt
 
-from briefs.models import Brief
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.request import Request
@@ -125,12 +124,14 @@ class EdgeOutcomesView(APIView):
         qs = qs.order_by("-brief_date", "ticker")[:_OUTCOMES_LIMIT]
         outcomes = list(qs)
 
-        themes = self._theme_lookup(outcomes)
         rows = [
             {
                 "ticker": o.ticker,
                 "brief_date": o.brief_date,
-                "theme": themes.get((o.brief_date, o.ticker)),
+                # Theme is carried on the outcome record itself (stamped at the
+                # brief by the population monitor) — no fragile re-join. "" (older
+                # / unstamped rows) maps to null so the SPA renders an em dash.
+                "theme": o.theme or None,
                 "ladder_classification": o.ladder_classification,
                 "terminal": o.terminal,
                 "realized_r": o.realized_r,
@@ -144,25 +145,6 @@ class EdgeOutcomesView(APIView):
             for o in outcomes
         ]
         return Response({"data": EdgeOutcomeRowSerializer(rows, many=True).data})
-
-    @staticmethod
-    def _theme_lookup(
-        outcomes: list[LadderOutcome],
-    ) -> dict[tuple[dt.date, str], str]:
-        """Join ``theme`` from the Brief cache by (date, ticker).
-
-        The population-ladder parquet has no ``theme`` column — it is recoverable
-        from the brief for the same (brief_date, ticker). A missing brief leaves
-        the theme None (older / uncached date); never 500s.
-        """
-        if not outcomes:
-            return {}
-        dates = {o.brief_date for o in outcomes}
-        tickers = {o.ticker for o in outcomes}
-        brief_rows = Brief.objects.filter(date__in=dates, ticker__in=tickers).values(
-            "date", "ticker", "theme"
-        )
-        return {(b["date"], b["ticker"]): b["theme"] for b in brief_rows}
 
 
 __all__ = ["EdgeOutcomesView", "EdgeSummaryView"]

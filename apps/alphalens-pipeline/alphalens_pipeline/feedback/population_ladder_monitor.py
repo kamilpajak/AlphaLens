@@ -624,6 +624,21 @@ def _carry_prior(prior: dict[str, Any]) -> dict[str, Any]:
     return carried
 
 
+def _stamp_theme(row: dict[str, Any], theme: str | None) -> dict[str, Any]:
+    """Stamp the brief's theme onto a store row (provenance captured at the brief).
+
+    The theme travels WITH the outcome record rather than being re-joined downstream
+    from the (mutable, 6x/day-rebuilt) briefs cache — that join returns NULL whenever
+    a candidate has churned out of the latest brief for its date. We only FILL when
+    missing: a row frozen on a prior run keeps its original theme, while an older row
+    (predating this column) recovers it from the current brief. ``None`` for an empty
+    theme so the read side renders an em dash, never an empty string.
+    """
+    if not row.get("theme"):
+        row["theme"] = theme
+    return row
+
+
 def _read_existing_store(store_dir: Path, brief_date: dt.date) -> dict[str, dict[str, Any]]:
     """Read the existing per-date store into ``{ticker: row}`` (empty when absent)."""
     path = store_dir / f"{brief_date.isoformat()}.parquet"
@@ -792,15 +807,17 @@ def _candidate_row(
     and drives the per-date counters in :func:`_replay_one_date`.
     """
     ticker = c.ticker.upper()
+    theme = c.theme or None
     plannable, reason = _is_plannable(c)
     if not plannable:
-        return _nonplannable_row(brief_date, ticker, reason or "not plannable"), "nonplannable"
+        row = _nonplannable_row(brief_date, ticker, reason or "not plannable")
+        return _stamp_theme(row, theme), "nonplannable"
     assert c.trade_setup is not None  # plannable guarantees it
     prior = existing.get(ticker)
 
     # FREEZE: a terminal prior row is copied forward verbatim, no fetch/replay.
     if prior is not None and bool(prior.get("terminal")):
-        return _carry_prior(prior), "terminal"
+        return _stamp_theme(_carry_prior(prior), theme), "terminal"
 
     cutoffs = _engine_cutoffs(brief_date, c.trade_setup, exchange)
     outcome = _replay_candidate(
@@ -815,10 +832,10 @@ def _candidate_row(
             if prior is not None
             else _placeholder_row(brief_date, ticker, cutoffs)
         )
-        return carried_row, "carried"
+        return _stamp_theme(carried_row, theme), "carried"
 
     row = _terminal_row(brief_date, ticker, c.trade_setup, outcome, cutoffs, last_closed_session)
-    return row, "terminal" if row["terminal"] else "ongoing"
+    return _stamp_theme(row, theme), "terminal" if row["terminal"] else "ongoing"
 
 
 def _replay_candidate(

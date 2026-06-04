@@ -43,6 +43,13 @@ class LadderOutcome(models.Model):
     brief_date = models.DateField(db_index=True)
     ticker = models.CharField(max_length=12)
 
+    # Theme captured AT the brief (provenance), carried in the population-ladder
+    # parquet. Empty for older rows that predate the column or when the brief
+    # carried no theme (the ingest coerces a NULL cell to ""); the read view maps
+    # "" → null. Replaces the fragile downstream join on the (mutable,
+    # 6x/day-rebuilt) briefs cache that returned NULL for churned candidates.
+    theme = models.CharField(max_length=64, blank=True, default="")
+
     # Plannability + terminal state.
     plannable = models.BooleanField(default=False)
     nonplannable_reason = models.CharField(max_length=256, blank=True, default="")

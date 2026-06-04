@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from briefs.ingest.parquet import rebuild_from_parquet as rebuild_briefs
 from edge.api.summary import N_GATE_THRESHOLD
 from edge.ingest.parquet import rebuild_from_parquet
 from rest_framework.test import APIClient
@@ -23,10 +22,18 @@ def _write_parquet(directory: Path, iso_date: str, rows: list[dict]) -> None:
     pd.DataFrame(rows).to_parquet(directory / f"{iso_date}.parquet", index=False)
 
 
-def _terminal(ticker: str, *, excess: float, realized_r: float, classification="TP_FULL") -> dict:
+def _terminal(
+    ticker: str,
+    *,
+    excess: float,
+    realized_r: float,
+    classification="TP_FULL",
+    theme: str | None = None,
+) -> dict:
     return {
         "brief_date": dt.date(2026, 5, 27),
         "ticker": ticker,
+        "theme": theme,
         "plannable": True,
         "terminal": True,
         "matured_at": dt.date(2026, 6, 2),
@@ -43,10 +50,11 @@ def _terminal(ticker: str, *, excess: float, realized_r: float, classification="
     }
 
 
-def _ongoing(ticker: str, *, open_r: float) -> dict:
+def _ongoing(ticker: str, *, open_r: float, theme: str | None = None) -> dict:
     return {
         "brief_date": dt.date(2026, 5, 27),
         "ticker": ticker,
+        "theme": theme,
         "plannable": True,
         "terminal": False,
         "matured_at": None,
@@ -99,29 +107,33 @@ def test_summary_computed_when_at_threshold(tmp_path: Path):
 
 
 @pytest.mark.django_db
-def test_outcomes_shape_and_theme_join(tmp_path: Path, briefs_dir: Path):
-    # Brief cache provides the theme for the (date, ticker) join.
-    _write_parquet_briefs(briefs_dir)
-    rebuild_briefs(briefs_dir)
-
+def test_outcomes_shape_and_theme_from_record(tmp_path: Path):
+    # Theme is carried ON the ladder-outcome parquet (stamped at the brief by the
+    # population monitor), NOT re-joined from the briefs cache. A row whose theme
+    # has churned out of the latest brief still renders its theme; an unstamped
+    # (older) row renders None.
     _write_parquet(
         tmp_path,
         "2026-05-27",
-        [_terminal("AMPL", excess=0.04, realized_r=1.2), _ongoing("BLBD", open_r=0.16)],
+        [
+            _terminal("AMPL", excess=0.04, realized_r=1.2, theme="ai-infra"),
+            _ongoing("BLBD", open_r=0.16, theme="ev"),
+            _ongoing("MRCY", open_r=0.07),  # no theme stamped (older row) → None
+        ],
     )
     rebuild_from_parquet(tmp_path)
 
     body = APIClient().get("/v1/edge/outcomes").json()
     rows = {r["ticker"]: r for r in body["data"]}
-    assert set(rows) == {"AMPL", "BLBD"}
+    assert set(rows) == {"AMPL", "BLBD", "MRCY"}
     ampl = rows["AMPL"]
     assert ampl["terminal"] is True
     assert ampl["market_excess_return"] == pytest.approx(0.04)
     assert ampl["realized_r"] == pytest.approx(1.2)
     assert ampl["theme"] == "ai-infra"
-    blbd = rows["BLBD"]
-    assert blbd["terminal"] is False
-    assert blbd["open_r"] == pytest.approx(0.16)
+    assert rows["BLBD"]["theme"] == "ev"
+    assert rows["BLBD"]["open_r"] == pytest.approx(0.16)
+    assert rows["MRCY"]["theme"] is None
 
 
 @pytest.mark.django_db
@@ -137,19 +149,3 @@ def test_outcomes_status_filter(tmp_path: Path):
     assert {r["ticker"] for r in terminal} == {"AMPL"}
     ongoing = APIClient().get("/v1/edge/outcomes?status=ongoing").json()["data"]
     assert {r["ticker"] for r in ongoing} == {"BLBD"}
-
-
-def _write_parquet_briefs(briefs_dir: Path) -> None:
-    pd.DataFrame(
-        [
-            {"ticker": "AMPL", "theme": "ai-infra", "date": dt.date(2026, 5, 27)},
-            {"ticker": "BLBD", "theme": "ev", "date": dt.date(2026, 5, 27)},
-        ]
-    ).to_parquet(briefs_dir / "2026-05-27.parquet", index=False)
-
-
-@pytest.fixture
-def briefs_dir(tmp_path: Path) -> Path:
-    d = tmp_path / "briefs"
-    d.mkdir()
-    return d
