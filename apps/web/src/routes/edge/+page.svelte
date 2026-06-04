@@ -6,6 +6,7 @@
 	import { fmtNum } from '$lib/format';
 	import {
 		classificationTone,
+		EXCESS_RETURN_BAR_DOMAIN,
 		excessBarGeometry,
 		fmtFracPct,
 		fmtR,
@@ -106,7 +107,7 @@
 			>
 				<div class="flex items-center justify-between gap-2 mb-3">
 					<div class="text-[10px] uppercase tracking-widest text-cyan">
-						// edge (excess R, matured)
+						// edge (excess return, matured)
 					</div>
 					{#if !statsUnlocked(summary.edge.status)}
 						<Lock class="size-3 text-fg-muted" />
@@ -136,24 +137,24 @@
 							<div class="text-fg-muted">
 								<JargonTip
 									term="excess expectancy"
-									body="Average excess R across matured trades — the candidate's raw window return minus the benchmark's return over the same window. The headline edge estimate. Gross of cost."
+									body="Average excess return across matured trades — the candidate's raw window return minus the benchmark's return over the same window. The headline edge estimate. Gross of cost."
 									>excess expectancy</JargonTip
 								>
 							</div>
 							<div class="text-fg text-xl font-bold normal-case whitespace-nowrap">
-								{fmtR(summary.edge.market_excess_mean)}
+								{fmtFracPct(summary.edge.market_excess_mean, 1)}
 							</div>
 						</div>
 						<div>
 							<div class="text-fg-muted">
 								<JargonTip
 									term="median"
-									body="The middle matured excess-R value. Less swayed by a single outlier than the mean — read alongside it."
+									body="The middle matured excess-return value. Less swayed by a single outlier than the mean — read alongside it."
 									>median</JargonTip
 								>
 							</div>
 							<div class="text-fg text-xl font-bold normal-case whitespace-nowrap">
-								{fmtR(summary.edge.market_excess_median)}
+								{fmtFracPct(summary.edge.market_excess_median, 1)}
 							</div>
 						</div>
 					</div>
@@ -162,36 +163,36 @@
 							<div class="text-fg-muted">
 								<JargonTip
 									term="p10"
-									body="10th-percentile excess R — the left tail. A tenth of matured trades did worse than this."
+									body="10th-percentile excess return — the left tail. A tenth of matured trades did worse than this."
 									>p10</JargonTip
 								>
 							</div>
 							<div class="text-red font-bold normal-case whitespace-nowrap">
-								{fmtR(summary.edge.market_excess_quantiles.p10)}
+								{fmtFracPct(summary.edge.market_excess_quantiles.p10, 1)}
 							</div>
 						</div>
 						<div>
 							<div class="text-fg-muted">
 								<JargonTip
 									term="p50"
-									body="Median excess R (50th percentile)."
+									body="Median excess return (50th percentile)."
 									>p50</JargonTip
 								>
 							</div>
 							<div class="text-fg font-bold normal-case whitespace-nowrap">
-								{fmtR(summary.edge.market_excess_quantiles.p50)}
+								{fmtFracPct(summary.edge.market_excess_quantiles.p50, 1)}
 							</div>
 						</div>
 						<div>
 							<div class="text-fg-muted">
 								<JargonTip
 									term="p90"
-									body="90th-percentile excess R — the right tail. A tenth of matured trades did better than this."
+									body="90th-percentile excess return — the right tail. A tenth of matured trades did better than this."
 									>p90</JargonTip
 								>
 							</div>
 							<div class="text-green font-bold normal-case whitespace-nowrap">
-								{fmtR(summary.edge.market_excess_quantiles.p90)}
+								{fmtFracPct(summary.edge.market_excess_quantiles.p90, 1)}
 							</div>
 						</div>
 					</div>
@@ -412,11 +413,19 @@
 							<th class="py-2 pr-3">ticker</th>
 							<th class="py-2 pr-3">class</th>
 							<th class="py-2 pr-3">
-								<JargonTip
-									term="excess R"
-									body="Raw window return minus the benchmark return over the same arrival-to-exit window. Centered bar: zero in the middle, green right (beat the benchmark), red left (trailed it). Gross of cost."
-									>excess R</JargonTip
-								>
+								{#if filter === 'terminal'}
+									<JargonTip
+										term="excess return"
+										body="Raw window return minus the benchmark return over the same arrival-to-exit window. Centered bar: zero in the middle, green right (beat the benchmark), red left (trailed it). Gross of cost."
+										>excess return</JargonTip
+									>
+								{:else}
+									<JargonTip
+										term="open R"
+										body="Unrealized R-multiple of the open position — current paper P&L in units of the trade's initial risk. Not yet benchmark-excess; the row matures to an excess-return figure on exit."
+										>open R</JargonTip
+									>
+								{/if}
 							</th>
 							<th class="hidden sm:table-cell py-2 pr-3 text-right">hold</th>
 							<th class="hidden md:table-cell py-2 pr-3 text-right">% book</th>
@@ -427,7 +436,12 @@
 						{#each rows as o (o.brief_date + o.ticker)}
 							{@const tone = classificationTone(o.ladder_classification)}
 							{@const rValue = o.terminal ? o.market_excess_return : o.open_r}
-							{@const bar = excessBarGeometry(rValue)}
+							<!-- Terminal value is an excess RETURN (fraction → % units); ongoing is an
+							     R-multiple. The bar domain differs accordingly. -->
+							{@const bar = excessBarGeometry(
+								rValue,
+								o.terminal ? EXCESS_RETURN_BAR_DOMAIN : 1.0
+							)}
 							<tr class="border-b border-grid hover:bg-bg-2 group">
 								<td class="py-2.5 pr-3">
 									<a
@@ -456,7 +470,7 @@
 											class:text-fg-muted={rValue == null}
 										>
 											{#if o.terminal}
-												{fmtR(o.market_excess_return)}
+												{fmtFracPct(o.market_excess_return, 1)}
 											{:else}
 												{fmtR(o.open_r)}
 											{/if}
@@ -465,7 +479,7 @@
 											<!-- "open" label as its own flex item so it never overlaps the bar -->
 											<span class="text-[9px] text-fg-muted whitespace-nowrap shrink-0">open</span>
 										{/if}
-										<!-- Centered excess-R bar: 0 in the middle. -->
+										<!-- Centered excess bar: 0 in the middle. -->
 										<div class="relative h-1.5 flex-1 bg-bg-3 overflow-hidden">
 											<!-- center tick -->
 											<div
