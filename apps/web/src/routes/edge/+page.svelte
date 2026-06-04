@@ -458,7 +458,7 @@
 								<td class="py-2.5 pr-3 min-w-[8rem]">
 									<div class="flex items-center gap-2">
 										<span
-											class="font-bold text-xs whitespace-nowrap w-14 text-right"
+											class="font-bold text-xs whitespace-nowrap w-14 text-right shrink-0"
 											class:text-green={o.terminal ? bar.positive : false}
 											class:text-red={o.terminal ? !bar.positive && rValue != null : false}
 											class:text-cyan={!o.terminal}
@@ -467,9 +467,13 @@
 											{#if o.terminal}
 												{fmtR(o.market_excess_return)}
 											{:else}
-												{fmtR(o.open_r)} <span class="text-[9px] text-fg-muted">open</span>
+												{fmtR(o.open_r)}
 											{/if}
 										</span>
+										{#if !o.terminal}
+											<!-- "open" label as its own flex item so it never overlaps the bar -->
+											<span class="text-[9px] text-fg-muted whitespace-nowrap shrink-0">open</span>
+										{/if}
 										<!-- Centered excess-R bar: 0 in the middle. -->
 										<div class="relative h-1.5 flex-1 bg-bg-3 overflow-hidden">
 											<!-- center tick -->
