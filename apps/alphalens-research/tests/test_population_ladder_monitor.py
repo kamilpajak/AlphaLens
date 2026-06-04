@@ -1334,6 +1334,63 @@ class TestSizeFieldEnrichment(_MonitorTestBase):
             self.assertTrue(pd.isna(row[col]))
 
 
+class TestSizeEnrichmentHelpers(unittest.TestCase):
+    """Direct unit tests of the size-backfill pure helpers + their guard branches."""
+
+    def test_parse_filled_entry_ids(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _parse_filled_entry_ids
+
+        self.assertEqual(_parse_filled_entry_ids("E1->E2->TP1->SL"), ["E1", "E2"])
+        self.assertEqual(_parse_filled_entry_ids("E1->E1->TP1"), ["E1"])  # de-dup
+        self.assertEqual(_parse_filled_entry_ids("TP1->SL"), [])  # no entry crossings
+        self.assertEqual(_parse_filled_entry_ids(None), [])
+        self.assertEqual(_parse_filled_entry_ids(123), [])  # non-string
+
+    def test_rederive_filled_fraction(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _rederive_filled_fraction
+
+        self.assertIsNone(_rederive_filled_fraction(_THREE_TIER_SETUP, []))  # nothing filled
+        # E1 of 28/34/38 -> 0.28; E1+E2 -> 0.62.
+        self.assertAlmostEqual(_rederive_filled_fraction(_THREE_TIER_SETUP, ["E1"]), 0.28, places=9)
+        self.assertAlmostEqual(
+            _rederive_filled_fraction(_THREE_TIER_SETUP, ["E1", "E2"]), 0.62, places=9
+        )
+        # An id absent from the ladder is ignored -> no usable fill -> None.
+        self.assertIsNone(_rederive_filled_fraction(_THREE_TIER_SETUP, ["E9"]))
+
+    def test_size_fields_from_row_no_suggested_size_leaves_book_fields_null(self):
+        # A NO_STRUCTURE setup (no suggested_size, no usable geometry) yields a dict
+        # whose book-weight fields are None (unknowable) — never fudged. The count
+        # fields are still concrete (0 / 0.0), so the dict is returned as-is.
+        from alphalens_pipeline.feedback.population_ladder_monitor import _size_fields_from_row
+
+        row = {"blended_entry": None, "sequence_str": None, "realized_r": None, "open_r": None}
+        fields = _size_fields_from_row(row, _NO_STRUCTURE_SETUP)
+        self.assertIsNotNone(fields)
+        self.assertIsNone(fields["suggested_gross_weight_pct"])
+        self.assertIsNone(fields["realized_gross_weight_pct"])
+        self.assertIsNone(fields["realized_return_pct_of_book"])
+        self.assertEqual(fields["tiers_filled_count"], 0)
+
+    def test_needs_size_enrichment(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _needs_size_enrichment
+
+        base = {"plannable": True, "realized_gross_weight_pct": None}
+        self.assertTrue(_needs_size_enrichment(base))
+        self.assertFalse(_needs_size_enrichment({**base, "realized_gross_weight_pct": 0.04}))
+        self.assertFalse(_needs_size_enrichment({**base, "plannable": False}))
+
+    def test_load_setups_for_date_broad_except_returns_none(self):
+        # An unanticipated load_brief error (not FileNotFoundError/ValueError) must be
+        # caught and yield None — the sweep continues (the zen-review hardening).
+        from unittest.mock import patch
+
+        from alphalens_pipeline.feedback import population_ladder_monitor as mon
+
+        with patch.object(mon, "load_brief", side_effect=RuntimeError("boom")):
+            self.assertIsNone(mon._load_setups_for_date(dt.date(2026, 5, 1), Path("/nonexistent")))
+
+
 class TestLookbackConstant(unittest.TestCase):
     def test_monitor_lookback_is_distinct_and_large_enough(self):
         # The monitor uses its OWN lookback (>= ~60 calendar days for 42 sessions),
