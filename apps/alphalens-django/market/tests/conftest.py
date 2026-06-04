@@ -24,6 +24,7 @@ def _force_permissive_dev_rest_framework(settings):
         **settings.REST_FRAMEWORK,
         "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
     }
+    _PERM_ATTRS = ("permission_classes", "authentication_classes")
     with override_settings(REST_FRAMEWORK=permissive):
         # IMPORTANT: import market.views INSIDE the fixture, not at module
         # level. DRF's ``APIView`` resolves ``permission_classes`` /
@@ -32,8 +33,21 @@ def _force_permissive_dev_rest_framework(settings):
         # have the same invariant). Flag surfaced by zen review 2026-05-30.
         from market import views as market_views
 
-        market_views.MarketStatusView.permission_classes = api_settings.DEFAULT_PERMISSION_CLASSES
-        market_views.MarketStatusView.authentication_classes = (
-            api_settings.DEFAULT_AUTHENTICATION_CLASSES
-        )
-        yield
+        view = market_views.MarketStatusView
+        # Capture pre-mutation ownership so teardown restores it exactly.
+        # ``MarketStatusView`` inherits these attrs from DRF's ``APIView`` and
+        # does not declare its own, so the sentinel lets teardown delete the
+        # injected entry rather than leave a permanent override on the class.
+        _MISSING = object()
+        original = {attr: view.__dict__.get(attr, _MISSING) for attr in _PERM_ATTRS}
+        try:
+            view.permission_classes = api_settings.DEFAULT_PERMISSION_CLASSES
+            view.authentication_classes = api_settings.DEFAULT_AUTHENTICATION_CLASSES
+            yield
+        finally:
+            for attr, value in original.items():
+                if value is _MISSING:
+                    if attr in view.__dict__:
+                        delattr(view, attr)
+                else:
+                    setattr(view, attr, value)

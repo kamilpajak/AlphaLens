@@ -43,6 +43,7 @@ def _force_permissive_dev_rest_framework(settings):
         **settings.REST_FRAMEWORK,
         "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
     }
+    _PERM_ATTRS = ("permission_classes", "authentication_classes")
     with override_settings(REST_FRAMEWORK=permissive):
         from briefs.api import views as briefs_views
 
@@ -53,7 +54,27 @@ def _force_permissive_dev_rest_framework(settings):
             briefs_views.TickerViewSet,
             briefs_views.StatsView,
         ]
-        for cls in view_classes:
-            cls.permission_classes = api_settings.DEFAULT_PERMISSION_CLASSES
-            cls.authentication_classes = api_settings.DEFAULT_AUTHENTICATION_CLASSES
-        yield
+        # Capture whatever each class owned BEFORE mutation so teardown can
+        # restore it exactly. Several of these views inherit the attrs from
+        # DRF's base classes (they don't declare their own), so the sentinel
+        # distinguishes "owned a value" from "did not own the attr at all" —
+        # restoring the latter by deleting the injected entry rather than
+        # leaving a permanent override on the class.
+        _MISSING = object()
+        original = {
+            cls: {attr: cls.__dict__.get(attr, _MISSING) for attr in _PERM_ATTRS}
+            for cls in view_classes
+        }
+        try:
+            for cls in view_classes:
+                cls.permission_classes = api_settings.DEFAULT_PERMISSION_CLASSES
+                cls.authentication_classes = api_settings.DEFAULT_AUTHENTICATION_CLASSES
+            yield
+        finally:
+            for cls, owned in original.items():
+                for attr, value in owned.items():
+                    if value is _MISSING:
+                        if attr in cls.__dict__:
+                            delattr(cls, attr)
+                    else:
+                        setattr(cls, attr, value)
