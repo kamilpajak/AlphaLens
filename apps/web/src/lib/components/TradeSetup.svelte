@@ -1,7 +1,13 @@
 <script lang="ts">
 	import type { TradeSetup } from '$lib/types';
 	import { fmtPrice, fmtPct } from '$lib/format';
+	import {
+		fullLadderBlendedEntry,
+		stopDistanceFracFull,
+		impliedRiskPctOfBook
+	} from '$lib/tradeSetupRisk';
 	import { Crosshair } from 'lucide-svelte';
+	import JargonTip from './JargonTip.svelte';
 
 	interface Props {
 		setup: TradeSetup | null | undefined;
@@ -11,14 +17,25 @@
 	const hasStructure = $derived(
 		setup != null && setup.status === 'OK' && setup.entry_tiers.length > 0
 	);
+
+	// Forward-looking risk geometry (ex-ante; computed from the setup the card
+	// already shows). `riskPct` is the headline: how much of the book is at risk
+	// on the disaster stop if the full ladder fills. See $lib/tradeSetupRisk.
+	const fullBlended = $derived(setup ? fullLadderBlendedEntry(setup.entry_tiers) : null);
+	const stopFrac = $derived(
+		setup && fullBlended != null ? stopDistanceFracFull(fullBlended, setup.disaster_stop) : null
+	);
+	const riskPct = $derived(setup ? impliedRiskPctOfBook(setup.suggested_size_pct, stopFrac) : null);
 </script>
 
-<section data-testid="trade-setup" class="relative overflow-hidden">
-	<!-- Decorative crosshair watermark (matches the live terminal aesthetic). -->
-	<Crosshair
-		class="pointer-events-none absolute -right-6 -top-6 size-40 text-grid opacity-40"
-		aria-hidden="true"
-	/>
+<section data-testid="trade-setup" class="relative">
+	<!-- Decorative crosshair watermark (matches the live terminal aesthetic).
+	     Clipped by its own overflow-hidden wrapper rather than the section so
+	     the JargonTip popovers (which extend above/beside their trigger) are
+	     not cut off by the panel box. -->
+	<div class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+		<Crosshair class="absolute -right-6 -top-6 size-40 text-grid opacity-40" />
+	</div>
 
 	<div class="relative flex items-center justify-between gap-2 mb-3">
 		<div class="text-[10px] uppercase tracking-widest text-cyan">trade.execution.setup</div>
@@ -56,21 +73,75 @@
 		<!-- Sizing + risk headline -->
 		<div class="relative grid grid-cols-2 gap-x-6 gap-y-3 mb-4 text-[10px] uppercase tracking-widest">
 			<div>
-				<div class="text-fg-muted">suggested size</div>
+				<div class="text-fg-muted">
+					<JargonTip
+						term="suggested size"
+						body="Target position size as a percent of the whole book if the full entry ladder fills. A sizing suggestion, not an instruction."
+						>suggested size</JargonTip
+					>
+				</div>
 				<div class="text-fg text-base font-bold normal-case">
 					{setup.suggested_size_pct != null ? `${fmtPct(setup.suggested_size_pct, 2, false)} of book` : '—'}
 				</div>
 			</div>
 			<div>
-				<div class="text-fg-muted">disaster stop</div>
+				<div class="text-fg-muted">
+					<JargonTip
+						term="disaster stop"
+						body="Hard stop price. If the market trades through it the entire position is exited — the maximum-loss line for the trade."
+						>disaster stop</JargonTip
+					>
+				</div>
 				<div class="text-red text-base font-bold normal-case whitespace-nowrap">
 					{fmtPrice(setup.disaster_stop)}
 				</div>
 			</div>
 			<div>
-				<div class="text-fg-muted">ref last close</div>
+				<div class="text-fg-muted">
+					<JargonTip
+						term="risk at stop"
+						body="Percent of the book lost if the full ladder fills and the disaster stop is hit: suggested size × distance from the blended entry to the stop. The real downside the position puts at risk."
+						>risk at stop</JargonTip
+					>
+				</div>
+				<div class="text-fg text-base font-bold normal-case">
+					{riskPct != null ? `${fmtPct(riskPct, 1, false)} of book` : '—'}
+				</div>
+			</div>
+			<div>
+				<div class="text-fg-muted">
+					<JargonTip
+						term="ref last close"
+						body="The closing price the ladder geometry was anchored to. Entry tiers sit below it; the disaster stop sits below them."
+						>ref last close</JargonTip
+					>
+				</div>
 				<div class="text-fg text-base font-bold normal-case whitespace-nowrap">
 					{fmtPrice(setup.asof_close)}
+				</div>
+			</div>
+			<div>
+				<div class="text-fg-muted">
+					<JargonTip
+						term="full-ladder entry"
+						body="Allocation-weighted average entry price if all entry tiers fill. The blended cost basis the risk-at-stop and to-stop figures are measured from."
+						>full-ladder entry</JargonTip
+					>
+				</div>
+				<div class="text-fg text-base font-bold normal-case whitespace-nowrap">
+					{fmtPrice(fullBlended)}
+				</div>
+			</div>
+			<div>
+				<div class="text-fg-muted">
+					<JargonTip
+						term="to stop"
+						body="Percent move down from the full-ladder blended entry to the disaster stop — the price drop that triggers the maximum loss."
+						>to stop</JargonTip
+					>
+				</div>
+				<div class="text-fg-muted text-base font-bold normal-case whitespace-nowrap">
+					{stopFrac != null ? fmtPct(-stopFrac * 100, 1) : '—'}
 				</div>
 			</div>
 		</div>
