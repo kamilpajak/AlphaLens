@@ -1090,6 +1090,13 @@ def _load_setups_for_date(brief_date: dt.date, briefs_dir: Path) -> dict[str, di
             exc,
         )
         return None
+    except Exception as exc:  # any other brief-load error must NOT abort the whole sweep
+        logger.warning(
+            "size-enrichment: brief load failed for %s — %s; leaving the date NULL.",
+            brief_date.isoformat(),
+            exc,
+        )
+        return None
     return {c.ticker.upper(): c.trade_setup for c in candidates if c.trade_setup is not None}
 
 
