@@ -1,11 +1,12 @@
 """Layer 4 signal 1 — Cohen-Malloy opportunistic insider buying (paradigm #11).
 
 Wraps :func:`alphalens_pipeline.scorers.opportunistic_form4.aggregate_opportunistic_signal`
-with the two-stage Form-4 load pattern from
-:mod:`alphalens_pipeline.thematic.verification.insider` to produce a scalar
-``net_oppor_usd`` per ticker, then ranks the candidate within its industry
-peer set via simple percentile-of-the-cohort (no Bayesian shrinkage; small
-cohorts get noisy ranks — design accepted).
+with the two-stage Form-4 load pattern from the neutral
+:mod:`alphalens_pipeline.thematic.sources.form4_store` (shared with the Layer 3
+``verification.insider`` gate) to produce a scalar ``net_oppor_usd`` per
+ticker, then ranks the candidate within its industry peer set via simple
+percentile-of-the-cohort (no Bayesian shrinkage; small cohorts get noisy
+ranks — design accepted).
 
 Returned shape: ``{"score_usd": float | None, "sector_percentile": float | None}``.
 
@@ -25,13 +26,10 @@ from alphalens_pipeline.scorers.opportunistic_form4 import (
     aggregate_opportunistic_signal,
 )
 from alphalens_pipeline.thematic.screening._common import percentile_rank
-from alphalens_pipeline.thematic.verification.insider import (
+from alphalens_pipeline.thematic.sources import form4_store
+from alphalens_pipeline.thematic.sources.form4_store import (
     DEFAULT_FORM4_ROOT,
     DEFAULT_LOOKBACK_DAYS,
-    _classification_years,
-    _load_form4_for_insiders,
-    _load_form4_for_ticker,
-    _MemoizedClassifier,
     filter_records,
 )
 
@@ -53,9 +51,11 @@ def compute_net_opportunistic_usd(
     opportunistic insider USD (sum of signed P/S transactions classified by
     Cohen-Malloy as OPPORTUNISTIC).
     """
-    years = _classification_years(asof)
+    years = form4_store.classification_years(asof)
     try:
-        ticker_history = _load_form4_for_ticker(ticker, form4_root=form4_root, years=years)
+        ticker_history = form4_store.load_form4_for_ticker(
+            ticker, form4_root=form4_root, years=years
+        )
     except Exception as exc:
         logger.warning("form4 load failed for %s: %s", ticker, exc)
         return None
@@ -68,14 +68,16 @@ def compute_net_opportunistic_usd(
 
     active_insiders = set(recent["reporting_owner_cik"].dropna().astype(str))
     try:
-        full_history = _load_form4_for_insiders(active_insiders, form4_root=form4_root, years=years)
+        full_history = form4_store.load_form4_for_insiders(
+            active_insiders, form4_root=form4_root, years=years
+        )
     except Exception as exc:
         logger.warning("form4 cross-ticker load failed for %s: %s", ticker, exc)
         return None
     if full_history.empty:
         full_history = ticker_history
 
-    classifier_cache = _MemoizedClassifier(full_history)
+    classifier_cache = form4_store.MemoizedClassifier(full_history)
     return float(
         aggregate_opportunistic_signal(recent, asof=asof, classifier_cache=classifier_cache)
     )

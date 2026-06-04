@@ -141,7 +141,7 @@ class TestPrecedenceRule(unittest.TestCase):
         assert result is not None
         # The catalyst URL is the businesswire one — that row was the
         # template-extracted winner. The polygon row was superseded.
-        self.assertIn("businesswire.com", result["url"])
+        self.assertIn("businesswire.com", result.url)
         # Holdout counter ticked once for the superseded flash event.
         snap = metrics.snapshot()
         self.assertEqual(snap["holdout"].get(HOLDOUT_SUPERSEDED_BY_TEMPLATE), 1)

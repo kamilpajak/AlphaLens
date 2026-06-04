@@ -51,7 +51,7 @@ THEME = "quantum_computing"
 ASOF = dt.date(2026, 5, 24)
 # 30-day catalyst + press window around ASOF (verified on-disk).
 _WINDOW_DATES = ("2026-05-15", "2026-05-18", "2026-05-24")
-# _classification_years(2026) = {2023, 2024, 2025, 2026}.
+# form4_store.classification_years(2026) = {2023, 2024, 2025, 2026}.
 _FORM4_YEARS = (2023, 2024, 2025, 2026)
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "golden" / "fixtures" / "map_day"

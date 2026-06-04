@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import unittest
 
+from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 from alphalens_pipeline.thematic.screening import catalyst_signals as cs
 
 
@@ -29,14 +30,23 @@ def _event(
     event_type="product_launch",
     confidence=0.95,
     second_order_implications=None,
-):
+) -> CatalystPayload:
     if second_order_implications is None:
         second_order_implications = ["beneficiary 1", "beneficiary 2"]
-    return {
-        "event_type": event_type,
-        "confidence": confidence,
-        "second_order_implications": second_order_implications,
-    }
+    return CatalystPayload(
+        url="https://example/news",
+        title="catalyst",
+        published_at="2026-05-10",
+        event_type=event_type,
+        confidence=confidence,
+        second_order_implications=second_order_implications,
+        echo_count=1,
+        trigger_url="https://example/news",
+        trigger_published_at="2026-05-10",
+        is_amplified=False,
+        template_id=None,
+        template_facts=None,
+    )
 
 
 class TestEventTypeTier(unittest.TestCase):
@@ -102,14 +112,15 @@ class TestComputeCatalystStrength(unittest.TestCase):
     def test_returns_zero_when_event_is_none(self):
         self.assertEqual(cs.compute_catalyst_strength(None), 0.0)
 
-    def test_returns_zero_when_event_is_empty(self):
-        self.assertEqual(cs.compute_catalyst_strength({}), 0.0)
-
     def test_handles_missing_confidence(self):
+        # No conf (None) → conf dim contributes 0, other dims still count.
         cs_val = cs.compute_catalyst_strength(
-            {"event_type": "product_launch", "second_order_implications": ["a"]}
+            _event(
+                event_type="product_launch",
+                confidence=None,
+                second_order_implications=["a"],
+            )
         )
-        # No conf → conf dim contributes 0, other dims still count.
         self.assertGreaterEqual(cs_val, 0.30)
 
     def test_clamps_to_zero_one_range(self):

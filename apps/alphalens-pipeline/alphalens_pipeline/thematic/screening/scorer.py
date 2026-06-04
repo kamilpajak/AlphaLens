@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 from alphalens_pipeline.thematic.screening import (
     catalyst_signals,
     fcff_signal,
@@ -371,8 +372,8 @@ def _build_candidate_row(
     val: dict,
     tech: dict,
     magic_formula_inputs: MagicFormulaInputs,
-    catalyst_event: dict | None,
-    subject_catalyst: dict | None,
+    catalyst_event: CatalystPayload | None,
+    subject_catalyst: CatalystPayload | None,
     cs_val: float,
 ) -> dict:
     """Assemble one candidate's enrichment row (deferred Magic-Formula rank
@@ -423,8 +424,8 @@ def _build_candidate_row(
         "technical_ma200_slope_pct_per_day": tech.get("ma200_slope_pct_per_day"),
         "technicals_summary_str": tech["summary"],
         "catalyst_strength": cs_val,
-        "catalyst_event_type": (catalyst_event or {}).get("event_type"),
-        "catalyst_confidence": (catalyst_event or {}).get("confidence"),
+        "catalyst_event_type": catalyst_event.event_type if catalyst_event else None,
+        "catalyst_confidence": catalyst_event.confidence if catalyst_event else None,
         # PR-3: typed-fact provenance from the template engine. The
         # orchestrator's _row_to_facts deserialises the JSON column back
         # to a dict; brief generator's prompt-rendering branch fires on
@@ -441,16 +442,16 @@ def _build_candidate_row(
         # per-ticker drop_duplicates tie-break, so a now-richer subject-stamped
         # row can win that tie over an equally-scored theme row for the same
         # ticker -- intended; layer4_weighted_score / rankings are untouched.)
-        "catalyst_template_id": (template_source or {}).get("template_id"),
+        "catalyst_template_id": template_source.template_id if template_source else None,
         "catalyst_template_facts_json": (
-            json.dumps((template_source or {}).get("template_facts"), sort_keys=True)
-            if (template_source or {}).get("template_facts")
+            json.dumps(template_source.template_facts, sort_keys=True)
+            if template_source and template_source.template_facts
             else None
         ),
         # Stashed for the reversal detector (source_event_url is
         # in candidates.parquet, merged AFTER this frame). Dropped
         # before the public DataFrame is built.
-        "_catalyst_url": (catalyst_event or {}).get("url"),
+        "_catalyst_url": catalyst_event.url if catalyst_event else None,
         # Signal positives stashed for the post-loop weighted-score
         # composition; dropped before the public DataFrame is built.
         # ``fcff_positive`` reads the cohort-adjusted percentile so a
@@ -485,7 +486,7 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
     # candidates sharing a theme reuse a single resolution.
     from alphalens_pipeline.thematic.mapping import catalyst_resolver
 
-    catalyst_cache: dict[str, dict | None] = {}
+    catalyst_cache: dict[str, CatalystPayload | None] = {}
 
     # Option (b) #395: subject-match template catalysts. Index template-
     # extracted events by primary-entity ticker ONCE per batch so a candidate
@@ -524,7 +525,7 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
         peers, level = peer_cache[industry_id]
         return industry_id, industry_name, sector_name, peers, level
 
-    def _resolve_catalyst_event(theme: str) -> dict | None:
+    def _resolve_catalyst_event(theme: str) -> CatalystPayload | None:
         if theme not in catalyst_cache:
             try:
                 catalyst_cache[theme] = catalyst_resolver.find_trigger_event(theme=theme, asof=asof)

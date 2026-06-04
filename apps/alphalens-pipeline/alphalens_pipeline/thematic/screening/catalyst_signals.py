@@ -31,6 +31,7 @@ from __future__ import annotations
 import math
 
 from alphalens_pipeline.thematic.extraction.schema import NOISE_EVENT_TYPES
+from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 
 # Per-event-type tier weight (hand-calibrated; operator-feedback ledger
 # will tune over time). Anchored against the 39-value EVENT_TYPES enum
@@ -117,17 +118,17 @@ def _safe_float(v) -> float | None:
     return f
 
 
-def compute_catalyst_strength(event: dict | None) -> float:
+def compute_catalyst_strength(event: CatalystPayload | None) -> float:
     """Score the news catalyst itself in [0, 1].
 
-    ``event`` is the per-news extraction dict from ``thematic_events``
-    parquet (event_type, confidence, second_order_implications, ...).
-    Returns 0.0 when ``event`` is None / empty / lacks all dimensions.
+    ``event`` is the typed :class:`CatalystPayload` from the resolver
+    (event_type, confidence, second_order_implications, ...). Returns 0.0
+    when ``event`` is None.
     """
     if not event:
         return 0.0
 
-    event_type = str(event.get("event_type", "other")).lower()
+    event_type = str(event.event_type or "other").lower()
     # Defence-in-depth: noise types already filtered upstream, but if any
     # leak through return 0 strength outright — Flash's own classification
     # asserts the article is non-market-moving, so even high confidence /
@@ -136,10 +137,10 @@ def compute_catalyst_strength(event: dict | None) -> float:
         return 0.0
     tier = EVENT_TYPE_TIER.get(event_type, EVENT_TYPE_TIER["other"])
 
-    conf_raw = _safe_float(event.get("confidence"))
+    conf_raw = _safe_float(event.confidence)
     conf = max(0.0, min(1.0, conf_raw)) if conf_raw is not None else 0.0
 
-    soi = event.get("second_order_implications")
+    soi = event.second_order_implications
     soi_count = len(soi) if soi else 0
     soi_norm = min(1.0, soi_count / _SOI_SATURATION)
 

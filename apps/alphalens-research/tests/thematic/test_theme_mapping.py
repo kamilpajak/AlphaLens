@@ -7,6 +7,32 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
+from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
+
+
+def _catalyst_payload(
+    *,
+    url: str = "https://example.com/catalyst",
+    title: str = "Stub catalyst event",
+    published_at: str = "2026-05-14",
+) -> CatalystPayload:
+    """Build a CatalystPayload stub for the orchestrator map_themes tests
+    (orchestrator._build_row only reads url / title / published_at)."""
+    return CatalystPayload(
+        url=url,
+        title=title,
+        published_at=published_at,
+        event_type="m_and_a",
+        confidence=0.9,
+        second_order_implications=[],
+        echo_count=1,
+        trigger_url=url,
+        trigger_published_at=published_at,
+        is_amplified=False,
+        template_id=None,
+        template_facts=None,
+    )
+
 
 SAMPLE_MAPPER_RESPONSE = {
     "candidates": [
@@ -381,11 +407,7 @@ class TestVerifyCandidate(unittest.TestCase):
         self.assertTrue(result["verified"])
 
 
-_DEFAULT_CATALYST = {
-    "url": "https://example.com/catalyst",
-    "title": "Stub catalyst event",
-    "published_at": "2026-05-14",
-}
+_DEFAULT_CATALYST = _catalyst_payload()
 
 
 def _install_default_catalyst(testcase: unittest.TestCase) -> None:
@@ -1104,11 +1126,11 @@ class TestSkipsThemesWithoutCatalyst(unittest.TestCase):
         def _resolver(*, theme, asof):
             if theme == "discounts":
                 return None
-            return {
-                "url": f"https://example.com/{theme}",
-                "title": f"{theme} catalyst",
-                "published_at": "2026-05-15",
-            }
+            return _catalyst_payload(
+                url=f"https://example.com/{theme}",
+                title=f"{theme} catalyst",
+                published_at="2026-05-15",
+            )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
