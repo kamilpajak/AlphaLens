@@ -77,6 +77,11 @@ class LadderOutcome:
     classification: str = "NO_FILL"
     blended_entry: float | None = None
     realized_r: float | None = None
+    # Fraction of the FULL intended position that actually filled (alloc-weighted,
+    # bounded (0, 1]). ``None`` when nothing filled. Exposed so the population
+    # monitor can derive the realized gross weight (= suggested_size × this) WITHOUT
+    # re-implementing the alloc-weighting logic. Pure geometry — NOT a size field.
+    filled_fraction: float | None = None
     horizon_open: bool = False  # position still open at the last bar
     ambiguous_bars: int = 0
     # Substrate (layer 1) -- policy-free path statistics.
@@ -384,6 +389,11 @@ def _finalize(
     assert stop is not None
     risk = blended - stop  # R unit per share
 
+    # ``filled_frac`` is well-defined regardless of geometry (it is the alloc-
+    # weighted fill ratio), so expose it on every filled outcome — the size layer
+    # needs it even for a BAD_GEOMETRY row (a real position was opened).
+    filled_frac = _filled_frac(ladder, filled)
+
     # Bug #2: degenerate geometry (stop at/above the blended entry) makes R-units
     # undefined. Classify BAD_GEOMETRY with realized_r EXPLICITLY None rather than
     # silently returning a 0 or a NaN.
@@ -398,6 +408,7 @@ def _finalize(
             classification="BAD_GEOMETRY",
             blended_entry=blended,
             realized_r=None,
+            filled_fraction=filled_frac,
             ambiguous_bars=ambiguous_bars,
             mfe=None,  # R-units undefined when risk <= 0
             mae=None,
@@ -407,7 +418,6 @@ def _finalize(
             ratchet_realized_r=None,
         )
 
-    filled_frac = _filled_frac(ladder, filled)
     realized_r, horizon_open = _realized_r_with_frac(
         ladder, hit_tp_ids, blended, stop, risk, sl_hit, last_close, filled_frac, expiry_close
     )
@@ -429,6 +439,7 @@ def _finalize(
         classification=classification,
         blended_entry=blended,
         realized_r=realized_r,
+        filled_fraction=filled_frac,
         horizon_open=horizon_open,
         ambiguous_bars=ambiguous_bars,
         mfe=mfe,
