@@ -50,6 +50,14 @@ export interface ExcessBarGeometry {
 	positive: boolean;
 }
 
+/**
+ * Bar domain for terminal rows, whose value is a benchmark-EXCESS RETURN
+ * (a fraction, e.g. 0.21 = +21% over the index), NOT an R-multiple. A ±25%
+ * excess reaches the track edge; larger moves clamp. Ongoing rows keep the
+ * default 1.0 domain because their value (`open_r`) is a true R-multiple.
+ */
+export const EXCESS_RETURN_BAR_DOMAIN = 0.25;
+
 export function excessBarGeometry(
 	value: number | null | undefined,
 	domain = 1.0

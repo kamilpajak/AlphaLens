@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	classificationTone,
+	EXCESS_RETURN_BAR_DOMAIN,
 	excessBarGeometry,
 	fmtFracPct,
 	fmtR,
@@ -134,6 +135,19 @@ describe('fmtFracPct', () => {
 		expect(fmtFracPct(undefined)).toBe('—');
 		expect(fmtFracPct(Number.NaN)).toBe('—');
 		expect(fmtFracPct(Number.POSITIVE_INFINITY)).toBe('—');
+	});
+});
+
+describe('EXCESS_RETURN_BAR_DOMAIN', () => {
+	it('maps a benchmark-excess RETURN (fraction) onto the bar, ±25% → edge', () => {
+		// A terminal row's bar value is an excess RETURN (e.g. 0.2085 = +20.85%
+		// over SPY), not an R-multiple — so the domain is in return units.
+		const g = excessBarGeometry(EXCESS_RETURN_BAR_DOMAIN, EXCESS_RETURN_BAR_DOMAIN);
+		expect(g.width).toBeCloseTo(50, 6); // a +25% excess fills the half-track
+		expect(g.positive).toBe(true);
+		// AMPL's real +20.85% excess sits most of the way out, not a sliver.
+		const ampl = excessBarGeometry(0.2085, EXCESS_RETURN_BAR_DOMAIN);
+		expect(ampl.width).toBeGreaterThan(35);
 	});
 });
 
