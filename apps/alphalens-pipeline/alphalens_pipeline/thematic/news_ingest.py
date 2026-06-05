@@ -292,14 +292,19 @@ def ingest_daily(
     Required for golden-replay determinism (tests pin it; production omits it).
     NEVER stamp an un-injectable ``datetime.now()`` directly into the lake.
     """
-    # Eager default: resolve the transaction-time once, up front, so all rows
-    # stamped below share the exact same value even though the merge happens
-    # later. Injecting ``now`` keeps the golden parquet bit-deterministic.
-    now = now or dt.datetime.now(dt.UTC)
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / f"{date.isoformat()}.parquet"
     if cache_path.exists() and not force:
+        # Cache hit: return the original parquet untouched, preserving its
+        # original ingested_at (no re-stamp). Resolve ``now`` only past here so
+        # a cache hit doesn't pay an unused clock read.
         return pd.read_parquet(cache_path)
+
+    # Eager default: resolve the transaction-time once, up front (only on an
+    # actual build), so all rows stamped below share the exact same value even
+    # though the merge happens later. Injecting ``now`` keeps the golden parquet
+    # bit-deterministic.
+    now = now or dt.datetime.now(dt.UTC)
 
     # ``polygon_api_key`` is accepted for backwards-compatibility with the CLI
     # signature, but the canonical PolygonClient reads ``POLYGON_API_KEY``
