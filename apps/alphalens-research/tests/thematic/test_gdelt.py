@@ -37,6 +37,18 @@ THEME_BUCKETS_FIXTURE = {
     "biotech": "(mRNA OR FDA approval) AND (Moderna OR Regeneron)",
 }
 
+# In-window variant for the fetch_daily_news tests: both articles dated on the
+# target day (2026-05-15) so the P1a post-fetch window filter keeps them. The
+# module-level SAMPLE_GDELT_RESPONSE intentionally spans two days to exercise
+# the transform / parse path; the daily-fetch dedup/iteration tests need both
+# rows inside the strict [date, date+1) window.
+SAMPLE_GDELT_RESPONSE_IN_WINDOW = {
+    "articles": [
+        {**SAMPLE_GDELT_RESPONSE["articles"][0], "seendate": "20260515T011500Z"},
+        {**SAMPLE_GDELT_RESPONSE["articles"][1], "seendate": "20260515T184500Z"},
+    ]
+}
+
 
 class TestGdeltTransform(unittest.TestCase):
     def test_transforms_to_unified_schema(self):
@@ -69,39 +81,165 @@ class TestGdeltTransform(unittest.TestCase):
         self.assertEqual(len(df), 0)
         self.assertEqual(list(df.columns), NEWS_COLUMNS)
 
+    def test_transform_drops_missing_seendate(self):
+        """Articles without seendate are dropped (cannot verify window membership).
+
+        P1a: the old ``pd.Timestamp.now(tz="UTC")`` fallback would inject an
+        out-of-window timestamp under explicit bounds, so the row is dropped
+        instead.
+        """
+        articles = [
+            {
+                "url": "https://with-seendate.test",
+                "title": "Has date",
+                "seendate": "20260515T120000Z",
+            },
+            {
+                "url": "https://no-seendate.test",
+                "title": "No date",
+                # missing seendate
+            },
+        ]
+        df = gdelt.transform(articles, theme="test")
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]["url"], "https://with-seendate.test")
+
 
 class TestGdeltQueryBuilder(unittest.TestCase):
     def test_build_url_includes_required_params(self):
         url = gdelt.build_query_url(
             query="NVIDIA AND quantum",
-            timespan="1d",
             maxrecords=50,
         )
         self.assertIn("api.gdeltproject.org/api/v2/doc/doc", url)
         self.assertIn("query=NVIDIA+AND+quantum", url)
-        self.assertIn("timespan=1d", url)
         self.assertIn("maxrecords=50", url)
         self.assertIn("mode=artlist", url)
         self.assertIn("format=json", url)
+        # P1a: timespan removed entirely in favour of explicit datetime bounds.
+        self.assertNotIn("timespan", url)
+
+    def test_build_query_url_with_explicit_datetimes(self):
+        """Verify startdatetime and enddatetime are URL-encoded when present."""
+        url = gdelt.build_query_url(
+            query="NVIDIA",
+            startdatetime="20260515000000",
+            enddatetime="20260516000000",
+        )
+        self.assertIn("startdatetime=20260515000000", url)
+        self.assertIn("enddatetime=20260516000000", url)
+        self.assertNotIn("timespan", url)
+
+    def test_build_query_url_without_datetimes_omits_both(self):
+        """If either datetime is None, neither startdatetime nor enddatetime appears."""
+        url = gdelt.build_query_url(
+            query="NVIDIA",
+            startdatetime=None,
+            enddatetime="20260516000000",
+        )
+        self.assertNotIn("startdatetime", url)
+        self.assertNotIn("enddatetime", url)
+
+
+class TestGdeltDatetimeFormatting(unittest.TestCase):
+    def test_format_datetime_for_gdelt_utc(self):
+        """Format UTC datetime to YYYYMMDDHHMMSS."""
+        dt_ = dt.datetime(2026, 5, 15, 13, 45, 30, tzinfo=dt.UTC)
+        result = gdelt._format_datetime_for_gdelt(dt_)
+        self.assertEqual(result, "20260515134530")
+
+    def test_format_datetime_for_gdelt_rejects_naive(self):
+        """Reject naive (no timezone) datetime."""
+        dt_ = dt.datetime(2026, 5, 15, 13, 45, 30)
+        with self.assertRaises(ValueError):
+            gdelt._format_datetime_for_gdelt(dt_)
+
+    def test_format_datetime_for_gdelt_converts_non_utc_to_utc(self):
+        """A tz-aware non-UTC datetime is converted to UTC before formatting."""
+        eastern = dt.timezone(dt.timedelta(hours=-5))
+        dt_ = dt.datetime(2026, 5, 15, 8, 45, 30, tzinfo=eastern)  # 13:45:30 UTC
+        result = gdelt._format_datetime_for_gdelt(dt_)
+        self.assertEqual(result, "20260515134530")
 
 
 class TestGdeltFetch(unittest.TestCase):
     def test_fetch_theme_calls_endpoint_and_returns_frame(self):
+        # Window spans both sample seendates (2026-05-14 18:45 and 2026-05-15 01:15).
+        start = dt.datetime(2026, 5, 14, 0, 0, 0, tzinfo=dt.UTC)
+        end = dt.datetime(2026, 5, 16, 0, 0, 0, tzinfo=dt.UTC)
         with patch.object(gdelt, "_http_get_json", return_value=SAMPLE_GDELT_RESPONSE):
             df = gdelt.fetch_theme(
                 theme="ai_quantum",
                 query='("CUDA" OR "quantum computing") AND (NVIDIA OR IBM)',
-                timespan="1d",
+                start=start,
+                end=end,
             )
         self.assertEqual(len(df), 2)
         self.assertTrue((df["source"] == "gdelt").all())
+
+    def test_fetch_theme_post_filters_seendate_outside_window(self):
+        """Articles with seendate outside [start, end) are dropped post-fetch."""
+        articles = [
+            {
+                "url": "https://in-window.test",
+                "title": "In window",
+                "seendate": "20260515T120000Z",
+            },
+            {
+                "url": "https://before-window.test",
+                "title": "Before window",
+                "seendate": "20260514T235959Z",  # just before window
+            },
+            {
+                "url": "https://after-window.test",
+                "title": "After window",
+                "seendate": "20260516T000001Z",  # just after window
+            },
+        ]
+        start = dt.datetime(2026, 5, 15, 0, 0, 0, tzinfo=dt.UTC)
+        end = dt.datetime(2026, 5, 16, 0, 0, 0, tzinfo=dt.UTC)
+
+        with patch.object(gdelt, "_http_get_json", return_value={"articles": articles}):
+            df = gdelt.fetch_theme(
+                theme="test",
+                query="test query",
+                start=start,
+                end=end,
+            )
+
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]["url"], "https://in-window.test")
+
+    def test_fetch_daily_news_window_is_midnight_to_midnight_utc(self):
+        """fetch_daily_news(date) uses [date 00:00 UTC, date+1 00:00 UTC)."""
+        target_date = dt.date(2026, 5, 15)
+        expected_start = dt.datetime(2026, 5, 15, 0, 0, 0, tzinfo=dt.UTC)
+        expected_end = dt.datetime(2026, 5, 16, 0, 0, 0, tzinfo=dt.UTC)
+
+        calls = []
+
+        def fake_fetch_theme(**kwargs):
+            calls.append(kwargs)
+            return gdelt.empty_news_frame()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(gdelt, "fetch_theme", side_effect=fake_fetch_theme):
+                gdelt.fetch_daily_news(
+                    date=target_date,
+                    theme_buckets={"test": "query"},
+                    cache_dir=Path(tmpdir),
+                    inter_query_sleep_sec=0,
+                )
+
+        self.assertEqual(calls[0]["start"], expected_start)
+        self.assertEqual(calls[0]["end"], expected_end)
 
     def test_fetch_daily_news_iterates_all_themes(self):
         calls = []
 
         def fake_call(url, **kwargs):
             calls.append(url)
-            return SAMPLE_GDELT_RESPONSE
+            return SAMPLE_GDELT_RESPONSE_IN_WINDOW
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.object(gdelt, "_http_get_json", side_effect=fake_call):
@@ -121,7 +259,7 @@ class TestGdeltFetch(unittest.TestCase):
     def test_fetch_daily_news_dedupes_articles_seen_in_multiple_themes(self):
         # Same article appears in both query buckets
         def fake_call(url, **kwargs):
-            return SAMPLE_GDELT_RESPONSE
+            return SAMPLE_GDELT_RESPONSE_IN_WINDOW
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.object(gdelt, "_http_get_json", side_effect=fake_call):
@@ -136,7 +274,9 @@ class TestGdeltFetch(unittest.TestCase):
 
     def test_fetch_daily_news_reads_cache_on_second_call(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.object(gdelt, "_http_get_json", return_value=SAMPLE_GDELT_RESPONSE):
+            with patch.object(
+                gdelt, "_http_get_json", return_value=SAMPLE_GDELT_RESPONSE_IN_WINDOW
+            ):
                 gdelt.fetch_daily_news(
                     date=dt.date(2026, 5, 15),
                     theme_buckets=THEME_BUCKETS_FIXTURE,
@@ -223,7 +363,13 @@ class TestGdeltHttpGetJson(unittest.TestCase):
 
 class TestGdeltFetchIsolation(unittest.TestCase):
     def test_fetch_daily_news_isolates_failing_bucket(self):
-        good = SAMPLE_GDELT_RESPONSE
+        # Articles dated on the 2026-05-18 target day so the P1a window keeps them.
+        good = {
+            "articles": [
+                {**SAMPLE_GDELT_RESPONSE["articles"][0], "seendate": "20260518T011500Z"},
+                {**SAMPLE_GDELT_RESPONSE["articles"][1], "seendate": "20260518T184500Z"},
+            ]
+        }
         side_effects = [
             gdelt.GdeltQueryError("phrase too short"),
             good,

@@ -30,6 +30,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -49,6 +50,20 @@ DEFAULT_MAX_ITEMS = 200
 # Issuer-direct (8-K EX-99.1) is the richest source — it outranks the
 # aggregators at URL-canonical dedup and cluster-representative tie-break.
 _SOURCE_PRIORITY = {"edgar_press_release": 0, "polygon": 1, "gdelt": 2, "rss": 3}
+
+# Per-source quota weights for the cap-``max_items`` allocation. They allocate a
+# guaranteed minimum fraction to each source so a single high-volume aggregator
+# (GDELT on a busy day) cannot fill every slot by recency alone and crowd out the
+# lower-volume, higher-signal sources (issuer-direct EX-99.1, ticker-tagged
+# Polygon). Weights sum to 1.0. Unused budget from a quiet source rolls into a
+# global remainder pool, backfilled by recency — so a slow GDELT day never wastes
+# slots.
+_SOURCE_QUOTA_WEIGHTS = {
+    "edgar_press_release": 0.30,  # richest — 8-K EX-99.1 issuer-direct
+    "polygon": 0.30,  # curated / ticker-tagged
+    "gdelt": 0.20,  # high-volume, lower signal-to-noise
+    "rss": 0.20,  # high-volume, lower signal-to-noise
+}
 
 
 def _fetch_edgar_press_release(*, date: dt.date) -> pd.DataFrame:
@@ -182,6 +197,65 @@ def _cluster_same_day_lexical(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _allocate_per_source(
+    df: pd.DataFrame, weights: dict[str, float], max_items: int
+) -> pd.DataFrame:
+    """Allocate ``max_items`` across sources by quota weights, backfilling by recency.
+
+    For each source in ``weights`` compute its quota as ``ceil(max_items*weight)``
+    (``>= 1`` so no source is starved to zero), take that source's newest rows up
+    to the quota, and push any unused budget (source has fewer rows than its
+    quota) plus the source's overflow into a global remainder pool. Sources NOT
+    in ``weights`` get no guaranteed quota — all their rows go to the remainder.
+    Backfill the remainder by ``timestamp`` recency until ``max_items`` is reached
+    or the supply is exhausted. The caller is responsible for the final sort; the
+    only internal sort is the cap-guard for the ``max_items < source count`` edge
+    (where the per-source floor would otherwise over-allocate).
+
+    Ranking within a source uses ``_cluster_rank_ts`` (max member timestamp) when
+    present so a breaking-news cluster whose representative is early still competes
+    by its latest echo — mirroring the legacy flat cap.
+    """
+    if df.empty or max_items <= 0:
+        return df
+
+    rank_col = "_cluster_rank_ts" if "_cluster_rank_ts" in df.columns else "timestamp"
+
+    allocated: list[pd.DataFrame] = []
+    remainder: list[pd.DataFrame] = []
+
+    for source, weight in weights.items():
+        source_df = df[df["source"] == source]
+        if source_df.empty:
+            continue
+        quota = max(1, math.ceil(max_items * weight))
+        source_sorted = source_df.sort_values(rank_col, ascending=False)
+        allocated.append(source_sorted.head(quota))
+        if len(source_sorted) > quota:
+            remainder.append(source_sorted.iloc[quota:])
+
+    # Sources outside the weight table get no guaranteed quota.
+    unknown = df[~df["source"].isin(weights)]
+    if not unknown.empty:
+        remainder.append(unknown)
+
+    result = pd.concat(allocated, ignore_index=True) if allocated else df.iloc[0:0].copy()
+
+    if len(result) < max_items and remainder:
+        remainder_df = pd.concat(remainder, ignore_index=True)
+        backfill_qty = max_items - len(result)
+        backfill = remainder_df.sort_values(rank_col, ascending=False).head(backfill_qty)
+        result = pd.concat([result, backfill], ignore_index=True)
+
+    # Cap the contract: when max_items < the number of weighted sources, the
+    # per-source floor (>=1 each) can over-allocate past max_items. Trim to the
+    # newest max_items so the guarantee "<= max_items" always holds.
+    if len(result) > max_items:
+        result = result.sort_values(rank_col, ascending=False).head(max_items)
+
+    return result.reset_index(drop=True)
+
+
 def ingest_daily(
     *,
     date: dt.date,
@@ -254,10 +328,21 @@ def ingest_daily(
             .reset_index(drop=True)
         )
         merged = _cluster_same_day_lexical(merged)
+        # P1a belt-and-suspenders: enforce the strict single UTC day
+        # ``[date 00:00, date+1 00:00)`` even if a source regresses to bleed
+        # adjacent days. Applied AFTER clustering so same-day echoes collapse
+        # first; an out-of-window cluster is then dropped whole.
+        if len(merged) > 0:
+            window_start = pd.Timestamp(date, tz="UTC")
+            window_end = window_start + pd.Timedelta(days=1)
+            merged = merged[
+                (merged["timestamp"] >= window_start) & (merged["timestamp"] < window_end)
+            ].reset_index(drop=True)
+        # Per-source quota: allocate the cap across sources so a single
+        # high-volume aggregator cannot crowd out the higher-signal sources.
         merged = (
-            merged.sort_values("_cluster_rank_ts", ascending=False)
-            .head(max_items)
-            .drop(columns=["_cluster_rank_ts"])
+            _allocate_per_source(merged, _SOURCE_QUOTA_WEIGHTS, max_items)
+            .drop(columns=["_cluster_rank_ts"], errors="ignore")
             .sort_values("timestamp", ascending=False)
             .reset_index(drop=True)
         )

@@ -1036,6 +1036,24 @@ class TestAcceptanceTimestampSurvivesRecencyCap(unittest.TestCase):
             columns=NEWS_COLUMNS,
         )
 
+    def _edgar_frame_named(self, *, id_, ts, title, url):
+        return pd.DataFrame(
+            [
+                {
+                    "id": id_,
+                    "source": "edgar_press_release",
+                    "timestamp": ts,
+                    "tickers": ["AAPL"],
+                    "title": title,
+                    "body": "Apple today announced ...",
+                    "url": url,
+                    "keywords": [],
+                    "extra": json.dumps({"accession": id_}),
+                }
+            ],
+            columns=NEWS_COLUMNS,
+        )
+
     def _polygon_fillers(self, *, n, base_ts):
         # n distinct headlines that must NOT lexically cluster: a single unique
         # token each (|∩|=0 < MIN_TOKEN_OVERLAP, mirroring test_caps_at_max_items),
@@ -1088,15 +1106,47 @@ class TestAcceptanceTimestampSurvivesRecencyCap(unittest.TestCase):
         self.assertIn("0000320193-26-000050", set(out["id"]))
         self.assertIn("edgar_press_release", set(out["source"]))
 
-    def test_midnight_row_is_dropped_proving_the_bug(self):
-        # Control: the OLD 00:00 stamp sorts the EDGAR row to the bottom; the
-        # same cap-3 drops it. Pins that the intraday timestamp is what saves it.
-        out = self._run(
-            edgar_ts=pd.Timestamp("2026-05-30 00:00:00", tz="UTC"),
-            max_items=3,
-            n_fillers=5,
+    def test_midnight_row_loses_intra_source_ranking_proving_the_bug(self):
+        # Control: the OLD 00:00 stamp sorts the EDGAR row to the bottom of the
+        # EDGAR source's own ranking. P1a's per-source quota guarantees EDGAR a
+        # minimum slot (ceil(max_items*0.30)=1 at max_items=3), so to still prove
+        # the timestamp is load-bearing we make TWO EDGAR rows compete for that
+        # single quota slot: a newer intraday row and the buggy 00:00 row. The
+        # newer row wins the slot; the 00:00 row is dropped — pinning that the
+        # intraday acceptance timestamp is what saves a row, now at the
+        # intra-source-ranking level.
+        edgar_df = pd.concat(
+            [
+                self._edgar_frame(ts=pd.Timestamp("2026-05-30 00:00:00", tz="UTC")),
+                self._edgar_frame_named(
+                    id_="0000320193-26-000099",
+                    ts=pd.Timestamp("2026-05-30 19:00:00", tz="UTC"),
+                    title="Apple Issues Follow-up Statement",
+                    url="https://www.sec.gov/Archives/edgar/data/320193/y/idx-index.htm",
+                ),
+            ],
+            ignore_index=True,
         )
+        polygon_df = self._polygon_fillers(
+            n=5, base_ts=pd.Timestamp("2026-05-30 20:00:00", tz="UTC")
+        )
+        empty = self.ni.empty_news_frame()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(self.ni, "_fetch_edgar_press_release", return_value=edgar_df),
+                patch.object(self.ni, "_fetch_polygon", return_value=polygon_df),
+                patch.object(self.ni, "_fetch_gdelt", return_value=empty),
+                patch.object(self.ni, "_fetch_rss", return_value=empty),
+            ):
+                out = self.ni.ingest_daily(
+                    date=self.date,
+                    cache_dir=Path(tmpdir),
+                    max_items=3,
+                    force=True,
+                )
+        # The 00:00 row loses EDGAR's single quota slot to the 19:00 row.
         self.assertNotIn("0000320193-26-000050", set(out["id"]))
+        self.assertIn("0000320193-26-000099", set(out["id"]))
 
 
 if __name__ == "__main__":

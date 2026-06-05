@@ -103,10 +103,21 @@ def _no_edgar(*, date: dt.date):
 
 
 def _write_synthetic_gdelt() -> None:
-    """Author the GDELT cassette: build_query_url(query) -> {articles:[...]}."""
+    """Author the GDELT cassette: build_query_url(query, window) -> {articles:[...]}.
+
+    The URL key MUST match the one ``gdelt.fetch_theme`` builds at replay time —
+    which now carries the explicit P1a single-day window ``startdatetime`` /
+    ``enddatetime`` for ``ASOF`` (no more relative ``timespan``).
+    """
+    start = dt.datetime.combine(ASOF, dt.time.min, tzinfo=dt.UTC)
+    end = start + dt.timedelta(days=1)
     store: dict[str, dict] = {}
     for theme, query in _GDELT_BUCKETS.items():
-        url = gdelt.build_query_url(query=query)
+        url = gdelt.build_query_url(
+            query=query,
+            startdatetime=gdelt._format_datetime_for_gdelt(start),
+            enddatetime=gdelt._format_datetime_for_gdelt(end),
+        )
         store[url] = {"articles": _SYNTH_ARTICLES[theme]}
     (_FIXTURES / "gdelt.json").write_text(json.dumps(store, indent=2, sort_keys=True))
 

@@ -2,7 +2,7 @@
   "by_source": {
     "gdelt": 3,
     "polygon": 72,
-    "rss": 87
+    "rss": 36
   },
   "columns": [
     "body",
@@ -16,28 +16,12 @@
     "url"
   ],
   "n_tickers_total": 168,
-  "row_count": 162,
+  "row_count": 111,
   "rows": [
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "02f2a89e801b1595",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "035f70e69ad478a6",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "0392e323f5173217",
       "n_tickers": 0,
       "source": "rss",
       "tickers": []
@@ -51,14 +35,6 @@
       "tickers": [
         "TSLA"
       ]
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "0a8670a0a5112db9",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
     },
     {
       "cluster_size": 1,
@@ -148,22 +124,6 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "162873f766d21717",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "18c5ad3db2bd33d3",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "18ea5c0ec610a6d9db5e67eb84a84569b568ac6159d84aea86a073f2fd5c1735",
       "n_tickers": 2,
       "source": "polygon",
@@ -175,23 +135,7 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "1939531b33eb1797",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "1a155bb25e8c367e",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "1c000c0f6341af81",
       "n_tickers": 0,
       "source": "rss",
       "tickers": []
@@ -205,22 +149,6 @@
       "tickers": [
         "AMZN"
       ]
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "1e59e284a503a0ef",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "2276f10a30532fcd",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
     },
     {
       "cluster_size": 1,
@@ -261,14 +189,6 @@
       "tickers": [
         "NVDA"
       ]
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "2575e7e5ec797eaa",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
     },
     {
       "cluster_size": 1,
@@ -393,22 +313,6 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "3f285bc7a100fe56",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "411dfbe28039fcf5",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "41df00c13273409e",
       "n_tickers": 0,
       "source": "rss",
@@ -451,30 +355,6 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "48a43ac10486fb0a",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "4904ae6eb93aa17d",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "4f2f22e713746a2f",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "4fec876dbb67b879",
       "n_tickers": 0,
       "source": "rss",
@@ -493,14 +373,6 @@
         "META",
         "MSFT"
       ]
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "5443e4e734dcc280",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
     },
     {
       "cluster_size": 1,
@@ -546,14 +418,6 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "5c6fb3f249aec745",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "5dfe1097955e9469",
       "n_tickers": 0,
       "source": "rss",
@@ -573,31 +437,7 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "5eeae8179015e344",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "60f080a4d062b43d",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "61ca23c77d16a99c",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "61fed03182221cc4",
       "n_tickers": 0,
       "source": "rss",
       "tickers": []
@@ -649,28 +489,12 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "6e16372767dc110d",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "6e399f2f94a330981194a3d87dfcccb67fde115a7e8bfd551cca5d184adf8dd9",
       "n_tickers": 1,
       "source": "polygon",
       "tickers": [
         "COST"
       ]
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "6f76eccfa5598910",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
     },
     {
       "cluster_size": 1,
@@ -686,44 +510,12 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "71e4053d677dcff4",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "7288c5a75b848448779a5b89980a248b3d364a3965f1a999886fa84841390c4c",
       "n_tickers": 1,
       "source": "polygon",
       "tickers": [
         "MRNA"
       ]
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "740e340e355d18ae",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "763a034425152430",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "7666b66f50e3c972",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
     },
     {
       "cluster_size": 1,
@@ -744,30 +536,6 @@
         "JPM",
         "SNOW"
       ]
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "7a2ef22d7ef2836a",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "7dbe59973509af9a",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "7fd359f3aa30658a",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
     },
     {
       "cluster_size": 1,
@@ -797,14 +565,6 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "87100c8667141167",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "885e4885112434bf3c614bf59edbab8441513a1a447ba12fc052ca6ad5c46be3",
       "n_tickers": 5,
       "source": "polygon",
@@ -830,14 +590,6 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "89c9f01021c37a3f",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "8bd9d13309365b26",
       "n_tickers": 0,
       "source": "rss",
@@ -846,23 +598,7 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "90fb3cf4dabe229e",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "933f76473f363b7b",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "94aceeb597bc77e4",
       "n_tickers": 0,
       "source": "rss",
       "tickers": []
@@ -899,14 +635,6 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "971ae18f2c44e3d8",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "99e0fb0646e0df6e5ac96232d8d7905ce9bd75aeba7a0296494d64d60cd4179b",
       "n_tickers": 3,
       "source": "polygon",
@@ -926,14 +654,6 @@
         "COST",
         "WMT"
       ]
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "9d046b68f7c5455f",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
     },
     {
       "cluster_size": 1,
@@ -993,14 +713,6 @@
         "BA",
         "GE"
       ]
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "ab0b0a041b630cdb",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
     },
     {
       "cluster_size": 1,
@@ -1087,23 +799,7 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "b520a0e1497fe471",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "b74c35eb6acb404c",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "b972c33f46a7da95",
       "n_tickers": 0,
       "source": "rss",
       "tickers": []
@@ -1162,38 +858,6 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "c2c53b0d33ffddbd",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "c4ce0f0836f4bc86",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "c6839260e2515652",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "c8fe8fc096d9c54f",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "ca1a60369095ce4aea64c88118c2eec4f1b4678cac0f9e4f1a2f532052bfb0fc",
       "n_tickers": 3,
       "source": "polygon",
@@ -1202,14 +866,6 @@
         "GE",
         "RTX"
       ]
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "caf6fe8e38c65cb2",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
     },
     {
       "cluster_size": 1,
@@ -1245,23 +901,7 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "cf9c32d288c6cbce",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "d28066627ad9f64e",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "d87bbb85d4ffbdaa",
       "n_tickers": 0,
       "source": "rss",
       "tickers": []
@@ -1290,14 +930,6 @@
         "MSFT",
         "NVDA"
       ]
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "e10e225b009ec3a1",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
     },
     {
       "cluster_size": 1,
@@ -1400,14 +1032,6 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "e90311e1ed8a5097",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "e948c41020de3440777edb585e5418193b88c1c33e67c1ea372d3ded305cf9b8",
       "n_tickers": 1,
       "source": "polygon",
@@ -1497,44 +1121,12 @@
     {
       "cluster_size": 1,
       "has_body": true,
-      "id": "f754db972e5ded6e",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
       "id": "fbdfe9866a57426b70652f6a7538493a1f86a5a62aab907f0f411a35c44690d7",
       "n_tickers": 1,
       "source": "polygon",
       "tickers": [
         "AMZN"
       ]
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "fcf386b22e243024",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "fd4e59ad913f16c5",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
-    },
-    {
-      "cluster_size": 1,
-      "has_body": true,
-      "id": "fe2ec096bd3bee3d",
-      "n_tickers": 0,
-      "source": "rss",
-      "tickers": []
     },
     {
       "cluster_size": 1,
