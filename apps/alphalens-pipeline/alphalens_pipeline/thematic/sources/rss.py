@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_news" / "rss"
 FEEDS_PATH = Path(__file__).parent.parent / "config" / "rss_feeds.yaml"
-DEFAULT_WINDOW_DAYS = 2  # accept entries within ±N days of target
+# P1a: strict single UTC day. 0 encodes "the target day only" — the window math
+# below computes ``[date 00:00, date+1 00:00)`` regardless, so an explicit
+# ``window_days > 0`` no longer widens the window (kept in the signature only so
+# older callers do not break at the kwarg boundary).
+DEFAULT_WINDOW_DAYS = 0
 
 
 def _parse_feed(url: str):
@@ -67,17 +71,19 @@ def transform(
     domain: str,
     fallback_date: dt.date | None = None,
 ) -> pd.DataFrame:
-    fallback_ts = (
-        pd.Timestamp(fallback_date, tz="UTC")
-        if fallback_date is not None
-        else pd.Timestamp.now(tz="UTC")
-    )
+    # No now()-fallback: an entry with no parseable timestamp and no
+    # fallback_date is DROPPED, not stamped with the current time. Injecting
+    # pd.Timestamp.now() would be a now-relative leak — non-deterministic and
+    # replay-incorrect — mirroring GDELT's drop-on-missing-seendate behaviour.
+    fallback_ts = pd.Timestamp(fallback_date, tz="UTC") if fallback_date is not None else None
     rows: list[dict] = []
     for e in entries:
         url = getattr(e, "link", None)
         if not url:
             continue
         ts = _entry_timestamp(e) or fallback_ts
+        if ts is None:
+            continue
         extra = {
             "feed_name": feed_name,
             "domain": domain,
@@ -129,7 +135,13 @@ def fetch_daily_news(
     window_days: int = DEFAULT_WINDOW_DAYS,
     force: bool = False,
 ) -> pd.DataFrame:
-    """Pull all configured RSS feeds, filter to ``[date - window, date + window]``, dedupe."""
+    """Pull all configured RSS feeds, filter to the single UTC day ``[date 00:00, date+1 00:00)``, dedupe.
+
+    ``window_days`` is retained for signature compatibility but no longer widens
+    the window — P1a admits only the strict single target UTC day, matching
+    polygon_news.py.
+    """
+    del window_days  # P1a: window is always the single target UTC day
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / f"{date.isoformat()}.parquet"
     if cache_path.exists() and not force:
@@ -156,10 +168,9 @@ def fetch_daily_news(
         merged = pd.concat(frames, ignore_index=True)
         merged = merged.drop_duplicates(subset=["id"], keep="first").reset_index(drop=True)
 
-    if window_days > 0 and len(merged) > 0:
-        anchor = pd.Timestamp(date, tz="UTC")
-        lo = anchor - pd.Timedelta(days=window_days)
-        hi = anchor + pd.Timedelta(days=window_days + 1)
+    if len(merged) > 0:
+        lo = pd.Timestamp(date, tz="UTC")
+        hi = lo + pd.Timedelta(days=1)
         merged = merged[(merged["timestamp"] >= lo) & (merged["timestamp"] < hi)].reset_index(
             drop=True
         )

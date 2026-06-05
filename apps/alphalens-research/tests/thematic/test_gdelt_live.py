@@ -2,8 +2,9 @@
 
 Catches YAML query bugs (single-word quoted phrases, malformed boolean
 combos) that pass static lint but fail at the API. Each bucket gets one real
-HTTP request with ``timespan=1h`` (GDELT v2 minimum) so wall time is short
-and the result volume is small. Run with::
+HTTP request bounded to the last hour (explicit ``startdatetime`` /
+``enddatetime``, post-P1a) so wall time is short and the result volume is
+small. Run with::
 
     GDELT_LIVE_TEST=1 .venv/bin/python -m unittest tests.thematic.test_gdelt_live -v
 
@@ -15,6 +16,7 @@ spends real rate-limit budget.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import time
@@ -45,10 +47,17 @@ class TestGdeltLiveSmoke(unittest.TestCase):
         permanent: list[tuple[str, str]] = []
         transient: list[tuple[str, str]] = []
         ok: list[str] = []
+        now = dt.datetime.now(tz=dt.UTC).replace(microsecond=0)
+        start = now - dt.timedelta(hours=1)
         for i, (theme, query) in enumerate(buckets.items()):
             if i > 0:
                 time.sleep(gdelt.DEFAULT_INTER_QUERY_SLEEP_SEC)
-            url = gdelt.build_query_url(query=query, timespan="1h", maxrecords=5)
+            url = gdelt.build_query_url(
+                query=query,
+                startdatetime=gdelt._format_datetime_for_gdelt(start),
+                enddatetime=gdelt._format_datetime_for_gdelt(now),
+                maxrecords=5,
+            )
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "AlphaLens-thematic/0.1"})
                 with urllib.request.urlopen(req, timeout=20) as r:

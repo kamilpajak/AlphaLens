@@ -144,19 +144,39 @@ def load_theme_buckets() -> dict[str, str]:
 def build_query_url(
     *,
     query: str,
-    timespan: str = "1d",
+    startdatetime: str | None = None,
+    enddatetime: str | None = None,
     maxrecords: int = DEFAULT_MAXRECORDS,
     sort: str = "datedesc",
 ) -> str:
-    params = {
+    """Build a GDELT DOC API URL with optional explicit UTC bounds.
+
+    ``startdatetime`` / ``enddatetime`` are GDELT ``YYYYMMDDHHMMSS`` strings
+    (absolute, UTC). They are only emitted when BOTH are provided; the legacy
+    relative ``timespan`` parameter is gone (P1a strict single-day window).
+    """
+    params: dict[str, object] = {
         "query": query,
         "mode": "artlist",
         "format": "json",
         "maxrecords": maxrecords,
-        "timespan": timespan,
         "sort": sort,
     }
+    if startdatetime is not None and enddatetime is not None:
+        params["startdatetime"] = startdatetime
+        params["enddatetime"] = enddatetime
     return f"{ENDPOINT}?{urllib.parse.urlencode(params)}"
+
+
+def _format_datetime_for_gdelt(dt_: dt.datetime) -> str:
+    """Format a tz-aware datetime to GDELT API format ``YYYYMMDDHHMMSS`` (UTC).
+
+    Rejects naive datetimes so window bounds are never silently misinterpreted
+    as local time.
+    """
+    if dt_.tzinfo is None:
+        raise ValueError(f"datetime must be timezone-aware; got {dt_!r}")
+    return dt_.astimezone(dt.UTC).strftime("%Y%m%d%H%M%S")
 
 
 def _parse_seendate(seendate: str) -> pd.Timestamp:
@@ -170,16 +190,26 @@ def _stable_id(url: str) -> str:
 
 
 def transform(raw_articles: Iterable[dict], *, theme: str) -> pd.DataFrame:
-    """Normalise GDELT artlist rows to the unified ``NEWS_COLUMNS`` schema."""
+    """Normalise GDELT artlist rows to the unified ``NEWS_COLUMNS`` schema.
+
+    Drops articles with a missing or unparseable ``seendate``: under the P1a
+    explicit-window fetch the old ``pd.Timestamp.now(tz="UTC")`` fallback would
+    inject an out-of-window timestamp (and a non-replay-stable one), so such
+    rows cannot be trusted and are dropped instead.
+    """
     rows: list[dict] = []
     for art in raw_articles:
         url = art.get("url") or ""
         if not url:
             continue
         seendate = art.get("seendate")
+        if not seendate:
+            logger.debug("gdelt article dropped (missing seendate): %s", url)
+            continue
         try:
-            ts = _parse_seendate(seendate) if seendate else pd.Timestamp.now(tz="UTC")
+            ts = _parse_seendate(seendate)
         except ValueError:
+            logger.debug("gdelt article dropped (invalid seendate %r): %s", seendate, url)
             continue
         extra = {
             "theme_bucket": theme,
@@ -213,13 +243,29 @@ def fetch_theme(
     *,
     theme: str,
     query: str,
-    timespan: str = "1d",
+    start: dt.datetime,
+    end: dt.datetime,
     maxrecords: int = DEFAULT_MAXRECORDS,
 ) -> pd.DataFrame:
-    """Issue one GDELT DOC API query and return the normalised frame."""
-    url = build_query_url(query=query, timespan=timespan, maxrecords=maxrecords)
+    """Issue one GDELT DOC API query bounded to ``[start, end)`` UTC.
+
+    The DOC API may over-return at the boundaries, so rows whose ``seendate``
+    falls outside ``[start, end)`` are filtered post-fetch — the file is then
+    free of T-0 bleed and replay-correct regardless of fetch wall-time.
+    """
+    url = build_query_url(
+        query=query,
+        startdatetime=_format_datetime_for_gdelt(start),
+        enddatetime=_format_datetime_for_gdelt(end),
+        maxrecords=maxrecords,
+    )
     data = _http_get_json(url)
-    return transform(data.get("articles") or [], theme=theme)
+    df = transform(data.get("articles") or [], theme=theme)
+    if not df.empty:
+        start_ts = pd.Timestamp(start)
+        end_ts = pd.Timestamp(end)
+        df = df[(df["timestamp"] >= start_ts) & (df["timestamp"] < end_ts)].reset_index(drop=True)
+    return df
 
 
 def fetch_daily_news(
@@ -227,16 +273,22 @@ def fetch_daily_news(
     date: dt.date,
     theme_buckets: dict[str, str] | None = None,
     cache_dir: Path = DEFAULT_CACHE_DIR,
-    timespan: str = "1d",
     maxrecords: int = DEFAULT_MAXRECORDS,
     inter_query_sleep_sec: float = DEFAULT_INTER_QUERY_SLEEP_SEC,
     force: bool = False,
 ) -> pd.DataFrame:
-    """Run all theme-bucket queries for one day, deduplicate, cache, return frame."""
+    """Run all theme-bucket queries for the strict single UTC day, dedupe, cache.
+
+    Window = ``[date 00:00 UTC, date+1 00:00 UTC)`` for every bucket, matching
+    Polygon's strict single-day fetch.
+    """
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / f"{date.isoformat()}.parquet"
     if cache_path.exists() and not force:
         return pd.read_parquet(cache_path)
+
+    start = dt.datetime.combine(date, dt.time.min, tzinfo=dt.UTC)
+    end = start + dt.timedelta(days=1)
 
     buckets = theme_buckets if theme_buckets is not None else load_theme_buckets()
     frames: list[pd.DataFrame] = []
@@ -244,7 +296,7 @@ def fetch_daily_news(
         if i > 0 and inter_query_sleep_sec > 0:
             time.sleep(inter_query_sleep_sec)
         try:
-            df = fetch_theme(theme=theme, query=query, timespan=timespan, maxrecords=maxrecords)
+            df = fetch_theme(theme=theme, query=query, start=start, end=end, maxrecords=maxrecords)
             frames.append(df)
         except (GdeltQueryError, GdeltMaxRetriesError, urllib.error.URLError) as exc:
             logger.warning("gdelt bucket %s failed: %r", theme, exc)

@@ -31,6 +31,28 @@ SAMPLE_ENTRIES = [
 ]
 
 
+# In-window variant for the fetch_daily_news iteration/dedup tests: both entries
+# dated on the 2026-05-15 target day so the P1a strict single-day window keeps
+# them. SAMPLE_ENTRIES intentionally spans two days to exercise the transform
+# parse path; the daily-fetch tests need both rows inside [date, date+1).
+SAMPLE_ENTRIES_IN_WINDOW = [
+    SimpleNamespace(
+        id="https://wired.com/cuda-quantum-2026",
+        title="CUDA Proves Nvidia Is a Software Company",
+        link="https://wired.com/cuda-quantum-2026",
+        published_parsed=(2026, 5, 15, 14, 30, 0, 0, 0, 0),
+        summary="NVIDIA unveiled CUDA-Q, its toolkit for hybrid quantum...",
+    ),
+    SimpleNamespace(
+        id="https://wired.com/regen-mrna-trial",
+        title="Regeneron mRNA trial halted by FDA",
+        link="https://wired.com/regen-mrna-trial",
+        published_parsed=(2026, 5, 15, 9, 0, 0, 0, 0, 0),
+        summary="Pivotal phase 3 trial pauses on safety signal...",
+    ),
+]
+
+
 class TestRssTransform(unittest.TestCase):
     def test_transforms_entries_to_unified_schema(self):
         df = rss.transform(SAMPLE_ENTRIES, feed_name="wired", domain="wired.com")
@@ -75,6 +97,15 @@ class TestRssTransform(unittest.TestCase):
         self.assertEqual(len(df), 0)
         self.assertEqual(list(df.columns), NEWS_COLUMNS)
 
+    def test_undated_entry_without_fallback_is_dropped_not_now_stamped(self):
+        # No published/updated timestamp AND no fallback_date -> the row must be
+        # DROPPED, never stamped with pd.Timestamp.now() (a now-relative leak that
+        # would make the lake non-deterministic / replay-incorrect). Mirrors
+        # GDELT's drop-on-missing-seendate behaviour.
+        no_date = SimpleNamespace(id="x", title="dateless", link="https://x.com/dateless")
+        df = rss.transform([no_date], feed_name="wired", domain="wired.com")
+        self.assertEqual(len(df), 0)
+
     def test_fallback_timestamp_is_deterministic_when_target_date_given(self):
         no_date = SimpleNamespace(id="x", title="dateless", link="https://x.com/dateless")
         anchor = dt.date(2026, 5, 15)
@@ -100,7 +131,7 @@ class TestRssFetch(unittest.TestCase):
 
         def fake_parse(url):
             call_count[0] += 1
-            return _make_fake_parsed(SAMPLE_ENTRIES)
+            return _make_fake_parsed(SAMPLE_ENTRIES_IN_WINDOW)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.object(rss, "_parse_feed", side_effect=fake_parse):
@@ -115,7 +146,7 @@ class TestRssFetch(unittest.TestCase):
             self.assertEqual(df["id"].nunique(), 2)
             self.assertTrue((Path(tmpdir) / "2026-05-15.parquet").exists())
 
-    def test_fetch_daily_news_skips_feeds_outside_date(self):
+    def test_fetch_daily_news_skips_feeds_outside_strict_single_day_window(self):
         # Entry from 2026-05-10; date filter requested for 2026-05-15 with window=1
         old_entry = SimpleNamespace(
             id="https://x.com/old",
@@ -144,7 +175,7 @@ class TestRssFetch(unittest.TestCase):
         def fake_parse(url):
             if url == "u2":
                 raise RuntimeError("network error")
-            return _make_fake_parsed(SAMPLE_ENTRIES)
+            return _make_fake_parsed(SAMPLE_ENTRIES_IN_WINDOW)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch.object(rss, "_parse_feed", side_effect=fake_parse):
@@ -164,6 +195,105 @@ class TestRssFetch(unittest.TestCase):
             self.assertIn("name", f)
             self.assertIn("url", f)
             self.assertIn("domain", f)
+
+
+class TestRssFetchDailyNewsStrictWindow(unittest.TestCase):
+    """P1a: strict single UTC day [date 00:00, date+1 00:00) window."""
+
+    def test_fetch_daily_news_admits_entry_on_target_date_only(self):
+        """Entry with timestamp = target date 00:00 UTC is admitted."""
+        on_date = SimpleNamespace(
+            id="https://x.com/on-date",
+            link="https://x.com/on-date",
+            title="On Date",
+            published_parsed=(2026, 5, 15, 0, 0, 0, 0, 0, 0),
+            summary="...",
+        )
+        feeds = [{"name": "x", "url": "u", "domain": "x.com"}]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(rss, "_parse_feed", return_value=_make_fake_parsed([on_date])):
+                df = rss.fetch_daily_news(
+                    date=dt.date(2026, 5, 15),
+                    feeds=feeds,
+                    cache_dir=Path(tmpdir),
+                )
+            self.assertEqual(len(df), 1)
+
+    def test_fetch_daily_news_rejects_entry_before_target_date(self):
+        """Entry with timestamp < target date 00:00 UTC is rejected."""
+        before_date = SimpleNamespace(
+            id="https://x.com/before",
+            link="https://x.com/before",
+            title="Before",
+            published_parsed=(2026, 5, 14, 23, 59, 59, 0, 0, 0),
+            summary="...",
+        )
+        feeds = [{"name": "x", "url": "u", "domain": "x.com"}]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(rss, "_parse_feed", return_value=_make_fake_parsed([before_date])):
+                df = rss.fetch_daily_news(
+                    date=dt.date(2026, 5, 15),
+                    feeds=feeds,
+                    cache_dir=Path(tmpdir),
+                )
+            self.assertEqual(len(df), 0)
+
+    def test_fetch_daily_news_rejects_entry_at_next_day_boundary(self):
+        """Entry with timestamp >= target+1 day 00:00 UTC is rejected."""
+        next_day = SimpleNamespace(
+            id="https://x.com/next",
+            link="https://x.com/next",
+            title="Next Day",
+            published_parsed=(2026, 5, 16, 0, 0, 0, 0, 0, 0),
+            summary="...",
+        )
+        feeds = [{"name": "x", "url": "u", "domain": "x.com"}]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(rss, "_parse_feed", return_value=_make_fake_parsed([next_day])):
+                df = rss.fetch_daily_news(
+                    date=dt.date(2026, 5, 15),
+                    feeds=feeds,
+                    cache_dir=Path(tmpdir),
+                )
+            self.assertEqual(len(df), 0)
+
+    def test_fetch_daily_news_admits_entry_on_target_date_end_of_day(self):
+        """Entry just before target+1 day 00:00 UTC is admitted."""
+        eod = SimpleNamespace(
+            id="https://x.com/eod",
+            link="https://x.com/eod",
+            title="End of Day",
+            published_parsed=(2026, 5, 15, 23, 59, 59, 0, 0, 0),
+            summary="...",
+        )
+        feeds = [{"name": "x", "url": "u", "domain": "x.com"}]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(rss, "_parse_feed", return_value=_make_fake_parsed([eod])):
+                df = rss.fetch_daily_news(
+                    date=dt.date(2026, 5, 15),
+                    feeds=feeds,
+                    cache_dir=Path(tmpdir),
+                )
+            self.assertEqual(len(df), 1)
+
+    def test_fetch_daily_news_undated_entry_uses_target_date(self):
+        """Undated entry (no published_parsed) gets fallback_date and is admitted."""
+        undated = SimpleNamespace(
+            id="https://x.com/undated",
+            link="https://x.com/undated",
+            title="Undated",
+            summary="...",
+        )
+        feeds = [{"name": "x", "url": "u", "domain": "x.com"}]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(rss, "_parse_feed", return_value=_make_fake_parsed([undated])):
+                df = rss.fetch_daily_news(
+                    date=dt.date(2026, 5, 15),
+                    feeds=feeds,
+                    cache_dir=Path(tmpdir),
+                )
+            self.assertEqual(len(df), 1)
+            self.assertEqual(df.iloc[0]["timestamp"].date(), dt.date(2026, 5, 15))
 
 
 if __name__ == "__main__":

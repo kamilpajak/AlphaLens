@@ -457,6 +457,153 @@ class TestTier1LexicalClustering(unittest.TestCase):
         self.assertEqual(df.iloc[0]["timestamp"], pd.Timestamp("2026-05-15T01:00:00Z"))
 
 
+class TestNewsIngestStrictWindow(unittest.TestCase):
+    """P1a: source-agnostic window enforcement + per-source quota allocation."""
+
+    def setUp(self):
+        patcher = patch.object(
+            news_ingest, "_fetch_edgar_press_release", return_value=news_ingest.empty_news_frame()
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_allocate_never_exceeds_max_items_below_source_count(self):
+        """Quota floor (>=1 per source) must not over-allocate: with 4 weighted
+        sources and max_items < 4, the result is still capped at max_items."""
+        rows = [
+            _row("p1", "polygon", "2026-05-15T10:00:00Z", ["NVDA"], "poly"),
+            _row("e1", "edgar_press_release", "2026-05-15T11:00:00Z", ["AAPL"], "edgar"),
+            _row("g1", "gdelt", "2026-05-15T12:00:00Z", [], "gdelt"),
+            _row("r1", "rss", "2026-05-15T13:00:00Z", [], "rss"),
+        ]
+        df = _frame(rows)
+        out = news_ingest._allocate_per_source(df, news_ingest._SOURCE_QUOTA_WEIGHTS, max_items=2)
+        self.assertLessEqual(len(out), 2)
+
+    def test_enforces_strict_window_after_clustering(self):
+        """Belt-and-suspenders: rows outside [date 00:00, date+1 00:00) UTC are dropped."""
+        polygon_row = _row("p1", "polygon", "2026-05-15T10:00:00Z", ["NVDA"], "Polygon story")
+        edgar_row = _row(
+            "e1", "edgar_press_release", "2026-05-15T23:50:00Z", ["AAPL"], "EDGAR story"
+        )
+        rss_in_window = _row("r1", "rss", "2026-05-15T10:00:00Z", [], "RSS story alpha")
+        rss_out_of_window = _row("r2", "rss", "2026-05-16T02:00:00Z", [], "RSS story bravo")
+
+        polygon_df = _frame([polygon_row])
+        edgar_df = _frame([edgar_row])
+        rss_df = _frame([rss_in_window, rss_out_of_window])
+        empty_df = news_ingest.empty_news_frame()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(news_ingest, "_fetch_edgar_press_release", return_value=edgar_df),
+                patch.object(news_ingest, "_fetch_polygon", return_value=polygon_df),
+                patch.object(news_ingest, "_fetch_gdelt", return_value=empty_df),
+                patch.object(news_ingest, "_fetch_rss", return_value=rss_df),
+            ):
+                df = news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                    force=True,
+                )
+
+        self.assertEqual(len(df), 3)
+        window_start = pd.Timestamp("2026-05-15", tz="UTC")
+        window_end = window_start + pd.Timedelta(days=1)
+        for _, row in df.iterrows():
+            self.assertGreaterEqual(row["timestamp"], window_start)
+            self.assertLess(row["timestamp"], window_end)
+        self.assertNotIn("r2", df["id"].tolist())
+
+    def test_per_source_quota_prevents_crowding(self):
+        """When GDELT floods with 150 rows, Polygon/SEC/RSS are NOT crowded out."""
+        gdelt_rows = [
+            _row(f"g{i:03d}", "gdelt", "2026-05-15T15:00:00Z", [], f"GDELT story {i:04d}")
+            for i in range(150)
+        ]
+        polygon_rows = [
+            _row(f"p{i:03d}", "polygon", "2026-05-15T09:00:00Z", ["NVDA"], f"Polygon story {i:04d}")
+            for i in range(30)
+        ]
+        edgar_rows = [
+            _row(
+                f"e{i:02d}",
+                "edgar_press_release",
+                "2026-05-15T11:00:00Z",
+                ["AAPL"],
+                f"EDGAR story {i:04d}",
+            )
+            for i in range(20)
+        ]
+        rss_rows = [
+            _row(f"r{i:02d}", "rss", "2026-05-15T12:00:00Z", [], f"RSS story {i:04d}")
+            for i in range(20)
+        ]
+
+        gdelt_df = _frame(gdelt_rows)
+        polygon_df = _frame(polygon_rows)
+        edgar_df = _frame(edgar_rows)
+        rss_df = _frame(rss_rows)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(news_ingest, "_fetch_edgar_press_release", return_value=edgar_df),
+                patch.object(news_ingest, "_fetch_polygon", return_value=polygon_df),
+                patch.object(news_ingest, "_fetch_gdelt", return_value=gdelt_df),
+                patch.object(news_ingest, "_fetch_rss", return_value=rss_df),
+            ):
+                df = news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                    force=True,
+                    max_items=200,
+                )
+
+        self.assertEqual(len(df), 200)
+
+        gdelt_count = len(df[df["source"] == "gdelt"])
+        polygon_count = len(df[df["source"] == "polygon"])
+        edgar_count = len(df[df["source"] == "edgar_press_release"])
+        rss_count = len(df[df["source"] == "rss"])
+
+        # Quota weights {gdelt:0.20, polygon:0.30, edgar:0.30, rss:0.20}:
+        # GDELT capped to ~40 (not allowed to fill 150 slots), every other
+        # source fully admitted (each has < its quota). Backfill of unused
+        # budget pulls the rest of GDELT to reach 200.
+        self.assertGreater(polygon_count, 0)
+        self.assertGreater(edgar_count, 0)
+        self.assertGreater(rss_count, 0)
+        # All 30 polygon, 20 edgar, 20 rss survive (under their quotas).
+        self.assertEqual(polygon_count, 30)
+        self.assertEqual(edgar_count, 20)
+        self.assertEqual(rss_count, 20)
+        # GDELT fills the remaining 130 slots (200 - 70), capped by its 150 supply.
+        self.assertEqual(gdelt_count, 130)
+
+    def test_final_sort_is_timestamp_descending(self):
+        """After per-source quota, final result is sorted timestamp DESC (newest first)."""
+        rows = [
+            _row("a", "polygon", "2026-05-15T08:00:00Z", ["NVDA"], "oldword"),
+            _row("b", "polygon", "2026-05-15T18:00:00Z", ["NVDA"], "newword"),
+            _row("c", "polygon", "2026-05-15T13:00:00Z", ["NVDA"], "midword"),
+        ]
+        polygon_df = _frame(rows)
+        empty_df = news_ingest.empty_news_frame()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(news_ingest, "_fetch_polygon", return_value=polygon_df),
+                patch.object(news_ingest, "_fetch_gdelt", return_value=empty_df),
+                patch.object(news_ingest, "_fetch_rss", return_value=empty_df),
+            ):
+                df = news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                )
+
+        self.assertEqual(df["id"].tolist(), ["b", "c", "a"])
+
+
 class TestSourceRowCountsOutParam(unittest.TestCase):
     """RAW per-source counts feed the #384 EX-99.1 dead-man-switch.
 
