@@ -57,7 +57,7 @@ def _replay_briefs(out_dir: Path) -> pd.DataFrame:
         mock.patch.object(brief_orch, "_build_clients", return_value=(replay, replay)),
         mock.patch(
             "alphalens_pipeline.thematic.sources.earnings_calendar.fetch_next_earnings",
-            lambda *, ticker, asof: None,
+            lambda *, ticker, asof, today=None: None,
         ),
     ):
         return brief_orch.generate_briefs(

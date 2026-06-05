@@ -54,21 +54,42 @@ def _extract_earnings_dates(calendar) -> list[dt.date]:
     return out
 
 
-def fetch_next_earnings(*, ticker: str, asof: dt.date) -> dt.date | None:
+_FRESHNESS_WINDOW = dt.timedelta(days=7)
+
+
+def fetch_next_earnings(
+    *, ticker: str, asof: dt.date, today: dt.date | None = None
+) -> dt.date | None:
     """Return the next confirmed earnings date strictly AFTER ``asof``.
 
-    PIT contract: when ``asof < today`` we return ``None``. ``yfinance.calendar``
-    only exposes the CURRENT forward earnings schedule (re-fetched each
-    call), not a historical "as-of" calendar — so for a 2020-06-15 replay
-    it would happily return 2026-07-30, a 6-year look-ahead leak.
+    Freshness-window contract. ``yfinance.calendar`` only exposes the CURRENT
+    forward earnings schedule (re-fetched each call), not a historical "as-of"
+    calendar — so for a 2020-06-15 replay it would happily return 2026-07-30,
+    a 6-year look-ahead leak.
 
-    For the live operator workflow (``asof == today``) this matches
-    expectation: the next earnings is the one yfinance knows about right
-    now. Historical replay needs a different data source (AV EARNINGS
-    cache or SEC 8-K parsing) — until that is wired we suppress the field
-    so the operator never reads a leaked future date as factual.
+    But the daily pipeline always runs at ``asof == today - 1`` (T-1), which
+    is the live/recent operator workflow, NOT a historical replay. The next
+    earnings date is always FORWARD (e.g. 2026-08-05), so surfacing it for a
+    recent ``asof`` carries no meaningful leak. We therefore surface the date
+    when ``asof`` is within ``_FRESHNESS_WINDOW`` (7 days) of ``today`` — wide
+    enough to absorb weekend/holiday lag (T-2/T-3) — and suppress ONLY when
+    ``asof`` is genuinely far in the past (a real historical replay), where
+    yfinance's forward-only calendar would leak. Historical replay needs a
+    different data source (AV EARNINGS cache or SEC 8-K parsing); until that
+    is wired we suppress the field there so the operator never reads a leaked
+    future date as factual.
+
+    ``today`` is injectable for testing — production callers omit it and the
+    real clock is used. The default is the **UTC** date, matching the pipeline's
+    own ``asof = now(UTC).date() - 1`` so the window is computed in one timezone
+    (a local-clock default could drift a day from a UTC asof; harmless inside a
+    7-day window but inconsistent).
+
+    Note: if the daily pipeline ever lags more than 7 days behind real time
+    (long backfill / queue stall), widen ``_FRESHNESS_WINDOW``.
     """
-    if asof < dt.date.today():
+    today = today or dt.datetime.now(dt.UTC).date()
+    if today - asof > _FRESHNESS_WINDOW:
         return None
     # The canonical client owns throttle + retry; it swallows permanent /
     # exhausted failures to None (graceful degradation — the brief omits the

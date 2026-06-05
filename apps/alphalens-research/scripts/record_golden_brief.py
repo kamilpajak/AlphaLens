@@ -46,7 +46,7 @@ _FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "golden" / "fixtures
 _ALPHALENS = Path.home() / ".alphalens"
 
 
-def _frozen_earnings(*, ticker: str, asof: dt.date):
+def _frozen_earnings(*, ticker: str, asof: dt.date, today: dt.date | None = None):
     """Deterministic stand-in for the yfinance earnings lookup."""
     return None
 

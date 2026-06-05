@@ -40,6 +40,9 @@ def _sample_rows() -> list[dict]:
             "verified": True,
             "market_cap": 3_000_000_000_000.0,
             "also_in_themes": ["compute"],
+            # Pipeline writes next_earnings_date as an ISO date STRING; ingest
+            # must coerce it to the model DateField. AVGO omits it (null round-trip).
+            "next_earnings_date": "2026-08-05",
             # Pipeline persists the trade setup as a json.dumps STRING of a dict.
             "brief_trade_setup": json.dumps(
                 {"schema_version": "1.0.0", "status": "OK", "entry_tiers": [{"limit": 307.15}]}
@@ -76,6 +79,10 @@ class TestRebuildSmoke:
         assert nvda.date == dt.date(2026, 5, 22)
         assert nvda.gates_passed == ["pe", "fcff"]
         assert nvda.verified is True
+        # next_earnings_date: ISO string in the parquet -> coerced DateField.
+        assert nvda.next_earnings_date == dt.date(2026, 8, 5)
+        # AVGO omits the column entirely -> null round-trip, not a crash.
+        assert Brief.objects.get(ticker="AVGO").next_earnings_date is None
 
         meta = DayMeta.objects.get(date=dt.date(2026, 5, 22))
         assert meta.n_candidates == 2
