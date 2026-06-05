@@ -105,8 +105,10 @@ class YFinanceClient:
         self._sleep = sleep
         self._last_call_ts: float = 0.0
         # Per-process OHLCV memo so a batch that scores the same ticker twice
-        # (candidate + peer cohort) doesn't refetch within one run.
-        self._ohlcv_memo: dict[str, pd.DataFrame] = {}
+        # (candidate + peer cohort) doesn't refetch within one run. Keyed by
+        # (ticker, asof): a different asof has a different lookback window, so it
+        # must NOT reuse an earlier asof's (possibly truncated) frame.
+        self._ohlcv_memo: dict[tuple[str, dt.date], pd.DataFrame] = {}
 
     # ----- public flat methods -----
 
@@ -171,19 +173,23 @@ class YFinanceClient:
         returned only when every path above misses.
         """
         upper = ticker.upper()
-        if upper in self._ohlcv_memo:
-            return _slice_to_asof(self._ohlcv_memo[upper], asof)
+        key = (upper, asof)
+        if key in self._ohlcv_memo:
+            return _slice_to_asof(self._ohlcv_memo[key], asof)
 
-        self._cache_dir.mkdir(parents=True, exist_ok=True)
         exact = self._cache_dir / f"{upper}_{asof.isoformat()}.parquet"
-        if exact.exists():
-            df = _read_ohlcv_cache(exact)
-        else:
+        # A corrupt/unreadable exact parquet reads as empty (_read_ohlcv_cache
+        # swallows), so an empty result here — whether the file is absent or
+        # corrupt — falls through to the live fetch below (a successful live
+        # fetch overwrites the corrupt file). This avoids a corrupt file
+        # permanently pinning empty OHLCV for that (ticker, asof).
+        df = _read_ohlcv_cache(exact) if exact.exists() else pd.DataFrame()
+        if df.empty:
             start = asof - dt.timedelta(days=_OHLCV_LOOKBACK_DAYS)
             end = asof + dt.timedelta(days=1)
             df = self.daily_ohlcv(upper, start=start, end=end)
             if not df.empty:
-                df.to_parquet(exact)
+                self._write_ohlcv_cache(exact, df)
             else:
                 stale = self._newest_cached_parquet(upper)
                 if stale is not None:
@@ -195,7 +201,7 @@ class YFinanceClient:
                     )
                     df = _read_ohlcv_cache(stale)
 
-        self._ohlcv_memo[upper] = df
+        self._ohlcv_memo[key] = df
         return _slice_to_asof(df, asof)
 
     # ----- internals -----
@@ -205,6 +211,15 @@ class YFinanceClient:
         filename (lexicographic on the ISO date suffix == chronological)."""
         candidates = sorted(self._cache_dir.glob(f"{upper}_*.parquet"))
         return candidates[-1] if candidates else None
+
+    def _write_ohlcv_cache(self, path: Path, df: pd.DataFrame) -> None:
+        """Persist OHLCV to the disk cache. NEVER raises — a disk / permission
+        error must not crash the batch (the fetch already succeeded)."""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            df.to_parquet(path)
+        except Exception as exc:  # best-effort cache; a disk error is never fatal
+            logger.warning("ohlcv cache write failed for %s: %s", path.name, exc)
 
     def _throttle(self) -> None:
         elapsed = time.monotonic() - self._last_call_ts
