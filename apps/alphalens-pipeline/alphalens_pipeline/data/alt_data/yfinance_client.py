@@ -153,6 +153,54 @@ class YFinanceClient:
 
         return self._call_with_retry(_fetch, what=f"calendar({upper})", default=None)
 
+    def market_cap(self, ticker: str) -> float | None:
+        """Live market cap via ``fast_info.market_cap``; ``None`` on failure.
+
+        Throttled + retried like every Yahoo call. (FastInfo dict-style
+        ``.get("market_cap")`` returns ``None`` — attribute access is the
+        contract.) The persistent ≤14d cache fallback lives in the mcap filter,
+        which composes this method.
+        """
+        upper = ticker.upper()
+
+        def _fetch() -> float | None:
+            import yfinance as yf
+
+            mc = yf.Ticker(upper).fast_info.market_cap
+            return float(mc) if mc is not None else None
+
+        return self._call_with_retry(_fetch, what=f"market_cap({upper})", default=None)
+
+    def shares(self, ticker: str, *, asof: dt.date | None = None) -> float | None:
+        """Shares outstanding; ``None`` on failure.
+
+        PIT (``asof`` given): the latest ``get_shares_full`` value on or before
+        ``asof`` (the only dated yfinance shares series), falling back to the
+        ``fast_info.shares`` snapshot. ``asof=None`` → the live snapshot.
+        """
+        upper = ticker.upper()
+
+        def _fetch() -> float | None:
+            import pandas as pd
+            import yfinance as yf
+
+            tk = yf.Ticker(upper)
+            if asof is not None:
+                asof_ts = pd.Timestamp(asof)
+                series = tk.get_shares_full(
+                    start=(asof_ts - pd.Timedelta(days=400)).date().isoformat(),
+                    end=(asof_ts + pd.Timedelta(days=1)).date().isoformat(),
+                )
+                if series is not None and len(series) > 0:
+                    series.index = pd.to_datetime(series.index).tz_localize(None)
+                    pit = series[series.index <= asof_ts]
+                    if not pit.empty:
+                        return float(pit.iloc[-1])
+            snapshot = getattr(tk.fast_info, "shares", None)
+            return float(snapshot) if snapshot else None
+
+        return self._call_with_retry(_fetch, what=f"shares({upper})", default=None)
+
     def cached_daily_ohlcv(self, ticker: str, *, asof: dt.date) -> pd.DataFrame:
         """OHLCV with disk + in-process cache and a stale-fallback safety net.
 

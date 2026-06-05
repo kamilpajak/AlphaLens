@@ -16,6 +16,7 @@ import datetime as dt
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -278,3 +279,61 @@ class TestSingleton(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMarketCap(unittest.TestCase):
+    @staticmethod
+    def _ticker(mcap):
+        return SimpleNamespace(fast_info=SimpleNamespace(market_cap=mcap))
+
+    def test_returns_market_cap(self):
+        with patch("yfinance.Ticker", return_value=self._ticker(4.5e12)):
+            self.assertEqual(_client().market_cap("aapl"), 4.5e12)
+
+    def test_none_market_cap_returns_none(self):
+        with patch("yfinance.Ticker", return_value=self._ticker(None)):
+            self.assertIsNone(_client().market_cap("x"))
+
+    def test_retries_rate_limit_then_returns(self):
+        with patch(
+            "yfinance.Ticker",
+            side_effect=[YFRateLimitError(), self._ticker(1e9)],
+        ):
+            self.assertEqual(_client().market_cap("x"), 1e9)
+
+
+class TestShares(unittest.TestCase):
+    def test_pit_uses_latest_shares_on_or_before_asof(self):
+        series = pd.Series([200e6, 224.5e6], index=pd.to_datetime(["2026-01-15", "2026-03-30"]))
+        tk = SimpleNamespace(
+            get_shares_full=MagicMock(return_value=series),
+            fast_info=SimpleNamespace(shares=None),
+        )
+        with patch("yfinance.Ticker", return_value=tk):
+            self.assertEqual(_client().shares("qubt", asof=dt.date(2026, 4, 14)), 224.5e6)
+
+    def test_pit_skips_shares_after_asof(self):
+        series = pd.Series([200e6, 999e6], index=pd.to_datetime(["2026-03-01", "2026-05-01"]))
+        tk = SimpleNamespace(
+            get_shares_full=MagicMock(return_value=series),
+            fast_info=SimpleNamespace(shares=None),
+        )
+        with patch("yfinance.Ticker", return_value=tk):
+            self.assertEqual(_client().shares("x", asof=dt.date(2026, 4, 14)), 200e6)
+
+    def test_falls_back_to_fast_info_shares_when_series_empty(self):
+        tk = SimpleNamespace(
+            get_shares_full=MagicMock(return_value=pd.Series(dtype=float)),
+            fast_info=SimpleNamespace(shares=500e6),
+        )
+        with patch("yfinance.Ticker", return_value=tk):
+            self.assertEqual(_client().shares("x", asof=dt.date(2026, 4, 14)), 500e6)
+
+    def test_live_snapshot_skips_dated_series_when_no_asof(self):
+        tk = SimpleNamespace(
+            get_shares_full=MagicMock(),
+            fast_info=SimpleNamespace(shares=300e6),
+        )
+        with patch("yfinance.Ticker", return_value=tk):
+            self.assertEqual(_client().shares("x"), 300e6)
+        tk.get_shares_full.assert_not_called()

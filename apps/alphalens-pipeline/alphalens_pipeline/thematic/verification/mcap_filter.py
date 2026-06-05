@@ -23,6 +23,8 @@ import logging
 import os
 from pathlib import Path
 
+from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
+
 logger = logging.getLogger(__name__)
 
 # Persistent last-known live mcap, so a TRANSIENT yfinance/Yahoo outage does not
@@ -53,17 +55,12 @@ def fetch_mcap(ticker: str, *, asof: dt.date | None = None) -> float | None:
 
 
 def _fetch_live_mcap(ticker: str) -> float | None:
-    """One live ``fast_info.market_cap`` lookup; ``None`` on any failure."""
-    try:
-        import yfinance as yf
+    """One live market-cap lookup via the canonical client; ``None`` on failure.
 
-        # FastInfo dict-style `.get("market_cap")` returns None because the dict
-        # keys differ from the attribute names; attribute access is the contract.
-        mc = yf.Ticker(ticker).fast_info.market_cap
-        return float(mc) if mc is not None else None
-    except Exception as exc:
-        logger.warning("mcap live fetch failed for %s: %s", ticker, exc)
-        return None
+    The client owns the shared throttle + retry that keeps this filter's
+    ~hundreds-of-tickers batch from tripping Yahoo's rate limit.
+    """
+    return get_default_yfinance_client().market_cap(ticker)
 
 
 def _fetch_live_mcap_with_cache(ticker: str) -> float | None:
@@ -93,25 +90,24 @@ def _fetch_pit_mcap(ticker: str, asof: dt.date) -> float | None:
     """
     try:
         import pandas as pd
-        import yfinance as yf
 
-        tk = yf.Ticker(ticker)
+        client = get_default_yfinance_client()
         asof_ts = pd.Timestamp(asof)
-        # Pull a 7-day window so a Friday close covers a Saturday asof.
-        hist = tk.history(
+        # Pull a 7-day window so a Friday close covers a Saturday asof. The
+        # client normalises to lowercase columns + a tz-naive index.
+        hist = client.daily_ohlcv(
+            ticker,
             start=(asof_ts - pd.Timedelta(days=7)).date(),
             end=(asof_ts + pd.Timedelta(days=1)).date(),
-            auto_adjust=False,
         )
-        if hist is None or hist.empty:
+        if hist.empty:
             return None
-        hist.index = pd.to_datetime(hist.index).tz_localize(None)
         hist = hist[hist.index <= asof_ts]
         if hist.empty:
             return None
-        close = float(hist["Close"].iloc[-1])
+        close = float(hist["close"].iloc[-1])
 
-        shares = _pit_shares(tk, asof_ts)
+        shares = client.shares(ticker, asof=asof)
         if not shares:
             return None
         return close * shares
@@ -165,32 +161,6 @@ def _mcap_cache_get(ticker: str, *, now: dt.datetime | None = None) -> float | N
         # — distinguish corruption / a manual-edit typo from a plain cache miss.
         logger.warning("mcap cache entry for %s is malformed (%s); ignoring", ticker, exc)
         return None
-
-
-def _pit_shares(tk, asof_ts):
-    """Latest shares_outstanding update on or before ``asof_ts``.
-
-    Returns ``float`` or ``None``. Tries ``get_shares_full`` first (the
-    only yfinance API that exposes a dated series); falls back to
-    ``fast_info.shares`` when the series is empty.
-    """
-    import pandas as pd
-
-    try:
-        series = tk.get_shares_full(
-            start=(asof_ts - pd.Timedelta(days=400)).date().isoformat(),
-            end=(asof_ts + pd.Timedelta(days=1)).date().isoformat(),
-        )
-    except Exception:
-        series = None
-    if series is not None and len(series) > 0:
-        series.index = pd.to_datetime(series.index).tz_localize(None)
-        pit = series[series.index <= asof_ts]
-        if not pit.empty:
-            return float(pit.iloc[-1])
-    # No PIT shares series → fall back to fast_info.shares.
-    fallback = getattr(tk.fast_info, "shares", None)
-    return float(fallback) if fallback else None
 
 
 def filter_by_mcap(
