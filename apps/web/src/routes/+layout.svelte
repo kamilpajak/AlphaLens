@@ -103,14 +103,14 @@
 				<a href="/briefs" class="hover:text-amber transition-colors" class:text-amber={route.startsWith('/brief')}>
 					<span class="hidden sm:inline">[02]&nbsp;</span>briefs
 				</a>
-				<a href="/about" class="hover:text-amber transition-colors" class:text-amber={route === '/about'}>
-					<span class="hidden sm:inline">[03]&nbsp;</span>about
+				<a href="/edge" class="hover:text-amber transition-colors" class:text-amber={route === '/edge'}>
+					<span class="hidden sm:inline">[03]&nbsp;</span>edge
 				</a>
 				<a href="/experiments" class="hover:text-amber transition-colors" class:text-amber={route === '/experiments'}>
 					<span class="hidden sm:inline">[04]&nbsp;</span>experiments
 				</a>
-				<a href="/edge" class="hover:text-amber transition-colors" class:text-amber={route === '/edge'}>
-					<span class="hidden sm:inline">[06]&nbsp;</span>edge
+				<a href="/about" class="hover:text-amber transition-colors" class:text-amber={route === '/about'}>
+					<span class="hidden sm:inline">[05]&nbsp;</span>about
 				</a>
 				<a
 					href={apiDocsHref}
@@ -119,7 +119,7 @@
 					class="hover:text-amber transition-colors"
 					aria-label="api documentation (opens in a new tab)"
 				>
-					<span class="hidden sm:inline">[07]&nbsp;</span>api <span aria-hidden="true">↗</span>
+					<span class="hidden sm:inline">[06]&nbsp;</span>api <span aria-hidden="true">↗</span>
 				</a>
 			</nav>
 			<div class="ml-auto flex items-center gap-3 sm:gap-5 text-fg-muted">
