@@ -19,10 +19,18 @@ via two Perplexity deep-research passes, is the standard pattern:
 
 > **One UTC-stamped, append-only, bitemporal news *lake* + a per-exchange
 > session-window *view* parametrized by ISO 10383 MIC.** Ingest makes no session
-> decision and partitions nothing by any market's trading day. The session window
-> `[prev_close(MIC, D), next_open(MIC, D))` is a query parameter at brief-generation
-> time, computed from a MIC-keyed trading calendar. The brief *output* is snapshotted
-> immutably per `(MIC, session_date)` for bit-identical PIT rebuilds.
+> decision and partitions nothing by any market's trading day. The view is a
+> **gap-free, contiguous tiling** of the timeline (each brief covers
+> `[prev_cut, this_cut)` — see §3.0), anchored to the exchange's session via a
+> MIC-keyed trading calendar, computed as a query parameter at brief-generation
+> time. The brief *output* is snapshotted immutably per `(MIC, session_date)` for
+> bit-identical PIT rebuilds.
+
+> **Revised after adversarial review (2026-06-05, §9):** the original draft used
+> `[prev_close, next_open)` as the window. That is WRONG — it is an overnight-only
+> window that leaves the intraday period `[open, close)` uncovered by any session,
+> so a midday catalyst (Fed 14:00, lunchtime M&A) would be dropped from every brief.
+> The window is now a **gap-free contiguous tiling**, not an overnight slice.
 
 Adding an exchange becomes "register its MIC + calendar", with **zero changes to the
 lake** — the same promise the existing exchange-agnostic calendar helper already makes
@@ -106,12 +114,30 @@ append-only, immutable log with monotonic ids.
 This is the cornerstone of a true PIT rebuild ("what was knowable at moment T"), and the
 reason an append-only, never-mutated log is required.
 
+### 3.0 Windowing model — gap-free contiguous tiling (corrected)
+
+The window must **tile the timeline with no gaps and no overlaps**, so no news item is
+ever orphaned. An overnight-only window `[prev_close, next_open)` does NOT tile — it
+leaves the intraday period `[open, close)` uncovered, dropping midday catalysts (Fed
+14:00, lunchtime M&A) from every brief. That is the single most damaging failure mode for
+an event-driven tool and was the original draft's error (caught in adversarial review, §9).
+
+The correct primitive is **contiguous cut-to-cut**: each brief covers `[prev_cut, this_cut)`
+where `this_cut` is the brief's generation time and `prev_cut` is the previous brief's cut.
+Consecutive briefs tile the full timeline; nothing falls between them. This is exactly what
+the existing **6×/day cadence** is for — the midday runs cover the intraday window, so
+intraday catalysts are captured rather than dropped. The exchange **session** (close / open
+from the MIC calendar) is the **anchor/label** — it names which run is the flagship morning
+brief for a market and how the window is labelled — **not** a lossy filter on which items
+are admitted. (Equivalent framing: close-to-close `[prev_close, this_close)` also tiles; the
+cut-to-cut form generalizes it to an arbitrary generation cadence.)
+
 ### Layer 2 — Per-exchange session view (parameter = ISO 10383 MIC)
 
-A brief for exchange X on session date D selects from the lake the items whose valid time
-falls in `[prev_close(X, D), next_open(X, D))`, where the boundaries come from a
-**MIC-keyed trading-calendar service** (timezone + historical DST + half-days + intraday
-breaks per market). The session window is a **query parameter at brief-generation time**,
+A brief for exchange X generated at cut time `T` selects from the lake the items whose valid
+time falls in `[prev_cut(X), T)` (the gap-free window of §3.0), labelled against X's current
+session from a **MIC-keyed trading-calendar service** (timezone + historical DST + half-days
++ intraday breaks per market). The window is a **query parameter at brief-generation time**,
 never baked into ingest. Same lake, different slice per exchange. Adding an exchange =
 register its MIC + calendar, zero changes to the lake.
 
@@ -123,9 +149,11 @@ downstream theme→beneficiary mapping (a ticker's home exchange).
 ### Six corrective requirements (beyond the bare two-layer split)
 
 1. **Bitemporal storage** (valid + transaction time). Not one timestamp.
-2. **Session window `[prev_close, next_open)`** — not a fixed 24h period; must handle
-   holidays, early closes / half-days, and **intraday breaks** (Tokyo / HK lunch recess
-   → effectively multiple windows per day).
+2. **Gap-free contiguous window** (cut-to-cut `[prev_cut, this_cut)`, §3.0) — NOT an
+   overnight `[prev_close, next_open)` slice (which orphans intraday news) and NOT a fixed
+   24h UTC period. The MIC session is the anchor/label, not the admission filter; it must
+   still model holidays, early closes / half-days, and **intraday breaks** (Tokyo / HK
+   lunch recess) for correct labelling.
 3. **MIC-keyed calendar with historical DST.** Strong candidate: the `exchange_calendars`
    PyPI library (MIC-keyed global calendars with breaks/holidays/half-days) — prefer it
    over hand-rolling. Decide whether to adopt it or extend the existing `calendar.py`.
@@ -153,12 +181,15 @@ downstream theme→beneficiary mapping (a ticker's home exchange).
 - **Brief snapshot store** — table keyed `(MIC, session_date)`, immutable materialization
   of the output; the SPA/API read this.
 - **Recency cap** — per-source quota **within** each per-exchange window (so GDELT can't
-  crowd out SEC / Polygon), allocated across the overnight time segments.
+  crowd out SEC / Polygon), allocated across time segments.
 - **Dedup** — global event cluster → per-exchange attribution; earliest-published item is
   the cluster representative (it sets the market narrative), domain authority only as a
-  <15-min tie-break. (Today's cap uses newest-first — the opposite.)
-- **Label** — `(MIC, session_date, [start_utc, cut_utc], generated_at)`. The date is no
-  longer a bare UTC day; it is a per-exchange session with explicit bounds and a cut time.
+  <15-min tie-break. (Today's cap uses newest-first — the opposite.) Implementation reuses
+  the **already-extracted** theme/entity from the existing LLM pipeline — NOT a from-scratch
+  cross-lingual NLP clustering system (see §9, rejected simplification #2 caveat).
+- **Label** — `(MIC, session_date, [start_utc=prev_cut, cut_utc=this_cut], generated_at)`.
+  The date is no longer a bare UTC day; it is a per-exchange session with explicit
+  contiguous bounds and a cut time.
 
 ## 5. Phasing (validate US first, then split-session markets)
 
@@ -167,11 +198,11 @@ downstream theme→beneficiary mapping (a ticker's home exchange).
   now-relative windows). Add a test pinning that every unified-news row falls within the
   declared bounds. Add per-source cap quota so SEC/Polygon are not crowded out. Small,
   local to `sources/` + `news_ingest.py`. Closes problem **B** and most of **A**.
-- **Phase 2 — session view, XNYS first.** `session_window(MIC, date)` on a MIC-keyed
-  calendar; `[prev_close, next_open)`; snapshot-as-you-go keyed `(MIC, session_date)`;
-  global-event dedup (earliest-wins). Validate on a single market (XNYS ≈ today's
-  behaviour, but correct). Resolve the `next_earnings_date` guard here (freshness window
-  replaces `asof < today`).
+- **Phase 2 — session view, XNYS first.** `session_window(MIC, cut)` on a MIC-keyed
+  calendar producing the gap-free `[prev_cut, this_cut)` window (§3.0); snapshot-as-you-go
+  keyed `(MIC, session_date)`; global-event dedup (earliest-wins, reusing existing
+  theme/entity). Validate on a single market (XNYS). Resolve the `next_earnings_date` guard
+  here (freshness window replaces `asof < today`).
 - **Phase 3 — split-session + scale-out.** Tokyo (lunch break → multi-window), Warsaw
   (CET/CEST), HK, Shanghai = register MIC + calendar, zero lake changes.
 
@@ -197,8 +228,9 @@ downstream theme→beneficiary mapping (a ticker's home exchange).
 2. Lake storage substrate — stay on partitioned parquet under `~/.alphalens/` vs move to a
    table? (lean: bitemporal parquet partitions for Phase 1; revisit if query patterns
    demand a DB.)
-3. Window semantics edge: `[prev_close, next_open)` vs `[prev_close, prev_close+24h)` for
-   markets with very long overnight gaps; boundary tolerance (~10 min) at the cut.
+3. Window labelling edge: how the gap-free `[prev_cut, this_cut)` window is *named* against
+   a session (which cut is the "morning brief" for a market; how late-day intraday items are
+   labelled vs the next morning's flagship); boundary tolerance (~10 min) at the cut.
 4. Snapshot store: extend the Postgres `briefs` table to key `(MIC, session_date)` and
    make it immutable, vs a separate snapshot table.
 
@@ -210,3 +242,53 @@ Refinitiv Workspace, RavenPack, S&P Capital IQ PIT, ISO 10383 MIC, GDELT DOC API
 data-modelling literature. Note: the specific quantitative claims in those passes (market
 shares, terminal prices, "X% of volatility", named clustering algorithms) are treated as
 flavour, not load-bearing facts; the **architecture** is the validated signal.
+
+## 9. Adversarial review (2026-06-05) — accepted / rejected
+
+A third Perplexity pass adversarially reviewed this memo. Verdict was "RETHINK". One
+catch is accepted as a real bug; the rest are **rejected** as a context mismatch — the
+reviewer repeatedly argued "simplify, you are a solo retail builder", but this is a mature
+tool that real people in the investing group act on with their own money, so the rigour is
+warranted, not over-engineering. The reviewer conflated "hard for a solo builder" (a weak
+argument — the work gets done) with "unnecessary" (a different claim it never established).
+
+**ACCEPTED (real bug — fixed above):**
+
+- **Windowing.** `[prev_close, next_open)` is an overnight-only window that orphans the
+  intraday `[open, close)` period, dropping midday catalysts from every brief. Replaced with
+  the gap-free contiguous `[prev_cut, this_cut)` tiling of §3.0, which the 6×/day cadence
+  already supports. This was the single genuine flaw and the most damaging one for an
+  event-driven tool. (The reviewer's interval arithmetic was muddled, but the conclusion —
+  intraday news is orphaned — is correct.)
+
+**REJECTED (kept; reframed as sequencing, not scope-cut):**
+
+1. *"Bitemporality is over-engineered; use single-timeline event-time, 90/10."* — Rejected.
+   With money at stake, the audit trail ("what the brief knew at moment T, from which data")
+   is a feature, not a luxury; storage cost on news volume (hundreds of items/day) is modest,
+   not the "explosion" the reviewer claimed (a news-scale, not web-scale, lake; the
+   NoSQL-required claim is false on parquet). Bitemporal stays. It is sequenced so it does
+   not block the windowing fix, but it is NOT cut.
+2. *"Global event clustering is an NLP tarpit for a solo builder."* — Partly fair on the
+   from-scratch cross-lingual version, but rejected as a scope-cut: duplicate-inflated event
+   importance can mislead a money decision, so cross-exchange dedup is a real requirement.
+   It is (a) only relevant once multi-exchange is live (P3, not P1), and (b) built by reusing
+   the **already-extracted theme/entity** from the existing LLM pipeline + the existing
+   URL/lexical dedup — NOT a new research-grade NLP system. Kept, scoped, deferred to P3.
+3. *"Compliance / regulatory controls are missing — would be rejected by enterprise review."*
+   — Out of scope. This is a personal augmentation tool for one investing group, not a
+   redistributed or institutional product (GDELT open, SEC public, Polygon/RSS personal-use
+   ToS). Revisit only if it ever serves external/commercial clients.
+4. *"No data-quality / freshness monitoring."* — Largely already exists and the reviewer
+   could not see it: per-stage volume gauges (#373), the EDGAR dead-man-switch (#384/#390),
+   VIX-cache staleness, `StageZeroOutput` / `BriefVolumeAnomaly` alerts. P1 adds one more: a
+   window-correctness test (every admitted item inside the declared `[prev_cut, this_cut)`).
+
+**Also noted (minor, accepted):** calendars are dynamic, not static — rules change over time
+(EU ending DST 2026, exchange-hour changes), so for PIT-correct rebuild the calendar must be
+the one in force at date D; `exchange_calendars` carries historical schedules, which is an
+extra reason to adopt it (open decision #1).
+
+**Net:** the core (UTC lake + per-exchange MIC view) stands. One change is a true fix
+(windowing → gap-free tiling); bitemporality and cross-exchange dedup are retained as
+rigour the money-stakes justify, sequenced later rather than removed.
