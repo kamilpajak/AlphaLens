@@ -1,10 +1,19 @@
 import datetime as dt
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 from alphalens_pipeline.thematic.verification import mcap_filter
+
+
+def _live_ticker(mcap: float | None) -> SimpleNamespace:
+    fi = MagicMock(spec=["market_cap"])
+    fi.market_cap = mcap
+    return SimpleNamespace(fast_info=fi)
 
 
 class TestFilterByMcap(unittest.TestCase):
@@ -47,11 +56,21 @@ class TestFilterByMcap(unittest.TestCase):
 
 
 class TestFetchMcapErrorPaths(unittest.TestCase):
+    def setUp(self):
+        # Isolate the persistent mcap cache so these "→ None" assertions are
+        # hermetic (an empty cache → no fallback value).
+        self._td = tempfile.TemporaryDirectory()
+        self._patch = patch.object(
+            mcap_filter, "_MCAP_CACHE_PATH", Path(self._td.name) / "mcap_cache.json"
+        )
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        self._td.cleanup()
+
     def test_returns_none_when_yfinance_returns_none_mcap(self):
-        fake_fast_info = MagicMock(spec=["market_cap"])
-        fake_fast_info.market_cap = None
-        fake_ticker = SimpleNamespace(fast_info=fake_fast_info)
-        with patch("yfinance.Ticker", return_value=fake_ticker):
+        with patch("yfinance.Ticker", return_value=_live_ticker(None)):
             self.assertIsNone(mcap_filter.fetch_mcap("UNKNOWN"))
 
     def test_returns_none_on_yfinance_exception(self):
@@ -59,6 +78,61 @@ class TestFetchMcapErrorPaths(unittest.TestCase):
         # to None so the caller can drop the candidate cleanly.
         with patch("yfinance.Ticker", side_effect=RuntimeError("network")):
             self.assertIsNone(mcap_filter.fetch_mcap("DEAD"))
+
+
+class TestMcapCacheFallback(unittest.TestCase):
+    """The live mcap path persists each success and falls back to a recent
+    cached value on a transient yfinance failure, so a Yahoo outage does not
+    silently empty the whole brief (a candidate seen on a prior run survives).
+    """
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.cache = Path(self._td.name) / "mcap_cache.json"
+        self._patch = patch.object(mcap_filter, "_MCAP_CACHE_PATH", self.cache)
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        self._td.cleanup()
+
+    def test_live_success_caches_and_returns(self):
+        with patch("yfinance.Ticker", return_value=_live_ticker(1_000_000_000.0)):
+            self.assertEqual(mcap_filter.fetch_mcap("NVDA"), 1_000_000_000.0)
+        stored = json.loads(self.cache.read_text())
+        self.assertEqual(stored["NVDA"]["mcap"], 1_000_000_000.0)
+
+    def test_live_failure_falls_back_to_recent_cache(self):
+        with patch("yfinance.Ticker", return_value=_live_ticker(2_000_000_000.0)):
+            mcap_filter.fetch_mcap("AAPL")
+        with patch("yfinance.Ticker", side_effect=RuntimeError("network")):
+            self.assertEqual(mcap_filter.fetch_mcap("AAPL"), 2_000_000_000.0)
+
+    def test_live_none_mcap_falls_back_to_recent_cache(self):
+        with patch("yfinance.Ticker", return_value=_live_ticker(3_000_000_000.0)):
+            mcap_filter.fetch_mcap("MSFT")
+        with patch("yfinance.Ticker", return_value=_live_ticker(None)):
+            self.assertEqual(mcap_filter.fetch_mcap("MSFT"), 3_000_000_000.0)
+
+    def test_live_failure_no_cache_returns_none(self):
+        with patch("yfinance.Ticker", side_effect=RuntimeError("network")):
+            self.assertIsNone(mcap_filter.fetch_mcap("BRANDNEW"))
+
+    def test_live_failure_stale_cache_returns_none(self):
+        stale_ts = (
+            dt.datetime.now(dt.UTC) - dt.timedelta(days=mcap_filter._MCAP_CACHE_MAX_STALE_DAYS + 1)
+        ).isoformat()
+        self.cache.write_text(json.dumps({"OLD": {"mcap": 5e9, "ts": stale_ts}}))
+        with patch("yfinance.Ticker", side_effect=RuntimeError("network")):
+            self.assertIsNone(mcap_filter.fetch_mcap("OLD"))
+
+    def test_pit_path_does_not_use_live_cache(self):
+        # A historical (asof past) fetch must NOT fall back to the live-mcap
+        # cache — PIT mcap is price(asof) × shares(asof), not today's value.
+        with patch("yfinance.Ticker", return_value=_live_ticker(9_000_000_000.0)):
+            mcap_filter.fetch_mcap("PIT")  # seeds the live cache
+        with patch("yfinance.Ticker", side_effect=RuntimeError("network")):
+            self.assertIsNone(mcap_filter.fetch_mcap("PIT", asof=dt.date(2020, 1, 2)))
 
 
 class TestFetchMcapYfinanceContract(unittest.TestCase):
