@@ -14,7 +14,7 @@ data-fetch boundary the scorer itself uses:
   * ``_build_feature_fetcher`` output  -> features.json  ({ticker: 16-field dict})
   * ``insider_signal.score_insider``   -> insider.json   ({ticker: {score_usd, pctl}})
   * ``mcap_filter.fetch_mcap``         -> mcap.json
-  * OHLCV (``_fetch_ohlcv_via_yfinance``) -> reuse brief_day/ohlcv (4 tickers)
+  * OHLCV (``YFinanceClient.cached_daily_ohlcv``) -> reuse brief_day/ohlcv
   * catalyst window                    -> reuse map_day/{events,news}
 
 The REAL score logic still runs over the frozen inputs: the fcff / valuation
@@ -34,12 +34,12 @@ import datetime as dt
 import functools
 import json
 import shutil
-import tempfile
 from pathlib import Path
 from unittest import mock
 
 import numpy as np
 import pandas as pd
+from alphalens_pipeline.data.alt_data import yfinance_client as yc
 from alphalens_pipeline.thematic.mapping import catalyst_resolver
 from alphalens_pipeline.thematic.screening import insider_signal, scorer
 from alphalens_pipeline.thematic.verification import mcap_filter
@@ -67,12 +67,20 @@ def _json_default(obj):
     return str(obj)
 
 
-def _frozen_ohlcv_reader(ohlcv_dir: Path):
-    def _reader(upper: str, asof: dt.date) -> pd.DataFrame:
-        path = ohlcv_dir / f"{upper}_{asof.isoformat()}.parquet"
-        return pd.read_parquet(path) if path.exists() else pd.DataFrame()
+def _frozen_ohlcv_client(ohlcv_dir: Path) -> yc.YFinanceClient:
+    """A YFinanceClient replaying frozen OHLCV parquets from ``ohlcv_dir``,
+    freezing the recorder at the same boundary the live yfinance fetch used to
+    occupy (now inside the client)."""
 
-    return _reader
+    class _Frozen(yc.YFinanceClient):
+        def cached_daily_ohlcv(self, ticker: str, *, asof: dt.date) -> pd.DataFrame:
+            path = ohlcv_dir / f"{ticker.upper()}_{asof.isoformat()}.parquet"
+            df = pd.read_parquet(path) if path.exists() else pd.DataFrame()
+            if df.empty:
+                return df
+            return df[df.index <= pd.Timestamp(asof)]
+
+    return _Frozen(min_interval_s=0.0, sleep=lambda _s: None)
 
 
 def main() -> None:
@@ -134,20 +142,22 @@ def main() -> None:
         mcap_cap[ticker.upper()] = v
         return v
 
-    with (
-        tempfile.TemporaryDirectory(prefix="ohlcv_record_") as ohlcv_tmp,
-        mock.patch.object(scorer, "_build_feature_fetcher", _teed_build),
-        mock.patch.object(insider_signal, "score_insider", _teed_insider),
-        mock.patch.object(mcap_filter, "fetch_mcap", _teed_mcap),
-        mock.patch.object(scorer, "_fetch_ohlcv_via_yfinance", _frozen_ohlcv_reader(ohlcv_dir)),
-        mock.patch.object(scorer, "_THEMATIC_OHLCV_CACHE", Path(ohlcv_tmp)),
-        mock.patch.object(
-            catalyst_resolver,
-            "find_trigger_event",
-            functools.partial(real_find, events_dir=events_dir, news_dir=news_dir),
-        ),
-    ):
-        scored = scorer.score_candidates(cand, asof=ASOF)
+    yc._reset_default_client_for_tests()
+    yc._DEFAULT_CLIENT = _frozen_ohlcv_client(ohlcv_dir)
+    try:
+        with (
+            mock.patch.object(scorer, "_build_feature_fetcher", _teed_build),
+            mock.patch.object(insider_signal, "score_insider", _teed_insider),
+            mock.patch.object(mcap_filter, "fetch_mcap", _teed_mcap),
+            mock.patch.object(
+                catalyst_resolver,
+                "find_trigger_event",
+                functools.partial(real_find, events_dir=events_dir, news_dir=news_dir),
+            ),
+        ):
+            scored = scorer.score_candidates(cand, asof=ASOF)
+    finally:
+        yc._reset_default_client_for_tests()
 
     (_FIXTURES / "features.json").write_text(
         json.dumps(

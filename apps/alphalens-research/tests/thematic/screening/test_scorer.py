@@ -415,32 +415,43 @@ class TestScoreCandidatesIsResilientToSignalExceptions(unittest.TestCase):
 
 
 class TestOhlcvLoaderDiskCache(unittest.TestCase):
-    def test_reads_from_parquet_cache_when_present(self):
+    """The loader now delegates to the canonical ``YFinanceClient`` (disk +
+    in-process cache + throttle/retry/stale-fallback live there; the client's
+    own ``test_yfinance_client.py`` covers the retry/stale paths). These tests
+    pin the delegation contract end-to-end through ``_build_ohlcv_loader``."""
+
+    def setUp(self):
         import tempfile
         from pathlib import Path
 
+        from alphalens_pipeline.data.alt_data import yfinance_client as yc
+
+        self._yc = yc
+        self._td = tempfile.TemporaryDirectory()
+        self._cache_dir = Path(self._td.name)
+        yc._reset_default_client_for_tests()
+        yc._DEFAULT_CLIENT = yc.YFinanceClient(
+            min_interval_s=0.0, cache_dir=self._cache_dir, sleep=lambda _s: None
+        )
+
+    def tearDown(self):
+        self._yc._reset_default_client_for_tests()
+        self._td.cleanup()
+
+    def test_reads_from_parquet_cache_when_present(self):
         cached_df = pd.DataFrame(
             {"open": [1.0], "high": [2.0], "low": [0.5], "close": [1.5], "volume": [1000.0]},
             index=pd.DatetimeIndex(["2026-04-10"]),
         )
         asof = dt.date(2026, 4, 14)
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-            cache_path = cache_dir / f"QUBT_{asof.isoformat()}.parquet"
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cached_df.to_parquet(cache_path)
-            with (
-                patch.object(scorer, "_THEMATIC_OHLCV_CACHE", cache_dir),
-                patch("yfinance.Ticker", side_effect=AssertionError("must not fetch live")),
-            ):
-                loader = scorer._build_ohlcv_loader()
-                df = loader("QUBT", asof)
+        cached_df.to_parquet(self._cache_dir / f"QUBT_{asof.isoformat()}.parquet")
+        with patch("yfinance.Ticker", side_effect=AssertionError("must not fetch live")):
+            loader = scorer._build_ohlcv_loader()
+            df = loader("QUBT", asof)
         self.assertEqual(len(df), 1)
         self.assertEqual(float(df["close"].iloc[0]), 1.5)
 
     def test_writes_parquet_after_live_fetch(self):
-        import tempfile
-        from pathlib import Path
         from unittest.mock import MagicMock
 
         live_df = pd.DataFrame(
@@ -454,17 +465,12 @@ class TestOhlcvLoaderDiskCache(unittest.TestCase):
             index=pd.DatetimeIndex(["2026-04-10"]),
         )
         asof = dt.date(2026, 4, 14)
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_dir = Path(tmp)
-            fake_ticker = MagicMock()
-            fake_ticker.history.return_value = live_df
-            with (
-                patch.object(scorer, "_THEMATIC_OHLCV_CACHE", cache_dir),
-                patch("yfinance.Ticker", return_value=fake_ticker),
-            ):
-                loader = scorer._build_ohlcv_loader()
-                _ = loader("RGTI", asof)
-            self.assertTrue((cache_dir / f"RGTI_{asof.isoformat()}.parquet").exists())
+        fake_ticker = MagicMock()
+        fake_ticker.history.return_value = live_df
+        with patch("yfinance.Ticker", return_value=fake_ticker):
+            loader = scorer._build_ohlcv_loader()
+            _ = loader("RGTI", asof)
+        self.assertTrue((self._cache_dir / f"RGTI_{asof.isoformat()}.parquet").exists())
 
 
 class TestFeatureFetcherFallback(unittest.TestCase):

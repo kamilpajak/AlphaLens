@@ -30,6 +30,7 @@ from pathlib import Path
 from unittest import mock
 
 import pandas as pd
+from alphalens_pipeline.data.alt_data import yfinance_client as yc
 from alphalens_pipeline.thematic.mapping import catalyst_resolver
 from alphalens_pipeline.thematic.screening import insider_signal, scorer
 from alphalens_pipeline.thematic.verification import mcap_filter
@@ -46,6 +47,18 @@ _REAL_FIND = catalyst_resolver.find_trigger_event
 def _frozen_ohlcv_reader(upper: str, asof: dt.date) -> pd.DataFrame:
     path = _FIXTURES / "ohlcv" / f"{upper}_{asof.isoformat()}.parquet"
     return pd.read_parquet(path) if path.exists() else pd.DataFrame()
+
+
+class _FrozenOhlcvClient(yc.YFinanceClient):
+    """A YFinanceClient whose OHLCV path replays frozen parquets — freezes the
+    score replay at the same boundary the live ``_fetch_ohlcv_via_yfinance``
+    seam used to occupy, now that the OHLCV cache lives in the client."""
+
+    def cached_daily_ohlcv(self, ticker: str, *, asof: dt.date) -> pd.DataFrame:
+        df = _frozen_ohlcv_reader(ticker.upper(), asof)
+        if df.empty:
+            return df
+        return df[df.index <= pd.Timestamp(asof)]
 
 
 def _replay_score() -> pd.DataFrame:
@@ -70,23 +83,30 @@ def _replay_score() -> pd.DataFrame:
         return insider_map.get(ticker.upper(), {"score_usd": None, "sector_percentile": None})
 
     with tempfile.TemporaryDirectory(prefix="ohlcv_replay_") as ohlcv_tmp:
-        with (
-            mock.patch.object(scorer, "_build_feature_fetcher", _frozen_feature_fetcher),
-            mock.patch.object(insider_signal, "score_insider", _frozen_insider),
-            mock.patch.object(
-                mcap_filter, "fetch_mcap", lambda ticker, *, asof=None: mcap_map.get(ticker.upper())
-            ),
-            mock.patch.object(scorer, "_fetch_ohlcv_via_yfinance", _frozen_ohlcv_reader),
-            mock.patch.object(scorer, "_THEMATIC_OHLCV_CACHE", Path(ohlcv_tmp)),
-            mock.patch.object(
-                catalyst_resolver,
-                "find_trigger_event",
-                functools.partial(
-                    _REAL_FIND, events_dir=_FIXTURES / "events", news_dir=_FIXTURES / "news"
+        yc._reset_default_client_for_tests()
+        yc._DEFAULT_CLIENT = _FrozenOhlcvClient(
+            min_interval_s=0.0, cache_dir=Path(ohlcv_tmp), sleep=lambda _s: None
+        )
+        try:
+            with (
+                mock.patch.object(scorer, "_build_feature_fetcher", _frozen_feature_fetcher),
+                mock.patch.object(insider_signal, "score_insider", _frozen_insider),
+                mock.patch.object(
+                    mcap_filter,
+                    "fetch_mcap",
+                    lambda ticker, *, asof=None: mcap_map.get(ticker.upper()),
                 ),
-            ),
-        ):
-            return scorer.score_candidates(cand, asof=_ASOF)
+                mock.patch.object(
+                    catalyst_resolver,
+                    "find_trigger_event",
+                    functools.partial(
+                        _REAL_FIND, events_dir=_FIXTURES / "events", news_dir=_FIXTURES / "news"
+                    ),
+                ),
+            ):
+                return scorer.score_candidates(cand, asof=_ASOF)
+        finally:
+            yc._reset_default_client_for_tests()
 
 
 class TestGoldenScoreReplay(unittest.TestCase):
