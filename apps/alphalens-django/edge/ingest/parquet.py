@@ -155,8 +155,12 @@ def _stored_mtimes() -> dict[dt.date, float]:
 @transaction.atomic
 def _rebuild_one_date(*, date: dt.date, parquet_path: Path, mtime: float, now: dt.datetime) -> int:
     df = pd.read_parquet(parquet_path)
+    # A 0-candidate brief date legitimately produces an EMPTY store parquet (0
+    # rows, no columns) — ingest it as "no outcomes for this date" rather than
+    # tripping the required-columns guard and failing the whole rebuild. A
+    # NON-empty frame missing the columns is still a real schema break → raise.
     missing = REQUIRED_PARQUET_COLUMNS - set(df.columns)
-    if missing:
+    if missing and not df.empty:
         raise ValueError(f"parquet {parquet_path.name} missing required columns: {sorted(missing)}")
 
     fields = _payload_fields()
