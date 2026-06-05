@@ -264,6 +264,7 @@ def ingest_daily(
     polygon_api_key: str | None = None,
     force: bool = False,
     source_row_counts: dict[str, int] | None = None,
+    now: dt.datetime | None = None,
 ) -> pd.DataFrame:
     """Aggregate EDGAR/Polygon/GDELT/RSS for one UTC day, dedupe, cluster, cap, persist, return.
 
@@ -284,7 +285,17 @@ def ingest_daily(
     identical behavior; existing callers stay untouched. NOTE: on a cache hit the
     fetches never run, so the dict is left empty and the CLI emits nothing (the
     live VPS ingest always passes ``--force``, so this is dev/replay only).
+
+    ``now``: optional injectable UTC datetime for the bitemporal transaction-time
+    (``ingested_at``) column. Defaults to ``datetime.now(UTC)`` evaluated EAGERLY
+    at function entry, so every row written by this invocation shares one value.
+    Required for golden-replay determinism (tests pin it; production omits it).
+    NEVER stamp an un-injectable ``datetime.now()`` directly into the lake.
     """
+    # Eager default: resolve the transaction-time once, up front, so all rows
+    # stamped below share the exact same value even though the merge happens
+    # later. Injecting ``now`` keeps the golden parquet bit-deterministic.
+    now = now or dt.datetime.now(dt.UTC)
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / f"{date.isoformat()}.parquet"
     if cache_path.exists() and not force:
@@ -347,6 +358,18 @@ def ingest_daily(
             .reset_index(drop=True)
         )
 
+    # Stamp the transaction-time (lake-entry point) on every row of this run.
+    # Per-source frames don't carry ``ingested_at`` (concat fills it with NaT);
+    # this scalar broadcast overwrites it so all rows share one value, then the
+    # final select includes the now-populated column. On the empty path the
+    # 0-row assignment is a no-op that preserves the UTC datetime dtype.
+    ingested_at = pd.Timestamp(now)
+    ingested_at = (
+        ingested_at.tz_localize("UTC")
+        if ingested_at.tzinfo is None
+        else ingested_at.tz_convert("UTC")
+    )
+    merged["ingested_at"] = ingested_at
     merged = merged[NEWS_COLUMNS]
     merged.to_parquet(cache_path, index=False)
     return merged

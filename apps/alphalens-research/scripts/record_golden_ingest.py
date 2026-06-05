@@ -51,6 +51,9 @@ from tests.golden.vendor_cassette import RecordingVendor
 
 ASOF = dt.date(2026, 5, 29)
 MAX_ITEMS = news_ingest.DEFAULT_MAX_ITEMS
+# Must equal ``_FROZEN_NOW`` in test_golden_ingest_replay.py so the recorded
+# golden matches the replay (P1b bitemporal ``ingested_at`` is pinned, not wall-clock).
+FROZEN_NOW = dt.datetime(2026, 5, 29, 12, 0, 0, tzinfo=dt.UTC)
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "golden" / "fixtures" / "ingest_day"
 
@@ -188,7 +191,9 @@ def main() -> None:
             # EDGAR excluded from this golden (see module docstring).
             mock.patch.object(news_ingest, "_fetch_edgar_press_release", _no_edgar),
         ):
-            df = news_ingest.ingest_daily(date=ASOF, cache_dir=tmp / "unified", max_items=MAX_ITEMS)
+            df = news_ingest.ingest_daily(
+                date=ASOF, cache_dir=tmp / "unified", max_items=MAX_ITEMS, now=FROZEN_NOW
+            )
 
     _trim_polygon_cassettes(set(load_input_universe()))
     (golden_dir / "projection.json").write_text(

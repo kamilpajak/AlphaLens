@@ -8,6 +8,7 @@
     "body",
     "extra",
     "id",
+    "ingested_at",
     "keywords",
     "source",
     "tickers",
