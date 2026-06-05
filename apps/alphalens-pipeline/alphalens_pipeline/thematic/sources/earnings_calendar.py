@@ -10,8 +10,9 @@ explicitly forbids the LLM from speculating on earnings outcomes;
 ``earnings_calendar.fetch_next_earnings`` simply surfaces the date so
 the brief can render "next earnings YYYY-MM-DD" factually.
 
-Defensive: any yfinance exception or unexpected payload shape → return
-None (graceful degradation; brief omits the line).
+Defensive: any yfinance failure (handled by the canonical
+``YFinanceClient`` — throttle + retry, then swallow to None) or unexpected
+payload shape → return None (graceful degradation; brief omits the line).
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ import datetime as dt
 import logging
 
 import pandas as pd
+
+from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
 
 logger = logging.getLogger(__name__)
 
@@ -67,13 +70,10 @@ def fetch_next_earnings(*, ticker: str, asof: dt.date) -> dt.date | None:
     """
     if asof < dt.date.today():
         return None
-    try:
-        import yfinance as yf
-
-        calendar = yf.Ticker(ticker).calendar
-    except Exception as exc:
-        logger.warning("earnings_calendar fetch failed for %s: %s", ticker, exc)
-        return None
+    # The canonical client owns throttle + retry; it swallows permanent /
+    # exhausted failures to None (graceful degradation — the brief omits the
+    # earnings line) just like the legacy raw call did.
+    calendar = get_default_yfinance_client().next_earnings(ticker)
     dates = _extract_earnings_dates(calendar)
     future = sorted(d for d in dates if d > asof)
     return future[0] if future else None

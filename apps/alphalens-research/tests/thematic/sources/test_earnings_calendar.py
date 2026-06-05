@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+from alphalens_pipeline.data.alt_data import yfinance_client as yc
 from alphalens_pipeline.thematic.sources import earnings_calendar
 
 # All happy-path tests run with asof = today so the PIT guard doesn't
@@ -13,7 +14,22 @@ _DELTA_30 = _TODAY + dt.timedelta(days=30)
 _DELTA_120 = _TODAY + dt.timedelta(days=120)
 
 
-class TestFetchNextEarnings(unittest.TestCase):
+class _FastClientMixin:
+    """Reset the YFinanceClient singleton to a throttle-free instance so the
+    earnings tests (which route through ``get_default_yfinance_client``) run
+    instantly and don't leak state between cases."""
+
+    def setUp(self):
+        super().setUp()
+        yc._reset_default_client_for_tests()
+        yc._DEFAULT_CLIENT = yc.YFinanceClient(min_interval_s=0.0, sleep=lambda _s: None)
+
+    def tearDown(self):
+        yc._reset_default_client_for_tests()
+        super().tearDown()
+
+
+class TestFetchNextEarnings(_FastClientMixin, unittest.TestCase):
     def test_returns_next_date_after_asof(self):
         fake_ticker = MagicMock()
         fake_ticker.calendar = {"Earnings Date": [_DELTA_30]}
@@ -71,7 +87,7 @@ class TestFetchNextEarnings(unittest.TestCase):
         self.assertEqual(result, _DELTA_30)
 
 
-class TestFetchNextEarningsPITGuard(unittest.TestCase):
+class TestFetchNextEarningsPITGuard(_FastClientMixin, unittest.TestCase):
     """``yfinance.calendar`` only exposes today's forward schedule. For
     asof < today the function would happily return a date 6 years out
     (verified empirically: AAPL asof=2020-06-15 returned 2026-07-30).

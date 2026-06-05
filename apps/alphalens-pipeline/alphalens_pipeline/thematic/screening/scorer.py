@@ -18,11 +18,11 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 from alphalens_pipeline.thematic.screening import (
     catalyst_signals,
@@ -205,63 +205,20 @@ def _build_feature_fetcher(tickers: list[str] | None = None) -> Callable[[str, d
     return fetcher
 
 
-_THEMATIC_OHLCV_CACHE = Path.home() / ".alphalens" / "thematic_ohlcv"
-
-
-def _read_ohlcv_cache(path: Path) -> pd.DataFrame:
-    try:
-        return pd.read_parquet(path)
-    except Exception as exc:
-        logger.warning("ohlcv cache read failed for %s: %s", path.name, exc)
-        return pd.DataFrame()
-
-
-def _fetch_ohlcv_via_yfinance(upper: str, asof: date) -> pd.DataFrame:
-    import yfinance as yf
-
-    try:
-        start = pd.Timestamp(asof) - pd.Timedelta(days=400)
-        end = pd.Timestamp(asof) + pd.Timedelta(days=1)
-        df = yf.Ticker(upper).history(start=start, end=end, auto_adjust=False)
-    except Exception as exc:
-        logger.warning("yfinance fetch failed for %s: %s", upper, exc)
-        return pd.DataFrame()
-    df.columns = [c.lower() for c in df.columns]
-    if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
-        df.index = df.index.tz_localize(None)
-    return df[["open", "high", "low", "close", "volume"]]
-
-
 def _build_ohlcv_loader() -> Callable[[str, date], pd.DataFrame]:
-    """Build an OHLCV loader with disk + in-process cache.
+    """Build an OHLCV loader backed by the canonical :class:`YFinanceClient`.
 
-    Disk cache lives at ``~/.alphalens/thematic_ohlcv/{TICKER}_{asof}.parquet``.
-    First miss triggers a live ``yfinance.Ticker.history`` fetch (~400d
-    lookback) and persists the result. Cache filename includes asof so
-    cross-asof reruns don't silently reuse a stale parquet whose tail
-    predates the new evaluation date (zen review 2026-05-17 HIGH finding).
+    Disk cache lives at ``~/.alphalens/thematic_ohlcv/{TICKER}_{asof}.parquet``
+    and an in-process memo avoids refetching within one run — both now owned by
+    the client's :meth:`cached_daily_ohlcv`. The client adds throttle + retry
+    and a stale-fallback (newest ``{TICKER}_*.parquet`` on a rate-limited /
+    empty live fetch) so a Yahoo 429 burst no longer empties the brief.
+
+    A fresh client per loader keeps the in-run memo scoped to a single scoring
+    pass (the throttle still shares the implicit Yahoo budget across passes is
+    intentionally not required here — each daily pipeline run is one pass).
     """
-    cache_dir = _THEMATIC_OHLCV_CACHE
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    mem_cache: dict[str, pd.DataFrame] = {}
-
-    def loader(ticker: str, asof: date) -> pd.DataFrame:
-        upper = ticker.upper()
-        if upper not in mem_cache:
-            path = cache_dir / f"{upper}_{asof.isoformat()}.parquet"
-            if path.exists():
-                df = _read_ohlcv_cache(path)
-            else:
-                df = _fetch_ohlcv_via_yfinance(upper, asof)
-                if not df.empty:
-                    df.to_parquet(path)
-            mem_cache[upper] = df
-        df = mem_cache[upper]
-        if df.empty:
-            return df
-        return df[df.index <= pd.Timestamp(asof)]
-
-    return loader
+    return lambda ticker, asof: get_default_yfinance_client().cached_daily_ohlcv(ticker, asof=asof)
 
 
 # ---- Main entry point ---------------------------------------------------
