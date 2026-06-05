@@ -116,6 +116,23 @@ class TestNoRawYfinance(unittest.TestCase):
         for sample in safe:
             self.assertEqual(_find_raw_yf_lines(sample), [], f"false positive: {sample!r}")
 
+    def test_deferred_allowlist_entries_are_still_offenders(self):
+        """Anti-rot: every DEFERRED_RELS file must STILL contain a raw-yfinance
+        hit. Once a file is migrated to the client it has zero hits — at which
+        point it must be REMOVED from the allowlist, not left to silently widen
+        the exemption (a future raw call re-introduced in that same file would
+        otherwise pass unflagged)."""
+        for rel in DEFERRED_RELS:
+            path = WORKSPACE_ROOT / rel
+            self.assertTrue(path.exists(), f"deferred allowlist entry is missing: {rel}")
+            hits = _find_raw_yf_lines(path.read_text(encoding="utf-8"))
+            self.assertNotEqual(
+                hits,
+                [],
+                f"{rel} is on DEFERRED_RELS but no longer has a raw yfinance call "
+                "— it was migrated; remove it from the allowlist.",
+            )
+
     def test_no_raw_yfinance_outside_canonical_client(self):
         offenders: list[str] = []
         for scan_dir in SCAN_DIRS:

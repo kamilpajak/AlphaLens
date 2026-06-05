@@ -337,3 +337,44 @@ class TestShares(unittest.TestCase):
         with patch("yfinance.Ticker", return_value=tk):
             self.assertEqual(_client().shares("x"), 300e6)
         tk.get_shares_full.assert_not_called()
+
+    def test_pit_handles_tz_aware_index_without_crashing(self):
+        # The real get_shares_full index is UTC-aware; the normalisation must be
+        # idempotent (a future tz-naive index must not raise either — covered by
+        # the naive-index fixtures above).
+        series = pd.Series([224.5e6], index=pd.to_datetime(["2026-03-30"]).tz_localize("UTC"))
+        tk = SimpleNamespace(
+            get_shares_full=MagicMock(return_value=series),
+            fast_info=SimpleNamespace(shares=None),
+        )
+        with patch("yfinance.Ticker", return_value=tk):
+            self.assertEqual(_client().shares("qubt", asof=dt.date(2026, 4, 14)), 224.5e6)
+
+    def test_pit_warns_when_match_is_stale(self):
+        # Match 200+ days before asof → still returned, but a staleness warning
+        # makes the forward bias visible to a PIT analysis.
+        series = pd.Series([200e6], index=pd.to_datetime(["2025-08-01"]))
+        tk = SimpleNamespace(
+            get_shares_full=MagicMock(return_value=series),
+            fast_info=SimpleNamespace(shares=None),
+        )
+        with (
+            patch("yfinance.Ticker", return_value=tk),
+            self.assertLogs(yc.logger, level="WARNING") as logs,
+        ):
+            self.assertEqual(_client().shares("x", asof=dt.date(2026, 4, 14)), 200e6)
+        self.assertTrue(any("stale" in m for m in logs.output))
+
+    def test_pit_warns_on_fast_info_fallback_with_asof(self):
+        # No get_shares_full point at all + a PIT asof → snapshot fallback logs a
+        # forward-bias warning (silent on the asof=None live path).
+        tk = SimpleNamespace(
+            get_shares_full=MagicMock(return_value=pd.Series(dtype=float)),
+            fast_info=SimpleNamespace(shares=500e6),
+        )
+        with (
+            patch("yfinance.Ticker", return_value=tk),
+            self.assertLogs(yc.logger, level="WARNING") as logs,
+        ):
+            self.assertEqual(_client().shares("x", asof=dt.date(2026, 4, 14)), 500e6)
+        self.assertTrue(any("forward-biased" in m for m in logs.output))

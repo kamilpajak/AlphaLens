@@ -171,17 +171,23 @@ class YFinanceClient:
 
         return self._call_with_retry(_fetch, what=f"market_cap({upper})", default=None)
 
+    _SHARES_STALE_WARN_DAYS = 90  # warn if the PIT shares match predates asof by this much
+
     def shares(self, ticker: str, *, asof: dt.date | None = None) -> float | None:
         """Shares outstanding; ``None`` on failure.
 
         PIT (``asof`` given): the latest ``get_shares_full`` value on or before
         ``asof`` (the only dated yfinance shares series), falling back to the
         ``fast_info.shares`` snapshot. ``asof=None`` → the live snapshot.
+
+        When ``asof`` is given, a forward-biased result (a ``get_shares_full``
+        match more than ``_SHARES_STALE_WARN_DAYS`` before ``asof``, or the
+        ``fast_info.shares`` snapshot fallback — today's count) logs a warning so
+        the staleness is visible to a PIT analysis rather than silent.
         """
         upper = ticker.upper()
 
         def _fetch() -> float | None:
-            import pandas as pd
             import yfinance as yf
 
             tk = yf.Ticker(upper)
@@ -192,10 +198,30 @@ class YFinanceClient:
                     end=(asof_ts + pd.Timedelta(days=1)).date().isoformat(),
                 )
                 if series is not None and len(series) > 0:
-                    series.index = pd.to_datetime(series.index).tz_localize(None)
+                    # tz_localize(None) on an already-naive index raises; build a
+                    # UTC-aware index first so this is idempotent across yfinance
+                    # versions (today the index is UTC-aware; a future naive index
+                    # would otherwise silently kill the whole PIT shares path).
+                    series.index = pd.to_datetime(series.index, utc=True).tz_localize(None)
                     pit = series[series.index <= asof_ts]
                     if not pit.empty:
+                        match_ts = pit.index[-1]
+                        if (asof_ts - match_ts).days > self._SHARES_STALE_WARN_DAYS:
+                            logger.warning(
+                                "PIT shares for %s@%s are stale: nearest get_shares_full "
+                                "point is %s (%d days before asof)",
+                                upper,
+                                asof.isoformat(),
+                                match_ts.date().isoformat(),
+                                (asof_ts - match_ts).days,
+                            )
                         return float(pit.iloc[-1])
+                logger.warning(
+                    "PIT shares for %s@%s: no get_shares_full point on or before asof; "
+                    "falling back to today's fast_info.shares snapshot (forward-biased)",
+                    upper,
+                    asof.isoformat(),
+                )
             snapshot = getattr(tk.fast_info, "shares", None)
             return float(snapshot) if snapshot else None
 
