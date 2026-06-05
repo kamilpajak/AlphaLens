@@ -80,12 +80,15 @@ def fetch_next_earnings(
     future date as factual.
 
     ``today`` is injectable for testing — production callers omit it and the
-    real clock (``dt.date.today()``) is used.
+    real clock is used. The default is the **UTC** date, matching the pipeline's
+    own ``asof = now(UTC).date() - 1`` so the window is computed in one timezone
+    (a local-clock default could drift a day from a UTC asof; harmless inside a
+    7-day window but inconsistent).
 
     Note: if the daily pipeline ever lags more than 7 days behind real time
     (long backfill / queue stall), widen ``_FRESHNESS_WINDOW``.
     """
-    today = today or dt.date.today()
+    today = today or dt.datetime.now(dt.UTC).date()
     if today - asof > _FRESHNESS_WINDOW:
         return None
     # The canonical client owns throttle + retry; it swallows permanent /
