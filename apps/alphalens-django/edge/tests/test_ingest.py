@@ -142,3 +142,30 @@ def test_ingest_drops_dates_whose_parquet_disappeared(tmp_path: Path):
     assert result.n_deleted == 1
     assert LadderOutcome.objects.count() == 0
     assert DayMetaLadderOutcome.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_ingest_tolerates_empty_parquet_from_zero_candidate_date(tmp_path: Path):
+    # A 0-candidate brief date makes the population monitor write an EMPTY store
+    # parquet — 0 rows, only the benchmark-excess columns (no brief_date/ticker).
+    # The ingest must treat it as "no outcomes for this date", NOT crash the whole
+    # rebuild (which would fail the thematic-build unit).
+    path = tmp_path / "2026-05-27.parquet"
+    pd.DataFrame({"benchmark_window_return": [], "market_excess_return": []}).to_parquet(
+        path, index=False
+    )
+    result = rebuild_from_parquet(tmp_path)
+    assert result.total_rows == 0
+    assert LadderOutcome.objects.count() == 0
+    meta = DayMetaLadderOutcome.objects.get(brief_date=dt.date(2026, 5, 27))
+    assert meta.n_rows == 0
+
+
+@pytest.mark.django_db
+def test_ingest_still_raises_on_nonempty_parquet_missing_required_columns(tmp_path: Path):
+    # A NON-empty parquet that lacks brief_date/ticker is a real schema break and
+    # must still fail loudly (the empty-tolerance must not mask that).
+    path = tmp_path / "2026-05-27.parquet"
+    pd.DataFrame([{"realized_r": 1.0}]).to_parquet(path, index=False)
+    with pytest.raises(ValueError, match="missing required columns"):
+        rebuild_from_parquet(tmp_path)
