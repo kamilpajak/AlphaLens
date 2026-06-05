@@ -139,8 +139,12 @@ def _mcap_cache_put(ticker: str, mcap: float, *, now: dt.datetime | None = None)
         cache[ticker] = {"mcap": float(mcap), "ts": now.isoformat()}
         _MCAP_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = _MCAP_CACHE_PATH.parent / f"{_MCAP_CACHE_PATH.name}.tmp"
-        tmp.write_text(json.dumps(cache))
-        os.replace(tmp, _MCAP_CACHE_PATH)
+        # Path is the fixed, operator-owned `~/.alphalens` data root (the same
+        # root every other cache uses) — `ticker` is a dict key, never part of
+        # the path. The Sonar path-injection taint on `Path.home()` is a false
+        # positive in this single-operator, non-web context.
+        tmp.write_text(json.dumps(cache))  # NOSONAR
+        os.replace(tmp, _MCAP_CACHE_PATH)  # NOSONAR
     except Exception:
         logger.exception("mcap cache write failed for %s; the fetch succeeded", ticker)
 
