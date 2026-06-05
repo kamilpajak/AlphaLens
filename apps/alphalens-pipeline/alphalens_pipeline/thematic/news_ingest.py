@@ -276,11 +276,12 @@ def _lake_run_filename(now: dt.datetime) -> str:
     return f"run={stamp}.parquet"
 
 
-def _write_lake_run(merged: pd.DataFrame, lake_dir: Path, date: dt.date, now: dt.datetime) -> None:
+def _write_lake_run(frame: pd.DataFrame, lake_dir: Path, date: dt.date, now: dt.datetime) -> None:
     """Append one immutable run file to the lake log (best-effort, never clobber).
 
-    Writes the SAME built ``merged`` frame (post-dedup/cap, WITH ``ingested_at``)
-    to ``<lake_dir>/session_date=<D>/run=<ingested_at_compact>.parquet``. Empty
+    Writes ``frame`` — the RAW per-source union (pre-dedup/cap, WITH
+    ``ingested_at``), NOT the deduped+capped current-view (see the caller) — to
+    ``<lake_dir>/session_date=<D>/run=<ingested_at_compact>.parquet``. Empty
     days still write a 0-row file (the "we ran and saw nothing" audit signal,
     mirroring the unconditional-zero ethos of the #384 dead-man-switch). If the
     exact path already exists (a same-millisecond rerun), a short numeric suffix
@@ -305,7 +306,7 @@ def _write_lake_run(merged: pd.DataFrame, lake_dir: Path, date: dt.date, now: dt
             run_path = session_dir / f"{stem}-{suffix}.parquet"
             suffix += 1
     tmp_path = run_path.parent / f"{run_path.name}.tmp"
-    merged.to_parquet(tmp_path, index=False)
+    frame.to_parquet(tmp_path, index=False)
     tmp_path.replace(run_path)
 
 
@@ -458,8 +459,23 @@ def ingest_daily(
     # logged and swallowed so the brief pipeline never fails because the audit
     # log write failed (mirrors the ``_safe_call`` swallow ethos). Only the
     # current-view write above is allowed to break the build.
+    #
+    # The lake stores the RAW per-source union (P1c-raw correction), NOT the
+    # deduped+capped current-view ``merged`` above. ``merged`` is filtered to the
+    # strict single UTC day and capped to ``max_items`` for the LLM budget — a
+    # faithful record of what THIS brief served, but a lossy substrate. The P2
+    # per-exchange session-window VIEW needs the rows ``merged`` dropped: news in
+    # the prior UTC day (a session window straddles UTC midnight) and beyond the
+    # 200-cap. So the lake stores everything fetched this run BEFORE dedup /
+    # lexical clustering / strict-day filter / cap (Layer-1 principle: ingest
+    # makes no session/cap decision; the session VIEW does, at read time). The
+    # raw union is built INSIDE the try so any issue with it cannot break the
+    # build. Same ``ingested_at`` (transaction-time) as the current-view run.
     try:
-        _write_lake_run(merged, lake_dir, date, now)
+        raw_union = pd.concat(frames, ignore_index=True) if frames else empty_news_frame()
+        raw_union["ingested_at"] = ingested_at
+        raw_union = raw_union[NEWS_COLUMNS]
+        _write_lake_run(raw_union, lake_dir, date, now)
     except Exception:
         logger.warning(
             "thematic ingest lake-log write failed for %s (current-view parquet OK)",

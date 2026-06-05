@@ -17,8 +17,9 @@ NEWS_COLUMNS = [
     # TRANSACTION-time (P1b bitemporal lake): when ``ingest_daily`` recorded this
     # item into the canonical lake. Appended at the END so the existing column
     # offsets are unchanged. Stamped at the lake-entry point (ingest_daily), NOT
-    # per source; every row of one ingest run shares the run's value. On the
-    # OVERWRITE model this reflects the last successful build of the day's file.
+    # per source; every row of one ingest run shares the run's value. The
+    # current-view ``{D}.parquet`` carries the last build's value (overwrite); the
+    # P1c-raw append-only lake preserves every run's RAW union under its own value.
     "ingested_at",  # pd.Timestamp, UTC, tz-aware
 ]
 
