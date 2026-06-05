@@ -46,6 +46,8 @@ def _valid_news_frame() -> pd.DataFrame:
             "url": ["https://ex1.test", "https://ex2.test"],
             "keywords": [["acq"], ["guidance"]],
             "extra": ["{}", "{}"],
+            # P1b bitemporal transaction-time stamped by ingest_daily at lake entry.
+            "ingested_at": pd.to_datetime(["2026-05-31 12:00", "2026-05-31 12:00"], utc=True),
         }
     )
     return df[NEWS_COLUMNS]

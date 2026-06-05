@@ -37,6 +37,10 @@ from tests.golden.url_cassette import FeedCassette, UrlJsonCassette
 from tests.golden.vendor_cassette import VendorCassette
 
 _ASOF = dt.date(2026, 5, 29)
+# Fixed transaction-time (P1b bitemporal): injected so the ``ingested_at`` lake
+# column is bit-deterministic under cassette replay (noon UTC on the ingest day).
+# The recorder pins the SAME value so the captured golden and the replay match.
+_FROZEN_NOW = dt.datetime(2026, 5, 29, 12, 0, 0, tzinfo=dt.UTC)
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ingest_day"
 _GOLDEN = _FIXTURES / "golden" / "projection.json"
 
@@ -95,7 +99,10 @@ def _replay_ingest(unified_cache: Path) -> pd.DataFrame:
             mock.patch.object(news_ingest, "_fetch_edgar_press_release", _no_edgar),
         ):
             return news_ingest.ingest_daily(
-                date=_ASOF, cache_dir=unified_cache, max_items=news_ingest.DEFAULT_MAX_ITEMS
+                date=_ASOF,
+                cache_dir=unified_cache,
+                max_items=news_ingest.DEFAULT_MAX_ITEMS,
+                now=_FROZEN_NOW,
             )
 
 
