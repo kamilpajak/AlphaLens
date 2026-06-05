@@ -69,6 +69,7 @@ from alphalens_pipeline.paper.calendar import (
 )
 from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS, TIME_STOP_DAYS
 from alphalens_pipeline.paper.sizing import TradeSetupNotPlannableError, validate_trade_setup
+from alphalens_pipeline.thematic.theme_text import slugify_theme
 
 logger = logging.getLogger(__name__)
 
@@ -625,17 +626,21 @@ def _carry_prior(prior: dict[str, Any]) -> dict[str, Any]:
 
 
 def _stamp_theme(row: dict[str, Any], theme: str | None) -> dict[str, Any]:
-    """Stamp the brief's theme onto a store row (provenance captured at the brief).
+    """Stamp the canonical theme SLUG onto a store row (provenance from the brief).
 
     The theme travels WITH the outcome record rather than being re-joined downstream
     from the (mutable, 6x/day-rebuilt) briefs cache — that join returns NULL whenever
-    a candidate has churned out of the latest brief for its date. We only FILL when
-    missing: a row frozen on a prior run keeps its original theme, while an older row
-    (predating this column) recovers it from the current brief. ``None`` for an empty
-    theme so the read side renders an em dash, never an empty string.
+    a candidate has churned out of the latest brief for its date.
+
+    The stored value is always a slug (``slugify_theme``): an EXISTING theme is kept
+    (provenance — a frozen row keeps *which* concept it had) but re-slugged to the
+    canonical format, so a row stamped before slug-canonicalisation (a spaced theme)
+    is normalised in place on its next stamp; an empty row takes the brief's theme.
+    ``None`` for an empty result so the read side renders an em dash, not "".
     """
-    if not row.get("theme"):
-        row["theme"] = theme
+    existing = row.get("theme")
+    canonical = slugify_theme(existing) if existing else slugify_theme(theme or "")
+    row["theme"] = canonical or None
     return row
 
 

@@ -150,6 +150,20 @@ class TestStampThemeUnit(unittest.TestCase):
         self.assertEqual(_stamp_theme({"theme": None}, "ai")["theme"], "ai")
         self.assertEqual(_stamp_theme({"theme": ""}, "ai")["theme"], "ai")
 
+    def test_slugifies_incoming_theme(self):
+        # A spaced brief theme is canonicalised to a slug on the way in.
+        self.assertEqual(_stamp_theme({}, "AI ethics")["theme"], "ai_ethics")
+        self.assertEqual(_stamp_theme({}, "high gas prices")["theme"], "high_gas_prices")
+
+    def test_canonicalises_preserved_spaced_theme(self):
+        # A row frozen with a SPACED theme (stamped before slug canonicalisation)
+        # is re-slugged to the SAME concept on the next stamp — provenance (which
+        # concept) is kept, only the format changes.
+        self.assertEqual(_stamp_theme({"theme": "gas prices"}, "x")["theme"], "gas_prices")
+        self.assertEqual(
+            _stamp_theme({"theme": "defense_procurement"}, "x")["theme"], "defense_procurement"
+        )
+
 
 class TestThemeProvenance(_MonitorTestBase):
     def test_replayed_row_carries_brief_theme(self):
@@ -161,7 +175,7 @@ class TestThemeProvenance(_MonitorTestBase):
         _write_brief(
             self.briefs_dir,
             brief_date,
-            [{"ticker": "NVDA", "setup": _OK_SETUP, "theme": "ai-infra"}],
+            [{"ticker": "NVDA", "setup": _OK_SETUP, "theme": "AI infra"}],
         )
 
         def _fetch(ticker, start, end):
@@ -176,7 +190,8 @@ class TestThemeProvenance(_MonitorTestBase):
             now=now,
         )
         row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
-        self.assertEqual(row["theme"], "ai-infra")
+        # Brief theme "AI infra" is stamped as its canonical slug.
+        self.assertEqual(row["theme"], "ai_infra")
 
     def test_frozen_terminal_keeps_original_theme_when_brief_theme_drifts(self):
         # GIVEN a terminal row stamped with theme T1. WHEN a later run sees the SAME
