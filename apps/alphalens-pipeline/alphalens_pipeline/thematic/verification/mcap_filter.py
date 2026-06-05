@@ -156,7 +156,10 @@ def _mcap_cache_get(ticker: str, *, now: dt.datetime | None = None) -> float | N
         if now - ts > dt.timedelta(days=_MCAP_CACHE_MAX_STALE_DAYS):
             return None
         return float(entry["mcap"])
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError) as exc:
+        # The ticker IS present (entry was truthy) but its record is malformed
+        # — distinguish corruption / a manual-edit typo from a plain cache miss.
+        logger.warning("mcap cache entry for %s is malformed (%s); ignoring", ticker, exc)
         return None
 
 
