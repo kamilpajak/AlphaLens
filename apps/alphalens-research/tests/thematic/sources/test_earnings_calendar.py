@@ -87,20 +87,23 @@ class TestFetchNextEarnings(_FastClientMixin, unittest.TestCase):
         self.assertEqual(result, _DELTA_30)
 
 
-class TestFetchNextEarningsPITGuard(_FastClientMixin, unittest.TestCase):
-    """``yfinance.calendar`` only exposes today's forward schedule. For
-    asof < today the function would happily return a date 6 years out
-    (verified empirically: AAPL asof=2020-06-15 returned 2026-07-30).
-    Guard: return None for past asof so historical replay never reads
-    a leaked forward date as factual."""
+class TestFreshnessWindowGuard(_FastClientMixin, unittest.TestCase):
+    """Freshness-window guard. ``yfinance.calendar`` only exposes today's
+    forward schedule, so a genuine historical replay (asof months/years ago)
+    would read a leaked forward date as factual (verified empirically: AAPL
+    asof=2020-06-15 returned 2026-07-30). But the daily T-1 brief is the live
+    operator workflow, not a replay, and a forward earnings date carries no
+    meaningful leak. Guard: surface earnings when asof is within the freshness
+    window of today; suppress only when asof is genuinely far in the past."""
 
-    def test_returns_none_for_past_asof_without_calling_yfinance(self):
-        # Even if yfinance would return data, the guard fires first.
+    def test_returns_none_for_asof_beyond_freshness_window(self):
+        # asof 30 days old (genuine historical replay) — guard fires before
+        # yfinance is touched, even though it would return data.
         fake_ticker = MagicMock()
         fake_ticker.calendar = {"Earnings Date": [_DELTA_30]}
         past = _TODAY - dt.timedelta(days=30)
         with patch("yfinance.Ticker", return_value=fake_ticker) as patched:
-            result = earnings_calendar.fetch_next_earnings(ticker="QUBT", asof=past)
+            result = earnings_calendar.fetch_next_earnings(ticker="QUBT", asof=past, today=_TODAY)
         self.assertIsNone(result)
         patched.assert_not_called()
 
@@ -108,7 +111,81 @@ class TestFetchNextEarningsPITGuard(_FastClientMixin, unittest.TestCase):
         fake_ticker = MagicMock()
         fake_ticker.calendar = {"Earnings Date": [_DELTA_30]}
         with patch("yfinance.Ticker", return_value=fake_ticker) as patched:
-            earnings_calendar.fetch_next_earnings(ticker="QUBT", asof=_TODAY)
+            earnings_calendar.fetch_next_earnings(ticker="QUBT", asof=_TODAY, today=_TODAY)
+        patched.assert_called_once_with("QUBT")
+
+
+class TestFreshnessWindowBoundary(_FastClientMixin, unittest.TestCase):
+    """Freshness window = 7 days: asof in [today-7, today] (exclusive of the
+    -7 edge) calls yfinance; asof more than 7 days old returns None (genuine
+    historical replay). ``today`` is injected so the boundary is pinnable."""
+
+    def test_asof_exactly_7_days_old_returns_earnings(self):
+        # Boundary: today - asof == 7 days. ``> 7`` is False here, so this is
+        # the last day INSIDE the window — earnings surface, yfinance is hit.
+        past_7 = _TODAY - dt.timedelta(days=7)
+        fake_ticker = MagicMock()
+        fake_ticker.calendar = {"Earnings Date": [_DELTA_30]}
+        with patch("yfinance.Ticker", return_value=fake_ticker) as patched:
+            result = earnings_calendar.fetch_next_earnings(ticker="QUBT", asof=past_7, today=_TODAY)
+        self.assertEqual(result, _DELTA_30)
+        patched.assert_called_once_with("QUBT")
+
+    def test_asof_8_days_old_returns_none(self):
+        # First day OUTSIDE the window — guard fires, yfinance untouched.
+        past_8 = _TODAY - dt.timedelta(days=8)
+        fake_ticker = MagicMock()
+        fake_ticker.calendar = {"Earnings Date": [_DELTA_30]}
+        with patch("yfinance.Ticker", return_value=fake_ticker) as patched:
+            result = earnings_calendar.fetch_next_earnings(ticker="QUBT", asof=past_8, today=_TODAY)
+        self.assertIsNone(result)
+        patched.assert_not_called()
+
+    def test_asof_6_days_old_within_window_returns_earnings(self):
+        past_6 = _TODAY - dt.timedelta(days=6)
+        fake_ticker = MagicMock()
+        fake_ticker.calendar = {"Earnings Date": [_DELTA_30]}
+        with patch("yfinance.Ticker", return_value=fake_ticker) as patched:
+            result = earnings_calendar.fetch_next_earnings(ticker="QUBT", asof=past_6, today=_TODAY)
+        self.assertEqual(result, _DELTA_30)
+        patched.assert_called_once_with("QUBT")
+
+    def test_asof_yesterday_returns_earnings_steady_state(self):
+        # The daily pipeline runs at asof = today_UTC - 1; this is the case
+        # the fix exists to unblock.
+        yesterday = _TODAY - dt.timedelta(days=1)
+        fake_ticker = MagicMock()
+        fake_ticker.calendar = {"Earnings Date": [_DELTA_30]}
+        with patch("yfinance.Ticker", return_value=fake_ticker) as patched:
+            result = earnings_calendar.fetch_next_earnings(
+                ticker="QUBT", asof=yesterday, today=_TODAY
+            )
+        self.assertEqual(result, _DELTA_30)
+        patched.assert_called_once_with("QUBT")
+
+    def test_injectable_today_parameter_pins_window(self):
+        # Injected ``today`` controls the window, not the real clock: asof is
+        # 4 days before injected_today → inside the window.
+        asof = dt.date(2026, 6, 1)
+        injected_today = dt.date(2026, 6, 5)
+        fake_ticker = MagicMock()
+        fake_ticker.calendar = {"Earnings Date": [dt.date(2026, 8, 5)]}
+        with patch("yfinance.Ticker", return_value=fake_ticker) as patched:
+            result = earnings_calendar.fetch_next_earnings(
+                ticker="QUBT", asof=asof, today=injected_today
+            )
+        self.assertEqual(result, dt.date(2026, 8, 5))
+        patched.assert_called_once_with("QUBT")
+
+    def test_today_defaults_to_real_clock_when_omitted(self):
+        # When ``today`` is omitted, the function falls back to the real clock;
+        # a T-1 asof must still surface earnings (the production call path).
+        yesterday = _TODAY - dt.timedelta(days=1)
+        fake_ticker = MagicMock()
+        fake_ticker.calendar = {"Earnings Date": [_DELTA_30]}
+        with patch("yfinance.Ticker", return_value=fake_ticker) as patched:
+            result = earnings_calendar.fetch_next_earnings(ticker="QUBT", asof=yesterday)
+        self.assertEqual(result, _DELTA_30)
         patched.assert_called_once_with("QUBT")
 
 
