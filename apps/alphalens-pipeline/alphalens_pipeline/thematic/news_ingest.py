@@ -208,7 +208,9 @@ def _allocate_per_source(
     quota) plus the source's overflow into a global remainder pool. Sources NOT
     in ``weights`` get no guaranteed quota — all their rows go to the remainder.
     Backfill the remainder by ``timestamp`` recency until ``max_items`` is reached
-    or the supply is exhausted. The caller is responsible for the final sort.
+    or the supply is exhausted. The caller is responsible for the final sort; the
+    only internal sort is the cap-guard for the ``max_items < source count`` edge
+    (where the per-source floor would otherwise over-allocate).
 
     Ranking within a source uses ``_cluster_rank_ts`` (max member timestamp) when
     present so a breaking-news cluster whose representative is early still competes
