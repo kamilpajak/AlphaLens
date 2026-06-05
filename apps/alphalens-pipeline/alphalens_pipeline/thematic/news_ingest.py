@@ -42,6 +42,11 @@ from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS, empty_news_
 logger = logging.getLogger(__name__)
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_news"
+# P1c immutable per-run lake log — a SIBLING of the current-view dir (NEVER inside
+# it, so the current-view ``*.parquet`` glob in catalyst_resolver stays clean).
+# Each ACTUAL build appends one self-describing run file under a hive-style
+# ``session_date=<D>/`` partition; the current-view ``{D}.parquet`` is untouched.
+DEFAULT_LAKE_DIR = DEFAULT_CACHE_DIR.parent / "thematic_news_lake"
 DEFAULT_MAX_ITEMS = 200
 
 # Lower number = higher priority. Used both at URL-canonical dedup (richer
@@ -256,10 +261,59 @@ def _allocate_per_source(
     return result.reset_index(drop=True)
 
 
+def _lake_run_filename(now: dt.datetime) -> str:
+    """Filesystem-safe compact UTC ``run=...parquet`` name for one ingest run.
+
+    Derived from the run's single ``ingested_at`` value so the file is
+    self-describing and two runs of the same day never collide. Format is
+    ``run=YYYYMMDDTHHMMSSmmmZ.parquet`` (millisecond precision, UTC), e.g.
+    ``run=20260529T120000000Z.parquet``. A naive datetime is read as UTC.
+    """
+    aware = now if now.tzinfo is not None else now.replace(tzinfo=dt.UTC)
+    utc = aware.astimezone(dt.UTC)
+    millis = utc.microsecond // 1000
+    stamp = f"{utc.strftime('%Y%m%dT%H%M%S')}{millis:03d}Z"
+    return f"run={stamp}.parquet"
+
+
+def _write_lake_run(merged: pd.DataFrame, lake_dir: Path, date: dt.date, now: dt.datetime) -> None:
+    """Append one immutable run file to the lake log (best-effort, never clobber).
+
+    Writes the SAME built ``merged`` frame (post-dedup/cap, WITH ``ingested_at``)
+    to ``<lake_dir>/session_date=<D>/run=<ingested_at_compact>.parquet``. Empty
+    days still write a 0-row file (the "we ran and saw nothing" audit signal,
+    mirroring the unconditional-zero ethos of the #384 dead-man-switch). If the
+    exact path already exists (a same-millisecond rerun), a short numeric suffix
+    is appended so an existing run file is NEVER overwritten — append-only is
+    inviolable.
+
+    The write is atomic: the parquet lands in a sibling ``.tmp`` file first and
+    is then ``Path.replace``-d (same-filesystem ``rename(2)``) into place, so a
+    crash mid-write never leaves a partial/corrupt parquet for P2 to read. The
+    ``exists()``-loop + replace is safe for the SERIAL production cadence (6
+    systemd builds/day with jitter, never concurrent); a genuinely concurrent
+    writer would instead need an ``O_EXCL`` atomic-create reservation.
+    """
+    session_dir = lake_dir / f"session_date={date.isoformat()}"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    run_name = _lake_run_filename(now)
+    run_path = session_dir / run_name
+    if run_path.exists():
+        stem = run_path.stem  # e.g. "run=20260529T120000000Z"
+        suffix = 1
+        while run_path.exists():
+            run_path = session_dir / f"{stem}-{suffix}.parquet"
+            suffix += 1
+    tmp_path = run_path.parent / f"{run_path.name}.tmp"
+    merged.to_parquet(tmp_path, index=False)
+    tmp_path.replace(run_path)
+
+
 def ingest_daily(
     *,
     date: dt.date,
     cache_dir: Path = DEFAULT_CACHE_DIR,
+    lake_dir: Path | None = None,
     max_items: int = DEFAULT_MAX_ITEMS,
     polygon_api_key: str | None = None,
     force: bool = False,
@@ -291,14 +345,33 @@ def ingest_daily(
     at function entry, so every row written by this invocation shares one value.
     Required for golden-replay determinism (tests pin it; production omits it).
     NEVER stamp an un-injectable ``datetime.now()`` directly into the lake.
+
+    ``lake_dir``: root of the additive immutable lake log (P1c). On every ACTUAL
+    build (not a cache hit) the same merged frame is ALSO written to
+    ``<lake_dir>/session_date=<D>/run=<ingested_at_compact>.parquet`` so the full
+    per-run history is preserved append-only while the current-view ``{D}.parquet``
+    keeps its overwrite semantics. The lake write is best-effort: a failure there
+    is logged and swallowed and does NOT fail the build (only the current-view
+    write is load-bearing). ``None`` (default) resolves to a SIBLING of
+    ``cache_dir`` (``cache_dir.parent / "thematic_news_lake"``), NEVER inside
+    ``thematic_news/`` itself — the current-view glob must stay clean. Deriving it
+    from ``cache_dir`` keeps the production path at :data:`DEFAULT_LAKE_DIR`
+    (``~/.alphalens/thematic_news_lake/``) while a test that isolates ``cache_dir``
+    to a tmp dir automatically isolates the lake too.
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / f"{date.isoformat()}.parquet"
     if cache_path.exists() and not force:
         # Cache hit: return the original parquet untouched, preserving its
-        # original ingested_at (no re-stamp). Resolve ``now`` only past here so
-        # a cache hit doesn't pay an unused clock read.
+        # original ingested_at (no re-stamp). Resolve ``now`` AND ``lake_dir``
+        # only past here so a cache hit doesn't pay an unused clock read and
+        # writes NO new lake run file (byte-identical to pre-P1c).
         return pd.read_parquet(cache_path)
+
+    # Resolve the lake root on the build path only (same gate as ``now``). The
+    # default mirrors a SIBLING of ``cache_dir`` so it never lands inside
+    # ``thematic_news/``.
+    lake_dir = lake_dir if lake_dir is not None else cache_dir.parent / "thematic_news_lake"
 
     # Eager default: resolve the transaction-time once, up front (only on an
     # actual build), so all rows stamped below share the exact same value even
@@ -376,5 +449,22 @@ def ingest_daily(
     )
     merged["ingested_at"] = ingested_at
     merged = merged[NEWS_COLUMNS]
+    # Current-view write stays load-bearing — it is the file the extract stage
+    # reads next, byte-identical to pre-P1c for the same inputs.
     merged.to_parquet(cache_path, index=False)
+
+    # P1c additive lake log: append an immutable per-run copy AFTER the
+    # load-bearing current-view write. Best-effort — a lake-write failure is
+    # logged and swallowed so the brief pipeline never fails because the audit
+    # log write failed (mirrors the ``_safe_call`` swallow ethos). Only the
+    # current-view write above is allowed to break the build.
+    try:
+        _write_lake_run(merged, lake_dir, date, now)
+    except Exception:
+        logger.warning(
+            "thematic ingest lake-log write failed for %s (current-view parquet OK)",
+            date.isoformat(),
+            exc_info=True,
+        )
+
     return merged
