@@ -164,6 +164,20 @@ class TestLakeWriteOnBuild(unittest.TestCase):
                 lake_df.reset_index(drop=True), view_df.reset_index(drop=True)
             )
 
+    def test_successful_build_leaves_no_temp_file(self):
+        # The lake write is atomic (temp file + replace) so a crash mid-write
+        # never leaves a partial/corrupt parquet that P2 would later read. After
+        # a successful build the session partition holds exactly the run file and
+        # NO leftover temp artifact.
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td) / "thematic_news"
+            lake = Path(td) / "thematic_news_lake"
+            _run_ingest(cache, lake, now=_FROZEN_NOW)
+            session = _session_dir(lake, _ASOF)
+            entries = sorted(p.name for p in session.iterdir())
+            self.assertEqual(entries, ["run=20260529T120000000Z.parquet"])
+            self.assertFalse(any(p.name.endswith(".tmp") for p in session.iterdir()))
+
 
 class TestLakeEmptyDay(unittest.TestCase):
     def test_empty_day_writes_zero_row_run_file_with_schema(self):

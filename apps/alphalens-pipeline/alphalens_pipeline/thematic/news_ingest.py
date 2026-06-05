@@ -286,6 +286,13 @@ def _write_lake_run(merged: pd.DataFrame, lake_dir: Path, date: dt.date, now: dt
     exact path already exists (a same-millisecond rerun), a short numeric suffix
     is appended so an existing run file is NEVER overwritten — append-only is
     inviolable.
+
+    The write is atomic: the parquet lands in a sibling ``.tmp`` file first and
+    is then ``Path.replace``-d (same-filesystem ``rename(2)``) into place, so a
+    crash mid-write never leaves a partial/corrupt parquet for P2 to read. The
+    ``exists()``-loop + replace is safe for the SERIAL production cadence (6
+    systemd builds/day with jitter, never concurrent); a genuinely concurrent
+    writer would instead need an ``O_EXCL`` atomic-create reservation.
     """
     session_dir = lake_dir / f"session_date={date.isoformat()}"
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -297,7 +304,9 @@ def _write_lake_run(merged: pd.DataFrame, lake_dir: Path, date: dt.date, now: dt
         while run_path.exists():
             run_path = session_dir / f"{stem}-{suffix}.parquet"
             suffix += 1
-    merged.to_parquet(run_path, index=False)
+    tmp_path = run_path.parent / f"{run_path.name}.tmp"
+    merged.to_parquet(tmp_path, index=False)
+    tmp_path.replace(run_path)
 
 
 def ingest_daily(
