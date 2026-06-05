@@ -16,6 +16,34 @@ def _live_ticker(mcap: float | None) -> SimpleNamespace:
     return SimpleNamespace(fast_info=fi)
 
 
+def _full_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    """Backfill open/high/low/volume from Close so a close-only PIT fixture
+    survives the client's ``_normalize_ohlcv`` (which selects all 5 columns)."""
+    out = df.copy()
+    if "Close" in out.columns:
+        for col in ("Open", "High", "Low"):
+            if col not in out.columns:
+                out[col] = out["Close"]
+        if "Volume" not in out.columns:
+            out["Volume"] = 0.0
+    return out
+
+
+def setUpModule():
+    # fetch_mcap now composes the canonical YFinanceClient; install a default
+    # with NO throttle/backoff so the mocked tests don't sleep (1.5s spacing in
+    # production is irrelevant to value assertions).
+    from alphalens_pipeline.data.alt_data import yfinance_client as yfc
+
+    yfc._DEFAULT_CLIENT = yfc.YFinanceClient(min_interval_s=0.0, sleep=lambda *_: None)
+
+
+def tearDownModule():
+    from alphalens_pipeline.data.alt_data import yfinance_client as yfc
+
+    yfc._reset_default_client_for_tests()
+
+
 class TestFilterByMcap(unittest.TestCase):
     def test_keeps_tickers_within_bracket(self):
         with patch.object(
@@ -171,7 +199,7 @@ class TestFetchMcapPITPath(unittest.TestCase):
         # Stand-in for ``yfinance.Ticker(t)`` that the PIT path drives.
         fake_fast_info = SimpleNamespace(market_cap=fast_mcap, shares=None)
         return SimpleNamespace(
-            history=MagicMock(return_value=hist_df),
+            history=MagicMock(return_value=_full_ohlcv(hist_df)),
             get_shares_full=MagicMock(return_value=shares_series),
             fast_info=fake_fast_info,
         )
@@ -237,7 +265,7 @@ class TestFetchMcapPITPath(unittest.TestCase):
         empty_shares = pd.Series(dtype=float)
         fake_fast_info = SimpleNamespace(market_cap=None, shares=500_000_000.0)
         fake = SimpleNamespace(
-            history=MagicMock(return_value=hist),
+            history=MagicMock(return_value=_full_ohlcv(hist)),
             get_shares_full=MagicMock(return_value=empty_shares),
             fast_info=fake_fast_info,
         )
