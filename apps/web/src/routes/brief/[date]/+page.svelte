@@ -184,10 +184,6 @@
 			<CandidateCard
 				candidate={c}
 				index={i}
-				briefDate={data.brief.date}
-				taxonomy={data.taxonomy}
-				decisionsLoaded={data.decisionsByKey !== null}
-				existingDecision={data.decisionsByKey?.[`${c.ticker}::${c.theme}`] ?? null}
 			/>
 		{/each}
 	</div>

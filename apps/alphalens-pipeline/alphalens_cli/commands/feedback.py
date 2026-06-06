@@ -1,15 +1,13 @@
-"""CLI: ``alphalens feedback`` subcommands for the feedback ledger.
+"""CLI: ``alphalens feedback`` subcommands for the broker-free feedback replay.
 
-v1 ships ``report`` only — operator-facing summary for monitoring the
-ledger between sessions. v2 will surface this in the SPA weekly review
-route; until then this CLI keeps the operator informed about action
-distribution, dismiss-reason histogram, and the "other %" guardrail
-called out in the locked design memo (>15% other = taxonomy gap).
+Ships ``backfill-shadow-returns`` only — the nightly VPS timer entrypoint that
+drives the broker-free ladder + population-monitor replay engines (market-
+behavior feedback). The Track-A user-action report histogram was removed with
+the click ledger.
 
-Per zen pre-merge finding #7. Lazy imports inside the command body keep
-the ``alphalens`` CLI startup time low (Layer-1 ``edgar-detect`` cron
-ticks must not pay for pandas / sqlite import cost we don't need on
-that path).
+Lazy imports inside the command body keep the ``alphalens`` CLI startup time low
+(Layer-1 ``edgar-detect`` cron ticks must not pay for pandas / sqlite import
+cost we don't need on that path).
 """
 
 from __future__ import annotations
@@ -23,15 +21,9 @@ logger = logging.getLogger(__name__)
 
 feedback_app = typer.Typer(
     name="feedback",
-    help="Feedback ledger operator tools (see PR #292 design memo).",
+    help="Broker-free feedback replay operator tools.",
     no_args_is_help=True,
 )
-
-# Threshold from the design memo §2.1: above this fraction of dismiss
-# events tagged `other`, taxonomy needs a re-think (likely a missing
-# enum candidate). Kept as a module constant so the test suite + memo
-# stay in sync via reference.
-_OTHER_WARN_THRESHOLD = 0.15
 
 # Duplicates ``bar_window.DEFAULT_LOOKBACK_DAYS`` because typer.Option
 # evaluates its default at import time and this CLI lazy-imports the feedback
@@ -43,59 +35,6 @@ _DEFAULT_LOOKBACK_DAYS = 14
 # Per-user runtime data root (``~/.alphalens``). Holds the feedback ledger and
 # the daily thematic brief parquets the broker-free replay reads.
 _ALPHALENS_HOME = Path.home() / ".alphalens"
-
-
-@feedback_app.command(name="report")
-def report_command(
-    ledger: Path = typer.Option(
-        _ALPHALENS_HOME / "feedback.db",
-        "--ledger",
-        help="Override the default feedback ledger location.",
-    ),
-) -> None:
-    """Print action distribution + dismiss histogram + 'other %' guardrail.
-
-    Read-only — never writes to the ledger. Safe to invoke from cron or
-    from a session inside the prod Docker stack via the same SQLite
-    file mounted by the Django app.
-    """
-    from collections import Counter
-
-    from alphalens_feedback.store import FeedbackStore
-
-    if not ledger.exists():
-        typer.echo(f"no ledger at {ledger} — nothing to report yet.")
-        raise typer.Exit(code=0)
-
-    with FeedbackStore.open(ledger) as fb:
-        rows = list(fb.conn.execute("SELECT action, dismiss_reason FROM decisions"))
-
-    if not rows:
-        typer.echo(f"ledger at {ledger} is empty.")
-        raise typer.Exit(code=0)
-
-    total = len(rows)
-    actions = Counter(r["action"] for r in rows)
-    dismiss_reasons = Counter(
-        r["dismiss_reason"] for r in rows if r["action"] == "dismissed" and r["dismiss_reason"]
-    )
-    n_dismissed = sum(dismiss_reasons.values())
-    other_pct = (dismiss_reasons.get("other", 0) / n_dismissed) if n_dismissed else 0.0
-
-    typer.echo(f"feedback report (ledger={ledger})")
-    typer.echo(f"  total decisions: {total}")
-    typer.echo("  actions:")
-    for action, count in actions.most_common():
-        typer.echo(f"    {action:<14} {count:>5}  ({count / total:.1%})")
-    if n_dismissed:
-        typer.echo(f"  dismiss reasons ({n_dismissed} dismissed total):")
-        for reason, count in dismiss_reasons.most_common():
-            typer.echo(f"    {reason:<24} {count:>5}  ({count / n_dismissed:.1%})")
-        if other_pct > _OTHER_WARN_THRESHOLD:
-            typer.echo(
-                f"  ⚠ other usage = {other_pct:.1%} (>{_OTHER_WARN_THRESHOLD:.0%}) "
-                "— taxonomy may have a gap; review free-text notes."
-            )
 
 
 # NOTE: the command name ``backfill-shadow-returns`` is retained for the existing
@@ -142,11 +81,6 @@ def backfill_shadow_returns_command(
     # ``--lookback-days``. Folded here so it reuses the 06:30 UTC timer (no new
     # systemd unit). Never raises.
     _refresh_population_ladders(briefs_dir)
-
-
-def _fmt(value: float | None) -> str:
-    """Format a possibly-None decimal-fraction statistic for the report."""
-    return "n/a" if value is None else f"{value:+.4f}"
 
 
 def _refresh_ladder_outcomes(ledger: Path, briefs_dir: Path, *, lookback_days: int) -> None:

@@ -226,7 +226,7 @@ jobs:
       - name: Pytest with coverage
         working-directory: apps/alphalens-django
         # Coverage scoped to the app source dirs (core, auth_cf, briefs, edge,
-        # config, feedback, market) so test files themselves don't inflate the
+        # config, market) so test files themselves don't inflate the
         # denominator.
         # New Django apps MUST be added here — otherwise SonarCloud reports
         # "0% coverage on new code" even when pytest exercises every line.
@@ -235,7 +235,7 @@ jobs:
         # configured in sonar-project.properties to consume both research +
         # django paths.
         run: |
-          uv run coverage run --source=core,auth_cf,briefs,edge,config,feedback,market -m pytest -q
+          uv run coverage run --source=core,auth_cf,briefs,edge,config,market -m pytest -q
           uv run coverage report
           uv run coverage xml -o coverage.xml
 
@@ -312,7 +312,7 @@ jobs:
 
       - name: Web tests (Playwright)
         working-directory: apps/web
-        # The 5 hermetic Playwright suites (smoke, feedback, template-facts,
+        # The hermetic Playwright suites (smoke, template-facts,
         # market-status, django-smoke) that `just test-web` runs locally —
         # they were NOT gated in CI before. `pnpm test` == `playwright test`;
         # its webServer config builds + previews the SPA on 127.0.0.1:4173,

@@ -77,71 +77,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/feedback/decisions": {
+    "/v1/edge/outcomes": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * @description POST (create/upsert) + GET (list by brief_date) collection endpoint.
-         *
-         *     HTTP status convention (zen pre-merge finding #5): POST returns 201
-         *     only on fresh creation; 200 on upsert update (UNIQUE-key row already
-         *     existed and was replaced). The id is preserved across the upsert so
-         *     the SPA's local undo reference stays valid either way.
-         */
-        get: operations["v1_feedback_decisions_retrieve"];
+        /** @description ``/v1/edge/outcomes`` — per-candidate rows (theme joined from the brief). */
+        get: operations["v1_edge_outcomes_list"];
         put?: never;
-        /**
-         * @description POST (create/upsert) + GET (list by brief_date) collection endpoint.
-         *
-         *     HTTP status convention (zen pre-merge finding #5): POST returns 201
-         *     only on fresh creation; 200 on upsert update (UNIQUE-key row already
-         *     existed and was replaced). The id is preserved across the upsert so
-         *     the SPA's local undo reference stays valid either way.
-         */
-        post: operations["v1_feedback_decisions_create"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/v1/feedback/decisions/{decision_id}": {
+    "/v1/edge/summary": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** @description DELETE single decision by uuid. */
-        delete: operations["v1_feedback_decisions_destroy"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/feedback/taxonomy": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * @description Static endpoint exposing the locked dismiss taxonomy + action enum.
-         *
-         *     The SPA fetches this once on app boot to build the dropdowns
-         *     without hard-coding the labels client-side. Pipeline + Django + SPA
-         *     therefore share one source of truth (the taxonomy constant in
-         *     ``alphalens_feedback.store``).
-         */
-        get: operations["v1_feedback_taxonomy_retrieve"];
+        /** @description ``/v1/edge/summary`` — the N-gated, benchmark-relative aggregate. */
+        get: operations["v1_edge_summary_retrieve"];
         put?: never;
         post?: never;
         delete?: never;
@@ -371,76 +332,82 @@ export interface components {
             /** @description Empty-string DB default → None on the wire (parity with legacy API). */
             readonly top_theme: string | null;
         };
-        /** @description Envelope for GET /v1/feedback/decisions. */
-        DecisionListResponse: {
-            data: components["schemas"]["DecisionResponse"][];
+        /** @description The DEPLOYMENT panel — N-INDEPENDENT, always populated. */
+        DeploymentPanel: {
+            n_terminal: number;
+            n_filled: number;
+            n_no_fill: number;
+            /** Format: double */
+            fill_rate: number | null;
+            /** Format: double */
+            no_fill_rate: number | null;
+            /** Format: double */
+            mean_tiers_filled_count: number | null;
         };
-        /**
-         * @description Body schema for POST /v1/feedback/decisions. All optional fields
-         *     default to None so the pipeline-side Decision dataclass enforces the
-         *     rules (e.g. dismiss_category required when action=dismissed).
-         */
-        DecisionRequest: {
+        /** @description The lean per-candidate shape for ``/v1/edge/outcomes`` (memo §5 table). */
+        EdgeOutcomeRow: {
+            ticker: string;
             /** Format: date */
             brief_date: string;
-            ticker: string;
-            theme: string;
-            /** Format: date-time */
-            surfaced_at: string;
-            action: string;
-            /** Format: date-time */
-            action_at?: string | null;
-            dismiss_category?: string | null;
-            dismiss_reason?: string | null;
-            dismiss_note?: string | null;
-            confidence_subjective?: number | null;
-            paper_trade_plan_id?: string | null;
+            theme?: string | null;
+            ladder_classification: string;
+            terminal: boolean;
             /** Format: double */
-            position_size_usd?: number | null;
+            realized_r: number | null;
             /** Format: double */
-            entry_price?: number | null;
+            open_r: number | null;
+            /** Format: double */
+            market_excess_return: number | null;
+            /** Format: double */
+            forward_return: number | null;
+            /** Format: double */
+            benchmark_window_return: number | null;
+            holding_days_elapsed: number | null;
+            /** Format: double */
+            realized_return_pct_of_book: number | null;
         };
         /**
-         * @description Response shape for a persisted decision row.
+         * @description The EDGE panel — gated. ``status='insufficient'`` nulls the stat fields.
          *
-         *     Mirrors ``views._serialise_decision`` output so drf-spectacular can
-         *     generate accurate OpenAPI schemas for the SPA + downstream clients.
+         *     The key SHAPE is stable (every field always present); the N-gate hides the
+         *     numbers by setting them to ``null`` rather than dropping the keys, so the
+         *     frontend can build a single static type and branch on ``status``.
          */
-        DecisionResponse: {
-            id: string;
-            /** Format: date */
-            brief_date: string;
-            ticker: string;
-            theme: string;
-            /** Format: date-time */
-            surfaced_at: string;
-            action: string;
-            /** Format: date-time */
-            action_at: string;
-            dismiss_category: string | null;
-            dismiss_reason: string | null;
-            dismiss_note: string | null;
-            confidence_subjective: number | null;
-            paper_trade_plan_id: string | null;
+        EdgePanel: {
+            status: components["schemas"]["StatusEnum"];
+            n_matured: number;
+            threshold: number;
             /** Format: double */
-            position_size_usd: number | null;
+            market_excess_mean: number | null;
             /** Format: double */
-            entry_price: number | null;
-            market_regime_at_entry: string | null;
-            layer4_score?: number | null;
-            rank_in_day?: number | null;
-            cohort_size_in_day?: number | null;
-            gate_verdict_json?: string | null;
-            brief_model_used?: string | null;
-            outcome_plan_id: string | null;
-            fill_status: string | null;
-            exit_kind: string | null;
+            market_excess_median: number | null;
+            market_excess_quantiles: components["schemas"]["_Quantiles"];
             /** Format: double */
-            shadow_return: number | null;
+            gross_realized_r_mean: number | null;
             /** Format: double */
-            realized_return: number | null;
-            /** Format: date-time */
-            outcome_computed_at: string | null;
+            gross_realized_r_median: number | null;
+            gross_realized_r_n: number;
+            holding_days_n: number;
+            /** Format: double */
+            holding_days_p50: number | null;
+            /** Format: double */
+            holding_days_p95: number | null;
+            gross_of_cost: boolean;
+            regime_stratified: boolean;
+        };
+        /** @description ``/v1/edge/summary`` — the full N-gated, benchmark-relative aggregate. */
+        EdgeSummary: {
+            n_brief: number;
+            n_plannable: number;
+            n_terminal: number;
+            n_matured: number;
+            n_gate_threshold: number;
+            benchmark: string;
+            metric_note: string;
+            edge: components["schemas"]["EdgePanel"];
+            portfolio: components["schemas"]["PortfolioPanel"];
+            deployment: components["schemas"]["DeploymentPanel"];
+            open_positions: components["schemas"]["OpenPositions"];
         };
         MarketStatus: {
             is_trading_day: boolean;
@@ -448,6 +415,13 @@ export interface components {
             /** Format: date-time */
             next_open_iso: string;
             exchange: string;
+        };
+        /** @description Ongoing positions as a DESCRIPTIVE distribution (never a scalar mean). */
+        OpenPositions: {
+            n_open: number;
+            near_tp: number;
+            near_sl: number;
+            note: string;
         };
         PaginatedCandidateList: {
             data: components["schemas"]["Candidate"][];
@@ -482,6 +456,21 @@ export interface components {
                 offset: number;
             };
         };
+        /** @description The PORTFOLIO (size-weighted) panel — gated, same N-gate as EDGE. */
+        PortfolioPanel: {
+            status: components["schemas"]["StatusEnum"];
+            n_matured: number;
+            threshold: number;
+            /** Format: double */
+            total_realized_contribution_pct_of_book: number | null;
+            /** Format: double */
+            size_weighted_realized_r: number | null;
+            /** Format: double */
+            mean_realized_risk_pct: number | null;
+            /** Format: double */
+            mean_tiers_filled_count: number | null;
+            gross_of_cost: boolean;
+        };
         /** @description Top-line counters and most-frequent themes for ``/v1/stats``. */
         Stats: {
             n_days: number;
@@ -495,13 +484,13 @@ export interface components {
             last_rebuild_at: string | null;
             top_themes: components["schemas"]["TopTheme"][];
         };
-        /** @description Shape of GET /v1/feedback/taxonomy — exposed to SPA dropdowns. */
-        TaxonomyResponse: {
-            actions: string[];
-            categories: {
-                [key: string]: string[];
-            };
-        };
+        /**
+         * @description * `insufficient` - insufficient
+         *     * `early` - early
+         *     * `ok` - ok
+         * @enum {string}
+         */
+        StatusEnum: "insufficient" | "early" | "ok";
         /** @description Row in ``/v1/themes``: distinct theme + appearance counts. */
         ThemeSummary: {
             theme: string;
@@ -516,6 +505,14 @@ export interface components {
             theme: string;
             n_days: number;
             n_candidates: number;
+        };
+        _Quantiles: {
+            /** Format: double */
+            p10: number | null;
+            /** Format: double */
+            p50: number | null;
+            /** Format: double */
+            p90: number | null;
         };
     };
     responses: never;
@@ -629,11 +626,13 @@ export interface operations {
             };
         };
     };
-    v1_feedback_decisions_retrieve: {
+    v1_edge_outcomes_list: {
         parameters: {
-            query: {
-                /** @description YYYY-MM-DD — brief date to filter by. */
-                brief_date: string;
+            query?: {
+                /** @description Filter: 'terminal' or 'ongoing' (default: all plannable). */
+                status?: string;
+                /** @description Calendar days back from the latest brief date (default: all). */
+                window?: number;
             };
             header?: never;
             path?: never;
@@ -646,59 +645,17 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DecisionListResponse"];
+                    "application/json": components["schemas"]["EdgeOutcomeRow"][];
                 };
             };
         };
     };
-    v1_feedback_decisions_create: {
+    v1_edge_summary_retrieve: {
         parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DecisionRequest"];
-                "application/x-www-form-urlencoded": components["schemas"]["DecisionRequest"];
-                "multipart/form-data": components["schemas"]["DecisionRequest"];
+            query?: {
+                /** @description Calendar days back from the latest brief date (default: all). */
+                window?: number;
             };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DecisionResponse"];
-                };
-            };
-        };
-    };
-    v1_feedback_decisions_destroy: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                decision_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description No response body */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    v1_feedback_taxonomy_retrieve: {
-        parameters: {
-            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -710,7 +667,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TaxonomyResponse"];
+                    "application/json": components["schemas"]["EdgeSummary"];
                 };
             };
         };

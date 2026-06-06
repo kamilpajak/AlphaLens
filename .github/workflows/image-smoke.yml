@@ -128,12 +128,11 @@ jobs:
           cache-from: type=gha,scope=django-build
           cache-to: type=gha,scope=django-build,mode=max
 
-      - name: import-smoke (runtime deps + shared feedback ledger)
+      - name: import-smoke (runtime deps)
         run: |
           docker run --rm alphalens-django:ci-smoke python -c "
           import django, rest_framework, drf_spectacular, corsheaders, environ
           import psycopg, gunicorn, uvicorn, pyarrow, pandas, jwt, httpx, exchange_calendars
-          import alphalens_feedback.store, alphalens_feedback.regime
           print('django import-smoke OK', django.get_version())
           "
 

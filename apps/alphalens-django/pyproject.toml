@@ -26,21 +26,11 @@ dependencies = [
     # pipeline uses for paper-trade submission gating, so half-day +
     # next-open semantics line up by construction.
     "exchange-calendars>=4.5",
-    # Shared feedback-ledger primitives (SQLite Decision store + VIX regime).
-    # Pure stdlib, ZERO heavy deps — this is what lets the slim Django image
-    # read/write the shared feedback.db without installing the whole
-    # alphalens-pipeline dependency tree (the collectstatic ImportError that
-    # broke the image build, prod incident 2026-06-01). feedback/views.py
-    # imports `alphalens_feedback.{store,regime}`, NOT `alphalens_pipeline`.
-    "alphalens-feedback",
 ]
-
-[tool.uv.sources]
-alphalens-feedback = { workspace = true }
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["config*", "briefs*", "edge*", "auth_cf*", "core*", "feedback*", "market*"]
+include = ["config*", "briefs*", "edge*", "auth_cf*", "core*", "market*"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings.dev"

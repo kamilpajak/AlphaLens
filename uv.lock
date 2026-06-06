@@ -39,7 +39,6 @@ name = "alphalens-django"
 version = "0.1.0"
 source = { editable = "apps/alphalens-django" }
 dependencies = [
-    { name = "alphalens-feedback" },
     { name = "django" },
     { name = "django-cors-headers" },
     { name = "django-environ" },
@@ -57,7 +56,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "alphalens-feedback", editable = "apps/alphalens-feedback" },
     { name = "django", specifier = "==6.0.5" },
     { name = "django-cors-headers", specifier = ">=4.9" },
     { name = "django-environ", specifier = ">=0.13" },
