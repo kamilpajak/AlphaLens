@@ -30,7 +30,7 @@ dev = [
     "pytest-django>=4.12",
     "diff-cover>=10.2.1",
     "pyright>=1.1.409",
-    "pandas-stubs>=3.0.0.260204",
+    "pandas-stubs>=3.0.3.260530",
     "django-types>=0.22.0",
     "djangorestframework-types>=0.9.0",
 ]
