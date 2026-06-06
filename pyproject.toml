@@ -31,7 +31,7 @@ dev = [
     "diff-cover>=10.2.1",
     "pyright>=1.1.409",
     "pandas-stubs>=3.0.0.260204",
-    "django-types>=0.22.0",
+    "django-types>=0.24.0",
     "djangorestframework-types>=0.9.0",
 ]
 
