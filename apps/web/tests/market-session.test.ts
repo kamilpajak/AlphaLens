@@ -163,3 +163,47 @@ test.describe('MarketSession chip — placement + banner removal', () => {
 		await expect(page.getByText(/submission deferred/i)).toHaveCount(0);
 	});
 });
+
+test.describe('MarketSession chip — mobile footer density', () => {
+	// On a narrow viewport the footer must keep only the essentials (live +
+	// session chip + version); the ambient clock + db path are desktop-only
+	// (lg+). 700px is below the lg breakpoint (1024px) but above sm (640px) —
+	// the width where the old `sm:flex` clock used to appear and could push
+	// the shrink-0 telemetry cluster into horizontal overflow.
+	const OPEN = {
+		is_trading_day: true,
+		is_half_day: false,
+		is_open_now: true,
+		next_open_iso: isoInFuture(24),
+		next_close_iso: isoInFuture(3),
+		exchange: 'XNYS'
+	};
+
+	test('below lg: chip shown, clock + db hidden, no horizontal overflow', async ({ page }) => {
+		await page.setViewportSize({ width: 700, height: 800 });
+		await installMockedApi(page, OPEN);
+		await page.goto('/');
+
+		// The session chip is the one piece of market info we always keep.
+		await expect(page.getByTestId('market-session')).toBeVisible();
+		// Ambient flavour is hidden until lg.
+		await expect(page.getByTestId('footer-clock')).toBeHidden();
+		await expect(page.getByTestId('footer-db')).toBeHidden();
+
+		// The page must not scroll sideways — the whole point of the cut.
+		const overflow = await page.evaluate(
+			() => document.documentElement.scrollWidth > document.documentElement.clientWidth
+		);
+		expect(overflow).toBe(false);
+	});
+
+	test('at lg+: clock + db become visible', async ({ page }) => {
+		await page.setViewportSize({ width: 1280, height: 800 });
+		await installMockedApi(page, OPEN);
+		await page.goto('/');
+
+		await expect(page.getByTestId('market-session')).toBeVisible();
+		await expect(page.getByTestId('footer-clock')).toBeVisible();
+		await expect(page.getByTestId('footer-db')).toBeVisible();
+	});
+});
