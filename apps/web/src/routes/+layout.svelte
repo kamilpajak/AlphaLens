@@ -3,7 +3,7 @@
 	import { page, updated } from '$app/state';
 	import { Activity, Database, Triangle } from 'lucide-svelte';
 	import favicon from '$lib/assets/favicon.svg';
-	import { MODELS } from '$lib/models';
+	import { tickerThematic, tickerExperiments } from '$lib/pipelineFacts';
 	import MarketSession from '$lib/components/MarketSession.svelte';
 	import { startMarketStatusPoll } from '$lib/marketStatus.svelte';
 
@@ -38,33 +38,8 @@
 	const apiBase = (import.meta.env.VITE_API_BASE ?? '').trim().replace(/\/+$/, '');
 	const apiDocsHref = apiBase ? `${apiBase}/api/docs/` : '/api/docs/';
 
-	// Footer ticker chips — context-switch per route so the slogans match
-	// the page the user is reading. Dashboard / briefs / brief / about all
-	// concern the thematic-tool pipeline (Polygon news + DeepSeek V4 Pro/Flash +
-	// verification gates), while /experiments concerns the active-alpha
-	// research ledger (αt thresholds, Bonferroni, multi-phase audit, PIT
-	// discipline). Same component, two vocabularies.
-	type Chip = { label: string; value: string };
-	const tickerThematic: Chip[] = [
-		{ label: 'PRESS-GATE', value: 'tri-state ok' },
-		{ label: 'CATALYST-FLOOR', value: '0.55' },
-		{ label: 'MAGIC-FORMULA', value: 'cohort' },
-		{ label: 'PRO-MODEL', value: MODELS.PRO },
-		{ label: 'FLASH-MODEL', value: MODELS.FLASH },
-		{ label: 'PRESS-WINDOW', value: '30d' },
-		{ label: 'SLIPPAGE', value: '50bps' },
-		{ label: 'LIMIT', value: 'polygon 5rpm' }
-	];
-	const tickerExperiments: Chip[] = [
-		{ label: 'DOCTRINE', value: 'αt ≥ 3.5 deploy' },
-		{ label: 'MARGINAL', value: 'αt 2.0-3.5 paper' },
-		{ label: 'NOISE', value: 'αt < 2.0' },
-		{ label: 'BONFERRONI', value: 'escalates per test' },
-		{ label: 'MULTI-PHASE', value: 'stride-5 mean ± std' },
-		{ label: 'PIT', value: 'point-in-time mandatory' },
-		{ label: 'SLIPPAGE-STRESS', value: '50bps half-spread' },
-		{ label: 'LITERATURE', value: 'not oracle' }
-	];
+	// Footer ticker chips — route-keyed vocabulary (thematic vs research).
+	// Definitions + provenance live in $lib/pipelineFacts.
 	const ticker = $derived(route === '/experiments' ? tickerExperiments : tickerThematic);
 </script>
 
@@ -157,7 +132,15 @@
 					<span class="whitespace-nowrap">{now} utc</span>
 				</span>
 			</div>
-			<div class="hidden lg:flex flex-1 items-center gap-6 overflow-hidden whitespace-nowrap text-fg-muted/80">
+			<!-- Slogan ticker clips first when space is tight; the right-edge
+			     fade mask makes the cut read as intentional (a fade-out, not a
+			     mid-word chop) and signals "there's more". The mask only shows
+			     over content near the right edge, so it's invisible when the
+			     chips fit with room to spare. -->
+			<div
+				class="hidden lg:flex flex-1 items-center gap-6 overflow-hidden whitespace-nowrap text-fg-muted/80"
+				style="mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent); -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent);"
+			>
 				{#each ticker as chip}
 					<span class="flex items-center gap-1.5"><span class="text-amber">{chip.label}</span><span>{chip.value}</span></span>
 				{/each}
