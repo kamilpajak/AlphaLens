@@ -40,7 +40,6 @@ INSTALLED_APPS = [
     "edge.apps.EdgeConfig",
     "auth_cf.apps.AuthCfConfig",
     "core.apps.CoreConfig",
-    "feedback.apps.FeedbackConfig",
     "market.apps.MarketConfig",
 ]
 
@@ -77,21 +76,13 @@ ASGI_APPLICATION = "config.asgi.application"
 
 DATABASES = {"default": env.db("DATABASE_URL", default="sqlite:///" + str(BASE_DIR / "db.sqlite3"))}
 
-# Feedback ledger SQLite path. Pipeline-side ``FeedbackStore`` is the schema
-# authority; Django views open the same on-disk file via the ``~/.alphalens``
-# host-volume mount. Env override is REQUIRED in containers because
-# ``Path.home()`` resolves to the container user (``/home/django``), not the
-# host ``~/.alphalens`` mount — see feedback_pathhome_in_container_trap_2026_05_28.
-# Compose exports the env at startup; dev falls back to the host path.
-ALPHALENS_FEEDBACK_DB = env(
-    "ALPHALENS_FEEDBACK_DB",
-    default=str(Path.home() / ".alphalens" / "feedback.db"),
-)
-
-# Server-side VIX regime cache (v2 PR-2). Read-only on the feedback POST hot
-# path via regime.get_cached_vix; refreshed out-of-band by
-# `alphalens cache refresh-vix`. Same host ``~/.alphalens`` mount + container
-# HOME trap as ALPHALENS_FEEDBACK_DB above.
+# Server-side VIX regime cache. Written out-of-band by
+# `alphalens cache refresh-vix` (FRED VIXCLS) during the daily thematic build.
+# No Django consumer reads it after the Track-A user-action feedback ledger was
+# removed; the setting is kept so the cache path stays a single documented
+# constant shared with the pipeline-side ``alphalens_feedback.regime`` default
+# and the Prometheus VIX-cache staleness alert. Same host ``~/.alphalens`` mount
+# + container HOME trap as ALPHALENS_BRIEFS_DIR.
 ALPHALENS_VIX_CACHE = env(
     "ALPHALENS_VIX_CACHE",
     default=str(Path.home() / ".alphalens" / "macro" / "vix_regime_cache.json"),

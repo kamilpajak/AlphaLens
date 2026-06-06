@@ -29,6 +29,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -70,6 +71,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -94,6 +96,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -140,6 +143,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -147,107 +151,59 @@ paths:
               schema:
                 $ref: '#/components/schemas/PaginatedCandidateList'
           description: ''
-  /v1/feedback/decisions:
+  /v1/edge/outcomes:
     get:
-      operationId: v1_feedback_decisions_retrieve
-      description: |-
-        POST (create/upsert) + GET (list by brief_date) collection endpoint.
-
-        HTTP status convention (zen pre-merge finding #5): POST returns 201
-        only on fresh creation; 200 on upsert update (UNIQUE-key row already
-        existed and was replaced). The id is preserved across the upsert so
-        the SPA's local undo reference stays valid either way.
+      operationId: v1_edge_outcomes_list
+      description: '``/v1/edge/outcomes`` — per-candidate rows (theme joined from
+        the brief).'
       parameters:
       - in: query
-        name: brief_date
+        name: status
         schema:
           type: string
-        description: YYYY-MM-DD — brief date to filter by.
-        required: true
+        description: 'Filter: ''terminal'' or ''ongoing'' (default: all plannable).'
+      - in: query
+        name: window
+        schema:
+          type: integer
+        description: 'Calendar days back from the latest brief date (default: all).'
       tags:
       - v1
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DecisionListResponse'
+                type: array
+                items:
+                  $ref: '#/components/schemas/EdgeOutcomeRow'
           description: ''
-    post:
-      operationId: v1_feedback_decisions_create
-      description: |-
-        POST (create/upsert) + GET (list by brief_date) collection endpoint.
-
-        HTTP status convention (zen pre-merge finding #5): POST returns 201
-        only on fresh creation; 200 on upsert update (UNIQUE-key row already
-        existed and was replaced). The id is preserved across the upsert so
-        the SPA's local undo reference stays valid either way.
-      tags:
-      - v1
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/DecisionRequest'
-          application/x-www-form-urlencoded:
-            schema:
-              $ref: '#/components/schemas/DecisionRequest'
-          multipart/form-data:
-            schema:
-              $ref: '#/components/schemas/DecisionRequest'
-        required: true
-      security:
-      - CloudflareAccessJWT: []
-      - cookieAuth: []
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DecisionResponse'
-          description: ''
-  /v1/feedback/decisions/{decision_id}:
-    delete:
-      operationId: v1_feedback_decisions_destroy
-      description: DELETE single decision by uuid.
-      parameters:
-      - in: path
-        name: decision_id
-        schema:
-          type: string
-        required: true
-      tags:
-      - v1
-      security:
-      - CloudflareAccessJWT: []
-      - cookieAuth: []
-      responses:
-        '204':
-          description: No response body
-  /v1/feedback/taxonomy:
+  /v1/edge/summary:
     get:
-      operationId: v1_feedback_taxonomy_retrieve
-      description: |-
-        Static endpoint exposing the locked dismiss taxonomy + action enum.
-
-        The SPA fetches this once on app boot to build the dropdowns
-        without hard-coding the labels client-side. Pipeline + Django + SPA
-        therefore share one source of truth (the taxonomy constant in
-        ``alphalens_feedback.store``).
+      operationId: v1_edge_summary_retrieve
+      description: '``/v1/edge/summary`` — the N-gated, benchmark-relative aggregate.'
+      parameters:
+      - in: query
+        name: window
+        schema:
+          type: integer
+        description: 'Calendar days back from the latest brief date (default: all).'
       tags:
       - v1
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TaxonomyResponse'
+                $ref: '#/components/schemas/EdgeSummary'
           description: ''
   /v1/market/status:
     get:
@@ -270,6 +226,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -299,6 +256,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -340,6 +298,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -387,6 +346,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -435,6 +395,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -734,184 +695,193 @@ components:
       - n_candidates
       - n_themes
       - top_theme
-    DecisionListResponse:
+    DeploymentPanel:
       type: object
-      description: Envelope for GET /v1/feedback/decisions.
+      description: The DEPLOYMENT panel — N-INDEPENDENT, always populated.
       properties:
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/DecisionResponse'
+        n_terminal:
+          type: integer
+        n_filled:
+          type: integer
+        n_no_fill:
+          type: integer
+        fill_rate:
+          type: number
+          format: double
+          nullable: true
+        no_fill_rate:
+          type: number
+          format: double
+          nullable: true
+        mean_tiers_filled_count:
+          type: number
+          format: double
+          nullable: true
       required:
-      - data
-    DecisionRequest:
+      - fill_rate
+      - mean_tiers_filled_count
+      - n_filled
+      - n_no_fill
+      - n_terminal
+      - no_fill_rate
+    EdgeOutcomeRow:
       type: object
-      description: |-
-        Body schema for POST /v1/feedback/decisions. All optional fields
-        default to None so the pipeline-side Decision dataclass enforces the
-        rules (e.g. dismiss_category required when action=dismissed).
+      description: The lean per-candidate shape for ``/v1/edge/outcomes`` (memo §5
+        table).
       properties:
+        ticker:
+          type: string
         brief_date:
           type: string
           format: date
-        ticker:
-          type: string
-          maxLength: 10
         theme:
           type: string
-          maxLength: 200
-        surfaced_at:
-          type: string
-          format: date-time
-        action:
-          type: string
-          maxLength: 20
-        action_at:
-          type: string
-          format: date-time
           nullable: true
-        dismiss_category:
+        ladder_classification:
           type: string
-          nullable: true
-          maxLength: 30
-        dismiss_reason:
-          type: string
-          nullable: true
-          maxLength: 30
-        dismiss_note:
-          type: string
-          nullable: true
-          maxLength: 200
-        confidence_subjective:
-          type: integer
-          nullable: true
-        paper_trade_plan_id:
-          type: string
-          nullable: true
-          maxLength: 64
-        position_size_usd:
+        terminal:
+          type: boolean
+        realized_r:
           type: number
           format: double
           nullable: true
-        entry_price:
+        open_r:
+          type: number
+          format: double
+          nullable: true
+        market_excess_return:
+          type: number
+          format: double
+          nullable: true
+        forward_return:
+          type: number
+          format: double
+          nullable: true
+        benchmark_window_return:
+          type: number
+          format: double
+          nullable: true
+        holding_days_elapsed:
+          type: integer
+          nullable: true
+        realized_return_pct_of_book:
           type: number
           format: double
           nullable: true
       required:
-      - action
+      - benchmark_window_return
       - brief_date
-      - surfaced_at
-      - theme
+      - forward_return
+      - holding_days_elapsed
+      - ladder_classification
+      - market_excess_return
+      - open_r
+      - realized_r
+      - realized_return_pct_of_book
+      - terminal
       - ticker
-    DecisionResponse:
+    EdgePanel:
       type: object
       description: |-
-        Response shape for a persisted decision row.
+        The EDGE panel — gated. ``status='insufficient'`` nulls the stat fields.
 
-        Mirrors ``views._serialise_decision`` output so drf-spectacular can
-        generate accurate OpenAPI schemas for the SPA + downstream clients.
+        The key SHAPE is stable (every field always present); the N-gate hides the
+        numbers by setting them to ``null`` rather than dropping the keys, so the
+        frontend can build a single static type and branch on ``status``.
       properties:
-        id:
-          type: string
-        brief_date:
-          type: string
-          format: date
-        ticker:
-          type: string
-        theme:
-          type: string
-        surfaced_at:
-          type: string
-          format: date-time
-        action:
-          type: string
-        action_at:
-          type: string
-          format: date-time
-        dismiss_category:
-          type: string
-          nullable: true
-        dismiss_reason:
-          type: string
-          nullable: true
-        dismiss_note:
-          type: string
-          nullable: true
-        confidence_subjective:
+        status:
+          $ref: '#/components/schemas/StatusEnum'
+        n_matured:
           type: integer
-          nullable: true
-        paper_trade_plan_id:
-          type: string
-          nullable: true
-        position_size_usd:
+        threshold:
+          type: integer
+        market_excess_mean:
           type: number
           format: double
           nullable: true
-        entry_price:
+        market_excess_median:
           type: number
           format: double
           nullable: true
-        market_regime_at_entry:
-          type: string
-          nullable: true
-        layer4_score:
-          type: integer
-          nullable: true
-        rank_in_day:
-          type: integer
-          nullable: true
-        cohort_size_in_day:
-          type: integer
-          nullable: true
-        gate_verdict_json:
-          type: string
-          nullable: true
-        brief_model_used:
-          type: string
-          nullable: true
-        outcome_plan_id:
-          type: string
-          nullable: true
-        fill_status:
-          type: string
-          nullable: true
-        exit_kind:
-          type: string
-          nullable: true
-        shadow_return:
+        market_excess_quantiles:
+          $ref: '#/components/schemas/_Quantiles'
+        gross_realized_r_mean:
           type: number
           format: double
           nullable: true
-        realized_return:
+        gross_realized_r_median:
           type: number
           format: double
           nullable: true
-        outcome_computed_at:
-          type: string
-          format: date-time
+        gross_realized_r_n:
+          type: integer
+        holding_days_n:
+          type: integer
+        holding_days_p50:
+          type: number
+          format: double
           nullable: true
+        holding_days_p95:
+          type: number
+          format: double
+          nullable: true
+        gross_of_cost:
+          type: boolean
+        regime_stratified:
+          type: boolean
       required:
-      - action
-      - action_at
-      - brief_date
-      - confidence_subjective
-      - dismiss_category
-      - dismiss_note
-      - dismiss_reason
-      - entry_price
-      - exit_kind
-      - fill_status
-      - id
-      - market_regime_at_entry
-      - outcome_computed_at
-      - outcome_plan_id
-      - paper_trade_plan_id
-      - position_size_usd
-      - realized_return
-      - shadow_return
-      - surfaced_at
-      - theme
-      - ticker
+      - gross_of_cost
+      - gross_realized_r_mean
+      - gross_realized_r_median
+      - gross_realized_r_n
+      - holding_days_n
+      - holding_days_p50
+      - holding_days_p95
+      - market_excess_mean
+      - market_excess_median
+      - market_excess_quantiles
+      - n_matured
+      - regime_stratified
+      - status
+      - threshold
+    EdgeSummary:
+      type: object
+      description: '``/v1/edge/summary`` — the full N-gated, benchmark-relative aggregate.'
+      properties:
+        n_brief:
+          type: integer
+        n_plannable:
+          type: integer
+        n_terminal:
+          type: integer
+        n_matured:
+          type: integer
+        n_gate_threshold:
+          type: integer
+        benchmark:
+          type: string
+        metric_note:
+          type: string
+        edge:
+          $ref: '#/components/schemas/EdgePanel'
+        portfolio:
+          $ref: '#/components/schemas/PortfolioPanel'
+        deployment:
+          $ref: '#/components/schemas/DeploymentPanel'
+        open_positions:
+          $ref: '#/components/schemas/OpenPositions'
+      required:
+      - benchmark
+      - deployment
+      - edge
+      - metric_note
+      - n_brief
+      - n_gate_threshold
+      - n_matured
+      - n_plannable
+      - n_terminal
+      - open_positions
+      - portfolio
     MarketStatus:
       type: object
       properties:
@@ -929,6 +899,24 @@ components:
       - is_half_day
       - is_trading_day
       - next_open_iso
+    OpenPositions:
+      type: object
+      description: Ongoing positions as a DESCRIPTIVE distribution (never a scalar
+        mean).
+      properties:
+        n_open:
+          type: integer
+        near_tp:
+          type: integer
+        near_sl:
+          type: integer
+        note:
+          type: string
+      required:
+      - n_open
+      - near_sl
+      - near_tp
+      - note
     PaginatedCandidateList:
       type: object
       required:
@@ -1007,6 +995,43 @@ components:
             offset:
               type: integer
               example: 0
+    PortfolioPanel:
+      type: object
+      description: The PORTFOLIO (size-weighted) panel — gated, same N-gate as EDGE.
+      properties:
+        status:
+          $ref: '#/components/schemas/StatusEnum'
+        n_matured:
+          type: integer
+        threshold:
+          type: integer
+        total_realized_contribution_pct_of_book:
+          type: number
+          format: double
+          nullable: true
+        size_weighted_realized_r:
+          type: number
+          format: double
+          nullable: true
+        mean_realized_risk_pct:
+          type: number
+          format: double
+          nullable: true
+        mean_tiers_filled_count:
+          type: number
+          format: double
+          nullable: true
+        gross_of_cost:
+          type: boolean
+      required:
+      - gross_of_cost
+      - mean_realized_risk_pct
+      - mean_tiers_filled_count
+      - n_matured
+      - size_weighted_realized_r
+      - status
+      - threshold
+      - total_realized_contribution_pct_of_book
     Stats:
       type: object
       description: Top-line counters and most-frequent themes for ``/v1/stats``.
@@ -1041,23 +1066,16 @@ components:
       - n_days
       - n_themes
       - top_themes
-    TaxonomyResponse:
-      type: object
-      description: Shape of GET /v1/feedback/taxonomy — exposed to SPA dropdowns.
-      properties:
-        actions:
-          type: array
-          items:
-            type: string
-        categories:
-          type: object
-          additionalProperties:
-            type: array
-            items:
-              type: string
-      required:
-      - actions
-      - categories
+    StatusEnum:
+      enum:
+      - insufficient
+      - early
+      - ok
+      type: string
+      description: |-
+        * `insufficient` - insufficient
+        * `early` - early
+        * `ok` - ok
     ThemeSummary:
       type: object
       description: 'Row in ``/v1/themes``: distinct theme + appearance counts.'
@@ -1093,6 +1111,25 @@ components:
       - n_candidates
       - n_days
       - theme
+    _Quantiles:
+      type: object
+      properties:
+        p10:
+          type: number
+          format: double
+          nullable: true
+        p50:
+          type: number
+          format: double
+          nullable: true
+        p90:
+          type: number
+          format: double
+          nullable: true
+      required:
+      - p10
+      - p50
+      - p90
   securitySchemes:
     CloudflareAccessJWT:
       type: apiKey

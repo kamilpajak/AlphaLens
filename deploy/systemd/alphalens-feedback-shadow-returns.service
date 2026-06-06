@@ -1,13 +1,15 @@
 [Unit]
-# Nightly broker-free ladder + population-monitor backfill (Track A v2 PR-T).
-# Replays each matured feedback decision's trade ladder over the last 14
+# Nightly broker-free ladder + population-monitor backfill (market-behavior
+# feedback). Replays each matured ledger decision's trade ladder over the last 14
 # calendar days, then runs the population monitor over its own larger window —
 # both deterministic price-path replays over Polygon minute bars (no broker).
 # The legacy shadow-return / execution-quality metrics were removed with the
-# broker chain (ADR 0012); the unit + command name are retained so the existing
-# timer keeps working (a rename is a deferred follow-up). The Polygon minute-bar
-# pull is rate-limited and the horizon must have closed (Polygon Basic serves
-# only closed sessions).
+# broker chain (ADR 0012), and the Track-A user-action click ledger was removed
+# later; the population-monitor replay (every brief candidate) is the primary
+# market-behavior feedback that survives. The unit + command name are retained so
+# the existing timer keeps working (a rename is a deferred follow-up). The Polygon
+# minute-bar pull is rate-limited and the horizon must have closed (Polygon Basic
+# serves only closed sessions).
 #
 # Install as a *user* unit alongside the companion timer:
 #
@@ -22,7 +24,7 @@
 #
 # Persistence (survives logout) — once, as the user:
 #   sudo loginctl enable-linger "$USER"
-Description=AlphaLens nightly shadow-return backfill (Track A v2)
+Description=AlphaLens nightly broker-free ladder + population-monitor backfill
 After=network-online.target
 Wants=network-online.target
 

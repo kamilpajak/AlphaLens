@@ -92,7 +92,7 @@ describe('apiFetch normalization branches', () => {
 		const fetcher = vi.fn().mockResolvedValue(jsonResponse(200));
 
 		await apiFetch(
-			'/v1/feedback',
+			'/v1/days',
 			{ method: 'POST', body: '{"x":1}' },
 			fetcher as unknown as typeof fetch
 		);

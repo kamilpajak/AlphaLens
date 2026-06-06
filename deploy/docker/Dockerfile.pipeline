@@ -76,7 +76,8 @@ RUN uv sync --frozen --no-dev --no-install-workspace --package alphalens-pipelin
 # pipeline — intentionally omitted from this image. Mount via volume +
 # $ALPHALENS_DATA_ROOT if needed.
 # Shared feedback-ledger primitives (pure stdlib) — a declared workspace
-# dependency of alphalens-pipeline; outcome_join/shadow_return import it.
+# dependency of alphalens-pipeline. `cache.py` imports `alphalens_feedback.regime`
+# (VIX cache refresh) and `feedback.ladder_backfill` imports the FeedbackStore.
 COPY apps/alphalens-feedback/alphalens_feedback ./apps/alphalens-feedback/alphalens_feedback
 COPY apps/alphalens-pipeline/alphalens_pipeline ./apps/alphalens-pipeline/alphalens_pipeline
 COPY apps/alphalens-pipeline/alphalens_cli ./apps/alphalens-pipeline/alphalens_cli

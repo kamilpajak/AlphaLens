@@ -85,25 +85,6 @@ function installApiMock(page: Page) {
 				body: JSON.stringify({ detail: `no brief for date=${date}` })
 			});
 		}
-		// /api/v1/feedback/* — return empty taxonomy + empty decisions so the
-		// brief page loader's graceful-degrade path activates (FeedbackControls
-		// hidden) without producing a console 404 that would trip the suite's
-		// strict consoleErrors assertion. The dedicated feedback.test.ts file
-		// installs a richer mock that exercises the real interactions.
-		if (url.pathname === '/api/v1/feedback/taxonomy') {
-			return route.fulfill({
-				status: 200,
-				contentType: 'application/json',
-				body: JSON.stringify({ actions: [], categories: {} })
-			});
-		}
-		if (url.pathname === '/api/v1/feedback/decisions') {
-			return route.fulfill({
-				status: 200,
-				contentType: 'application/json',
-				body: JSON.stringify({ data: [] })
-			});
-		}
 		return route.fulfill({
 			status: 404,
 			contentType: 'application/json',
