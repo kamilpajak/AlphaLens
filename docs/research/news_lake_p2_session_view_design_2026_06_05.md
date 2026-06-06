@@ -255,3 +255,39 @@ P3   multi-exchange (XTKS/XHKG/XSHG/XWAR) — register MIC + calendar, fill the 
 ```
 
 The 6×/day cadence → exchange mapping (discovery open-question) is **P3**, not P2: today all 6 cuts produce XNYS briefs; the CLAUDE.md "global exchange rotation" is documented intent with no CLI/systemd mapping yet. P2 leaves the cadence as-is (6 XNYS cuts, flagship = `20:30Z`); P3 introduces a per-cut `mic` so the rotation becomes real.
+
+---
+
+## 9. FEEDBACK / OUTPUT-SIDE scheduling — per-MIC replay + ingest (multi-exchange)
+
+The session-window problem has a mirror on the **output / feedback side**: the EDGE market-behavior dashboard is fed by a daily **replay** (compute) + **ingest** (publish) chain whose timing today assumes a single exchange. The same MIC-keyed session logic this memo locks for the *input* news window applies to the *output* replay schedule. Captured here so it is not re-discovered when multi-exchange (P3) lands.
+
+### 9.1 Current chain (XNYS-only) and its one inefficiency
+
+- **Replay** — `alphalens-feedback-shadow-returns` systemd timer, **`06:30 UTC` once/day**. Broker-free price-path replay of every candidate's 3E/3TP/1SL ladder over **Polygon minute bars**, plus the population monitor over its ~42-session lookback; enriches `market_excess_return` (vs SPY). Writes `~/.alphalens/population_ladders/*.parquet` + `feedback.db`. Time chosen because XNYS closes ~`20:00–21:00 UTC` so bars are long settled by `06:30 UTC`.
+- **Ingest** — `rebuild-ladder-outcomes` compose maintenance one-shot, fired as `ExecStartPost` of the **6×/day** `alphalens-thematic-build` (`HH:30 UTC`). Per-date `parquet_mtime`-gated upsert into Postgres `edge.LadderOutcome` (`edge/ingest/parquet.py:206`). Cheap; 5 of 6 daily runs are no-op skips because the data only changes once/day.
+- **Inefficiency (XNYS, minor):** replay finishes ~`07:00 UTC` but the next ingest is the `08:30 UTC` cut (the `04:30 UTC` build ran *before* replay) → ~1.5 h where a fresh parquet exists but is unpublished. A cheap fix is an ingest trigger on the replay unit itself (`ExecStartPost` on `shadow-returns`), but the value is low (once-daily telemetry, not a live trading signal). **Not worth a standalone change before multi-exchange.**
+
+### 9.2 Why a single fixed-time daily replay breaks under multi-exchange
+
+Different MICs close at different UTC times, so one `06:30 UTC` replay cannot serve them:
+
+| MIC | close (approx UTC) | a `06:30 UTC` replay would… |
+|---|---|---|
+| XTKS Tokyo | ~`06:00` | run only ~30 min post-close — bars possibly unsettled |
+| XSHG Shanghai | ~`07:00` | run *before* today's close — misses today |
+| XHKG Hong Kong | ~`08:00` | run before close — misses today |
+| XWAR Warsaw | ~`15:30` | run ~9 h before close — today's session replayed only **next day** (full-day-stale) |
+| XNYS New York | ~`20:00–21:00` (prev day) | fine (9 h after close) |
+
+The fix is the output-side analog of §1: **replay (and its ingest) must be triggered per-MIC after `session_close(MIC) + settle_buffer`**, not at a single wall-clock time. This reuses the exact primitives this memo already needs — `paper/calendar.py` MIC helpers + the new `session_close_utc(MIC, date)` helper (open-decision #2) — so the schedule is *session-driven*, not fixed-UTC. N active exchanges → N daily replay triggers, each followed immediately by its ingest. Sequence this **with P2/P3**, reusing the same calendar layer; do not design a separate scheduler.
+
+### 9.3 The deeper gate — per-exchange price bars (NOT just scheduling)
+
+Scheduling is the easy half. The replay computes the ladder price-path over **Polygon minute bars, and Polygon is US-only**. The calendar is already MIC-parametrized (CLAUDE.md "exchange-parametrized calendar helper"), but **the price-data source is not** — XWAR/XTKS/XHKG/XSHG need their own minute-bar vendors. That is the real cost/decision, and any new bar vendor is subject to the **mandatory data-vendor PIT-validation gate** (CLAUDE.md research methodology: ≥5 sector-diverse anchor events × 2-source triangulation, HALT on fail). **Multi-exchange feedback is blocked on price-vendor coverage before the schedule even matters.**
+
+### 9.4 Recommendation
+
+- **Now:** no change. The XNYS chain is correct; the `06:30→08:30 UTC` lag is cosmetic.
+- **At multi-exchange (P3):** fold the replay/ingest schedule into the same MIC-keyed session infrastructure as the news window — per-MIC trigger at `session_close_utc(MIC) + buffer`, ingest immediately after. First resolve the **per-exchange minute-bar vendor** (gated by PIT validation); the schedule is meaningless without it.
+- This output-side thread is the feedback-side twin of §1/§4 and should ship in the same P3 epoch, not as a separate scheduler design.
