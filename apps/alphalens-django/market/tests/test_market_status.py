@@ -187,6 +187,25 @@ class TestIntradaySession:
         instant = dt.datetime(2026, 5, 29, 15, 0)  # noqa: DTZ001 — UTC assumed
         assert is_session_open_at(instant) is True
 
+    def test_exact_open_minute_is_open(self):
+        from market.calendar import is_session_open_at
+
+        # Pin the library's boundary contract: the open minute (09:30 ET =
+        # 13:30 UTC on this EDT date) counts as in-session, so the chip
+        # flips to "open" exactly at the bell, not a minute late.
+        instant = dt.datetime(2026, 5, 29, 13, 30, 0, tzinfo=dt.UTC)
+        assert is_session_open_at(instant) is True
+
+    def test_exact_close_minute_is_closed(self):
+        from market.calendar import is_session_open_at
+
+        # The close minute (16:00 ET = 20:00 UTC) counts as NOT in-session —
+        # ``exchange_calendars`` treats sessions as left-closed/right-open, so
+        # the chip flips to "closed" at the bell. Pinning this guards against
+        # a library default-``side`` change silently shifting the boundary.
+        instant = dt.datetime(2026, 5, 29, 20, 0, 0, tzinfo=dt.UTC)
+        assert is_session_open_at(instant) is False
+
 
 class TestSchema:
     def test_response_shape_keys(self, client: APIClient):

@@ -33,34 +33,36 @@ for (const day of DAYS_INDEX) {
 	}
 }
 
-// Trading-day mock for /v1/market/status — the layout poll fires on
-// every page load (PR-C), and the default smoke fixture wants the
-// banner OFF (closed-market banner is exercised by tests/market-status.test.ts).
+// Open-market mock for /v1/market/status — the layout poll fires on every
+// page load, so the footer session chip needs a realistic "open" payload.
 // A 404 fallback would trip the "Failed to load resource" browser console
-// error and fail every route's console-clean assertion.
+// error and fail every route's console-clean assertion. The chip's content
+// (open/closed, countdown) is exercised by tests/market-session.test.ts;
+// here we only need a well-formed body that renders the "open" branch so
+// the smoke routes don't surface a stale closed/2099 chip state.
 //
-// ``next_open_iso: '2099-01-01'`` is a never-reached sentinel — the banner
-// short-circuits on ``is_trading_day: true`` and never reads it. A future
-// test that asserts on next_open date content rather than just banner
-// visibility would see the sentinel; tests/market-status.test.ts builds a
-// realistic ``next_open_iso`` from ``Date.now()`` for those assertions.
-// Flag surfaced by zen review 2026-05-30.
-const MARKET_STATUS_TRADING_BODY = JSON.stringify({
+// ``next_open_iso`` is a never-reached sentinel (the chip reads it only when
+// closed). ``next_close_iso`` is ~2h out so the open chip's "closes in 2h"
+// tail is plausible; it isn't asserted here, so the relative timestamp is
+// harmless to determinism.
+const MARKET_STATUS_OPEN_BODY = JSON.stringify({
 	is_trading_day: true,
 	is_half_day: false,
+	is_open_now: true,
 	next_open_iso: '2099-01-01T13:30:00+00:00',
+	next_close_iso: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
 	exchange: 'XNYS'
 });
 
 function installApiMock(page: Page) {
 	return page.route('**/api/v1/**', (route) => {
 		const url = new URL(route.request().url());
-		// /api/v1/market/status — fixed trading-day stub so the banner stays hidden.
+		// /api/v1/market/status — fixed open-market stub for the session chip.
 		if (url.pathname === '/api/v1/market/status') {
 			return route.fulfill({
 				status: 200,
 				contentType: 'application/json',
-				body: MARKET_STATUS_TRADING_BODY
+				body: MARKET_STATUS_OPEN_BODY
 			});
 		}
 		// /api/v1/days[?limit=…]
