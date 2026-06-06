@@ -205,5 +205,8 @@ test.describe('MarketSession chip — mobile footer density', () => {
 		await expect(page.getByTestId('market-session')).toBeVisible();
 		await expect(page.getByTestId('footer-clock')).toBeVisible();
 		await expect(page.getByTestId('footer-db')).toBeVisible();
+		// Slogan ticker (now sourced from $lib/pipelineFacts) still renders —
+		// the first chip is left-aligned and fully visible at this width.
+		await expect(page.getByText('PRESS-GATE')).toBeVisible();
 	});
 });
