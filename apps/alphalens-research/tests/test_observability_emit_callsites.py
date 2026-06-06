@@ -762,23 +762,17 @@ class TestBackfillRefreshesPopulationLadders(unittest.TestCase):
             recorded.append(briefs_dir)
 
         with tempfile.TemporaryDirectory() as tmp:
-            ledger = Path(tmp) / "feedback.db"
             briefs_dir = Path(tmp) / "thematic_briefs"
-            with (
-                patch.object(feedback, "_refresh_ladder_outcomes"),
-                patch.object(
-                    feedback,
-                    "_refresh_population_ladders",
-                    side_effect=fake_refresh,
-                ),
+            with patch.object(
+                feedback,
+                "_refresh_population_ladders",
+                side_effect=fake_refresh,
             ):
                 result = runner.invoke(
                     app,
                     [
                         "feedback",
                         "backfill-shadow-returns",
-                        "--ledger",
-                        str(ledger),
                         "--briefs-dir",
                         str(briefs_dir),
                     ],

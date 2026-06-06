@@ -90,7 +90,7 @@ MONITOR_LOOKBACK_DAYS = 75
 _MAX_FETCHES_PER_RUN = 150
 
 # Minutes of the horizon-end session to include so the replay path covers the
-# full session (open → close, half-days too). Mirrors ladder_backfill.
+# full session (open → close, half-days too).
 _HORIZON_SESSION_SPAN_MIN = 480
 
 # Terminal classifications: the position is fully resolved and will not change on

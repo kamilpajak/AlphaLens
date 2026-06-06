@@ -1,8 +1,7 @@
 """Shared broker-free VWAP-anchor / bar-fetch primitives.
 
 These are the price-path replay building blocks consumed by the surviving
-broker-free feedback engines — the ladder replay
-(:mod:`alphalens_pipeline.feedback.ladder_backfill`) and the population monitor
+broker-free feedback engine — the population monitor
 (:mod:`alphalens_pipeline.feedback.population_ladder_monitor`). They were
 formerly housed in ``shadow_return.py`` (deleted with the broker chain); the
 arrival opening-window VWAP arithmetic, the implausible-move guard threshold,
@@ -35,12 +34,12 @@ HOLDING_HORIZON_TRADING_DAYS = 5
 # and flag rather than stamp a corrupted value.
 IMPLAUSIBLE_RETURN_THRESHOLD = 0.60
 
-# Default look-back window (calendar days) for the nightly sweep. A brief matures
-# ~6-8 calendar days after its build (5 trading sessions + the (D-1) dating), so
-# 14 days gives margin to re-price after VPS downtime or a rate-limit timeout.
-# Duplicated CLI-side as ``_DEFAULT_LOOKBACK_DAYS`` (typer evaluates Option
-# defaults at import time and the CLI lazy-imports this module) — parity pinned
-# by ``test_cli_lookback_default_in_sync_with_module`` (against ``bar_window``).
+# The fixed 5-session maturity window (calendar days). A brief matures ~6-8
+# calendar days after its build (5 trading sessions + the (D-1) dating), so 14
+# days gives margin. Referenced by the population monitor as the contrast against
+# its own much larger ``MONITOR_LOOKBACK_DAYS``. (No longer fed to a CLI option:
+# the per-decision ladder replay that used it was removed with the click ledger,
+# #465; the population monitor uses its own lookback.)
 DEFAULT_LOOKBACK_DAYS = 14
 
 # A bar (dict) → ticker, window start, window end → list of Polygon agg bars.
