@@ -4,7 +4,7 @@
 	import { Activity, Database, Triangle } from 'lucide-svelte';
 	import favicon from '$lib/assets/favicon.svg';
 	import { MODELS } from '$lib/models';
-	import MarketStatusBanner from '$lib/components/MarketStatusBanner.svelte';
+	import MarketSession from '$lib/components/MarketSession.svelte';
 	import { startMarketStatusPoll } from '$lib/marketStatus.svelte';
 
 	let { children } = $props();
@@ -88,7 +88,9 @@
 	class="scanlines grain min-h-screen flex flex-col"
 	data-sveltekit-reload={updated.current ? '' : 'off'}
 >
-	<!-- Top status bar -->
+	<!-- Top bar — identity + navigation only. Ambient telemetry (live /
+	     session / db / clock) lives in the footer so this row never wraps
+	     accidentally on narrow viewports. -->
 	<header class="border-b border-grid bg-bg-1 text-[11px] uppercase tracking-widest">
 		<div class="flex flex-wrap items-center gap-x-4 gap-y-1 sm:gap-x-6 px-3 sm:px-4 py-2">
 			<a href="/" class="flex items-center gap-2 font-display font-bold text-amber text-base tracking-[0.2em]">
@@ -122,11 +124,24 @@
 					<span class="hidden sm:inline">[06]&nbsp;</span>api <span aria-hidden="true">↗</span>
 				</a>
 			</nav>
-			<div class="ml-auto flex items-center gap-3 sm:gap-5 text-fg-muted">
+		</div>
+	</header>
+
+	<main class="flex-1">
+		{@render children()}
+	</main>
+
+	<!-- Bottom status bar. Left: system telemetry (live / market session /
+	     db / clock) — shrink-0, never clipped. Middle: route-keyed slogan
+	     ticker — flex-1, clips first when space is tight. Right: version. -->
+	<footer class="border-t border-grid bg-bg-1 text-[10px] uppercase tracking-widest text-fg-muted">
+		<div class="flex items-center gap-x-5 px-4 py-2">
+			<div class="flex shrink-0 items-center gap-3 sm:gap-4">
 				<span class="flex items-center gap-1.5">
 					<span class="dot bg-green blink"></span>
 					<span class="text-green">live</span>
 				</span>
+				<MarketSession />
 				<span class="hidden md:flex items-center gap-1.5">
 					<Database class="size-3" />
 					<span>~/.alphalens</span>
@@ -136,25 +151,12 @@
 					<span class="whitespace-nowrap">{now} utc</span>
 				</span>
 			</div>
-		</div>
-	</header>
-
-	<!-- Closed-market banner above main content. Self-hides on trading days
-	     and during the pre-load window; non-trading days get the persistent
-	     "submission deferred until …" chrome rendered globally. -->
-	<MarketStatusBanner />
-
-	<main class="flex-1">
-		{@render children()}
-	</main>
-
-	<!-- Bottom ticker / status — chips switch per route via $derived(ticker). -->
-	<footer class="border-t border-grid bg-bg-1 text-[10px] uppercase tracking-widest text-fg-muted overflow-hidden">
-		<div class="flex items-center gap-6 px-4 py-2 whitespace-nowrap">
-			{#each ticker as chip}
-				<span class="text-amber">{chip.label}</span><span>{chip.value}</span>
-			{/each}
-			<span class="ml-auto">v0.1</span>
+			<div class="hidden lg:flex flex-1 items-center gap-6 overflow-hidden whitespace-nowrap text-fg-muted/80">
+				{#each ticker as chip}
+					<span class="flex items-center gap-1.5"><span class="text-amber">{chip.label}</span><span>{chip.value}</span></span>
+				{/each}
+			</div>
+			<span class="ml-auto shrink-0">v0.1</span>
 		</div>
 	</footer>
 </div>

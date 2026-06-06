@@ -104,24 +104,113 @@ class TestInvalidAsOf:
         assert res.status_code == 400
 
 
+class TestIntradaySession:
+    """Minute-resolution ``is_session_open_at`` / ``next_session_close_utc``.
+
+    The day-level fields (``is_trading_day`` etc.) answer "what about day D";
+    these two helpers answer "right now". They feed the SPA's per-exchange
+    session chip (open/closed + countdown to the next close while open). The
+    view passes ``datetime.now(UTC)``; here we pin explicit instants so the
+    branches are deterministic without freezing the clock.
+
+    Late-May is EDT (UTC-4): XNYS regular session 09:30→16:00 ET maps to
+    13:30→20:00 UTC. Black Friday is EST (UTC-5) with an early 13:00 ET close
+    (18:00 UTC).
+    """
+
+    def test_open_during_regular_session(self):
+        from market.calendar import is_session_open_at
+
+        # Fri 2026-05-29 15:00 UTC == 11:00 ET — mid-session.
+        instant = dt.datetime(2026, 5, 29, 15, 0, tzinfo=dt.UTC)
+        assert is_session_open_at(instant) is True
+
+    def test_closed_before_open(self):
+        from market.calendar import is_session_open_at
+
+        # Fri 2026-05-29 09:00 UTC == 05:00 ET — pre-market.
+        instant = dt.datetime(2026, 5, 29, 9, 0, tzinfo=dt.UTC)
+        assert is_session_open_at(instant) is False
+
+    def test_closed_after_close(self):
+        from market.calendar import is_session_open_at
+
+        # Fri 2026-05-29 21:00 UTC == 17:00 ET — after the 16:00 ET close.
+        instant = dt.datetime(2026, 5, 29, 21, 0, tzinfo=dt.UTC)
+        assert is_session_open_at(instant) is False
+
+    def test_closed_on_weekend(self):
+        from market.calendar import is_session_open_at
+
+        # Sat 2026-05-30 15:00 UTC — no session at all.
+        instant = dt.datetime(2026, 5, 30, 15, 0, tzinfo=dt.UTC)
+        assert is_session_open_at(instant) is False
+
+    def test_half_day_open_before_early_close(self):
+        from market.calendar import is_session_open_at
+
+        # Black Friday 2026-11-27 17:00 UTC == 12:00 ET — before the 13:00 ET
+        # early close, so the venue is open.
+        instant = dt.datetime(2026, 11, 27, 17, 0, tzinfo=dt.UTC)
+        assert is_session_open_at(instant) is True
+
+    def test_half_day_closed_after_early_close(self):
+        from market.calendar import is_session_open_at
+
+        # Black Friday 2026-11-27 19:00 UTC == 14:00 ET — after the 13:00 ET
+        # early close. A naive "is it a trading day" check would miss this.
+        instant = dt.datetime(2026, 11, 27, 19, 0, tzinfo=dt.UTC)
+        assert is_session_open_at(instant) is False
+
+    def test_next_close_is_todays_close_when_open(self):
+        from market.calendar import next_session_close_utc
+
+        # Mid-session Fri → next close is today's 16:00 ET (20:00 UTC).
+        instant = dt.datetime(2026, 5, 29, 15, 0, tzinfo=dt.UTC)
+        nxt = next_session_close_utc(instant)
+        assert nxt.isoformat() == "2026-05-29T20:00:00+00:00"
+
+    def test_next_close_is_early_close_on_half_day(self):
+        from market.calendar import next_session_close_utc
+
+        # Mid-session Black Friday → next close is the early 13:00 ET
+        # (18:00 UTC), not the regular 16:00 ET.
+        instant = dt.datetime(2026, 11, 27, 17, 0, tzinfo=dt.UTC)
+        nxt = next_session_close_utc(instant)
+        assert nxt.isoformat() == "2026-11-27T18:00:00+00:00"
+
+    def test_naive_instant_assumed_utc(self):
+        from market.calendar import is_session_open_at
+
+        # A naive datetime must be read as UTC, not local — the view passes
+        # tz-aware now() but the helper is robust either way.
+        instant = dt.datetime(2026, 5, 29, 15, 0)  # noqa: DTZ001 — UTC assumed
+        assert is_session_open_at(instant) is True
+
+
 class TestSchema:
     def test_response_shape_keys(self, client: APIClient):
-        """Stable contract for the SPA banner: exactly these four keys."""
+        """Stable contract for the SPA session chip: exactly these six keys."""
         res = client.get("/v1/market/status?as_of=2026-05-29")
         body = res.json()
 
         assert set(body.keys()) == {
             "is_trading_day",
             "is_half_day",
+            "is_open_now",
             "next_open_iso",
+            "next_close_iso",
             "exchange",
         }
-        # next_open is a tz-aware ISO 8601 string the SPA can hand
-        # straight to ``new Date(...)``. We assert parseability rather
-        # than a literal because half-day vs full-day open semantics
-        # are covered by the dedicated tests above.
-        parsed = dt.datetime.fromisoformat(body["next_open_iso"])
-        assert parsed.tzinfo is not None
+        # next_open / next_close are tz-aware ISO 8601 strings the SPA can
+        # hand straight to ``new Date(...)``. We assert parseability rather
+        # than a literal because half-day vs full-day semantics are covered
+        # by the dedicated tests above; ``is_open_now`` depends on wall-clock
+        # so we only pin its type here.
+        for key in ("next_open_iso", "next_close_iso"):
+            parsed = dt.datetime.fromisoformat(body[key])
+            assert parsed.tzinfo is not None
+        assert isinstance(body["is_open_now"], bool)
 
 
 class TestDefaultAnchor:

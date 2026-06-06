@@ -187,5 +187,14 @@
 				{/each}
 			</div>
 		</div>
+
+		<!-- Freshness caveat. Relocated here from the old global
+		     market-status banner: the ladder geometry is anchored to the
+		     reference last close shown above, so the limit/target prices
+		     stay fixed while the venue is closed and only move once a new
+		     session's close re-anchors the next brief. -->
+		<p class="relative mt-3 text-[10px] uppercase tracking-widest text-fg-muted/70">
+			ladder anchored to last close · prices static while market closed
+		</p>
 	{/if}
 </section>
