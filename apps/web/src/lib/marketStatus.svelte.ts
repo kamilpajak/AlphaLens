@@ -1,6 +1,6 @@
 /**
  * Client for ``/v1/market/status`` — polls the Django endpoint that
- * projects XNYS calendar state for the closed-market banner.
+ * projects XNYS calendar state for the per-exchange session chip.
  *
  * Single source-of-truth design: every component that needs market state
  * imports ``marketStatus`` from this module. Background refresh is owned
@@ -11,13 +11,10 @@
  * Refresh cadence: 60 s. The endpoint is read-only and downstream of an
  * in-process calendar lookup, so the cost is dominated by network RTT
  * (~50 ms cross-origin to api.alphalens.kamilpajak.pl). 60 s is short
- * enough that the banner appears/disappears within a session boundary,
+ * enough that the chip flips open↔closed within a session boundary,
  * long enough that an idle tab doesn't hammer CF Access. The SPA also
  * re-polls on ``visibilitychange`` so a tab waking from background
  * doesn't display a stale "closed" indicator after the market opens.
- *
- * Design memo: ``docs/research/paper_trading_non_trading_day_2026_05_29.md``
- * §5 (PR-C sequencing).
  */
 
 import { apiFetch } from '$lib/api';
@@ -25,7 +22,15 @@ import { apiFetch } from '$lib/api';
 export interface MarketStatus {
 	is_trading_day: boolean;
 	is_half_day: boolean;
+	/** True when the venue is in a regular session at the current instant
+	 *  (minute-resolution; honours early closes). Drives the session chip's
+	 *  open/closed state — distinct from ``is_trading_day`` which is
+	 *  day-granular and can't tell a pre-open Monday from mid-session. */
+	is_open_now: boolean;
 	next_open_iso: string;
+	/** UTC ISO 8601 of the next session close. Read only while
+	 *  ``is_open_now`` is true, to render a "closes in HH:MM" countdown. */
+	next_close_iso: string;
 	exchange: string;
 }
 
@@ -140,16 +145,17 @@ export function startMarketStatusPoll(
 }
 
 /**
- * Format a millisecond duration as a compact "in 1h 24m" style string.
+ * Format a millisecond duration as a compact "1h 24m" style string.
  *
- * Exported so the banner template can render it without re-deriving the
- * math and so tests can assert the formatting directly. Sub-minute
- * residual is rounded down to "<1m" instead of showing 0 — we'd rather
- * understate than disappear the countdown entirely on the last tick
- * before the market actually opens.
+ * Caller-neutral: the session chip prefixes the verb ("opens in …" /
+ * "closes in …"), so this returns the bare duration. Sub-minute residual
+ * rounds down to "<1m" instead of showing 0 — we'd rather understate than
+ * disappear the countdown on the last tick before the boundary. A
+ * non-positive duration (the boundary just passed, before the next poll
+ * refreshes state) renders "now".
  */
 export function formatCountdown(ms: number): string {
-	if (ms <= 0) return 'opening now';
+	if (ms <= 0) return 'now';
 	const totalMinutes = Math.floor(ms / 60_000);
 	if (totalMinutes < 1) return '<1m';
 	const days = Math.floor(totalMinutes / (60 * 24));

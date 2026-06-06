@@ -120,7 +120,7 @@ export interface paths {
         };
         /**
          * Current market-status snapshot
-         * @description Returns whether the requested venue (defaulting to XNYS) is currently in a regular session, whether today's session is a half-day, and the UTC ISO 8601 timestamp of the next session open. Anchored on UTC today unless ``?as_of=YYYY-MM-DD`` is supplied.
+         * @description Returns whether the requested venue (defaulting to XNYS) holds a session on the anchor date, whether that session is a half-day, whether the venue is in a regular session right now, and the UTC ISO 8601 timestamps of the next session open and next session close. The day-level fields (``is_trading_day``, ``is_half_day``, ``next_open_iso``) are anchored on UTC today unless ``?as_of=YYYY-MM-DD`` is supplied; the intraday fields (``is_open_now``, ``next_close_iso``) always reflect the current wall-clock instant.
          */
         get: operations["market_status_retrieve"];
         put?: never;
@@ -412,8 +412,11 @@ export interface components {
         MarketStatus: {
             is_trading_day: boolean;
             is_half_day: boolean;
+            is_open_now: boolean;
             /** Format: date-time */
             next_open_iso: string;
+            /** Format: date-time */
+            next_close_iso: string;
             exchange: string;
         };
         /** @description Ongoing positions as a DESCRIPTIVE distribution (never a scalar mean). */

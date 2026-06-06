@@ -59,6 +59,18 @@ def _session_ts(d: dt.date) -> pd.Timestamp:
     return pd.Timestamp(d)
 
 
+def _utc_minute_ts(instant: dt.datetime) -> pd.Timestamp:
+    """UTC, minute-floored Timestamp for minute-resolution session queries.
+
+    A naive ``instant`` is assumed UTC. ``is_open_on_minute`` requires
+    minute resolution; flooring sub-minute precision off ``now()`` keeps the
+    query well-formed and the result stable across a poll window.
+    """
+    ts = pd.Timestamp(instant)
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+    return ts.floor("min")
+
+
 def is_trading_day(d: dt.date, exchange: str = DEFAULT_EXCHANGE) -> bool:
     """True when ``exchange`` holds a session (full or half-day) on ``d``."""
     return bool(_calendar(exchange).is_session(_session_ts(d)))
@@ -119,4 +131,35 @@ def next_trading_open_utc(
     """
     after_ts = pd.Timestamp(anchor, tz="UTC") + pd.Timedelta(hours=23, minutes=59)
     nxt = _calendar(exchange).next_open(after_ts)
+    return nxt.to_pydatetime().astimezone(dt.UTC)
+
+
+def is_session_open_at(
+    instant: dt.datetime,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> bool:
+    """True when ``exchange`` is in a regular trading session at ``instant``.
+
+    Minute-resolution check via ``exchange_calendars.is_open_on_minute`` so it
+    honours early closes (half-days) and any lunch breaks exactly as the
+    library's own schedule does — unlike the day-level ``is_trading_day``,
+    which can't tell a Monday pre-open from mid-session. ``instant`` is
+    normalised to UTC (naive datetimes assumed UTC).
+    """
+    return bool(_calendar(exchange).is_open_on_minute(_utc_minute_ts(instant)))
+
+
+def next_session_close_utc(
+    instant: dt.datetime,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> dt.datetime:
+    """UTC datetime of the next session close on ``exchange`` strictly after
+    ``instant``.
+
+    When the venue is open at ``instant`` this is today's close (the early
+    close on a half-day, not the regular one); when closed it is the next
+    session's close. The SPA reads it only while ``is_open_now`` is true, to
+    render a "closes in HH:MM" countdown.
+    """
+    nxt = _calendar(exchange).next_close(_utc_minute_ts(instant))
     return nxt.to_pydatetime().astimezone(dt.UTC)

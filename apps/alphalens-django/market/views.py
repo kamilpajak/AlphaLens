@@ -1,17 +1,14 @@
-"""``/v1/market/status`` — XNYS-state projection for the SPA banner.
+"""``/v1/market/status`` — XNYS-state projection for the SPA session chip.
 
 One GET endpoint, no database. Reads ``market.calendar`` (a thin wrapper
-around the ``exchange_calendars`` library) to answer "is the market open
-right now, is it a half-day, when is the next open?" — the four data
-points the SvelteKit ``MarketStatusBanner`` needs to render its
-closed-market countdown.
+around the ``exchange_calendars`` library) to answer "does the venue trade
+today, is it a half-day, is it open right now, when is the next open/close?"
+— the data the SvelteKit per-exchange session chip needs.
 
-``?as_of=YYYY-MM-DD`` pins the anchor for deterministic tests + operator
-debugging. Without it the view defaults to ``datetime.now(UTC).date()``;
-the SPA never passes ``as_of``.
-
-Design memo: ``docs/research/paper_trading_non_trading_day_2026_05_29.md``
-§5 (PR-C sequencing).
+``?as_of=YYYY-MM-DD`` pins the anchor for the day-level fields in
+deterministic tests + operator debugging. Without it those fields default
+to ``datetime.now(UTC).date()``; the intraday fields always use the real
+current instant. The SPA never passes ``as_of``.
 """
 
 from __future__ import annotations
@@ -45,20 +42,25 @@ def _parse_as_of(raw: str) -> dt.date:
 
 
 class MarketStatusView(APIView):
-    """Read-only XNYS state snapshot. Read CLAUDE.md "Layer 1" — this is
-    decision-support telemetry for the paper-trade submitter, exposed
-    to the SPA so closed-market days surface a banner instead of users
-    refreshing wondering why no orders are flowing."""
+    """Read-only XNYS state snapshot. Ambient market-session telemetry for
+    the SPA's per-exchange session chip — answers "is the venue open right
+    now, when does it next open/close" so a reader can tell whether the
+    prices in a brief are live or anchored to the last close. No order flow
+    is involved (the paper-trade/broker chain was decommissioned, ADR 0012)."""
 
     @extend_schema(
         operation_id="market_status_retrieve",
         summary="Current market-status snapshot",
         description=(
-            "Returns whether the requested venue (defaulting to XNYS) is "
-            "currently in a regular session, whether today's session is a "
-            "half-day, and the UTC ISO 8601 timestamp of the next session "
-            "open. Anchored on UTC today unless ``?as_of=YYYY-MM-DD`` is "
-            "supplied."
+            "Returns whether the requested venue (defaulting to XNYS) holds "
+            "a session on the anchor date, whether that session is a "
+            "half-day, whether the venue is in a regular session right now, "
+            "and the UTC ISO 8601 timestamps of the next session open and "
+            "next session close. The day-level fields (``is_trading_day``, "
+            "``is_half_day``, ``next_open_iso``) are anchored on UTC today "
+            "unless ``?as_of=YYYY-MM-DD`` is supplied; the intraday fields "
+            "(``is_open_now``, ``next_close_iso``) always reflect the "
+            "current wall-clock instant."
         ),
         parameters=[
             OpenApiParameter(
@@ -79,7 +81,9 @@ class MarketStatusView(APIView):
                 fields={
                     "is_trading_day": serializers.BooleanField(),
                     "is_half_day": serializers.BooleanField(),
+                    "is_open_now": serializers.BooleanField(),
                     "next_open_iso": serializers.DateTimeField(),
+                    "next_close_iso": serializers.DateTimeField(),
                     "exchange": serializers.CharField(),
                 },
             ),
@@ -104,6 +108,15 @@ class MarketStatusView(APIView):
         is_half = market_calendar.is_half_day(anchor, exchange=exchange)
         next_open = market_calendar.next_trading_open_utc(anchor, exchange=exchange)
 
+        # Intraday fields reflect the real current instant regardless of
+        # ``as_of`` — "is the venue open right now / when does it next close"
+        # is a wall-clock question, while the day-level fields above answer
+        # "what about the anchor date". The SPA's session chip reads
+        # ``next_close_iso`` only while ``is_open_now`` is true.
+        now = dt.datetime.now(dt.UTC)
+        is_open_now = market_calendar.is_session_open_at(now, exchange=exchange)
+        next_close = market_calendar.next_session_close_utc(now, exchange=exchange)
+
         # ``isoformat`` on a tz-aware datetime emits ``+00:00`` rather
         # than ``Z``; the SPA's ``new Date(...)`` parses both, but the
         # explicit offset reads more obviously to a human inspecting the
@@ -112,7 +125,9 @@ class MarketStatusView(APIView):
             {
                 "is_trading_day": is_trading,
                 "is_half_day": is_half,
+                "is_open_now": is_open_now,
                 "next_open_iso": next_open.isoformat(),
+                "next_close_iso": next_close.isoformat(),
                 "exchange": exchange,
             }
         )
