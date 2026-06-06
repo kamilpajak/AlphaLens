@@ -319,7 +319,7 @@
 			<div class="text-[10px] uppercase tracking-widest text-red mb-2">bear.case</div>
 			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_bear_summary_md ?? '—'}</p>
 		</div>
-		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 border-t lg:border-t-0">
+		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 border-grid border-t lg:border-t-0">
 			<div class="text-[10px] uppercase tracking-widest text-amber mb-2">catalyst.failure.exit</div>
 			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_catalyst_failure_exit ?? '—'}</p>
 		</div>
