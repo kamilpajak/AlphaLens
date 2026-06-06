@@ -12,7 +12,10 @@
 	let now = $state('');
 	$effect(() => {
 		const tick = () => {
-			now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+			// Minute precision (drop seconds): narrower in the footer and the
+			// per-second interval becomes a no-op assignment for 59s of every
+			// minute (Svelte skips equal-value $state writes), so no churn.
+			now = new Date().toISOString().slice(0, 16).replace('T', ' ');
 		};
 		tick();
 		const id = setInterval(tick, 1000);
@@ -142,11 +145,14 @@
 					<span class="text-green">live</span>
 				</span>
 				<MarketSession />
-				<span class="hidden md:flex items-center gap-1.5">
+				<!-- db path + clock are pure ambient flavour — desktop only (lg+).
+				     On mobile the footer keeps just live + the session chip so
+				     it never overflows a narrow viewport. -->
+				<span data-testid="footer-db" class="hidden lg:flex items-center gap-1.5">
 					<Database class="size-3" />
 					<span>~/.alphalens</span>
 				</span>
-				<span class="hidden sm:flex items-center gap-1.5">
+				<span data-testid="footer-clock" class="hidden lg:flex items-center gap-1.5">
 					<Activity class="size-3" />
 					<span class="whitespace-nowrap">{now} utc</span>
 				</span>
