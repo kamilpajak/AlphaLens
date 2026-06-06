@@ -33,8 +33,8 @@ Three measurement layers (design memo §5.0), in priority order:
 
 Pure + deterministic: this module imports nothing from the store / Polygon /
 broker. It takes a parsed trade-setup dict + a list of OHLC bars and returns a
-:class:`LadderOutcome`. Enumeration, Polygon fetch and the feedback-ledger write
-live in the caller (``ladder_backfill``).
+:class:`LadderOutcome`. Brief enumeration, the Polygon fetch and the parquet
+write live in the caller (``population_ladder_monitor``).
 """
 
 from __future__ import annotations

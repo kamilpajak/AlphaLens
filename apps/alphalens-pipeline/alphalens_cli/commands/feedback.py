@@ -1,13 +1,14 @@
 """CLI: ``alphalens feedback`` subcommands for the broker-free feedback replay.
 
 Ships ``backfill-shadow-returns`` only — the nightly VPS timer entrypoint that
-drives the broker-free ladder + population-monitor replay engines (market-
-behavior feedback). The Track-A user-action report histogram was removed with
-the click ledger.
+drives the broker-free population-monitor replay engine (market-behavior
+feedback). The Track-A user-action click ledger was removed (#465), so the
+per-decision ladder replay that read the ``decisions`` table is gone too; the
+population monitor (briefs + Polygon, parquet-only) is the sole feedback signal.
 
 Lazy imports inside the command body keep the ``alphalens`` CLI startup time low
-(Layer-1 ``edgar-detect`` cron ticks must not pay for pandas / sqlite import
-cost we don't need on that path).
+(Layer-1 ``edgar-detect`` cron ticks must not pay for pandas import cost we don't
+need on that path).
 """
 
 from __future__ import annotations
@@ -25,81 +26,39 @@ feedback_app = typer.Typer(
     no_args_is_help=True,
 )
 
-# Duplicates ``bar_window.DEFAULT_LOOKBACK_DAYS`` because typer.Option
-# evaluates its default at import time and this CLI lazy-imports the feedback
-# module inside command bodies (keeps the pipeline → research direction clean +
-# the CLI startup cheap). Parity pinned by
-# ``test_cli_lookback_default_in_sync_with_module``.
-_DEFAULT_LOOKBACK_DAYS = 14
-
-# Per-user runtime data root (``~/.alphalens``). Holds the feedback ledger and
-# the daily thematic brief parquets the broker-free replay reads.
+# Per-user runtime data root (``~/.alphalens``). Holds the daily thematic brief
+# parquets the broker-free population replay reads.
 _ALPHALENS_HOME = Path.home() / ".alphalens"
 
 
 # NOTE: the command name ``backfill-shadow-returns`` is retained for the existing
 # systemd unit ``alphalens-feedback-shadow-returns.service`` (renaming would force
 # VPS-survivor churn). The legacy shadow-return / execution-quality metrics were
-# removed with the broker chain; this command now drives only the broker-free
-# replay engines. A rename is a deferred follow-up.
+# removed with the broker chain, and the per-decision ladder replay went with the
+# click ledger (#465); this command now drives only the population monitor. A
+# rename is a deferred follow-up.
 @feedback_app.command(name="backfill-shadow-returns")
 def backfill_shadow_returns_command(
-    lookback_days: int = typer.Option(
-        _DEFAULT_LOOKBACK_DAYS,
-        "--lookback-days",
-        help=(
-            "Calendar days to sweep back from today. The window is inclusive at "
-            "both ends, so N yields N+1 dates (default 14 → 15 dates)."
-        ),
-    ),
-    ledger: Path = typer.Option(
-        _ALPHALENS_HOME / "feedback.db",
-        "--ledger",
-        help="Override the default feedback ledger location.",
-    ),
     briefs_dir: Path = typer.Option(
         _ALPHALENS_HOME / "thematic_briefs",
         "--briefs-dir",
-        help="Directory of daily thematic brief parquets (for the broker-free ladder replay).",
+        help="Directory of daily thematic brief parquets (for the population replay).",
     ),
 ) -> None:
-    """Backfill the broker-free ladder + population-monitor outcomes.
+    """Backfill the broker-free population-monitor outcomes.
 
     The nightly VPS timer's entrypoint — it runs with NO ``--date`` so it needs
-    no date arithmetic. It first replays each matured feedback decision's ladder
-    over the ``--lookback-days`` window, then runs the population monitor over its
-    OWN much-larger lookback. Both are price-path replays over Polygon bars (no
-    broker). The legacy shadow-return / execution-quality metrics were removed
-    with the broker chain. Idempotent and resilient: per-ticker fetch failures
-    skip + warn, and one bad ticker never aborts the sweep.
+    no date arithmetic. It runs the population monitor over its OWN ~42-session
+    lookback, a price-path replay over Polygon bars (no broker). The legacy
+    shadow-return / execution-quality metrics were removed with the broker chain,
+    and the per-decision ladder replay went with the click ledger (#465).
+    Idempotent and resilient: per-ticker fetch failures skip + warn, and one bad
+    ticker never aborts the sweep.
     """
-    # Broker-free ladder replay over the maturity window.
-    _refresh_ladder_outcomes(ledger, briefs_dir, lookback_days=lookback_days)
     # Population ladder monitor: the broker-free full-hold replay over EVERY brief
-    # candidate, NOT just clicked decisions. It uses its OWN, much larger lookback
-    # (``MONITOR_LOOKBACK_DAYS`` ≈ the 42-session hold), NOT the command's
-    # ``--lookback-days``. Folded here so it reuses the 06:30 UTC timer (no new
-    # systemd unit). Never raises.
+    # candidate. It uses its OWN ~42-session lookback (``MONITOR_LOOKBACK_DAYS``).
+    # Never raises.
     _refresh_population_ladders(briefs_dir)
-
-
-def _refresh_ladder_outcomes(ledger: Path, briefs_dir: Path, *, lookback_days: int) -> None:
-    """Run the broker-free ladder replay over the maturity window. Never raises.
-
-    Folded into the nightly ``backfill-shadow-returns`` tail so it reuses the
-    06:30 UTC timer (no new systemd unit / alert rule). Intentionally swallow-all:
-    a replay or Polygon failure must NOT change the command's exit behaviour or
-    shadow the population-monitor refresh that follows.
-    """
-    try:
-        from alphalens_pipeline.feedback.ladder_backfill import replay_ladder_decisions_window
-
-        reports = replay_ladder_decisions_window(ledger, briefs_dir, lookback_days=lookback_days)
-        stamped = sum(r.stamped for r in reports)
-        matured = sum(1 for r in reports if r.matured)
-        typer.echo(f"ladder-replay: {stamped} decisions stamped across {matured} matured dates.")
-    except Exception:
-        logger.exception("ladder-replay refresh failed; continuing")
 
 
 def _refresh_population_ladders(briefs_dir: Path) -> None:
@@ -173,3 +132,29 @@ def _enrich_population_benchmark_excess() -> None:
         typer.echo(f"benchmark-excess: enriched {n} rows with market-excess return.")
     except Exception:
         logger.exception("benchmark-excess enrichment failed; continuing")
+
+
+@feedback_app.command(name="drop-decisions-table")
+def drop_decisions_table_command(
+    feedback_db: Path = typer.Option(
+        _ALPHALENS_HOME / "feedback.db",
+        "--feedback-db",
+        help="Path to the legacy feedback.db whose dead `decisions` table to drop.",
+    ),
+) -> None:
+    """One-shot operator teardown: drop the dead Track-A `decisions` table.
+
+    The user-action click ledger was removed (#465) and the per-decision store
+    subsystem was deleted, so nothing opens `feedback.db` at runtime any more —
+    a legacy host file just keeps dead historical decision rows around. This
+    drops that table (+ its indexes) so the orphaned file is clean. Idempotent
+    and safe to run zero/one/many times; it ONLY touches `feedback.db` and never
+    the population-ladder parquets (the live market-behavior feedback).
+    """
+    from alphalens_feedback import migrate
+
+    dropped = migrate.drop_decisions_table(feedback_db)
+    if dropped:
+        typer.echo(f"feedback teardown: dropped dead `decisions` table from {feedback_db}.")
+    else:
+        typer.echo(f"feedback teardown: {feedback_db} does not exist — nothing to drop.")

@@ -75,9 +75,9 @@ RUN uv sync --frozen --no-dev --no-install-workspace --package alphalens-pipelin
 # paradigm audits run on the laptop / runpod, not by the thematic daily
 # pipeline — intentionally omitted from this image. Mount via volume +
 # $ALPHALENS_DATA_ROOT if needed.
-# Shared feedback-ledger primitives (pure stdlib) — a declared workspace
-# dependency of alphalens-pipeline. `cache.py` imports `alphalens_feedback.regime`
-# (VIX cache refresh) and `feedback.ladder_backfill` imports the FeedbackStore.
+# Shared feedback primitive (pure stdlib) — a declared workspace dependency of
+# alphalens-pipeline. `cache.py` imports `alphalens_feedback.regime` (VIX cache
+# refresh). (The SQLite `store` was removed with the click ledger, #465.)
 COPY apps/alphalens-feedback/alphalens_feedback ./apps/alphalens-feedback/alphalens_feedback
 COPY apps/alphalens-pipeline/alphalens_pipeline ./apps/alphalens-pipeline/alphalens_pipeline
 COPY apps/alphalens-pipeline/alphalens_cli ./apps/alphalens-pipeline/alphalens_cli

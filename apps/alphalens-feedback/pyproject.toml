@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "alphalens-feedback"
 version = "0.1.0"
-description = "Shared, dependency-free feedback-ledger primitives (SQLite Decision store + VIX regime) consumed by BOTH the pipeline and the Django API."
+description = "Shared, dependency-free feedback primitives (VIX regime + dead-table teardown) consumed by BOTH the pipeline and the Django API."
 readme = "README.md"
 requires-python = ">=3.13"
-# INTENTIONALLY zero third-party dependencies — store.py + regime.py are
-# pure stdlib (sqlite3 / datetime / fcntl / json / uuid). This is what lets
-# the slim Django image import the ledger without pulling the heavy pipeline
-# dependency tree (yfinance / pandera / alpaca / scipy).
+# INTENTIONALLY zero third-party dependencies — regime.py + migrate.py are
+# pure stdlib (sqlite3 / datetime / json). This is what lets the slim Django
+# image import the regime helper without pulling the heavy pipeline dependency
+# tree (yfinance / pandera / scipy).
 # Adding a third-party dep here re-bloats the Django image — don't.
 dependencies = []
 

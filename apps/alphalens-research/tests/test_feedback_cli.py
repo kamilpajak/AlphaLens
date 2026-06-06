@@ -1,111 +1,111 @@
-"""Tests for the ``alphalens feedback backfill-shadow-returns`` operator CLI."""
+"""Tests for the ``alphalens feedback backfill-shadow-returns`` operator CLI.
+
+The command name is retained for the existing systemd unit
+``alphalens-feedback-shadow-returns.service``. After the Track-A click ledger
+removal (#465) the per-decision ladder replay (which read the ``decisions``
+table) is gone; the command now drives ONLY the broker-free, parquet-only
+population monitor. These tests pin: the population step is invoked, the command
+exits 0 and prints the population summary, and a population-step failure is
+swallowed (never aborts the nightly timer).
+"""
 
 from __future__ import annotations
 
-import datetime as dt
-import tempfile
 import unittest
-from pathlib import Path
+from unittest import mock
 
 from alphalens_cli.main import app
-from alphalens_feedback.store import Decision, FeedbackStore
 from typer.testing import CliRunner
-
-UTC = dt.UTC
 
 
 class TestFeedbackBackfillCommand(unittest.TestCase):
-    """`alphalens feedback backfill-shadow-returns` is the nightly timer's entrypoint.
+    def setUp(self):
+        self.runner = CliRunner()
 
-    The name is retained for the existing systemd unit; the command now drives
-    only the broker-free ladder + population-monitor replays. The seed date is
-    anchored relative to *today* so it always lands inside the default 14-day
-    window regardless of when the suite runs.
-    """
+    def test_command_invokes_population_monitor_and_exits_zero(self):
+        # Stub the population monitor + its enrichment tail (all lazy-imported in
+        # the command body) so the test never touches ~/.alphalens or Polygon.
+        fake_report = mock.Mock(terminal=2, ongoing=1)
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                return_value=[fake_report],
+            ) as replay,
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.enrich_store_with_size_fields",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.benchmark_excess.enrich_store_with_benchmark_excess",
+                return_value=0,
+            ),
+        ):
+            result = self.runner.invoke(
+                app,
+                ["feedback", "backfill-shadow-returns", "--briefs-dir", "/tmp/does-not-matter"],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("population-monitor", result.stdout)
+        replay.assert_called_once()
+
+    def test_population_failure_is_swallowed_command_still_exits_zero(self):
+        # A Polygon outage / replay error must NOT change the command's exit
+        # behaviour — the nightly timer must stay green so staleness alerting
+        # (not a non-zero exit) is the signal of a stuck job.
+        # The enrichment tail runs UNCONDITIONALLY after the replay try/except,
+        # so stub it too — otherwise it would hit the real ~/.alphalens store.
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                side_effect=RuntimeError("polygon down"),
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.enrich_store_with_size_fields",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.benchmark_excess.enrich_store_with_benchmark_excess",
+                return_value=0,
+            ),
+        ):
+            result = self.runner.invoke(
+                app,
+                ["feedback", "backfill-shadow-returns", "--briefs-dir", "/tmp/does-not-matter"],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.stdout)
+
+
+class TestFeedbackDropDecisionsTableCommand(unittest.TestCase):
+    """Pins the operator teardown command that drops the dead ``decisions`` table
+    from a legacy ``feedback.db`` (the schema-evolution follow-up: wires
+    ``alphalens_feedback.migrate.drop_decisions_table`` to an invokable CLI so the
+    orphaned host table can actually be cleaned)."""
 
     def setUp(self):
         self.runner = CliRunner()
-        self._td = tempfile.TemporaryDirectory()
-        self.fb_path = Path(self._td.name) / "feedback.db"
 
-    def tearDown(self):
-        self._td.cleanup()
-
-    def test_cli_lookback_default_in_sync_with_module(self):
-        from alphalens_cli.commands.feedback import _DEFAULT_LOOKBACK_DAYS
-        from alphalens_pipeline.feedback.bar_window import DEFAULT_LOOKBACK_DAYS
-
-        # typer.Option evaluates its default at import time and the CLI lazy-imports
-        # the feedback module inside the command body, so the literal is duplicated
-        # CLI-side. Pin parity (same hazard as preaudit _DEFAULT_SMOKE_TIMEOUT_S).
-        self.assertEqual(_DEFAULT_LOOKBACK_DAYS, DEFAULT_LOOKBACK_DAYS)
-        self.assertEqual(_DEFAULT_LOOKBACK_DAYS, 14)
-
-    def test_backfill_runs_ladder_replay_and_stamps(self):
-        # The broker-free ladder step must stamp the gen-4 columns from the
-        # nightly command. Provide a brief parquet + stub the ladder bar fetch.
-        import json
-
-        import pandas as pd
-        from alphalens_pipeline.feedback import ladder_backfill as lb
-
-        brief = dt.datetime.now(UTC).date() - dt.timedelta(days=12)
-        briefs_dir = Path(self._td.name) / "thematic_briefs"
-        briefs_dir.mkdir()
-        setup = {
-            "status": "OK",
-            "disaster_stop": 95.0,
-            "entry_tiers": [{"limit": 100.0, "alloc_pct": 100.0}],
-            "tp_tranches": [{"target": 110.0, "tranche_pct": 100.0}],
-        }
-        pd.DataFrame(
-            [{"ticker": "NVDA", "theme": "ai", "brief_trade_setup": json.dumps(setup)}]
-        ).to_parquet(briefs_dir / f"{brief.isoformat()}.parquet")
-        with FeedbackStore.open(self.fb_path) as fb:
-            fb.insert(
-                Decision(
-                    brief_date=brief,
-                    ticker="NVDA",
-                    theme="ai",
-                    surfaced_at=dt.datetime.now(UTC),
-                    action="interested",
-                    action_at=dt.datetime.now(UTC),
-                )
-            )
-
-        def fake_fetch(ticker, start, end):
-            base = int(start.timestamp() * 1000)
-            return [
-                {"t": base, "h": 101.0, "l": 99.0, "c": 100.0, "v": 100.0},
-                {"t": base + 60_000, "h": 111.0, "l": 100.0, "c": 110.0, "v": 100.0},
-            ]
-
-        orig_lb = lb._default_bar_fetch
-        lb._default_bar_fetch = fake_fetch
-        try:
+    def test_command_invokes_teardown_with_path_and_exits_zero(self):
+        with mock.patch(
+            "alphalens_feedback.migrate.drop_decisions_table", return_value=True
+        ) as drop:
             result = self.runner.invoke(
                 app,
-                [
-                    "feedback",
-                    "backfill-shadow-returns",
-                    "--ledger",
-                    str(self.fb_path),
-                    "--briefs-dir",
-                    str(briefs_dir),
-                ],
+                ["feedback", "drop-decisions-table", "--feedback-db", "/tmp/legacy-feedback.db"],
             )
-        finally:
-            lb._default_bar_fetch = orig_lb
-
         self.assertEqual(result.exit_code, 0, result.stdout)
-        self.assertIn("ladder-replay", result.stdout)
-        with FeedbackStore.open(self.fb_path) as fb:
-            row = fb.conn.execute(
-                "SELECT ladder_classification, realized_r FROM decisions "
-                "WHERE brief_date = ? AND ticker = 'NVDA'",
-                (brief.isoformat(),),
-            ).fetchone()
-        self.assertEqual(row["ladder_classification"], "TP_FULL")
+        drop.assert_called_once()
+        self.assertEqual(str(drop.call_args[0][0]), "/tmp/legacy-feedback.db")
+
+    def test_command_reports_noop_when_no_file(self):
+        with mock.patch("alphalens_feedback.migrate.drop_decisions_table", return_value=False):
+            result = self.runner.invoke(
+                app,
+                ["feedback", "drop-decisions-table", "--feedback-db", "/tmp/absent.db"],
+            )
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("nothing", result.stdout.lower())
 
 
 if __name__ == "__main__":
