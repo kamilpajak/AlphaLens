@@ -899,6 +899,48 @@ class TestForm4IncrementalDark(unittest.TestCase):
             self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
 
 
+class TestForm4IncrementalSustainedTransientErrors(unittest.TestCase):
+    """Pins for the chronic-SEC-fetch-failure alert (zen #477 HIGH).
+
+    rows_written can stay non-zero while one source keeps 403-ing, so the Dark
+    (rows==0) and Stale (last_success) rules miss it; a sustained transient-error
+    count is the only signal. DISTINCT alertname + NO ``job=`` label keep it out
+    of the cron-keyed enumerations, so it needs its OWN pins here.
+    """
+
+    ALERT = "AlphalensForm4IncrementalTransientErrors"
+    METRIC = "alphalens_form4_transient_errors"
+
+    def _one(self) -> dict:
+        matches = [r for r in _load_rules()["groups"][0]["rules"] if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_alert_exists(self) -> None:
+        self._one()
+
+    def test_expr_is_sustained_gauge_over_time_positive(self) -> None:
+        expr = self._one()["expr"]
+        self.assertIn(f"min_over_time({self.METRIC}", expr)
+        self.assertIn("> 0", expr)
+        # Gauge, not counter — must not use monotonic-counter functions.
+        for func in ("increase(", "rate(", "irate("):
+            self.assertNotIn(func, expr)
+
+    def test_has_for_debounce_and_routes_warning_telegram(self) -> None:
+        rule = self._one()
+        self.assertIn("for", rule)
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        rule = self._one()
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+
 class TestEdgarPressReleaseDoesNotCollideWithCronEnums(unittest.TestCase):
     """Regression pin: the #384 alerts stay isolated from the cron-keyed
     AlphalensJobStale / AlphalensJobMetricMissing machinery — same contract the

@@ -312,14 +312,19 @@ def latest_filed_date_in_store(parquet_root: Path) -> date | None:
     """
     if not parquet_root.is_dir():
         return None
+    # A corrupted far-future filed_date must not drive window sizing (it would
+    # shrink the window, not open a gap, but ignore it defensively anyway).
+    today = today_utc()
     latest: date | None = None
     for fp in sorted(parquet_root.glob("transaction_year=*/compacted.parquet")):
         try:
             col = pd.read_parquet(fp, columns=["filed_date"])["filed_date"]
         except Exception:  # unreadable/partial partition must not crash sizing
             continue
-        m = pd.to_datetime(col, errors="coerce").max()
-        if pd.notna(m):
-            d = m.date()
-            latest = d if latest is None else max(latest, d)
+        parsed = pd.to_datetime(col, errors="coerce")
+        parsed = parsed[parsed <= pd.Timestamp(today)]
+        if parsed.empty:
+            continue
+        d = parsed.max().date()
+        latest = d if latest is None else max(latest, d)
     return latest

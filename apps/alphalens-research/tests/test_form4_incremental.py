@@ -431,6 +431,19 @@ class TestLatestFiledDateInStore(unittest.TestCase):
                 pd.DataFrame({"filed_date": [filed]}).to_parquet(part / "compacted.parquet")
             self.assertEqual(latest_filed_date_in_store(root), date(2026, 5, 20))
 
+    def test_corrupted_future_filed_date_is_ignored(self) -> None:
+        # A far-future filed_date must not drive window sizing; the newest
+        # plausible (<= today) date wins instead.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            part = root / "transaction_year=2026"
+            part.mkdir(parents=True)
+            real = datetime.now(UTC).date() - timedelta(days=3)
+            pd.DataFrame({"filed_date": [real, date(2999, 1, 1)]}).to_parquet(
+                part / "compacted.parquet"
+            )
+            self.assertEqual(latest_filed_date_in_store(root), real)
+
 
 if __name__ == "__main__":
     unittest.main()

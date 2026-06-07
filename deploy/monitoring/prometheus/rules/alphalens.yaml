@@ -579,3 +579,21 @@ groups:
         annotations:
           summary: "Form-4 daily-incremental rows-written metric missing"
           description: "No alphalens_form4_rows_written series. The runner's emit step has not succeeded since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Expected once on a fresh deploy; clears after the first successful run_form4_daily_incremental.py run."
+
+      # Chronic SEC-fetch failure the Dark/Stale rules MISS: rows_written can
+      # stay non-zero (other dates succeed) while one source keeps failing, so a
+      # SUSTAINED transient-error count is the only signal. The gauge holds its
+      # last emit between daily runs; min_over_time(...[50h]) > 0 means BOTH of
+      # the last two nightly runs reported errors — a single clean run emits 0
+      # and clears it, so a self-healing one-off does not fire. DISTINCT
+      # alertname + NO job= label keep it out of the cron-keyed enums.
+      - alert: AlphalensForm4IncrementalTransientErrors
+        expr: min_over_time(alphalens_form4_transient_errors[50h]) > 0
+        for: 1h
+        labels:
+          severity: warning
+          route: telegram
+          unit: form4-incremental
+        annotations:
+          summary: "Form-4 daily-incremental hit SEC fetch errors on consecutive runs"
+          description: "alphalens_form4_transient_errors stayed > 0 across the last two nightly form4-incremental runs (a clean run emits 0 and clears this). A persistent SEC daily-index / submissions / XML 403 or transient failure is dropping some dates' filings while rows_written may remain non-zero from other dates — so AlphalensForm4IncrementalDark and AlphalensJobStale will NOT surface it. Check `journalctl --user -u alphalens-form4-incremental.service` and the SEC rate coordinator / per-IP 403 load."
