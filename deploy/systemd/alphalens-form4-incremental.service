@@ -1,0 +1,70 @@
+[Unit]
+# Daily Form-4 incremental ingest — oneshot triggered by the companion .timer.
+# Keeps ~/.alphalens/form4_parquet/ fresh after the one-time historical bulk
+# backfill (alphalens-form4-backfill.service, DONE 2026-05-08) froze. Each fire
+# fetches a fixed 3-day lookback window via the SEC daily form index; overlap
+# between consecutive daily runs collapses on the unique accession_number under
+# the compactor, so there is NO state file to corrupt.
+#
+# Install as a *user* unit alongside the companion timer:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/systemd/alphalens-form4-incremental.service ~/.config/systemd/user/
+#   cp deploy/systemd/alphalens-form4-incremental.timer   ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alphalens-form4-incremental.timer
+#
+# FIRST-RUN catch-up (one time — fill the seed -> today gap, ~35 days):
+#   %h/AlphaLens/.venv/bin/python \
+#       apps/alphalens-research/scripts/run_form4_daily_incremental.py \
+#       --lookback-days 35
+#
+# Inspect:  journalctl --user -u alphalens-form4-incremental.service -f
+# Trigger manually: systemctl --user start alphalens-form4-incremental.service
+#
+# Persistence (survives logout) — once, as the user:
+#   sudo loginctl enable-linger "$USER"
+Description=AlphaLens Form-4 daily incremental ingest
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+
+# Shared secrets file: /etc/alphalens/env (root:root chmod 600) — same source
+# as the other host-venv units. SEC_EDGAR_USER_AGENT is the only key this job
+# needs; the canonical client falls back to a built-in default UA, but the
+# residential-VPS IP must carry the operator contact UA, so the env var is set
+# in production. No leading `-`: fail loud on a missing/typoed path rather than
+# silently fetching under the wrong UA. See deploy/systemd/README.md
+# "Environment file setup".
+EnvironmentFile=/etc/alphalens/env
+
+# Steady-state 3-day lookback (SEC 2-business-day filing deadline + a weekend).
+# The first deploy needs ONE manual --lookback-days 35 catch-up (see header).
+ExecStart=%h/AlphaLens/.venv/bin/python \
+    apps/alphalens-research/scripts/run_form4_daily_incremental.py \
+    --lookback-days 3
+
+# Prometheus textfile metrics (see alphalens-edgar-detect.service for the
+# pattern). A transient-403 night still exits 0, so last_success refreshes
+# nightly and the staleness rule catches "the job stopped running".
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics form4-incremental
+
+# Keep stdout/stderr in journald (no /var/log file needed).
+StandardOutput=journal
+StandardError=journal
+
+# The 3-day window is light (1 index/day + tens of submissions + tens of XML).
+# The one-time --lookback-days 35 catch-up is the only heavy burst. 1G is ample.
+MemoryMax=1G
+TasksMax=32
+
+# Type=oneshot defaults TimeoutStartSec to infinity; a wedged run (SEC retry
+# storm) would block every subsequent timer fire. 45min = ~generous ceiling for
+# the steady-state window; a healthy 3-day run finishes in minutes.
+TimeoutStartSec=45min
+
+[Install]
+WantedBy=default.target

@@ -63,6 +63,7 @@ ACTIVE_SERVICES = (
     SYSTEMD_DIR / "alphalens-av-earnings-backfill.service",
     SYSTEMD_DIR / "alphalens-thematic-build.service",
     SHADOW_SERVICE,
+    SYSTEMD_DIR / "alphalens-form4-incremental.service",
 )
 
 
