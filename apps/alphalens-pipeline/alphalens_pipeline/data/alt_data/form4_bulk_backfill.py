@@ -165,6 +165,17 @@ def write_records_to_parquet(records: Iterable[Form4Record], *, parquet_root: Pa
     runs do not overwrite earlier files. ``Decimal`` fields (shares, price)
     are converted to ``float64`` for storage; downstream PIT reads accept the
     float representation.
+
+    Hard-fail contract (F2): if any record carries a ``transaction_year``
+    outside ``[_MIN_TRANSACTION_YEAR, _MAX_TRANSACTION_YEAR]`` this function
+    raises ``ValueError`` and writes NOTHING for the whole batch. This is a
+    defense-in-depth backstop, not the primary guard: the parser's F1 check
+    (``form4_records._parse_iso_date``) already rejects implausible years at
+    the parse boundary. A bad year reaching here means either a parser
+    regression or a directly-constructed ``Form4Record`` that bypassed the
+    parser — both are bugs worth failing loudly on rather than silently
+    materialising a junk ``transaction_year=NN`` partition that
+    ``merge_form4_shards.py`` would later delete.
     """
     rows: list[dict] = []
     dropped_future_dates = 0

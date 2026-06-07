@@ -60,7 +60,10 @@ _PARTITION_RE = re.compile(r"^transaction_year=(\d+)$")
 
 # Exit code emitted when malformed partitions were dropped with no
 # --quarantine-malformed dir: the merge irrecoverably deleted data, so the run
-# must NOT look green to automation or the operator.
+# must NOT look green to automation or the operator. NOTE: main() RETURNS this
+# code; callers MUST propagate it (the __main__ entry point does via
+# sys.exit(main())). A programmatic wrapper that ignores main()'s return value
+# would swallow the data-loss signal.
 _EXIT_DATA_LOSS = 2
 
 
@@ -184,6 +187,12 @@ def merge_shards(
         "files_deleted": 0,
     }
 
+    # files_deleted accumulates from two handlers with the SAME meaning
+    # ("files that did not survive into the target"): the target-side handler
+    # counts files removed by rmtree, the source-side handler counts files it
+    # skipped (never copied). Keep them in one bucket only because both feed the
+    # same data-loss exit-code decision below — if either contract changes, split
+    # the accounting so the exit code cannot silently skew.
     # Step 1: clean malformed orphans in the target (e.g. Mac =15).
     tgt_malformed, tgt_quarantined, tgt_deleted = _sweep_malformed(target_root, quarantine_dir)
     stats["target_malformed_partitions"] = tgt_malformed

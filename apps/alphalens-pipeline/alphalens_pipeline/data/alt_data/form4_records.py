@@ -110,6 +110,8 @@ def parse_form4_xml(
         owner_meta = _parse_reporting_owner(owner)
         for tx in non_derivative_txs:
             tx_meta = _parse_transaction(tx)
+            if tx_meta is None:
+                continue  # zero-share footnote / correction row — drop just this row
             records.append(
                 Form4Record(
                     issuer_cik=issuer_cik,
@@ -168,7 +170,7 @@ def _parse_reporting_owner(owner: Element) -> dict:
     }
 
 
-def _parse_transaction(tx: Element) -> dict:
+def _parse_transaction(tx: Element) -> dict | None:
     coding = tx.find("transactionCoding")
     amounts = tx.find("transactionAmounts")
     tx_date_node = tx.find("transactionDate/value")
@@ -178,11 +180,17 @@ def _parse_transaction(tx: Element) -> dict:
     code = _text(coding, "transactionCode")
     shares = _decimal(_text_value(amounts, "transactionShares"), field="transactionShares")
     # SEC reports share quantity as a positive magnitude; direction lives in
-    # transaction_code (P/S) and acquired_disposed (A/D). A non-positive count
-    # is corruption that would flip or zero the downstream net_oppor_usd
-    # contribution, so reject it at parse time.
-    if shares is None or shares <= 0:
-        raise Form4ParseError(f"non-positive transactionShares: {shares!r}")
+    # transaction_code (P/S) and acquired_disposed (A/D), not in the sign. A
+    # NEGATIVE count is corruption that would flip the downstream net_oppor_usd
+    # contribution, so reject it (the whole filing skips + logs). A ZERO-share
+    # row carries no economic trade (typically a footnote / correction line) —
+    # return None to drop just this row, preserving the filing's real
+    # transactions and not polluting the Cohen-Malloy date classification with
+    # a non-trade date.
+    if shares is None or shares < 0:
+        raise Form4ParseError(f"negative transactionShares: {shares!r}")
+    if shares == 0:
+        return None
     price_str = _text_value(amounts, "transactionPricePerShare")
     price = _decimal(price_str, field="transactionPricePerShare", optional=True)
     acq_disp = _text_value(amounts, "transactionAcquiredDisposedCode") or "A"
