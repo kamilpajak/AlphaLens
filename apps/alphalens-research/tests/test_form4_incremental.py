@@ -667,6 +667,35 @@ class TestUniverseScope(unittest.TestCase):
         self.assertEqual(result.distinct_accessions, 2)
         self.assertEqual(sorted(client.txt_fetches), [a1, a2])
 
+    def test_all_rows_filtered_out_logs_warning(self) -> None:
+        # A populated index day with zero universe survivors (format-drift
+        # signal) must WARN, not silently write nothing.
+        day = date(2026, 6, 5)
+        acc = "0000000111-26-000001"
+        idx = _idx([_index_row("4", "ONE", 111, "2026-06-05", acc)])
+        client = _FakeClient(
+            index_by_date={day: idx},
+            txt_by_accession={
+                acc: _submission_txt(
+                    issuer_cik=111, ticker="ONE", owner_cik=9, tx_date="2026-06-04", code="P"
+                )
+            },
+        )
+        with (
+            TestFetchWindowSpeedup().tmp_root() as root,
+            self.assertLogs("alphalens_pipeline.data.alt_data.form4_incremental", "WARNING") as cm,
+        ):
+            result = fetch_form4_records_for_window(
+                client,
+                start_date=day,
+                end_date=day,
+                parquet_root=root,
+                cik_universe={"9999999999"},  # matches nothing
+            )
+        self.assertEqual(result.distinct_accessions, 0)
+        self.assertEqual(client.txt_fetches, [])
+        self.assertTrue(any("filtered out" in m for m in cm.output))
+
 
 class TestLoadCikUniverse(unittest.TestCase):
     def test_normalizes_pads_and_skips_comments(self) -> None:
@@ -691,6 +720,14 @@ class TestLoadCikUniverse(unittest.TestCase):
             p.write_text("# only comments\n\n")
             with self.assertRaises(ValueError):
                 load_cik_universe(p)
+
+    def test_runner_returns_1_on_missing_universe_file(self) -> None:
+        # The runner fails loud (clean non-zero exit, not a raw traceback) when
+        # the universe file is missing — no fetch happens.
+        from scripts.run_form4_daily_incremental import main
+
+        rc = main(["--cik-universe", "/nonexistent/form4_cik_universe.txt"])
+        self.assertEqual(rc, 1)
 
 
 if __name__ == "__main__":

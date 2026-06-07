@@ -171,7 +171,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # Universe-scope by default (fail loud if the file is missing rather than
     # silently degrading to the slow market-wide path); --market-wide opts out.
-    cik_universe = None if args.market_wide else load_cik_universe(args.cik_universe)
+    try:
+        cik_universe = None if args.market_wide else load_cik_universe(args.cik_universe)
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error("form4-incremental: cannot load CIK universe: %s", exc)
+        return 1
 
     latest_in_store = latest_filed_date_in_store(args.parquet_root)
     start_date = _resolve_window_start(

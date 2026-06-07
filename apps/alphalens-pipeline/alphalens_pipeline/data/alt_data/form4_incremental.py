@@ -332,7 +332,18 @@ def fetch_form4_records_for_window(
         if cik_universe is not None:
             # Universe-scope: drop non-universe issuers BEFORE any .txt fetch so
             # they cost zero requests (the consumer only reads universe tickers).
+            n_before = len(rows)
             rows = [r for r in rows if r.cik in cik_universe]
+            if n_before and not rows:
+                # A populated index day with zero survivors is almost certainly a
+                # CIK-format drift in the universe file (8005 issuers rarely all
+                # skip a day) — surface it now, not after the 5-day dead-man.
+                logger.warning(
+                    "form4-incremental: all %d index rows for %s filtered out by the "
+                    "universe — possible CIK-format mismatch in the universe file",
+                    n_before,
+                    d,
+                )
 
         try:
             records, accessions, day_other = _records_for_date(sec, rows=rows)
