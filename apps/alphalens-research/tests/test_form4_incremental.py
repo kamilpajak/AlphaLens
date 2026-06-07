@@ -2,9 +2,10 @@
 
 Covers:
   * ``parse_form4_index_rows`` keeps only Form-4 / 4-A rows from a daily ``.idx``.
-  * ``fetch_form4_records_for_window`` intersects each day's daily-index accession
-    set with the per-CIK submissions block (so an old filing from the same CIK is
-    not re-written), parses XML, writes parquet, and compacts.
+  * ``fetch_form4_records_for_window`` resolves each daily-index row to its
+    deterministic full-submission ``.txt``, slices out the inline
+    ``<ownershipDocument>`` XML, parses it, writes parquet, and compacts — with
+    NO per-CIK ``submissions`` roundtrip (the speedup contract).
   * overlap dedup-safety: two overlapping windows + compaction -> unique accessions.
   * window date math is inclusive UTC.
   * a daily-index 403 is counted and does not raise / abort the window.
@@ -26,10 +27,13 @@ import pandas as pd
 import pyarrow.parquet as pq
 from alphalens_pipeline.data.alt_data.form4_incremental import (
     IncrementalResult,
+    _extract_ownership_document,
+    _full_submission_txt_url,
     fetch_form4_records_for_window,
     latest_filed_date_in_store,
     parse_form4_index_rows,
 )
+from alphalens_pipeline.data.alt_data.form4_records import Form4ParseError
 from alphalens_pipeline.data.alt_data.sec_edgar_client import SecForbiddenError
 
 
@@ -55,9 +59,8 @@ def _index_row(form: str, company: str, cik: int, date_filed: str, accession: st
     return f"{form:<11} {company:<40} {cik:<10}  {date_filed}  {file_name}"
 
 
-def _form4_xml(*, issuer_cik: int, ticker: str, owner_cik: int, tx_date: str, code: str) -> bytes:
+def _ownership_xml(*, issuer_cik: int, ticker: str, owner_cik: int, tx_date: str, code: str) -> str:
     return (
-        "<?xml version='1.0'?>"
         "<ownershipDocument>"
         "<documentType>4</documentType>"
         f"<issuer><issuerCik>{issuer_cik}</issuerCik>"
@@ -77,29 +80,54 @@ def _form4_xml(*, issuer_cik: int, ticker: str, owner_cik: int, tx_date: str, co
         "</transactionAmounts>"
         "</nonDerivativeTransaction></nonDerivativeTable>"
         "</ownershipDocument>"
-    ).encode()
+    )
+
+
+def _submission_txt(
+    *, issuer_cik: int, ticker: str, owner_cik: int, tx_date: str, code: str
+) -> str:
+    """A realistic full-submission .txt: SEC headers + SGML wrapper + inline XML."""
+    body = _ownership_xml(
+        issuer_cik=issuer_cik, ticker=ticker, owner_cik=owner_cik, tx_date=tx_date, code=code
+    )
+    return (
+        "<SEC-DOCUMENT>0000000111-26-000050.txt : 20260605\n"
+        "<SEC-HEADER>0000000111-26-000050.hdr.sgml : 20260605\n"
+        "ACCESSION NUMBER:\t\t0000000111-26-000050\n"
+        "</SEC-HEADER>\n"
+        "<DOCUMENT>\n<TYPE>4\n<SEQUENCE>1\n<FILENAME>wf-form4_172.xml\n"
+        "<TEXT>\n<XML>\n"
+        "<?xml version='1.0'?>\n"
+        f"{body}\n"
+        "</XML>\n</TEXT>\n</DOCUMENT>\n</SEC-DOCUMENT>\n"
+    )
 
 
 class _FakeClient:
-    """Minimal stand-in for SecEdgarClient.
+    """Minimal stand-in for SecEdgarClient — serves daily ``.idx`` and the
+    deterministic full-submission ``.txt`` through the single ``get_text`` entry.
 
-    ``index_by_date`` maps a UTC ``date`` to a raw ``.idx`` text (or an
-    exception instance to raise on fetch). ``submissions`` maps a 10-digit CIK
-    to a submissions JSON dict. ``xml_by_accession`` maps an accession to the
-    raw Form-4 XML bytes.
+    ``index_by_date`` maps a UTC ``date`` to a raw ``.idx`` text (or an exception
+    instance to raise on fetch). ``txt_by_accession`` maps an accession to its
+    full-submission ``.txt`` body (or an exception to raise on fetch).
+
+    ``fetch_submissions`` raises on call so any regression that reintroduces the
+    per-CIK roundtrip fails loudly (the speedup contract). ``txt_fetches`` records
+    every full-submission fetch so a test can assert exactly one per accession.
     """
 
     def __init__(
         self,
         *,
         index_by_date: dict[date, object],
-        submissions: dict[str, dict],
-        xml_by_accession: dict[str, bytes],
+        txt_by_accession: dict[str, object],
     ) -> None:
         self._index_by_date = index_by_date
-        self._submissions = submissions
-        self._xml_by_accession = xml_by_accession
+        self._txt_by_accession = txt_by_accession
         self.index_fetches: list[date] = []
+        self.txt_fetches: list[str] = []
+        self.txt_urls: list[str] = []
+        self.submissions_calls: list[str] = []
 
     @staticmethod
     def _date_from_idx_url(url: str) -> date:
@@ -107,7 +135,22 @@ class _FakeClient:
         stamp = url.rsplit("form.", 1)[1].split(".idx", 1)[0]
         return date(int(stamp[:4]), int(stamp[4:6]), int(stamp[6:8]))
 
+    @staticmethod
+    def _accession_from_txt_url(url: str) -> str:
+        # .../{acc_no_dashes}/{acc_with_dashes}.txt
+        return url.rsplit("/", 1)[-1].removesuffix(".txt")
+
     def get_text(self, url: str, *, encoding: str = "utf-8") -> str:
+        if url.endswith(".txt"):
+            acc = self._accession_from_txt_url(url)
+            self.txt_fetches.append(acc)
+            self.txt_urls.append(url)
+            value = self._txt_by_accession.get(acc)
+            if isinstance(value, Exception):
+                raise value
+            if value is None:
+                raise AssertionError(f"unexpected .txt fetch for {acc}")
+            return value  # type: ignore[return-value]
         d = self._date_from_idx_url(url)
         self.index_fetches.append(d)
         value = self._index_by_date.get(d)
@@ -118,24 +161,45 @@ class _FakeClient:
         return value  # type: ignore[return-value]
 
     def fetch_submissions(self, cik: str) -> dict:
-        return self._submissions[cik]
+        self.submissions_calls.append(cik)
+        raise AssertionError(
+            "form4-incremental must NOT fetch per-CIK submissions on the daily-index path"
+        )
 
-    def fetch_form4_xml(self, *, cik: str, accession_number: str, primary_doc: str) -> bytes:
-        return self._xml_by_accession[accession_number]
 
+class TestFullSubmissionTxtPath(unittest.TestCase):
+    def test_txt_url_is_deterministic_from_cik_and_accession(self) -> None:
+        url = _full_submission_txt_url(cik="0000320193", accession_number="0000320193-26-000050")
+        self.assertEqual(
+            url,
+            "https://www.sec.gov/Archives/edgar/data/320193/"
+            "000032019326000050/0000320193-26-000050.txt",
+        )
 
-def _submissions(*, forms: list[str], accessions: list[str], dates: list[str]) -> dict:
-    return {
-        "filings": {
-            "recent": {
-                "form": forms,
-                "accessionNumber": accessions,
-                "filingDate": dates,
-                "primaryDocument": ["xslF345X05/form4.xml"] * len(forms),
-            },
-            "files": [],
-        }
-    }
+    def test_extract_ownership_document_slices_inline_xml(self) -> None:
+        txt = _submission_txt(
+            issuer_cik=320193, ticker="AAPL", owner_cik=999, tx_date="2026-06-04", code="P"
+        )
+        xml = _extract_ownership_document(txt)
+        self.assertTrue(xml.startswith(b"<ownershipDocument>"))
+        self.assertTrue(xml.endswith(b"</ownershipDocument>"))
+        # The SGML header (accession line) and the <XML> wrapper must be gone.
+        self.assertNotIn(b"<SEC-HEADER>", xml)
+        self.assertNotIn(b"<XML>", xml)
+
+    def test_extract_ownership_document_raises_when_block_absent(self) -> None:
+        with self.assertRaises(Form4ParseError):
+            _extract_ownership_document("<SEC-DOCUMENT>no ownership xml here</SEC-DOCUMENT>")
+
+    def test_extract_ownership_document_takes_first_block(self) -> None:
+        # A single Form-4 primary doc has one <ownershipDocument> (joint filers
+        # share it via multiple <reportingOwner>). If a second block ever appears
+        # we take the FIRST (and the engine logs a warning). Pin that.
+        one = _ownership_xml(issuer_cik=1, ticker="AA", owner_cik=9, tx_date="2026-06-04", code="P")
+        two = _ownership_xml(issuer_cik=2, ticker="BB", owner_cik=8, tx_date="2026-06-04", code="S")
+        xml = _extract_ownership_document(f"<SEC-DOCUMENT>{one}{two}</SEC-DOCUMENT>")
+        self.assertIn(b"AA", xml)
+        self.assertNotIn(b"BB", xml)
 
 
 class TestParseFormIndexRows(unittest.TestCase):
@@ -159,32 +223,26 @@ class TestParseFormIndexRows(unittest.TestCase):
         self.assertTrue(all(len(r.cik) == 10 and r.cik.isdigit() for r in rows))
 
 
-class TestFetchWindowIntersection(unittest.TestCase):
-    def test_fetch_window_intersects_daily_index_accessions_with_submissions(self) -> None:
-        # CIK 111 filed an OLD 4 last year + a NEW 4 today; the daily index for
-        # today lists only the new accession, so only the new row must be written.
+class TestFetchWindowSpeedup(unittest.TestCase):
+    def test_daily_index_path_makes_no_per_cik_submissions_calls(self) -> None:
+        # Speedup contract: a day with 3 distinct CIKs (one filing 2 Form-4s) must
+        # be ingested with ZERO submissions roundtrips and EXACTLY one
+        # full-submission .txt fetch per accession (4) plus the 1 daily index.
         today = date(2026, 6, 5)
-        new_acc = "0000000111-26-000050"
-        old_acc = "0000000111-25-000003"
-        idx = _idx([_index_row("4", "ACME CORP", 111, "2026-06-05", new_acc)])
-        client = _FakeClient(
-            index_by_date={today: idx},
-            submissions={
-                "0000000111": _submissions(
-                    forms=["4", "4"],
-                    accessions=[new_acc, old_acc],
-                    dates=["2026-06-05", "2025-08-01"],
-                )
-            },
-            xml_by_accession={
-                new_acc: _form4_xml(
-                    issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2026-06-04", code="P"
-                ),
-                old_acc: _form4_xml(
-                    issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2025-07-31", code="S"
-                ),
-            },
-        )
+        rows = [
+            ("4", 111, "0000000111-26-000041"),
+            ("4", 111, "0000000111-26-000042"),  # same CIK, second filing same day
+            ("4", 222, "0000000222-26-000010"),
+            ("4/A", 333, "0000000333-26-000007"),
+        ]
+        idx = _idx([_index_row(form, "CO", cik, "2026-06-05", acc) for form, cik, acc in rows])
+        txt_by_accession = {
+            acc: _submission_txt(
+                issuer_cik=cik, ticker="CO", owner_cik=999, tx_date="2026-06-04", code="P"
+            )
+            for _form, cik, acc in rows
+        }
+        client = _FakeClient(index_by_date={today: idx}, txt_by_accession=txt_by_accession)
 
         with self.tmp_root() as root:
             result = fetch_form4_records_for_window(
@@ -192,8 +250,40 @@ class TestFetchWindowIntersection(unittest.TestCase):
             )
             accessions = self._all_accessions(root)
 
-        self.assertEqual(accessions, {new_acc})
-        self.assertEqual(result.distinct_accessions, 1)
+        self.assertEqual(client.submissions_calls, [], "no per-CIK submissions fetch allowed")
+        self.assertEqual(
+            sorted(client.txt_fetches),
+            sorted(acc for _f, _c, acc in rows),
+            "exactly one full-submission .txt fetch per accession",
+        )
+        self.assertEqual(accessions, {acc for _f, _c, acc in rows})
+        self.assertEqual(result.distinct_accessions, 4)
+
+    def test_txt_url_built_from_index_issuer_cik_not_accession_prefix(self) -> None:
+        # Real EDGAR: the daily-index (issuer) CIK differs from the accession
+        # prefix (the filer/agent CIK). The full-submission .txt lives under the
+        # ISSUER directory, so the URL must be built from the index row's CIK,
+        # not from the accession prefix — otherwise prod 404s while the hermetic
+        # suite (which ignored the CIK segment) stayed green.
+        today = date(2026, 6, 5)
+        issuer_cik, acc = 34782, "0000939167-26-000123"  # prefix 939167 != issuer 34782
+        idx = _idx([_index_row("4", "DELTA AIR LINES", issuer_cik, "2026-06-05", acc)])
+        txt = _submission_txt(
+            issuer_cik=issuer_cik, ticker="DAL", owner_cik=999, tx_date="2026-06-04", code="P"
+        )
+        client = _FakeClient(index_by_date={today: idx}, txt_by_accession={acc: txt})
+
+        with self.tmp_root() as root:
+            result = fetch_form4_records_for_window(
+                client, start_date=today, end_date=today, parquet_root=root
+            )
+
+        self.assertEqual(result.rows_written, 1)
+        self.assertEqual(len(client.txt_urls), 1)
+        self.assertIn("/data/34782/", client.txt_urls[0], "txt URL must use the issuer CIK dir")
+        self.assertNotIn(
+            "/data/939167/", client.txt_urls[0], "must NOT use the accession-prefix CIK"
+        )
 
     def tmp_root(self):
         import tempfile
@@ -230,22 +320,15 @@ class TestWindowDateMath(unittest.TestCase):
         }
         client = _FakeClient(
             index_by_date=idx_by_date,
-            submissions={
-                "0000000111": _submissions(
-                    forms=["4", "4", "4"],
-                    accessions=list(touched.values()),
-                    dates=[d.isoformat() for d in touched],
-                )
-            },
-            xml_by_accession={
-                acc: _form4_xml(
+            txt_by_accession={
+                acc: _submission_txt(
                     issuer_cik=111, ticker="ACME", owner_cik=999, tx_date=d.isoformat(), code="P"
                 )
                 for d, acc in touched.items()
             },
         )
 
-        with TestFetchWindowIntersection().tmp_root() as root:
+        with TestFetchWindowSpeedup().tmp_root() as root:
             fetch_form4_records_for_window(
                 client, start_date=floor, end_date=asof, parquet_root=root
             )
@@ -267,22 +350,15 @@ class TestOverlapDedup(unittest.TestCase):
         }
         client = _FakeClient(
             index_by_date=idx_by_date,
-            submissions={
-                "0000000111": _submissions(
-                    forms=["4", "4", "4"],
-                    accessions=list(days.values()),
-                    dates=[d.isoformat() for d in days],
-                )
-            },
-            xml_by_accession={
-                acc: _form4_xml(
+            txt_by_accession={
+                acc: _submission_txt(
                     issuer_cik=111, ticker="ACME", owner_cik=999, tx_date=d.isoformat(), code="P"
                 )
                 for d, acc in days.items()
             },
         )
 
-        with TestFetchWindowIntersection().tmp_root() as root:
+        with TestFetchWindowSpeedup().tmp_root() as root:
             fetch_form4_records_for_window(
                 client, start_date=date(2026, 6, 3), end_date=date(2026, 6, 4), parquet_root=root
             )
@@ -313,26 +389,62 @@ class TestGracefulDegrade(unittest.TestCase):
                 bad: SecForbiddenError("403 traffic threshold"),
                 good: _idx([_index_row("4", "ACME", 111, good.isoformat(), good_acc)]),
             },
-            submissions={
-                "0000000111": _submissions(
-                    forms=["4"], accessions=[good_acc], dates=[good.isoformat()]
-                )
-            },
-            xml_by_accession={
-                good_acc: _form4_xml(
+            txt_by_accession={
+                good_acc: _submission_txt(
                     issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2026-06-05", code="P"
                 )
             },
         )
 
-        with TestFetchWindowIntersection().tmp_root() as root:
+        with TestFetchWindowSpeedup().tmp_root() as root:
             result = fetch_form4_records_for_window(
                 client, start_date=bad, end_date=good, parquet_root=root
             )
-            accessions = TestFetchWindowIntersection._all_accessions(root)
+            accessions = TestFetchWindowSpeedup._all_accessions(root)
 
         self.assertEqual(result.transient_errors, 1)
         self.assertEqual(accessions, {good_acc})
+
+    def test_submission_txt_without_ownership_block_is_counted_other_error(self) -> None:
+        # A .txt whose ownership block is missing/unparseable must be counted as
+        # an other_error and skipped — not raised, not written.
+        d = date(2026, 6, 5)
+        bad_acc = "0000000111-26-000001"
+        good_acc = "0000000111-26-000002"
+        client = _FakeClient(
+            index_by_date={
+                d: _idx(
+                    [
+                        _index_row("4", "ACME", 111, d.isoformat(), bad_acc),
+                        _index_row("4", "ACME", 111, d.isoformat(), good_acc),
+                    ]
+                )
+            },
+            txt_by_accession={
+                bad_acc: "<SEC-DOCUMENT>no ownership xml</SEC-DOCUMENT>",
+                good_acc: _submission_txt(
+                    issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2026-06-04", code="P"
+                ),
+            },
+        )
+
+        with TestFetchWindowSpeedup().tmp_root() as root:
+            result = fetch_form4_records_for_window(
+                client, start_date=d, end_date=d, parquet_root=root
+            )
+            accessions = TestFetchWindowSpeedup._all_accessions(root)
+
+        self.assertEqual(result.other_errors, 1)
+        self.assertEqual(accessions, {good_acc})
+
+    def test_unexpected_index_error_propagates_not_swallowed(self) -> None:
+        # A non-HTTP/OS error on the index fetch (a programmer bug, e.g. KeyError)
+        # must PROPAGATE and fail the run, not be masked as a transient and
+        # retried forever.
+        d = date(2026, 6, 5)
+        client = _FakeClient(index_by_date={d: KeyError("simulated bug")}, txt_by_accession={})
+        with TestFetchWindowSpeedup().tmp_root() as root, self.assertRaises(KeyError):
+            fetch_form4_records_for_window(client, start_date=d, end_date=d, parquet_root=root)
 
 
 class TestIncrementalResult(unittest.TestCase):
@@ -341,17 +453,14 @@ class TestIncrementalResult(unittest.TestCase):
         acc = "0000000111-26-000005"
         client = _FakeClient(
             index_by_date={d: _idx([_index_row("4", "ACME", 111, d.isoformat(), acc)])},
-            submissions={
-                "0000000111": _submissions(forms=["4"], accessions=[acc], dates=[d.isoformat()])
-            },
-            xml_by_accession={
-                acc: _form4_xml(
+            txt_by_accession={
+                acc: _submission_txt(
                     issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2026-06-04", code="P"
                 )
             },
         )
 
-        with TestFetchWindowIntersection().tmp_root() as root:
+        with TestFetchWindowSpeedup().tmp_root() as root:
             result = fetch_form4_records_for_window(
                 client, start_date=d, end_date=d, parquet_root=root
             )
@@ -461,18 +570,11 @@ class TestPerDateFlushBoundsMemory(unittest.TestCase):
                 d1: _idx([_index_row("4", "ACME CORP", 111, "2026-06-04", acc1)]),
                 d2: _idx([_index_row("4", "ACME CORP", 111, "2026-06-05", acc2)]),
             },
-            submissions={
-                "0000000111": _submissions(
-                    forms=["4", "4"],
-                    accessions=[acc1, acc2],
-                    dates=["2026-06-04", "2026-06-05"],
-                )
-            },
-            xml_by_accession={
-                acc1: _form4_xml(
+            txt_by_accession={
+                acc1: _submission_txt(
                     issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2026-06-04", code="P"
                 ),
-                acc2: _form4_xml(
+                acc2: _submission_txt(
                     issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2026-06-05", code="P"
                 ),
             },
