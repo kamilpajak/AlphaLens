@@ -8,17 +8,20 @@ Strategy (locked memo ``docs/research/form4_daily_incremental_design_2026_06_07.
    (``form.{YYYYMMDD}.idx``). One index lists every Form-4/4-A filed that day, so
    coverage is complete with no stale-roster risk, and a past-date ``.idx`` is
    immutable so re-runs are cheap.
-2. For each distinct filer CIK that filed a Form-4/4-A that day, fetch
-   ``submissions/CIK{cik}.json`` ONCE (recent block only — a same-week Form-4 is
-   always in ``recent``, so the overflow walk of the bulk backfill is not needed)
-   and reuse :func:`iter_form4_filings` to resolve the raw-XML ``primaryDocument``
-   path (``_strip_xsl_prefix`` applied).
-3. Keep only the :class:`FilingMetadata` whose ``accession_number`` is in the
-   day's daily-index accession set (so a CIK that filed an old 4 last year + a new
-   4 today contributes only today's accession).
-4. Fetch + parse the XML via :func:`parse_form4_xml`, write via
-   :func:`write_records_to_parquet`, then :func:`compact_root` so overlapping
-   re-fetches collapse on the unique ``accession_number``.
+2. For each Form-4/4-A row in that day's index, fetch the deterministic
+   full-submission ``.txt`` (``{acc_no_dashes}/{acc_dashed}.txt``) ONCE and slice
+   out the inline ``<ownershipDocument>`` block. One HTTP request per accession,
+   no per-CIK ``submissions/CIK{cik}.json`` roundtrip: the daily ``.idx`` already
+   lists EXACTLY the filings filed that day, so the submissions intersection
+   ("don't re-write an old 4 from the same CIK") is redundant on this path, and
+   the full-submission ``.txt`` path is derivable from CIK + accession alone (the
+   primary-document filename, which submissions was the only way to learn, is NOT
+   needed). Dropping submissions halves the request count and removes the entire
+   per-CIK request class that made a 34-day catch-up exceed the 45-min timeout.
+3. Parse the extracted XML via :func:`parse_form4_xml` with the PIT
+   ``filing_date`` taken from the index row (not the XML).
+4. Write via :func:`write_records_to_parquet`, then :func:`compact_root` so
+   overlapping re-fetches collapse on the unique ``accession_number``.
 
 State is STATELESS: each run re-reads a fixed lookback window, and dedup is by
 ``accession_number`` uniqueness collapsing under ``compact_partition``'s full-row
@@ -44,7 +47,6 @@ from pathlib import Path
 import pandas as pd
 
 from alphalens_pipeline.data.alt_data.form4_bulk_backfill import (
-    iter_form4_filings,
     write_records_to_parquet,
 )
 from alphalens_pipeline.data.alt_data.form4_compaction import compact_root
@@ -69,6 +71,15 @@ _KEPT_FORM_TYPES = frozenset({"4", "4/A"})
 
 # Minimum tokens in a daily-index row: Form Type ... CIK Date-Filed File-Name.
 _MIN_INDEX_ROW_TOKENS = 4
+
+# The Form-4 ownership XML is embedded inline in the full-submission .txt inside
+# the SGML <DOCUMENT> wrapper. The primary-document filename is filer-chosen and
+# NOT derivable from CIK + accession (that is the only thing submissions JSON
+# resolved), but the full-submission .txt path IS deterministic, and it carries
+# the raw <ownershipDocument> element verbatim — so we slice it out instead of
+# fetching submissions to learn the filename.
+_OWNERSHIP_OPEN_TAG = "<ownershipDocument>"
+_OWNERSHIP_CLOSE_TAG = "</ownershipDocument>"
 
 
 @dataclass(frozen=True)
@@ -98,6 +109,41 @@ def _daily_index_url(*, date: date) -> str:
         f"{_ARCHIVES_BASE}/Archives/edgar/daily-index/"
         f"{date.year}/QTR{quarter}/form.{date:%Y%m%d}.idx"
     )
+
+
+def _full_submission_txt_url(*, cik: str, accession_number: str) -> str:
+    """Deterministic full-submission ``.txt`` URL from CIK + accession.
+
+    SEC archive layout uses the CIK without leading zeros and the accession both
+    without dashes (directory) and with dashes (leaf): e.g.
+    ``edgar/data/320193/000032019326000050/0000320193-26-000050.txt``.
+    """
+    cik_no_zeros = str(int(cik))
+    acc_no_dashes = accession_number.replace("-", "")
+    return (
+        f"{_ARCHIVES_BASE}/Archives/edgar/data/{cik_no_zeros}/"
+        f"{acc_no_dashes}/{accession_number}.txt"
+    )
+
+
+def _extract_ownership_document(submission_txt: str) -> bytes:
+    """Slice the inline ``<ownershipDocument>...</ownershipDocument>`` XML block.
+
+    The full-submission ``.txt`` wraps every document in SGML ``<DOCUMENT>`` tags
+    plus SEC headers, so the whole body is not parseable XML; the Form-4 XML
+    parser needs just the ownership element. We take the FIRST opening tag
+    through the FIRST matching closing tag. Raises :class:`Form4ParseError` when
+    the block is absent (older / malformed packaging) so the caller counts the
+    miss and degrades per-filing instead of writing a junk row.
+    """
+    start = submission_txt.find(_OWNERSHIP_OPEN_TAG)
+    if start == -1:
+        raise Form4ParseError("no <ownershipDocument> block in full-submission .txt")
+    end = submission_txt.find(_OWNERSHIP_CLOSE_TAG, start)
+    if end == -1:
+        raise Form4ParseError("unterminated <ownershipDocument> block in full-submission .txt")
+    end += len(_OWNERSHIP_CLOSE_TAG)
+    return submission_txt[start:end].encode()
 
 
 def parse_form4_index_rows(idx_text: str) -> list[Form4IndexRow]:
@@ -181,55 +227,43 @@ def _records_for_date(
 ) -> tuple[list, set[str], int]:
     """Resolve a day's Form-4 index rows to parsed Form4Records.
 
-    For each distinct filer CIK, fetch submissions once and intersect by the day's
-    accession set (so an unrelated older 4 from the same CIK is not re-written).
-    Returns ``(records, accessions_written, other_errors)``.
+    For each Form-4/4-A row, fetch the deterministic full-submission ``.txt``
+    ONCE, slice out the inline ``<ownershipDocument>`` XML, and parse it with the
+    PIT ``filing_date`` from the index row. No per-CIK ``submissions`` roundtrip:
+    the daily index already lists exactly the filings filed that day, so there is
+    no old-filing-from-the-same-CIK to intersect away, and the ``.txt`` path is
+    deterministic from CIK + accession (the only thing submissions resolved — the
+    primary-document filename — is not needed). Returns
+    ``(records, accessions_written, other_errors)``.
     """
-    # accession -> filing_date string (authoritative PIT date from the index).
-    acc_to_date: dict[str, str] = {r.accession_number: r.filing_date for r in rows}
-    ciks = sorted({r.cik for r in rows})
-
     records: list = []
     accessions_written: set[str] = set()
     other_errors = 0
 
-    for cik in ciks:
+    for row in rows:
         try:
-            submissions = client.fetch_submissions(cik)
+            submission_txt = client.get_text(
+                _full_submission_txt_url(cik=row.cik, accession_number=row.accession_number)
+            )
+            xml = _extract_ownership_document(submission_txt)
+            parsed = parse_form4_xml(
+                xml,
+                accession_number=row.accession_number,
+                filing_date=date.fromisoformat(row.filing_date),
+            )
         except SecForbiddenError:
-            raise  # transient under shared-IP load — propagate so the day is counted
-        except SecEdgarError as exc:
+            raise  # transient — propagate so the day is counted, not silently dropped
+        except (SecEdgarError, Form4ParseError, ValueError) as exc:
             other_errors += 1
-            logger.warning("form4-incremental submissions fetch failed cik=%s: %s", cik, exc)
+            logger.warning(
+                "form4-incremental skip filing cik=%s acc=%s: %s",
+                row.cik,
+                row.accession_number,
+                exc,
+            )
             continue
-
-        for meta in iter_form4_filings(submissions, cik=cik):
-            if meta.accession_number not in acc_to_date:
-                continue  # not filed on a date in this day's index set
-            try:
-                xml = client.fetch_form4_xml(
-                    cik=cik,
-                    accession_number=meta.accession_number,
-                    primary_doc=meta.primary_document,
-                )
-                parsed = parse_form4_xml(
-                    xml,
-                    accession_number=meta.accession_number,
-                    filing_date=meta.filing_date,
-                )
-            except SecForbiddenError:
-                raise  # transient — propagate so the day is counted, not silently dropped
-            except (SecEdgarError, Form4ParseError) as exc:
-                other_errors += 1
-                logger.warning(
-                    "form4-incremental skip filing cik=%s acc=%s: %s",
-                    cik,
-                    meta.accession_number,
-                    exc,
-                )
-                continue
-            records.extend(parsed)
-            accessions_written.add(meta.accession_number)
+        records.extend(parsed)
+        accessions_written.add(row.accession_number)
 
     return records, accessions_written, other_errors
 
