@@ -143,6 +143,16 @@ def _extract_ownership_document(submission_txt: str) -> bytes:
     if end == -1:
         raise Form4ParseError("unterminated <ownershipDocument> block in full-submission .txt")
     end += len(_OWNERSHIP_CLOSE_TAG)
+    # A single Form-4 primary document carries exactly one <ownershipDocument>
+    # (joint filers share it via multiple <reportingOwner> children, which
+    # parse_form4_xml already handles). A SECOND block would mean only the first
+    # is parsed — not expected for Form-4, so surface it rather than silently
+    # under-count.
+    if _OWNERSHIP_OPEN_TAG in submission_txt[end:]:
+        logger.warning(
+            "full-submission .txt has >1 <ownershipDocument> block; only the first is "
+            "parsed (unexpected for a single Form-4 primary document)"
+        )
     return submission_txt[start:end].encode()
 
 
@@ -301,7 +311,11 @@ def fetch_form4_records_for_window(
             transient_errors += 1
             logger.warning("form4-incremental daily-index 403 for %s: %s", d, exc)
             continue
-        except Exception as exc:
+        except (SecEdgarError, OSError) as exc:
+            # Network / HTTP / index-read failure for this date — degrade and let
+            # the overlapping next run re-pull. A bare ``except`` here would mask
+            # programmer errors (AttributeError, KeyError, ...) as transient and
+            # retry them forever, so let anything else propagate and fail loud.
             transient_errors += 1
             logger.warning("form4-incremental daily-index fetch failed for %s: %s", d, exc)
             continue
@@ -323,7 +337,8 @@ def fetch_form4_records_for_window(
             rows_written += len(records)
             wrote_any = True
         if accessions:
-            latest_filing_date = max(latest_filing_date or d, d)
+            # The date being processed IS d; the guard already proves success.
+            latest_filing_date = d
 
     if wrote_any:
         compact_root(parquet_root)

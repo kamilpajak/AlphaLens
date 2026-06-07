@@ -191,6 +191,16 @@ class TestFullSubmissionTxtPath(unittest.TestCase):
         with self.assertRaises(Form4ParseError):
             _extract_ownership_document("<SEC-DOCUMENT>no ownership xml here</SEC-DOCUMENT>")
 
+    def test_extract_ownership_document_takes_first_block(self) -> None:
+        # A single Form-4 primary doc has one <ownershipDocument> (joint filers
+        # share it via multiple <reportingOwner>). If a second block ever appears
+        # we take the FIRST (and the engine logs a warning). Pin that.
+        one = _ownership_xml(issuer_cik=1, ticker="AA", owner_cik=9, tx_date="2026-06-04", code="P")
+        two = _ownership_xml(issuer_cik=2, ticker="BB", owner_cik=8, tx_date="2026-06-04", code="S")
+        xml = _extract_ownership_document(f"<SEC-DOCUMENT>{one}{two}</SEC-DOCUMENT>")
+        self.assertIn(b"AA", xml)
+        self.assertNotIn(b"BB", xml)
+
 
 class TestParseFormIndexRows(unittest.TestCase):
     def test_parse_form4_index_rows_keeps_only_form4_and_amendments(self) -> None:
@@ -426,6 +436,15 @@ class TestGracefulDegrade(unittest.TestCase):
 
         self.assertEqual(result.other_errors, 1)
         self.assertEqual(accessions, {good_acc})
+
+    def test_unexpected_index_error_propagates_not_swallowed(self) -> None:
+        # A non-HTTP/OS error on the index fetch (a programmer bug, e.g. KeyError)
+        # must PROPAGATE and fail the run, not be masked as a transient and
+        # retried forever.
+        d = date(2026, 6, 5)
+        client = _FakeClient(index_by_date={d: KeyError("simulated bug")}, txt_by_accession={})
+        with TestFetchWindowSpeedup().tmp_root() as root, self.assertRaises(KeyError):
+            fetch_form4_records_for_window(client, start_date=d, end_date=d, parquet_root=root)
 
 
 class TestIncrementalResult(unittest.TestCase):
