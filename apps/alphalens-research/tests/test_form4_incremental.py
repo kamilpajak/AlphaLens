@@ -126,6 +126,7 @@ class _FakeClient:
         self._txt_by_accession = txt_by_accession
         self.index_fetches: list[date] = []
         self.txt_fetches: list[str] = []
+        self.txt_urls: list[str] = []
         self.submissions_calls: list[str] = []
 
     @staticmethod
@@ -143,6 +144,7 @@ class _FakeClient:
         if url.endswith(".txt"):
             acc = self._accession_from_txt_url(url)
             self.txt_fetches.append(acc)
+            self.txt_urls.append(url)
             value = self._txt_by_accession.get(acc)
             if isinstance(value, Exception):
                 raise value
@@ -246,6 +248,32 @@ class TestFetchWindowSpeedup(unittest.TestCase):
         )
         self.assertEqual(accessions, {acc for _f, _c, acc in rows})
         self.assertEqual(result.distinct_accessions, 4)
+
+    def test_txt_url_built_from_index_issuer_cik_not_accession_prefix(self) -> None:
+        # Real EDGAR: the daily-index (issuer) CIK differs from the accession
+        # prefix (the filer/agent CIK). The full-submission .txt lives under the
+        # ISSUER directory, so the URL must be built from the index row's CIK,
+        # not from the accession prefix — otherwise prod 404s while the hermetic
+        # suite (which ignored the CIK segment) stayed green.
+        today = date(2026, 6, 5)
+        issuer_cik, acc = 34782, "0000939167-26-000123"  # prefix 939167 != issuer 34782
+        idx = _idx([_index_row("4", "DELTA AIR LINES", issuer_cik, "2026-06-05", acc)])
+        txt = _submission_txt(
+            issuer_cik=issuer_cik, ticker="DAL", owner_cik=999, tx_date="2026-06-04", code="P"
+        )
+        client = _FakeClient(index_by_date={today: idx}, txt_by_accession={acc: txt})
+
+        with self.tmp_root() as root:
+            result = fetch_form4_records_for_window(
+                client, start_date=today, end_date=today, parquet_root=root
+            )
+
+        self.assertEqual(result.rows_written, 1)
+        self.assertEqual(len(client.txt_urls), 1)
+        self.assertIn("/data/34782/", client.txt_urls[0], "txt URL must use the issuer CIK dir")
+        self.assertNotIn(
+            "/data/939167/", client.txt_urls[0], "must NOT use the accession-prefix CIK"
+        )
 
     def tmp_root(self):
         import tempfile
