@@ -16,6 +16,7 @@ The hive-partitioned source is ``~/.alphalens/form4_parquet/`` laid out as
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -24,6 +25,8 @@ from alphalens_pipeline.scorers.cohen_malloy_classifier import (
     CohenMalloyLabel,
     classify_from_transaction_dates,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_FORM4_ROOT = Path.home() / ".alphalens" / "form4_parquet"
 DEFAULT_LOOKBACK_DAYS = 90
@@ -34,6 +37,24 @@ class MemoizedClassifier:
 
     def __init__(self, history: pd.DataFrame):
         self._labels: dict[tuple[str, int], CohenMalloyLabel] = {}
+        if history.empty:
+            return
+        # Legacy parquet written before the F1/F2 year guards may carry NaT
+        # transaction_date or NULL reporting_owner_cik. A NaT in the year set
+        # makes {d.year for d in ...} yield nan -> int(nan) raises and takes
+        # down the whole ticker; a NULL cik creates an unreachable ('nan', year)
+        # group. Build the classifier only from usable rows.
+        original_len = len(history)
+        history = history.dropna(subset=["transaction_date", "reporting_owner_cik"])
+        dropped = original_len - len(history)
+        if dropped:
+            # Surface legacy bad-data drops so an operator can tell a clean
+            # parquet (no-op) from one still carrying pre-guard NaT/NULL rows.
+            logger.warning(
+                "MemoizedClassifier dropped %d row(s) with NaT transaction_date "
+                "or NULL reporting_owner_cik (legacy pre-guard parquet)",
+                dropped,
+            )
         if history.empty:
             return
         years = sorted({d.year for d in history["transaction_date"]})

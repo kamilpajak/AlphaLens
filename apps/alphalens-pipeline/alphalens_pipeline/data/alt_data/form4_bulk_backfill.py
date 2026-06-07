@@ -30,7 +30,11 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from alphalens_pipeline.data.alt_data.form4_records import Form4Record
+from alphalens_pipeline.data.alt_data.form4_records import (
+    _MAX_TRANSACTION_YEAR,
+    _MIN_TRANSACTION_YEAR,
+    Form4Record,
+)
 from alphalens_pipeline.data.store.form4_pit import FORM4_SCHEMA_COLUMNS, PARTITION_KEY
 
 logger = logging.getLogger(__name__)
@@ -161,6 +165,17 @@ def write_records_to_parquet(records: Iterable[Form4Record], *, parquet_root: Pa
     runs do not overwrite earlier files. ``Decimal`` fields (shares, price)
     are converted to ``float64`` for storage; downstream PIT reads accept the
     float representation.
+
+    Hard-fail contract (F2): if any record carries a ``transaction_year``
+    outside ``[_MIN_TRANSACTION_YEAR, _MAX_TRANSACTION_YEAR]`` this function
+    raises ``ValueError`` and writes NOTHING for the whole batch. This is a
+    defense-in-depth backstop, not the primary guard: the parser's F1 check
+    (``form4_records._parse_iso_date``) already rejects implausible years at
+    the parse boundary. A bad year reaching here means either a parser
+    regression or a directly-constructed ``Form4Record`` that bypassed the
+    parser — both are bugs worth failing loudly on rather than silently
+    materialising a junk ``transaction_year=NN`` partition that
+    ``merge_form4_shards.py`` would later delete.
     """
     rows: list[dict] = []
     dropped_future_dates = 0
@@ -205,6 +220,22 @@ def write_records_to_parquet(records: Iterable[Form4Record], *, parquet_root: Pa
 
     df = pd.DataFrame.from_records(rows, columns=list(FORM4_SCHEMA_COLUMNS))
     df["transaction_year"] = df["transaction_date"].apply(lambda d: d.year)
+
+    # Defense-in-depth (F2): the frozen Form4Record is directly constructible,
+    # so a caller bypassing parse_form4_xml (and its F1 year guard) could carry
+    # an implausible year. Refuse to materialise a junk partition path like
+    # transaction_year=22 — that directory is exactly what merge_form4_shards.py
+    # silently deletes, so the row would vanish without a trace. Hard-fail here.
+    bad_years = sorted(
+        y
+        for y in df["transaction_year"].unique()
+        if not _MIN_TRANSACTION_YEAR <= int(y) <= _MAX_TRANSACTION_YEAR
+    )
+    if bad_years:
+        raise ValueError(
+            f"refusing to write Form-4 records with implausible transaction_year "
+            f"{bad_years} (outside [{_MIN_TRANSACTION_YEAR}, {_MAX_TRANSACTION_YEAR}])"
+        )
 
     parquet_root.mkdir(parents=True, exist_ok=True)
     for year, group in df.groupby("transaction_year"):

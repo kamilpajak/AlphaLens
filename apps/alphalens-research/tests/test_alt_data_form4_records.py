@@ -416,6 +416,134 @@ class TestTolerantDateParse(unittest.TestCase):
             parse_form4_xml(xml, accession_number="A", filing_date=date(2026, 4, 10))
 
 
+class TestImplausibleTransactionYear(unittest.TestCase):
+    """A transaction_date whose year falls outside the plausible Form-4 window
+    is unrecoverable corruption (the real year is unknown). Reject at parse
+    time so the filing is skipped + logged rather than writing a junk
+    transaction_year partition that merge_form4_shards.py later deletes —
+    the silent-data-loss chain this fix cuts at the source.
+    """
+
+    def test_two_digit_year_raises_form4_parse_error(self):
+        from alphalens_pipeline.data.alt_data.form4_records import Form4ParseError, parse_form4_xml
+
+        xml = _build_xml(
+            non_derivative=[
+                {"date": "0022-05-23", "code": "P", "shares": "1000", "price": "10.00"},
+            ],
+        )
+
+        with self.assertRaises(Form4ParseError):
+            parse_form4_xml(xml, accession_number="A", filing_date=date(2025, 3, 17))
+
+    def test_below_floor_year_raises_form4_parse_error(self):
+        # The documented corruption is a 2-digit transaction_date parsed as
+        # year-AD ("0099-06-15" -> year 99). Any sub-1900 year is rejected;
+        # legitimate 4-digit historical amendments (e.g. 1992) are not.
+        from alphalens_pipeline.data.alt_data.form4_records import Form4ParseError, parse_form4_xml
+
+        xml = _build_xml(
+            non_derivative=[
+                {"date": "0099-06-15", "code": "P", "shares": "1000", "price": "10.00"},
+            ],
+        )
+
+        with self.assertRaises(Form4ParseError):
+            parse_form4_xml(xml, accession_number="A", filing_date=date(2025, 3, 17))
+
+    def test_far_future_year_raises_form4_parse_error(self):
+        from alphalens_pipeline.data.alt_data.form4_records import Form4ParseError, parse_form4_xml
+
+        xml = _build_xml(
+            non_derivative=[
+                {"date": "9999-12-31", "code": "P", "shares": "1000", "price": "10.00"},
+            ],
+        )
+
+        with self.assertRaises(Form4ParseError):
+            parse_form4_xml(xml, accession_number="A", filing_date=date(2025, 3, 17))
+
+    def test_current_plausible_year_still_parses(self):
+        """Positive control: a normal recent date must still parse."""
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
+
+        xml = _build_xml(
+            non_derivative=[
+                {"date": "2025-03-15", "code": "P", "shares": "1000", "price": "10.00"},
+            ],
+        )
+
+        records = parse_form4_xml(xml, accession_number="A", filing_date=date(2025, 3, 17))
+        self.assertEqual(records[0].transaction_date, date(2025, 3, 15))
+
+
+class TestShareCountValidation(unittest.TestCase):
+    """SEC nonDerivativeTransaction reports a positive share magnitude; direction
+    is carried by transaction_code (P/S) and acquired_disposed (A/D), not by
+    sign. A NEGATIVE count is corruption that would flip the net_oppor_usd
+    contribution — reject the filing at parse time. A ZERO-share row is a
+    no-economic-content footnote / correction line — skip just that row so the
+    filing's real transactions survive and the Cohen-Malloy date classification
+    is not polluted by a non-trade date.
+    """
+
+    def test_negative_shares_raises_form4_parse_error(self):
+        from alphalens_pipeline.data.alt_data.form4_records import Form4ParseError, parse_form4_xml
+
+        xml = _build_xml(
+            non_derivative=[
+                {"date": "2025-03-15", "code": "P", "shares": "-1000", "price": "10.00"},
+            ],
+        )
+
+        with self.assertRaises(Form4ParseError):
+            parse_form4_xml(xml, accession_number="A", filing_date=date(2025, 3, 17))
+
+    def test_zero_shares_row_skipped_not_raised(self):
+        """A lone zero-share row yields no records but does NOT raise."""
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
+
+        xml = _build_xml(
+            non_derivative=[
+                {"date": "2025-03-15", "code": "P", "shares": "0", "price": "10.00"},
+            ],
+        )
+
+        records = parse_form4_xml(xml, accession_number="A", filing_date=date(2025, 3, 17))
+        self.assertEqual(records, [])
+
+    def test_zero_shares_row_dropped_but_sibling_preserved(self):
+        """The key regression: a zero-share row must not cost the filing its
+        real transactions — the positive sibling in the same filing survives.
+        """
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
+
+        xml = _build_xml(
+            non_derivative=[
+                {"date": "2025-03-15", "code": "P", "shares": "0", "price": "10.00"},
+                {"date": "2025-03-16", "code": "P", "shares": "1000", "price": "10.00"},
+            ],
+        )
+
+        records = parse_form4_xml(xml, accession_number="A", filing_date=date(2025, 3, 17))
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].transaction_shares, Decimal("1000"))
+        self.assertEqual(records[0].transaction_date, date(2025, 3, 16))
+
+    def test_positive_fractional_shares_still_parse(self):
+        """Positive control: fractional share counts are legitimate."""
+        from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml
+
+        xml = _build_xml(
+            non_derivative=[
+                {"date": "2025-03-15", "code": "P", "shares": "12.5", "price": "10.00"},
+            ],
+        )
+
+        records = parse_form4_xml(xml, accession_number="A", filing_date=date(2025, 3, 17))
+        self.assertEqual(records[0].transaction_shares, Decimal("12.5"))
+
+
 class TestMissingPriceNonePreserved(unittest.TestCase):
     def test_gift_tx_no_price_parses_as_none(self):
         from alphalens_pipeline.data.alt_data.form4_records import parse_form4_xml

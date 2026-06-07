@@ -391,5 +391,58 @@ class TestMergeShards(unittest.TestCase):
             self.assertEqual(files[0].name, "compacted.parquet")
 
 
+class TestMergeLoudOnLoss(unittest.TestCase):
+    """When malformed partitions are dropped without a quarantine dir, the merge
+    must fail loud (non-zero exit) and the stats must count the deleted files —
+    otherwise a future malformed partition is silently swallowed with a green
+    run and an under-reported (zero) loss count.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.source = self.root / "src"
+        self.target = self.root / "tgt"
+        self.source.mkdir()
+        self.target.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_main_exits_nonzero_when_source_malformed_and_no_quarantine(self):
+        from scripts.merge_form4_shards import main
+
+        write_records_to_parquet(
+            [_mk_record(transaction_date=date(2020, 6, 1), accession="GOOD")],
+            parquet_root=self.source,
+        )
+        _seed_malformed_partition(self.source, "transaction_year=22", "BAD")
+
+        argv = ["--source", str(self.source), "--target", str(self.target)]
+        rc = None
+        try:
+            rc = main(argv)
+        except SystemExit as exc:
+            rc = exc.code
+        self.assertNotEqual(rc, 0)
+
+    def test_stats_count_deleted_files_when_no_quarantine_dir(self):
+        from scripts.merge_form4_shards import merge_shards
+
+        # Two malformed files in a single =22 partition, no quarantine dir.
+        _seed_malformed_partition(self.source, "transaction_year=22", "BAD-1")
+        # Add a second parquet file to the same malformed partition.
+        write_records_to_parquet(
+            [_mk_record(transaction_date=date(2099, 6, 1), accession="BAD-2")],
+            parquet_root=self.root / "_seed2",
+        )
+        extra = next((self.root / "_seed2" / "transaction_year=2099").glob("*.parquet"))
+        extra.rename(self.source / "transaction_year=22" / "extra.parquet")
+
+        stats = merge_shards(self.source, self.target, quarantine_dir=None)
+
+        self.assertEqual(stats["files_deleted"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

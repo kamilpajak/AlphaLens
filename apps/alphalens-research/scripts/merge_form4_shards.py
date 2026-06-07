@@ -58,6 +58,14 @@ logger = logging.getLogger(__name__)
 
 _PARTITION_RE = re.compile(r"^transaction_year=(\d+)$")
 
+# Exit code emitted when malformed partitions were dropped with no
+# --quarantine-malformed dir: the merge irrecoverably deleted data, so the run
+# must NOT look green to automation or the operator. NOTE: main() RETURNS this
+# code; callers MUST propagate it (the __main__ entry point does via
+# sys.exit(main())). A programmatic wrapper that ignores main()'s return value
+# would swallow the data-loss signal.
+_EXIT_DATA_LOSS = 2
+
 
 def _classify_partition(name: str) -> str:
     """Return ``"canonical"`` (4-digit year), ``"malformed"`` (non-4-digit
@@ -89,14 +97,18 @@ def _unique_target_path(target_partition: Path, source_filename: str) -> Path:
 def _handle_malformed_partition(
     partition_dir: Path,
     quarantine_dir: Path | None,
-) -> int:
+) -> tuple[int, int]:
     """Quarantine (preserving layout) or delete a malformed partition.
 
-    Returns the number of files quarantined (0 when ``quarantine_dir`` is
-    None and the partition is simply deleted).
+    Returns ``(quarantined, deleted)``: the number of files moved to
+    quarantine and the number of files irrecoverably deleted (the latter is
+    non-zero only when ``quarantine_dir`` is None). Counting the deleted
+    files before ``rmtree`` is what lets the merge report data loss instead of
+    under-reporting it as zero.
     """
     files = list(partition_dir.glob("*.parquet"))
     quarantined = 0
+    deleted = 0
     if quarantine_dir is not None:
         dest_partition = quarantine_dir / partition_dir.name
         dest_partition.mkdir(parents=True, exist_ok=True)
@@ -104,29 +116,34 @@ def _handle_malformed_partition(
             dst = _unique_target_path(dest_partition, src.name)
             shutil.move(str(src), str(dst))
             quarantined += 1
+    else:
+        deleted = len(files)
     # shutil.rmtree handles both the "files moved" and "files still there" cases.
     shutil.rmtree(partition_dir)
-    return quarantined
+    return quarantined, deleted
 
 
 def _sweep_malformed(
     root: Path,
     quarantine_dir: Path | None,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """Walk ``root`` once; quarantine/delete any malformed partition.
 
-    Returns ``(malformed_count, quarantined_files)``.
+    Returns ``(malformed_count, quarantined_files, deleted_files)``.
     """
     malformed_count = 0
     quarantined_files = 0
+    deleted_files = 0
     for entry in sorted(root.iterdir()):
         if not entry.is_dir():
             continue
         if _classify_partition(entry.name) != "malformed":
             continue
-        quarantined_files += _handle_malformed_partition(entry, quarantine_dir)
+        quarantined, deleted = _handle_malformed_partition(entry, quarantine_dir)
+        quarantined_files += quarantined
+        deleted_files += deleted
         malformed_count += 1
-    return malformed_count, quarantined_files
+    return malformed_count, quarantined_files, deleted_files
 
 
 def merge_shards(
@@ -153,7 +170,9 @@ def merge_shards(
     Returns:
         Stats dict: ``partitions_merged``, ``files_copied``,
         ``source_malformed_partitions``, ``target_malformed_partitions``,
-        ``files_quarantined``.
+        ``files_quarantined``, ``files_deleted``. ``files_deleted`` counts
+        files irrecoverably dropped because no ``quarantine_dir`` was set —
+        it is the data-loss figure the merge must surface, not under-report.
     """
     if not source_root.is_dir():
         raise ValueError(f"source_root does not exist or is not a directory: {source_root}")
@@ -165,12 +184,20 @@ def merge_shards(
         "source_malformed_partitions": 0,
         "target_malformed_partitions": 0,
         "files_quarantined": 0,
+        "files_deleted": 0,
     }
 
+    # files_deleted accumulates from two handlers with the SAME meaning
+    # ("files that did not survive into the target"): the target-side handler
+    # counts files removed by rmtree, the source-side handler counts files it
+    # skipped (never copied). Keep them in one bucket only because both feed the
+    # same data-loss exit-code decision below — if either contract changes, split
+    # the accounting so the exit code cannot silently skew.
     # Step 1: clean malformed orphans in the target (e.g. Mac =15).
-    tgt_malformed, tgt_quarantined = _sweep_malformed(target_root, quarantine_dir)
+    tgt_malformed, tgt_quarantined, tgt_deleted = _sweep_malformed(target_root, quarantine_dir)
     stats["target_malformed_partitions"] = tgt_malformed
     stats["files_quarantined"] += tgt_quarantined
+    stats["files_deleted"] += tgt_deleted
 
     # Step 2: walk source, classify, copy canonical, quarantine malformed.
     for entry in sorted(source_root.iterdir()):
@@ -181,9 +208,10 @@ def merge_shards(
             logger.info("skipping non-partition entry: %s", entry.name)
             continue
         if kind == "malformed":
-            quarantined = _quarantine_source_partition(entry, quarantine_dir)
+            quarantined, dropped = _quarantine_source_partition(entry, quarantine_dir)
             stats["source_malformed_partitions"] += 1
             stats["files_quarantined"] += quarantined
+            stats["files_deleted"] += dropped
             continue
         # canonical
         target_partition = target_root / entry.name
@@ -202,16 +230,20 @@ def merge_shards(
     return stats
 
 
-def _quarantine_source_partition(partition_dir: Path, quarantine_dir: Path | None) -> int:
+def _quarantine_source_partition(
+    partition_dir: Path, quarantine_dir: Path | None
+) -> tuple[int, int]:
     """Source-side malformed handling: COPY into quarantine (preserve source
-    tree intact), or just count-and-skip if no quarantine_dir.
+    tree intact), or just count the lost files if no quarantine_dir.
 
-    Returns the number of files quarantined (0 when dropping with no
-    quarantine_dir set).
+    Returns ``(quarantined, dropped)``. The source tree is left intact in
+    both branches (canonical merge copies, never moves), so ``dropped`` counts
+    the files that would NOT survive into the target — the loss the merge must
+    surface rather than swallow as zero.
     """
-    if quarantine_dir is None:
-        return 0
     files = list(partition_dir.glob("*.parquet"))
+    if quarantine_dir is None:
+        return 0, len(files)
     dest_partition = quarantine_dir / partition_dir.name
     dest_partition.mkdir(parents=True, exist_ok=True)
     quarantined = 0
@@ -219,10 +251,10 @@ def _quarantine_source_partition(partition_dir: Path, quarantine_dir: Path | Non
         dst = _unique_target_path(dest_partition, src.name)
         shutil.copy2(src, dst)
         quarantined += 1
-    return quarantined
+    return quarantined, 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--source", type=Path, required=True, help="Source shard parquet root.")
     ap.add_argument("--target", type=Path, required=True, help="Target tree to merge into.")
@@ -239,7 +271,7 @@ def main() -> int:
         action="store_true",
         help="Run scripts/compact_form4_parquet.compact_root on target after merge.",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     logging.basicConfig(
         level=logging.INFO,
@@ -257,6 +289,26 @@ def main() -> int:
         logger.info("running compact_root on %s", args.target)
         compact_root(args.target)
         logger.info("compaction complete")
+
+    # Fail loud on irrecoverable loss: malformed partitions were dropped and
+    # no quarantine dir was given to preserve them. Report the partitions and
+    # file counts at ERROR level and exit non-zero so a future malformed
+    # partition surfaces instead of being swallowed by a green exit-0 run.
+    malformed_dropped = (
+        args.quarantine_malformed is None
+        and (stats["source_malformed_partitions"] + stats["target_malformed_partitions"]) > 0
+    )
+    if malformed_dropped:
+        logger.error(
+            "DATA LOSS: deleted %d malformed partition(s) (%d source, %d target) "
+            "totalling %d parquet file(s) with NO --quarantine-malformed dir. "
+            "Re-run with --quarantine-malformed to preserve them for inspection.",
+            stats["source_malformed_partitions"] + stats["target_malformed_partitions"],
+            stats["source_malformed_partitions"],
+            stats["target_malformed_partitions"],
+            stats["files_deleted"],
+        )
+        return _EXIT_DATA_LOSS
 
     return 0
 

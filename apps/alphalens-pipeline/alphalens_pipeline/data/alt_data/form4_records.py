@@ -22,6 +22,21 @@ from defusedxml.ElementTree import fromstring as _defused_fromstring
 
 _VALID_DOCUMENT_TYPES = {"4", "4/A"}
 
+# Plausible Form-4 transaction-year window. The documented corruption is a
+# 2-digit ``transaction_date`` parsed as year-AD (e.g. "0022-05-23" -> year 22,
+# "0015-..." -> year 15), which mirrors merge_form4_shards.py's strict-4-digit
+# partition rule. The floor of 1900 rejects every such 2-digit (and 3-digit)
+# misparse while still admitting legitimate retroactive Form-4 amendments that
+# reference 1990s transactions — merge_form4_shards.py explicitly treats any
+# 4-digit partition (including =1992, =1995) as canonical, so the writer must
+# not reject those at the value level or it would introduce the opposite
+# silent-loss. The upper bound is a fixed, generous ceiling: a year past it is
+# unrecoverable corruption, not a real filing. These bounds are imported by
+# form4_bulk_backfill.write_records_to_parquet so the parser-side (F1) and
+# writer-side (F2) guards cannot drift apart.
+_MIN_TRANSACTION_YEAR = 1900
+_MAX_TRANSACTION_YEAR = 2100
+
 
 class Form4ParseError(RuntimeError):
     """Raised when Form 4 XML cannot be parsed or fails schema validation."""
@@ -95,6 +110,8 @@ def parse_form4_xml(
         owner_meta = _parse_reporting_owner(owner)
         for tx in non_derivative_txs:
             tx_meta = _parse_transaction(tx)
+            if tx_meta is None:
+                continue  # zero-share footnote / correction row — drop just this row
             records.append(
                 Form4Record(
                     issuer_cik=issuer_cik,
@@ -153,7 +170,7 @@ def _parse_reporting_owner(owner: Element) -> dict:
     }
 
 
-def _parse_transaction(tx: Element) -> dict:
+def _parse_transaction(tx: Element) -> dict | None:
     coding = tx.find("transactionCoding")
     amounts = tx.find("transactionAmounts")
     tx_date_node = tx.find("transactionDate/value")
@@ -162,6 +179,18 @@ def _parse_transaction(tx: Element) -> dict:
 
     code = _text(coding, "transactionCode")
     shares = _decimal(_text_value(amounts, "transactionShares"), field="transactionShares")
+    # SEC reports share quantity as a positive magnitude; direction lives in
+    # transaction_code (P/S) and acquired_disposed (A/D), not in the sign. A
+    # NEGATIVE count is corruption that would flip the downstream net_oppor_usd
+    # contribution, so reject it (the whole filing skips + logs). A ZERO-share
+    # row carries no economic trade (typically a footnote / correction line) —
+    # return None to drop just this row, preserving the filing's real
+    # transactions and not polluting the Cohen-Malloy date classification with
+    # a non-trade date.
+    if shares is None or shares < 0:
+        raise Form4ParseError(f"negative transactionShares: {shares!r}")
+    if shares == 0:
+        return None
     price_str = _text_value(amounts, "transactionPricePerShare")
     price = _decimal(price_str, field="transactionPricePerShare", optional=True)
     acq_disp = _text_value(amounts, "transactionAcquiredDisposedCode") or "A"
@@ -188,9 +217,21 @@ def _parse_iso_date(raw: str) -> date:
     if len(text) < 10:
         raise Form4ParseError(f"transaction date too short: {text!r}")
     try:
-        return date.fromisoformat(text[:10])
+        parsed = date.fromisoformat(text[:10])
     except ValueError as exc:
         raise Form4ParseError(f"invalid transaction date: {text!r}") from exc
+    # Reject implausible years (e.g. "0022-05-23" -> year 22). The real year
+    # is unrecoverable, so writing transaction_year=22 only produces a junk
+    # partition that merge_form4_shards.py later deletes — silent data loss.
+    # The writer-side transaction_date > filed_date drop is a complementary,
+    # not redundant, second guard: it catches plausible-year-but-future typos
+    # that pass this year-range check.
+    if not _MIN_TRANSACTION_YEAR <= parsed.year <= _MAX_TRANSACTION_YEAR:
+        raise Form4ParseError(
+            f"transaction year out of plausible range "
+            f"[{_MIN_TRANSACTION_YEAR}, {_MAX_TRANSACTION_YEAR}]: {text!r}"
+        )
+    return parsed
 
 
 def _text_value(elem: Element, tag: str) -> str:
