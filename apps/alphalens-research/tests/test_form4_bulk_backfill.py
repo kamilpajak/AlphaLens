@@ -193,6 +193,26 @@ class TestWriteRecordsToParquet(unittest.TestCase):
         df = dataset.to_table().to_pandas()
         self.assertEqual(set(df["accession_number"]), {"GOOD", "EDGE"})
 
+    def test_implausible_year_record_not_written_as_junk_partition(self):
+        # Defense-in-depth for F2: the frozen Form4Record is directly
+        # constructible, bypassing parse_form4_xml (and its F1 year guard).
+        # A record carrying transaction_date=date(22, 5, 23) must never reach a
+        # transaction_year=22 partition dir — that junk partition is the exact
+        # trigger merge_form4_shards.py silently deletes. filing_date is set in
+        # the same junk year so the existing transaction_date > filed_date drop
+        # does NOT fire, isolating the year-range guard.
+        records = [
+            _mk_record(
+                accession_number="JUNK",
+                filing_date=date(22, 5, 24),
+                transaction_date=date(22, 5, 23),
+            ),
+        ]
+        with self.assertRaises(ValueError):
+            write_records_to_parquet(records, parquet_root=self.root)
+
+        self.assertFalse((self.root / "transaction_year=22").exists())
+
     def test_appends_to_existing_partition_with_unique_filename(self):
         # First batch creates part-0000.parquet.
         write_records_to_parquet(

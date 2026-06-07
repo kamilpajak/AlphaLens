@@ -36,6 +36,14 @@ class MemoizedClassifier:
         self._labels: dict[tuple[str, int], CohenMalloyLabel] = {}
         if history.empty:
             return
+        # Legacy parquet written before the F1/F2 year guards may carry NaT
+        # transaction_date or NULL reporting_owner_cik. A NaT in the year set
+        # makes {d.year for d in ...} yield nan -> int(nan) raises and takes
+        # down the whole ticker; a NULL cik creates an unreachable ('nan', year)
+        # group. Build the classifier only from usable rows.
+        history = history.dropna(subset=["transaction_date", "reporting_owner_cik"])
+        if history.empty:
+            return
         years = sorted({d.year for d in history["transaction_date"]})
         for cik, grp in history.groupby("reporting_owner_cik"):
             dates = list(grp["transaction_date"])
