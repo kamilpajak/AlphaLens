@@ -205,6 +205,34 @@ groups:
           summary: "feedback-shadow-returns success metric missing"
           description: "No success metric for feedback-shadow-returns. The job has not run since metrics were enabled (e.g. a freshly installed unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
 
+      # form4-incremental runs daily at 02:30 UTC (Form-4 daily-incremental
+      # ingest). 172800s = 48h = 2× the daily cadence, matching
+      # av-earnings-backfill + feedback-shadow-returns. The fixed-lookback window
+      # makes a one-night miss self-heal on the next overlapping run, and the job
+      # exits 0 even on a transient-403 night, so last_success refreshes nightly —
+      # staleness here cleanly catches "the daily ingest stopped running".
+      - alert: AlphalensJobStale
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="form4-incremental"} > 172800
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: form4-incremental
+        annotations:
+          summary: "form4-incremental stale > 48h (expected daily cadence)"
+          description: "Last successful run was {{ $value | humanizeDuration }} ago."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="form4-incremental"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: form4-incremental
+        annotations:
+          summary: "form4-incremental success metric missing"
+          description: "No success metric for form4-incremental. The job has not run since metrics were enabled (e.g. a freshly installed unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
+
       # ---------------------------------------------------------------
       # VIX regime-cache freshness (Track A v2 PR-2 follow-up).
       # ---------------------------------------------------------------
@@ -505,3 +533,67 @@ groups:
         annotations:
           summary: "EDGAR press-release source-volume metric missing"
           description: "No alphalens_thematic_source_rows{source=edgar_press_release} series. The ingest source-volume emit step has not succeeded since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Expected once on a fresh deploy; clears after the first successful `alphalens thematic ingest` run."
+
+      # ---------------------------------------------------------------
+      # Form-4 daily-incremental output-volume dead-man-switch.
+      # ---------------------------------------------------------------
+      #
+      # The job's AlphalensJobStale rule above catches "stopped running", but a
+      # run that exits 0 and writes 0 rows for days (silent-success-noop) is
+      # invisible to the exit-code check: a daily-index format drift degrades to
+      # "0 rows + transient" rather than a crash, and a persistent per-IP 403
+      # starvation produces the same 0-row clean exit. This rule is the backstop:
+      # alert when the rows-written gauge (emitted every run by the runner) stays
+      # 0 across the window.
+      #
+      # GAUGE (overwritten each run) -> max_over_time, never increase()/rate()
+      # (the PR #312 lesson). DISTINCT alertname + NO ``job=`` label (like the
+      # VIX-cache + EDGAR-dark rules) keep it out of the per-job cron
+      # enumerations. 5d window, NOT 4d: max_over_time(...[5d]) == 0 tolerates the
+      # worst legitimate all-zero cluster (a holiday + weekend with no new Form-4
+      # filings). Severity warning, not critical: a degraded data source is not a
+      # wake-up outage (the AlphalensEdgarNoCandidates24h precedent).
+      - alert: AlphalensForm4IncrementalDark
+        expr: max_over_time(alphalens_form4_rows_written[5d]) == 0
+        for: 6h
+        labels:
+          severity: warning
+          route: telegram
+          unit: form4-incremental
+        annotations:
+          summary: "Form-4 daily-incremental ingest wrote 0 rows for 5 days"
+          description: "alphalens_form4_rows_written has been 0 across every form4-incremental run for the last 5 days — longer than any normal weekend or the worst holiday cluster. Likely a per-IP SEC 403 starvation under concurrent load or a daily-index format drift that degrades to 0 rows + transient. Check `journalctl --user -u alphalens-form4-incremental.service` and the SEC daily-index fetch / sec_rate_coord.lock. The job's AlphalensJobStale rule will NOT show this — the run still exits 0."
+
+      # absent() companion for the cold-start / emit-step-broken blind spot.
+      # During a real 0-row run the series is PRESENT at 0 (the Dark rule's job),
+      # so this only fires when the runner's emit step never landed since metrics
+      # were enabled (fresh deploy, or a broken textfile collector / scrape).
+      # Clears on the first successful run.
+      - alert: AlphalensForm4IncrementalMetricMissing
+        expr: absent(alphalens_form4_rows_written)
+        for: 1h
+        labels:
+          severity: warning
+          route: telegram
+          unit: form4-incremental
+        annotations:
+          summary: "Form-4 daily-incremental rows-written metric missing"
+          description: "No alphalens_form4_rows_written series. The runner's emit step has not succeeded since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Expected once on a fresh deploy; clears after the first successful run_form4_daily_incremental.py run."
+
+      # Chronic SEC-fetch failure the Dark/Stale rules MISS: rows_written can
+      # stay non-zero (other dates succeed) while one source keeps failing, so a
+      # SUSTAINED transient-error count is the only signal. The gauge holds its
+      # last emit between daily runs; min_over_time(...[50h]) > 0 means BOTH of
+      # the last two nightly runs reported errors — a single clean run emits 0
+      # and clears it, so a self-healing one-off does not fire. DISTINCT
+      # alertname + NO job= label keep it out of the cron-keyed enums.
+      - alert: AlphalensForm4IncrementalTransientErrors
+        expr: min_over_time(alphalens_form4_transient_errors[50h]) > 0
+        for: 1h
+        labels:
+          severity: warning
+          route: telegram
+          unit: form4-incremental
+        annotations:
+          summary: "Form-4 daily-incremental hit SEC fetch errors on consecutive runs"
+          description: "alphalens_form4_transient_errors stayed > 0 across the last two nightly form4-incremental runs (a clean run emits 0 and clears this). A persistent SEC daily-index / submissions / XML 403 or transient failure is dropping some dates' filings while rows_written may remain non-zero from other dates — so AlphalensForm4IncrementalDark and AlphalensJobStale will NOT surface it. Check `journalctl --user -u alphalens-form4-incremental.service` and the SEC rate coordinator / per-IP 403 load."

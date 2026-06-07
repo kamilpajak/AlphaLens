@@ -51,6 +51,7 @@ ACTIVE_JOBS = (
     "av-earnings-backfill",
     "thematic-build",
     "feedback-shadow-returns",
+    "form4-incremental",
 )
 
 
@@ -159,6 +160,11 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             # nightly — staleness cleanly catches "the nightly sweep stopped
             # running", which AlphalensJobFailed (non-zero exit) cannot.
             "feedback-shadow-returns": 172800,
+            # 48h = 2× the daily cadence (02:30 UTC). The fixed-lookback window
+            # makes a one-night miss self-heal on the next overlapping run, and
+            # the job exits 0 even on a transient-403 night, so last_success
+            # refreshes nightly — staleness catches "the job stopped running".
+            "form4-incremental": 172800,
         }
         rules = _load_rules()["groups"][0]["rules"]
         found: dict[str, int] = {}
@@ -258,7 +264,7 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             for rule in rules
             if rule.get("alert") == "AlphalensJobMetricMissing"
         ]
-        self.assertEqual(len(label_sets), 6)
+        self.assertEqual(len(label_sets), len(ACTIVE_JOBS))
         self.assertEqual(len(set(label_sets)), len(label_sets))
 
     def test_missing_metric_message_claims_no_duration(self) -> None:
@@ -305,6 +311,7 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             "alphalens_thematic_",
             "alphalens_av_",
             "alphalens_vix_",
+            "alphalens_form4_",
         )
         for rule in rules:
             expr = rule.get("expr", "")
@@ -358,7 +365,7 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             for rule in rules
             if rule.get("alert") == "AlphalensJobStale"
         ]
-        self.assertEqual(len(label_sets), 6)
+        self.assertEqual(len(label_sets), len(ACTIVE_JOBS))
         self.assertEqual(
             len(set(label_sets)),
             len(label_sets),
@@ -819,6 +826,119 @@ class TestEdgarPressReleaseDark(unittest.TestCase):
         # would quietly break this backstop.
         script = (REPO_ROOT / "deploy" / "docker" / "run_thematic_day.sh").read_text()
         self.assertRegex(script, r"thematic\s+ingest\s+--force")
+
+
+class TestForm4IncrementalDark(unittest.TestCase):
+    """Output-volume dead-man-switch for the Form-4 daily-incremental ingest.
+
+    Mirrors :class:`TestEdgarPressReleaseDark`. The job's staleness rule catches
+    "stopped running", but a job that runs clean and writes 0 rows for days (the
+    silent-success-noop class — e.g. a daily-index format drift that degrades to
+    0 rows + transient, or a persistent 403 starvation) is invisible to the
+    exit-code check. ``AlphalensForm4IncrementalDark`` fires when the rows-written
+    gauge stays 0 across the window. DISTINCT alertname + NO ``job=`` label keep
+    it out of the cron-keyed enumerations, so it needs its OWN pins here.
+    """
+
+    METRIC = "alphalens_form4_rows_written"
+    DARK = "AlphalensForm4IncrementalDark"
+    MISSING = "AlphalensForm4IncrementalMetricMissing"
+    # 5d, same reasoning as the EDGAR-dark rule: max_over_time(...[Nd]) == 0 fires
+    # the instant the window holds only zeros, so tolerating the worst legitimate
+    # all-zero cluster (a holiday + weekend with no new Form-4 filings) needs a
+    # window STRICTLY longer than 4 days.
+    WINDOW = "5d"
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def _one(self, alertname: str) -> dict:
+        matches = [r for r in self._rules() if r.get("alert") == alertname]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {alertname}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_dark_alert_exists(self) -> None:
+        self._one(self.DARK)
+
+    def test_dark_expr_is_gauge_correct_max_over_time_zero(self) -> None:
+        expr = self._one(self.DARK)["expr"]
+        self.assertIn(self.METRIC, expr)
+        self.assertIn("max_over_time", expr)
+        self.assertIn("== 0", expr)
+        self.assertNotIn("increase(", expr)
+        self.assertNotIn("rate(", expr)
+
+    def test_dark_expr_window_is_five_days(self) -> None:
+        expr = self._one(self.DARK)["expr"]
+        self.assertIn(f"max_over_time({self.METRIC}[{self.WINDOW}])", expr)
+
+    def test_dark_has_for_debounce(self) -> None:
+        self.assertIn("for", self._one(self.DARK))
+
+    def test_dark_routes_to_telegram(self) -> None:
+        self.assertEqual(self._one(self.DARK).get("labels", {}).get("route"), "telegram")
+
+    def test_dark_severity_is_warning_not_critical(self) -> None:
+        self.assertEqual(self._one(self.DARK).get("labels", {}).get("severity"), "warning")
+
+    def test_missing_alert_wraps_absent(self) -> None:
+        expr = self._one(self.MISSING)["expr"]
+        self.assertIn(f"absent({self.METRIC}", expr)
+        self.assertEqual(self._one(self.MISSING).get("labels", {}).get("route"), "telegram")
+
+    def test_dark_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        # The Dark/MetricMissing pair is a per-output-volume slice, not a
+        # systemd unit's last_success — a job= label would falsely register it
+        # in the job-keyed parity tests. (The job's OWN AlphalensJobStale +
+        # AlphalensJobMetricMissing rules carry job="form4-incremental".)
+        for alertname in (self.DARK, self.MISSING):
+            rule = self._one(alertname)
+            self.assertNotIn("job", rule.get("labels", {}))
+            self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+
+class TestForm4IncrementalSustainedTransientErrors(unittest.TestCase):
+    """Pins for the chronic-SEC-fetch-failure alert (zen #477 HIGH).
+
+    rows_written can stay non-zero while one source keeps 403-ing, so the Dark
+    (rows==0) and Stale (last_success) rules miss it; a sustained transient-error
+    count is the only signal. DISTINCT alertname + NO ``job=`` label keep it out
+    of the cron-keyed enumerations, so it needs its OWN pins here.
+    """
+
+    ALERT = "AlphalensForm4IncrementalTransientErrors"
+    METRIC = "alphalens_form4_transient_errors"
+
+    def _one(self) -> dict:
+        matches = [r for r in _load_rules()["groups"][0]["rules"] if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_alert_exists(self) -> None:
+        self._one()
+
+    def test_expr_is_sustained_gauge_over_time_positive(self) -> None:
+        expr = self._one()["expr"]
+        self.assertIn(f"min_over_time({self.METRIC}", expr)
+        self.assertIn("> 0", expr)
+        # Gauge, not counter — must not use monotonic-counter functions.
+        for func in ("increase(", "rate(", "irate("):
+            self.assertNotIn(func, expr)
+
+    def test_has_for_debounce_and_routes_warning_telegram(self) -> None:
+        rule = self._one()
+        self.assertIn("for", rule)
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        rule = self._one()
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
 
 
 class TestEdgarPressReleaseDoesNotCollideWithCronEnums(unittest.TestCase):

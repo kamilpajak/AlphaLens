@@ -1,0 +1,23 @@
+[Unit]
+# Fires the companion alphalens-form4-incremental.service once per day.
+#
+# OnCalendar: 02:30 UTC — staggered deliberately:
+#   * 1h+ after the AV EARNINGS backfill (00:05 UTC) so the two don't overlap;
+#   * off the thematic-build HH:30 grid (00/04/08/12/16/20:30 UTC);
+#   * outside the every-15-min edgar-detect window's busiest moments.
+# This keeps the shared per-IP SEC 10 req/s bucket uncontended for the daily
+# Form-4 fetch.
+#
+# Persistent=true: if the VPS was off when a scheduled run was due, fire the
+# missed run at next boot rather than skipping the day silently. The fixed
+# lookback window makes the catch-up cheap + idempotent.
+Description=Trigger AlphaLens Form-4 daily incremental ingest
+After=network-online.target
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+Persistent=true
+Unit=alphalens-form4-incremental.service
+
+[Install]
+WantedBy=timers.target

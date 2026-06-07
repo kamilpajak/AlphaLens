@@ -1,0 +1,449 @@
+"""TDD for the Form-4 daily-incremental ingest engine.
+
+Covers:
+  * ``parse_form4_index_rows`` keeps only Form-4 / 4-A rows from a daily ``.idx``.
+  * ``fetch_form4_records_for_window`` intersects each day's daily-index accession
+    set with the per-CIK submissions block (so an old filing from the same CIK is
+    not re-written), parses XML, writes parquet, and compacts.
+  * overlap dedup-safety: two overlapping windows + compaction -> unique accessions.
+  * window date math is inclusive UTC.
+  * a daily-index 403 is counted and does not raise / abort the window.
+  * ``IncrementalResult`` carries the metric fields the runner emits.
+
+All SEC access is through a fake client (no live HTTP). The runner argparse
+defaults are also pinned here.
+"""
+
+from __future__ import annotations
+
+import tempfile
+import unittest
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+
+import pandas as pd
+import pyarrow.parquet as pq
+from alphalens_pipeline.data.alt_data.form4_incremental import (
+    IncrementalResult,
+    fetch_form4_records_for_window,
+    latest_filed_date_in_store,
+    parse_form4_index_rows,
+)
+from alphalens_pipeline.data.alt_data.sec_edgar_client import SecForbiddenError
+
+
+def _idx(rows: list[str]) -> str:
+    """Build a daily form .idx body with a header + dashed separator + rows."""
+    header = [
+        "Description:           Daily Index of EDGAR Dissemination Feed by Form Type.",
+        "Last Data Received:    June 5, 2026",
+        " ",
+        "Form Type   Company Name                              CIK         Date Filed  File Name",
+        "-" * 110,
+    ]
+    return "\n".join(header + rows) + "\n"
+
+
+def _index_row(form: str, company: str, cik: int, date_filed: str, accession: str) -> str:
+    """One fixed-width-ish whitespace-separated daily-index row.
+
+    The parser anchors on column 0 (Form Type) + the last three tokens
+    (CIK, Date Filed, File Name), so spacing only needs to be whitespace.
+    """
+    file_name = f"edgar/data/{cik}/{accession}-index.htm"
+    return f"{form:<11} {company:<40} {cik:<10}  {date_filed}  {file_name}"
+
+
+def _form4_xml(*, issuer_cik: int, ticker: str, owner_cik: int, tx_date: str, code: str) -> bytes:
+    return (
+        "<?xml version='1.0'?>"
+        "<ownershipDocument>"
+        "<documentType>4</documentType>"
+        f"<issuer><issuerCik>{issuer_cik}</issuerCik>"
+        f"<issuerTradingSymbol>{ticker}</issuerTradingSymbol></issuer>"
+        "<reportingOwner>"
+        f"<reportingOwnerId><rptOwnerCik>{owner_cik}</rptOwnerCik>"
+        "<rptOwnerName>Doe John</rptOwnerName></reportingOwnerId>"
+        "<reportingOwnerRelationship><isDirector>1</isDirector></reportingOwnerRelationship>"
+        "</reportingOwner>"
+        "<nonDerivativeTable><nonDerivativeTransaction>"
+        f"<transactionDate><value>{tx_date}</value></transactionDate>"
+        f"<transactionCoding><transactionCode>{code}</transactionCode></transactionCoding>"
+        "<transactionAmounts>"
+        "<transactionShares><value>100</value></transactionShares>"
+        "<transactionPricePerShare><value>50.0</value></transactionPricePerShare>"
+        "<transactionAcquiredDisposedCode><value>A</value></transactionAcquiredDisposedCode>"
+        "</transactionAmounts>"
+        "</nonDerivativeTransaction></nonDerivativeTable>"
+        "</ownershipDocument>"
+    ).encode()
+
+
+class _FakeClient:
+    """Minimal stand-in for SecEdgarClient.
+
+    ``index_by_date`` maps a UTC ``date`` to a raw ``.idx`` text (or an
+    exception instance to raise on fetch). ``submissions`` maps a 10-digit CIK
+    to a submissions JSON dict. ``xml_by_accession`` maps an accession to the
+    raw Form-4 XML bytes.
+    """
+
+    def __init__(
+        self,
+        *,
+        index_by_date: dict[date, object],
+        submissions: dict[str, dict],
+        xml_by_accession: dict[str, bytes],
+    ) -> None:
+        self._index_by_date = index_by_date
+        self._submissions = submissions
+        self._xml_by_accession = xml_by_accession
+        self.index_fetches: list[date] = []
+
+    @staticmethod
+    def _date_from_idx_url(url: str) -> date:
+        # .../form.YYYYMMDD.idx
+        stamp = url.rsplit("form.", 1)[1].split(".idx", 1)[0]
+        return date(int(stamp[:4]), int(stamp[4:6]), int(stamp[6:8]))
+
+    def get_text(self, url: str, *, encoding: str = "utf-8") -> str:
+        d = self._date_from_idx_url(url)
+        self.index_fetches.append(d)
+        value = self._index_by_date.get(d)
+        if isinstance(value, Exception):
+            raise value
+        if value is None:
+            raise AssertionError(f"unexpected index fetch for {d}")
+        return value  # type: ignore[return-value]
+
+    def fetch_submissions(self, cik: str) -> dict:
+        return self._submissions[cik]
+
+    def fetch_form4_xml(self, *, cik: str, accession_number: str, primary_doc: str) -> bytes:
+        return self._xml_by_accession[accession_number]
+
+
+def _submissions(*, forms: list[str], accessions: list[str], dates: list[str]) -> dict:
+    return {
+        "filings": {
+            "recent": {
+                "form": forms,
+                "accessionNumber": accessions,
+                "filingDate": dates,
+                "primaryDocument": ["xslF345X05/form4.xml"] * len(forms),
+            },
+            "files": [],
+        }
+    }
+
+
+class TestParseFormIndexRows(unittest.TestCase):
+    def test_parse_form4_index_rows_keeps_only_form4_and_amendments(self) -> None:
+        idx = _idx(
+            [
+                _index_row("4", "ACME CORP", 111, "2026-06-05", "0000000111-26-000001"),
+                _index_row("4/A", "ACME CORP", 111, "2026-06-05", "0000000111-26-000002"),
+                _index_row("8-K", "ACME CORP", 111, "2026-06-05", "0000000111-26-000003"),
+                _index_row("10-K", "OTHER INC", 222, "2026-06-05", "0000000222-26-000009"),
+            ]
+        )
+
+        rows = parse_form4_index_rows(idx)
+
+        forms = sorted(r.form for r in rows)
+        self.assertEqual(forms, ["4", "4/A"])
+        accessions = {r.accession_number for r in rows}
+        self.assertEqual(accessions, {"0000000111-26-000001", "0000000111-26-000002"})
+        # CIK is zero-padded to 10 digits.
+        self.assertTrue(all(len(r.cik) == 10 and r.cik.isdigit() for r in rows))
+
+
+class TestFetchWindowIntersection(unittest.TestCase):
+    def test_fetch_window_intersects_daily_index_accessions_with_submissions(self) -> None:
+        # CIK 111 filed an OLD 4 last year + a NEW 4 today; the daily index for
+        # today lists only the new accession, so only the new row must be written.
+        today = date(2026, 6, 5)
+        new_acc = "0000000111-26-000050"
+        old_acc = "0000000111-25-000003"
+        idx = _idx([_index_row("4", "ACME CORP", 111, "2026-06-05", new_acc)])
+        client = _FakeClient(
+            index_by_date={today: idx},
+            submissions={
+                "0000000111": _submissions(
+                    forms=["4", "4"],
+                    accessions=[new_acc, old_acc],
+                    dates=["2026-06-05", "2025-08-01"],
+                )
+            },
+            xml_by_accession={
+                new_acc: _form4_xml(
+                    issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2026-06-04", code="P"
+                ),
+                old_acc: _form4_xml(
+                    issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2025-07-31", code="S"
+                ),
+            },
+        )
+
+        with self.tmp_root() as root:
+            result = fetch_form4_records_for_window(
+                client, start_date=today, end_date=today, parquet_root=root
+            )
+            accessions = self._all_accessions(root)
+
+        self.assertEqual(accessions, {new_acc})
+        self.assertEqual(result.distinct_accessions, 1)
+
+    def tmp_root(self):
+        import tempfile
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _cm():
+            with tempfile.TemporaryDirectory() as d:
+                yield Path(d) / "form4_parquet"
+
+        return _cm()
+
+    @staticmethod
+    def _all_accessions(root: Path) -> set[str]:
+        accs: set[str] = set()
+        for f in root.rglob("*.parquet"):
+            tbl = pq.read_table(f)
+            accs.update(tbl.column("accession_number").to_pylist())
+        return accs
+
+
+class TestWindowDateMath(unittest.TestCase):
+    def test_window_date_math_is_inclusive_utc(self) -> None:
+        # lookback window [asof - 2, asof] must touch exactly floor, mid, asof.
+        asof = date(2026, 6, 5)
+        floor = date(2026, 6, 3)
+        touched: dict[date, str] = {}
+        for d in (date(2026, 6, 3), date(2026, 6, 4), date(2026, 6, 5)):
+            acc = f"0000000111-26-0000{d.day:02d}"
+            touched[d] = acc
+        idx_by_date = {
+            d: _idx([_index_row("4", "ACME", 111, d.isoformat(), acc)])
+            for d, acc in touched.items()
+        }
+        client = _FakeClient(
+            index_by_date=idx_by_date,
+            submissions={
+                "0000000111": _submissions(
+                    forms=["4", "4", "4"],
+                    accessions=list(touched.values()),
+                    dates=[d.isoformat() for d in touched],
+                )
+            },
+            xml_by_accession={
+                acc: _form4_xml(
+                    issuer_cik=111, ticker="ACME", owner_cik=999, tx_date=d.isoformat(), code="P"
+                )
+                for d, acc in touched.items()
+            },
+        )
+
+        with TestFetchWindowIntersection().tmp_root() as root:
+            fetch_form4_records_for_window(
+                client, start_date=floor, end_date=asof, parquet_root=root
+            )
+
+        self.assertEqual(sorted(client.index_fetches), [floor, date(2026, 6, 4), asof])
+
+
+class TestOverlapDedup(unittest.TestCase):
+    def test_overlapping_windows_dedup_to_unique_accessions(self) -> None:
+        # Two windows overlap on 2026-06-04 + 2026-06-05; the shared accessions
+        # must collapse to one row each after the engine's own compaction.
+        days = {
+            date(2026, 6, 3): "0000000111-26-000003",
+            date(2026, 6, 4): "0000000111-26-000004",
+            date(2026, 6, 5): "0000000111-26-000005",
+        }
+        idx_by_date = {
+            d: _idx([_index_row("4", "ACME", 111, d.isoformat(), acc)]) for d, acc in days.items()
+        }
+        client = _FakeClient(
+            index_by_date=idx_by_date,
+            submissions={
+                "0000000111": _submissions(
+                    forms=["4", "4", "4"],
+                    accessions=list(days.values()),
+                    dates=[d.isoformat() for d in days],
+                )
+            },
+            xml_by_accession={
+                acc: _form4_xml(
+                    issuer_cik=111, ticker="ACME", owner_cik=999, tx_date=d.isoformat(), code="P"
+                )
+                for d, acc in days.items()
+            },
+        )
+
+        with TestFetchWindowIntersection().tmp_root() as root:
+            fetch_form4_records_for_window(
+                client, start_date=date(2026, 6, 3), end_date=date(2026, 6, 4), parquet_root=root
+            )
+            fetch_form4_records_for_window(
+                client, start_date=date(2026, 6, 4), end_date=date(2026, 6, 5), parquet_root=root
+            )
+            # Count rows for the two overlapping accessions: must be exactly one each.
+            counts: dict[str, int] = {}
+            for f in root.rglob("*.parquet"):
+                tbl = pq.read_table(f)
+                for acc in tbl.column("accession_number").to_pylist():
+                    counts[acc] = counts.get(acc, 0) + 1
+
+        self.assertEqual(counts.get("0000000111-26-000004"), 1)
+        self.assertEqual(counts.get("0000000111-26-000005"), 1)
+        self.assertEqual(counts.get("0000000111-26-000003"), 1)
+
+
+class TestGracefulDegrade(unittest.TestCase):
+    def test_daily_index_403_is_counted_and_does_not_raise(self) -> None:
+        # One date 403s; the other date in the window succeeds. The window must
+        # NOT raise, must count the transient, and must still write the good day.
+        bad = date(2026, 6, 4)
+        good = date(2026, 6, 5)
+        good_acc = "0000000111-26-000005"
+        client = _FakeClient(
+            index_by_date={
+                bad: SecForbiddenError("403 traffic threshold"),
+                good: _idx([_index_row("4", "ACME", 111, good.isoformat(), good_acc)]),
+            },
+            submissions={
+                "0000000111": _submissions(
+                    forms=["4"], accessions=[good_acc], dates=[good.isoformat()]
+                )
+            },
+            xml_by_accession={
+                good_acc: _form4_xml(
+                    issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2026-06-05", code="P"
+                )
+            },
+        )
+
+        with TestFetchWindowIntersection().tmp_root() as root:
+            result = fetch_form4_records_for_window(
+                client, start_date=bad, end_date=good, parquet_root=root
+            )
+            accessions = TestFetchWindowIntersection._all_accessions(root)
+
+        self.assertEqual(result.transient_errors, 1)
+        self.assertEqual(accessions, {good_acc})
+
+
+class TestIncrementalResult(unittest.TestCase):
+    def test_result_reports_rows_written_and_latest_filing_date(self) -> None:
+        d = date(2026, 6, 5)
+        acc = "0000000111-26-000005"
+        client = _FakeClient(
+            index_by_date={d: _idx([_index_row("4", "ACME", 111, d.isoformat(), acc)])},
+            submissions={
+                "0000000111": _submissions(forms=["4"], accessions=[acc], dates=[d.isoformat()])
+            },
+            xml_by_accession={
+                acc: _form4_xml(
+                    issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2026-06-04", code="P"
+                )
+            },
+        )
+
+        with TestFetchWindowIntersection().tmp_root() as root:
+            result = fetch_form4_records_for_window(
+                client, start_date=d, end_date=d, parquet_root=root
+            )
+
+        self.assertIsInstance(result, IncrementalResult)
+        self.assertEqual(result.rows_written, 1)
+        self.assertEqual(result.distinct_accessions, 1)
+        self.assertEqual(result.latest_filing_date, d)
+        self.assertEqual(result.transient_errors, 0)
+
+
+class TestRunnerArgparse(unittest.TestCase):
+    def test_runner_argparse_defaults_lookback_three_and_asof_today(self) -> None:
+        # Import the runner module from the scripts package (requires -t apps/alphalens-research).
+        from scripts.run_form4_daily_incremental import parse_args
+
+        args = parse_args([])
+        self.assertEqual(args.lookback_days, 3)
+        # Runner default is today_utc(); assert against UTC (not local date.today())
+        # so the test cannot flake near UTC midnight on a non-UTC machine.
+        self.assertEqual(args.asof_date, datetime.now(UTC).date())
+
+
+class TestWindowSizing(unittest.TestCase):
+    """The window auto-extends to cover the gap to the store's newest filing, so
+    a late first deploy or a missed run self-heals — no manual catch-up sizing.
+    """
+
+    def _start(self, **kw):
+        from scripts.run_form4_daily_incremental import _resolve_window_start
+
+        base = {
+            "asof_date": date(2026, 6, 10),
+            "lookback_days": 3,
+            "overlap_days": 2,
+            "max_catchup_days": 400,
+        }
+        base.update(kw)
+        return _resolve_window_start(**base)
+
+    def test_fresh_store_floors_at_lookback(self) -> None:
+        # Store fully current (today already in store) -> the 3-day lookback
+        # floor (asof - 2) dominates; the reach-back (asof - overlap) ties it.
+        self.assertEqual(self._start(latest_in_store=date(2026, 6, 10)), date(2026, 6, 8))
+
+    def test_fresh_store_yesterday_includes_overlap(self) -> None:
+        # Store one day behind -> reach-back (latest - overlap = 06-07) extends
+        # one day past the lookback floor; a dedup-safe 4-day window.
+        self.assertEqual(self._start(latest_in_store=date(2026, 6, 9)), date(2026, 6, 7))
+
+    def test_stale_store_reaches_back_to_latest_minus_overlap(self) -> None:
+        # Store ends a month ago -> window starts at latest - overlap (gap closed).
+        self.assertEqual(self._start(latest_in_store=date(2026, 5, 7)), date(2026, 5, 5))
+
+    def test_runaway_capped_by_max_catchup(self) -> None:
+        self.assertEqual(
+            self._start(latest_in_store=date(2020, 1, 1), max_catchup_days=30),
+            date(2026, 6, 10) - timedelta(days=30),
+        )
+
+    def test_empty_store_uses_lookback(self) -> None:
+        self.assertEqual(self._start(latest_in_store=None), date(2026, 6, 8))
+
+
+class TestLatestFiledDateInStore(unittest.TestCase):
+    def test_empty_store_returns_none(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(latest_filed_date_in_store(Path(d)))
+
+    def test_max_filed_date_found_even_in_older_partition(self) -> None:
+        # A late 4/A puts the newest filed_date in an OLDER transaction_year
+        # partition, so scanning only the newest partition would miss it.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for year, filed in [("2026", date(2026, 5, 1)), ("2023", date(2026, 5, 20))]:
+                part = root / f"transaction_year={year}"
+                part.mkdir(parents=True)
+                pd.DataFrame({"filed_date": [filed]}).to_parquet(part / "compacted.parquet")
+            self.assertEqual(latest_filed_date_in_store(root), date(2026, 5, 20))
+
+    def test_corrupted_future_filed_date_is_ignored(self) -> None:
+        # A far-future filed_date must not drive window sizing; the newest
+        # plausible (<= today) date wins instead.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            part = root / "transaction_year=2026"
+            part.mkdir(parents=True)
+            real = datetime.now(UTC).date() - timedelta(days=3)
+            pd.DataFrame({"filed_date": [real, date(2999, 1, 1)]}).to_parquet(
+                part / "compacted.parquet"
+            )
+            self.assertEqual(latest_filed_date_in_store(root), real)
+
+
+if __name__ == "__main__":
+    unittest.main()

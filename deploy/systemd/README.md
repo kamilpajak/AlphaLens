@@ -13,7 +13,8 @@ hosts where launchd is unavailable.
 | `alphalens-av-earnings-backfill.{service,timer}` | daily 00:05 UTC | AV EARNINGS daily 25-call quota burn into `~/.alphalens/av_cache/` |
 | `alphalens-thematic-build.{service,timer}` | 6× daily at HH:30 UTC (00/04/08/12/16/20) | docker-run thematic pipeline + verify-cache + Django rebuild-cache (PR-F, epic #295 #300) |
 | `alphalens-feedback-shadow-returns.{service,timer}` | daily 06:30 UTC | host-venv `alphalens feedback backfill-shadow-returns` — runs the broker-free population monitor over its own ~42-session window (price-path replay over Polygon minute bars) and the benchmark-excess + size-field enrichment tail. `Persistent=true` catch-up; idempotent re-stamp. Needs `POLYGON_API_KEY`. NOT trading-day-gated (the per-date maturity guard handles non-trading dates). The unit + command name are retained for the existing timer; the per-decision ladder replay (Track A click ledger) was removed (#465), so the command now drives only the population monitor — a rename is a deferred follow-up. |
-| `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) |
+| `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) — the one-time historical seed (DONE 2026-05-08) |
+| `alphalens-form4-incremental.{service,timer}` | daily 02:30 UTC | Form-4 daily incremental ingest — keeps `~/.alphalens/form4_parquet/` fresh after the seed froze. Self-sizing lookback (min 3 days, auto-extends to the store's newest filing, capped at `--max-catchup-days`) via the SEC daily form index; overlap dedups on `accession_number`. Needs `SEC_EDGAR_USER_AGENT`. **First run auto-catches-up the seed→today gap — no manual step** (see section below). |
 
 > **Decommissioned 2026-06-03 (ADR 0012):** the Alpaca paper-trading units
 > (`alphalens-paper-plan`, `alphalens-paper-submit`, `alphalens-paper-reconcile`,
@@ -35,6 +36,10 @@ All three AlphaLens systemd units load secrets via
   is best-effort, so a missing key only degrades regime stamps to "unknown")
 - `alphalens-av-earnings-backfill.service` — `ALPHA_VANTAGE_API_KEY`
 - `alphalens-form4-backfill.service` — `SEC_EDGAR_USER_AGENT`
+- `alphalens-form4-incremental.service` — `SEC_EDGAR_USER_AGENT` (the
+  residential-VPS IP must carry the operator contact UA; the canonical client
+  has a built-in default but the `EnvironmentFile=` has no leading dash so a
+  missing `/etc/alphalens/env` fails the unit loudly)
 - `alphalens-edgar-detect.service` — `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 - `alphalens-literature-scan-{weekly,monthly}.service` — `PERPLEXITY_API_KEY`,
   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, **plus `GH_TOKEN`** (HTTPS push
@@ -389,6 +394,76 @@ OOM kill, or `pkill` aborts a multi-day run with no restart. systemd's
 `Restart=on-failure` + `RestartSec=60` automates recovery while
 `StartLimitBurst=5` prevents tight crash loops if the underlying problem
 is persistent (bad credentials, exhausted disk, SEC ban).
+
+## alphalens-form4-incremental.service + alphalens-form4-incremental.timer
+
+Keeps the hive-partitioned Form-4 parquet store fresh after the one-time
+historical bulk backfill above (the seed, DONE 2026-05-08) froze. Each daily
+fire fetches a fixed lookback window `[asof - lookback_days, asof]` (UTC) via the
+SEC daily form index, intersects each day's accession set with the per-CIK
+submissions block, parses the XML, writes to
+`~/.alphalens/form4_parquet/transaction_year=YYYY/`, and compacts so overlapping
+re-fetches collapse on the unique `accession_number`. **No state file** — the
+fixed lookback re-reads recent immutable days every run, so a one-run miss
+self-heals on the next run.
+
+Design memo: [`docs/research/form4_daily_incremental_design_2026_06_07.md`](../../docs/research/form4_daily_incremental_design_2026_06_07.md).
+
+### Install
+
+```bash
+cp deploy/systemd/alphalens-form4-incremental.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-form4-incremental.timer   ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-form4-incremental.timer
+```
+
+### First run — automatic catch-up (no manual step)
+
+The window self-sizes: each run reads the store's newest `filed_date` and
+extends the window back to it (minus a 2-day overlap), capped at
+`--max-catchup-days` (default 400). So the FIRST fire after the seed froze
+(~2026-05-08) automatically walks the whole seed→today gap, dedups against the
+seed on compaction, and then settles to the 3-day steady state. The same is
+true after any missed run. No `--lookback-days N` catch-up to remember, and it
+works whether you deploy days or weeks after the seed.
+
+Just enable the timer (above) — or trigger one fire immediately:
+
+```bash
+systemctl --user start alphalens-form4-incremental.service
+```
+
+Verify the first run reached today:
+
+```bash
+curl -s localhost:9100/metrics | grep alphalens_form4_latest_filing_date
+# the gauge (a Unix timestamp) should be within ~1 day of `date +%s`
+```
+
+### Inspect
+
+```bash
+systemctl --user list-timers alphalens-form4-incremental.timer
+journalctl --user -u alphalens-form4-incremental.service -f
+journalctl --user -u alphalens-form4-incremental.service --since "yesterday"
+```
+
+### Why daily-index, not a per-CIK walk
+
+The seed walks the full 8005-CIK universe; the incremental does NOT. The SEC
+daily form index lists every Form-4/4-A filed that UTC day, so one index fetch
+per date gives complete coverage with no stale-roster risk, at ~200× lower HTTP
+than re-walking 8005 submissions every run. A daily-index fetch failure (403
+under shared-IP load) is counted and the date is skipped — the next run's
+overlapping window + the immutable `.idx` are the recovery. See the design memo
+§2 for the full rationale.
+
+### Output
+
+`~/.alphalens/form4_parquet/transaction_year=YYYY/compacted.parquet` — the same
+store the seed wrote, consumed in-place by the Cohen-Malloy / opportunistic-Form4
+scorers. The incremental adds tens of KB/day.
 
 ## alphalens-av-earnings-backfill.service + alphalens-av-earnings-backfill.timer
 
