@@ -14,7 +14,7 @@ hosts where launchd is unavailable.
 | `alphalens-thematic-build.{service,timer}` | 6× daily at HH:30 UTC (00/04/08/12/16/20) | docker-run thematic pipeline + verify-cache + Django rebuild-cache (PR-F, epic #295 #300) |
 | `alphalens-feedback-shadow-returns.{service,timer}` | daily 06:30 UTC | host-venv `alphalens feedback backfill-shadow-returns` — runs the broker-free population monitor over its own ~42-session window (price-path replay over Polygon minute bars) and the benchmark-excess + size-field enrichment tail. `Persistent=true` catch-up; idempotent re-stamp. Needs `POLYGON_API_KEY`. NOT trading-day-gated (the per-date maturity guard handles non-trading dates). The unit + command name are retained for the existing timer; the per-decision ladder replay (Track A click ledger) was removed (#465), so the command now drives only the population monitor — a rename is a deferred follow-up. |
 | `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) — the one-time historical seed (DONE 2026-05-08) |
-| `alphalens-form4-incremental.{service,timer}` | daily 02:30 UTC | Form-4 daily incremental ingest — keeps `~/.alphalens/form4_parquet/` fresh after the seed froze. Fixed 3-day lookback window via the SEC daily form index; overlap dedups on `accession_number`. Needs `SEC_EDGAR_USER_AGENT`. **First deploy needs ONE `--lookback-days 35` catch-up** (see section below). |
+| `alphalens-form4-incremental.{service,timer}` | daily 02:30 UTC | Form-4 daily incremental ingest — keeps `~/.alphalens/form4_parquet/` fresh after the seed froze. Self-sizing lookback (min 3 days, auto-extends to the store's newest filing, capped at `--max-catchup-days`) via the SEC daily form index; overlap dedups on `accession_number`. Needs `SEC_EDGAR_USER_AGENT`. **First run auto-catches-up the seed→today gap — no manual step** (see section below). |
 
 > **Decommissioned 2026-06-03 (ADR 0012):** the Alpaca paper-trading units
 > (`alphalens-paper-plan`, `alphalens-paper-submit`, `alphalens-paper-reconcile`,
@@ -418,22 +418,23 @@ systemctl --user daemon-reload
 systemctl --user enable --now alphalens-form4-incremental.timer
 ```
 
-### FIRST-RUN catch-up (MANDATORY, one time)
+### First run — automatic catch-up (no manual step)
 
-The steady-state timer uses a 3-day lookback. On first deploy there is a
-~30-day gap between the seed end-date (~2026-05-08) and today, so run ONE manual
-catch-up with a 35-day window BEFORE relying on the timer:
+The window self-sizes: each run reads the store's newest `filed_date` and
+extends the window back to it (minus a 2-day overlap), capped at
+`--max-catchup-days` (default 400). So the FIRST fire after the seed froze
+(~2026-05-08) automatically walks the whole seed→today gap, dedups against the
+seed on compaction, and then settles to the 3-day steady state. The same is
+true after any missed run. No `--lookback-days N` catch-up to remember, and it
+works whether you deploy days or weeks after the seed.
+
+Just enable the timer (above) — or trigger one fire immediately:
 
 ```bash
-%h/AlphaLens/.venv/bin/python \
-    apps/alphalens-research/scripts/run_form4_daily_incremental.py \
-    --lookback-days 35
+systemctl --user start alphalens-form4-incremental.service
 ```
 
-The 35-day window deliberately overlaps the seed end-date by a few days; those
-overlapping accessions are already in the seed and collapse on compaction (no
-double-count). **If you skip this step, the steady-state 3-day windows leave a
-permanent ~30-day hole.** Verify the catch-up reached today:
+Verify the first run reached today:
 
 ```bash
 curl -s localhost:9100/metrics | grep alphalens_form4_latest_filing_date

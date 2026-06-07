@@ -41,10 +41,13 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
+import pandas as pd
+
 from alphalens_pipeline.data.alt_data.form4_bulk_backfill import (
     iter_form4_filings,
     write_records_to_parquet,
 )
+from alphalens_pipeline.data.alt_data.form4_compaction import compact_root
 from alphalens_pipeline.data.alt_data.form4_records import (
     Form4ParseError,
     parse_form4_xml,
@@ -245,11 +248,6 @@ def fetch_form4_records_for_window(
     gracefully per-date: a 403 (or other index/submissions/XML failure) on one
     date is counted and skipped, never raised. Returns per-run counts for metrics.
     """
-    # Local import keeps the compaction (a research-side script) out of the
-    # pipeline module's top-level import graph — the engine stays importable on
-    # its own while the runner still gets dedup-on-append.
-    from scripts.compact_form4_parquet import compact_root
-
     sec = client or get_default_sec_client()
 
     all_records: list = []
@@ -300,3 +298,28 @@ def fetch_form4_records_for_window(
 def today_utc() -> date:
     """Current UTC date (engine-local helper so the runner default is testable)."""
     return dt.datetime.now(dt.UTC).date()
+
+
+def latest_filed_date_in_store(parquet_root: Path) -> date | None:
+    """Newest ``filed_date`` currently in the store, or ``None`` when empty.
+
+    Scans the ``filed_date`` column of every ``transaction_year`` partition (a
+    late 4/A can file a recent correction against an old transaction year, so
+    the newest filing is not necessarily in the newest partition). Used by the
+    runner to auto-size the lookback window: the window start always reaches
+    back to where the data ends, so a late first deploy or a missed daily run
+    self-heals on the next run instead of leaving a permanent gap.
+    """
+    if not parquet_root.is_dir():
+        return None
+    latest: date | None = None
+    for fp in sorted(parquet_root.glob("transaction_year=*/compacted.parquet")):
+        try:
+            col = pd.read_parquet(fp, columns=["filed_date"])["filed_date"]
+        except Exception:  # unreadable/partial partition must not crash sizing
+            continue
+        m = pd.to_datetime(col, errors="coerce").max()
+        if pd.notna(m):
+            d = m.date()
+            latest = d if latest is None else max(latest, d)
+    return latest

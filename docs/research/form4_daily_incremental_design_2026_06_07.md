@@ -63,8 +63,8 @@ per-CIK cost at exactly one submissions fetch.
 
 **HTTP budget, steady-state 3-day window:** 3 index fetches + (~tens of distinct filers × 1 submissions)
 + (~tens of accessions × 1 XML) ≈ low-hundreds of requests, comfortably inside the 10 req/s bucket in a
-few minutes. **First-run 35-day window:** ~35 index fetches + a few thousand submissions/XML fetches over
-the ~30+ day gap ≈ tens of minutes to ~2h wall at 10 req/s.
+few minutes. **First-run auto catch-up (~30-day seed gap):** ~30 index fetches + a few thousand
+submissions/XML fetches ≈ tens of minutes to ~2h wall at 10 req/s; bounded by `--max-catchup-days`.
 
 ### Fallback when a daily-index fetch fails
 
@@ -82,11 +82,16 @@ window IS the recovery mechanism.
 walking each date via the daily index. State lives entirely in the parquet store + `accession_number`
 uniqueness.
 
-- **Steady-state default:** `--lookback-days 3` (the SEC 2-business-day filing deadline means a 3-day
+- **Steady-state minimum:** `--lookback-days 3` (the SEC 2-business-day filing deadline means a 3-day
   window over-covers the normal case; a weekend run still re-reads Fri+Sat+Sun).
-- **First-run catch-up:** `--lookback-days 35` (manually on first deploy, or via a one-shot
-  `systemctl --user start` with a drop-in; see §6 runbook). 35 covers the ~2026-05-08 → today gap with
-  margin.
+- **Self-sizing window (no manual catch-up):** each run reads the store's newest `filed_date`
+  (`latest_filed_date_in_store`, scanning every partition's `filed_date` column since a late 4/A can land
+  a recent filing in an old `transaction_year` partition) and extends the window start back to
+  `latest − overlap_days` whenever that is earlier than the 3-day default. So the FIRST run after the seed
+  (or after any missed run) closes the gap automatically; the same `--lookback-days 3` invocation serves
+  both catch-up and steady state. `_resolve_window_start` = `max(min(asof − (lookback−1), latest − overlap), asof − max_catchup_days)`.
+- **Bounded:** `--max-catchup-days` (default 400) caps the reach-back so an empty/misread store can never
+  walk years of daily indexes.
 - **Overlap is dedup-safe by construction:** consecutive daily runs overlap by `lookback_days − 1` days.
   `accession_number` is the globally-unique SEC filing ID; the same accession re-fetched on overlapping
   days produces byte-identical `Form4Record`s, which collapse under
@@ -100,22 +105,21 @@ re-fetching ~`lookback_days` of immutable index data — negligible.
 
 ---
 
-## 4. First-run catch-up (concrete)
+## 4. First-run catch-up (automatic, no operator math)
 
-On first VPS deploy (target ~2026-06-08):
+The window self-sizes, so the first run catches up on its own regardless of deploy date:
 
-1. Operator runs ONE manual catch-up: `systemctl --user start alphalens-form4-incremental.service`
-   after dropping in a one-shot override, OR runs the script directly with `--lookback-days 35`
-   (runbook §6). This walks 2026-05-04 → 2026-06-08 (35d), dedups against the seed (overlapping
-   accessions collapse in compaction), and writes the gap into the existing
-   `transaction_year=2026/` partition.
-2. The daily timer then runs steady-state `--lookback-days 3` from 2026-06-09 onward.
+1. Operator just enables the timer (or triggers one fire). The first run reads the store's newest
+   `filed_date` (~2026-05-07 from the seed), sets the window start to `latest − overlap` (~2026-05-05),
+   and walks the whole gap to today in one fire — bounded by `--max-catchup-days` (400). The overlap
+   re-reads the seed's last days; those accessions collapse on compaction (no double-count).
+2. Every subsequent run finds the store fresh (newest filing ≈ yesterday), so the 3-day default dominates
+   and the window settles to steady state.
+3. A missed run (VPS down for a week) self-heals identically on the next fire — the window auto-extends
+   back to wherever the data ends.
 
-The catch-up window deliberately overlaps the seed end-date (~2026-05-08) by a few days; those overlapping
-accessions are already in the seed and collapse on compaction — no double-count.
-
-A `alphalens_form4_first_run_catchup` gauge is **not** added (keeps the metric set tight); the catch-up
-is a one-time operator action verified by comparing `alphalens_form4_latest_filing_date` against today
+This removes the deploy-date fragility of a fixed catch-up size: deploying days or weeks after the seed
+froze makes no difference. Verified by comparing `alphalens_form4_latest_filing_date` against today
 post-run (runbook §6).
 
 ---
@@ -238,9 +242,9 @@ cp deploy/systemd/alphalens-form4-incremental.{service,timer} ~/.config/systemd/
 systemctl --user daemon-reload
 systemctl --user enable --now alphalens-form4-incremental.timer
 
-# FIRST-RUN catch-up (one time — fill the seed→today gap, ~35d):
-%h/AlphaLens/.venv/bin/python apps/alphalens-research/scripts/run_form4_daily_incremental.py \
-    --lookback-days 35
+# First run auto-catches-up the seed→today gap (window self-sizes — no manual
+# --lookback-days). Trigger one fire now instead of waiting for 02:30:
+systemctl --user start alphalens-form4-incremental.service
 # then verify coverage reached today:
 #   curl -s localhost:9100/metrics | grep alphalens_form4_latest_filing_date
 
@@ -257,15 +261,16 @@ systemctl --user list-timers alphalens-form4-incremental.timer
 
 1. **Shared per-IP 10 req/s SEC bucket** — form4-incremental (02:30 UTC) + every-15-min edgar-detect +
    6×/day thematic. Mitigation: 02:30 stagger (off both grids); `SecEdgarClient` global throttle + 403
-   backoff; per-date graceful degrade. The first-run 35d catch-up is the only heavy burst — run it once,
-   off-peak.
+   backoff; per-date graceful degrade. The first-run auto catch-up (bounded by `--max-catchup-days`) is
+   the only heavy burst, and 02:30 UTC keeps it off-peak.
 2. **`submissions/recent` 1000-cap edge** — a CIK that files >1000 filings in the lookback window would
-   push a same-week 4 out of `recent`. Implausible at 3-day (even 35-day) windows; if it ever bites, the
+   push a same-week 4 out of `recent`. Implausible at 3-day (even catch-up) windows; if it ever bites, the
    overlapping next-day window + the future deep-refresh catch it. Not handled inline (no overflow walk).
 3. **Late filings beyond the window** (§7) — accepted; future quarterly deep-refresh.
 4. **Daily-index format drift** — the engine reuses the proven `.idx` fixed-width parse shape from
    `edgar_press_release.py`; a format change degrades to "0 rows + transient" not a crash. An opt-in live
    smoke (mirroring the L4 `SEC_LIVE_TEST` probes) is a reasonable follow-up, NOT in this PR.
-5. **First-run catch-up is a manual step** — if the operator skips it, steady-state 3-day windows leave a
-   permanent ~30-day hole until a deep-refresh. The runbook flags it as mandatory; the
-   `alphalens_form4_latest_filing_date` gauge surfaces the hole (would sit ~30 days behind `time()`).
+5. **First run / missed runs self-heal** — the window auto-extends to the store's newest filing, so there
+   is no manual catch-up to skip and no fixed-size catch-up that breaks if the deploy slips. A gap can only
+   persist past `--max-catchup-days` (400); the `alphalens_form4_latest_filing_date` gauge surfaces any
+   hole (it would sit far behind `time()`).

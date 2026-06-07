@@ -2,9 +2,16 @@
 # Daily Form-4 incremental ingest — oneshot triggered by the companion .timer.
 # Keeps ~/.alphalens/form4_parquet/ fresh after the one-time historical bulk
 # backfill (alphalens-form4-backfill.service, DONE 2026-05-08) froze. Each fire
-# fetches a fixed 3-day lookback window via the SEC daily form index; overlap
-# between consecutive daily runs collapses on the unique accession_number under
-# the compactor, so there is NO state file to corrupt.
+# fetches a lookback window via the SEC daily form index; overlap between
+# consecutive daily runs collapses on the unique accession_number under the
+# compactor, so there is NO state file to corrupt.
+#
+# Self-healing window (NO manual catch-up): the window auto-extends back to the
+# store's newest filing, so the FIRST run after the seed (or after any missed
+# run) closes the gap on its own, then settles to the 3-day steady state. The
+# reach-back is capped by --max-catchup-days (default 400) so it can never run
+# away. Whether deployed days or weeks after the seed froze, the first fire
+# catches up automatically.
 #
 # Install as a *user* unit alongside the companion timer:
 #
@@ -13,11 +20,6 @@
 #   cp deploy/systemd/alphalens-form4-incremental.timer   ~/.config/systemd/user/
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now alphalens-form4-incremental.timer
-#
-# FIRST-RUN catch-up (one time — fill the seed -> today gap, ~35 days):
-#   %h/AlphaLens/.venv/bin/python \
-#       apps/alphalens-research/scripts/run_form4_daily_incremental.py \
-#       --lookback-days 35
 #
 # Inspect:  journalctl --user -u alphalens-form4-incremental.service -f
 # Trigger manually: systemctl --user start alphalens-form4-incremental.service
@@ -41,8 +43,10 @@ WorkingDirectory=%h/AlphaLens
 # "Environment file setup".
 EnvironmentFile=/etc/alphalens/env
 
-# Steady-state 3-day lookback (SEC 2-business-day filing deadline + a weekend).
-# The first deploy needs ONE manual --lookback-days 35 catch-up (see header).
+# Steady-state minimum 3-day lookback (SEC 2-business-day filing deadline + a
+# weekend). The window auto-extends past this to reach the store's newest filing
+# when stale, so the same invocation serves both the first-run catch-up and the
+# daily steady state — no separate catch-up command.
 ExecStart=%h/AlphaLens/.venv/bin/python \
     apps/alphalens-research/scripts/run_form4_daily_incremental.py \
     --lookback-days 3
@@ -57,7 +61,8 @@ StandardOutput=journal
 StandardError=journal
 
 # The 3-day window is light (1 index/day + tens of submissions + tens of XML).
-# The one-time --lookback-days 35 catch-up is the only heavy burst. 1G is ample.
+# The one-time first-run auto catch-up (seed -> today) is the only heavy burst,
+# bounded by --max-catchup-days. 1G is ample.
 MemoryMax=1G
 TasksMax=32
 

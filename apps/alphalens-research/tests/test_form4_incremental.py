@@ -16,14 +16,17 @@ defaults are also pinned here.
 
 from __future__ import annotations
 
+import tempfile
 import unittest
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import pandas as pd
 import pyarrow.parquet as pq
 from alphalens_pipeline.data.alt_data.form4_incremental import (
     IncrementalResult,
     fetch_form4_records_for_window,
+    latest_filed_date_in_store,
     parse_form4_index_rows,
 )
 from alphalens_pipeline.data.alt_data.sec_edgar_client import SecForbiddenError
@@ -366,7 +369,67 @@ class TestRunnerArgparse(unittest.TestCase):
 
         args = parse_args([])
         self.assertEqual(args.lookback_days, 3)
-        self.assertEqual(args.asof_date, date.today())
+        # Runner default is today_utc(); assert against UTC (not local date.today())
+        # so the test cannot flake near UTC midnight on a non-UTC machine.
+        self.assertEqual(args.asof_date, datetime.now(UTC).date())
+
+
+class TestWindowSizing(unittest.TestCase):
+    """The window auto-extends to cover the gap to the store's newest filing, so
+    a late first deploy or a missed run self-heals — no manual catch-up sizing.
+    """
+
+    def _start(self, **kw):
+        from scripts.run_form4_daily_incremental import _resolve_window_start
+
+        base = {
+            "asof_date": date(2026, 6, 10),
+            "lookback_days": 3,
+            "overlap_days": 2,
+            "max_catchup_days": 400,
+        }
+        base.update(kw)
+        return _resolve_window_start(**base)
+
+    def test_fresh_store_floors_at_lookback(self) -> None:
+        # Store fully current (today already in store) -> the 3-day lookback
+        # floor (asof - 2) dominates; the reach-back (asof - overlap) ties it.
+        self.assertEqual(self._start(latest_in_store=date(2026, 6, 10)), date(2026, 6, 8))
+
+    def test_fresh_store_yesterday_includes_overlap(self) -> None:
+        # Store one day behind -> reach-back (latest - overlap = 06-07) extends
+        # one day past the lookback floor; a dedup-safe 4-day window.
+        self.assertEqual(self._start(latest_in_store=date(2026, 6, 9)), date(2026, 6, 7))
+
+    def test_stale_store_reaches_back_to_latest_minus_overlap(self) -> None:
+        # Store ends a month ago -> window starts at latest - overlap (gap closed).
+        self.assertEqual(self._start(latest_in_store=date(2026, 5, 7)), date(2026, 5, 5))
+
+    def test_runaway_capped_by_max_catchup(self) -> None:
+        self.assertEqual(
+            self._start(latest_in_store=date(2020, 1, 1), max_catchup_days=30),
+            date(2026, 6, 10) - timedelta(days=30),
+        )
+
+    def test_empty_store_uses_lookback(self) -> None:
+        self.assertEqual(self._start(latest_in_store=None), date(2026, 6, 8))
+
+
+class TestLatestFiledDateInStore(unittest.TestCase):
+    def test_empty_store_returns_none(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(latest_filed_date_in_store(Path(d)))
+
+    def test_max_filed_date_found_even_in_older_partition(self) -> None:
+        # A late 4/A puts the newest filed_date in an OLDER transaction_year
+        # partition, so scanning only the newest partition would miss it.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for year, filed in [("2026", date(2026, 5, 1)), ("2023", date(2026, 5, 20))]:
+                part = root / f"transaction_year={year}"
+                part.mkdir(parents=True)
+                pd.DataFrame({"filed_date": [filed]}).to_parquet(part / "compacted.parquet")
+            self.assertEqual(latest_filed_date_in_store(root), date(2026, 5, 20))
 
 
 if __name__ == "__main__":

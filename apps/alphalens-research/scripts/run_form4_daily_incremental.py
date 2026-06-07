@@ -35,6 +35,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from alphalens_pipeline.data.alt_data.form4_incremental import (
     fetch_form4_records_for_window,
+    latest_filed_date_in_store,
     today_utc,
 )
 from alphalens_pipeline.data.alt_data.sec_edgar_client import (
@@ -46,8 +47,36 @@ from alphalens_pipeline.observability.textfile import emit_domain_metrics
 logger = logging.getLogger(__name__)
 
 _DEFAULT_LOOKBACK_DAYS = 3
+_DEFAULT_OVERLAP_DAYS = 2
+_DEFAULT_MAX_CATCHUP_DAYS = 400
 _DEFAULT_PARQUET_ROOT = Path.home() / ".alphalens" / "form4_parquet"
 _JOB_NAME = "form4-incremental"
+
+
+def _resolve_window_start(
+    *,
+    asof_date: date,
+    lookback_days: int,
+    overlap_days: int,
+    max_catchup_days: int,
+    latest_in_store: date | None,
+) -> date:
+    """Window start = the earlier of the steady-state lookback and a reach-back
+    to the store's newest filing (minus overlap), capped at ``max_catchup_days``.
+
+    Steady state (store fresh): the lookback term dominates. After a late first
+    deploy or a missed run (store stale): the reach-back term dominates so the
+    gap is closed. The cap bounds an empty/misread store so the window can never
+    run away.
+    """
+    default_start = asof_date - timedelta(days=lookback_days - 1)
+    floor_start = asof_date - timedelta(days=max_catchup_days)
+    if latest_in_store is None:
+        start = default_start
+    else:
+        reach_back = latest_in_store - timedelta(days=overlap_days)
+        start = min(default_start, reach_back)
+    return max(start, floor_start)
 
 
 def _parse_date(raw: str) -> date:
@@ -61,8 +90,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=_DEFAULT_LOOKBACK_DAYS,
         help=(
-            "Inclusive lookback window size in days. Default 3 (steady-state); "
-            "use 35 for the one-time first-deploy catch-up of the seed -> today gap."
+            "Minimum inclusive lookback window in days (default 3). The window "
+            "auto-extends further back when the store's newest filing is older "
+            "than this (late first deploy or a missed run self-heals); no manual "
+            "catch-up sizing needed."
+        ),
+    )
+    p.add_argument(
+        "--overlap-days",
+        type=int,
+        default=_DEFAULT_OVERLAP_DAYS,
+        help=(
+            "When auto-extending to the store's newest filing, start this many "
+            "days before it so a same-day partial filing set is re-pulled "
+            "(dedup-safe). Default 2."
+        ),
+    )
+    p.add_argument(
+        "--max-catchup-days",
+        type=int,
+        default=_DEFAULT_MAX_CATCHUP_DAYS,
+        help=(
+            "Hard cap on how far back the auto-extended window may reach "
+            "(default 400). Bounds the first run / a misread store so it can "
+            "never run away fetching years of daily indexes."
         ),
     )
     p.add_argument(
@@ -101,12 +152,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parse_args(argv)
 
-    start_date = args.asof_date - timedelta(days=args.lookback_days - 1)
+    latest_in_store = latest_filed_date_in_store(args.parquet_root)
+    start_date = _resolve_window_start(
+        asof_date=args.asof_date,
+        lookback_days=args.lookback_days,
+        overlap_days=args.overlap_days,
+        max_catchup_days=args.max_catchup_days,
+        latest_in_store=latest_in_store,
+    )
     logger.info(
-        "form4-incremental: window=[%s, %s] (lookback=%dd) root=%s",
+        "form4-incremental: window=[%s, %s] (%dd) latest_in_store=%s root=%s",
         start_date,
         args.asof_date,
-        args.lookback_days,
+        (args.asof_date - start_date).days + 1,
+        latest_in_store,
         args.parquet_root,
     )
 
