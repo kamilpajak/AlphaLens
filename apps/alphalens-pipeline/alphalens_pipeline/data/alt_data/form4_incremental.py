@@ -243,18 +243,22 @@ def fetch_form4_records_for_window(
 ) -> IncrementalResult:
     """Ingest every Form-4/4-A filed in ``[start_date, end_date]`` (inclusive UTC).
 
-    Writes the parsed records to the hive-partitioned store and compacts so
-    overlapping re-fetches collapse on the unique ``accession_number``. Degrades
-    gracefully per-date: a 403 (or other index/submissions/XML failure) on one
-    date is counted and skipped, never raised. Returns per-run counts for metrics.
+    Writes each date's parsed records to the hive-partitioned store as it goes,
+    then compacts ONCE so overlapping re-fetches collapse on the unique
+    ``accession_number``. Per-date flushing keeps memory bounded to a single
+    day's filings: accumulating a whole self-sizing catch-up window in memory
+    OOM-killed a 34-day first run at the unit's 1G cap. Degrades gracefully
+    per-date: a 403 (or other index/submissions/XML failure) on one date is
+    counted and skipped, never raised. Returns per-run counts for metrics.
     """
     sec = client or get_default_sec_client()
 
-    all_records: list = []
+    rows_written = 0
     all_accessions: set[str] = set()
     latest_filing_date: date | None = None
     transient_errors = 0
     other_errors = 0
+    wrote_any = False
 
     for d in _iter_window_dates(start_date, end_date):
         try:
@@ -275,15 +279,19 @@ def fetch_form4_records_for_window(
             logger.warning("form4-incremental per-filing 403 for %s: %s", d, exc)
             continue
 
-        all_records.extend(records)
-        all_accessions.update(accessions)
         other_errors += day_other
+        all_accessions.update(accessions)
+        if records:
+            # Flush this date immediately rather than accumulating the whole
+            # window — bounds memory for a long catch-up. The duplicate part
+            # files an overlapping window produces collapse at compact_root.
+            write_records_to_parquet(records, parquet_root=parquet_root)
+            rows_written += len(records)
+            wrote_any = True
         if accessions:
             latest_filing_date = max(latest_filing_date or d, d)
 
-    rows_written = len(all_records)
-    if all_records:
-        write_records_to_parquet(all_records, parquet_root=parquet_root)
+    if wrote_any:
         compact_root(parquet_root)
 
     return IncrementalResult(

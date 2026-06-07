@@ -20,6 +20,7 @@ import tempfile
 import unittest
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -443,6 +444,56 @@ class TestLatestFiledDateInStore(unittest.TestCase):
                 part / "compacted.parquet"
             )
             self.assertEqual(latest_filed_date_in_store(root), real)
+
+
+class TestPerDateFlushBoundsMemory(unittest.TestCase):
+    """A long catch-up window must write per-date, not accumulate the whole
+    window in memory (a 34-day first run OOM-killed at the unit's 1G cap).
+    """
+
+    def test_writes_once_per_date_then_compacts_once(self) -> None:
+        import alphalens_pipeline.data.alt_data.form4_incremental as eng
+
+        d1, d2 = date(2026, 6, 4), date(2026, 6, 5)
+        acc1, acc2 = "0000000111-26-000041", "0000000111-26-000042"
+        client = _FakeClient(
+            index_by_date={
+                d1: _idx([_index_row("4", "ACME CORP", 111, "2026-06-04", acc1)]),
+                d2: _idx([_index_row("4", "ACME CORP", 111, "2026-06-05", acc2)]),
+            },
+            submissions={
+                "0000000111": _submissions(
+                    forms=["4", "4"],
+                    accessions=[acc1, acc2],
+                    dates=["2026-06-04", "2026-06-05"],
+                )
+            },
+            xml_by_accession={
+                acc1: _form4_xml(
+                    issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2026-06-04", code="P"
+                ),
+                acc2: _form4_xml(
+                    issuer_cik=111, ticker="ACME", owner_cik=999, tx_date="2026-06-05", code="P"
+                ),
+            },
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(
+                eng, "write_records_to_parquet", wraps=eng.write_records_to_parquet
+            ) as wr,
+            mock.patch.object(eng, "compact_root", wraps=eng.compact_root) as cr,
+        ):
+            result = eng.fetch_form4_records_for_window(
+                client, start_date=d1, end_date=d2, parquet_root=Path(tmp)
+            )
+
+        self.assertEqual(
+            wr.call_count, 2, "must flush once per date, not once for the whole window"
+        )
+        self.assertEqual(cr.call_count, 1, "compaction runs once at the end")
+        self.assertEqual(result.rows_written, 2)
+        self.assertEqual(result.distinct_accessions, 2)
 
 
 if __name__ == "__main__":
