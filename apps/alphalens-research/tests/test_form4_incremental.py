@@ -598,5 +598,100 @@ class TestPerDateFlushBoundsMemory(unittest.TestCase):
         self.assertEqual(result.distinct_accessions, 2)
 
 
+class TestUniverseScope(unittest.TestCase):
+    def test_filters_to_universe_before_any_fetch(self) -> None:
+        # Two filings on the day: one issuer in the universe, one not. The
+        # non-universe row must be dropped BEFORE its .txt is fetched (zero
+        # requests), and only the universe filing is written.
+        day = date(2026, 6, 5)
+        in_acc = "0000000111-26-000001"
+        out_acc = "0000000222-26-000002"
+        idx = _idx(
+            [
+                _index_row("4", "IN UNIVERSE", 111, "2026-06-05", in_acc),
+                _index_row("4", "NOT UNIVERSE", 222, "2026-06-05", out_acc),
+            ]
+        )
+        client = _FakeClient(
+            index_by_date={day: idx},
+            txt_by_accession={
+                in_acc: _submission_txt(
+                    issuer_cik=111, ticker="IN", owner_cik=9, tx_date="2026-06-04", code="P"
+                ),
+                out_acc: _submission_txt(
+                    issuer_cik=222, ticker="OUT", owner_cik=9, tx_date="2026-06-04", code="P"
+                ),
+            },
+        )
+        with TestFetchWindowSpeedup().tmp_root() as root:
+            result = fetch_form4_records_for_window(
+                client,
+                start_date=day,
+                end_date=day,
+                parquet_root=root,
+                cik_universe={"0000000111"},
+            )
+            accessions = TestFetchWindowSpeedup._all_accessions(root)
+
+        self.assertEqual(
+            client.txt_fetches, [in_acc], "non-universe row must cost zero .txt fetches"
+        )
+        self.assertEqual(accessions, {in_acc})
+        self.assertEqual(result.distinct_accessions, 1)
+
+    def test_universe_none_keeps_market_wide(self) -> None:
+        # cik_universe=None (default) ingests every Form-4 in the index.
+        day = date(2026, 6, 5)
+        a1, a2 = "0000000111-26-000001", "0000000222-26-000002"
+        idx = _idx(
+            [
+                _index_row("4", "ONE", 111, "2026-06-05", a1),
+                _index_row("4", "TWO", 222, "2026-06-05", a2),
+            ]
+        )
+        client = _FakeClient(
+            index_by_date={day: idx},
+            txt_by_accession={
+                a1: _submission_txt(
+                    issuer_cik=111, ticker="ONE", owner_cik=9, tx_date="2026-06-04", code="P"
+                ),
+                a2: _submission_txt(
+                    issuer_cik=222, ticker="TWO", owner_cik=9, tx_date="2026-06-04", code="P"
+                ),
+            },
+        )
+        with TestFetchWindowSpeedup().tmp_root() as root:
+            result = fetch_form4_records_for_window(
+                client, start_date=day, end_date=day, parquet_root=root
+            )
+        self.assertEqual(result.distinct_accessions, 2)
+        self.assertEqual(sorted(client.txt_fetches), [a1, a2])
+
+
+class TestLoadCikUniverse(unittest.TestCase):
+    def test_normalizes_pads_and_skips_comments(self) -> None:
+        from alphalens_pipeline.data.alt_data.form4_incremental import load_cik_universe
+
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "u.txt"
+            p.write_text("# header\n320193\n0000001750\n\n  789  \nnotacik\n")
+            self.assertEqual(load_cik_universe(p), {"0000320193", "0000001750", "0000000789"})
+
+    def test_raises_on_missing_file(self) -> None:
+        from alphalens_pipeline.data.alt_data.form4_incremental import load_cik_universe
+
+        with self.assertRaises(FileNotFoundError):
+            load_cik_universe(Path("/nonexistent/form4_cik_universe.txt"))
+
+    def test_raises_on_empty_universe(self) -> None:
+        from alphalens_pipeline.data.alt_data.form4_incremental import load_cik_universe
+
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "u.txt"
+            p.write_text("# only comments\n\n")
+            with self.assertRaises(ValueError):
+                load_cik_universe(p)
+
+
 if __name__ == "__main__":
     unittest.main()

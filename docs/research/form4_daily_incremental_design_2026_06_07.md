@@ -5,6 +5,20 @@
 **Branch: `feat/form4-daily-incremental`**
 **Scope: keep `~/.alphalens/form4_parquet/` (hive-partitioned by `transaction_year=YYYY`) COMPLETE and FRESH automatically, hands-off, VPS as single source of truth.**
 
+> **Scope revision 2026-06-08 — universe-scoped, not market-wide.** The original
+> design ingested every Form-4/4-A in each daily index (market-wide). Live, that
+> was ~2000-3000 filings/day → ~2640 `.txt` fetches/day at SEC's 10 req/s →
+> ~2 h for the 27-day catch-up, which blew the 45-min unit timeout. The runner
+> now filters the daily index to the **8005-CIK universe** (the same scope the
+> historical seed was built from; the thematic tool only ever reads insider data
+> for universe issuers) BEFORE any `.txt` fetch — ~10× fewer requests, catch-up
+> in minutes. The engine takes `cik_universe: set[str] | None` (None = the old
+> market-wide path, kept for `--market-wide`); the runner loads
+> `~/.alphalens/form4_cik_universe.txt` by default and **fails loud** if it is
+> missing rather than silently degrading to the slow path. Already-ingested
+> market-wide rows (seed + the partial catch-up) stay — harmless extra data the
+> consumer never queries.
+
 ---
 
 ## 1. Problem & non-goals
