@@ -284,8 +284,17 @@ def fetch_form4_records_for_window(
     start_date: date,
     end_date: date,
     parquet_root: Path,
+    cik_universe: set[str] | None = None,
 ) -> IncrementalResult:
     """Ingest every Form-4/4-A filed in ``[start_date, end_date]`` (inclusive UTC).
+
+    When ``cik_universe`` is given (a set of 10-digit zero-padded issuer CIKs),
+    each day's index rows are filtered to that set BEFORE any ``.txt`` is fetched
+    — so a non-universe filing costs zero requests. This scopes the incremental
+    to the same universe the historical seed was built from (the thematic tool
+    only reads insider data for universe issuers), cutting a market-wide
+    ~2000-3000 filings/day down to ~hundreds and letting the catch-up finish in
+    minutes. ``None`` keeps the full market-wide behaviour.
 
     Writes each date's parsed records to the hive-partitioned store as it goes,
     then compacts ONCE so overlapping re-fetches collapse on the unique
@@ -319,6 +328,22 @@ def fetch_form4_records_for_window(
             transient_errors += 1
             logger.warning("form4-incremental daily-index fetch failed for %s: %s", d, exc)
             continue
+
+        if cik_universe is not None:
+            # Universe-scope: drop non-universe issuers BEFORE any .txt fetch so
+            # they cost zero requests (the consumer only reads universe tickers).
+            n_before = len(rows)
+            rows = [r for r in rows if r.cik in cik_universe]
+            if n_before and not rows:
+                # A populated index day with zero survivors is almost certainly a
+                # CIK-format drift in the universe file (8005 issuers rarely all
+                # skip a day) — surface it now, not after the 5-day dead-man.
+                logger.warning(
+                    "form4-incremental: all %d index rows for %s filtered out by the "
+                    "universe — possible CIK-format mismatch in the universe file",
+                    n_before,
+                    d,
+                )
 
         try:
             records, accessions, day_other = _records_for_date(sec, rows=rows)
@@ -355,6 +380,32 @@ def fetch_form4_records_for_window(
 def today_utc() -> date:
     """Current UTC date (engine-local helper so the runner default is testable)."""
     return dt.datetime.now(dt.UTC).date()
+
+
+def load_cik_universe(path: Path) -> set[str]:
+    """Load a CIK-per-line file into a set of 10-digit zero-padded CIKs.
+
+    Matches ``Form4IndexRow.cik`` (also 10-digit zero-padded) so membership
+    tests are exact. Mirrors the bulk backfill's ``_load_cik_list`` parse:
+    blank lines and ``#`` comments are skipped, non-numeric lines are dropped
+    with a warning. Raises ``FileNotFoundError`` if ``path`` is missing — the
+    runner fails loud rather than silently falling back to the slow market-wide
+    path. Raises ``ValueError`` if the file yields zero usable CIKs (a format
+    problem that would otherwise silently filter EVERY filing out).
+    """
+    universe: set[str] = set()
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            universe.add(f"{int(line):010d}")
+        except ValueError:
+            logger.warning("skipping non-numeric CIK universe line: %r", line)
+            continue
+    if not universe:
+        raise ValueError(f"CIK universe file yielded zero usable CIKs: {path}")
+    return universe
 
 
 def latest_filed_date_in_store(parquet_root: Path) -> date | None:

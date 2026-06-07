@@ -36,6 +36,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from alphalens_pipeline.data.alt_data.form4_incremental import (
     fetch_form4_records_for_window,
     latest_filed_date_in_store,
+    load_cik_universe,
     today_utc,
 )
 from alphalens_pipeline.data.alt_data.sec_edgar_client import (
@@ -50,6 +51,7 @@ _DEFAULT_LOOKBACK_DAYS = 3
 _DEFAULT_OVERLAP_DAYS = 2
 _DEFAULT_MAX_CATCHUP_DAYS = 400
 _DEFAULT_PARQUET_ROOT = Path.home() / ".alphalens" / "form4_parquet"
+_DEFAULT_CIK_UNIVERSE = Path.home() / ".alphalens" / "form4_cik_universe.txt"
 _JOB_NAME = "form4-incremental"
 
 
@@ -136,6 +138,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "default client (reads SEC_EDGAR_USER_AGENT from the environment)."
         ),
     )
+    p.add_argument(
+        "--cik-universe",
+        type=Path,
+        default=_DEFAULT_CIK_UNIVERSE,
+        help=(
+            "CIK-per-line universe file. The daily index is filtered to these "
+            "issuers before any .txt fetch (matches the seed's scope; ~10x fewer "
+            "requests). Fails loud if missing — use --market-wide to opt out."
+        ),
+    )
+    p.add_argument(
+        "--market-wide",
+        action="store_true",
+        help="Ingest every Form-4 in the daily index (no universe filter). Slow.",
+    )
     return p.parse_args(argv)
 
 
@@ -151,6 +168,14 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     args = parse_args(argv)
+
+    # Universe-scope by default (fail loud if the file is missing rather than
+    # silently degrading to the slow market-wide path); --market-wide opts out.
+    try:
+        cik_universe = None if args.market_wide else load_cik_universe(args.cik_universe)
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error("form4-incremental: cannot load CIK universe: %s", exc)
+        return 1
 
     latest_in_store = latest_filed_date_in_store(args.parquet_root)
     start_date = _resolve_window_start(
@@ -175,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
         start_date=start_date,
         end_date=args.asof_date,
         parquet_root=args.parquet_root,
+        cik_universe=cik_universe,
     )
 
     logger.info(
