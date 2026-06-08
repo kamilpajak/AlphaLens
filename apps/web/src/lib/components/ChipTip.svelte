@@ -39,7 +39,7 @@
 </script>
 
 <span
-	class="group relative inline-block hover:z-50 focus-within:z-50"
+	class="group/chip relative inline-block cursor-help hover:z-50 focus-within:z-50"
 	tabindex="0"
 	role="group"
 	onpointerdown={onPointerDown}
@@ -51,7 +51,7 @@
 
 	<span
 		id={tooltipId}
-		class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+		class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover/chip:opacity-100 group-focus-within/chip:opacity-100"
 		role="tooltip"
 	>
 		<span class="block border border-amber bg-bg-1 px-3 py-2 text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl">

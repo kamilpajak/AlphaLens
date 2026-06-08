@@ -6,7 +6,8 @@ import {
 	fmtFracPct,
 	fmtR,
 	statsUnlocked,
-	statusLabel
+	statusLabel,
+	toneClasses
 } from '../../src/lib/edge';
 
 // Pins the pure derivation/formatting the /edge dashboard relies on: the
@@ -16,17 +17,22 @@ import {
 // the N-gate is server-side; statsUnlocked is only a presentation switch.
 
 describe('classificationTone', () => {
-	it('maps the five known ladder classifications to memo §5 colours', () => {
+	it('maps the known ladder classifications to memo §5 colours', () => {
 		expect(classificationTone('TP_FULL')).toBe('green');
 		expect(classificationTone('SL_HIT')).toBe('red');
 		expect(classificationTone('TIME_STOP')).toBe('amber');
 		expect(classificationTone('OPEN')).toBe('cyan');
-		expect(classificationTone('PARTIAL')).toBe('violet');
+	});
+
+	it('maps both partial-take-profit states to violet', () => {
+		expect(classificationTone('PARTIAL_TP_OPEN')).toBe('violet');
+		expect(classificationTone('PARTIAL_TP_THEN_SL')).toBe('violet');
 	});
 
 	it('is case- and whitespace-insensitive', () => {
 		expect(classificationTone(' tp_full ')).toBe('green');
 		expect(classificationTone('Sl_Hit')).toBe('red');
+		expect(classificationTone('partial_tp_open')).toBe('violet');
 	});
 
 	it('falls back to muted for unknown / NO_FILL / null', () => {
@@ -35,6 +41,12 @@ describe('classificationTone', () => {
 		expect(classificationTone(null)).toBe('muted');
 		expect(classificationTone(undefined)).toBe('muted');
 		expect(classificationTone('')).toBe('muted');
+	});
+
+	it('maps each tone to its border + text classes', () => {
+		expect(toneClasses('green')).toBe('border-green text-green');
+		expect(toneClasses('violet')).toBe('border-violet text-violet');
+		expect(toneClasses('muted')).toBe('border-grid-strong text-fg-muted');
 	});
 });
 

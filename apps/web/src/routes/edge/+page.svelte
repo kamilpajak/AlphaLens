@@ -3,6 +3,9 @@
 	import type { EdgeOutcome } from '$lib/types';
 	import { AlertTriangle, Clock, Lock } from 'lucide-svelte';
 	import JargonTip from '$lib/components/JargonTip.svelte';
+	import ChipTip from '$lib/components/ChipTip.svelte';
+	import LadderStatusLegend from '$lib/components/LadderStatusLegend.svelte';
+	import { ladderStatusBody } from '$lib/data/ladderStatus';
 	import { fmtNum } from '$lib/format';
 	import {
 		classificationTone,
@@ -11,7 +14,7 @@
 		fmtFracPct,
 		fmtR,
 		statsUnlocked,
-		type EdgeTone
+		toneClasses
 	} from '$lib/edge';
 
 	let { data }: { data: PageData } = $props();
@@ -32,24 +35,6 @@
 	const nTerminal = $derived((data.outcomes ?? []).filter((o) => o.terminal).length);
 	const nOngoing = $derived((data.outcomes ?? []).filter((o) => !o.terminal).length);
 
-	// Map an EdgeTone to the chip border/text utility classes. Kept inline
-	// (not a component) so the colour mapping is local + explicit.
-	function chipClasses(tone: EdgeTone): string {
-		switch (tone) {
-			case 'green':
-				return 'border-green text-green';
-			case 'red':
-				return 'border-red text-red';
-			case 'amber':
-				return 'border-amber text-amber';
-			case 'cyan':
-				return 'border-cyan text-cyan';
-			case 'violet':
-				return 'border-violet text-violet';
-			default:
-				return 'border-grid-strong text-fg-muted';
-		}
-	}
 </script>
 
 <div class="px-3 sm:px-4 py-8 max-w-[1200px] mx-auto">
@@ -367,6 +352,7 @@
 
 		<!-- PER-CANDIDATE OUTCOMES table -->
 		<section class="fade-up" data-testid="outcomes-table">
+			<LadderStatusLegend />
 			<div class="mb-3 flex flex-wrap items-center justify-between gap-2">
 				<div class="flex items-baseline gap-2 flex-1 min-w-[12rem]">
 					<div class="text-[10px] uppercase tracking-[0.3em] text-fg-muted">
@@ -452,13 +438,17 @@
 									</a>
 								</td>
 								<td class="py-2.5 pr-3">
-									<span
-										class="inline-block px-1.5 py-0.5 border text-[9px] uppercase tracking-widest whitespace-nowrap {chipClasses(
-											tone
-										)}"
-									>
-										{o.ladder_classification}
-									</span>
+									<ChipTip term={o.ladder_classification} body={ladderStatusBody(o.ladder_classification)}>
+										{#snippet chip()}
+											<span
+												class="inline-block px-1.5 py-0.5 border text-[9px] uppercase tracking-widest whitespace-nowrap {toneClasses(
+													tone
+												)}"
+											>
+												{o.ladder_classification}
+											</span>
+										{/snippet}
+									</ChipTip>
 								</td>
 								<td class="py-2.5 pr-3 min-w-[8rem]">
 									<div class="flex items-center gap-2">

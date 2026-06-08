@@ -13,7 +13,8 @@ export type EdgeTone = 'green' | 'red' | 'amber' | 'cyan' | 'violet' | 'muted';
 /**
  * Ladder-classification → chip tone, per memo §5:
  *   TP_FULL → green, SL_HIT → red, TIME_STOP → amber, OPEN → cyan,
- *   PARTIAL → violet. Anything else (NO_FILL, unknown) → muted.
+ *   PARTIAL_TP_OPEN / PARTIAL_TP_THEN_SL → violet. Anything else (NO_FILL,
+ *   BAD_GEOMETRY, NO_STRUCTURE, NO_DATA, unknown) → muted.
  * Matching is case-insensitive and tolerant of a leading/trailing space.
  */
 export function classificationTone(classification: string | null | undefined): EdgeTone {
@@ -23,8 +24,27 @@ export function classificationTone(classification: string | null | undefined): E
 	if (c === 'SL_HIT') return 'red';
 	if (c === 'TIME_STOP') return 'amber';
 	if (c === 'OPEN') return 'cyan';
-	if (c === 'PARTIAL') return 'violet';
+	if (c.startsWith('PARTIAL')) return 'violet';
 	return 'muted';
+}
+
+/** A chip tone → its Tailwind `border-*` + `text-*` classes. Shared by the
+ *  /edge outcomes table and the ladder-status legend so both stay in sync. */
+export function toneClasses(tone: EdgeTone): string {
+	switch (tone) {
+		case 'green':
+			return 'border-green text-green';
+		case 'red':
+			return 'border-red text-red';
+		case 'amber':
+			return 'border-amber text-amber';
+		case 'cyan':
+			return 'border-cyan text-cyan';
+		case 'violet':
+			return 'border-violet text-violet';
+		default:
+			return 'border-grid-strong text-fg-muted';
+	}
 }
 
 /**
