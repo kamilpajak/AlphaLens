@@ -747,6 +747,110 @@ class TestVixCacheStaleness(unittest.TestCase):
             )
 
 
+class TestEdgarNoCandidatesWeekendTolerance(unittest.TestCase):
+    """Pin the weekend/holiday-tolerant window on the no-candidates alert.
+
+    ``AlphalensEdgarNoCandidates`` catches a genuinely quiet / emptied
+    watchlist (the unique signal detector LIVENESS does not cover — that is
+    AlphalensJobStale + AlphalensJobMetricMissing). SEC accepts no filings on
+    weekends and the watched portfolio is tiny (~6 tickers), so a [24h] window
+    is legitimately 0 every weekend and false-fired the operator. The window is
+    widened to [5d] to tolerate a weekend AND the worst holiday cluster (the
+    pessimistic Thanksgiving Thu-Sun 4-zero-day run), matching the sibling
+    AlphalensEdgarPressReleaseDark / AlphalensForm4IncrementalDark rules.
+
+    The window is encoded in the alertname per project convention, so the live
+    alert is ``AlphalensEdgarNoCandidates5d`` and the stale 24h name must be
+    gone.
+    """
+
+    METRIC = "alphalens_edgar_events_dispatched_total"
+    ALERT = "AlphalensEdgarNoCandidates5d"
+    OLD_ALERT = "AlphalensEdgarNoCandidates24h"
+    # 5d, NOT 24h and NOT 4d: max_over_time(...[Nd]) == 0 fires the instant the
+    # window holds only zeros, so tolerating the worst legit 4-zero-day cluster
+    # (pessimistic Thanksgiving Thu-Sun) needs a window STRICTLY longer than 4d.
+    # A future edit that shrinks this back toward 24h re-introduces the weekend
+    # false page; growing it past 5d delays a real emptied-watchlist incident.
+    WINDOW = "5d"
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def _one(self, alertname: str) -> dict:
+        matches = [r for r in self._rules() if r.get("alert") == alertname]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {alertname}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_alert_exists_under_window_named_alertname(self) -> None:
+        self._one(self.ALERT)
+
+    def test_old_24h_alertname_is_gone(self) -> None:
+        # The name encodes the window; a stale 24h name after widening to 5d
+        # would mislead the operator on Telegram.
+        names = {r.get("alert") for r in self._rules()}
+        self.assertNotIn(
+            self.OLD_ALERT,
+            names,
+            "AlphalensEdgarNoCandidates24h must be renamed to ...5d after the window widen.",
+        )
+
+    def test_expr_is_gauge_correct_max_over_time_zero(self) -> None:
+        expr = self._one(self.ALERT)["expr"]
+        self.assertIn(self.METRIC, expr)
+        self.assertIn("max_over_time", expr)
+        self.assertIn("== 0", expr)
+        # GAUGE (overwritten each run) -> never counter functions (the PR #312
+        # lesson; also pinned generically by test_no_counter_functions_*).
+        self.assertNotIn("increase(", expr)
+        self.assertNotIn("rate(", expr)
+
+    def test_expr_window_is_five_days(self) -> None:
+        # Pin the literal [5d] window so a noise-reduction edit can't silently
+        # shrink it below a weekend/holiday cluster (false page) or back to 24h.
+        expr = self._one(self.ALERT)["expr"]
+        self.assertIn(f"max_over_time({self.METRIC}[{self.WINDOW}])", expr)
+        self.assertNotIn("[24h]", expr)
+        self.assertNotIn("[1d]", expr)
+        # Anchor the WHOLE expression (zen LOW, PR #489) so a second window
+        # can't be concatenated in unnoticed — the rule is exactly this one
+        # aggregation compared to zero, nothing more.
+        self.assertRegex(
+            expr.strip(),
+            rf"^max_over_time\({re.escape(self.METRIC)}\[{re.escape(self.WINDOW)}\]\)\s*==\s*0$",
+        )
+
+    def test_has_for_debounce(self) -> None:
+        # 6h debounce for parity with the sibling dark rules
+        # (AlphalensEdgarPressReleaseDark / the brief-anomaly rule). The [5d]
+        # window edge ages out the last nonzero sample exactly 120h after it
+        # was emitted; a 6h `for:` gives holiday-morning headroom so the first
+        # quiet business day after a long-weekend zero-cluster does not page in
+        # the ~1h boundary a shorter debounce would leave open.
+        self.assertEqual(self._one(self.ALERT).get("for"), "6h")
+
+    def test_routes_to_telegram(self) -> None:
+        self.assertEqual(self._one(self.ALERT).get("labels", {}).get("route"), "telegram")
+
+    def test_wording_reflects_five_day_window_not_24h(self) -> None:
+        # The summary/description must describe the 5-day window, not a stale
+        # "24h", so the Telegram message matches the actual evaluation window.
+        ann = self._one(self.ALERT).get("annotations", {})
+        summary = ann.get("summary", "")
+        self.assertNotIn("24h", summary)
+        self.assertNotIn("24h", ann.get("description", ""))
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        # Like the VIX / dark rules: a per-domain slice, not a systemd unit's
+        # last_success. A job= label would falsely register it in the job-keyed
+        # parity tests. Detector LIVENESS is covered by the job= rules instead.
+        rule = self._one(self.ALERT)
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+
 class TestEdgarPressReleaseDark(unittest.TestCase):
     """#384 per-source dead-man-switch for the EDGAR EX-99.1 ingest.
 

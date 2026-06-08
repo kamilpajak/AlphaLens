@@ -266,7 +266,7 @@ groups:
       # no new observation), so weekends do not age it. ``{series="VIXCLS"}``
       # scopes both rules to the one series we depend on. GAUGE → threshold on
       # ``time() - metric`` / ``absent()``, never increase()/rate() (the
-      # AlphalensEdgarNoCandidates24h lesson).
+      # AlphalensEdgarNoCandidates5d lesson).
       - alert: AlphalensVixCacheStale
         expr: time() - alphalens_vix_cache_fetched_at_timestamp_seconds{series="VIXCLS"} > 259200
         for: 5m
@@ -315,11 +315,25 @@ groups:
       # that an exit-code check would miss.
       # ---------------------------------------------------------------
 
-      # The edgar detector usually finds 1-3 candidates per day on the
-      # held + watchlist tickers. Zero candidates for 24h is more
-      # likely a portfolio.yaml regression (empty file slipped past
-      # the bounds-check) than a quiet news day. ``for: 1h`` debounces
-      # a quiet morning vs a real stuck portfolio.
+      # The edgar detector usually finds 1-3 candidates per WEEK on the
+      # tiny held + watchlist (~6 tickers). The unique signal here is a
+      # genuinely quiet / emptied watchlist — detector LIVENESS is
+      # already covered by AlphalensJobStale (30-min staleness) +
+      # AlphalensJobMetricMissing, so this rule does not need to watch
+      # for "the poller stopped".
+      #
+      # WINDOW = 5d, NOT 24h. SEC accepts no filings on weekends and the
+      # portfolio is tiny, so the dispatched count is legitimately 0
+      # every weekend — a [24h] window false-fired the operator every
+      # Saturday/Sunday. ``max_over_time(...[Nd]) == 0`` fires the
+      # instant the trailing window holds only zeros, so to TOLERATE a
+      # weekend (and the worst legitimate all-zero cluster — the
+      # pessimistic Thanksgiving Thu-Sun 4-zero-day run) the window must
+      # be STRICTLY longer than that cluster. 5d = worst-legit (4d) + 1,
+      # matching the sibling AlphalensEdgarPressReleaseDark /
+      # AlphalensForm4IncrementalDark rules. The name encodes the window
+      # (was ...24h), so it is renamed ...5d to keep the Telegram message
+      # honest about the evaluation window.
       #
       # ``alphalens_edgar_events_dispatched_total`` is a GAUGE that
       # the emitter overwrites with the current run's count on every
@@ -327,19 +341,31 @@ groups:
       # ``increase()`` is wrong here — it is a counter function that
       # assumes monotonic non-decreasing series; on a gauge it
       # returns nonsense. The correct semantic for "zero candidates
-      # across every run in the last 24h" is ``max_over_time(...)
+      # across every run in the window" is ``max_over_time(...)
       # == 0`` — the maximum value the gauge took on across the
       # window. Zen pre-merge review of PR #312 caught this gauge-vs-
       # counter mismatch.
-      - alert: AlphalensEdgarNoCandidates24h
-        expr: max_over_time(alphalens_edgar_events_dispatched_total[24h]) == 0
-        for: 1h
+      #
+      # Severity info, NOT warning/critical: a quiet watchlist is a
+      # nudge to review portfolio.yaml, not an outage (the broader
+      # alert-fatigue discipline shared with the dark rules).
+      #
+      # ``for: 6h`` matches the sibling AlphalensEdgarPressReleaseDark
+      # debounce. The [5d] window ages the last nonzero sample out
+      # exactly 120h after it was emitted, so on the first quiet
+      # business day after a worst-case long-weekend zero-cluster the
+      # window can momentarily read all-zero; the 6h debounce absorbs
+      # that boundary instead of paging in the ~1h a shorter ``for:``
+      # would leave open.
+      - alert: AlphalensEdgarNoCandidates5d
+        expr: max_over_time(alphalens_edgar_events_dispatched_total[5d]) == 0
+        for: 6h
         labels:
           severity: info
           route: telegram
         annotations:
-          summary: "edgar-detect found 0 candidates in last 24h"
-          description: "Verify ~/.alphalens/edgar-detect/portfolio.yaml is non-empty."
+          summary: "edgar-detect found 0 candidates in last 5 days"
+          description: "No EDGAR candidates dispatched across every edgar-detect run for the last 5 days — longer than a normal weekend or the worst holiday cluster (Thanksgiving). The watched portfolio is tiny, so this usually means an emptied or stale ~/.alphalens/edgar-detect/portfolio.yaml; verify the 'held:' / 'watchlist:' lists are non-empty. (Detector liveness is covered separately by AlphalensJobStale.)"
 
       # AV free-tier quota = 25 calls/day. ``quota_remaining < 3`` flags
       # the operator before the backfill cron silently runs out before
@@ -370,7 +396,7 @@ groups:
       #
       # Gauge-correct aggregation: the stage gauges are OVERWRITTEN each
       # run, so increase()/rate() return nonsense (the
-      # AlphalensEdgarNoCandidates24h lesson, PR #312). The right operator
+      # AlphalensEdgarNoCandidates5d lesson, PR #312). The right operator
       # for "produced nothing across every run in the window" is
       # ``max_over_time``. After max_over_time strips ``__name__``, the
       # input and output vectors share only ``{stage}`` so the ``and``
@@ -505,7 +531,7 @@ groups:
       # ``job=`` label (like the VIX-cache rules) keeps it out of the
       # per-job cron enumerations. Severity warning, not critical: a
       # degraded data source is not a wake-up outage (over-escalation breeds
-      # alert fatigue — the AlphalensEdgarNoCandidates24h precedent).
+      # alert fatigue — the AlphalensEdgarNoCandidates5d precedent).
       - alert: AlphalensEdgarPressReleaseDark
         expr: max_over_time(alphalens_thematic_source_rows{source="edgar_press_release"}[5d]) == 0
         for: 6h
@@ -552,7 +578,7 @@ groups:
       # enumerations. 5d window, NOT 4d: max_over_time(...[5d]) == 0 tolerates the
       # worst legitimate all-zero cluster (a holiday + weekend with no new Form-4
       # filings). Severity warning, not critical: a degraded data source is not a
-      # wake-up outage (the AlphalensEdgarNoCandidates24h precedent).
+      # wake-up outage (the AlphalensEdgarNoCandidates5d precedent).
       - alert: AlphalensForm4IncrementalDark
         expr: max_over_time(alphalens_form4_rows_written[5d]) == 0
         for: 6h
