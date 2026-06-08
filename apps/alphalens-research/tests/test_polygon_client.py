@@ -535,6 +535,82 @@ class PolygonClientGetAggRangeTests(unittest.TestCase):
         self.assertEqual(len(bars), 3)
 
 
+class PolygonClientGetGroupedDailyTests(unittest.TestCase):
+    """``get_grouped_daily`` whole-market daily OHLCV (grouped-daily two-tier screen)."""
+
+    _DATE = dt.date(2026, 5, 29)
+
+    def test_symbol_key_comes_from_uppercase_T_not_bar_timestamp(self):
+        # The dict key is ALWAYS row['T'] (the symbol, uppercase). A row's own 't'
+        # (bar start ms) is preserved as the bar time and NEVER used as the key.
+        session = mock.Mock()
+        session.get.return_value = _ok(
+            {
+                "resultsCount": 1,
+                "results": [
+                    {
+                        "T": "aapl",
+                        "t": 1748534400000,
+                        "o": 100.0,
+                        "h": 101.0,
+                        "l": 99.0,
+                        "c": 100.5,
+                        "v": 1000.0,
+                        "vw": 100.2,
+                    }
+                ],
+            }
+        )
+        client = _make_client(session=session)
+
+        out = client.get_grouped_daily(self._DATE)
+        # Keyed by uppercase symbol, never by the bar timestamp.
+        self.assertIn("AAPL", out)
+        self.assertNotIn(1748534400000, out)
+        self.assertNotIn("1748534400000", out)
+        # The bar's own 't' is preserved as the bar time inside the value.
+        self.assertEqual(out["AAPL"]["t"], 1748534400000)
+        self.assertEqual(out["AAPL"]["c"], 100.5)
+        self.assertEqual(out["AAPL"]["vw"], 100.2)
+
+    def test_outgoing_request_carries_adjusted_false(self):
+        # Positive control (mirror test_no_raw_polygon_http discipline): the
+        # outgoing request MUST carry adjusted=false (and include_otc=false) so
+        # the daily H/L matches the raw, split-unadjusted minute bars + absolute
+        # ladder levels.
+        session = mock.Mock()
+        session.get.return_value = _ok({"resultsCount": 0})
+        client = _make_client(session=session)
+
+        client.get_grouped_daily(self._DATE)
+
+        url = session.get.call_args_list[0].args[0]
+        params = session.get.call_args_list[0].kwargs.get("params") or {}
+        self.assertIn("/v2/aggs/grouped/locale/us/market/stocks/2026-05-29", url)
+        self.assertEqual(params["adjusted"], "false")
+        self.assertEqual(params["include_otc"], "false")
+
+    def test_adjusted_true_when_opted_in(self):
+        session = mock.Mock()
+        session.get.return_value = _ok({"resultsCount": 0})
+        client = _make_client(session=session)
+
+        client.get_grouped_daily(self._DATE, adjusted=True, include_otc=True)
+        params = session.get.call_args_list[0].kwargs.get("params") or {}
+        self.assertEqual(params["adjusted"], "true")
+        self.assertEqual(params["include_otc"], "true")
+
+    def test_holiday_zero_results_returns_empty_dict(self):
+        # A weekend / holiday returns resultsCount==0 / results null -> {} (no error).
+        session = mock.Mock()
+        session.get.return_value = _ok({"resultsCount": 0})
+        client = _make_client(session=session)
+        self.assertEqual(client.get_grouped_daily(self._DATE), {})
+
+        session.get.return_value = _ok({"resultsCount": 0, "results": None})
+        self.assertEqual(client.get_grouped_daily(self._DATE), {})
+
+
 class PolygonClientGetJsonEscapeHatchTests(unittest.TestCase):
     def test_get_json_returns_raw_payload(self):
         session = mock.Mock()

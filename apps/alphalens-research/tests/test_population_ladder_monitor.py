@@ -24,11 +24,24 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
+from alphalens_pipeline.feedback.ladder_replay import replay_ladder
 from alphalens_pipeline.feedback.population_ladder_monitor import (
+    _SPLIT_SCREEN_THRESHOLD,
+    _TOUCH_EPS,
     MONITOR_LOOKBACK_DAYS,
+    _cheap_open_r,
+    _coerce_session,
+    _engine_cutoffs,
+    _screen_decision,
     _stamp_theme,
     replay_population_ladders,
     summarize_population_ladders,
+)
+from alphalens_pipeline.paper.calendar import (
+    advance_trading_sessions,
+    previous_trading_day,
+    session_on_or_after,
+    session_open_utc,
 )
 
 UTC = dt.UTC
@@ -312,7 +325,7 @@ class TestTerminalOutcomes(_MonitorTestBase):
         self.assertTrue(bool(row["terminal"]))
         # First fill + exit are the same session => 0 trading days; must be tiny,
         # never the ~42-session full-hold span the old coarse bound reported.
-        self.assertLessEqual(int(row["holding_days_elapsed"]), 1)
+        self.assertLessEqual(int(row.loc["holding_days_elapsed"]), 1)
 
     def test_open_row_marks_to_last_close(self):
         # GIVEN a candidate filled but whose position_expiry session is still in
@@ -1503,6 +1516,933 @@ class TestLookbackConstant(unittest.TestCase):
         # NOT shadow_return's 14-day window.
         self.assertGreaterEqual(MONITOR_LOOKBACK_DAYS, 60)
         self.assertNotEqual(MONITOR_LOOKBACK_DAYS, 14)
+
+
+# --------------------------------------------------------------------------- #
+# Grouped-daily two-tier screen — unit + integration tests.                   #
+# --------------------------------------------------------------------------- #
+
+_XNYS = "XNYS"
+_DAY_MS = 86_400_000
+_MIN_MS = 60_000
+
+
+def _grouped(**by_ticker_ohlc) -> dict[str, dict]:
+    """Build a grouped-daily map {TICKER: {o,h,l,c,v,vw,t}} from kwargs.
+
+    Each value is a 5-tuple (o, h, l, c, v); t/vw are synthesized.
+    """
+    out = {}
+    for ticker, (o, h, low, c, v) in by_ticker_ohlc.items():
+        out[ticker.upper()] = {"t": 0, "o": o, "h": h, "l": low, "c": c, "v": v, "vw": c}
+    return out
+
+
+def _open_prior(
+    *,
+    setup: dict,
+    last_priced_session: dt.date,
+    last_resolved_session: dt.date | None = None,
+    blended_entry: float = 100.0,
+    last_close: float = 100.0,
+    reference_close: float = 100.0,
+    sequence_str: str = "E1",
+    classification: str = "OPEN",
+    realized_risk_pct: float = 0.001,
+) -> dict:
+    """A minimal OPEN prior store row sufficient for the screen + cheap path.
+
+    ``last_resolved_session`` defaults to ``last_priced_session`` so a prior built
+    here looks freshly minute-resolved (R7 does NOT fire). Pass an explicit
+    OLDER session to model a row the cheap path has advanced past its last resolve.
+    """
+    return {
+        "ladder_classification": classification,
+        "terminal": False,
+        "blended_entry": blended_entry,
+        "last_close": last_close,
+        "reference_close": reference_close,
+        "last_priced_session": last_priced_session,
+        "last_resolved_session": (
+            last_resolved_session if last_resolved_session is not None else last_priced_session
+        ),
+        "open_r": 0.0,
+        "realized_r": None,
+        "sequence_str": sequence_str,
+        "holding_days_elapsed": 1,
+        "realized_risk_pct": realized_risk_pct,
+    }
+
+
+class TestScreenDecision(unittest.TestCase):
+    """The needs_minute_resolve predicate, exercised directly on prior + grouped."""
+
+    def setUp(self):
+        self.brief_date = dt.date(2026, 5, 1)
+        self.cutoffs = _engine_cutoffs(self.brief_date, _OK_SETUP, _XNYS)
+        self.arrival = self.cutoffs[0]
+        # A few sessions in (entry window for _OK_SETUP = 7 sessions still open).
+        self.last_priced = advance_trading_sessions(self.arrival, 1, _XNYS)
+        self.new_session = advance_trading_sessions(self.arrival, 2, _XNYS)
+        self.last_closed = self.new_session
+        self.prev_session = advance_trading_sessions(self.arrival, 1, _XNYS)
+
+    def _decide(self, prior, grouped_by_session):
+        last_resolved = _coerce_session(prior.get("last_resolved_session")) if prior else None
+        return _screen_decision(
+            prior,
+            "NVDA",
+            _OK_SETUP,
+            [self.new_session],
+            grouped_by_session,
+            self.cutoffs,
+            self.last_priced,
+            last_resolved,
+            self.last_closed,
+            _XNYS,
+        )
+
+    def test_no_touch_open_is_cheap(self):
+        # OPEN @ blended 100, stop 95, lowest TP 110. A day entirely inside
+        # (95, 110) touches nothing -> no resolve.
+        prior = _open_prior(setup=_OK_SETUP, last_priced_session=self.last_priced)
+        grouped = {
+            self.new_session: _grouped(NVDA=(101.0, 103.0, 99.0, 102.0, 1000)),
+            self.prev_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+        }
+        self.assertFalse(self._decide(prior, grouped).needs_resolve)
+
+    def test_stop_touch_forces_resolve(self):
+        # Day low pierces the disaster_stop (95) -> resolve, touched.
+        prior = _open_prior(setup=_OK_SETUP, last_priced_session=self.last_priced)
+        grouped = {
+            self.new_session: _grouped(NVDA=(100.0, 101.0, 94.0, 96.0, 1000)),
+            self.prev_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+        }
+        d = self._decide(prior, grouped)
+        self.assertTrue(d.needs_resolve)
+        self.assertTrue(d.touched)
+
+    def test_tp_touch_forces_resolve(self):
+        # Day high reaches the lowest un-hit TP (110) -> resolve.
+        prior = _open_prior(setup=_OK_SETUP, last_priced_session=self.last_priced)
+        grouped = {
+            self.new_session: _grouped(NVDA=(100.0, 111.0, 99.0, 109.0, 1000)),
+            self.prev_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+        }
+        self.assertTrue(self._decide(prior, grouped).needs_resolve)
+
+    def test_eps_band_resolves_low_one_tick_above_stop(self):
+        # Daily low one tick ABOVE the stop but within eps still resolves (the true
+        # minute low could be one tick below -> SL_HIT). 95*(1+eps)=95.2375.
+        prior = _open_prior(setup=_OK_SETUP, last_priced_session=self.last_priced)
+        near = 95.0 * (1 + _TOUCH_EPS) - 0.01  # inside the band
+        self.assertGreater(near, 95.0)  # genuinely above the raw stop
+        grouped = {
+            self.new_session: _grouped(NVDA=(100.0, 101.0, near, 99.0, 1000)),
+            self.prev_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+        }
+        self.assertTrue(self._decide(prior, grouped).needs_resolve)
+
+    def test_missing_daily_bar_fails_closed(self):
+        # The new session's grouped map is absent for the ticker -> resolve (fail closed).
+        prior = _open_prior(setup=_OK_SETUP, last_priced_session=self.last_priced)
+        grouped = {
+            self.new_session: _grouped(OTHER=(100.0, 101.0, 99.0, 100.0, 1000)),  # no NVDA
+            self.prev_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+        }
+        self.assertTrue(self._decide(prior, grouped).needs_resolve)
+
+    def test_missing_session_gap_fails_closed(self):
+        # The session is an upstream gap (None) -> resolve (never cheap-advance).
+        prior = _open_prior(setup=_OK_SETUP, last_priced_session=self.last_priced)
+        grouped = {
+            self.new_session: None,
+            self.prev_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+        }
+        self.assertTrue(self._decide(prior, grouped).needs_resolve)
+
+    def test_missing_prev_close_fails_closed_when_no_last_close(self):
+        # prev_c unavailable from cache AND prior has no last_close -> resolve.
+        prior = _open_prior(setup=_OK_SETUP, last_priced_session=self.last_priced)
+        prior["last_close"] = None
+        grouped = {self.new_session: _grouped(NVDA=(100.0, 103.0, 99.0, 102.0, 1000))}
+        self.assertTrue(self._decide(prior, grouped).needs_resolve)
+
+    def test_split_class_day_resolves(self):
+        # |c*/prev_c - 1| = 0.5 (a 2:1 unadjusted halving) -> resolve.
+        prior = _open_prior(setup=_OK_SETUP, last_priced_session=self.last_priced)
+        grouped = {
+            self.new_session: _grouped(NVDA=(50.0, 52.0, 49.0, 50.0, 1000)),  # ~half
+            self.prev_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+        }
+        self.assertTrue(self._decide(prior, grouped).needs_resolve)
+
+    def test_normal_vol_day_not_split(self):
+        # |c*/prev_c - 1| = 0.05 is well below 0.18 -> not a split trigger (and no
+        # level touch) -> cheap.
+        prior = _open_prior(setup=_OK_SETUP, last_priced_session=self.last_priced)
+        grouped = {
+            self.new_session: _grouped(NVDA=(100.0, 106.0, 99.0, 105.0, 1000)),
+            self.prev_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+        }
+        self.assertFalse(self._decide(prior, grouped).needs_resolve)
+
+    def test_brand_new_prior_is_forced_resolve(self):
+        d = _screen_decision(
+            None,
+            "NVDA",
+            _OK_SETUP,
+            [self.new_session],
+            {self.new_session: _grouped(NVDA=(100.0, 101.0, 99.0, 100.0, 1000))},
+            self.cutoffs,
+            None,
+            None,
+            self.last_closed,
+            _XNYS,
+        )
+        self.assertTrue(d.needs_resolve)
+        self.assertTrue(d.forced)
+
+    def test_partial_tp_open_always_resolves(self):
+        prior = _open_prior(
+            setup=_OK_SETUP,
+            last_priced_session=self.last_priced,
+            classification="PARTIAL_TP_OPEN",
+            sequence_str="E1->TP1",
+        )
+        grouped = {
+            self.new_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+            self.prev_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+        }
+        d = self._decide(prior, grouped)
+        self.assertTrue(d.needs_resolve)
+
+    def test_periodic_forced_resolve_when_far_behind(self):
+        # last_priced > K=5 sessions behind last_closed -> forced resolve even with
+        # no touch.
+        prior = _open_prior(setup=_OK_SETUP, last_priced_session=self.arrival)
+        far_closed = advance_trading_sessions(self.arrival, 7, _XNYS)
+        new_sessions = [advance_trading_sessions(self.arrival, i, _XNYS) for i in range(1, 8)]
+        grouped = {s: _grouped(NVDA=(100.0, 101.0, 99.0, 100.0, 1000)) for s in new_sessions}
+        grouped[self.arrival] = _grouped(NVDA=(100.0, 101.0, 99.0, 100.0, 1000))
+        d = _screen_decision(
+            prior,
+            "NVDA",
+            _OK_SETUP,
+            new_sessions,
+            grouped,
+            self.cutoffs,
+            self.arrival,
+            self.arrival,
+            far_closed,
+            _XNYS,
+        )
+        self.assertTrue(d.needs_resolve)
+        self.assertTrue(d.forced)
+
+
+class TestUnfilledEntryTierTouch(unittest.TestCase):
+    """An OPEN row with un-filled entry tiers resolves on a new low reaching them."""
+
+    def setUp(self):
+        self.brief_date = dt.date(2026, 5, 1)
+        self.cutoffs = _engine_cutoffs(self.brief_date, _THREE_TIER_SETUP, _XNYS)
+        self.arrival = self.cutoffs[0]
+        self.last_priced = advance_trading_sessions(self.arrival, 1, _XNYS)
+        self.new_session = advance_trading_sessions(self.arrival, 2, _XNYS)
+        self.prev_session = self.last_priced
+
+    def _decide(self, prior, grouped, last_closed):
+        return _screen_decision(
+            prior,
+            "NVDA",
+            _THREE_TIER_SETUP,
+            [self.new_session],
+            grouped,
+            self.cutoffs,
+            self.last_priced,
+            self.last_priced,
+            last_closed,
+            _XNYS,
+        )
+
+    def test_new_low_to_e2_while_window_open_resolves(self):
+        # E1 (100) filled; E2 (98) un-filled; entry window still open. A new daily
+        # low of 97.5 reaches E2 (but not stop 70 nor any TP) -> resolve.
+        prior = _open_prior(
+            setup=_THREE_TIER_SETUP,
+            last_priced_session=self.last_priced,
+            blended_entry=100.0,
+            sequence_str="E1",
+        )
+        grouped = {
+            self.new_session: _grouped(NVDA=(99.0, 99.5, 97.5, 98.0, 1000)),
+            self.prev_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+        }
+        d = self._decide(prior, grouped, self.new_session)
+        self.assertTrue(d.needs_resolve)
+
+    def test_e2_dropped_once_entry_window_closed(self):
+        # SAME E2-reaching low, but the entry window has fully closed (last_closed is
+        # past entry_expiry). E2 is dropped from the touch set -> no resolve.
+        entry_expiry = self.cutoffs[1]
+        far_closed = advance_trading_sessions(entry_expiry, 2, _XNYS)
+        new_session = advance_trading_sessions(entry_expiry, 1, _XNYS)
+        prev_session = entry_expiry
+        prior = _open_prior(
+            setup=_THREE_TIER_SETUP,
+            last_priced_session=entry_expiry,
+            blended_entry=100.0,
+            sequence_str="E1",
+        )
+        grouped = {
+            new_session: _grouped(NVDA=(99.0, 99.5, 97.5, 98.0, 1000)),
+            prev_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+        }
+        d = _screen_decision(
+            prior,
+            "NVDA",
+            _THREE_TIER_SETUP,
+            [new_session],
+            grouped,
+            self.cutoffs,
+            entry_expiry,
+            entry_expiry,
+            far_closed,
+            _XNYS,
+        )
+        self.assertFalse(d.needs_resolve)
+
+
+class TestCheapPathNoMultiDayFreeze(unittest.TestCase):
+    """A legitimate multi-day trend (no single-day split) must NOT freeze the mark.
+
+    The cheap path has NO multi-day implausible guard: ``_screen_decision`` is the
+    sole, exact split gate (it checks every consecutive day-over-day close ratio),
+    so a c* that drifted >18% from a multi-day-old prior mark via small daily steps
+    still cheap-advances. The removed guard compared c* to a possibly days-old
+    ``prior.last_close``, which false-froze compounding trends.
+    """
+
+    def test_cheap_update_advances_on_large_multiday_trend(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _cheap_update_row
+
+        brief_date = dt.date(2026, 5, 1)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, _XNYS)
+        arrival = cutoffs[0]
+        last_priced = advance_trading_sessions(arrival, 1, _XNYS)
+        new_session = advance_trading_sessions(arrival, 2, _XNYS)
+        last_closed = new_session
+        # Prior mark 80; c* 100 = +25% accumulated over several no-split sessions.
+        # The OLD guard (|100/80-1| = 0.25 > 0.18) would have frozen this; the fix
+        # advances it (the per-day screen, run upstream, found no single-day split).
+        prior = _open_prior(
+            setup=_OK_SETUP, last_priced_session=last_priced, last_close=80.0, blended_entry=100.0
+        )
+        self.assertGreater(abs(100.0 / 80.0 - 1), _SPLIT_SCREEN_THRESHOLD)
+        # No-touch bar: high 101 < TP 110, low 99 > disaster_stop 95.
+        grouped = {new_session: _grouped(NVDA=(99.5, 101.0, 99.0, 100.0, 1000))}
+        result = _cheap_update_row(
+            _OK_SETUP,
+            prior,
+            "NVDA",
+            [new_session],
+            grouped,
+            cutoffs,
+            last_closed,
+            reference_close=100.0,
+        )
+        self.assertIsNotNone(result, "a legit multi-day trend must NOT be frozen")
+        assert result is not None
+        row, category = result
+        self.assertEqual(category, "cheap")
+        self.assertEqual(row["last_close"], 100.0)
+        # forward_return is refreshed for the ongoing mark (gemini MEDIUM fix —
+        # applies to every ongoing state, not only OPEN).
+        self.assertAlmostEqual(row["forward_return"], (100.0 - 100.0) / 100.0, places=9)
+
+
+class TestCheapOpenRMatchesReplay(unittest.TestCase):
+    """The load-bearing property: cheap open_r == full replay_ladder open_r."""
+
+    def test_cheap_open_r_equals_replay_realized_r_no_touch(self):
+        # An OPEN no-TP position marked to a daily close c* via the cheap formula
+        # must equal replay_ladder's mark-to-last-close realized_r over an RTH path
+        # whose last close is c*, with NO level touched.
+        c_star = 103.0
+        blended, stop = 100.0, 95.0
+        cheap = _cheap_open_r(c_star, blended, stop)
+
+        # Build an RTH minute path: fill E1 at 100 on bar 1, drift to close c* with
+        # no TP (110) / SL (95) touch.
+        bars = [
+            {"t": 0, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+            {"t": _MIN_MS, "o": 100.0, "h": 104.0, "l": 100.0, "c": c_star, "v": 1000.0},
+        ]
+        outcome = replay_ladder(_OK_SETUP, bars, reference_close=100.0)
+        self.assertEqual(outcome.classification, "OPEN")
+        self.assertAlmostEqual(cheap, outcome.realized_r, places=9)
+
+
+class _GroupedConsistentBase(_MonitorTestBase):
+    """Integration base that serves RTH minute bars + a CONSISTENT grouped-daily map.
+
+    The minute fetch returns one RTH bar per session (at the session open); the
+    grouped fetch returns the SAME daily OHLC, so daily [low, high] is a true
+    superset of the minute path by construction.
+    """
+
+    def _session_open_ms(self, session: dt.date) -> int:
+        return int(session_open_utc(session, _XNYS).timestamp() * 1000)
+
+
+class TestRthAlignment(_GroupedConsistentBase):
+    def test_after_hours_stop_ignored_by_rth_filter(self):
+        # GIVEN a post-16:00 ET bar that pierces the disaster_stop, recovered by the
+        # next open. WHEN replayed. THEN _filter_bars_to_rth drops the AH bar so the
+        # minute path never records an SL_HIT (daily + minute AGREE).
+        from alphalens_pipeline.feedback.population_ladder_monitor import _filter_bars_to_rth
+
+        brief_date = dt.date(2026, 5, 1)
+        arrival = session_on_or_after(brief_date, _XNYS)
+        open_ms = int(session_open_utc(arrival, _XNYS).timestamp() * 1000)
+        bars = [
+            {"t": open_ms, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},  # RTH fill
+            # An after-hours bar 9 hours after open (well past the 390-min RTH close)
+            # that pierces the stop 95.
+            {
+                "t": open_ms + 9 * 60 * _MIN_MS,
+                "o": 96.0,
+                "h": 96.0,
+                "l": 90.0,
+                "c": 95.5,
+                "v": 10.0,
+            },
+        ]
+        kept = _filter_bars_to_rth(bars, arrival, arrival, _XNYS)
+        # Only the RTH bar survives; the AH stop-piercing bar is dropped.
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["t"], open_ms)
+        outcome = replay_ladder(_OK_SETUP, kept, reference_close=100.0)
+        self.assertFalse(outcome.sl_hit)
+
+
+class TestGroupedDailyIntegration(_GroupedConsistentBase):
+    def test_no_touch_night_zero_minute_fetches_but_advances_open_r(self):
+        # GIVEN an OPEN row established on run 1 (one minute fetch). WHEN run 2 runs a
+        # later night whose new daily bar touches no level. THEN run 2 issues ZERO
+        # minute fetches yet advances open_r / forward_return from the daily close.
+        brief_date = dt.date(2026, 5, 1)
+        arrival = session_on_or_after(brief_date, _XNYS)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        def _minute_fetch_run1(ticker, start, end):
+            open_ms = int(session_open_utc(arrival, _XNYS).timestamp() * 1000)
+            return [
+                {"t": open_ms, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {
+                    "t": open_ms + _MIN_MS,
+                    "o": 100.0,
+                    "h": 103.0,
+                    "l": 100.0,
+                    "c": 102.0,
+                    "v": 1000.0,
+                },
+            ]
+
+        now1 = dt.datetime(2026, 5, 8, 7, 0, tzinfo=UTC)
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now1.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_minute_fetch_run1,
+            grouped_fetch=lambda d: {},  # run 1 = brand-new, screen never consults grouped
+            now=now1,
+        )
+        before = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertFalse(bool(before["terminal"]))
+        self.assertEqual(before["ladder_classification"], "OPEN")
+        open_r_before = float(before["open_r"])
+
+        # Run 2: a later night. The daily grouped bar drifts to 104 (no stop/TP/entry
+        # touch). The minute fetch must NOT be called.
+        minute_calls: list[str] = []
+
+        def _minute_guard(ticker, start, end):
+            minute_calls.append(ticker)
+            return _minute_fetch_run1(ticker, start, end)
+
+        def _grouped_fetch(date):
+            # Same daily OHLC for every needed date: a quiet drift up to 104.
+            return {
+                "NVDA": {
+                    "t": 0,
+                    "o": 102.0,
+                    "h": 105.0,
+                    "l": 101.0,
+                    "c": 104.0,
+                    "v": 1000.0,
+                    "vw": 104.0,
+                }
+            }
+
+        now2 = dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC)
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now2.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_minute_guard,
+            grouped_fetch=_grouped_fetch,
+            now=now2,
+        )
+        after = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertEqual(minute_calls, [], "no-touch night must issue ZERO minute fetches")
+        self.assertEqual(after["ladder_classification"], "OPEN")
+        # open_r advanced to the cheap mark: (104 - 100)/(100 - 95) = 0.8.
+        self.assertAlmostEqual(float(after["open_r"]), (104.0 - 100.0) / (100.0 - 95.0), places=6)
+        self.assertNotAlmostEqual(float(after["open_r"]), open_r_before, places=6)
+        # open_return_pct_of_book recomputed from the refreshed open_r.
+        self.assertAlmostEqual(
+            float(after["open_return_pct_of_book"]),
+            float(after["open_r"]) * float(after["realized_risk_pct"]),
+            places=9,
+        )
+
+    def test_touch_night_resolves_via_minute_fetch(self):
+        # GIVEN the same OPEN row. WHEN run 2's daily bar pierces the stop. THEN the
+        # minute fetch IS called and the row resolves precisely.
+        brief_date = dt.date(2026, 5, 1)
+        arrival = session_on_or_after(brief_date, _XNYS)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        def _minute_run1(ticker, start, end):
+            open_ms = int(session_open_utc(arrival, _XNYS).timestamp() * 1000)
+            return [
+                {"t": open_ms, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {
+                    "t": open_ms + _MIN_MS,
+                    "o": 100.0,
+                    "h": 103.0,
+                    "l": 100.0,
+                    "c": 102.0,
+                    "v": 1000.0,
+                },
+            ]
+
+        now1 = dt.datetime(2026, 5, 8, 7, 0, tzinfo=UTC)
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now1.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_minute_run1,
+            grouped_fetch=lambda d: {},
+            now=now1,
+        )
+
+        minute_calls: list[str] = []
+
+        def _minute_run2(ticker, start, end):
+            minute_calls.append(ticker)
+            open_ms = int(session_open_utc(arrival, _XNYS).timestamp() * 1000)
+            later = advance_trading_sessions(arrival, 6, _XNYS)
+            later_ms = int(session_open_utc(later, _XNYS).timestamp() * 1000)
+            return [
+                {"t": open_ms, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {
+                    "t": later_ms,
+                    "o": 96.0,
+                    "h": 96.0,
+                    "l": 94.0,
+                    "c": 95.0,
+                    "v": 1000.0,
+                },  # SL pierce
+            ]
+
+        def _grouped(date):
+            return {
+                "NVDA": {
+                    "t": 0,
+                    "o": 96.0,
+                    "h": 96.0,
+                    "l": 94.0,
+                    "c": 95.0,
+                    "v": 1000.0,
+                    "vw": 95.0,
+                }
+            }
+
+        now2 = dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC)
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now2.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_minute_run2,
+            grouped_fetch=_grouped,
+            now=now2,
+        )
+        self.assertIn("NVDA", minute_calls, "a touch night must resolve via the minute fetch")
+        after = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertTrue(bool(after["terminal"]))
+        self.assertEqual(after["ladder_classification"], "SL_HIT")
+
+    def test_two_disjoint_tickers_share_one_grouped_fetch(self):
+        # GIVEN two OPEN candidates on the SAME date with disjoint tickers. WHEN the
+        # screen runs. THEN the grouped-daily fetch is called ONCE per session (the
+        # whole-market payload is shared), and both resolve from the single cache.
+        brief_date = dt.date(2026, 5, 1)
+        arrival = session_on_or_after(brief_date, _XNYS)
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [{"ticker": "AAA", "setup": _OK_SETUP}, {"ticker": "BBB", "setup": _OK_SETUP}],
+        )
+
+        def _minute(ticker, start, end):
+            open_ms = int(session_open_utc(arrival, _XNYS).timestamp() * 1000)
+            return [
+                {"t": open_ms, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {
+                    "t": open_ms + _MIN_MS,
+                    "o": 100.0,
+                    "h": 103.0,
+                    "l": 100.0,
+                    "c": 102.0,
+                    "v": 1000.0,
+                },
+            ]
+
+        now1 = dt.datetime(2026, 5, 8, 7, 0, tzinfo=UTC)
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now1.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_minute,
+            grouped_fetch=lambda d: {},
+            now=now1,
+        )
+
+        grouped_dates: list[dt.date] = []
+
+        def _grouped(date):
+            grouped_dates.append(date)
+            return {
+                "AAA": {
+                    "t": 0,
+                    "o": 102.0,
+                    "h": 105.0,
+                    "l": 101.0,
+                    "c": 104.0,
+                    "v": 1000.0,
+                    "vw": 104.0,
+                },
+                "BBB": {
+                    "t": 0,
+                    "o": 102.0,
+                    "h": 105.0,
+                    "l": 101.0,
+                    "c": 104.0,
+                    "v": 1000.0,
+                    "vw": 104.0,
+                },
+            }
+
+        now2 = dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC)
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now2.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_minute,
+            grouped_fetch=_grouped,
+            now=now2,
+        )
+        # Each date fetched at most once (no per-candidate re-fetch).
+        self.assertEqual(len(grouped_dates), len(set(grouped_dates)))
+        df = self._read_store(brief_date).set_index("ticker")
+        # Both advanced cheaply to the same open_r.
+        self.assertAlmostEqual(
+            float(df.loc["AAA", "open_r"]), float(df.loc["BBB", "open_r"]), places=9
+        )
+
+    def test_missing_daily_bar_does_not_cheap_advance(self):
+        # GIVEN an OPEN row. WHEN the new session's grouped map lacks the ticker
+        # (halt / gap) AND the minute fetch fails. THEN the row is carried (NOT
+        # cheap-advanced) — open_r/last_close unchanged.
+        brief_date = dt.date(2026, 5, 1)
+        arrival = session_on_or_after(brief_date, _XNYS)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        def _minute_run1(ticker, start, end):
+            open_ms = int(session_open_utc(arrival, _XNYS).timestamp() * 1000)
+            return [
+                {"t": open_ms, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {
+                    "t": open_ms + _MIN_MS,
+                    "o": 100.0,
+                    "h": 103.0,
+                    "l": 100.0,
+                    "c": 102.0,
+                    "v": 1000.0,
+                },
+            ]
+
+        now1 = dt.datetime(2026, 5, 8, 7, 0, tzinfo=UTC)
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now1.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_minute_run1,
+            grouped_fetch=lambda d: {},
+            now=now1,
+        )
+        before = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        open_r_before = before["open_r"]
+
+        def _minute_boom(ticker, start, end):
+            raise ValueError("polygon outage")
+
+        now2 = dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC)
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now2.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_minute_boom,
+            grouped_fetch=lambda d: {
+                "OTHER": {"t": 0, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1, "vw": 1}
+            },
+            now=now2,
+        )
+        after = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        # Carried verbatim: open_r unchanged (NOT advanced from a phantom close).
+        if pd.isna(open_r_before):
+            self.assertTrue(pd.isna(after["open_r"]))
+        else:
+            self.assertAlmostEqual(float(after["open_r"]), float(open_r_before), places=9)
+
+
+class TestForcedResolvePrecedenceAndFairness(_MonitorTestBase):
+    def test_periodic_forced_resolve_precedes_no_fill_cheap_flip(self):
+        # GIVEN a long-quiet NO_FILL row whose last_priced is > K sessions behind
+        # last_closed AND whose entry window has closed (a cheap NO_FILL terminal
+        # flip would otherwise fire). WHEN screened. THEN the R7 periodic resolve
+        # takes precedence (needs_resolve True, forced True) — the cheap flip is NOT
+        # taken that night.
+        brief_date = dt.date(2026, 5, 1)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, _XNYS)
+        arrival = cutoffs[0]
+        entry_expiry = cutoffs[1]
+        # last_priced far behind; last_closed well past entry_expiry.
+        last_priced = arrival
+        last_closed = advance_trading_sessions(entry_expiry, 3, _XNYS)
+        new_sessions = [advance_trading_sessions(arrival, i, _XNYS) for i in range(1, 9)]
+        grouped = {s: _grouped(NVDA=(105.0, 106.0, 104.0, 105.0, 1000)) for s in new_sessions}
+        grouped[arrival] = _grouped(NVDA=(105.0, 106.0, 104.0, 105.0, 1000))
+        prior = _open_prior(
+            setup=_OK_SETUP,
+            last_priced_session=last_priced,
+            classification="NO_FILL",
+            sequence_str="",
+            blended_entry=None,
+        )
+        d = _screen_decision(
+            prior,
+            "NVDA",
+            _OK_SETUP,
+            new_sessions,
+            grouped,
+            cutoffs,
+            last_priced,
+            last_priced,
+            last_closed,
+            _XNYS,
+        )
+        self.assertTrue(d.needs_resolve)
+        self.assertTrue(d.forced)
+
+    def test_r7_fires_for_cheap_advanced_open_position(self):
+        # REGRESSION: the cheap path advances last_priced_session EVERY night, so a
+        # position that is cheap-advanced nightly keeps last_priced == last_closed
+        # and never accumulates K sessions there. R7 must gate on
+        # last_resolved_session (the last ACTUAL minute resolve) so it still fires:
+        # last_priced is fresh (== last_closed) but last_resolved is > K sessions
+        # behind -> needs_resolve True, forced True.
+        brief_date = dt.date(2026, 5, 1)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, _XNYS)
+        arrival = cutoffs[0]
+        # last_resolved at arrival; cheap-advanced nightly to a last_priced that is
+        # exactly the (fresh) last_closed, K+1 sessions past the last resolve.
+        last_resolved = arrival
+        last_closed = advance_trading_sessions(arrival, 6, _XNYS)  # 6 > K=5
+        last_priced = last_closed  # cheap path kept it fully fresh
+        new_session = last_closed
+        prev_session = previous_trading_day(last_closed, _XNYS)
+        # A no-touch day entirely inside (stop 95, TP 110) — the ONLY thing that can
+        # force a resolve here is R7 (no level touch, no split, no missing bar).
+        grouped = {
+            new_session: _grouped(NVDA=(101.0, 103.0, 99.0, 102.0, 1000)),
+            prev_session: _grouped(NVDA=(100.0, 101.0, 99.5, 100.0, 1000)),
+        }
+        prior = _open_prior(
+            setup=_OK_SETUP,
+            last_priced_session=last_priced,
+            last_resolved_session=last_resolved,
+        )
+
+        # Control: gating R7 on a FRESH last_resolved (== last_priced == last_closed)
+        # would NOT resolve — proving the only trigger here is the stale resolve.
+        fresh = _screen_decision(
+            prior,
+            "NVDA",
+            _OK_SETUP,
+            [new_session],
+            grouped,
+            cutoffs,
+            last_priced,
+            last_priced,
+            last_closed,
+            _XNYS,
+        )
+        self.assertFalse(fresh.needs_resolve, "no touch + fresh resolve must be cheap")
+
+        d = _screen_decision(
+            prior,
+            "NVDA",
+            _OK_SETUP,
+            [new_session],
+            grouped,
+            cutoffs,
+            last_priced,
+            last_resolved,
+            last_closed,
+            _XNYS,
+        )
+        self.assertTrue(d.needs_resolve, "R7 must fire despite a fresh last_priced_session")
+        self.assertTrue(d.forced)
+
+    def test_crash_flood_resolves_touches_within_bounded_drain(self):
+        # GIVEN many OPEN candidates that ALL get a stop-piercing daily bar on a
+        # single crash night (more than fit one tight budget). WHEN the monitor runs.
+        # THEN every touched name resolves to SL_HIT across the bounded drain and no
+        # touch is permanently displaced. (Two nights suffice here.)
+        from alphalens_pipeline.feedback import population_ladder_monitor as mon
+
+        brief_date = dt.date(2026, 5, 1)
+        arrival = session_on_or_after(brief_date, _XNYS)
+        tickers = [f"T{i:02d}" for i in range(6)]
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [{"ticker": t, "setup": _OK_SETUP} for t in tickers],
+        )
+
+        def _minute_open(ticker, start, end):
+            open_ms = int(session_open_utc(arrival, _XNYS).timestamp() * 1000)
+            return [
+                {"t": open_ms, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {
+                    "t": open_ms + _MIN_MS,
+                    "o": 100.0,
+                    "h": 103.0,
+                    "l": 100.0,
+                    "c": 102.0,
+                    "v": 1000.0,
+                },
+            ]
+
+        # Run 1: establish all OPEN (brand-new -> forced budget, generous).
+        now1 = dt.datetime(2026, 5, 8, 7, 0, tzinfo=UTC)
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now1.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_minute_open,
+            grouped_fetch=lambda d: {},
+            now=now1,
+        )
+
+        def _minute_crash(ticker, start, end):
+            open_ms = int(session_open_utc(arrival, _XNYS).timestamp() * 1000)
+            later = advance_trading_sessions(arrival, 6, _XNYS)
+            later_ms = int(session_open_utc(later, _XNYS).timestamp() * 1000)
+            return [
+                {"t": open_ms, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {"t": later_ms, "o": 96.0, "h": 96.0, "l": 94.0, "c": 95.0, "v": 1000.0},
+            ]
+
+        def _grouped_crash(date):
+            return {
+                t: {"t": 0, "o": 96.0, "h": 96.0, "l": 94.0, "c": 95.0, "v": 1000.0, "vw": 95.0}
+                for t in tickers
+            }
+
+        # Tight main budget (2): the crash flood (6 touches) cannot all resolve in
+        # one night, but drains over a couple of nights.
+        now2 = dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC)
+        original = mon._MAX_FETCHES_PER_RUN
+        try:
+            mon._MAX_FETCHES_PER_RUN = 2
+            for _ in range(4):  # repeated nights drain the queue
+                replay_population_ladders(
+                    self.briefs_dir,
+                    end_date=now2.date(),
+                    store_dir=self.store_dir,
+                    bar_fetch=_minute_crash,
+                    grouped_fetch=_grouped_crash,
+                    now=now2,
+                )
+        finally:
+            mon._MAX_FETCHES_PER_RUN = original
+
+        df = self._read_store(brief_date).set_index("ticker")
+        for t in tickers:
+            self.assertEqual(df.loc[t, "ladder_classification"], "SL_HIT", f"{t} should resolve")
+            self.assertTrue(bool(df.loc[t, "terminal"]))
+
+
+class TestLastPricedSessionBackfill(_MonitorTestBase):
+    def test_old_format_row_without_screen_cols_backfills_none(self):
+        # GIVEN an OPEN row written then stripped of the screen columns (an OLD-format
+        # parquet). WHEN run 2's minute fetch fails so the prior is carried. THEN the
+        # missing screen columns surface as NaN (re-populated on the next resolve).
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        def _fetch_ok(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [{"t": base, "o": 100.0, "h": 103.0, "l": 99.0, "c": 102.0, "v": 1000.0}]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch_ok,
+            grouped_fetch=lambda d: {},
+            now=now,
+        )
+        path = self.store_dir / f"{brief_date.isoformat()}.parquet"
+        df = pd.read_parquet(path)
+        screen_cols = ["last_priced_session", "reference_close"]
+        df = df.drop(columns=[c for c in screen_cols if c in df.columns])
+        df.to_parquet(path)
+
+        def _fetch_boom(ticker, start, end):
+            raise ValueError("polygon outage")
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch_boom,
+            grouped_fetch=lambda d: {
+                "OTHER": {"t": 0, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1, "vw": 1}
+            },
+            now=now,
+        )
+        after = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        for col in screen_cols:
+            self.assertIn(col, after.index)
+            self.assertTrue(pd.isna(after[col]))
 
 
 if __name__ == "__main__":
