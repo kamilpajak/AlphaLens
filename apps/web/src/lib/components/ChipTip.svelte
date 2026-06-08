@@ -39,7 +39,7 @@
 </script>
 
 <span
-	class="group/chip relative inline-block hover:z-50 focus-within:z-50"
+	class="group/chip relative inline-block cursor-help hover:z-50 focus-within:z-50"
 	tabindex="0"
 	role="group"
 	onpointerdown={onPointerDown}
