@@ -18,11 +18,14 @@
 	}
 </script>
 
-<details class="mb-6 border border-grid bg-bg-1 fade-up">
+<details class="group/legend mb-6 border border-grid bg-bg-1 fade-up">
 	<summary
-		class="cursor-pointer select-none list-none px-3 py-2 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-dim flex items-center gap-2"
+		class="cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden px-3 py-2 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-dim flex items-center gap-2"
 	>
-		<span class="text-amber" aria-hidden="true">▸</span>
+		<span
+			class="inline-block text-amber transition-transform duration-150 group-open/legend:rotate-90"
+			aria-hidden="true">▸</span
+		>
 		<span>what do these statuses mean?</span>
 	</summary>
 	<div class="border-t border-grid px-3 py-3 grid grid-cols-1 sm:grid-cols-3 gap-x-5 gap-y-3">
