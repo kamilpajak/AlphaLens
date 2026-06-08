@@ -1815,10 +1815,17 @@ class TestUnfilledEntryTierTouch(unittest.TestCase):
         self.assertFalse(d.needs_resolve)
 
 
-class TestCheapPathImplausibleGuard(unittest.TestCase):
-    """The cheap OPEN path carries the prior verbatim on a split-class jump."""
+class TestCheapPathNoMultiDayFreeze(unittest.TestCase):
+    """A legitimate multi-day trend (no single-day split) must NOT freeze the mark.
 
-    def test_cheap_update_carries_on_implausible_move(self):
+    The cheap path has NO multi-day implausible guard: ``_screen_decision`` is the
+    sole, exact split gate (it checks every consecutive day-over-day close ratio),
+    so a c* that drifted >18% from a multi-day-old prior mark via small daily steps
+    still cheap-advances. The removed guard compared c* to a possibly days-old
+    ``prior.last_close``, which false-froze compounding trends.
+    """
+
+    def test_cheap_update_advances_on_large_multiday_trend(self):
         from alphalens_pipeline.feedback.population_ladder_monitor import _cheap_update_row
 
         brief_date = dt.date(2026, 5, 1)
@@ -1827,13 +1834,15 @@ class TestCheapPathImplausibleGuard(unittest.TestCase):
         last_priced = advance_trading_sessions(arrival, 1, _XNYS)
         new_session = advance_trading_sessions(arrival, 2, _XNYS)
         last_closed = new_session
+        # Prior mark 80; c* 100 = +25% accumulated over several no-split sessions.
+        # The OLD guard (|100/80-1| = 0.25 > 0.18) would have frozen this; the fix
+        # advances it (the per-day screen, run upstream, found no single-day split).
         prior = _open_prior(
-            setup=_OK_SETUP, last_priced_session=last_priced, last_close=100.0, blended_entry=100.0
+            setup=_OK_SETUP, last_priced_session=last_priced, last_close=80.0, blended_entry=100.0
         )
-        # c* = 50 is a ~50% drop vs last_close 100 -> > 0.18 -> CARRY, never emit a
-        # garbage open_r. (Above the named threshold so a future tune is one edit.)
-        self.assertGreater(abs(50.0 / 100.0 - 1), _SPLIT_SCREEN_THRESHOLD)
-        grouped = {new_session: _grouped(NVDA=(52.0, 53.0, 49.0, 50.0, 1000))}
+        self.assertGreater(abs(100.0 / 80.0 - 1), _SPLIT_SCREEN_THRESHOLD)
+        # No-touch bar: high 101 < TP 110, low 99 > disaster_stop 95.
+        grouped = {new_session: _grouped(NVDA=(99.5, 101.0, 99.0, 100.0, 1000))}
         result = _cheap_update_row(
             _OK_SETUP,
             prior,
@@ -1844,7 +1853,14 @@ class TestCheapPathImplausibleGuard(unittest.TestCase):
             last_closed,
             reference_close=100.0,
         )
-        self.assertIsNone(result, "an implausible cheap move must signal CARRY (None)")
+        self.assertIsNotNone(result, "a legit multi-day trend must NOT be frozen")
+        assert result is not None
+        row, category = result
+        self.assertEqual(category, "cheap")
+        self.assertEqual(row["last_close"], 100.0)
+        # forward_return is refreshed for the ongoing mark (gemini MEDIUM fix —
+        # applies to every ongoing state, not only OPEN).
+        self.assertAlmostEqual(row["forward_return"], (100.0 - 100.0) / 100.0, places=9)
 
 
 class TestCheapOpenRMatchesReplay(unittest.TestCase):

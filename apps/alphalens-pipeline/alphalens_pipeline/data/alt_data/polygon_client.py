@@ -264,7 +264,7 @@ class PolygonClient:
         *,
         adjusted: bool = False,
         include_otc: bool = False,
-        max_pages: int = 1,
+        max_pages: int = 200,
     ) -> dict[str, dict[str, Any]]:
         """Polygon ``/v2/aggs/grouped/locale/us/market/stocks/{date}`` — one call
         returns the whole-market daily OHLCV+VWAP for ``date``.

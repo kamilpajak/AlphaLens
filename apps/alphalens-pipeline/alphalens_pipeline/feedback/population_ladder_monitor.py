@@ -1526,11 +1526,15 @@ def _cheap_update_row(
 ) -> tuple[dict[str, Any], str] | None:
     """Advance a no-touch ongoing row from the latest daily close. ``None`` = carry.
 
-    The screen has already proven no relevant level was touched on any new session,
-    so ``classification`` / fills / blended_entry are INVARIANT — only the
-    mark-to-market moves. ``None`` is returned when the cheap move is implausibly
-    large (``|c*/last_close_prev − 1| > _SPLIT_SCREEN_THRESHOLD``), so a split-class
-    jump never emits a garbage ``open_r`` (the prior row is carried instead).
+    The screen has already proven (a) no relevant level was touched on any new
+    session and (b) no day-over-day jump was split-class — ``_screen_decision``
+    checks every consecutive close ratio against ``_SPLIT_SCREEN_THRESHOLD`` and
+    routes a split to a minute resolve, so this path is never reached on a split
+    day. Hence ``classification`` / fills / blended_entry are INVARIANT here and
+    only the mark-to-market moves. (No second split guard lives here: a multi-day
+    ``c*/prior.last_close`` ratio would false-trigger on a legitimate compounding
+    trend and permanently freeze the mark — the per-day screen is the sole, exact
+    split gate.)
     """
     from alphalens_pipeline.paper.calendar import trading_days_elapsed
 
@@ -1541,21 +1545,15 @@ def _cheap_update_row(
     if c_star is None or latest_session is None:
         return _carry_only(prior)  # no usable new close — carry verbatim
 
-    last_close_prev = _safe_finite_float(prior.get("last_close"))
-    # Cheap-path implausible guard (parity with the resolve-path split screen):
-    # a split-class jump must CARRY, never cheap-emit a corrupted mark.
-    if (
-        last_close_prev is not None
-        and last_close_prev != 0
-        and abs(c_star / last_close_prev - 1) > _SPLIT_SCREEN_THRESHOLD
-    ):
-        return None
-
     row = dict(prior)
     for col in (*_SIZE_COLUMNS, *_SCREEN_COLUMNS):
         row.setdefault(col, None)
     row["last_close"] = c_star
     row["last_priced_session"] = latest_session
+    # Mark-to-market vs the arrival anchor — refreshed for EVERY ongoing state
+    # (a NO_FILL tracks where price went after the non-fill; an OPEN marks the
+    # position). Uses the STORED frozen reference_close, never grouped ``vw``.
+    row["forward_return"] = _cheap_forward_return(c_star, reference_close)
 
     classification = _prior_classification(prior)
     entry_expiry_session = cutoffs[1]
@@ -1572,7 +1570,6 @@ def _cheap_update_row(
         disaster_stop = _safe_finite_float(setup.get("disaster_stop"))
         open_r = _cheap_open_r(c_star, blended_entry, disaster_stop)
         row["open_r"] = open_r
-        row["forward_return"] = _cheap_forward_return(c_star, reference_close)
         row["holding_days_elapsed"] = _cheap_holding_days(
             prior, last_priced_prev, latest_session, trading_days_elapsed
         )
