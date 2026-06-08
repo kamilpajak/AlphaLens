@@ -349,9 +349,17 @@ groups:
       # Severity info, NOT warning/critical: a quiet watchlist is a
       # nudge to review portfolio.yaml, not an outage (the broader
       # alert-fatigue discipline shared with the dark rules).
+      #
+      # ``for: 6h`` matches the sibling AlphalensEdgarPressReleaseDark
+      # debounce. The [5d] window ages the last nonzero sample out
+      # exactly 120h after it was emitted, so on the first quiet
+      # business day after a worst-case long-weekend zero-cluster the
+      # window can momentarily read all-zero; the 6h debounce absorbs
+      # that boundary instead of paging in the ~1h a shorter ``for:``
+      # would leave open.
       - alert: AlphalensEdgarNoCandidates5d
         expr: max_over_time(alphalens_edgar_events_dispatched_total[5d]) == 0
-        for: 1h
+        for: 6h
         labels:
           severity: info
           route: telegram

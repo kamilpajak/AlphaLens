@@ -816,7 +816,13 @@ class TestEdgarNoCandidatesWeekendTolerance(unittest.TestCase):
         self.assertNotIn("[1d]", expr)
 
     def test_has_for_debounce(self) -> None:
-        self.assertIn("for", self._one(self.ALERT))
+        # 6h debounce for parity with the sibling dark rules
+        # (AlphalensEdgarPressReleaseDark / the brief-anomaly rule). The [5d]
+        # window edge ages out the last nonzero sample exactly 120h after it
+        # was emitted; a 6h `for:` gives holiday-morning headroom so the first
+        # quiet business day after a long-weekend zero-cluster does not page in
+        # the ~1h boundary a shorter debounce would leave open.
+        self.assertEqual(self._one(self.ALERT).get("for"), "6h")
 
     def test_routes_to_telegram(self) -> None:
         self.assertEqual(self._one(self.ALERT).get("labels", {}).get("route"), "telegram")
