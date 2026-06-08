@@ -95,13 +95,39 @@ export const LADDER_STATUS_BY_CODE: ReadonlyMap<string, LadderStatusEntry> = new
 	LADDER_STATUS.map((e) => [e.code, e])
 );
 
+// Synthetic display state for a placeholder row whose `ladder_classification`
+// is blank/null. The candidate is plannable but has NOT been priced/replayed
+// yet — its first fetch failed or (more often) was deferred by the nightly
+// fetch budget, so the monitor stores an empty classification and retries it on
+// a later sweep. This is NOT a pipeline classification, so it deliberately lives
+// OUTSIDE `LADDER_STATUS` (and its pipeline-parity test): the UI synthesises it
+// from an empty value rather than the pipeline emitting it.
+export const PENDING_STATUS: LadderStatusEntry = {
+	code: 'PENDING',
+	short: 'not priced yet (queued)',
+	body: 'Not priced yet — this candidate is plannable but its price replay is still queued (each nightly run prices a bounded number of names). It gets a real status on a later sweep.',
+	group: 'ongoing'
+};
+
+/** True when the classification is a blank/null not-yet-priced placeholder. */
+export function isPendingStatus(code: string | null | undefined): boolean {
+	return !code || !code.trim();
+}
+
+/** Badge label for a raw `ladder_classification`: the value itself, or
+ *  `PENDING` for a blank/null placeholder (so the badge is never empty). */
+export function ladderStatusLabel(code: string | null | undefined): string {
+	return isPendingStatus(code) ? PENDING_STATUS.code : code!.trim();
+}
+
 /**
  * Tooltip body for a raw `ladder_classification` value. Case-insensitive and
- * tolerant of surrounding whitespace; returns a sensible fallback for an
- * unknown code so a badge always has a usable tooltip.
+ * tolerant of surrounding whitespace. A blank/null value is the PENDING
+ * placeholder; an unrecognised non-empty code gets a safe generic fallback so a
+ * badge always has a usable tooltip.
  */
 export function ladderStatusBody(code: string | null | undefined): string {
-	if (!code) return 'No status reported for this candidate.';
-	const entry = LADDER_STATUS_BY_CODE.get(code.trim().toUpperCase());
+	if (isPendingStatus(code)) return PENDING_STATUS.body;
+	const entry = LADDER_STATUS_BY_CODE.get(code!.trim().toUpperCase());
 	return entry?.body ?? `Status "${code}" — no description available.`;
 }

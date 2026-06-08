@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
+	isPendingStatus,
 	LADDER_STATUS,
 	LADDER_STATUS_BY_CODE,
-	ladderStatusBody
+	ladderStatusBody,
+	ladderStatusLabel,
+	PENDING_STATUS
 } from '../../src/lib/data/ladderStatus';
 
 // Mirror of the classification strings the pipeline can emit
@@ -55,9 +58,36 @@ describe('ladderStatusBody', () => {
 		expect(ladderStatusBody('Tp_Full')).toBe(LADDER_STATUS_BY_CODE.get('TP_FULL')!.body);
 	});
 
-	it('falls back gracefully for null / unknown', () => {
-		expect(ladderStatusBody(null)).toContain('No status');
-		expect(ladderStatusBody(undefined)).toContain('No status');
+	it('returns the PENDING body for blank / null placeholders', () => {
+		expect(ladderStatusBody(null)).toBe(PENDING_STATUS.body);
+		expect(ladderStatusBody(undefined)).toBe(PENDING_STATUS.body);
+		expect(ladderStatusBody('')).toBe(PENDING_STATUS.body);
+		expect(ladderStatusBody('   ')).toBe(PENDING_STATUS.body);
+	});
+
+	it('falls back gracefully for an unknown non-empty code', () => {
 		expect(ladderStatusBody('WAT')).toContain('no description');
+	});
+});
+
+describe('pending placeholder helpers', () => {
+	it('isPendingStatus is true only for blank / null', () => {
+		expect(isPendingStatus(null)).toBe(true);
+		expect(isPendingStatus(undefined)).toBe(true);
+		expect(isPendingStatus('')).toBe(true);
+		expect(isPendingStatus('   ')).toBe(true);
+		expect(isPendingStatus('OPEN')).toBe(false);
+		expect(isPendingStatus(' NO_FILL ')).toBe(false);
+	});
+
+	it('ladderStatusLabel shows PENDING for blank, else the trimmed code', () => {
+		expect(ladderStatusLabel('')).toBe('PENDING');
+		expect(ladderStatusLabel(null)).toBe('PENDING');
+		expect(ladderStatusLabel('  OPEN ')).toBe('OPEN');
+	});
+
+	it('PENDING is NOT a pipeline code (stays out of LADDER_STATUS)', () => {
+		expect(PIPELINE_CODES).not.toContain('PENDING');
+		expect(LADDER_STATUS_BY_CODE.has('PENDING')).toBe(false);
 	});
 });

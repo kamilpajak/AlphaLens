@@ -5,7 +5,7 @@
 	import JargonTip from '$lib/components/JargonTip.svelte';
 	import ChipTip from '$lib/components/ChipTip.svelte';
 	import LadderStatusLegend from '$lib/components/LadderStatusLegend.svelte';
-	import { ladderStatusBody } from '$lib/data/ladderStatus';
+	import { isPendingStatus, ladderStatusBody, ladderStatusLabel } from '$lib/data/ladderStatus';
 	import { fmtNum } from '$lib/format';
 	import {
 		classificationTone,
@@ -438,14 +438,17 @@
 									</a>
 								</td>
 								<td class="py-2.5 pr-3">
-									<ChipTip term={o.ladder_classification} body={ladderStatusBody(o.ladder_classification)}>
+									<ChipTip
+										term={ladderStatusLabel(o.ladder_classification)}
+										body={ladderStatusBody(o.ladder_classification)}
+									>
 										{#snippet chip()}
 											<span
 												class="inline-block px-1.5 py-0.5 border text-[9px] uppercase tracking-widest whitespace-nowrap {toneClasses(
 													tone
-												)}"
+												)} {isPendingStatus(o.ladder_classification) ? 'border-dashed' : ''}"
 											>
-												{o.ladder_classification}
+												{ladderStatusLabel(o.ladder_classification)}
 											</span>
 										{/snippet}
 									</ChipTip>

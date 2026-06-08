@@ -97,6 +97,20 @@
       "benchmark_window_return": 0.011,
       "holding_days_elapsed": 14,
       "realized_return_pct_of_book": null
+    },
+    {
+      "ticker": "PEND",
+      "brief_date": "2026-05-18",
+      "theme": "ai_assistant",
+      "ladder_classification": "",
+      "terminal": false,
+      "realized_r": null,
+      "open_r": null,
+      "market_excess_return": null,
+      "forward_return": null,
+      "benchmark_window_return": null,
+      "holding_days_elapsed": null,
+      "realized_return_pct_of_book": null
     }
   ]
 }

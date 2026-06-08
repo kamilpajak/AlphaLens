@@ -4,7 +4,7 @@
 	// (ladderStatus.ts) and the same tone → class map as the table chips
 	// (edge.ts), so colours and wording never drift between the two surfaces.
 
-	import { LADDER_STATUS, type LadderGroup } from '$lib/data/ladderStatus';
+	import { LADDER_STATUS, PENDING_STATUS, type LadderGroup } from '$lib/data/ladderStatus';
 	import { classificationTone, toneClasses } from '$lib/edge';
 
 	const GROUPS: { key: LadderGroup; label: string }[] = [
@@ -14,7 +14,9 @@
 	];
 
 	function entriesFor(group: LadderGroup) {
-		return LADDER_STATUS.filter((e) => e.group === group);
+		const base = LADDER_STATUS.filter((e) => e.group === group);
+		// The synthetic PENDING placeholder belongs with the ongoing states.
+		return group === 'ongoing' ? [...base, PENDING_STATUS] : base;
 	}
 </script>
 
@@ -38,7 +40,7 @@
 							<span
 								class="inline-block shrink-0 px-1.5 py-0.5 border text-[9px] uppercase tracking-widest whitespace-nowrap {toneClasses(
 									classificationTone(e.code)
-								)}"
+								)} {e.code === PENDING_STATUS.code ? 'border-dashed' : ''}"
 							>
 								{e.code}
 							</span>
