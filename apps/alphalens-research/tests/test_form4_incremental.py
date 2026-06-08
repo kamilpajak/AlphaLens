@@ -405,6 +405,62 @@ class TestGracefulDegrade(unittest.TestCase):
         self.assertEqual(result.transient_errors, 1)
         self.assertEqual(accessions, {good_acc})
 
+    def test_weekend_dates_are_not_fetched(self) -> None:
+        # SEC files Mon-Fri; the window spans a weekend (06-06 Sat, 06-07 Sun)
+        # which must be skipped without any index fetch.
+        fri, mon = date(2026, 6, 5), date(2026, 6, 8)
+        fri_acc, mon_acc = "0000000111-26-000005", "0000000111-26-000008"
+        client = _FakeClient(
+            index_by_date={
+                fri: _idx([_index_row("4", "ACME", 111, fri.isoformat(), fri_acc)]),
+                mon: _idx([_index_row("4", "ACME", 111, mon.isoformat(), mon_acc)]),
+                # Sat/Sun deliberately absent — a fetch for them would AssertionError.
+            },
+            txt_by_accession={
+                fri_acc: _submission_txt(
+                    issuer_cik=111, ticker="ACME", owner_cik=9, tx_date="2026-06-04", code="P"
+                ),
+                mon_acc: _submission_txt(
+                    issuer_cik=111, ticker="ACME", owner_cik=9, tx_date="2026-06-05", code="P"
+                ),
+            },
+        )
+        with TestFetchWindowSpeedup().tmp_root() as root:
+            result = fetch_form4_records_for_window(
+                client, start_date=fri, end_date=mon, parquet_root=root
+            )
+        self.assertEqual(sorted(client.index_fetches), [fri, mon])
+        self.assertEqual(result.transient_errors, 0)
+        self.assertEqual(result.distinct_accessions, 2)
+
+    def test_missing_daily_index_403_is_benign_not_transient(self) -> None:
+        # A weekday whose daily index 403s with the S3 AccessDenied body (the
+        # file does not exist — a holiday, or today before publication) is
+        # benign: NOT counted transient. The good day is still written.
+        holiday, good = date(2026, 6, 4), date(2026, 6, 5)  # both weekdays
+        good_acc = "0000000111-26-000005"
+        client = _FakeClient(
+            index_by_date={
+                holiday: SecForbiddenError(
+                    "403 https://www.sec.gov/Archives/edgar/daily-index/2026/QTR2/"
+                    "form.20260604.idx headers={} body=<Error><Code>AccessDenied</Code></Error>"
+                ),
+                good: _idx([_index_row("4", "ACME", 111, good.isoformat(), good_acc)]),
+            },
+            txt_by_accession={
+                good_acc: _submission_txt(
+                    issuer_cik=111, ticker="ACME", owner_cik=9, tx_date="2026-06-04", code="P"
+                )
+            },
+        )
+        with TestFetchWindowSpeedup().tmp_root() as root:
+            result = fetch_form4_records_for_window(
+                client, start_date=holiday, end_date=good, parquet_root=root
+            )
+            accessions = TestFetchWindowSpeedup._all_accessions(root)
+        self.assertEqual(result.transient_errors, 0)
+        self.assertEqual(accessions, {good_acc})
+
     def test_submission_txt_without_ownership_block_is_counted_other_error(self) -> None:
         # A .txt whose ownership block is missing/unparseable must be counted as
         # an other_error and skipped — not raised, not written.
