@@ -40,6 +40,14 @@ logger = logging.getLogger(__name__)
 _STATE_FILENAME = "dispatch_state.json"
 _LAST_DISPATCH_KEY = "last_dispatch_date"
 
+# Emitted for the no-dispatch gauge when the dispatch-state read/write itself
+# fails (disk full, permission flip, unwritable state file). Deliberately far
+# above any plausible trading-day gap so the AlphalensEdgarNoDispatchTradingDays
+# rule FIRES (fail-loud) instead of the gauge being silently jammed at 0 — a
+# state failure leaves the cron's success timestamp fresh, so AlphalensJobStale
+# would never surface it.
+DISPATCH_STATE_FAILURE_SENTINEL = 999
+
 # The gauge counts EXCHANGE SESSIONS, so "today" must be the date in the
 # exchange timezone — for the SEC/XNYS-scoped edgar-detect that is US/Eastern.
 # A UTC date rolls a day ahead of the US session for the ~4-5h after 19-20:00

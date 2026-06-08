@@ -19,6 +19,7 @@ from alphalens_pipeline.edgar_detector.dispatch.handlers.digest import DigestHan
 from alphalens_pipeline.edgar_detector.dispatch.handlers.telegram import TelegramHandler
 from alphalens_pipeline.edgar_detector.dispatch.router import DispatchRouter
 from alphalens_pipeline.edgar_detector.dispatch_state import (
+    DISPATCH_STATE_FAILURE_SENTINEL,
     compute_trading_days_since_dispatch,
     exchange_today,
     load_last_dispatch_date,
@@ -125,6 +126,23 @@ def _trading_days_since_dispatch_gauge(dispatched: int) -> int:
     return compute_trading_days_since_dispatch(last, today)
 
 
+def _safe_trading_days_since_dispatch_gauge(dispatched: int) -> int:
+    """``_trading_days_since_dispatch_gauge`` with a fail-LOUD guard.
+
+    A dispatch-state read/write failure must not crash the cron (the EDGAR poll
+    already shipped its alerts + updated dedup). But it must NOT fall back to 0
+    either: 0 reads the same as "just dispatched", so the no-dispatch rule would
+    never fire and a jammed gauge would hide silently (AlphalensJobStale can't
+    catch it — the run still succeeds). Emit a sentinel above the alert
+    threshold so a persistent state failure surfaces as the alert firing.
+    """
+    try:
+        return _trading_days_since_dispatch_gauge(dispatched)
+    except Exception:
+        logger.exception("dispatch-state update failed; edgar-detect run succeeded")
+        return DISPATCH_STATE_FAILURE_SENTINEL
+
+
 @edgar_app.command(name="detect")
 def detect() -> None:
     """Detect new SEC filings: poll EDGAR, classify, dispatch alerts."""
@@ -133,16 +151,12 @@ def detect() -> None:
     typer.echo(f"detected={result['events_detected']} dispatched={result['events_dispatched']}")
 
     # Calendar-aware no-dispatch gauge. Computed + persisted OUTSIDE the emit
-    # try/except below: a state-write failure here is unexpected (it would also
-    # break dedup eventually) and we want it logged, but it still must not fail
-    # the cron — so it has its own guard.
-    try:
-        trading_days_since_dispatch = _trading_days_since_dispatch_gauge(
-            result["events_dispatched"]
-        )
-    except Exception:
-        logger.exception("dispatch-state update failed; edgar-detect run succeeded")
-        trading_days_since_dispatch = 0
+    # try/except below with its own fail-LOUD guard: a state failure must not
+    # fail the cron, but must surface as the alert firing (sentinel), never be
+    # silently swallowed to 0.
+    trading_days_since_dispatch = _safe_trading_days_since_dispatch_gauge(
+        result["events_dispatched"]
+    )
 
     # Domain counters for the cron-observability dashboard (PR-2 of
     # the epic). Numbers are gauges, not Prometheus counters — they

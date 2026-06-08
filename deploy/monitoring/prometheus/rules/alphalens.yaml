@@ -368,7 +368,7 @@ groups:
           route: telegram
         annotations:
           summary: "edgar-detect dispatched 0 candidates in 5+ trading days"
-          description: "More than 5 trading days (a full trading week) have elapsed with zero dispatched candidates — calendar-aware, immune to weekends and holidays (the count is XNYS sessions, not clock days). The watched portfolio is tiny, so this usually means an emptied or stale ~/.alphalens/edgar-detect/portfolio.yaml; verify the 'held:' / 'watchlist:' lists are non-empty. (Detector liveness is covered separately by AlphalensJobStale.)"
+          description: "More than 5 trading days (a full trading week) have elapsed with zero dispatched candidates — calendar-aware, immune to weekends and holidays (the count is XNYS sessions, not clock days). The watched portfolio is tiny, so this usually means an emptied or stale ~/.alphalens/edgar-detect/portfolio.yaml; verify the 'held:' / 'watchlist:' lists are non-empty. A value of 999 is the fail-loud sentinel meaning the dispatch-state file could not be read/written (disk/permission). (Detector liveness is covered separately by AlphalensJobStale.)"
 
       # AV free-tier quota = 25 calls/day. ``quota_remaining < 3`` flags
       # the operator before the backfill cron silently runs out before
