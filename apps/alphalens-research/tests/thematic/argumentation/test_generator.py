@@ -95,6 +95,42 @@ class TestGenerateBrief(unittest.TestCase):
         self.assertIsNone(brief)
         self.assertEqual(kind, generator.BriefErrorKind.MALFORMED_JSON)
 
+    def test_empty_text_with_stop_classified_as_empty(self):
+        # PJT regression (brief 2026-06-07, run 12:54 UTC): the LLM returned
+        # an EMPTY string with finish_reason STOP — NOT MAX_TOKENS, NOT
+        # SAFETY. An empty response is "no content", distinct from
+        # MALFORMED_JSON ("non-empty but unparseable content"). It is a
+        # transient that warrants a retry.
+        resp = SimpleNamespace(
+            text="",
+            candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+        )
+        with patch.object(generator, "_call_llm", return_value=resp):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.EMPTY)
+
+    def test_whitespace_only_text_classified_as_empty(self):
+        # Whitespace-only is still "no content" — must classify EMPTY, not
+        # MALFORMED_JSON, so the retry wrapper recovers it.
+        resp = SimpleNamespace(
+            text="   \n\t  ",
+            candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+        )
+        with patch.object(generator, "_call_llm", return_value=resp):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.EMPTY)
+
+    def test_empty_text_with_missing_finish_reason_classified_as_empty(self):
+        # Some SDK variants surface no candidates / no finish_reason (STOP is
+        # implied). An empty body there is still EMPTY, not MALFORMED_JSON.
+        resp = SimpleNamespace(text="")
+        with patch.object(generator, "_call_llm", return_value=resp):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.EMPTY)
+
     def test_truncation_classified(self):
         resp = _truncated_response()
         with patch.object(generator, "_call_llm", return_value=resp):
@@ -223,6 +259,58 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
             brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
         self.assertIsNone(brief)
         self.assertEqual(mock_call.call_count, 1)
+
+    def test_retry_recovers_empty_first_response(self):
+        # PJT regression (brief 2026-06-07, run 12:54 UTC): the first call
+        # returns an EMPTY-text STOP response (transient), the second call
+        # returns a valid brief. The wrapper must retry on EMPTY and recover
+        # the populated brief. Pre-fix this returned None (EMPTY was lumped
+        # into MALFORMED_JSON, which is non-retryable).
+        empty_resp = SimpleNamespace(
+            text="",
+            candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+        )
+        good_resp = SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
+        with patch.object(generator, "_call_llm", side_effect=[empty_resp, good_resp]) as mock_call:
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+        self.assertIsNotNone(brief)
+        self.assertEqual(brief["tldr"], _SAMPLE_BRIEF["tldr"])
+        self.assertEqual(brief["bear_summary"], _SAMPLE_BRIEF["bear_summary"])
+        self.assertEqual(mock_call.call_count, 2)
+
+    def test_empty_retry_uses_temperature_zero(self):
+        # The EMPTY retry recovers with a greedy/deterministic decode.
+        captured: list[dict] = []
+
+        def fake_call(client, prompt, *, model, max_output_tokens, temperature):
+            captured.append({"max": max_output_tokens, "temp": temperature})
+            if len(captured) == 1:
+                return SimpleNamespace(
+                    text="",
+                    candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+                )
+            return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
+
+        with patch.object(generator, "_call_llm", side_effect=fake_call):
+            brief = generator.generate_brief_with_retry(
+                _facts(weighted_score=2), api_key="k", base_max_output_tokens=2000
+            )
+        self.assertIsNotNone(brief)
+        self.assertEqual(len(captured), 2)
+        self.assertEqual(captured[1]["temp"], 0.0)
+
+    def test_two_empty_responses_give_up(self):
+        # Exactly ONE retry — a persistent empty response degrades to None.
+        empty_resp = SimpleNamespace(
+            text="",
+            candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+        )
+        with patch.object(
+            generator, "_call_llm", side_effect=[empty_resp, empty_resp]
+        ) as mock_call:
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(mock_call.call_count, 2)
 
     def test_no_retry_on_safety(self):
         with patch.object(
