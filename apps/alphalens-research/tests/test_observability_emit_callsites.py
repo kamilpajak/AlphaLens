@@ -41,6 +41,8 @@ class TestEdgarDetectEmitsDomainMetrics(unittest.TestCase):
         with (
             patch.object(edgar, "_build_detector", return_value=detector),
             patch.object(edgar, "emit_domain_metrics") as emit,
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(edgar, "_state_home", return_value=Path(tmp)),
         ):
             edgar.detect()
 
@@ -52,6 +54,43 @@ class TestEdgarDetectEmitsDomainMetrics(unittest.TestCase):
         self.assertEqual(metrics["alphalens_edgar_events_dispatched_total"], 3)
         self.assertEqual(metrics['alphalens_edgar_portfolio_size{class="held"}'], 3)
         self.assertEqual(metrics['alphalens_edgar_portfolio_size{class="watchlist"}'], 2)
+        # The trading-day-since-last-dispatch gauge is emitted on EVERY run so
+        # the series never goes absent. This run dispatched (3 > 0), so it
+        # resets to 0 and stamps today as the last_dispatch_date.
+        self.assertEqual(metrics["alphalens_edgar_trading_days_since_last_dispatch"], 0)
+
+    def test_detect_emits_trading_days_gauge_on_zero_dispatch_run(self) -> None:
+        # On a quiet run (0 dispatched) the gauge reflects the trading-day gap
+        # since the last persisted dispatch. Pre-stamp a known last-dispatch
+        # date and patch "today" via the calendar-aware computation's clock.
+        import datetime as dt
+
+        from alphalens_cli.commands import edgar
+        from alphalens_pipeline.edgar_detector import dispatch_state
+
+        detector = MagicMock()
+        detector.run_once.return_value = {
+            "events_detected": 0,
+            "events_dispatched": 0,
+        }
+        detector.portfolio.held = ["AAPL"]
+        detector.portfolio.watchlist = []
+
+        with (
+            patch.object(edgar, "_build_detector", return_value=detector),
+            patch.object(edgar, "emit_domain_metrics") as emit,
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(edgar, "_state_home", return_value=Path(tmp)),
+            patch.object(edgar, "_today", return_value=dt.date(2026, 1, 19)),
+        ):
+            # Dispatch happened Mon 2026-01-12; today = Mon 2026-01-19 (MLK).
+            # Inner sessions Tue-Fri 13-16 = 4.
+            dispatch_state.stamp_last_dispatch_date(Path(tmp), dt.date(2026, 1, 12))
+            edgar.detect()
+
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics["alphalens_edgar_events_dispatched_total"], 0)
+        self.assertEqual(metrics["alphalens_edgar_trading_days_since_last_dispatch"], 4)
 
 
 class TestLiteratureScanEmitsDomainMetrics(unittest.TestCase):
