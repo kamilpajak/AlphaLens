@@ -611,7 +611,7 @@ class TestThematicVolumeRules(unittest.TestCase):
 
     def test_zero_output_rule_uses_gauge_correct_aggregation(self) -> None:
         # The stage gauges are overwritten each run; increase()/rate() return
-        # nonsense on a gauge (the AlphalensEdgarNoCandidates24h lesson,
+        # nonsense on a gauge (the AlphalensEdgarPressReleaseDark lesson,
         # PR #312). The correct "nothing across the window" operator is
         # max_over_time.
         expr = self._rule(self.ZERO_OUTPUT)["expr"]
@@ -747,32 +747,35 @@ class TestVixCacheStaleness(unittest.TestCase):
             )
 
 
-class TestEdgarNoCandidatesWeekendTolerance(unittest.TestCase):
-    """Pin the weekend/holiday-tolerant window on the no-candidates alert.
+class TestEdgarNoDispatchTradingDays(unittest.TestCase):
+    """Pin the calendar-aware no-dispatch alert.
 
-    ``AlphalensEdgarNoCandidates`` catches a genuinely quiet / emptied
-    watchlist (the unique signal detector LIVENESS does not cover — that is
-    AlphalensJobStale + AlphalensJobMetricMissing). SEC accepts no filings on
-    weekends and the watched portfolio is tiny (~6 tickers), so a [24h] window
-    is legitimately 0 every weekend and false-fired the operator. The window is
-    widened to [5d] to tolerate a weekend AND the worst holiday cluster (the
-    pessimistic Thanksgiving Thu-Sun 4-zero-day run), matching the sibling
-    AlphalensEdgarPressReleaseDark / AlphalensForm4IncrementalDark rules.
+    The old ``AlphalensEdgarNoCandidates5d`` rule was a blind PromQL window
+    ``max_over_time(alphalens_edgar_events_dispatched_total[5d]) == 0``. PromQL
+    cannot consult a holiday calendar, so a [5d] window only tolerates weekends
+    statistically and can still false-fire across the December holiday cluster
+    or a genuinely quiet small watchlist.
 
-    The window is encoded in the alertname per project convention, so the live
-    alert is ``AlphalensEdgarNoCandidates5d`` and the stale 24h name must be
-    gone.
+    The replacement moves the calendar awareness into the EMITTER: the
+    edgar-detect cron persists the last dispatch date and emits a calendar-aware
+    gauge ``alphalens_edgar_trading_days_since_last_dispatch`` (counted with the
+    XNYS session calendar, immune to weekends + holidays). The rule is a simple
+    threshold on that gauge. Detector LIVENESS stays covered separately by
+    AlphalensJobStale + AlphalensJobMetricMissing, so this rule needs no
+    absent()/MetricMissing of its own.
     """
 
-    METRIC = "alphalens_edgar_events_dispatched_total"
-    ALERT = "AlphalensEdgarNoCandidates5d"
-    OLD_ALERT = "AlphalensEdgarNoCandidates24h"
-    # 5d, NOT 24h and NOT 4d: max_over_time(...[Nd]) == 0 fires the instant the
-    # window holds only zeros, so tolerating the worst legit 4-zero-day cluster
-    # (pessimistic Thanksgiving Thu-Sun) needs a window STRICTLY longer than 4d.
-    # A future edit that shrinks this back toward 24h re-introduces the weekend
-    # false page; growing it past 5d delays a real emptied-watchlist incident.
-    WINDOW = "5d"
+    GAUGE = "alphalens_edgar_trading_days_since_last_dispatch"
+    ALERT = "AlphalensEdgarNoDispatchTradingDays"
+    # Every old PromQL-window alertname must be gone — the rule changed shape
+    # (gauge threshold, not max_over_time window), so the window-encoding names
+    # would mislead the operator on Telegram.
+    OLD_ALERTS = ("AlphalensEdgarNoCandidates5d", "AlphalensEdgarNoCandidates24h")
+    # 5 trading days = a full trading week with zero dispatched candidates.
+    # Conservative because the dispatch cadence cannot be tightly calibrated
+    # (the source gauge is transient + Prometheus retains only ~10d) and this is
+    # an info nudge with liveness covered separately. Single easy-to-tune literal.
+    THRESHOLD = 5
 
     def _rules(self) -> list[dict]:
         return _load_rules()["groups"][0]["rules"]
@@ -784,63 +787,57 @@ class TestEdgarNoCandidatesWeekendTolerance(unittest.TestCase):
         )
         return matches[0]
 
-    def test_alert_exists_under_window_named_alertname(self) -> None:
+    def test_alert_exists(self) -> None:
         self._one(self.ALERT)
 
-    def test_old_24h_alertname_is_gone(self) -> None:
-        # The name encodes the window; a stale 24h name after widening to 5d
-        # would mislead the operator on Telegram.
+    def test_old_promql_window_alertnames_are_gone(self) -> None:
         names = {r.get("alert") for r in self._rules()}
-        self.assertNotIn(
-            self.OLD_ALERT,
-            names,
-            "AlphalensEdgarNoCandidates24h must be renamed to ...5d after the window widen.",
-        )
+        for old in self.OLD_ALERTS:
+            self.assertNotIn(
+                old,
+                names,
+                f"{old} must be replaced by AlphalensEdgarNoDispatchTradingDays "
+                "(calendar-aware gauge rule).",
+            )
 
-    def test_expr_is_gauge_correct_max_over_time_zero(self) -> None:
+    def test_expr_is_gauge_threshold(self) -> None:
+        # The new rule reads the calendar-aware gauge and compares to the
+        # threshold. No PromQL window function (max_over_time / increase /
+        # rate) — the calendar math already happened in the emitter.
         expr = self._one(self.ALERT)["expr"]
-        self.assertIn(self.METRIC, expr)
-        self.assertIn("max_over_time", expr)
-        self.assertIn("== 0", expr)
-        # GAUGE (overwritten each run) -> never counter functions (the PR #312
-        # lesson; also pinned generically by test_no_counter_functions_*).
+        self.assertIn(self.GAUGE, expr)
+        self.assertNotIn("max_over_time", expr)
         self.assertNotIn("increase(", expr)
         self.assertNotIn("rate(", expr)
-
-    def test_expr_window_is_five_days(self) -> None:
-        # Pin the literal [5d] window so a noise-reduction edit can't silently
-        # shrink it below a weekend/holiday cluster (false page) or back to 24h.
-        expr = self._one(self.ALERT)["expr"]
-        self.assertIn(f"max_over_time({self.METRIC}[{self.WINDOW}])", expr)
+        self.assertNotIn("[5d]", expr)
         self.assertNotIn("[24h]", expr)
-        self.assertNotIn("[1d]", expr)
-        # Anchor the WHOLE expression (zen LOW, PR #489) so a second window
-        # can't be concatenated in unnoticed — the rule is exactly this one
-        # aggregation compared to zero, nothing more.
+        # Pin the exact threshold expression: gauge > 5, nothing more.
         self.assertRegex(
             expr.strip(),
-            rf"^max_over_time\({re.escape(self.METRIC)}\[{re.escape(self.WINDOW)}\]\)\s*==\s*0$",
+            rf"^{re.escape(self.GAUGE)}\s*>\s*{self.THRESHOLD}$",
         )
 
     def test_has_for_debounce(self) -> None:
-        # 6h debounce for parity with the sibling dark rules
-        # (AlphalensEdgarPressReleaseDark / the brief-anomaly rule). The [5d]
-        # window edge ages out the last nonzero sample exactly 120h after it
-        # was emitted; a 6h `for:` gives holiday-morning headroom so the first
-        # quiet business day after a long-weekend zero-cluster does not page in
-        # the ~1h boundary a shorter debounce would leave open.
+        # 6h debounce: the gauge is refreshed every 15-min run, so a single
+        # spurious read cannot fire; 6h matches the sibling dark rules.
         self.assertEqual(self._one(self.ALERT).get("for"), "6h")
+
+    def test_severity_is_info(self) -> None:
+        # A quiet / emptied watchlist is a nudge to review portfolio.yaml, not
+        # an outage — matches the old rule's info severity (alert-fatigue
+        # discipline shared with the dark rules).
+        self.assertEqual(self._one(self.ALERT).get("labels", {}).get("severity"), "info")
 
     def test_routes_to_telegram(self) -> None:
         self.assertEqual(self._one(self.ALERT).get("labels", {}).get("route"), "telegram")
 
-    def test_wording_reflects_five_day_window_not_24h(self) -> None:
-        # The summary/description must describe the 5-day window, not a stale
-        # "24h", so the Telegram message matches the actual evaluation window.
+    def test_wording_describes_trading_days(self) -> None:
+        # The message must describe the calendar-aware semantics, not a stale
+        # PromQL window ("24h" / "5 days" clock-time).
         ann = self._one(self.ALERT).get("annotations", {})
-        summary = ann.get("summary", "")
-        self.assertNotIn("24h", summary)
-        self.assertNotIn("24h", ann.get("description", ""))
+        blob = ann.get("summary", "") + " " + ann.get("description", "")
+        self.assertIn("trading day", blob)
+        self.assertNotIn("24h", blob)
 
     def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
         # Like the VIX / dark rules: a per-domain slice, not a systemd unit's
@@ -911,7 +908,7 @@ class TestEdgarPressReleaseDark(unittest.TestCase):
 
     def test_dark_severity_is_warning_not_critical(self) -> None:
         # A degraded data source is not a wake-up outage; critical breeds alert
-        # fatigue (the AlphalensEdgarNoCandidates24h / brief-anomaly precedent).
+        # fatigue (the AlphalensEdgarNoDispatchTradingDays / brief-anomaly precedent).
         self.assertEqual(self._one(self.DARK).get("labels", {}).get("severity"), "warning")
 
     def test_missing_alert_wraps_absent(self) -> None:

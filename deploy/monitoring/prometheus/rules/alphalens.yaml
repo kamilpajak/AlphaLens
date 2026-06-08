@@ -266,7 +266,7 @@ groups:
       # no new observation), so weekends do not age it. ``{series="VIXCLS"}``
       # scopes both rules to the one series we depend on. GAUGE → threshold on
       # ``time() - metric`` / ``absent()``, never increase()/rate() (the
-      # AlphalensEdgarNoCandidates5d lesson).
+      # AlphalensEdgarNoDispatchTradingDays lesson).
       - alert: AlphalensVixCacheStale
         expr: time() - alphalens_vix_cache_fetched_at_timestamp_seconds{series="VIXCLS"} > 259200
         for: 5m
@@ -322,50 +322,53 @@ groups:
       # AlphalensJobMetricMissing, so this rule does not need to watch
       # for "the poller stopped".
       #
-      # WINDOW = 5d, NOT 24h. SEC accepts no filings on weekends and the
-      # portfolio is tiny, so the dispatched count is legitimately 0
-      # every weekend — a [24h] window false-fired the operator every
-      # Saturday/Sunday. ``max_over_time(...[Nd]) == 0`` fires the
-      # instant the trailing window holds only zeros, so to TOLERATE a
-      # weekend (and the worst legitimate all-zero cluster — the
-      # pessimistic Thanksgiving Thu-Sun 4-zero-day run) the window must
-      # be STRICTLY longer than that cluster. 5d = worst-legit (4d) + 1,
-      # matching the sibling AlphalensEdgarPressReleaseDark /
-      # AlphalensForm4IncrementalDark rules. The name encodes the window
-      # (was ...24h), so it is renamed ...5d to keep the Telegram message
-      # honest about the evaluation window.
+      # CALENDAR-AWARE, not a PromQL window. The predecessor
+      # (AlphalensEdgarNoCandidates5d) was a blind window
+      # ``max_over_time(alphalens_edgar_events_dispatched_total[5d]) == 0``.
+      # PromQL cannot consult a holiday calendar, so a [5d] window only
+      # TOLERATES weekends statistically and could still false-fire across
+      # the December holiday cluster (Christmas + New Year back-to-back) or
+      # whenever ``alphalens_edgar_events_dispatched_total`` (a TRANSIENT
+      # gauge — nonzero only during the single run that dispatched, reset to
+      # 0 the next run) leaves only zeros in the window. The calendar
+      # awareness now lives in the EMITTER (Python, where the
+      # exchange_calendars holiday table lives): the edgar-detect cron
+      # persists the last dispatch date and emits
+      # ``alphalens_edgar_trading_days_since_last_dispatch`` on EVERY run
+      # (incl. weekends + zero-dispatch runs, so the series never goes
+      # absent). The gauge counts XNYS sessions strictly between the last
+      # dispatch and today — weekends and holidays never increment it.
       #
-      # ``alphalens_edgar_events_dispatched_total`` is a GAUGE that
-      # the emitter overwrites with the current run's count on every
-      # fire (per ``observability/textfile.py`` design note). So
-      # ``increase()`` is wrong here — it is a counter function that
-      # assumes monotonic non-decreasing series; on a gauge it
-      # returns nonsense. The correct semantic for "zero candidates
-      # across every run in the window" is ``max_over_time(...)
-      # == 0`` — the maximum value the gauge took on across the
-      # window. Zen pre-merge review of PR #312 caught this gauge-vs-
-      # counter mismatch.
+      # THRESHOLD = 5 trading days = a full trading week with zero dispatched
+      # candidates. Conservative because the dispatch cadence cannot be
+      # tightly calibrated (the source gauge is transient + Prometheus
+      # retains only ~10d) and this is an info nudge with liveness covered
+      # separately — the threshold is a single easy-to-tune literal.
+      #
+      # GAUGE not counter: ``alphalens_edgar_trading_days_since_last_dispatch``
+      # is overwritten with the current value on every emit, so counter
+      # functions (``increase()`` / ``rate()``) would return nonsense — a
+      # plain threshold is correct (the PR #312 gauge-vs-counter lesson; the
+      # calendar window math already happened in the emitter, so no
+      # ``max_over_time`` is needed here either).
       #
       # Severity info, NOT warning/critical: a quiet watchlist is a
       # nudge to review portfolio.yaml, not an outage (the broader
       # alert-fatigue discipline shared with the dark rules).
       #
       # ``for: 6h`` matches the sibling AlphalensEdgarPressReleaseDark
-      # debounce. The [5d] window ages the last nonzero sample out
-      # exactly 120h after it was emitted, so on the first quiet
-      # business day after a worst-case long-weekend zero-cluster the
-      # window can momentarily read all-zero; the 6h debounce absorbs
-      # that boundary instead of paging in the ~1h a shorter ``for:``
-      # would leave open.
-      - alert: AlphalensEdgarNoCandidates5d
-        expr: max_over_time(alphalens_edgar_events_dispatched_total[5d]) == 0
+      # debounce. The gauge is refreshed every 15-min run, so a single
+      # spurious read cannot fire; 6h gives headroom across the boundary
+      # where a dispatch arrives just after the threshold is crossed.
+      - alert: AlphalensEdgarNoDispatchTradingDays
+        expr: alphalens_edgar_trading_days_since_last_dispatch > 5
         for: 6h
         labels:
           severity: info
           route: telegram
         annotations:
-          summary: "edgar-detect found 0 candidates in last 5 days"
-          description: "No EDGAR candidates dispatched across every edgar-detect run for the last 5 days — longer than a normal weekend or the worst holiday cluster (Thanksgiving). The watched portfolio is tiny, so this usually means an emptied or stale ~/.alphalens/edgar-detect/portfolio.yaml; verify the 'held:' / 'watchlist:' lists are non-empty. (Detector liveness is covered separately by AlphalensJobStale.)"
+          summary: "edgar-detect dispatched 0 candidates in 5+ trading days"
+          description: "More than 5 trading days (a full trading week) have elapsed with zero dispatched candidates — calendar-aware, immune to weekends and holidays (the count is XNYS sessions, not clock days). The watched portfolio is tiny, so this usually means an emptied or stale ~/.alphalens/edgar-detect/portfolio.yaml; verify the 'held:' / 'watchlist:' lists are non-empty. (Detector liveness is covered separately by AlphalensJobStale.)"
 
       # AV free-tier quota = 25 calls/day. ``quota_remaining < 3`` flags
       # the operator before the backfill cron silently runs out before
@@ -396,7 +399,7 @@ groups:
       #
       # Gauge-correct aggregation: the stage gauges are OVERWRITTEN each
       # run, so increase()/rate() return nonsense (the
-      # AlphalensEdgarNoCandidates5d lesson, PR #312). The right operator
+      # AlphalensEdgarPressReleaseDark lesson, PR #312). The right operator
       # for "produced nothing across every run in the window" is
       # ``max_over_time``. After max_over_time strips ``__name__``, the
       # input and output vectors share only ``{stage}`` so the ``and``
@@ -531,7 +534,7 @@ groups:
       # ``job=`` label (like the VIX-cache rules) keeps it out of the
       # per-job cron enumerations. Severity warning, not critical: a
       # degraded data source is not a wake-up outage (over-escalation breeds
-      # alert fatigue — the AlphalensEdgarNoCandidates5d precedent).
+      # alert fatigue — the AlphalensEdgarNoDispatchTradingDays precedent).
       - alert: AlphalensEdgarPressReleaseDark
         expr: max_over_time(alphalens_thematic_source_rows{source="edgar_press_release"}[5d]) == 0
         for: 6h
@@ -578,7 +581,7 @@ groups:
       # enumerations. 5d window, NOT 4d: max_over_time(...[5d]) == 0 tolerates the
       # worst legitimate all-zero cluster (a holiday + weekend with no new Form-4
       # filings). Severity warning, not critical: a degraded data source is not a
-      # wake-up outage (the AlphalensEdgarNoCandidates5d precedent).
+      # wake-up outage (the AlphalensEdgarNoDispatchTradingDays precedent).
       - alert: AlphalensForm4IncrementalDark
         expr: max_over_time(alphalens_form4_rows_written[5d]) == 0
         for: 6h
