@@ -35,6 +35,11 @@ _BASE_URL = "https://api.polygon.io"
 _NEWS_PATH = "/v2/reference/news"
 _SHORT_INTEREST_PATH = "/stocks/v1/short-interest"
 _OPTIONS_CONTRACTS_PATH = "/v3/reference/options/contracts"
+_GROUPED_DAILY_PATH = "/v2/aggs/grouped/locale/us/market/stocks"
+
+# Fields kept from each grouped-daily result row: bar time + OHLCV + VWAP. The
+# symbol (``T``) is the dict KEY, never carried inside the value.
+_GROUPED_DAILY_FIELDS = ("t", "o", "h", "l", "c", "v", "vw")
 
 API_KEY_ENV = "POLYGON_API_KEY"
 
@@ -252,6 +257,54 @@ class PolygonClient:
             url = _strip_apikey_from_url(next_url) if next_url else None
             pages += 1
         return bars
+
+    def get_grouped_daily(
+        self,
+        date: dt.date,
+        *,
+        adjusted: bool = False,
+        include_otc: bool = False,
+        max_pages: int = 1,
+    ) -> dict[str, dict[str, Any]]:
+        """Polygon ``/v2/aggs/grouped/locale/us/market/stocks/{date}`` — one call
+        returns the whole-market daily OHLCV+VWAP for ``date``.
+
+        Backbone of the population-monitor grouped-daily two-tier screen: a SINGLE
+        HTTP request prices the entire US-equity market for one session, so the
+        cheap daily no-touch screen costs O(days) not O(candidates).
+
+        Returns ``{TICKER: {t,o,h,l,c,v,vw}}``. The symbol key is ALWAYS the row's
+        ``T`` field (upper-cased); the per-bar ``t`` (epoch ms, bar START) is
+        preserved as the bar time inside the value and is NEVER used as the key.
+
+        ``adjusted=False`` (default) mirrors :meth:`get_agg_range` — the raw,
+        split/dividend-UNADJUSTED daily H/L must match the raw minute bars and the
+        absolute ladder levels (Polygon defaults this endpoint to ``true``, which
+        would silently corrupt ``open_r``). ``include_otc`` defaults false.
+
+        A weekend / holiday (``resultsCount == 0`` / ``results`` null) returns
+        ``{}`` (NOT an error) so the caller treats it as "no session". Raises
+        ``PolygonError`` / ``PolygonRateLimitError`` / ``PolygonAuthError``
+        identically to the other methods.
+        """
+        params: dict[str, Any] = {
+            "adjusted": "true" if adjusted else "false",
+            "include_otc": "true" if include_otc else "false",
+        }
+        out: dict[str, dict[str, Any]] = {}
+        url: str | None = f"{_BASE_URL}{_GROUPED_DAILY_PATH}/{date.isoformat()}"
+        pages = 0
+        while url and pages < max_pages:
+            payload = self._get_json(url, params=params if pages == 0 else None)
+            for row in payload.get("results") or []:
+                symbol = row.get("T")
+                if symbol is None:
+                    continue
+                out[str(symbol).upper()] = {k: row[k] for k in _GROUPED_DAILY_FIELDS if k in row}
+            next_url = payload.get("next_url")
+            url = _strip_apikey_from_url(next_url) if next_url else None
+            pages += 1
+        return out
 
     def get_options_contracts(
         self,
