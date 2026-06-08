@@ -31,6 +31,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from alphalens_pipeline.paper.calendar import DEFAULT_EXCHANGE, is_trading_day
 
@@ -38,6 +39,22 @@ logger = logging.getLogger(__name__)
 
 _STATE_FILENAME = "dispatch_state.json"
 _LAST_DISPATCH_KEY = "last_dispatch_date"
+
+# The gauge counts EXCHANGE SESSIONS, so "today" must be the date in the
+# exchange timezone — for the SEC/XNYS-scoped edgar-detect that is US/Eastern.
+# A UTC date rolls a day ahead of the US session for the ~4-5h after 19-20:00
+# ET, which would otherwise let the open-interval session count read one high
+# near UTC midnight.
+_EXCHANGE_TZ = ZoneInfo("America/New_York")
+
+
+def exchange_today(now: dt.datetime) -> dt.date:
+    """The XNYS-session calendar date for an aware instant ``now``.
+
+    Convert to the exchange timezone before taking the date so the session
+    count aligns with actual trading days rather than UTC calendar days.
+    """
+    return now.astimezone(_EXCHANGE_TZ).date()
 
 
 def state_path(home: Path) -> Path:
@@ -83,7 +100,12 @@ def stamp_last_dispatch_date(home: Path, date: dt.date) -> Path:
     ) as tmp:
         json.dump(payload, tmp)
         tmp_path = Path(tmp.name)
-    os.replace(tmp_path, target)
+    try:
+        os.replace(tmp_path, target)
+    except OSError:
+        # os.replace can fail (e.g. cross-device) — do not leak the temp file.
+        tmp_path.unlink(missing_ok=True)
+        raise
     return target
 
 

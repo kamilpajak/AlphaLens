@@ -20,6 +20,7 @@ from alphalens_pipeline.edgar_detector.dispatch.handlers.telegram import Telegra
 from alphalens_pipeline.edgar_detector.dispatch.router import DispatchRouter
 from alphalens_pipeline.edgar_detector.dispatch_state import (
     compute_trading_days_since_dispatch,
+    exchange_today,
     load_last_dispatch_date,
     stamp_last_dispatch_date,
 )
@@ -99,10 +100,12 @@ def _state_home() -> Path:
 
 
 def _today() -> dt.date:
-    """Today's date (UTC). Indirection point so the calendar-aware gauge can be
-    tested at a pinned date without monkeypatching the stdlib clock.
+    """Today's date in the EXCHANGE timezone (XNYS = US/Eastern). The gauge
+    counts trading sessions, so "today" must be the exchange-session date, not
+    the UTC date (which rolls a day ahead ~19-20:00 ET). Indirection point so
+    the calendar-aware gauge can be tested at a pinned date.
     """
-    return dt.datetime.now(dt.UTC).date()
+    return exchange_today(dt.datetime.now(dt.UTC))
 
 
 def _trading_days_since_dispatch_gauge(dispatched: int) -> int:

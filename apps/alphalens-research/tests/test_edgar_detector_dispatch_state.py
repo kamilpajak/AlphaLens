@@ -105,6 +105,34 @@ class TestComputeTradingDaysSinceDispatch(unittest.TestCase):
         self.assertEqual(self._fn()(dt.date(2026, 1, 12), dt.date(2026, 1, 19)), 4)
 
 
+class TestExchangeToday(unittest.TestCase):
+    """``today`` for the session count is the date in the EXCHANGE timezone
+    (XNYS = America/New_York), not UTC — a UTC date rolls a day ahead of the US
+    session for the ~4-5h after 19-20:00 ET, which would otherwise let the
+    open-interval count read one session high near UTC midnight."""
+
+    def _fn(self):
+        from alphalens_pipeline.edgar_detector.dispatch_state import exchange_today
+
+        return exchange_today
+
+    def test_utc_evening_maps_to_prior_et_day(self) -> None:
+        # 2026-06-09 02:00 UTC == 2026-06-08 22:00 America/New_York (EDT, -4):
+        # the exchange session date is still the 8th, not the 9th.
+        now = dt.datetime(2026, 6, 9, 2, 0, tzinfo=dt.UTC)
+        self.assertEqual(self._fn()(now), dt.date(2026, 6, 8))
+
+    def test_utc_daytime_maps_to_same_day(self) -> None:
+        # 2026-06-09 14:00 UTC == 2026-06-09 10:00 ET -> same date.
+        now = dt.datetime(2026, 6, 9, 14, 0, tzinfo=dt.UTC)
+        self.assertEqual(self._fn()(now), dt.date(2026, 6, 9))
+
+    def test_winter_est_offset(self) -> None:
+        # 2026-01-20 02:00 UTC == 2026-01-19 21:00 ET (EST, -5) -> the 19th.
+        now = dt.datetime(2026, 1, 20, 2, 0, tzinfo=dt.UTC)
+        self.assertEqual(self._fn()(now), dt.date(2026, 1, 19))
+
+
 class TestDispatchStatePersistence(unittest.TestCase):
     """Round-trip the ISO-date JSON state file under a temp home."""
 
@@ -158,6 +186,39 @@ class TestDispatchStatePersistence(unittest.TestCase):
             home = Path(tmp)
             (home / "dispatch_state.json").write_text("{not json")
             self.assertIsNone(load_last_dispatch_date(home))
+
+    def test_load_tolerates_wrong_shape(self) -> None:
+        # Valid JSON but wrong shape (missing key / non-string / bad ISO) must
+        # also degrade to cold start, not raise — the contract is "any
+        # unreadable state -> None", made explicit here.
+        from alphalens_pipeline.edgar_detector.dispatch_state import load_last_dispatch_date
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            path = home / "dispatch_state.json"
+            for bad in (
+                '{"other_key": "2026-01-14"}',  # missing key
+                '{"last_dispatch_date": 20260114}',  # non-string -> TypeError
+                '{"last_dispatch_date": "not-a-date"}',  # bad ISO -> ValueError
+            ):
+                path.write_text(bad)
+                self.assertIsNone(load_last_dispatch_date(home))
+
+    def test_temp_file_cleaned_up_on_replace_failure(self) -> None:
+        # If os.replace fails (e.g. cross-device), the NamedTemporaryFile must
+        # not leak in the home dir — the failure propagates but no .tmp lingers.
+        from unittest import mock
+
+        from alphalens_pipeline.edgar_detector import dispatch_state
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            with mock.patch.object(dispatch_state.os, "replace", side_effect=OSError("boom")):
+                with self.assertRaises(OSError):
+                    dispatch_state.stamp_last_dispatch_date(home, dt.date(2026, 1, 14))
+            self.assertEqual(
+                list(home.glob("*.tmp")), [], "temp state file leaked on os.replace failure"
+            )
 
 
 if __name__ == "__main__":
