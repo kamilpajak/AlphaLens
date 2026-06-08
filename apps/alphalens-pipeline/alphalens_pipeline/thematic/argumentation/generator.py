@@ -9,9 +9,12 @@ can branch on the exact failure mode. ``generate_brief_with_retry`` wraps
 it with the Perplexity-recommended retry policy (2026-05-17): on
 ``BriefErrorKind.TRUNCATED`` (OpenRouter ``finish_reason == "length"``,
 translated to ``"MAX_TOKENS"`` by the OpenRouter client wrapper) retry
-once with double ``max_output_tokens`` and ``temperature=0``. Other
-failure kinds (``MALFORMED_JSON`` / ``SAFETY`` / ``TRANSPORT``) do not
-retry — they will not be helped by more tokens or different temperature.
+once with double ``max_output_tokens`` and ``temperature=0``; on
+``BriefErrorKind.EMPTY`` (finish_reason STOP/absent but the response body
+was empty/whitespace-only — a transient no-content response) retry once
+with the same token cap and ``temperature=0``. Other failure kinds
+(``MALFORMED_JSON`` / ``SAFETY`` / ``TRANSPORT``) do not retry — they
+will not be helped by more tokens or different temperature.
 """
 
 from __future__ import annotations
@@ -49,7 +52,8 @@ class BriefErrorKind(enum.Enum):
 
     NONE = "none"
     TRUNCATED = "truncated"  # finish_reason == MAX_TOKENS
-    MALFORMED_JSON = "malformed_json"  # finish_reason == STOP but parse failed
+    EMPTY = "empty"  # finish_reason STOP/absent but response text empty/whitespace-only
+    MALFORMED_JSON = "malformed_json"  # finish_reason == STOP, non-empty body, parse failed
     SAFETY = "safety"  # finish_reason == SAFETY
     TRANSPORT = "transport"  # SDK raised before producing a response
 
@@ -187,6 +191,20 @@ def generate_brief(
         return None, finish_kind
 
     raw = getattr(response, "text", "") or ""
+    if raw.strip() == "":
+        # finish_reason was STOP/absent (not MAX_TOKENS, not SAFETY) but the
+        # model returned no content at all. This is a transient no-content
+        # response (PJT brief 2026-06-07 run 12:54 UTC: empty body + STOP,
+        # while the 03:05 and 06:58 runs that day produced full briefs). It
+        # is distinct from MALFORMED_JSON ("non-empty but unparseable") — an
+        # empty string is "no content", not "bad content" — so json-repair
+        # has nothing to salvage. Surface EMPTY so the retry wrapper drives a
+        # fresh call rather than degrading to deterministic-only.
+        logger.warning(
+            "brief response empty (finish_reason STOP/absent) for %s", facts.get("ticker")
+        )
+        return None, BriefErrorKind.EMPTY
+
     parsed = parse_extraction(raw)
     if parsed is None:
         # finish_reason=STOP + parse failed → try json-repair (per
@@ -250,16 +268,27 @@ def generate_brief_with_retry(
     llm_client_flash: OpenRouterClient | None = None,
     base_max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
 ) -> dict | None:
-    """Generate a brief, retrying once on ``BriefErrorKind.TRUNCATED``.
+    """Generate a brief, retrying once on ``TRUNCATED`` or ``EMPTY``.
 
-    The retry doubles ``max_output_tokens`` and sets ``temperature=0`` so
-    decoding is greedy/deterministic. Other failure kinds (MALFORMED_JSON,
-    SAFETY, TRANSPORT) return None without retrying — extra tokens won't
-    fix bad JSON, safety blocks, or network errors.
+    Retryable kinds:
 
-    Returns the brief dict (with ``model_used``) on success, ``None``
-    otherwise. The orchestrator's graceful-degradation renderer then
-    surfaces the deterministic facts even when this returns None.
+    * ``BriefErrorKind.TRUNCATED`` — the retry doubles ``max_output_tokens``
+      (the model ran out of room) and sets ``temperature=0`` so decoding is
+      greedy/deterministic.
+    * ``BriefErrorKind.EMPTY`` — a transient no-content response (empty /
+      whitespace-only body with finish_reason STOP/absent). The recovery is
+      a fresh call at ``temperature=0``; the token cap is left unchanged —
+      doubling it does nothing for an empty response (it was never a
+      truncation), so we keep the base cap.
+
+    Non-retryable kinds (``MALFORMED_JSON``, ``SAFETY``, ``TRANSPORT``)
+    return None without retrying — extra tokens won't fix bad JSON, safety
+    blocks, or network errors.
+
+    Either way the retry runs at most once (no loop). Returns the brief
+    dict (with ``model_used``) on success, ``None`` otherwise. The
+    orchestrator's graceful-degradation renderer then surfaces the
+    deterministic facts even when this returns None.
     """
     # Resolve clients ONCE so the retry path doesn't re-do lazy-singleton
     # lookup. Cheap when the caller already hoisted (orchestrator batch
@@ -278,13 +307,18 @@ def generate_brief_with_retry(
     )
     if kind == BriefErrorKind.NONE:
         return brief
-    if kind != BriefErrorKind.TRUNCATED:
+    if kind not in (BriefErrorKind.TRUNCATED, BriefErrorKind.EMPTY):
         return None
 
-    retry_tokens = base_max_output_tokens * 2
+    # Only TRUNCATED needs more room; EMPTY was not a token-exhaustion, so a
+    # fresh greedy call at the base cap is the right recovery.
+    retry_tokens = (
+        base_max_output_tokens * 2 if kind == BriefErrorKind.TRUNCATED else base_max_output_tokens
+    )
     logger.info(
-        "brief retry for %s: max_output_tokens %d -> %d, temperature=%.1f",
+        "brief retry for %s (kind=%s): max_output_tokens %d -> %d, temperature=%.1f",
         facts.get("ticker"),
+        kind.value,
         base_max_output_tokens,
         retry_tokens,
         _RETRY_TEMPERATURE,
