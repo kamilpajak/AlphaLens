@@ -278,6 +278,21 @@ def _records_for_date(
     return records, accessions_written, other_errors
 
 
+_SATURDAY = 5  # date.weekday() >= 5 is Sat/Sun — SEC files Mon-Fri, no daily index
+
+# S3 returns this code for a missing archive key. The SEC daily index simply does
+# not exist for a non-trading day (market holiday) or for today before it is
+# published, so its 403 is benign — NOT a transient SEC failure. A real throttle
+# carries "Request Rate Threshold" and a UA-reject a different body, so neither
+# matches this marker and both still count as transient.
+_MISSING_KEY_403_MARKER = "AccessDenied"
+
+
+def _is_missing_daily_index(exc: SecForbiddenError) -> bool:
+    """True when a daily-index 403 means the file does not exist (vs a throttle)."""
+    return _MISSING_KEY_403_MARKER in str(exc)
+
+
 def fetch_form4_records_for_window(
     client: SecEdgarClient | None,
     *,
@@ -314,9 +329,20 @@ def fetch_form4_records_for_window(
     wrote_any = False
 
     for d in _iter_window_dates(start_date, end_date):
+        if d.weekday() >= _SATURDAY:
+            continue  # weekend — no SEC filings, no daily index to fetch
         try:
             rows = _fetch_index_rows_for_date(sec, date=d)
         except SecForbiddenError as exc:
+            if _is_missing_daily_index(exc):
+                # No daily index for this date (a market holiday, or today before
+                # SEC publishes it). The file does not exist — benign, NOT a
+                # transient SEC failure. Counting it would keep transient_errors
+                # > 0 on every window that spans a non-trading day and false-fire
+                # the sustained-error alert. A real throttle/UA-reject carries a
+                # different body and still counts below.
+                logger.info("form4-incremental: no daily index for %s (non-trading/unpublished)", d)
+                continue
             transient_errors += 1
             logger.warning("form4-incremental daily-index 403 for %s: %s", d, exc)
             continue
