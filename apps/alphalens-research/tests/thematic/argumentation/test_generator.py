@@ -298,6 +298,10 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
         self.assertIsNotNone(brief)
         self.assertEqual(len(captured), 2)
         self.assertEqual(captured[1]["temp"], 0.0)
+        # EMPTY is NOT a truncation, so the retry keeps the BASE token cap
+        # (only TRUNCATED doubles it). Pin the branch so a future edit can't
+        # silently start doubling tokens on an empty response.
+        self.assertEqual(captured[1]["max"], 2000)
 
     def test_two_empty_responses_give_up(self):
         # Exactly ONE retry — a persistent empty response degrades to None.
