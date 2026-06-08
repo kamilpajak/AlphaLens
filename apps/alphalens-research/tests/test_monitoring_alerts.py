@@ -814,6 +814,13 @@ class TestEdgarNoCandidatesWeekendTolerance(unittest.TestCase):
         self.assertIn(f"max_over_time({self.METRIC}[{self.WINDOW}])", expr)
         self.assertNotIn("[24h]", expr)
         self.assertNotIn("[1d]", expr)
+        # Anchor the WHOLE expression (zen LOW, PR #489) so a second window
+        # can't be concatenated in unnoticed — the rule is exactly this one
+        # aggregation compared to zero, nothing more.
+        self.assertRegex(
+            expr.strip(),
+            rf"^max_over_time\({re.escape(self.METRIC)}\[{re.escape(self.WINDOW)}\]\)\s*==\s*0$",
+        )
 
     def test_has_for_debounce(self) -> None:
         # 6h debounce for parity with the sibling dark rules
