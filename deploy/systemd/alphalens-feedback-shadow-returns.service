@@ -25,7 +25,7 @@
 # Persistence (survives logout) — once, as the user:
 #   sudo loginctl enable-linger "$USER"
 Description=AlphaLens nightly broker-free ladder + population-monitor backfill
-After=network-online.target
+After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]

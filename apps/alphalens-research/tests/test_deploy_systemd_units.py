@@ -760,6 +760,19 @@ class TestShadowReturnsUnit(unittest.TestCase):
             "missing POLYGON_API_KEY rather than silently pricing nothing).",
         )
 
+    def test_service_orders_after_docker_for_compose_post(self) -> None:
+        # The rebuild-ladder-outcomes ExecStartPost runs `docker compose`, so
+        # the unit must order After=docker.service (matching thematic-build).
+        # Without it, a freshly-booted VPS could fire the timer before dockerd
+        # is ready, the compose call fails, and the whole unit is marked failed
+        # until the next nightly run (~24h). (zen MEDIUM, PR #493.)
+        self.assertRegex(
+            SHADOW_SERVICE.read_text(),
+            re.compile(r"^After=.*\bdocker\.service\b.*$", re.MULTILINE),
+            "Unit runs `docker compose` in ExecStartPost — must order "
+            "After=docker.service so the daemon is ready.",
+        )
+
     def test_service_rebuilds_ladder_outcomes_post_run(self) -> None:
         # The population-ladder parquet is (re)written ONLY by this nightly
         # recompute, so the edge Postgres mirror (the maintenance
