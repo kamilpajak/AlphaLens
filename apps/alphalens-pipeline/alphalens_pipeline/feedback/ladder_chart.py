@@ -58,8 +58,11 @@ from alphalens_pipeline.feedback.ladder_replay import (
 )
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
+    advance_trading_sessions,
+    previous_trading_day,
     session_on_or_after,
     session_open_utc,
+    trading_days_elapsed,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,6 +83,22 @@ _MARKER_TIME_STOP = "TIME_STOP"
 # default reads the per-(ticker, arrival) bar cache the population monitor writes;
 # test stubs inject synthetic bars.
 ChartBarFetch = Callable[[str, dt.date], Sequence[Mapping[str, Any]]]
+
+# A (ticker, start, end) -> list of Polygon DAILY aggregate bars (same OHLCV dict
+# shape as the minute bars). Used ONLY for the CONTEXT WINDOW around the trade
+# (lead-in before arrival, trailing after the horizon) — the in-trade sessions
+# keep the minute-fold path. Mirrors ``benchmark_excess.BarFetch``.
+DailyBarFetch = Callable[[str, dt.datetime, dt.datetime], Sequence[Mapping[str, Any]]]
+
+# Context-window geometry (design review). The lead-in (sessions BEFORE arrival)
+# is ``min(LEAD_IN_CAP, max(LEAD_IN_FLOOR, 2 x hold_sessions))`` so a young
+# position is not "a handful of lonely candles" yet a long hold does not drag in
+# an unbounded history; the trailing window (sessions AFTER the exit / horizon) is
+# a fixed ``TRAILING_SESSIONS`` for a closed trade and "whatever exists" for an
+# open one (no synthetic future bars).
+LEAD_IN_FLOOR = 20
+LEAD_IN_CAP = 90
+TRAILING_SESSIONS = 15
 
 
 def _empty_price_lines() -> dict[str, Any]:
@@ -136,11 +155,6 @@ def _rth_session_windows(
     aggregation). Close is the RTH close (honours half-days). ``close_ms`` is
     inclusive.
     """
-    from alphalens_pipeline.paper.calendar import (
-        advance_trading_sessions,
-        trading_days_elapsed,
-    )
-
     if horizon_session < arrival_session:
         return []
     n_sessions = trading_days_elapsed(arrival_session, horizon_session, exchange)
@@ -302,6 +316,140 @@ def _price_lines(setup: Mapping[str, Any] | None) -> dict[str, Any]:
     return {"entry": entry, "tp": tp, "stop": parsed.disaster_stop}
 
 
+def _lead_in_sessions(arrival_session: dt.date, hold_sessions: int) -> int:
+    """Number of pre-arrival context sessions: ``min(CAP, max(FLOOR, 2 x hold))``."""
+    return min(LEAD_IN_CAP, max(LEAD_IN_FLOOR, 2 * max(0, hold_sessions)))
+
+
+def _retreat_sessions(session: dt.date, n: int, exchange: str) -> dt.date:
+    """The session ``n`` sessions strictly before ``session`` (walks the calendar).
+
+    There is no public "advance backward by N" helper, so this steps back one
+    session at a time via :func:`previous_trading_day` (each call returns the
+    session strictly before its argument). ``n == 0`` returns ``session``.
+    """
+    cursor = session
+    for _ in range(max(0, n)):
+        cursor = previous_trading_day(cursor, exchange)
+    return cursor
+
+
+def _daily_bars_from_context(
+    raw_bars: Sequence[Mapping[str, Any]],
+    *,
+    keep_sessions: set[dt.date],
+    exchange: str,
+) -> list[dict[str, Any]]:
+    """Fold fetched Polygon DAILY aggregates into one candle per kept session.
+
+    Each daily aggregate's ``t`` (epoch-ms, session start) is mapped to the
+    session on-or-after its UTC date; a bar whose session is not in
+    ``keep_sessions`` (outside the lead-in / trailing span) or whose OHLC is
+    non-finite is dropped. At most one candle per session (the last one wins on
+    the rare duplicate). These bars carry NO markers — pure visual structure.
+    """
+    by_session: dict[dt.date, dict[str, Any]] = {}
+    for bar in sorted(raw_bars, key=lambda b: int(b["t"])):
+        if not _has_finite_ohlc(bar):
+            continue
+        bar_date = dt.datetime.fromtimestamp(int(bar["t"]) / 1000, dt.UTC).date()
+        session = session_on_or_after(bar_date, exchange)
+        if session not in keep_sessions:
+            continue
+        by_session[session] = {
+            "time": session.isoformat(),
+            "open": float(bar["o"]),
+            "high": float(bar["h"]),
+            "low": float(bar["l"]),
+            "close": float(bar["c"]),
+            "volume": _finite_or_zero(bar.get("v")),
+        }
+    return [by_session[s] for s in sorted(by_session)]
+
+
+def _context_bars(
+    ticker: str,
+    daily_bar_fetch: DailyBarFetch,
+    *,
+    arrival_session: dt.date,
+    horizon_session: dt.date,
+    hold_sessions: int,
+    exchange: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """``(lead_in_bars, trailing_bars)`` daily context candles around the trade.
+
+    Session counts → a single generous CALENDAR date range for one Polygon daily
+    fetch (sessions ≠ calendar days, so the range is widened: lead-in walks the
+    calendar back ``lead_in`` sessions, trailing walks forward ``TRAILING_SESSIONS``
+    sessions, then the fetched bars are filtered back to exactly the kept sessions
+    — Polygon daily aggregates are already session-only, no weekend/holiday
+    phantoms). A fetch that raises or returns empty degrades to no context
+    (``([], [])``) so the caller falls back to the in-trade bars only.
+    """
+    lead_in = _lead_in_sessions(arrival_session, hold_sessions)
+    oldest_lead_in = _retreat_sessions(arrival_session, lead_in, exchange)
+    newest_trailing = advance_trading_sessions(horizon_session, TRAILING_SESSIONS, exchange)
+
+    # The set of sessions we will KEEP as context: lead-in is strictly before
+    # arrival, trailing strictly after the horizon. The in-trade sessions
+    # (arrival..horizon) are intentionally NOT in either set — they keep their
+    # minute-fold candle and a context bar must never overwrite them.
+    lead_in_sessions = {
+        _retreat_sessions(arrival_session, i, exchange) for i in range(1, lead_in + 1)
+    }
+    trailing_sessions = {
+        advance_trading_sessions(horizon_session, i, exchange)
+        for i in range(1, TRAILING_SESSIONS + 1)
+    }
+    keep = lead_in_sessions | trailing_sessions
+
+    # One generous calendar range covers both ends in a single fetch. Pad the
+    # ends by a day so the boundary session's full bar is inside the window.
+    start = session_open_utc(oldest_lead_in, exchange) - dt.timedelta(days=1)
+    end = session_open_utc(newest_trailing, exchange) + dt.timedelta(days=1)
+
+    try:
+        raw = list(daily_bar_fetch(ticker, start, end))
+    except Exception as exc:
+        logger.warning(
+            "chart-payload: daily context fetch failed for %s [%s, %s] — %s; in-trade only.",
+            ticker,
+            oldest_lead_in.isoformat(),
+            newest_trailing.isoformat(),
+            exc,
+        )
+        return [], []
+    if not raw:
+        return [], []
+
+    folded = _daily_bars_from_context(raw, keep_sessions=keep, exchange=exchange)
+    arrival_iso = arrival_session.isoformat()
+    horizon_iso = horizon_session.isoformat()
+    lead = [b for b in folded if b["time"] < arrival_iso]
+    trail = [b for b in folded if b["time"] > horizon_iso]
+    return lead, trail
+
+
+def _merge_bars(
+    lead_in: Sequence[Mapping[str, Any]],
+    in_trade: Sequence[Mapping[str, Any]],
+    trailing: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge context-pre + in-trade + context-post into one date-ordered list.
+
+    Dedup by ``time``: the in-trade (minute-fold) bar WINS on any overlap so a
+    context daily bar can never overwrite an in-trade session's minute union.
+    """
+    by_time: dict[str, dict[str, Any]] = {}
+    for bar in lead_in:
+        by_time[bar["time"]] = dict(bar)
+    for bar in trailing:
+        by_time[bar["time"]] = dict(bar)
+    for bar in in_trade:  # in-trade wins on overlap
+        by_time[bar["time"]] = dict(bar)
+    return [by_time[t] for t in sorted(by_time)]
+
+
 def build_chart_payload(
     setup: Mapping[str, Any] | None,
     bars: Sequence[Mapping[str, Any]],
@@ -310,6 +458,8 @@ def build_chart_payload(
     arrival_session: dt.date,
     horizon_session: dt.date,
     exchange: str = DEFAULT_EXCHANGE,
+    ticker: str = "",
+    daily_bar_fetch: DailyBarFetch | None = None,
 ) -> dict[str, Any]:
     """Build the chart payload for one (brief_date, ticker).
 
@@ -324,6 +474,14 @@ def build_chart_payload(
       pre-post-market / outside the session span).
     * ``OK`` otherwise: daily candles + price lines + markers, all aligned so every
       marker time is an emitted daily bar time.
+
+    Context window (option A): the in-trade sessions (arrival..horizon) keep the
+    minute-fold path so a daily high/low stays the union of its minute high/low.
+    When ``daily_bar_fetch`` is supplied, a lead-in (before arrival) + trailing
+    (after horizon) band of DAILY aggregates is fetched and merged around the
+    in-trade candles for readable market structure. Context bars carry NO markers
+    and the in-trade bar wins on any date overlap. A failed / empty context fetch
+    degrades silently to the in-trade bars only.
     """
     parsed = parse_ladder(setup)
     if not parsed.ok:
@@ -336,14 +494,29 @@ def build_chart_payload(
 
     # Restrict the marker mapping to the windows that actually produced a daily bar
     # so a crossing on a session with no emitted candle is dropped (not just one
-    # outside the calendar span).
+    # outside the calendar span). Markers map to in-trade session dates, which the
+    # context merge preserves, so the "every marker time lands on an existing bar"
+    # invariant is unaffected by the context bars.
     emitted_dates = {b["time"] for b in daily}
     emitted_windows = [w for w in session_windows if w[0].isoformat() in emitted_dates]
     markers = _markers_from_sequence(outcome, emitted_windows)
 
+    bars_out = daily
+    if daily_bar_fetch is not None:
+        hold_sessions = trading_days_elapsed(arrival_session, horizon_session, exchange)
+        lead_in, trailing = _context_bars(
+            ticker,
+            daily_bar_fetch,
+            arrival_session=arrival_session,
+            horizon_session=horizon_session,
+            hold_sessions=hold_sessions,
+            exchange=exchange,
+        )
+        bars_out = _merge_bars(lead_in, daily, trailing)
+
     return {
         "status": "OK",
-        "bars": daily,
+        "bars": bars_out,
         "price_lines": _price_lines(setup),
         "markers": markers,
         "ambiguous_bars": int(outcome.ambiguous_bars),
@@ -365,11 +538,28 @@ def _default_bar_fetch(ticker: str, arrival_session: dt.date) -> Sequence[Mappin
     return _read_cached_bars(store_dir, ticker, arrival_session)
 
 
+def _default_daily_bar_fetch(
+    ticker: str, start: dt.datetime, end: dt.datetime
+) -> Sequence[Mapping[str, Any]]:
+    """Production daily-context source: the canonical Polygon client.
+
+    Pulls DAILY aggregates over the context calendar range; same bar dict shape as
+    the minute bars (``t``/``o``/``h``/``l``/``c``/``v``). Mirrors
+    ``benchmark_excess._default_bar_fetch`` but with ``timespan="day"``.
+    """
+    from alphalens_pipeline.data.alt_data.polygon_client import get_default_polygon_client
+
+    return get_default_polygon_client().get_agg_range(
+        ticker=ticker, start=start, end=end, timespan="day"
+    )
+
+
 def enrich_store_with_chart_payloads(
     store_dir: Path | str,
     briefs_dir: Path | str,
     *,
     bar_fetch: ChartBarFetch | None = None,
+    daily_bar_fetch: DailyBarFetch | None = None,
     exchange: str = DEFAULT_EXCHANGE,
 ) -> int:
     """Add / refresh the ``chart_payload_json`` column on every store parquet.
@@ -389,6 +579,7 @@ def enrich_store_with_chart_payloads(
     if not store.exists():
         return 0
     fetch = bar_fetch or _default_bar_fetch
+    daily_fetch = daily_bar_fetch or _default_daily_bar_fetch
 
     n_with_chart = 0
     setups_by_date: dict[dt.date, dict[str, dict] | None] = {}
@@ -407,6 +598,7 @@ def enrich_store_with_chart_payloads(
             payload = _payload_for_row(
                 dict(row),
                 fetch=fetch,
+                daily_fetch=daily_fetch,
                 exchange=exchange,
                 setups_by_date=setups_by_date,
                 briefs_dir=briefs,
@@ -425,6 +617,7 @@ def _payload_for_row(
     row: Mapping[str, Any],
     *,
     fetch: ChartBarFetch,
+    daily_fetch: DailyBarFetch,
     exchange: str,
     setups_by_date: dict[dt.date, dict[str, dict] | None],
     briefs_dir: Path,
@@ -457,6 +650,8 @@ def _payload_for_row(
             arrival_session=arrival_session,
             horizon_session=horizon_session,
             exchange=exchange,
+            ticker=ticker,
+            daily_bar_fetch=daily_fetch,
         )
     except Exception:
         logger.exception(
@@ -549,6 +744,9 @@ def _write_atomic(path: Path, df: pd.DataFrame) -> None:
 
 __all__ = [
     "CHART_PAYLOAD_COLUMN",
+    "LEAD_IN_CAP",
+    "LEAD_IN_FLOOR",
+    "TRAILING_SESSIONS",
     "build_chart_payload",
     "enrich_store_with_chart_payloads",
 ]
