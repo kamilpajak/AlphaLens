@@ -28,6 +28,7 @@ from alphalens_pipeline.feedback.ladder_chart import (
     LEAD_IN_CAP,
     LEAD_IN_FLOOR,
     TRAILING_SESSIONS,
+    _horizon_session,
     build_chart_payload,
     enrich_store_with_chart_payloads,
 )
@@ -262,6 +263,10 @@ class TestContextWindow(unittest.TestCase):
         # In-trade alone is 2 sessions; lead-in adds >= LEAD_IN_FLOOR sessions.
         self.assertGreaterEqual(len(bars), 2 + LEAD_IN_FLOOR)
         self.assertLess(bars[0]["time"], _ARRIVAL.isoformat())  # first bar before arrival
+        # The FIRST emitted lead-in bar is the boundary (oldest kept) session — a
+        # date-based fetch window must not drop the boundary daily bar (Fix 2).
+        expected_oldest = _sessions_before(_ARRIVAL, LEAD_IN_FLOOR)[0]
+        self.assertEqual(bars[0]["time"], expected_oldest.isoformat())
 
     def test_short_hold_gets_minimum_20_session_lead_in(self) -> None:
         """A ~2-session hold floors the lead-in at LEAD_IN_FLOOR (20) sessions, so
@@ -459,6 +464,13 @@ class TestContextWindow(unittest.TestCase):
         self.assertEqual(len(trailing), 2)  # only the supplied ones, never padded
 
 
+class TestHorizonSession(unittest.TestCase):
+    def test_horizon_session_empty_bars_falls_back_to_arrival(self) -> None:
+        """``_horizon_session`` over an empty bar list returns the arrival session
+        (defensive fallback — no ``max()`` over an empty sequence)."""
+        self.assertEqual(_horizon_session(_ARRIVAL, [], _EXCHANGE), _ARRIVAL)
+
+
 def _write_store_row(store_dir: Path, brief_date: dt.date, ticker: str) -> None:
     store_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([{"brief_date": brief_date, "ticker": ticker, "forward_return": 0.05}]).to_parquet(
@@ -610,6 +622,109 @@ class TestEnrichStoreWithChartPayloads(unittest.TestCase):
             self.assertEqual(payload["status"], "OK")
             times = [b["time"] for b in payload["bars"]]
             self.assertTrue(all(t >= _ARRIVAL.isoformat() for t in times))  # no context survived
+
+    def test_enrich_caches_daily_fetch_per_ticker_window(self) -> None:
+        """Two store rows with the SAME ticker + arrival/horizon share ONE daily
+        context fetch (per-run memo cache); two DIFFERENT tickers fetch twice."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir = root / "population_ladders"
+            briefs_dir = root / "briefs"
+            brief_date = _ARRIVAL
+
+            # Two store rows for the SAME ticker on the same date (e.g. surfaced
+            # under two themes) -> one (ticker, start, end) Polygon call, not two.
+            store_dir.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(
+                [
+                    {"brief_date": brief_date, "ticker": "NVDA", "forward_return": 0.05},
+                    {"brief_date": brief_date, "ticker": "NVDA", "forward_return": 0.07},
+                ]
+            ).to_parquet(store_dir / f"{brief_date.isoformat()}.parquet")
+            _write_brief(briefs_dir, brief_date, "NVDA", _OK_SETUP)
+
+            minute_bars = {
+                ("NVDA", _ARRIVAL): [
+                    _bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.5),
+                    _bar(_session_open_ms(_NEXT_SESSION), o=105.0, h=111.0, low=104.0, c=110.5),
+                ]
+            }
+
+            def bar_fetch(ticker, arrival_session):
+                return minute_bars.get((ticker.upper(), arrival_session), [])
+
+            pre = _sessions_before(_ARRIVAL, 25)
+            calls: list[tuple] = []
+
+            def daily_fetch(ticker, start, end):
+                calls.append((ticker, start, end))
+                return [_daily_bar(s, o=40.0, h=41.0, low=39.0, c=40.5) for s in pre]
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=daily_fetch,
+                exchange=_EXCHANGE,
+            )
+            # Same ticker + identical (start, end) across both rows -> ONE fetch.
+            self.assertEqual(len(calls), 1)
+
+    def test_enrich_caches_daily_fetch_distinct_per_ticker(self) -> None:
+        """Two DIFFERENT tickers each get their own daily context fetch (cache is
+        keyed by (ticker, start, end), not shared across tickers)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir = root / "population_ladders"
+            briefs_dir = root / "briefs"
+            brief_date = _ARRIVAL
+
+            store_dir.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(
+                [
+                    {"brief_date": brief_date, "ticker": "NVDA", "forward_return": 0.05},
+                    {"brief_date": brief_date, "ticker": "AMD", "forward_return": 0.07},
+                ]
+            ).to_parquet(store_dir / f"{brief_date.isoformat()}.parquet")
+            briefs_dir.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(
+                [
+                    {
+                        "ticker": t,
+                        "theme": "ai",
+                        "verified": True,
+                        "brief_trade_setup": json.dumps(_OK_SETUP),
+                    }
+                    for t in ("NVDA", "AMD")
+                ]
+            ).to_parquet(briefs_dir / f"{brief_date.isoformat()}.parquet")
+
+            minute_bars = {
+                (t, _ARRIVAL): [
+                    _bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.5),
+                    _bar(_session_open_ms(_NEXT_SESSION), o=105.0, h=111.0, low=104.0, c=110.5),
+                ]
+                for t in ("NVDA", "AMD")
+            }
+
+            def bar_fetch(ticker, arrival_session):
+                return minute_bars.get((ticker.upper(), arrival_session), [])
+
+            pre = _sessions_before(_ARRIVAL, 25)
+            tickers_fetched: list[str] = []
+
+            def daily_fetch(ticker, start, end):
+                tickers_fetched.append(ticker)
+                return [_daily_bar(s, o=40.0, h=41.0, low=39.0, c=40.5) for s in pre]
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=daily_fetch,
+                exchange=_EXCHANGE,
+            )
+            self.assertEqual(sorted(tickers_fetched), ["AMD", "NVDA"])
 
 
 if __name__ == "__main__":

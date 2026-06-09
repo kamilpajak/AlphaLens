@@ -403,10 +403,15 @@ def _context_bars(
     }
     keep = lead_in_sessions | trailing_sessions
 
-    # One generous calendar range covers both ends in a single fetch. Pad the
-    # ends by a day so the boundary session's full bar is inside the window.
-    start = session_open_utc(oldest_lead_in, exchange) - dt.timedelta(days=1)
-    end = session_open_utc(newest_trailing, exchange) + dt.timedelta(days=1)
+    # One generous calendar range covers both ends in a single fetch. Build the
+    # bounds from the session DATE at midnight UTC (not the exchange-open instant,
+    # e.g. 13:30 UTC): Polygon daily bars may be keyed at 00:00 UTC, so a window
+    # starting at the open instant could drop the boundary session's daily bar.
+    # Pad the ends so the boundary session's bar is always inside the window; the
+    # keep-set filtering below still restricts the output to exactly the kept
+    # sessions, so this only widens/aligns the request range.
+    start = dt.datetime.combine(oldest_lead_in, dt.time.min, tzinfo=dt.UTC) - dt.timedelta(days=1)
+    end = dt.datetime.combine(newest_trailing, dt.time.min, tzinfo=dt.UTC) + dt.timedelta(days=2)
 
     try:
         raw = list(daily_bar_fetch(ticker, start, end))
@@ -580,6 +585,28 @@ def _default_daily_bar_fetch(
     )
 
 
+def _memoized_daily_fetch(daily_fetch: DailyBarFetch) -> DailyBarFetch:
+    """Wrap a daily-context fetch in a per-run memo keyed by ``(ticker, start, end)``.
+
+    The same ticker can surface under several themes on one date (several store
+    rows in one parquet), each asking ``build_chart_payload`` for the identical
+    ``(ticker, start, end)`` Polygon daily fetch. Sharing ONE call across those
+    rows saves quota and avoids 429s. Only SUCCESSFUL results are cached (an empty
+    list from a successful empty return IS cached); a raise is never memoized into
+    a poisoned empty, so the per-row graceful degradation (in-trade-only) is
+    preserved and a later transient recovery still re-fetches.
+    """
+    cache: dict[tuple[str, dt.datetime, dt.datetime], Sequence[Mapping[str, Any]]] = {}
+
+    def cached(ticker: str, start: dt.datetime, end: dt.datetime) -> Sequence[Mapping[str, Any]]:
+        key = (ticker, start, end)
+        if key not in cache:
+            cache[key] = daily_fetch(ticker, start, end)  # raise propagates, not cached
+        return cache[key]
+
+    return cached
+
+
 def enrich_store_with_chart_payloads(
     store_dir: Path | str,
     briefs_dir: Path | str,
@@ -605,7 +632,7 @@ def enrich_store_with_chart_payloads(
     if not store.exists():
         return 0
     fetch = bar_fetch or _default_bar_fetch
-    daily_fetch = daily_bar_fetch or _default_daily_bar_fetch
+    daily_fetch = _memoized_daily_fetch(daily_bar_fetch or _default_daily_bar_fetch)
 
     n_with_chart = 0
     setups_by_date: dict[dt.date, dict[str, dict] | None] = {}
@@ -699,7 +726,13 @@ def _horizon_session(
     The newest bar's calendar date is rolled to the session on-or-after it. The
     session-window walk + RTH filter then drop any session past the data, so an
     over-shoot is harmless; the only guard needed is "never before arrival".
+
+    Defensive: ``bars`` empty -> the arrival session (a zero-length window the
+    callers already handle as NO_DATA / plan-preview). Callers guard this today,
+    but the empty fallback keeps the helper from raising on ``max()`` over [].
     """
+    if not bars:
+        return arrival_session
     last_ts = max(int(b["t"]) for b in bars)
     last_dt = dt.datetime.fromtimestamp(last_ts / 1000, dt.UTC).date()
     horizon = session_on_or_after(last_dt, exchange)
