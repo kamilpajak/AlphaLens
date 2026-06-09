@@ -1,11 +1,13 @@
 <script lang="ts">
 	import type { PageData } from './$types';
-	import type { EdgeOutcome } from '$lib/types';
-	import { AlertTriangle, Clock, Lock } from 'lucide-svelte';
+	import type { ChartPayload, EdgeOutcome } from '$lib/types';
+	import { AlertTriangle, ChevronRight, Clock, Lock } from 'lucide-svelte';
 	import JargonTip from '$lib/components/JargonTip.svelte';
 	import ChipTip from '$lib/components/ChipTip.svelte';
+	import LadderChart from '$lib/components/LadderChart.svelte';
 	import LadderStatusLegend from '$lib/components/LadderStatusLegend.svelte';
 	import { isPendingStatus, ladderStatusBody, ladderStatusLabel } from '$lib/data/ladderStatus';
+	import { getEdgeChart } from '$lib/api';
 	import { fmtNum } from '$lib/format';
 	import {
 		classificationTone,
@@ -18,6 +20,42 @@
 	} from '$lib/edge';
 
 	let { data }: { data: PageData } = $props();
+
+	// Inline-accordion state for the outcomes table. Each row can expand below
+	// itself into a full-width ladder-replay chart. Multiple rows may be open
+	// at once (the design calls for in-place expansion, not a modal/drawer).
+	//
+	// `rowKey` is the compound key already used to key the {#each} loop, so the
+	// expand set and the chart cache stay aligned across re-renders / filter
+	// toggles. The chart payload is fetched lazily on first expand and cached
+	// per row — collapsing then re-expanding does not refetch.
+	const rowKey = (o: EdgeOutcome) => `${o.brief_date}::${o.ticker}`;
+
+	type ChartState = { loading: boolean; payload: ChartPayload | null; error: boolean };
+
+	let expanded = $state<Set<string>>(new Set());
+	let chartCache = $state<Record<string, ChartState>>({});
+
+	async function toggleRow(o: EdgeOutcome) {
+		const key = rowKey(o);
+		const next = new Set(expanded);
+		if (next.has(key)) {
+			next.delete(key);
+			expanded = next;
+			return;
+		}
+		next.add(key);
+		expanded = next;
+
+		// Lazy-load on first expand only; reuse the cache afterwards.
+		if (chartCache[key]) return;
+		chartCache = { ...chartCache, [key]: { loading: true, payload: null, error: false } };
+		const payload = await getEdgeChart(o.brief_date, o.ticker, fetch);
+		chartCache = {
+			...chartCache,
+			[key]: { loading: false, payload, error: payload === null }
+		};
+	}
 
 	const summary = $derived(data.summary);
 	const hasSummary = $derived(summary !== null);
@@ -396,6 +434,7 @@
 						<tr
 							class="text-[10px] uppercase tracking-widest text-fg-muted text-left border-b border-grid"
 						>
+							<th class="py-2 pr-1 w-4" aria-label="expand"></th>
 							<th class="py-2 pr-3">ticker</th>
 							<th class="py-2 pr-3">class</th>
 							<th class="py-2 pr-3">
@@ -428,10 +467,28 @@
 								rValue,
 								o.terminal ? EXCESS_RETURN_BAR_DOMAIN : 1.0
 							)}
-							<tr class="border-b border-grid hover:bg-bg-2 group">
+							{@const key = rowKey(o)}
+							{@const isOpen = expanded.has(key)}
+							{@const chart = chartCache[key]}
+							<tr
+								class="border-b border-grid hover:bg-bg-2 group cursor-pointer"
+								onclick={() => toggleRow(o)}
+								aria-expanded={isOpen}
+							>
+								<td class="py-2.5 pr-1 align-middle">
+									<ChevronRight
+										class="size-3.5 text-fg-muted group-hover:text-amber transition-transform {isOpen
+											? 'rotate-90'
+											: ''}"
+										aria-hidden="true"
+									/>
+								</td>
 								<td class="py-2.5 pr-3">
+									<!-- Stop click propagation so the ticker link navigates to the
+									     brief instead of toggling the row. -->
 									<a
 										href="/brief/{o.brief_date}"
+										onclick={(e) => e.stopPropagation()}
 										class="font-display font-bold text-base text-fg group-hover:text-amber transition-colors whitespace-nowrap"
 									>
 										{o.ticker}
@@ -504,6 +561,38 @@
 									{o.theme ?? '—'}
 								</td>
 							</tr>
+							{#if isOpen}
+								<!-- Inline-accordion detail row: full-width ladder-replay chart,
+								     lazy-mounted on first expand. -->
+								<tr class="border-b border-grid bg-bg-2/40">
+									<td colspan="7" class="px-2 sm:px-4 py-4">
+										<div class="border border-grid bg-bg-1 px-4 sm:px-5 py-4">
+											{#if !chart || chart.loading}
+												<div class="text-[10px] uppercase tracking-widest text-fg-muted py-6 text-center">
+													loading chart…
+												</div>
+											{:else if chart.error || chart.payload === null}
+												<div
+													class="border border-dashed border-grid-strong px-3 py-4 text-[11px]"
+												>
+													<div class="text-fg-muted uppercase tracking-widest mb-1">
+														chart unavailable
+													</div>
+													<p class="text-fg-dim leading-relaxed">
+														Could not load the ladder replay for
+														<span class="whitespace-nowrap">{o.ticker}</span>
+														on
+														<span class="whitespace-nowrap">{o.brief_date}</span>. The edge API
+														may be offline or the window not yet recomputed.
+													</p>
+												</div>
+											{:else}
+												<LadderChart payload={chart.payload} />
+											{/if}
+										</div>
+									</td>
+								</tr>
+							{/if}
 						{/each}
 					</tbody>
 				</table>
