@@ -158,6 +158,13 @@ class ChartResponseSerializer(serializers.Serializer):
     brief_date = serializers.DateField()
     ticker = serializers.CharField()
     ladder_classification = serializers.CharField(allow_blank=True)
+    # Lifecycle fields so the SPA can style Open vs Closed + a "Day N" label
+    # without a 2nd request. ``terminal`` is the closed/ongoing flag; the rest are
+    # null while a position is still open (or has no fill).
+    terminal = serializers.BooleanField()
+    holding_days_elapsed = serializers.IntegerField(allow_null=True)
+    open_r = serializers.FloatField(allow_null=True)
+    realized_r = serializers.FloatField(allow_null=True)
     status = serializers.ChoiceField(choices=["OK", "NO_DATA", "NO_STRUCTURE"])
     bars = ChartBarSerializer(many=True)
     price_lines = ChartPriceLinesSerializer()
