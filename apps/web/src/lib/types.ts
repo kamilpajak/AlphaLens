@@ -253,3 +253,64 @@ export interface EdgeOutcome {
 	holding_days_elapsed: number | null;
 	realized_return_pct_of_book: number | null;
 }
+
+/** A single daily OHLCV bar for the ladder chart (GET /v1/edge/chart/...).
+ *  `time` is a `YYYY-MM-DD` string — Lightweight Charts' daily/business-day
+ *  format, which auto-collapses non-trading gaps on the time scale. */
+export interface ChartBar {
+	time: string;
+	open: number;
+	high: number;
+	low: number;
+	close: number;
+	volume: number;
+}
+
+/** Horizontal price levels drawn as dashed price lines. `entry`/`stop` are
+ *  nullable (an absent disaster stop or unfilled blended entry); `tp` is the
+ *  ordered list of take-profit targets (tp1, tp2, ...). */
+export interface ChartPriceLines {
+	entry: number | null;
+	tp: number[];
+	stop: number | null;
+}
+
+/** A modeled fill/exit marker. `kind` is the closed event set the replay
+ *  emits; `level_id` ties a marker back to its tier/tranche (e.g. "tp1").
+ *  `ambiguous` flags a bar that touched both TP and SL (resolved SL-first). */
+export interface ChartMarker {
+	time: string;
+	kind: 'ENTRY' | 'TP' | 'SL' | 'TIME_STOP';
+	level_id: string | null;
+	price: number;
+	label: string;
+	ambiguous: boolean;
+}
+
+/** Payload for GET /v1/edge/chart/<brief_date>/<ticker>.
+ *  `status` gates rendering: OK draws the chart; NO_DATA / NO_STRUCTURE
+ *  render the dotted-border empty box instead. */
+export interface ChartPayload {
+	status: 'OK' | 'NO_DATA' | 'NO_STRUCTURE';
+	bars: ChartBar[];
+	price_lines: ChartPriceLines;
+	markers: ChartMarker[];
+	ambiguous_bars: number;
+	intrabar_rule: string | null;
+	rth_only: boolean;
+	ticker: string;
+	brief_date: string;
+	ladder_classification: string;
+	/**
+	 * Trade-lifecycle fields (PR-2). `terminal` is the closed-vs-live switch:
+	 * true → the ladder reached a terminal exit (TP-full / SL / time-stop),
+	 * false → still live (open) or never triggered (planned). `holding_days_elapsed`
+	 * is the calendar days from first fill (null when never filled). `open_r` is
+	 * the unrealized R-multiple of a live position (null on terminal / planned);
+	 * `realized_r` is the closed R-multiple (null until terminal).
+	 */
+	terminal: boolean;
+	holding_days_elapsed: number | null;
+	open_r: number | null;
+	realized_r: number | null;
+}

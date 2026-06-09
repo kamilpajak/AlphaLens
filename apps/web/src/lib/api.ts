@@ -97,3 +97,30 @@ export async function apiFetch(
 	}
 	return res;
 }
+
+/**
+ * Fetch the ladder-replay chart payload for one recommendation.
+ *
+ * Lazy-called from the /edge inline accordion (and later the brief toggle) on
+ * first expand — never in the page loader. Returns the parsed `ChartPayload`
+ * on success or `null` on any failure (offline, 401, 5xx, malformed body), so
+ * the caller can render the same dotted-border empty box it uses for the
+ * NO_DATA / NO_STRUCTURE states rather than throwing.
+ *
+ * `briefDate` and `ticker` are path segments; they are URL-encoded defensively
+ * even though both come from controlled ledger data.
+ */
+export async function getEdgeChart(
+	briefDate: string,
+	ticker: string,
+	fetcher: typeof fetch = fetch
+): Promise<import('./types').ChartPayload | null> {
+	const path = `/v1/edge/chart/${encodeURIComponent(briefDate)}/${encodeURIComponent(ticker)}`;
+	try {
+		const res = await apiFetch(path, {}, fetcher);
+		if (!res.ok) return null;
+		return (await res.json()) as import('./types').ChartPayload;
+	} catch {
+		return null;
+	}
+}
