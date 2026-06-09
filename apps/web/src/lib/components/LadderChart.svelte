@@ -43,6 +43,9 @@
 		payload: ChartPayload;
 	}
 	let { payload }: Props = $props();
+	// NOTE: the chart is snapshot-static after mount — it reads `payload` once in
+	// onMount and does NOT re-create on later payload prop changes. Fine for the
+	// current single-fetch usage (a row fetches its payload once when expanded).
 
 	// Terminal-aesthetic palette (mirrors app.css CSS variables — Lightweight
 	// Charts needs literal colour strings, it cannot read CSS custom props).
@@ -106,6 +109,9 @@
 	// Set true only if the band overlay degraded (coordinate mapping failed); a
 	// tiny footnote then notes the band was skipped without breaking the chart.
 	let shadeDegraded = $state(false);
+	// Set true if the dynamic `lightweight-charts` import (or chart creation)
+	// failed — a CDN/cache chunk-load miss must not become a silent blank chart.
+	let chartLibError = $state(false);
 
 	onMount(() => {
 		// Guard: never instantiate server-side or for the empty states.
@@ -118,6 +124,7 @@
 		let disposed = false;
 
 		(async () => {
+			try {
 			const lib = await import('lightweight-charts');
 			// The async import can resolve after the component is destroyed
 			// (fast expand → collapse); bail before touching the DOM.
@@ -293,8 +300,13 @@
 			if (lifecycle !== 'PLANNED' && shadeBand) {
 				rangeHandler = updateBand;
 				timeScale.subscribeVisibleTimeRangeChange(rangeHandler);
-				// Initial paint after fitContent has settled the scale.
-				updateBand();
+				// Defer the FIRST paint one frame: right after fitContent the time
+				// scale may not have applied yet, so timeToCoordinate() returns null
+				// and the band stays hidden until the next resize/range event. A RAF
+				// lets the scale settle first (guarded against disposal).
+				requestAnimationFrame(() => {
+					if (!disposed) updateBand();
+				});
 			}
 
 			resizeObserver = new ResizeObserver(() => {
@@ -304,6 +316,19 @@
 				}
 			});
 			resizeObserver.observe(chartContainer);
+			} catch (err) {
+				// A failed chunk-load (CDN/cache miss) or mid-create throw must not
+				// become an unhandled rejection + silent blank chart. Surface an
+				// honest empty-box state instead. Dispose any partially-created
+				// chart here; the onMount cleanup also guards (chart.remove is safe
+				// once, and we null the ref to avoid a double-remove).
+				console.error('LadderChart: failed to load lightweight-charts', err);
+				chartLibError = true;
+				if (chart) {
+					chart.remove();
+					chart = null;
+				}
+			}
 		})();
 
 		// Cleanup on destroy: stop observing + unsubscribe + dispose the canvas.
@@ -383,7 +408,17 @@
 		<Crosshair class="absolute -right-6 -top-6 size-40 text-grid opacity-40" />
 	</div>
 
-	{#if !hasStructure}
+	{#if chartLibError}
+		<!-- Chart library failed to load (CDN/cache chunk-load miss). Reuse the
+		     same dotted-border empty box so the failure is honest, not a silent
+		     blank canvas. -->
+		<div class="relative border border-dashed border-grid-strong px-3 py-4 text-[11px]">
+			<div class="text-fg-muted uppercase tracking-widest mb-1">chart unavailable</div>
+			<p class="text-fg-dim leading-relaxed">
+				The chart library could not be loaded, so the ladder cannot be drawn. Try reloading the page.
+			</p>
+		</div>
+	{:else if !hasStructure}
 		<!-- NO_STRUCTURE / NO_DATA: reuse the dotted-border empty box, no chart.
 		     This is now ONLY the genuine no-bars / no-structure case — the
 		     plan-preview (status OK, markers === []) renders the chart below. -->
