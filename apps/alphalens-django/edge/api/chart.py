@@ -133,7 +133,31 @@ class EdgeChartView(APIView):
             "intrabar_rule": payload.get("intrabar_rule", _INTRABAR_RULE),
             "rth_only": payload.get("rth_only", True),
         }
-        return Response(ChartResponseSerializer(body).data)
+        try:
+            return Response(ChartResponseSerializer(body).data)
+        except Exception:
+            # A pre-computed artifact should never surface a 400/500. If a stored
+            # payload is malformed (e.g. a corrupt bar that fails FloatField
+            # representation), degrade to a stable NO_DATA response in the same
+            # shape rather than leaking a serialization error to the client.
+            logger.exception(
+                "edge-chart: payload serialization failed for %s on %s; serving NO_DATA",
+                outcome.ticker,
+                parsed_date.isoformat(),
+            )
+            fallback = {
+                "brief_date": outcome.brief_date,
+                "ticker": outcome.ticker,
+                "ladder_classification": outcome.ladder_classification,
+                "status": "NO_DATA",
+                "bars": [],
+                "price_lines": {"entry": None, "tp": [], "stop": None},
+                "markers": [],
+                "ambiguous_bars": 0,
+                "intrabar_rule": _INTRABAR_RULE,
+                "rth_only": True,
+            }
+            return Response(ChartResponseSerializer(fallback).data)
 
 
 __all__ = ["EdgeChartView"]

@@ -131,6 +131,40 @@ def test_chart_endpoint_no_data_and_no_structure_shapes(tmp_path: Path) -> None:
 
 
 @pytest.mark.django_db
+def test_chart_endpoint_corrupt_payload_degrades_to_no_data(tmp_path: Path) -> None:
+    """A stored payload that fails serialisation (e.g. a bar with a non-numeric
+    OHLC value) must NOT surface a 400/500 — the endpoint degrades to a stable
+    NO_DATA response in the same shape (zen MEDIUM, PR #496)."""
+    corrupt = {
+        "status": "OK",
+        "bars": [
+            {
+                "time": "2026-05-01",
+                "open": 1.0,
+                "high": "not-a-number",  # breaks FloatField.to_representation
+                "low": 0.9,
+                "close": 1.0,
+                "volume": 1.0,
+            }
+        ],
+        "price_lines": {"entry": 1.0, "tp": [1.1], "stop": 0.9},
+        "markers": [],
+        "ambiguous_bars": 0,
+        "intrabar_rule": "sl_first",
+        "rth_only": True,
+    }
+    _write_and_ingest(tmp_path, [_row("CRUS", chart_payload_json=json.dumps(corrupt))])
+
+    resp = APIClient().get(f"/v1/edge/chart/{_BRIEF_DATE}/CRUS")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "NO_DATA"
+    assert body["bars"] == []
+    assert body["markers"] == []
+    assert body["ticker"] == "CRUS"  # outcome identity still populated
+
+
+@pytest.mark.django_db
 def test_chart_endpoint_404_on_missing_row_and_bad_date(tmp_path: Path) -> None:
     _write_and_ingest(tmp_path, [_row("CRUS", chart_payload_json=json.dumps(_OK_PAYLOAD))])
     client = APIClient()

@@ -42,6 +42,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import math
 import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -200,17 +201,46 @@ def _daily_bars_from_minute(
         minute_bars = by_session.get(session)
         if not minute_bars:
             continue
+        # Drop any minute bar with a missing or non-finite OHLC value: a single
+        # NaN/Inf tick would otherwise poison the daily open/high/low/close and
+        # the downstream JSON FloatField serialisation (a NaN is not valid JSON).
+        # A session left with no finite bar emits no candle — the same "a gap is
+        # honest, not a phantom flat bar" rule as a session with no bars at all.
+        finite_bars = [b for b in minute_bars if _has_finite_ohlc(b)]
+        if not finite_bars:
+            continue
         daily.append(
             {
                 "time": session.isoformat(),
-                "open": float(minute_bars[0]["o"]),
-                "high": max(float(b["h"]) for b in minute_bars),
-                "low": min(float(b["l"]) for b in minute_bars),
-                "close": float(minute_bars[-1]["c"]),
-                "volume": sum(float(b.get("v", 0.0)) for b in minute_bars),
+                "open": float(finite_bars[0]["o"]),
+                "high": max(float(b["h"]) for b in finite_bars),
+                "low": min(float(b["l"]) for b in finite_bars),
+                "close": float(finite_bars[-1]["c"]),
+                "volume": sum(_finite_or_zero(b.get("v")) for b in finite_bars),
             }
         )
     return daily
+
+
+def _has_finite_ohlc(bar: Mapping[str, Any]) -> bool:
+    """True when the bar's open/high/low/close are all present and finite.
+
+    A missing key (``KeyError``) or a non-numeric / NaN / Inf value makes the bar
+    unusable for a daily candle, so it is dropped rather than crashing the fold.
+    """
+    try:
+        return all(math.isfinite(float(bar[k])) for k in ("o", "h", "l", "c"))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _finite_or_zero(value: Any) -> float:
+    """Coerce a volume value to a finite float; NaN / Inf / missing become 0.0."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return v if math.isfinite(v) else 0.0
 
 
 def _marker_kind_and_label(level_id: str, kind: str) -> tuple[str, str]:

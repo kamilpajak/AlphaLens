@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -91,6 +92,32 @@ class TestBuildChartPayload(unittest.TestCase):
         self.assertEqual(candle["open"], 1.0)  # first minute's open
         self.assertEqual(candle["close"], 1.25)  # last minute's close
         self.assertEqual(candle["volume"], 350.0)  # sum
+
+    def test_daily_bars_drop_non_finite_minute_bars(self) -> None:
+        """A minute bar with a NaN/Inf OHLC value is dropped from the daily fold
+        (a NaN candle would fail JSON float serialisation downstream); a session
+        left with no finite bar emits no candle, just like a session with no bars
+        at all (zen MEDIUM, PR #496)."""
+        open_ms = _session_open_ms(_ARRIVAL)
+        next_open_ms = _session_open_ms(_NEXT_SESSION)
+        bars = [
+            # Arrival session: one good bar + one NaN-high bar -> the NaN one is
+            # dropped, the daily candle stays finite and reflects only the good bar.
+            _bar(open_ms, o=1.0, h=1.2, low=0.9, c=1.1, v=100.0),
+            _bar(open_ms + 60_000, o=1.1, h=float("nan"), low=0.85, c=1.25, v=250.0),
+            # Next session: every bar non-finite -> no candle emitted for it.
+            _bar(next_open_ms, o=float("inf"), h=float("inf"), low=0.5, c=0.6, v=10.0),
+        ]
+        payload = _payload(bars, replay_ladder(_OK_SETUP, bars))
+        daily = {b["time"]: b for b in payload["bars"]}
+        self.assertIn(_ARRIVAL.isoformat(), daily)
+        self.assertNotIn(_NEXT_SESSION.isoformat(), daily)  # all-non-finite session dropped
+        candle = daily[_ARRIVAL.isoformat()]
+        self.assertEqual(candle["high"], 1.2)  # NaN bar excluded
+        self.assertEqual(candle["close"], 1.1)  # last FINITE bar's close
+        self.assertEqual(candle["volume"], 100.0)  # NaN bar's volume not summed
+        for value in (candle["open"], candle["high"], candle["low"], candle["close"]):
+            self.assertTrue(math.isfinite(value))
 
     def test_every_marker_time_lands_on_an_existing_daily_bar(self) -> None:
         """A crossing whose bar_ts_ms maps to a session NOT in the emitted daily
