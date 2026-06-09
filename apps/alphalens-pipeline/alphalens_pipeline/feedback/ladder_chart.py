@@ -489,8 +489,45 @@ def build_chart_payload(
 
     session_windows = _rth_session_windows(arrival_session, horizon_session, exchange)
     daily = _daily_bars_from_minute(bars, session_windows)
+
+    # The daily CONTEXT bars (lead-in before arrival + trailing after the horizon)
+    # are computed regardless of whether the in-trade window produced any candle. A
+    # freshly-started OPEN position has no in-trade minute bars yet, but its PLAN
+    # (lead-in context candles + the entry/TP/stop price lines) must still render —
+    # never an empty "no data" box. When there ARE in-trade bars the hold spans
+    # arrival..horizon; with none yet the hold is 0 sessions so the LEAD_IN_FLOOR
+    # (20) still governs the lead-in.
+    lead_in: list[dict[str, Any]] = []
+    trailing: list[dict[str, Any]] = []
+    if daily_bar_fetch is not None:
+        hold_sessions = (
+            trading_days_elapsed(arrival_session, horizon_session, exchange) if daily else 0
+        )
+        lead_in, trailing = _context_bars(
+            ticker,
+            daily_bar_fetch,
+            arrival_session=arrival_session,
+            horizon_session=horizon_session,
+            hold_sessions=hold_sessions,
+            exchange=exchange,
+        )
+
     if not daily:
-        return _no_data_payload()
+        # In-trade window empty. Plan-preview the PLAN over the context bars when
+        # any exist; only a total absence of bars (no in-trade AND no context) is
+        # honest NO_DATA.
+        context_bars = _merge_bars(lead_in, [], trailing)
+        if not context_bars:
+            return _no_data_payload()
+        return {
+            "status": "OK",
+            "bars": context_bars,
+            "price_lines": _price_lines(setup),
+            "markers": [],  # no fills yet — a plan preview, not a replay
+            "ambiguous_bars": int(outcome.ambiguous_bars),
+            "intrabar_rule": TIE_BREAK_SL_FIRST,
+            "rth_only": True,
+        }
 
     # Restrict the marker mapping to the windows that actually produced a daily bar
     # so a crossing on a session with no emitted candle is dropped (not just one
@@ -501,18 +538,7 @@ def build_chart_payload(
     emitted_windows = [w for w in session_windows if w[0].isoformat() in emitted_dates]
     markers = _markers_from_sequence(outcome, emitted_windows)
 
-    bars_out = daily
-    if daily_bar_fetch is not None:
-        hold_sessions = trading_days_elapsed(arrival_session, horizon_session, exchange)
-        lead_in, trailing = _context_bars(
-            ticker,
-            daily_bar_fetch,
-            arrival_session=arrival_session,
-            horizon_session=horizon_session,
-            hold_sessions=hold_sessions,
-            exchange=exchange,
-        )
-        bars_out = _merge_bars(lead_in, daily, trailing)
+    bars_out = _merge_bars(lead_in, daily, trailing)
 
     return {
         "status": "OK",

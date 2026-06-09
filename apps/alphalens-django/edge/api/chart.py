@@ -114,7 +114,16 @@ class EdgeChartView(APIView):
         # CompositePrimaryKey(brief_date, ticker) -> filter().first(), not get().
         outcome = (
             LadderOutcome.objects.filter(brief_date=parsed_date, ticker=ticker.upper())
-            .only("brief_date", "ticker", "ladder_classification", "chart_payload_json")
+            .only(
+                "brief_date",
+                "ticker",
+                "ladder_classification",
+                "terminal",
+                "holding_days_elapsed",
+                "open_r",
+                "realized_r",
+                "chart_payload_json",
+            )
             .first()
         )
         if outcome is None:
@@ -125,6 +134,10 @@ class EdgeChartView(APIView):
             "brief_date": outcome.brief_date,
             "ticker": outcome.ticker,
             "ladder_classification": outcome.ladder_classification,
+            "terminal": outcome.terminal,
+            "holding_days_elapsed": outcome.holding_days_elapsed,
+            "open_r": outcome.open_r,
+            "realized_r": outcome.realized_r,
             "status": payload.get("status", "NO_DATA"),
             "bars": payload.get("bars", []),
             "price_lines": payload.get("price_lines", {"entry": None, "tp": [], "stop": None}),
@@ -149,6 +162,10 @@ class EdgeChartView(APIView):
                 "brief_date": outcome.brief_date,
                 "ticker": outcome.ticker,
                 "ladder_classification": outcome.ladder_classification,
+                "terminal": outcome.terminal,
+                "holding_days_elapsed": outcome.holding_days_elapsed,
+                "open_r": outcome.open_r,
+                "realized_r": outcome.realized_r,
                 "status": "NO_DATA",
                 "bars": [],
                 "price_lines": {"entry": None, "tp": [], "stop": None},

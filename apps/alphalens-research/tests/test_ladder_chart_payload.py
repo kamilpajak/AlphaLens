@@ -400,6 +400,45 @@ class TestContextWindow(unittest.TestCase):
         trailing = [b["time"] for b in payload["bars"] if b["time"] > _NEXT_SESSION.isoformat()]
         self.assertEqual(len(trailing), TRAILING_SESSIONS)  # 15, not 29
 
+    def test_plan_preview_when_no_in_trade_bars_but_context_exists(self) -> None:
+        """A freshly-started OPEN position with NO in-trade minute bars yet but a
+        lead-in band of daily context bars renders its PLAN (status OK, context
+        bars only, the entry/TP/stop price lines, NO markers — no fills yet)."""
+        pre = _sessions_before(_ARRIVAL, 25)
+
+        def daily_fetch(ticker, start, end):
+            return [_daily_bar(s, o=40.0, h=41.0, low=39.0, c=40.5) for s in pre]
+
+        payload = _payload(
+            [],  # no in-trade minute bars yet
+            replay_ladder(_OK_SETUP, []),
+            daily_bar_fetch=daily_fetch,
+        )
+        self.assertEqual(payload["status"], "OK")
+        bars = payload["bars"]
+        times = [b["time"] for b in bars]
+        self.assertEqual(times, sorted(times))  # date-ordered
+        # All bars are context (before arrival) — the floor (20) still applies.
+        self.assertGreaterEqual(len(bars), LEAD_IN_FLOOR)
+        self.assertTrue(all(t < _ARRIVAL.isoformat() for t in times))
+        # No fills yet -> no markers, but the plan IS drawn.
+        self.assertEqual(payload["markers"], [])
+        self.assertEqual(payload["price_lines"]["entry"], 100.0)
+        self.assertEqual(payload["price_lines"]["tp"], [110.0])
+        self.assertEqual(payload["price_lines"]["stop"], 95.0)
+
+    def test_no_data_when_no_in_trade_and_no_context(self) -> None:
+        """Empty in-trade bars AND an empty daily context fetch -> NO_DATA (no plan
+        preview without any bars to anchor it)."""
+
+        def daily_fetch(ticker, start, end):
+            return []
+
+        payload = _payload([], replay_ladder(_OK_SETUP, []), daily_bar_fetch=daily_fetch)
+        self.assertEqual(payload["status"], "NO_DATA")
+        self.assertEqual(payload["bars"], [])
+        self.assertEqual(payload["markers"], [])
+
     def test_open_trade_trailing_only_up_to_available(self) -> None:
         """An open trade emits trailing context only for sessions the fetch
         actually supplies (no synthetic future bars)."""

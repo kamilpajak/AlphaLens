@@ -70,13 +70,25 @@ _STRICT_REST_FRAMEWORK = {
 }
 
 
-def _row(ticker: str, *, chart_payload_json: str | None, classification="TP_FULL") -> dict:
+def _row(
+    ticker: str,
+    *,
+    chart_payload_json: str | None,
+    classification="TP_FULL",
+    terminal=True,
+    holding_days_elapsed=4,
+    open_r=None,
+    realized_r=1.5,
+) -> dict:
     row: dict = {
         "brief_date": dt.date.fromisoformat(_BRIEF_DATE),
         "ticker": ticker,
         "plannable": True,
-        "terminal": True,
+        "terminal": terminal,
         "ladder_classification": classification,
+        "holding_days_elapsed": holding_days_elapsed,
+        "open_r": open_r,
+        "realized_r": realized_r,
     }
     if chart_payload_json is not None:
         row["chart_payload_json"] = chart_payload_json
@@ -105,6 +117,36 @@ def test_chart_endpoint_returns_stored_payload_shape(tmp_path: Path) -> None:
     assert set(body["price_lines"]) == {"entry", "tp", "stop"}
     marker = body["markers"][0]
     assert set(marker) == {"time", "kind", "level_id", "price", "label", "ambiguous"}
+    # Lifecycle fields so the frontend can style Open vs Closed + "Day N".
+    assert body["terminal"] is True
+    assert body["holding_days_elapsed"] == 4
+    assert body["open_r"] is None
+    assert body["realized_r"] == 1.5
+
+
+@pytest.mark.django_db
+def test_chart_endpoint_open_position_lifecycle_fields(tmp_path: Path) -> None:
+    """An ONGOING (non-terminal) position carries terminal=False, a populated
+    open_r, a null realized_r, and a holding-day count for the "Day N" label."""
+    _write_and_ingest(
+        tmp_path,
+        [
+            _row(
+                "CRUS",
+                chart_payload_json=json.dumps(_OK_PAYLOAD),
+                classification="",
+                terminal=False,
+                holding_days_elapsed=2,
+                open_r=0.4,
+                realized_r=None,
+            )
+        ],
+    )
+    body = APIClient().get(f"/v1/edge/chart/{_BRIEF_DATE}/CRUS").json()
+    assert body["terminal"] is False
+    assert body["open_r"] == 0.4
+    assert body["realized_r"] is None
+    assert body["holding_days_elapsed"] == 2
 
 
 @pytest.mark.django_db
@@ -162,6 +204,11 @@ def test_chart_endpoint_corrupt_payload_degrades_to_no_data(tmp_path: Path) -> N
     assert body["bars"] == []
     assert body["markers"] == []
     assert body["ticker"] == "CRUS"  # outcome identity still populated
+    # Lifecycle fields survive the fallback path (terminal from the row).
+    assert body["terminal"] is True
+    assert "holding_days_elapsed" in body
+    assert "open_r" in body
+    assert "realized_r" in body
 
 
 @pytest.mark.django_db
