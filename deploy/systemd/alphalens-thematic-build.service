@@ -108,14 +108,14 @@ ExecStartPost=/usr/bin/docker compose \
     -f %h/AlphaLens/deploy/docker/django-prod/docker-compose.yaml \
     --profile maintenance run --rm rebuild-cache
 
-# Sync the population-ladder parquet (the market-behavior edge telemetry,
-# written + benchmark-enriched by the host-venv feedback-shadow-returns job at
-# 06:30 UTC) into the edge Postgres cache. Same maintenance one-shot as
-# rebuild-cache; idempotent, so running it on every thematic-build fire just
-# re-ingests the current parquet (freshest after the nightly host enrich).
-ExecStartPost=/usr/bin/docker compose \
-    -f %h/AlphaLens/deploy/docker/django-prod/docker-compose.yaml \
-    --profile maintenance run --rm rebuild-ladder-outcomes
+# NOTE: the population-ladder edge mirror (``rebuild-ladder-outcomes``) used to
+# live here too, but it was MOVED to alphalens-feedback-shadow-returns.service
+# (ExecStartPost). That nightly job is the SOLE writer of the population-ladder
+# parquet; mirroring it from thematic-build re-synced unchanged data 5× per day
+# AND left the edge dashboard up to one slot (~2h) behind the recompute — the
+# recompute lands at 06:30 UTC, after the morning thematic-build slot, so the
+# mirror waited for the next slot. The briefs cache (``rebuild-cache`` above)
+# stays here because the thematic pipeline IS its writer.
 
 # Prometheus textfile metrics (see alphalens-edgar-detect.service for
 # the pattern). Runs unconditionally so a failed pipeline run or

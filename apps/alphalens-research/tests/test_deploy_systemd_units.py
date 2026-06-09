@@ -217,6 +217,24 @@ class TestSystemdUnits(unittest.TestCase):
             "the daily pipeline run.",
         )
 
+    def test_thematic_build_no_longer_rebuilds_ladder_outcomes(self):
+        # rebuild-ladder-outcomes MOVED to the shadow-returns ExecStartPost —
+        # the only job that (re)writes the population-ladder parquet. Leaving
+        # it here too re-synced unchanged data 5× per day AND was the source of
+        # the up-to-one-slot (~2h) dashboard lag behind the nightly recompute
+        # (the recompute lands after the morning thematic-build slot, so the
+        # mirror waited for the next slot). Directive-line match (multiline
+        # ``^``) so a leftover explanatory comment does not falsely trip it.
+        self.assertNotRegex(
+            self.unit_text,
+            re.compile(
+                r"^ExecStartPost=[^\n]*(?:\\\n[^\n]*)*rebuild-ladder-outcomes\b",
+                re.MULTILINE,
+            ),
+            "rebuild-ladder-outcomes must live on the shadow-returns unit "
+            "(where the parquet is written), not thematic-build.",
+        )
+
 
 class TestMigratedLaunchdUnits(unittest.TestCase):
     """The three units migrated from macOS launchd in PR-1.
@@ -740,6 +758,38 @@ class TestShadowReturnsUnit(unittest.TestCase):
             re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE),
             "Must load /etc/alphalens/env without a leading dash (fail loud on "
             "missing POLYGON_API_KEY rather than silently pricing nothing).",
+        )
+
+    def test_service_orders_after_docker_for_compose_post(self) -> None:
+        # The rebuild-ladder-outcomes ExecStartPost runs `docker compose`, so
+        # the unit must order After=docker.service (matching thematic-build).
+        # Without it, a freshly-booted VPS could fire the timer before dockerd
+        # is ready, the compose call fails, and the whole unit is marked failed
+        # until the next nightly run (~24h). (zen MEDIUM, PR #493.)
+        self.assertRegex(
+            SHADOW_SERVICE.read_text(),
+            re.compile(r"^After=.*\bdocker\.service\b.*$", re.MULTILINE),
+            "Unit runs `docker compose` in ExecStartPost — must order "
+            "After=docker.service so the daemon is ready.",
+        )
+
+    def test_service_rebuilds_ladder_outcomes_post_run(self) -> None:
+        # The population-ladder parquet is (re)written ONLY by this nightly
+        # recompute, so the edge Postgres mirror (the maintenance
+        # ``rebuild-ladder-outcomes`` one-shot from the django-prod compose
+        # stack) belongs here as an ExecStartPost. It fires only after a
+        # successful ExecStart, so a failed recompute leaves the cache
+        # untouched. This makes the edge dashboard fresh right after the
+        # recompute rather than waiting for the next thematic-build slot.
+        self.assertRegex(
+            SHADOW_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStartPost=[^\n]*(?:\\\n[^\n]*)*rebuild-ladder-outcomes\b",
+                re.MULTILINE,
+            ),
+            "Missing or malformed ExecStartPost — the edge Postgres cache will "
+            "not pick up the freshly recomputed population-ladder parquet until "
+            "the next thematic-build slot (~2h lag).",
         )
 
     def test_service_documents_polygon_api_key_requirement(self) -> None:
